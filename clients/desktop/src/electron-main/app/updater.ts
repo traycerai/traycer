@@ -145,7 +145,15 @@ function discardStagingUpdateTokenForLog(): string {
   const rejectedToken = stagingUpdateToken;
   discardStagingUpdateToken();
   stagingUpdateToken = "";
-  discardedStagingUpdateToken = rejectedToken;
+  // Only a real secret replaces the retained one. The `error` event and the
+  // `downloadUpdate()` rejection are TWO calls for ONE failure, and the second
+  // finds `stagingUpdateToken` already cleared - so an unconditional assignment
+  // here would overwrite the retained token with `""` and leave the second
+  // warning with nothing to scrub against, which is the exact leak the retained
+  // copy exists to prevent.
+  if (rejectedToken.length > 0) {
+    discardedStagingUpdateToken = rejectedToken;
+  }
   return rejectedToken;
 }
 
@@ -810,7 +818,15 @@ function emitStagingAuthUnavailable(
   if (checkInFlight) checkErrorEmitted = true;
   log.warn(
     "[updater] staging update unavailable",
-    stagingAuthLogMessage(reason, [rejectedToken, stagingUpdateToken]),
+    // All three, because on a SECOND auth event the first two are already
+    // empty: the live token was cleared by the first, and this call's
+    // `rejectedToken` is what that clearing returned. Only the retained copy
+    // still holds the secret the error message may be carrying.
+    stagingAuthLogMessage(reason, [
+      rejectedToken,
+      stagingUpdateToken,
+      discardedStagingUpdateToken,
+    ]),
   );
   if (intent === "manual") {
     emitSnapshot({
@@ -1757,6 +1773,11 @@ async function resolveDesktopReleaseFeed(
     coordinate.repo,
     release,
     token,
+    // The private provider resolves installers through opaque asset URLs, so it
+    // needs the running package's format to keep `findFile` from falling
+    // through to `files[0]` and handing `dpkg -i` an AppImage. This is the same
+    // value discovery filters candidates with, resolved once at install time.
+    linuxPackageType,
   );
 }
 

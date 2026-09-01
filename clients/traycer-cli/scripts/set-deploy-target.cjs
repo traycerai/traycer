@@ -13,7 +13,6 @@
 // (the exact host this CLI installs by default), and `releaseRepo` (so a
 // forked/relocated build fetches from the repo it publishes to, via
 // RELEASE_REPO).
-const DEFAULT_RELEASE_REPO = "traycerai/traycer";
 
 const path = require("node:path");
 const {
@@ -21,6 +20,8 @@ const {
 } = require("../../scripts/rewrite-config-target.cjs");
 const {
   ClientTargetStampError,
+  PRODUCTION_RELEASE_REPO,
+  resolveReleaseRepoForTarget,
   targetInputFromArg,
 } = require("../../scripts/release-target-stamp.cjs");
 
@@ -33,16 +34,6 @@ function parseSupportedHostVersion(argv, raw) {
   return trimmed.length === 0 ? null : trimmed;
 }
 
-// The production coordinate is the fallback for every target except staging:
-// a staging CLI stamps staging-only feed tags, and stamping those against the
-// production repository fails every discovery lookup at runtime, so a missing
-// RELEASE_REPO must fail the build instead.
-function parseReleaseRepo(raw, releaseTarget) {
-  const trimmed = typeof raw === "string" ? raw.trim() : "";
-  if (trimmed.length > 0) return trimmed;
-  return releaseTarget === "staging" ? null : DEFAULT_RELEASE_REPO;
-}
-
 const supportedHostVersion = parseSupportedHostVersion(
   process.argv,
   process.env.TRAYCER_SUPPORTED_HOST_VERSION,
@@ -52,16 +43,17 @@ const allowUnpinnedHost = process.argv.includes("--allow-unpinned-host");
 const targetArg = process.argv.find((arg) => arg.startsWith("--target="));
 const target =
   targetArg === undefined ? null : targetArg.slice("--target=".length);
-const releaseRepo = parseReleaseRepo(
+// `--restore` puts the committed config back and needs no coordinate, so it
+// must not be blocked by a resolution the restore does not use.
+const releaseRepoResult = resolveReleaseRepoForTarget(
   process.env.TRAYCER_RELEASE_REPO ?? process.env.RELEASE_REPO,
   target,
 );
-if (releaseRepo === null && !process.argv.includes("--restore")) {
-  console.error(
-    "[set-deploy-target] TRAYCER_RELEASE_REPO (or RELEASE_REPO) is required for a staging build; the production repository is never a staging destination.",
-  );
+if (!releaseRepoResult.ok && !process.argv.includes("--restore")) {
+  console.error(`[set-deploy-target] ${releaseRepoResult.reason}`);
   process.exit(2);
 }
+const releaseRepo = releaseRepoResult.ok ? releaseRepoResult.repo : null;
 
 if (
   !allowUnpinnedHost &&
@@ -114,9 +106,9 @@ runConfigTargetCli({
       production: production.cloud.cloudUiBaseUrl,
     },
     releaseRepo: {
-      dev: DEFAULT_RELEASE_REPO,
+      dev: PRODUCTION_RELEASE_REPO,
       staging: releaseRepo ?? "",
-      production: releaseRepo ?? DEFAULT_RELEASE_REPO,
+      production: releaseRepo ?? PRODUCTION_RELEASE_REPO,
     },
     hostDiscoveryTag: {
       dev: production.hostDiscoveryTag,

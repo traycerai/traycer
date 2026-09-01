@@ -212,7 +212,7 @@ describe("set-deploy-target scripts", () => {
     );
     mkdirSync(dirname(generated), { recursive: true });
     writeFileSync(generated, "fixture", "utf8");
-    const restored = run(fixture, ["--restore"]);
+    const restored = runWithoutReleaseRepo(fixture, ["--restore"]);
     expect(restored.status).toBe(0);
     expect(readFileSync(fixture.configPath, "utf8")).toBe(original);
     expect(existsSync(fixture.stampPath)).toBe(false);
@@ -241,7 +241,7 @@ describe("set-deploy-target scripts", () => {
     // The CLI has no packaging step that reads a stamp, so its stamper never
     // writes one; the input file is the caller's to keep.
     expect(existsSync(fixture.stampPath)).toBe(false);
-    const restored = run(fixture, ["--restore"]);
+    const restored = runWithoutReleaseRepo(fixture, ["--restore"]);
     expect(restored.status).toBe(0);
     expect(readFileSync(fixture.configPath, "utf8")).toBe(original);
     expect(existsSync(fixture.targetInputPath)).toBe(true);

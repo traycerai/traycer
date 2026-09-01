@@ -1,7 +1,11 @@
 import { fetchWithGitHubReleaseAuth } from "./authenticated-fetch";
 import { isAuthorizedGitHubReleaseUrl } from "./policy";
+import { AuthenticationRequiredError } from "./redact";
 import type { GitHubReleaseCredentialResolver } from "./resolver";
-import type { GitHubReleaseAuthPolicy } from "./types";
+import {
+  AUTHENTICATION_REQUIRED_MESSAGE,
+  type GitHubReleaseAuthPolicy,
+} from "./types";
 
 export interface GitHubReleaseDownloadRef {
   readonly tag: string;
@@ -65,25 +69,44 @@ export async function fetchGitHubReleaseAssetWithAuth(
   }
   const { owner, repo } = policy.repository;
   const listingUrl = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/releases/tags/${encodeURIComponent(ref.tag)}`;
-  const listing = await fetchWithGitHubReleaseAuth(
-    resolver,
-    policy,
-    listingUrl,
-    {
-      method: "GET",
-      headers: { accept: "application/vnd.github+json" },
-      signal: init.signal ?? null,
-    },
-  );
-  // A missing release reads exactly like a missing asset would have on the
-  // browser URL; the caller already classifies non-2xx responses.
-  if (!listing.ok) return listing;
-  const assetUrl = releaseAssetApiUrl(
-    await listing.json(),
-    ref.assetName,
-    policy,
-  );
+  // ONE listing per (repo, tag) per process, not one per download attempt. A
+  // resumed archive download retries up to `MAX_DOWNLOAD_ATTEMPTS` times, and
+  // without this each retry re-listed the release - turning a slow download
+  // into hundreds of api.github.com calls and eventually into the rate-limit
+  // 403 that `isRateLimited` now has to disentangle from a real auth failure.
+  // A release's asset set does not change under a download.
+  const cacheKey = `${owner.toLowerCase()}/${repo.toLowerCase()}#${ref.tag}`;
+  let release = releaseListingCache.get(cacheKey);
+  if (release === undefined) {
+    const listing = await fetchWithGitHubReleaseAuth(
+      resolver,
+      policy,
+      listingUrl,
+      {
+        method: "GET",
+        headers: { accept: "application/vnd.github+json" },
+        signal: init.signal ?? null,
+      },
+    );
+    if (!listing.ok) {
+      // A 404 here is ambiguous: GitHub masks a repository the token cannot
+      // see behind the same status a genuinely missing tag returns. Only the
+      // repository probe can tell them apart, and only the "no access" answer
+      // is an authentication problem - a missing tag with a perfectly good
+      // token must keep its 404, or the user is told to re-authenticate for a
+      // release that simply was not published.
+      if (listing.status === 404) {
+        await assertRepositoryVisible(resolver, policy, init.signal ?? null);
+      }
+      return listing;
+    }
+    release = await listing.json();
+    releaseListingCache.set(cacheKey, release);
+  }
+  const assetUrl = releaseAssetApiUrl(release, ref.assetName, policy);
   if (assetUrl === null) {
+    // A 200 listing is proof of access, so this 404 can only mean the asset is
+    // absent. Never routed through the probe above.
     return new Response(null, { status: 404, statusText: "Not Found" });
   }
   const headers = new Headers(init.headers);
@@ -92,6 +115,50 @@ export async function fetchGitHubReleaseAssetWithAuth(
     ...init,
     headers,
   });
+}
+
+/**
+ * Resolved release payloads, keyed by repository and tag. Module-level to match
+ * the resolver's own lifetime: both are per-process, and a CLI process is one
+ * command.
+ */
+const releaseListingCache = new Map<string, unknown>();
+
+/** Test seam: a new process starts with no cache, and a test should too. */
+export function clearGitHubReleaseListingCache(): void {
+  releaseListingCache.clear();
+}
+
+/**
+ * Turn a 404 from release discovery into an authentication error IF, and only
+ * if, the repository itself is invisible to this token.
+ *
+ * `GET /repos/<owner>/<repo>` is the one request whose 404 cannot mean
+ * "missing tag" or "missing asset" - the repository coordinate is baked at
+ * build time, so a 404 means the credential cannot see it. A 2xx proves access
+ * and the caller's original 404 stands on its own.
+ *
+ * Deliberately best-effort: a probe that fails for any other reason (offline,
+ * 5xx) must not manufacture an authentication verdict out of a network blip.
+ * `fetchWithGitHubReleaseAuth` already throws `AuthenticationRequiredError` on
+ * a 401/403 that is not a rate limit, so that path needs no help here.
+ */
+async function assertRepositoryVisible(
+  resolver: GitHubReleaseCredentialResolver,
+  policy: GitHubReleaseAuthPolicy,
+  signal: AbortSignal | null,
+): Promise<void> {
+  const { owner, repo } = policy.repository;
+  const probeUrl = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+  const probe = await fetchWithGitHubReleaseAuth(resolver, policy, probeUrl, {
+    method: "GET",
+    headers: { accept: "application/vnd.github+json" },
+    signal,
+  });
+  if (probe.body !== null) await probe.body.cancel();
+  if (probe.status !== 404) return;
+  resolver.discardLease();
+  throw new AuthenticationRequiredError(AUTHENTICATION_REQUIRED_MESSAGE);
 }
 
 function releaseAssetApiUrl(

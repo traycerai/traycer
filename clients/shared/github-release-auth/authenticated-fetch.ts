@@ -41,7 +41,15 @@ export async function fetchWithGitHubReleaseAuth(
       headers,
       redirect: "manual",
     });
-    if (authorized && (response.status === 401 || response.status === 403)) {
+    // The rate-limit exception is 403-ONLY. GitHub overloads 403 with "slow
+    // down", but a 401 is always a credential verdict - rate-limit headers can
+    // ride along on one, and honouring them there would retain a token the
+    // server just rejected.
+    if (
+      authorized &&
+      (response.status === 401 ||
+        (response.status === 403 && !isRateLimited(response)))
+    ) {
       await cancelBody(response);
       resolver.discardLease();
       throw new AuthenticationRequiredError(AUTHENTICATION_REQUIRED_MESSAGE);
@@ -66,6 +74,26 @@ export async function fetchWithGitHubReleaseAuth(
     }
   }
   throw new Error("GitHub release download exceeded the redirect limit");
+}
+
+/**
+ * A 403 that means "slow down", not "your token is no good".
+ *
+ * GitHub answers 403 for BOTH a permission failure and a rate limit, and the
+ * two want opposite handling: a permission failure should discard the lease and
+ * tell the user to re-authenticate, while a rate limit should be retried with
+ * the SAME credential. Reading a rate limit as a permission failure is the
+ * worse direction - it discards a working token and puts an
+ * `AuthenticationRequiredError` in front of a user whose only problem was
+ * making too many requests.
+ *
+ * The two signals GitHub documents: `x-ratelimit-remaining: 0` for a primary
+ * limit, and `retry-after` for a secondary one. Returning the response leaves
+ * classification to the caller, which already retries a non-2xx with backoff.
+ */
+function isRateLimited(response: Response): boolean {
+  if (response.headers.has("retry-after")) return true;
+  return response.headers.get("x-ratelimit-remaining") === "0";
 }
 
 function isRedirect(status: number): boolean {

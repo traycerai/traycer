@@ -307,10 +307,17 @@ async function downloadWithRetries(opts: DownloadToFileOptions): Promise<void> {
       restarted = true;
       lastError = new Error(result.reason);
     } catch (err) {
-      if (isCliError(err)) {
-        await discardPartial(opts.destPath);
-        throw err;
-      }
+      // Terminal, but the partial is NOT this loop's to judge. `isCliError` is
+      // a bare name check, so it cannot tell "these bytes are poisoned" from
+      // "the request could not be made at all" - and both shapes reach here.
+      // The size-cap abort discards its own bytes at the throw site; a staging
+      // `RELEASE_AUTHENTICATION_REQUIRED` wrote nothing, so deleting a
+      // resumable partial for it would restart a multi-hundred-megabyte
+      // download from zero after the user simply re-authenticates. The layer
+      // above already draws that line correctly (`isTrustFailure` in
+      // registry/client.ts keeps the file for everything but a sha256
+      // mismatch); deleting here silently contradicted it.
+      if (isCliError(err)) throw err;
       lastError = err;
     }
     if (restarted) {
@@ -364,6 +371,10 @@ async function downloadAttempt(
   options: DownloadAttemptOptions,
 ): Promise<DownloadAttemptResult> {
   const { opts, state, offset, attempt } = options;
+  // Set only by the size-cap abort below. The bytes on disk are the ones a
+  // run-on stream already over-wrote, so THIS attempt owns discarding them -
+  // see the catch at the end of the write loop.
+  let oversize = false;
   const controller = new AbortController();
   const linkedSignal = linkAbortSignals(controller, opts.signal);
   const resuming = offset > 0;
@@ -456,6 +467,7 @@ async function downloadAttempt(
           opts.expectedSizeBytes + DOWNLOAD_SIZE_SLACK_BYTES
         ) {
           controller.abort();
+          oversize = true;
           throw cliError({
             code: CLI_ERROR_CODES.REGISTRY_UNAVAILABLE,
             message: `host registry: ${opts.url} exceeded declared size ${opts.expectedSizeBytes} bytes (received ${downloadedBytes}); aborted to protect local disk`,
@@ -499,6 +511,10 @@ async function downloadAttempt(
     } catch (err) {
       controller.abort();
       await closeWriter(writer);
+      // AFTER `closeWriter`, never before: deleting while the writer still has
+      // a pending flush races it (EBUSY on Windows, or a file recreated by the
+      // flush that lands after the unlink).
+      if (oversize) await discardPartial(opts.destPath);
       throw err;
     }
   } finally {

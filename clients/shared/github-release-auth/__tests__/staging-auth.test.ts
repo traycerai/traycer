@@ -273,6 +273,77 @@ describe("staging GitHub release credentials", () => {
     expect(headers[0]?.get("authorization")).toBe("token new-token");
   });
 
+  it.each([
+    ["retry-after", { "retry-after": "1" }],
+    ["primary rate limit", { "x-ratelimit-remaining": "0" }],
+  ] as const)(
+    "returns a 403 %s response without discarding the credential lease",
+    async (_label, headers) => {
+      process.env[STAGING_RELEASE_TOKEN_ENV] = "rate-limit-token";
+      const resolver = new GitHubReleaseCredentialResolver();
+      const authorization: Array<string | null> = [];
+      let call = 0;
+      const fetchMock = vi.fn(
+        async (_input: RequestInfo | URL, init: RequestInit | undefined) => {
+          authorization.push(new Headers(init?.headers).get("authorization"));
+          call += 1;
+          return call === 1
+            ? new Response("rate limited", { status: 403, headers })
+            : new Response("ok", { status: 200 });
+        },
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(
+        fetchWithGitHubReleaseAuth(resolver, policy(), apiUrl, {}),
+      ).resolves.toHaveProperty("status", 403);
+      process.env[STAGING_RELEASE_TOKEN_ENV] = "replacement-token";
+      await fetchWithGitHubReleaseAuth(resolver, policy(), apiUrl, {});
+
+      expect(authorization).toEqual([
+        "token rate-limit-token",
+        "token rate-limit-token",
+      ]);
+    },
+  );
+
+  it.each([
+    [403, {}],
+    [401, { "retry-after": "1" }],
+    [401, { "x-ratelimit-remaining": "0" }],
+  ] as const)(
+    "treats a %s response as authentication failure even with rate headers",
+    async (status, headers) => {
+      process.env[STAGING_RELEASE_TOKEN_ENV] = "expired-token";
+      const resolver = new GitHubReleaseCredentialResolver();
+      const authorization: Array<string | null> = [];
+      const fetchMock = vi.fn(
+        async (_input: RequestInfo | URL, init: RequestInit | undefined) => {
+          authorization.push(new Headers(init?.headers).get("authorization"));
+          return new Response("unauthorized", { status, headers });
+        },
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(
+        fetchWithGitHubReleaseAuth(resolver, policy(), apiUrl, {}),
+      ).rejects.toMatchObject({ name: "AuthenticationRequiredError" });
+      process.env[STAGING_RELEASE_TOKEN_ENV] = "fresh-token";
+      fetchMock.mockImplementation(
+        async (_input: RequestInfo | URL, init: RequestInit | undefined) => {
+          authorization.push(new Headers(init?.headers).get("authorization"));
+          return new Response("ok", { status: 200 });
+        },
+      );
+      await fetchWithGitHubReleaseAuth(resolver, policy(), apiUrl, {});
+
+      expect(authorization).toEqual([
+        "token expired-token",
+        "token fresh-token",
+      ]);
+    },
+  );
+
   it("errors after the redirect limit", async () => {
     process.env[STAGING_RELEASE_TOKEN_ENV] = "env-token";
     const resolver = new GitHubReleaseCredentialResolver();

@@ -13,6 +13,7 @@ export { createStagingGitHubReleaseAuthPolicy } from "./policy";
 export { GitHubReleaseCredentialResolver } from "./resolver";
 export { fetchWithGitHubReleaseAuth } from "./authenticated-fetch";
 export {
+  clearGitHubReleaseListingCache,
   fetchGitHubReleaseAssetWithAuth,
   parseGitHubReleaseDownloadUrl,
 } from "./release-asset";

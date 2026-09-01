@@ -17,6 +17,12 @@ const stampModule = require("../../../scripts/release-target-stamp.cjs") as {
     required: boolean,
     component: "cli" | "desktop",
   ) => Record<string, unknown> | null;
+  resolveReleaseRepoForTarget: (
+    raw: unknown,
+    releaseTarget: string,
+  ) =>
+    | { readonly ok: true; readonly repo: string }
+    | { readonly ok: false; readonly reason: string };
 };
 
 type Stamp = Record<string, unknown>;
@@ -238,6 +244,104 @@ describe("readClientTargetStamp", () => {
     ).toThrow("updaterChannelFiles");
   });
 
+  it("refuses null and empty nested scalar leaves", () => {
+    for (const value of [null, ""] as const) {
+      const cloudStamp = cliStamp();
+      (cloudStamp.cloud as Stamp).authnApiUrl = value;
+      expect(() =>
+        stampModule.readClientTargetStamp(
+          writeStamp(cloudStamp),
+          "staging",
+          "cli",
+        ),
+      ).toThrow("cloud.authnApiUrl");
+
+      const macStamp = desktopStamp();
+      (macStamp.mac as Stamp).bundleName = value;
+      expect(() =>
+        stampModule.readClientTargetStamp(
+          writeStamp(macStamp),
+          "staging",
+          "desktop",
+        ),
+      ).toThrow("mac.bundleName");
+
+      const windowsStamp = desktopStamp();
+      (windowsStamp.windows as Stamp).executableName = value;
+      expect(() =>
+        stampModule.readClientTargetStamp(
+          writeStamp(windowsStamp),
+          "staging",
+          "desktop",
+        ),
+      ).toThrow("windows.executableName");
+
+      const debStamp = desktopStamp();
+      ((debStamp.linux as Stamp).deb as Stamp).packageName = value;
+      expect(() =>
+        stampModule.readClientTargetStamp(
+          writeStamp(debStamp),
+          "staging",
+          "desktop",
+        ),
+      ).toThrow("linux.deb.packageName");
+
+      const linuxStamp = desktopStamp();
+      (linuxStamp.linux as Stamp).executableName = value;
+      expect(() =>
+        stampModule.readClientTargetStamp(
+          writeStamp(linuxStamp),
+          "staging",
+          "desktop",
+        ),
+      ).toThrow("linux.executableName");
+    }
+  });
+
+  it("refuses non-string and empty structured array entries", () => {
+    for (const key of ["credentialSources", "authorizedOrigins"] as const) {
+      const entryStamp = cliStamp();
+      entryStamp[key] = [null];
+      expect(() =>
+        stampModule.readClientTargetStamp(
+          writeStamp(entryStamp),
+          "staging",
+          "cli",
+        ),
+      ).toThrow(key);
+
+      const emptyStamp = cliStamp();
+      emptyStamp[key] = [];
+      expect(() =>
+        stampModule.readClientTargetStamp(
+          writeStamp(emptyStamp),
+          "staging",
+          "cli",
+        ),
+      ).toThrow(key);
+    }
+
+    const entryStamp = desktopStamp();
+    entryStamp.updaterChannelFiles = [null];
+    expect(() =>
+      stampModule.readClientTargetStamp(
+        writeStamp(entryStamp),
+        "staging",
+        "desktop",
+      ),
+    ).toThrow("updaterChannelFiles");
+
+    const emptyStamp = desktopStamp();
+    emptyStamp.updaterChannelFiles = [];
+    expect(() =>
+      stampModule.readClientTargetStamp(
+        writeStamp(emptyStamp),
+        "staging",
+        "desktop",
+      ),
+    ).toThrow("updaterChannelFiles");
+  });
+
   it("requires cliInstallRoot and windowsTaskName on desktop stamps", () => {
     const stamp = desktopStamp();
     delete stamp.cliInstallRoot;
@@ -248,6 +352,42 @@ describe("readClientTargetStamp", () => {
         "desktop",
       ),
     ).toThrow(/cliInstallRoot/);
+  });
+});
+
+describe("resolveReleaseRepoForTarget", () => {
+  it("requires an explicit repository on staging and defaults production", () => {
+    expect(
+      stampModule.resolveReleaseRepoForTarget(undefined, "staging").ok,
+    ).toBe(false);
+    expect(
+      stampModule.resolveReleaseRepoForTarget(undefined, "production"),
+    ).toEqual({ ok: true, repo: "traycerai/traycer" });
+  });
+
+  it.each(["https://github.com/o/r", "owner/repo/extra", "owner"])(
+    "rejects malformed repository %s on both targets",
+    (raw) => {
+      expect(stampModule.resolveReleaseRepoForTarget(raw, "staging").ok).toBe(
+        false,
+      );
+      expect(
+        stampModule.resolveReleaseRepoForTarget(raw, "production").ok,
+      ).toBe(false);
+    },
+  );
+
+  it("rejects the production repository on staging but accepts it on production", () => {
+    expect(
+      stampModule.resolveReleaseRepoForTarget("TraycerAI/Traycer", "staging")
+        .ok,
+    ).toBe(false);
+    expect(
+      stampModule.resolveReleaseRepoForTarget(
+        "TraycerAI/Traycer",
+        "production",
+      ),
+    ).toEqual({ ok: true, repo: "TraycerAI/Traycer" });
   });
 });
 

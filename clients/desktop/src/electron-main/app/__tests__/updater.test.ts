@@ -2902,6 +2902,17 @@ describe("staging updater release authentication and channel", () => {
     expect(updater.getAppUpdateSnapshot().errorMessage).toBe(
       "Updates are not available for this build.",
     );
+
+    // A second electron-updater failure can arrive after the first auth event
+    // has already cleared the live token. Re-surface the same candidate without
+    // another check so this specifically exercises the retained-token path.
+    autoUpdater.emit("update-available", { version: "2.0.0-staging.2" });
+    expect(updater.getAppUpdateSnapshot().status).toBe("available");
+    updater.startUpdateDownload();
+    await vi.waitFor(() => {
+      expect(updater.getAppUpdateSnapshot().status).toBe("unavailable");
+    });
+
     expect(JSON.stringify(logger.warn.mock.calls)).not.toContain(token);
   });
 });

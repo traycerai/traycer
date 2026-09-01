@@ -663,7 +663,13 @@ describe("buildDesktopReleaseFeed", () => {
   };
 
   it("builds a generic exact-release URL when no token is configured", () => {
-    const feed = buildDesktopReleaseFeed("traycerai", "traycer", release, "");
+    const feed = buildDesktopReleaseFeed(
+      "traycerai",
+      "traycer",
+      release,
+      "",
+      null,
+    );
 
     expect(feed).toEqual({
       provider: "generic",
@@ -677,6 +683,7 @@ describe("buildDesktopReleaseFeed", () => {
       "private-traycer",
       release,
       "secret-token",
+      "deb",
     );
 
     expect(feed).toEqual({
@@ -688,6 +695,10 @@ describe("buildDesktopReleaseFeed", () => {
       // assets, which `assets` above (this release alone) cannot supply.
       owner: "traycerai",
       repo: "private-traycer",
+      // Carried so `resolveFiles` can keep only the files the RUNNING package
+      // format can install; the asset URLs it swaps in are opaque, so
+      // electron-updater's own extension filter sees nothing to match on.
+      linuxPackageType: "deb",
     });
   });
 });
@@ -732,7 +743,12 @@ describe("ExactReleaseAssetProvider", () => {
     "",
   ].join("\n");
 
-  function buildProvider(assets: readonly DesktopReleaseAsset[]): {
+  type TestLinuxPackageType = "deb" | "rpm" | null;
+
+  function buildProviderWithType(
+    assets: readonly DesktopReleaseAsset[],
+    linuxPackageType: TestLinuxPackageType,
+  ): {
     readonly executor: FakeHttpExecutor;
     readonly provider: ExactReleaseAssetProvider;
   } {
@@ -745,11 +761,19 @@ describe("ExactReleaseAssetProvider", () => {
         token: "secret-token",
         owner: "traycerai",
         repo: "private-traycer",
+        linuxPackageType,
       },
       undefined,
       buildRuntimeOptions(executor),
     );
     return { executor, provider };
+  }
+
+  function buildProvider(assets: readonly DesktopReleaseAsset[]): {
+    readonly executor: FakeHttpExecutor;
+    readonly provider: ExactReleaseAssetProvider;
+  } {
+    return buildProviderWithType(assets, null);
   }
 
   it("resolves the platform manifest asset with authenticated, non-following headers", async () => {
@@ -815,6 +839,75 @@ describe("ExactReleaseAssetProvider", () => {
     expect(() => provider.resolveFiles(updateInfo)).toThrow(
       /Traycer-1\.6\.0-rc\.3-mac\.zip/,
     );
+  });
+
+  function linuxUpdateInfo(fileNames: readonly string[]): UpdateInfo {
+    const first = fileNames[0];
+    if (first === undefined) throw new Error("test requires an update file");
+    return {
+      version: "1.6.0-rc.3",
+      files: fileNames.map((url) => ({ url, sha512: "abcDEF123==" })),
+      path: first,
+      sha512: "abcDEF123==",
+      releaseDate: "2026-07-01T00:00:00.000Z",
+    };
+  }
+
+  function linuxProvider(
+    linuxPackageType: TestLinuxPackageType,
+    fileNames: readonly string[],
+  ): ExactReleaseAssetProvider {
+    return buildProviderWithType(
+      fileNames.map((name, index) => ({
+        name,
+        url: `https://api.github.com/repos/traycerai/private-traycer/releases/assets/linux-${index}`,
+      })),
+      linuxPackageType,
+    ).provider;
+  }
+
+  it.each([
+    ["deb", "Traycer-1.6.0-rc.3-linux.deb"],
+    ["rpm", "Traycer-1.6.0-rc.3-linux.rpm"],
+    [null, "Traycer-1.6.0-rc.3-linux.AppImage"],
+  ] as const)(
+    "selects the %s installer from a mixed Linux manifest",
+    (linuxPackageType, expectedName) => {
+      setPlatform("linux");
+      const fileNames = [
+        "Traycer-1.6.0-rc.3-linux.AppImage",
+        "Traycer-1.6.0-rc.3-linux.deb",
+        "Traycer-1.6.0-rc.3-linux.rpm",
+      ];
+      const provider = linuxProvider(linuxPackageType, fileNames);
+      const [resolved] = provider.resolveFiles(linuxUpdateInfo(fileNames));
+
+      expect(resolved?.info.url).toBe(expectedName);
+      expect(resolved?.url.toString()).toContain(
+        `linux-${fileNames.indexOf(expectedName)}`,
+      );
+    },
+  );
+
+  it("throws when a multi-file Linux manifest has no matching installer format", () => {
+    setPlatform("linux");
+    const fileNames = [
+      "Traycer-1.6.0-rc.3-linux.AppImage",
+      "Traycer-1.6.0-rc.3-linux.rpm",
+    ];
+    const provider = linuxProvider("deb", fileNames);
+
+    expect(() => provider.resolveFiles(linuxUpdateInfo(fileNames))).toThrow(
+      /No update file matches this installer format/,
+    );
+  });
+
+  it("keeps a single Linux file even when its extension does not match", () => {
+    setPlatform("linux");
+    const fileNames = ["Traycer-1.6.0-rc.3-linux.zip"];
+    const provider = linuxProvider("deb", fileNames);
+
+    expect(provider.resolveFiles(linuxUpdateInfo(fileNames))).toHaveLength(1);
   });
 
   // The differential downloader asks for the blockmap of the release being

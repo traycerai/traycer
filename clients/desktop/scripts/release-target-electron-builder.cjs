@@ -7,6 +7,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const {
   readClientTargetStamp,
+  resolveReleaseRepoForTarget,
 } = require("../../scripts/release-target-stamp.cjs");
 
 const projectDir = path.resolve(__dirname, "..");
@@ -36,26 +37,19 @@ const pkg = JSON.parse(
   fs.readFileSync(path.join(projectDir, "package.json"), "utf8"),
 );
 const base = pkg.build ?? {};
-const configuredReleaseRepo = (
-  process.env.TRAYCER_RELEASE_REPO ??
-  process.env.RELEASE_REPO ??
-  ""
-).trim();
-// The production coordinate is never a staging publish destination.
-if (configuredReleaseRepo.length === 0 && target.target === "staging") {
-  throw new Error(
-    "TRAYCER_RELEASE_REPO (or RELEASE_REPO) is required to package a staging release",
-  );
+// Absent, malformed, or the production coordinate on staging - all three
+// refused by the one resolver the CLI and desktop stampers also use, so the
+// packaging path and the config-stamping path cannot disagree about what a
+// staging build may point at.
+const releaseRepoResult = resolveReleaseRepoForTarget(
+  process.env.TRAYCER_RELEASE_REPO ?? process.env.RELEASE_REPO,
+  target.target,
+);
+if (!releaseRepoResult.ok) {
+  throw new Error(releaseRepoResult.reason);
 }
-const releaseRepo =
-  configuredReleaseRepo.length === 0
-    ? "traycerai/traycer"
-    : configuredReleaseRepo;
-const repositoryParts = releaseRepo.split("/");
-if (repositoryParts.length !== 2 || repositoryParts.some((part) => !part)) {
-  throw new Error("release repository must be an owner/repo coordinate");
-}
-const [owner, repo] = repositoryParts;
+const releaseRepo = releaseRepoResult.repo;
+const [owner, repo] = releaseRepo.split("/");
 
 function windowsLauncherPath(cliInstallRoot) {
   return `$PROFILE\\${cliInstallRoot.slice(2).replaceAll("/", "\\")}\\host-start-hidden.vbs`;

@@ -542,6 +542,10 @@ export interface ExactReleaseFeedConfig {
   ) => ExactReleaseAssetProvider;
   readonly assets: readonly DesktopReleaseAsset[];
   readonly token: string;
+  // The installer format the RUNNING package is, so `resolveFiles` can keep
+  // only the files that format can install. Null off Linux and on an AppImage
+  // install, which `platformInstallerExtensions` already reads as "AppImage".
+  readonly linuxPackageType: LinuxPackageType | null;
   // Needed to resolve the PREVIOUS release's assets when the differential
   // downloader asks for its blockmap; the pinned `assets` above describe the
   // new release alone. See `ExactReleaseAssetProvider.getBlockMapFiles`.
@@ -577,6 +581,7 @@ export function buildDesktopReleaseFeed(
   repo: string,
   release: DesktopReleaseCandidate,
   token: string,
+  linuxPackageType: LinuxPackageType | null,
 ): DesktopUpdateFeed {
   if (token.length === 0) {
     return {
@@ -584,7 +589,13 @@ export function buildDesktopReleaseFeed(
       url: `https://github.com/${owner}/${repo}/releases/download/${encodeURIComponent(release.tag)}/`,
     };
   }
-  return privateExactReleaseFeed(release.assets, token, owner, repo);
+  return privateExactReleaseFeed(
+    release.assets,
+    token,
+    owner,
+    repo,
+    linuxPackageType,
+  );
 }
 
 // The URL + headers used to fetch a candidate's channel manifest during
@@ -625,6 +636,7 @@ function privateExactReleaseFeed(
   token: string,
   owner: string,
   repo: string,
+  linuxPackageType: LinuxPackageType | null,
 ): ExactReleaseFeedConfig {
   return {
     provider: "custom",
@@ -633,6 +645,7 @@ function privateExactReleaseFeed(
     token,
     owner,
     repo,
+    linuxPackageType,
   };
 }
 
@@ -648,6 +661,7 @@ export class ExactReleaseAssetProvider extends Provider<UpdateInfo> {
   private readonly token: string;
   private readonly owner: string;
   private readonly repo: string;
+  private readonly linuxPackageType: LinuxPackageType | null;
 
   constructor(
     options: ExactReleaseFeedConfig,
@@ -659,6 +673,7 @@ export class ExactReleaseAssetProvider extends Provider<UpdateInfo> {
     this.token = options.token;
     this.owner = options.owner;
     this.repo = options.repo;
+    this.linuxPackageType = options.linuxPackageType;
   }
 
   // GitHub's asset API 302-redirects to a signed object-store URL; mirror
@@ -711,12 +726,36 @@ export class ExactReleaseAssetProvider extends Provider<UpdateInfo> {
    *     `_DebUpdater` asking for `deb` therefore receives whatever is first in
    *     the channel manifest, and `dpkg -i` is handed an AppImage.
    *
-   * So this provider must never be pointed at a platform that publishes more
-   * than one installer format in one channel manifest.
+   * That is not hypothetical: Linux publishes AppImage, deb and rpm into one
+   * `latest-linux*.yml`, and Windows publishes nsis and msi. So the filename
+   * semantics `findFile` can no longer see are applied HERE, while the names
+   * are still readable - `file.url` in the manifest carries the real filename;
+   * only the asset URL we swap in is opaque.
+   *
+   * Order is preserved, so when exactly one format matches this is what
+   * `findFile` would have chosen anyway. An empty match on a multi-file
+   * manifest throws rather than falling back to `files[0]`: falling back is
+   * precisely the bug. Discovery already refuses a release with no applicable
+   * installer (`releaseHasApplicableInstaller`), so this is the guard that
+   * makes that refusal load-bearing rather than advisory.
    */
   resolveFiles(updateInfo: UpdateInfo): ResolvedUpdateFileInfo[] {
-    return getFileList(updateInfo).map((file) => {
-      const name = posix.basename(file.url).replace(/ /g, "-");
+    const files = getFileList(updateInfo);
+    const extensions = platformInstallerExtensions(this.linuxPackageType);
+    const named = files.map((file) => ({
+      file,
+      name: posix.basename(file.url).replace(/ /g, "-"),
+    }));
+    const matching = named.filter((it) =>
+      extensions.some((extension) => it.name.toLowerCase().endsWith(extension)),
+    );
+    if (matching.length === 0 && files.length > 1) {
+      throw new Error(
+        `No update file matches this installer format (${extensions.join(", ")}); the manifest lists ${named.map((it) => it.name).join(", ")}`,
+      );
+    }
+    const selected = matching.length > 0 ? matching : named;
+    return selected.map(({ file, name }) => {
       const asset = this.assets.find((it) => it.name === name);
       if (asset === undefined) {
         throw new Error(
