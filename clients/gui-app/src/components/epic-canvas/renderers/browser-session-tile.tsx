@@ -154,6 +154,7 @@ function BrowserTabRebindWait(props: {
     return (
       <div
         role="status"
+        aria-label="Reconnecting browser tab"
         aria-busy
         className="flex h-full w-full items-center justify-center px-4 text-ui-sm text-muted-foreground"
       >

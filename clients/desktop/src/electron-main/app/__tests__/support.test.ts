@@ -7,6 +7,7 @@ import type {
   DesktopAuthSessionSnapshot,
   SupportSubmitReportRequest,
 } from "../../../ipc-contracts/window-types";
+import { REPORT_LOG_TAIL_MAX_BYTES } from "@traycer-clients/shared/support/image-attachment-guards";
 
 vi.mock("electron", () => ({
   app: {
@@ -499,6 +500,35 @@ describe("DesktopSupportService browser diagnostics jsonl tail window (ticket 03
       const result = await service.readFrozenLogTail(KEY, "browserTrace");
       expect(result.truncated).toBe(false);
       expect(result.lines).toEqual(['{"seq":1,"source":"live"}']);
+    });
+  });
+
+  it("keeps a complete first live record when the rotated file falls exactly outside the byte window", async () => {
+    await withPidMetadataFile(undefined, async (hostLayout) => {
+      const firstLine = '{"seq":1}\n';
+      const secondLinePrefix = '{"pad":"';
+      const secondLineSuffix = '"}\n';
+      const secondLine = `${secondLinePrefix}${"x".repeat(
+        REPORT_LOG_TAIL_MAX_BYTES -
+          Buffer.byteLength(firstLine + secondLinePrefix + secondLineSuffix),
+      )}${secondLineSuffix}`;
+      await writeFile(
+        hostLayout.browserTraceRotatedFile,
+        '{"seq":0}\n',
+        "utf8",
+      );
+      await writeFile(
+        hostLayout.browserTraceFile,
+        firstLine + secondLine,
+        "utf8",
+      );
+
+      const service = buildService(hostLayout);
+      await service.freezeEvidence(KEY, null);
+      const result = await service.readFrozenLogTail(KEY, "browserTrace");
+
+      expect(result.truncated).toBe(true);
+      expect(result.lines.at(0)).toBe('{"seq":1}');
     });
   });
 

@@ -100,7 +100,9 @@ vi.mock("@/components/epic-canvas/renderers/browser-peek-tile", () => ({
   BrowserPeekTile: (props: {
     readonly node: { readonly sessionId: string; readonly tabId: string };
   }) => (
-    <div
+    <button
+      type="button"
+      aria-label="Browser screencast controls"
       data-testid="headless-browser-tab"
       data-session={props.node.sessionId}
       data-tab={props.node.tabId}
@@ -307,10 +309,13 @@ describe("BrowserSessionTile lifecycle projection", () => {
 
     renderTile();
 
-    expect(screen.getByTestId("headless-browser-tab").dataset.tab).toBe(
-      "tab-1",
-    );
-    expect(screen.queryByText("Reconnecting browser tab…")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Browser screencast controls" })
+        .dataset.tab,
+    ).toBe("tab-1");
+    expect(
+      screen.queryByRole("status", { name: "Reconnecting browser tab" }),
+    ).toBeNull();
   });
 
   it("prefers an accepted binding over the wake path even while the tab still reads dormant", () => {

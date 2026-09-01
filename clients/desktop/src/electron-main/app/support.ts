@@ -942,13 +942,10 @@ async function captureBrowserLogTail(
     maxBytes,
   );
   const decodedLines = splitLogLines(window.bytes.toString("utf8"));
-  // A byte window can begin mid-codepoint and mid-record. Drop that first
-  // partial line unconditionally when windowed - correct for jsonl, where a
-  // partial head record can never parse anyway (mirrors `readBoundedLogTail`'s
-  // EOF-window handling). This holds even when the window contains only one
-  // line: that line IS the partial head record, so dropping it correctly
-  // yields empty output rather than shipping one truncated record.
-  const lines = window.windowed ? decodedLines.slice(1) : decodedLines;
+  // A byte window can begin mid-codepoint and mid-record. Drop the first line
+  // only when the first included file was read from a nonzero offset; omitting
+  // an earlier file does not make the next file's first record partial.
+  const lines = window.headIsPartial ? decodedLines.slice(1) : decodedLines;
   // Scrub BEFORE the byte cap, never after - same invariant as
   // `captureLogTail` (ticket 09).
   const scrubbed = scrubSupportText(lines.join("\n"));
@@ -963,6 +960,8 @@ interface JsonlTailWindow {
   readonly bytes: Buffer;
   /** True when the window omits bytes from the start of the concatenation. */
   readonly windowed: boolean;
+  /** True when the first returned byte is not the first byte of its file. */
+  readonly headIsPartial: boolean;
 }
 
 /**
@@ -983,6 +982,10 @@ async function readConcatenatedJsonlTailWindow(
   );
   const totalSize = rotated.size + live.size;
   const windowed = rotated.bytes.length + live.bytes.length < totalSize;
+  const headIsPartial =
+    rotated.bytes.length > 0
+      ? rotated.bytes.length < rotated.size
+      : live.bytes.length < live.size;
   // A crash or kill mid-write can leave the rotation's last flush torn - no
   // trailing newline - which would otherwise fuse its last (partial) record
   // onto the live file's first line. `readTailBytes` always reads through to
@@ -996,7 +999,7 @@ async function readConcatenatedJsonlTailWindow(
   const bytes = rotatedEndsInNewline
     ? Buffer.concat([rotated.bytes, live.bytes])
     : Buffer.concat([rotated.bytes, Buffer.from("\n"), live.bytes]);
-  return { bytes, windowed };
+  return { bytes, windowed, headIsPartial };
 }
 
 interface TailBytesResult {
