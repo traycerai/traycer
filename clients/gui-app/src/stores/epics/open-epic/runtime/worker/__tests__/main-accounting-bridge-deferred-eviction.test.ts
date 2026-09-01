@@ -24,7 +24,6 @@
  */
 import { describe, expect, it } from "vitest";
 import type {
-  EvictionOutcome,
   MemoryAccountant,
   ProtectedBytes,
   RuntimeEnvironment,
@@ -43,6 +42,7 @@ import type {
   EpicRuntimeAccountingPort,
   EpicRuntimeAccountingSource,
 } from "../../epic-runtime-accounting-port";
+import type { HotDocEvictionOutcome } from "../../epic-runtime-accounting-port";
 
 const SOFT_LIMIT_BYTES = 1_000;
 
@@ -85,9 +85,10 @@ function createTestPort(
       book.attach({
         key: "book-1",
         materializedIds: () => source?.materializedRoomIds() ?? [],
-        demoteColdestUnpinned: (overBytes): EvictionOutcome =>
+        demoteColdestUnpinned: (overBytes): HotDocEvictionOutcome =>
           source?.demoteColdestUnpinned(overBytes) ?? {
             reclaimedBytes: 0,
+            deferredBytes: 0,
             protectedBytesByKind: [],
           },
       });
@@ -195,8 +196,9 @@ describe("createMainAccountingBridge's demote proxy", () => {
     book.attach({
       key: "book-1",
       materializedIds: () => [],
-      demoteColdestUnpinned: (): EvictionOutcome => ({
+      demoteColdestUnpinned: (): HotDocEvictionOutcome => ({
         reclaimedBytes: 0,
+        deferredBytes: 0,
         protectedBytesByKind: PROTECTED,
       }),
     });

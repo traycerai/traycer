@@ -49,7 +49,6 @@ import {
 } from "y-protocols/awareness";
 import type {
   DocSeedMode,
-  EvictionOutcome,
   LeaseGrant,
   LeaseHandle,
   LeasePolicy,
@@ -70,6 +69,7 @@ import {
   isNonTrivialYUpdate,
   latestHostCoversDirtyWatermark,
 } from "./dirty-watermark";
+import type { HotDocEvictionOutcome } from "./epic-runtime-accounting-port";
 
 /**
  * Per-artifact-room Y.Doc replicas mirroring the host-side artifact-rooms. The
@@ -435,7 +435,7 @@ export interface ArtifactRoomTier {
    * The existing LRU walk, parameterized by bytes rather than count. Pinned
    * rooms are never victims and are reported as protected `"leased"`.
    */
-  demoteColdestUnpinned(overBytes: number): EvictionOutcome;
+  demoteColdestUnpinned(overBytes: number): HotDocEvictionOutcome;
 
   /** Whether the tier holds any unsent or unacknowledged local body state. */
   hasDivergence(): boolean;
@@ -1494,7 +1494,7 @@ export function createArtifactRoomTier(
       }
     },
 
-    demoteColdestUnpinned(overBytes: number): EvictionOutcome {
+    demoteColdestUnpinned(overBytes: number): HotDocEvictionOutcome {
       let remaining = overBytes;
       let reclaimed = 0;
       while (remaining > 0) {
@@ -1525,6 +1525,10 @@ export function createArtifactRoomTier(
       }
       return {
         reclaimedBytes: reclaimed,
+        // ZERO, and it must stay zero: this tier does the demotion before it
+        // returns, so everything it accepted is already in `reclaimedBytes`.
+        // Deferral exists only across the worker boundary.
+        deferredBytes: 0,
         protectedBytesByKind:
           leasedBytes > 0 ? [{ kind: "leased", bytes: leasedBytes }] : [],
       };

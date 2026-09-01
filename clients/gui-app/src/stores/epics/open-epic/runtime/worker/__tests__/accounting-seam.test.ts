@@ -13,12 +13,12 @@
  */
 import { describe, expect, it } from "vitest";
 
-import type { EvictionOutcome } from "@traycer-clients/shared/replica-runtime/memory-accountant";
 import type { WorkerToMainEvent } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
 import { createRecordingAccountingPort } from "@/stores/epics/open-epic/test-support/accounting-port-fixture";
 import type { EpicRuntimeAccountingSource } from "../../epic-runtime-accounting-port";
 import { createMainAccountingBridge } from "../main-accounting-bridge";
 import { createWorkerAccountingPort } from "../worker-accounting-port";
+import type { HotDocEvictionOutcome } from "../../epic-runtime-accounting-port";
 
 const COUNTS = {
   artifacts: 3,
@@ -29,8 +29,9 @@ const COUNTS = {
   treeNodes: 7,
 };
 
-const PINNED: EvictionOutcome = {
+const PINNED: HotDocEvictionOutcome = {
   reclaimedBytes: 0,
+  deferredBytes: 0,
   protectedBytesByKind: [{ kind: "visible", bytes: 4096 }],
 };
 
@@ -169,7 +170,7 @@ describe("the accounting seam", () => {
     const demoted: number[] = [];
     seam.worker.port.registerBooks(
       createSource({
-        demoteColdestUnpinned: (overBytes): EvictionOutcome => {
+        demoteColdestUnpinned: (overBytes): HotDocEvictionOutcome => {
           demoted.push(overBytes);
           return PINNED;
         },
@@ -181,7 +182,15 @@ describe("the accounting seam", () => {
     // First reconcile: nothing is known about what is pinned yet, so the
     // breakdown is empty and the request is dispatched.
     const first = source.demoteColdestUnpinned(8192);
-    expect(first).toEqual({ reclaimedBytes: 0, protectedBytesByKind: [] });
+    // `deferredBytes` is the WHOLE ask, and asserted by exact shape rather
+    // than `objectContaining` on purpose: the two zero-ish fields mean
+    // opposite things here - nothing freed, everything accepted - and a
+    // partial matcher would let either of them drift.
+    expect(first).toEqual({
+      reclaimedBytes: 0,
+      deferredBytes: 8192,
+      protectedBytesByKind: [],
+    });
     expect(seam.demoteRequests).toEqual([8192]);
     // Nothing ran in the worker yet - the dispatch is one-way.
     expect(demoted).toEqual([]);
@@ -199,6 +208,11 @@ describe("the accounting seam", () => {
     const second = source.demoteColdestUnpinned(8192);
     expect(second).toEqual({
       reclaimedBytes: 0,
+      // STILL the whole ask. Learning that the tier is entirely pinned does
+      // not make this dispatch a refusal - the proxy cannot know that when it
+      // answers, and the breakdown beside it is last-known rather than a
+      // verdict on THIS request.
+      deferredBytes: 8192,
       protectedBytesByKind: [{ kind: "visible", bytes: 4096 }],
     });
   });
@@ -207,7 +221,7 @@ describe("the accounting seam", () => {
     const seam = createSeam();
     const demoted: number[] = [];
     const source = createSource({
-      demoteColdestUnpinned: (overBytes): EvictionOutcome => {
+      demoteColdestUnpinned: (overBytes): HotDocEvictionOutcome => {
         demoted.push(overBytes);
         return PINNED;
       },

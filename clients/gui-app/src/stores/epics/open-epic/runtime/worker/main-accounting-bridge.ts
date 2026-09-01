@@ -40,9 +40,11 @@ import type {
   RuntimeAccountingSnapshot,
   WorkerToMainEvent,
 } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
-import type { EvictionOutcome } from "@traycer-clients/shared/replica-runtime/memory-accountant";
 import type { EpicReplicaProjectionCounts } from "@/stores/replica-memory/epic-replica-budget";
-import type { EpicRuntimeAccountingPort } from "../epic-runtime-accounting-port";
+import type {
+  EpicRuntimeAccountingPort,
+  HotDocEvictionOutcome,
+} from "../epic-runtime-accounting-port";
 
 const EMPTY_PROJECTION_COUNTS: EpicReplicaProjectionCounts = {
   artifacts: 0,
@@ -91,7 +93,7 @@ export function createMainAccountingBridge(options: {
               measureRootBytes: () => cache.rootBytes,
               projectionCounts: () =>
                 narrowProjectionCounts(cache.projectionCounts),
-              demoteColdestUnpinned: (overBytes): EvictionOutcome => {
+              demoteColdestUnpinned: (overBytes): HotDocEvictionOutcome => {
                 // BEFORE the dispatch and INSIDE this closure, both required:
                 // `reconcile` clears the flag immediately before calling
                 // `evict`, so a call made anywhere earlier is erased, and this
@@ -103,7 +105,16 @@ export function createMainAccountingBridge(options: {
                 // The eviction is real and is happening on the other thread;
                 // its bytes arrive as settlements and the next reconcile sees
                 // them.
+                //
+                // `deferredBytes` says the same thing to the BOOK, which the
+                // side-channel flag above cannot reach: the flag is raised on
+                // the accountant, and `HotDocBudgetBook.evict` loops over every
+                // epic's tier reading only this outcome. It saw a zero, left
+                // its running total untouched, and asked the next epic for the
+                // same full overage - so a 1 MiB overage with five open epics
+                // dispatched five demotions of 1 MiB each.
                 return {
+                  deferredBytes: overBytes,
                   reclaimedBytes: 0,
                   protectedBytesByKind: cache.protectedBytesByKind,
                 };

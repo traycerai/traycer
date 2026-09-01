@@ -22,10 +22,7 @@
  * identical `bookKey`, the second `attach` would overwrite the first, and the
  * old runtime's teardown would then deregister the NEW one.
  */
-import {
-  BUDGET_PLANE_IDS,
-  type EvictionOutcome,
-} from "@traycer-clients/shared/replica-runtime";
+import { BUDGET_PLANE_IDS } from "@traycer-clients/shared/replica-runtime";
 import { ensureProcessMemoryRuntime } from "@/stores/replica-memory/process-memory-accountant";
 import { hotDocHolderId } from "@/stores/replica-memory/hot-doc-budget";
 import {
@@ -39,6 +36,7 @@ import type {
   EpicRuntimeAccountingPort,
   EpicRuntimeAccountingSource,
 } from "./epic-runtime-accounting-port";
+import type { HotDocEvictionOutcome } from "./epic-runtime-accounting-port";
 
 /**
  * The eviction answer for a runtime that has not registered its books.
@@ -48,8 +46,11 @@ import type {
  * the flip's deferred proxy, which reports zero freed with the tier's LAST
  * KNOWN protected breakdown — same `reclaimedBytes`, entirely different claim.
  */
-const NOTHING_TO_EVICT: EvictionOutcome = {
+const NOTHING_TO_EVICT: HotDocEvictionOutcome = {
   reclaimedBytes: 0,
+  // A REFUSAL, not a deferral - there is no source to dispatch to, so nothing
+  // is coming later and the book must go on to the next epic's tier.
+  deferredBytes: 0,
   protectedBytesByKind: [],
 };
 

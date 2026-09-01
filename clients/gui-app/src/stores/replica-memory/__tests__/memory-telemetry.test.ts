@@ -35,6 +35,7 @@ describe("collectReplicaMemoryTelemetry", () => {
       materializedIds: () => ["room-a", "room-b"],
       demoteColdestUnpinned: () => ({
         reclaimedBytes: 0,
+        deferredBytes: 0,
         protectedBytesByKind: [],
       }),
     });
@@ -82,10 +83,16 @@ describe("collectReplicaMemoryTelemetry", () => {
     runtime.hotDocs.attach({
       key: "host:epic:rt",
       materializedIds: () => [],
-      demoteColdestUnpinned: () => {
+      demoteColdestUnpinned: (overBytes) => {
         runtime.accountant.noteEvictionDeferred(BUDGET_PLANE_IDS.hotDocs);
         return {
           reclaimedBytes: 0,
+          // This fixture MODELS the deferring proxy - it raises the deferral
+          // flag on the line above - so it has to report the ask it accepted.
+          // Saying zero here would be a double that calls itself deferring
+          // while behaving like a refusal, which is exactly the conflation the
+          // field was added to end.
+          deferredBytes: overBytes,
           protectedBytesByKind: [{ kind: "leased", bytes: 4_096 }],
         };
       },

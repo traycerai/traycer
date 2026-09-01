@@ -43,6 +43,7 @@ function sourceWithRooms(
     materializedRoomIds: () => roomIds,
     demoteColdestUnpinned: () => ({
       reclaimedBytes: 0,
+      deferredBytes: 0,
       protectedBytesByKind: [],
     }),
     measureRootBytes: () => 0,

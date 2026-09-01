@@ -43,6 +43,36 @@ import type { EpicReplicaProjectionCounts } from "@/stores/replica-memory/epic-r
  * At the flip it becomes a request — the proxy answers `reclaimedBytes: 0`,
  * dispatches, and the worker's settles reconcile on arrival.
  */
+/**
+ * An {@link EvictionOutcome} that can also say "accepted, not yet performed".
+ *
+ * `reclaimedBytes: 0` is ambiguous across the worker boundary: it is what a
+ * fully-pinned tier answers AND what the proxy answers for a demotion it has
+ * dispatched but cannot yet report on. The accountant tells the two apart with
+ * a side-channel flag the evicting tier raises for itself
+ * (`noteHotDocEvictionDeferred`), but the BOOK that loops over several epics'
+ * tiers never saw that flag - it reads this outcome and nothing else - so it
+ * subtracted zero and handed the same full overage to the next epic in turn.
+ *
+ * Carried in the outcome so the loop can bound what it asks for in total.
+ * Scoped to this port rather than added to the shared `EvictionOutcome`: the
+ * deferral is a property of the worker-proxied hot-doc tier, and the other
+ * planes' 40-odd producers would have to state a field that is always zero.
+ */
+export interface HotDocEvictionOutcome extends EvictionOutcome {
+  /**
+   * Bytes whose demotion was ACCEPTED and dispatched, but whose freeing has
+   * not happened yet. Zero for an in-process tier, which does the work before
+   * it returns and reports it as `reclaimedBytes`.
+   *
+   * Not a subset of `reclaimedBytes` and not added to it: these bytes are a
+   * promise, and the settlements that follow are what make them real. A caller
+   * may treat them as spoken for when deciding whom ELSE to ask, and must not
+   * treat them as recovered.
+   */
+  readonly deferredBytes: number;
+}
+
 export interface EpicRuntimeAccountingSource {
   /** Rooms currently resident as live `Y.Doc`s. */
   materializedRoomIds(): readonly string[];
@@ -55,7 +85,7 @@ export interface EpicRuntimeAccountingSource {
    * limit, and it is what distinguishes "everything here is pinned" from
    * "there was nothing to free".
    */
-  demoteColdestUnpinned(overBytes: number): EvictionOutcome;
+  demoteColdestUnpinned(overBytes: number): HotDocEvictionOutcome;
   /** The root replica's settled wire bytes. */
   measureRootBytes(): number;
   /** Projection row counts, for the memory telemetry surface. */

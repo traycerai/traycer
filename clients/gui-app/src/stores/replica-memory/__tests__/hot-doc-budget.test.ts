@@ -7,7 +7,6 @@
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import * as Y from "yjs";
 import type {
-  EvictionOutcome,
   LeaseGrant,
   LeaseHandle,
   MemoryAccountant,
@@ -42,6 +41,7 @@ import {
   type ReplicaMemoryTelemetry,
 } from "@/stores/replica-memory/memory-telemetry";
 import type { ProcessMemoryRuntime } from "@/stores/replica-memory/process-memory-accountant";
+import type { HotDocEvictionOutcome } from "@/stores/epics/open-epic/runtime/epic-runtime-accounting-port";
 
 function createFakeEnvironment(): RuntimeEnvironment & {
   advanceClock(ms: number): void;
@@ -145,10 +145,10 @@ function leaseOf(grant: LeaseGrant<unknown>): LeaseHandle {
 interface BudgetedHarness {
   readonly tier: ArtifactRoomTier;
   readonly accountant: MemoryAccountant;
-  readonly demote: Mock<(overBytes: number) => EvictionOutcome>;
+  readonly demote: Mock<(overBytes: number) => HotDocEvictionOutcome>;
   readonly settle: Mock<(id: string, bytes: number) => void>;
   readonly chargeProvisional: Mock<(id: string, bytes: number) => void>;
-  readonly demoteOutcomes: EvictionOutcome[];
+  readonly demoteOutcomes: HotDocEvictionOutcome[];
   readonly runtime: ProcessMemoryRuntime;
   readonly hostId: string;
   readonly epicId: string;
@@ -233,8 +233,8 @@ function createBudgetedHarness(softLimitBytes: number): BudgetedHarness {
     budget: sink,
   });
   disposers.push(() => tier.dispose());
-  const demoteOutcomes: EvictionOutcome[] = [];
-  const demote = vi.fn((overBytes: number): EvictionOutcome => {
+  const demoteOutcomes: HotDocEvictionOutcome[] = [];
+  const demote = vi.fn((overBytes: number): HotDocEvictionOutcome => {
     const outcome = tier.demoteColdestUnpinned(overBytes);
     demoteOutcomes.push(outcome);
     return outcome;
@@ -329,6 +329,7 @@ describe("hot-doc holder identity", () => {
       materializedIds: () => ["room"],
       demoteColdestUnpinned: () => ({
         reclaimedBytes: 0,
+        deferredBytes: 0,
         protectedBytesByKind: [],
       }),
     });
@@ -342,6 +343,7 @@ describe("hot-doc holder identity", () => {
       materializedIds: () => ["room"],
       demoteColdestUnpinned: () => ({
         reclaimedBytes: 0,
+        deferredBytes: 0,
         protectedBytesByKind: [],
       }),
     });
