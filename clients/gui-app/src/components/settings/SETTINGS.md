@@ -497,17 +497,26 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
   - **Browser**: the in-app browser has no toggle - it is always on, and the
     group carries no master switch.
     Web link default + per-kind terminal/markdown link open-mode selects are
-    always active (no `disabled` state).
-    Agent tab surfacing (`agentTabSurfacingMode`: `pip` | `tile` | `off`,
-    default `off` - what the GUI does when the AGENT opens a browser tab via
-    its REPL `openTab` tool) governs suppressing host-driven opens that
-    previously always split the canvas.
-    `pip` floats the tab picture-in-picture unless a user-converted PiP is
-    showing or the epic surface is hidden; `tile` places a canvas tile
-    grouped by session - same-session opens become tabs of one pane - even
-    in hidden epics; `off` answers electron foreground creates with a hidden
-    off-screen view so the agent's open still succeeds, and leaves headless
-    tabs in the sidebar.
+    always active (no `disabled` state). They read and write `linkOpen`
+    (`{ default: "in-app" | "external" | "per-kind"; markdown, terminal,
+github, image: "in-app" | "external" }`, default all `in-app`) through
+    the single `setLinkOpen(patch)` setter; `linkOpenModeForKind` resolves a
+    kind against the default.
+    Agent tab surfacing (`agentTabSurfacing`: `surface` | `off`, default
+    `off` - what the GUI does when the AGENT opens a browser tab via its REPL
+    `openTab` tool) governs suppressing host-driven opens that previously
+    always split the canvas.
+    `surface` places the tab using the browser tile placement
+    (`tilePlacement.browser`, resolved by `tilePlacementForCategory`): `pip`
+    floats it picture-in-picture unless a user-converted PiP is showing or
+    the epic surface is hidden, and `tab`/`split` place a canvas tile grouped
+    by session - same-session opens become tabs of one pane - even in hidden
+    epics. `off` answers electron foreground creates with a hidden off-screen
+    view so the agent's open still succeeds, and leaves headless tabs in the
+    sidebar.
+    The pre-refactor keys (`browserLinkDefaultMode`,
+    `{terminal,markdown}BrowserLinkOpenMode`, `agentTabSurfacingMode`) are
+    migrated once in the store's persist `merge` and then dropped.
     Disposition decisions live in `lib/browser-view/agent-tab-surfacing.ts`;
     headless-origin tabs are diffed from `browser.sessions` lifecycle frames
     in the dock, seeded snapshot-only so surfacing stays ephemeral across

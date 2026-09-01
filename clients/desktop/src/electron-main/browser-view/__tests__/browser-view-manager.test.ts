@@ -35,6 +35,16 @@ import type {
   BrowserSessionProfileRequest,
 } from "../browser-session";
 
+// The popup path hands non-http(s) targets to the OS through the app's
+// scheme allowlist; mocking the seam keeps the assertion on "we delegated"
+// rather than on Electron's `shell`.
+const safelyOpenExternalMock = vi.hoisted(() =>
+  vi.fn((_url: string) => Promise.resolve(true)),
+);
+vi.mock("../../app/security", () => ({
+  safelyOpenExternal: safelyOpenExternalMock,
+}));
+
 type BrowserViewManagerOptions = ConstructorParameters<
   typeof BrowserViewManager
 >[0];
@@ -2832,3 +2842,80 @@ function reportAttachResult(
     status,
   });
 }
+
+describe("BrowserViewManager in-page window.open (Decision #22)", () => {
+  interface OpenedWindow {
+    readonly result: { readonly action: string };
+    readonly openTileRequests: readonly BrowserViewOpenTileRequest[];
+  }
+
+  async function openWindow(
+    disposition: string,
+    url: string,
+    features: string,
+  ): Promise<OpenedWindow> {
+    const harness = createHarness();
+    const { view } = await attachNativeTab(
+      harness,
+      "window-1",
+      BASE_KEY,
+      "https://opener.example/",
+    );
+    const handler = view.webContents.windowOpenHandler;
+    if (handler === null) throw new Error("expected a window-open handler");
+    const result = handler({
+      url,
+      frameName: features.length > 0 ? "popup" : "_blank",
+      features,
+      disposition,
+    });
+    return { result, openTileRequests: harness.openTileRequests };
+  }
+
+  beforeEach(() => {
+    safelyOpenExternalMock.mockClear();
+  });
+
+  it("maps Chromium's background-tab disposition onto the tile request", async () => {
+    const opened = await openWindow(
+      "background-tab",
+      "https://target.example/a",
+      "",
+    );
+    expect(opened.result.action).toBe("deny");
+    expect(opened.openTileRequests).toEqual([
+      {
+        ...BASE_TILE_KEY,
+        url: "https://target.example/a",
+        disposition: "background",
+      },
+    ]);
+  });
+
+  it("treats every other disposition as foreground", async () => {
+    const opened = await openWindow(
+      "foreground-tab",
+      "https://target.example/b",
+      "",
+    );
+    expect(opened.openTileRequests[0]?.disposition).toBe("foreground");
+  });
+
+  it("hands a non-http(s) target to the OS and sends no tile request", async () => {
+    const opened = await openWindow("foreground-tab", "mailto:a@b.example", "");
+    expect(opened.result.action).toBe("deny");
+    expect(opened.openTileRequests).toEqual([]);
+    expect(safelyOpenExternalMock).toHaveBeenCalledWith("mailto:a@b.example");
+  });
+
+  it("leaves a real popup (non-empty features) as a native window", async () => {
+    const opened = await openWindow(
+      "new-window",
+      "https://target.example/popup",
+      "width=400,height=300",
+    );
+    expect(opened.result.action).toBe("allow");
+    expect(opened.openTileRequests).toEqual([]);
+    expect(safelyOpenExternalMock).not.toHaveBeenCalled();
+  });
+});

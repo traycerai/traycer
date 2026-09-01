@@ -917,6 +917,28 @@ function forgetLocalLogins(browserView: BrowserViewBridge | null): void {
   });
 }
 
+/**
+ * ticket 09 rewrites this into `surfaceHostOpenedTab`, which honours
+ * `frame.disposition` and handles `source === "page"` popups too.
+ *
+ * Extracted for the same reason as {@link forgetLocalLogins}: inlined into the
+ * frame switch it puts {@link handleBrowserSessionsSubsystemFrame} over the
+ * complexity budget.
+ */
+function handleTabOpenedFrame(
+  frame: Extract<BrowserSessionsSubsystemFrame, { kind: "tabOpened" }>,
+  epicId: string,
+  hostId: string,
+): void {
+  if (frame.source !== "agent") return;
+  surfaceAgentTab({
+    epicId,
+    hostId,
+    sessionId: frame.sessionId,
+    tabId: frame.tabId,
+  });
+}
+
 function handleBrowserSessionsSubsystemFrame(args: {
   readonly frame: BrowserSessionsSubsystemFrame;
   readonly epicId: string;
@@ -956,13 +978,8 @@ function handleBrowserSessionsSubsystemFrame(args: {
         cellTitle: frame.cellTitle,
       });
       return;
-    case "agentTabOpened":
-      surfaceAgentTab({
-        epicId: args.epicId,
-        hostId: args.hostId,
-        sessionId: frame.sessionId,
-        tabId: frame.tabId,
-      });
+    case "tabOpened":
+      handleTabOpenedFrame(frame, args.epicId, args.hostId);
       return;
     case "capturePrimaryProfile":
       handlePrimaryProfileCaptureFrame({

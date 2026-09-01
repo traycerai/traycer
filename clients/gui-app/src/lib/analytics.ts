@@ -234,7 +234,7 @@ export type AnalyticsRole = "editor" | "owner" | "viewer";
 
 export type AnalyticsSetting =
   | "allowPrereleaseUpdates"
-  | "agentTabSurfacingMode"
+  | "agentTabSurfacing"
   | "artifactIconColorMode"
   | "artifactIconColors"
   | "chatTurnMinimapSide"

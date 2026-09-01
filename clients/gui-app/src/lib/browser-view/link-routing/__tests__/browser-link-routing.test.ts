@@ -29,9 +29,13 @@ const SOURCE_TILE: EpicCanvasTileRef = {
 function resetStores(): void {
   useEpicCanvasStore.setState({ canvasByTabId: {}, tabsById: {} });
   useSettingsStore.setState({
-    browserLinkDefaultMode: "in-app",
-    terminalBrowserLinkOpenMode: "in-app",
-    markdownBrowserLinkOpenMode: "in-app",
+    linkOpen: {
+      default: "in-app",
+      markdown: "in-app",
+      terminal: "in-app",
+      github: "in-app",
+      image: "in-app",
+    },
     browserDevOrigins: [],
   });
 }
@@ -123,9 +127,13 @@ describe("browser link routing", () => {
     const runnerHost = mockRunnerHost();
     const openInApp = vi.fn(() => true);
     useSettingsStore.setState({
-      browserLinkDefaultMode: "per-kind",
-      terminalBrowserLinkOpenMode: "in-app",
-      markdownBrowserLinkOpenMode: "external",
+      linkOpen: {
+        default: "per-kind",
+        markdown: "external",
+        terminal: "in-app",
+        github: "in-app",
+        image: "in-app",
+      },
     });
 
     expect(

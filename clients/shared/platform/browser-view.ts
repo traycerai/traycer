@@ -171,6 +171,9 @@ export interface BrowserViewCertificateTrust extends BrowserViewTileKey {
 
 export interface BrowserViewOpenTileRequest extends BrowserViewTileKey {
   readonly url: string;
+  /** Chromium's disposition for the in-page open: `background-tab` is the
+   * only one that maps to `background` (middle/ctrl/cmd-click). */
+  readonly disposition: "foreground" | "background";
 }
 
 export interface BrowserViewOverlayOcclusion {

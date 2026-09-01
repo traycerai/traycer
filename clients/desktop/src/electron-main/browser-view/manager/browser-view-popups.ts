@@ -1,6 +1,7 @@
 import type { BrowserWindowConstructorOptions } from "electron";
 import { RunnerHostEvent } from "../../../ipc-contracts/ipc-channels";
 import { log } from "../../app/logger";
+import { safelyOpenExternal } from "../../app/security";
 import {
   toTileKey,
   type BrowserViewEntry,
@@ -27,7 +28,10 @@ interface BrowserViewPopupsOptions {
 
 /**
  * Decision #22: real popups keep their opener as a native window, while
- * `target=_blank` and tab dispositions become Traycer tiles.
+ * `target=_blank` and tab dispositions become Traycer tiles carrying
+ * Chromium's disposition (`background-tab` -> background, else foreground).
+ * Non-http(s) targets are not tiles at all: they leave to the OS through
+ * `safelyOpenExternal`'s scheme allowlist, and no tile request is sent.
  */
 export class BrowserViewPopups {
   private readonly createPopupWindowOptions: (
@@ -59,9 +63,20 @@ export class BrowserViewPopups {
     // Electron exposes featureless scripted window.open the same as _blank
     // tab opens, so the available guardrail is non-empty popup features.
     if (windowOpenShouldCreateTile(details)) {
+      const url = normalizeOpenedUrl(details.url, entry.currentUrl);
+      // A4: only web URLs become tiles. mailto:/custom schemes go to the OS
+      // through the existing allowlist, which rejects the opaque ones.
+      if (!isWebUrl(url)) {
+        void safelyOpenExternal(url);
+        return { action: "deny" };
+      }
       this.send(surface.windowId, RunnerHostEvent.browserViewOpenTileRequest, {
         ...toTileKey(surface),
-        url: normalizeOpenedUrl(details.url, entry.currentUrl),
+        url,
+        disposition:
+          details.disposition === "background-tab"
+            ? "background"
+            : "foreground",
       });
       return { action: "deny" };
     }
@@ -118,6 +133,15 @@ function windowOpenShouldCreateTile(
   if (details.features.trim().length > 0) return false;
   if (details.frameName === "_blank") return true;
   return false;
+}
+
+function isWebUrl(url: string): boolean {
+  try {
+    const protocol = new URL(url).protocol;
+    return protocol === "http:" || protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 function normalizeOpenedUrl(url: string, baseUrl: string): string {

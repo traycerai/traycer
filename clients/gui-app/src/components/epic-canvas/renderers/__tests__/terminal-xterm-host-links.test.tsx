@@ -266,9 +266,13 @@ describe("<TerminalXtermHost /> link handling", () => {
     xtermMocks.openTab.mockClear();
     useEpicCanvasStore.setState({ canvasByTabId: {}, tabsById: {} });
     useSettingsStore.setState({
-      browserLinkDefaultMode: "in-app",
-      terminalBrowserLinkOpenMode: "in-app",
-      markdownBrowserLinkOpenMode: "in-app",
+      linkOpen: {
+        default: "in-app",
+        markdown: "in-app",
+        terminal: "in-app",
+        github: "in-app",
+        image: "in-app",
+      },
       browserDevOrigins: [],
     });
   });

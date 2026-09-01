@@ -4,8 +4,9 @@ import { findPaneById } from "@/stores/epics/canvas/tile-tree";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import {
+  linkOpenModeForKind,
   useSettingsStore,
-  type BrowserLinkOpenMode,
+  type LinkOpenMode,
 } from "@/stores/settings/settings-store";
 
 export type BrowserLinkKind = "markdown" | "terminal";
@@ -130,16 +131,8 @@ export function openBrowserSessionTileFromPage(
   return true;
 }
 
-function browserLinkOpenModeForKind(
-  kind: BrowserLinkKind,
-): BrowserLinkOpenMode {
-  const settings = useSettingsStore.getState();
-  if (settings.browserLinkDefaultMode !== "per-kind") {
-    return settings.browserLinkDefaultMode;
-  }
-  return kind === "terminal"
-    ? settings.terminalBrowserLinkOpenMode
-    : settings.markdownBrowserLinkOpenMode;
+function browserLinkOpenModeForKind(kind: BrowserLinkKind): LinkOpenMode {
+  return linkOpenModeForKind(useSettingsStore.getState().linkOpen, kind);
 }
 
 function looksLikeDevServer(url: URL): boolean {

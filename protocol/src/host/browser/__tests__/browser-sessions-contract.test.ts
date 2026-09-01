@@ -226,16 +226,40 @@ describe("browser.screencast@1.0 control frames", () => {
 });
 
 describe("browser.sessions@1.0 epic-scoped open + tab-shaped session info", () => {
-  it("parses agentTabOpened as a one-way tab lifecycle event", () => {
+  it("parses tabOpened as a one-way tab lifecycle event carrying source + disposition", () => {
     const opened = {
-      kind: "agentTabOpened",
+      kind: "tabOpened",
       hasBinaryPayload: false,
       sessionId: "session-1",
       tabId: "tab-2",
+      source: "agent",
+      disposition: "foreground",
     };
     expect(browserSessionsServerFrameSchema.safeParse(opened).success).toBe(
       true,
     );
+    expect(
+      browserSessionsServerFrameSchema.safeParse({
+        ...opened,
+        source: "page",
+        disposition: "background",
+      }).success,
+    ).toBe(true);
+    // Both discriminating fields are required and closed.
+    expect(
+      browserSessionsServerFrameSchema.safeParse({
+        kind: "tabOpened",
+        hasBinaryPayload: false,
+        sessionId: "session-1",
+        tabId: "tab-2",
+      }).success,
+    ).toBe(false);
+    expect(
+      browserSessionsServerFrameSchema.safeParse({
+        ...opened,
+        disposition: "pip",
+      }).success,
+    ).toBe(false);
   });
 
   it("requires only the authorizing epicId on the open request", () => {

@@ -19,7 +19,10 @@ import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/bro
 import { makeBlankTileRef } from "@/stores/epics/canvas/tile-schema/blank-tile";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+import {
+  DEFAULT_TILE_PLACEMENT_SETTINGS,
+  useSettingsStore,
+} from "@/stores/settings/settings-store";
 
 const EPIC = "epic-surface-1";
 const HOST = "host-1";
@@ -51,7 +54,8 @@ describe("decideAgentTabDisposition", () => {
   it("suppresses with mode-off regardless of visibility or pip state", () => {
     expect(
       decideAgentTabDisposition({
-        mode: "off",
+        surfacing: "off",
+        browserPlacement: "pip",
         epicVisible: true,
         manualPipActive: false,
       }),
@@ -61,7 +65,8 @@ describe("decideAgentTabDisposition", () => {
   it("places a tile even in hidden epics and past a manual PiP", () => {
     expect(
       decideAgentTabDisposition({
-        mode: "tile",
+        surfacing: "surface",
+        browserPlacement: "split",
         epicVisible: false,
         manualPipActive: true,
       }),
@@ -71,7 +76,8 @@ describe("decideAgentTabDisposition", () => {
   it("never floats over a manual PiP", () => {
     expect(
       decideAgentTabDisposition({
-        mode: "pip",
+        surfacing: "surface",
+        browserPlacement: "pip",
         epicVisible: true,
         manualPipActive: true,
       }),
@@ -81,7 +87,8 @@ describe("decideAgentTabDisposition", () => {
   it("does not arm PiP for a hidden epic", () => {
     expect(
       decideAgentTabDisposition({
-        mode: "pip",
+        surfacing: "surface",
+        browserPlacement: "pip",
         epicVisible: false,
         manualPipActive: false,
       }),
@@ -91,7 +98,8 @@ describe("decideAgentTabDisposition", () => {
   it("floats when pip mode, visible epic, and no manual PiP", () => {
     expect(
       decideAgentTabDisposition({
-        mode: "pip",
+        surfacing: "surface",
+        browserPlacement: "pip",
         epicVisible: true,
         manualPipActive: false,
       }),
@@ -231,7 +239,10 @@ describe("surfaceAgentTab", () => {
   beforeEach(() => {
     useEpicCanvasStore.setState({ canvasByTabId: {}, tabsById: {} });
     dismissPip(EPIC);
-    useSettingsStore.setState({ agentTabSurfacingMode: "off" });
+    useSettingsStore.setState({
+      agentTabSurfacing: "off",
+      tilePlacement: DEFAULT_TILE_PLACEMENT_SETTINGS,
+    });
   });
 
   it("suppresses in off mode", () => {
@@ -242,8 +253,11 @@ describe("surfaceAgentTab", () => {
     expect(canvas === undefined || canvas.root === null).toBe(true);
   });
 
-  it("arms a pending agent PiP in pip mode on a visible epic", () => {
-    useSettingsStore.setState({ agentTabSurfacingMode: "pip" });
+  it("arms a pending agent PiP for a pip placement on a visible epic", () => {
+    useSettingsStore.setState({
+      agentTabSurfacing: "surface",
+      tilePlacement: { ...DEFAULT_TILE_PLACEMENT_SETTINGS, browser: "pip" },
+    });
     setEpicSurfaceVisibility(EPIC, true);
     surfaceAgentTab(agentTabFixture({ tabId: "tab-pip" }));
     expect(getPipSnapshot(EPIC).pendingTarget).toMatchObject({
@@ -255,7 +269,10 @@ describe("surfaceAgentTab", () => {
   });
 
   it("skips the float when a manual PiP owns the overlay", () => {
-    useSettingsStore.setState({ agentTabSurfacingMode: "pip" });
+    useSettingsStore.setState({
+      agentTabSurfacing: "surface",
+      tilePlacement: { ...DEFAULT_TILE_PLACEMENT_SETTINGS, browser: "pip" },
+    });
     setEpicSurfaceVisibility(EPIC, true);
     convertBrowserTabToPip({
       epicId: EPIC,
@@ -273,8 +290,11 @@ describe("surfaceAgentTab", () => {
     setEpicSurfaceVisibility(EPIC, false);
   });
 
-  it("places a canvas tile in tile mode even for hidden epics", () => {
-    useSettingsStore.setState({ agentTabSurfacingMode: "tile" });
+  it("places a canvas tile for a split placement even for hidden epics", () => {
+    useSettingsStore.setState({
+      agentTabSurfacing: "surface",
+      tilePlacement: { ...DEFAULT_TILE_PLACEMENT_SETTINGS, browser: "split" },
+    });
     setEpicSurfaceVisibility(EPIC, false);
     seedCanvasWithTile(makeBlankTileRef());
     surfaceAgentTab(agentTabFixture({ tabId: "tab-tiled" }));

@@ -312,9 +312,13 @@ describe("GeneralSettingsPanel", () => {
       showNavigatorResourceStats: false,
       pinContextUsageBreakdown: false,
       quoteReplyEnabled: true,
-      browserLinkDefaultMode: "in-app",
-      terminalBrowserLinkOpenMode: "in-app",
-      markdownBrowserLinkOpenMode: "in-app",
+      linkOpen: {
+        default: "in-app",
+        markdown: "in-app",
+        terminal: "in-app",
+        github: "in-app",
+        image: "in-app",
+      },
       browserDevOrigins: [],
     });
   });
@@ -471,7 +475,13 @@ describe("GeneralSettingsPanel", () => {
 
   it("renders per-kind browser link settings and removable dev origins", () => {
     useSettingsStore.setState({
-      browserLinkDefaultMode: "per-kind",
+      linkOpen: {
+        default: "per-kind",
+        markdown: "in-app",
+        terminal: "in-app",
+        github: "in-app",
+        image: "in-app",
+      },
       browserDevOrigins: ["http://localhost:5173"],
     });
 

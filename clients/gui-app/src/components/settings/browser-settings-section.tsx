@@ -28,56 +28,34 @@ import type {
   BrowserSavedLoginSitesResponse,
 } from "@traycer/protocol/host/browser/contracts";
 import {
-  isAgentTabSurfacingMode,
-  isBrowserLinkDefaultMode,
-  isBrowserLinkOpenMode,
+  isAgentTabSurfacing,
+  isLinkOpenDefault,
+  isLinkOpenMode,
   useSettingsStore,
-  type AgentTabSurfacingMode,
-  type BrowserLinkDefaultMode,
-  type BrowserLinkOpenMode,
+  type AgentTabSurfacing,
+  type LinkOpenMode,
+  type LinkOpenSettings,
 } from "@/stores/settings/settings-store";
 
-const BROWSER_LINK_DEFAULT_MODE_LABELS: Record<BrowserLinkDefaultMode, string> =
-  {
-    "in-app": "In app",
-    external: "External",
-    "per-kind": "Per kind",
-  };
-const BROWSER_LINK_OPEN_MODE_LABELS: Record<BrowserLinkOpenMode, string> = {
+const LINK_OPEN_DEFAULT_LABELS: Record<LinkOpenSettings["default"], string> = {
+  "in-app": "In app",
+  external: "External",
+  "per-kind": "Per kind",
+};
+const LINK_OPEN_MODE_LABELS: Record<LinkOpenMode, string> = {
   "in-app": "In app",
   external: "External",
 };
-const AGENT_TAB_SURFACING_LABELS: Record<AgentTabSurfacingMode, string> = {
-  pip: "Float (PiP)",
-  tile: "Tile in canvas",
+const AGENT_TAB_SURFACING_LABELS: Record<AgentTabSurfacing, string> = {
+  surface: "Surface on canvas",
   off: "Off (background only)",
 };
 
 export function BrowserSettingsSection(): ReactNode {
-  const browserLinkDefaultMode = useSettingsStore(
-    (s) => s.browserLinkDefaultMode,
-  );
-  const setBrowserLinkDefaultMode = useSettingsStore(
-    (s) => s.setBrowserLinkDefaultMode,
-  );
-  const terminalBrowserLinkOpenMode = useSettingsStore(
-    (s) => s.terminalBrowserLinkOpenMode,
-  );
-  const setTerminalBrowserLinkOpenMode = useSettingsStore(
-    (s) => s.setTerminalBrowserLinkOpenMode,
-  );
-  const markdownBrowserLinkOpenMode = useSettingsStore(
-    (s) => s.markdownBrowserLinkOpenMode,
-  );
-  const setMarkdownBrowserLinkOpenMode = useSettingsStore(
-    (s) => s.setMarkdownBrowserLinkOpenMode,
-  );
-  const agentTabSurfacingMode = useSettingsStore(
-    (s) => s.agentTabSurfacingMode,
-  );
-  const setAgentTabSurfacingMode = useSettingsStore(
-    (s) => s.setAgentTabSurfacingMode,
-  );
+  const linkOpen = useSettingsStore((s) => s.linkOpen);
+  const setLinkOpen = useSettingsStore((s) => s.setLinkOpen);
+  const agentTabSurfacing = useSettingsStore((s) => s.agentTabSurfacing);
+  const setAgentTabSurfacing = useSettingsStore((s) => s.setAgentTabSurfacing);
   const browserDevOrigins = useSettingsStore((s) => s.browserDevOrigins);
   const removeBrowserDevOrigin = useSettingsStore(
     (s) => s.removeBrowserDevOrigin,
@@ -96,26 +74,30 @@ export function BrowserSettingsSection(): ReactNode {
           description="Choose where http and https links open."
           control={
             <EnumSelect
-              labels={BROWSER_LINK_DEFAULT_MODE_LABELS}
-              isValue={isBrowserLinkDefaultMode}
-              value={browserLinkDefaultMode}
-              onValueChange={setBrowserLinkDefaultMode}
+              labels={LINK_OPEN_DEFAULT_LABELS}
+              isValue={isLinkOpenDefault}
+              value={linkOpen.default}
+              onValueChange={(value) => {
+                setLinkOpen({ default: value });
+              }}
               ariaLabel="Web link default"
               triggerClassName="w-[min(42vw,11rem)]"
             />
           }
         />
-        {browserLinkDefaultMode === "per-kind" ? (
+        {linkOpen.default === "per-kind" ? (
           <>
             <SettingsRow
               label="Terminal links"
               description="Applies to plain terminal URLs and OSC-8 hyperlinks."
               control={
                 <EnumSelect
-                  labels={BROWSER_LINK_OPEN_MODE_LABELS}
-                  isValue={isBrowserLinkOpenMode}
-                  value={terminalBrowserLinkOpenMode}
-                  onValueChange={setTerminalBrowserLinkOpenMode}
+                  labels={LINK_OPEN_MODE_LABELS}
+                  isValue={isLinkOpenMode}
+                  value={linkOpen.terminal}
+                  onValueChange={(value) => {
+                    setLinkOpen({ terminal: value });
+                  }}
                   ariaLabel="Link open mode"
                   triggerClassName="w-[min(42vw,10rem)]"
                 />
@@ -126,10 +108,12 @@ export function BrowserSettingsSection(): ReactNode {
               description="Applies to rendered markdown http and https anchors."
               control={
                 <EnumSelect
-                  labels={BROWSER_LINK_OPEN_MODE_LABELS}
-                  isValue={isBrowserLinkOpenMode}
-                  value={markdownBrowserLinkOpenMode}
-                  onValueChange={setMarkdownBrowserLinkOpenMode}
+                  labels={LINK_OPEN_MODE_LABELS}
+                  isValue={isLinkOpenMode}
+                  value={linkOpen.markdown}
+                  onValueChange={(value) => {
+                    setLinkOpen({ markdown: value });
+                  }}
                   ariaLabel="Link open mode"
                   triggerClassName="w-[min(42vw,10rem)]"
                 />
@@ -139,13 +123,13 @@ export function BrowserSettingsSection(): ReactNode {
         ) : null}
         <SettingsRow
           label="Agent tab surfacing"
-          description="Choose what happens on your canvas when the agent opens a browser tab: float it picture-in-picture, place a tile, or keep it in the background (sidebar only)."
+          description="Choose what happens on your canvas when the agent opens a browser tab: surface it using the browser tile placement, or keep it in the background (sidebar only)."
           control={
             <EnumSelect
               labels={AGENT_TAB_SURFACING_LABELS}
-              isValue={isAgentTabSurfacingMode}
-              value={agentTabSurfacingMode}
-              onValueChange={setAgentTabSurfacingMode}
+              isValue={isAgentTabSurfacing}
+              value={agentTabSurfacing}
+              onValueChange={setAgentTabSurfacing}
               ariaLabel="Agent tab surfacing"
               triggerClassName="w-[min(42vw,11rem)]"
             />

@@ -9,8 +9,10 @@ import {
 import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import { convertBrowserTabToPip, getPipSnapshot } from "../pip/pip-store";
 import {
+  tilePlacementForCategory,
   useSettingsStore,
-  type AgentTabSurfacingMode,
+  type AgentTabSurfacing,
+  type BrowserTilePlacement,
 } from "@/stores/settings/settings-store";
 
 type AgentTabSurfacableAction = "float" | "tile" | "suppress";
@@ -29,22 +31,26 @@ interface AgentTabDisposition {
  * Pure decision table. Contract:
  * - `off` suppresses presentation only. Electron tab creation and its ready
  *   acknowledgement remain part of the host-owned lifecycle transaction.
- * - `pip` floats the tab unless the user converted a PiP manually (never
- *   stomp explicit user intent) or the epic surface is hidden (a floating
- *   overlay nobody can see arms nothing); both fall back to suppression.
- *   An existing AGENT-origin PiP is replaced latest-wins.
- * - `tile` always places a canvas tile, even in a hidden epic: layout
- *   mutations are fine where an overlay would be invisible.
+ * - `surface` + browser placement `pip` floats the tab unless the user
+ *   converted a PiP manually (never stomp explicit user intent) or the epic
+ *   surface is hidden (a floating overlay nobody can see arms nothing); both
+ *   fall back to suppression. An existing AGENT-origin PiP is replaced
+ *   latest-wins.
+ * - `surface` with any other placement always places a canvas tile, even in a
+ *   hidden epic: layout mutations are fine where an overlay would be invisible.
  */
 export function decideAgentTabDisposition(input: {
-  readonly mode: AgentTabSurfacingMode;
+  readonly surfacing: AgentTabSurfacing;
+  readonly browserPlacement: BrowserTilePlacement;
   readonly epicVisible: boolean;
   readonly manualPipActive: boolean;
 }): AgentTabDisposition {
-  if (input.mode === "off") {
+  if (input.surfacing === "off") {
     return { action: "suppress", suppressReason: "mode-off" };
   }
-  if (input.mode === "tile") return { action: "tile", suppressReason: null };
+  if (input.browserPlacement !== "pip") {
+    return { action: "tile", suppressReason: null };
+  }
   if (input.manualPipActive) {
     return { action: "suppress", suppressReason: "manual-pip-active" };
   }
@@ -206,8 +212,13 @@ export function surfaceAgentTab(input: {
   readonly sessionId: string;
   readonly tabId: string;
 }): void {
+  const settings = useSettingsStore.getState();
   const disposition = decideAgentTabDisposition({
-    mode: useSettingsStore.getState().agentTabSurfacingMode,
+    surfacing: settings.agentTabSurfacing,
+    browserPlacement: tilePlacementForCategory(
+      settings.tilePlacement,
+      "browser",
+    ),
     epicVisible: isEpicSurfaceVisible(input.epicId),
     manualPipActive: isManualPipActive(input.epicId),
   });

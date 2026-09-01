@@ -169,9 +169,13 @@ describe("renderTile browser sessions host boundary", () => {
     routerHarness.results = [];
     useEpicCanvasStore.setState({ canvasByTabId: {}, tabsById: {} });
     useSettingsStore.setState({
-      browserLinkDefaultMode: "in-app",
-      markdownBrowserLinkOpenMode: "in-app",
-      terminalBrowserLinkOpenMode: "in-app",
+      linkOpen: {
+        default: "in-app",
+        markdown: "in-app",
+        terminal: "in-app",
+        github: "in-app",
+        image: "in-app",
+      },
       browserDevOrigins: [],
     });
   });
