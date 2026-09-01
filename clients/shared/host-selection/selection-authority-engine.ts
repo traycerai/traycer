@@ -66,9 +66,11 @@ import {
 } from "./selection-authority-contract";
 
 /**
- * How many CONSECUTIVE transport-confirmed refusals/timeouts - counted across
- * every window's attempts, deduplicated per (incarnation, attemptId) - make a
- * host `dead` (connection registry §2).
+ * How many CONSECUTIVE ordinary transport-confirmed refusals/timeouts - counted
+ * across every window's attempts, deduplicated per (incarnation, attemptId) -
+ * make a host `dead` (connection registry §2). A deterministic
+ * `plan-restricted` entitlement refusal is the deliberate one-observation
+ * exception; see `deriveLease`.
  *
  * Three, not one: the registry's target is "confirmation within ~5-10 s of
  * real death, not one failed probe". The transports pace their own redials
@@ -2761,8 +2763,11 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
    *    (which would flash `ready` a moment before the socket dies) and the
    *    death arm.
    * 3. a live session anywhere in the app is firsthand proof of life.
-   * 4. the confirmed-death streak. `plan-restricted` is reachable ONLY from a
-   *    refusal whose transport error carried it - never from a DTO.
+   * 4. confirmed refusal evidence. A `plan-restricted` refusal is conclusive
+   *    after one observation because it is a deterministic entitlement verdict;
+   *    ordinary reachability refusals still require the confirmed-death streak.
+   *    `plan-restricted` is reachable ONLY from a refusal whose transport error
+   *    carried it - never from a DTO.
    * 5. otherwise `connecting`: no evidence yet, or a streak still short of
    *    the threshold. Deliberately non-committal - neither usable-by-proof
    *    nor dead.
@@ -2886,7 +2891,8 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     }
     if (
       evidence !== null &&
-      evidence.refusalStreak >= CONFIRMED_DEATH_REFUSAL_STREAK
+      (evidence.lastCountedRefusalDetail === "plan-restricted" ||
+        evidence.refusalStreak >= CONFIRMED_DEATH_REFUSAL_STREAK)
     ) {
       return {
         hostId,

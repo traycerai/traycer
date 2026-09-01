@@ -292,6 +292,15 @@ function armPlanRestrictedSuppression(entry: CacheEntry, key: string): void {
   if (!isPlanRestricted(entry) || entry.planRestrictedUntil !== null) {
     return;
   }
+  // A consumer may have released while the attach grant was still in flight,
+  // arming the ordinary keep-warm teardown before the fatal arrived. The
+  // entitlement verdict has its own, longer lifetime; leaving that timer armed
+  // would evict this entry after REMOTE_SESSION_LINGER_MS and reopen the
+  // cross-session mint/dial loop long before the controlled reprobe is due.
+  if (entry.lingerTimer !== null) {
+    clearTimeout(entry.lingerTimer);
+    entry.lingerTimer = null;
+  }
   entry.planRestrictedUntil = Date.now() + PLAN_RESTRICTED_REPROBE_MS;
   entry.planRestrictedTimer = setTimeout(() => {
     entry.planRestrictedTimer = null;

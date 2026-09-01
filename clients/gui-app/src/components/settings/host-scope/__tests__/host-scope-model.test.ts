@@ -201,6 +201,37 @@ describe("buildHostScopeOptions planRestricted", () => {
       }).planRestricted,
     ).toBe(false);
   });
+
+  it("uses the matching authority lease to disable only the refused host", () => {
+    const options = buildHostScopeOptions({
+      directory: [
+        entry({ hostId: "restricted" }),
+        entry({ hostId: "healthy" }),
+      ],
+      registry: [],
+      localHostId: null,
+      activeHostId: null,
+      localService: undefined,
+      hasLiveSession: () => false,
+      leases: [
+        hostLeaseFixture("healthy", null),
+        hostLeaseFixture("restricted", { reason: "plan-restricted" }),
+      ],
+      authorityAttached: true,
+      localHostSettingUp: false,
+      nowMs: 0,
+    });
+    const byId = new Map(options.map((option) => [option.hostId, option]));
+
+    expect(byId.get("restricted")).toMatchObject({
+      connectable: false,
+      planRestricted: true,
+    });
+    expect(byId.get("healthy")).toMatchObject({
+      connectable: true,
+      planRestricted: false,
+    });
+  });
 });
 
 describe("buildHostScopeOptions planRestricted — composed against a real plan-gated mapped entry", () => {

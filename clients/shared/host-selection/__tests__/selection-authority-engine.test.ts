@@ -833,13 +833,14 @@ describe("SelectionAuthorityEngineImpl - death aggregation", () => {
     const attachA = engine.attach("A", attachRequest(seqA, []));
     if (!attachA.ok) throw new Error("expected attach to succeed");
 
-    for (let i = 0; i < CONFIRMED_DEATH_REFUSAL_STREAK; i += 1) {
-      engine.ingestEvidence(
-        "A",
-        attachA.incarnationId,
-        dialRefusal("H1", `plan-${i}`, "plan-restricted", i),
-      );
-    }
+    engine.ingestEvidence(
+      "A",
+      attachA.incarnationId,
+      dialRefusal("H1", "plan-1", "plan-restricted", 0),
+    );
+    // An entitlement refusal is deterministic, unlike a reachability failure:
+    // one observed verdict is conclusive and avoids manufacturing two more
+    // network attempts merely to make the UI publish the known reason.
     expect(findLease(engine.snapshot().leases, "H1")?.dead).toEqual({
       reason: "plan-restricted",
     });

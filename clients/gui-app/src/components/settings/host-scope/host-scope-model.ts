@@ -121,14 +121,18 @@ export function buildHostScopeOptions(
   const options = hostIds.map((hostId): HostScopeOption => {
     const entry = entries.get(hostId) ?? null;
     const item = items.get(hostId) ?? null;
+    const lease = leases.get(hostId) ?? null;
+    const leasePlanRestricted = isLeasePlanRestricted(lease);
     const isLocalMachine = hostId === input.localHostId;
     return {
       hostId,
       name: resolveHostName(hostId, entry, item),
       isLocalMachine,
       isActive: hostId === input.activeHostId,
-      connectable: isAdministrableRoute(entry, input.hasLiveSession(hostId)),
-      planRestricted: isPlanRestrictedRoute(entry),
+      connectable:
+        !leasePlanRestricted &&
+        isAdministrableRoute(entry, input.hasLiveSession(hostId)),
+      planRestricted: leasePlanRestricted || isPlanRestrictedRoute(entry),
       settingUp: isLocalMachine && input.localHostSettingUp,
       registered: item !== null,
       platform: item?.platform ?? null,
@@ -138,7 +142,7 @@ export function buildHostScopeOptions(
         isLocalMachine,
         hasLiveSession: input.hasLiveSession(hostId),
         service: isLocalMachine ? input.localService : undefined,
-        lease: leases.get(hostId) ?? null,
+        lease,
         authorityAttached: input.authorityAttached,
         planAllowsRemote: true,
         nowMs: input.nowMs,
@@ -150,6 +154,10 @@ export function buildHostScopeOptions(
   });
 
   return options.sort(compareHostOptions);
+}
+
+function isLeasePlanRestricted(lease: HostLeaseSnapshot | null): boolean {
+  return lease?.status === "dead" && lease.dead.reason === "plan-restricted";
 }
 
 /**

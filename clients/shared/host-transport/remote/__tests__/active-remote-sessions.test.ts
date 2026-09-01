@@ -460,6 +460,49 @@ describe("acquireRemoteSession", () => {
     expireLinger();
   });
 
+  it("replaces an in-flight linger with the full PLAN_RESTRICTED suppression window", () => {
+    const identity = freshIdentity();
+    const restricted = fakeSession();
+    const recovered = fakeSession();
+    const createSession = vi
+      .fn()
+      .mockReturnValueOnce(restricted)
+      .mockReturnValueOnce(recovered);
+
+    const first = acquireRemoteSession(
+      identity,
+      ELIGIBLE_POLICY,
+      createSession,
+    );
+    // Release before the attach result arrives: this arms ordinary linger.
+    first.close();
+    restricted.fatalCode = "PLAN_RESTRICTED";
+    restricted.closedUnderneath = true;
+    restricted.emitClosed();
+
+    vi.advanceTimersByTime(REMOTE_SESSION_LINGER_MS);
+    const stillSuppressed = acquireRemoteSession(
+      identity,
+      ELIGIBLE_POLICY,
+      createSession,
+    );
+    expect(createSession).toHaveBeenCalledTimes(1);
+    expect(stillSuppressed.terminalFatal()?.code).toBe("PLAN_RESTRICTED");
+    stillSuppressed.close();
+
+    vi.advanceTimersByTime(
+      PLAN_RESTRICTED_REPROBE_MS - REMOTE_SESSION_LINGER_MS,
+    );
+    const probe = acquireRemoteSession(
+      identity,
+      ELIGIBLE_POLICY,
+      createSession,
+    );
+    expect(createSession).toHaveBeenCalledTimes(2);
+    probe.close();
+    expireLinger();
+  });
+
   it("a session that goes fatal WHILE lingering is evicted on the next acquire, and the stale linger timer never touches the successor", () => {
     const identity = freshIdentity();
     const dead = fakeSession();
