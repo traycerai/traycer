@@ -1359,13 +1359,23 @@ export async function runHostStart(
         // Beside the report dir, every start: a fail-fast from native code
         // leaves neither stderr nor a report, and only a WER minidump names
         // the module (see crash-diagnostics.ts). Never throws.
-        // The DATA dir, not `target.cwd`: the spawn cwd can be an `opts.cwd`
-        // override, while the host is always told `--host-data-dir` of
-        // `hostHomeDir(...)` - and that is where the exit-code decoding sends
-        // a reader looking for the dump.
+        //
+        // A DATA dir, not `target.cwd`: the spawn cwd can be an `opts.cwd`
+        // override, while the host is always told `--host-data-dir` under
+        // `hostHomeDir(...)`. And the SHARED root rather than this
+        // environment's slot, because WER's `LocalDumps` key is scoped to the
+        // executable BASENAME and every environment ships the same
+        // `traycer-host.exe`: two signed slots side by side (staging beside
+        // production) would keep rewriting one key with two different
+        // `DumpFolder` values, and whichever started last would silently
+        // redirect the other's dumps into its own data directory - production
+        // crashing while production's own `crash-dumps` stays empty. One key,
+        // one folder. The dump file is named `<exe>.<pid>.dmp`, so the slot it
+        // came from is still recoverable from the supervisor's own record of
+        // the pid it spawned.
         const dumpRegistration = await deps.registerCrashDumpCapture(
           target.executable,
-          crashDumpsDirFor(hostHomeDir(opts.environment)),
+          crashDumpsDirFor(hostHomeDir(undefined)),
         );
         // A real failure is worth a line: the exit-code decoding points a
         // reader at `crash-dumps`, and an empty one with no explanation is

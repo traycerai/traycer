@@ -431,9 +431,18 @@ export function crashReportsDirFor(childCwd: string): string {
   return join(childCwd, "crash-reports");
 }
 
-/** `<childCwd>/crash-dumps` - where WER writes the host's minidumps on Windows. */
-export function crashDumpsDirFor(childCwd: string): string {
-  return join(childCwd, "crash-dumps");
+/**
+ * `<hostRoot>/crash-dumps` - where WER writes the host's minidumps on Windows.
+ *
+ * Pass the SHARED host root, never an environment's slot. The registration
+ * this feeds is keyed on the executable's basename
+ * ({@link registerWindowsCrashDumpCapture}), which every environment shares,
+ * so a per-slot folder here would give one key two competing values and let
+ * the last host to start redirect every other slot's dumps into its own data
+ * directory.
+ */
+export function crashDumpsDirFor(hostRoot: string): string {
+  return join(hostRoot, "crash-dumps");
 }
 
 /**
