@@ -37,9 +37,7 @@ vi.mock("@/hooks/pr/use-pr-list-subscription", () => ({
   usePrListSubscriptionForClient: () => subscriptionResult.current,
 }));
 
-function renderOwnerPr(): ReturnType<
-  typeof renderHook<ReturnType<typeof useOwnerListPrReferences>, unknown>
-> {
+function renderOwnerPr() {
   return renderHook(() =>
     useOwnerListPrReferences({
       hostId: "host-1",
