@@ -17,8 +17,11 @@ import {
   gitImageDiffRevisionKey,
   gitImageDiffRouting,
   gitImageDiffSides,
+  gitRoutesToPdfDiffCards,
 } from "@/lib/git/git-diff-tile";
 import { ImageDiffView } from "@/components/epic-canvas/image-preview/image-diff-view";
+import { PdfDiffView } from "@/components/epic-canvas/pdf-preview/pdf-diff-view";
+import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
 import { DiffContentLoadingSkeleton } from "./diff-content-loading-skeleton";
 import {
   DiffBundleCollapseChevron,
@@ -155,8 +158,24 @@ function BundleFileSectionBody(props: BundleFileSectionBodyProps): ReactNode {
   // binary image - see `gitImageDiffRouting` for the routing decision
   // itself, shared with the single-file diff tile.
   const { routeToImageDiff } = gitImageDiffRouting(props.file);
+  // Same shape as the single-file tile: PDF cards need the host to serve
+  // PDFs on `git.streamFileAsset` (>= 1.1); an old host keeps the exact
+  // pre-PDF behavior (binary placeholder / text diff). Image routing wins a
+  // straddling rename, exactly as in `GitFileDiffPanel`.
+  const gitAssetStreamVersion = useHostMethodSchemaVersion(
+    props.node.hostId,
+    "git.streamFileAsset",
+  );
+  const pdfCardsSupported =
+    gitAssetStreamVersion !== null &&
+    gitAssetStreamVersion.major === 1 &&
+    gitAssetStreamVersion.minor >= 1;
+  const routeToPdfCards =
+    !routeToImageDiff &&
+    gitRoutesToPdfDiffCards(props.file) &&
+    pdfCardsSupported;
   useEffect(() => {
-    if (!props.file.isBinary && !routeToImageDiff) return;
+    if (!props.file.isBinary && !routeToImageDiff && !routeToPdfCards) return;
     bundleFindRegistration.registerCoverageState(
       props.bundleFindFileId,
       "binary",
@@ -166,6 +185,7 @@ function BundleFileSectionBody(props: BundleFileSectionBodyProps): ReactNode {
     props.bundleFindFileId,
     props.file.isBinary,
     routeToImageDiff,
+    routeToPdfCards,
   ]);
 
   if (routeToImageDiff) {
@@ -188,6 +208,27 @@ function BundleFileSectionBody(props: BundleFileSectionBodyProps): ReactNode {
         fileName={props.file.path}
         conflicted={sides.conflicted}
         compact
+        onOpenExternally={null}
+        openExternallyOpening={false}
+      />
+    );
+  }
+  if (routeToPdfCards) {
+    const sides = gitImageDiffSides(props.file);
+    const revisionKey = gitImageDiffRevisionKey(props.file, props.headSha);
+    // Same per-side summary cards as the single-file tile - the bundle row
+    // composes the rich per-type views (the image branch above is the
+    // precedent), it does not fall back to a poorer rendering.
+    return (
+      <PdfDiffView
+        key={revisionKey}
+        runningDir={props.node.diff.runningDir}
+        filePath={props.file.path}
+        previousPath={props.file.previousPath}
+        revisionKey={revisionKey}
+        oldStage={sides.oldStage}
+        newStage={sides.newStage}
+        sizeBytes={props.file.sizeBytes}
         onOpenExternally={null}
         openExternallyOpening={false}
       />
