@@ -274,6 +274,36 @@ describe("useChatImageFetcher", () => {
     expect(request).toHaveBeenCalledTimes(1);
   });
 
+  it("does not let one build's unsupported verdict suppress a different build", async () => {
+    // The verdict key was `${hostId}\n${hostVersion}`, with a comment
+    // asserting a host id "never contains" a newline - an assumption about a
+    // value that crosses the wire as an unconstrained string, and silent about
+    // `hostVersion` entirely. These two pairs joined to the same key, so the
+    // first host's permanent negative suppressed the second's RPC leg for the
+    // rest of the renderer session.
+    request.mockRejectedValue(rpcError("E_HOST_UNSUPPORTED"));
+    docMocks.hasAttachmentBytes.mockReturnValue(true);
+    docMocks.readAttachmentBytes.mockResolvedValue(DOC_BYTES);
+
+    await expect(bytesOnce(scopeAt("h", "a\nb", true))).resolves.toEqual(
+      DOC_BYTES,
+    );
+    expect(request).toHaveBeenCalledTimes(1);
+
+    // A DIFFERENT build, aliasing onto the same joined key. It must still be
+    // probed - and it answers, so its bytes come off the chat plane.
+    request.mockReset();
+    request.mockResolvedValue({
+      ok: true,
+      bytesBase64: CHAT_PLANE_BASE64,
+      mediaType: "image/png",
+    });
+    await expect(bytesOnce(scopeAt("h\na", "b", true))).resolves.toEqual(
+      CHAT_PLANE_BYTES,
+    );
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
   it("never pins a verdict for a host whose build is not yet known", async () => {
     request.mockRejectedValue(rpcError("E_HOST_UNSUPPORTED"));
     docMocks.hasAttachmentBytes.mockReturnValue(true);

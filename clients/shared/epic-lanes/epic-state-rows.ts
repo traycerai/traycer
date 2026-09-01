@@ -119,12 +119,20 @@ export function artifactTombstoneRowId(artifactId: string): string {
  *
  * `(artifactId, threadId)` is the row key the contract names, and both parts
  * are needed: thread ids are unique per artifact, not per epic.
+ *
+ * JSON-encoded rather than `:`-joined. Both ids are `z.string()` on the wire,
+ * so a `:` inside either one aliases two distinct pairs onto one row -
+ * `("a:b","c")` and `("a","b:c")` - and the consequences are worse than a
+ * mixed-up render: a snapshot or upsert overwrites the other thread, and
+ * REMOVING either installs an absorbing retraction under the shared key that
+ * suppresses the survivor for the rest of the session. Only ever constructed
+ * and compared, never parsed, so the encoding is free to change.
  */
 export function commentThreadRowId(
   artifactId: string,
   threadId: string,
 ): string {
-  return `${COMMENT_THREAD_ROW_PREFIX}${artifactId}:${threadId}`;
+  return `${COMMENT_THREAD_ROW_PREFIX}${JSON.stringify([artifactId, threadId])}`;
 }
 
 /**

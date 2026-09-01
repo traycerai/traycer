@@ -2,6 +2,7 @@ import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  buildScopedImageCacheKey,
   imageBlobCache,
   type ImageBlobLease,
   type ImageBlobResolution,
@@ -27,6 +28,24 @@ function resolvedAs(url: string): ImageBlobResolution {
 
 const bytesFetcher = () =>
   Promise.resolve({ bytes: new Uint8Array([1]), mediaType: null });
+
+/**
+ * Stand in for the cache's own key derivation.
+ *
+ * The hook hands `acquire` the raw hash plus the scoped source and the CACHE
+ * derives the entry identity - so a double that keyed on the first argument
+ * alone would collapse two subjects onto one blob and report that as correct.
+ */
+function leaseKeyedLikeTheCache(
+  subject: string,
+  fetcher: ScopedImageBytesFetcher,
+): ImageBlobLease {
+  return makeLease(
+    Promise.resolve(
+      resolvedAs(`blob:${buildScopedImageCacheKey(fetcher.scopeKey, subject)}`),
+    ),
+  );
+}
 
 /**
  * Bundles a bare byte source with a cache subject, for the cases below that
@@ -202,9 +221,12 @@ describe("useImageBlobUrlState", () => {
     const recoveredFetcher = scopedFetcher(recoveredInner, "test-scope");
     const acquire = vi
       .spyOn(imageBlobCache, "acquire")
-      .mockImplementation((_key, _mediaType, fetcher) =>
+      .mockImplementation((_subject, _mediaType, fetcher) =>
         makeLease(
-          fetcher === recoveredInner
+          // `.fetch`, because the hook hands `acquire` the SCOPED source, not
+          // the bare function - the cache needs `scopeKey` to derive its own
+          // entry identity.
+          fetcher.fetch === recoveredInner
             ? Promise.resolve(resolvedAs("blob:rearmed-image"))
             : Promise.reject(new Error("store disposed")),
         ),
@@ -250,8 +272,8 @@ describe("useImageBlobUrlState", () => {
     // miss.
     const acquire = vi
       .spyOn(imageBlobCache, "acquire")
-      .mockImplementation((key) =>
-        makeLease(Promise.resolve(resolvedAs(`blob:${key}`))),
+      .mockImplementation((subject, _mediaType, fetcher) =>
+        leaseKeyedLikeTheCache(subject, fetcher),
       );
     const sharedHash = "hash-referenced-from-two-artifacts";
     // Hoisted, not built inside the render callback: the hook documents that
@@ -270,7 +292,19 @@ describe("useImageBlobUrlState", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
 
-    const keys = acquire.mock.calls.map((call) => call[0]);
+    // The SUBJECT handed to the cache is the bare hash, because that is what
+    // the byte source is asked for. Passing the scoped identity here instead
+    // made every artifact/chat RPC request `["scope","<hash>"]` and no
+    // persisted image resolved.
+    expect(acquire.mock.calls.map((call) => call[0])).toEqual([
+      sharedHash,
+      sharedHash,
+    ]);
+
+    // Scoping is therefore visible in the DERIVED identity, not the subject.
+    const keys = acquire.mock.calls.map(([subject, , fetcher]) =>
+      buildScopedImageCacheKey(fetcher.scopeKey, subject),
+    );
     expect(keys).toHaveLength(2);
     expect(new Set(keys).size).toBe(2);
     // Every key still CONTAINS the hash - the entries are distinct because of
@@ -289,8 +323,8 @@ describe("useImageBlobUrlState", () => {
     // rendering an image onto one blob, which is the whole reason it exists.
     const acquire = vi
       .spyOn(imageBlobCache, "acquire")
-      .mockImplementation((key) =>
-        makeLease(Promise.resolve(resolvedAs(`blob:${key}`))),
+      .mockImplementation((subject, _mediaType, fetcher) =>
+        leaseKeyedLikeTheCache(subject, fetcher),
       );
     const fetcher = scopedFetcher(vi.fn(bytesFetcher), "artifact-a");
 
@@ -318,8 +352,9 @@ describe("useImageBlobUrlState", () => {
     // subject's bytes for the whole of the new subject's fetch, and
     // indefinitely if the new one never resolves. `loading` is the assertion
     // that matters here; the later `ready` only proves the hook still works.
-    vi.spyOn(imageBlobCache, "acquire").mockImplementation((key) =>
-      makeLease(Promise.resolve(resolvedAs(`blob:${key}`))),
+    vi.spyOn(imageBlobCache, "acquire").mockImplementation(
+      (subject, _mediaType, fetcher) =>
+        leaseKeyedLikeTheCache(subject, fetcher),
     );
 
     const fetcherA = scopedFetcher(vi.fn(bytesFetcher), "artifact-a");

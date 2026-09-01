@@ -64,9 +64,13 @@ const hostBuildsWithoutChatAttachmentRead = new Set<string>();
  */
 function hostBuildKey(scope: ChatAttachmentScopeValue): string | null {
   if (scope.hostVersion === null) return null;
-  // Newline-separated: a host id never contains one, so no two distinct pairs
-  // can collide on a single key.
-  return `${scope.hostId}\n${scope.hostVersion}`;
+  // JSON-encoded, not newline-joined. The previous comment here asserted that
+  // "a host id never contains one" - an assumption about a value that crosses
+  // the wire as an unconstrained string, and it says nothing about
+  // `hostVersion` at all. A newline in either aliases distinct pairs, so an
+  // `E_HOST_UNSUPPORTED` verdict learned for one build would suppress
+  // attachment fetches for a different one for the rest of the session.
+  return JSON.stringify([scope.hostId, scope.hostVersion]);
 }
 
 /**

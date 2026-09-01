@@ -192,9 +192,15 @@ export interface ImageBlobCache {
    * later acquirer's claim cannot describe different bytes.
    */
   acquire: (
-    hash: string,
+    /**
+     * What the byte source is asked FOR - a content hash, or the composite
+     * `buildImageAssetCacheKey` string for workspace assets. NOT the cache
+     * key: `acquire` derives that from this and `fetcher.scopeKey`, so a
+     * caller cannot hand the fetcher a scoped identity by mistake.
+     */
+    subject: string,
     mediaType: string,
-    fetcher: ImageBytesFetcher,
+    fetcher: ScopedImageBytesFetcher,
     retention: ImageBlobRetention,
   ) => ImageBlobLease;
   /** Live entry count (diagnostics/tests). */
@@ -209,7 +215,7 @@ export interface ImageBlobCache {
    * again. Safe to call with a hash that is not (or no longer) cached - a
    * no-op. A later `acquire()` for the same identity starts a fresh fetch.
    */
-  discard: (hash: string) => void;
+  discard: (scopeKey: string, subject: string) => void;
   /**
    * Test-only: drops every entry immediately, bypassing grace/session
    * retention and revoking every live URL. `"session"`-retention entries
@@ -228,7 +234,7 @@ export function createImageBlobCache(
 ): ImageBlobCache {
   const entries = new Map<string, CacheEntry>();
 
-  const scheduleRevoke = (hash: string, entry: CacheEntry): void => {
+  const scheduleRevoke = (identity: string, entry: CacheEntry): void => {
     // Session retention (immutable git object bytes, decision #11): a
     // zero-ref entry stays cached for the rest of the app session rather
     // than being revoked after the grace window, so a remount later reuses
@@ -239,7 +245,7 @@ export function createImageBlobCache(
       entry.cancelRevoke = null;
       if (entry.refCount > 0) return;
       if (entry.resolved !== null) ops.revoke(entry.resolved.url);
-      entries.delete(hash);
+      entries.delete(identity);
     }, graceMs);
     entry.cancelRevoke = () => clearTimeout(handle);
   };
@@ -249,31 +255,39 @@ export function createImageBlobCache(
   // to be. This is the ABA fix: a `discard()`/prior-`release()` can already
   // have removed `target` from `entries` and a later `acquire()` can already
   // have installed an unrelated replacement there by the time this runs; the
-  // `entries.get(hash) !== target` check below is what stops this stale
+  // `entries.get(identity) !== target` check below is what stops this stale
   // release from touching that live replacement.
-  const releaseEntry = (hash: string, target: CacheEntry): void => {
+  const releaseEntry = (identity: string, target: CacheEntry): void => {
     if (target.refCount > 0) target.refCount -= 1;
     if (target.refCount > 0) return;
-    if (entries.get(hash) !== target) return;
+    if (entries.get(identity) !== target) return;
     if (target.inFlight !== null) {
       // Nothing wants the bytes anymore - cancel the fetch and drop the entry so
       // its observers/timers tear down; a re-acquire starts a fresh fetch.
       target.abort?.abort();
       target.abort = null;
       target.inFlight = null;
-      entries.delete(hash);
+      entries.delete(identity);
       return;
     }
-    scheduleRevoke(hash, target);
+    scheduleRevoke(identity, target);
   };
 
   const acquire = (
-    hash: string,
+    subject: string,
     mediaType: string,
-    fetcher: ImageBytesFetcher,
+    fetcher: ScopedImageBytesFetcher,
     retention: ImageBlobRetention,
   ): ImageBlobLease => {
-    let entry = entries.get(hash);
+    // The map key is DERIVED here, never taken from the caller, and the byte
+    // source is asked for `subject` - the two roles used to share one `hash`
+    // parameter, and a caller that correctly passed a scoped key for the first
+    // role thereby asked its RPC for `["scope","sha256..."]` instead of the
+    // hash. Deriving it is what makes the two impossible to disagree: there is
+    // no argument that can carry a scope into the fetcher, and none that can
+    // reach the map without one.
+    const identity = buildScopedImageCacheKey(fetcher.scopeKey, subject);
+    let entry = entries.get(identity);
     if (entry === undefined) {
       entry = {
         refCount: 0,
@@ -283,7 +297,7 @@ export function createImageBlobCache(
         retention,
         cancelRevoke: null,
       };
-      entries.set(hash, entry);
+      entries.set(identity, entry);
     }
     entry.refCount += 1;
     if (entry.cancelRevoke !== null) {
@@ -296,7 +310,7 @@ export function createImageBlobCache(
     const release = (): void => {
       if (released) return;
       released = true;
-      releaseEntry(hash, target);
+      releaseEntry(identity, target);
     };
 
     if (target.resolved !== null) {
@@ -308,11 +322,11 @@ export function createImageBlobCache(
 
     const controller = new AbortController();
     target.abort = controller;
-    // `entries.get(hash) === target` guards every late callback: once an entry
+    // `entries.get(identity) === target` guards every late callback: once an entry
     // is released/replaced, its stale fetch must not resurrect or clobber it.
-    target.inFlight = fetcher(hash, controller.signal).then(
+    target.inFlight = fetcher.fetch(subject, controller.signal).then(
       (result) => {
-        if (entries.get(hash) !== target) {
+        if (entries.get(identity) !== target) {
           throw new Error("image blob fetch superseded");
         }
         // The byte source's own verdict outranks the caller's declared type:
@@ -328,15 +342,15 @@ export function createImageBlobCache(
         target.inFlight = null;
         target.abort = null;
         // Released while the fetch was in flight: revoke once the grace passes.
-        if (target.refCount === 0) scheduleRevoke(hash, target);
+        if (target.refCount === 0) scheduleRevoke(identity, target);
         return resolved;
       },
       (error) => {
-        if (entries.get(hash) === target) {
+        if (entries.get(identity) === target) {
           target.inFlight = null;
           target.abort = null;
           // Never leave a poisoned entry: drop it so a later acquire retries.
-          entries.delete(hash);
+          entries.delete(identity);
         }
         throw error;
       },
@@ -351,10 +365,16 @@ export function createImageBlobCache(
     entries.delete(hash);
   };
 
-  const discard = (hash: string): void => {
-    const entry = entries.get(hash);
+  const discard = (scopeKey: string, subject: string): void => {
+    // Same derivation as `acquire`, for the same reason: the map is keyed by
+    // the scoped identity, so a bare subject matches nothing. `discard` is
+    // documented as a safe no-op on an absent key, which means a mismatch here
+    // fails SILENTLY - the undecodable entry stays live and its URL is never
+    // revoked - so it derives rather than accepting a key.
+    const identity = buildScopedImageCacheKey(scopeKey, subject);
+    const entry = entries.get(identity);
     if (entry === undefined) return;
-    dropEntry(hash, entry);
+    dropEntry(identity, entry);
   };
 
   const clear = (): void => {

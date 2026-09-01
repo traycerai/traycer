@@ -103,13 +103,16 @@ export function useImageBlobUrlState(
     const acquire = (): void => {
       attemptCount += 1;
       const lease = imageBlobCache.acquire(
-        // The SUBJECT is in the identity, not just the hash: `acquire` serves a
-        // resolved or in-flight entry without running this fetcher, so a
-        // bare-hash key would let the first acquirer's authorization stand in
-        // for every later one's (`ScopedImageBytesFetcher`).
-        identity,
+        // The HASH, which is what the RPC is asked for. The subject still
+        // scopes the cache entry - `acquire` serves a resolved or in-flight
+        // entry without running this fetcher, so a bare-hash key would let the
+        // first acquirer's authorization stand in for every later one's - but
+        // it does that by deriving the key from `fetcher.scopeKey` itself.
+        // Passing the scoped identity HERE asked the artifact/chat RPCs for
+        // `["scope","sha256..."]` and no image ever resolved.
+        hash,
         mediaType,
-        fetcher.fetch,
+        fetcher,
         // Content-addressed within their subject, but not treated as
         // session-immutable here - unchanged grace-window behavior.
         "grace",

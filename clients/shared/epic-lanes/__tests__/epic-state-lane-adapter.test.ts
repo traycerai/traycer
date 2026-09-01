@@ -589,6 +589,24 @@ describe("createEpicStateLaneAdapter - snapshot row decode", () => {
     expect(rowIds).toContain(ROLE_CLAIMS_ROW_ID);
   });
 
+  it("gives distinct (artifactId, threadId) pairs distinct row ids", () => {
+    // `:`-joined, these two pairs produced the SAME row id. Both fields are
+    // `z.string()` on the wire, so this is reachable input, and the failure is
+    // not a mixed-up render: an upsert overwrites the other thread, and
+    // removing either installs an absorbing retraction under the shared key
+    // that suppresses the survivor for the rest of the session.
+    expect(commentThreadRowId("a:b", "c")).not.toBe(
+      commentThreadRowId("a", "b:c"),
+    );
+    // The separator is not special - nothing this picks can be, which is why
+    // the encoding is injective rather than merely using a rarer character.
+    expect(commentThreadRowId('a"b', "c")).not.toBe(
+      commentThreadRowId("a", '"b,c'),
+    );
+    // ...while the ordinary case still round-trips to one stable id.
+    expect(commentThreadRowId("a1", "t1")).toBe(commentThreadRowId("a1", "t1"));
+  });
+
   it("carries the role-claims row even when claims is empty", () => {
     const { factory, latest } = createFakeStreamClientFactory();
     const adapter = createEpicStateLaneAdapter(

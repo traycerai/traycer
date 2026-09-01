@@ -1068,7 +1068,10 @@ describe("useImageAsset", () => {
         "git-oid",
       ]),
       "image/png",
-      expect.any(Function),
+      // The scoped shape, not a bare function: `acquire` derives its entry
+      // identity from `scopeKey`, so a byte source cannot reach the cache
+      // without declaring what it authorizes against.
+      expect.objectContaining({ scopeKey: "image-asset" }),
       "session",
     );
   });
@@ -1120,7 +1123,10 @@ describe("useImageAsset", () => {
         "cancelled-identity",
       ]),
       "image/png",
-      expect.any(Function),
+      // The scoped shape, not a bare function: `acquire` derives its entry
+      // identity from `scopeKey`, so a byte source cannot reach the cache
+      // without declaring what it authorizes against.
+      expect.objectContaining({ scopeKey: "image-asset" }),
       "grace",
     );
     expect(createObjectUrlMock).not.toHaveBeenCalled();
