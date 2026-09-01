@@ -371,6 +371,17 @@ export interface PendingChatAction {
    */
   readonly restoreWorktreeIntent: WorktreeIntent | null;
   /**
+   * Render-only copy of the consumed worktree choice. Unlike the restore copy,
+   * this is retired once the host records the message, so retained action
+   * bookkeeping cannot mask a newer binding after transcript-window eviction.
+   */
+  readonly displayWorktreeIntent: WorktreeIntent | null;
+  /**
+   * A live `messageAccepted` sighting retained across transcript-window
+   * eviction until the action ack copies it to `AcceptedChatAction`.
+   */
+  readonly messageConfirmedByHost: boolean;
+  /**
    * Staging revision immediately after the send consumes its selection. A
    * rejection restores only when the user has made no newer picker choice.
    */
@@ -516,6 +527,8 @@ export interface AcceptedChatAction {
   readonly accountContext: AccountContext | null;
   readonly deliveryPolicy: ChatQueueDeliveryPolicy | null;
   readonly restoreWorktreeIntent: WorktreeIntent | null;
+  /** See {@link PendingChatAction.displayWorktreeIntent}. */
+  readonly displayWorktreeIntent: WorktreeIntent | null;
   /**
    * The connection this send was DISPATCHED on, carried across the accepted
    * ack. Absence from a snapshot is only evidence against an earlier
@@ -4580,25 +4593,33 @@ export function createChatSessionStoreWithNotificationDependencies(
                 state.acceptedActions,
                 pending,
                 Date.now(),
-                // An ack confirms the host RECEIVED the frame, nothing about
-                // whether the message exists - that rule stands. What CAN
-                // confirm at this door is the transcript the record is born
-                // into: `messageAccepted` legitimately arrives BEFORE the ack
-                // (`takeSetupFailedRestoration` slot 2 documents the order),
-                // and in that order door 5 fired while the send was still
-                // pending, found no accepted record to stamp, and this birth
-                // is the only chance to carry that sighting. A hardcoded
-                // `false` here re-opened the resurrection through the other
-                // arm of the same race.
-                //
-                // The transcript ONLY - deliberately not `state.queue`, which
-                // is merged with locally-minted optimistic items, so reading
-                // it would let our own write confirm our own send. A false
-                // confirmation fails in the dangerous direction (quiet about
-                // a real loss); queue-parked sends are covered in both orders
-                // by the queue and snapshot doors.
-                pending.messageId !== null &&
-                  messageExists(state.messages, pending.messageId),
+                {
+                  // An ack confirms the host RECEIVED the frame, nothing about
+                  // whether the message exists - that rule stands. What CAN
+                  // confirm at this door is the transcript the record is born
+                  // into: `messageAccepted` legitimately arrives BEFORE the ack
+                  // (`takeSetupFailedRestoration` slot 2 documents the order),
+                  // and in that order door 5 fired while the send was still
+                  // pending, found no accepted record to stamp, and this birth
+                  // is the only chance to carry that sighting. A hardcoded
+                  // `false` here re-opened the resurrection through the other
+                  // arm of the same race.
+                  //
+                  // The transcript ONLY - deliberately not `state.queue`, which
+                  // is merged with locally-minted optimistic items, so reading
+                  // it would let our own write confirm our own send. A false
+                  // confirmation fails in the dangerous direction (quiet about
+                  // a real loss); queue-parked sends are covered in both orders
+                  // by the queue and snapshot doors.
+                  confirmedByHost:
+                    pending.messageConfirmedByHost ||
+                    (pending.messageId !== null &&
+                      messageExists(state.messages, pending.messageId)),
+                  messageConfirmedByHost:
+                    pending.messageConfirmedByHost ||
+                    (pending.messageId !== null &&
+                      messageExists(state.messages, pending.messageId)),
+                },
               ),
               pendingUserMessages: nextPendingUsers,
               pendingBackgroundStops: backgroundStopAck.pendingStops,
@@ -4668,6 +4689,10 @@ export function createChatSessionStoreWithNotificationDependencies(
             state.acceptedActions,
             frame.message.messageId,
           );
+          const pendingActions = releasePendingWorktreeIntentDisplayByMessageId(
+            state.pendingActions,
+            frame.message.messageId,
+          );
           // On the windowed line the record goes into the WINDOW instead (see
           // `takeLiveRecords`), and `messages` is republished from there - so
           // the existence check moves with it, because `state.messages` here
@@ -4679,6 +4704,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           ) {
             return {
               acceptedActions,
+              pendingActions,
               pendingUserMessages,
               queue: removeOptimisticQueuedItemByMessageId(
                 state.queue,
@@ -4688,6 +4714,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           }
           return {
             acceptedActions,
+            pendingActions,
             messages: [...state.messages, frame.message],
             pendingUserMessages,
             queue: removeOptimisticQueuedItemByMessageId(
@@ -5695,6 +5722,8 @@ export function createChatSessionStoreWithNotificationDependencies(
             settings: input.settings,
             accountContext: frame.accountContext,
             restoreWorktreeIntent: worktreeIntent,
+            displayWorktreeIntent: worktreeIntent,
+            messageConfirmedByHost: false,
             deliveryPolicy: frame.deliveryPolicy,
             createdAt: Date.now(),
           },
@@ -5818,6 +5847,8 @@ export function createChatSessionStoreWithNotificationDependencies(
             sender: input.sender,
             settings: input.settings,
             restoreWorktreeIntent: null,
+            displayWorktreeIntent: null,
+            messageConfirmedByHost: false,
             // The DISPATCHED context, not a default. A Team-billed first
             // message that strands would otherwise report that it was going
             // to bill personal - a drift statement lying about the very thing
@@ -5924,6 +5955,8 @@ export function createChatSessionStoreWithNotificationDependencies(
             sender: null,
             settings: null,
             restoreWorktreeIntent: worktreeIntent,
+            displayWorktreeIntent: worktreeIntent,
+            messageConfirmedByHost: false,
             accountContext: null,
             deliveryPolicy: null,
             createdAt: Date.now(),
@@ -5997,6 +6030,8 @@ export function createChatSessionStoreWithNotificationDependencies(
             sender: null,
             settings: null,
             restoreWorktreeIntent: null,
+            displayWorktreeIntent: null,
+            messageConfirmedByHost: false,
             accountContext: null,
             deliveryPolicy: null,
             createdAt: Date.now(),
@@ -6751,6 +6786,8 @@ function basicPending(
     sender: null,
     settings: null,
     restoreWorktreeIntent: null,
+    displayWorktreeIntent: null,
+    messageConfirmedByHost: false,
     accountContext: null,
     deliveryPolicy: null,
     createdAt: Date.now(),
@@ -6784,6 +6821,56 @@ export function projectQueueWithPendingCancellations(
     (item) => !hiddenQueueItemIds.has(item.queueItemId),
   );
   return items.length === queue.items.length ? queue : { ...queue, items };
+}
+
+/**
+ * The worktree choice owned by the dispatch that most recently consumed this
+ * chat's staging slot. This is a render-only bridge across the interval where
+ * the picker choice has left staging but the host has not yet published the
+ * replacement binding.
+ *
+ * The transcript message is the authoritative end of that interval: on an
+ * ordered connection the host publishes the replacement binding before
+ * `messageAccepted`, while queued sends do not enter the transcript until
+ * their deferred worktree setup has completed. Accepted action records may be
+ * retained after that point for recovery bookkeeping, so message presence is
+ * also what prevents a retained record from masking later binding changes.
+ */
+export function dispatchedWorktreeIntentForDisplay(
+  pendingActions: Readonly<Record<string, PendingChatAction>>,
+  acceptedActions: Readonly<Record<string, AcceptedChatAction>>,
+  clientActionId: string | null,
+): WorktreeIntent | null {
+  if (clientActionId === null) return null;
+  let action: PendingChatAction | AcceptedChatAction | null = null;
+  if (Object.hasOwn(pendingActions, clientActionId)) {
+    action = pendingActions[clientActionId];
+  } else if (Object.hasOwn(acceptedActions, clientActionId)) {
+    action = acceptedActions[clientActionId];
+  }
+  return action?.displayWorktreeIntent ?? null;
+}
+
+function releasePendingWorktreeIntentDisplayByMessageId(
+  pendingActions: Readonly<Record<string, PendingChatAction>>,
+  messageId: string,
+): Readonly<Record<string, PendingChatAction>> {
+  const pending = Object.values(pendingActions).find(
+    (candidate) =>
+      candidate.action === "send" &&
+      candidate.messageId === messageId &&
+      (!candidate.messageConfirmedByHost ||
+        candidate.displayWorktreeIntent !== null),
+  );
+  if (pending === undefined) return pendingActions;
+  return {
+    ...pendingActions,
+    [pending.clientActionId]: {
+      ...pending,
+      displayWorktreeIntent: null,
+      messageConfirmedByHost: true,
+    },
+  };
 }
 
 // The client action id of an in-flight (pending) or accepted-but-unresolved
