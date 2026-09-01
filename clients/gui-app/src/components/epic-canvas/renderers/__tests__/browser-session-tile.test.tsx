@@ -1,5 +1,6 @@
 import "../../../../../__tests__/test-browser-apis";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -294,6 +295,153 @@ describe("BrowserSessionTile lifecycle projection", () => {
 
     expect(screen.getByText("Reconnecting browser tab…")).toBeTruthy();
     expect(screen.queryByTestId("headless-browser-tab")).toBeNull();
+  });
+
+  it("takes the wake path for a dormant tab of an Electron session", () => {
+    // `materialize` provisions only the tab it was asked for, so a live
+    // Electron session routinely publishes dormant siblings. A sibling that
+    // fell into the bare null-binding branch had no way back: the reconnect
+    // spinner subscribes to nothing, and the screencast subscription behind
+    // the peek tile is the only thing that reaches `ensureTabAttached`.
+    harness.items = [session("dormant", "electron")];
+
+    renderTile();
+
+    expect(screen.getByTestId("headless-browser-tab").dataset.tab).toBe(
+      "tab-1",
+    );
+    expect(screen.queryByText("Reconnecting browser tab…")).toBeNull();
+  });
+
+  it("prefers an accepted binding over the wake path even while the tab still reads dormant", () => {
+    // The renderer publishes the binding before the host's `electronTabState`
+    // lands, so this window is ordinary. Native pixels win it.
+    harness.binding = binding();
+    harness.items = [session("dormant", "electron")];
+
+    renderTile();
+
+    expect(screen.getByTestId("managed-electron-tab")).toBeTruthy();
+    expect(screen.queryByTestId("headless-browser-tab")).toBeNull();
+  });
+
+  it("bounds the reconnect wait and offers the wake path once it expires", () => {
+    vi.useFakeTimers();
+    try {
+      harness.items = [session("ready", "electron")];
+
+      renderTile();
+
+      expect(screen.getByText("Reconnecting browser tab…")).toBeTruthy();
+      expect(screen.queryByTestId("browser-tab-rebind-timeout")).toBeNull();
+
+      act(() => {
+        vi.advanceTimersByTime(10_000);
+      });
+
+      expect(screen.queryByText("Reconnecting browser tab…")).toBeNull();
+      const timedOut = screen.getByTestId("browser-tab-rebind-timeout");
+      expect(timedOut.getAttribute("role")).toBe("alert");
+
+      fireEvent.click(screen.getByRole("button", { name: "Reopen tab" }));
+
+      expect(screen.getByTestId("headless-browser-tab").dataset.tab).toBe(
+        "tab-1",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("returns to the actionable error state once the bounded wake window itself expires with no binding", () => {
+    // The wake request is bounded, not latched: a reader who clicked "Reopen
+    // tab" and never got a binding back must land on the same actionable
+    // error state the original reconnect wait offers, not spin on the peek
+    // tile forever.
+    vi.useFakeTimers();
+    try {
+      harness.items = [session("ready", "electron")];
+
+      renderTile();
+
+      act(() => {
+        vi.advanceTimersByTime(10_000);
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Reopen tab" }));
+      expect(screen.getByTestId("headless-browser-tab")).toBeTruthy();
+
+      // The bounded wake window's own deadline, still with no binding.
+      act(() => {
+        vi.advanceTimersByTime(10_000);
+      });
+
+      expect(screen.queryByTestId("headless-browser-tab")).toBeNull();
+      // Falls straight to the error state - no intervening reconnect spinner.
+      expect(screen.queryByText("Reconnecting browser tab…")).toBeNull();
+      const timedOut = screen.getByTestId("browser-tab-rebind-timeout");
+      expect(timedOut.getAttribute("role")).toBe("alert");
+      expect(screen.getByRole("button", { name: "Reopen tab" })).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets a binding arrive mid-wake-window, then falls back to the actionable alert (not a phantom headless tab) once a stale wake request has naturally expired", () => {
+    vi.useFakeTimers();
+    try {
+      harness.items = [session("ready", "electron")];
+
+      const view = render(
+        <BrowserSessionTile
+          node={NODE}
+          viewTabId="view-1"
+          paneId="pane-1"
+          epicId="epic-1"
+        />,
+      );
+
+      act(() => {
+        vi.advanceTimersByTime(10_000);
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Reopen tab" }));
+      expect(screen.getByTestId("headless-browser-tab")).toBeTruthy();
+
+      // A binding arrives before the wake window expires - native pixels win.
+      harness.binding = binding();
+      view.rerender(
+        <BrowserSessionTile
+          node={NODE}
+          viewTabId="view-1"
+          paneId="pane-1"
+          epicId="epic-1"
+        />,
+      );
+      expect(screen.getByTestId("managed-electron-tab")).toBeTruthy();
+
+      // A later, transient reconnect: the binding drops again well after the
+      // original wake window would have elapsed. The stale request is inert
+      // by then, so this lands on the same actionable alert a fresh expiry
+      // produces - never stuck spinning, and never a phantom headless tab.
+      act(() => {
+        vi.advanceTimersByTime(10_000);
+      });
+      harness.binding = null;
+      view.rerender(
+        <BrowserSessionTile
+          node={NODE}
+          viewTabId="view-1"
+          paneId="pane-1"
+          epicId="epic-1"
+        />,
+      );
+
+      expect(screen.queryByText("Reconnecting browser tab…")).toBeNull();
+      expect(screen.queryByTestId("headless-browser-tab")).toBeNull();
+      const timedOut = screen.getByTestId("browser-tab-rebind-timeout");
+      expect(timedOut.getAttribute("role")).toBe("alert");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("renders a dormant placeholder for an unreachable host and never closes the tile", async () => {
