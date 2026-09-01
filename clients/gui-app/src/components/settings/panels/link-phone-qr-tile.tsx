@@ -7,7 +7,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
 /**
- * The branded QR tile for the link-a-phone code, drawn here rather than by a
+ * The branded QR tile for the link-mobile-app code, drawn here rather than by a
  * QR-styling library. `qrcode` hands back the raw module matrix synchronously,
  * so the whole symbol is plain SVG: it renders identically under jsdom (a test
  * can compare every drawn module against the encoder's matrix), it takes the
@@ -172,7 +172,7 @@ const QrSymbolSvg = memo(function QrSymbolSvg(props: {
       viewBox={`0 0 ${extent} ${extent}`}
       className="absolute inset-0 h-full w-full"
       role="img"
-      aria-label="Link-a-phone QR code"
+      aria-label="Link mobile app QR code"
       data-testid="link-phone-qr"
       data-qr-version={props.symbol.version}
       data-qr-error-correction="H"

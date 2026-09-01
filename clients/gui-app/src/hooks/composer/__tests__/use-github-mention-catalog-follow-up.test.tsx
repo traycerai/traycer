@@ -37,6 +37,8 @@ vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
   useReactiveHostReadiness: () => ({
     hostId: readiness.hostId,
     isReady: readiness.isReady,
+    hasRpcEndpoint: readiness.isReady,
+    canExecute: readiness.isReady,
   }),
 }));
 

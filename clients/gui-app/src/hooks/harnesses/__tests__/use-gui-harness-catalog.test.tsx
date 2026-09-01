@@ -8,6 +8,11 @@ import {
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import {
+  installHostConnectionRegistrySource,
+  resetHostConnectionRegistryForTest,
+} from "@traycer-clients/shared/host-client/host-connection-registry";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
@@ -24,6 +29,7 @@ import {
   HARNESS_PENDING_POLL_LANE,
 } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { createAppQueryClient } from "@/lib/query-client";
+import { hostQueryKeys } from "@/lib/query-keys";
 import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import {
@@ -773,6 +779,7 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
   afterEach(() => {
     hostBindingMock.current = null;
     useSelectionAuthorityStore.getState().reset();
+    resetHostConnectionRegistryForTest();
     cleanup();
   });
 
@@ -900,6 +907,158 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
     // target through the app-wide default (rather than the `client`
     // argument) would either refresh the wrong host or refresh both.
     expect(hostACalls).toEqual({ harnesses: 1, models: 1, commands: 1 });
+  });
+
+  it("returns unavailable without retaining invalidation while the target has no RPC endpoint", async () => {
+    const queryClient = createAppQueryClient();
+    const entry = {
+      hostId: "host-booting",
+      label: "Booting host",
+      kind: "local" as const,
+      websocketUrl: null,
+      version: "0.0.0-mock",
+      transportDialability: "not-dialable" as const,
+    };
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) => (hostId === entry.hostId ? entry : null),
+      messenger: new MockHostMessenger<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        requestId: () => "req-booting",
+        handlers: {},
+      }),
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "tok-booting",
+      }),
+    );
+    const client = spine.createRequester(entry);
+    const queryKey = hostQueryKeys.method<
+      HostRpcRegistry,
+      "agent.gui.listModels"
+    >(entry.hostId, "agent.gui.listModels", {
+      harnessId: "opencode",
+      workingDirectory: null,
+    });
+    queryClient.setQueryData(queryKey, modelsResponse(1));
+    const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");
+    const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+      <QueryClientProvider client={queryClient}>
+        {props.children}
+      </QueryClientProvider>
+    );
+    const { result } = renderHook(
+      () => useRefreshHarnessCatalogForClient(client),
+      { wrapper: Wrapper },
+    );
+
+    await expect(result.current()).resolves.toEqual({
+      kind: "unavailable",
+      reason: "rpc-endpoint-absent",
+    });
+
+    expect(invalidateQueries).not.toHaveBeenCalled();
+    expect(queryClient.getQueryState(queryKey)?.isInvalidated).toBe(false);
+    invalidateQueries.mockRestore();
+  });
+
+  it("does one default-host catalog fill when an endpoint arrives after a boot-time refresh", async () => {
+    const queryClient = createAppQueryClient();
+    let entry: HostDirectoryEntry = {
+      hostId: "host-booting",
+      label: "Booting host",
+      kind: "local",
+      websocketUrl: null,
+      version: "0.0.0-mock",
+      transportDialability: "not-dialable",
+    };
+    const listeners = new Set<() => void>();
+    const calls = { harnesses: 0, models: 0, commands: 0 };
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) => (hostId === entry.hostId ? entry : null),
+      messenger: new MockHostMessenger<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        requestId: () => "req-boot-recovery",
+        handlers: {
+          "agent.gui.listHarnesses": () => {
+            calls.harnesses += 1;
+            return { harnesses: harnesses(["opencode", "claude"]) };
+          },
+          "agent.gui.listModels": () => {
+            calls.models += 1;
+            return modelsResponse(1);
+          },
+          "agent.gui.listCommands": (): ListGuiAgentCommandsResponse => {
+            calls.commands += 1;
+            return { harnessId: "opencode", commands: [] };
+          },
+        },
+      }),
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "tok-boot-recovery",
+      }),
+    );
+    const client = spine.createRequesterForHostId(entry.hostId);
+    hostBindingMock.current = { hostClient: client };
+    setEffectiveHostId(entry.hostId);
+    installHostConnectionRegistrySource({
+      directory: {
+        findById: (hostId) => (hostId === entry.hostId ? entry : null),
+        onDirectoryChanged: (listener) => {
+          listeners.add(listener);
+          return { dispose: () => listeners.delete(listener) };
+        },
+      },
+      leases: null,
+    });
+    const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");
+    const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+      <QueryClientProvider client={queryClient}>
+        {props.children}
+      </QueryClientProvider>
+    );
+    renderHook(
+      () =>
+        useGuiHarnessCatalog(null, {
+          enabled: true,
+          subscribed: true,
+          modelsFetch: "all-harnesses",
+        }),
+      { wrapper: Wrapper },
+    );
+    const refresh = renderHook(() => useRefreshHarnessCatalog(), {
+      wrapper: Wrapper,
+    });
+
+    await expect(refresh.result.current()).resolves.toEqual({
+      kind: "unavailable",
+      reason: "rpc-endpoint-absent",
+    });
+    expect(invalidateQueries).not.toHaveBeenCalled();
+    expect(calls).toEqual({ harnesses: 0, models: 0, commands: 0 });
+
+    act(() => {
+      entry = { ...entry, websocketUrl: "ws://127.0.0.1:59998/stream" };
+      for (const listener of listeners) listener();
+    });
+
+    await waitFor(() => {
+      expect(calls).toEqual({ harnesses: 1, models: 2, commands: 0 });
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(calls).toEqual({ harnesses: 1, models: 2, commands: 0 });
+    expect(invalidateQueries).not.toHaveBeenCalled();
+    invalidateQueries.mockRestore();
   });
 
   it("useGuiHarnessesQueryForClient(null, …) disables the query outright - never falls back to the app-wide default host", async () => {

@@ -7,6 +7,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useHostQueries } from "@/hooks/host/use-host-queries";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { hostQueryKeys } from "@/lib/query-keys";
 
@@ -30,10 +31,8 @@ type GetChatRunSettingsResponse = ResponseOfMethod<
  * ## Passive, and gated by the caller's MOUNT
  *
  * No polling and no focus refetch. Run settings change only when the user
- * changes them, and the one caller (the sidebar hover card) unmounts on close,
- * so a re-open is already a fresh read whenever the entry has gone stale. The
- * `staleTime` is what keeps re-hovering the same row from re-asking the host on
- * every pass of the pointer.
+ * changes them, and settings mutations explicitly invalidate this cache. The
+ * `staleTime` keeps passive consumers from re-asking the host on every mount.
  *
  * ## `client` decides WHICH host, and it is not the tab's
  *
@@ -91,20 +90,57 @@ export function useChatRunSettings(args: {
 }
 
 /**
+ * Persisted run-settings tuples for a set of chats owned by one host.
+ *
+ * The caller must establish the ownership boundary before passing `chatIds`:
+ * one requester cannot resolve records owned by another host. Keeping the
+ * batch on `useHostQueries` starts the independent reads together and reuses
+ * the same viewer-scoped cache entries as {@link useChatRunSettings}.
+ */
+export function useChatRunSettingsBatch(args: {
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly epicId: string;
+  readonly chatIds: ReadonlyArray<string>;
+  readonly enabled: boolean;
+}): Array<UseQueryResult<GetChatRunSettingsResponse, HostRpcError>> {
+  const viewerUserId = useCloudChatViewerId();
+  const requests = useMemo(
+    () =>
+      args.chatIds.map((chatId) => ({
+        method: "epic.getChatRunSettings" as const,
+        params: { epicId: args.epicId, chatId },
+      })),
+    [args.chatIds, args.epicId],
+  );
+  return useHostQueries<HostRpcRegistry, "epic.getChatRunSettings">({
+    cacheKeyIdentity: viewerUserId,
+    client: args.client,
+    requests,
+    options: {
+      enabled: args.enabled && viewerUserId.length > 0,
+      staleTime: 60_000,
+      refetchOnWindowFocus: false,
+      retry: (failureCount, error) =>
+        error.code !== "E_HOST_UNSUPPORTED" && failureCount < 2,
+    },
+  });
+}
+
+/**
  * Drop this host's cached run-settings tuples after a write.
  *
  * The host store is the only thing a settings write updates - for a
  * registry-only chat the record row still summarises to a harness id, and for a
  * pre-pivot chat the doc entry is frozen - so nothing about a successful
  * `epic.updateChatRunSettings` / `epic.updateChatProfile` reaches this cache on
- * its own. Without this, changing a model or profile in the composer leaves an
- * already-hovered card showing the old values for a `staleTime` (and for as
- * long as it stays mounted, since a mounted observer will not refetch a fresh
- * entry at all).
+ * its own. Without this, changing a model or profile in the composer leaves
+ * mounted consumers showing the old values because a fresh cached entry does
+ * not refetch merely because an observer is present.
  *
  * Method-scoped rather than per chat: the key carries the params AND the viewer,
  * so a `chatId`-precise invalidation would have to reconstruct both, and the
- * entries this drops are single small tuples refetched only on a hover.
+ * entries this drops are single small tuples refetched only while a passive
+ * consumer needs them.
  */
 export function invalidateChatRunSettings(
   queryClient: QueryClient,
