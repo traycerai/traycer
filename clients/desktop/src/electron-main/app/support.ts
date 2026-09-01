@@ -740,12 +740,14 @@ export class DesktopSupportService {
     if (!isBrowserLogTarget(input.target)) {
       await ensureLogFile(path);
     }
-    const content = await readFile(path, "utf8").catch((error: unknown) => {
-      if (isBrowserLogTarget(input.target) && isMissingPathError(error)) {
-        return "";
-      }
-      throw error;
-    });
+    const content = isBrowserLogTarget(input.target)
+      ? await readBrowserLogFiles(
+          input.target === "browserTelemetry"
+            ? this.hostLayout.browserTelemetryRotatedFile
+            : this.hostLayout.browserTraceRotatedFile,
+          path,
+        )
+      : await readFile(path, "utf8");
     const lines = splitLogLines(content);
     return {
       target: input.target,
@@ -773,6 +775,25 @@ function isBrowserLogTarget(
   target: SupportLogTarget,
 ): target is "browserTelemetry" | "browserTrace" {
   return target === "browserTelemetry" || target === "browserTrace";
+}
+
+async function readBrowserLogFiles(
+  rotatedPath: string,
+  livePath: string,
+): Promise<string> {
+  const readIfPresent = async (path: string): Promise<string> =>
+    readFile(path, "utf8").catch((error: unknown) => {
+      if (isMissingPathError(error)) return "";
+      throw error;
+    });
+  const [rotated, live] = await Promise.all([
+    readIfPresent(rotatedPath),
+    readIfPresent(livePath),
+  ]);
+  if (rotated.length === 0 || live.length === 0 || rotated.endsWith("\n")) {
+    return rotated + live;
+  }
+  return `${rotated}\n${live}`;
 }
 
 function frozenLogTailForTarget(

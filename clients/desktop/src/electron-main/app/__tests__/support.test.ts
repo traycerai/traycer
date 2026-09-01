@@ -626,4 +626,36 @@ describe("DesktopSupportService browser diagnostics existence handling (ticket 0
       });
     });
   });
+
+  it("tails rotated and live browser logs as one stream", async () => {
+    await withPidMetadataFile(undefined, async (hostLayout) => {
+      await writeFile(
+        hostLayout.browserTelemetryRotatedFile,
+        '{"seq":1}\n{"seq":2}\n',
+        "utf8",
+      );
+      await writeFile(hostLayout.browserTelemetryFile, '{"seq":3}\n', "utf8");
+      await writeFile(
+        hostLayout.browserTraceRotatedFile,
+        '{"seq":1}\n{"seq":2}',
+        "utf8",
+      );
+      await writeFile(hostLayout.browserTraceFile, '{"seq":3}\n', "utf8");
+
+      const service = buildService(hostLayout);
+      const telemetry = await service.tailLog({
+        target: "browserTelemetry",
+        tailLines: 2,
+      });
+      const trace = await service.tailLog({
+        target: "browserTrace",
+        tailLines: 2,
+      });
+
+      expect(telemetry.lines).toEqual(['{"seq":2}', '{"seq":3}']);
+      expect(trace.lines).toEqual(['{"seq":2}', '{"seq":3}']);
+      expect(telemetry.truncated).toBe(true);
+      expect(trace.truncated).toBe(true);
+    });
+  });
 });
