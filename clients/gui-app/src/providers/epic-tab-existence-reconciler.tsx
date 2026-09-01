@@ -20,6 +20,8 @@ import {
   type ListTasksResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { getNegotiatedHostMethodVersion } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import type { SchemaVersion } from "@traycer/protocol/framework/index";
 import { useShallow } from "zustand/react/shallow";
 import {
   useHostClient,
@@ -361,16 +363,31 @@ interface LocalHomeProbe {
  * which is the same warning the schema doc gives about branching on WHICH
  * producer fired.
  *
- * `undefined` is the one absent-marker that IS complete: a pre-`1.6` host does
- * not carry `completeness` at all, and treating a legacy peer as permanently
- * incomplete would strand every tab it serves.
+ * `undefined` is complete ONLY on a negotiated line that cannot produce local
+ * rows at all. A pre-`1.4` host does not carry `home: "local"` rows, so its
+ * page cannot have truncated any, and treating such a peer as permanently
+ * incomplete would strand every tab it serves. A `1.4`/`1.5` host DOES
+ * synthesize local rows but predates the `completeness` marker (`1.5` carries
+ * it only when the resolver chose to; `1.4` never does), so its missing marker
+ * proves nothing: a persisted tab whose epic fell beyond that page's cap
+ * would otherwise be force-closed on a page that never claimed to be whole.
+ * A `null` version (no manifest recorded yet) is read the same way as a
+ * capable line - unknown is not evidence of completeness either.
  */
 function localRowsAreComplete(
   localRows: ListTasksCompleteness["localRows"] | undefined,
+  negotiatedListTasks: SchemaVersion | null,
 ): boolean {
-  return (
-    localRows === undefined || localRows === "none" || localRows === "present"
-  );
+  if (localRows === "none" || localRows === "present") return true;
+  if (localRows !== undefined) return false;
+  return !negotiatedLineCarriesLocalRows(negotiatedListTasks);
+}
+
+function negotiatedLineCarriesLocalRows(
+  version: SchemaVersion | null,
+): boolean {
+  if (version === null) return true;
+  return version.major > 1 || (version.major === 1 && version.minor >= 4);
 }
 
 function combineLocallyProtectedEpicIds(
@@ -379,10 +396,14 @@ function combineLocallyProtectedEpicIds(
 ): ReadonlySet<string> | null {
   if (probes === null || results.length !== probes.length) return null;
   const locallyProtected = new Set<string>();
-  for (const result of results) {
+  for (const [index, result] of results.entries()) {
     if (!result.isSuccess) return null;
     const localRows = result.data.completeness?.localRows;
-    if (!localRowsAreComplete(localRows)) return null;
+    const negotiatedListTasks = getNegotiatedHostMethodVersion(
+      probes[index].hostId,
+      "epic.listTasks",
+    );
+    if (!localRowsAreComplete(localRows, negotiatedListTasks)) return null;
     for (const epicId of locallyProtectedEpicIdsFromListTasks(result.data)) {
       locallyProtected.add(epicId);
     }

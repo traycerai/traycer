@@ -92,7 +92,10 @@ describe("TabContextMenuContent preserved-orphan pin guard", () => {
     expect(item.getAttribute("data-preserved-orphan-pin-unavailable")).toBe(
       "true",
     );
-    expect(item.getAttribute("data-disabled")).not.toBeNull();
+    // Permanently unavailable: `aria-disabled`, NOT `disabled`, so the label
+    // explaining the restriction stays reachable by keyboard.
+    expect(item.getAttribute("aria-disabled")).toBe("true");
+    expect(item.getAttribute("data-disabled")).toBeNull();
     expect(item.textContent).toContain("stored on this device");
     fireEvent.click(item);
     expect(onSetTaskPinned).not.toHaveBeenCalled();
@@ -109,7 +112,7 @@ describe("TabContextMenuContent preserved-orphan pin guard", () => {
     expect(item.getAttribute("data-preserved-orphan-pin-unavailable")).toBe(
       "true",
     );
-    expect(item.getAttribute("data-disabled")).not.toBeNull();
+    expect(item.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(item);
     expect(onSetTaskPinned).not.toHaveBeenCalled();
   });

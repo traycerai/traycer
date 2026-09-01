@@ -797,10 +797,6 @@ describe("deriveEpicSyncPillState", () => {
         }),
       ).not.toBe("synced");
     });
-
-    it("keeps a pre-@1.6 peer on exactly its old rendering", () => {
-      expect(deriveEpicSyncPillState(HEALTHY_INPUTS)).toBe("synced");
-    });
   });
 
   // ── `s5-unarmed-session`, rendering half ────────────────────────────────

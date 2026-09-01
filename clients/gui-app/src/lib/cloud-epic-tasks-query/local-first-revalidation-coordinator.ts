@@ -62,6 +62,37 @@ export function isCurrentLocalFirstRevalidation(
   return episode?.claimed === true && episode.generation === lease.generation;
 }
 
+/**
+ * Hands the episode back once the follow-up it was claimed for has SETTLED,
+ * either way. The generation is kept - a later dispatch still supersedes -
+ * but the claim is released so the same episode can be claimed again.
+ *
+ * Without this a claim was permanent for the life of the episode, and one
+ * ordinary sequence stranded it: authorization lost after the claim, the
+ * page demoted from `pending` to `unavailable` so the arriving result could
+ * not replace it, then authorization restored and the page reopened to
+ * `pending` - which re-ran the dispatch effect, found the episode still
+ * claimed, and refused. With mount/focus/reconnect refetching disabled and
+ * an infinite `staleTime`, the cloud rows then stayed absent until an
+ * explicit refresh began a new episode.
+ *
+ * A stale lease (superseded by a newer episode) releases nothing: the claim
+ * it would clear belongs to the newer dispatch.
+ */
+export function releaseLocalFirstRevalidation(
+  queryClient: QueryClient,
+  lease: LocalFirstRevalidationLease,
+): void {
+  const episodes = episodesFor(queryClient);
+  const episode = episodes.get(lease.identity);
+  if (episode === undefined || episode.generation !== lease.generation) return;
+  if (!episode.claimed) return;
+  episodes.set(lease.identity, {
+    generation: episode.generation,
+    claimed: false,
+  });
+}
+
 function episodesFor(
   queryClient: QueryClient,
 ): Map<string, LocalFirstRevalidationEpisode> {

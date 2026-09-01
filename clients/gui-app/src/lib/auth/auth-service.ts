@@ -2184,6 +2184,10 @@ export class AuthService {
       liveContext.identity.userId === session.user.user.id &&
       this.currentBearer !== session.token
     ) {
+      // Read BEFORE the store commit below, for the same announcement rule
+      // `applySignedIn` applies: only a promotion (`unverified` ->
+      // `signed-in`) moved an ambient answer, so only a promotion announces.
+      const heldVerdict = useAuthStore.getState().status === "signed-in";
       // COMMIT BEFORE EMIT (see `applySignedIn`) - the rotation notification
       // below is synchronous, and this projection path rotates just as often
       // as the local ones.
@@ -2215,6 +2219,15 @@ export class AuthService {
         );
       this.emitSessionSnapshot();
       this.refreshScheduler.start();
+      // The post-commit verdict announcement, exactly as `applySignedIn`
+      // makes it as its last act. `HostRuntime` retries the directory refresh
+      // that was refused while unverified on THIS event and on nothing else -
+      // the bearer-rotation notification above only invalidates in-flight
+      // work - so a window that restored its verdict through this branch and
+      // did not announce kept an empty remote directory until an ambient poll.
+      if (!heldVerdict) {
+        this.contextProvider.announceSessionVerified();
+      }
       return;
     }
     this.applySignedIn(session.token, session.user, session.profile);

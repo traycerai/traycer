@@ -113,7 +113,7 @@ export const MobileHistoryRow = memo(function MobileHistoryRow(
   // `epic.batchDelete` the desktop row does, so the two surfaces admit on one
   // rule or the class survives at whichever of them was left out.
   const canDelete = canDeleteHistoryItem(item, cloudAuthorized);
-  const canRename = canEditHistoryItemTitle(item);
+  const canRename = canEditHistoryItemTitle(item, cloudAuthorized);
   const pinUnavailableReason = historyPinUnavailableReason(
     item,
     cloudAuthorized,
@@ -127,11 +127,19 @@ export const MobileHistoryRow = memo(function MobileHistoryRow(
     useEpicUpdateTitle();
   const commitTitle = useCallback(
     (nextTitle: string) => {
+      // Re-checked at COMMIT, as the desktop row does: a rename begun before
+      // a demotion must not land on the retained credential afterwards.
+      if (
+        item.isLocalHome !== true &&
+        !authorizesCloudCapability(useAuthStore.getState().status)
+      ) {
+        return;
+      }
       renameEpicTitle({
         epicDelta: { id: item.epicId, title: nextTitle, updatedAt: Date.now() },
       });
     },
-    [item.epicId, renameEpicTitle],
+    [item.epicId, item.isLocalHome, renameEpicTitle],
   );
   const {
     isEditing: isRenaming,

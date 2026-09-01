@@ -18,6 +18,25 @@ import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-cli
 import { appLogger } from "@/lib/logger";
 import { hostQueryKeys, epicMutationKeys } from "@/lib/query-keys";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
+
+/**
+ * The LIVE cloud verdict, re-read before each batch this mutation dispatches.
+ *
+ * The Sharing panel preflights once, before `sendInvites`, but one call here
+ * can issue two cloud mutations in sequence - a role update for existing
+ * users, then a grant for new ones. A session demoted to `unverified` while
+ * the first is in flight has had its authorization withdrawn, and the second
+ * request would still go out on the retained local-host context, which does
+ * not carry the renderer's verdict. So each batch asks again, and a batch
+ * refused here simply leaves its invites in `failedInvites`.
+ */
+function cloudAuthorizedNow(): boolean {
+  return authorizesCloudCapability(useAuthStore.getState().status);
+}
 
 export interface SendQueuedInvitesArgs {
   readonly epicId: string;
@@ -86,7 +105,7 @@ export function useEpicSendQueuedInvites(): UseMutationResult<
       const succeededNewInvites: QueuedInvite[] = [];
       const succeededReInvites: QueuedInvite[] = [];
 
-      if (inviteBatches.reInvites.length > 0) {
+      if (inviteBatches.reInvites.length > 0 && cloudAuthorizedNow()) {
         try {
           const response = await batchUpdateRoles.mutateAsync({
             epicId,
@@ -126,7 +145,7 @@ export function useEpicSendQueuedInvites(): UseMutationResult<
         }
       }
 
-      if (inviteBatches.newInvites.length > 0) {
+      if (inviteBatches.newInvites.length > 0 && cloudAuthorizedNow()) {
         try {
           const response = await grantAccess.mutateAsync({
             epicId,

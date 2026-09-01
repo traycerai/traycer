@@ -32,6 +32,7 @@ export function OpenEpicInNewWindowDialog(
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
+    initialLegRefused,
   } = useCloudEpicTasksQuery(undefined, { enabled: true });
   const { data: queryData, isError, isFetching, isLoading, refetch } = query;
   const rows = buildOpenEpicRows(tasks);
@@ -75,6 +76,7 @@ export function OpenEpicInNewWindowDialog(
               isLoading: isLoading || (isFetching && queryData === undefined),
               isError,
               isAvailable: props.flow.isAvailable,
+              initialLegRefused,
               hasNextPage,
               isFetchingNextPage,
             })}
@@ -119,6 +121,15 @@ type OpenEpicPickerBodyState =
   | { readonly kind: "unavailable" }
   | { readonly kind: "error" }
   | { readonly kind: "loading" }
+  /**
+   * The list's initial leg was REFUSED rather than answered: an `unverified`
+   * session on a host whose negotiated `epic.listTasks` cannot serve the
+   * local-first page. The query behind it is a permanently disabled empty
+   * one - idle, not loading and not errored - so without this arm it read as
+   * an authoritative "No Epics yet", and Retry only refetched the synthetic
+   * empty page.
+   */
+  | { readonly kind: "refused" }
   | { readonly kind: "empty" }
   | {
       readonly kind: "ready";
@@ -181,6 +192,17 @@ function OpenEpicPickerBody(props: OpenEpicPickerBodyProps): ReactNode {
       </div>
     );
   }
+  if (props.state.kind === "refused") {
+    return (
+      <p
+        className="text-ui-sm text-muted-foreground"
+        data-testid="open-epic-new-window-refused"
+      >
+        Your sign-in couldn&apos;t be confirmed, so this host can&apos;t list
+        your Epics until it reconnects.
+      </p>
+    );
+  }
   if (props.state.kind === "empty") {
     return <p className="text-ui-sm text-muted-foreground">No Epics yet.</p>;
   }
@@ -236,12 +258,16 @@ function openEpicPickerBodyState(input: {
   readonly isLoading: boolean;
   readonly isError: boolean;
   readonly isAvailable: boolean;
+  readonly initialLegRefused: boolean;
   readonly hasNextPage: boolean;
   readonly isFetchingNextPage: boolean;
 }): OpenEpicPickerBodyState {
   if (!input.isAvailable) return { kind: "unavailable" };
   if (input.isError) return { kind: "error" };
   if (input.isLoading) return { kind: "loading" };
+  // Ahead of `empty`: the refusal PRODUCES the empty row set, and would
+  // otherwise be indistinguishable from an account with no Epics.
+  if (input.initialLegRefused) return { kind: "refused" };
   if (input.rows.length === 0) return { kind: "empty" };
   return {
     kind: "ready",

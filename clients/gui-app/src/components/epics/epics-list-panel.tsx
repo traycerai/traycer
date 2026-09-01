@@ -1603,7 +1603,6 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
     onRequestSweep,
   });
   const displayTitle = historyItemDisplayTitle(item);
-  const canEditTitle = canEditHistoryItemTitle(item);
   // The same verdict the panel gates selection on, read here too rather than
   // threaded down as a prop: this row renders for a picker variant that never
   // computes the panel's copy, and a control that admits on a rule its own
@@ -1611,6 +1610,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
   const cloudAuthorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
+  const canEditTitle = canEditHistoryItemTitle(item, cloudAuthorized);
   const canDeleteItem = canDeleteHistoryItem(item, cloudAuthorized);
   const selectionDisabled = historySelectionDisabled(
     selectionMode,
@@ -1635,6 +1635,16 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
   const commitEpicTitle = useCallback(
     (nextTitle: string) => {
       if (isPhase) return;
+      // Re-checked at COMMIT, not only at admission: a rename started before
+      // a demotion would otherwise land on the retained credential after the
+      // verdict was withdrawn. Same exemption as the gate - a local-home row
+      // spends nothing.
+      if (
+        item.isLocalHome !== true &&
+        !authorizesCloudCapability(useAuthStore.getState().status)
+      ) {
+        return;
+      }
       renameEpicTitle({
         epicDelta: {
           id: item.epicId,
@@ -1643,7 +1653,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
         },
       });
     },
-    [isPhase, item.epicId, renameEpicTitle],
+    [isPhase, item.epicId, item.isLocalHome, renameEpicTitle],
   );
   const {
     isEditing: isRenaming,

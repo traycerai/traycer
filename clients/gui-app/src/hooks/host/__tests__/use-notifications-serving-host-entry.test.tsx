@@ -197,14 +197,4 @@ describe("useNotificationsServingHostId", () => {
     expect(entryResult.result.current).toBeNull();
     expect(idResult.result.current).toBeNull();
   });
-
-  it("treats an undeclared shell as local-capable and returns null rather than acquiring the fallback", () => {
-    state.localEntry = null;
-    state.runnerHost = null;
-    state.boundHostId = "host-b";
-
-    const { result } = renderHook(() => useNotificationsServingHostId());
-
-    expect(result.current).toBeNull();
-  });
 });

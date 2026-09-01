@@ -29,6 +29,23 @@ function setupTransitionProbe(initial: Props): {
 }
 
 describe("useAuthIdentityTransition", () => {
+  it("does not report an interactive sign-in that began on the first render as an initial mount", () => {
+    // A hook that first renders in `signing-in` has its `previous` rewound to
+    // `null` by the held-attempt branch. RED before the fix: the settled
+    // `signed-in` then read `prior === null` and reported `isInitialMount:
+    // true` for what is the documented `signing-in` -> `signed-in` edge.
+    const { transitions, rerender } = setupTransitionProbe({
+      status: "signing-in",
+      userId: null,
+    });
+    expect(transitions).toEqual([]);
+
+    rerender({ status: "signed-in", userId: "user-a" });
+    expect(transitions).toEqual([
+      { kind: "signedIn", userId: "user-a", isInitialMount: false },
+    ]);
+  });
+
   it("emits no transition for a failed interactive sign-in, nor for the recovery re-admit that follows it", () => {
     // Mount already `unverified` so the initial-mount `signedIn` fire (asserted
     // separately below) is out of the way before the sequence under test.

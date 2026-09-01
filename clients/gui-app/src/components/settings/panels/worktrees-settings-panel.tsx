@@ -140,6 +140,10 @@ import {
   type WorktreeSortMode,
 } from "@/stores/settings/worktrees-settings-view-store";
 import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
+import {
   EMPTY_SELECTED_WORKTREE_PATHS,
   useWorktreesSettingsSelectionStore,
   type SelectedWorktreePathsUpdate,
@@ -557,8 +561,17 @@ function WorktreesBody(props: {
     worktreePaths,
   );
   // Owning-Task titles: tier 1 scans free cloud listTasks caches; tier 2 batches
-  // still-unresolved ids through epic.getTaskContexts on this host.
-  const taskTitlesByEpicId = useWorktreeTaskTitles(client, listing.worktrees);
+  // still-unresolved ids through epic.getTaskContexts on this host - a cloud
+  // spend, so it is gated on the live verdict (the panel itself is admitted
+  // under `unverified`).
+  const cloudAuthorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
+  const taskTitlesByEpicId = useWorktreeTaskTitles(
+    client,
+    listing.worktrees,
+    cloudAuthorized,
+  );
   const canRefresh = reachable && client !== null;
   const { prepareEnrichmentRefresh } = enrichment;
   const onRefresh = useCallback(async () => {

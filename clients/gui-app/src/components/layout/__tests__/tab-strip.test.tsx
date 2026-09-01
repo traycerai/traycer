@@ -1424,7 +1424,10 @@ describe("<TabStrip />", () => {
     fireEvent.contextMenu(await screen.findByTestId("tab-epic-e-a"));
     const item = await screen.findByTestId(`tab-pin-history-${EPIC_A.id}`);
     expect(item.getAttribute("data-local-home-pin-unavailable")).toBe("true");
-    expect(item.getAttribute("data-disabled")).not.toBeNull();
+    // Permanently unavailable, so `aria-disabled` rather than `disabled`:
+    // the explanatory label stays keyboard-reachable.
+    expect(item.getAttribute("aria-disabled")).toBe("true");
+    expect(item.getAttribute("data-disabled")).toBeNull();
     // States the condition; does not promise a cloud sync that may never come.
     expect(item.textContent).toContain("stored on this device");
 

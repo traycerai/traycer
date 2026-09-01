@@ -38,7 +38,11 @@ import {
   openCloudNotificationsStream,
   useCloudNotificationsStore,
 } from "@/stores/notifications/cloud-notifications-store";
-import { useNotificationFeedModeFor } from "@/lib/notifications/notification-feed-mode";
+import {
+  useHeldNotificationFeedMode,
+  useNotificationFeedModeFor,
+  type NotificationFeedMode,
+} from "@/lib/notifications/notification-feed-mode";
 import { useStreamMethodSupportFor } from "@/lib/host/stream-runtime-context";
 import { NotificationFeedModeContext } from "@/lib/notifications/notification-feed-mode-context";
 import { resetCloudEntityReadDriver } from "@/lib/notifications/cloud-entity-read-driver";
@@ -203,9 +207,24 @@ export function NotificationsSessionProvider(
   // which travel on the host client and do not need a stream to exist at all.
   // A null entry yields a null id, which withholds mixed mode - the safe way
   // for this to be unknown.
-  const notificationFeedMode = useNotificationFeedModeFor(
+  const negotiatedFeedMode = useNotificationFeedModeFor(
     servingStreamClient,
     servingHostEntry?.hostId ?? null,
+  );
+  // Raw negotiation state, read beside the mode: `unknown` marks a client
+  // whose handshake has not landed. The published mode HOLDS the previously
+  // decided one through that beat (see `useHeldNotificationFeedMode`), so the
+  // session body's stream transition and every context consumer - the
+  // `home: "local"` partition selector on unary calls above all - decide on
+  // the same value rather than the body holding privately while the context
+  // reports a raw `local`.
+  const cloudFeedSupport = useStreamMethodSupportFor(
+    servingStreamClient,
+    "host.notifications.cloudFeed.subscribe",
+  );
+  const notificationFeedMode = useHeldNotificationFeedMode(
+    negotiatedFeedMode,
+    cloudFeedSupport,
   );
   // The session body itself consumes the mode (through
   // `useMergedNotificationsActions`), and a component cannot read a context it
@@ -229,7 +248,7 @@ export function NotificationsSessionProvider(
 interface NotificationsSessionBodyProps extends NotificationsSessionProviderProps {
   readonly servingHostEntry: HostDirectoryEntry | null;
   readonly servingStreamClient: IHostStreamClient<HostStreamRpcRegistry> | null;
-  readonly notificationFeedMode: "local" | "cloud" | "upgrade-required";
+  readonly notificationFeedMode: NotificationFeedMode;
 }
 
 function NotificationsSessionBody(
@@ -237,14 +256,9 @@ function NotificationsSessionBody(
 ): ReactNode {
   const servingHostEntry = props.servingHostEntry;
   const servingStreamClient = props.servingStreamClient;
+  // Already HELD across a client rebuild's `unknown` beat by the shell, so it
+  // is the same value the mode context publishes to every other consumer.
   const notificationFeedMode = props.notificationFeedMode;
-  // Raw negotiation state, read beside the mode: `unknown` marks a client
-  // whose handshake has not landed, which the stream-transition effect must
-  // treat as "hold the previous projection", never as a downgrade decision.
-  const cloudFeedSupport = useStreamMethodSupportFor(
-    servingStreamClient,
-    "host.notifications.cloudFeed.subscribe",
-  );
   // Unary acknowledgements share the stream's serving-host binding (the local
   // host where one exists, the bound host on a shell without one). The
   // app-wide effective host can still be unresolved when this stream opens.
@@ -280,9 +294,7 @@ function NotificationsSessionBody(
   const previousServingHostIdRef = useRef<string | null>(servingHostId);
   // Start unset so an initially cloud-capable session also clears the legacy
   // local sources before opening its first relay stream.
-  const previousFeedModeRef = useRef<
-    "local" | "cloud" | "upgrade-required" | null
-  >(null);
+  const previousFeedModeRef = useRef<NotificationFeedMode | null>(null);
   const [fallbackWindowId] = useState(createFallbackNotificationsWindowId);
   const windowId = windowsBridge?.windowId ?? fallbackWindowId;
   const markEntityReadMutation =
@@ -791,10 +803,7 @@ function NotificationsSessionBody(
    * must open while its account-backed lanes stay shut.
    */
   const openForCurrentUser = useCallback(
-    (
-      settledFeedMode: "local" | "cloud" | "upgrade-required",
-      cloudAuthorized: boolean,
-    ): void => {
+    (settledFeedMode: NotificationFeedMode, cloudAuthorized: boolean): void => {
       if (
         getNotificationsStreamFactoryOverride() === null &&
         servingStreamClient === null
@@ -1089,12 +1098,10 @@ function NotificationsSessionBody(
     // capability downgrade: deciding on it would tear the mixed projection
     // down (discarding the retained local-partition rows the disconnect path
     // deliberately preserves), open the whole-origin feed, then reset again
-    // when negotiation lands. Hold the previously decided projection until
-    // the client actually answers.
-    const settledFeedMode =
-      cloudFeedSupport === "unknown" && previousFeedModeRef.current !== null
-        ? previousFeedModeRef.current
-        : notificationFeedMode;
+    // when negotiation lands. The shell already holds the previously decided
+    // mode through that beat (`useHeldNotificationFeedMode`) - and publishes
+    // the same held value to the context - so the prop IS the settled mode.
+    const settledFeedMode = notificationFeedMode;
     if (previousFeedModeRef.current !== settledFeedMode) {
       // A CHANGE of projection, not the first read of one. The ref starts
       // `null` so the initial pass always lands here, but there is no prior
@@ -1168,7 +1175,6 @@ function NotificationsSessionBody(
     markHostReplicaDisconnected,
     openForCurrentUser,
     notificationFeedMode,
-    cloudFeedSupport,
   ]);
 
   useEffect(() => {

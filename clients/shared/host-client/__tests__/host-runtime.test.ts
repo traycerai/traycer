@@ -88,6 +88,12 @@ class FakeDirectoryService implements IHostDirectoryService {
   readonly refreshForEraCalls: AuthEra[] = [];
   readonly invalidateInFlightRefreshCalls = { count: 0 };
   /**
+   * ONE ordered log across the two operations above, so an ordering claim
+   * ("invalidate, THEN refresh") is observable rather than inferred from two
+   * independent counters.
+   */
+  readonly callOrder: Array<"invalidate" | "refreshForEra"> = [];
+  /**
    * Per-identity host sets a "fetch" resolves to, keyed by auth context id
    * (`null` for signed-out). Lets `refreshForEra`/`refresh` model a REAL
    * commit instead of a no-op counter: a call stamped with the wrong identity
@@ -128,11 +134,13 @@ class FakeDirectoryService implements IHostDirectoryService {
   async refreshForEra(era: AuthEra): Promise<readonly HostDirectoryEntry[]> {
     this.refreshCalls.count += 1;
     this.refreshForEraCalls.push(era);
+    this.callOrder.push("refreshForEra");
     return this.commitForIdentity(era.identity);
   }
 
   invalidateInFlightRefresh(): void {
     this.invalidateInFlightRefreshCalls.count += 1;
+    this.callOrder.push("invalidate");
   }
 
   private commitForIdentity(
@@ -539,6 +547,7 @@ describe("HostRuntime session-verified wiring", () => {
     // `onSessionVerified` wiring alone.
     const invalidateBaseline = directory.invalidateInFlightRefreshCalls.count;
     const refreshForEraBaseline = directory.refreshForEraCalls.length;
+    const orderBaseline = directory.callOrder.length;
 
     provider.announceSessionVerified();
 
@@ -558,15 +567,13 @@ describe("HostRuntime session-verified wiring", () => {
     expect(announcedEra.credentialGeneration).toBe(
       provider.getCredentialGeneration(),
     );
-    // Ordering: `invalidateInFlightRefreshCalls` and `refreshForEraCalls` are
-    // two SEPARATE per-method arrays on `FakeDirectoryService`, not one
-    // shared ordered log, so "invalidate happened before refreshForEra" is
-    // not independently observable from these two counters alone. The
-    // production handler's own source order (`invalidateInFlightRefresh()`
-    // then `void refreshForEra(era)`, both synchronous, back to back) is what
-    // this test structurally cannot falsify a reordering of; the call-count
-    // and call-argument assertions above are what the fake actually lets a
-    // test pin.
+    // Ordering, pinned on the fake's single ordered log: the invalidation
+    // must land BEFORE the refresh it clears the way for. Swapping the two
+    // lines in `HostRuntime`'s handler reverses this sequence.
+    expect(directory.callOrder.slice(orderBaseline)).toEqual([
+      "invalidate",
+      "refreshForEra",
+    ]);
   });
 
   it("dispose() unsubscribes: a later announcement reaches the directory no further", () => {

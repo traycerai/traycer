@@ -12,6 +12,7 @@ import {
   X,
 } from "lucide-react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { cn } from "@/lib/utils";
 import { ShortcutHint } from "@/components/ui/shortcut-hint";
 import type { TaskPinnedState } from "@/hooks/epic/use-epic-task-pinned-states-query";
 import {
@@ -141,13 +142,25 @@ function EpicTabMenuItems(props: {
         // cache cannot carry list preservation and is intentionally
         // infinitely fresh, so a live session's orphan-pause state is the
         // authority for an open cloud-deleted-but-locally-preserved epic.
-        disabled={
-          taskPinned === null || props.isTaskPinPending || pinUnavailable
-        }
+        //
+        // `disabled` only for the TRANSIENT states (state unknown, mutation
+        // pending). A permanently unavailable item - local home, preserved
+        // orphan - is `aria-disabled` instead: Radix drops `disabled` items
+        // from roving keyboard navigation, so a keyboard user could never
+        // reach the label that explains WHY the pin is unavailable. The
+        // `onSelect` guard below is what keeps it inert either way, and
+        // `preventDefault` keeps the menu open on that inert select, exactly
+        // as a disabled item would have.
+        disabled={taskPinned === null || props.isTaskPinPending}
+        aria-disabled={pinUnavailable || undefined}
+        className={cn(pinUnavailable && "opacity-50")}
         data-local-home-pin-unavailable={localOnly || undefined}
         data-preserved-orphan-pin-unavailable={preservedOrphan || undefined}
-        onSelect={() => {
-          if (pinUnavailable || taskPinned === null) return;
+        onSelect={(event) => {
+          if (pinUnavailable || taskPinned === null) {
+            event.preventDefault();
+            return;
+          }
           props.onSetTaskPinned(!taskPinned);
         }}
         data-testid={`tab-pin-history-${tabId}`}

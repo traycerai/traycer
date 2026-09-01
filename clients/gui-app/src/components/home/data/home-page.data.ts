@@ -383,8 +383,20 @@ function historyPullRequestNumbers(
   );
 }
 
-export function canEditHistoryItemTitle(item: HistoryItem): boolean {
-  return item.taskType === "epic" && isEditableRole(item.permissionRole);
+/**
+ * Renaming is a CLOUD write for every row but a local-home one -
+ * `epic.updateTitle` carries the CloudData `epic.update` contract - so it is
+ * gated on the same verdict as deletion. A local-home row renames on this
+ * machine's own disk and spends nothing, so it stays editable while the
+ * session is `unverified`.
+ */
+export function canEditHistoryItemTitle(
+  item: HistoryItem,
+  cloudAuthorized: boolean,
+): boolean {
+  if (item.taskType !== "epic") return false;
+  if (item.isLocalHome !== true && !cloudAuthorized) return false;
+  return isEditableRole(item.permissionRole);
 }
 
 /**

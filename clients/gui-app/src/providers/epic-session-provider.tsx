@@ -1558,7 +1558,7 @@ export function EpicSessionProvider(
   );
 }
 
-interface CloudTaskTitleCacheSyncArgs {
+interface EpicSessionCacheSyncArgs {
   readonly activeHostId: string | null;
   readonly epicId: string;
   readonly handle: OpenEpicStoreHandle | null;
@@ -1566,7 +1566,7 @@ interface CloudTaskTitleCacheSyncArgs {
   readonly userId: string | null;
 }
 
-function useCloudTaskTitleCacheSync(args: CloudTaskTitleCacheSyncArgs): void {
+function useCloudTaskTitleCacheSync(args: EpicSessionCacheSyncArgs): void {
   const { activeHostId, epicId, handle, queryClient, userId } = args;
   useEffect(() => {
     if (activeHostId === null) return;
@@ -1634,7 +1634,7 @@ function normalizeGeneratedTitle(title: string): string | null {
  * is a response-level sibling list, so there is no per-row edit to make, and
  * that query is the tab strip's only source of the marker.
  */
-function useEpicHomeCacheSync(args: CloudTaskTitleCacheSyncArgs): void {
+function useEpicHomeCacheSync(args: EpicSessionCacheSyncArgs): void {
   const { activeHostId, epicId, handle, queryClient, userId } = args;
   useEffect(() => {
     if (activeHostId === null) return;
@@ -1652,6 +1652,14 @@ function useEpicHomeCacheSync(args: CloudTaskTitleCacheSyncArgs): void {
       if (!state.hasFreshCloudSyncStatus) return;
       const status = state.durabilityStatus ?? null;
       if (status === null || status === "unknown") return;
+      // `paused` says nothing about home. An unpromoted epic whose promotion
+      // was blocked (entitlement, access) goes `promoting` -> `paused` and is
+      // still local-homed; a cloud-homed epic paused over orphaned local
+      // edits is not. Writing `false` for both patched History and the
+      // last-known caches as though a cloud task existed for the first kind -
+      // enabling Pin and dropping local-home treatment until a list refresh
+      // corrected it. Keep whatever home the caches already hold.
+      if (status === "paused") return;
       const localHome = status === "local" || status === "promoting";
       if (localHome === lastSyncedLocalHome) return;
       lastSyncedLocalHome = localHome;

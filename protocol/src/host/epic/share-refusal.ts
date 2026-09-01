@@ -119,25 +119,35 @@ export function epicShareRefusalErrorCode(
 export function epicShareRefusalFromErrorCode(
   code: string,
 ): EpicShareRefusal | null {
-  switch (code) {
-    case "E_SHARE_NEEDS_CLOUD_SYNC":
-      return { kind: "needs-cloud-sync" };
-    case "E_SHARE_NOT_OWNED":
-      return { kind: "not-owned" };
-    case "E_SHARE_PENDING_RECENT_ATTEMPT":
-      return { kind: "promotion-pending", reason: "recent-attempt" };
-    case "E_SHARE_PENDING_BUSY":
-      return { kind: "promotion-pending", reason: "busy" };
-    case "E_SHARE_PENDING_OFFLINE":
-      return { kind: "promotion-pending", reason: "offline" };
-    case "E_SHARE_PENDING_FAILED":
-      return { kind: "promotion-pending", reason: "failed" };
-    case "E_SHARE_REFUSED":
-      return { kind: "refused" };
-    default:
-      return null;
-  }
+  return EPIC_SHARE_REFUSAL_BY_CODE.get(code) ?? null;
 }
+
+/**
+ * The decoder, derived from the two encode maps rather than restated beside
+ * them. A code added to either map decodes without a second edit, so an
+ * encode/decode drift - which surfaced as a `null` here and the GUI silently
+ * falling back to the generic message this module exists to remove - has
+ * nowhere to happen.
+ */
+const EPIC_SHARE_REFUSAL_BY_CODE: ReadonlyMap<string, EpicShareRefusal> =
+  new Map<string, EpicShareRefusal>([
+    ...(
+      Object.keys(EPIC_SHARE_REFUSAL_CODE_BY_KIND) as ReadonlyArray<
+        keyof typeof EPIC_SHARE_REFUSAL_CODE_BY_KIND
+      >
+    ).map((kind): readonly [string, EpicShareRefusal] => [
+      EPIC_SHARE_REFUSAL_CODE_BY_KIND[kind],
+      { kind },
+    ]),
+    ...(
+      Object.keys(EPIC_SHARE_PENDING_CODE_BY_REASON) as ReadonlyArray<
+        keyof typeof EPIC_SHARE_PENDING_CODE_BY_REASON
+      >
+    ).map((reason): readonly [string, EpicShareRefusal] => [
+      EPIC_SHARE_PENDING_CODE_BY_REASON[reason],
+      { kind: "promotion-pending", reason },
+    ]),
+  ]);
 
 /** Whether a wire code belongs to the share-refusal taxonomy. */
 export function isEpicShareRefusalErrorCode(code: string): boolean {

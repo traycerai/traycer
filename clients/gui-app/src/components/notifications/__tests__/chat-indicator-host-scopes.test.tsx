@@ -11,6 +11,7 @@ import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
 import type {
+  HostNotificationsCloudFeedRow,
   HostNotificationsIndicatorState,
   HostNotificationsIndicatorStateRequest,
   HostNotificationsIndicatorStateResponse,
@@ -20,6 +21,7 @@ import { chatIndicatorHostScopes } from "@/lib/notifications/chat-indicator-scop
 import { useSurfaceNotificationIndicatorState } from "@/components/notifications/notification-indicator-context";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 import type { SurfaceNotificationIndicators } from "@/stores/notifications/notification-indicator-state";
+import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -201,11 +203,50 @@ function renderStrip(
   );
 }
 
+/**
+ * An unread, unresolved approval the cloud snapshot attributes to `originHostId`
+ * - the row a cloud-mode probe must light `pendingApproval` from.
+ */
+function cloudApprovalRow(input: {
+  readonly entryId: string;
+  readonly originHostId: string;
+  readonly chatId: string;
+}): HostNotificationsCloudFeedRow {
+  return {
+    entryId: input.entryId,
+    originHostId: input.originHostId,
+    coalesceKey: `approval.requested:${input.chatId}`,
+    entry: {
+      id: input.entryId,
+      updatedAt: 1_100,
+      readAt: null,
+      kind: "approval.requested",
+      sourceRef: input.entryId,
+      severity: "needs_action",
+      outcome: null,
+      resolvedAt: null,
+      epicId: "epic-1",
+      chatId: input.chatId,
+      payload: {
+        kind: "approval",
+        epicId: "epic-1",
+        chatId: input.chatId,
+        approvalId: input.entryId,
+      },
+    },
+    presentation: { epicTitle: "Epic", chatTitle: "Chat" },
+  };
+}
+
 afterEach(() => {
   cleanup();
   feedMode.value = "local";
   clientsByHostId.value = new Map();
   useAuthStore.setState(useAuthStore.getInitialState(), true);
+  useCloudNotificationsStore.setState(
+    useCloudNotificationsStore.getInitialState(),
+    true,
+  );
 });
 
 describe("ChatIndicatorHostScopes", () => {
@@ -309,6 +350,34 @@ describe("ChatIndicatorHostScopes", () => {
       expect(screen.getByTestId("probe-epic-1").textContent).toBe("done");
       expect(screen.getByTestId(`probe-${HOST_A}-chat-a`).textContent).toBe(
         "fork",
+      );
+    });
+  });
+
+  it("lights a host-bound tab from the cloud row its host produced, in that host's bucket", async () => {
+    // A host-bound probe reads its host's BUCKET (`byOriginHostId`), never the
+    // aggregate. RED before the fix: the cloud base folded the snapshot's rows
+    // into the aggregate only and inherited the (empty) buckets, so a cloud
+    // row for HOST_B's chat lit nothing on HOST_B's tab - and the host layer
+    // below could not supply it either, since it folds only the `home: local`
+    // partition, which by construction excludes a cloud-homed row.
+    feedMode.value = "cloud";
+    useCloudNotificationsStore.setState({
+      rows: {
+        "entry-b": cloudApprovalRow({
+          entryId: "entry-b",
+          originHostId: HOST_B,
+          chatId: "chat-b",
+        }),
+      },
+    });
+    const harness = createHarness([]);
+
+    renderStrip(harness, [{ hostId: HOST_B, chatId: "chat-b" }]);
+
+    await waitFor(() => {
+      expect(screen.getByTestId(`probe-${HOST_B}-chat-b`).textContent).toBe(
+        "approval",
       );
     });
   });

@@ -3,6 +3,8 @@ import { AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { useLocalStoreRebindMutation } from "@/hooks/local-store/use-local-store-rebind-mutation";
+import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
+import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
@@ -111,6 +113,21 @@ export function SnapshotErrorBanner(props: SnapshotErrorBannerProps) {
 function LocalStoreRepair(props: { readonly error: SnapshotFetchError }) {
   const requestFreshSnapshot = useEpicRequestFreshSnapshot();
   const rebindLocalStore = useLocalStoreRebindMutation();
+  // `host.rebindLocalStore` is an OPTIONAL unary, negotiated independently of
+  // the stream that produced this error: a host can emit
+  // `LOCAL_STORE_UNAVAILABLE` through `epic.subscribe` and still not carry the
+  // repair RPC. The registry's own note on the method says the button is to
+  // be absent for such a host, so the affordance is gated on the negotiated
+  // manifest rather than inferred from the error - offering it there only
+  // ended in an unsupported-RPC toast with no recovery behind it. Fails
+  // closed (`null` reads as absent) and self-corrects: the directory poll
+  // keeps talking to the session host, so a handshake that has not landed
+  // yet fills in on its own.
+  const sessionHostId = useEpicSessionHostId();
+  const rebindSupported = useHostSupportsMethod(
+    sessionHostId,
+    "host.rebindLocalStore",
+  );
   const [confirmRepairOpen, setConfirmRepairOpen] = useState(false);
   const [repairRefusal, setRepairRefusal] = useState<{
     readonly message: string;
@@ -132,14 +149,16 @@ function LocalStoreRepair(props: { readonly error: SnapshotFetchError }) {
           {repairRefusal.message}
         </p>
       )}
-      <Button
-        type="button"
-        size="sm"
-        data-testid="local-store-rebind"
-        onClick={() => setConfirmRepairOpen(true)}
-      >
-        Rebind local store
-      </Button>
+      {rebindSupported ? (
+        <Button
+          type="button"
+          size="sm"
+          data-testid="local-store-rebind"
+          onClick={() => setConfirmRepairOpen(true)}
+        >
+          Rebind local store
+        </Button>
+      ) : null}
       <ConfirmDestructiveDialog
         open={confirmRepairOpen}
         onOpenChange={setConfirmRepairOpen}

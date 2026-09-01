@@ -68,6 +68,13 @@ export function useAuthIdentityTransition(
   // attempt rewinds `previous` past the `signing-in` marker, so a
   // `prior.status === "signing-in"` test can never observe one.
   const attemptInFlight = useRef(false);
+  // Whether this hook has classified ANY render yet - tracked apart from
+  // `previous`, which the held-attempt branch below deliberately rewinds to
+  // `null` on a first render in `signing-in`. Deriving "initial mount" from
+  // `previous` alone reported the settled `signed-in` that ENDS an
+  // interactive attempt as an initial mount, which the documented
+  // `signing-in` -> `signed-in` transition is not.
+  const hasClassified = useRef(false);
   const callbackRef = useRef(onTransition);
   // `useLayoutEffect` keeps the ref write out of the render phase (eslint
   // react-hooks flags ref mutation during render) while still happening
@@ -79,6 +86,8 @@ export function useAuthIdentityTransition(
   useEffect(() => {
     const prior = previous.current;
     previous.current = { status, userId };
+    const isInitialMount = !hasClassified.current;
+    hasClassified.current = true;
 
     // Classified on IDENTITY PRESENCE, not on a cloud verdict. `unverified`
     // holds a stored identity read from disk - the same account, the same
@@ -150,7 +159,7 @@ export function useAuthIdentityTransition(
       callbackRef.current({
         kind: "signedIn",
         userId,
-        isInitialMount: prior === null,
+        isInitialMount,
       });
       return;
     }

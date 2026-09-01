@@ -36,6 +36,14 @@ const EMPTY_TITLE_RECORD: Record<string, string> = {};
 export function useWorktreeTaskTitles(
   client: HostClient<HostRpcRegistry> | null,
   worktrees: readonly WorktreeHostEntryV14[],
+  /**
+   * The live cloud verdict (`authorizesCloudCapability`). Tier 2 is a
+   * CAPABILITY SPEND: `epic.getTaskContexts` consults the cloud for ids the
+   * host cannot resolve locally, so merely viewing the Worktrees panel while
+   * `unverified` would spend the retained credential after the verdict was
+   * withdrawn. Tier 1 reads caches and spends nothing, so it stays on.
+   */
+  cloudAuthorized: boolean,
 ): ReadonlyMap<string, string> {
   const queryClient = useQueryClient();
   const epicIds = useMemo(
@@ -91,7 +99,7 @@ export function useWorktreeTaskTitles(
     requests: batchRequests,
     cacheKeyIdentity: userId === null ? undefined : userId,
     options: {
-      enabled: userId !== null && unresolvedIds.length > 0,
+      enabled: cloudAuthorized && userId !== null && unresolvedIds.length > 0,
       // Same presentation-only window as the History reader: the Settings
       // panel remounts on every open, and a title next to a worktree row does
       // not need a round trip each time.

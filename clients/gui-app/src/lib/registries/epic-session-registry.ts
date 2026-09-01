@@ -90,14 +90,11 @@ export const EpicSessionPresentationContext = createStableDevContext(
  */
 interface EpicSessionDevGlobals {
   __TRAYCER_EPIC_SESSION_CONTEXT__:
-    | Context<OpenEpicStoreHandle | null>
-    | undefined;
+    Context<OpenEpicStoreHandle | null> | undefined;
   __TRAYCER_EPIC_SESSION_PRESENTATION_CONTEXT__:
-    | Context<EpicSessionPresentation | null>
-    | undefined;
+    Context<EpicSessionPresentation | null> | undefined;
   __TRAYCER_EPIC_SESSION_HOST_CLIENT_CONTEXT__:
-    | Context<HostClient<HostRpcRegistry> | null>
-    | undefined;
+    Context<HostClient<HostRpcRegistry> | null> | undefined;
 }
 
 function createStableDevContext<K extends keyof EpicSessionDevGlobals>(
@@ -252,10 +249,19 @@ function useEpicReadLiveSessionSnapshot<T>(
   ) => LiveSessionSnapshotCache<T>,
   getServerSnapshot: () => T,
 ): T {
+  // Keyed on the ids' CONTENTS, not the array's identity. Callers rebuild the
+  // array on every render, and a memo keyed on it produced a new
+  // `canonicalEpicIds` each time - then a new `subscribe`, so
+  // `useSyncExternalStore` tore down and rebound every per-epic store listener
+  // plus the registry listener on every commit. The signature cache below
+  // already kept the renders stable; this keeps the subscriptions stable too.
+  const epicIdsSignature = [...new Set(epicIds)]
+    .sort((left, right) => left.localeCompare(right))
+    .join("\u0000");
   const canonicalEpicIds = useMemo(
-    () =>
-      [...new Set(epicIds)].sort((left, right) => left.localeCompare(right)),
-    [epicIds],
+    (): ReadonlyArray<string> =>
+      epicIdsSignature.length === 0 ? [] : epicIdsSignature.split("\u0000"),
+    [epicIdsSignature],
   );
   const snapshotCache = useRef<LiveSessionSnapshotCache<T> | null>(null);
   const subscribe = useCallback(

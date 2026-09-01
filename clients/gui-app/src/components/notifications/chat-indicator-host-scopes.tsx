@@ -1,4 +1,5 @@
 import { useContext, useMemo, type ReactNode } from "react";
+import type { HostNotificationsIndicatorStateResponse } from "@traycer/protocol/host/notifications/contracts";
 import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
 import { useNotificationFeedMode } from "@/lib/notifications/notification-feed-mode";
 import { NotificationIndicatorsContext } from "@/components/notifications/notification-indicator-context";
@@ -9,7 +10,7 @@ import {
   EMPTY_INDICATOR_STATE_RESPONSE,
   mergeLocalPartitionIntoCloudIndicators,
   mergeIndicatorStateResponses,
-  selectCloudNotificationIndicators,
+  selectCloudNotificationIndicatorProjection,
   type SurfaceNotificationIndicators,
 } from "@/stores/notifications/notification-indicator-state";
 
@@ -69,12 +70,31 @@ export function ChatIndicatorHostScopes(props: {
     // outer answer, then add only the cloud chat rows this fan-out owns;
     // replacing the base would erase every header Epic light as soon as a
     // chat-host scope mounted.
+    //
+    // The per-origin buckets have to come along with the aggregate. A
+    // host-bound consumer (`useSurfaceNotificationIndicatorState` with the
+    // tab's `originHostId`) reads its host's BUCKET, never the aggregate, so a
+    // cloud row that only reached the aggregate lit nothing for the tab it
+    // was about - and the host layers below fold only the `home: local`
+    // partition into those buckets, which by construction excludes it.
+    const cloud = selectCloudNotificationIndicatorProjection(
+      cloudRows,
+      NO_EPIC_IDS,
+      allChatIds,
+    );
+    const byOriginHostId: Record<
+      string,
+      HostNotificationsIndicatorStateResponse
+    > = { ...inherited.byOriginHostId };
+    for (const [originHostId, bucket] of Object.entries(cloud.byOriginHostId)) {
+      byOriginHostId[originHostId] = mergeIndicatorStateResponses(
+        byOriginHostId[originHostId] ?? EMPTY_INDICATOR_STATE_RESPONSE,
+        bucket,
+      );
+    }
     return {
-      ...mergeIndicatorStateResponses(
-        inherited,
-        selectCloudNotificationIndicators(cloudRows, NO_EPIC_IDS, allChatIds),
-      ),
-      byOriginHostId: inherited.byOriginHostId,
+      ...mergeIndicatorStateResponses(inherited, cloud.aggregate),
+      byOriginHostId,
     };
   }, [isCloud, inherited, cloudRows, allChatIds]);
   return (

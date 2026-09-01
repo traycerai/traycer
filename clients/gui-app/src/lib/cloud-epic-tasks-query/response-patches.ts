@@ -67,13 +67,22 @@ export function removeDeletedEpicsFromCloudTasksResponse(
   const tasks = response.tasks.filter(
     (task) => !isDeletedEpicTask(task, deletedEpicIds),
   );
+  // Facet counts describe the SERVER result set and never included a
+  // host-injected `home: "local"` row - the protocol marks facets `partial`
+  // when local rows are added for exactly that reason. Decrementing them for
+  // a local-home deletion undercounted unrelated cloud rows and could remove
+  // a repo, workspace, ownership or chat-host option that still had cloud
+  // matches, persistently in inactive cached scopes that never refetch.
+  const removedCloudTasks = removedTasks.filter(
+    (task) => task.home !== "local",
+  );
   return {
     ...response,
     tasks,
     facets:
-      response.facets === undefined
-        ? undefined
-        : removeTasksFromFacets(response.facets, removedTasks, userId),
+      response.facets === undefined || removedCloudTasks.length === 0
+        ? response.facets
+        : removeTasksFromFacets(response.facets, removedCloudTasks, userId),
   };
 }
 

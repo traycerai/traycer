@@ -1,5 +1,6 @@
-import { use, useMemo } from "react";
+import { use, useMemo, useState } from "react";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
+import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import {
   useHostNegotiatedMethodVersions,
@@ -75,6 +76,54 @@ function meetsHostFloor(
  */
 export function useNotificationFeedMode(): NotificationFeedMode {
   return use(NotificationFeedModeContext);
+}
+
+interface HeldNotificationFeedMode {
+  readonly negotiated: NotificationFeedMode;
+  readonly cloudFeedSupport: StreamMethodSupport | null;
+  readonly settled: NotificationFeedMode;
+}
+
+/**
+ * The negotiated mode, HELD across a stream client's re-negotiation.
+ *
+ * A rebuilt stream client reports every method's support as `unknown` until
+ * its handshake lands, so `useNotificationFeedModeFor` reads `local` for a
+ * beat even when the same cloud-capable host is coming right back. That beat
+ * is "not yet re-decided", not a capability downgrade. The session body used
+ * to apply this hold privately, inside its stream-transition effect - which
+ * left every OTHER consumer of the mode context (`useMergedNotificationsActions`,
+ * the indicator hooks, the sidebar) reading the raw `local` for that beat:
+ * a `list` fired then omitted the `home: "local"` partition selector, and a
+ * mark-all reached cloud-home rows. The hold therefore lives here, in the
+ * value the shell publishes, so the session body and the context agree.
+ *
+ * `null` support (no client at all) is NOT held: there is no handshake in
+ * flight to wait for, and the negotiated `local` is the genuine answer.
+ *
+ * Derived state, adjusted during render rather than in an effect: the settled
+ * mode must be visible in the same commit as the negotiation change, or the
+ * beat this exists to remove would still reach one render's worth of
+ * consumers.
+ */
+export function useHeldNotificationFeedMode(
+  negotiated: NotificationFeedMode,
+  cloudFeedSupport: StreamMethodSupport | null,
+): NotificationFeedMode {
+  const [held, setHeld] = useState<HeldNotificationFeedMode>({
+    negotiated,
+    cloudFeedSupport,
+    settled: negotiated,
+  });
+  if (
+    held.negotiated !== negotiated ||
+    held.cloudFeedSupport !== cloudFeedSupport
+  ) {
+    const settled = cloudFeedSupport === "unknown" ? held.settled : negotiated;
+    setHeld({ negotiated, cloudFeedSupport, settled });
+    return settled;
+  }
+  return held.settled;
 }
 
 /**

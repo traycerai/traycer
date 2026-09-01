@@ -605,6 +605,18 @@ describe("AuthService cloudAuthorized verdict propagation on in-place transition
     const contextBefore = provider.current();
     expect(contextBefore).not.toBeNull();
     expect(contextBefore?.cloudAuthorized).toBe(false);
+    const verifiedAnnouncements: Array<"signed-in" | "unverified"> = [];
+    const verifiedSubscription = provider.onSessionVerified(() => {
+      // Recorded WITH the store status at the moment of the announcement:
+      // `HostRuntime`'s refresh reads `cloudBearer()`, which gates on it, so
+      // an announcement made before the commit would be refused exactly like
+      // no announcement at all.
+      verifiedAnnouncements.push(
+        useAuthStore.getState().status === "signed-in"
+          ? "signed-in"
+          : "unverified",
+      );
+    });
 
     // A sibling window validated a fresh sign-in for the SAME user end to
     // end and projects it here via the cross-window bridge.
@@ -613,6 +625,11 @@ describe("AuthService cloudAuthorized verdict propagation on in-place transition
     );
 
     expect(useAuthStore.getState().status).toBe("signed-in");
+    // RED before the fix: this branch restored the verdict and the store but
+    // never announced, so the directory refresh refused while unverified was
+    // never retried and a cold window kept an empty remote directory.
+    expect(verifiedAnnouncements).toEqual(["signed-in"]);
+    verifiedSubscription();
     expect(service.getCurrentSessionSnapshot().token).toBe(
       "sibling-window-token",
     );

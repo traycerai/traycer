@@ -38,6 +38,49 @@ describe("removeDeletedEpicsFromCloudTaskCaches", () => {
     });
   });
 
+  it("removes a local-home row without decrementing the cloud facets", () => {
+    // The facets are the CLOUD's aggregate: a `home: "local"` row is
+    // host-synthesized and prepended, never counted there. RED before the fix:
+    // removing it decremented the facet of a cloud epic that shares its repo,
+    // so that cloud epic's count under-read by one.
+    const queryClient = new QueryClient();
+    const key = cloudEpicTasksQueryKey(
+      "host-a",
+      "user-1",
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    const facets: ListTasksResponse["facets"] = {
+      repos: [
+        { repoIdentifier: { owner: "traycer", repo: "gui-app" }, count: 1 },
+      ],
+      workspaces: [],
+      ownershipScopes: [{ value: "mine", count: 1 }],
+    };
+    queryClient.setQueryData<ListTasksResponse>(key, {
+      tasks: [
+        {
+          ...taskLight("epic-local", "Local", "traycer/gui-app", "user-1"),
+          home: "local",
+        },
+        taskLight("epic-cloud", "Cloud", "traycer/gui-app", "user-1"),
+      ],
+      hasMore: false,
+      facets,
+    });
+
+    removeDeletedEpicsFromCloudTaskCaches(
+      queryClient,
+      { hostId: null, userId: "user-1" },
+      ["epic-local"],
+    );
+
+    const after = queryClient.getQueryData<ListTasksResponse>(key);
+    expect(after?.tasks.map((task) => task.epic?.light?.id)).toEqual([
+      "epic-cloud",
+    ]);
+    expect(after?.facets).toEqual(facets);
+  });
+
   it("removes deleted epic rows and decrements facets for matching user caches", () => {
     const queryClient = new QueryClient();
     const matchingKey = cloudEpicTasksQueryKey(
@@ -318,6 +361,22 @@ describe("removeDeletedEpicsFromCloudTaskCaches", () => {
     expect(retained[0].tasks.map((task) => task.epic?.light?.id)).toEqual([
       "epic-orphan",
     ]);
+
+    // The other half of that sentence, at the CURRENT generation: an ordinary
+    // row for the tombstoned id is still refused. The earlier rejection in
+    // this file uses a stale generation and so exercises the generation
+    // guard; without this assertion a tombstone filter that admitted every
+    // late row at the current generation would pass the suite.
+    useCloudEpicTasksPagesStore.getState().appendPage(identity, generation, {
+      tasks: [listTaskLight("epic-orphan", "Orphan", scope.userId)],
+      hasMore: false,
+    });
+    const retainedAfterOrdinary =
+      useCloudEpicTasksPagesStore.getState().pagesByIdentity[identity];
+    const ordinaryRows = retainedAfterOrdinary.flatMap((page) =>
+      page.tasks.filter((task) => task.preservation !== "orphaned-local-edits"),
+    );
+    expect(ordinaryRows).toEqual([]);
   });
 });
 

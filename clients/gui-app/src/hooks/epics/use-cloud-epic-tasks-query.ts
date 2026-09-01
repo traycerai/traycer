@@ -49,6 +49,7 @@ import {
 import {
   claimLocalFirstRevalidation,
   isCurrentLocalFirstRevalidation,
+  releaseLocalFirstRevalidation,
   type LocalFirstRevalidationLease,
 } from "@/lib/cloud-epic-tasks-query/local-first-revalidation-coordinator";
 import { queryKeys, uiQueryKeys } from "@/lib/query-keys";
@@ -420,6 +421,11 @@ export function useCloudEpicTasksQuery(
             ) {
               return;
             }
+            // Settled: the episode is claimable again. The page may no longer
+            // be `pending` (a demotion marked it `unavailable` meanwhile), in
+            // which case this result is dropped and the authorization-restored
+            // edge below reopens the page and re-claims.
+            releaseLocalFirstRevalidation(queryClient, variables.lease);
             queryClient.setQueryData<ListTasksResponse>(
               variables.queryKey,
               (current) => {
@@ -434,6 +440,7 @@ export function useCloudEpicTasksQuery(
             ) {
               return;
             }
+            releaseLocalFirstRevalidation(queryClient, variables.lease);
             queryClient.setQueryData<ListTasksResponse>(
               variables.queryKey,
               (current) => markLocalFirstCloudUnavailable(current),

@@ -154,8 +154,7 @@ export interface WsStreamClientOptions<
    * short-lived provisioning probe (CLI `host install`) is who needs it.
    */
   readonly onHostCredentialState:
-    | ((hostId: string, state: HostCredentialState) => void)
-    | null;
+    ((hostId: string, state: HostCredentialState) => void) | null;
   /**
    * Where this transport's observations reach the selection authority.
    *
@@ -1099,12 +1098,18 @@ export class WsStreamClient<
         // prediction too keeps the entry alive across that session's disposal,
         // when the live map drops back to nothing but the peer's manifest is
         // still just as true as it was a moment earlier.
+        //
+        // Only when the method actually negotiated. On the incompatible
+        // handshake path this session's method is `unsupported`, and a
+        // prediction recorded anyway - a same-major minor the registry cannot
+        // bridge to still yields one - made `getMethodSchemaVersion()` report
+        // a usable version for a method that cannot subscribe.
         changed =
           this.recordManifestSchemaVersion(
             method,
             myManifest,
             theirManifest,
-            true,
+            subscribedMethodSupport === "supported",
           ) || changed;
         if (handshakeHostId !== null) {
           recordNegotiatedStreamMethodSupport(
@@ -1380,8 +1385,7 @@ interface StreamSessionOptions<Registry extends VersionedStreamRpcRegistry> {
    * this build cannot subscribe to. `null` when nobody is watching.
    */
   readonly onHostCredentialState:
-    | ((hostId: string, state: HostCredentialState) => void)
-    | null;
+    ((hostId: string, state: HostCredentialState) => void) | null;
   /**
    * Reports positive host-recovery evidence to the owning client - see
    * `WsStreamClient.subscribeAvailabilityRecovered` for the two emission

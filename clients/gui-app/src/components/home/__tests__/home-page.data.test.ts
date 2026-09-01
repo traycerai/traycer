@@ -7,6 +7,7 @@ import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schem
 import {
   buildHistoryItemsFromTasks,
   canDeleteHistoryItem,
+  canEditHistoryItemTitle,
   EMPTY_LOCAL_HOMED_TASK_IDS,
   collectHistoryRepos,
   filterHistoryItems,
@@ -373,8 +374,9 @@ describe("home-page history helpers", () => {
 
   it("marks host-synthesized local-home task rows for cloud-only pin gating", () => {
     // `home` is carried on listTasks@1.4 rows; the history builder reads it
-    // off the task light the host actually returns.
-    const tasks = [
+    // off the task light the host actually returns. Annotated rather than
+    // asserted so the literal is checked structurally against the wire type.
+    const tasks: ReadonlyArray<ListTaskLightPre15> = [
       {
         home: "local" as const,
         epic: {
@@ -406,7 +408,7 @@ describe("home-page history helpers", () => {
         phase: null,
         pinned: false,
       },
-    ] as ReadonlyArray<ListTaskLightPre15>;
+    ];
 
     const items = buildHistoryItemsFromTasks(
       tasks,
@@ -538,6 +540,50 @@ describe("home-page history helpers", () => {
       expect(canDeleteHistoryItem(owner, true)).toBe(true);
       expect(canDeleteHistoryItem(editor, true)).toBe(true);
       expect(canDeleteHistoryItem(viewer, true)).toBe(false);
+    });
+  });
+
+  // Renaming is the same cloud write class as deletion (`epic.updateTitle`
+  // carries the CloudData `epic.update` contract), so it admits on the same
+  // rule - with the same local-home exemption.
+  describe("canEditHistoryItemTitle", () => {
+    it("refuses a cloud row under an unverified session", () => {
+      const item = makeItem({
+        id: "cloud-row",
+        title: "Cloud row",
+        permissionRole: "owner",
+        isLocalHome: false,
+      });
+      // RED before the fix: role-only, so a demoted History page kept
+      // offering a rename that mutated cloud data on a withdrawn verdict.
+      expect(canEditHistoryItemTitle(item, false)).toBe(false);
+      expect(canEditHistoryItemTitle(item, true)).toBe(true);
+    });
+
+    it("keeps a local-home row renamable under an unverified session", () => {
+      const item = makeItem({
+        id: "local-home-row",
+        title: "Local home row",
+        permissionRole: "owner",
+        isLocalHome: true,
+      });
+      expect(canEditHistoryItemTitle(item, false)).toBe(true);
+    });
+
+    it("still refuses by role and by task type whatever the verdict", () => {
+      const viewer = makeItem({
+        id: "viewer-row",
+        title: "Viewer row",
+        permissionRole: "viewer",
+      });
+      const phase = makeItem({
+        id: "phase-row",
+        title: "Phase row",
+        taskType: "phase",
+        permissionRole: "owner",
+      });
+      expect(canEditHistoryItemTitle(viewer, true)).toBe(false);
+      expect(canEditHistoryItemTitle(phase, true)).toBe(false);
     });
   });
 });
