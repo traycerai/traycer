@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { PLAN_RESTRICTED_REPROBE_MS } from "../../host-transport/remote/config";
 import {
   SELECTION_AUTHORITY_CONTRACT_VERSION,
   type AuthorityIdentitySource,
@@ -812,7 +813,7 @@ describe("SelectionAuthorityEngineImpl - death aggregation", () => {
     authority.dispose();
   });
 
-  it("plan-restricted provenance: only comes from a confirmed refusal carrying it; null-detail is offline; last-counted refusal wins", () => {
+  it("plan-restricted provenance is sticky until proof of life; ordinary refusals still derive offline", () => {
     const clock = createFakeAuthorityClock(0);
     const authority = createTestAuthority({
       initialFleet: {
@@ -822,6 +823,7 @@ describe("SelectionAuthorityEngineImpl - death aggregation", () => {
           fleetHost("H1", "remote"),
           fleetHost("H2", "remote"),
           fleetHost("H3", "remote"),
+          fleetHost("H4", "remote"),
         ],
       },
       initialIdentityKey: "acct-1",
@@ -833,13 +835,14 @@ describe("SelectionAuthorityEngineImpl - death aggregation", () => {
     const attachA = engine.attach("A", attachRequest(seqA, []));
     if (!attachA.ok) throw new Error("expected attach to succeed");
 
-    for (let i = 0; i < CONFIRMED_DEATH_REFUSAL_STREAK; i += 1) {
-      engine.ingestEvidence(
-        "A",
-        attachA.incarnationId,
-        dialRefusal("H1", `plan-${i}`, "plan-restricted", i),
-      );
-    }
+    engine.ingestEvidence(
+      "A",
+      attachA.incarnationId,
+      dialRefusal("H1", "plan-1", "plan-restricted", 0),
+    );
+    // An entitlement refusal is deterministic, unlike a reachability failure:
+    // one observed verdict is conclusive and avoids manufacturing two more
+    // network attempts merely to make the UI publish the known reason.
     expect(findLease(engine.snapshot().leases, "H1")?.dead).toEqual({
       reason: "plan-restricted",
     });
@@ -871,8 +874,48 @@ describe("SelectionAuthorityEngineImpl - death aggregation", () => {
       dialRefusal("H3", "mix-3", null, 0),
     );
     expect(findLease(engine.snapshot().leases, "H3")?.dead).toEqual({
-      reason: "offline",
+      reason: "plan-restricted",
     });
+
+    engine.ingestEvidence(
+      "A",
+      attachA.incarnationId,
+      sessionEvidence("H4", "live", "established", 0),
+    );
+    engine.ingestEvidence(
+      "A",
+      attachA.incarnationId,
+      dialRefusal("H4", "denied-while-live", "plan-restricted", 0),
+    );
+    expect(findLease(engine.snapshot().leases, "H4")?.status).toBe("ready");
+    engine.ingestEvidence(
+      "A",
+      attachA.incarnationId,
+      sessionEvidence("H4", "live", "lost", 1),
+    );
+    expect(findLease(engine.snapshot().leases, "H4")?.dead).toEqual({
+      reason: "plan-restricted",
+    });
+
+    // The authority owns the matching deadline too. Once it expires, the
+    // lease becomes selectable again so the cache's now-empty slot can receive
+    // the one controlled policy probe even when no tab remained mounted.
+    clock.advance(PLAN_RESTRICTED_REPROBE_MS);
+    expect(findLease(engine.snapshot().leases, "H1")?.status).toBe(
+      "connecting",
+    );
+    expect(findLease(engine.snapshot().leases, "H3")?.status).toBe(
+      "connecting",
+    );
+
+    engine.ingestEvidence(
+      "A",
+      attachA.incarnationId,
+      dialOutcome("H3", "recovered", "success", 1),
+    );
+    expect(findLease(engine.snapshot().leases, "H3")?.status).toBe(
+      "connecting",
+    );
 
     authority.dispose();
   });

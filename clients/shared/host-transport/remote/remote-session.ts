@@ -66,6 +66,7 @@ import {
   MAX_TERMINAL_STREAM_IDS,
   ATTACH_ACK_TIMEOUT_MS,
   NOISE_HANDSHAKE_TIMEOUT_MS,
+  PLAN_RESTRICTED_FATAL_CODE,
   SESSION_OPEN_ACK_TIMEOUT_MS,
   UNARY_RESPONSE_TIMEOUT_MS,
   RECONNECT_INITIAL_BACKOFF_MS,
@@ -4434,7 +4435,7 @@ function asHostRpcError(
  * paid-plan upsell on this instead of a generic session failure. Free-string
  * `FatalErrorDetails.code` space, so no protocol change is involved.
  */
-export const PLAN_RESTRICTED_FATAL_CODE = "PLAN_RESTRICTED";
+export { PLAN_RESTRICTED_FATAL_CODE } from "./config";
 
 function planRestrictedFatalDetails(): FatalErrorDetails {
   return {

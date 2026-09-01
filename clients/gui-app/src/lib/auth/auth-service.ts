@@ -51,10 +51,7 @@ import {
   type ProactiveRefreshScheduler,
 } from "@traycer-clients/shared/auth/token-refresh-scheduler";
 import { usernameFromAuthenticatedUser } from "@traycer/protocol/auth/request-context";
-import {
-  isPaidTier,
-  type SubscriptionStatus,
-} from "@traycer/protocol/auth/user";
+import type { SubscriptionStatus } from "@traycer/protocol/auth/user";
 import {
   useAuthStore,
   type AuthContextMetadata,
@@ -475,13 +472,9 @@ export class AuthService {
    * or revalidation — the SAME value projected into the auth store beside every
    * write below, kept here so a caller can read it without React.
    *
-   * It lives on this object rather than being read back out of the store
-   * because the host-directory projection needs the plan and the credential to
-   * be one coherent answer: `commitLiveCredential` runs BEFORE the transition
-   * is announced, and the store projection runs after, so a fetch kicked off by
-   * that announcement would read this account's hosts against the previous
-   * account's plan. `null` means "not signed in, or not yet known" and reads as
-   * ALLOWED (see {@link planAllowsRemoteHosts}).
+   * Kept here for synchronous consumers outside React. Remote-host
+   * connectivity does not read it; authn owns that decision at grant minting.
+   * `null` means "not signed in, or not yet known".
    */
   private currentSubscription: SubscriptionStatus | null = null;
   private lastError: string | null = null;
@@ -3430,22 +3423,6 @@ export class AuthService {
    */
   currentSubscriptionStatus(): SubscriptionStatus | null {
     return this.currentSubscription;
-  }
-
-  /**
-   * Whether the account's plan includes REMOTE hosts (a paid-tier feature —
-   * "Sync and above"). The client-side mirror of CS's attach-grant gate; the
-   * server enforces it authoritatively on both attach legs
-   * (`reason: "plan_restricted"`).
-   *
-   * An unknown plan reads as ALLOWED, matching `useRemoteHostsPlanRestricted`'s
-   * polarity: a dial made on a stale-optimistic read just meets the server's
-   * 403 and is invisible, while a false "upgrade" prompt shown to a paying user
-   * during the sign-in window is not.
-   */
-  planAllowsRemoteHosts(): boolean {
-    const status = this.currentSubscription;
-    return status === null || isPaidTier(status);
   }
 
   /**

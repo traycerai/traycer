@@ -3,7 +3,11 @@ import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/ver
 import type { TimerHandle } from "../timer-handle";
 import type { RequestOfMethod, ResponseOfMethod } from "../host-messenger";
 import type { ReconnectAllOptions } from "../host-stream-client";
-import { REMOTE_SESSION_LINGER_MS } from "./config";
+import {
+  PLAN_RESTRICTED_FATAL_CODE,
+  PLAN_RESTRICTED_REPROBE_MS,
+  REMOTE_SESSION_LINGER_MS,
+} from "./config";
 import type { IRemoteSession } from "./remote-session";
 
 /**
@@ -168,6 +172,13 @@ interface CacheEntry {
   /** Armed while the entry lingers at refCount 0; null while consumers hold it. */
   lingerTimer: TimerHandle | null;
   /**
+   * Until this instant, a terminal `PLAN_RESTRICTED` session remains a
+   * negative cache entry instead of being replaced by every new consumer.
+   */
+  planRestrictedUntil: number | null;
+  /** Drops an unheld negative-cache entry when its controlled probe is due. */
+  planRestrictedTimer: TimerHandle | null;
+  /**
    * Set once this entry's identity has been SUPERSEDED - the host re-keyed or
    * moved, or the auth context (credential lease or signed-in user) that built
    * it was retired, and a newer identity for the same host has been acquired
@@ -265,6 +276,68 @@ const KEY_SEPARATOR = "\u0000";
 
 const entriesByKey = new Map<string, CacheEntry>();
 
+function isPlanRestricted(entry: CacheEntry): boolean {
+  return entry.session.terminalFatal()?.code === PLAN_RESTRICTED_FATAL_CODE;
+}
+
+function isPlanRestrictedSuppressed(entry: CacheEntry): boolean {
+  return (
+    isPlanRestricted(entry) &&
+    entry.planRestrictedUntil !== null &&
+    Date.now() < entry.planRestrictedUntil
+  );
+}
+
+export function planRestrictedReprobeAt(
+  identity: RemoteSessionIdentity,
+): number | null {
+  const entry = entriesByKey.get(remoteSessionCacheKey(identity));
+  return entry !== undefined && isPlanRestrictedSuppressed(entry)
+    ? entry.planRestrictedUntil
+    : null;
+}
+
+export function planRestrictedReprobeAtForHost(hostId: string): number | null {
+  let latest: number | null = null;
+  for (const entry of entriesByKey.values()) {
+    if (
+      entry.identity.hostId !== hostId ||
+      !isPlanRestrictedSuppressed(entry)
+    ) {
+      continue;
+    }
+    const until = entry.planRestrictedUntil;
+    if (until !== null && (latest === null || until > latest)) latest = until;
+  }
+  return latest;
+}
+
+function armPlanRestrictedSuppression(entry: CacheEntry, key: string): void {
+  if (!isPlanRestricted(entry) || entry.planRestrictedUntil !== null) {
+    return;
+  }
+  // A consumer may have released while the attach grant was still in flight,
+  // arming the ordinary keep-warm teardown before the fatal arrived. The
+  // entitlement verdict has its own, longer lifetime; leaving that timer armed
+  // would evict this entry after REMOTE_SESSION_LINGER_MS and reopen the
+  // cross-session mint/dial loop long before the controlled reprobe is due.
+  if (entry.lingerTimer !== null) {
+    clearTimeout(entry.lingerTimer);
+    entry.lingerTimer = null;
+  }
+  entry.planRestrictedUntil = Date.now() + PLAN_RESTRICTED_REPROBE_MS;
+  entry.planRestrictedTimer = setTimeout(() => {
+    entry.planRestrictedTimer = null;
+    if (entriesByKey.get(key) !== entry || entry.refCount > 0) {
+      return;
+    }
+    entriesByKey.delete(key);
+    entry.disposeReadinessWiring();
+    entry.session.close();
+    notifyReadinessChanged();
+  }, PLAN_RESTRICTED_REPROBE_MS);
+}
+
 /**
  * The map key, and nothing else: every consumer that needs an identity FIELD
  * back reads `CacheEntry.identity` instead of parsing this string, so fields
@@ -318,7 +391,11 @@ export function acquireRemoteSession<
 ): IRemoteSession<RpcRegistry, StreamRegistry> {
   const key = remoteSessionCacheKey(identity);
   let entry = entriesByKey.get(key);
-  if (entry !== undefined && (entry.session.isClosed() || entry.superseded)) {
+  if (
+    entry !== undefined &&
+    (entry.superseded ||
+      (entry.session.isClosed() && !isPlanRestrictedSuppressed(entry)))
+  ) {
     // Two states a NEW acquirer must never adopt:
     //
     // Closed: a terminally-closed session (a session-level fatal closes it in
@@ -342,6 +419,9 @@ export function acquireRemoteSession<
     if (entry.lingerTimer !== null) {
       clearTimeout(entry.lingerTimer);
     }
+    if (entry.planRestrictedTimer !== null) {
+      clearTimeout(entry.planRestrictedTimer);
+    }
     entry.disposeReadinessWiring();
     entriesByKey.delete(key);
     entry = undefined;
@@ -356,6 +436,8 @@ export function acquireRemoteSession<
       refCount: 0,
       borrowCount: 0,
       lingerTimer: null,
+      planRestrictedUntil: null,
+      planRestrictedTimer: null,
       superseded: false,
       disposeReadinessWiring: () => undefined,
     };
@@ -368,7 +450,10 @@ export function acquireRemoteSession<
     const offRecovered = session.subscribeAvailabilityRecovered(
       notifyReadinessChanged,
     );
-    const offClosed = session.onClosed(notifyReadinessChanged);
+    const offClosed = session.onClosed(() => {
+      armPlanRestrictedSuppression(created, key);
+      notifyReadinessChanged();
+    });
     // The DOWN edge, and the reason this trio is not a pair. Both wirings
     // above point UP - a session becoming ready, and a session dying - so a
     // relay `host_detached` or a drop into `reconnecting` flipped
@@ -455,6 +540,14 @@ export function acquireRemoteSession<
       return;
     }
     if (entry.superseded || entry.session.isClosed()) {
+      armPlanRestrictedSuppression(entry, key);
+      if (isPlanRestrictedSuppressed(entry)) {
+        // Keep the terminal verdict addressable at refCount zero. A new
+        // consumer receives it immediately without constructing a successor;
+        // the suppression timer removes it when one controlled probe is due.
+        notifyReadinessChanged();
+        return;
+      }
       // Superseded: marked while this consumer still held it - the host
       // re-keyed or moved underneath a live reference, so
       // `closeSupersededIdentities` could not take it then and nothing sweeps
@@ -473,6 +566,9 @@ export function acquireRemoteSession<
       // acquire evicts closed entries anyway, so drop it now. (`close()` on
       // an already-closed session is an idempotent no-op.)
       entriesByKey.delete(key);
+      if (entry.planRestrictedTimer !== null) {
+        clearTimeout(entry.planRestrictedTimer);
+      }
       entry.disposeReadinessWiring();
       entry.session.close();
       notifyReadinessChanged();
@@ -639,6 +735,10 @@ function closeSupersededIdentities(
       clearTimeout(entry.lingerTimer);
       entry.lingerTimer = null;
     }
+    if (entry.planRestrictedTimer !== null) {
+      clearTimeout(entry.planRestrictedTimer);
+      entry.planRestrictedTimer = null;
+    }
     entry.disposeReadinessWiring();
     entriesByKey.delete(key);
     entry.session.close();
@@ -675,6 +775,10 @@ export function retireAllRemoteSessions(): void {
     if (entry.lingerTimer !== null) {
       clearTimeout(entry.lingerTimer);
       entry.lingerTimer = null;
+    }
+    if (entry.planRestrictedTimer !== null) {
+      clearTimeout(entry.planRestrictedTimer);
+      entry.planRestrictedTimer = null;
     }
     entry.disposeReadinessWiring();
     entriesByKey.delete(key);
