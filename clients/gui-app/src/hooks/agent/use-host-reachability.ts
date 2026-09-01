@@ -13,6 +13,11 @@ import { useLoadDeadline } from "@/hooks/host/use-load-deadline";
 import { useHostLease } from "@/hooks/host/use-host-lease";
 import { isUnknownHost } from "@/lib/host/constants";
 import { HOST_STARTING_BUDGET_MS } from "@/lib/host/bounded-load-budgets";
+import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
+
+function isPlanRestrictedLease(lease: HostLeaseSnapshot | null): boolean {
+  return lease?.status === "dead" && lease.dead.reason === "plan-restricted";
+}
 
 export type HostReachabilityStatus =
   | "checking"
@@ -239,7 +244,7 @@ export function useHostReachability(hostId: string): HostReachability {
     // actually evidence about the host.
     const hostLabel = entry.label.length > 0 ? entry.label : hostId;
     const hostKind = entry.kind;
-    if (lease?.status === "dead" && lease.dead.reason === "plan-restricted") {
+    if (!hasReadySession && isPlanRestrictedLease(lease)) {
       return {
         status: "unreachable",
         hostLabel,

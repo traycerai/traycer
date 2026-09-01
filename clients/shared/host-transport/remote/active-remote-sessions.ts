@@ -297,6 +297,21 @@ export function planRestrictedReprobeAt(
     : null;
 }
 
+export function planRestrictedReprobeAtForHost(hostId: string): number | null {
+  let latest: number | null = null;
+  for (const entry of entriesByKey.values()) {
+    if (
+      entry.identity.hostId !== hostId ||
+      !isPlanRestrictedSuppressed(entry)
+    ) {
+      continue;
+    }
+    const until = entry.planRestrictedUntil;
+    if (until !== null && (latest === null || until > latest)) latest = until;
+  }
+  return latest;
+}
+
 function armPlanRestrictedSuppression(entry: CacheEntry, key: string): void {
   if (!isPlanRestricted(entry) || entry.planRestrictedUntil !== null) {
     return;

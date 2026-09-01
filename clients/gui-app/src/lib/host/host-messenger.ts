@@ -17,6 +17,7 @@ import {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   createRemoteHostTransport,
+  planRestrictedReprobeAtForHost,
   type IRemoteSession,
   type RemoteHostTransport,
 } from "@traycer-clients/shared/host-transport/remote/index";
@@ -274,7 +275,7 @@ class RuntimeHostMessenger<
     string,
     {
       readonly fatal: FatalErrorDetails;
-      readonly at: number;
+      readonly expiresAt: number;
       readonly key: string;
     }
   >();
@@ -581,9 +582,11 @@ class RuntimeHostMessenger<
         // superseded can, at worst, fail-fast the host for one TTL while
         // other consumers hold a working session under the new identity -
         // bounded, and cleared early by the next ready boundary heard.)
+        const at = Date.now();
+        const planRestrictedUntil = planRestrictedReprobeAtForHost(hostId);
         this.terminalVerdictByHost.set(hostId, {
           fatal,
-          at: Date.now(),
+          expiresAt: planRestrictedUntil ?? at + TERMINAL_VERDICT_TTL_MS,
           key: transportKey,
         });
         this.onRemoteAvailabilityRecovered(hostId);
@@ -688,10 +691,7 @@ class RuntimeHostMessenger<
     if (verdict === undefined) {
       return null;
     }
-    if (
-      verdict.key !== currentKey ||
-      Date.now() - verdict.at >= TERMINAL_VERDICT_TTL_MS
-    ) {
+    if (verdict.key !== currentKey || Date.now() >= verdict.expiresAt) {
       // Key mismatch: the host's transport identity moved (version bump, key
       // rotation, relay move) since the fatal - the very session the verdict
       // condemned can no longer be built, so waiting out the TTL would
