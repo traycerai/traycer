@@ -127,6 +127,7 @@ export function BundleFileSection(props: BundleFileSectionProps): ReactNode {
     >
       <BundleFileSectionBody
         node={props.node}
+        viewTabId={props.viewTabId}
         file={props.file}
         headSha={props.headSha}
         isLarge={isLarge}
@@ -141,6 +142,7 @@ export function BundleFileSection(props: BundleFileSectionProps): ReactNode {
 
 interface BundleFileSectionBodyProps {
   readonly node: GitBundleDiffTileRef;
+  readonly viewTabId: string;
   readonly file: GitChangedFile;
   readonly headSha: string;
   readonly isLarge: boolean;
@@ -217,22 +219,19 @@ function BundleFileSectionBody(props: BundleFileSectionBodyProps): ReactNode {
   }
   if (routeToPdfCards) {
     const sides = gitImageDiffSides(props.file);
-    const revisionKey = gitImageDiffRevisionKey(props.file, props.headSha);
-    // Same per-side summary cards as the single-file tile - the bundle row
-    // composes the rich per-type views (the image branch above is the
-    // precedent), it does not fall back to a poorer rendering.
+    // Same compact block as the single-file tile - the bundle row composes
+    // the rich per-type views (the image branch above is the precedent), it
+    // does not fall back to a poorer rendering.
     return (
       <PdfDiffView
-        key={revisionKey}
+        hostId={props.node.hostId}
+        viewTabId={props.viewTabId}
         runningDir={props.node.diff.runningDir}
         filePath={props.file.path}
         previousPath={props.file.previousPath}
-        revisionKey={revisionKey}
         oldStage={sides.oldStage}
         newStage={sides.newStage}
         sizeBytes={props.file.sizeBytes}
-        onOpenExternally={null}
-        openExternallyOpening={false}
       />
     );
   }

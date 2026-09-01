@@ -1,34 +1,44 @@
 /**
- * PDF change summary for the single-file git diff tile (PDF preview design,
- * Q7 follow-up). Deliberately NOT two inline viewers: two unsynchronized
- * multi-page viewers in cramped half-tile columns would look like a diff
- * while carrying none of a diff's meaning (page insertions shift
- * everything). Instead: the diff view's job here is "tell me it changed and
- * how much, and let me open either version properly" - per-side metadata
- * cards in the same old|new spatial grammar the image diff established,
- * each with a View button into the full-size `PdfViewDialog`.
+ * PDF change summary for the git diff surfaces (single-file tile and bundle
+ * rows) - the GitHub-shaped treatment, settled with the user 2026-09-03:
+ * one COMPACT centered block (icon, path, "Added/Modified · size"), never a
+ * full-height fake two-column diff (two multi-page viewers would look like
+ * a diff while carrying none of a diff's meaning), never a modal. The one
+ * action is Open: the CURRENT version in the app's own PDF viewer (the
+ * workspace file tile), with the app's standard click-to-open +
+ * drag-to-split mechanics. Old-version open deliberately deferred (needs a
+ * file-at-revision tile kind; the user chose latest-only for now), so a
+ * deleted PDF shows its status with no open affordance.
  */
-import { useState, type ReactNode } from "react";
-import { Eye, FileMinus, FilePlus, FileTextIcon } from "lucide-react";
+import { useCallback, useMemo, type ReactNode } from "react";
+import { useDraggable } from "@dnd-kit/core";
+import { ExternalLink, FileTextIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { BinaryPlaceholder } from "@/components/epic-canvas/binary-placeholder";
-import { isPdfAssetPath } from "@/lib/assets/image-extension-allowlist";
-import { PdfViewDialog, type PdfViewSide } from "./pdf-view-dialog";
+import { StartTruncatedText } from "@/components/ui/start-truncated-text";
+import { getBasename } from "@/lib/path/cross-platform-path";
+import { useOpenEpicId } from "@/lib/epic-selectors";
+import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { workspaceFileRefFromTreePath } from "@/components/epic-canvas/workspace-file/workspace-file-ref";
+import {
+  getPaneScopedDndId,
+  getWorkspaceFileDragId,
+  WORKSPACE_FILE_DND_TYPE,
+  type EpicCanvasWorkspaceFileDragData,
+} from "@/components/epic-canvas/dnd/dnd";
+import { useDragSourceDisabled } from "@/components/epic-canvas/dnd/use-drag-source-disabled";
 
 export interface PdfDiffViewProps {
+  readonly hostId: string;
+  readonly viewTabId: string;
   readonly runningDir: string;
   readonly filePath: string;
   readonly previousPath: string | null;
-  /** `gitImageDiffRevisionKey(file, headSha)` - threads into every git request, see `ImageDiffViewProps.revisionKey`. */
-  readonly revisionKey: string;
-  /** From `gitImageDiffSides`; `null` = the side does not exist (Added/Deleted empty state). */
+  /** From `gitImageDiffSides`; `null` = the side does not exist. */
   readonly oldStage: "staged" | "unstaged" | null;
   readonly newStage: "staged" | "unstaged" | null;
-  /** Current (new-side) size from `GitChangedFile.sizeBytes`; the old side's size is not known without a stream, so its card omits it. */
+  /** Current (new-side) size from `GitChangedFile.sizeBytes`. */
   readonly sizeBytes: number | null;
-  readonly onOpenExternally: (() => void) | null;
-  readonly openExternallyOpening: boolean;
 }
 
 function formatSizeBytes(sizeBytes: number): string {
@@ -41,159 +51,116 @@ function formatSizeBytes(sizeBytes: number): string {
   return `${sizeBytes} B`;
 }
 
-function PdfDiffEmptyState(props: {
-  readonly label: "Added" | "Deleted";
-}): ReactNode {
-  const Icon = props.label === "Added" ? FilePlus : FileMinus;
-  return (
-    <div className="flex size-full flex-col items-center justify-center gap-2 p-4 text-ui-xs text-muted-foreground">
-      <Icon className="size-8" />
-      <span>{props.label}</span>
-    </div>
-  );
-}
-
-function PdfSideCard(props: {
-  readonly label: "Old" | "New";
-  readonly sizeBytes: number | null;
-  readonly onView: () => void;
-}): ReactNode {
-  return (
-    <div
-      className="flex size-full flex-col items-center justify-center gap-2 p-4"
-      data-testid={`pdf-diff-side-${props.label.toLowerCase()}`}
-    >
-      <FileTextIcon className="size-8 text-muted-foreground" />
-      <span className="text-ui-xs text-muted-foreground">
-        {props.label} version
-        {props.sizeBytes !== null
-          ? ` · ${formatSizeBytes(props.sizeBytes)}`
-          : ""}
-      </span>
-      <Button type="button" variant="outline" size="sm" onClick={props.onView}>
-        <Eye className="size-4" />
-        View
-      </Button>
-    </div>
-  );
-}
-
-function PdfDiffSideSlot(props: {
-  readonly exists: boolean;
-  readonly isPdf: boolean;
-  readonly emptyLabel: "Added" | "Deleted";
-  readonly cardLabel: "Old" | "New";
-  readonly effectivePath: string;
-  readonly sizeBytes: number | null;
-  readonly onView: () => void;
-  readonly onOpenExternally: (() => void) | null;
-  readonly openExternallyOpening: boolean;
-}): ReactNode {
-  if (!props.exists) {
-    return <PdfDiffEmptyState label={props.emptyLabel} />;
+function statusLabel(props: PdfDiffViewProps): string {
+  if (props.oldStage === null) return "Added";
+  if (props.newStage === null) return "Deleted";
+  if (props.previousPath !== null && props.previousPath !== props.filePath) {
+    return "Renamed";
   }
-  if (props.isPdf) {
-    return (
-      <PdfSideCard
-        label={props.cardLabel}
-        sizeBytes={props.sizeBytes}
-        onView={props.onView}
-      />
-    );
-  }
-  // A rename can put a non-PDF on one side (`data.bin -> report.pdf`) - that
-  // side gets the plain compact placeholder rather than a View card into a
-  // document that is not a PDF.
-  return (
-    <BinaryPlaceholder
-      fileName={props.effectivePath}
-      sizeBytes={props.sizeBytes}
-      reason={null}
-      onOpenExternally={props.onOpenExternally}
-      openExternallyOpening={props.openExternallyOpening}
-      compact
-    />
-  );
+  return "Modified";
 }
 
 export function PdfDiffView(props: PdfDiffViewProps): ReactNode {
-  const [viewSide, setViewSide] = useState<PdfViewSide | null>(null);
+  const epicId = useOpenEpicId();
+  const navigateNested = useEpicNestedFocusNavigation();
+  const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
+    (s) => s.prepareOpenTileInTabFocusTarget,
+  );
 
-  // Same either-path rule as the image diff's per-side gating.
-  const oldEffectivePath = props.previousPath ?? props.filePath;
-  const oldIsPdf = props.oldStage !== null && isPdfAssetPath(oldEffectivePath);
-  const newIsPdf = props.newStage !== null && isPdfAssetPath(props.filePath);
+  // The block's headline path: the surviving side's. Only a DELETED file has
+  // no current side, and its label is the (old) path being removed.
+  const displayPath =
+    props.newStage !== null
+      ? props.filePath
+      : (props.previousPath ?? props.filePath);
+
+  // Latest-only by decision: the ref points at the CURRENT file on disk, so
+  // the button exists only while a current side does. The tile's own router
+  // handles whatever the path turns out to be (a rename can put a non-PDF on
+  // the new side - the file tile renders its true type).
+  const openRef = useMemo(() => {
+    if (props.newStage === null) return null;
+    return workspaceFileRefFromTreePath(
+      props.hostId,
+      props.runningDir,
+      props.filePath,
+      getBasename(props.filePath),
+    );
+  }, [props.hostId, props.runningDir, props.filePath, props.newStage]);
+
+  const dragData = useMemo<EpicCanvasWorkspaceFileDragData | null>(() => {
+    if (openRef === null) return null;
+    return {
+      kind: WORKSPACE_FILE_DND_TYPE,
+      epicId,
+      viewTabId: props.viewTabId,
+      ref: openRef,
+    };
+  }, [epicId, openRef, props.viewTabId]);
+
+  const dragDisabled = useDragSourceDisabled();
+  const { listeners, setNodeRef: dragRef } = useDraggable({
+    id: getPaneScopedDndId(
+      props.viewTabId,
+      getWorkspaceFileDragId(openRef?.id ?? `pdf-diff:${props.filePath}`),
+    ),
+    data: dragData ?? undefined,
+    disabled: openRef === null || dragDisabled,
+  });
+
+  const handleOpen = useCallback(() => {
+    if (openRef === null) return;
+    navigateNested(epicId, props.viewTabId, () =>
+      prepareOpenTileInTabFocusTarget(props.viewTabId, openRef),
+    );
+  }, [
+    epicId,
+    navigateNested,
+    openRef,
+    prepareOpenTileInTabFocusTarget,
+    props.viewTabId,
+  ]);
+
+  const label = statusLabel(props);
+  const sizeSuffix =
+    props.newStage !== null && props.sizeBytes !== null
+      ? ` · ${formatSizeBytes(props.sizeBytes)}`
+      : "";
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="flex min-h-0 flex-1 items-stretch">
-        <div className="min-w-0 flex-1">
-          <PdfDiffSideSlot
-            exists={props.oldStage !== null}
-            isPdf={oldIsPdf}
-            emptyLabel="Added"
-            cardLabel="Old"
-            effectivePath={oldEffectivePath}
-            sizeBytes={null}
-            onView={() => setViewSide("old")}
-            onOpenExternally={props.onOpenExternally}
-            openExternallyOpening={props.openExternallyOpening}
-          />
-        </div>
-        <div className="w-px shrink-0 bg-canvas-border/70" aria-hidden="true" />
-        <div className="min-w-0 flex-1">
-          <PdfDiffSideSlot
-            exists={props.newStage !== null}
-            isPdf={newIsPdf}
-            emptyLabel="Deleted"
-            cardLabel="New"
-            effectivePath={props.filePath}
-            sizeBytes={props.sizeBytes}
-            onView={() => setViewSide("new")}
-            onOpenExternally={props.onOpenExternally}
-            openExternallyOpening={props.openExternallyOpening}
-          />
-        </div>
-      </div>
-      {props.onOpenExternally !== null ? (
-        <div className="flex shrink-0 items-center justify-center border-t border-canvas-border/70 p-2">
+    <div
+      className="flex items-center justify-center p-6"
+      data-testid="pdf-diff-block"
+    >
+      <div className="flex min-w-0 max-w-full flex-col items-center gap-2 text-center">
+        <FileTextIcon className="size-8 text-muted-foreground" />
+        <StartTruncatedText className="max-w-full text-ui-sm">
+          {displayPath}
+        </StartTruncatedText>
+        {label === "Renamed" && props.previousPath !== null ? (
+          <StartTruncatedText className="max-w-full text-ui-xs text-muted-foreground">
+            {`from ${props.previousPath}`}
+          </StartTruncatedText>
+        ) : null}
+        <span className="text-ui-xs text-muted-foreground">
+          {label}
+          {sizeSuffix}
+        </span>
+        {openRef !== null ? (
           <Button
+            ref={dragRef}
+            {...listeners}
             type="button"
             variant="outline"
             size="sm"
-            disabled={props.openExternallyOpening}
-            onClick={props.onOpenExternally}
+            onClick={handleOpen}
+            aria-label={`Open ${getBasename(props.filePath)}`}
           >
-            {props.openExternallyOpening ? (
-              <AgentSpinningDots
-                className="size-4"
-                testId={undefined}
-                variant={undefined}
-              />
-            ) : null}
-            Open Externally
+            <ExternalLink className="size-4" />
+            Open
           </Button>
-        </div>
-      ) : null}
-      {viewSide !== null ? (
-        // Mounted per viewing session (the dialog's own state initializer
-        // re-arms to the clicked side); unmount on close.
-        <PdfViewDialog
-          open
-          onOpenChange={(open) => {
-            if (!open) setViewSide(null);
-          }}
-          runningDir={props.runningDir}
-          filePath={props.filePath}
-          previousPath={props.previousPath}
-          revisionKey={props.revisionKey}
-          oldStage={oldIsPdf ? props.oldStage : null}
-          newStage={newIsPdf ? props.newStage : null}
-          initialSide={viewSide}
-          onOpenExternally={props.onOpenExternally}
-          openExternallyOpening={props.openExternallyOpening}
-        />
-      ) : null}
+        ) : null}
+      </div>
     </div>
   );
 }

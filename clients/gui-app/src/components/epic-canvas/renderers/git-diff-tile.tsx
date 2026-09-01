@@ -7,7 +7,6 @@ import type {
   GitGetFileDiffResponse,
 } from "@traycer/protocol/host";
 import { useEditorOpenForClient } from "@/hooks/editor/use-editor-open-mutation";
-import { usePdfOpenExternallyTarget } from "@/hooks/editor/use-pdf-open-target";
 import { useEditorOpenFeedback } from "@/hooks/editor/use-editor-open-feedback";
 import { useGitRefreshWorktreeStatus } from "@/hooks/git/use-git-refresh-worktree-status";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
@@ -249,6 +248,7 @@ function GitDiffTileLive(props: GitDiffTileLiveProps): ReactNode {
       {isGitFileDiffTileRef(props.node) ? (
         <GitFileDiffTileBody
           node={props.node}
+          viewTabId={props.viewTabId}
           subscription={subscription}
           isActive={props.isActive}
         />
@@ -398,6 +398,7 @@ function GitDiffTileToolbar(props: GitDiffTileToolbarProps): ReactNode {
 
 interface GitFileDiffTileBodyProps {
   readonly node: GitFileDiffTileRef;
+  readonly viewTabId: string;
   readonly subscription: GitListChangedFilesSubscriptionResult;
   readonly isActive: boolean;
 }
@@ -467,6 +468,7 @@ function GitFileDiffTileBody(props: GitFileDiffTileBodyProps): ReactNode {
 
   return (
     <GitFileDiffPanel
+      viewTabId={props.viewTabId}
       node={props.node}
       file={file}
       headSha={props.subscription.data?.headSha ?? ""}
@@ -477,6 +479,7 @@ function GitFileDiffTileBody(props: GitFileDiffTileBodyProps): ReactNode {
 }
 
 interface GitFileDiffPanelProps {
+  readonly viewTabId: string;
   readonly node: GitFileDiffTileRef;
   readonly file: GitChangedFile;
   readonly headSha: string;
@@ -504,7 +507,6 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
     gitAssetStreamVersion !== null &&
     (gitAssetStreamVersion.major !== 1 || gitAssetStreamVersion.minor < 1);
   const defaultEditor = useSettingsStore((s) => s.defaultEditor);
-  const pdfOpenTarget = usePdfOpenExternallyTarget(props.node.hostId);
   const editorOpen = useEditorOpenForClient(tabHostClient, "file");
   const {
     active: openExternallyFeedbackActive,
@@ -601,24 +603,6 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
     triggerOpenExternallyFeedback,
   ]);
 
-  // The PDF cards' variant of the handler: same path, but targeting the OS
-  // default application on hosts that speak editor.openPaths >= 1.1.
-  const handleOpenPdfExternally = useCallback(() => {
-    if (openExternallyOpening) return;
-    triggerOpenExternallyFeedback();
-    editorOpen.mutate({
-      editorId: pdfOpenTarget,
-      paths: [absoluteFilePath(props.node.diff.runningDir, props.file.path)],
-    });
-  }, [
-    editorOpen,
-    openExternallyOpening,
-    pdfOpenTarget,
-    props.file.path,
-    props.node.diff.runningDir,
-    triggerOpenExternallyFeedback,
-  ]);
-
   if (showImageDiff) {
     const sides = gitImageDiffSides(props.file);
     const revisionKey = gitImageDiffRevisionKey(props.file, props.headSha);
@@ -647,21 +631,18 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
   // image diff), before the generic binary placeholder it upgrades.
   if (gitRoutesToPdfDiffCards(props.file) && !pdfCardsKnownUnsupported) {
     const sides = gitImageDiffSides(props.file);
-    const revisionKey = gitImageDiffRevisionKey(props.file, props.headSha);
     return (
       <>
         {svgToggle}
         <PdfDiffView
-          key={revisionKey}
+          hostId={props.node.hostId}
+          viewTabId={props.viewTabId}
           runningDir={props.node.diff.runningDir}
           filePath={props.file.path}
           previousPath={props.file.previousPath}
-          revisionKey={revisionKey}
           oldStage={sides.oldStage}
           newStage={sides.newStage}
           sizeBytes={props.file.sizeBytes}
-          onOpenExternally={handleOpenPdfExternally}
-          openExternallyOpening={openExternallyOpening}
         />
       </>
     );

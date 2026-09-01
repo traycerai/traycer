@@ -8,7 +8,11 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { DiffViewerPreferences } from "@/lib/diff/diff-viewer-preferences";
 import { makeSnapshotCumulativeDiffTile } from "@/lib/chat/snapshot-diff-tile";
-import { FILE_EDIT_REASON_COPY } from "@/lib/chat/file-edit-reason-copy";
+import {
+  FILE_EDIT_REASON_COPY,
+  PDF_FILE_DIFF_COPY,
+} from "@/lib/chat/file-edit-reason-copy";
+import { isPdfAssetPath } from "@/lib/assets/image-extension-allowlist";
 import { buildSnapshotUnifiedPatch } from "@/lib/diff/snapshot-diff-patch";
 import type { SnapshotBundleSectionEntry } from "@/lib/chat/snapshot-bundle-section-entries";
 import type { DiffFindMetadataUnitInput } from "@/lib/diff/diff-find";
@@ -338,8 +342,9 @@ function SnapshotBundleFileSectionBody(props: {
       props.entry.filePath,
     ],
   );
+  const isPdf = isPdfAssetPath(props.entry.filePath);
   useEffect(() => {
-    if (props.entry.reason !== "snapshot") return;
+    if (isPdf || props.entry.reason !== "snapshot") return;
     bundleFindRegistration.registerLoadedPatch({
       fileId: props.bundleFindFileId,
       patch,
@@ -349,11 +354,20 @@ function SnapshotBundleFileSectionBody(props: {
   }, [
     bundleFindRegistration,
     patch,
+    isPdf,
     props.bundleFindFileId,
     props.entry.filePath,
     props.entry.reason,
     props.node.id,
   ]);
+
+  if (isPdf) {
+    return (
+      <div className="p-4 text-ui-sm text-muted-foreground">
+        {PDF_FILE_DIFF_COPY}
+      </div>
+    );
+  }
 
   if (props.entry.reason !== "snapshot") {
     return (

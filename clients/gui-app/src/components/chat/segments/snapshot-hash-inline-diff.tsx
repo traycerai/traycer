@@ -6,7 +6,11 @@ import {
 } from "@/components/diff/diff-content-primitive";
 import { useSnapshotDiffQuery } from "@/hooks/snapshots/use-snapshot-diff-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
-import { FILE_EDIT_REASON_COPY } from "@/lib/chat/file-edit-reason-copy";
+import {
+  FILE_EDIT_REASON_COPY,
+  PDF_FILE_DIFF_COPY,
+} from "@/lib/chat/file-edit-reason-copy";
+import { isPdfAssetPath } from "@/lib/assets/image-extension-allowlist";
 import { buildSnapshotUnifiedPatch } from "@/lib/diff/snapshot-diff-patch";
 
 /**
@@ -49,6 +53,14 @@ export function SnapshotHashInlineDiff(props: {
       ignoreWhitespace: false,
     });
   }, [query.data, props.filePath]);
+
+  if (isPdfAssetPath(props.filePath)) {
+    return (
+      <div className="text-ui-sm text-muted-foreground">
+        {PDF_FILE_DIFF_COPY}
+      </div>
+    );
+  }
 
   if (query.isLoading) {
     return (

@@ -1,9 +1,9 @@
 /**
  * PDF routing in BUNDLE diff rows: the aggregated view composes the same
  * per-type views as the single-file tile (the image branch is the
- * precedent), so a .pdf row renders the summary cards - extension-only,
- * version-gated on `git.streamFileAsset >= 1.1`, and falling back to the
- * exact pre-PDF rendering on an old host.
+ * precedent), so a .pdf row renders the compact summary block -
+ * extension-only, failing OPEN on an unknown stream version, and falling
+ * back to the exact pre-PDF rendering on a positively-known old host.
  */
 import type { ReactNode } from "react";
 import {
@@ -262,7 +262,7 @@ describe("<BundleFileSection /> PDF routing", () => {
   it("routes a binary PDF row to the summary cards on a 1.1 host", () => {
     renderSection(file({ path: "docs/report.pdf", isBinary: true }));
 
-    expect(screen.getByTestId("pdf-diff-side-new")).toBeTruthy();
+    expect(screen.getByTestId("pdf-diff-block")).toBeTruthy();
     expect(screen.queryByText("Binary file")).toBeNull();
     expect(screen.queryByTestId("bundle-file-diff")).toBeNull();
     // Cards are metadata-only - the closed dialog must not fetch a side.
@@ -276,7 +276,7 @@ describe("<BundleFileSection /> PDF routing", () => {
   it("routes an ASCII-authored (non-binary) PDF row to the cards, not the text diff", () => {
     renderSection(file({ path: "docs/test-diff.pdf", isBinary: false }));
 
-    expect(screen.getByTestId("pdf-diff-side-new")).toBeTruthy();
+    expect(screen.getByTestId("pdf-diff-block")).toBeTruthy();
     expect(screen.queryByTestId("bundle-file-diff")).toBeNull();
   });
 
@@ -288,7 +288,7 @@ describe("<BundleFileSection /> PDF routing", () => {
     state.assetStreamVersion = null;
     renderSection(file({ path: "docs/report.pdf", isBinary: true }));
 
-    expect(screen.getByTestId("pdf-diff-side-new")).toBeTruthy();
+    expect(screen.getByTestId("pdf-diff-block")).toBeTruthy();
     expect(screen.queryByText("Binary file")).toBeNull();
   });
 
@@ -296,14 +296,14 @@ describe("<BundleFileSection /> PDF routing", () => {
     state.assetStreamVersion = { major: 1, minor: 0 };
     renderSection(file({ path: "docs/report.pdf", isBinary: true }));
 
-    expect(screen.queryByTestId("pdf-diff-side-new")).toBeNull();
+    expect(screen.queryByTestId("pdf-diff-block")).toBeNull();
     expect(screen.getByText("Binary file")).toBeTruthy();
   });
 
   it("keeps non-PDF binary rows on the bundle placeholder", () => {
     renderSection(file({ path: "assets/archive.zip", isBinary: true }));
 
-    expect(screen.queryByTestId("pdf-diff-side-new")).toBeNull();
+    expect(screen.queryByTestId("pdf-diff-block")).toBeNull();
     expect(screen.getByText("Binary file")).toBeTruthy();
   });
 });

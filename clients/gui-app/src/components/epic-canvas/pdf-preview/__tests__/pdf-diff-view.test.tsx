@@ -1,140 +1,132 @@
 /**
- * The PDF diff summary cards and their View dialog (PDF preview design, Q7
- * follow-up): per-side cards in the old|new spatial grammar, View opening
- * the full-size viewer pointed at THAT side's git stream request, Old/New
- * toggle re-pointing the same mounted dialog, and rename sides that are not
- * PDFs degrading to the compact placeholder.
+ * The compact PDF diff block (diff-surface redesign, 2026-09-03): one
+ * centered summary - path, status · size - with a single Open action that
+ * opens the CURRENT version as a workspace file tile (latest-only by
+ * decision; deleted files therefore have no open affordance). No modal, no
+ * Open Externally, no fetching from the block itself.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import type { FileAssetRequest } from "@/hooks/assets/use-file-asset";
 
-const state = vi.hoisted(() => ({
-  asset: {
-    status: "ready",
-    url: "blob:pdf",
-    meta: null,
-    reason: null,
-    totalBytes: null,
-    servedFromCache: false,
-  },
-  assetRequests: [] as Array<FileAssetRequest | null>,
+const state = vi.hoisted(
+  (): {
+    prepareOpenTileInTabFocusTarget: Mock;
+    navigateNested: Mock;
+  } => ({
+    prepareOpenTileInTabFocusTarget: vi.fn(),
+    navigateNested: vi.fn(
+      (_epicId: string, _viewTabId: string, fn: () => unknown) => fn(),
+    ),
+  }),
+);
+
+vi.mock("@/lib/epic-selectors", () => ({
+  useOpenEpicId: () => "epic-1",
 }));
 
-vi.mock("@/hooks/assets/use-file-asset", () => ({
-  useFileAsset: (request: FileAssetRequest | null) => {
-    state.assetRequests.push(request);
-    return { ...state.asset, reportDecodeFailure: vi.fn() };
-  },
+vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
+  useEpicNestedFocusNavigation: () => state.navigateNested,
 }));
 
-// The real viewer imports pdf.js; the contract under test is only "the
-// dialog mounts the shared viewer with the active side's blob URL".
-vi.mock("@/components/epic-canvas/pdf-preview/pdf-preview-lazy", () => ({
-  PdfPreviewLazy: (props: { readonly url: string }) => (
-    <div data-testid="dialog-pdf-preview" data-url={props.url} />
-  ),
+vi.mock("@/stores/epics/canvas/store", () => ({
+  useEpicCanvasStore: <T,>(
+    selector: (store: { readonly prepareOpenTileInTabFocusTarget: Mock }) => T,
+  ): T =>
+    selector({
+      prepareOpenTileInTabFocusTarget: state.prepareOpenTileInTabFocusTarget,
+    }),
 }));
 
 import { PdfDiffView } from "../pdf-diff-view";
 
-function lastRequest(): FileAssetRequest | null {
-  return state.assetRequests[state.assetRequests.length - 1] ?? null;
-}
-
 function renderView(overrides: {
+  readonly filePath?: string;
   readonly previousPath?: string | null;
   readonly oldStage?: "staged" | "unstaged" | null;
   readonly newStage?: "staged" | "unstaged" | null;
-  readonly filePath?: string;
+  readonly sizeBytes?: number | null;
 }) {
   return render(
     <PdfDiffView
+      hostId="host-A"
+      viewTabId="view-1"
       runningDir="/work/repo"
       filePath={overrides.filePath ?? "docs/report.pdf"}
       previousPath={overrides.previousPath ?? null}
-      revisionKey="rev-1"
       oldStage={
         overrides.oldStage === undefined ? "unstaged" : overrides.oldStage
       }
       newStage={
         overrides.newStage === undefined ? "unstaged" : overrides.newStage
       }
-      sizeBytes={2_202_009}
-      onOpenExternally={null}
-      openExternallyOpening={false}
+      sizeBytes={
+        overrides.sizeBytes === undefined ? 2_048 : overrides.sizeBytes
+      }
     />,
   );
 }
 
 describe("PdfDiffView", () => {
-  beforeEach(() => {
-    state.asset = {
-      status: "ready",
-      url: "blob:pdf",
-      meta: null,
-      reason: null,
-      totalBytes: null,
-      servedFromCache: false,
-    };
-    state.assetRequests.length = 0;
-  });
-
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
   });
 
-  it("renders both side cards with the new side's size, no streams opened", () => {
+  it("shows a modified PDF as one compact block with path, status and size", () => {
     renderView({});
 
-    expect(screen.getByTestId("pdf-diff-side-old")).toBeTruthy();
-    expect(screen.getByTestId("pdf-diff-side-new")).toBeTruthy();
-    expect(screen.getByText("New version · 2.1 MB")).toBeTruthy();
-    expect(screen.getByText("Old version")).toBeTruthy();
-    // Cards are metadata-only - the closed dialog must not fetch either side.
-    expect(state.assetRequests.every((request) => request === null)).toBe(true);
+    expect(screen.getByTestId("pdf-diff-block")).toBeTruthy();
+    expect(screen.getByText("docs/report.pdf")).toBeTruthy();
+    expect(screen.getByText("Modified · 2.0 KB")).toBeTruthy();
   });
 
-  it("shows Added for a file with no old side", () => {
-    renderView({ oldStage: null });
-    expect(screen.getByText("Added")).toBeTruthy();
-    expect(screen.queryByTestId("pdf-diff-side-old")).toBeNull();
-  });
+  it("opens the current version as a workspace file tile", () => {
+    renderView({});
 
-  it("shows Deleted for a file with no new side", () => {
-    renderView({ newStage: null });
-    expect(screen.getByText("Deleted")).toBeTruthy();
-    expect(screen.queryByTestId("pdf-diff-side-new")).toBeNull();
-  });
+    fireEvent.click(screen.getByRole("button", { name: "Open report.pdf" }));
 
-  it("opens the dialog on the clicked side's git request and toggles sides", () => {
-    renderView({ previousPath: "docs/old-report.pdf" });
-
-    fireEvent.click(screen.getAllByRole("button", { name: /View/u })[0]);
-
-    expect(screen.getByTestId("dialog-pdf-preview")).toBeTruthy();
-    expect(lastRequest()).toEqual({
-      method: "git",
-      runningDir: "/work/repo",
-      filePath: "docs/report.pdf",
-      previousPath: "docs/old-report.pdf",
-      side: "old",
-      stage: "unstaged",
-      coalesceRevision: "rev-1",
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: "New" }));
-    expect(lastRequest()).toEqual(
-      expect.objectContaining({ side: "new", stage: "unstaged" }),
+    expect(state.prepareOpenTileInTabFocusTarget).toHaveBeenCalledWith(
+      "view-1",
+      expect.objectContaining({
+        type: "workspace-file",
+        hostId: "host-A",
+        workspacePath: "/work/repo",
+        filePath: "docs/report.pdf",
+      }),
     );
   });
 
-  it("degrades a non-PDF rename side to the compact placeholder with no View", () => {
-    renderView({ previousPath: "docs/data.bin" });
+  it("labels an added PDF and still offers Open", () => {
+    renderView({ oldStage: null });
 
-    // Old side is not a PDF: placeholder, and only ONE View button (new side).
-    expect(screen.queryByTestId("pdf-diff-side-old")).toBeNull();
-    expect(screen.getAllByRole("button", { name: /View/u })).toHaveLength(1);
+    expect(screen.getByText("Added · 2.0 KB")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Open report.pdf" }),
+    ).toBeTruthy();
+  });
+
+  it("labels a deleted PDF with no open affordance (latest-only decision)", () => {
+    renderView({ newStage: null, sizeBytes: null });
+
+    expect(screen.getByText("Deleted")).toBeTruthy();
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  it("shows the old path for a rename", () => {
+    renderView({ previousPath: "docs/old-report.pdf" });
+
+    expect(screen.getByText("Renamed · 2.0 KB")).toBeTruthy();
+    expect(screen.getByText("from docs/old-report.pdf")).toBeTruthy();
+  });
+
+  it("headlines the deleted (old) path when only the old side exists", () => {
+    renderView({
+      filePath: "docs/report.pdf",
+      previousPath: "docs/old-report.pdf",
+      newStage: null,
+      sizeBytes: null,
+    });
+
+    expect(screen.getByText("docs/old-report.pdf")).toBeTruthy();
   });
 });

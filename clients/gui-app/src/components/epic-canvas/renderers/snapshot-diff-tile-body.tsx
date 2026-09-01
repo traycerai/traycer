@@ -1,3 +1,5 @@
+import { isPdfAssetPath } from "@/lib/assets/image-extension-allowlist";
+import { PDF_FILE_DIFF_COPY } from "@/lib/chat/file-edit-reason-copy";
 import { memo, useCallback, useEffect, useMemo, type ReactNode } from "react";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
@@ -435,6 +437,16 @@ function SnapshotDiffTileResolved(props: {
   }
 
   if (patch === null) return null;
+
+  if (resolved.every((entry) => isPdfAssetPath(entry.filePath))) {
+    return (
+      <SnapshotDiffTileShell node={node} viewTabId={viewTabId}>
+        <div className="p-4 text-ui-sm text-muted-foreground">
+          {PDF_FILE_DIFF_COPY}
+        </div>
+      </SnapshotDiffTileShell>
+    );
+  }
 
   return (
     <SnapshotDiffTileShell node={node} viewTabId={viewTabId}>
