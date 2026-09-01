@@ -1,4 +1,5 @@
-import { readFileSync, statSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import babel from "@rolldown/plugin-babel";
@@ -8,6 +9,11 @@ import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import { defineConfig, type Connect, type Plugin, type UserConfig } from "vite";
 import { sanitizeDevDesktopSlot } from "../shared/platform/dev-desktop-slot";
 import { devRelayBaseUrlFromEnv } from "../shared/platform/dev-backend-urls";
+import {
+  BUNDLED_BUILD_META_NAME,
+  bundledBuildIdFromHtml,
+  bundledBuildReloadClient,
+} from "./scripts/bundled-build-reload";
 
 // Dev-server endpoint that re-reads the host's pid.json on every request. The
 // baked define config only captures the host port as of Vite startup; the dev
@@ -213,56 +219,50 @@ function devHostEndpoint(slot: string): Plugin {
   };
 }
 
-function bundledBuildReload(): Plugin {
+function bundledBuildReload(): readonly Plugin[] {
   const indexPath = resolve(mobileRoot, "dist", "web", "index.html");
-  const reloadClient = `
-(() => {
-  let activeBuild = null;
-  const checkForBuild = async () => {
-    try {
-      const response = await fetch(${JSON.stringify(BUNDLED_BUILD_PATH)}, {
-        cache: "no-store",
-      });
-      if (!response.ok) return;
-      const nextBuild = await response.text();
-      if (activeBuild === null) {
-        activeBuild = nextBuild;
-      } else if (nextBuild !== activeBuild) {
-        location.reload();
-      }
-    } catch {
-      // A build can replace dist/web between polls. Retry on the next tick.
-    }
-  };
-  void checkForBuild();
-  setInterval(() => void checkForBuild(), 750);
-})();`;
-  return {
-    name: "traycer-bundled-build-reload",
-    transformIndexHtml() {
-      return [
-        {
-          tag: "script",
-          children: reloadClient,
-          injectTo: "head",
-        },
-      ];
+  return [
+    {
+      name: "traycer-bundled-build-marker",
+      apply: "build",
+      transformIndexHtml() {
+        const buildId = randomUUID();
+        return [
+          {
+            tag: "meta",
+            attrs: { name: BUNDLED_BUILD_META_NAME, content: buildId },
+            injectTo: "head",
+          },
+          {
+            tag: "script",
+            children: bundledBuildReloadClient(buildId, BUNDLED_BUILD_PATH),
+            injectTo: "head",
+          },
+        ];
+      },
     },
-    configurePreviewServer(server) {
-      server.middlewares.use(BUNDLED_BUILD_PATH, (_request, response) => {
-        try {
-          const stat = statSync(indexPath);
-          response.statusCode = 200;
-          response.setHeader("Cache-Control", "no-store");
-          response.setHeader("Content-Type", "text/plain; charset=utf-8");
-          response.end(`${stat.mtimeMs}:${stat.size}`);
-        } catch {
-          response.statusCode = 503;
-          response.end();
-        }
-      });
+    {
+      name: "traycer-bundled-build-endpoint",
+      apply: "serve",
+      configurePreviewServer(server) {
+        server.middlewares.use(BUNDLED_BUILD_PATH, (_request, response) => {
+          try {
+            const buildId = bundledBuildIdFromHtml(
+              readFileSync(indexPath, "utf8"),
+            );
+            if (buildId === null) throw new Error("Missing bundled build ID");
+            response.statusCode = 200;
+            response.setHeader("Cache-Control", "no-store");
+            response.setHeader("Content-Type", "text/plain; charset=utf-8");
+            response.end(buildId);
+          } catch {
+            response.statusCode = 503;
+            response.end();
+          }
+        });
+      },
     },
-  };
+  ];
 }
 
 async function guiAppDevConfig(): Promise<TraycerMobileBakedConfig> {
@@ -372,7 +372,7 @@ export default defineConfig(async (): Promise<UserConfig> => {
       ...(config.devHost === null
         ? []
         : [devHostEndpoint(config.devHost.host.label)]),
-      ...(bundledDevelopment ? [bundledBuildReload()] : []),
+      ...(bundledDevelopment ? bundledBuildReload() : []),
       tanstackRouter({
         enableRouteGeneration: false,
         target: "react",
