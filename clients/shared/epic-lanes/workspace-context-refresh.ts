@@ -131,6 +131,42 @@ export function createWorkspaceContextRefreshPolicy(
    * open only counts as a reconnect if there was something to come back from.
    */
   let transportLeftOpen = false;
+  /**
+   * The initial read's recovery state.
+   *
+   * `"initial"` is the ONLY trigger with no successor. Every other one recurs
+   * on its own - a reconnect needs a drop first, permission and migration
+   * frames keep arriving, the epoch moves again - so a transient failure there
+   * is recovered by the next occurrence, which is what
+   * {@link WorkspaceContextRefreshSources.onError} means by "reported, never
+   * latched". The first read has no next occurrence, and a healthy epic whose
+   * control lane is quiet emits nothing at all, so a first read that failed
+   * transiently left the epic on empty `snapshotMeta` for the whole session.
+   *
+   * `everFetched` tracks the FETCH, not the delivery. A consumer that throws
+   * in {@link deliver} is a broken consumer, not an unread context - this
+   * module keeps those two facts apart everywhere else, and re-fetching for it
+   * would just throw again.
+   *
+   * Exactly ONE retry, and only once a failure has actually been observed.
+   * Both halves are load-bearing:
+   *
+   * - Retrying on "no context yet" rather than on "the read failed" would fire
+   *   while the initial fetch is still in flight, coalesce into `pendingCause`,
+   *   and issue a second fetch the moment the first resolves. That is the
+   *   doubled cold open this module's header exists to prevent.
+   * - Without the one-shot latch, a rejection would re-enter the retry from its
+   *   own rejection handler, spinning as fast as the host can refuse.
+   *
+   * Every later `"open"` reaches the reconnect arm and fetches anyway, so one
+   * retry here is the whole gap. A second failure against a transport that is
+   * open and a lane that is quiet is a host not serving this method, which is
+   * the degrade `onError` documents rather than something to hammer.
+   */
+  let everFetched = false;
+  let initialReadFailed = false;
+  let initialRetryUsed = false;
+  let transportEverOpened = false;
 
   function alive(): boolean {
     return !disposed && !isDisposed();
@@ -159,6 +195,24 @@ export function createWorkspaceContextRefreshPolicy(
     }
   }
 
+  /**
+   * Re-issue the initial read once both of its preconditions hold.
+   *
+   * Called from the rejection handler AND from the first `"open"`, because
+   * either can be the one that arrives second: the read can lose its race with
+   * the status lane, or beat it.
+   */
+  function retryInitialReadIfOwed(): void {
+    if (everFetched || initialRetryUsed) return;
+    if (!initialReadFailed || !transportEverOpened) return;
+    initialRetryUsed = true;
+    // Reported as `"initial"` rather than a new cause, because that is what it
+    // is: the same first read of the session, arriving later. A separate label
+    // would widen an exported union to describe a distinction no consumer
+    // draws.
+    run("initial");
+  }
+
   function run(cause: WorkspaceContextRefreshCause): void {
     if (!alive()) return;
     if (inFlight) {
@@ -169,6 +223,7 @@ export function createWorkspaceContextRefreshPolicy(
     void fetch(epicId)
       .then(
         (context) => {
+          everFetched = true;
           if (!alive()) return;
           // Delivered in its OWN continuation, not inside the `then` whose
           // rejection handler is `onError`.
@@ -184,6 +239,7 @@ export function createWorkspaceContextRefreshPolicy(
           deliver(context, cause);
         },
         (error: unknown) => {
+          if (!everFetched) initialReadFailed = true;
           if (!alive()) return;
           environment.logger.warn("epic.getWorkspaceContext refresh failed", {
             epicId,
@@ -196,8 +252,18 @@ export function createWorkspaceContextRefreshPolicy(
         inFlight = false;
         const next = pendingCause;
         pendingCause = null;
-        if (next === null) return;
-        run(next);
+        // A queued trigger's fetch reads the same context the retry would, so
+        // it SUBSUMES the retry - and leaves `initialRetryUsed` unspent, so a
+        // first read that is still unsatisfied when that one settles keeps its
+        // one attempt.
+        if (next !== null) {
+          run(next);
+          return;
+        }
+        // After `inFlight` is cleared, never from inside the rejection handler:
+        // running there would route the retry through `pendingCause`, where the
+        // next arriving trigger would overwrite it.
+        retryInitialReadIfOwed();
       });
   }
 
@@ -213,7 +279,16 @@ export function createWorkspaceContextRefreshPolicy(
         transportLeftOpen = true;
         return;
       }
-      if (!transportLeftOpen) return;
+      transportEverOpened = true;
+      if (!transportLeftOpen) {
+        // The first `"open"` of a session is the tab opening, which `start`
+        // already covered - UNLESS that read failed. Then this is the first
+        // moment a retry could succeed, and nothing later owes one: the
+        // reconnect arm below needs a drop to have happened first, and a
+        // healthy epic whose control lane is quiet emits no frame at all.
+        retryInitialReadIfOwed();
+        return;
+      }
       transportLeftOpen = false;
       run("reconnect");
     },

@@ -119,6 +119,10 @@ vi.mock("@tanstack/react-router", () => ({
 
 import { EpicSessionProvider } from "@/providers/epic-session-provider";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
+import {
+  __setEpicRuntimeWorkerFactoryForTests,
+  getEpicRuntimeWorkerFactoryOverride,
+} from "@/lib/registries/epic-runtime-worker-factory-slot";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
@@ -370,5 +374,50 @@ describe("<EpicSessionProvider /> transport ownership", () => {
     // A DISTINCT instance, not the disposed transport handed back to the new
     // session.
     expect(secondRecord.wsStreamClient).not.toBe(firstRecord.wsStreamClient);
+  });
+
+  it("closes the transport when construction THROWS before a handle exists", async () => {
+    // Every close in this suite so far runs off the handle - `dispose` and
+    // `detachTransport` are the only two paths to `closeSessionTransport`, and
+    // both are members of an object that construction has to finish producing.
+    // So a synchronous throw between opening the transport and returning that
+    // object leaked the socket with no reference anywhere that could close it:
+    // it went on dialling `host-a` for the life of the window.
+    //
+    // `new Worker` refused by the runtime or a CSP is the reachable trigger -
+    // it is the one call in that span that touches a browser primitive with
+    // its own policy - but the leak is a property of the WINDOW, so the fix
+    // and this pin are about the span rather than about the worker.
+    const previousFactory = getEpicRuntimeWorkerFactoryOverride();
+    __setEpicRuntimeWorkerFactoryForTests(() => {
+      throw new Error("Worker construction blocked by the runtime");
+    });
+    try {
+      // The throw travels out of the acquire effect. Swallowed HERE and not in
+      // the provider: turning it into a caught, quiet failure would be a
+      // different change, and this pin is about the socket, not the
+      // presentation.
+      try {
+        render(
+          sessionBody("epic-worker-throws", "epic-worker-throws", () => {}),
+        );
+      } catch {
+        // Expected - construction failed, which is the premise.
+      }
+
+      // The transport WAS opened: this pin is only meaningful if the leak
+      // window was actually entered.
+      await waitFor(() => {
+        expect(transportRegistry.records).toHaveLength(1);
+      });
+      // THE REDDENING ASSERTION - previously 0, with no handle in existence to
+      // ever make it 1.
+      expect(transportRegistry.records[0]?.closeCount).toBe(1);
+      // ...and nothing was registered, so no later pass can find a handle to
+      // close it either. That is what made the leak permanent.
+      expect(__getOpenEpicRegistryForTests().size()).toBe(0);
+    } finally {
+      __setEpicRuntimeWorkerFactoryForTests(previousFactory);
+    }
   });
 });

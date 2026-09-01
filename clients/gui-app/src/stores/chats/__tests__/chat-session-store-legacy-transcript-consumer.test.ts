@@ -503,6 +503,47 @@ function capturedLegacySnapshotEnvelope(): StreamFrameEnvelope {
   };
 }
 
+/**
+ * A turn SETTLING, carrying a background-item set the snapshot did not have.
+ *
+ * `runStatus: "idle"` with `activeTurn: null` is the shape
+ * `turnSettledFromStatus` reads as "the turn is over" on a host that omits
+ * `turnInProgress`, which is the moment the completed turn's real size first
+ * exists - streaming growth is under-read on purpose while deltas buffer.
+ */
+function turnSettledWithBackgroundItemsEnvelope(): StreamFrameEnvelope {
+  return {
+    kind: "turnStateChanged",
+    hasBinaryPayload: false,
+    epicId: EPIC_ID,
+    chatId: CHAT_ID,
+    runStatus: "idle",
+    activeTurn: null,
+    backgroundItems: [
+      {
+        taskId: "task-settled-1",
+        kind: "command",
+        title:
+          "a background command whose title is long enough to move the charge",
+        blockId: "tool-settled-1",
+        parentTaskId: null,
+        scheduledFor: null,
+        individualStopUnavailable: null,
+      },
+      {
+        taskId: "task-settled-2",
+        kind: "command",
+        title:
+          "a second one, so the delta is not a single-item rounding artefact",
+        blockId: "tool-settled-2",
+        parentTaskId: null,
+        scheduledFor: null,
+        individualStopUnavailable: null,
+      },
+    ],
+  };
+}
+
 /** A stale `range` answer for the coordinate space the downgrade abandoned. */
 function strandedRangeEnvelope(): StreamFrameEnvelope {
   return {
@@ -790,6 +831,45 @@ describe("chat-session-store - real legacy snapshots settle the process-wide cha
     } finally {
       harness.handle.dispose();
       memory.accountant.release(BUDGET_PLANE_IDS.chatWindows, primerHolderId);
+    }
+  });
+
+  it("a turnStateChanged frame re-settles the holder - the growth a completed turn is the first proof of", () => {
+    // `onTurnStateChanged` writes `backgroundItems` (one of the six) and seats
+    // the turn's frozen row, and settled NOTHING. `evictWindowAfterInPlaceGrowth`
+    // is not the re-settle: it returns without touching the accountant whenever
+    // the window is under `TRANSCRIPT_WINDOW_MAX_BYTES`, and immediately on the
+    // legacy line this test drives.
+    //
+    // The turn's COMPLETION is the moment that matters: buffered block deltas
+    // deliberately leave a streaming turn under-read, so the finished turn is
+    // when its real size first exists. A multi-megabyte response followed by no
+    // range and no snapshot stayed charged at the pre-turn figure for as long as
+    // the chat then stayed quiet - which is exactly the growth the process-wide
+    // budget exists to notice.
+    const memory = getProcessMemoryRuntime();
+    const harness = createConsumerHarness();
+    try {
+      harness.session.negotiatedVersion = LEGACY_VERSION;
+      harness.session.emitStatus("open", null);
+      harness.session.fireServerFrame(capturedLegacySnapshotEnvelope());
+
+      const settledBeforeTurn = chatWindowsUsage(memory).settledBytes;
+      expect(settledBeforeTurn).toBeGreaterThan(0);
+
+      harness.session.fireServerFrame(turnSettledWithBackgroundItemsEnvelope());
+
+      const state = harness.handle.store.getState();
+      const expectedBytes = expectedLegacyChargeBytes(state);
+      // Non-vacuous in the way that matters: the frame really did grow the
+      // charge, so "unchanged" and "correct" are different answers here.
+      expect(expectedBytes).toBeGreaterThan(settledBeforeTurn);
+
+      // THE REDDENING ASSERTION - previously still `settledBeforeTurn`.
+      expect(chatWindowsUsage(memory).settledBytes).toBe(expectedBytes);
+      expect(chatWindowsUsage(memory).holderCount).toBe(1);
+    } finally {
+      harness.handle.dispose();
     }
   });
 });

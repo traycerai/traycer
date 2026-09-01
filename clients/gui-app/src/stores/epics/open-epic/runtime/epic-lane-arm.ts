@@ -290,6 +290,11 @@ export function createEpicLaneArm(sources: EpicLaneArmSources): EpicLaneArm {
     // outcome is the same `snapshotMeta` a lane session had before this policy
     // existed. Latching a failure would be worse than reporting it, since the
     // next trigger's fetch is exactly what recovers a transient one.
+    //
+    // "The next trigger" is the policy's obligation, not this arm's, and it
+    // holds because the policy retries a first read that failed on the status
+    // lane's first `"open"`. That is the one trigger with no natural
+    // successor; every other one recurs on its own.
     onError: () => {},
     isDisposed,
   });

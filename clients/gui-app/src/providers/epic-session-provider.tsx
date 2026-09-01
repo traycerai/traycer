@@ -600,290 +600,314 @@ export function EpicSessionProvider(
         transportClosed = true;
         transport.close();
       };
-      // The four typed stream clients are NOT built here any more. They are
-      // the method-typed zod decode this relocation exists to move, so the
-      // worker builds them itself over its proxied `IStreamClient`
-      // (`buildProxiedStreamFactories`). What crosses is this session's real
-      // `wsStreamClient`, whose socket never leaves this thread.
+      // EVERY construction between opening the transport and returning a
+      // handle that owns its close. A synchronous throw anywhere in here -
+      // `new Worker` refused by the runtime or CSP, an emitted worker URL
+      // that will not load, an accounting port that cannot be built -
+      // propagated with the transport already open and NO handle in
+      // existence, so neither `dispose` nor `detachTransport` could ever
+      // reach `closeSessionTransport` and the socket stayed dialling for
+      // the life of the window. The epic also failed outside the `failed`
+      // presentation, which is the state carrying the Retry affordance.
       //
-      // There is deliberately no "no transport" guard left. One stood here and
-      // threw, which was the right posture while a branch above could produce a
-      // null client; with that branch gone, `DurableStreamTransport` declares
-      // `wsStreamClient` non-nullable and the check became unreachable - and a
-      // dead `=== null` is what `no-unnecessary-condition` exists to reject.
-      // The property is carried by the TYPE now, which is the stronger form of
-      // the same guarantee: a runtime throw catches a null that reaches it,
-      // whereas this one cannot be constructed.
+      // Scoped to the whole span rather than to the worker spawn the
+      // symptom pointed at: the leak is a property of the WINDOW between
+      // acquiring the socket and handing back its owner, not of any one
+      // call inside it.
+      try {
+        // The four typed stream clients are NOT built here any more. They are
+        // the method-typed zod decode this relocation exists to move, so the
+        // worker builds them itself over its proxied `IStreamClient`
+        // (`buildProxiedStreamFactories`). What crosses is this session's real
+        // `wsStreamClient`, whose socket never leaves this thread.
+        //
+        // There is deliberately no "no transport" guard left. One stood here and
+        // threw, which was the right posture while a branch above could produce a
+        // null client; with that branch gone, `DurableStreamTransport` declares
+        // `wsStreamClient` non-nullable and the check became unreachable - and a
+        // dead `=== null` is what `no-unnecessary-condition` exists to reject.
+        // The property is carried by the TYPE now, which is the stronger form of
+        // the same guarantee: a runtime throw catches a null that reaches it,
+        // whereas this one cannot be constructed.
 
-      /**
-       * The books, on MAIN, and the one set for this session.
-       *
-       * Built here rather than in the store because the worker reports into
-       * them too, over the bridge - so the composition that spawns the worker
-       * is the composition that owns them.
-       */
-      const accounting = createProcessBackedAccountingPort({
-        hostId: targetHostId,
-        epicId,
-        environment: createRendererRuntimeEnvironment(),
-      });
+        /**
+         * The books, on MAIN, and the one set for this session.
+         *
+         * Built here rather than in the store because the worker reports into
+         * them too, over the bridge - so the composition that spawns the worker
+         * is the composition that owns them.
+         */
+        const accounting = createProcessBackedAccountingPort({
+          hostId: targetHostId,
+          epicId,
+          environment: createRendererRuntimeEnvironment(),
+        });
 
-      /**
-       * The projection handlers, filled once the store exists.
-       *
-       * A slot because the two constructions are mutually dependent: the
-       * spawner reduces into handlers only the store can supply, and the store
-       * needs the port only the spawner can hand back. The worker cannot
-       * publish before its bootstrap is answered, and that happens after both
-       * lines below - so the window where this is `null` carries no traffic.
-       * It is still checked rather than asserted, because "cannot happen" is
-       * not a thing this file gets to claim about another thread.
-       */
-      // Buffers publications made before the store exists, and answers
-      // `accept` from a pure parser so a `null` there means "foreign payload"
-      // and never "no target yet". The worker composes and starts INSIDE the
-      // spawn below, so that window carries real traffic.
-      const projection = createLateBoundProjectionTarget<
-        Partial<EpicRuntimeProjection>
-      >(
-        (value) => (isProjectionPatch(value) ? value : null),
-        (reason, revision) => {
-          appLogger.warn(
-            "[open-epic] dropped a projection publication before attach",
-            { epicId, reason, revision },
-          );
-        },
-      );
-      /**
-       * The body plane's return leg, filled on the same line as the one above
-       * and `null` for the same window. The store owns the live body docs, so
-       * this is mutually dependent with the spawn in exactly the way the
-       * projection slot is.
-       */
-      // NOT buffered, and derived rather than assumed. The body return leg
-      // publishes only from observers attached inside the `body/materialize`
-      // handler (`epic-runtime-core-ports.ts` - both call sites, the cold arm
-      // and the forward-only one). A materialize is a CALL issued by the lease
-      // bridge, and the lease bridge is built by the store - so no body
-      // publication can precede the store, and this slot has no gap to lose
-      // traffic in. Contrast the projection slot above, whose producer runs
-      // during composition.
-      let bodyTarget: EpicRuntimeBodyReturnTarget | null = null;
-
-      // Created BEFORE the spawn and mapped to the handle after it, because a
-      // protocol-mismatch fatal arrives synchronously from inside
-      // `spawnEpicRuntimeWorker` - before `handle` exists. See
-      // `handleWorkerLiveness` for why this is a cell rather than a set entry.
-      const liveness = { dead: false };
-
-      const runtimeWorker = spawnEpicRuntimeWorker<
-        Partial<EpicRuntimeProjection>
-      >({
-        createWorker: getEpicRuntimeWorkerFactory(),
-        relay: {
-          log: (entry) => {
-            // The worker's own level, mapped onto the four this logger has.
-            // `debug` is the floor: a relocated module's chatter must not
-            // arrive as an error just because it crossed a thread.
-            if (entry.level === "error") {
-              appLogger.error(entry.message, entry.fields, entry.error);
-              return;
-            }
-            if (entry.level === "warn") {
-              appLogger.warn(entry.message, entry.fields);
-              return;
-            }
-            appLogger.debug(entry.message, entry.fields);
-          },
-          fatal: (message, stack) => {
-            // NOT just a log line. The runtime behind the bridge is gone, so a
-            // UI waiting on projections would wait forever - the epic reads as
-            // permanently loading. Surfaced as `failed`, which is the state
-            // that carries a retry affordance.
-            appLogger.error(
-              "[epic-session] runtime worker fatal",
-              { epicId },
-              { message, stack },
+        /**
+         * The projection handlers, filled once the store exists.
+         *
+         * A slot because the two constructions are mutually dependent: the
+         * spawner reduces into handlers only the store can supply, and the store
+         * needs the port only the spawner can hand back. The worker cannot
+         * publish before its bootstrap is answered, and that happens after both
+         * lines below - so the window where this is `null` carries no traffic.
+         * It is still checked rather than asserted, because "cannot happen" is
+         * not a thing this file gets to claim about another thread.
+         */
+        // Buffers publications made before the store exists, and answers
+        // `accept` from a pure parser so a `null` there means "foreign payload"
+        // and never "no target yet". The worker composes and starts INSIDE the
+        // spawn below, so that window carries real traffic.
+        const projection = createLateBoundProjectionTarget<
+          Partial<EpicRuntimeProjection>
+        >(
+          (value) => (isProjectionPatch(value) ? value : null),
+          (reason, revision) => {
+            appLogger.warn(
+              "[open-epic] dropped a projection publication before attach",
+              { epicId, reason, revision },
             );
-            // RECORDED, not acted on. `failed` is the presentation that carries
-            // the Retry affordance, and Retry alone could not recover: it bumps
-            // `retryGeneration`, the acquire effect sees
-            // `current.hostId === targetHostId`, and presents this same dead
-            // handle as `ready` - the affordance unable to recover from the one
-            // failure it is shown for. Marking the handle is what lets that
-            // pass retire it instead.
-            //
-            // Marked rather than disposed HERE because this runs on a bridge
-            // callback that can be inside the registry's own acquire
-            // transaction; the acquire effect owns registry mutation and reads
-            // this on its next pass.
-            liveness.dead = true;
-            presentSession({
-              kind: "failed",
-              targetHostId,
-              originalHostId: originalHostIdRef.current,
-            });
           },
-        },
-        // Classified HERE, on main: an `Error` does not survive structured
-        // clone, so the worker receives the classifier's own union.
-        writeCommand: async (commandId, intent) => {
-          const narrowed = readWriteCommandIntent(intent);
-          if (narrowed === null) {
-            return {
-              ok: false,
-              failure: {
-                kind: "rejected",
-                resolution: {
+        );
+        /**
+         * The body plane's return leg, filled on the same line as the one above
+         * and `null` for the same window. The store owns the live body docs, so
+         * this is mutually dependent with the spawn in exactly the way the
+         * projection slot is.
+         */
+        // NOT buffered, and derived rather than assumed. The body return leg
+        // publishes only from observers attached inside the `body/materialize`
+        // handler (`epic-runtime-core-ports.ts` - both call sites, the cold arm
+        // and the forward-only one). A materialize is a CALL issued by the lease
+        // bridge, and the lease bridge is built by the store - so no body
+        // publication can precede the store, and this slot has no gap to lose
+        // traffic in. Contrast the projection slot above, whose producer runs
+        // during composition.
+        let bodyTarget: EpicRuntimeBodyReturnTarget | null = null;
+
+        // Created BEFORE the spawn and mapped to the handle after it, because a
+        // protocol-mismatch fatal arrives synchronously from inside
+        // `spawnEpicRuntimeWorker` - before `handle` exists. See
+        // `handleWorkerLiveness` for why this is a cell rather than a set entry.
+        const liveness = { dead: false };
+
+        const runtimeWorker = spawnEpicRuntimeWorker<
+          Partial<EpicRuntimeProjection>
+        >({
+          createWorker: getEpicRuntimeWorkerFactory(),
+          relay: {
+            log: (entry) => {
+              // The worker's own level, mapped onto the four this logger has.
+              // `debug` is the floor: a relocated module's chatter must not
+              // arrive as an error just because it crossed a thread.
+              if (entry.level === "error") {
+                appLogger.error(entry.message, entry.fields, entry.error);
+                return;
+              }
+              if (entry.level === "warn") {
+                appLogger.warn(entry.message, entry.fields);
+                return;
+              }
+              appLogger.debug(entry.message, entry.fields);
+            },
+            fatal: (message, stack) => {
+              // NOT just a log line. The runtime behind the bridge is gone, so a
+              // UI waiting on projections would wait forever - the epic reads as
+              // permanently loading. Surfaced as `failed`, which is the state
+              // that carries a retry affordance.
+              appLogger.error(
+                "[epic-session] runtime worker fatal",
+                { epicId },
+                { message, stack },
+              );
+              // RECORDED, not acted on. `failed` is the presentation that carries
+              // the Retry affordance, and Retry alone could not recover: it bumps
+              // `retryGeneration`, the acquire effect sees
+              // `current.hostId === targetHostId`, and presents this same dead
+              // handle as `ready` - the affordance unable to recover from the one
+              // failure it is shown for. Marking the handle is what lets that
+              // pass retire it instead.
+              //
+              // Marked rather than disposed HERE because this runs on a bridge
+              // callback that can be inside the registry's own acquire
+              // transaction; the acquire effect owns registry mutation and reads
+              // this on its next pass.
+              liveness.dead = true;
+              presentSession({
+                kind: "failed",
+                targetHostId,
+                originalHostId: originalHostIdRef.current,
+              });
+            },
+          },
+          // Classified HERE, on main: an `Error` does not survive structured
+          // clone, so the worker receives the classifier's own union.
+          writeCommand: async (commandId, intent) => {
+            const narrowed = readWriteCommandIntent(intent);
+            if (narrowed === null) {
+              return {
+                ok: false,
+                failure: {
                   kind: "rejected",
-                  code: "RPC_ERROR",
-                  reason: "unrecognised write command intent",
-                  retryable: false,
+                  resolution: {
+                    kind: "rejected",
+                    code: "RPC_ERROR",
+                    reason: "unrecognised write command intent",
+                    retryable: false,
+                  },
                 },
-              },
-            };
-          }
-          try {
-            const sent = await dispatchEpicWriteCommand(
+              };
+            }
+            try {
+              const sent = await dispatchEpicWriteCommand(
+                {
+                  epicId,
+                  requester: () => getRequesterForHostId(handleHostId),
+                },
+                commandId,
+                narrowed,
+              );
+              return { ok: true, hostId: sent.hostId };
+            } catch (cause: unknown) {
+              return {
+                ok: false,
+                failure: classifyEpicWriteCommandFailure(cause),
+              };
+            }
+          },
+          // Reduced HERE, on main, for the same reason `writeCommand` is: an
+          // `Error` does not survive structured clone.
+          laneUnary: (request) =>
+            dispatchEpicLaneUnary(
               { epicId, requester: () => getRequesterForHostId(handleHostId) },
-              commandId,
-              narrowed,
-            );
-            return { ok: true, hostId: sent.hostId };
-          } catch (cause: unknown) {
-            return {
-              ok: false,
-              failure: classifyEpicWriteCommandFailure(cause),
-            };
+              request,
+            ),
+          streams: wsStreamClient,
+          // The SAME object as `streams`, narrowed to the two members the
+          // manifest is built from - see the option's own doc for why the two
+          // are separate parameters rather than one widened one.
+          methodSupport: wsStreamClient,
+          accounting,
+          projection: projection.handlers,
+          body: {
+            applyDocUpdate: (docKey, update) => {
+              bodyTarget?.applyDocUpdate(docKey, update);
+            },
+            applyAwareness: (docKey, frame) => {
+              bodyTarget?.applyAwareness(docKey, frame);
+            },
+          },
+          epicId,
+          // The host this session was established against, which is the same
+          // value the accounting port is built with above. The worker's
+          // write-command queue reads it as its send gate - see
+          // `RuntimeWorkerBootstrap.hostId`.
+          hostId: targetHostId,
+          windowLabel: epicId,
+        });
+
+        const created = createOpenEpicStore({
+          epicId,
+          userId: sessionUserId,
+          accounting,
+          runtime: {
+            port: runtimeWorker.port,
+            command: (command) => {
+              runtimeWorker.command(command);
+            },
+            awarenessOut: (docKey, frame, localClientId) => {
+              runtimeWorker.awarenessOut(docKey, frame, localClientId);
+            },
+            currentUser: (nextUserId) => {
+              runtimeWorker.currentUser(nextUserId);
+            },
+            detach: () => {
+              runtimeWorker.detach();
+            },
+            dispose: () => {
+              runtimeWorker.dispose();
+            },
+          },
+        });
+        projection.attach(created.projection);
+        bodyTarget = created.body;
+
+        /**
+         * The UNAUTHORIZED revalidate, delivered by the PROJECTION rather than by
+         * a callback.
+         *
+         * `onAuthError` fired from the control replica, which is worker-side now.
+         * Its own comment says what it is: "The stream owns UNAUTHORIZED recovery
+         * now: it stays 'reconnecting' and self-revalidates … keep the revalidate
+         * as the sign-out cascade's NET (single-flight, a no-op once already
+         * settled)." A net whose trigger is single-flight and idempotent does not
+         * need callback timing, and the same branch that called it publishes
+         * `snapshotFetchError` one line above - so the fact already crosses.
+         *
+         * Filtered on the CODE. All three branches of that handler publish a
+         * snapshot error; only UNAUTHORIZED is the sign-out cascade's business,
+         * and triggering a revalidate on an INCOMPATIBLE close would be a second
+         * bug wearing this one's clothes.
+         */
+        // Not unsubscribed explicitly: the subscription's lifetime IS this
+        // store's, and the store is what the registry disposes. An unsubscribe
+        // held here would be a second lifetime to keep in step with the first.
+        let revalidatedForUnauthorized = false;
+        created.store.subscribe((state) => {
+          if (state.snapshotFetchError?.code !== "UNAUTHORIZED") {
+            // Re-armed once the error clears, so a later UNAUTHORIZED after a
+            // recovery still reaches the net.
+            revalidatedForUnauthorized = false;
+            return;
           }
-        },
-        // Reduced HERE, on main, for the same reason `writeCommand` is: an
-        // `Error` does not survive structured clone.
-        laneUnary: (request) =>
-          dispatchEpicLaneUnary(
-            { epicId, requester: () => getRequesterForHostId(handleHostId) },
-            request,
-          ),
-        streams: wsStreamClient,
-        // The SAME object as `streams`, narrowed to the two members the
-        // manifest is built from - see the option's own doc for why the two
-        // are separate parameters rather than one widened one.
-        methodSupport: wsStreamClient,
-        accounting,
-        projection: projection.handlers,
-        body: {
-          applyDocUpdate: (docKey, update) => {
-            bodyTarget?.applyDocUpdate(docKey, update);
-          },
-          applyAwareness: (docKey, frame) => {
-            bodyTarget?.applyAwareness(docKey, frame);
-          },
-        },
-        epicId,
-        // The host this session was established against, which is the same
-        // value the accounting port is built with above. The worker's
-        // write-command queue reads it as its send gate - see
-        // `RuntimeWorkerBootstrap.hostId`.
-        hostId: targetHostId,
-        windowLabel: epicId,
-      });
+          // The projection republishes on every publish, not only on change, so
+          // without this the single-flight would be asked once per slice.
+          if (revalidatedForUnauthorized) return;
+          revalidatedForUnauthorized = true;
+          handleSessionAuthError();
+        });
 
-      const created = createOpenEpicStore({
-        epicId,
-        userId: sessionUserId,
-        accounting,
-        runtime: {
-          port: runtimeWorker.port,
-          command: (command) => {
-            runtimeWorker.command(command);
-          },
-          awarenessOut: (docKey, frame, localClientId) => {
-            runtimeWorker.awarenessOut(docKey, frame, localClientId);
-          },
-          currentUser: (nextUserId) => {
-            runtimeWorker.currentUser(nextUserId);
-          },
-          detach: () => {
-            runtimeWorker.detach();
-          },
+        // Construction-honest stamp, written exactly once: `streamClientFactory`
+        // above captures this run's `targetHostId` into the transport it opens,
+        // so the stamp IS the handle's transport binding. Nothing re-stamps a
+        // live handle - a label that can drift from the binding routes RPCs and
+        // capability answers to a host that does not own the stream (F1).
+        // The transport outlives every client on it, so the two lifetimes that
+        // end the session have to close it: dispose (the registry evicting) and
+        // detachTransport (a retained-dirty buffer that must stop dialling a host
+        // this window has left). Composed here rather than inside the store
+        // because the transport is the PROVIDER's to own - the store knows about
+        // clients, not sockets - and idempotently, so either path may run first
+        // or both may run.
+        const handle: OpenEpicStoreHandle = {
+          ...created,
           dispose: () => {
-            runtimeWorker.dispose();
+            created.dispose();
+            closeSessionTransport();
           },
-        },
-      });
-      projection.attach(created.projection);
-      bodyTarget = created.body;
-
-      /**
-       * The UNAUTHORIZED revalidate, delivered by the PROJECTION rather than by
-       * a callback.
-       *
-       * `onAuthError` fired from the control replica, which is worker-side now.
-       * Its own comment says what it is: "The stream owns UNAUTHORIZED recovery
-       * now: it stays 'reconnecting' and self-revalidates … keep the revalidate
-       * as the sign-out cascade's NET (single-flight, a no-op once already
-       * settled)." A net whose trigger is single-flight and idempotent does not
-       * need callback timing, and the same branch that called it publishes
-       * `snapshotFetchError` one line above - so the fact already crosses.
-       *
-       * Filtered on the CODE. All three branches of that handler publish a
-       * snapshot error; only UNAUTHORIZED is the sign-out cascade's business,
-       * and triggering a revalidate on an INCOMPATIBLE close would be a second
-       * bug wearing this one's clothes.
-       */
-      // Not unsubscribed explicitly: the subscription's lifetime IS this
-      // store's, and the store is what the registry disposes. An unsubscribe
-      // held here would be a second lifetime to keep in step with the first.
-      let revalidatedForUnauthorized = false;
-      created.store.subscribe((state) => {
-        if (state.snapshotFetchError?.code !== "UNAUTHORIZED") {
-          // Re-armed once the error clears, so a later UNAUTHORIZED after a
-          // recovery still reaches the net.
-          revalidatedForUnauthorized = false;
-          return;
-        }
-        // The projection republishes on every publish, not only on change, so
-        // without this the single-flight would be asked once per slice.
-        if (revalidatedForUnauthorized) return;
-        revalidatedForUnauthorized = true;
-        handleSessionAuthError();
-      });
-
-      // Construction-honest stamp, written exactly once: `streamClientFactory`
-      // above captures this run's `targetHostId` into the transport it opens,
-      // so the stamp IS the handle's transport binding. Nothing re-stamps a
-      // live handle - a label that can drift from the binding routes RPCs and
-      // capability answers to a host that does not own the stream (F1).
-      // The transport outlives every client on it, so the two lifetimes that
-      // end the session have to close it: dispose (the registry evicting) and
-      // detachTransport (a retained-dirty buffer that must stop dialling a host
-      // this window has left). Composed here rather than inside the store
-      // because the transport is the PROVIDER's to own - the store knows about
-      // clients, not sockets - and idempotently, so either path may run first
-      // or both may run.
-      const handle: OpenEpicStoreHandle = {
-        ...created,
-        dispose: () => {
-          created.dispose();
-          closeSessionTransport();
-        },
-        detachTransport: () => {
-          created.detachTransport();
-          closeSessionTransport();
-        },
-      };
-      // Stamped on the handle that ESCAPES, not on the inner store object:
-      // `handleHostIds` is keyed by identity, and stamping `created` while
-      // returning a wrapper leaves every lookup answering "no construction host
-      // stamp" - which is a thrown invariant, not a silent miss, because the
-      // stamp is what routes RPCs and capability answers to the host that owns
-      // the stream (F1).
-      handleHostIds.set(handle, targetHostId);
-      // The same cell the fatal relay above writes, so a death that happened
-      // before this line is already recorded on the handle the moment it
-      // exists.
-      trackEpicSessionHandleLiveness(handle, liveness);
-      return handle;
+          detachTransport: () => {
+            created.detachTransport();
+            closeSessionTransport();
+          },
+        };
+        // Stamped on the handle that ESCAPES, not on the inner store object:
+        // `handleHostIds` is keyed by identity, and stamping `created` while
+        // returning a wrapper leaves every lookup answering "no construction host
+        // stamp" - which is a thrown invariant, not a silent miss, because the
+        // stamp is what routes RPCs and capability answers to the host that owns
+        // the stream (F1).
+        handleHostIds.set(handle, targetHostId);
+        // The same cell the fatal relay above writes, so a death that happened
+        // before this line is already recorded on the handle the moment it
+        // exists.
+        trackEpicSessionHandleLiveness(handle, liveness);
+        return handle;
+      } catch (error: unknown) {
+        // Idempotent, and the handle's own paths are too, so a later
+        // `dispose` on a handle that never escaped cannot double-close.
+        closeSessionTransport();
+        throw error;
+      }
     };
     let current = sessionRef.current;
     // A handle whose runtime worker died is not a session; it is a corpse that

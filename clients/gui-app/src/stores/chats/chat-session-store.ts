@@ -4637,6 +4637,13 @@ export function createChatSessionStoreWithNotificationDependencies(
             ),
           };
         });
+        // `queue` is one of the six, and this handler removes an optimistic
+        // item from it. The direction is the OPPOSITE of the growth cases
+        // above, and it is a defect for the same reason: the accountant keeps
+        // over-charging this holder and evicts it ahead of chats that really
+        // are that large. The obligation `chatSlicesOf` states is about every
+        // write, not every growth.
+        commitWholeSetSliceBudget();
         maybeDispatchPendingBackgroundSessionStop(set, get);
       },
       onMessageAccepted: (frame) => {
@@ -4686,7 +4693,16 @@ export function createChatSessionStoreWithNotificationDependencies(
         });
         if (windowedLine) {
           takeLiveRecords({ messages: [frame.message], events: [] });
+          return;
         }
+        // THE LEGACY ARM'S SETTLE. `takeLiveRecords` re-settles through
+        // `publishWindowedTranscript` for the windowed line, and the legacy
+        // line had nothing - it appends straight into `messages` and left the
+        // accountant on the previous figure. `commitLegacyTranscriptBudget`
+        // rather than `commitWholeSetSliceBudget` so both arms of the SAME
+        // handler agree about recency: the windowed arm stamps it, and a
+        // message landing means the same thing on either line.
+        commitLegacyTranscriptBudget();
       },
       onQueueChanged: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
@@ -4875,6 +4891,16 @@ export function createChatSessionStoreWithNotificationDependencies(
         // rewrites every record carrying the remapped turn. Same reason, same
         // guard - a no-op unless the fresh tier is genuinely over budget.
         evictWindowAfterInPlaceGrowth();
+        // ...and the eviction guard is NOT the re-settle. It returns without
+        // touching the accountant whenever the window is under
+        // `TRANSCRIPT_WINDOW_MAX_BYTES`, and immediately on the legacy line -
+        // so this handler wrote `backgroundItems` and seated the turn's frozen
+        // row while the accountant kept the pre-turn figure. Buffered deltas
+        // deliberately leave a streaming turn under-read, which makes the
+        // completed turn the moment its real size first exists; a multi-megabyte
+        // response followed by no range or snapshot stayed charged at the
+        // pre-turn size for as long as the chat then stayed quiet.
+        commitWholeSetSliceBudget();
         // Routed through the shared decider rather than calling
         // `restoreStagedWorktreeIntent` directly, so the swept-claimant rule
         // is applied here too.
@@ -5205,6 +5231,10 @@ export function createChatSessionStoreWithNotificationDependencies(
             ? state.events
             : [...state.events, frame.event],
         }));
+        // Same asymmetry as `onMessageAccepted`, and the same remedy: the
+        // early return above settles through `takeLiveRecords`, this arm did
+        // not settle at all.
+        commitLegacyTranscriptBudget();
       },
       onRestoreStarted: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {

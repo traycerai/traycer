@@ -174,6 +174,122 @@ describe("createWorkspaceContextRefreshPolicy - noteTransportStatus", () => {
     expect(calls()).toHaveLength(2);
     expect(calls()[1]?.epicId).toBe("epic-1");
   });
+
+  it("retries a FAILED initial read on the first 'open' - the one trigger with no successor", async () => {
+    // `"initial"` is the only cause that never recurs. A reconnect needs a drop
+    // first, permission and migration frames keep arriving, the epoch moves
+    // again - but a first read that failed transiently while the status lane
+    // was still making its first connection had nothing left to recover it, and
+    // a healthy epic with a quiet control lane emits no frame at all. The epic
+    // kept empty `snapshotMeta` for the whole session.
+    const { fetch, calls } = createFakeFetch();
+    const { sources, onContextCalls } = createSources(fetch, undefined);
+    const policy = createWorkspaceContextRefreshPolicy(sources);
+
+    policy.start();
+    calls()[0]?.deferred.reject(new Error("transient"));
+    await flush();
+
+    policy.noteTransportStatus("open");
+
+    // THE REDDENING ASSERTION: previously the first `"open"` was discarded
+    // wholesale, because it is normally the tab opening that `start` covered.
+    expect(calls()).toHaveLength(2);
+
+    calls()[1]?.deferred.resolve(contextFixture());
+    await flush();
+    // Reported as the first read it is, not as a distinct cause.
+    expect(onContextCalls.map((entry) => entry.cause)).toEqual(["initial"]);
+  });
+
+  it("retries when the failure lands AFTER the first 'open' - either can be second", async () => {
+    // The other ordering, and it is the likelier one: the unary is issued at
+    // tab open and the status lane reaches `"open"` while it is still in
+    // flight. Keying the retry on the `"open"` alone would miss this entirely.
+    const { fetch, calls } = createFakeFetch();
+    const { sources } = createSources(fetch, undefined);
+    const policy = createWorkspaceContextRefreshPolicy(sources);
+
+    policy.start();
+    policy.noteTransportStatus("open");
+    expect(calls()).toHaveLength(1);
+
+    calls()[0]?.deferred.reject(new Error("transient"));
+    await flush();
+
+    expect(calls()).toHaveLength(2);
+  });
+
+  it("does NOT retry after a SUCCESSFUL initial read - the cold open stays single", async () => {
+    // The control that matters most. Retrying on "no context yet" rather than
+    // on "the read failed" would fire while the first fetch is still in
+    // flight, coalesce into `pendingCause`, and issue a second fetch the
+    // instant the first resolved - doubling every cold open, which is the
+    // regression this module's header exists to prevent.
+    const { fetch, calls } = createFakeFetch();
+    const { sources } = createSources(fetch, undefined);
+    const policy = createWorkspaceContextRefreshPolicy(sources);
+
+    policy.start();
+    policy.noteTransportStatus("open");
+    calls()[0]?.deferred.resolve(contextFixture());
+    await flush();
+
+    expect(calls()).toHaveLength(1);
+
+    // ...and a later `"open"` with still no intervening drop stays quiet too.
+    policy.noteTransportStatus("open");
+    await flush();
+    expect(calls()).toHaveLength(1);
+  });
+
+  it("retries the initial read exactly ONCE, however many times it fails", async () => {
+    // The second control: without a one-shot latch the retry re-enters from
+    // its own rejection handler and spins as fast as the host can refuse. Two
+    // attempts total, then the `onError` degrade - a transport that is open
+    // and a lane that is quiet, still refusing, is a host not serving this
+    // method rather than something to hammer.
+    const { fetch, calls } = createFakeFetch();
+    const { sources, onErrorCalls } = createSources(fetch, undefined);
+    const policy = createWorkspaceContextRefreshPolicy(sources);
+
+    policy.start();
+    calls()[0]?.deferred.reject(new Error("first"));
+    await flush();
+    policy.noteTransportStatus("open");
+    expect(calls()).toHaveLength(2);
+
+    calls()[1]?.deferred.reject(new Error("second"));
+    await flush();
+    policy.noteTransportStatus("open");
+    await flush();
+
+    expect(calls()).toHaveLength(2);
+    expect(onErrorCalls.map((entry) => entry.cause)).toEqual([
+      "initial",
+      "initial",
+    ]);
+  });
+
+  it("a drop and return still refetches after two failed initial reads", async () => {
+    // The one-shot latch bounds the RETRY, never the ordinary triggers. A real
+    // reconnect is still a reconnect.
+    const { fetch, calls } = createFakeFetch();
+    const { sources } = createSources(fetch, undefined);
+    const policy = createWorkspaceContextRefreshPolicy(sources);
+
+    policy.start();
+    calls()[0]?.deferred.reject(new Error("first"));
+    await flush();
+    policy.noteTransportStatus("open");
+    calls()[1]?.deferred.reject(new Error("second"));
+    await flush();
+
+    policy.noteTransportStatus("closed");
+    policy.noteTransportStatus("open");
+
+    expect(calls()).toHaveLength(3);
+  });
 });
 
 // ─── noteControlEvent ───────────────────────────────────────────────────────
