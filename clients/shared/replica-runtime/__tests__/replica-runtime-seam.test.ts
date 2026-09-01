@@ -1112,6 +1112,48 @@ describe("createSessionRegistry", () => {
       expect(session.disposed).toBe(true);
       expect(registry.peek("s1")).toBeNull();
     });
+
+    it("caps a LATE re-arm at what is left of the defer window, so drift cannot push disposal past it", () => {
+      // The case above advances in exact TTL steps, so every check lands on the
+      // cap's grid and a full-TTL re-arm happens to end exactly at 5000. A
+      // callback that runs LATE — which browser timer throttling causes as a
+      // matter of course — takes every later check off that grid, and a re-arm
+      // of a fresh `ttlMs` then overshoots the cap by up to a full window. At
+      // production's 10-minute TTL under a 60-minute cap that is nine extra
+      // minutes of retained transcript and websocket, from one late callback.
+      const environment = createFakeEnvironment();
+      const config: PolicyConfig = {
+        ...defaultPolicyConfig(),
+        idleTtlMs: 1_000,
+        maxActiveDeferMs: 5_000,
+      };
+      const policy = createTrackedPolicy(config);
+      const registry = createSessionRegistry({ environment, policy });
+      const session = makeSession("s1");
+      session.busy = true;
+      registry.acquire("s1", "scope", () => session);
+      registry.release("s1", "warm");
+
+      // 2500ms in one step: the timer armed for 1000 fires at 2500, late.
+      environment.advanceClock(2500);
+      expect(session.disposed).toBe(false);
+      // Still a full TTL, not the whole 2500ms remainder — the cap bounds the
+      // re-arm, it does not replace the polling interval.
+      expect(environment.nextTimerFireAt()).toBe(3500);
+
+      environment.advanceClock(1000); // check at 3500
+      expect(environment.nextTimerFireAt()).toBe(4500);
+
+      // THE REDDENING ASSERTION. 500ms of the cap is left at this check, so the
+      // next one lands ON the cap. A fresh `ttlMs` here answers 5500.
+      environment.advanceClock(1000); // check at 4500
+      expect(environment.nextTimerFireAt()).toBe(5000);
+
+      // And the session is gone AT the cap rather than 500ms after it.
+      environment.advanceClock(500); // check at 5000
+      expect(session.disposed).toBe(true);
+      expect(registry.peek("s1")).toBeNull();
+    });
   });
 
   describe("refreshOrderOnRelease", () => {

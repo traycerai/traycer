@@ -3,18 +3,24 @@
  *
  * The algorithm is four rules that only make sense together:
  *
- *  1. **A request-time fence.** `revision` orders two versions of ONE row and
- *     says nothing about a row an answer omits. So an omission may only retract
- *     a row that was already held when the answer was ISSUED. `rowSeq` stamps
- *     every accepted write with a monotonic counter; the list caller reads that
- *     counter at dispatch and hands it back with the answer as the fence, so a
- *     row ingested past it survives that answer and an answer issued after the
- *     row landed retracts it at once - a deletion missed while the stream was
- *     down is collected by the very next read, not one read later.
- *     {@link RecordTable.ingestSeq} is what a caller captures; `snapshotFence`
- *     (where the counter stood after the previous answer) is the fallback for
- *     an answer dispatched with no session to read from, and it holds an
- *     omitted row for one extra pass.
+ *  1. **A request-time fence.** An answer knows nothing about a write that
+ *     landed after it was ISSUED, so such a write survives the answer whole -
+ *     whether the answer omits the row or carries a stale copy of it. `rowSeq`
+ *     stamps every accepted write with a monotonic counter; the list caller
+ *     reads that counter at dispatch and hands it back with the answer as the
+ *     fence, so a row ingested past it survives that answer and an answer
+ *     issued after the row landed retracts it at once - a deletion missed while
+ *     the stream was down is collected by the very next read, not one read
+ *     later. {@link RecordTable.ingestSeq} is what a caller captures;
+ *     `snapshotFence` (where the counter stood after the previous answer) is
+ *     the fallback for an answer dispatched with no session to read from, and
+ *     it holds an omitted row for one extra pass.
+ *
+ *     Both halves, deliberately. The fence was once read as an omission rule
+ *     only, leaving the carried half to rule 2 alone - and rule 2 is the one a
+ *     plane may WAIVE. Every plane that narrows it therefore had a window where
+ *     a slow answer could overwrite a newer push with no revision left to stop
+ *     it, and nothing owed to restore the row until the next poll.
  *  2. **A per-row revision guard**, in the same direction on both paths: a row
  *     that does not strictly exceed what is held is a replay, a reorder or a
  *     duplicate, and dropping it is what makes those harmless with no merge
@@ -357,8 +363,21 @@ export function createRecordTable<TRow, TSlice>(
       for (const [key, row] of admitted) {
         hooks.onRowServed(row);
         const held = rows.get(key);
-        if (held !== undefined && !plane.supersedesOnSnapshot(row, held)) {
-          continue;
+        if (held !== undefined) {
+          // THE FENCE AGAIN, on the carried half - see rule 1. An answer cannot
+          // know about a write that landed after it was issued, and that is
+          // true of a row it CARRIES A STALE COPY OF exactly as it is of one it
+          // omits. Ahead of the revision guard, not instead of it: the guard
+          // still decides between two versions this answer could have seen.
+          //
+          // Load-bearing because rule 2 is waivable and rule 1 is not. A plane
+          // that narrows `supersedesOnSnapshot` - both of ours do - was left
+          // with NO protection at all against a slow answer overwriting a
+          // newer push: an upsert seeding `docResident: null` at revision 6,
+          // then a list answer issued before it landing at revision 5, rolled
+          // the row back with nothing owed to restore it until the next poll.
+          if ((rowSeq.get(key) ?? 0) > fence) continue;
+          if (!plane.supersedesOnSnapshot(row, held)) continue;
         }
         rows.set(key, row);
         ingestSeq += 1;

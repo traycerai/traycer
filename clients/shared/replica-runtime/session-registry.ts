@@ -591,8 +591,12 @@ export function createSessionRegistry<TSession>(
   }
 
   /**
-   * Start a session's warm window from now. Every caller but the early-fire
-   * re-check wants this; that one wants the remainder, and says so.
+   * Start a session's warm window from now.
+   *
+   * What every caller that is STARTING a window wants. The two inside
+   * {@link expireIfIdle} are not: the early-fire re-check wants what is left of
+   * the window, and the active-work deferral wants what is left of the CAP -
+   * both arm {@link armIdleTimer} with a computed remainder and say why.
    */
   function armFreshIdleWindow(entry: RegistryEntry<TSession>): void {
     const ttlMs = policy.idleTtlMs;
@@ -629,13 +633,29 @@ export function createSessionRegistry<TSession>(
       // long as they are busy; nothing more is scheduled, and the plane's own
       // observation of the work finishing is what collects it.
       if (deferMs === null) return;
-      if (parkedAtMs !== null && checkedAt - parkedAtMs < deferMs) {
+      const deferredForMs = parkedAtMs === null ? null : checkedAt - parkedAtMs;
+      if (deferredForMs !== null && deferredForMs < deferMs) {
         // The deferral is measured from when the session went demand-free, not
-        // from this check, so a session whose work never settles still goes at
-        // the cap. Its eviction ORDER is refreshed on the same plane rule as a
-        // release, which is what the incumbent chat registry does here.
+        // from this check, so a session whose work never settles goes AT the
+        // cap - and the re-arm is capped at what is left of it for that claim
+        // to be true. A fresh `ttlMs` here overshoots by up to one full window
+        // and does it on the ordinary path, not a pathological one: the check
+        // that lands just inside the cap arms another whole TTL beyond it, and
+        // a callback delayed by browser timer throttling puts every later
+        // check off the cap's grid as well. Production's 10-minute TTL under a
+        // 60-minute cap ran nine minutes long from one callback that fired at
+        // minute 19.
+        //
+        // `Math.max(0, …)` guards the same backward clock step the early-fire
+        // re-arm above guards, from the other side: a backward step makes
+        // `deferredForMs` small, never negative here (the branch requires it
+        // below `deferMs`), but a forward step past the cap would make the
+        // remainder negative and arm a timer in the past.
         if (policy.refreshOrderOnRelease) entry.order = order.next();
-        armFreshIdleWindow(entry);
+        armIdleTimer(
+          entry,
+          Math.min(ttlMs, Math.max(0, deferMs - deferredForMs)),
+        );
         return;
       }
     }

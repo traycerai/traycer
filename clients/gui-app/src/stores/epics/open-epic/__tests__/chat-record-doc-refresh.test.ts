@@ -22,6 +22,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
+import type { ChatRecordDelta } from "@traycer-clients/shared/host-transport/chat-records-stream-client";
 import { createChatRecordTable } from "../runtime/chat-record-table";
 
 const CHAT_ID = "chat-doc-1";
@@ -151,5 +152,73 @@ describe("createChatRecordTable - refreshing a doc-resident row", () => {
       null,
     );
     expect(docAtSameRevision).toBeNull();
+  });
+
+  it("does not let an IN-FLIGHT answer roll back a row a push advanced, waiver or not", () => {
+    // A waiver on the revision guard is a waiver on the only thing that stood
+    // between a slow list answer and a newer push - the record table's own
+    // note at the fence says so ("its omission, OR ITS STALE COPY via the
+    // revision test above, must not defeat it"). So the request-time fence has
+    // to cover the carried half too, and each waiver below is checked against a
+    // delta that landed while the answer was in flight.
+    const table = freshTable();
+
+    table.applyRecords(
+      [record({ docResident: true, revision: 0, title: "Original" })],
+      null,
+    );
+
+    // The list caller captures the fence at DISPATCH. Everything after this
+    // line is a write the answer being built cannot know about.
+    const issuedAtSeq = table.ingestSeq();
+
+    const upsert: ChatRecordDelta = {
+      kind: "upsert",
+      epicId: "epic-doc",
+      record: record({ revision: 6, title: "Pushed" }),
+    };
+    // The delta plane states no home, so this seeds `docResident: null` on the
+    // held row - the pre-existing waiver's exact trigger, and reachable without
+    // any doc-resident chat at all.
+    expect(table.applyDelta(upsert)).not.toBeNull();
+
+    // The answer, issued BEFORE that push and carrying the row as it was.
+    const stale = table.applyRecords(
+      [record({ docResident: true, revision: 5, title: "Original" })],
+      issuedAtSeq,
+    );
+
+    // THE REDDENING ASSERTION. `held.docResident === null` waived the revision
+    // guard, so revision 5 replaced revision 6 and nothing was owed to put it
+    // back until the next poll.
+    expect(stale).toBeNull();
+    expect(table.current().byId[CHAT_ID].title).toBe("Pushed");
+  });
+
+  it("still admits an answer issued AFTER the push it carries", () => {
+    // The control. A fence that rejected every carried row would pass the case
+    // above and freeze the table against its own poll - which is the backup
+    // half of this design, not an optional one.
+    const table = freshTable();
+
+    table.applyRecords(
+      [record({ docResident: true, revision: 0, title: "Original" })],
+      null,
+    );
+    table.applyDelta({
+      kind: "upsert",
+      epicId: "epic-doc",
+      record: record({ revision: 6, title: "Pushed" }),
+    });
+
+    // Captured after the push, so this answer could have seen it.
+    const issuedAtSeq = table.ingestSeq();
+    const fresh = table.applyRecords(
+      [record({ docResident: true, revision: 7, title: "Polled" })],
+      issuedAtSeq,
+    );
+
+    expect(fresh).not.toBeNull();
+    expect(table.current().byId[CHAT_ID].title).toBe("Polled");
   });
 });
