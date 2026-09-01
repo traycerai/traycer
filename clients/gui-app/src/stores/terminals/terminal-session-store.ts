@@ -952,7 +952,20 @@ export function createTerminalSessionStore(
           connectionStatus: "connecting",
           status: state.snapshotLoaded ? "running" : "creating",
         });
-        attachStream(state.requestedCols, state.requestedRows);
+        try {
+          attachStream(state.requestedCols, state.requestedRows);
+        } catch (cause) {
+          // Construction can fail after the old client has been closed. Leave
+          // the retained handle in the same recoverable terminal state as an
+          // ordinary transport close, so registry replacement and explicit
+          // retry remain available after the bounded automatic attempts end.
+          set({
+            connectionStatus: "closed",
+            status: "lost",
+            snapshotLoaded: state.snapshotLoaded,
+          });
+          throw cause;
+        }
       },
       dispose: () => {
         if (disposed) return;
