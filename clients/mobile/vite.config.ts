@@ -1,11 +1,16 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import babel from "@rolldown/plugin-babel";
 import tailwindcss from "@tailwindcss/vite";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
-import { defineConfig, type Plugin, type UserConfig } from "vite";
+import {
+  defineConfig,
+  type Connect,
+  type Plugin,
+  type UserConfig,
+} from "vite";
 import { sanitizeDevDesktopSlot } from "../shared/platform/dev-desktop-slot";
 import { devRelayBaseUrlFromEnv } from "../shared/platform/dev-backend-urls";
 
@@ -19,6 +24,8 @@ import { devRelayBaseUrlFromEnv } from "../shared/platform/dev-backend-urls";
 // against a local `make dev-desktop` host. The shipped mobile client reaches
 // remote hosts through real host discovery and must not depend on this.
 const DEV_HOST_PATH = "/__traycer/dev-host";
+const BUNDLED_BUILD_PATH = "/__traycer/bundled-build";
+const GUI_MODE_ENV = "TRAYCER_GUI_MODE";
 /** Mirrors the desktop's baked value (`clients/desktop/src/config.ts`). */
 const RELAY_BASE_URL = "wss://relay.traycer.ai/attach";
 
@@ -72,6 +79,13 @@ function resolveMobileEnvironment(): MobileEnvironment {
   throw new Error(
     `TRAYCER_MOBILE_ENV must be dev, staging or production (got "${raw}")`,
   );
+}
+
+function isBundledDevelopment(): boolean {
+  const raw = process.env[GUI_MODE_ENV];
+  if (raw === undefined || raw === "vite") return false;
+  if (raw === "bundled") return true;
+  throw new Error(`${GUI_MODE_ENV} must be vite or bundled (got "${raw}")`);
 }
 
 function shippedConfig(
@@ -175,22 +189,82 @@ function isMissingFile(error: unknown): boolean {
   return error instanceof Error && "code" in error && error.code === "ENOENT";
 }
 
+function devHostMiddleware(slot: string): Connect.SimpleHandleFunction {
+  return (_request, response) => {
+    const pidPath = devHostPidPath(slot);
+    let host: DevHostPid;
+    try {
+      host = parseDevHostPid(readFileSync(pidPath, "utf8"), pidPath);
+    } catch {
+      response.statusCode = 503;
+      response.end();
+      return;
+    }
+    response.setHeader("Content-Type", "application/json");
+    response.end(JSON.stringify(host));
+  };
+}
+
 function devHostEndpoint(slot: string): Plugin {
+  const middleware = devHostMiddleware(slot);
   return {
     name: "traycer-dev-host-endpoint",
     configureServer(server) {
-      server.middlewares.use(DEV_HOST_PATH, (_request, response) => {
-        const pidPath = devHostPidPath(slot);
-        let host: DevHostPid;
+      server.middlewares.use(DEV_HOST_PATH, middleware);
+    },
+    configurePreviewServer(server) {
+      server.middlewares.use(DEV_HOST_PATH, middleware);
+    },
+  };
+}
+
+function bundledBuildReload(): Plugin {
+  const indexPath = resolve(mobileRoot, "dist", "web", "index.html");
+  const reloadClient = `
+(() => {
+  let activeBuild = null;
+  const checkForBuild = async () => {
+    try {
+      const response = await fetch(${JSON.stringify(BUNDLED_BUILD_PATH)}, {
+        cache: "no-store",
+      });
+      if (!response.ok) return;
+      const nextBuild = await response.text();
+      if (activeBuild === null) {
+        activeBuild = nextBuild;
+      } else if (nextBuild !== activeBuild) {
+        location.reload();
+      }
+    } catch {
+      // A build can replace dist/web between polls. Retry on the next tick.
+    }
+  };
+  void checkForBuild();
+  setInterval(() => void checkForBuild(), 750);
+})();`;
+  return {
+    name: "traycer-bundled-build-reload",
+    transformIndexHtml() {
+      return [
+        {
+          tag: "script",
+          children: reloadClient,
+          injectTo: "head",
+        },
+      ];
+    },
+    configurePreviewServer(server) {
+      server.middlewares.use(BUNDLED_BUILD_PATH, (_request, response) => {
         try {
-          host = parseDevHostPid(readFileSync(pidPath, "utf8"), pidPath);
+          const stat = statSync(indexPath);
+          response.statusCode = 200;
+          response.setHeader("Cache-Control", "no-store");
+          response.setHeader("Content-Type", "text/plain; charset=utf-8");
+          response.end(`${stat.mtimeMs}:${stat.size}`);
         } catch {
           response.statusCode = 503;
           response.end();
-          return;
         }
-        response.setHeader("Content-Type", "application/json");
-        response.end(JSON.stringify(host));
       });
     },
   };
@@ -250,6 +324,7 @@ async function guiAppDevConfig(): Promise<TraycerMobileBakedConfig> {
 
 export default defineConfig(async (): Promise<UserConfig> => {
   const environment = resolveMobileEnvironment();
+  const bundledDevelopment = isBundledDevelopment();
   const config =
     environment === "dev"
       ? await guiAppDevConfig()
@@ -261,6 +336,7 @@ export default defineConfig(async (): Promise<UserConfig> => {
   // phone on the same LAN can load the bundle; everything else stays on
   // loopback.
   let server: UserConfig["server"];
+  let preview: UserConfig["preview"];
   if (environment === "dev") {
     const portRaw = requiredEnv("PORT");
     const port = Number.parseInt(portRaw, 10);
@@ -272,20 +348,24 @@ export default defineConfig(async (): Promise<UserConfig> => {
       typeof hostRaw === "string" && hostRaw.trim().length > 0
         ? hostRaw.trim()
         : "127.0.0.1";
-    server = {
-      host,
-      port,
-      strictPort: true,
-      // Pre-transform the app from its entry at server start instead of on
-      // the first browser request: the entry pulls in effectively all of
-      // gui-app through the react-compiler babel pass, which otherwise
-      // makes the first page load of a fresh stack take tens of seconds.
-      // Warmup shares the normal transform cache and module graph, so HMR,
-      // invalidation, and every later request behave exactly as before —
-      // nothing observes the request-triggered laziness, it only moves the
-      // same work earlier.
-      warmup: { clientFiles: ["./main.tsx"] },
-    };
+    if (bundledDevelopment) {
+      preview = { host, port, strictPort: true };
+    } else {
+      server = {
+        host,
+        port,
+        strictPort: true,
+        // Pre-transform the app from its entry at server start instead of on
+        // the first browser request: the entry pulls in effectively all of
+        // gui-app through the react-compiler babel pass, which otherwise
+        // makes the first page load of a fresh stack take tens of seconds.
+        // Warmup shares the normal transform cache and module graph, so HMR,
+        // invalidation, and every later request behave exactly as before —
+        // nothing observes the request-triggered laziness, it only moves the
+        // same work earlier.
+        warmup: { clientFiles: ["./main.tsx"] },
+      };
+    }
   }
 
   return {
@@ -297,6 +377,7 @@ export default defineConfig(async (): Promise<UserConfig> => {
       ...(config.devHost === null
         ? []
         : [devHostEndpoint(config.devHost.host.label)]),
+      ...(bundledDevelopment ? [bundledBuildReload()] : []),
       tanstackRouter({
         enableRouteGeneration: false,
         target: "react",
@@ -327,8 +408,13 @@ export default defineConfig(async (): Promise<UserConfig> => {
       target: "es2022",
       emptyOutDir: true,
       outDir: resolve(mobileRoot, "dist", "web"),
-      sourcemap: false,
+      // The tunnel-friendly development bundle favors rebuild speed and
+      // debuggability. Ordinary release builds retain Vite's minification and
+      // the existing no-sourcemap output.
+      minify: bundledDevelopment ? false : undefined,
+      sourcemap: bundledDevelopment,
     },
     server,
+    preview,
   };
 });
