@@ -36,11 +36,21 @@ const pkg = JSON.parse(
   fs.readFileSync(path.join(projectDir, "package.json"), "utf8"),
 );
 const base = pkg.build ?? {};
-const releaseRepo = (
+const configuredReleaseRepo = (
   process.env.TRAYCER_RELEASE_REPO ??
   process.env.RELEASE_REPO ??
-  "traycerai/traycer"
+  ""
 ).trim();
+// The production coordinate is never a staging publish destination.
+if (configuredReleaseRepo.length === 0 && target.target === "staging") {
+  throw new Error(
+    "TRAYCER_RELEASE_REPO (or RELEASE_REPO) is required to package a staging release",
+  );
+}
+const releaseRepo =
+  configuredReleaseRepo.length === 0
+    ? "traycerai/traycer"
+    : configuredReleaseRepo;
 const repositoryParts = releaseRepo.split("/");
 if (repositoryParts.length !== 2 || repositoryParts.some((part) => !part)) {
   throw new Error("release repository must be an owner/repo coordinate");
@@ -59,15 +69,14 @@ function windowsTaskFolder(taskName) {
   return match[1];
 }
 
+// The uninstaller removes the host autostart the CLI registered, so it takes
+// the CLI's install identity from the same stamp rather than a literal that
+// could drift from the descriptor.
 function writeTargetNsisInclude() {
-  const cliInstallRoot =
-    target.target === "staging" ? "~/.traycer/cli/staging" : "~/.traycer/cli";
-  const windowsTaskName =
-    target.target === "staging" ? "\\Traycer\\Host-Staging" : "\\Traycer\\Host";
   const contents = [
-    `!define TRAYCER_WINDOWS_TASK_NAME "${windowsTaskName}"`,
-    `!define TRAYCER_WINDOWS_TASK_FOLDER "${windowsTaskFolder(windowsTaskName)}"`,
-    `!define TRAYCER_HOST_LAUNCHER "${windowsLauncherPath(cliInstallRoot)}"`,
+    `!define TRAYCER_WINDOWS_TASK_NAME "${target.windowsTaskName}"`,
+    `!define TRAYCER_WINDOWS_TASK_FOLDER "${windowsTaskFolder(target.windowsTaskName)}"`,
+    `!define TRAYCER_HOST_LAUNCHER "${windowsLauncherPath(target.cliInstallRoot)}"`,
     '!include "uninstall-host-autostart.nsh"',
     "",
   ].join("\n");

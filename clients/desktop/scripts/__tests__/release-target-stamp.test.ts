@@ -202,6 +202,53 @@ describe("readClientTargetStamp", () => {
       ),
     ).toThrow(key);
   });
+
+  it("refuses a desktop stamp with a null scalar appId", () => {
+    const stamp = desktopStamp();
+    stamp.appId = null;
+    expect(() =>
+      stampModule.readClientTargetStamp(
+        writeStamp(stamp),
+        "staging",
+        "desktop",
+      ),
+    ).toThrow(/appId/);
+  });
+
+  it.each(["credentialSources", "authorizedOrigins"])(
+    "refuses a cli stamp whose %s value is not an array",
+    (key) => {
+      const stamp = cliStamp();
+      stamp[key] = null;
+      expect(() =>
+        stampModule.readClientTargetStamp(writeStamp(stamp), "staging", "cli"),
+      ).toThrow(key);
+    },
+  );
+
+  it("refuses a desktop stamp whose updaterChannelFiles is not an array", () => {
+    const stamp = desktopStamp();
+    stamp.updaterChannelFiles = null;
+    expect(() =>
+      stampModule.readClientTargetStamp(
+        writeStamp(stamp),
+        "staging",
+        "desktop",
+      ),
+    ).toThrow("updaterChannelFiles");
+  });
+
+  it("requires cliInstallRoot and windowsTaskName on desktop stamps", () => {
+    const stamp = desktopStamp();
+    delete stamp.cliInstallRoot;
+    expect(() =>
+      stampModule.readClientTargetStamp(
+        writeStamp(stamp),
+        "staging",
+        "desktop",
+      ),
+    ).toThrow(/cliInstallRoot/);
+  });
 });
 
 describe("targetInputFromArg", () => {

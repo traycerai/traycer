@@ -36,11 +36,24 @@ const generatedNsisIncludePath = path.resolve(
   "bundle",
   ".release-target-uninstall-host-autostart.nsh",
 );
-function releaseRepoFromEnv() {
+// The production coordinate is the fallback for every target except staging:
+// a staging desktop must update from the repository the staging train
+// publishes into, so a missing RELEASE_REPO fails the build instead of
+// stamping the production feed.
+function releaseRepoFromEnv(releaseTarget) {
   const raw =
     process.env.TRAYCER_RELEASE_REPO ?? process.env.RELEASE_REPO ?? "";
   const trimmed = raw.trim();
-  return trimmed.length === 0 ? "traycerai/traycer" : trimmed;
+  if (trimmed.length > 0) return trimmed;
+  return releaseTarget === "staging" ? null : "traycerai/traycer";
+}
+
+const releaseRepo = releaseRepoFromEnv(target);
+if (releaseRepo === null && !process.argv.includes("--restore")) {
+  console.error(
+    "[set-deploy-target] TRAYCER_RELEASE_REPO (or RELEASE_REPO) is required for a staging build; the production repository is never a staging destination.",
+  );
+  process.exit(2);
 }
 
 let targetInput = null;
@@ -121,8 +134,8 @@ runConfigTargetCli({
     },
     releaseRepo: {
       dev: "traycerai/traycer",
-      staging: releaseRepoFromEnv(),
-      production: releaseRepoFromEnv(),
+      staging: releaseRepo ?? "",
+      production: releaseRepo ?? "traycerai/traycer",
     },
     releaseChannel: {
       dev: "dev",

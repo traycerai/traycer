@@ -12,4 +12,9 @@ export {
 export { createStagingGitHubReleaseAuthPolicy } from "./policy";
 export { GitHubReleaseCredentialResolver } from "./resolver";
 export { fetchWithGitHubReleaseAuth } from "./authenticated-fetch";
+export {
+  fetchGitHubReleaseAssetWithAuth,
+  parseGitHubReleaseDownloadUrl,
+} from "./release-asset";
+export type { GitHubReleaseDownloadRef } from "./release-asset";
 export { stripGitHubReleaseCredentialsFromEnv } from "./host-env";

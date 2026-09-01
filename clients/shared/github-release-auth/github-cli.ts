@@ -20,7 +20,7 @@ export async function readGitHubCliToken(
       ["auth", "token", "--hostname", "github.com"],
       {
         encoding: "utf8",
-        env: stripGitHubReleaseCredentialsFromEnv(env),
+        env: stripGitHubReleaseCredentialsFromEnv(env, process.platform),
         timeout: 8_000,
         maxBuffer: 64 * 1024,
         windowsHide: true,

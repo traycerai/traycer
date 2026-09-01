@@ -46,6 +46,23 @@ type HostReleaseLine = string;
 
 const CANONICAL_RC_PATTERN = /^(\d+\.\d+\.\d+)-rc\.(\d+)$/;
 const STABLE_PATTERN = /^\d+\.\d+\.\d+$/;
+// The staging release train's version grammar: the next patch above the
+// latest stable, then the train's run number and the short build commit.
+// Numeric identifiers carry no leading zeros and the commit is lowercase hex,
+// exactly as the internal allocator writes them.
+const CANONICAL_STAGING_PATTERN =
+  /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)-staging\.(?:0|[1-9]\d*)\.g[0-9a-f]{7,40}$/;
+
+/**
+ * Whether `version` is a canonical staging-train version. A staging client
+ * only ever reads the staging feeds, where EVERY row has this shape: it is
+ * that client's release line, not a pre-release of it, which is why
+ * {@link isPreReleaseVersion} excludes it. It never activates implicit RC
+ * following - a staging install updates through its own feeds' `latest`.
+ */
+export function isCanonicalStagingVersion(version: string): boolean {
+  return CANONICAL_STAGING_PATTERN.test(version);
+}
 
 /**
  * The release line of a canonical `X.Y.Z-rc.N`, or `null` for every other
@@ -99,9 +116,15 @@ export function isCanonicalReleaseCandidate(version: string): boolean {
  * substring test also matched the `local-<basename>-<timestamp>` version a
  * local-file install records, which is not a registry row at all. Build
  * metadata alone (`1.8.0+build.4`) is not a pre-release, per SemVer.
+ *
+ * A canonical staging-train version is NOT hidden either: it is the only
+ * shape the staging feeds publish, so hiding it would leave a staging client
+ * with an empty default listing and would make Desktop purge every staged
+ * staging host as "yanked". Production feeds never carry the shape, so the
+ * exemption is inert there.
  */
 export function isPreReleaseVersion(version: string): boolean {
-  return /^\d+\.\d+\.\d+-/.test(version);
+  return /^\d+\.\d+\.\d+-/.test(version) && !isCanonicalStagingVersion(version);
 }
 
 /**

@@ -18,7 +18,12 @@ import type {
 } from "electron-updater/out/types";
 import { isValidCompatibilityEpoch } from "@traycer/protocol/framework/index";
 import type { LinuxPackageType } from "./linux-update-guidance";
-import { isCanonicalReleaseCandidate } from "@traycer-clients/shared/host-version/release-line";
+import {
+  isCanonicalReleaseCandidate,
+  isCanonicalStagingVersion,
+} from "@traycer-clients/shared/host-version/release-line";
+
+const DESKTOP_TAG_PREFIX = "desktop-v";
 
 // electron-updater's HTTP executor reads a `redirect` field the node `http`
 // `RequestOptions` type doesn't declare; model that augmentation locally rather
@@ -121,15 +126,24 @@ export function projectDesktopRelease(
   }
   const stableOrRc =
     /^desktop-v((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-rc\.(?:0|[1-9]\d*))?)$/;
-  const staging =
-    /^desktop-v((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)-staging\.(?:0|[1-9]\d*)\.g[0-9a-f]{7,40})$/;
-  const match = (releaseChannel === "staging" ? staging : stableOrRc).exec(
-    value.tag_name,
-  );
-  if (match === null) {
-    return [];
+  let version: string;
+  if (releaseChannel === "staging") {
+    // The staging grammar lives with the other release-line predicates so the
+    // CLI catalog filter and this projection cannot drift apart.
+    const stagingVersion = value.tag_name.startsWith(DESKTOP_TAG_PREFIX)
+      ? value.tag_name.slice(DESKTOP_TAG_PREFIX.length)
+      : "";
+    if (!isCanonicalStagingVersion(stagingVersion)) {
+      return [];
+    }
+    version = stagingVersion;
+  } else {
+    const match = stableOrRc.exec(value.tag_name);
+    if (match === null) {
+      return [];
+    }
+    version = match[1];
   }
-  const version = match[1];
   // The same canonical predicate the channel model derives implicit RC
   // following from, rather than a local substring test: a tag this projection
   // accepts as an RC is one the selector may later have to place on a release

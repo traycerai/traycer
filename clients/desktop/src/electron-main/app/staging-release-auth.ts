@@ -39,12 +39,18 @@ export function discardStagingUpdateToken(): void {
   resolver.discardLease();
 }
 
+/**
+ * `releaseTokens` are every token the message may quote: the current lease
+ * AND the one a concurrent error path may already have discarded, since
+ * electron-updater can both emit `error` and reject `downloadUpdate()` for
+ * the same failure.
+ */
 export function stagingAuthLogMessage(
   error: unknown,
-  releaseToken: string,
+  releaseTokens: readonly string[],
 ): string {
   const message = error instanceof Error ? error.message : String(error);
-  return sanitizeCredentialTextWithSecrets(message, [releaseToken]);
+  return sanitizeCredentialTextWithSecrets(message, releaseTokens);
 }
 
 export { AUTHENTICATION_REQUIRED_MESSAGE };

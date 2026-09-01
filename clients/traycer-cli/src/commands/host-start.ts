@@ -1085,10 +1085,13 @@ export async function runHostStart(
         environment: opts.environment,
         overrideCount: Object.keys(envOverrides).length,
       });
-      env = stripGitHubReleaseCredentialsFromEnv({
-        ...applyEnvOverrides(process.env, envOverrides),
-        TERM_PROGRAM: "traycer",
-      });
+      env = stripGitHubReleaseCredentialsFromEnv(
+        {
+          ...applyEnvOverrides(process.env, envOverrides),
+          TERM_PROGRAM: "traycer",
+        },
+        process.platform,
+      );
       // Cap the host's V8 young generation at creation time on EVERY platform.
       // This is the single cross-platform host launch path, so applying it here
       // gives Linux (systemd) and Windows (schtasks, which cannot set env vars in

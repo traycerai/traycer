@@ -2891,7 +2891,7 @@ describe("staging updater release authentication and channel", () => {
     await updater.installAutoUpdater(true, makeDeps(true));
     await updater.checkForUpdatesNow(false, "manual");
     autoUpdater.downloadUpdate.mockImplementation(() => {
-      const error = new Error("HttpError: 403 Forbidden");
+      const error = new Error(`HttpError: 403 Forbidden ${token}`);
       autoUpdater.emit("error", error);
       return Promise.reject(error);
     });

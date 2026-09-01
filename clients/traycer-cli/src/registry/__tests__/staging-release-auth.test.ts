@@ -70,4 +70,57 @@ describe("registryFetch staging authentication", () => {
       code: CLI_ERROR_CODES.RELEASE_AUTHENTICATION_REQUIRED,
     });
   });
+
+  it("resolves staging browser download URLs through the tag listing and API asset", async () => {
+    process.env.TRAYCER_STAGING_RELEASE_TOKEN = "registry-token";
+    const registryFetch = await loadRegistryFetch("staging");
+    const calls: Array<{
+      url: string;
+      method: string;
+      accept: string | null;
+    }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init: RequestInit | undefined) => {
+        const headers = new Headers(init?.headers);
+        const url = typeof input === "string" ? input : input.toString();
+        calls.push({
+          url,
+          method: init?.method ?? "GET",
+          accept: headers.get("accept"),
+        });
+        if (calls.length === 1) {
+          return new Response(
+            JSON.stringify({
+              assets: [
+                {
+                  name: "versions.json",
+                  url: "https://api.github.com/repos/traycerai/traycer-internal/releases/assets/17",
+                },
+              ],
+            }),
+            { status: 200 },
+          );
+        }
+        return new Response("{}", { status: 200 });
+      }),
+    );
+    const response = await registryFetch(
+      "https://github.com/traycerai/traycer-internal/releases/download/host-v1.2.3/versions.json",
+      {},
+    );
+    expect(response.status).toBe(200);
+    expect(calls).toEqual([
+      {
+        url: "https://api.github.com/repos/traycerai/traycer-internal/releases/tags/host-v1.2.3",
+        method: "GET",
+        accept: "application/vnd.github+json",
+      },
+      {
+        url: "https://api.github.com/repos/traycerai/traycer-internal/releases/assets/17",
+        method: "GET",
+        accept: "application/octet-stream",
+      },
+    ]);
+  });
 });

@@ -385,6 +385,25 @@ describe("buildHostAvailableCommand's derived catalog default", () => {
     ]);
   });
 
+  it("keeps canonical staging rows in the stable-default catalog", async () => {
+    mocks.fetchManifestMock.mockResolvedValue(
+      createManifest(["1.2.3-staging.4.gabcdef1", "1.2.3-rc.1", "1.2.0"]),
+    );
+    mocks.readHostInstallRecordMock.mockResolvedValue(installRecord("1.2.0"));
+
+    const command = buildHostAvailableCommand({ includePreReleases: null });
+    const result = await command(fakeCtx());
+
+    expect(result.data).toMatchObject({
+      includePreReleases: false,
+      includePreReleasesSource: "stable-default",
+    });
+    expect(parseAvailableSnapshotLikeDesktop(result.data).versions).toEqual([
+      { version: "1.2.3-staging.4.gabcdef1", available: true },
+      { version: "1.2.0", available: true },
+    ]);
+  });
+
   it("still lists the registry when the install record is corrupt", async () => {
     // A corrupt `install.json` is exactly when someone needs to see which
     // versions exist. `readHostInstallRecord` throws rather than overwrite a

@@ -135,6 +135,19 @@ const PRIVATE_UPDATE_REPO =
 const BAKED_PRIVATE_UPDATE_TOKEN =
   process.env.VITE_TRAYCER_DESKTOP_UPDATE_TOKEN ?? "";
 let stagingUpdateToken = "";
+// The token most recently discarded after an auth failure. electron-updater
+// can both emit `error` and reject `downloadUpdate()` for one failure; the
+// event handler clears `stagingUpdateToken` first, so the later catch still
+// needs the secret to scrub from its own log line.
+let discardedStagingUpdateToken = "";
+
+function discardStagingUpdateTokenForLog(): string {
+  const rejectedToken = stagingUpdateToken;
+  discardStagingUpdateToken();
+  stagingUpdateToken = "";
+  discardedStagingUpdateToken = rejectedToken;
+  return rejectedToken;
+}
 
 function currentPrivateUpdateToken(): string {
   return config.environment === "staging"
@@ -770,9 +783,7 @@ export async function checkForUpdatesNow(
     await autoUpdater.checkForUpdates();
   } catch (err) {
     if (isStagingAuthFailure(err)) {
-      const rejectedToken = stagingUpdateToken;
-      discardStagingUpdateToken();
-      stagingUpdateToken = "";
+      const rejectedToken = discardStagingUpdateTokenForLog();
       emitStagingAuthUnavailable(checkIntent ?? intent, err, rejectedToken);
     } else {
       log.warn("[updater] check failed", credentialSafeLogValue(err));
@@ -799,7 +810,7 @@ function emitStagingAuthUnavailable(
   if (checkInFlight) checkErrorEmitted = true;
   log.warn(
     "[updater] staging update unavailable",
-    stagingAuthLogMessage(reason, rejectedToken),
+    stagingAuthLogMessage(reason, [rejectedToken, stagingUpdateToken]),
   );
   if (intent === "manual") {
     emitSnapshot({
@@ -813,7 +824,10 @@ function emitStagingAuthUnavailable(
 
 function credentialSafeLogValue(error: unknown): unknown {
   return stagingReleaseAuthRequired()
-    ? stagingAuthLogMessage(error, stagingUpdateToken)
+    ? stagingAuthLogMessage(error, [
+        stagingUpdateToken,
+        discardedStagingUpdateToken,
+      ])
     : error;
 }
 
@@ -2152,9 +2166,7 @@ function handleUpdaterError(error: unknown): void {
       checkIntent ??
       currentSnapshot.lastCheckIntent ??
       "automatic";
-    const rejectedToken = stagingUpdateToken;
-    discardStagingUpdateToken();
-    stagingUpdateToken = "";
+    const rejectedToken = discardStagingUpdateTokenForLog();
     downloadInProgress = false;
     downloadIntent = null;
     emitStagingAuthUnavailable(intent, error, rejectedToken);

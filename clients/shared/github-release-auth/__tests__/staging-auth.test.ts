@@ -113,9 +113,30 @@ describe("staging GitHub release credentials", () => {
 
   it("removes only the staging token without mutating the input", () => {
     const input = { PATH: "/bin", [STAGING_RELEASE_TOKEN_ENV]: "secret" };
-    const output = stripGitHubReleaseCredentialsFromEnv(input);
+    const output = stripGitHubReleaseCredentialsFromEnv(input, "darwin");
     expect(output).toEqual({ PATH: "/bin" });
     expect(input[STAGING_RELEASE_TOKEN_ENV]).toBe("secret");
+  });
+
+  it("removes every casing of the token on Windows", () => {
+    const input = {
+      PATH: "/bin",
+      Traycer_Staging_Release_Token: "secret-lower",
+      TRAYCER_STAGING_RELEASE_TOKEN: "secret-upper",
+    };
+    const output = stripGitHubReleaseCredentialsFromEnv(input, "win32");
+    expect(output).toEqual({ PATH: "/bin" });
+    expect(input.Traycer_Staging_Release_Token).toBe("secret-lower");
+  });
+
+  it("removes only the exact token name off Windows", () => {
+    const input = {
+      Traycer_Staging_Release_Token: "secret-lower",
+      [STAGING_RELEASE_TOKEN_ENV]: "secret-exact",
+    };
+    expect(stripGitHubReleaseCredentialsFromEnv(input, "darwin")).toEqual({
+      Traycer_Staging_Release_Token: "secret-lower",
+    });
   });
 
   it("authorizes only the exact GitHub release origins and repository path", () => {
@@ -156,11 +177,12 @@ describe("staging GitHub release credentials", () => {
 
   it("redacts GitHub tokens, authorization headers, and supplied secrets", () => {
     const result = sanitizeCredentialTextWithSecrets(
-      "ghp_abc123 github_pat_xyz456 Authorization: token raw-token custom-secret",
-      ["custom-secret", "raw-token"],
+      'ghp_abc123 ghr_refresh456 github_pat_xyz456 Authorization: Bearer raw-token "authorization":"Bearer json-token" authorization: "token quoted-token" custom-secret',
+      ["custom-secret", "raw-token", "json-token", "quoted-token"],
     );
     expect(result).not.toContain("ghp_abc123");
     expect(result).not.toContain("github_pat_xyz456");
+    expect(result).not.toContain("ghr_refresh456");
     expect(result).not.toContain("raw-token");
     expect(result).not.toContain("custom-secret");
     expect(result).toContain("Authorization: [redacted]");
@@ -265,4 +287,58 @@ describe("staging GitHub release credentials", () => {
       fetchWithGitHubReleaseAuth(resolver, policy(), apiUrl, {}),
     ).rejects.toThrow(/redirect limit/);
   });
+
+  it.each([
+    [302, "PUT", "put-body", "put-body"],
+    [303, "POST", "post-body", null],
+    [307, "POST", "post-body", "post-body"],
+  ] as const)(
+    "applies redirect %s semantics to %s bodies",
+    async (status, method, initialBody, redirectedBody) => {
+      process.env[STAGING_RELEASE_TOKEN_ENV] = "redirect-token";
+      const resolver = new GitHubReleaseCredentialResolver();
+      const calls: Array<{
+        method: string;
+        body: BodyInit | null;
+        contentType: string | null;
+        contentLength: string | null;
+      }> = [];
+      let responseCount = 0;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          async (_input: RequestInfo | URL, init: RequestInit | undefined) => {
+            responseCount += 1;
+            calls.push({
+              method: init?.method ?? "GET",
+              body: init?.body ?? null,
+              contentType: new Headers(init?.headers).get("content-type"),
+              contentLength: new Headers(init?.headers).get("content-length"),
+            });
+            return responseCount === 1
+              ? new Response(null, {
+                  status,
+                  headers: { location: apiUrl },
+                })
+              : new Response("ok", { status: 200 });
+          },
+        ),
+      );
+      await fetchWithGitHubReleaseAuth(resolver, policy(), apiUrl, {
+        method,
+        body: initialBody,
+        headers: {
+          "content-type": "text/plain",
+          "content-length": String(initialBody.length),
+        },
+      });
+      expect(calls[0]).toMatchObject({ method, body: initialBody });
+      expect(calls[1]?.method).toBe(status === 303 ? "GET" : method);
+      expect(calls[1]?.body).toBe(redirectedBody);
+      if (redirectedBody === null) {
+        expect(calls[1]?.contentType).toBeNull();
+        expect(calls[1]?.contentLength).toBeNull();
+      }
+    },
+  );
 });

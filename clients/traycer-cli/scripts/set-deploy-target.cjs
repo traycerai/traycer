@@ -33,24 +33,35 @@ function parseSupportedHostVersion(argv, raw) {
   return trimmed.length === 0 ? null : trimmed;
 }
 
-function parseReleaseRepo(raw) {
-  if (typeof raw !== "string") return DEFAULT_RELEASE_REPO;
-  const trimmed = raw.trim();
-  return trimmed.length === 0 ? DEFAULT_RELEASE_REPO : trimmed;
+// The production coordinate is the fallback for every target except staging:
+// a staging CLI stamps staging-only feed tags, and stamping those against the
+// production repository fails every discovery lookup at runtime, so a missing
+// RELEASE_REPO must fail the build instead.
+function parseReleaseRepo(raw, releaseTarget) {
+  const trimmed = typeof raw === "string" ? raw.trim() : "";
+  if (trimmed.length > 0) return trimmed;
+  return releaseTarget === "staging" ? null : DEFAULT_RELEASE_REPO;
 }
 
 const supportedHostVersion = parseSupportedHostVersion(
   process.argv,
   process.env.TRAYCER_SUPPORTED_HOST_VERSION,
 );
-const releaseRepo = parseReleaseRepo(
-  process.env.TRAYCER_RELEASE_REPO ?? process.env.RELEASE_REPO,
-);
 
 const allowUnpinnedHost = process.argv.includes("--allow-unpinned-host");
 const targetArg = process.argv.find((arg) => arg.startsWith("--target="));
 const target =
   targetArg === undefined ? null : targetArg.slice("--target=".length);
+const releaseRepo = parseReleaseRepo(
+  process.env.TRAYCER_RELEASE_REPO ?? process.env.RELEASE_REPO,
+  target,
+);
+if (releaseRepo === null && !process.argv.includes("--restore")) {
+  console.error(
+    "[set-deploy-target] TRAYCER_RELEASE_REPO (or RELEASE_REPO) is required for a staging build; the production repository is never a staging destination.",
+  );
+  process.exit(2);
+}
 
 if (
   !allowUnpinnedHost &&
@@ -104,8 +115,8 @@ runConfigTargetCli({
     },
     releaseRepo: {
       dev: DEFAULT_RELEASE_REPO,
-      staging: releaseRepo,
-      production: releaseRepo,
+      staging: releaseRepo ?? "",
+      production: releaseRepo ?? DEFAULT_RELEASE_REPO,
     },
     hostDiscoveryTag: {
       dev: production.hostDiscoveryTag,

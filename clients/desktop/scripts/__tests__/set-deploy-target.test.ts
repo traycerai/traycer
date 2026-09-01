@@ -124,6 +124,25 @@ function run(fixture: Fixture, args: readonly string[]) {
   );
 }
 
+function runWithoutReleaseRepo(fixture: Fixture, args: readonly string[]) {
+  const env = {
+    ...process.env,
+    TRAYCER_DESKTOP_SENTRY_DSN: "https://sentry/staging",
+    TRAYCER_DESKTOP_SENTRY_RENDERER_DSN: "https://sentry-renderer/staging",
+  };
+  Reflect.deleteProperty(env, "TRAYCER_RELEASE_REPO");
+  Reflect.deleteProperty(env, "RELEASE_REPO");
+  return spawnSync(
+    process.execPath,
+    [join(fixture.projectDir, "scripts", "set-deploy-target.cjs"), ...args],
+    {
+      cwd: fixture.projectDir,
+      encoding: "utf8",
+      env,
+    },
+  );
+}
+
 afterEach(() => {
   while (roots.length > 0) {
     const root = roots.pop();
@@ -137,6 +156,26 @@ describe("set-deploy-target scripts", () => {
     const result = run(fixture, ["--target=staging"]);
     expect(result.status).toBe(2);
     expect(result.stderr).toContain("--target-input");
+  });
+
+  it("requires a release repository for staging desktop targets", () => {
+    const fixture = createFixture("desktop");
+    const result = runWithoutReleaseRepo(fixture, [
+      "--target=staging",
+      `--target-input=${fixture.targetInputPath}`,
+    ]);
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("TRAYCER_RELEASE_REPO");
+  });
+
+  it("requires a release repository for staging CLI targets", () => {
+    const fixture = createFixture("cli");
+    const result = runWithoutReleaseRepo(fixture, [
+      "--target=staging",
+      `--target-input=${fixture.targetInputPath}`,
+    ]);
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("TRAYCER_RELEASE_REPO");
   });
 
   it("stamps and restores the desktop config in an isolated copy", () => {

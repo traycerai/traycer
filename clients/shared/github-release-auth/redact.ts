@@ -1,4 +1,10 @@
-const GITHUB_TOKEN = /\b(?:ghp|gho|ghu|ghs|github_pat)_[A-Za-z0-9_]+\b/g;
+// Every GitHub token prefix: classic PAT, OAuth, App user, App installation,
+// App refresh, fine-grained PAT.
+const GITHUB_TOKEN = /\b(?:ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]+\b/g;
+// `authorization: Bearer x`, `authorization="token x"` and the JSON form
+// `"authorization":"Bearer x"`; the whole credential goes, not the scheme.
+const AUTHORIZATION_VALUE =
+  /("?authorization"?\s*[:=]\s*"?)(?:(?:bearer|token)\s+)?[^\s,;}\]"]+/gi;
 
 export function sanitizeCredentialText(value: string): string {
   return sanitizeCredentialTextWithSecrets(value, []);
@@ -15,10 +21,7 @@ export function sanitizeCredentialTextWithSecrets(
   }
   return sanitized
     .replace(GITHUB_TOKEN, "[redacted]")
-    .replace(
-      /(authorization\s*[:=]\s*)(?:(?:bearer|token)\s+)?[^\s,;}\]]+/gi,
-      "$1[redacted]",
-    )
+    .replace(AUTHORIZATION_VALUE, "$1[redacted]")
     .replace(/(TRAYCER_STAGING_RELEASE_TOKEN\s*[:=]\s*)\S+/gi, "$1[redacted]");
 }
 

@@ -45,9 +45,11 @@ function desktopStamp(
       : "released-host-versions",
     credentialEnvironmentVariable: staging
       ? "TRAYCER_STAGING_RELEASE_TOKEN"
-      : "",
+      : "TRAYCER_RELEASE_TOKEN",
     credentialSources: ["environment"],
     authorizedOrigins: ["https://github.com", "https://api.github.com"],
+    cliInstallRoot: staging ? "~/.traycer/cli/staging" : "~/.traycer/cli",
+    windowsTaskName: staging ? "\\Traycer\\Host-Staging" : "\\Traycer\\Host",
     appId: staging ? "ai.traycer.desktop.staging" : "ai.traycer.desktop",
     productName: staging ? "Traycer Staging" : "Traycer",
     protocolScheme: staging ? "traycer-staging" : "traycer",
@@ -230,5 +232,24 @@ describe("release-target-electron-builder", () => {
     );
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("release-stamped config");
+  });
+
+  it("refuses a staging stamp when no release repository is configured", () => {
+    const fixture = createProject("staging");
+    const modulePath = join(
+      fixture.projectDir,
+      "scripts",
+      "release-target-electron-builder.cjs",
+    );
+    const env = { ...process.env };
+    Reflect.deleteProperty(env, "TRAYCER_RELEASE_REPO");
+    Reflect.deleteProperty(env, "RELEASE_REPO");
+    const result = spawnSync(process.execPath, [modulePath], {
+      cwd: fixture.projectDir,
+      encoding: "utf8",
+      env,
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("TRAYCER_RELEASE_REPO");
   });
 });

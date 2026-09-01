@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isCanonicalReleaseCandidate,
+  isCanonicalStagingVersion,
   isMatchingStableRelease,
   isPreReleaseVersion,
   isSameReleaseLine,
@@ -58,6 +59,12 @@ describe("isCanonicalReleaseCandidate", () => {
 
   it("rejects a stable release - stable never follows a line implicitly", () => {
     expect(isCanonicalReleaseCandidate("2.0.0")).toBe(false);
+  });
+
+  it("does not classify a canonical staging version as an RC", () => {
+    const staging = "1.2.3-staging.4.gabcdef1";
+    expect(isCanonicalStagingVersion(staging)).toBe(true);
+    expect(isCanonicalReleaseCandidate(staging)).toBe(false);
   });
 
   it("scopes an RC to the line its core names", () => {
@@ -156,6 +163,23 @@ describe("isPreReleaseVersion", () => {
     // release and must stay in the default catalog.
     for (const version of ["2.0.0", "0.0.0", "10.20.30", "1.8.0+build.4"]) {
       expect(isPreReleaseVersion(version)).toBe(false);
+    }
+  });
+
+  it("keeps canonical staging versions in the stable-default catalog", () => {
+    expect(isCanonicalStagingVersion("1.2.3-staging.4.gabcdef1")).toBe(true);
+    expect(isPreReleaseVersion("1.2.3-staging.4.gabcdef1")).toBe(false);
+  });
+
+  it("rejects non-canonical staging versions", () => {
+    for (const version of [
+      "1.2.3-staging.04.gabcdef1",
+      "1.2.3-staging.4.gabcdef",
+      "1.2.3-staging.4.gABCDEF1",
+      "1.2.3-staging.4.gabcdef1+build.1",
+      "v1.2.3-staging.4.gabcdef1",
+    ]) {
+      expect(isCanonicalStagingVersion(version)).toBe(false);
     }
   });
 

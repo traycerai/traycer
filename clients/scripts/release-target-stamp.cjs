@@ -9,37 +9,48 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const KNOWN_TARGETS = ["production", "staging"];
-const COMMON_KEYS = [
+// Scalar keys must be non-empty strings; structured keys are checked by shape
+// below. Keeping the two sets apart is what makes a `null` scalar fail here
+// instead of being packaged as `appId: null` or `schemes: [null]`.
+const COMMON_SCALAR_KEYS = [
   "target",
   "environment",
-  "cloud",
   "sentryEnvironment",
   "cliFeedTag",
   "hostDiscoveryTag",
   "credentialEnvironmentVariable",
+];
+const COMMON_STRUCTURED_KEYS = [
+  "cloud",
   "credentialSources",
   "authorizedOrigins",
 ];
 const COMPONENT_KEYS = {
-  cli: [
-    "cliInstallRoot",
-    "hostInstallRoot",
-    "serviceLabelId",
-    "windowsTaskName",
-  ],
-  desktop: [
-    "appId",
-    "productName",
-    "protocolScheme",
-    "releaseChannel",
-    "mac",
-    "windows",
-    "linux",
-    "updaterPackageName",
-    "updaterCacheDirName",
-    "updaterChannel",
-    "updaterChannelFiles",
-  ],
+  cli: {
+    scalar: [
+      "cliInstallRoot",
+      "hostInstallRoot",
+      "serviceLabelId",
+      "windowsTaskName",
+    ],
+    structured: [],
+  },
+  desktop: {
+    scalar: [
+      "appId",
+      "productName",
+      "protocolScheme",
+      "releaseChannel",
+      "updaterPackageName",
+      "updaterCacheDirName",
+      "updaterChannel",
+      // The NSIS uninstaller removes the CLI-installed host autostart, so the
+      // desktop stamp carries the CLI's install identity too.
+      "cliInstallRoot",
+      "windowsTaskName",
+    ],
+    structured: ["mac", "windows", "linux", "updaterChannelFiles"],
+  },
 };
 
 class ClientTargetStampError extends Error {
@@ -87,9 +98,24 @@ function readClientTargetStamp(inputPath, expectedTarget, component) {
   }
   const stamp = requireKeys(
     parsed,
-    [...COMMON_KEYS, ...componentKeys],
+    [
+      ...COMMON_SCALAR_KEYS,
+      ...COMMON_STRUCTURED_KEYS,
+      ...componentKeys.scalar,
+      ...componentKeys.structured,
+    ],
     "client target stamp",
   );
+  for (const key of [...COMMON_SCALAR_KEYS, ...componentKeys.scalar]) {
+    requireString(stamp[key], `client target stamp.${key}`);
+  }
+  for (const key of ["credentialSources", "authorizedOrigins"]) {
+    if (!Array.isArray(stamp[key])) {
+      throw new ClientTargetStampError(
+        `client target stamp.${key} must be an array`,
+      );
+    }
+  }
   if (
     !KNOWN_TARGETS.includes(stamp.target) ||
     stamp.target !== expectedTarget
@@ -108,12 +134,12 @@ function readClientTargetStamp(inputPath, expectedTarget, component) {
     ["traycerServerBaseUrl", "authnApiUrl", "cloudUiBaseUrl", "relayAttachUrl"],
     "client target stamp.cloud",
   );
-  for (const key of componentKeys) {
-    if (!Array.isArray(stamp[key]) && typeof stamp[key] !== "object") {
-      requireString(stamp[key], `client target stamp.${key}`);
-    }
-  }
   if (component === "desktop") {
+    if (!Array.isArray(stamp.updaterChannelFiles)) {
+      throw new ClientTargetStampError(
+        "client target stamp.updaterChannelFiles must be an array",
+      );
+    }
     requireKeys(
       stamp.mac,
       ["bundleName", "helperBundleId", "launchAgentLabel"],
