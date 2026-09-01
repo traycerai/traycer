@@ -775,6 +775,9 @@ describe("observed sign-in echo", () => {
       cookies: harness.jar,
       emit: (delta) => deltas.push(delta),
       now: () => Date.now(),
+      // This test is about additions, which no removal guard touches, so one
+      // faked clock answers for both.
+      monotonicNow: () => Date.now(),
       coalesceWindowMs: BROWSER_COOKIE_DELTA_WINDOW_MS,
     });
     observer.attach();

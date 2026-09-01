@@ -206,6 +206,10 @@ export function ensureBrowserViewSessionForPartition(
  * Cookie deltas come from the durable `primary` jar and nowhere else: the
  * ephemeral jar's logins are gone at quit, and an isolated partition shares
  * nothing by construction (spec §6.1).
+ *
+ * This runs on the FIRST materialization of that partition, not at app start:
+ * the observer's startup grace window is therefore anchored to the user's
+ * first browser tile of the run. See `attach()` for what that costs.
  */
 function observePrimaryProfileCookieChanges(
   partition: string,
@@ -220,6 +224,7 @@ function observePrimaryProfileCookieChanges(
       browserCookieDeltaListeners.forEach((listener) => listener(delta));
     },
     now: () => Date.now(),
+    monotonicNow: () => performance.now(),
     coalesceWindowMs: BROWSER_COOKIE_DELTA_WINDOW_MS,
   });
   observer.attach();

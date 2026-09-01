@@ -3,18 +3,24 @@ import type { Cookie } from "electron";
 import type { BrowserPrimaryProfileDelta } from "@traycer/protocol/host/browser/contracts";
 import {
   BROWSER_COOKIE_DELTA_WINDOW_MS,
+  BROWSER_COOKIE_REMOVAL_GRACE_MS,
   BrowserCookieChangeObserver,
   type BrowserCookieChangeSource,
 } from "../browser-cookie-change-observer";
+import { log } from "../../../app/logger";
 import { browserStorageCookies } from "../browser-storage-state";
 import {
   makeCookie,
+  makeSessionCookie,
   matchesDomainFilter,
   type CookieChangeListener,
 } from "./cookie-jar-fixture";
 
 vi.mock("../../../app/logger", () => ({
   log: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+  // The real one, near enough for these assertions: what matters is that the
+  // trace passes its fields through a truncating redactor at all.
+  sanitizeLogFields: (fields: Record<string, unknown>) => fields,
   describeLogError: (error: unknown) => String(error),
 }));
 
@@ -53,14 +59,24 @@ class FakeCookieChangeSource implements BrowserCookieChangeSource {
   /** Upserts a cookie and fires the matching `changed` event - jar first, then event, exactly as Chromium does it. */
   set(cookie: Cookie): void {
     this.upsert(cookie);
-    this.emit(cookie, false);
+    this.emit(cookie, "explicit", false);
   }
 
   /** Removes a cookie from the jar and fires the matching removal event. */
   remove(cookie: Cookie): void {
+    this.removeWithCause(cookie, "explicit");
+  }
+
+  /**
+   * The same, under one of Chromium's other removal causes: `expired` for the
+   * expiry sweep, `evicted` for capacity garbage collection, and
+   * `expired-overwrite` for a `Set-Cookie` carrying a past date - which is a
+   * server-side sign-out and stays witnessable.
+   */
+  removeWithCause(cookie: Cookie, cause: string): void {
     const index = this.indexOf(cookie);
     if (index !== -1) this.jar.splice(index, 1);
-    this.emit(cookie, true);
+    this.emit(cookie, cause, true);
   }
 
   private upsert(cookie: Cookie): void {
@@ -78,11 +94,11 @@ class FakeCookieChangeSource implements BrowserCookieChangeSource {
     );
   }
 
-  private emit(cookie: Cookie, removed: boolean): void {
+  private emit(cookie: Cookie, cause: string, removed: boolean): void {
     if (this.listener === null) {
       throw new Error("FakeCookieChangeSource fired before attach()");
     }
-    this.listener({}, cookie, "explicit", removed);
+    this.listener({}, cookie, cause, removed);
   }
 }
 
@@ -119,7 +135,16 @@ class GatedCookieChangeSource extends FakeCookieChangeSource {
   }
 }
 
-function makeObserver(
+/**
+ * Attaches with the startup grace window running: the clock reads the attach
+ * instant.
+ *
+ * `monotonicNow` is driven off the same faked `Date` as `now` rather than off
+ * `performance`, so `advanceTimersByTimeAsync` moves both and a test's elapsed
+ * time means one thing. In production they are different clocks precisely
+ * because the wall one can go backwards.
+ */
+function makeObserverAtAttach(
   source: BrowserCookieChangeSource,
   deltas: BrowserPrimaryProfileDelta[],
 ): BrowserCookieChangeObserver {
@@ -127,14 +152,34 @@ function makeObserver(
     cookies: source,
     emit: (delta) => deltas.push(delta),
     now: () => Date.now(),
+    monotonicNow: () => Date.now(),
     coalesceWindowMs: BROWSER_COOKIE_DELTA_WINDOW_MS,
   });
   observer.attach();
   return observer;
 }
 
+/**
+ * The same, then straight past the startup grace window - the state a jar is
+ * in for all but the first minute of a run, and the only state in which a
+ * removal is witnessed at all. Nothing is scheduled at attach, so moving the
+ * clock here fires no timer; it just puts the observer where every test that
+ * is not ABOUT the grace window means to be.
+ */
+function makeObserver(
+  source: BrowserCookieChangeSource,
+  deltas: BrowserPrimaryProfileDelta[],
+): BrowserCookieChangeObserver {
+  const observer = makeObserverAtAttach(source, deltas);
+  vi.setSystemTime(Date.now() + BROWSER_COOKIE_REMOVAL_GRACE_MS);
+  return observer;
+}
+
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  // The trace assertions below are about what THIS test wrote, and one of them
+  // is an absence.
+  vi.clearAllMocks();
 });
 
 afterEach(() => {
@@ -511,6 +556,280 @@ describe("BrowserCookieChangeObserver removedKeys (ticket 14)", () => {
       "name",
       "path",
     ]);
+
+    observer.dispose();
+  });
+});
+
+/**
+ * Universal-sign-in decision 7. `removedKeys` is the only field on this frame
+ * that can sign a live remote session out, so what is allowed onto it is
+ * narrower than what the jar actually did.
+ *
+ * The host end of that is a single chokepoint, which is what makes an empty
+ * `removedKeys` sufficient here: `handlePrimaryProfileDelta` is the only delta
+ * path that reaches `evictPrimaryProfileDomains`, it passes it exactly
+ * `loggedOutDomains(frame.removedKeys, ...)`, and that returns `[]` for an
+ * empty `removedKeys` before it looks at anything else. The merge still
+ * reconciles the host's cache from `cookies`; it evicts nothing.
+ */
+describe("BrowserCookieChangeObserver witnessed-removal hardening", () => {
+  it("never witnesses a session cookie's removal, inside the grace window or long after it", async () => {
+    const source = new FakeCookieChangeSource();
+    const sessionCookie = makeSessionCookie({
+      name: "sid",
+      domain: "example.com",
+    });
+    source.seed(sessionCookie);
+
+    const deltas: BrowserPrimaryProfileDelta[] = [];
+    const observer = makeObserverAtAttach(source, deltas);
+
+    // Inside the window - where the grace rule would suppress it anyway.
+    source.remove(sessionCookie);
+    await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS);
+
+    expect(deltas).toHaveLength(1);
+    expect(deltas[0]?.removedKeys).toEqual([]);
+
+    // Hours later, with the grace window long spent: still not a logout. A
+    // session cookie dies with the process, so its removal is what a restart
+    // looks like.
+    await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_REMOVAL_GRACE_MS * 60);
+    source.seed(sessionCookie);
+    source.remove(sessionCookie);
+    await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS);
+
+    expect(deltas).toHaveLength(2);
+    expect(deltas[1]?.removedKeys).toEqual([]);
+    // The desktop's own view still tracked the change: the slice was re-read
+    // and the cookie is gone from it. Only the logout claim was withheld.
+    expect(deltas[1]?.cookies).toEqual([]);
+    // Suppression is traceable, which is how the next forensic pass tells
+    // "nothing was removed" apart from "a removal was not believed". At DEBUG,
+    // because a session cookie dying is ordinary traffic and INFO would write
+    // a line per domain per window for the life of the process.
+    expect(log.debug).toHaveBeenCalledWith(
+      "[browser-view] withheld cookie removals from a delta",
+      {
+        domain: "example.com",
+        reason: "session-cookie",
+        cause: "explicit",
+        removals: 1,
+      },
+    );
+
+    observer.dispose();
+  });
+
+  it("witnesses a persistent cookie's removal only once the startup grace window has passed", async () => {
+    const source = new FakeCookieChangeSource();
+    const early = makeCookie({ name: "early", domain: "example.com" });
+    const late = makeCookie({ name: "late", domain: "example.com" });
+    source.seed(early);
+    source.seed(late);
+
+    const deltas: BrowserPrimaryProfileDelta[] = [];
+    const observer = makeObserverAtAttach(source, deltas);
+
+    // The incident's own timing: 18 s after attach, well inside the window.
+    await vi.advanceTimersByTimeAsync(18_000);
+    source.remove(early);
+    await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS);
+
+    expect(deltas).toHaveLength(1);
+    expect(deltas[0]?.removedKeys).toEqual([]);
+    expect(deltas[0]?.cookies.map((cookie) => cookie.name)).toEqual(["late"]);
+
+    // Past the window, the same shape of removal is the user signing out.
+    await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_REMOVAL_GRACE_MS);
+    source.remove(late);
+    await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS);
+
+    expect(deltas).toHaveLength(2);
+    expect(deltas[1]?.removedKeys).toEqual([
+      { domain: "example.com", name: "late", path: "/" },
+    ]);
+
+    observer.dispose();
+  });
+
+  it("leaves additions untouched throughout - only removals are untrusted at startup", async () => {
+    const source = new FakeCookieChangeSource();
+    const deltas: BrowserPrimaryProfileDelta[] = [];
+    const observer = makeObserverAtAttach(source, deltas);
+
+    // A sign-in one second into the run, session cookie and all: the whole
+    // point of the epic is that this still reaches the host.
+    source.set(makeSessionCookie({ name: "sid", domain: "example.com" }));
+    await vi.advanceTimersByTimeAsync(1_000);
+    source.set(makeCookie({ name: "remember", domain: "example.com" }));
+    await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS);
+
+    expect(deltas).toHaveLength(1);
+    expect(deltas[0]?.cookies.map((cookie) => cookie.name).sort()).toEqual([
+      "remember",
+      "sid",
+    ]);
+    expect(deltas[0]?.removedKeys).toEqual([]);
+
+    observer.dispose();
+  });
+
+  it("still reports a remove-then-re-set inside the grace window as no removal, and the re-set cookie as present", async () => {
+    const source = new FakeCookieChangeSource();
+    const cookie = makeCookie({ name: "sid", domain: "example.com" });
+    source.seed(cookie);
+
+    const deltas: BrowserPrimaryProfileDelta[] = [];
+    const observer = makeObserverAtAttach(source, deltas);
+
+    // Chromium's `overwrite` cause, during the window: the suppression must not
+    // have disturbed the machinery that already handles this.
+    source.remove(cookie);
+    source.set(cookie);
+    await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS);
+
+    expect(deltas).toHaveLength(1);
+    expect(deltas[0]?.cookies.map((entry) => entry.name)).toEqual(["sid"]);
+    expect(deltas[0]?.removedKeys).toEqual([]);
+
+    observer.dispose();
+  });
+
+  it("reports zero removedKeys for the 2026-09-01 boot drop: four keys vanish 18 s after attach", async () => {
+    const source = new FakeCookieChangeSource();
+    const dropped = [
+      makeCookie({ name: "sid", domain: "github.com" }),
+      makeCookie({ name: "user_session", domain: "github.com" }),
+      makeCookie({ name: "device", domain: "www.github.com" }),
+      makeCookie({ name: "prefs", domain: "github.com" }),
+    ];
+    dropped.forEach((cookie) => {
+      source.seed(cookie);
+    });
+
+    const deltas: BrowserPrimaryProfileDelta[] = [];
+    const observer = makeObserverAtAttach(source, deltas);
+
+    // Chromium's boot-time housekeeping, as the forensics recorded it: no user
+    // touched the browser, and four persistent keys left the jar at once.
+    await vi.advanceTimersByTimeAsync(18_000);
+    dropped.forEach((cookie) => {
+      source.remove(cookie);
+    });
+    await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS);
+
+    // The delta still goes out - the jar really did change, and the host's
+    // cache converges on it - but it carries no logout evidence, and the empty
+    // list is what makes `loggedOutDomains` return `[]` and the evict fan-out
+    // never run. Before this ticket these four keys signed live remote
+    // sessions out of GitHub.
+    expect(deltas).toHaveLength(1);
+    expect(deltas[0]?.domain).toBe("github.com");
+    expect(deltas[0]?.cookies).toEqual([]);
+    expect(deltas[0]?.removedKeys).toEqual([]);
+    // Counted, not one line per cookie, and carrying the CAUSE string: that is
+    // the evidence ticket 07's live pass needs to decide whether boot cleanup
+    // ever announces itself outside `expired`/`evicted` - the one open
+    // question keeping this window alive.
+    expect(log.info).toHaveBeenCalledWith(
+      "[browser-view] withheld cookie removals from a delta",
+      {
+        domain: "github.com",
+        reason: "grace-window",
+        cause: "explicit",
+        removals: 4,
+      },
+    );
+
+    observer.dispose();
+  });
+
+  it("never witnesses a capacity eviction, hours into a run where no startup window could see it", async () => {
+    const source = new FakeCookieChangeSource();
+    const evicted = makeCookie({ name: "user_session", domain: "github.com" });
+    const kept = makeCookie({ name: "prefs", domain: "github.com" });
+    source.seed(evicted);
+    source.seed(kept);
+
+    const deltas: BrowserPrimaryProfileDelta[] = [];
+    const observer = makeObserver(source, deltas);
+    // Ten minutes in: the grace window is long spent and the cookie is
+    // persistent, so the CAUSE is the only thing standing between Chromium's
+    // per-host capacity GC and a `primaryProfileEvict` broadcast - which is
+    // the 2026-08-31 bug verbatim.
+    await vi.advanceTimersByTimeAsync(600_000);
+
+    source.removeWithCause(evicted, "evicted");
+    await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS);
+
+    expect(deltas).toHaveLength(1);
+    expect(deltas[0]?.removedKeys).toEqual([]);
+    expect(deltas[0]?.cookies.map((cookie) => cookie.name)).toEqual(["prefs"]);
+    expect(log.info).toHaveBeenCalledWith(
+      "[browser-view] withheld cookie removals from a delta",
+      {
+        domain: "github.com",
+        reason: "housekeeping-cause",
+        cause: "evicted",
+        removals: 1,
+      },
+    );
+
+    observer.dispose();
+  });
+
+  it("never witnesses the expiry sweep, and still witnesses a server-side sign-out", async () => {
+    const source = new FakeCookieChangeSource();
+    const swept = makeCookie({ name: "stale", domain: "example.com" });
+    const signedOut = makeCookie({ name: "sid", domain: "example.com" });
+    source.seed(swept);
+    source.seed(signedOut);
+
+    const deltas: BrowserPrimaryProfileDelta[] = [];
+    const observer = makeObserver(source, deltas);
+
+    source.removeWithCause(swept, "expired");
+    await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS);
+
+    expect(deltas).toHaveLength(1);
+    expect(deltas[0]?.removedKeys).toEqual([]);
+
+    // `expired-overwrite` is a `Set-Cookie` with a date in the past: the
+    // canonical server-side logout, and the removal this whole path exists to
+    // carry. The cause filter must not be so broad that it eats this one.
+    source.removeWithCause(signedOut, "expired-overwrite");
+    await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS);
+
+    expect(deltas).toHaveLength(2);
+    expect(deltas[1]?.removedKeys).toEqual([
+      { domain: "example.com", name: "sid", path: "/" },
+    ]);
+
+    observer.dispose();
+  });
+
+  it("counts no suppression for a session cookie the server merely re-set", async () => {
+    const source = new FakeCookieChangeSource();
+    const cookie = makeSessionCookie({ name: "sid", domain: "example.com" });
+    source.seed(cookie);
+
+    const deltas: BrowserPrimaryProfileDelta[] = [];
+    const observer = makeObserver(source, deltas);
+
+    // Chromium's overwrite pair, which is what a silent refresh looks like -
+    // the single most common thing that happens to a session cookie. Counting
+    // the removal half as a suppression would trace ordinary churn forever.
+    source.remove(cookie);
+    source.set(cookie);
+    await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS);
+
+    expect(deltas).toHaveLength(1);
+    expect(deltas[0]?.cookies.map((entry) => entry.name)).toEqual(["sid"]);
+    expect(deltas[0]?.removedKeys).toEqual([]);
+    expect(log.debug).not.toHaveBeenCalled();
+    expect(log.info).not.toHaveBeenCalled();
 
     observer.dispose();
   });

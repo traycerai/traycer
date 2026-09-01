@@ -19,6 +19,7 @@ export function matchesDomainFilter(
   return normalized === filterDomain || normalized.endsWith(`.${filterDomain}`);
 }
 
+/** A persistent cookie: it carries an expiry, so it outlives the process. */
 export function makeCookie(input: {
   readonly name: string;
   readonly domain: string;
@@ -31,8 +32,22 @@ export function makeCookie(input: {
     path: "/",
     secure: true,
     httpOnly: false,
-    session: true,
+    session: false,
     sameSite: "lax",
     expirationDate: 4_102_444_800,
   };
+}
+
+/**
+ * A session cookie, exactly as Chromium reports one: `session: true` and NO
+ * `expirationDate` at all. The pair is not independent in Electron - one is
+ * the other's shape - and the capture path reads the absent expiry, so a
+ * fixture that set both would not exercise the rule it claims to.
+ */
+export function makeSessionCookie(input: {
+  readonly name: string;
+  readonly domain: string;
+}): Cookie {
+  const { expirationDate: _expirationDate, ...cookie } = makeCookie(input);
+  return { ...cookie, session: true };
 }

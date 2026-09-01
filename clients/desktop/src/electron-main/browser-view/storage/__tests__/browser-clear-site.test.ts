@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { BrowserPrimaryProfileDelta } from "@traycer/protocol/host/browser/contracts";
 import {
   BROWSER_COOKIE_DELTA_WINDOW_MS,
+  BROWSER_COOKIE_REMOVAL_GRACE_MS,
   BrowserCookieChangeObserver,
 } from "../browser-cookie-change-observer";
 import {
@@ -20,6 +21,7 @@ import {
 
 vi.mock("../../../app/logger", () => ({
   log: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+  sanitizeLogFields: (fields: Record<string, unknown>) => fields,
   describeLogError: (error: unknown) => String(error),
 }));
 
@@ -297,17 +299,28 @@ describe("clearBrowserSite against an in-flight observation", () => {
 });
 
 describe("clearBrowserSite delta behaviour", () => {
+  /**
+   * Attached, then stepped past the observer's startup grace window: inside it
+   * no removal is witnessed at all (universal-sign-in decision 7), and a clear
+   * is a steady-state action. A clear that DOES fall inside the window still
+   * reaches the host - `recordForgottenBrowserSite` bumps the forget ledger
+   * before the jar is touched and the digest is what prunes the host's store
+   * (ticket 04) - it just does not reach it through `removedKeys`.
+   */
   function attachObserver(
     session: FakeClearSiteSession,
     deltas: BrowserPrimaryProfileDelta[],
   ): BrowserCookieChangeObserver {
+    let now = 1_000;
     const observer = new BrowserCookieChangeObserver({
       cookies: session.cookies,
       emit: (delta) => deltas.push(delta),
-      now: () => 1_000,
+      now: () => now,
+      monotonicNow: () => now,
       coalesceWindowMs: BROWSER_COOKIE_DELTA_WINDOW_MS,
     });
     observer.attach();
+    now += BROWSER_COOKIE_REMOVAL_GRACE_MS;
     return observer;
   }
 
