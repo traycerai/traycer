@@ -9,6 +9,7 @@ import {
   type RemoteHostDirectoryEntry,
 } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { createRemoteHostTransport } from "@traycer-clients/shared/host-transport/remote/index";
+import { planRestrictedReprobeAtFromClosedReason } from "@traycer-clients/shared/host-transport/remote/config";
 import type { HostStatusDTO } from "@traycer/protocol/host/host-status";
 import {
   hostRpcRegistry,
@@ -279,6 +280,12 @@ export function buildHostStreamClient(params: {
 
   return new WsStreamClient<HostStreamRpcRegistry>({
     registry: hostStreamRpcRegistry,
+    // Named, so this client can seed its stream-method support from what an
+    // earlier handshake with the SAME host already computed instead of probing
+    // for it again. The Epic's client is minted per session, so before this the
+    // answer was re-derived - and paid for with a serial lane probe - on every
+    // Epic open. See `stream-method-support-registry.ts`.
+    hostId: params.target.hostId,
     endpoint: params.endpoint,
     bearer: params.bearer,
     auth: params.auth,
@@ -576,6 +583,19 @@ export function useHostStreamClientBindingFor(
     };
     const rebuild = (): void => {
       if (teardownInProgressRef.current) return;
+      const planRestrictedReprobeAt = planRestrictedReprobeAtFromClosedReason(
+        client.getClosedReason(),
+      );
+      if (planRestrictedReprobeAt !== null) {
+        backoffTimer = window.setTimeout(
+          () => {
+            backoffTimer = null;
+            setRebuildNonce((nonce) => nonce + 1);
+          },
+          Math.max(0, planRestrictedReprobeAt - Date.now()),
+        );
+        return;
+      }
       const delayMs = rebuildBackoff.nextRebuildDelayMs(Date.now());
       appLogger.warn(
         "[stream] transient host stream client closed underneath its binding - rebuilding",

@@ -126,7 +126,7 @@ function fetchOnce(
   const { result } = renderHook(() => useChatImageFetcher(), {
     wrapper: wrapperFor(scope),
   });
-  return result.current(HASH, new AbortController().signal);
+  return result.current.fetch(HASH, new AbortController().signal);
 }
 
 /** The bytes alone, for the many assertions that do not care about the type. */
@@ -180,10 +180,11 @@ describe("useChatImageFetcher", () => {
     await expect(bytesOnce(scopeValue("host-1", true))).resolves.toEqual(
       DOC_BYTES,
     );
-    expect(docMocks.readAttachmentBytes).toHaveBeenCalledWith(
-      HASH,
-      expect.any(AbortSignal),
-    );
+    // ONE argument, no signal. `readHeldEpicAttachmentBytes` says why at its
+    // own site: "there is nothing to abort. The waiting is what a signal
+    // bounded, and this leg does not wait." A pin still demanding a signal is
+    // asserting the pre-relocation shape of a call that deliberately lost it.
+    expect(docMocks.readAttachmentBytes).toHaveBeenCalledWith(HASH);
   });
 
   it("never calls the indefinitely-waiting doc read without a presence hit", async () => {
@@ -193,8 +194,19 @@ describe("useChatImageFetcher", () => {
     await expect(bytesOnce(scopeValue("host-1", true))).rejects.toThrow(
       /unavailable/,
     );
-    expect(docMocks.hasAttachmentBytes).toHaveBeenCalledWith(HASH);
-    expect(docMocks.readAttachmentBytes).not.toHaveBeenCalled();
+    // The PROPERTY survives; the mechanism it used to name does not. This leg
+    // was guarded by a separate `hasAttachmentBytes` pre-check, and the guard
+    // moved INTO the worker - `readAttachmentBytes` answers `null` for a hash
+    // the replica does not hold rather than waiting for one to arrive, so
+    // there is one call where there were two, and main no longer calls the
+    // predicate at all. Asserting the old pre-check here would pin a
+    // construction that was deleted on purpose.
+    //
+    // What must stay true is what the test's NAME claims: the caller never
+    // parks. The rejection above is that, and this is the read that answered
+    // null to produce it.
+    expect(docMocks.hasAttachmentBytes).not.toHaveBeenCalled();
+    expect(docMocks.readAttachmentBytes).toHaveBeenCalledWith(HASH);
   });
 
   it("propagates a transient RPC failure so the blob cache retries it", async () => {
@@ -257,6 +269,36 @@ describe("useChatImageFetcher", () => {
       mediaType: "image/png",
     });
     await expect(bytesOnce(scopeAt("host-1", "1.5.0", true))).resolves.toEqual(
+      CHAT_PLANE_BYTES,
+    );
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not let one build's unsupported verdict suppress a different build", async () => {
+    // The verdict key was `${hostId}\n${hostVersion}`, with a comment
+    // asserting a host id "never contains" a newline - an assumption about a
+    // value that crosses the wire as an unconstrained string, and silent about
+    // `hostVersion` entirely. These two pairs joined to the same key, so the
+    // first host's permanent negative suppressed the second's RPC leg for the
+    // rest of the renderer session.
+    request.mockRejectedValue(rpcError("E_HOST_UNSUPPORTED"));
+    docMocks.hasAttachmentBytes.mockReturnValue(true);
+    docMocks.readAttachmentBytes.mockResolvedValue(DOC_BYTES);
+
+    await expect(bytesOnce(scopeAt("h", "a\nb", true))).resolves.toEqual(
+      DOC_BYTES,
+    );
+    expect(request).toHaveBeenCalledTimes(1);
+
+    // A DIFFERENT build, aliasing onto the same joined key. It must still be
+    // probed - and it answers, so its bytes come off the chat plane.
+    request.mockReset();
+    request.mockResolvedValue({
+      ok: true,
+      bytesBase64: CHAT_PLANE_BASE64,
+      mediaType: "image/png",
+    });
+    await expect(bytesOnce(scopeAt("h\na", "b", true))).resolves.toEqual(
       CHAT_PLANE_BYTES,
     );
     expect(request).toHaveBeenCalledTimes(1);

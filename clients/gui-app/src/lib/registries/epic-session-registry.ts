@@ -1,15 +1,25 @@
+import {
+  createEpicRuntimeWorker,
+  type RuntimeWorkerLike,
+} from "@/stores/epics/open-epic/runtime/worker/spawn-epic-runtime-worker";
 import { createContext, type Context } from "react";
+import { getEpicRuntimeWorkerFactoryOverride } from "./epic-runtime-worker-factory-slot";
 import {
   DEFAULT_MAX_LIVE_EPICS,
   OpenEpicSessionRegistry,
   type RetainedHandleIdentity,
   type UnsyncedEditsEntry,
 } from "@/stores/epics/open-epic/session-registry";
+// RE-EXPORTED, not re-declared. The liveness cell moved to the module that owns
+// `acquireMounted`, because that seam is what has to consult it - and this
+// module imports THAT one, so a map declared here could not be read there
+// without a cycle. The provider's import path is unchanged.
+export {
+  isEpicSessionHandleDead,
+  trackEpicSessionHandleLiveness,
+} from "@/stores/epics/open-epic/session-registry";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import type {
-  EpicStreamClientFactory,
-  OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
+import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { releaseDesktopEpicOwnershipForEpic } from "@/lib/windows/desktop-epic-ownership";
@@ -161,20 +171,25 @@ registry.setReleaseListener((epicId) => {
 });
 
 /**
- * Test / production seam. Defaults to real `EpicStreamClient`; tests swap
- * via `__setEpicStreamClientFactoryForTests(...)` so the provider can be
- * mounted in jsdom without a live host.
+ * Test / production seam for the runtime WORKER - now the ONLY one.
+ *
+ * jsdom has no `Worker`, so every suite that mounts a session needs a
+ * constructor it can supply. This sat "beside the stream one above" until that
+ * one was deleted: a stream factory built on MAIN cannot cross `postMessage`
+ * to a runtime that lives in the worker, so overriding it could not do what its
+ * name promised, and the provider's own branch for it could only ever throw.
+ *
+ * A suite drives this session's stream by supplying a fake TRANSPORT at the
+ * opener instead, and its own composition - if it wants a live replica - with
+ * `createInProcessEpicRuntimeWorker` at this seam. Both reach the real host,
+ * the real core and the real composition on their own thread.
+ *
+ * `null` uses the production constructor, which is the only path that calls
+ * `new Worker(new URL(...))` - a form Vite must see literally, and which jsdom
+ * cannot execute.
  */
-let streamClientFactoryOverride: EpicStreamClientFactory | null = null;
-
-export function __setEpicStreamClientFactoryForTests(
-  factory: EpicStreamClientFactory | null,
-): void {
-  streamClientFactoryOverride = factory;
-}
-
-export function getEpicStreamClientFactoryOverride(): EpicStreamClientFactory | null {
-  return streamClientFactoryOverride;
+export function getEpicRuntimeWorkerFactory(): () => RuntimeWorkerLike {
+  return getEpicRuntimeWorkerFactoryOverride() ?? createEpicRuntimeWorker;
 }
 
 export function __getOpenEpicRegistryForTests(): OpenEpicSessionRegistry {

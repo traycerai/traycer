@@ -44,15 +44,26 @@ vi.mock("@/lib/host", () => ({
 }));
 
 // The epic session and the comm-graph fan-in both build durable transports.
-// The session's stream client is overridden by the test harness and the
-// comm-graph opener by `__setCommGraphSubscriptionOpenerForTests`, so this
-// stub must never actually be called.
-const openTransportStub = vi.hoisted(() => () => {
-  throw new Error("openTransport must not be called in this test");
+// This stub used to THROW on the reasoning that neither would reach it. Half of
+// that reasoning is gone: the session's stream-factory override was deleted, so
+// `EpicSessionProvider` now opens a transport unconditionally and the throw
+// failed every test here.
+//
+// The comm-graph half still holds, and by construction rather than by this
+// stub: `use-comm-graph-snapshot.ts` builds its opener as
+// `localOpenerOverride ?? createCommGraphSubscriptionOpener(openTransport)`, and
+// `??` short-circuits - with `__setCommGraphSubscriptionOpenerForTests`
+// installed the wrapped opener is never even constructed, let alone invoked.
+// What the throw added on top of that was redundancy, and it is what is lost
+// here; the primary guarantee is the override, which this file still installs.
+vi.mock("@/lib/host/use-durable-stream-transport", async () => {
+  const { fakeDurableStreamTransports } =
+    await import("@/lib/host/test-support/fake-durable-stream-transport");
+  return {
+    useDurableStreamTransportFactory: () =>
+      fakeDurableStreamTransports().opener,
+  };
 });
-vi.mock("@/lib/host/use-durable-stream-transport", () => ({
-  useDurableStreamTransportFactory: () => openTransportStub,
-}));
 
 vi.mock("@/providers/use-resolved-theme", () => ({
   useResolvedTheme: () => ({

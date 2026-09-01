@@ -31,6 +31,11 @@ interface ForkCreateRequest {
 const loadingSurfaceTestState = vi.hoisted(() => ({
   unresolvedWorkspaceRenderCount: 0,
 }));
+const workspaceSelectorTestState = vi.hoisted<{
+  inFlightWorktreeIntent: WorktreeIntent | null;
+}>(() => ({
+  inFlightWorktreeIntent: null,
+}));
 const forkCreateTestState = vi.hoisted(() => ({
   mutate: vi.fn<(input: ForkCreateRequest, options: object) => void>(),
   reset: vi.fn<() => void>(),
@@ -60,8 +65,13 @@ vi.mock(
   "@/components/home/host-workspace-selector/host-workspace-selector",
   () => ({
     HostWorkspaceSelector: (props: {
-      readonly surface: { readonly bindingResolved: boolean };
+      readonly surface: {
+        readonly bindingResolved: boolean;
+        readonly inFlightWorktreeIntent: WorktreeIntent | null;
+      };
     }) => {
+      workspaceSelectorTestState.inFlightWorktreeIntent =
+        props.surface.inFlightWorktreeIntent;
       if (!props.surface.bindingResolved) {
         loadingSurfaceTestState.unresolvedWorkspaceRenderCount += 1;
       }
@@ -344,6 +354,7 @@ import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unar
 import type {
   WorktreeBinding,
   WorktreeFolderIntent,
+  WorktreeIntent,
 } from "@traycer/protocol/host/worktree-schemas";
 import {
   readStagedWorktreeIntent,
@@ -1216,6 +1227,7 @@ describe("<ChatTile />", () => {
     useComposerRunSettingsStore.getState().resetForTests();
     useComposerHarnessMemoryStore.getState().resetForTests();
     loadingSurfaceTestState.unresolvedWorkspaceRenderCount = 0;
+    workspaceSelectorTestState.inFlightWorktreeIntent = null;
     forkCreateTestState.mutate.mockReset();
     forkCreateTestState.reset.mockReset();
     // The composer gates Send on a resolved (non-empty) model slug. Without a
@@ -1408,7 +1420,15 @@ describe("<ChatTile />", () => {
     if (handle === null) {
       throw new Error("expected live epic handle");
     }
-    const chats = handle.doc.getMap("epic").get("chats");
+    // A registry handle is a PRODUCTION one and has no `Y.Doc` - the replica
+    // is on the worker thread. The message count is not projected either
+    // (`ChatProjection` carries no `messages`), so the honest read is the
+    // root-state port: `encodeRootState` is the production member that hands
+    // the replica's bytes across, and decoding them here reconstructs exactly
+    // the map this assertion always walked.
+    const rootState = new Y.Doc();
+    Y.applyUpdate(rootState, await handle.encodeRootState());
+    const chats = rootState.getMap("epic").get("chats");
     if (!(chats instanceof Y.Map)) {
       throw new Error("expected chats map");
     }
@@ -1421,6 +1441,7 @@ describe("<ChatTile />", () => {
       throw new Error("expected messages array");
     }
     expect(messages.length).toBe(1);
+    rootState.destroy();
   });
 
   it("uses the composer send button as the running turn stop control", async () => {
@@ -1714,8 +1735,10 @@ describe("<ChatTile />", () => {
       throw new Error("expected live epic handle");
     }
 
-    act(() => {
-      handle.store.getState().renameArtifact(CHAT_ARTIFACT.id, "Latest title");
+    await act(async () => {
+      await handle.store
+        .getState()
+        .renameArtifact(CHAT_ARTIFACT.id, "Latest title");
       emitChatSnapshotWithMessages({
         callbacks: chatHarness.callbacks(),
         access: "owner",
@@ -3712,6 +3735,11 @@ describe("<ChatTile />", () => {
     expect(frame.worktreeIntent?.entries[0]).toMatchObject({
       kind: "import",
       worktreePath: "/wt/a",
+    });
+    await waitFor(() => {
+      expect(workspaceSelectorTestState.inFlightWorktreeIntent).toEqual(
+        frame.worktreeIntent,
+      );
     });
   });
 
