@@ -980,6 +980,15 @@ function handleBrowserSessionsSubsystemFrame(args: {
         browserView: args.browserView,
       });
       return;
+    // NOT YET APPLIED. The universal-sign-in contract arm (ticket 01) landed
+    // ahead of the desktop merge that validates and applies it - independent
+    // domain re-derivation, the frame bounds, the suppression window and the
+    // reject traces are ticket 03's scope, and applying an unvalidated
+    // host->jar write here would be exactly the injection the epic's security
+    // model bounds. Until then the observation is deliberately dropped, which
+    // is the pre-epic behaviour. Replace this arm in ticket 03.
+    case "primaryProfileObserved":
+      return;
     case "storeKeyWrapRequest":
     case "storeKeyUnwrapRequest":
       handleStoreKeyRequestFrame({

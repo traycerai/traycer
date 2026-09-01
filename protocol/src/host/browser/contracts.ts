@@ -238,6 +238,150 @@ export type BrowserPrimaryProfileDelta = z.infer<
   typeof browserPrimaryProfileDeltaSchema
 >;
 
+/*
+ * Wire bounds for the universal-sign-in carry-over path (decision 8). Both
+ * ends import these, so the producer clamps against exactly the number the
+ * receiver enforces.
+ *
+ * They are exported constants rather than `.max()` on the schemas below, and
+ * that is deliberate. A schema bound turns an over-bound frame into a silent
+ * parse failure inside the stream transport: the receiver never sees the
+ * frame, so it can neither WARN (keyed by `instance=`) nor emit the
+ * `over-bound` reject trace these paths are diagnosed by, and this epic's
+ * bugs were found by trace forensics. The receiver counts and rejects instead.
+ *
+ * The two frames overflow in OPPOSITE directions, so they get two policies and
+ * these must not be unified into one:
+ *
+ * - `primaryProfileObserved` over-bound: reject the WHOLE frame, apply none of
+ *   it. Dropping an observation costs a re-login; applying an attacker-chosen
+ *   prefix of one writes into the master jar. Failing closed is safe here.
+ * - `primaryProfileForgetLedger` over-bound: apply EVERYTHING the digest
+ *   carries, then WARN and trace the overflow. Never drop it. Rejecting a
+ *   forget digest leaves every login it names alive on the host - a silent
+ *   resurrection of exactly the sessions the user asked to be gone - so on
+ *   this frame a whole-frame reject is the fail-OPEN direction and is
+ *   forbidden.
+ */
+
+/**
+ * Cookies one `primaryProfileObserved` frame may carry for its single
+ * registrable domain. Chromium's own per-host cap is 180, so this leaves room
+ * for a domain whose subtree spans several hostnames while still bounding what
+ * one compromised host can write into the user's jar in a single frame - a
+ * real sign-in is tens of cookies, not hundreds.
+ */
+export const BROWSER_PRIMARY_PROFILE_OBSERVED_MAX_COOKIES = 512;
+
+/**
+ * Per-domain entries one `primaryProfileForgetLedger` digest may carry. The
+ * digest is a whole-ledger replacement rather than a delta, so the desktop
+ * trims to this bound by first dropping the entries `forgetAllAt` already
+ * covers (a domain forgotten before the last forget-all adds nothing to it)
+ * and then the oldest remaining timestamps.
+ *
+ * That trim order has a cost worth naming: the oldest entries are exactly the
+ * domains a long-disconnected host is most likely to still be holding, and a
+ * trimmed digest is indistinguishable from a complete one on the wire - the
+ * receiving host cannot tell that a forget it never heard about was dropped
+ * on the way. The bound is set far above any real ledger so this stays
+ * theoretical; if it ever starts biting, the fix is a bigger bound or a
+ * lower-water compaction on the desktop, not a smarter host.
+ */
+export const BROWSER_FORGET_LEDGER_MAX_DOMAINS = 1_024;
+
+/**
+ * One headless-observed sign-in for a single registrable domain
+ * (`registrable-domain.ts` derives it on both ends).
+ *
+ * Direction: host -> jar-authorized desktops. It is the first host->jar WRITE
+ * direction the contract has ever had, so the desktop treats it as UNTRUSTED
+ * input: it re-derives every cookie's registrable domain itself, drops the
+ * frame when any cookie disagrees with `domain`, bounds it by
+ * {@link BROWSER_PRIMARY_PROFILE_OBSERVED_MAX_COOKIES}, and applies what
+ * survives through Chromium's own `cookies.set` validation.
+ *
+ * COOKIES ONLY - no `origins`/localStorage, and none may be added later
+ * (universal-sign-in decision 1). localStorage has no per-key merge: the only
+ * way to apply it is clear-and-reseed a whole origin, which is a second
+ * implicit sign-out channel, and an unapplied `origins` array would just ship
+ * every SPA's bearer tokens across the wire for nothing. localStorage
+ * carry-over is future work, not a field this frame is missing.
+ *
+ * TRUST POSTURE - the absence of a removals field closes the EXPLICIT
+ * sign-out channel, and that is all it closes. Do not read it as "this frame
+ * cannot assert a logout": ONE IMPLICIT CHANNEL REMAINS. Chromium treats
+ * setting an already-expired cookie as a DELETE of the matching one, and
+ * `expires` here has no floor - the desktop's seed path passes any
+ * non-negative value straight through to `cookies.set` as `expirationDate`.
+ * So a cookie carrying `expires` at or before receive time is a removal
+ * wearing a write's clothing.
+ *
+ * EXPIRED-COOKIE REJECTION (ticket 03, reason `expired-cookie`): the applier
+ * MUST drop, per cookie, any cookie whose `expires >= 0 && expires <= now`
+ * (seconds since epoch, the field's own unit; a NEGATIVE `expires` is the
+ * session-cookie sentinel - the capture path writes `-1` - and is always
+ * allowed through). The comparison is against RECEIVE time, so a parse-time
+ * schema bound cannot decide it and this stays the applier's obligation. Drop
+ * the cookie, not the frame: the rest of the observation is still a
+ * legitimate sign-in.
+ *
+ * No contributor id: provenance is the sending host's identity on this
+ * authenticated stream, which the desktop already knows and which a frame
+ * field could only forge. No ordering field either, by design - there is no
+ * sequence number, watermark or issue timestamp to compare, so protection
+ * against a host replaying a stale contribution over a fresher jar is
+ * entirely the REPLAY ORDERING's obligation (ticket 02), never a check the
+ * applier can make from the frame's own contents.
+ */
+export const browserPrimaryProfileObservedSchema = z
+  .object({
+    domain: z.string(),
+    /** Every cookie the domain's subtree holds after the capture, not a delta. */
+    cookies: z.array(browserStorageCookieSchema),
+  })
+  .strict();
+export type BrowserPrimaryProfileObserved = z.infer<
+  typeof browserPrimaryProfileObservedSchema
+>;
+
+/** One site the user forgot, stamped by the forgetting desktop's own clock. */
+export const browserForgetLedgerDomainSchema = z
+  .object({
+    /** Registrable domain (eTLD+1) - never a cookie name, never a value. */
+    domain: z.string(),
+    forgottenAt: z.number(),
+  })
+  .strict();
+export type BrowserForgetLedgerDomain = z.infer<
+  typeof browserForgetLedgerDomainSchema
+>;
+
+/**
+ * The desktop's durable forget ledger, sent whole: a digest, never a delta, so
+ * a host that missed a push converges on the next one with no watermark.
+ *
+ * Every timestamp on it comes from ONE clock - the authoring desktop's - and is
+ * only ever compared against other entries of the same ledger. Hosts never
+ * compare these against their own clock or against another desktop's ledger,
+ * so no clock skew between machines can resurrect or bury a login.
+ *
+ * `forgetAllAt` is null until the user has forgotten everything at least once;
+ * it is the floor every domain is measured against, which is why a per-domain
+ * entry older than it carries no information. It is required and explicitly
+ * nullable rather than defaulted: the frame is new on an unreleased contract,
+ * so no peer can omit it, and a default would quietly absorb a producer bug
+ * into "nothing was ever forgotten" - the one wrong direction for this field.
+ * `domains` is bounded by {@link BROWSER_FORGET_LEDGER_MAX_DOMAINS}.
+ */
+export const browserForgetLedgerSchema = z
+  .object({
+    forgetAllAt: z.number().nullable(),
+    domains: z.array(browserForgetLedgerDomainSchema),
+  })
+  .strict();
+export type BrowserForgetLedger = z.infer<typeof browserForgetLedgerSchema>;
+
 const cdpRequestFrameFields = {
   ...requestFrameFields,
   tabId: z.string(),
@@ -468,12 +612,43 @@ export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
+      // A sign-in this host witnessed inside a headless session, offered to
+      // the desktops that hold the master jar (universal-sign-in decisions
+      // 1-5). Emitted from headless capture events only - never echoed back
+      // from a desktop's own `primaryProfileDelta`, which is what terminates
+      // the loop - and from primary-profile-backed sessions only, so ephemeral
+      // ones stay isolated. Replayed for the host's headless-contributed
+      // domains on every jar-authorized desktop attach, which is what lets the
+      // path carry no watermark and no ack: the merge is idempotent, so
+      // redundancy is free and a crash costs nothing. Sent to every
+      // jar-authorized desktop of the user. No `userId`: the identity is the
+      // stream's authenticated user.
+      kind: z.literal("primaryProfileObserved"),
+      ...textFrameFields,
+      ...browserPrimaryProfileObservedSchema.shape,
+    })
+    .strict(),
+  z
+    .object({
       // The user forgot every saved browser login (keychain refactor ticket
       // 08). The host has already crypto-shredded its slice for this user and
       // suspended their live `primary` sessions; each connected desktop clears
       // its own persistent partition on receipt. Sent to every subscriber of
       // the user, the originator included - it clears the same way the others
       // do. No `userId`: the identity is the stream's authenticated user.
+      //
+      // @deprecated RETIRED by universal-sign-in decision 6. The desktop's
+      // `primaryProfileForgetLedger` digest is the single forget mechanism
+      // now - hosts prune idempotently from it (store, session seeding, live
+      // headless contexts) instead of reacting to this one-shot fan-out, and
+      // two forget mechanisms must not coexist. The arm survives only because
+      // the host still emits it and the GUI still handles it. `browser.sessions`
+      // never shipped (see the registry note collapsing its in-repo @1.0-@1.4
+      // history into one fresh @1.0 baseline), so it is on no released
+      // baseline and no support floor: deleting the arm needs no minor bump,
+      // no compat exception and no downgrade bridge - only those two call
+      // sites, which the ledger tickets replace. Delete it with the last of
+      // them, and add no new consumers.
       kind: z.literal("primaryProfileForgotten"),
       ...textFrameFields,
     })
@@ -689,6 +864,22 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
       // `primaryProfileCaptured`).
       kind: z.literal("forgetLogins"),
       ...textFrameFields,
+    })
+    .strict(),
+  z
+    .object({
+      // The desktop's whole forget ledger (universal-sign-in decision 6),
+      // pushed on every forget action and once at attach BEFORE any observed
+      // replay - so a host can never re-offer, in the replay, a login the user
+      // forgot while that host was disconnected. Unsolicited and
+      // unacknowledged: the host prunes idempotently from it, which needs no
+      // answer and is safe to repeat. Supersedes the `primaryProfileForgotten`
+      // fan-out (see its arm on the server union). No `userId` - the identity
+      // is the stream's authenticated user, and only the elected lifecycle
+      // subscriber is heard (same gate as `primaryProfileDelta`).
+      kind: z.literal("primaryProfileForgetLedger"),
+      ...textFrameFields,
+      ...browserForgetLedgerSchema.shape,
     })
     .strict(),
 ]);

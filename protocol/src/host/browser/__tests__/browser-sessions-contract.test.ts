@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
+  BROWSER_FORGET_LEDGER_MAX_DOMAINS,
+  BROWSER_PRIMARY_PROFILE_OBSERVED_MAX_COOKIES,
   browserCookieKeySchema,
+  browserForgetLedgerDomainSchema,
   browserPrimaryProfileDeltaSchema,
+  browserPrimaryProfileObservedSchema,
   browserSavedLoginSitesRequestSchema,
   browserSavedLoginSitesResponseSchema,
   browserSavedLoginSitesV10,
@@ -831,5 +835,128 @@ describe("browser.savedLoginSites@1.0 (ticket 10)", () => {
         ],
       }).success,
     ).toBe(false);
+  });
+});
+
+describe("browser.sessions@1.0 universal sign-in carry-over (ticket 01)", () => {
+  const COOKIE = {
+    name: "sid",
+    value: "abc",
+    domain: "example.com",
+    path: "/",
+    expires: 1_700_000_000,
+    httpOnly: true,
+    secure: true,
+    sameSite: "Lax" as const,
+  };
+
+  const OBSERVED = {
+    kind: "primaryProfileObserved",
+    hasBinaryPayload: false,
+    domain: "example.com",
+    cookies: [COOKIE],
+  };
+
+  const LEDGER = {
+    kind: "primaryProfileForgetLedger",
+    hasBinaryPayload: false,
+    forgetAllAt: 1_700_000_000_000,
+    domains: [{ domain: "example.com", forgottenAt: 1_700_000_001_000 }],
+  };
+
+  it("parses an observed frame without stripping the payload it validated", () => {
+    // `browserSessionsV1.serverFrameSchema` is the same object reference as
+    // this union - `defineStreamRpcContract` stores the schema as given - so
+    // parsing through it proves nothing extra and is not asserted twice. What
+    // this does pin is the chat-subscribe projection-strip class of bug: the
+    // whole payload has to survive the parse, with `partitionKey` defaulted
+    // rather than dropped.
+    const parsed = browserSessionsServerFrameSchema.safeParse(OBSERVED);
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data).toEqual({
+      ...OBSERVED,
+      cookies: [{ ...COOKIE, partitionKey: null }],
+    });
+  });
+
+  it("cannot express a removal: the observed frame is strict and has no removals field", () => {
+    expect(
+      browserSessionsServerFrameSchema.safeParse({
+        ...OBSERVED,
+        removedKeys: [{ domain: "example.com", name: "sid", path: "/" }],
+      }).success,
+    ).toBe(false);
+    expect(
+      browserPrimaryProfileObservedSchema.safeParse({
+        domain: "example.com",
+        cookies: [],
+        removedKeys: [],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("carries cookies only: localStorage origins are not a field of this frame", () => {
+    expect(
+      browserSessionsServerFrameSchema.safeParse({
+        ...OBSERVED,
+        origins: [
+          {
+            origin: "https://example.com",
+            localStorage: [{ name: "token", value: "abc" }],
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      browserPrimaryProfileObservedSchema.safeParse({
+        domain: "example.com",
+        storageState: { cookies: [], origins: [] },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("parses a forget-ledger digest without stripping it", () => {
+    const parsed = browserSessionsClientFrameSchema.safeParse(LEDGER);
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data).toEqual(LEDGER);
+  });
+
+  it("takes a ledger that has never seen a forget-all, but requires the field", () => {
+    expect(
+      browserSessionsClientFrameSchema.safeParse({
+        ...LEDGER,
+        forgetAllAt: null,
+        domains: [],
+      }).success,
+    ).toBe(true);
+    expect(
+      browserSessionsClientFrameSchema.safeParse({
+        kind: "primaryProfileForgetLedger",
+        hasBinaryPayload: false,
+        domains: LEDGER.domains,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("is strict about ledger entries", () => {
+    expect(
+      browserSessionsClientFrameSchema.safeParse({
+        ...LEDGER,
+        domains: [{ domain: "example.com", forgottenAt: 1, cookies: ["sid"] }],
+      }).success,
+    ).toBe(false);
+    expect(
+      browserForgetLedgerDomainSchema.safeParse({
+        domain: "example.com",
+        forgottenAt: 1,
+      }).success,
+    ).toBe(true);
+  });
+
+  it("publishes bounds both ends validate against", () => {
+    expect(BROWSER_PRIMARY_PROFILE_OBSERVED_MAX_COOKIES).toBeGreaterThan(180);
+    expect(BROWSER_FORGET_LEDGER_MAX_DOMAINS).toBeGreaterThan(0);
   });
 });
