@@ -423,6 +423,11 @@ class RuntimeHostMessenger<
 
   reset(): void {
     this.closeRemoteTransport();
+    // `reset` is invoked only for `auth-changed` (runtime-change-scope.ts).
+    // Terminal verdicts belong to the credential context that observed them;
+    // carrying one across this boundary would block the fresh auth epoch even
+    // though the remote-session cache deliberately keys epochs separately.
+    this.terminalVerdictByHost.clear();
   }
 
   private remoteMessengerFor(

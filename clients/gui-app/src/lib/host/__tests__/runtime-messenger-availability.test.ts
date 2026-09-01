@@ -648,6 +648,20 @@ describe("RuntimeHostMessenger availability forwarding", () => {
     h.dispose();
   });
 
+  it("auth reset clears a terminal verdict before the next credential context requests", () => {
+    const h = harness();
+    h.requestRemote();
+    h.session.fatal = incompatibleFatal();
+    h.session.emitClosed();
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(1);
+
+    h.reset();
+    h.requestRemote();
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(2);
+
+    h.dispose();
+  });
+
   it("rejects with the recorded verdict instead of redialing while it is fresh, then redials after the TTL", async () => {
     vi.useFakeTimers();
     try {
