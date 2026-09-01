@@ -31,6 +31,11 @@ interface ForkCreateRequest {
 const loadingSurfaceTestState = vi.hoisted(() => ({
   unresolvedWorkspaceRenderCount: 0,
 }));
+const workspaceSelectorTestState = vi.hoisted<{
+  inFlightWorktreeIntent: WorktreeIntent | null;
+}>(() => ({
+  inFlightWorktreeIntent: null,
+}));
 const forkCreateTestState = vi.hoisted(() => ({
   mutate: vi.fn<(input: ForkCreateRequest, options: object) => void>(),
   reset: vi.fn<() => void>(),
@@ -59,8 +64,13 @@ vi.mock(
   "@/components/home/host-workspace-selector/host-workspace-selector",
   () => ({
     HostWorkspaceSelector: (props: {
-      readonly surface: { readonly bindingResolved: boolean };
+      readonly surface: {
+        readonly bindingResolved: boolean;
+        readonly inFlightWorktreeIntent: WorktreeIntent | null;
+      };
     }) => {
+      workspaceSelectorTestState.inFlightWorktreeIntent =
+        props.surface.inFlightWorktreeIntent;
       if (!props.surface.bindingResolved) {
         loadingSurfaceTestState.unresolvedWorkspaceRenderCount += 1;
       }
@@ -129,7 +139,13 @@ vi.mock("@/providers/use-resolved-theme", () => ({
 // catalog would stay loading forever and every `$` prompt would (correctly) be
 // left as prose. Serve one skill so the gated conversion has something to
 // resolve; unknown names still fall through to the ungated `/` fallback.
-vi.mock("@/hooks/composer/use-slash-commands", () => ({
+vi.mock("@/hooks/composer/use-slash-commands", async (importOriginal) => ({
+  // Spread the real module rather than listing exports: the tile also imports
+  // `NO_LOCAL_SLASH_COMMANDS` from here, and a hand-listed factory silently
+  // breaks every test in this file the next time an export is added.
+  ...(await importOriginal<
+    typeof import("@/hooks/composer/use-slash-commands")
+  >()),
   useSlashCommands: () => ({
     data: [
       {
@@ -337,6 +353,7 @@ import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unar
 import type {
   WorktreeBinding,
   WorktreeFolderIntent,
+  WorktreeIntent,
 } from "@traycer/protocol/host/worktree-schemas";
 import {
   readStagedWorktreeIntent,
@@ -440,6 +457,18 @@ interface ChatHarness {
     queueItems: ReadonlyArray<ChatQueuedItem>,
     settings: ChatRunSettings | null,
   ): void;
+  /**
+   * `installWithSettings` plus the chat's own event log. The composer seeds
+   * itself off the FIRST snapshot, so a fact carried by an event - import
+   * provenance is the one that matters here - has to be in that snapshot;
+   * re-emitting it later tests a chat that was already seeded without it.
+   */
+  installWithEvents(
+    access: "owner" | "viewer",
+    queueItems: ReadonlyArray<ChatQueuedItem>,
+    settings: ChatRunSettings | null,
+    events: ReadonlyArray<ChatEvent>,
+  ): void;
   installDeferred(): void;
   streamCreations(): number;
   callbacks(): ChatStreamCallbacks;
@@ -482,6 +511,7 @@ function createChatHarness(): ChatHarness {
       readonly access: "owner" | "viewer";
       readonly queueItems: ReadonlyArray<ChatQueuedItem>;
       readonly settings: ChatRunSettings | null;
+      readonly events: ReadonlyArray<ChatEvent>;
     } | null,
   ): void => {
     __setChatStreamClientFactoryForTests((_epicId, _chatId, nextCallbacks) => {
@@ -490,12 +520,15 @@ function createChatHarness(): ChatHarness {
       if (snapshot !== null) {
         setTimeout(() => {
           nextCallbacks.onConnectionStatus("open", null);
-          emitChatSnapshot(
-            nextCallbacks,
-            snapshot.access,
-            snapshot.queueItems,
-            snapshot.settings,
-          );
+          emitChatSnapshotWithMessages({
+            callbacks: nextCallbacks,
+            access: snapshot.access,
+            queueItems: snapshot.queueItems,
+            settings: snapshot.settings,
+            events: snapshot.events,
+            messages: [hostUserMessage()],
+            activeTurn: null,
+          });
         }, 0);
       }
       const client: ChatStreamClientHandle = {
@@ -510,16 +543,25 @@ function createChatHarness(): ChatHarness {
       return client;
     });
   };
-  const installWithSettings = (
+  const installWithEvents = (
     access: "owner" | "viewer",
     queueItems: ReadonlyArray<ChatQueuedItem>,
     settings: ChatRunSettings | null,
+    events: ReadonlyArray<ChatEvent>,
   ): void => {
     installStream({
       access,
       queueItems,
       settings,
+      events,
     });
+  };
+  const installWithSettings = (
+    access: "owner" | "viewer",
+    queueItems: ReadonlyArray<ChatQueuedItem>,
+    settings: ChatRunSettings | null,
+  ): void => {
+    installWithEvents(access, queueItems, settings, []);
   };
   return {
     sent,
@@ -527,6 +569,7 @@ function createChatHarness(): ChatHarness {
       installWithSettings(access, queueItems, null);
     },
     installWithSettings,
+    installWithEvents,
     installDeferred: () => installStream(null),
     streamCreations: () => streamCreations,
     callbacks: () => {
@@ -667,6 +710,40 @@ function hostUserMessage(): Message {
   };
 }
 
+// Neither this suite's remembered pair (Claude) nor its default provider
+// (Codex), so a settings tuple that names it can only have come from the
+// import provenance.
+const IMPORTED_SOURCE_PROVIDER = "opencode";
+
+/**
+ * The provenance session import writes as an imported chat's first event. It is
+ * the only record of which provider the transcript came from - such a chat's own
+ * `ChatRunSettings` stays null whenever the source listed no model at import
+ * time, which is exactly when the composer has to fall back to something.
+ */
+function chatImportedEvent(): ChatEvent {
+  return {
+    eventId: "event-imported",
+    type: "chat.imported",
+    timestamp: 1,
+    clientActionId: null,
+    actor: null,
+    message: null,
+    turnId: null,
+    messageId: null,
+    queueItemId: null,
+    approvalId: null,
+    blockId: null,
+    severity: "info",
+    metadata: {
+      sourceProvider: IMPORTED_SOURCE_PROVIDER,
+      nativeSessionId: "native-session-1",
+      importedAt: 1,
+      sourceCwd: "/Users/test/project",
+    },
+  };
+}
+
 const DELIVERED_A2A_MESSAGE_ID = "message-delivered-a2a";
 
 /**
@@ -715,6 +792,7 @@ function nextStepsAssistantMessage(): Message {
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
+    envCredentialVar: null,
     imageResolutions: [],
   };
 }
@@ -770,6 +848,7 @@ function planAssistantMessage(): Message {
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
+    envCredentialVar: null,
     imageResolutions: [],
   };
 }
@@ -810,6 +889,7 @@ function skillNextStepsAssistantMessage(): Message {
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
+    envCredentialVar: null,
     imageResolutions: [],
   };
 }
@@ -864,6 +944,7 @@ function streamingInterviewAssistantMessage(): Message {
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
+    envCredentialVar: null,
     imageResolutions: [],
   };
 }
@@ -1145,6 +1226,7 @@ describe("<ChatTile />", () => {
     useComposerRunSettingsStore.getState().resetForTests();
     useComposerHarnessMemoryStore.getState().resetForTests();
     loadingSurfaceTestState.unresolvedWorkspaceRenderCount = 0;
+    workspaceSelectorTestState.inFlightWorktreeIntent = null;
     forkCreateTestState.mutate.mockReset();
     forkCreateTestState.reset.mockReset();
     // The composer gates Send on a resolved (non-empty) model slug. Without a
@@ -1337,7 +1419,15 @@ describe("<ChatTile />", () => {
     if (handle === null) {
       throw new Error("expected live epic handle");
     }
-    const chats = handle.doc.getMap("epic").get("chats");
+    // A registry handle is a PRODUCTION one and has no `Y.Doc` - the replica
+    // is on the worker thread. The message count is not projected either
+    // (`ChatProjection` carries no `messages`), so the honest read is the
+    // root-state port: `encodeRootState` is the production member that hands
+    // the replica's bytes across, and decoding them here reconstructs exactly
+    // the map this assertion always walked.
+    const rootState = new Y.Doc();
+    Y.applyUpdate(rootState, await handle.encodeRootState());
+    const chats = rootState.getMap("epic").get("chats");
     if (!(chats instanceof Y.Map)) {
       throw new Error("expected chats map");
     }
@@ -1350,6 +1440,7 @@ describe("<ChatTile />", () => {
       throw new Error("expected messages array");
     }
     expect(messages.length).toBe(1);
+    rootState.destroy();
   });
 
   it("uses the composer send button as the running turn stop control", async () => {
@@ -1518,6 +1609,39 @@ describe("<ChatTile />", () => {
     expect(frame.settings).toEqual(SESSION_SETTINGS);
   });
 
+  it("keeps an imported chat on its source provider over a resolved remembered pair", async () => {
+    // The remembered pair is a RESOLVED Claude tuple, which is what made this a
+    // defect rather than a seeding gap: the tile committed it as the chat's
+    // live settings on mount, and from the next render on that commit outranked
+    // the imported fallback the composer had already been handed.
+    useComposerRunSettingsStore.setState({
+      globalLastRunSettingsByHostId: { [HOST_ID]: SESSION_SETTINGS },
+    });
+    chatHarness.teardown();
+    chatHarness.installWithEvents("owner", [], null, [chatImportedEvent()]);
+
+    renderChatTile();
+
+    await waitForChatTileLoaded();
+
+    // An inline edit runs on the tile's OWN settings chain rather than the
+    // composer's picker store, so the frame it sends reads that chain directly.
+    fireEvent.click(getButtonByAriaLabel("Edit message"));
+    fireEvent.click(getButtonByAriaLabel("Send edit"));
+
+    const frame = chatHarness.sent[0];
+    if (frame.kind !== "editUserMessage") {
+      throw new Error("expected editUserMessage frame");
+    }
+    expect(frame.settings).toEqual({
+      ...SESSION_SETTINGS,
+      harnessId: IMPORTED_SOURCE_PROVIDER,
+      // Empty on purpose: the seed hands the model back to the source
+      // provider's own catalog rather than carrying Claude's slug across.
+      model: "",
+    });
+  });
+
   it("keeps permission editable during an active turn", async () => {
     renderChatTile();
 
@@ -1610,8 +1734,10 @@ describe("<ChatTile />", () => {
       throw new Error("expected live epic handle");
     }
 
-    act(() => {
-      handle.store.getState().renameArtifact(CHAT_ARTIFACT.id, "Latest title");
+    await act(async () => {
+      await handle.store
+        .getState()
+        .renameArtifact(CHAT_ARTIFACT.id, "Latest title");
       emitChatSnapshotWithMessages({
         callbacks: chatHarness.callbacks(),
         access: "owner",
@@ -3608,6 +3734,11 @@ describe("<ChatTile />", () => {
     expect(frame.worktreeIntent?.entries[0]).toMatchObject({
       kind: "import",
       worktreePath: "/wt/a",
+    });
+    await waitFor(() => {
+      expect(workspaceSelectorTestState.inFlightWorktreeIntent).toEqual(
+        frame.worktreeIntent,
+      );
     });
   });
 

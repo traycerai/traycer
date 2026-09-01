@@ -3,13 +3,31 @@ import type { WorktreeBusyHolder } from "@traycer/protocol/framework/worktree-bu
 import type { EpicSweepWorktreeRow } from "@/hooks/epic/use-epic-sweep-worktree-candidates-query";
 import { formatUnknownHolderConsequence } from "@/lib/worktree/teardown-holder-copy";
 
+/**
+ * How a row is NAMED to a person - the branch when there is one, else the
+ * path. A display label only: two worktrees on the same branch share it, so
+ * it must never stand in for the row's identity. Selection, reconciliation
+ * and session outcomes all key on `entry.worktreePath`.
+ */
 export function worktreeIdentity(row: EpicSweepWorktreeRow): string {
   return row.entry.branch ?? row.entry.worktreePath;
 }
 
+function worktreeNoun(count: number): string {
+  return `${String(count)} worktree${count === 1 ? "" : "s"}`;
+}
+
+/**
+ * The Choose step's primary action. It always cues removal - never "review"
+ * or "preview" - because review is an automatic safety step on the way, not
+ * the person's goal.
+ */
+export function removeButtonLabel(count: number): string {
+  return `Remove ${worktreeNoun(count)}`;
+}
+
 export function isBulkScopeRow(row: EpicSweepWorktreeRow): boolean {
-  if (row.disabled) return false;
-  return row.note !== "in-use";
+  return !row.disabled;
 }
 
 export function isElevatedRow(row: EpicSweepWorktreeRow): boolean {
@@ -43,18 +61,15 @@ export function selectionHasShared(
   return rows.some((row) => row.note === "shared");
 }
 
+/**
+ * The consequences step's final action. The categories (stopping work,
+ * unproven landings, broken bindings) are explained in the body above it; the
+ * button states the outcome.
+ */
 export function finalSweepButtonLabel(
   rows: ReadonlyArray<EpicSweepWorktreeRow>,
 ): string {
-  const inUse = selectionHasInUse(rows);
-  const unproven = selectionHasUnproven(rows);
-  const shared = selectionHasShared(rows);
-  const categories = [inUse, unproven, shared].filter(Boolean).length;
-  if (categories > 1) return "Confirm sweep";
-  if (inUse) return "Stop work & sweep";
-  if (unproven) return "Sweep anyway";
-  if (shared) return "Break bindings & sweep";
-  return "Sweep selected";
+  return `Confirm and remove ${worktreeNoun(rows.length)}`;
 }
 
 export function externalOwnerCount(
@@ -104,12 +119,8 @@ export function unprovenRowHint(row: EpicSweepWorktreeRow): string {
 export function selectAllCountCopy(input: {
   readonly selected: number;
   readonly total: number;
-  readonly inUse: number;
 }): string {
-  const base = `${String(input.selected)} of ${String(input.total)} selected`;
-  if (input.inUse === 0) return base;
-  const unit = input.inUse === 1 ? "worktree" : "worktrees";
-  return `${base} · ${String(input.inUse)} in-use ${unit} require individual selection`;
+  return `${String(input.selected)} of ${String(input.total)} selected`;
 }
 
 export function safeSummaryCopy(

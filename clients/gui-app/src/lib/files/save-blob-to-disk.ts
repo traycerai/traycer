@@ -1,3 +1,8 @@
+import type {
+  IFileSaveHost,
+  SavedFileLocation,
+} from "@traycer-clients/shared/platform/runner-host";
+
 interface FsaFileHandle {
   readonly name: string;
   createWritable: () => Promise<FsaWritable>;
@@ -24,88 +29,24 @@ declare global {
 }
 
 /**
- * A file `saveBlobToDisk` wrote. `name` is what the user settled on in the
- * picker (display copy); `path` is the absolute location, known only where
- * the runtime reports it back - Traycer Desktop's native dialog does, the
- * browser File System Access picker and `<a download>` never do, so `path`
- * is `null` there and no "open it" affordance is possible.
+ * A file `saveBlobToDisk` wrote. `name` is what the user settled on (display
+ * copy); `path` is the absolute location, known only where the runtime reports
+ * it back - Traycer Desktop's native dialog does, while the browser File
+ * System Access picker, `<a download>` and the phone's share sheet never do,
+ * so `path` is `null` there and no "open it" affordance is possible.
  */
-export interface SavedFile {
-  readonly name: string;
-  readonly path: string | null;
-}
-
-interface DesktopSaveFileInput {
-  readonly name: string;
-  readonly type: string;
-  readonly bytes: ArrayBuffer;
-}
-
-type DesktopSaveFile = (input: DesktopSaveFileInput) => Promise<unknown>;
-type DesktopOpenSavedFile = (path: string) => Promise<void>;
-
-interface DesktopFileBridge {
-  readonly saveFile: DesktopSaveFile;
-  readonly openSavedFile: DesktopOpenSavedFile | null;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function isDesktopSaveFile(value: unknown): value is DesktopSaveFile {
-  return typeof value === "function";
-}
-
-function isDesktopOpenSavedFile(value: unknown): value is DesktopOpenSavedFile {
-  return typeof value === "function";
-}
+export type SavedFile = SavedFileLocation;
 
 /**
- * Traycer Desktop exposes a native save bridge under
- * `runnerHost.fileDrops.saveFile`. The sandboxed Electron renderer cannot use
- * the File System Access API's `createWritable()` (it throws `NotAllowedError`),
- * so the bytes are handed to the main process, which writes them after a native
- * save dialog. `openSavedFile` sits beside it and re-opens a path `saveFile`
- * returned. Returns `null` in any non-desktop runtime (browser, dev shell).
+ * Whether {@link openSavedFile} can act. Both halves are required: the shell
+ * has to own a re-open route AND the save has to have reported a path, which
+ * is the same pair of facts `IFileSaveHost` keeps together.
  */
-function getDesktopFileBridge(): DesktopFileBridge | null {
-  const runnerHost = (globalThis as { runnerHost?: unknown }).runnerHost;
-  if (!isRecord(runnerHost)) return null;
-  const fileDrops = runnerHost.fileDrops;
-  if (!isRecord(fileDrops)) return null;
-  const saveFile = fileDrops.saveFile;
-  if (!isDesktopSaveFile(saveFile)) return null;
-  const openSavedFile = fileDrops.openSavedFile;
-  return {
-    saveFile,
-    openSavedFile: isDesktopOpenSavedFile(openSavedFile) ? openSavedFile : null,
-  };
-}
-
-/**
- * The desktop bridge answers `{ name, path }` once the bytes are written and
- * `null` when the user cancels the dialog. The bridge is duck-typed from a
- * global, so its answer is validated rather than trusted.
- */
-function parseDesktopSaveResult(value: unknown): SavedFile | null {
-  if (value === null) return null;
-  if (
-    isRecord(value) &&
-    typeof value.name === "string" &&
-    typeof value.path === "string"
-  ) {
-    return { name: value.name, path: value.path };
-  }
-  throw new Error("Desktop save bridge returned an unexpected result");
-}
-
-/**
- * Whether {@link openSavedFile} can act in this runtime. Only Traycer Desktop
- * can re-open a saved file - it is the one runtime that learns the path.
- */
-export function canOpenSavedFile(saved: SavedFile): boolean {
-  const open = getDesktopFileBridge()?.openSavedFile ?? null;
+export function canOpenSavedFile(
+  saved: SavedFile,
+  fileSave: IFileSaveHost | null,
+): boolean {
+  const open = fileSave?.openSavedFile ?? null;
   return saved.path !== null && open !== null;
 }
 
@@ -114,12 +55,77 @@ export function canOpenSavedFile(saved: SavedFile): boolean {
  * Rejects when the runtime cannot open files or the OS refuses (file moved,
  * no handler app) so the caller can toast the failure.
  */
-export async function openSavedFile(saved: SavedFile): Promise<void> {
-  const open = getDesktopFileBridge()?.openSavedFile ?? null;
+export async function openSavedFile(
+  saved: SavedFile,
+  fileSave: IFileSaveHost | null,
+): Promise<void> {
+  const open = fileSave?.openSavedFile ?? null;
   if (saved.path === null || open === null) {
     throw new Error(`Cannot open ${saved.name} from this app`);
   }
   await open(saved.path);
+}
+
+/**
+ * Whether this shell keeps "share it" and "download it" apart, i.e. whether
+ * {@link saveBlobToDisk} would reach an OS chooser rather than commit the file
+ * itself. Read off the capability rather than off any notion of which shell is
+ * running: a shell owns a chooser-free download precisely when its `saveFile`
+ * is not one already.
+ */
+export function hasSeparateDownloadRoute(
+  fileSave: IFileSaveHost | null,
+): boolean {
+  return fileSave?.saveRoute === "share";
+}
+
+/**
+ * Whether a "Download" control can be honoured at all.
+ *
+ * True with no shell (the browser downloads), true where the shell owns a
+ * chooser-free write, and true where its own `saveFile` IS the download. FALSE
+ * only where the shell hands everything to a chooser and has no direct write -
+ * Android 10, whose shared-storage route does not exist. Offering Download
+ * there would route it into the share sheet, which is the very mislabelling
+ * the split was built to remove.
+ */
+export function canDownloadToDevice(fileSave: IFileSaveHost | null): boolean {
+  if (fileSave === null) return true;
+  return fileSave.downloadFile !== null || fileSave.saveRoute === "download";
+}
+
+/**
+ * Persist a Blob the way a "Download" control promises: straight into the
+ * device's storage, with no chooser in between, on the shells that own such a
+ * route. Everywhere else this IS {@link saveBlobToDisk} - a desktop save dialog
+ * and a browser's download both already commit the file - so callers get the
+ * one honest download route for their runtime without asking which runtime it
+ * is.
+ *
+ * `null` only ever comes from the delegated path (a dismissed picker); a direct
+ * write has nothing to dismiss and either lands or throws.
+ */
+export async function downloadBlobToDevice(
+  blob: Blob,
+  suggestedName: string,
+  fileSave: IFileSaveHost | null,
+): Promise<SavedFile | null> {
+  const download = fileSave?.downloadFile ?? null;
+  if (download === null) {
+    // Never silently fall through to a chooser: on a shell whose `saveFile` is
+    // a share sheet and which owns no direct write, delegating here is exactly
+    // how a "Download" ends up opening the sheet. Callers gate on
+    // `canDownloadToDevice`, so reaching this is a bug worth surfacing.
+    if (!canDownloadToDevice(fileSave)) {
+      throw new Error("This device has no download destination.");
+    }
+    return saveBlobToDisk(blob, suggestedName, fileSave);
+  }
+  return download({
+    name: suggestedName,
+    type: blob.type,
+    bytes: await blob.arrayBuffer(),
+  });
 }
 
 /**
@@ -138,29 +144,35 @@ function buildSaveFilePickerTypes(
 }
 
 /**
- * Persist a Blob to disk, picking the best mechanism for the current runtime:
- *   1. Traycer Desktop → native save dialog via the `runnerHost` IPC bridge.
+ * Persist a Blob, picking the best mechanism for the current runtime:
+ *   1. A shell with a native save capability (`IRunnerHost.fileSave`) →
+ *      Traycer Desktop's save dialog, the phone's share sheet.
  *   2. Browsers with the File System Access API → `showSaveFilePicker`.
  *   3. Everything else (and recoverable FSA write failures) → `<a download>`.
- * Returns the saved file (name always; path on desktop only), or `null` when
- * the user cancels the picker.
+ * Returns the saved file (name always; path where the mechanism reports one),
+ * or `null` when the user dismissed the picker.
+ *
+ * The native leg is FIRST and unconditional, not a fallback for a failed
+ * browser attempt: a shell that has one has it precisely because the browser
+ * routes do not work there. Electron's sandboxed renderer cannot use
+ * `createWritable()`, and a WKWebView has no picker and ignores `<a download>`
+ * outright - which is why an export on a phone used to resolve successfully
+ * having done nothing at all.
  *
  * Shared across the app — not Mermaid-specific — so any feature that needs a
- * "save this blob" affordance gets the desktop-sandbox-safe path for free.
+ * "save this blob" affordance gets the shell-appropriate path for free.
  */
 export async function saveBlobToDisk(
   blob: Blob,
   suggestedName: string,
+  fileSave: IFileSaveHost | null,
 ): Promise<SavedFile | null> {
-  const desktop = getDesktopFileBridge();
-  if (desktop !== null) {
-    return parseDesktopSaveResult(
-      await desktop.saveFile({
-        name: suggestedName,
-        type: blob.type,
-        bytes: await blob.arrayBuffer(),
-      }),
-    );
+  if (fileSave !== null) {
+    return fileSave.saveFile({
+      name: suggestedName,
+      type: blob.type,
+      bytes: await blob.arrayBuffer(),
+    });
   }
 
   if (typeof window.showSaveFilePicker === "function") {
@@ -180,7 +192,7 @@ export async function saveBlobToDisk(
       }
       // A non-cancel failure (locked file, transient I/O) must not lose the
       // file: fall through to the <a download> path so the browser still saves
-      // it. Desktop never reaches here — getDesktopFileBridge() handled it above.
+      // it. A shell with `fileSave` never reaches here — it returned above.
     }
   }
 

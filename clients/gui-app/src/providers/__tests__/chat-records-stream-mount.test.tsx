@@ -14,8 +14,11 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
-import type { ChatRecordSummary } from "@traycer/protocol/host/epic/chat-records";
-import type { TuiAgentRecordSummary } from "@traycer/protocol/host/epic/tui-agent-records";
+import type {
+  ChatRecordSummary,
+  ChatRecordSummaryV11,
+} from "@traycer/protocol/host/epic/chat-records";
+import type { TuiAgentRecordSummaryV12 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type { ChatRecordsStreamDelta } from "@traycer-clients/shared/host-transport/chat-records-stream-client";
 import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import type {
@@ -27,11 +30,9 @@ import {
   resetHostConnectionRegistryForTest,
 } from "@traycer-clients/shared/host-client/host-connection-registry";
 import { HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
-import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-  type OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
+import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
+import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import {
   getOpenEpicRegistry,
   handleHostIds,
@@ -130,9 +131,20 @@ function record(overrides: Partial<ChatRecordSummary>): ChatRecordSummary {
   };
 }
 
+/**
+ * The `epic.listChatRecords@1.1` poll's row - what `applyChatRecords` (as
+ * opposed to a stream delta, which carries the BASE `record()` shape above)
+ * takes. `docResident: false` by default: a registry answer.
+ */
+function pollRecord(
+  overrides: Partial<ChatRecordSummaryV11>,
+): ChatRecordSummaryV11 {
+  return { ...record(overrides), docResident: false, ...overrides };
+}
+
 function tuiRecord(
-  overrides: Partial<TuiAgentRecordSummary>,
-): TuiAgentRecordSummary {
+  overrides: Partial<Extract<TuiAgentRecordSummaryV12, { origin: "registry" }>>,
+): Extract<TuiAgentRecordSummaryV12, { origin: "registry" }> {
   return {
     tuiAgentId: "tui-1",
     ownerUserId: "user-a",
@@ -156,6 +168,10 @@ function tuiRecord(
     terminalShellCommand: null,
     terminalShellArgs: null,
     revision: 1,
+    // This suite tests the mount's host-stamp routing gate, not doc
+    // residency - an ordinary registry row exercises it.
+    docResident: false,
+    origin: "registry",
     ...overrides,
   };
 }
@@ -175,13 +191,25 @@ const noopStreamFactory: EpicStreamClientFactory = () => ({
  * `epic-session-provider.tsx` does for every handle it creates. A helper that
  * defaulted it would hide the one input the routing gate reads.
  */
+// Returns what the REGISTRY returns, which narrows to the production handle
+// type whatever it was handed. Nothing here reads the harness's extra members.
 function openEpic(epicId: string, hostId: string | null): OpenEpicStoreHandle {
   const handle = getOpenEpicRegistry().acquire(epicId, (id) =>
-    createOpenEpicStore({
+    openStoreForTest({
       epicId: id,
-      streamClientFactory: noopStreamFactory,
       userId: null,
-      onAuthError: null,
+      // The factories go to the COMPOSITION now, not the store:
+      // `createOpenEpicStore` stopped constructing a runtime, so a
+      // suite that used to hand it a `streamClientFactory` has nothing
+      // to hand it. `handle.doc` still resolves because this harness
+      // builds the runtime in THIS thread.
+      factories: {
+        streamClientFactory: noopStreamFactory,
+        laneSelection: null,
+      },
+      // Explicit: `null` means this suite never writes, so a write in
+      // one that said so fails rather than resolving quietly.
+      writeCommand: null,
     }),
   );
   handleHostIds.set(handle, hostId);
@@ -260,7 +288,7 @@ describe("<ChatRecordsStreamMount />", () => {
     const handle = openEpic("epic-1", "host-A");
     handle.store
       .getState()
-      .applyChatRecords([record({ chatId: "gone" })], null);
+      .applyChatRecords([pollRecord({ chatId: "gone" })], null);
     render(<ChatRecordsStreamMount />);
 
     emit({
@@ -358,7 +386,7 @@ describe("<ChatRecordsStreamMount />", () => {
     const handle = openEpic("epic-1", "host-A");
     handle.store
       .getState()
-      .applyChatRecords([record({ chatId: "polled" })], null);
+      .applyChatRecords([pollRecord({ chatId: "polled" })], null);
 
     render(<ChatRecordsStreamMount />);
 
@@ -368,7 +396,10 @@ describe("<ChatRecordsStreamMount />", () => {
     handle.store
       .getState()
       .applyChatRecords(
-        [record({ chatId: "polled" }), record({ chatId: "polled-again" })],
+        [
+          pollRecord({ chatId: "polled" }),
+          pollRecord({ chatId: "polled-again" }),
+        ],
         null,
       );
     expect(handle.store.getState().chats.allIds.slice().sort()).toEqual([

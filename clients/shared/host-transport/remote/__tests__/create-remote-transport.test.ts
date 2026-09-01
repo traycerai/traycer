@@ -46,6 +46,7 @@ function transportFor(bearerSource: OpenFrameBearerSource | null) {
     // two are deliberately different mechanisms.
     cloudAuthorized: () => true,
     auth: null,
+    clock: null,
     rpcRegistry: emptyRpcRegistry,
     streamRegistry: emptyStreamRegistry,
     webSocketFactory: {
@@ -206,6 +207,7 @@ describe("createRemoteHostTransport cloudAuthorized gate (Option D — mint-only
         bearer: () => bearerSource,
         cloudAuthorized,
         auth: null,
+        clock: null,
         rpcRegistry: emptyRpcRegistry,
         streamRegistry: emptyStreamRegistry,
         webSocketFactory,
@@ -317,6 +319,7 @@ describe("createRemoteHostTransport cloudAuthorized gate (Option D — mint-only
         bearer: () => bearerSource,
         cloudAuthorized,
         auth: null,
+        clock: null,
         rpcRegistry: emptyRpcRegistry,
         streamRegistry: emptyStreamRegistry,
         webSocketFactory,

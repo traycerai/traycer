@@ -169,6 +169,7 @@ const testState = vi.hoisted(() => ({
   completeness: null as ListTasksCompleteness | null,
   bridge: null as DesktopWindowsBridge | null,
   worktreeCandidates: [] as WorktreeCleanupCandidateStub[],
+  worktreeCandidatesFetching: false,
   worktreesByEpicId: new Map<string, readonly WorktreeHostEntryV12[]>(),
   mutate:
     vi.fn<
@@ -218,6 +219,7 @@ vi.mock("@/hooks/epic/use-task-delete-worktree-candidates-query", () => ({
   useTaskDeleteWorktreeCandidates: () => ({
     candidates: testState.worktreeCandidates,
     isError: false,
+    isFetching: testState.worktreeCandidatesFetching,
   }),
 }));
 
@@ -374,6 +376,7 @@ describe("<EpicsListPanel />", () => {
     testState.completeness = null;
     testState.bridge = null;
     testState.worktreeCandidates = [];
+    testState.worktreeCandidatesFetching = false;
     testState.worktreesByEpicId = new Map();
     setDesktopEpicOwnershipBridge(null);
     testState.mutate.mockReset();
@@ -860,6 +863,9 @@ describe("<EpicsListPanel />", () => {
 
   it("keeps a disabled Sweep action on a task with no worktrees", async () => {
     testState.worktreesByEpicId = new Map();
+    // Provenance that names only THIS host adds nothing: the listing above is
+    // this host's, and it is empty.
+    testState.items = [historyItem({ chatHostIds: ["host-test"] })];
     renderPanel("embedded", "/");
 
     const disabled = await screen.findByRole("button", {
@@ -869,6 +875,37 @@ describe("<EpicsListPanel />", () => {
     expect(
       screen.queryByRole("button", { name: /^sweep worktrees for /i }),
     ).toBeNull();
+  });
+
+  it("keeps the row Sweep action live when the task's chats ran on another host", async () => {
+    // `worktreesByEpicId` is THIS host's listing, so it is silent about a Task
+    // whose agents ran elsewhere. Gating on it alone made the host picker
+    // unreachable for exactly the multi-host Tasks it exists for.
+    testState.worktreesByEpicId = new Map();
+    testState.items = [historyItem({ chatHostIds: ["host-elsewhere"] })];
+    renderPanel("embedded", "/");
+
+    const sweep = await screen.findByRole("button", {
+      name: /^sweep worktrees for /i,
+    });
+    expect(sweep.getAttribute("aria-disabled")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /^no worktrees to sweep for /i }),
+    ).toBeNull();
+  });
+
+  it("keeps the row Sweep action faded when the row cannot answer at all", async () => {
+    // `null` is a serving peer that predates `chatHostIds` - silence, not
+    // evidence of another machine. It must not enable the affordance on its
+    // own, or every row on an older peer would claim a multi-host Task.
+    testState.worktreesByEpicId = new Map();
+    testState.items = [historyItem({ chatHostIds: null })];
+    renderPanel("embedded", "/");
+
+    const disabled = await screen.findByRole("button", {
+      name: /^no worktrees to sweep for /i,
+    });
+    expect(disabled.getAttribute("aria-disabled")).toBe("true");
   });
 
   it("shows task PR pills without replacing the row navigation layer", async () => {
@@ -1099,7 +1136,7 @@ describe("<EpicsListPanel />", () => {
   it("keeps bulk Sweep closed for a selection where no task owns a worktree", async () => {
     // The row control is already gated this way, so a selection of only
     // worktree-less tasks must not open a Sweep dialog with nothing in it.
-    testState.items = [historyItem({})];
+    testState.items = [historyItem({ chatHostIds: ["host-test"] })];
     testState.worktreesByEpicId = new Map();
     renderPanel("embedded", "/");
 
@@ -1111,6 +1148,32 @@ describe("<EpicsListPanel />", () => {
     expect(
       screen.getByTestId("epics-list-sweep-selected").matches(":disabled"),
     ).toBe(true);
+  });
+
+  it("opens bulk Sweep when a selected task's chats ran on another host", async () => {
+    // The same multi-host clause as the row control, asked of the SELECTION:
+    // nothing in this selection owns a worktree HERE, and the picker behind
+    // the button is the only way to reach the machine that does.
+    testState.items = [
+      historyItem({ chatHostIds: ["host-test"] }),
+      historyItem({
+        id: "history-epic-2",
+        epicId: "epic-two",
+        title: "Second history item",
+        chatHostIds: ["host-elsewhere"],
+      }),
+    ];
+    testState.worktreesByEpicId = new Map();
+    renderPanel("embedded", "/");
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Select history items" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+
+    expect(
+      screen.getByTestId("epics-list-sweep-selected").matches(":disabled"),
+    ).toBe(false);
   });
 
   it("opens bulk Sweep as soon as one selected task owns a worktree", async () => {
@@ -1412,6 +1475,18 @@ describe("<EpicsListPanel />", () => {
         ],
       },
     });
+  });
+
+  it("does not delete the task while its worktree cleanup choices are still loading", async () => {
+    testState.worktreeCandidatesFetching = true;
+    renderPanel("embedded", "/");
+
+    fireEvent.click(await screen.findByTestId("epics-list-row-delete"));
+    const confirm = await screen.findByTestId("delete-tasks-confirm");
+
+    expect(confirm.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(confirm);
+    expect(testState.mutate).not.toHaveBeenCalled();
   });
 
   it("names local-only commits and leaves a clean-ahead candidate unchecked by default", async () => {

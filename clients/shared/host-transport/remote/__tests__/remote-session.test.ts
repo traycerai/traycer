@@ -23,6 +23,7 @@ import {
   defineUpgradePath,
   defineVersionedRpcRegistry,
   HOST_RESTARTING_FATAL_CODE,
+  UNARY_CAPABILITY_IDEMPOTENCY_KEY,
   type FatalErrorDetails,
   type VersionedRpcRegistry,
 } from "@traycer/protocol/framework/index";
@@ -57,6 +58,11 @@ import {
 } from "@traycer/protocol/host-transport/mux";
 import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
 import {
+  clockCanMakeValidBearersLookExpired,
+  type ServerClockSkewSignal,
+  type ServerClockState,
+} from "@traycer-clients/shared/clock/server-time-offset-tracker";
+import {
   HostRequestAbortedError,
   HostRpcError,
   HostTransportFailureError,
@@ -68,6 +74,7 @@ import {
   resetNegotiatedManifests,
 } from "../../negotiated-manifest-registry";
 import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
+import type { DialPriority } from "../../dial-priority";
 import type {
   IStreamWebSocketFactory,
   StreamWebSocketLike,
@@ -331,6 +338,7 @@ class FakeRelayHost {
     method: string;
     schemaVersion: unknown;
     params: unknown;
+    idempotencyKey: string | null;
     streamId: number;
   }[] = [];
   /** Answers the next REQUEST with this result payload. */
@@ -656,6 +664,8 @@ class FakeRelayHost {
         method: typeof json.method === "string" ? json.method : "",
         schemaVersion: json.schemaVersion,
         params: json.params,
+        idempotencyKey:
+          typeof json.idempotencyKey === "string" ? json.idempotencyKey : null,
         streamId: message.streamId,
       });
       if (this.skipUnaryAutoRespond) {
@@ -991,6 +1001,7 @@ function buildSessionOptions(
       }),
     bearer: () => lease,
     auth,
+    clock: null,
     rpcRegistry: emptyRpcRegistry,
     streamRegistry: emptyStreamRegistry,
     webSocketFactory: relay.factory,
@@ -1400,7 +1411,7 @@ describe("RemoteSession terminal close notification", () => {
       const session = buildSession(relay, lease, {
         revalidateForReconnect: revalidate,
       });
-      const streamClient = new RemoteStreamClient(session);
+      const streamClient = new RemoteStreamClient(session, () => null);
       let closedEvents = 0;
       streamClient.onClosed(() => {
         closedEvents += 1;
@@ -1577,6 +1588,7 @@ describe("RemoteSession plan-restricted entitlement denial", () => {
         },
         bearer: () => lease,
         auth: { revalidateForReconnect: revalidate },
+        clock: null,
         rpcRegistry: emptyRpcRegistry,
         streamRegistry: emptyStreamRegistry,
         webSocketFactory: relay.factory,
@@ -1584,7 +1596,7 @@ describe("RemoteSession plan-restricted entitlement denial", () => {
         evidence: NO_TRANSPORT_EVIDENCE,
         clientIdentity: TEST_CLIENT_IDENTITY,
       });
-      const streamClient = new RemoteStreamClient(session);
+      const streamClient = new RemoteStreamClient(session, () => null);
       let closedEvents = 0;
       streamClient.onClosed(() => {
         closedEvents += 1;
@@ -1617,7 +1629,7 @@ describe("RemoteSession availability-recovered evidence", () => {
       const relay = new FakeRelayHost();
       const lease = new MutableBearerLease("valid-token", "user-1");
       const session = buildSession(relay, lease, null);
-      const streamClient = new RemoteStreamClient(session);
+      const streamClient = new RemoteStreamClient(session, () => null);
       let recoveredEvents = 0;
       streamClient.subscribeAvailabilityRecovered(() => {
         recoveredEvents += 1;
@@ -1903,7 +1915,7 @@ describe("RemoteSession host_detached readiness evidence", () => {
         expect(session.isClosed()).toBe(false);
 
         const error: unknown = await session
-          .sendUnary("host.status", {}, null, undefined)
+          .sendUnary("host.status", {}, null, null, undefined, false)
           .then(
             () => null,
             (reason: unknown) => reason,
@@ -1994,7 +2006,7 @@ describe("RemoteStreamClient dynamic subscribe params", () => {
       const streamClient = new RemoteStreamClient<
         VersionedRpcRegistry,
         typeof cursorStreamRegistry
-      >(session);
+      >(session, () => null);
       const supportChanges: string[] = [];
       const unsubscribe = streamClient.subscribeMethodSupport(() => {
         supportChanges.push(streamClient.getMethodSupport("cursor.subscribe"));
@@ -2058,7 +2070,7 @@ describe("RemoteStreamClient dynamic subscribe params", () => {
       const streamClient = new RemoteStreamClient<
         VersionedRpcRegistry,
         typeof dualMajorCursorStreamRegistry
-      >(session);
+      >(session, () => null);
       const stream = streamClient.subscribe("cursor.subscribe", {
         cursor: null,
       });
@@ -2097,7 +2109,7 @@ describe("RemoteStreamClient dynamic subscribe params", () => {
       const streamClient = new RemoteStreamClient<
         VersionedRpcRegistry,
         typeof cursorStreamRegistry
-      >(session);
+      >(session, () => null);
       let cursor: number | null = null;
       const stream = streamClient.subscribeWithParamsProvider(
         "cursor.subscribe",
@@ -2153,7 +2165,7 @@ describe("RemoteSession method-support listener isolation", () => {
       const streamClient = new RemoteStreamClient<
         VersionedRpcRegistry,
         typeof cursorStreamRegistry
-      >(session);
+      >(session, () => null);
       // Registered FIRST, so the set's insertion order puts the fault ahead of
       // the healthy observer - which is what makes the second assertion below
       // evidence that a throw does not silence the rest of the set.
@@ -2216,7 +2228,7 @@ describe("RemoteSession method-support listener isolation", () => {
       const streamClient = new RemoteStreamClient<
         VersionedRpcRegistry,
         typeof cursorStreamRegistry
-      >(session);
+      >(session, () => null);
       const observed: string[] = [];
       const unsubscribe = streamClient.subscribeMethodSupport(() => {
         observed.push(streamClient.getMethodSupport("cursor.subscribe"));
@@ -2416,7 +2428,7 @@ describe("RemoteSession dial-failure logging", () => {
     expect(session.isClosed()).toBe(true);
 
     const error: unknown = await session
-      .sendUnary("host.status", {}, null, undefined)
+      .sendUnary("host.status", {}, null, null, undefined, false)
       .then(
         () => null,
         (reason: unknown) => reason,
@@ -2471,7 +2483,9 @@ describe("RemoteSession dial-failure logging", () => {
           "host.status",
           {},
           null,
+          null,
           undefined,
+          false,
         );
         // Still not ready when the call is issued - the await-ready path must
         // hold rather than reject.
@@ -2524,7 +2538,7 @@ describe("RemoteSession dial-failure logging", () => {
       try {
         session.start();
         const error: unknown = await session
-          .sendUnary("host.status", {}, null, undefined)
+          .sendUnary("host.status", {}, null, null, undefined, false)
           .then(
             () => null,
             (reason: unknown) => reason,
@@ -2556,7 +2570,7 @@ describe("RemoteSession dial-failure logging", () => {
       try {
         session.start();
         const error: unknown = await session
-          .sendUnary("host.status", {}, null, undefined)
+          .sendUnary("host.status", {}, null, null, undefined, false)
           .then(
             () => null,
             (reason: unknown) => reason,
@@ -2591,8 +2605,10 @@ describe("RemoteSession dial-failure logging", () => {
         const pending = session.sendUnary(
           "host.status",
           {},
+          null,
           controller.signal,
           undefined,
+          false,
         );
         controller.abort();
 
@@ -2634,7 +2650,14 @@ describe("RemoteSession dial-failure logging", () => {
       try {
         session.start();
         const error: unknown = await session
-          .sendUnary("host.status", {}, controller.signal, undefined)
+          .sendUnary(
+            "host.status",
+            {},
+            null,
+            controller.signal,
+            undefined,
+            false,
+          )
           .then(
             () => null,
             (reason: unknown) => reason,
@@ -2801,7 +2824,14 @@ describe("RemoteSession absent optional method", () => {
         session.start();
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
         const error: unknown = await session
-          .sendUnary("host.syntheticUnsupported", {}, null, undefined)
+          .sendUnary(
+            "host.syntheticUnsupported",
+            {},
+            null,
+            null,
+            undefined,
+            false,
+          )
           .then(
             () => null,
             (reason: unknown) => reason,
@@ -2920,7 +2950,9 @@ describe("RemoteSession fallback degrade version anchoring", () => {
           "host.syntheticSkewFallback",
           { label: "x" },
           null,
+          null,
           undefined,
+          false,
         );
         // adaptResponse ran over the DECLARED 1.0 response shape: no `detail`
         // key, i.e. no canonical-version upgrade was applied on the way back.
@@ -3594,7 +3626,14 @@ describe("RemoteSession wake", () => {
       // backoff already owns; it does NOT hurry it. If arriving were enough,
       // ambient polling reads would collapse the long tiers continuously and
       // an unavailable host would be dialed in a loop.
-      const pending = session.sendUnary("host.status", {}, null, undefined);
+      const pending = session.sendUnary(
+        "host.status",
+        {},
+        null,
+        null,
+        undefined,
+        false,
+      );
       await new Promise((resolve) => setTimeout(resolve, 1_200));
       // A collapse would have dialed by now (its draw tops out at 1s); the
       // jittered 4s tier cannot have fired this early.
@@ -3631,7 +3670,7 @@ describe("RemoteSession wake", () => {
         interval: 50,
       });
       await expect(
-        session.sendUnary("host.status", {}, null, undefined),
+        session.sendUnary("host.status", {}, null, null, undefined, false),
       ).rejects.toBeInstanceOf(RetryableTransportError);
       // Still pre-send, so the caller keeps its retry license - and the
       // failure it just proved has accelerated the NEXT redial rather than
@@ -3673,8 +3712,10 @@ describe("RemoteSession wake", () => {
       const pending = session.sendUnary(
         "host.status",
         {},
+        null,
         controller.signal,
         undefined,
+        false,
       );
       controller.abort();
       // An abandoned read is not evidence anybody is waiting, so its
@@ -3849,7 +3890,7 @@ describe("RemoteSession wake", () => {
       { proactiveWakeEligible: true },
       () => session,
     );
-    const streamClient = new RemoteStreamClient(view);
+    const streamClient = new RemoteStreamClient(view, () => null);
     try {
       view.start();
       await vi.waitFor(() => expect(relay.openBearers).toHaveLength(3), {
@@ -4560,6 +4601,128 @@ describe("RemoteSession openAck without optionalRpc", () => {
         expect(session.isReady()).toBe(false);
         expect(getNegotiatedHostMethods("host-1")).toBeNull();
         expect(session.isClosed()).toBe(false);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
+describe("RemoteSession unary idempotency negotiation", () => {
+  const statusContract = defineRpcContract({
+    method: "host.status",
+    schemaVersion: { major: 1, minor: 0 } as const,
+    requestSchema: z.object({}),
+    responseSchema: z.object({ ready: z.boolean() }),
+  });
+  const statusRegistry: VersionedRpcRegistry =
+    defineFloorAwareVersionedRpcRegistry(["host.status"] as const, {
+      "host.status": {
+        1: {
+          latestMinor: 0,
+          versions: {
+            0: {
+              contract: statusContract,
+              upgradeFromPreviousVersion: null,
+            },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    });
+
+  it.each([
+    ["legacy openAck", [] as string[], null, HostTransportFailureError],
+    [
+      "idempotency-capable openAck",
+      [UNARY_CAPABILITY_IDEMPOTENCY_KEY],
+      "requested-key",
+      RetryableTransportError,
+    ],
+  ])(
+    "%s sends the negotiated key and classifies a post-send drop consistently with local transport",
+    async (_label, capabilities, expectedKey, expectedError) => {
+      const relay = new FakeRelayHost();
+      relay.floorRpcManifest = { "host.status": { major: 1, minor: 0 } };
+      relay.openAckCapabilities = capabilities;
+      relay.skipUnaryAutoRespond = true;
+      const lease = new MutableBearerLease("token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        rpcRegistry: statusRegistry,
+      });
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+
+        const pending = session.sendUnary(
+          "host.status",
+          {},
+          "requested-key",
+          null,
+          10_000,
+          false,
+        );
+        const outcome = pending.then(
+          () => null,
+          (reason: unknown) => reason,
+        );
+        await vi.waitFor(
+          () => expect(relay.unaryRequests).toHaveLength(1),
+          WAIT,
+        );
+        expect(relay.unaryRequests[0]?.idempotencyKey).toBe(expectedKey);
+
+        relay.dropCurrentConnection();
+        const error: unknown = await outcome;
+        expect(error).toBeInstanceOf(expectedError);
+        if (expectedError === HostTransportFailureError) {
+          expect(error).not.toBeInstanceOf(RetryableTransportError);
+        }
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "refuses to dispatch a replay this connection cannot key",
+    async () => {
+      // The legacy arm of the matrix above proves this same openAck strips the
+      // key and sends anyway. That is correct for a FIRST attempt - nothing was
+      // dispatched, so an unkeyed send is a first send. It is a second
+      // undeduplicated execution once an earlier attempt has gone out keyed,
+      // which is exactly the state `replayMustBeKeyed` names.
+      const relay = new FakeRelayHost();
+      relay.floorRpcManifest = { "host.status": { major: 1, minor: 0 } };
+      relay.openAckCapabilities = [];
+      const lease = new MutableBearerLease("token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        rpcRegistry: statusRegistry,
+      });
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+
+        const error: unknown = await session
+          .sendUnary("host.status", {}, "requested-key", null, 10_000, true)
+          .then(
+            () => null,
+            (reason: unknown) => reason,
+          );
+
+        expect(error).toBeInstanceOf(HostTransportFailureError);
+        // Ambiguous, never retryable: the attempt this one replays may already
+        // have committed, so licensing a third would compound it.
+        expect(error).not.toBeInstanceOf(RetryableTransportError);
+        // The refusal is the assertion. The relay auto-responds here (no
+        // `skipUnaryAutoRespond`), so a dispatched frame would have RESOLVED
+        // the call rather than reaching either check above - and this pins
+        // that nothing reached the wire even so.
+        expect(relay.unaryRequests).toHaveLength(0);
       } finally {
         session.close();
       }
@@ -5774,7 +5937,7 @@ describe("RemoteSession WORKTREE_BUSY holder preservation", () => {
         session.start();
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
         const error: unknown = await session
-          .sendUnary("host.status", {}, null, undefined)
+          .sendUnary("host.status", {}, null, null, undefined, false)
           .then(
             () => null,
             (reason: unknown) => reason,
@@ -5807,7 +5970,7 @@ describe("RemoteSession WORKTREE_BUSY holder preservation", () => {
         session.start();
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
         const error: unknown = await session
-          .sendUnary("host.status", {}, null, undefined)
+          .sendUnary("host.status", {}, null, null, undefined, false)
           .then(
             () => null,
             (reason: unknown) => reason,
@@ -5840,7 +6003,7 @@ describe("RemoteSession WORKTREE_BUSY holder preservation", () => {
         session.start();
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
         const error: unknown = await session
-          .sendUnary("host.status", {}, null, undefined)
+          .sendUnary("host.status", {}, null, null, undefined, false)
           .then(
             () => null,
             (reason: unknown) => reason,
@@ -5878,7 +6041,7 @@ describe("RemoteSession WORKTREE_BUSY holder preservation", () => {
         session.start();
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
         const error: unknown = await session
-          .sendUnary("host.status", {}, null, undefined)
+          .sendUnary("host.status", {}, null, null, undefined, false)
           .then(
             () => null,
             (reason: unknown) => reason,
@@ -5948,11 +6111,25 @@ describe("RemoteSession pending-unary FATAL rejection (S3)", () => {
 
         // A budget far BELOW the 30s default, so only a timer that honors the
         // argument can fire this fast.
-        const budgeted = session.sendUnary("host.status", {}, null, 60);
+        const budgeted = session.sendUnary(
+          "host.status",
+          {},
+          null,
+          null,
+          60,
+          false,
+        );
         // The positive control: same request, no budget. If the argument were
         // still ignored, both would behave identically - and this one must NOT
         // settle inside the window, or the assertion above proves nothing.
-        const defaulted = session.sendUnary("host.status", {}, null, undefined);
+        const defaulted = session.sendUnary(
+          "host.status",
+          {},
+          null,
+          null,
+          undefined,
+          false,
+        );
         let defaultedSettled = false;
         void defaulted.then(
           () => {
@@ -6004,7 +6181,14 @@ describe("RemoteSession pending-unary FATAL rejection (S3)", () => {
         session.start();
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
 
-        const pending = session.sendUnary("host.status", {}, null, undefined);
+        const pending = session.sendUnary(
+          "host.status",
+          {},
+          null,
+          null,
+          undefined,
+          false,
+        );
         await vi.waitFor(
           () => expect(relay.unaryRequests).toHaveLength(1),
           WAIT,
@@ -6770,10 +6954,10 @@ describe("RemoteSession reconnect backoff ladder (T5, B6)", () => {
     let firstDialTaken = false;
     const redialTimestamps: number[] = [];
     const succeedOnceThenFail: IStreamWebSocketFactory = {
-      create: (url: string): StreamWebSocketLike => {
+      create: (url: string, priority: DialPriority): StreamWebSocketLike => {
         if (!firstDialTaken) {
           firstDialTaken = true;
-          return relay.factory.create(url);
+          return relay.factory.create(url, priority);
         }
         redialTimestamps.push(Date.now());
         const socket = new FakeSocket(
@@ -6859,7 +7043,7 @@ describe("RemoteSession reconnect backoff ladder (T5, B6)", () => {
     const lease = new MutableBearerLease("valid-token", "user-1");
     let failuresLeft = 1;
     const flakyFactory: IStreamWebSocketFactory = {
-      create: (url: string): StreamWebSocketLike => {
+      create: (url: string, priority: DialPriority): StreamWebSocketLike => {
         if (failuresLeft > 0) {
           failuresLeft -= 1;
           const socket = new FakeSocket(
@@ -6871,7 +7055,7 @@ describe("RemoteSession reconnect backoff ladder (T5, B6)", () => {
           });
           return socket;
         }
-        return relay.factory.create(url);
+        return relay.factory.create(url, priority);
       },
     };
     const session = new RemoteSession({
@@ -7285,6 +7469,347 @@ describe("RemoteSession per-stream retryable FATAL recovery", () => {
         });
       } finally {
         session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
+/**
+ * Clock-skew park on the RELAY transport (Clock-skew detection and self-healing
+ * recovery, §2 — extended to remote sessions).
+ *
+ * A wrong wall clock is a property of the MACHINE, so a user whose clock is
+ * hours off wedges identically against a remote host: authn (correct clock)
+ * keeps answering "valid" while the host keeps FATAL-ing the same bearer, and
+ * the no-progress bound walks the session terminal. The remote user is also the
+ * one least able to guess why — hence the same park here.
+ *
+ * One structural difference from the local transport, and it is the reason
+ * there is a single park site rather than two: this session has no pre-dial
+ * expiry gate, so it always spends one full attach+reject round trip before the
+ * verdict is consulted.
+ */
+describe("RemoteSession clock-skew park", () => {
+  /**
+   * A hand-driven `ServerClockSkewSignal`. The transport's contract is with the
+   * verdict, its DIRECTION, and the recovery edge; keeping the double dumb
+   * makes these tests statements about the session, not about the tracker
+   * (which has its own suite).
+   *
+   * `skewed-ahead` is the incident: a local clock running FAST, so
+   * `server − local` is NEGATIVE. `skewed-behind` is the equal-and-opposite
+   * clock - just as wrong, just as banner-worthy, and incapable of being why
+   * the relay rejected a bearer. The predicate is computed exactly as the real
+   * tracker computes it rather than hardcoded per case, so the double cannot
+   * drift from the sign convention.
+   */
+  function makeClockSignal(initial: "ok" | "skewed-ahead" | "skewed-behind"): {
+    readonly signal: ServerClockSkewSignal;
+    readonly recover: () => void;
+    readonly recoverySubscribers: () => number;
+  } {
+    const SEVEN_HOURS_MS = 7 * 3_600_000;
+    let state: ServerClockState;
+    if (initial === "skewed-ahead") {
+      state = { verdict: "skewed", offsetMs: -SEVEN_HOURS_MS };
+    } else if (initial === "skewed-behind") {
+      state = { verdict: "skewed", offsetMs: SEVEN_HOURS_MS };
+    } else {
+      state = { verdict: "ok", offsetMs: 0 };
+    }
+    const recoveryListeners = new Set<() => void>();
+    return {
+      recoverySubscribers: () => recoveryListeners.size,
+      recover: () => {
+        state = { verdict: "ok", offsetMs: 0 };
+        for (const listener of [...recoveryListeners]) {
+          listener();
+        }
+      },
+      signal: {
+        currentState: () => state,
+        canMakeValidBearersLookExpired: () =>
+          clockCanMakeValidBearersLookExpired(state),
+        subscribe: () => () => undefined,
+        subscribeToRecovery: (listener) => {
+          recoveryListeners.add(listener);
+          return () => {
+            recoveryListeners.delete(listener);
+          };
+        },
+      },
+    };
+  }
+
+  /** Always UNAUTHORIZED, and a revalidator that never rotates: no progress. */
+  function buildNoProgressSession(
+    relay: FakeRelayHost,
+    lease: MutableBearerLease,
+    clock: ServerClockSkewSignal,
+  ): RemoteSession<VersionedRpcRegistry, VersionedStreamRpcRegistry> {
+    relay.decideOpen = () => ({
+      kind: "fatal",
+      details: unauthorizedDetails(),
+    });
+    return new RemoteSession({
+      ...buildSessionOptions(relay, lease, {
+        revalidateForReconnect: () => Promise.resolve("rotated" as const),
+      }),
+      clock,
+    });
+  }
+
+  it(
+    "parks instead of walking the no-progress bound to a terminal close",
+    async () => {
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("clock-skewed-token", "user-1");
+      const clock = makeClockSignal("skewed-ahead");
+      const session = buildNoProgressSession(relay, lease, clock.signal);
+      try {
+        session.start();
+        // One attach, one rejection, one revalidation - then the park.
+        await vi.waitFor(
+          () => expect(clock.recoverySubscribers()).toBe(1),
+          WAIT,
+        );
+        // Far longer than the three backoff rungs the bound would have burned.
+        // A session that counted this cycle would be closed by now; a parked
+        // one has not re-attached even once.
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        expect(session.isClosed()).toBe(false);
+        expect(relay.openBearers).toEqual(["clock-skewed-token"]);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "re-attaches on the clock-corrected edge, with no reload and no new credential",
+    async () => {
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("clock-skewed-token", "user-1");
+      const clock = makeClockSignal("skewed-ahead");
+      relay.decideOpen = (_bearer, openIndex) =>
+        openIndex === 0
+          ? { kind: "fatal", details: unauthorizedDetails() }
+          : { kind: "ack" };
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, {
+          revalidateForReconnect: () => Promise.resolve("rotated" as const),
+        }),
+        clock: clock.signal,
+      });
+      try {
+        session.start();
+        await vi.waitFor(
+          () => expect(clock.recoverySubscribers()).toBe(1),
+          WAIT,
+        );
+        expect(session.isReady()).toBe(false);
+
+        // The user fixes the clock. Nothing else happens - no retry tap, no
+        // wake, no new bearer.
+        clock.recover();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        expect(relay.openBearers).toEqual([
+          "clock-skewed-token",
+          "clock-skewed-token",
+        ]);
+        // The park released its handle on the way back out.
+        expect(clock.recoverySubscribers()).toBe(0);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "still reaches the terminal bound for a host config mismatch, which looks identical on the wire",
+    async () => {
+      // The reason the park keys on the tracker's verdict and never on the
+      // rejection shape: a misconfigured host produces the very same
+      // no-progress streak, and retrying that forever helps nobody.
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("mismatched-token", "user-1");
+      const clock = makeClockSignal("ok");
+      const session = buildNoProgressSession(relay, lease, clock.signal);
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
+        expect(clock.recoverySubscribers()).toBe(0);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "does NOT park on a clock running BEHIND, and still reaches the terminal bound",
+    async () => {
+      // The mirror of the incident, and the failure this feature would
+      // otherwise have reintroduced in the opposite direction. A SLOW clock
+      // makes a bearer look more valid, never expired, and the relay validates
+      // against its own clock - so it cannot be why this bearer was rejected.
+      // Whatever is (host config mismatch, revocation) is exactly what the
+      // bound exists to diagnose, and a remote user stranded behind "fix your
+      // clock" has no way at all to discover the real cause.
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("mismatched-token", "user-1");
+      const clock = makeClockSignal("skewed-behind");
+      const session = buildNoProgressSession(relay, lease, clock.signal);
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
+        expect(clock.recoverySubscribers()).toBe(0);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "leaves the transient network-error arm untouched under skew",
+    async () => {
+      // A revalidation that cannot reach authn says nothing about the clock -
+      // the bearer is untouched, the streak resets, and the ordinary backoff
+      // rides. Parking here would strand a session whose only problem was a
+      // wake-time blip.
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("stale-token", "user-1");
+      const clock = makeClockSignal("skewed-ahead");
+      relay.decideOpen = (_bearer, openIndex) =>
+        openIndex === 0
+          ? { kind: "fatal", details: unauthorizedDetails() }
+          : { kind: "ack" };
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, {
+          revalidateForReconnect: () =>
+            Promise.resolve("network-error" as const),
+        }),
+        clock: clock.signal,
+      });
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        expect(clock.recoverySubscribers()).toBe(0);
+        expect(session.isClosed()).toBe(false);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "releases the recovery subscription on close, so a later clock fix cannot revive a dead session",
+    async () => {
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("clock-skewed-token", "user-1");
+      const clock = makeClockSignal("skewed-ahead");
+      const session = buildNoProgressSession(relay, lease, clock.signal);
+      session.start();
+      await vi.waitFor(() => expect(clock.recoverySubscribers()).toBe(1), WAIT);
+
+      session.close();
+      expect(clock.recoverySubscribers()).toBe(0);
+
+      clock.recover();
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(relay.openBearers).toEqual(["clock-skewed-token"]);
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "degrades to the pre-existing terminal bound with no tracker wired",
+    async () => {
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("clock-skewed-token", "user-1");
+      relay.decideOpen = () => ({
+        kind: "fatal",
+        details: unauthorizedDetails(),
+      });
+      const session = new RemoteSession(
+        buildSessionOptions(relay, lease, {
+          revalidateForReconnect: () => Promise.resolve("rotated" as const),
+        }),
+      );
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
+/**
+ * The remote twin of the local park's status-emit hazard. Here the external
+ * callback inside the park is `reportEvidenceOutcome`, which hands control to
+ * the selection authority - a component whose entire job is to react to
+ * transport evidence, and which can retire this host (closing this session)
+ * before the call returns.
+ */
+describe("RemoteSession clock-skew park re-entrancy", () => {
+  it(
+    "leaves NO subscription behind when the evidence sink closes the session re-entrantly",
+    async () => {
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("clock-skewed-token", "user-1");
+      relay.decideOpen = () => ({
+        kind: "fatal",
+        details: unauthorizedDetails(),
+      });
+      const recoveryListeners = new Set<() => void>();
+      const clock: ServerClockSkewSignal = {
+        currentState: (): ServerClockState => ({
+          verdict: "skewed",
+          offsetMs: -7 * 3_600_000,
+        }),
+        canMakeValidBearersLookExpired: () => true,
+        subscribe: () => () => undefined,
+        subscribeToRecovery: (listener) => {
+          recoveryListeners.add(listener);
+          return () => {
+            recoveryListeners.delete(listener);
+          };
+        },
+      };
+      let session: RemoteSession<
+        VersionedRpcRegistry,
+        VersionedStreamRpcRegistry
+      > | null = null;
+      const closingEvidence: TransportEvidenceReporter = {
+        ...NO_TRANSPORT_EVIDENCE,
+        reportDialIndeterminate: () => {
+          session?.close();
+        },
+      };
+      session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, {
+          revalidateForReconnect: () => Promise.resolve("rotated" as const),
+        }),
+        clock,
+        evidence: closingEvidence,
+      });
+      const live = session;
+      try {
+        live.start();
+        // The park reports `indeterminate`, the sink closes the session inside
+        // that call, and the park must still own a handle to release.
+        await vi.waitFor(() => expect(live.isClosed()).toBe(true), WAIT);
+        expect(recoveryListeners.size).toBe(0);
+      } finally {
+        live.close();
       }
     },
     TEST_BUDGET_MS,

@@ -644,6 +644,7 @@ describe("HostCompatibilityProvider startup consumers", () => {
     const { queryClient } = mountStartupConsumers({
       hostStatus: () => {
         throw new RetryableTransportError({
+          replaySafetyFromKey: false,
           code: "RPC_ERROR",
           message: "Remote session is not ready",
           requestId: "req-status",
@@ -1096,6 +1097,7 @@ describe("HostCompatibilityProvider startup consumers", () => {
         probes += 1;
         if (probes === 1) return compatibleHostStatus;
         throw new RetryableTransportError({
+          replaySafetyFromKey: false,
           code: "RPC_ERROR",
           message: "host did not answer the dial",
           requestId: "req-status",
@@ -1175,6 +1177,7 @@ describe("HostCompatibilityProvider startup consumers", () => {
         probes += 1;
         if (probes === 1) return firstAnswer;
         throw new RetryableTransportError({
+          replaySafetyFromKey: false,
           code: "RPC_ERROR",
           message: "host did not answer the dial",
           requestId: "req-status",

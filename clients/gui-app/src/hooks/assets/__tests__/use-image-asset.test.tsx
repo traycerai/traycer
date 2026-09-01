@@ -171,9 +171,12 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
     super({
       clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
+      // This endpoint resolves no host, so there is none to name.
+      hostId: null,
       endpoint: () => null,
       bearer: () => null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -1065,7 +1068,10 @@ describe("useImageAsset", () => {
         "git-oid",
       ]),
       "image/png",
-      expect.any(Function),
+      // The scoped shape, not a bare function: `acquire` derives its entry
+      // identity from `scopeKey`, so a byte source cannot reach the cache
+      // without declaring what it authorizes against.
+      expect.objectContaining({ scopeKey: "image-asset" }),
       "session",
     );
   });
@@ -1117,7 +1123,10 @@ describe("useImageAsset", () => {
         "cancelled-identity",
       ]),
       "image/png",
-      expect.any(Function),
+      // The scoped shape, not a bare function: `acquire` derives its entry
+      // identity from `scopeKey`, so a byte source cannot reach the cache
+      // without declaring what it authorizes against.
+      expect.objectContaining({ scopeKey: "image-asset" }),
       "grace",
     );
     expect(createObjectUrlMock).not.toHaveBeenCalled();

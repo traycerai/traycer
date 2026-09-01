@@ -24,6 +24,7 @@ import {
   useMigrationRunStore,
   type MigrationRunState,
 } from "@/stores/migration/migration-run-store";
+import { useSessionImportRunStore } from "@/stores/session-import/session-import-run-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -262,6 +263,7 @@ describe("GeneralSettingsPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useMigrationRunStore.setState(idleState);
+    useSessionImportRunStore.getState().reset();
     hostQueryMocks.queryResult = {
       data: { bytes: 432 * 1024 * 1024 },
       isPending: false,
@@ -529,6 +531,28 @@ describe("GeneralSettingsPanel", () => {
     expect(
       screen.getByText("Migrating tasks - tasks 2/7, epics 0/3"),
     ).toBeTruthy();
+  });
+
+  // A submitted run is active before the host has said how big it is, and the
+  // row must not report a size it does not have yet.
+  it("says the import is starting until the host confirms a total, then counts", () => {
+    useSessionImportRunStore.getState().markStarting(new Map());
+
+    renderPanel();
+
+    expect(screen.getByText("Starting import…")).toBeTruthy();
+    expect(screen.queryByText("Importing 0 of 0…")).toBeNull();
+    // Same run, same spinner - only the sentence was waiting on the total.
+    expect(screen.getByTestId("settings-import-sessions-spinner")).toBeTruthy();
+
+    cleanup();
+    useSessionImportRunStore
+      .getState()
+      .applyStarted({ runId: "run-1", total: 3, attached: false });
+
+    renderPanel();
+
+    expect(screen.getByText("Importing 0 of 3…")).toBeTruthy();
   });
 
   // The Danger Zone used to mix three scopes in one red box: one machine's

@@ -160,6 +160,9 @@ export class MockRunnerHost implements IRunnerHost {
   // instead), so this never needs to vary per test the way `authnBaseUrl` does.
   readonly relayBaseUrl: string = "wss://relay.test.invalid/attach";
   readonly hasLocalHost: boolean;
+  // Browser-tab flavoured, like `fileSave` below: a tab's own clipboard takes
+  // images, so image-copy affordances render by default in tests.
+  readonly canCopyImages: boolean = true;
   readonly openedExternalLinks: string[] = [];
   readonly notificationsSent: Array<{
     readonly title: string;
@@ -285,6 +288,10 @@ export class MockRunnerHost implements IRunnerHost {
     },
     readNativeClipboardFilePaths: async (): Promise<readonly string[]> => [],
   };
+  // No native save surface to stand in for: this shell runs in a browser tab,
+  // where gui-app's own File System Access / `<a download>` legs are already
+  // the real answer.
+  readonly fileSave: null = null;
   readonly service: null = null;
   readonly traycerCli: ITraycerCli | null;
   readonly migration: null = null;
@@ -800,6 +807,7 @@ export class MockRunnerHost implements IRunnerHost {
   }
 
   readonly notifications: INotificationHost = {
+    systemSettings: null,
     show: async (
       title: string,
       body: string,

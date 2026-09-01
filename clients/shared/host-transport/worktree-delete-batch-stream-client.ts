@@ -81,6 +81,7 @@ export interface WorktreeDeleteBatchStreamClientOptions {
   /** Client-minted UUID; identifies this command for single-flight reuse. */
   readonly commandId: string;
   readonly source: WorktreeDeletionSource;
+  readonly epicId?: string;
   readonly targets: ReadonlyArray<WorktreeDeleteBatchTarget>;
   readonly callbacks: WorktreeDeleteBatchStreamCallbacks;
 }
@@ -145,6 +146,7 @@ export class WorktreeDeleteBatchStreamClient {
       mode: "start",
       commandId: options.commandId,
       source: options.source,
+      ...(options.epicId === undefined ? {} : { epicId: options.epicId }),
       targets: options.targets.map((target) => ({
         worktreePath: target.worktreePath,
         scripts: target.scripts,

@@ -43,6 +43,10 @@ import {
 import { isMobileApp } from "@/lib/mobile-app";
 import { cn } from "@/lib/utils";
 import { appLogger } from "@/lib/logger";
+import {
+  getNativeKeyboardState,
+  runWhenNativeKeyboardSettled,
+} from "@/lib/native-keyboard";
 import { getNegotiatedHostMethodVersion } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { useTerminalTheme } from "@/lib/terminal-theme";
 import { scheduleAtlasClear } from "@/lib/terminal-theme-scheduler";
@@ -997,7 +1001,7 @@ function createXtermEntry(
   // min(cols/rows) is pinned tiny) is `reconcileWithHost`'s job, not this one's
   // - except for a reconcile that was deferred because the box was unmeasurable
   // at the time, which this path completes on the next good measurement.
-  const fitToContainer = (): void => {
+  const fitToContainerNow = (): void => {
     const dims = proposeContainerDims();
     if (dims === null) return;
     if (pendingHostGrid !== null) {
@@ -1067,6 +1071,26 @@ function createXtermEntry(
     reportDims(dims.cols, dims.rows);
   };
 
+  // While the mobile soft keyboard is animating (native-resize mode shrinks
+  // this container as part of the show/hide transition), hold the fit until
+  // the transition settles so the PTY re-grids once, at the final size,
+  // instead of repainting at intermediate sizes. Gated here, at the single
+  // choke point, because every fit source funnels through this wrapper -
+  // the ResizeObserver AND `term.onRender`, which fires on every committed
+  // render and would otherwise re-grid mid-transition whenever the PTY is
+  // streaming output. Re-arming cancels the previous pending fit, so a burst
+  // of calls during the transition coalesces into one settled fit. Outside
+  // the installed app the keyboard state never transitions and this runs
+  // synchronously.
+  let keyboardSettleCancel: (() => void) | null = null;
+  const fitToContainer = (): void => {
+    keyboardSettleCancel?.();
+    keyboardSettleCancel = runWhenNativeKeyboardSettled(() => {
+      keyboardSettleCancel = null;
+      fitToContainerNow();
+    });
+  };
+
   // Recovery: when the host's authoritative grid disagrees with what this
   // healthy container would naturally propose, re-report our natural size. This
   // unsticks a session whose shared grid was latched to a stale/tiny value by a
@@ -1077,6 +1101,15 @@ function createXtermEntry(
   // host grid only changes once per resize, so a dropped reconcile never
   // re-fires and the session latches at the stale size.
   const reconcileWithHost = (hostCols: number, hostRows: number): void => {
+    // Mid-keyboard-transition the container is animating through intermediate
+    // heights, so measuring now would report a grid that is wrong by the time
+    // the glide ends. Defer through the same pending slot as an unmeasurable
+    // box: a transition implies ResizeObserver activity, whose settled fit
+    // completes the pending reconcile.
+    if (getNativeKeyboardState().transitioning) {
+      pendingHostGrid = { cols: hostCols, rows: hostRows };
+      return;
+    }
     const dims = proposeContainerDims();
     if (dims === null) {
       pendingHostGrid = { cols: hostCols, rows: hostRows };
@@ -1115,6 +1148,10 @@ function createXtermEntry(
     if (resizeDebounce !== null) {
       clearTimeout(resizeDebounce);
       resizeDebounce = null;
+    }
+    if (keyboardSettleCancel !== null) {
+      keyboardSettleCancel();
+      keyboardSettleCancel = null;
     }
     dataDisposable.dispose();
     searchResultsDisposable.dispose();

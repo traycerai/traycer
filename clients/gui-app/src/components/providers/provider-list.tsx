@@ -66,16 +66,14 @@ function ProviderListItem(props: {
   return (
     <li className={liClassName(variant)}>
       {onSelect === null ? (
-        <div className={rowClassName(variant, row.active, row.dimmed)}>
-          {rowContent}
-        </div>
+        <div className={rowClassName(variant, row.active)}>{rowContent}</div>
       ) : (
         <button
           type="button"
           aria-label={providerDisplayName(row.providerId)}
           data-active={row.active}
           onClick={() => onSelect(row.providerId)}
-          className={rowClassName(variant, row.active, row.dimmed)}
+          className={rowClassName(variant, row.active)}
         >
           {rowContent}
         </button>
@@ -104,11 +102,7 @@ function innerClassName(): string {
   return "flex w-full min-w-0 items-center gap-2.5";
 }
 
-function rowClassName(
-  variant: ProviderListVariant,
-  active: boolean,
-  dimmed: boolean,
-): string {
+function rowClassName(variant: ProviderListVariant, active: boolean): string {
   if (variant === "settings") {
     return cn(
       "flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-ui-sm transition-colors",
@@ -123,12 +117,22 @@ function rowClassName(
       active ? "bg-accent text-accent-foreground" : "text-foreground/80",
     );
   }
-  return cn("min-w-0", dimmed && "opacity-60");
+  // No row-level dim: a dimmed onboarding row still carries its live controls
+  // ("Sign in & enable", the enable switch) in `trailing`, and a wrapper
+  // opacity would dim those with it - stacked on the outline button's
+  // translucent dark fill it left the row's one call to action near
+  // invisible. The dimmed treatment lives on the identity pieces instead
+  // (icon, label, badge - each already keyed on `dimmed`), which recede
+  // without taking the controls down with them.
+  return "min-w-0";
 }
 
 function iconClassName(variant: ProviderListVariant, dimmed: boolean): string {
   if (variant === "onboarding") {
-    return cn("size-4", dimmed ? "text-white/35" : "text-white/85");
+    // Opacity as well as text color: brand icons that paint their own colors
+    // ignore `currentColor`, so without the opacity a disabled row's logo
+    // renders at full vibrance next to its dimmed label.
+    return cn("size-4", dimmed ? "text-white/35 opacity-60" : "text-white/85");
   }
   if (variant === "diorama") return "size-3.5 shrink-0";
   return "";

@@ -31,6 +31,7 @@ import { ChatComposerAttachmentsStrip } from "@/components/chat/composer/chat-co
 import { ComposerContentRenderer } from "@/components/chat/composer/content-renderer";
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
 import { useComposerPickerItems } from "@/components/chat/composer/picker/use-composer-picker-items";
+import { NO_LOCAL_SLASH_COMMANDS } from "@/hooks/composer/use-slash-commands";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -279,9 +280,12 @@ function AgentMessageDisplayView({
       <span aria-hidden className="shrink-0 text-muted-foreground/40">
         ·
       </span>
-      <span className="flex min-w-0 flex-1 items-center gap-1.5 text-ui-sm">
-        <span className="min-w-0 truncate">
-          <span className="text-muted-foreground">from agent </span>
+      {/* flex-wrap lets the badge drop to a second line on narrow (mobile)
+          widths; the name group truncates last, so the sender stays visible
+          and tappable instead of collapsing to "from agent …". */}
+      <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-1 text-ui-sm">
+        <span className="flex min-w-0 items-center gap-1">
+          <span className="shrink-0 text-muted-foreground">from agent</span>
           <AgentHeaderLink
             name={senderName}
             onOpen={openTarget !== null ? openSenderTab : null}
@@ -667,6 +671,8 @@ function InlineUserMessageEditor({
     currentEpicId: editing.currentEpicId,
     // The inline editor mounts only while a message is being edited - active.
     isActive: true,
+    // An edited message is re-sent to THIS chat; there is no fork to offer.
+    localSlashCommands: NO_LOCAL_SLASH_COMMANDS,
   });
 
   const submit = useCallback(() => {

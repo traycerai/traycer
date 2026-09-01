@@ -58,6 +58,7 @@ export function createFakeRunnerHost(
     authnBaseUrl: "https://auth.example.invalid",
     relayBaseUrl: "wss://relay.example.invalid/attach",
     hasLocalHost: true,
+    canCopyImages: true,
     validateAuthTokenIdentity: () =>
       Promise.resolve({ kind: "rejected" as const }),
     listRegisteredHosts: () =>
@@ -105,6 +106,7 @@ export function createFakeRunnerHost(
       delete: () => Promise.resolve(),
     },
     notifications: {
+      systemSettings: null,
       show: () => Promise.resolve("presented" as const),
       onForegroundDisplay: () => ({ dispose: () => undefined }),
       onClick: () => ({ dispose: () => undefined }),
@@ -123,6 +125,7 @@ export function createFakeRunnerHost(
       copyDroppedFilePaths: (paths) => Promise.resolve(paths),
       readNativeClipboardFilePaths: () => Promise.resolve([]),
     },
+    fileSave: null,
     tokenStore: {
       get: () => Promise.resolve(null),
       signIn: () => Promise.resolve(),

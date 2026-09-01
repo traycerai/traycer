@@ -1,6 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import type { ExternalToast } from "sonner";
+import type {
+  FileSaveRequest,
+  IFileSaveHost,
+  SavedFileLocation,
+} from "@traycer-clients/shared/platform/runner-host";
 
 const toastSuccess = vi.hoisted(() =>
   vi.fn<(message: string, options: ExternalToast | undefined) => string>(
@@ -22,27 +27,34 @@ import { saveBlobToDisk } from "@/lib/files/save-blob-to-disk";
 import { toastSavedFile } from "@/lib/files/saved-file-toast";
 
 /**
- * Mirrors the shape `save-blob-to-disk.ts` expects from
- * `runnerHost.fileDrops.saveFile`'s input - not exported by the source
- * module, so redeclared here structurally rather than imported.
+ * The `saveFile` member of a faked `IFileSaveHost`: callable exactly as the
+ * contract declares it, plus the one mock member these tests read back.
  */
-interface DesktopSaveFileInput {
-  readonly name: string;
-  readonly type: string;
-  readonly bytes: ArrayBuffer;
+interface SaveFileMock {
+  (request: FileSaveRequest): Promise<SavedFileLocation | null>;
+  readonly mock: {
+    readonly calls: ReadonlyArray<[FileSaveRequest]>;
+  };
 }
 
-interface DesktopFileDrops {
-  readonly saveFile: (input: DesktopSaveFileInput) => Promise<unknown>;
-  readonly openSavedFile: (path: string) => Promise<void>;
+/**
+ * A shell with a native save route. `openSavedFile` is what separates the two
+ * kinds of it: a desktop dialog reports a path and can re-open it, a share
+ * sheet reports neither.
+ */
+function fileSaveHost(
+  saveFile: SaveFileMock,
+  openSavedFile: ((path: string) => Promise<void>) | null,
+): IFileSaveHost {
+  // No chooser-free download route: these cases are about what a COMPLETED
+  // save can offer afterwards, which is the same question either way.
+  return { saveFile, openSavedFile, downloadFile: null, saveRoute: "share" };
 }
 
-function setRunnerHost(fileDrops: DesktopFileDrops): void {
-  (globalThis as { runnerHost?: unknown }).runnerHost = { fileDrops };
-}
-
-function clearRunnerHost(): void {
-  delete (globalThis as { runnerHost?: unknown }).runnerHost;
+function resolvingSaveFile(result: SavedFileLocation | null): SaveFileMock {
+  return vi.fn<(request: FileSaveRequest) => Promise<SavedFileLocation | null>>(
+    () => Promise.resolve(result),
+  );
 }
 
 interface ToastAction {
@@ -70,37 +82,26 @@ function isActionToast(
 
 beforeEach(() => {
   vi.clearAllMocks();
-  clearRunnerHost();
-});
-
-afterEach(() => {
-  clearRunnerHost();
 });
 
 describe("toastSavedFile", () => {
-  describe("browser runtime (no runnerHost bridge)", () => {
+  describe("browser runtime (no native save capability)", () => {
     it("shows a plain success toast with no action", () => {
-      toastSavedFile({ name: "a.md", path: null }, vi.fn());
+      toastSavedFile({ name: "a.md", path: null }, vi.fn(), null, "save");
 
       expect(toastSuccess).toHaveBeenCalledWith("Saved a.md");
     });
   });
 
-  describe("desktop runtime (runnerHost.fileDrops bridge present)", () => {
+  describe("desktop runtime (a save host that reports paths)", () => {
     it("adds an Open file action whose onClick hands the saved file to openSaved", () => {
-      const openSaved =
-        vi.fn<(saved: { name: string; path: string | null }) => void>();
-      setRunnerHost({
-        saveFile: vi.fn<(input: DesktopSaveFileInput) => Promise<unknown>>(() =>
-          Promise.resolve(null),
-        ),
-        openSavedFile: vi.fn<(path: string) => Promise<void>>(() =>
-          Promise.resolve(),
-        ),
-      });
+      const openSaved = vi.fn<(saved: SavedFileLocation) => void>();
+      const host = fileSaveHost(resolvingSaveFile(null), () =>
+        Promise.resolve(),
+      );
 
       const saved = { name: "a.md", path: "/tmp/x/a.md" };
-      toastSavedFile(saved, openSaved);
+      toastSavedFile(saved, openSaved, host, "save");
 
       expect(toastSuccess).toHaveBeenCalledTimes(1);
       const [, options] = toastSuccess.mock.calls[0];
@@ -115,37 +116,62 @@ describe("toastSavedFile", () => {
     });
 
     it("shows a plain toast when the saved file has no path", () => {
-      setRunnerHost({
-        saveFile: vi.fn<(input: DesktopSaveFileInput) => Promise<unknown>>(() =>
-          Promise.resolve(null),
-        ),
-        openSavedFile: vi.fn<(path: string) => Promise<void>>(() =>
-          Promise.resolve(),
-        ),
-      });
+      const host = fileSaveHost(resolvingSaveFile(null), () =>
+        Promise.resolve(),
+      );
 
-      toastSavedFile({ name: "a.md", path: null }, vi.fn());
+      toastSavedFile({ name: "a.md", path: null }, vi.fn(), host, "save");
 
       expect(toastSuccess).toHaveBeenCalledWith("Saved a.md");
+    });
+  });
+
+  describe("phone runtime (a save host that reports no path)", () => {
+    // Nothing came back that could be re-opened, so offering the action would
+    // be a dead button.
+    it("shows a plain toast even though the shell has a native save route", () => {
+      const host = fileSaveHost(resolvingSaveFile(null), null);
+
+      toastSavedFile({ name: "a.md", path: null }, vi.fn(), host, "save");
+
+      expect(toastSuccess).toHaveBeenCalledWith("Saved a.md");
+    });
+
+    it("says the file was SHARED where the sheet was the route", () => {
+      // The bytes a share sheet is handed live in the app's cache container,
+      // so nothing was saved anywhere the user keeps files. Claiming otherwise
+      // is a plain untruth, and it is the verb the user reads.
+      const host = fileSaveHost(resolvingSaveFile(null), null);
+
+      toastSavedFile({ name: "a.md", path: null }, vi.fn(), host, "share");
+
+      expect(toastSuccess).toHaveBeenCalledWith("Shared a.md");
+    });
+
+    it("still offers no re-open action on a share, path or not", () => {
+      const host = fileSaveHost(resolvingSaveFile(null), null);
+
+      toastSavedFile(
+        { name: "a.md", path: "/tmp/a.md" },
+        vi.fn(),
+        host,
+        "share",
+      );
+
+      const [, options] = toastSuccess.mock.calls[0];
+      expect(isActionToast(options)).toBe(false);
     });
   });
 });
 
 describe("saveBlobToDisk", () => {
-  it("resolves the saved file and forwards blob bytes to the desktop save bridge", async () => {
-    const saveFileMock = vi.fn<
-      (input: DesktopSaveFileInput) => Promise<unknown>
-    >(() => Promise.resolve({ name: "d.png", path: "/tmp/d.png" }));
-    setRunnerHost({
-      saveFile: saveFileMock,
-      openSavedFile: vi.fn<(path: string) => Promise<void>>(() =>
-        Promise.resolve(),
-      ),
-    });
+  it("resolves the saved file and forwards blob bytes to the shell's save host", async () => {
+    const saveFile = resolvingSaveFile({ name: "d.png", path: "/tmp/d.png" });
 
     const result = await saveBlobToDisk(
       new Blob(["x"], { type: "image/png" }),
       "d.png",
+      fileSaveHost(saveFile, () => Promise.resolve()),
     );
 
     expect(result).toEqual({ name: "d.png", path: "/tmp/d.png" });
@@ -154,43 +180,30 @@ describe("saveBlobToDisk", () => {
     // plain object literal here is an unsafe assignment (the matcher is
     // typed `any`, the property is typed `ArrayBuffer`) that the lint rules
     // reject.
-    expect(saveFileMock).toHaveBeenCalledWith(
+    expect(saveFile).toHaveBeenCalledWith(
       expect.objectContaining({ name: "d.png", type: "image/png" }),
     );
-    const [[input]] = saveFileMock.mock.calls;
+    const [[input]] = saveFile.mock.calls;
     expect(input.bytes).toBeInstanceOf(ArrayBuffer);
   });
 
-  it("resolves null when the desktop bridge reports a cancel", async () => {
-    setRunnerHost({
-      saveFile: vi.fn<(input: DesktopSaveFileInput) => Promise<unknown>>(() =>
-        Promise.resolve(null),
-      ),
-      openSavedFile: vi.fn<(path: string) => Promise<void>>(() =>
-        Promise.resolve(),
-      ),
-    });
-
+  it("resolves null when the save host reports a dismissal", async () => {
     const result = await saveBlobToDisk(
       new Blob(["x"], { type: "image/png" }),
       "d.png",
+      fileSaveHost(resolvingSaveFile(null), () => Promise.resolve()),
     );
 
     expect(result).toBeNull();
   });
 
-  it("rejects when the desktop bridge returns a malformed result", async () => {
-    setRunnerHost({
-      saveFile: vi.fn<(input: DesktopSaveFileInput) => Promise<unknown>>(() =>
-        Promise.resolve("d.png"),
-      ),
-      openSavedFile: vi.fn<(path: string) => Promise<void>>(() =>
-        Promise.resolve(),
-      ),
-    });
+  it("passes a pathless save straight through, as a share sheet reports it", async () => {
+    const result = await saveBlobToDisk(
+      new Blob(["x"], { type: "image/png" }),
+      "d.png",
+      fileSaveHost(resolvingSaveFile({ name: "d.png", path: null }), null),
+    );
 
-    await expect(
-      saveBlobToDisk(new Blob(["x"], { type: "image/png" }), "d.png"),
-    ).rejects.toThrow(/unexpected result/);
+    expect(result).toEqual({ name: "d.png", path: null });
   });
 });

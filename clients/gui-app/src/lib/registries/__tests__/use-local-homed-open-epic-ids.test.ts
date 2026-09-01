@@ -5,10 +5,10 @@ import {
   useLocalHomedOpenEpicIds,
 } from "@/lib/registries/epic-session-registry";
 import {
-  createOpenEpicStore,
   type EpicStreamClientFactory,
   type OpenEpicStoreHandle,
 } from "@/stores/epics/open-epic/store";
+import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 
 /**
  * `useLocalHomedOpenEpicIds` is the fix for gap 4 (`use-epic-task-pinned-states-query.test.ts`
@@ -29,11 +29,14 @@ const noopStreamClientFactory: EpicStreamClientFactory = () => ({
 
 function mountSession(epicId: string): OpenEpicStoreHandle {
   return __getOpenEpicRegistryForTests().acquireMounted(epicId, () =>
-    createOpenEpicStore({
+    openStoreForTest({
       epicId,
-      streamClientFactory: noopStreamClientFactory,
       userId: null,
-      onAuthError: null,
+      factories: {
+        streamClientFactory: noopStreamClientFactory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     }),
   );
 }

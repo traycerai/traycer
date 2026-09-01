@@ -28,10 +28,11 @@ describe("released floor production module", () => {
     );
 
     // Latest advertised major for list is 2 (native projections), at minor 2
-    // (the durable-home selector); major 1 remains registered for the frozen
-    // all/unread bridge, and its earlier v2 minors stay installed so an older peer
-    // negotiates down to it, but optional capability manifests always
-    // advertise the method's latest major AND minor.
+    // (which carries both the `browser.human.needed` arm and the durable-home
+    // selector - see the contract's merge note); major 1 remains registered
+    // for the frozen all/unread bridge, and 2.0/2.1 stay installed so an older
+    // peer negotiates down to one of them, but optional capability manifests
+    // always advertise the method's latest major AND minor.
     expect(split.optionalManifest).toMatchObject({
       "host.notifications.list": { major: 2, minor: 2 },
       "host.notifications.markRead": { major: 1, minor: 0 },

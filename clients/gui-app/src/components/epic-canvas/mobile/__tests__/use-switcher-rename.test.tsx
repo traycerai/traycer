@@ -18,16 +18,26 @@ import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { createArtifactInDocForTests } from "@/stores/epics/open-epic/__tests__/projection-helpers-test-shims";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-  type OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
+import { dispatchEpicWriteCommand } from "@/stores/epics/open-epic/runtime/epic-write-command-dispatch";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import {
+  MockHostMessenger,
+  type MockHandlerMap,
+} from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 
 const mocks = vi.hoisted(() => ({
-  handle: { current: null as OpenEpicStoreHandle | null },
+  handle: { current: null as OpenedStoreForTest | null },
   chatCalls: [] as { readonly chatId: string; readonly title: string }[],
   tuiCalls: [] as { readonly tuiAgentId: string; readonly title: string }[],
   artifactCalls: [] as {
@@ -101,19 +111,6 @@ vi.mock("@/hooks/epic/use-epic-tui-agent-mutations", () => ({
   }),
 }));
 
-vi.mock("@/hooks/epic/use-epic-node-mutations", () => ({
-  useEpicRenameArtifact: () => ({
-    mutateAsync: makeMutateAsync(
-      (variables: { readonly artifactId: string; readonly title: string }) => {
-        mocks.artifactCalls.push({
-          artifactId: variables.artifactId,
-          title: variables.title,
-        });
-      },
-    ),
-  }),
-}));
-
 vi.mock("@/hooks/terminal/use-terminal-rename-for-mutation", () => ({
   useTerminalRenameFor: () => ({
     mutate: (variables: {
@@ -132,6 +129,7 @@ vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
 import { useSwitcherRename } from "@/components/epic-canvas/mobile/use-switcher-rename";
 
 const EPIC_ID = "epic-1";
+const HOST_ID = "host-1";
 
 function encodeBase64(bytes: Uint8Array): string {
   return btoa(String.fromCharCode(...bytes));
@@ -164,7 +162,58 @@ function makeMeta(): SnapshotMetaEpic {
   };
 }
 
-function newSession(): OpenEpicStoreHandle {
+/**
+ * A real `HostRequester` wired to an in-memory `MockHostMessenger`, in place
+ * of the `mutateAsync` control the retired `use-epic-node-mutations` mock
+ * used to hand tests. `epic.renameArtifact` is the one handler these suites
+ * drive - `pendingSettles` and `artifactCalls` are the SAME hoisted queues
+ * the chat/tui-agent mocks still push into, so a test that mixes tile types
+ * sees one call-order queue regardless of which path produced each entry.
+ */
+function buildCommandRequester(): HostRequester<HostRpcRegistry> {
+  const entry: HostDirectoryEntry = {
+    hostId: HOST_ID,
+    label: HOST_ID,
+    kind: "local",
+    websocketUrl: "ws://127.0.0.1:0",
+    version: "1.5.0",
+    transportDialability: "dialable",
+  };
+  const handlers: MockHandlerMap<HostRpcRegistry> = {
+    "epic.renameArtifact": (params) => {
+      mocks.artifactCalls.push({
+        artifactId: params.artifactId,
+        title: params.title,
+      });
+      return new Promise((resolve, reject) => {
+        mocks.pendingSettles.push(() => {
+          if (mocks.settleAs === "success") {
+            resolve({ updated: true });
+          } else {
+            reject(new Error("mock mutation failure"));
+          }
+        });
+      });
+    },
+  };
+  const spine = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: { invalidateHostScope: () => undefined },
+    findHostById: (candidateHostId) =>
+      candidateHostId === entry.hostId ? entry : null,
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => `req-${entry.hostId}`,
+      handlers,
+    }),
+  });
+  spine.setRequestContext(
+    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+  );
+  return spine.createRequester(entry);
+}
+
+function newSession(): OpenedStoreForTest {
   const captured: { value: EpicStreamCallbacks | null } = { value: null };
   const factory: EpicStreamClientFactory = (_id, callbacks) => {
     captured.value = callbacks;
@@ -177,13 +226,27 @@ function newSession(): OpenEpicStoreHandle {
       close: () => undefined,
     };
   };
-  const handle = createOpenEpicStore({
+  const handle = openStoreForTest({
     epicId: EPIC_ID,
-    streamClientFactory: factory,
     userId: null,
-    onAuthError: null,
+    // The factories go to the COMPOSITION now: the store stopped
+    // constructing a runtime, so a `streamClientFactory` has nowhere
+    // else to go.
+    factories: {
+      streamClientFactory: factory,
+      laneSelection: null,
+    },
+    writeCommand: (commandId, intent) =>
+      dispatchEpicWriteCommand(
+        { epicId: EPIC_ID, requester: () => buildCommandRequester() },
+        commandId,
+        intent,
+      ),
   });
   if (captured.value === null) throw new Error("factory not invoked");
+  // Transport must reach "open" BEFORE the root snapshot lands - see the
+  // matching comment in `use-rename-canvas-tab.test.tsx`.
+  captured.value.onConnectionStatus("open", null, false);
   captured.value.onSnapshot(makeMeta(), Y.encodeStateAsUpdate(new Y.Doc()));
   return handle;
 }
@@ -299,7 +362,17 @@ describe("useSwitcherRename", () => {
     expect(handle.store.getState().artifacts.byId[id].title).toBe("New spec");
   });
 
-  it("two consecutive renames retire BOTH stamps, not just the latest", async () => {
+  // Replaces a stamp-order/out-of-order-settle assertion. The write-command
+  // queue serializes sends on a single `sendingCommandId`
+  // (`command-overlay.ts:295` - "the queue serializes calls in issue order"
+  // per `CommandQueueOptions.send`'s own doc, and `retryPending`'s comment:
+  // "two renames of one row applied out of order leave the wrong title").
+  // So the second rename can no longer be sent while the first is still in
+  // flight, and there is nothing left to settle "out of order" - what
+  // replaces that race is pinning the serialization itself: the second
+  // stamp lands immediately, but its RPC is not attempted until the first
+  // settles, and both stamps still retire.
+  it("a second rename enqueued while the first is still in flight is stamped immediately but not SENT until the first settles, and both stamps still retire", async () => {
     const handle = newSession();
     mocks.handle.current = handle;
     // ERROR settles for the same observability reason as the unmount test
@@ -315,21 +388,27 @@ describe("useSwitcherRename", () => {
     act(() => {
       result.current("artifact", id, "Second");
     });
+    // Both stamps land synchronously, so the overlay already shows "Second"...
+    expect(handle.store.getState().artifacts.byId[id].title).toBe("Second");
+    // ...but only the FIRST command has actually been sent.
+    expect(mocks.artifactCalls).toEqual([{ artifactId: id, title: "First" }]);
+    expect(mocks.pendingSettles).toHaveLength(1);
+
+    // Settling the FIRST (failure) retires its stamp and lets the queue
+    // advance to the second, now-queued command - sent only at this point.
+    await act(async () => {
+      mocks.pendingSettles[0]?.();
+      await flushMicrotasks();
+    });
     expect(mocks.artifactCalls).toEqual([
       { artifactId: id, title: "First" },
       { artifactId: id, title: "Second" },
     ]);
-    expect(handle.store.getState().artifacts.byId[id].title).toBe("Second");
     expect(mocks.pendingSettles).toHaveLength(2);
+    expect(handle.store.getState().artifacts.byId[id].title).toBe("Second");
 
-    // Settle out of order (the second RPC beats the first back) to prove
-    // retiring one doesn't depend on the other having settled already.
     await act(async () => {
       mocks.pendingSettles[1]?.();
-      await flushMicrotasks();
-    });
-    await act(async () => {
-      mocks.pendingSettles[0]?.();
       await flushMicrotasks();
     });
 
@@ -339,14 +418,18 @@ describe("useSwitcherRename", () => {
     unmount();
   });
 
-  it("routes a chat rename through beginRenameMutation and the chat mutation", () => {
+  it("routes a chat rename through beginRenameMutation and the chat mutation", async () => {
     const handle = newSession();
     mocks.handle.current = handle;
     const chatId = createArtifactInDocForTests(handle.doc, "chat", null);
     const { result, unmount } = renderHook(() => useSwitcherRename(EPIC_ID));
 
-    act(() => {
+    // AWAITED: the overlay stamp is minted by the worker's queue, so the
+    // mutation fires only after that round trip resolves. A synchronous `act`
+    // here asserts on a chain still in flight and reads an empty call list.
+    await act(async () => {
       result.current("chat", chatId, "New chat name");
+      await flushMicrotasks();
     });
 
     expect(mocks.chatCalls).toEqual([{ chatId, title: "New chat name" }]);
@@ -355,7 +438,7 @@ describe("useSwitcherRename", () => {
     unmount();
   });
 
-  it("a REGISTRY-backed terminal-agent rename routes through beginRenameMutation and the tui-agent mutation", () => {
+  it("a REGISTRY-backed terminal-agent rename routes through beginRenameMutation and the tui-agent mutation", async () => {
     const handle = newSession();
     mocks.handle.current = handle;
     // A registry row (docResident: false) is what routes to the RPC; a
@@ -387,14 +470,17 @@ describe("useSwitcherRename", () => {
           terminalShellArgs: null,
           revision: 1,
           docResident: false,
+          origin: "registry",
         },
       ],
       null,
     );
     const { result, unmount } = renderHook(() => useSwitcherRename(EPIC_ID));
 
-    act(() => {
+    // AWAITED for the same reason the chat arm above is.
+    await act(async () => {
       result.current("terminal-agent", "agent-1", "New agent name");
+      await flushMicrotasks();
     });
 
     expect(mocks.tuiCalls).toEqual([

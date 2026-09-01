@@ -32,6 +32,7 @@ import {
   type NewConversationTransientState,
 } from "./new-conversation-transient-context";
 import { useComposerPickerItems } from "@/components/chat/composer/picker/use-composer-picker-items";
+import { NO_LOCAL_SLASH_COMMANDS } from "@/hooks/composer/use-slash-commands";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -652,6 +653,8 @@ export function NewConversationModalBody(props: {
     // Skip the eager catalog fetch when the modal is in Terminal mode: the chat
     // editor is hidden and cannot be pasted into. Mirrors `chatEditorIsActive`.
     isActive: chatComposerActive,
+    // No chat exists yet, so there is nothing a `/btw` could fork.
+    localSlashCommands: NO_LOCAL_SLASH_COMMANDS,
   });
 
   // Creates bind to the SUBMIT client: host-frozen for the resolved host, so a
@@ -701,8 +704,13 @@ export function NewConversationModalBody(props: {
     async (hash: string) => {
       if (hasPastedImageBytes?.(hash) !== true) return null;
       // Capture deliberately survives composer unmount, so this read is not
-      // coupled to component-lifecycle cancellation.
-      const read = await fetchEpicImage(hash, new AbortController().signal);
+      // coupled to component-lifecycle cancellation. `.fetch` directly: this
+      // one-shot read bypasses `imageBlobCache`, so it wants the byte source
+      // rather than the cache subject bundled with it.
+      const read = await fetchEpicImage.fetch(
+        hash,
+        new AbortController().signal,
+      );
       return new Uint8Array(read.bytes);
     },
     [fetchEpicImage, hasPastedImageBytes],
@@ -1260,6 +1268,13 @@ function useLatestConversationSettingsSeed(): {
       };
     }
     const agent = projection.tuiAgents.byId[latest.id];
+    if (agent.harnessId === null) {
+      // Nothing to seed FROM. A cross-host replica whose cloud row predates
+      // `runSettingsSummary` cannot say what it runs, and a composer seeded
+      // with a guessed harness would create the next agent under it. Fall back
+      // to the same "no memory yet" answer an epic with no prior agent gives.
+      return { settings: null, composerMode: fallbackComposerMode };
+    }
     return {
       settings: {
         harnessId: agent.harnessId,

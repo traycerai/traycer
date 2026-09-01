@@ -352,9 +352,20 @@ export async function provisionInstalledHostCredential(
 
     const activeClient = new WsStreamClient<HostStreamRpcRegistry>({
       registry: hostStreamRpcRegistry,
+      // `null`, and not a stale read of the slot below: `endpoint` is declared
+      // `null` here and filled in by the poller, so at CONSTRUCTION this run
+      // genuinely does not know its host yet. Declining the seed is the honest
+      // answer - and it costs nothing, because a one-shot provisioning probe
+      // has no earlier handshake in this process to seed from anyway.
+      hostId: null,
       endpoint: () => endpoint,
       bearer: () => lease,
       auth: streamAuth,
+      // No tracker wired yet on the CLI side: this is a short-lived
+      // provisioning probe, not a long-lived session a user could rescue by
+      // fixing their clock mid-run, and nothing here yet feeds server-time
+      // samples. `null` keeps the pre-existing behaviour exactly.
+      clock: null,
       hostCredentialMint: (request) => {
         mintInvoked = true;
         const settled = innerMint(request);

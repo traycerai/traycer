@@ -1,7 +1,10 @@
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 import { cloudChatVisibilitySchema } from "@traycer/protocol/host/epic/cloud-chat";
-import { tuiAgentRecordSummarySchema } from "@traycer/protocol/host/epic/tui-agent-records";
+import {
+  tuiAgentRecordSummarySchema,
+  tuiAgentRecordSummaryV12Schema,
+} from "@traycer/protocol/host/epic/tui-agent-records";
 // The PERSISTED variant, with its `.default(...)` backstops, and not the
 // wire-strict one: this is a read of a record that may have been written before
 // `serviceTier` or `profileId` existed, and the strict schema exists to stop a
@@ -211,6 +214,114 @@ export const listChatRecordsResponseSchema = z.object({
 });
 export type ListChatRecordsResponse = z.infer<
   typeof listChatRecordsResponseSchema
+>;
+
+// ─── `epic.listChatRecords@1.1` - the doc-remainder union ──────────────────
+//
+// The chat half of the eviction `epic.listTuiAgents@1.1` already made for
+// terminal agents, and it is that minor's shape field-for-field, deliberately:
+// the two methods answer the same question about two record populations, and
+// two different answers to "where did this row come from" would be a seam
+// nobody could keep straight.
+//
+// ## The failure it prevents
+//
+// `epic.listChatRecords@1.0` answers out of this host's chat registry. That was
+// the whole population while every client also held an epic-doc replica and
+// unioned the doc's `chats` subtree in itself. The lanes DELETE that replica -
+// `epic.state.subscribe` carries typed rows, not a document - so any chat that
+// lives only in the doc reaches a lane client here or nowhere.
+//
+// Two populations are still doc-resident and neither is hypothetical:
+//
+//   1. NOT-YET-SWEPT rows. The chat-sync-v2 upgrade sweep deletes doc records
+//      once they are published; until an epic has been opened by an upgraded
+//      host, its pre-upgrade entries are still only in the document.
+//   2. FOREIGN-HOST rows. The sweep is gated on the BINDING host - it refuses
+//      to touch an entry another host owns, because that host may still be
+//      writing it. So a serving host's doc map legitimately holds entries bound
+//      to un-upgraded PEER hosts, and no registry read can produce them.
+//
+// The TUI resolver's own comment names the symptom exactly: they do not error,
+// they are simply absent.
+//
+// ## The gate is the CALLER'S DECLARATION, not its version
+//
+// Serving the remainder is correct for a caller with no doc replica and WRONG
+// for one that has it - duplicate rows, and a union that must then choose
+// between its live doc entry and this host's poll-time copy of the same entry.
+// That choice has no good answer.
+//
+// Gating on this method's own negotiated minor CANNOT answer the question:
+// whether a caller holds a replica is decided by which epic READ LANE it
+// subscribed to, negotiated independently on the same connection. A renderer
+// speaking `listChatRecords@1.1` while still on the monolith is not
+// hypothetical - it is every build between this change and the lane cutover.
+//
+// So `@1.1` grows its REQUEST. The client is the only party that knows, and a
+// fact it declares cannot drift out of step with a version it negotiated
+// elsewhere. Both `hasDocReplica` declarations - this one and
+// `epic.listTuiAgents`' - flip at the same cutover, for the same reason.
+
+/**
+ * The `@1.1` row: the `@1.0` summary plus its ORIGIN PLANE.
+ *
+ * Not to be confused with `origin`, which is already on the row and answers a
+ * different question - `own` / `foreign` is about WRITE AUTHORITY (does this
+ * host's outbox own the row), while `docResident` is about WHICH STORE the row
+ * was read out of. A foreign registry replica and a doc-resident entry are both
+ * un-writable here and are not the same thing: the first is addressable through
+ * the record-backed affordances by routing to its owning host, the second is
+ * not addressable through them at all.
+ *
+ * ## Why the client is told, rather than handed a seamless union
+ *
+ * A `@1.0` client derived exactly this bit from its own doc replica, and the
+ * GUI still routes on it: a doc-resident chat is NOT addressable through the
+ * registry-backed mutations, so a client that could not tell the two apart
+ * would send `epic.renameChat` / `epic.reparentChat` an id naming no registry
+ * row. Serving the union without the marker would fix the disappearance and
+ * silently introduce that mis-route - the worse bug of the two, because it
+ * fails on WRITE instead of on render.
+ *
+ * So the marker is not metadata. It is the doc-replica-derived distinction,
+ * preserved for a client that no longer has a doc replica to derive it from.
+ */
+export const chatRecordSummaryV11Schema = chatRecordSummarySchema.extend({
+  docResident: z.boolean(),
+});
+export type ChatRecordSummaryV11 = z.infer<typeof chatRecordSummaryV11Schema>;
+
+export const listChatRecordsResponseV11Schema = z.object({
+  chats: z.array(chatRecordSummaryV11Schema),
+});
+export type ListChatRecordsResponseV11 = z.infer<
+  typeof listChatRecordsResponseV11Schema
+>;
+
+/**
+ * The `@1.1` request: the `@1.0` request plus the caller's own answer to the
+ * only question that decides what this method should serve.
+ *
+ * `hasDocReplica: true` means the caller still holds a live epic-doc replica
+ * (it subscribed on `epic.subscribe@1`) and therefore already sees every
+ * doc-resident entry continuously, without this method's help. It gets registry
+ * rows only - exactly `@1.0` content.
+ *
+ * `false` means it has no replica (it reads the epic through
+ * `epic.state.subscribe`), so the doc-resident remainder reaches it here or
+ * nowhere.
+ *
+ * REQUIRED, not optional: a `@1.1` caller always knows this about itself, and
+ * an absent field would have to be given a default - which is precisely the
+ * host-side guess this field exists to remove.
+ */
+export const listChatRecordsRequestV11Schema =
+  listChatRecordsRequestSchema.extend({
+    hasDocReplica: z.boolean(),
+  });
+export type ListChatRecordsRequestV11 = z.infer<
+  typeof listChatRecordsRequestV11Schema
 >;
 
 /**
@@ -598,6 +709,45 @@ export type HostChatRecordsSubscribeServerFrameV11 = z.infer<
   typeof hostChatRecordsSubscribeServerFrameSchemaV11
 >;
 
+// ─── `host.chatRecords.subscribe@1.2` - cross-host terminal-agent replicas ──
+//
+// The TUI roster's phase-2 freshness half. The frame KINDS are unchanged from
+// `@1.1`; what grows is the row `tuiUpsert` carries, from the single registry
+// shape to the three-arm `origin` union - so a delta about a terminal agent
+// owned by ANOTHER of the viewer's hosts can be pushed at all.
+//
+// `@1.1` stays installed and FROZEN, and the gate is the negotiated version as
+// before: a `@1.1` subscriber agreed to a `tuiUpsert` carrying the full
+// registry row, so the host must never hand it a narrow `cloud` arm it cannot
+// parse. It keeps receiving its own host's rows exactly as it did.
+export const hostChatRecordsSubscribeServerFrameSchemaV12 = z
+  .discriminatedUnion("kind", [
+    ...hostChatRecordsSubscribeSharedServerFrameSchemasV10,
+    z.object({
+      kind: z.literal("tuiUpsert"),
+      ...textFrameFields,
+      epicId: z.string().min(1),
+      tuiAgentId: z.string().min(1),
+      revision: z.number().int().nonnegative(),
+      record: tuiAgentRecordSummaryV12Schema,
+    }),
+    // Unchanged from `@1.1`, restated rather than shared: the frozen `@1.1`
+    // union is declared above this point and must not take a reference to a
+    // const introduced below it.
+    z.object({
+      kind: z.literal("tuiRemove"),
+      ...textFrameFields,
+      epicId: z.string().min(1),
+      tuiAgentId: z.string().min(1),
+      reason: chatRecordRemovalReasonSchema,
+    }),
+  ])
+  .superRefine(refineChatUpsertEnvelope)
+  .superRefine(refineTuiUpsertEnvelope);
+export type HostChatRecordsSubscribeServerFrameV12 = z.infer<
+  typeof hostChatRecordsSubscribeServerFrameSchemaV12
+>;
+
 export const hostChatRecordsSubscribeClientFrameSchemaV10 =
   z.discriminatedUnion("kind", [
     z.object({
@@ -622,5 +772,13 @@ export const hostChatRecordsSubscribeV11 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 1 } as const,
   openRequestSchema: hostChatRecordsSubscribeOpenRequestSchemaV10,
   serverFrameSchema: hostChatRecordsSubscribeServerFrameSchemaV11,
+  clientFrameSchema: hostChatRecordsSubscribeClientFrameSchemaV10,
+});
+
+export const hostChatRecordsSubscribeV12 = defineStreamRpcContract({
+  method: "host.chatRecords.subscribe",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  openRequestSchema: hostChatRecordsSubscribeOpenRequestSchemaV10,
+  serverFrameSchema: hostChatRecordsSubscribeServerFrameSchemaV12,
   clientFrameSchema: hostChatRecordsSubscribeClientFrameSchemaV10,
 });

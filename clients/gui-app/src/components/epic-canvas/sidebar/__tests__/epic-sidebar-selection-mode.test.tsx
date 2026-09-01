@@ -642,6 +642,10 @@ vi.mock("@/hooks/epic/use-epic-tui-agent-mutations", () => ({
 }));
 
 vi.mock("@/providers/use-open-epic-handle", () => ({
+  // The chat write-routing gate reads the session through the
+  // NON-throwing accessor. `null` here is the honest double: this suite
+  // mounts no epic store, and no session means no epic write path to gate.
+  useMaybeOpenEpicHandle: () => null,
   useOpenEpicHandle: () => {
     if (!testState.sessionReady) {
       throw new Error(
@@ -653,6 +657,11 @@ vi.mock("@/providers/use-open-epic-handle", () => ({
       store: {
         getState: () => ({
           deleteArtifact: testState.localDeleteArtifact,
+          // The unread marker computes its variant from BOTH stores, reading
+          // the tree non-reactively through this handle so a body-write stamp
+          // cannot re-render the row. That makes `tree` part of the state this
+          // double has to carry.
+          tree: testState.tree,
           renameArtifact: vi.fn(),
           // The rename path stamps an optimistic overlay patch before firing
           // the RPC, and reads the stamp tombstone back on settle. An empty
@@ -832,6 +841,15 @@ vi.mock("@/lib/epic-selectors", () => ({
         testState.activityTierById.get(id) ?? "turn",
       ]),
     ),
+  // ChatProgressIcon reads the REGISTERED (keyed, non-throwing) selector for
+  // the same data, so a whole-module mock has to answer that form too.
+  useRegisteredEpicAgentActivityTiers: () =>
+    new Map(
+      [...testState.activeAgentIds].map((id) => [
+        id,
+        testState.activityTierById.get(id) ?? "turn",
+      ]),
+    ),
   useEpicArtifact: (artifactId: string | null) => {
     if (artifactId === null) return null;
     const node = testState.tree.nodeById[artifactId];
@@ -871,6 +889,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   // effect's dependency never changes and it never seeds in these tests.
   useEpicNodeWorkspaceFolders: () => EMPTY_WORKSPACE_FOLDERS,
   useEpicPermissionRole: () => testState.permissionRole,
+  useRegisteredEpicPermissionRole: () => testState.permissionRole,
   useEpicSnapshotMeta: () => ({ epicLight: { title: "Test epic" } }),
   useEpicTreeIndex: () => testState.tree,
   useEpicTreeNode: (nodeId: string) => testState.tree.nodeById[nodeId] ?? null,
@@ -883,6 +902,13 @@ vi.mock("@/hooks/use-epic-store", () => ({
   useEpicStore: (selector: (state: unknown) => unknown) =>
     selector({
       snapshotLoaded: testState.snapshotLoaded,
+      // The tree index, because the row-level tree reads subscribe HERE now
+      // rather than through `useEpicTreeIndex`. A row that used to take the
+      // whole slice re-rendered on every record change; it now selects its own
+      // answer out of the store, so this fake has to carry what production
+      // reads. Same object the `epic-selectors` fake hands back, so the two
+      // mocks cannot disagree about the shape of the tree.
+      tree: testState.tree,
       artifacts: {
         allIds: testState.records
           .filter((record) => record.type !== "chat")
@@ -1012,6 +1038,7 @@ import {
   BASE_PAD_LEFT,
   INDENT_PX,
 } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
+import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
 const TAB_ID = "tab-1";
 const EPIC_ID = "epic-1";
@@ -1961,6 +1988,35 @@ describe("epic sidebar selection mode", () => {
     expect(
       screen.queryByRole("menuitem", { name: "Search artifacts" }),
     ).toBeNull();
+  });
+
+  it("moves focus from the Agents overflow menu into chat search", async () => {
+    seedChatTree();
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Search agents" }));
+
+    await waitFor(() => {
+      expect(document.activeElement).toBe(
+        screen.getByRole("textbox", { name: "Search agents" }),
+      );
+    });
+  });
+
+  it("moves focus from the Artifacts overflow menu into artifact search", async () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Search artifacts" }));
+
+    await waitFor(() => {
+      expect(document.activeElement).toBe(
+        screen.getByRole("combobox", { name: "Search artifacts" }),
+      );
+    });
   });
 
   it("hides artifact selection when there are no artifacts to select", () => {
@@ -3133,6 +3189,7 @@ const createdSessionHandles: ChatSessionStoreHandle[] = [];
  */
 function createSessionHandle(chatId: string): ChatSessionStoreHandle {
   const handle = createChatSessionStore({
+    environment: CHAT_STORE_TEST_ENVIRONMENT,
     hostId: "host-a",
     epicId: EPIC_ID,
     chatId,
@@ -3955,7 +4012,7 @@ describe("chat row archive", () => {
 
   // --- rename settles the editor on COMMIT, not on the ack ----------------
 
-  it("closes the rename input on commit while the rename RPC is still in flight", () => {
+  it("closes the rename input on commit while the rename RPC is still in flight", async () => {
     seedChatTree();
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
@@ -3973,8 +4030,15 @@ describe("chat row archive", () => {
       "chat-root",
       "Renamed while in flight",
     );
-    expect(testState.renameChatMutateAsync).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "Renamed while in flight" }),
+    // AWAITED: `beginRenameMutation` is a bridge round trip, so the RPC it
+    // gates is issued a microtask after the key event rather than inside it.
+    // The stamp assertion above still reads synchronously - that call IS made
+    // on the event - which is what makes this a delivery boundary rather than
+    // a wholesale change of when the commit starts.
+    await waitFor(() =>
+      expect(testState.renameChatMutateAsync).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Renamed while in flight" }),
+      ),
     );
     expect(testState.retirePendingMutation).not.toHaveBeenCalled();
     expect(
@@ -3982,7 +4046,7 @@ describe("chat row archive", () => {
     ).toBeNull();
   });
 
-  it("issues a second rename committed while the first is still in flight", () => {
+  it("issues a second rename committed while the first is still in flight", async () => {
     seedChatTree();
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
@@ -4015,7 +4079,10 @@ describe("chat row archive", () => {
       "chat-root",
       "Second title",
     );
-    expect(testState.renameChatMutateAsync).toHaveBeenCalledTimes(2);
+    // AWAITED for the reason the in-flight pin above states.
+    await waitFor(() =>
+      expect(testState.renameChatMutateAsync).toHaveBeenCalledTimes(2),
+    );
     expect(testState.renameChatMutateAsync).toHaveBeenLastCalledWith(
       expect.objectContaining({ title: "Second title" }),
     );

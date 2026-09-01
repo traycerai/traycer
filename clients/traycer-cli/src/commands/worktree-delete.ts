@@ -127,9 +127,15 @@ async function runWorktreeDelete(
   const lease = new MutableBearerLease(auth.token, auth.userId);
   const client = new WsStreamClient<HostStreamRpcRegistry>({
     registry: hostStreamRpcRegistry,
+    // The host this endpoint already resolves to. Safe even where `endpoint` is
+    // re-resolved later in the run: the seed is consulted only before this
+    // client's first handshake, which is while this id is still the current
+    // one, and the latch closes it for good after that.
+    hostId: endpoint.hostId,
     endpoint: () => endpoint,
     bearer: () => lease,
     auth: null,
+    clock: null,
     // Provisioning rides along here too. It used to be opted out because a
     // one-shot command must not interrupt with an email-OTP challenge; now that
     // the mint is silent there is nothing to interrupt, and only a host that
@@ -220,6 +226,7 @@ function runDeleteCommand(
       wsStreamClient: client,
       commandId: randomUUID(),
       source: "cli",
+      epicId: undefined,
       targets: [{ worktreePath, scripts: null }],
       callbacks: {
         onTargetStarted: (_worktreePath, hasTeardown) =>

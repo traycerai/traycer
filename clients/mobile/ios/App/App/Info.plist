@@ -37,8 +37,24 @@
 	<false/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<!-- The iOS half of a direct download (IFileSaveHost.downloadFile), which
+	     writes into the app's own Documents container. iOS has no shared
+	     downloads folder an app may write to unaided, so these two keys are
+	     what turn that container into a real destination: together they put
+	     "Traycer" under On My iPhone in the Files app, where the written PNG
+	     can be opened, moved and shared like any other file. Without them the
+	     write still succeeds and the user can never reach it, which would make
+	     the Download control a lie on this platform. Both are required - the
+	     first surfaces the folder, the second lets other apps open its files
+	     in place rather than only copy them out. -->
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>Traycer uses the camera to scan the sign-in QR code shown on your desktop.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Traycer saves exported images to your photo library when you choose Save Image.</string>
+	<key>UIFileSharingEnabled</key>
+	<true/>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>

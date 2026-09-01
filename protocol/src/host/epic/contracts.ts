@@ -117,7 +117,6 @@ import {
   epicSubscribeV14,
   epicSubscribeV15,
   epicSubscribeV16,
-  epicSubscribeV20,
 } from "@traycer/protocol/host/epic/subscribe";
 import {
   listCloudChatPayloadsRequestSchema,
@@ -149,7 +148,9 @@ import {
 } from "@traycer/protocol/host/epic/chat-replica-read";
 import {
   listChatRecordsRequestSchema,
+  listChatRecordsRequestV11Schema,
   listChatRecordsResponseSchema,
+  listChatRecordsResponseV11Schema,
   getChatRunSettingsRequestSchema,
   getChatRunSettingsResponseSchema,
   getChatRunSettingsResponseSchemaV10,
@@ -1000,6 +1001,46 @@ export const epicListChatRecordsV10 = defineRpcContract({
   responseSchema: listChatRecordsResponseSchema,
 });
 
+// `@1.1` - the doc-remainder union, gated on the CALLER'S declaration that it
+// no longer holds an epic-doc replica. Mirrors `epic.listTuiAgents@1.1` field
+// for field; the reasoning lives beside the schemas in `chat-records.ts`.
+export const epicListChatRecordsV11 = defineRpcContract({
+  method: "epic.listChatRecords",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: listChatRecordsRequestV11Schema,
+  responseSchema: listChatRecordsResponseV11Schema,
+});
+
+/**
+ * Both fills are FACTS about a `@1.0` peer, not defaults - which is what makes
+ * the upgraded value safe to ACT on rather than merely well-typed.
+ *
+ * REQUEST, `hasDocReplica: true`: a caller speaking only `@1.0` predates the
+ * lane surface entirely - `@1.1` and `epic.state.subscribe` ship in the same
+ * `@traycer/protocol`, so there is no build that has one without the other. It
+ * therefore holds a doc replica, and the host must serve it registry rows only.
+ * A wrong guess here would hand the oldest clients in the fleet the
+ * duplicate-row conflict this whole minor exists to avoid.
+ *
+ * RESPONSE, `docResident: false`: a host serving `@1.0` returns REGISTRY ROWS
+ * ONLY by construction, so every row an older host can produce is
+ * registry-backed. A `@1.1` client reading an older host still has to union
+ * that host's doc map itself - the upgrade path cannot invent rows the wire
+ * never carried, and must not pretend it did.
+ */
+export const epicListChatRecordsUpgradeV10ToV11 = defineUpgradePath<
+  typeof epicListChatRecordsV10,
+  typeof epicListChatRecordsV11
+>({
+  from: epicListChatRecordsV10.schemaVersion,
+  to: epicListChatRecordsV11.schemaVersion,
+  upgradeRequest: (request) => ({ ...request, hasDocReplica: true }),
+  upgradeResponse: (response) => ({
+    ...response,
+    chats: response.chats.map((row) => ({ ...row, docResident: false })),
+  }),
+});
+
 // One chat image attachment's bytes, resolved by the VIEWER's tab host (local
 // disk store first, cloud blob pass-through second). Optional and off the
 // released floor like every other read above it: a host that predates it
@@ -1107,6 +1148,14 @@ export const epicGetChatRunSettingsDowngradeV20ToV10 = defineDowngradePath<
 // ruling). Exported from there via the epic index, not re-exported here,
 // so `export *` consumers see exactly one binding.
 
+// The three LANE stream contracts (`epic.state.subscribe`,
+// `epic.status.subscribe`, `artifact.subscribe`) and the two lane unaries
+// (`epic.getWorkspaceContext`, `epic.retryMigration`) live beside their schemas
+// in `state-subscribe.ts` / `status-subscribe.ts` / `artifact-subscribe.ts` /
+// `lane-unaries.ts` - the `tui-agent-records.ts` and `communication-graph.ts`
+// arrangement, not this file's. They are exported through the epic index, not
+// re-exported here, so `export *` consumers see exactly one binding.
+
 export {
   epicSubscribeV10,
   epicSubscribeV11,
@@ -1115,5 +1164,4 @@ export {
   epicSubscribeV14,
   epicSubscribeV15,
   epicSubscribeV16,
-  epicSubscribeV20,
 };

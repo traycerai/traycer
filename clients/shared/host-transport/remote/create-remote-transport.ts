@@ -8,6 +8,7 @@ import type {
   OpenFrameBearerSource,
 } from "@traycer-clients/shared/auth/bearer-source";
 import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
+import type { ServerClockSkewSignal } from "@traycer-clients/shared/clock/server-time-offset-tracker";
 import type { TransportEvidenceReporter } from "@traycer-clients/shared/host-selection/transport-evidence";
 import type { IStreamWebSocketFactory } from "../ws-stream-factory";
 import { RemoteSession, type IRemoteSession } from "./remote-session";
@@ -15,7 +16,11 @@ import { RemoteHostMessenger } from "./remote-host-messenger";
 import { RemoteStreamClient } from "./remote-stream-client";
 import { createAttachGrantProvider } from "./grant-client";
 import { decodeHostPublicKey } from "./noise-channel";
-import { acquireRemoteSession } from "./active-remote-sessions";
+import {
+  acquireRemoteSession,
+  planRestrictedReprobeAt,
+  type RemoteSessionIdentity,
+} from "./active-remote-sessions";
 
 /**
  * Assembles the client remote transport for one host: one `RemoteSession`,
@@ -110,6 +115,17 @@ export interface CreateRemoteTransportOptions<
    * the app revalidator - a cache hit reuses whatever the creator wired.
    */
   readonly auth: StreamAuthRevalidator | null;
+  /**
+   * Clock-skew verdict for the session's `UNAUTHORIZED` park (see
+   * `RemoteSessionOptions.clock`).
+   *
+   * Deliberately NOT part of the cache identity above, for the same reason
+   * `clientIdentity` is not: unlike `auth`, this cannot vary between
+   * consumers. The wall clock is a property of the machine, so every consumer
+   * in the process passes the one app-wide tracker - a cache hit inheriting it
+   * is inheriting the only value any consumer could have passed.
+   */
+  readonly clock: ServerClockSkewSignal | null;
   readonly rpcRegistry: RpcRegistry;
   readonly streamRegistry: StreamRegistry;
   readonly webSocketFactory: IStreamWebSocketFactory;
@@ -200,20 +216,21 @@ export function createRemoteHostTransport<
     return null;
   }
 
+  const identity: RemoteSessionIdentity = {
+    hostId: options.hostId,
+    userId: options.userId,
+    hostPublicKey: options.hostPublicKey,
+    relayAttachUrl: options.relayAttachUrl,
+    // Part of the identity, not a per-consumer option: on a cache hit the
+    // factory below never runs, so `auth` would otherwise be silently
+    // inherited from whichever consumer happened to build the session first.
+    authRecovery: options.auth === null ? "terminal" : "revalidate",
+    // Same reasoning applied to WHICH auth context wired those closures, not
+    // just which policy they implement. See `RemoteSessionIdentity.authEpoch`.
+    authEpoch: authEpochFor(bearerSource),
+  };
   const session = acquireRemoteSession(
-    {
-      hostId: options.hostId,
-      userId: options.userId,
-      hostPublicKey: options.hostPublicKey,
-      relayAttachUrl: options.relayAttachUrl,
-      // Part of the identity, not a per-consumer option: on a cache hit the
-      // factory below never runs, so `auth` would otherwise be silently
-      // inherited from whichever consumer happened to build the session first.
-      authRecovery: options.auth === null ? "terminal" : "revalidate",
-      // Same reasoning applied to WHICH auth context wired those closures, not
-      // just which policy they implement. See `RemoteSessionIdentity.authEpoch`.
-      authEpoch: authEpochFor(bearerSource),
-    },
+    identity,
     { proactiveWakeEligible: options.proactiveWakeEligible },
     () => {
       const grantProvider = createAttachGrantProvider({
@@ -234,6 +251,7 @@ export function createRemoteHostTransport<
         grantProvider,
         bearer: options.bearer,
         auth: options.auth,
+        clock: options.clock,
         rpcRegistry: options.rpcRegistry,
         streamRegistry: options.streamRegistry,
         webSocketFactory: options.webSocketFactory,
@@ -247,7 +265,9 @@ export function createRemoteHostTransport<
   return {
     session,
     messenger: new RemoteHostMessenger(session),
-    streamClient: new RemoteStreamClient(session),
+    streamClient: new RemoteStreamClient(session, () =>
+      planRestrictedReprobeAt(identity),
+    ),
   };
 }
 

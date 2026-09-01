@@ -8,6 +8,7 @@ import {
   ChatSessionRegistry,
   MAX_ACTIVE_CHAT_IDLE_DEFER_MS,
 } from "@/stores/chats/session-registry";
+import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
 const TTL_MS = 10 * 60 * 1_000;
 // High enough that existing TTL-focused tests (≤2 sessions) never hit the cap.
@@ -22,6 +23,7 @@ function createHandle(epicId: string, chatId: string) {
   let closeCount = 0;
   return {
     handle: createChatSessionStore({
+      environment: CHAT_STORE_TEST_ENVIRONMENT,
       hostId: "host-a",
       epicId,
       chatId,

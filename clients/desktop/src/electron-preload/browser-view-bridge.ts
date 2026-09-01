@@ -5,8 +5,9 @@ import {
 } from "../ipc-contracts/ipc-channels";
 import type {
   BrowserViewBridge,
-  BrowserCookieCryptoState,
   BrowserPrimaryProfileCaptureResult,
+  BrowserStoreKeyUnwrapResult,
+  BrowserStoreKeyWrapResult,
   BrowserViewCapturePageResult,
   BrowserViewCertificateErrorChange,
   BrowserViewDebugSnapshot,
@@ -16,11 +17,13 @@ import type {
   BrowserViewOverlayOcclusionResult,
   BrowserViewOverlayReleaseResult,
   BrowserViewSnapshotInvalidatedChange,
-  BrowserViewElectronTabHandoffChange,
   BrowserViewNativeTabCapability,
   BrowserViewNativeTabStatusChange,
 } from "@traycer-clients/shared/platform/browser-view";
-import type { BrowserCdpResult } from "@traycer/protocol/host/browser/contracts";
+import type {
+  BrowserCdpResult,
+  BrowserPrimaryProfileDelta,
+} from "@traycer/protocol/host/browser/contracts";
 import type {
   BrowserAnnotationAttachedIpcEvent,
   BrowserAnnotationSessionIpcEvent,
@@ -138,14 +141,49 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
           RunnerHostInvoke.browserViewReleaseOverlay,
           input,
         ) as Promise<BrowserViewOverlayReleaseResult>,
-      getCookieCryptoState: () =>
+      getSaveLogins: () =>
         ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewCookieCryptoStateGet,
-        ) as Promise<BrowserCookieCryptoState>,
+          RunnerHostInvoke.browserViewSaveLoginsGet,
+        ) as Promise<boolean>,
+      setSaveLogins: (enabled) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.browserViewSaveLoginsSet,
+          enabled,
+        ) as Promise<boolean>,
+      wrapStoreKey: (rawKey) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.browserViewStoreKeyWrap,
+          rawKey,
+        ) as Promise<BrowserStoreKeyWrapResult>,
+      unwrapStoreKey: (wrappedKey) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.browserViewStoreKeyUnwrap,
+          wrappedKey,
+        ) as Promise<BrowserStoreKeyUnwrapResult>,
+      forgetLogins: () =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.browserViewForgetLogins,
+        ) as Promise<void>,
+      onPrimaryProfileDelta: (handler) =>
+        subscribe<BrowserPrimaryProfileDelta>(
+          RunnerHostEvent.browserViewPrimaryProfileDelta,
+          handler,
+        ),
       capturePrimaryProfile: () =>
         ipcRenderer.invoke(
           RunnerHostInvoke.browserViewPrimaryProfileCapture,
         ) as Promise<BrowserPrimaryProfileCaptureResult>,
+      // The tile key, not a domain: main derives the site from that tile's own
+      // URL, so no renderer can name a site it is not looking at.
+      clearSite: (input) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.browserViewClearSite,
+          input,
+        ) as Promise<void>,
+      evictSite: (domain) =>
+        ipcRenderer.invoke(RunnerHostInvoke.browserViewEvictSite, {
+          domain,
+        }) as Promise<void>,
       onFindChange: (handler) =>
         subscribe<BrowserViewFindChange>(
           RunnerHostEvent.browserViewFindChange,
@@ -203,11 +241,6 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
       onNativeTabStatusChange: (handler) =>
         subscribe<BrowserViewNativeTabStatusChange>(
           RunnerHostEvent.browserViewNativeTabStatusChange,
-          handler,
-        ),
-      onElectronTabHandoff: (handler) =>
-        subscribe<BrowserViewElectronTabHandoffChange>(
-          RunnerHostEvent.browserViewElectronTabHandoff,
           handler,
         ),
     },

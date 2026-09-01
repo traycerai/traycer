@@ -187,6 +187,7 @@ describe("useHostNotificationIndicators recovery", () => {
             if (responseMode.value === "error") {
               return Promise.reject(
                 new RetryableTransportError({
+                  replaySafetyFromKey: false,
                   code: "RPC_ERROR",
                   message: "WebSocket dial timed out after 10000ms",
                   requestId: `request-${requestCount.value}`,

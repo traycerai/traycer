@@ -36,9 +36,6 @@ vi.mock("@/components/epic-canvas/renderers/use-browser-view-snapshot", () => ({
 vi.mock("@/hooks/browser/use-browser-annotation-session", () => ({
   useBrowserAnnotationSession: () => null,
 }));
-vi.mock("@/lib/browser-view/use-browser-cookie-crypto-state", () => ({
-  useBrowserCookieCryptoState: () => null,
-}));
 vi.mock("@/lib/browser-view/tiles/visible-tile-registry", async (load) => {
   const actual =
     await load<
@@ -94,6 +91,7 @@ const CHROME_CONTROLLER: TileController = {
     siteInfo: false,
     annotate: false,
   },
+  profile: "primary",
   url: "https://example.com/",
   addressValue: "https://example.com/",
   canGoBack: false,
@@ -101,7 +99,6 @@ const CHROME_CONTROLLER: TileController = {
   zoomPercent: 100,
   viewportPreset: "responsive",
   disabled: false,
-  cookieCryptoState: null,
   zoomLocked: false,
   annotation: null,
   onNavigate: () => undefined,
@@ -115,6 +112,7 @@ const CHROME_CONTROLLER: TileController = {
   onResetZoom: () => undefined,
   onViewportPresetChange: () => undefined,
   onOpenDevTools: () => undefined,
+  onClearSite: () => undefined,
 };
 
 interface NativeStatusChange {

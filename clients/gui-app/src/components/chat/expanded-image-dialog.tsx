@@ -7,6 +7,12 @@ import { DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { useOpenSavedFile } from "@/hooks/files/use-open-saved-file";
 import { imageMutationKeys } from "@/lib/query-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
+import { useFileSaveHost } from "@/hooks/files/use-file-save-host";
+import { useCanCopyImages } from "@/hooks/images/use-can-copy-images";
+import {
+  canDownloadToDevice,
+  hasSeparateDownloadRoute,
+} from "@/lib/files/save-blob-to-disk";
 
 import {
   type ImageAction,
@@ -118,7 +124,9 @@ function ExpandedImageActionBar(props: {
   readonly alt: string;
   readonly suggestedName: string | null;
 }): ReactNode {
+  const fileSave = useFileSaveHost();
   const openSaved = useOpenSavedFile();
+  const canCopyOnShell = useCanCopyImages();
   const imageAction = useMutation<void, Error, ImageAction>({
     mutationKey: imageMutationKeys.perform(),
     mutationFn: (action) =>
@@ -130,6 +138,7 @@ function ExpandedImageActionBar(props: {
           props.suggestedName ??
           imageFileName(props.alt, props.src, props.mediaType),
         openSaved: openSaved.mutate,
+        fileSave,
       }),
     onError: (error, action) =>
       toastFromRunnerError(error, `Failed to ${action} image`),
@@ -138,9 +147,14 @@ function ExpandedImageActionBar(props: {
   return (
     <ImageActions
       pendingAction={imageAction.isPending ? imageAction.variables : null}
-      canCopy={isClipboardImageMediaType(props.mediaType)}
+      // The media type must take a clipboard image AND the shell must actually
+      // reach the system clipboard with one.
+      canCopy={isClipboardImageMediaType(props.mediaType) && canCopyOnShell}
+      canShare={hasSeparateDownloadRoute(fileSave)}
+      canDownload={canDownloadToDevice(fileSave)}
       remote={null}
       onCopy={() => imageAction.mutate("copy")}
+      onShare={() => imageAction.mutate("share")}
       onDownload={() => imageAction.mutate("download")}
     />
   );

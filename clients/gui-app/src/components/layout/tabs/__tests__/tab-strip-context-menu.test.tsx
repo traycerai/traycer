@@ -3,10 +3,8 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { TabContextMenuContent } from "@/components/layout/tabs/tab-strip-context-menu";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
-import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-} from "@/stores/epics/open-epic/store";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
+import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import type { HeaderTab } from "@/stores/tabs/types";
 
 const EPIC_TAB: Extract<HeaderTab, { kind: "epic" }> = {
@@ -32,11 +30,14 @@ const noopStreamClientFactory: EpicStreamClientFactory = () => ({
 });
 
 function createPausedEpicHandle(epicId: string, retained: boolean) {
-  const handle = createOpenEpicStore({
+  const handle = openStoreForTest({
     epicId,
-    streamClientFactory: noopStreamClientFactory,
     userId: null,
-    onAuthError: null,
+    factories: {
+      streamClientFactory: noopStreamClientFactory,
+      laneSelection: null,
+    },
+    writeCommand: null,
   });
   handle.store.setState(
     retained

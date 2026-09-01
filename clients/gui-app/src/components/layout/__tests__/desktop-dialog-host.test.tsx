@@ -1,3 +1,4 @@
+import { INERT_ROOT_STATE_PORT } from "@/stores/epics/open-epic/test-support/root-state-port-fixture";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -50,6 +51,7 @@ import type {
 } from "@/stores/epics/open-epic/store";
 import {
   EMPTY_CHATS_SLICE,
+  EMPTY_COMMENT_THREADS_SLICE,
   EMPTY_PROJECTED_SLICES,
 } from "@/stores/epics/open-epic/types";
 import { createReportIssueContext } from "@/lib/report-issue-context";
@@ -307,6 +309,7 @@ function createBaseRunnerHost(): IRunnerHost {
     authnBaseUrl: "https://auth.example.invalid",
     relayBaseUrl: "wss://relay.example.invalid/attach",
     hasLocalHost: true,
+    canCopyImages: true,
     validateAuthTokenIdentity: () =>
       Promise.resolve({ kind: "rejected" as const }),
     listRegisteredHosts: () =>
@@ -346,6 +349,7 @@ function createBaseRunnerHost(): IRunnerHost {
       delete: () => Promise.resolve(),
     },
     notifications: {
+      systemSettings: null,
       show: () => Promise.resolve("presented" as const),
       onForegroundDisplay: () => ({ dispose: () => undefined }),
       onClick: () => ({ dispose: () => undefined }),
@@ -364,6 +368,7 @@ function createBaseRunnerHost(): IRunnerHost {
       copyDroppedFilePaths: (paths) => Promise.resolve(paths),
       readNativeClipboardFilePaths: () => Promise.resolve([]),
     },
+    fileSave: null,
     tokenStore: {
       get: () => Promise.resolve(null),
       signIn: () => Promise.resolve(),
@@ -453,23 +458,39 @@ function createDirtyEpicHandle(
     doc,
     awareness,
     bindingVersion: 0,
+    installedArm: null,
+    chatIngestSeq: 0,
+    tuiAgentIngestSeq: 0,
     ...EMPTY_PROJECTED_SLICES,
     chatRecords: EMPTY_CHATS_SLICE,
     chatRecordListAuthoritative: true,
     chatRetractions: {},
     tuiAgentRecords: EMPTY_PROJECTED_SLICES.tuiAgents,
     tuiAgentRetractions: {},
-    artifactRooms: { stateByArtifactRoomId: {} },
+    // Empty is this field's TRUE value on a legacy connection - the `@1` wire
+    // carries no comment records at all - so the poll remains the source there.
+    commentThreads: EMPTY_COMMENT_THREADS_SLICE,
+    // Keyed by ARTIFACT id since the cutover - a room hosts many bodies, and
+    // `artifact.subscribe` has no rooms at all.
+    artifactRooms: { stateByArtifactId: {} },
     artifactRoomDirtyByArtifactRoomId: {},
     rootDirty: false,
     hasDirtySnapshotForOpenCycle: true,
-    durabilityLegsNegotiated: false,
-    durabilityStatusNegotiated: false,
     snapshotMeta: null,
     permissionRole: null,
     connectionStatus: "open",
     hostTransportStatus: "open",
+    recordsTransportStatus: "open",
     cloudSyncStatus: "connected",
+    durabilityStatus: null,
+    durabilityPauseReason: null,
+    durabilityPromotionState: null,
+    localProtection: null,
+    cloudFreshness: null,
+    durabilityLegsNegotiated: false,
+    durabilityStatusNegotiated: false,
+    retainedDurabilityStatus: null,
+    retainedDurabilityPauseReason: null,
     hasFreshCloudSyncStatus: true,
     hasConnectedOnce: true,
     accessLost: false,
@@ -486,6 +507,7 @@ function createDirtyEpicHandle(
     dirtyWatermarkStateVectorBase64: null,
     latestHostStateVectorBase64: null,
     unsyncedQueueSize,
+    writeCommands: [],
     lastFocusedArtifactId: null,
     lastFocusedThreadId: null,
     setLastFocusedArtifactId: (artifactId) => {
@@ -500,7 +522,16 @@ function createDirtyEpicHandle(
       set({ isDirty: false, unsyncedQueueSize: 0 });
     },
     requestFreshSnapshot: () => undefined,
+    retryTransport: () => undefined,
     retryMigration: () => undefined,
+    // These became ASYNC when the replica moved: the queue mints ids and the
+    // mutations stamp the overlay on the worker thread, so every one of them
+    // answers over the bridge. The stub keeps its verdicts and only changes
+    // shape.
+    enqueueWriteCommand: () => Promise.resolve(null),
+    waitForWriteCommand: () => Promise.reject(new Error("unused in this test")),
+    retryWriteCommand: () => undefined,
+    discardWriteCommand: () => undefined,
     applyChatRecords: () => undefined,
     peekChatIngestSeq: () => 0,
     markChatRecordListAuthoritative: () => undefined,
@@ -514,37 +545,54 @@ function createDirtyEpicHandle(
     dispose: () => undefined,
     createArtifact: () => "fake-id",
     createTerminalChat: () => null,
-    renameArtifact: () => false,
-    beginRenameMutation: () => null,
-    beginEpicTitleMutation: () => null,
-    beginReparentMutation: () => null,
-    retirePendingMutation: () => false,
-    isLatestRenameStamp: () => false,
+    renameArtifact: () => Promise.resolve(false),
+    beginRenameMutation: () => Promise.resolve(null),
+    beginEpicTitleMutation: () => Promise.resolve(null),
+    beginReparentMutation: () => Promise.resolve(null),
+    retirePendingMutation: () => Promise.resolve(false),
+    isLatestRenameStamp: () => Promise.resolve(false),
     ingestFenceIdentity: 0,
-    deleteArtifact: () => false,
-    reparentArtifact: () => false,
-    setEpicTitle: () => false,
+    deleteArtifact: () => Promise.resolve(false),
+    reparentArtifact: () => Promise.resolve(false),
     readAttachmentBytes: () => Promise.resolve(null),
     hasAttachmentBytes: () => false,
+    // The WAITING leg, distinct from the prompt read above - see
+    // `epic-replica-reads.ts`, whose headers say the two must not be merged.
+    awaitAttachmentBytes: () => Promise.resolve(null),
+    heldAttachmentHashes: [],
+    bodyResidencyVersion: 0,
     getArtifactFragment: () => null,
     getArtifactBodyAwareness: () => null,
     getArtifactBodyAvailability: () => "unavailable",
-    getArtifactRoomId: () => null,
+    getArtifactBodyDocKey: () => null,
     acquireArtifactBodyLease: () => () => {},
+    acquireResidentArtifactBodyLease: () => ({
+      release: () => {},
+      resident: Promise.resolve(),
+    }),
     readArtifactTitle: () => null,
     detachTransport: () => undefined,
   }));
   return {
     epicId,
     userId: null,
-    doc,
-    awareness,
+    // No `doc` / `awareness`: a production handle has neither, because the
+    // replica lives on the worker thread and a `Y.Doc` cannot cross a
+    // structured clone.
     store,
+    projection: {
+      accept: () => null,
+      apply: () => {},
+      reject: () => {},
+    },
+    body: { applyDocUpdate: () => {}, applyAwareness: () => {} },
     dispose: () => undefined,
     detachTransport: () => undefined,
     requestFreshSnapshot: () => undefined,
+    retryTransport: () => undefined,
     isClean: () => !store.getState().isDirty,
     hotArtifactRoomIdsForTests: () => [],
+    ...INERT_ROOT_STATE_PORT,
   };
 }
 

@@ -201,8 +201,8 @@ export interface IRunnerHost {
   ): Promise<StepUpChallengeFetchResult>;
 
   /**
-   * Mints a one-time link-login code under the user bearer — the "Link a
-   * phone" QR surface. The RESULT carries the raw code back into the renderer
+   * Mints a one-time link-login code under the user bearer — the "Link mobile
+   * app" QR surface. The RESULT carries the raw code back into the renderer
    * by necessity: the QR that must display it renders there. The code is
    * short-lived and single-use, and the surface re-mints while open, so the
    * renderer never holds a long-lived secret.
@@ -385,6 +385,13 @@ export interface IRunnerHost {
   readonly workspaceFolders: IWorkspaceFoldersHost;
   readonly fileDrops: IFileDropHost;
   /**
+   * How this shell commits a blob the user asked to keep, or `null` where it
+   * owns no native route and the caller falls back to the browser save APIs.
+   * A capability, not an identity: a plain desktop browser tab is `null` here
+   * without being any less of a desktop.
+   */
+  readonly fileSave: IFileSaveHost | null;
+  /**
    * Desktop display-zoom surface. Present on desktop shells and `null` on
    * shells that do not own a native app-scale control.
    */
@@ -415,6 +422,24 @@ export interface IRunnerHost {
    * stream are not exposed to a branch on capability.
    */
   readonly hasLocalHost: boolean;
+
+  /**
+   * Whether an image written through the web clipboard API on this shell
+   * actually reaches the system clipboard.
+   *
+   * `true` everywhere the write is honoured - desktop, a browser tab, and
+   * WKWebView, which is what the promise-valued `ClipboardItem` path exists
+   * for. `false` on Android's WebView, where the write RESOLVES having written
+   * nothing: Chromium reaches the Android clipboard for an image through an
+   * embedder-supplied clipboard image file provider, and that embedder installs
+   * none. Nothing rejects, so a surface cannot learn this by trying.
+   *
+   * A capability rather than a platform identity: what a surface needs to know
+   * is whether offering "Copy image" would report a success the clipboard never
+   * received, and shells answer that for themselves. Callers that copy TEXT are
+   * unaffected and must not consult this.
+   */
+  readonly canCopyImages: boolean;
 
   /**
    * Subscribes to local-host snapshot changes. The handler fires
@@ -669,6 +694,75 @@ export interface IFileDropHost {
    * paste event whose DOM clipboard has no usable content.
    */
   readNativeClipboardFilePaths(): Promise<readonly string[]>;
+}
+
+/** The bytes and their identity, as handed to `IFileSaveHost.saveFile`. */
+export interface FileSaveRequest {
+  readonly name: string;
+  readonly type: string;
+  readonly bytes: ArrayBuffer;
+}
+
+/**
+ * Where a completed save landed. `name` is display copy for the confirmation;
+ * `path` is the absolute location, which only a shell whose save mechanism
+ * REPORTS one can fill in - a native save dialog names the file it wrote,
+ * while a share sheet hands the bytes to another app and never says where they
+ * went. `path` is `null` there, and no "open it" affordance is possible.
+ */
+export interface SavedFileLocation {
+  readonly name: string;
+  readonly path: string | null;
+}
+
+/**
+ * The shell's native "put these bytes somewhere the user keeps files"
+ * capability, or `null` on `IRunnerHost.fileSave` where the shell has none and
+ * the caller must fall back to the web save APIs (a plain browser tab, tests).
+ *
+ * The two shells that have one reach it very differently - Electron opens a
+ * native save dialog and learns a path, a phone writes a temporary file and
+ * offers it to the OS share sheet - so this contract states only what both can
+ * honour: the bytes go out, the user may dismiss the surface, and a path comes
+ * back only when the mechanism produced one.
+ */
+export interface IFileSaveHost {
+  /** `null` when the user dismissed the dialog or sheet without saving. */
+  saveFile(request: FileSaveRequest): Promise<SavedFileLocation | null>;
+  /**
+   * Re-opens a file this shell saved, by the `path` it reported, with the OS
+   * default application. `null` where the shell never learns a path, which is
+   * also every case where `saveFile` reports `path: null`.
+   */
+  readonly openSavedFile: ((path: string) => Promise<void>) | null;
+  /**
+   * Writes the bytes straight into the device's own file storage, with no
+   * chooser, sheet or dialog in between - what a phone user means by
+   * "download". Resolves with where the file landed, or rejects; there is no
+   * dismissal to report, because nothing was offered to dismiss.
+   *
+   * `null` on every shell whose {@link saveFile} ALREADY commits the file
+   * itself - a desktop save dialog names the file it writes, so a second
+   * direct route would be the same act under a second name. Non-null exactly
+   * where `saveFile` hands the bytes to an OS chooser and another app decides
+   * where they land, which is what makes "share" and "download" two different
+   * things worth offering separately there.
+   */
+  readonly downloadFile:
+    | ((request: FileSaveRequest) => Promise<SavedFileLocation>)
+    | null;
+  /**
+   * What {@link saveFile} DOES, from the user's point of view: `"download"`
+   * where it commits the file itself (a desktop save dialog), `"share"` where
+   * it hands the bytes to an OS chooser and another app decides.
+   *
+   * Independent of {@link downloadFile}, and it has to be: a shell can own a
+   * chooser and NO direct download (Android 10, where the shared-storage write
+   * has no route). Reading "is this a chooser?" off the presence of a direct
+   * download would answer `false` there and put a Download label on the share
+   * sheet - the exact defect this contract exists to prevent.
+   */
+  readonly saveRoute: "download" | "share";
 }
 
 /**
@@ -1047,7 +1141,9 @@ export interface IDeviceFlowHost {
    * process. Resolves with a `DeviceFlowSession` once authorization succeeds,
    * or `null` when authorization itself fails (network/5xx) or the shell has no
    * device-flow backend - the caller surfaces a launch-style failure and may
-   * retry. The shell supplies its own `client_id` (`"desktop"`) and host label.
+   * retry. The shell supplies its own client kind as `client_id` - the kind it
+   * signs sessions in as (`"desktop"` for the desktop app, `"mobile"` for the
+   * phone shell) - and its host label.
    */
   start(): Promise<DeviceFlowSession | null>;
 }
@@ -1104,6 +1200,17 @@ export type AuthTokenRefreshResult =
   | { readonly kind: "rejected"; readonly rejection: AuthRefreshRejection }
   | { readonly kind: "network-error" };
 
+/**
+ * Opaque string slots. `get` returns EXACTLY the string `set` was handed, or
+ * `null` only when nothing is stored - a value must never read as absent.
+ *
+ * Worth stating because the one production implementation broke it silently:
+ * the desktop adapter's encrypt-storage back-end JSON-parses on read by
+ * default, so a value that happened to be valid JSON came back as an object
+ * and was reported as `null`. JWTs are not valid JSON, so the token slots
+ * masked it. An implementation that transforms values, or that cannot
+ * distinguish "unreadable" from "unset", does not satisfy this interface.
+ */
 export interface ISecureStorage {
   get(key: string): Promise<string | null>;
   set(key: string, value: string): Promise<void>;
@@ -1333,6 +1440,12 @@ export type NotificationShowOutcome =
 export type NotificationFeedSource = "host" | "cloud" | "app-local" | "global";
 
 export interface INotificationHost {
+  /**
+   * Native OS notification preferences for this desktop app. Phones expose
+   * their richer read/request/repair surface through `pushPermission` instead;
+   * browser/dev shells leave this null.
+   */
+  readonly systemSettings: INotificationSystemSettingsHost | null;
   show(
     title: string,
     body: string,
@@ -1346,6 +1459,11 @@ export interface INotificationHost {
   onForegroundDisplay(
     handler: (display: NotificationForegroundDisplay) => void,
   ): Disposable;
+}
+
+export interface INotificationSystemSettingsHost {
+  /** Opens the OS notification preferences owned by this application. */
+  open(): Promise<void>;
 }
 
 /**

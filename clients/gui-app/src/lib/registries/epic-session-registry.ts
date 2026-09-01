@@ -1,27 +1,39 @@
 import {
+  createEpicRuntimeWorker,
+  type RuntimeWorkerLike,
+} from "@/stores/epics/open-epic/runtime/worker/spawn-epic-runtime-worker";
+import {
   createContext,
   useCallback,
   useMemo,
   useRef,
   useSyncExternalStore,
+  type Context,
 } from "react";
+import { getEpicRuntimeWorkerFactoryOverride } from "./epic-runtime-worker-factory-slot";
 import {
   DEFAULT_MAX_LIVE_EPICS,
   OpenEpicSessionRegistry,
   type RetainedHandleIdentity,
   type UnsyncedEditsEntry,
 } from "@/stores/epics/open-epic/session-registry";
+// RE-EXPORTED, not re-declared. The liveness cell moved to the module that owns
+// `acquireMounted`, because that seam is what has to consult it - and this
+// module imports THAT one, so a map declared here could not be read there
+// without a cycle. The provider's import path is unchanged.
+export {
+  isEpicSessionHandleDead,
+  trackEpicSessionHandleLiveness,
+} from "@/stores/epics/open-epic/session-registry";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import type {
-  EpicStreamClientFactory,
-  OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
+import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { releaseDesktopEpicOwnershipForEpic } from "@/lib/windows/desktop-epic-ownership";
 
-export const EpicSessionContext = createContext<OpenEpicStoreHandle | null>(
-  null,
+export const EpicSessionContext = createStableDevContext(
+  "__TRAYCER_EPIC_SESSION_CONTEXT__",
+  () => createContext<OpenEpicStoreHandle | null>(null),
 );
 
 type EpicSessionPresentationState =
@@ -52,16 +64,72 @@ export type EpicSessionPresentation = EpicSessionPresentationState & {
  * complete snapshot; consumers use this presentation state to show a bounded
  * recovery result instead of treating a missing effective host as silence.
  */
-export const EpicSessionPresentationContext =
-  createContext<EpicSessionPresentation | null>(null);
+export const EpicSessionPresentationContext = createStableDevContext(
+  "__TRAYCER_EPIC_SESSION_PRESENTATION_CONTEXT__",
+  () => createContext<EpicSessionPresentation | null>(null),
+);
+
+/**
+ * The three epic-session contexts are pinned on `globalThis` in Vite's hot
+ * runtime, exactly as `HostCompatibilityContext` and the host runtime state are
+ * (`lib/host/compatibility-state.ts`, `lib/host/runtime.ts`): Fast Refresh can
+ * keep a provider from one module generation mounted while a refreshed
+ * consumer reads hooks from the next, and a context object created per
+ * generation makes those two sides address DIFFERENT contexts - the consumer
+ * reads the default `null` and the throwing `useOpenEpicHandle()` blanks the
+ * window with "must be called inside <EpicSessionProvider>" (observed during a
+ * dev-slot live pass, 2026-08-30). Reusing one object per page removes the only
+ * way two epic-session contexts can coexist. A production build has no
+ * `import.meta.hot` and gets ordinary page-local contexts; a real reload resets
+ * `globalThis`. Vitest's `import.meta.hot` stub exercises the same
+ * module-reimport path.
+ *
+ * All three are pinned, not just the handle context: the provider writes them
+ * as one tuple (`epic-session-provider.tsx`), and a split on any one of them
+ * leaves a consumer reading a stale presentation or host client.
+ */
+interface EpicSessionDevGlobals {
+  __TRAYCER_EPIC_SESSION_CONTEXT__:
+    | Context<OpenEpicStoreHandle | null>
+    | undefined;
+  __TRAYCER_EPIC_SESSION_PRESENTATION_CONTEXT__:
+    | Context<EpicSessionPresentation | null>
+    | undefined;
+  __TRAYCER_EPIC_SESSION_HOST_CLIENT_CONTEXT__:
+    | Context<HostClient<HostRpcRegistry> | null>
+    | undefined;
+}
+
+function createStableDevContext<K extends keyof EpicSessionDevGlobals>(
+  key: K,
+  create: () => NonNullable<EpicSessionDevGlobals[K]>,
+): NonNullable<EpicSessionDevGlobals[K]> {
+  if (import.meta.hot === undefined) {
+    return create();
+  }
+  // Typed as the dev-globals record alone (not the `typeof globalThis`
+  // intersection) so the keyed write below type-checks against the one
+  // property this function is generic over.
+  const devGlobals: EpicSessionDevGlobals = globalThis as typeof globalThis &
+    EpicSessionDevGlobals;
+  const existing = devGlobals[key];
+  if (existing !== undefined) {
+    return existing;
+  }
+  const context = create();
+  devGlobals[key] = context;
+  return context;
+}
 
 /**
  * The RPC client resolved for the same host that owns `EpicSessionContext`.
  * Session-level provisioning prevents sidebar rows from independently mounting
  * host-directory subscriptions just to address the same Epic host.
  */
-export const EpicSessionHostClientContext =
-  createContext<HostClient<HostRpcRegistry> | null>(null);
+export const EpicSessionHostClientContext = createStableDevContext(
+  "__TRAYCER_EPIC_SESSION_HOST_CLIENT_CONTEXT__",
+  () => createContext<HostClient<HostRpcRegistry> | null>(null),
+);
 
 export const handleHostIds = new WeakMap<OpenEpicStoreHandle, string | null>();
 // The R-1 rotation rationale that used to live here now lives at the acquire
@@ -127,20 +195,25 @@ registry.setReleaseListener((epicId) => {
 // premises. Read `:741-756` of the notifications provider for the live rule.
 
 /**
- * Test / production seam. Defaults to real `EpicStreamClient`; tests swap
- * via `__setEpicStreamClientFactoryForTests(...)` so the provider can be
- * mounted in jsdom without a live host.
+ * Test / production seam for the runtime WORKER - now the ONLY one.
+ *
+ * jsdom has no `Worker`, so every suite that mounts a session needs a
+ * constructor it can supply. This sat "beside the stream one above" until that
+ * one was deleted: a stream factory built on MAIN cannot cross `postMessage`
+ * to a runtime that lives in the worker, so overriding it could not do what its
+ * name promised, and the provider's own branch for it could only ever throw.
+ *
+ * A suite drives this session's stream by supplying a fake TRANSPORT at the
+ * opener instead, and its own composition - if it wants a live replica - with
+ * `createInProcessEpicRuntimeWorker` at this seam. Both reach the real host,
+ * the real core and the real composition on their own thread.
+ *
+ * `null` uses the production constructor, which is the only path that calls
+ * `new Worker(new URL(...))` - a form Vite must see literally, and which jsdom
+ * cannot execute.
  */
-let streamClientFactoryOverride: EpicStreamClientFactory | null = null;
-
-export function __setEpicStreamClientFactoryForTests(
-  factory: EpicStreamClientFactory | null,
-): void {
-  streamClientFactoryOverride = factory;
-}
-
-export function getEpicStreamClientFactoryOverride(): EpicStreamClientFactory | null {
-  return streamClientFactoryOverride;
+export function getEpicRuntimeWorkerFactory(): () => RuntimeWorkerLike {
+  return getEpicRuntimeWorkerFactoryOverride() ?? createEpicRuntimeWorker;
 }
 
 export function __getOpenEpicRegistryForTests(): OpenEpicSessionRegistry {

@@ -4,7 +4,10 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useEpicRenameChat } from "@/hooks/epic/use-epic-chat-mutations";
 import { useEpicRenameTuiAgent } from "@/hooks/epic/use-epic-tui-agent-mutations";
 import { useEpicRenameArtifact } from "@/hooks/epic/use-epic-node-mutations";
+import { resolveChatWriteRoute } from "@/hooks/epic/use-chat-write-route";
+import { getEpicSessionHandleHostId } from "@/lib/registries/epic-session-registry";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
+import { settleDetachedEpicMutation } from "@/lib/artifacts/detached-epic-mutation";
 
 /**
  * Commit handler for inline tab-title editing in the canvas tab strip, for
@@ -41,10 +44,14 @@ export function useRenameCanvasTab(
   const renameArtifactInTab = useEpicCanvasStore((s) => s.renameArtifactInTab);
   const renameChat = useEpicRenameChat();
   const renameTerminalAgent = useEpicRenameTuiAgent();
-  const renameArtifact = useEpicRenameArtifact(true);
+  // `null`, same reason as the mobile twin: the tab this commits for is an
+  // argument to the returned callback, and no caller reads `isPending`.
+  const renameArtifact = useEpicRenameArtifact(null, true);
 
-  return useCallback(
-    (tab, rawTitle) => {
+  // ASYNC because the replica moved: the doc write's verdict and the
+  // rename-stamp check are both round trips now.
+  const commit = useCallback(
+    async (tab: EpicCanvasTileRef, rawTitle: string): Promise<void> => {
       const trimmed = rawTitle.trim();
       // No same-title suppression: the optimistic local update can already be
       // ahead of a failed RPC, and resubmitting the visible title is the
@@ -65,18 +72,97 @@ export function useRenameCanvasTab(
       if (tab.type === "terminal-agent") {
         const agents = epicHandle.store.getState().tuiAgents.byId;
         if (!Object.hasOwn(agents, id) || agents[id].docResident) {
-          if (epicHandle.store.getState().renameArtifact(id, trimmed)) {
+          // AWAITED: the replica is on the worker thread now, so the doc
+          // write's verdict is a round trip rather than a return value. Still
+          // "synchronous authority" in the sense that matters - there is no
+          // stamp to retire and the snapshot follows the write's own success -
+          // just no longer synchronous in time.
+          if (await epicHandle.store.getState().renameArtifact(id, trimmed)) {
             renameArtifactInTab(viewTabId, id, trimmed);
           }
           return;
         }
+      }
+      if (tab.type !== "chat" && tab.type !== "terminal-agent") {
+        settleDetachedEpicMutation(
+          renameArtifact
+            .mutateAsync({ epicId, artifactId: id, title: trimmed })
+            .then(
+              () => renameArtifactInTab(viewTabId, id, trimmed),
+              () => {
+                // SUPERSEDED IS NOT LOST. `enqueueAndWait` throws for every
+                // non-committed terminal state, so a rename whose own
+                // authoritative echo beat its RPC ack arrives here having
+                // actually succeeded - and a bare swallow left the persisted tab
+                // snapshot holding the stale title, which a cold render then
+                // showed.
+                //
+                // The resolution cannot tell us which happened: the dead sweep
+                // fires both when this rename's echo landed and when a peer
+                // overwrote the row, and `metadata-overlay-store.ts` says so in
+                // as many words - "chain membership cannot [tell them apart],
+                // because the chain is gone in both". The authoritative ROW can.
+                // If it carries the title we sent, the write landed and the
+                // snapshot must follow it; if a peer won with a different title,
+                // theirs stands and ours must not be persisted over it; if a
+                // peer won with the same title, writing is a no-op.
+                //
+                // This reads the PROJECTED slice, which carries the optimistic
+                // overlay (`projection-helpers.ts` lands it on the union outputs
+                // components read). It is authoritative here only because the
+                // overlay entry is already retired by the time this microtask
+                // runs - by the dead sweep on `superseded`, by the rollback on
+                // `rejected`. If either retirement were ever deferred past
+                // settlement, a REJECTED rename would read back its own
+                // optimistic title and persist a title the host refused into the
+                // durable tab snapshot. That ordering is pinned by test.
+                //
+                // `noUncheckedIndexedAccess` is off, so the own-key check is
+                // what distinguishes a missing row from a present one.
+                const artifacts = epicHandle.store.getState().artifacts.byId;
+                if (
+                  Object.hasOwn(artifacts, id) &&
+                  artifacts[id].title === trimmed
+                ) {
+                  renameArtifactInTab(viewTabId, id, trimmed);
+                }
+              },
+            ),
+          "canvas tab",
+          "artifact rename settlement",
+        );
+        return;
+      }
+      // Last line for a chat the host's chat store cannot address. A tab
+      // title is renamed by inline edit rather than by a menu entry, so
+      // there is no affordance to disable here; the sidebar and switcher
+      // entries that DO have one are disabled with `CHAT_NOT_ADOPTED_COPY`.
+      // Nothing is sent and nothing is written to the doc - on a host with a
+      // record plane the doc is not the authority, so a local write loses to
+      // record-wins on the next answer - and no overlay stamp is taken, since
+      // an optimistic patch for a mutation that is never sent is a row that
+      // renames and then snaps back.
+      if (
+        resolveChatWriteRoute({
+          chatsById: epicHandle.store.getState().chats.byId,
+          isChatRow: tab.type === "chat",
+          nodeId: id,
+          sessionHostId: getEpicSessionHandleHostId(epicHandle),
+        }) === "unavailable"
+      ) {
+        return;
       }
       // The optimistic overlay, NOT the doc write this used to do. The doc
       // write covered artifacts and doc-backed chats and silently no-opped for
       // every registry-backed row, which post chats-off-YJS is most of the
       // agent family - so a tab rename of one of those had no local feedback
       // at all and merely looked slow.
-      const requestId = epicHandle.store
+      // AWAITED: the overlay stamp is minted by the worker's queue now, so the
+      // id comes back over the bridge. Everything below reads `requestId`, so
+      // it has to be the value rather than the promise - a `Promise<string>`
+      // here is truthy, which would make the `!== null` guards pass and hand a
+      // promise to `retirePendingMutation` as if it were an id.
+      const requestId = await epicHandle.store
         .getState()
         .beginRenameMutation(id, trimmed);
       // Retire rides the `mutateAsync` PROMISE, never a per-call `onSettled`:
@@ -93,12 +179,14 @@ export function useRenameCanvasTab(
       // until the record refetch actually delivers the new title - the ack
       // is proof the host has it - so a successful rename never snaps back
       // to the stale row while the refetch is in flight.
-      const retire = (outcome: "landed" | "failed"): void => {
+      const retire = async (outcome: "landed" | "failed"): Promise<void> => {
         if (requestId === null) return;
-        epicHandle.store.getState().retirePendingMutation(requestId, outcome);
+        await epicHandle.store
+          .getState()
+          .retirePendingMutation(requestId, outcome);
       };
-      const landed = (): void => {
-        retire("landed");
+      const landed = async (): Promise<void> => {
+        await retire("landed");
         // The tab snapshot only on settlement: it is a persisted fallback, not
         // live feedback (the overlay above is), and it has no rollback path -
         // written before the RPC, a terminal failure would leave the rejected
@@ -113,27 +201,38 @@ export function useRenameCanvasTab(
         // echo swept its chain before the ack still writes.
         if (
           requestId !== null &&
-          !epicHandle.store.getState().isLatestRenameStamp(id, requestId)
+          !(await epicHandle.store
+            .getState()
+            .isLatestRenameStamp(id, requestId))
         ) {
           return;
         }
         renameArtifactInTab(viewTabId, id, trimmed);
       };
-      const failed = (): void => {
-        retire("failed");
+      const failed = async (): Promise<void> => {
+        await retire("failed");
       };
+      // The trailing `.catch` is NOT redundant beside `failed`. `failed`
+      // handles the `mutateAsync` rejection only; a throw from inside `landed`
+      // or from `failed` itself - `retirePendingMutation` or
+      // `isLatestRenameStamp` rejecting after the RPC already succeeded -
+      // rejects the promise `.then` returns, which nothing above consumes.
       if (tab.type === "chat") {
-        void renameChat
-          .mutateAsync({ epicId, chatId: id, title: trimmed })
-          .then(landed, failed);
-      } else if (tab.type === "terminal-agent") {
-        void renameTerminalAgent
-          .mutateAsync({ epicId, tuiAgentId: id, title: trimmed })
-          .then(landed, failed);
+        settleDetachedEpicMutation(
+          renameChat
+            .mutateAsync({ epicId, chatId: id, title: trimmed })
+            .then(landed, failed),
+          "canvas tab",
+          "chat rename settlement",
+        );
       } else {
-        void renameArtifact
-          .mutateAsync({ epicId, artifactId: id, title: trimmed })
-          .then(landed, failed);
+        settleDetachedEpicMutation(
+          renameTerminalAgent
+            .mutateAsync({ epicId, tuiAgentId: id, title: trimmed })
+            .then(landed, failed),
+          "canvas tab",
+          "terminal-agent rename settlement",
+        );
       }
     },
     [
@@ -145,5 +244,26 @@ export function useRenameCanvasTab(
       renameTerminalAgent,
       viewTabId,
     ],
+  );
+
+  // The returned callback stays VOID-returning, which is what every caller
+  // declares and what a DOM handler needs - so the fire-and-forget has to be
+  // made explicit here rather than left as a promise assignable-to-void by
+  // accident.
+  //
+  // Explicit is not the same as SAFE, which is what `settleDetachedEpicMutation`
+  // adds: `commit` rejects for a worker handler fault or a malformed bridge
+  // response on the `beginRenameMutation` and doc-backed terminal arms, and
+  // `TabGroupView` calls this callback synchronously, so that rejection has
+  // nowhere to go but the unhandled channel unless something terminates it.
+  return useCallback(
+    (tab: EpicCanvasTileRef, rawTitle: string): void => {
+      settleDetachedEpicMutation(
+        commit(tab, rawTitle),
+        "canvas tab",
+        "rename commit",
+      );
+    },
+    [commit],
   );
 }

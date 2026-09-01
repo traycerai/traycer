@@ -6,7 +6,13 @@ import {
   AnalyticsEvent,
   type AnalyticsUsageImageExportSource,
 } from "@/lib/analytics";
-import { saveBlobToDisk, type SavedFile } from "@/lib/files/save-blob-to-disk";
+import {
+  canDownloadToDevice,
+  downloadBlobToDevice,
+  hasSeparateDownloadRoute,
+  saveBlobToDisk,
+  type SavedFile,
+} from "@/lib/files/save-blob-to-disk";
 import { toastSavedFile } from "@/lib/files/saved-file-toast";
 import { useOpenSavedFile } from "@/hooks/files/use-open-saved-file";
 import { copyImageBlobPromiseToClipboard } from "@/lib/images/copy-image-to-clipboard";
@@ -14,6 +20,8 @@ import { captureUsageExportImageBlob } from "@/lib/usage-analytics/usage-export-
 import { appLogger } from "@/lib/logger";
 import { imageMutationKeys } from "@/lib/query-keys";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import { useFileSaveHost } from "@/hooks/files/use-file-save-host";
+import { useCanCopyImages } from "@/hooks/images/use-can-copy-images";
 
 export interface UseUsageImageExportParams {
   /**
@@ -39,19 +47,23 @@ export interface UseUsageImageExportParams {
  *
  * The copy leg carries an ALREADY RUNNING promise rather than the node to
  * capture: the clipboard write has to be issued inside the click's user
- * activation, and a `mutationFn` body can run a tick later. The download
- * leg has no such constraint, so it hands over the node and captures inside
- * the mutation.
+ * activation, and a `mutationFn` body can run a tick later. The share and
+ * download legs have no such constraint, so they hand over the node and
+ * capture inside the mutation.
  */
 export type UsageImageExportInput =
   | { readonly action: "copy"; readonly started: Promise<void> }
+  | { readonly action: "share"; readonly node: HTMLElement }
   | { readonly action: "download"; readonly node: HTMLElement };
 
+/** Which export control a run belongs to, for the per-button spinner. */
+export type UsageImageExportAction = UsageImageExportInput["action"];
+
 /**
- * The saved file on a completed download, `null` on a copy (nothing is
- * saved) and on a download the user cancelled out of the save picker.
- * Callers discriminate on the VARIABLES, never on this - both no-file cases
- * are the same `null`.
+ * The saved file on a completed download or share, `null` on a copy (nothing
+ * is saved) and on a run the user cancelled out of the save picker or share
+ * sheet. Callers discriminate on the VARIABLES, never on this - every no-file
+ * case is the same `null`.
  */
 export type UsageImageExportMutation = UseMutationResult<
   SavedFile | null,
@@ -61,19 +73,51 @@ export type UsageImageExportMutation = UseMutationResult<
 
 export interface UseUsageImageExportResult {
   readonly mutation: UsageImageExportMutation;
-  readonly copyImage: () => void;
-  readonly downloadImage: () => void;
+  /**
+   * Which control's export is in flight, or `null` when none is. Derived here
+   * rather than at each surface: one export runs at a time, so this is also
+   * "an export is running", and the two facts must not be read differently by
+   * two surfaces.
+   */
+  readonly pendingAction: UsageImageExportAction | null;
+  /**
+   * `null` where the shell cannot put an image on the system clipboard, in
+   * which case the share sheet is where a user copies one (see
+   * {@link useUsageImageExport}). Independent of {@link shareImage}: a shell
+   * can offer both, one, or neither.
+   */
+  readonly copyImage: (() => void) | null;
+  /** `null` where the shell owns no OS share surface to hand the image to. */
+  readonly shareImage: (() => void) | null;
+  /** `null` where this device has no download destination at all. */
+  readonly downloadImage: (() => void) | null;
 }
 
 /**
- * "Copy image" / "Download image" for a usage dialog: rasterise the
- * dialog's summary region (headline, tiles, trend chart) to a PNG, then
- * hand it to the clipboard or the save-to-disk path. Both legs reuse the
- * app-wide runtime-aware plumbing - `copyImageBlobPromiseToClipboard` falls
- * back to the desktop nativeImage bridge, `saveBlobToDisk` to the native save
- * dialog - so this hook only owns capture + toasts.
+ * The export controls for a usage surface: rasterise the surface's summary
+ * region (headline, tiles, trend chart) to a PNG, then hand it to the
+ * clipboard, the OS share sheet, or the device's file storage. Every leg
+ * reuses the app-wide runtime-aware plumbing - `copyImageBlobPromiseToClipboard`
+ * falls back to the desktop nativeImage bridge, `saveBlobToDisk` and
+ * `downloadBlobToDevice` to whichever routes this shell owns - so this hook
+ * only owns capture, which controls exist, and the toasts.
  *
- * ONE mutation carries both legs, discriminated by its variables: a capture
+ * WHICH CONTROLS EXIST is decided here, once, off shell capability rather than
+ * per surface, so no usage surface can drift into a different set:
+ *
+ * - A shell with a chooser-free download (`IFileSaveHost.downloadFile`) is one
+ *   whose `saveFile` goes through an OS chooser instead - the installed mobile
+ *   app, whose sheet hands the file to another app. There, share and download
+ *   are genuinely two different acts and both are offered.
+ * - Copy is offered wherever the shell can actually reach the system clipboard
+ *   with an image (`IRunnerHost.canCopyImages`), which is everywhere except
+ *   Android's WebView. That one resolves the write having written nothing, so
+ *   the button would report a success the clipboard never received - worse
+ *   than no button. The two questions are INDEPENDENT: iOS answers yes to both
+ *   and offers all three controls, and the share sheet's own Copy action is
+ *   the fallback where it answers no.
+ *
+ * ONE mutation carries every leg, discriminated by its variables: a capture
  * is an expensive full-region rasterisation, so two of them must never be in
  * flight at once. A single pending flag is what lets every export button
  * disable while any export runs.
@@ -90,7 +134,11 @@ export function useUsageImageExport(
     analyticsSource,
   } = params;
 
+  const fileSave = useFileSaveHost();
   const openSaved = useOpenSavedFile();
+  const canShare = hasSeparateDownloadRoute(fileSave);
+  const canCopy = useCanCopyImages();
+  const canDownload = canDownloadToDevice(fileSave);
   const mutation = useMutation<SavedFile | null, Error, UsageImageExportInput>({
     mutationKey: imageMutationKeys.usageExport(),
     mutationFn: async (input) => {
@@ -105,7 +153,13 @@ export function useUsageImageExport(
         heading,
         subheading,
       });
-      return saveBlobToDisk(blob, fileName);
+      // `saveBlobToDisk` is the shell's own save route, which on a shell that
+      // also owns a direct download is the share sheet - that is exactly what
+      // makes it the SHARE leg here rather than a second download.
+      if (input.action === "share") {
+        return saveBlobToDisk(blob, fileName, fileSave);
+      }
+      return downloadBlobToDevice(blob, fileName, fileSave);
     },
     onSuccess: (saved, input) => {
       if (input.action === "copy") {
@@ -116,13 +170,19 @@ export function useUsageImageExport(
         toast.success("Usage image copied");
         return;
       }
-      // `null` is the user cancelling the picker - a no-op, not a success.
+      // `null` is the user cancelling the picker or the sheet - a no-op, not
+      // a success.
       if (saved !== null) {
         Analytics.getInstance().track(AnalyticsEvent.UsageImageExported, {
-          action: "download",
+          action: input.action,
           source: analyticsSource,
         });
-        toastSavedFile(saved, openSaved.mutate);
+        toastSavedFile(
+          saved,
+          openSaved.mutate,
+          fileSave,
+          input.action === "share" ? "share" : "save",
+        );
       }
     },
     onError: (err, input) => {
@@ -130,6 +190,16 @@ export function useUsageImageExport(
         appLogger.errorSummary("[usage] image copy failed", {}, err);
         reportableErrorToast("Failed to copy usage image", undefined, {
           title: "Could not copy usage image",
+          message: null,
+          code: null,
+          source: errorSource,
+        });
+        return;
+      }
+      if (input.action === "share") {
+        appLogger.errorSummary("[usage] image share failed", {}, err);
+        reportableErrorToast("Failed to share usage image", undefined, {
+          title: "Could not share usage image",
           message: null,
           code: null,
           source: errorSource,
@@ -147,7 +217,7 @@ export function useUsageImageExport(
   });
 
   const { mutate } = mutation;
-  const copyImage = useCallback(() => {
+  const startCopy = useCallback(() => {
     const node = getExportNode();
     if (node === null) return;
     mutate({
@@ -158,11 +228,23 @@ export function useUsageImageExport(
     });
   }, [getExportNode, heading, subheading, mutate]);
 
+  const startShare = useCallback(() => {
+    const node = getExportNode();
+    if (node === null) return;
+    mutate({ action: "share", node });
+  }, [getExportNode, mutate]);
+
   const downloadImage = useCallback(() => {
     const node = getExportNode();
     if (node === null) return;
     mutate({ action: "download", node });
   }, [getExportNode, mutate]);
 
-  return { mutation, copyImage, downloadImage };
+  return {
+    mutation,
+    pendingAction: mutation.isPending ? mutation.variables.action : null,
+    copyImage: canCopy ? startCopy : null,
+    shareImage: canShare ? startShare : null,
+    downloadImage: canDownload ? downloadImage : null,
+  };
 }

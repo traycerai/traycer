@@ -12,3 +12,11 @@ export * from "./contracts";
 export * from "./subscribe";
 export * from "./snapshot-meta";
 export * from "./share-refusal";
+// The lanes that replaced `epic.subscribe`: shared cursor/epoch primitives,
+// the records lane, the control lane, the per-artifact body lane, and the two
+// unaries that took over what the monolith could only express as frames.
+export * from "./lane-cursor";
+export * from "./state-subscribe";
+export * from "./status-subscribe";
+export * from "./artifact-subscribe";
+export * from "./lane-unaries";

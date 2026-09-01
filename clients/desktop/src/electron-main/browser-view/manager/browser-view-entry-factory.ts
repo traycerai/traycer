@@ -1,13 +1,14 @@
 import type { Event, Input, RenderProcessGoneDetails, Result } from "electron";
-import type {
-  BrowserViewElectronTabHandoffChange,
-  BrowserViewStatus,
-} from "@traycer-clients/shared/platform/browser-view";
+import type { BrowserViewStatus } from "@traycer-clients/shared/platform/browser-view";
 import { log } from "../../app/logger";
 import type {
   BrowserViewPopupWindow,
   ManagedBrowserView,
 } from "../browser-view-port";
+import type {
+  BrowserSessionProfile,
+  BrowserSessionProfileRequest,
+} from "../browser-session";
 import type { BrowserViewAnnotationHost } from "./browser-view-annotation-host";
 import type { BrowserViewChords } from "./browser-view-chords";
 import type {
@@ -25,7 +26,9 @@ import type { BrowserViewPopups } from "./browser-view-popups";
 import type { BrowserViewDebugSessions } from "./debug-session-for";
 
 interface BrowserViewEntryFactoryOptions {
-  readonly createView: () => ManagedBrowserView;
+  readonly createView: (
+    request: BrowserSessionProfileRequest,
+  ) => ManagedBrowserView;
   readonly entries: BrowserViewEntryRegistry<BrowserViewEntry>;
   readonly geometry: BrowserViewGeometry;
   readonly overlay: BrowserViewOverlay;
@@ -37,6 +40,7 @@ interface BrowserViewEntryFactoryOptions {
   readonly observePrimaryProfileOrigin: (
     url: string,
     webContents: ManagedBrowserView["webContents"],
+    profile: BrowserSessionProfile,
   ) => void;
   readonly setStatus: (
     entry: BrowserViewEntry,
@@ -44,10 +48,7 @@ interface BrowserViewEntryFactoryOptions {
     reason: string | null,
   ) => void;
   readonly emitStatus: (entry: BrowserViewEntry) => void;
-  readonly closeEntry: (
-    entry: BrowserViewEntry,
-    handoffReason: BrowserViewElectronTabHandoffChange["reason"] | null,
-  ) => void;
+  readonly closeEntry: (entry: BrowserViewEntry) => void;
 }
 
 /**
@@ -57,7 +58,9 @@ interface BrowserViewEntryFactoryOptions {
  * the coordinator only owns what a caller asks for.
  */
 export class BrowserViewEntryFactory {
-  private readonly createView: () => ManagedBrowserView;
+  private readonly createView: (
+    request: BrowserSessionProfileRequest,
+  ) => ManagedBrowserView;
   private readonly entries: BrowserViewEntryRegistry<BrowserViewEntry>;
   private readonly geometry: BrowserViewGeometry;
   private readonly overlay: BrowserViewOverlay;
@@ -69,6 +72,7 @@ export class BrowserViewEntryFactory {
   private readonly observePrimaryProfileOrigin: (
     url: string,
     webContents: ManagedBrowserView["webContents"],
+    profile: BrowserSessionProfile,
   ) => void;
   private readonly setStatus: (
     entry: BrowserViewEntry,
@@ -76,10 +80,7 @@ export class BrowserViewEntryFactory {
     reason: string | null,
   ) => void;
   private readonly emitStatus: (entry: BrowserViewEntry) => void;
-  private readonly closeEntry: (
-    entry: BrowserViewEntry,
-    handoffReason: BrowserViewElectronTabHandoffChange["reason"] | null,
-  ) => void;
+  private readonly closeEntry: (entry: BrowserViewEntry) => void;
 
   constructor(options: BrowserViewEntryFactoryOptions) {
     this.createView = options.createView;
@@ -100,13 +101,20 @@ export class BrowserViewEntryFactory {
   create(
     requestedUrl: string,
     identity: BrowserViewNativeIdentity,
+    profile: BrowserSessionProfile,
   ): BrowserViewEntry {
-    const view = this.createView();
+    // The host names the jar on `createElectronTab`; an `isolated` session
+    // lands on its own per-session partition and shares cookies with nothing.
+    const view = this.createView({
+      profile,
+      sessionId: identity.key.sessionId,
+    });
     const entry: BrowserViewEntry = {
       surface: null,
       surfaceBindingId: null,
       guestKey: nativeGuestKey(identity.key),
       identity,
+      profile,
       view,
       listeners: {
         "before-input-event": (event: Event, input: Input): void => {
@@ -222,7 +230,11 @@ export class BrowserViewEntryFactory {
     entry.currentUrl = url;
     entry.requestedUrl = url;
     entry.currentTitle = entry.view.webContents.getTitle();
-    this.observePrimaryProfileOrigin(url, entry.view.webContents);
+    this.observePrimaryProfileOrigin(
+      url,
+      entry.view.webContents,
+      entry.profile,
+    );
     entry.certificateError = null;
     this.overlay.invalidateSnapshot(entry, "navigation-committed");
     this.setStatus(entry, "ready", null);
@@ -243,7 +255,11 @@ export class BrowserViewEntryFactory {
     entry.currentUrl = url;
     entry.requestedUrl = url;
     entry.currentTitle = entry.view.webContents.getTitle();
-    this.observePrimaryProfileOrigin(url, entry.view.webContents);
+    this.observePrimaryProfileOrigin(
+      url,
+      entry.view.webContents,
+      entry.profile,
+    );
     this.annotations.end(entry, "navigation");
     this.overlay.invalidateSnapshot(entry, "in-page-navigation");
     this.emitStatus(entry);
@@ -255,9 +271,12 @@ export class BrowserViewEntryFactory {
   ): void {
     this.annotations.end(entry, "crash");
     this.overlay.invalidateSnapshot(entry, "render-process-gone");
+    // A crashed guest is reported as a plain `dead` tab status and its native
+    // view is destroyed. There is nothing to capture from a gone renderer and
+    // nothing to hand off - the host re-materializes the durable tab later.
     this.setStatus(entry, "dead", detail);
     this.geometry.applyVisibility(entry);
-    this.closeEntry(entry, "crash-no-capture");
+    this.closeEntry(entry);
   }
 
   private handleBeforeInputEvent(

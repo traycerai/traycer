@@ -150,6 +150,14 @@ const followingSurfaceAppWideReadExemptions = [
   "src/components/worktree/open-in-editor-button.tsx",
 ];
 
+// App chrome: mounted once above the shell split in `traycer-app.tsx`, so it is
+// not inside any tab, Epic session, or picker surface whose host it could read
+// instead. Session import runs against the host the app is pointed at, and the
+// single subscription it owns outlives every wizard that watches it.
+const appChromeAppWideReadExemptions = [
+  "src/components/session-import/session-import-run-controller.tsx",
+];
+
 // Hook directories whose every RPC now takes the caller's client, because
 // their surfaces are Epic-scoped (a tile's comments, a tile's snapshot
 // blobs, a session's terminals) and the app-wide read they used to launder
@@ -537,6 +545,7 @@ export default tseslint.config(
     files: [
       ...epicCanvasAppWideReadExemptions,
       ...followingSurfaceAppWideReadExemptions,
+      ...appChromeAppWideReadExemptions,
       ...hookWrapperAppWideReadExemptions,
     ],
     rules: {

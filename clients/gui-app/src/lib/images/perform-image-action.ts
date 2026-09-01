@@ -1,10 +1,20 @@
 import { toast } from "sonner";
 
-import { saveBlobToDisk, type SavedFile } from "@/lib/files/save-blob-to-disk";
+import type { IFileSaveHost } from "@traycer-clients/shared/platform/runner-host";
+import {
+  downloadBlobToDevice,
+  saveBlobToDisk,
+  type SavedFile,
+} from "@/lib/files/save-blob-to-disk";
 import { toastSavedFile } from "@/lib/files/saved-file-toast";
 import { copyImageBlobToClipboard } from "@/lib/images/copy-image-to-clipboard";
 
-export type ImageAction = "copy" | "download";
+/**
+ * Which route a control took. `share` exists only on shells that own an OS
+ * chooser, where handing the bytes to another app and writing them into the
+ * device's own storage are two different acts (see `hasSeparateDownloadRoute`).
+ */
+export type ImageAction = "copy" | "share" | "download";
 
 async function fetchImageBlob(
   src: string,
@@ -27,6 +37,8 @@ export async function performImageAction(params: {
   readonly mediaType: string | null;
   readonly suggestedName: string;
   readonly openSaved: (saved: SavedFile) => void;
+  /** The shell's native save route; `null` falls back to the browser APIs. */
+  readonly fileSave: IFileSaveHost | null;
 }): Promise<void> {
   const blob = await fetchImageBlob(params.src, params.mediaType);
   if (params.action === "copy") {
@@ -34,8 +46,21 @@ export async function performImageAction(params: {
     toast.success("Image copied");
     return;
   }
-  const saved = await saveBlobToDisk(blob, params.suggestedName);
-  if (saved !== null) toastSavedFile(saved, params.openSaved);
+  // `saveBlobToDisk` is the shell's OWN save route, which on a shell that also
+  // owns a chooser-free download is the share sheet - that is what makes it
+  // the share leg rather than a second download.
+  const saved =
+    params.action === "share"
+      ? await saveBlobToDisk(blob, params.suggestedName, params.fileSave)
+      : await downloadBlobToDevice(blob, params.suggestedName, params.fileSave);
+  if (saved !== null) {
+    toastSavedFile(
+      saved,
+      params.openSaved,
+      params.fileSave,
+      params.action === "share" ? "share" : "save",
+    );
+  }
 }
 
 export function imageFileName(

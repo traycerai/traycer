@@ -647,6 +647,7 @@ export function NotificationsPopover(
         ) : null}
       </div>
       <ConfirmDestructiveDialog
+        blockedReason={null}
         open={clearAllConfirmOpen}
         onOpenChange={setClearAllConfirmOpen}
         title="Clear all notifications?"

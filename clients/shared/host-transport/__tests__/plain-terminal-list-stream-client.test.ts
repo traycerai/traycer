@@ -60,8 +60,10 @@ function makeWsStreamClient(
     // framing, not selection, so it reports into the no-op sink.
     evidence: NO_TRANSPORT_EVIDENCE,
     endpoint: () => null,
+    hostId: null,
     bearer: () => null,
     auth: null,
+    clock: null,
     hostCredentialMint: null,
     onHostCredentialState: null,
     webSocketFactory: {

@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
-import * as Y from "yjs";
 import type { WorktreeBusyHolder } from "@traycer/protocol/framework/worktree-busy-holders";
 import { TeardownForceDeleteDialog } from "@/components/worktree/teardown-force-delete-dialog";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
+import { INERT_ROOT_STATE_PORT } from "@/stores/epics/open-epic/test-support/root-state-port-fixture";
 
 const HOLDER: WorktreeBusyHolder = {
   ownerRef: {
@@ -27,7 +27,6 @@ function seedOpenEpicWithChatTitle(title: string): {
     "chat-1": { id: "chat-1", title },
   };
   const listeners = new Set<() => void>();
-  const doc = new Y.Doc();
   const stateOf = () => ({
     chats: { allIds: ["chat-1"] as const, byId: chatsById },
     tuiAgents: { allIds: [] as const, byId: {} },
@@ -45,22 +44,25 @@ function seedOpenEpicWithChatTitle(title: string): {
       };
     },
   });
-  const awareness = {
-    getStates: () => new Map<number, Record<string, unknown>>(),
-    on: () => undefined,
-    off: () => undefined,
-  };
   const handle: OpenEpicStoreHandle = {
     epicId: "epic-1",
     userId: null,
-    doc,
-    awareness: awareness as never,
+    // A production handle has no `doc` / `awareness`: the replica lives on the
+    // worker thread and a `Y.Doc` cannot cross a structured clone.
+    projection: {
+      accept: () => null,
+      apply: () => {},
+      reject: () => {},
+    },
+    body: { applyDocUpdate: () => {}, applyAwareness: () => {} },
     store: storeBase as OpenEpicStoreHandle["store"],
     dispose: () => undefined,
     detachTransport: () => undefined,
     requestFreshSnapshot: () => undefined,
+    retryTransport: () => undefined,
     isClean: () => true,
     hotArtifactRoomIdsForTests: () => [],
+    ...INERT_ROOT_STATE_PORT,
   };
   __getOpenEpicRegistryForTests().acquire("epic-1", () => handle);
   return {

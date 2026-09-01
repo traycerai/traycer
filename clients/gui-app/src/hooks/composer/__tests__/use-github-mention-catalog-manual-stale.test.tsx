@@ -28,7 +28,12 @@ import type { HostRpcRegistry } from "@/lib/host";
 const request = vi.fn();
 
 vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
-  useReactiveHostReadiness: () => ({ hostId: "host-1", isReady: true }),
+  useReactiveHostReadiness: () => ({
+    hostId: "host-1",
+    isReady: true,
+    hasRpcEndpoint: true,
+    canExecute: true,
+  }),
 }));
 
 const client = Object.assign({} as HostClient<HostRpcRegistry>, {

@@ -79,9 +79,12 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
     super({
       clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
+      // This endpoint resolves no host, so there is none to name.
+      hostId: null,
       endpoint: () => null,
       bearer: () => null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -132,6 +135,8 @@ vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
     hostId: "any",
     requestContextUserId: null,
     isReady: client !== null,
+    hasRpcEndpoint: client !== null,
+    canExecute: client !== null,
   }),
 }));
 

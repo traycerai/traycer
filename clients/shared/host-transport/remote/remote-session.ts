@@ -1,6 +1,8 @@
 import {
+  CLIENT_CAPABILITY_EPIC_WRITE_PATH_V1,
   checkCompatibility,
   isRpcErrorCode,
+  UNARY_CAPABILITY_IDEMPOTENCY_KEY,
   type ConnectionManifest,
   type FatalErrorDetails,
   type MethodVersionRegistry,
@@ -25,6 +27,10 @@ import type {
   RevalidateOutcome,
   StreamAuthRevalidator,
 } from "@traycer-clients/shared/auth/bearer-revalidator";
+import {
+  clockSkewStreamReason,
+  type ServerClockSkewSignal,
+} from "@traycer-clients/shared/clock/server-time-offset-tracker";
 import type { TransportEvidenceReporter } from "@traycer-clients/shared/host-selection/transport-evidence";
 import type { IStreamWebSocketFactory } from "../ws-stream-factory";
 import type {
@@ -63,6 +69,7 @@ import {
   MAX_TERMINAL_STREAM_IDS,
   ATTACH_ACK_TIMEOUT_MS,
   NOISE_HANDSHAKE_TIMEOUT_MS,
+  PLAN_RESTRICTED_FATAL_CODE,
   SESSION_OPEN_ACK_TIMEOUT_MS,
   UNARY_RESPONSE_TIMEOUT_MS,
   RECONNECT_INITIAL_BACKOFF_MS,
@@ -287,6 +294,19 @@ export interface RemoteSessionOptions<
    * cannot recover an auth rejection by retrying the same bearer.
    */
   readonly auth: StreamAuthRevalidator | null;
+  /**
+   * Verdict on whether this machine's WALL CLOCK is trustworthy, from the
+   * shared server-time offset tracker. The twin of
+   * `WsStreamClientOptions.clock`, and it is here for the reason a remote
+   * session most needs it: the clock is a property of the MACHINE, so a user
+   * whose clock is hours off wedges identically whether their host is local or
+   * across a relay - and a remote user is the one least able to guess why.
+   *
+   * Read at exactly one site here (the no-progress `UNAUTHORIZED` bound),
+   * because unlike the local transport this session has no pre-dial expiry
+   * gate to read it at. `null` restores the pre-existing behaviour exactly.
+   */
+  readonly clock: ServerClockSkewSignal | null;
   readonly rpcRegistry: RpcRegistry;
   readonly streamRegistry: StreamRegistry;
   readonly webSocketFactory: IStreamWebSocketFactory;
@@ -353,6 +373,7 @@ export interface IRemoteSession<
   sendUnary<Method extends keyof RpcRegistry & string>(
     method: Method,
     params: RequestOfMethod<RpcRegistry, Method>,
+    idempotencyKey: string | null,
     abortSignal: AbortSignal | null,
     /**
      * Per-request response budget, overriding `UNARY_RESPONSE_TIMEOUT_MS`.
@@ -361,6 +382,15 @@ export interface IRemoteSession<
      * rather than re-scoring every unary this session carries.
      */
     responseTimeoutMs: number | undefined,
+    /**
+     * This send is a REPLAY whose predecessor was only retryable because the
+     * key was negotiated (`HostRequestOptions.replayMustBeKeyed` in
+     * `host-messenger.ts`, which documents the full rule). The key-stripping
+     * this session does for a host that predates the capability is a
+     * legitimate downgrade on a FIRST send and a double-execution on this
+     * one, so a stripped key here refuses instead of dispatching.
+     */
+    replayMustBeKeyed: boolean,
   ): Promise<ResponseOfMethod<RpcRegistry, Method>>;
   subscribe<Method extends keyof StreamRegistry & string>(
     method: Method,
@@ -524,6 +554,8 @@ interface PendingUnary {
   readonly hostCanonical: SchemaVersion;
   readonly methodRegistry: MethodVersionRegistry;
   readonly onWireRequest: unknown;
+  /** This connection promised replay-by-key, so an unheard result may retry. */
+  readonly replaySafe: boolean;
   readonly resolve: (result: unknown) => void;
   readonly reject: (error: HostRpcError) => void;
   timer: TimerHandle | null;
@@ -545,6 +577,7 @@ interface ActiveConnection {
    */
   hostRpcMerged: ConnectionManifest | null;
   credentialUpdateSupported: boolean;
+  idempotencyKeySupported: boolean;
   /**
    * Whether the HOST advertised that it can inflate compressed frames, i.e.
    * whether frames this client sends may set `MuxFlags.COMPRESSED`. Starts
@@ -761,6 +794,18 @@ export class RemoteSession<
    * transport's no-progress bound).
    */
   private noProgressUnauthorizedReconnects = 0;
+  /**
+   * Live subscription to the clock tracker's `skewed → ok` edge while this
+   * session is PARKED, or `null` when it is not. Doubles as the parked flag.
+   *
+   * It is also the only thing that can wake a parked session, and that is
+   * load-bearing here in a way it is not in the local transport: parking means
+   * no armed backoff, and every other resume path in this file is gated on one
+   * (`collapseBackoff` and `pullRedialToNow` both return early on a null
+   * `backoffTimer`, and `handleConnectionLost` on a null `connection`). Losing
+   * this handle strands the session for the life of the page.
+   */
+  private clockParkUnsubscribe: (() => void) | null = null;
 
   private phaseTimer: TimerHandle | null = null;
   private backoffTimer: TimerHandle | null = null;
@@ -1000,8 +1045,10 @@ export class RemoteSession<
   async sendUnary<Method extends keyof RpcRegistry & string>(
     method: Method,
     params: RequestOfMethod<RpcRegistry, Method>,
+    idempotencyKey: string | null,
     abortSignal: AbortSignal | null,
     responseTimeoutMs: number | undefined,
+    replayMustBeKeyed: boolean,
   ): Promise<ResponseOfMethod<RpcRegistry, Method>> {
     this.start();
     const requestId = this.options.requestId();
@@ -1068,6 +1115,9 @@ export class RemoteSession<
           requestId,
           method,
           fatalDetails: null,
+          // Pre-send: the frame was never enqueued, so the next attempt is a
+          // first send however it is keyed.
+          replaySafetyFromKey: false,
         }),
       );
     }
@@ -1080,6 +1130,8 @@ export class RemoteSession<
           requestId,
           method,
           fatalDetails: null,
+          // Pre-send, same as the detached case above.
+          replaySafetyFromKey: false,
         }),
       );
     }
@@ -1107,6 +1159,8 @@ export class RemoteSession<
         params,
         requestId,
         responseTimeoutMs,
+        idempotencyKey,
+        replayMustBeKeyed,
       );
     }
 
@@ -1119,6 +1173,8 @@ export class RemoteSession<
       params,
       requestId,
       responseTimeoutMs,
+      idempotencyKey,
+      replayMustBeKeyed,
     ) as Promise<ResponseOfMethod<RpcRegistry, Method>>;
   }
 
@@ -1227,7 +1283,12 @@ export class RemoteSession<
     };
     return this.isClosed()
       ? new HostTransportFailureError(notReady)
-      : new RetryableTransportError(notReady);
+      : new RetryableTransportError({
+          ...notReady,
+          // "Not ready" is decided before anything is enqueued, so this
+          // retryability is the no-dispatch guarantee, not a key.
+          replaySafetyFromKey: false,
+        });
   }
 
   /**
@@ -1248,6 +1309,8 @@ export class RemoteSession<
     params: unknown,
     requestId: string,
     responseTimeoutMs: number | undefined,
+    idempotencyKey: string | null,
+    replayMustBeKeyed: boolean,
   ): Promise<unknown> {
     let prepared: { onWireVersion: SchemaVersion; onWirePayload: unknown };
     try {
@@ -1263,11 +1326,48 @@ export class RemoteSession<
       return Promise.reject(asHostRpcError(cause, requestId, method));
     }
 
+    const wireIdempotencyKey = connection.idempotencyKeySupported
+      ? idempotencyKey
+      : null;
+    if (replayMustBeKeyed && wireIdempotencyKey === null) {
+      // Decided BEFORE `allocateStreamId` so a refusal costs no stream id: it
+      // reads `connection.idempotencyKeySupported` and nothing else, so
+      // hoisting it above the allocation changes no other ordering.
+      //
+      // An earlier attempt of this call went out keyed and its outcome is
+      // unknown; the only reason it was replayable at all is that THAT
+      // connection deduplicates the key. This connection does not - either
+      // the caller never had a key, or the re-dial landed on a host
+      // incarnation whose handshake omits the capability - so dispatching
+      // would execute a mutation the host may already have run. Ambiguous
+      // (`HostTransportFailureError`, not the retryable subclass) is the
+      // honest answer: the first attempt genuinely may have committed, and
+      // this session must not turn "may have" into "did, twice".
+      return Promise.reject(
+        new HostTransportFailureError({
+          code: "RPC_ERROR",
+          message: `Remote session cannot honour the idempotency key a replay of '${method}' requires`,
+          requestId,
+          method,
+          fatalDetails: null,
+        }),
+      );
+    }
     const streamId = this.allocateStreamId();
+    const replaySafe = wireIdempotencyKey !== null;
     return new Promise<unknown>((resolve, reject) => {
       {
         const timer = setTimeout(() => {
-          this.rejectUnary(streamId, unaryTimeoutError(requestId, method));
+          this.rejectUnary(
+            streamId,
+            replaySafe
+              ? retryableUnaryFailure(
+                  requestId,
+                  method,
+                  `Remote unary '${method}' timed out awaiting a response`,
+                )
+              : unaryTimeoutError(requestId, method),
+          );
         }, responseTimeoutMs ?? UNARY_RESPONSE_TIMEOUT_MS);
         this.pendingUnary.set(streamId, {
           requestId,
@@ -1276,6 +1376,7 @@ export class RemoteSession<
           hostCanonical,
           methodRegistry,
           onWireRequest: prepared.onWirePayload,
+          replaySafe,
           resolve,
           reject,
           timer,
@@ -1290,7 +1391,7 @@ export class RemoteSession<
               method,
               schemaVersion: prepared.onWireVersion,
               params: prepared.onWirePayload,
-              idempotencyKey: null,
+              idempotencyKey: wireIdempotencyKey,
             },
             binary: null,
           });
@@ -1482,6 +1583,10 @@ export class RemoteSession<
     this.pendingForceGeneration = null;
     this.restoredStreamIds.clear();
     this.stallReopenedStreamIds.clear();
+    // A parked session's tracker subscription is the one handle that is NOT a
+    // timer, so `clearAllTimers` cannot reach it. Left attached it would redial
+    // a closed session the next time somebody's clock came right.
+    this.clearClockPark();
     this.clearAllTimers();
     this.teardownConnection("closed-by-caller");
     for (const stream of this.subscriptions.values()) {
@@ -1621,6 +1726,10 @@ export class RemoteSession<
     if (this.phase === "closed") {
       return;
     }
+    // A dial is happening, so nothing is parked any more - whether we got here
+    // from the recovery edge or from any path that armed a backoff straight
+    // through a park. Idempotent.
+    this.clearClockPark();
     const generation = ++this.connectGeneration;
     // Any intent recorded against an earlier generation is stale by
     // construction: that dial ended (its failure spent the intent, or a path
@@ -1757,6 +1866,7 @@ export class RemoteSession<
       hostManifest: null,
       hostRpcMerged: null,
       credentialUpdateSupported: false,
+      idempotencyKeySupported: false,
       bodyCompressionSupported: false,
       hostAttached: true,
     };
@@ -2052,6 +2162,7 @@ export class RemoteSession<
       capabilities: [
         SESSION_CAPABILITY_BODY_COMPRESSION,
         SESSION_CAPABILITY_FINE_CREDITS,
+        CLIENT_CAPABILITY_EPIC_WRITE_PATH_V1,
       ],
       clientIdentity: this.clientIdentity,
     };
@@ -2274,6 +2385,8 @@ export class RemoteSession<
     params: RequestOfMethod<RpcRegistry, Method>,
     requestId: string,
     responseTimeoutMs: number | undefined,
+    idempotencyKey: string | null,
+    replayMustBeKeyed: boolean,
   ): Promise<ResponseOfMethod<RpcRegistry, Method>> {
     return resolveUnavailableMethodDegrade({
       registry: this.options.rpcRegistry,
@@ -2303,6 +2416,11 @@ export class RemoteSession<
           // contract, so it keeps that caller's budget rather than silently
           // reverting to the shared default.
           responseTimeoutMs,
+          idempotencyKey,
+          // Same caller request on an older contract, so it is the same
+          // replay: a degrade must not become the unkeyed dispatch the
+          // direct path just refused.
+          replayMustBeKeyed,
         ),
     }) as Promise<ResponseOfMethod<RpcRegistry, Method>>;
   }
@@ -2358,6 +2476,9 @@ export class RemoteSession<
     this.notifyMethodSupportListeners();
     connection.credentialUpdateSupported = parsed.data.capabilities.includes(
       SESSION_CAPABILITY_CREDENTIAL_UPDATE,
+    );
+    connection.idempotencyKeySupported = parsed.data.capabilities.includes(
+      UNARY_CAPABILITY_IDEMPOTENCY_KEY,
     );
     connection.bodyCompressionSupported = parsed.data.capabilities.includes(
       SESSION_CAPABILITY_BODY_COMPRESSION,
@@ -2948,17 +3069,9 @@ export class RemoteSession<
     // stays - a resolver that keeps failing its init must keep climbing the
     // backoff across session drops, not restart it.
     this.clearAllStreamReopens();
-    // In-flight unary calls are post-send from the caller's view → not
-    // retryable (the host may have applied them). Reject, never replay.
-    this.rejectAllPendingUnary(
-      new HostRpcError({
-        code: "RPC_ERROR",
-        message: "Remote session dropped before the response arrived",
-        requestId: "session-drop",
-        method: "",
-        fatalDetails: null,
-      }),
-    );
+    // Only requests carrying a key this connection negotiated are replayable.
+    // Unkeyed calls retain the old ambiguous-outcome failure on first drop.
+    this.rejectPendingOnConnectionDrop();
     // Callers parked awaiting THIS attach are still pre-send, so they keep
     // their retry license - but they must be released rather than left to
     // ride an unbounded number of further attempts inside one call.
@@ -3141,6 +3254,21 @@ export class RemoteSession<
     // clock skew / config mismatch). Bound that loop; otherwise reset and
     // redial with the fresh token.
     if (rejectedBearer !== null && this.readBearerOrNull() === rejectedBearer) {
+      // The clock, not the credential. The revalidation that just resolved is
+      // itself an authn round trip, so its `Date` header has already reached
+      // the tracker - if our clock is running FAST, this streak is measuring a
+      // wrong wall clock and must not walk the session to `goTerminalFatal`.
+      // Parked BEFORE the counter moves, so skew can never contribute to the
+      // bound.
+      //
+      // Keyed on the CLOCK and never on the rejection shape: a host config
+      // mismatch produces an identical no-progress streak from an identical
+      // frame, and that one SHOULD still reach the bound. And keyed on the
+      // direction that can cause this, not on `skewed`: a SLOW clock leaves
+      // this rejection just as unexplained as no skew at all.
+      if (this.parkIfClockSkewed()) {
+        return;
+      }
       this.noProgressUnauthorizedReconnects += 1;
       if (
         this.noProgressUnauthorizedReconnects >=
@@ -3162,6 +3290,130 @@ export class RemoteSession<
     // Same reasoning as the network-error arm: an UNAUTHORIZED redial is a
     // credential rotation, not a statement about host liveness.
     this.reportEvidenceOutcome(this.credentialAttemptId(), "indeterminate");
+  }
+
+  /**
+   * Parks this session if - and only if - the shared tracker reads the local
+   * clock as wrong IN THE DIRECTION THAT CAN CAUSE THIS FAILURE: running
+   * AHEAD, where a valid bearer reads as expired locally. Returns whether it
+   * parked, so the call site reads as a guard.
+   *
+   * Not merely `skewed`. A clock running BEHIND is equally wrong and equally
+   * banner-worthy, but it cannot make a bearer look expired and cannot make
+   * the relay reject one - it validates against its own clock - so an
+   * UNAUTHORIZED alongside it has some other cause, and parking would strand a
+   * session the bound would have diagnosed honestly. See
+   * `clockCanMakeValidBearersLookExpired`.
+   *
+   * The caller has already dropped the connection and left the phase at
+   * `reconnecting`, so parking is mostly a matter of NOT arming the backoff
+   * that every other arm of `revalidateThenReconnect` arms. A parked session
+   * therefore holds no connection and no timer, and comes back only on the
+   * tracker's `skewed → ok` edge. It is not terminal:
+   * `goTerminalFatal`'s "the loop is OVER" contract stays reserved for
+   * genuinely broken sessions, and a wrong clock is a condition the user fixes
+   * in seconds.
+   *
+   * Two deliberate omissions relative to the sibling arms:
+   *
+   *  - No `dialFailures.recordFailure`. Its `retryInMs` is a promise to the
+   *    reader that the loop will try again at a time, and there is no such
+   *    time here; the park's own line below is the honest replacement. The
+   *    consecutive-failure streak is deliberately left INTACT so that when the
+   *    clock is fixed, `recordSuccess` still prints the true
+   *    "recovered after N failures over M seconds".
+   *  - The evidence outcome IS still reported, as `indeterminate`, exactly
+   *    like both sibling arms: the host is answering (it rejected a bearer,
+   *    which a dead host cannot do) and what failed is our own clock. Anything
+   *    else would let a wrong clock feed the authority's death streak and fail
+   *    the window away from a perfectly healthy host.
+   */
+  private parkIfClockSkewed(): boolean {
+    if (this.phase === "closed") {
+      return false;
+    }
+    const clock = this.options.clock ?? null;
+    if (clock === null || !clock.canMakeValidBearersLookExpired()) {
+      return false;
+    }
+    if (this.clockParkUnsubscribe !== null) {
+      return true;
+    }
+    console.warn(
+      `[remote-session] remote session (host ${this.options.hostId}) parked on ` +
+        `system-clock skew: ${clockSkewStreamReason(clock.currentState())} - ` +
+        `it will reconnect on its own once the clock is corrected`,
+    );
+    // Defensive: a competing path is not supposed to have armed one while the
+    // revalidation was in flight (the caller re-checked `phase`/`connection`
+    // after its await), but "a parked session runs no retry timer" has to be
+    // literally true or the park silently becomes a slow retry loop.
+    if (this.backoffTimer !== null) {
+      clearTimeout(this.backoffTimer);
+      this.backoffTimer = null;
+    }
+    // SUBSCRIBE BEFORE THE EXTERNAL CALLBACK, and re-check after it. The twin
+    // of the local transport's status-emit hazard: `reportEvidenceOutcome`
+    // hands control to the selection authority synchronously, and that is a
+    // component whose whole job is to react to transport evidence - a verdict
+    // that retires this host can close this very session before the call
+    // returns. Assigning the handle first means a re-entrant `close()` finds
+    // something to release instead of nulling nothing and leaving the tracker
+    // holding a dead session for the life of the page.
+    this.clockParkUnsubscribe = clock.subscribeToRecovery(() => {
+      this.resumeFromClockPark();
+    });
+    this.reportEvidenceOutcome(this.credentialAttemptId(), "indeterminate");
+    // Through `isClosed()`, not a bare `this.phase === "closed"`. The early
+    // return at the top of this method narrows `phase` to exclude `"closed"`,
+    // and the checker does not know the call above can re-enter and change it -
+    // so the direct comparison type-errors as impossible. That narrowing IS the
+    // hazard this check exists for; reading the phase through the accessor is
+    // what keeps the check honest.
+    if (this.isClosed()) {
+      this.clearClockPark();
+    }
+    return true;
+  }
+
+  /**
+   * The `skewed → ok` edge: the clock was corrected, so redial now.
+   *
+   * `scheduleReconnect` then `pullRedialToNow` is the file's existing forced-
+   * resume idiom (it is what `consumePendingForce` does), and it is right here
+   * for the same reason: the rung is armed so attempt accounting stays honest,
+   * then that one wait is pulled to zero. `reconnectAttempt` is deliberately
+   * NOT reset - a host that is genuinely gone must keep climbing the ladder
+   * once the clock stops being the explanation.
+   *
+   * The no-progress streak IS reset, because it was counting a condition that
+   * no longer exists; carrying it forward would let a couple of pre-fix cycles
+   * push the first honest post-fix attempt into the terminal bound.
+   */
+  private resumeFromClockPark(): void {
+    if (this.clockParkUnsubscribe === null) {
+      return;
+    }
+    this.clearClockPark();
+    if (this.phase === "closed") {
+      return;
+    }
+    console.info(
+      `[remote-session] remote session (host ${this.options.hostId}) resuming: ` +
+        `the system clock was corrected`,
+    );
+    this.noProgressUnauthorizedReconnects = 0;
+    this.scheduleReconnect();
+    this.pullRedialToNow("system-clock-corrected");
+  }
+
+  private clearClockPark(): void {
+    const unsubscribe = this.clockParkUnsubscribe;
+    if (unsubscribe === null) {
+      return;
+    }
+    this.clockParkUnsubscribe = null;
+    unsubscribe();
   }
 
   /**
@@ -3216,6 +3468,8 @@ export class RemoteSession<
     // (caller `close()` and this fatal) must honor that, not just one.
     this.pendingForceGeneration = null;
     this.restoredStreamIds.clear();
+    // See `close()`: not a timer, so not reachable by `clearAllTimers`.
+    this.clearClockPark();
     this.clearAllTimers();
     this.teardownConnection("session-fatal");
     for (const stream of this.subscriptions.values()) {
@@ -3834,6 +4088,31 @@ export class RemoteSession<
     }
   }
 
+  private rejectPendingOnConnectionDrop(): void {
+    for (const [streamId, entry] of Array.from(this.pendingUnary)) {
+      if (entry.timer !== null) {
+        clearTimeout(entry.timer);
+      }
+      this.pendingUnary.delete(streamId);
+      this.outboundSeq.delete(streamId);
+      entry.reject(
+        entry.replaySafe
+          ? retryableUnaryFailure(
+              entry.requestId,
+              entry.method,
+              "Remote session dropped before the response arrived",
+            )
+          : new HostTransportFailureError({
+              code: "RPC_ERROR",
+              message: "Remote session dropped before the response arrived",
+              requestId: entry.requestId,
+              method: entry.method,
+              fatalDetails: null,
+            }),
+      );
+    }
+  }
+
   // ---- Small helpers ----------------------------------------------------- //
 
   private markStreamsReconnecting(): void {
@@ -4372,6 +4651,28 @@ function unaryTimeoutError(
   });
 }
 
+/**
+ * The POST-SEND retryable failure: a timeout or a connection drop for a
+ * request whose frame is already on the wire. Both call sites reach it only
+ * on `replaySafe`, i.e. only because the connection negotiated the key - so
+ * every error minted here carries `replaySafetyFromKey: true`, and the retry
+ * it licenses is one the next attempt must itself key.
+ */
+function retryableUnaryFailure(
+  requestId: string,
+  method: string,
+  message: string,
+): RetryableTransportError {
+  return new RetryableTransportError({
+    code: "RPC_ERROR",
+    message,
+    requestId,
+    method,
+    fatalDetails: null,
+    replaySafetyFromKey: true,
+  });
+}
+
 function asHostRpcError(
   cause: unknown,
   requestId: string,
@@ -4395,7 +4696,7 @@ function asHostRpcError(
  * paid-plan upsell on this instead of a generic session failure. Free-string
  * `FatalErrorDetails.code` space, so no protocol change is involved.
  */
-export const PLAN_RESTRICTED_FATAL_CODE = "PLAN_RESTRICTED";
+export { PLAN_RESTRICTED_FATAL_CODE } from "./config";
 
 function planRestrictedFatalDetails(): FatalErrorDetails {
   return {

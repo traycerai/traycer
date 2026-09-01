@@ -50,6 +50,19 @@ vi.mock("@/lib/host/runtime", () => ({
     return globalClientRef.value;
   },
 }));
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return {
+    ...actual,
+    useHostClient: () => {
+      if (globalClientRef.value === null) {
+        throw new Error("test global client not configured");
+      }
+      return globalClientRef.value;
+    },
+    useHostBinding: () => ({ hostClient: globalClientRef.value, hostId: null }),
+  };
+});
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   useHostDirectoryList: () => ({ data: directoryRef.entries }),
 }));
@@ -65,11 +78,11 @@ vi.mock("@/providers/use-runner-host", () => ({
 
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-  type OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 
 import { useEpicCreateChatForHostClient } from "@/hooks/epic/use-epic-chat-mutations";
@@ -102,7 +115,7 @@ const noopStreamClientFactory: EpicStreamClientFactory = () => ({
   close: () => undefined,
 });
 
-let epicHandle: OpenEpicStoreHandle | null = null;
+let epicHandle: OpenedStoreForTest | null = null;
 
 function buildGlobalClient(): HostClient<HostRpcRegistry> {
   const messenger = new MockHostMessenger<HostRpcRegistry>({
@@ -129,7 +142,7 @@ function buildGlobalClient(): HostClient<HostRpcRegistry> {
   return spine.createRequester(DEFAULT_HOST);
 }
 
-function wrapperFor(queryClient: QueryClient, handle: OpenEpicStoreHandle) {
+function wrapperFor(queryClient: QueryClient, handle: OpenedStoreForTest) {
   return function Wrapper({ children }: { readonly children: ReactNode }) {
     return (
       <QueryClientProvider client={queryClient}>
@@ -142,11 +155,21 @@ function wrapperFor(queryClient: QueryClient, handle: OpenEpicStoreHandle) {
 }
 
 function renderActions() {
-  const handle = createOpenEpicStore({
+  const handle = openStoreForTest({
     epicId: EPIC_ID,
-    streamClientFactory: noopStreamClientFactory,
     userId: null,
-    onAuthError: null,
+    // The factories go to the COMPOSITION now, not the store:
+    // `createOpenEpicStore` stopped constructing a runtime, so a
+    // suite that used to hand it a `streamClientFactory` has nothing
+    // to hand it. `handle.doc` still resolves because this harness
+    // builds the runtime in THIS thread.
+    factories: {
+      streamClientFactory: noopStreamClientFactory,
+      laneSelection: null,
+    },
+    // Explicit: `null` means this suite never writes, so a write in
+    // one that said so fails rather than resolving quietly.
+    writeCommand: null,
   });
   epicHandle = handle;
   return renderHook(
@@ -227,11 +250,21 @@ describe("useTerminalQuoteActions host routing", () => {
     globalClientRef.value = buildGlobalClient();
     directoryRef.entries = [DEFAULT_HOST, TAB_HOST];
 
-    const handle = createOpenEpicStore({
+    const handle = openStoreForTest({
       epicId: EPIC_ID,
-      streamClientFactory: noopStreamClientFactory,
       userId: null,
-      onAuthError: null,
+      // The factories go to the COMPOSITION now, not the store:
+      // `createOpenEpicStore` stopped constructing a runtime, so a
+      // suite that used to hand it a `streamClientFactory` has nothing
+      // to hand it. `handle.doc` still resolves because this harness
+      // builds the runtime in THIS thread.
+      factories: {
+        streamClientFactory: noopStreamClientFactory,
+        laneSelection: null,
+      },
+      // Explicit: `null` means this suite never writes, so a write in
+      // one that said so fails rather than resolving quietly.
+      writeCommand: null,
     });
     epicHandle = handle;
     const { result } = renderHook(

@@ -51,11 +51,9 @@ import {
   DEFAULT_REFRESH_MIN_DELAY_MS,
   type ProactiveRefreshScheduler,
 } from "@traycer-clients/shared/auth/token-refresh-scheduler";
+import { readAccessTokenExpiryMs } from "@traycer-clients/shared/auth/jwt-exp";
 import { usernameFromAuthenticatedUser } from "@traycer/protocol/auth/request-context";
-import {
-  isPaidTier,
-  type SubscriptionStatus,
-} from "@traycer/protocol/auth/user";
+import type { SubscriptionStatus } from "@traycer/protocol/auth/user";
 import {
   useAuthStore,
   type AuthContextMetadata,
@@ -75,7 +73,16 @@ import {
 import { projectShareableTeams } from "@/hooks/epic/use-epic-shareable-teams";
 import { onWakeReconnect } from "@/lib/host/wake-reconnect";
 import { appLogger, describeLogError } from "@/lib/logger";
+import {
+  recordAuthServerTime,
+  recordRotatedBearer,
+} from "@/lib/clock/app-server-clock";
 import { AuthTokenStore } from "./auth-token-store";
+import {
+  clearProvisionalSessionSnapshot,
+  readProvisionalSessionSnapshot,
+  writeProvisionalSessionSnapshot,
+} from "./provisional-session-snapshot";
 
 // Legacy encrypted-localStorage token slots (the pre-§3 desktop store). Two
 // separate string slots — NOT one JSON blob — matching the retired
@@ -529,13 +536,9 @@ export class AuthService {
    * or revalidation — the SAME value projected into the auth store beside every
    * write below, kept here so a caller can read it without React.
    *
-   * It lives on this object rather than being read back out of the store
-   * because the host-directory projection needs the plan and the credential to
-   * be one coherent answer: `commitLiveCredential` runs BEFORE the transition
-   * is announced, and the store projection runs after, so a fetch kicked off by
-   * that announcement would read this account's hosts against the previous
-   * account's plan. `null` means "not signed in, or not yet known" and reads as
-   * ALLOWED (see {@link planAllowsRemoteHosts}).
+   * Kept here for synchronous consumers outside React. Remote-host
+   * connectivity does not read it; authn owns that decision at grant minting.
+   * `null` means "not signed in, or not yet known".
    */
   private currentSubscription: SubscriptionStatus | null = null;
   private lastError: string | null = null;
@@ -904,6 +907,9 @@ export class AuthService {
     const startGeneration = this.identityGeneration;
     this.starting = true;
     this.authResolvedDuringStart = false;
+    // Set only on the provisional path, where the rehydration outlives this
+    // method and owns clearing `starting` itself.
+    let settlesInBackground = false;
     // Subscribe to the browser-return signal BEFORE awaiting the token load so a
     // shell-delivered nudge that arrives during the `tokenStore.load()` microtask
     // is not missed. The signal is payload-free - it only pokes an in-flight
@@ -949,6 +955,41 @@ export class AuthService {
         return;
       }
 
+      // PAINT BEFORE VALIDATING, when there is a validated identity to paint
+      // with. The awaited `validateToken` below is a cloud round trip, and the
+      // app shell renders `HostRuntimeBootFallback` until this method resolves
+      // - 616 ms of the 968 ms to first paint on a LAN, and 8.0 s on a cold
+      // launch whose authn answered late.
+      const provisional = await this.applyProvisionalSession(
+        stored,
+        startGeneration,
+      );
+      if (provisional !== null) {
+        // `starting` deliberately stays TRUE until this settles. It exists to
+        // make an interactive sign-in that resolves mid-rehydration set
+        // `authResolvedDuringStart`, and on this path the rehydration really
+        // is still in flight after `start()` returns - clearing it here would
+        // silently narrow that guard to the part of the flow that no longer
+        // contains the validation.
+        settlesInBackground = true;
+        void this.settleProvisionalSession(stored, provisional, startGeneration)
+          // `validateToken` is unguarded on the awaited path too, where a
+          // rejection escapes into `start()`'s caller. Nothing awaits this
+          // one, so the same rejection would surface as a process-level
+          // unhandled rejection and - worse - strand `starting` at true, which
+          // would silently disarm the `authResolvedDuringStart` guard for the
+          // rest of the session.
+          .catch((error: unknown) => {
+            appLogger.warn("[auth] provisional session validation threw", {
+              error: describeLogError(error),
+            });
+          })
+          .finally(() => {
+            this.starting = false;
+          });
+        return;
+      }
+
       const outcome = await this.validateToken(stored.token);
       if (this.shouldStopStartFlow(startGeneration)) {
         return;
@@ -990,8 +1031,168 @@ export class AuthService {
         "startup",
       );
     } finally {
-      this.starting = false;
+      if (!settlesInBackground) {
+        this.starting = false;
+      }
     }
+  }
+
+  /**
+   * Applies the STORED session without waiting for the cloud to confirm it,
+   * returning the identity applied - or `null` when there is nothing safe to
+   * apply, which means "carry on and await the verdict as before".
+   *
+   * Identity only. `commitSubscriptionStatus` is deliberately NOT called here:
+   * a stored `free` would render the remote-hosts upsell for one round trip to
+   * anyone who upgraded since their last session, and `null` is the documented
+   * not-yet-known state that `useRemoteHostsPlanRestricted` already reads as
+   * not-restricted. Entitlement lands with the verdict, which is exactly where
+   * it lands today for the whole of boot.
+   *
+   * The host never needed the cloud's answer either way: every `/rpc` and
+   * `/stream` socket validates the bearer itself, so host traffic may start on
+   * a provisional session. What the tradeoff really costs is the UI showing an
+   * account whose token has since been revoked, for the length of one
+   * validation - a window this app already accepts after every token refresh.
+   */
+  private async applyProvisionalSession(
+    stored: StoredCredentials,
+    startGeneration: number,
+  ): Promise<AuthenticatedUser | null> {
+    // An access token this client can already see is expired cannot open
+    // anything: painting with it would move the wait from one round trip to a
+    // cascade of host 401s. Fall through to the rotate path instead. The read
+    // is unverified and advisory - an undecodable token is simply not refused
+    // here - and a machine with a badly wrong clock only loses the fast path.
+    const expiresAtMs = readAccessTokenExpiryMs(stored.token);
+    if (expiresAtMs !== null && expiresAtMs <= Date.now()) {
+      return null;
+    }
+    const snapshot = await readProvisionalSessionSnapshot(
+      this.runnerHost.secureStorage,
+      stored.user.id,
+    );
+    if (snapshot === null || this.shouldStopStartFlow(startGeneration)) {
+      return null;
+    }
+    this.applySessionProjection(stored.token, snapshot, undefined, "defer");
+    return snapshot;
+  }
+
+  /**
+   * Finishes the validation the provisional apply skipped ahead of.
+   *
+   * The entry fence is the new one, and it is new because the usual one
+   * inverts here. Every other automatic tail stands down when it observes a
+   * live bearer ("someone else established a session while I was awaiting") -
+   * but on this path the provisional apply IS that bearer, and it is the very
+   * session this verdict is about. So the question becomes "is the live bearer
+   * still the exact one I applied, at the same identity": anything else means
+   * a sign-out, a sign-in, or a rotation landed while the cloud was answering,
+   * and the verdict describes a session that no longer exists.
+   *
+   * Past that fence each branch converges back onto the ordinary rules rather
+   * than carrying the inversion further - see the rejected branch, which
+   * clears the session first precisely so it can.
+   */
+  private async settleProvisionalSession(
+    stored: StoredCredentials,
+    provisional: AuthenticatedUser,
+    startGeneration: number,
+  ): Promise<void> {
+    const outcome = await this.validateToken(stored.token);
+    if (
+      this.shouldStopStartFlow(startGeneration) ||
+      !this.currentBearerIs(stored.token)
+    ) {
+      return;
+    }
+
+    if (outcome.kind === "valid") {
+      // NOT a second `applySignedIn`. That method re-broadcasts the session to
+      // every other window, restarts the refresh scheduler and rewrites the
+      // auth store with a freshly allocated teams array, so every subscriber
+      // churns for an identity that did not change. This is the same rule
+      // `revalidateLiveSession` already applies to a validated live session:
+      // project the entitlement, and re-sign-in only when the bearer turns out
+      // to name a different user.
+      this.commitSubscriptionStatus(
+        outcome.user.userSubscription.subscriptionStatus,
+      );
+      if (outcome.user.user.id !== provisional.user.id) {
+        this.applySignedIn(stored.token, outcome.user, undefined);
+        return;
+      }
+      // Same user, but not necessarily the same PERSON-FACING identity: the
+      // provisional apply painted the CACHED snapshot, and a name, avatar or
+      // team membership changed since the last launch is only in the verdict.
+      // Without this the header, the mobile drawer, the home hero and the
+      // share picker's team list all stayed one launch behind, and nothing
+      // else on this path ever corrected them - `commitSubscriptionStatus`
+      // above writes the entitlement alone.
+      this.reprojectSameUserIdentity(outcome.user);
+      void writeProvisionalSessionSnapshot(
+        this.runnerHost.secureStorage,
+        outcome.user,
+      );
+      return;
+    }
+
+    if (outcome.kind === "network-error") {
+      // No verdict, and deliberately NO `scheduleSessionRecovery` - which the
+      // awaited path calls here and which would be a no-op anyway: the
+      // recovery tick's first act is to stand down for a live bearer
+      // (`already-signed-in`), and the provisional session IS one.
+      //
+      // The session simply stays up, which is the correct outcome rather than
+      // a concession. Authn being unreachable is not evidence that a stored
+      // token is bad, the host validates every bearer itself, and a live
+      // session already owns exactly the machinery this needs: the proactive
+      // refresh scheduler the projection started, and `revalidateLiveSession`
+      // on the first 401. That is the same state any long-running session
+      // enters when the network drops after boot.
+      //
+      // What stays unknown until some later validation is the ENTITLEMENT,
+      // which the provisional apply skipped. `null` is the documented
+      // not-yet-known value on both readers, permissive on both, and the
+      // server enforces the grant authoritatively either way.
+      appLogger.warn(
+        "[auth] provisional session could not be validated at startup",
+        {},
+      );
+      return;
+    }
+
+    // Rejected. The session on screen is not real, so take it back BEFORE
+    // rotating rather than after.
+    //
+    // Not only honesty: it restores the invariant the rest of this machinery
+    // is written against. `rotateStoredSession` and every recovery tick stand
+    // down when a live bearer exists, so rotating with the rejected session
+    // still installed would make a TRANSIENT rotate failure terminal - the
+    // loop would settle as `already-signed-in` against the very session that
+    // was just refused, and nothing would ever retry it. Cleared first, this
+    // is byte-for-byte the path a cold boot takes today.
+    appLogger.warn("[auth] provisional session rejected at startup", {
+      outcome: outcome.kind,
+    });
+    this.clearUiSessionIfSignedIn();
+    await this.rotateStoredSession(
+      stored,
+      () => !this.shouldStopStartFlow(startGeneration),
+      "startup:provisional",
+    );
+  }
+
+  /**
+   * Whether the live credential is still the exact bearer a caller applied.
+   *
+   * Deliberately identity of the TOKEN, not of the user: a same-user rotation
+   * replaces the bearer while `identityGeneration` stays put, and a verdict
+   * about the pre-rotation token has nothing to say about the one now in use.
+   */
+  private currentBearerIs(bearerToken: string): boolean {
+    return this.currentBearer === bearerToken;
   }
 
   /**
@@ -2466,7 +2667,7 @@ export class AuthService {
   }
 
   /**
-   * Mints a one-time link-login code for the "Link a phone" QR surface. The
+   * Mints a one-time link-login code for the "Link mobile app" QR surface. The
    * raw bearer stays inside this auth boundary; the panel consumes only the
    * short-lived one-time code, which is itself the thing being displayed.
    */
@@ -2579,6 +2780,32 @@ export class AuthService {
         // The bearer now validates to a different user (a cross-user re-seed) -
         // treat as a fresh sign-in so the old context aborts cleanly.
         this.applySignedIn(currentToken, outcome.user, undefined);
+      } else {
+        // Same argument as the subscription commit above, applied to the rest
+        // of the person-facing identity: a display name, avatar or team
+        // membership can change without a bearer rotation, and projecting only
+        // entitlement left every other field one launch stale. Projection plus
+        // the service's own profile copy, gated on a real difference - see
+        // `reprojectSameUserIdentity` for why re-entering `applySignedIn` is
+        // not available here.
+        this.reprojectSameUserIdentity(outcome.user);
+        // ...and DURABLY, which the projection alone is not. `applySignedIn`
+        // is the only other writer of this snapshot and this path deliberately
+        // avoids it, so nothing else on this branch persists anything: the
+        // next launch paints the cached identity again, and if that launch's
+        // validation takes the accepted network-error path the stale name and
+        // avatar stand for the whole session. `settleProvisionalSession` pairs
+        // these two calls for exactly this reason; this is the same pair on
+        // the live-revalidation path, which had only the first half.
+        //
+        // Unconditional, matching that sibling. Gating it on
+        // `reprojectSameUserIdentity`'s notion of "changed" would couple the
+        // snapshot's contents to a comparison over the PROJECTED fields, which
+        // is a strict subset of what the snapshot stores.
+        void writeProvisionalSessionSnapshot(
+          this.runnerHost.secureStorage,
+          outcome.user,
+        );
       }
       return outcome;
     }
@@ -2672,6 +2899,18 @@ export class AuthService {
   // the refresh scheduler. The single point every same-user adoption goes through
   // (locked-rotate outcomes and the §4 reconcile worker).
   private rotateLiveBearer(userId: string, bearerToken: string): void {
+    // NO server-time sample here, deliberately. This is the generic
+    // lease-adoption helper, and MOST of what it adopts is not freshly minted:
+    // `applyReconciledOutcome` passes a token read straight off disk, and the
+    // `superseded`/`commit-failed` rotate arms adopt a pair some other window
+    // already committed. A backgrounded window that reconciles after five
+    // minutes adopts a perfectly valid token whose `iat` is legitimately that
+    // old - and sampling it would report the token's AGE as a server-time
+    // offset, flipping the app-wide verdict to `skewed` on a correct clock.
+    // That is a false banner plus every transport made eligible to park on the
+    // next unrelated auth failure. See `applyLiveRotateOutcome` for the one
+    // arm that is genuinely mint-proven.
+    //
     // COMMIT BEFORE EMIT (see `applySignedIn`): `rotateCurrentBearer` notifies
     // its rotation listeners synchronously. The profile is unchanged - a
     // rotation is the same account with a new token - and passing the live one
@@ -2724,7 +2963,24 @@ export class AuthService {
       outcome: rotated.outcome,
     });
     switch (rotated.outcome) {
-      case "applied":
+      case "applied": {
+        // THE server-time sample site, and the only one: `applied` means THIS
+        // process's locked rotate just spent the refresh against authn and
+        // committed the pair it minted, so the token is seconds old and its
+        // `iat` IS authn's clock. The neighbouring arms are deliberately not
+        // sampled - `superseded` adopts a pair another window committed and
+        // `commit-failed` can carry a pending pair of unknown age, and a token
+        // whose age we cannot bound reads as an offset we did not measure.
+        const applied = this.adoptRotatedPairIntoLiveSession(
+          rotated.pair,
+          userId,
+          generation,
+        );
+        if (applied.status === "rotated") {
+          recordRotatedBearer(applied.token);
+        }
+        return applied;
+      }
       case "superseded":
       case "commit-failed":
         // `superseded` is same-user by the store's user-mismatch-before-token
@@ -3570,7 +3826,7 @@ export class AuthService {
   }
 
   /**
-   * The "Link a phone" panel's view of its current code — whether a phone
+   * The "Link mobile app" panel's view of its current code — whether a phone
    * has claimed it and the claimant metadata for the confirmation prompt.
    * The raw bearer stays inside this auth boundary.
    */
@@ -3817,9 +4073,21 @@ export class AuthService {
    * Access-only (§3): validates the bearer without spending. A stale/expired
    * token returns `rejected`; the refresh spend is owned exclusively by the
    * locked `rotate` path, never here.
+   *
+   * Also the renderer's SERVER-TIME TAP. Every outcome that came back from a
+   * real response carries the authn `Date` header, and this is the one funnel
+   * all of them pass through - startup rehydration, the reactive 401
+   * revalidation, device-flow finalization. The reactive path is the one that
+   * matters most: it is exactly the call the stream makes when it believes its
+   * bearer expired, so on a machine with a wrong clock the very first cycle of
+   * what used to be the terminal loop lands a sample.
    */
-  private validateToken(token: string): Promise<ValidationOutcome> {
-    return this.runnerHost.validateAuthTokenIdentity(token);
+  private async validateToken(token: string): Promise<ValidationOutcome> {
+    const outcome = await this.runnerHost.validateAuthTokenIdentity(token);
+    if (outcome.kind !== "network-error") {
+      recordAuthServerTime(outcome.serverTime);
+    }
+    return outcome;
   }
 
   /**
@@ -3846,6 +4114,45 @@ export class AuthService {
     bearerToken: string,
     user: AuthenticatedUser,
     profileOverride: AuthProfile | undefined,
+  ): void {
+    this.applySessionProjection(bearerToken, user, profileOverride, "commit");
+    // Cache the identity for the NEXT launch's provisional apply. Here, and
+    // not at each call site, so "a validated identity was projected" and "the
+    // snapshot is current" cannot drift apart. Not awaited and unable to
+    // fail - the write swallows its own errors by contract, and the cost of
+    // losing one is a boot exactly as slow as it was before.
+    void writeProvisionalSessionSnapshot(this.runnerHost.secureStorage, user);
+  }
+
+  /**
+   * The body of {@link applySignedIn}, parameterized on the one thing the
+   * provisional boot apply must NOT do.
+   *
+   * `"defer"` commits identity and leaves `currentSubscription` at `null`. A
+   * stored `free` would render the remote-hosts upsell for one round trip to
+   * anyone who upgraded since their last session; `null` is the documented
+   * not-yet-known state, which `useRemoteHostsPlanRestricted` and
+   * `planAllowsRemoteHosts` both already read as not-restricted, and the
+   * server enforces the grant authoritatively regardless.
+   *
+   * Everything else is deliberately shared, the broadcast included: the
+   * provisional session is genuinely live in this renderer, and it is the ONE
+   * announcement of it. `settleProvisionalSession`'s `valid` branch commits
+   * the entitlement alone rather than re-entering here, so no subscriber sees
+   * a second transition for an identity that never changed.
+   *
+   * Broadcasting a deferred-entitlement session is safe by CONSTRUCTION, not
+   * by luck: `AuthSessionSnapshot` is `{ status, token, profile,
+   * contextMetadata }` and carries no `userSubscription` at all, so there is
+   * no way for a not-yet-known plan - or a stale cached one - to cross the
+   * window boundary from here. Add a plan to that snapshot and this stops
+   * being true.
+   */
+  private applySessionProjection(
+    bearerToken: string,
+    user: AuthenticatedUser,
+    profileOverride: AuthProfile | undefined,
+    entitlement: "commit" | "defer",
   ): void {
     if (this.disposed) {
       return;
@@ -3893,7 +4200,9 @@ export class AuthService {
     // `announceSessionVerified()` call at the end of this method, which is
     // what actually loads the directory for those transitions.
     this.commitLiveCredential(bearerToken, profile);
-    this.commitSubscriptionStatus(user.userSubscription.subscriptionStatus);
+    if (entitlement === "commit") {
+      this.commitSubscriptionStatus(user.userSubscription.subscriptionStatus);
+    }
     let rotatedInPlace = false;
     if (liveContext !== null && liveContext.identity.userId === user.user.id) {
       try {
@@ -4003,6 +4312,12 @@ export class AuthService {
     this.contextProvider.signOut();
     useAuthStore.getState().setSignedOut();
     this.emitSessionSnapshot();
+    // The cached identity goes with the session. HERE rather than only in
+    // `signOut()`, so the UI-only signed-out projection a dead credential
+    // produces cannot leave a snapshot the next launch would paint with. A
+    // recovery that gets the same user back re-writes it through
+    // `applySignedIn`, so the cost of clearing eagerly is one slow boot.
+    void clearProvisionalSessionSnapshot(this.runnerHost.secureStorage);
   }
 
   /**
@@ -4026,22 +4341,6 @@ export class AuthService {
    */
   currentSubscriptionStatus(): SubscriptionStatus | null {
     return this.currentSubscription;
-  }
-
-  /**
-   * Whether the account's plan includes REMOTE hosts (a paid-tier feature —
-   * "Sync and above"). The client-side mirror of CS's attach-grant gate; the
-   * server enforces it authoritatively on both attach legs
-   * (`reason: "plan_restricted"`).
-   *
-   * An unknown plan reads as ALLOWED, matching `useRemoteHostsPlanRestricted`'s
-   * polarity: a dial made on a stale-optimistic read just meets the server's
-   * 403 and is invisible, while a false "upgrade" prompt shown to a paying user
-   * during the sign-in window is not.
-   */
-  planAllowsRemoteHosts(): boolean {
-    const status = this.currentSubscription;
-    return status === null || isPaidTier(status);
   }
 
   /**
@@ -4149,6 +4448,89 @@ export class AuthService {
     // `signIn` settled any loop that was nursing one). Re-arm; the first tick
     // settles itself when the file turns out to be empty.
     this.scheduleSessionRecovery("interactive-failure");
+  }
+
+  /**
+   * Re-projects a same-user verdict's person-facing identity into the auth
+   * store and the service's own live-credential copy - and nothing else.
+   *
+   * Deliberately not `applySignedIn` / `applySessionProjection`. Those restart
+   * the refresh scheduler and - the part that is load-bearing rather than
+   * merely wasteful - would put the identity back through the context
+   * provider, where "same user => same context object" is an invariant the
+   * remote-session cache keys its auth epoch on. A fresh context here retires
+   * that epoch under every live session while its holders keep using it. So
+   * the profile, the context METADATA (a plain projected value, not the
+   * `RequestContext`) and the shareable teams are written to the store, the
+   * profile half of the credential pair is committed alongside them, and
+   * neither the provider nor the scheduler is touched.
+   *
+   * GATED on a real difference, which is what keeps the ordinary boot silent:
+   * `setSignedIn` fires `Analytics.identify` (`auth-store.ts`), so an
+   * unconditional call would emit one identify per launch for an identity that
+   * did not change. With the gate it fires only when the account's own details
+   * actually moved.
+   *
+   * The comparison is shallow by construction - `AuthProfile` and
+   * `AuthContextMetadata` are flat, and a team is compared on the three fields
+   * `projectShareableTeams` emits - so it can be read against those types
+   * rather than trusted.
+   */
+  private reprojectSameUserIdentity(user: AuthenticatedUser): void {
+    const profile = this.profileFromUser(user);
+    const contextMetadata = this.contextMetadataFromUser(user);
+    const shareableTeams = projectShareableTeams(user);
+    const current = useAuthStore.getState();
+    // Keyed by id, not by INDEX. `projectShareableTeams` preserves the server's
+    // order verbatim, so an index-wise compare reads a pure reorder of an
+    // identical team set as a change - which writes the store and fires an
+    // `Analytics.identify` for nothing. Team ids are unique, so a same-length
+    // set whose every id is found with matching fields is the same set.
+    const currentTeamsById = new Map(
+      current.shareableTeams.map((team) => [team.teamId, team]),
+    );
+    const unchanged =
+      current.profile !== null &&
+      current.contextMetadata !== null &&
+      current.profile.userId === profile.userId &&
+      current.profile.userName === profile.userName &&
+      current.profile.email === profile.email &&
+      current.profile.avatarUrl === profile.avatarUrl &&
+      current.contextMetadata.userId === contextMetadata.userId &&
+      current.contextMetadata.username === contextMetadata.username &&
+      current.shareableTeams.length === shareableTeams.length &&
+      shareableTeams.every((next) => {
+        const team = currentTeamsById.get(next.teamId);
+        return (
+          team !== undefined &&
+          team.slug === next.slug &&
+          team.avatarUrl === next.avatarUrl
+        );
+      });
+    if (unchanged) return;
+    // The service's OWN copy moves too, through the single commit site and
+    // BEFORE the announcement, exactly as every other identity write does.
+    // What this method must not disturb is the context provider and the
+    // refresh scheduler, and `currentProfile` is neither: it is the other half
+    // of the live credential pair, which `commitLiveCredential` exists to keep
+    // from splitting. Left
+    // behind, it is not merely stale but SELF-PERPETUATING, because the
+    // rotation path re-commits `this.currentProfile` verbatim on every
+    // refresh; a renamed account would keep serving its old name to
+    // `getCurrentSessionSnapshot` until the process restarted.
+    //
+    // The bearer is passed through unchanged: this path re-projects an
+    // identity, it does not mint a token, and the pair must be written
+    // together rather than one field at a time.
+    this.commitLiveCredential(this.currentBearer, profile);
+    useAuthStore
+      .getState()
+      .setSignedIn(profile, contextMetadata, shareableTeams);
+    // The windows bridge holds a PUSHED copy of the same snapshot, so fixing
+    // only the pull-side read would leave every other window on the old
+    // identity. Reached only past the gate above, so an unchanged identity
+    // still emits nothing.
+    this.emitSessionSnapshot();
   }
 
   private profileFromUser(user: AuthenticatedUser): AuthProfile {

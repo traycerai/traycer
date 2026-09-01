@@ -532,16 +532,20 @@ export class EpicStreamClient {
    *
    * A different major is `false`, never "newer, therefore also this". A major
    * is an independent contract, not a superset of the one before it, and
-   * `epic.subscribe` is the method that proves it: this branch's durability
-   * minors are @1.4-@1.6, while mainline's own work on the same method landed
-   * as @2.0 - a typed metadata/body plane carrying no `cloudSyncStatus` frame
-   * at all. Answering `2.0 > 1.6` told the renderer durability had been
-   * negotiated on a line that never defined it, so comment availability could
-   * sit in `checking` forever and absent v1 legs would be read as guarantees
-   * v2 never made.
+   * `epic.subscribe` is the method that proved it: while this branch's
+   * durability minors sat at @1.4-@1.6, mainline briefly installed an @2.0 on
+   * the same method - a typed metadata/body plane carrying no
+   * `cloudSyncStatus` frame at all. Answering `2.0 > 1.6` told the renderer
+   * durability had been negotiated on a line that never defined it, so
+   * comment availability could sit in `checking` forever and absent v1 legs
+   * would be read as guarantees v2 never made. That @2.0 was retired
+   * unreleased (its planes moved to the lane methods - see the note at the
+   * foot of `protocol/src/host/epic/subscribe.ts`), so today no second major
+   * of this method exists; the guard remains because the mistake it blocks is
+   * one arithmetic away from coming back.
    *
-   * If a v2 durability capability is ever defined, it gets its own predicate
-   * and its own version constant. It does not arrive by arithmetic.
+   * If a second major ever defines a durability capability, it gets its own
+   * predicate and its own version constant. It does not arrive by arithmetic.
    */
   private peerSpeaksAtLeast(version: SchemaVersion): boolean {
     const negotiated = this.session.getNegotiatedSchemaVersion();

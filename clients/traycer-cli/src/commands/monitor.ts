@@ -225,6 +225,12 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
 
   const client = new WsStreamClient<HostStreamRpcRegistry>({
     registry: hostStreamRpcRegistry,
+    // The host this endpoint resolves to, or `null` while it has resolved none
+    // yet - which simply declines the seed. Safe even where `endpoint` is
+    // re-resolved later in the run: the seed is consulted only before this
+    // client's first handshake, which is while this id is still the current
+    // one, and the latch closes it for good after that.
+    hostId: endpoint?.hostId ?? null,
     endpoint: () => endpoint,
     bearer: () => lease,
     // `auth: null` opts out of the WsStreamClient's built-in stream-auth
@@ -233,6 +239,7 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
     // back off and re-subscribe on `network-error`), so wiring the client
     // handler too would double up. Non-UNAUTHORIZED fatals stay terminal there.
     auth: null,
+    clock: null,
     // Delegated host-credential provisioning. `monitor` is the CLI command that
     // most needs it: the host it watches should keep serving after this process
     // exits. Provisioning is silent, so this works the same whether `monitor` is

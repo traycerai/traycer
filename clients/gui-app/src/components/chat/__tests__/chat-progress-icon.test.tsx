@@ -54,8 +54,8 @@ const mockSessionState = vi.hoisted<{
 }));
 
 vi.mock("@/lib/epic-selectors", () => ({
-  useEpicAgentActivityTiers: () => mockSessionState.activityTiers,
-  useEpicPermissionRole: () => mockSessionState.epicPermissionRole,
+  useRegisteredEpicAgentActivityTiers: () => mockSessionState.activityTiers,
+  useRegisteredEpicPermissionRole: () => mockSessionState.epicPermissionRole,
 }));
 
 vi.mock("@/lib/registries/chat-session-registry", () => ({
@@ -65,6 +65,8 @@ vi.mock("@/lib/registries/chat-session-registry", () => ({
 import { ChatProgressIcon } from "@/components/chat/chat-progress-icon";
 
 import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
+import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
+
 const createdHandles: ChatSessionStoreHandle[] = [];
 
 afterEach(() => {
@@ -321,6 +323,7 @@ function renderIcon() {
 
 function createHandle(): ChatSessionStoreHandle {
   const handle = createChatSessionStore({
+    environment: CHAT_STORE_TEST_ENVIRONMENT,
     hostId: "host-a",
     epicId: EPIC_ID,
     chatId: CHAT_ID,

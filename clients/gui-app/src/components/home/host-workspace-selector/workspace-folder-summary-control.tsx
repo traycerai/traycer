@@ -6,6 +6,7 @@ import {
   type ReactNode,
 } from "react";
 import { FolderPlus } from "lucide-react";
+import { Slot } from "radix-ui";
 import {
   Popover,
   PopoverContent,
@@ -31,6 +32,8 @@ import {
   WorkspaceFolderRows,
 } from "./workspace-folder-rows";
 import { WorkspaceFolderHoverList } from "./workspace-folder-hover-list";
+import { WorkspaceFolderPreviewSheet } from "./workspace-folder-preview-sheet";
+import { useWorkspaceFolderPreviewReveal } from "./use-workspace-folder-preview-reveal";
 import { WorkspaceSummaryTrigger } from "./workspace-summary-trigger";
 import type { WorkspaceRunItem } from "./workspace-run-item";
 
@@ -170,6 +173,7 @@ export function WorkspaceFolderSummaryControl(props: {
     workspacePopoverOpen: false,
     summaryHoverOpen: false,
   });
+  const preview = useWorkspaceFolderPreviewReveal();
   const refreshUi = useWorkspaceRefreshUi(props.refresh);
   const triggerRefresh = refreshUi.triggerRefresh;
   const canRefresh = refreshUi.canRefresh;
@@ -339,11 +343,16 @@ export function WorkspaceFolderSummaryControl(props: {
         });
       }}
     >
-      <PopoverTrigger asChild>{trigger}</PopoverTrigger>
+      <PopoverTrigger asChild>
+        {/* Innermost, so the press guard runs BEFORE the popover's own open
+            handler and can prevent it - `Slot` composes a child's handler
+            ahead of the slot's. */}
+        <Slot.Root {...preview.triggerProps}>{trigger}</Slot.Root>
+      </PopoverTrigger>
     </HoverPreviewCard>
   );
 
-  return (
+  const picker = (
     <Popover
       open={overlayState.workspacePopoverOpen}
       onOpenChange={(open) => {
@@ -427,6 +436,16 @@ export function WorkspaceFolderSummaryControl(props: {
         )}
       </PopoverContent>
     </Popover>
+  );
+  return (
+    <>
+      {picker}
+      <WorkspaceFolderPreviewSheet
+        items={props.items}
+        open={preview.open}
+        onClose={preview.close}
+      />
+    </>
   );
 }
 

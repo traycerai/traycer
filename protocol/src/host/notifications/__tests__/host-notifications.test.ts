@@ -19,7 +19,6 @@ import {
   hostNotificationsListResponseSchemaV10,
   hostNotificationsListUpgradeV10ToV20,
   hostNotificationsListDowngradeV22ToV10,
-  hostNotificationsListDowngradeV21ToV10,
   hostNotificationsMarkAllRead,
   hostNotificationsMarkRead,
   hostNotificationsSetConfig,
@@ -43,6 +42,13 @@ import {
   hostNotificationsSubscribeOpenRequestSchema,
   hostNotificationsSubscribeOpenRequestSchemaV10,
   hostNotificationsSummarySchema,
+  hostNotificationEntrySchemaV21,
+  hostNotificationEntrySchemaV22,
+  hiddenHostNotificationKinds,
+  visibleHostNotificationKinds,
+  ALL_HOST_NOTIFICATION_KINDS,
+  RELEASED_HOST_NOTIFICATION_KINDS,
+  type HostNotificationsSurface,
 } from "@traycer/protocol/host/notifications/contracts";
 import {
   buildStreamManifest,
@@ -348,7 +354,7 @@ describe("host.notifications.list V10↔V20 upgrade/downgrade bridges", () => {
 
   it("downgrades recent/unreadRecent onto all/unread and strips cursor kind", () => {
     expect(
-      hostNotificationsListDowngradeV21ToV10.downgradeRequest({
+      hostNotificationsListDowngradeV22ToV10.downgradeRequest({
         filter: "recent",
         limit: 25,
         cursor: CHRONOLOGICAL_CURSOR,
@@ -365,7 +371,7 @@ describe("host.notifications.list V10↔V20 upgrade/downgrade bridges", () => {
       },
     });
     expect(
-      hostNotificationsListDowngradeV21ToV10.downgradeRequest({
+      hostNotificationsListDowngradeV22ToV10.downgradeRequest({
         filter: "unreadRecent",
         limit: 10,
       }),
@@ -377,7 +383,7 @@ describe("host.notifications.list V10↔V20 upgrade/downgrade bridges", () => {
 
   it("downgrades response cursors by stripping kind", () => {
     expect(
-      hostNotificationsListDowngradeV21ToV10.downgradeResponse({
+      hostNotificationsListDowngradeV22ToV10.downgradeResponse({
         entries: [STOPPED_ENTRY],
         nextCursor: CHRONOLOGICAL_CURSOR,
       }),
@@ -395,7 +401,7 @@ describe("host.notifications.list V10↔V20 upgrade/downgrade bridges", () => {
 
   it("rejects attention downgrade with a structured unsupported error", () => {
     expect(
-      hostNotificationsListDowngradeV21ToV10.downgradeRequest({
+      hostNotificationsListDowngradeV22ToV10.downgradeRequest({
         filter: "attention",
         limit: 25,
         cursor: ATTENTION_CURSOR,
@@ -1101,5 +1107,114 @@ describe("host.notifications registry membership", () => {
         upgradeGuidance: { hostShouldUpgrade: true },
       },
     });
+  });
+});
+
+/**
+ * Ticket 11 (cross-host browser): the parked-session kind is carried only by
+ * the newest version of each surface. A released peer must never be handed a
+ * row its closed entry union cannot represent - the failure mode there is a
+ * 500 or a reconnect loop, not a missing row.
+ */
+describe("browser.human.needed stays off every released contract", () => {
+  const PARKED_ENTRY = {
+    id: "entry-parked",
+    updatedAt: 1_700_000_000_000,
+    readAt: null,
+    sourceRef: "session-9",
+    epicId: "epic-1",
+    chatId: "chat-1",
+    kind: "browser.human.needed",
+    severity: "needs_action",
+    outcome: null,
+    resolvedAt: null,
+    payload: {
+      kind: "browser_human_needed",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      sessionId: "session-9",
+      tabId: "tab-3",
+      reason: "sign in to example.com",
+    },
+  };
+
+  it("is absent from the released kind list and the released entry union", () => {
+    expect(RELEASED_HOST_NOTIFICATION_KINDS).not.toContain(
+      "browser.human.needed",
+    );
+    expect(ALL_HOST_NOTIFICATION_KINDS).toContain("browser.human.needed");
+    expect(hostNotificationEntrySchema.safeParse(PARKED_ENTRY).success).toBe(
+      false,
+    );
+    // `@2.1` shipped without this arm and stays frozen; `@2.2` is the widening.
+    expect(hostNotificationEntrySchemaV21.safeParse(PARKED_ENTRY).success).toBe(
+      false,
+    );
+    expect(hostNotificationEntrySchemaV22.safeParse(PARKED_ENTRY).success).toBe(
+      true,
+    );
+  });
+
+  it("is hidden from every released version and visible only on the newest", () => {
+    const released: ReadonlyArray<{
+      readonly surface: HostNotificationsSurface;
+      readonly major: number;
+      readonly minor: number;
+    }> = [
+      { surface: { method: "host.notifications.list" }, major: 1, minor: 0 },
+      { surface: { method: "host.notifications.list" }, major: 2, minor: 0 },
+      { surface: { method: "host.notifications.list" }, major: 2, minor: 1 },
+      {
+        surface: { method: "host.notifications.subscribe" },
+        major: 1,
+        minor: 0,
+      },
+      {
+        surface: { method: "host.notifications.feed.subscribe" },
+        major: 1,
+        minor: 0,
+      },
+      {
+        surface: { method: "host.notifications.feed.subscribe" },
+        major: 1,
+        minor: 1,
+      },
+      {
+        surface: { method: "host.notifications.cloudFeed.subscribe" },
+        major: 1,
+        minor: 0,
+      },
+    ];
+    for (const { surface, major, minor } of released) {
+      expect(
+        visibleHostNotificationKinds(surface, { major, minor }),
+      ).not.toContain("browser.human.needed");
+      expect(hiddenHostNotificationKinds(surface, { major, minor })).toContain(
+        "browser.human.needed",
+      );
+    }
+    const newest: ReadonlyArray<{
+      readonly surface: HostNotificationsSurface;
+      readonly major: number;
+      readonly minor: number;
+    }> = [
+      { surface: { method: "host.notifications.list" }, major: 2, minor: 2 },
+      {
+        surface: { method: "host.notifications.feed.subscribe" },
+        major: 1,
+        minor: 2,
+      },
+      // The cloud feed's `@1.1` has not shipped, so it grows in place.
+      {
+        surface: { method: "host.notifications.cloudFeed.subscribe" },
+        major: 1,
+        minor: 1,
+      },
+    ];
+    for (const { surface, major, minor } of newest) {
+      expect(visibleHostNotificationKinds(surface, { major, minor })).toContain(
+        "browser.human.needed",
+      );
+    }
   });
 });

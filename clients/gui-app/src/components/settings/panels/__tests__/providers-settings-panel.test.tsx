@@ -1731,6 +1731,7 @@ describe("<ProvidersSettingsPanel />", () => {
     // The pre-send "session not ready" rejection every host-scoped query gets
     // while the remote session's first dial is still in flight.
     providerMocks.listResult.error = new RetryableTransportError({
+      replaySafetyFromKey: false,
       code: "RPC_ERROR",
       message: "Remote session is not ready",
       requestId: "req-1",
@@ -1760,6 +1761,7 @@ describe("<ProvidersSettingsPanel />", () => {
     // panel on a permanent spinner with no way to report the fault.
     providerMocks.listResult.isError = true;
     providerMocks.listResult.error = new RetryableTransportError({
+      replaySafetyFromKey: false,
       code: "RPC_ERROR",
       message: "Local host connection is not ready",
       requestId: "req-2",

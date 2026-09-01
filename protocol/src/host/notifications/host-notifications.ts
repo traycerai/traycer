@@ -41,6 +41,7 @@ export const hostNotificationKindSchema = z.enum([
   "approval.requested",
   "interview.requested",
   "host.operation.finished",
+  "browser.human.needed",
 ]);
 export type HostNotificationKind = z.infer<typeof hostNotificationKindSchema>;
 
@@ -198,12 +199,69 @@ export type HostNotificationEntryV21 = z.infer<
   typeof hostNotificationEntrySchemaV21
 >;
 
-/** Narrows a `@2.1` entry to the released union. */
+/**
+ * An agent's browser session hit a step only a person can complete - a login
+ * wall, CAPTCHA, MFA challenge, or payment confirmation. The session parks
+ * instead of failing, this row deep-links to its tile, and the agent resumes
+ * once the human is done.
+ *
+ * Shaped exactly like the released `needs_action` arms (`outcome: null` plus a
+ * `resolvedAt` lifecycle) so the host transport's generic prompt branch already
+ * carries it and resuming resolves it - no arm-specific projection anywhere.
+ */
+const browserHumanNeededEntryArm = z.object({
+  ...hostNotificationEntryBaseFields,
+  kind: z.literal("browser.human.needed"),
+  outcome: z.null(),
+  resolvedAt: z.number().int().nonnegative().nullable(),
+  payload: hostNotificationPayloadSchema,
+});
+
+/**
+ * `@2.1`'s arms plus `browser.human.needed`; list `@2.2` / feed `@1.2` /
+ * cloudFeed `@1.1`.
+ *
+ * A NEW minor rather than a widening of `@2.1`/`@1.1`, because those two lines
+ * have shipped: a released client strict-decodes the frame, and zod's
+ * within-minor downgrade strips unknown FIELDS but cannot strip an unknown ARM.
+ * The `host.operation.finished` arm could join `@2.1` only because `@2.1` was
+ * itself the new minor at the time. `released-baseline-compat.test.ts` is what
+ * catches the difference; the cloud feed's `@1.1` grows in place because it has
+ * not shipped.
+ */
+export const hostNotificationEntrySchemaV22 = z.discriminatedUnion("kind", [
+  ...releasedHostNotificationEntryArms,
+  hostOperationFinishedEntryArm,
+  browserHumanNeededEntryArm,
+]);
+export type HostNotificationEntryV22 = z.infer<
+  typeof hostNotificationEntrySchemaV22
+>;
+
+/**
+ * Narrows a `@2.2` entry to the released union. Derived from
+ * {@link RELEASED_HOST_NOTIFICATION_KINDS} rather than listing the exclusions:
+ * this predicate is the downgrade bridge's last guard against an
+ * unrepresentable arm reaching a released client, so a new arm has to be
+ * excluded by DEFAULT, not by remembering to name it here.
+ */
 export function isReleasedHostNotificationEntry(
-  entry: HostNotificationEntryV21,
+  entry: HostNotificationEntryV22,
 ): entry is HostNotificationEntry {
-  return entry.kind !== "host.operation.finished";
+  return RELEASED_HOST_NOTIFICATION_KINDS.includes(entry.kind);
 }
+
+/**
+ * Kinds that light the pending-prompt glyph (epic sidebar row / chat
+ * indicator / cloud SQL projection) while `resolvedAt` is still `null`. The
+ * GUI's `indicatorContribution` consumes this tuple directly; the host's
+ * `hostNotificationsGetIndicatorState` SQL consumes its own local mirror
+ * (`PENDING_PROMPT_HOST_NOTIFICATION_KINDS`, same pattern as
+ * `ALL_PERSISTED_HOST_NOTIFICATION_KINDS`) - keep both lists in sync when a
+ * kind is added here.
+ */
+export const HOST_NOTIFICATION_PENDING_PROMPT_KINDS: readonly HostNotificationKind[] =
+  ["approval.requested", "interview.requested", "browser.human.needed"];
 
 /** The kinds every released contract version can carry. FROZEN. */
 export const RELEASED_HOST_NOTIFICATION_KINDS: readonly HostNotificationKind[] =
@@ -215,10 +273,16 @@ export const RELEASED_HOST_NOTIFICATION_KINDS: readonly HostNotificationKind[] =
     "interview.requested",
   ];
 
-/** Every kind this build can carry, on the newest version of each surface. */
-export const ALL_HOST_NOTIFICATION_KINDS: readonly HostNotificationKind[] = [
+/** The kinds list `@2.1` / feed `@1.1` carry. FROZEN with those minors. */
+export const V21_HOST_NOTIFICATION_KINDS: readonly HostNotificationKind[] = [
   ...RELEASED_HOST_NOTIFICATION_KINDS,
   "host.operation.finished",
+];
+
+/** Every kind this build can carry, on the newest version of each surface. */
+export const ALL_HOST_NOTIFICATION_KINDS: readonly HostNotificationKind[] = [
+  ...V21_HOST_NOTIFICATION_KINDS,
+  "browser.human.needed",
 ];
 
 /**
@@ -258,15 +322,17 @@ export function visibleHostNotificationKinds(
     case "host.notifications.list":
       if (schemaVersion.major === 1) return RELEASED_HOST_NOTIFICATION_KINDS;
       if (schemaVersion.major === 2) {
-        return schemaVersion.minor >= 1
-          ? ALL_HOST_NOTIFICATION_KINDS
+        if (schemaVersion.minor >= 2) return ALL_HOST_NOTIFICATION_KINDS;
+        return schemaVersion.minor === 1
+          ? V21_HOST_NOTIFICATION_KINDS
           : RELEASED_HOST_NOTIFICATION_KINDS;
       }
       return RELEASED_HOST_NOTIFICATION_KINDS;
     case "host.notifications.feed.subscribe":
       if (schemaVersion.major === 1) {
-        return schemaVersion.minor >= 1
-          ? ALL_HOST_NOTIFICATION_KINDS
+        if (schemaVersion.minor >= 2) return ALL_HOST_NOTIFICATION_KINDS;
+        return schemaVersion.minor === 1
+          ? V21_HOST_NOTIFICATION_KINDS
           : RELEASED_HOST_NOTIFICATION_KINDS;
       }
       return RELEASED_HOST_NOTIFICATION_KINDS;
@@ -512,6 +578,15 @@ export const hostNotificationsListResponseSchemaV21 = z.object({
 });
 export type HostNotificationsListResponseV21 = z.infer<
   typeof hostNotificationsListResponseSchemaV21
+>;
+
+/** `@2.2` response: identical projection, entry union widened again. */
+export const hostNotificationsListResponseSchemaV22 = z.object({
+  entries: z.array(hostNotificationEntrySchemaV22),
+  nextCursor: hostNotificationsCursorSchema.nullable(),
+});
+export type HostNotificationsListResponseV22 = z.infer<
+  typeof hostNotificationsListResponseSchemaV22
 >;
 
 export const hostNotificationsEntityRefSchema = z.object({
@@ -848,6 +923,92 @@ export type HostNotificationsSubscribeServerFrameV11 = z.infer<
   typeof hostNotificationsSubscribeServerFrameSchemaV11
 >;
 
+/**
+ * Feed `@1.2` server frames. Like `list@2.2` this minor carries BOTH of the
+ * bumps that landed on it independently: every entry-carrying slot widens to
+ * `hostNotificationEntrySchemaV22`, and the `partitionSnapshot` frame joins
+ * the union (legal only because `@1.2` is itself the unreleased new minor -
+ * see the `@2.2` entry-union note).
+ *
+ * `partitionSnapshot` selects the local durable-home partition. Its inherited
+ * attention/recent pages, summaries and cursors are all exact for that lane;
+ * `partition` is a selected snapshot variant that supplies the
+ * protocol-defined order while retaining every other frame verbatim.
+ *
+ * Written out in full for the same reason `@1.1` is: `@1.1` has now shipped and
+ * must stay byte-identical forever, so it cannot be a base a later edit
+ * silently rewrites.
+ */
+const hostNotificationsSnapshotSchemaV12 = z.object({
+  kind: z.literal("snapshot"),
+  ...textFrameFields,
+  attention: z.object({
+    entries: z.array(hostNotificationEntrySchemaV22),
+    nextCursor: hostNotificationsAttentionCursorSchema.nullable(),
+  }),
+  recent: z.object({
+    entries: z.array(hostNotificationEntrySchemaV22),
+    nextCursor: hostNotificationsChronologicalCursorSchema.nullable(),
+  }),
+  summary: hostNotificationsSummarySchema,
+});
+const hostNotificationsLocalPartitionSnapshotSchemaV12 =
+  hostNotificationsSnapshotSchemaV12.extend({
+    kind: z.literal("partitionSnapshot"),
+    partition: hostNotificationsLocalPartitionSchema,
+  });
+export const hostNotificationsSubscribeServerFrameSchemaV12 =
+  z.discriminatedUnion("kind", [
+    hostNotificationsLocalPartitionSnapshotSchemaV12,
+    hostNotificationsSnapshotSchemaV12,
+    z.object({
+      kind: z.literal("upserted"),
+      ...textFrameFields,
+      entry: hostNotificationEntrySchemaV22,
+      removedIds: nonDuplicateIdArraySchema(0),
+      summary: hostNotificationsSummarySchema,
+    }),
+    z.object({
+      kind: z.literal("readStateChanged"),
+      ...textFrameFields,
+      ids: z.array(z.string()).min(1),
+      entityRefs: z.array(hostNotificationsEntityRefSchema),
+      readAt: z.number().int().nonnegative().nullable(),
+      resolvedAt: z.number().int().nonnegative().nullable(),
+      removedIds: nonDuplicateIdArraySchema(0),
+      summary: hostNotificationsSummarySchema,
+    }),
+    z.object({
+      kind: z.literal("removed"),
+      ...textFrameFields,
+      removedIds: nonDuplicateIdArraySchema(1),
+      summary: hostNotificationsSummarySchema,
+    }),
+    z.object({
+      kind: z.literal("cleared"),
+      ...textFrameFields,
+      beforeUpdatedAt: z.number().int().nonnegative(),
+      removedIds: nonDuplicateIdArraySchema(0),
+      summary: hostNotificationsSummarySchema,
+    }),
+    z.object({
+      kind: z.literal("channelEmission"),
+      ...textFrameFields,
+      emissionId: z.string(),
+      channelId: hostNotificationChannelIdSchema,
+      severity: hostNotificationSeveritySchema,
+      rows: z.array(hostNotificationEntrySchemaV22).min(1),
+      reason: hostNotificationsChannelEmissionReasonSchema,
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      ...textFrameFields,
+    }),
+  ]);
+export type HostNotificationsSubscribeServerFrameV12 = z.infer<
+  typeof hostNotificationsSubscribeServerFrameSchemaV12
+>;
+
 export const hostNotificationsSubscribeClientFrameSchema = z.discriminatedUnion(
   "kind",
   [
@@ -1025,11 +1186,20 @@ export const hostNotificationsListV21 = defineRpcContract({
   responseSchema: hostNotificationsListResponseSchemaV21,
 });
 
+/**
+ * `@2.2` carries BOTH of the bumps that landed on this minor independently:
+ * the durable-home request variants (one branch) and the response entry union
+ * widened with `browser.human.needed` (the other). Two `@2.2` definitions of
+ * one method cannot both be registered, and picking one would silently drop
+ * the other's shape from the wire - the same merge rule `indicatorState@1.1`
+ * below records. Joining an unreleased minor is what makes this legal; see
+ * the `@2.2` entry-union note for why a SHIPPED minor could take neither bump.
+ */
 export const hostNotificationsListV22 = defineRpcContract({
   method: "host.notifications.list",
   schemaVersion: { major: 2, minor: 2 } as const,
   requestSchema: hostNotificationsListRequestSchemaV22,
-  responseSchema: hostNotificationsListResponseSchemaV21,
+  responseSchema: hostNotificationsListResponseSchemaV22,
 });
 
 export const hostNotificationsListUpgradeV10ToV20 = defineUpgradePath<
@@ -1068,7 +1238,12 @@ export const hostNotificationsListUpgradeV20ToV21 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
-/** Additive local-home selector; old callers receive the prior whole-origin view. */
+/**
+ * Additive on both axes: every `@2.1` request variant is kept verbatim (the
+ * local-home selector arrives as NEW union variants only, so an old caller's
+ * request parses unchanged), and the response widens exactly like
+ * `@2.0` -> `@2.1`.
+ */
 export const hostNotificationsListUpgradeV21ToV22 = defineUpgradePath<
   typeof hostNotificationsListV21,
   typeof hostNotificationsListV22
@@ -1079,13 +1254,35 @@ export const hostNotificationsListUpgradeV21ToV22 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
-export const hostNotificationsListDowngradeV21ToV10 = defineDowngradePath<
-  typeof hostNotificationsListV21,
+/**
+ * A released v1 host has no durable-home selector, so the exact local
+ * partition has no representation below `@2.2`.
+ *
+ * REFUSED rather than discarded, exactly as the `attention` projection is
+ * below. Stripping `home` answers a request for ONE partition with the
+ * whole-origin rows and the whole-origin cursor, and the caller that asked for
+ * a partition is by construction merging it with a cloud lane - so the
+ * cloud-homed rows come back twice, and every subsequent page or mutation is
+ * scoped to a set the caller never asked for. A short-circuit the caller can
+ * see beats a plausible answer it cannot distinguish from the real one.
+ */
+export const hostNotificationsListDowngradeV22ToV10 = defineDowngradePath<
+  typeof hostNotificationsListV22,
   typeof hostNotificationsListV10
 >({
-  from: hostNotificationsListV21.schemaVersion,
+  from: hostNotificationsListV22.schemaVersion,
   to: hostNotificationsListV10.schemaVersion,
   downgradeRequest: (request) => {
+    if ("home" in request) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "The local durable-home projection has no representation in host.notifications.list@1.0",
+        },
+      };
+    }
     if (request.filter === "attention") {
       return {
         ok: false,
@@ -1128,41 +1325,6 @@ export const hostNotificationsListDowngradeV21ToV10 = defineDowngradePath<
             },
     },
   }),
-});
-
-/**
- * A released v1 host has no durable-home selector, so the exact local
- * partition has no representation below `@2.2`.
- *
- * REFUSED rather than discarded, exactly as the `attention` projection is one
- * path up. Stripping `home` answers a request for ONE partition with the
- * whole-origin rows and the whole-origin cursor, and the caller that asked for
- * a partition is by construction merging it with a cloud lane - so the
- * cloud-homed rows come back twice, and every subsequent page or mutation is
- * scoped to a set the caller never asked for. A short-circuit the caller can
- * see beats a plausible answer it cannot distinguish from the real one.
- */
-export const hostNotificationsListDowngradeV22ToV10 = defineDowngradePath<
-  typeof hostNotificationsListV22,
-  typeof hostNotificationsListV10
->({
-  from: hostNotificationsListV22.schemaVersion,
-  to: hostNotificationsListV10.schemaVersion,
-  downgradeRequest: (request) => {
-    if ("home" in request) {
-      return {
-        ok: false,
-        error: {
-          code: "DOWNGRADE_UNSUPPORTED",
-          message:
-            "The local durable-home projection has no representation in host.notifications.list@1.0",
-        },
-      };
-    }
-    return hostNotificationsListDowngradeV21ToV10.downgradeRequest(request);
-  },
-  downgradeResponse: (response) =>
-    hostNotificationsListDowngradeV21ToV10.downgradeResponse(response),
 });
 
 export const hostNotificationsMarkRead = defineRpcContract({
@@ -1344,8 +1506,10 @@ export const hostNotificationsCloudFeedSubscribeV10 = defineStreamRpcContract({
 
 /**
  * Additive minor of the cloud feed row: identical envelope, entry slot widened
- * to the `@2.1` union so a `host.operation.finished` occurrence is
- * representable. V10 stays frozen - its closed union is a released parser's
+ * to the widest union (`@2.2`) so a `host.operation.finished` or parked-browser
+ * occurrence is representable. It grows in place rather than taking a `@1.2` of
+ * its own because this minor has not shipped - `released-baseline-compat` is
+ * the authority on which lines are frozen. V10 stays frozen - its closed union is a released parser's
  * contract, and one new arm reaching it is treated as connection corruption
  * (see `hostNotificationEntrySchema`'s doc), never a cosmetic failure.
  *
@@ -1355,7 +1519,7 @@ export const hostNotificationsCloudFeedSubscribeV10 = defineStreamRpcContract({
  */
 export const hostNotificationsCloudFeedRowSchemaV11 = z.object({
   ...hostNotificationsCloudFeedRowSchema.shape,
-  entry: hostNotificationEntrySchemaV21,
+  entry: hostNotificationEntrySchemaV22,
 });
 export type HostNotificationsCloudFeedRowV11 = z.infer<
   typeof hostNotificationsCloudFeedRowSchemaV11
@@ -1570,32 +1734,9 @@ export const hostNotificationsFeedSubscribeV11 = defineStreamRpcContract({
   clientFrameSchema: hostNotificationsSubscribeClientFrameSchema,
 });
 
-/**
- * Feed `@1.2` selects the local durable-home partition. Its inherited
- * attention/recent pages, summaries and cursors are all exact for that lane;
- * `partition` is a selected snapshot variant that supplies the
- * protocol-defined order while retaining every frozen V11 frame verbatim.
- */
-const hostNotificationsLocalPartitionSnapshotSchemaV12 =
-  hostNotificationsSnapshotSchemaV11.extend({
-    kind: z.literal("partitionSnapshot"),
-    partition: hostNotificationsLocalPartitionSchema,
-  });
-export const hostNotificationsSubscribeServerFrameSchemaV12 =
-  z.discriminatedUnion("kind", [
-    hostNotificationsLocalPartitionSnapshotSchemaV12,
-    hostNotificationsSnapshotSchemaV11,
-    hostNotificationsUpsertedSchemaV11,
-    hostNotificationsReadStateChangedSchemaV11,
-    hostNotificationsRemovedSchemaV11,
-    hostNotificationsClearedSchemaV11,
-    hostNotificationsChannelEmissionSchemaV11,
-    hostNotificationsPongSchemaV11,
-  ]);
-export type HostNotificationsSubscribeServerFrameV12 = z.infer<
-  typeof hostNotificationsSubscribeServerFrameSchemaV12
->;
-
+/** Additive minor: same open request and client frames; the widened entry
+ * union and the `partitionSnapshot` frame both land here (the union is
+ * defined beside `@1.1`'s, above). */
 export const hostNotificationsFeedSubscribeV12 = defineStreamRpcContract({
   method: "host.notifications.feed.subscribe",
   schemaVersion: { major: 1, minor: 2 } as const,

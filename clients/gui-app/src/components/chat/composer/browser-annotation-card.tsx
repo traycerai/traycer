@@ -2,9 +2,9 @@ import { X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import { useMaybeBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
-import { type ImageBytesFetcher } from "@/lib/attachments/image-blob-cache";
+import { type ScopedImageBytesFetcher } from "@/lib/attachments/image-blob-cache";
 import { useImageBlobUrl } from "@/lib/attachments/use-image-blob-url";
+import { useLiveBrowserSession } from "@/lib/browser-view/sessions/use-live-browser-session";
 import {
   formatAnnotationCounts,
   type BrowserAnnotationRecord,
@@ -18,11 +18,14 @@ import { cn } from "@/lib/utils";
 export function BrowserAnnotationCard(props: {
   readonly record: BrowserAnnotationRecord;
   readonly onRemove: ((annotationId: string) => void) | null;
-  readonly imageFetcher: ImageBytesFetcher;
+  readonly imageFetcher: ScopedImageBytesFetcher;
   readonly sessionObjectUrl: (hash: string) => string | null;
 }) {
   const { record, onRemove, imageFetcher } = props;
-  const sessions = useMaybeBrowserSessionsContext();
+  // Resolved across every open coordinator, not the surrounding sessions
+  // context: an annotation taken on one host is attached to a chat that may be
+  // pinned to another (see `browserSessionAcrossCoordinators`).
+  const session = useLiveBrowserSession(record.sessionId);
   const sessionUrl = props.sessionObjectUrl(record.imageHash);
   const blobUrl = useImageBlobUrl(record.imageHash, "image/png", imageFetcher);
   const src = sessionUrl ?? blobUrl;
@@ -34,7 +37,10 @@ export function BrowserAnnotationCard(props: {
   const countsLine = [counts, dropped]
     .filter((part) => part.length > 0)
     .join(", ");
-  const staleness = annotationStalenessHint(record, sessions?.items ?? null);
+  const staleness = annotationStalenessHint(
+    record,
+    session === null ? null : [session],
+  );
   const stalenessCopy =
     staleness === null ? "" : ANNOTATION_STALENESS_COPY[staleness];
   const secondary = stalenessCopy.length > 0 ? stalenessCopy : countsLine;

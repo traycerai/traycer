@@ -19,10 +19,10 @@ import { createAppQueryClient } from "@/lib/query-client";
 import { CommentSidebar } from "@/components/comments/comment-sidebar";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
 import {
-  createOpenEpicStore,
   type EpicStreamClientFactory,
   type OpenEpicStoreHandle,
 } from "@/stores/epics/open-epic/store";
+import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import { useCommentThreadsStore } from "@/stores/comments/comment-threads-store";
 
 const EPIC_ID = "epic-1";
@@ -70,8 +70,15 @@ function unavailableHost(): never {
 }
 
 function threadFixture(): CommentThreadWire {
+  return threadFixtureWith("thread-1", QUOTED_TEXT);
+}
+
+function threadFixtureWith(
+  threadId: string,
+  quotedText: string,
+): CommentThreadWire {
   return {
-    threadId: "thread-1",
+    threadId,
     resolved: false,
     createdAt: 1,
     comments: [
@@ -83,7 +90,7 @@ function threadFixture(): CommentThreadWire {
         author: { userId: "user-1", fallbackHandle: "someone" },
       },
     ],
-    data: { createdByUserId: "user-1", quotedText: QUOTED_TEXT },
+    data: { createdByUserId: "user-1", quotedText },
   };
 }
 
@@ -117,11 +124,14 @@ beforeEach(() => {
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
   );
   hostClientRef.current = spine.createRequester(mockLocalHostEntry);
-  defaultEpicHandle = createOpenEpicStore({
+  defaultEpicHandle = openStoreForTest({
     epicId: EPIC_ID,
-    streamClientFactory: noopEpicStreamClientFactory,
     userId: "user-1",
-    onAuthError: null,
+    factories: {
+      streamClientFactory: noopEpicStreamClientFactory,
+      laneSelection: null,
+    },
+    writeCommand: null,
   });
   // Cloud-backed epics leave durability unset; only local lifecycle states
   // populate this field. That keeps the normal list-query assertions below.
@@ -175,7 +185,10 @@ const noopEpicStreamClientFactory: EpicStreamClientFactory = () => ({
   close: () => undefined,
 });
 
-function renderSidebar(epicHandle: OpenEpicStoreHandle) {
+function renderSidebar(
+  epicHandle: OpenEpicStoreHandle,
+  laneThreads: readonly CommentThreadWire[] | null,
+) {
   return render(
     <QueryClientProvider client={queryClient}>
       <EpicSessionContext.Provider value={epicHandle}>
@@ -184,6 +197,8 @@ function renderSidebar(epicHandle: OpenEpicStoreHandle) {
           hostClient={hostClientRef.current}
           artifactType="spec"
           artifactId={ARTIFACT_ID}
+          laneThreads={laneThreads}
+          laneDroppedAt={null}
           anchorPositions={{ positions: new Map() }}
           currentUserId="user-1"
           canModerate={false}
@@ -232,7 +247,7 @@ describe("<CommentSidebar /> read failures", () => {
         resolveResponse = resolve;
       });
 
-    renderSidebar(defaultEpicHandle);
+    renderSidebar(defaultEpicHandle, null);
 
     await waitFor(() => {
       expect(loadingPanel()).not.toBeNull();
@@ -254,7 +269,7 @@ describe("<CommentSidebar /> read failures", () => {
   it("says comments could not be loaded when the cold query is disabled without a host client", async () => {
     hostClientRef.current = null;
 
-    renderSidebar(defaultEpicHandle);
+    renderSidebar(defaultEpicHandle, null);
 
     expect(
       await screen.findByText("Comments couldn't be loaded."),
@@ -268,7 +283,7 @@ describe("<CommentSidebar /> read failures", () => {
   it("says comments could not be LOADED - never that there are none - when the cold read fails", async () => {
     respondToListThreads = unavailableHost;
 
-    renderSidebar(defaultEpicHandle);
+    renderSidebar(defaultEpicHandle, null);
 
     expect(
       await screen.findByText(
@@ -291,7 +306,7 @@ describe("<CommentSidebar /> read failures", () => {
   it("still renders the empty state when the read SUCCEEDS with no threads", async () => {
     respondToListThreads = () => ({ threads: [] });
 
-    renderSidebar(defaultEpicHandle);
+    renderSidebar(defaultEpicHandle, null);
 
     expect(await screen.findByText(/No open comments/)).not.toBeNull();
     expect(unavailablePanel()).toBeNull();
@@ -301,7 +316,7 @@ describe("<CommentSidebar /> read failures", () => {
   it("keeps the last successful threads on screen when a REFETCH fails", async () => {
     respondToListThreads = () => ({ threads: [threadFixture()] });
 
-    renderSidebar(defaultEpicHandle);
+    renderSidebar(defaultEpicHandle, null);
     expect(await screen.findByText(QUOTED_TEXT)).not.toBeNull();
 
     respondToListThreads = unavailableHost;
@@ -338,11 +353,14 @@ describe("<CommentSidebar /> local durability honesty", () => {
       listThreadsCalls += 1;
       return { threads: [threadFixture()] };
     };
-    epicHandle = createOpenEpicStore({
+    epicHandle = openStoreForTest({
       epicId: EPIC_ID,
-      streamClientFactory: noopEpicStreamClientFactory,
       userId: "user-1",
-      onAuthError: null,
+      factories: {
+        streamClientFactory: noopEpicStreamClientFactory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
   });
 
@@ -358,7 +376,7 @@ describe("<CommentSidebar /> local durability honesty", () => {
     // Real open-epic store slot the sidebar reads via useEpicDurabilityStatus.
     epicHandle.store.setState({ durabilityStatus: "local" });
 
-    renderSidebar(epicHandle);
+    renderSidebar(epicHandle, null);
 
     expect(await screen.findByText(QUOTED_TEXT)).not.toBeNull();
     expect(listThreadsCalls).toBeGreaterThan(0);
@@ -380,7 +398,7 @@ describe("<CommentSidebar /> local durability honesty", () => {
     }
     epicHandle.store.setState({ durabilityStatus: null });
 
-    renderSidebar(epicHandle);
+    renderSidebar(epicHandle, null);
 
     expect(await screen.findByText(QUOTED_TEXT)).not.toBeNull();
     expect(listThreadsCalls).toBeGreaterThan(0);
@@ -400,7 +418,7 @@ describe("<CommentSidebar /> local durability honesty", () => {
       durabilityPromotionState: "active",
     });
 
-    renderSidebar(epicHandle);
+    renderSidebar(epicHandle, null);
 
     expect(
       await screen.findByText("Comments are temporarily unavailable."),
@@ -427,7 +445,7 @@ describe("<CommentSidebar /> local durability honesty", () => {
       durabilityPromotionState: "active",
     });
 
-    renderSidebar(epicHandle);
+    renderSidebar(epicHandle, null);
     expect(
       await screen.findByText("This epic is still uploading to the cloud."),
     ).not.toBeNull();
@@ -462,7 +480,7 @@ describe("<CommentSidebar /> local durability honesty", () => {
       durabilityLegsNegotiated: true,
     });
 
-    renderSidebar(epicHandle);
+    renderSidebar(epicHandle, null);
 
     expect(await screen.findByText("Comments are unavailable.")).not.toBeNull();
     expect(
@@ -492,7 +510,7 @@ describe("<CommentSidebar /> local durability honesty", () => {
       durabilityStatusNegotiated: true,
     });
 
-    renderSidebar(epicHandle);
+    renderSidebar(epicHandle, null);
 
     expect(await screen.findByText("Comments are unavailable.")).not.toBeNull();
     expect(
@@ -522,6 +540,8 @@ describe("<CommentSidebar /> host scope", () => {
           hostClient={hostClientRef.current}
           artifactType="spec"
           artifactId={ARTIFACT_ID}
+          laneThreads={null}
+          laneDroppedAt={null}
           anchorPositions={{ positions: new Map() }}
           currentUserId="user-1"
           canModerate={false}
@@ -547,5 +567,83 @@ describe("<CommentSidebar /> host scope", () => {
     expect(keys).toHaveLength(1);
     expect(keys[0]).toContain(mockLocalHostEntry.hostId);
     expect(keys[0]).not.toContain(mockRemoteHostEntry.hostId);
+  });
+});
+
+// The list RPC is the released floor - every host serves it - and the state
+// lane is the newer, pushed source that only lane-serving hosts also answer.
+// These pin `resolveArtifactCommentThreads` (`use-lane-comment-threads.ts`) as
+// wired into the sidebar: which source wins, and that a missing lane key is
+// UNKNOWN, never "zero comments".
+describe("<CommentSidebar /> state-lane threads", () => {
+  it("renders the lane's thread over the poll's when both answer", async () => {
+    respondToListThreads = () => ({
+      threads: [threadFixtureWith("poll-thread", "the poll's answer")],
+    });
+
+    renderSidebar(defaultEpicHandle, [
+      threadFixtureWith("lane-thread", "the lane's answer"),
+    ]);
+
+    expect(await screen.findByText("the lane's answer")).not.toBeNull();
+    expect(screen.queryByText("the poll's answer")).toBeNull();
+  });
+
+  it("renders the poll's thread when the lane has said nothing - the ordinary case on a poll-only host", async () => {
+    respondToListThreads = () => ({ threads: [threadFixture()] });
+
+    renderSidebar(defaultEpicHandle, null);
+
+    expect(await screen.findByText(QUOTED_TEXT)).not.toBeNull();
+  });
+
+  it("does not render the empty state off a missing lane key while the poll is still in flight", async () => {
+    let resolveResponse = (_response: ListCommentThreadsResponse): void => {
+      throw new Error("missing pending response");
+    };
+    respondToListThreads = () =>
+      new Promise<ListCommentThreadsResponse>((resolve) => {
+        resolveResponse = resolve;
+      });
+
+    renderSidebar(defaultEpicHandle, null);
+
+    await waitFor(() => {
+      expect(loadingPanel()).not.toBeNull();
+    });
+    expect(emptyPanel()).toBeNull();
+    expect(unavailablePanel()).toBeNull();
+
+    await act(async () => {
+      resolveResponse({ threads: [] });
+      await Promise.resolve();
+    });
+
+    // Same missing lane key as above, now beside a poll that answered zero -
+    // the two truths render differently even though both hold zero threads.
+    expect(await screen.findByText(/No open comments/)).not.toBeNull();
+    expect(emptyPanel()).not.toBeNull();
+  });
+
+  it("renders the empty state off an empty lane answer, even with the poll erroring", async () => {
+    respondToListThreads = unavailableHost;
+
+    renderSidebar(defaultEpicHandle, []);
+
+    expect(await screen.findByText(/No open comments/)).not.toBeNull();
+    expect(emptyPanel()).not.toBeNull();
+    expect(unavailablePanel()).toBeNull();
+  });
+
+  it("keeps a lane-served list on screen through a poll outage", async () => {
+    respondToListThreads = unavailableHost;
+
+    renderSidebar(defaultEpicHandle, [
+      threadFixtureWith("lane-thread", "the lane's answer"),
+    ]);
+
+    expect(await screen.findByText("the lane's answer")).not.toBeNull();
+    expect(unavailablePanel()).toBeNull();
+    expect(loadingPanel()).toBeNull();
   });
 });

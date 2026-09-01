@@ -50,6 +50,11 @@ import {
 import { isBrowsable } from "@/lib/worktree/worktree-row-browsable";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
+import {
+  describeBlockedChatWrites,
+  resolveChatWriteRoute,
+  useChatsByIdForWriteRoute,
+} from "@/hooks/epic/use-chat-write-route";
 import { requestArtifactEditorFocus } from "@/lib/artifacts/pending-editor-focus";
 import { openProjectedSidebarNodeInTabWhenAvailable } from "@/components/epic-canvas/sidebar/open-projected-sidebar-node";
 import { type EpicNodeRef } from "@/stores/epics/canvas/types";
@@ -1410,7 +1415,6 @@ function SidebarBulkDeleteController(props: {
   const selection = useSidebarBulkSelection();
   const liveRecords = useEpicArtifactRecords();
   const tree = useEpicTreeIndex();
-  const epicHandle = useOpenEpicHandle();
   const navigateNested = useEpicNestedFocusNavigation();
   const closeCanvasTab = useEpicCanvasStore((s) => s.closeCanvasTab);
   const markArtifactSelfDeleted = useEpicCanvasStore(
@@ -1419,9 +1423,14 @@ function SidebarBulkDeleteController(props: {
   const unmarkArtifactSelfDeleted = useEpicCanvasStore(
     (s) => s.unmarkArtifactSelfDeleted,
   );
-  const deleteArtifact = useEpicDeleteArtifact();
+  // `null`: this controller deletes EVERY selected row, so there is no one
+  // artifact it speaks for. It reads its own `deletePending` off the
+  // selection store rather than the hook's flag.
+  const deleteArtifact = useEpicDeleteArtifact(null);
   const deleteChat = useEpicDeleteChat();
   const deleteTerminalAgent = useEpicDeleteTuiAgent();
+  const sessionHostId = useEpicSessionHostId();
+  const chatsById = useChatsByIdForWriteRoute();
   const recordById = useMemo(
     () => new Map(liveRecords.map((record) => [record.id, record])),
     [liveRecords],
@@ -1436,8 +1445,35 @@ function SidebarBulkDeleteController(props: {
     cancelSelection,
   } = selection;
 
+  // The bulk path dispatches `epic.deleteChat` per row, so it needs the same
+  // gate the per-row menus have. It REFUSES AS A WHOLE rather than deleting
+  // what it can: a partial delete of a confirmed multi-select is the worse
+  // failure, because that is exactly where a user is least likely to notice
+  // the one row that silently remained.
+  const blockedDeleteReason = useMemo(() => {
+    if (pendingDeleteIds === null) return null;
+    const blockedTitles = rootmostSelectedSidebarIds({
+      ids: pendingDeleteIds,
+      tree,
+    }).flatMap((id) => {
+      const record = recordById.get(id);
+      if (record === undefined || record.type !== "chat") return [];
+      const route = resolveChatWriteRoute({
+        chatsById,
+        isChatRow: true,
+        nodeId: id,
+        sessionHostId,
+      });
+      return route === "unavailable" ? [record.name] : [];
+    });
+    return describeBlockedChatWrites(blockedTitles);
+  }, [chatsById, pendingDeleteIds, recordById, sessionHostId, tree]);
+
   const handleConfirmDelete = useCallback(() => {
     if (pendingDeleteIds === null || deletePending) return;
+    // The dialog's confirm is already disabled while this is non-null; the
+    // check is here too because a keyboard submit is not the button.
+    if (blockedDeleteReason !== null) return;
     const rootmostIds = rootmostSelectedSidebarIds({
       ids: pendingDeleteIds,
       tree,
@@ -1451,7 +1487,6 @@ function SidebarBulkDeleteController(props: {
       return;
     }
     targets.forEach((target) => {
-      epicHandle.store.getState().deleteArtifact(target.id);
       markArtifactSelfDeleted(target.id);
     });
     setDeletePending(true);
@@ -1518,6 +1553,7 @@ function SidebarBulkDeleteController(props: {
         setDeletePending(false);
       });
   }, [
+    blockedDeleteReason,
     cancelSelection,
     clearSelectedIds,
     closeCanvasTab,
@@ -1526,7 +1562,6 @@ function SidebarBulkDeleteController(props: {
     deleteChat,
     deletePending,
     deleteTerminalAgent,
-    epicHandle,
     markArtifactSelfDeleted,
     navigateNested,
     pendingDeleteIds,
@@ -1540,6 +1575,7 @@ function SidebarBulkDeleteController(props: {
 
   return (
     <ConfirmDestructiveDialog
+      blockedReason={blockedDeleteReason}
       open={pendingDeleteIds !== null}
       onOpenChange={(open) => {
         if (!open) closeDeleteDialog();
@@ -2117,6 +2153,7 @@ function ChatHeaderMoreMenu(props: {
   const connectionStatus = useEpicConnectionStatus();
   const openSearch = usePanelHeaderSearchStore((state) => state.openSearch);
   const menu = useExpandableHeaderMenu(props.tabId, "chats", props.collapsed);
+  const searchSelectedRef = useRef(false);
   const selectionEnabled = selection.canSelect && connectionStatus !== "closed";
 
   return (
@@ -2131,10 +2168,20 @@ function ChatHeaderMoreMenu(props: {
         sideOffset={8}
         avoidCollisions={false}
         className="w-[var(--radix-dropdown-menu-content-available-width)] min-w-0 max-w-56"
+        onCloseAutoFocus={(event) => {
+          if (!searchSelectedRef.current) return;
+          searchSelectedRef.current = false;
+          // Search owns the next focus target. Radix otherwise restores focus
+          // to the now-secondary overflow trigger after the input has mounted.
+          event.preventDefault();
+        }}
       >
         {props.searching ? null : (
           <DropdownMenuItem
-            onSelect={() => openSearch(props.tabId, "chats", "")}
+            onSelect={() => {
+              searchSelectedRef.current = true;
+              openSearch(props.tabId, "chats", "");
+            }}
             data-testid="epic-sidebar-more-search-chats"
           >
             <Search className="size-4" />
@@ -2169,6 +2216,7 @@ function ArtifactHeaderMoreMenu(props: {
   const selection = useSidebarBulkSelection();
   const openSearch = usePanelHeaderSearchStore((state) => state.openSearch);
   const searchAvailable = useArtifactSearchAvailable();
+  const searchSelectedRef = useRef(false);
   const menu = useExpandableHeaderMenu(
     props.tabId,
     "artifacts",
@@ -2187,13 +2235,23 @@ function ArtifactHeaderMoreMenu(props: {
         sideOffset={8}
         avoidCollisions={false}
         className="w-[var(--radix-dropdown-menu-content-available-width)] min-w-0 max-w-52"
+        onCloseAutoFocus={(event) => {
+          if (!searchSelectedRef.current) return;
+          searchSelectedRef.current = false;
+          // Keep the caret in the search input instead of returning it to the
+          // overflow trigger when the selection closes this menu.
+          event.preventDefault();
+        }}
       >
         {/* Hidden when the Epic has NO artifacts or is open read-only - see
             `useArtifactSearchAvailable` for why emptiness and write access gate
             this and a size threshold does not. */}
         {searchAvailable && !props.searching ? (
           <DropdownMenuItem
-            onSelect={() => openSearch(props.tabId, "artifacts", "")}
+            onSelect={() => {
+              searchSelectedRef.current = true;
+              openSearch(props.tabId, "artifacts", "");
+            }}
             data-testid="epic-sidebar-more-search-artifacts"
           >
             <Search className="size-4" />

@@ -27,10 +27,15 @@ import type {
 const NEGOTIATED_SCHEMA_VERSION: SchemaVersion = { major: 1, minor: 6 };
 
 /**
- * Mainline's own `epic.subscribe` work, which landed as an independent MAJOR
- * rather than as further minors on the 1.x line. It carries a typed
- * metadata/body plane and no `cloudSyncStatus` durability frame at all, so
- * "2.0" is emphatically not "1.6 and then some".
+ * A CONSTRUCTED second major, not a version today's wire can negotiate:
+ * mainline briefly installed an `epic.subscribe@2.0` (typed metadata/body
+ * planes, no `cloudSyncStatus` durability frame) and retired it unreleased in
+ * favour of the lane methods, so the registry now holds exactly one major of
+ * this method. The predicate's contract is what this exercises - a different
+ * major answers `false`, never "newer, therefore also this" - and that guard
+ * exists precisely for the day a second major returns, so the fixture is a
+ * stub of the SESSION's negotiated version rather than an assertion that any
+ * current handshake can produce it.
  */
 const V2_SCHEMA_VERSION: SchemaVersion = { major: 2, minor: 0 };
 
@@ -212,12 +217,13 @@ describe("EpicStreamClient cloudSyncStatus promotionState wire field", () => {
   });
 
   it("does not read an independent major as a durability floor", () => {
-    // A minor floor describes one major line and nothing else. `@2.0` is not
-    // "@1.6 and then some": it is mainline's separate contract, with a typed
-    // metadata/body plane and no `cloudSyncStatus` durability frame at all.
-    // Answering `2 > 1` here told the renderer durability had been negotiated
-    // on a line that never defined it, leaving comment availability stuck in
-    // `checking` and absent v1 legs read as guarantees v2 never made.
+    // A minor floor describes one major line and nothing else. When the
+    // (since-retired, never-released) `@2.0` was installed, answering `2 > 1`
+    // here told the renderer durability had been negotiated on a line that
+    // never defined it, leaving comment availability stuck in `checking` and
+    // absent v1 legs read as guarantees v2 never made. See the
+    // `V2_SCHEMA_VERSION` note for why this stimulus is a constructed
+    // version rather than one today's registry can negotiate.
     const { session, inject, emitOpen } =
       makeSessionWithInjector(V2_SCHEMA_VERSION);
     const wsStreamClient = makeTypedStreamClient(session, V2_SCHEMA_VERSION);

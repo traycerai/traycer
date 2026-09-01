@@ -14,6 +14,7 @@ import {
   type EpicRouteFocusIntent,
   useEpicRouteSynchronization,
 } from "@/components/epic-canvas/hooks/use-epic-route-synchronization";
+import { isRouteBookkeepingState } from "@/lib/tab-navigation/route-bookkeeping";
 import type {
   EpicCanvasTileRef,
   TileLayoutNode,
@@ -97,7 +98,10 @@ const testState = vi.hoisted<TestState>(() => ({
   autoOpenTarget: null,
   nestedFocusEnabled: false,
   useRealCanvasStore: false,
-  navigate: vi.fn(),
+  // `useNavigate()` returns a function returning a PROMISE; callers attach
+  // rejection handlers to it. A bare `vi.fn()` answers `undefined` and makes
+  // those call sites throw here for a reason the real API never would.
+  navigate: vi.fn(() => Promise.resolve()),
   canvasActivePaneId: null,
   canvasRoot: null,
   canvasTiles: {},
@@ -407,6 +411,20 @@ function isSearchUpdater(
   value: unknown,
 ): value is (prev: Readonly<Record<string, unknown>>) => unknown {
   return typeof value === "function";
+}
+
+function isStateUpdater(
+  value: unknown,
+): value is (prev: Readonly<Record<string, unknown>>) => unknown {
+  return typeof value === "function";
+}
+
+function lastNavigateOptions(): Readonly<Record<string, unknown>> {
+  const call = testState.navigate.mock.calls.at(-1);
+  if (call === undefined) throw new Error("expected navigate call");
+  const options: unknown = call[0];
+  if (!isRecord(options)) throw new Error("expected navigate options");
+  return options;
 }
 
 function lastNavigateSearchPatch(): Readonly<Record<string, unknown>> {
@@ -1735,5 +1753,45 @@ describe("useEpicRouteSynchronization", () => {
       outside.remove();
       selectedWrapperEl.remove();
     }
+  });
+
+  it("marks the bookkeeping route replace so a late commit cannot be mistaken for user intent", async () => {
+    testState.nestedFocusEnabled = true;
+    setSinglePaneCanvas(
+      "pane-current",
+      [specTile("artifact-current", "tile-current", "Current artifact")],
+      "tile-current",
+    );
+
+    renderHook(
+      (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
+      {
+        initialProps: {
+          epicId: EPIC_ID,
+          tabId: TAB_ID,
+          focusedAt: undefined,
+          focusArtifactId: undefined,
+          focusThreadId: undefined,
+          focusPaneId: undefined,
+          focusTileInstanceId: undefined,
+        },
+      },
+    );
+
+    await waitFor(() => {
+      expect(testState.navigate).toHaveBeenCalled();
+    });
+    expect(testState.navigate.mock.calls.at(-1)?.[0]).toMatchObject({
+      to: "/epics/$epicId/$tabId",
+      params: { epicId: EPIC_ID, tabId: TAB_ID },
+      replace: true,
+    });
+
+    const options = lastNavigateOptions();
+    const state = options.state;
+    if (!isStateUpdater(state)) {
+      throw new Error("expected navigate state updater");
+    }
+    expect(isRouteBookkeepingState(state({}))).toBe(true);
   });
 });

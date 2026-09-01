@@ -20,6 +20,13 @@ export interface UseComposerPickerItemsParams {
   // command-catalog fetch so inactive-but-mounted composers (e.g. hidden chat
   // tiles) do not subscribe to `agent.gui.listCommands`.
   readonly isActive: boolean;
+  /**
+   * Renderer-handled commands this surface can honor (today: the `/btw`
+   * side-chat command, offered only by a composer that can fork its chat).
+   * Listed in the picker and known to the raw-text converter exactly like the
+   * provider's rows - see `UseSlashCommandsParams.localCommands`.
+   */
+  readonly localSlashCommands: ReadonlyArray<SlashCommand>;
 }
 
 // Mount this on every composer surface; without it the picker menu opens empty.
@@ -39,6 +46,7 @@ export function useComposerPickerItems(
     hostClient: params.hostClient,
     harnessId: params.harnessId,
     workingDirectories: params.mentionRoots,
+    localCommands: params.localSlashCommands,
   });
   useKnownSlashCommandNames(params);
 }
@@ -57,6 +65,7 @@ function useKnownSlashCommandNames(params: UseComposerPickerItemsParams): void {
     harnessId: params.harnessId,
     workingDirectories: params.mentionRoots,
     enabled: params.isActive,
+    localCommands: params.localSlashCommands,
   });
   const knownCommands = useMemo<ReadonlyMap<string, SlashCommand> | null>(
     () =>

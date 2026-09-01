@@ -27,7 +27,7 @@ import {
   useHostRuntimeClient,
   type HostRpcRegistry,
 } from "@/lib/host";
-import { buildTransientHostClient } from "@/hooks/host/use-host-client-for";
+import { buildDialableHostClient } from "@/hooks/host/use-host-client-for";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
@@ -249,7 +249,7 @@ function EpicTabExistenceProbe(props: { readonly run: ReconcileSeed }) {
 
     const probes: LocalHomeProbe[] = [];
     for (const entry of entriesByHostId.values()) {
-      const pinnedClient = buildTransientHostClient(hostRuntimeClient, entry);
+      const pinnedClient = buildDialableHostClient(hostRuntimeClient, entry);
       // No credentials, endpoint, or routed requester is an unknown answer,
       // not an empty local-home page. Let a later settled render retry.
       if (pinnedClient === null) return null;

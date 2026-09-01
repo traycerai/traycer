@@ -50,6 +50,7 @@ import {
   type ReactNode,
 } from "react";
 import { cn } from "@/lib/utils";
+import { HostedTileBodyBoundary } from "@/components/epic-canvas/surface-host/hosted-tile-body-boundary";
 import { runPresentationLossBlur } from "@/components/epic-tabs/pane-visibility-context";
 import {
   getTileSurfaceMembership,
@@ -231,7 +232,20 @@ function TileSurfaceRecord(props: {
         : {})}
     >
       {environment !== null && canMountBody ? (
-        <Suspense fallback={null}>{props.renderBody(environment)}</Suspense>
+        // The boundary sits OUTSIDE Suspense so a throw from a lazily loaded
+        // body module is caught here too. Its reset key is the slot's anchor
+        // element - the one field that changes exactly when the record is
+        // re-hosted in a different slot (transfer) - and deliberately NOT the
+        // environment object: the slot republishes a fresh environment on
+        // every presentation change (tab select, pane focus), which would turn
+        // a deterministic crash into a fresh throw and Sentry capture per
+        // focus toggle. Same-slot recovery is the user's Retry.
+        <HostedTileBodyBoundary
+          instanceId={instanceId}
+          resetKey={environment.services.geometryAnchorElement}
+        >
+          <Suspense fallback={null}>{props.renderBody(environment)}</Suspense>
+        </HostedTileBodyBoundary>
       ) : null}
     </div>
   );

@@ -58,7 +58,7 @@ import {
 } from "@traycer/protocol/notifications/notification-room";
 import type {
   HostNotificationEntry,
-  HostNotificationEntryV21,
+  HostNotificationEntryV22,
   HostNotificationsCloudFeedRow,
 } from "@traycer/protocol/host/notifications/contracts";
 import { ALL_NOTIFICATION_CATEGORIES } from "@/lib/notifications/notification-category";
@@ -557,7 +557,7 @@ function threadEntryWithState(state: ThreadEntryState): NotificationEntry {
 }
 
 function applyHostSnapshot(
-  entries: ReadonlyArray<HostNotificationEntryV21>,
+  entries: ReadonlyArray<HostNotificationEntryV22>,
   summary: { readonly unreadCount: number; readonly attentionCount: number },
 ): void {
   useHostNotificationsStore.getState().applySnapshot({

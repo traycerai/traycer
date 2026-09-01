@@ -5,14 +5,20 @@ import type {
   EpicLocalProtection,
 } from "@traycer/protocol/host/epic/subscribe";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
+import type { CommandRecord } from "@traycer-clients/shared/replica-runtime";
 
 /**
- * What the Epic header's sync pill is allowed to claim.
+ * What the Epic header's sync pill is allowed to claim about the LINK AND
+ * DURABILITY class - inputs (i) through (iv) of wire-lane invariant 8.
  *
  * `synced` and `offlineChangesSavedLocally` are durability claims. The other
  * states deliberately claim nothing about durability: before the host has
  * confirmed an edit, or while the host-durability snapshot is unknown, this
  * window may be the only place that knows about it.
+ *
+ * The write-command class - input (v), plus the ambiguous arm of input (iv) -
+ * is deliberately NOT a member of this union. See
+ * {@link EpicWriteCommandAlert} for why the two are reported separately.
  */
 export type EpicSyncPillState =
   /** Every leg of the chain has acknowledged everything we know about. */
@@ -27,9 +33,15 @@ export type EpicSyncPillState =
   | "offlineWithHostPending"
   /**
    * Host reachable and holding outstanding work durably, cloud link down.
-   * The only state that claims local durability, and it is true because the
-   * host persists root-doc and artifact-room updates to SQLite while its cloud
-   * link is down and replays them on reconnect.
+   *
+   * The only state that claims LOCAL durability - and it is deliberately
+   * unreachable from {@link deriveEpicSyncPillState}, which is pinned by test.
+   * The aggregate dirty bit says the host holds work its cloud link has not
+   * acknowledged; it does not say the newest bytes reached the host's own
+   * durable store, so the ladder resolves that case to `offlineWithHostPending`
+   * instead. The member is kept because the distinction is real and a future
+   * per-leg durability signal would make it honest; nothing may return it until
+   * such a signal exists.
    */
   | "offlineChangesSavedLocally"
   /**
@@ -64,56 +76,184 @@ export type EpicSyncPillState =
   | "offline";
 
 /**
- * The host's current cloud-durability knowledge for the root doc and every
- * artifact room. `unknown` is deliberately distinct from `clean`: a new GUI
- * connected to an older host, or a new subscription before its atomic
- * `dirtySnapshot`, has not established that no durable work exists.
+ * The control lane's aggregate cloud-durability answer for this epic: the host
+ * owns the root ∨ any-room aggregation and publishes one bit.
+ *
+ * `unknown` is deliberately distinct from `clean`. Pre-snapshot silence means
+ * unknown, never clean (wire-lane invariant 8), and so does a legacy
+ * connection whose host cannot produce the atomic snapshot at all.
  */
 export type EpicHostDirtyState = "unknown" | "clean" | "dirty";
 
 /**
- * The five independent legs the pill must weigh, plus the bootstrap qualifier
- * that decides "Connecting…" vs "Reconnecting…" copy.
+ * The write-command class, counted PER OUTCOME rather than folded into a
+ * boolean.
  *
- * Deliberately NOT `OpenEpicState["connectionStatus"]`: that field is a lossy
- * *display* blend of {@link hostTransportStatus} and {@link cloudSyncStatus}
- * (see `deriveConnectionStatus` in the open-epic store), and collapsing the
- * two legs is exactly what makes it useless here - "host unreachable" and
- * "host reachable, cloud down" both read `reconnecting`, yet only the second
- * one may claim the work is saved anywhere.
+ * Every count here comes from the same `CommandRecord[]` the runtime projects,
+ * and the four are kept apart because they mean four different things to the
+ * person reading the pill: work in flight, work whose fate is unknown, work
+ * that was refused, and work another writer replaced.
+ *
+ * `committed` records are counted by NOTHING. A command the serving host
+ * applied is not divergence and not a failure; it stays in the projected list
+ * only until the user acknowledges it, and counting it as outstanding is what
+ * pinned the old pill to "Saving changes" for the rest of the session.
+ */
+export interface EpicWriteCommandSummary {
+  /** Issued, unanswered, and still being delivered normally. */
+  readonly pendingCount: number;
+  /**
+   * Delivered into ambiguity: the request may have reached an unnegotiated
+   * host. Never auto-retried, so this is NOT "saving" - the write may simply
+   * never have been applied.
+   */
+  readonly unknownOutcomeCount: number;
+  /** The authority refused the write. Terminal; the intent is retained. */
+  readonly rejectedCount: number;
+  /** Another writer's change won. Terminal; the intent is retained. */
+  readonly supersededCount: number;
+}
+
+export const NO_OUTSTANDING_WRITE_COMMANDS: EpicWriteCommandSummary =
+  Object.freeze({
+    pendingCount: 0,
+    unknownOutcomeCount: 0,
+    rejectedCount: 0,
+    supersededCount: 0,
+  });
+
+/**
+ * Counts a projected command list into {@link EpicWriteCommandSummary}.
+ *
+ * Generic in the intent so this module stays free of the epic write-path's
+ * types: the pill weighs a command's OUTCOME, never what it was trying to do.
+ */
+export function summarizeEpicWriteCommands<TIntent>(
+  commands: readonly CommandRecord<TIntent>[],
+): EpicWriteCommandSummary {
+  let pendingCount = 0;
+  let unknownOutcomeCount = 0;
+  let rejectedCount = 0;
+  let supersededCount = 0;
+  for (const command of commands) {
+    if (command.delivery === "unknown-outcome") {
+      unknownOutcomeCount += 1;
+      continue;
+    }
+    switch (command.state) {
+      case "pending":
+        pendingCount += 1;
+        break;
+      case "rejected":
+        rejectedCount += 1;
+        break;
+      case "superseded":
+        supersededCount += 1;
+        break;
+      case "committed":
+        break;
+    }
+  }
+  return {
+    pendingCount,
+    unknownOutcomeCount,
+    rejectedCount,
+    supersededCount,
+  };
+}
+
+/**
+ * Input (v), and the ambiguous arm of input (iv), as their own verdict.
+ *
+ * Reported BESIDE {@link EpicSyncPillState} rather than folded into it,
+ * because they are a different class and `replica-runtime/freshness.ts`
+ * forbids blending classes: an aggregate hides per-class state, and the class
+ * it hides first is exactly this one - "a green indicator must never hide a
+ * rejected write". Keeping the two verdicts separate is what lets the pill
+ * report a refused write and a down link at the same time instead of choosing
+ * between them.
+ */
+export type EpicWriteCommandAlert =
+  /** A write was refused. Terminal, and no reconnect will resolve it. */
+  | "rejected"
+  /** A remote host's concurrent write replaced ours. Terminal. */
+  | "superseded"
+  /** A write was delivered into ambiguity and may never have been applied. */
+  | "outcomeUnknown";
+
+/**
+ * The most severe outstanding write-command outcome, or `null` when the write
+ * path has nothing to report.
+ *
+ * A refused write outranks a replaced one (the user has to correct it, not
+ * just reapply it), and both outrank an ambiguous delivery, which may still
+ * resolve itself.
+ */
+export function deriveEpicWriteCommandAlert(
+  summary: EpicWriteCommandSummary,
+): EpicWriteCommandAlert | null {
+  if (summary.rejectedCount > 0) return "rejected";
+  if (summary.supersededCount > 0) return "superseded";
+  if (summary.unknownOutcomeCount > 0) return "outcomeUnknown";
+  return null;
+}
+
+/**
+ * The five inputs of wire-lane invariant 8, unblended.
+ *
+ * Each field names the lane it comes from, and none of them is a display
+ * blend. In particular this is deliberately NOT `OpenEpicState`'s
+ * `connectionStatus`: that field is a lossy blend of
+ * {@link hostTransportStatus} and {@link cloudSyncStatus} (see
+ * `deriveConnectionStatus` in the open-epic store), and collapsing the two
+ * legs is exactly what makes it useless here - "host unreachable" and "host
+ * reachable, cloud down" both read `reconnecting`, yet only the second one may
+ * claim the work is saved anywhere.
  */
 export interface EpicSyncPillInputs {
   /**
-   * Input 1 - the renderer↔host stream. Raw, not the display blend. When this
+   * Input (i) - the GUI↔host transport. Raw, not the display blend. When this
    * is anything but `open`, unsent local edits sit in the renderer's in-memory
    * queue and nothing durable holds them.
    */
   readonly hostTransportStatus: StreamConnectionStatus;
   /**
-   * Input 2 - the host↔cloud link for this Epic, as the host observes it.
+   * Input (ii) - the control lane's `cloudSyncStatus`: the host↔cloud link for
+   * this Epic, as the host observes it.
    */
   readonly cloudSyncStatus: EpicCloudSyncStatus;
   /**
-   * Input 3 - `true` only after a genuine `cloudSyncStatus` frame in this
-   * stream cycle. A display default is never proof that the cloud is connected.
+   * Input (ii), freshness half - `true` only after a genuine control-lane
+   * cloud-status frame in this open cycle. The projection's `connected`
+   * default is a DISPLAY default that keeps functional connection gates open;
+   * it is never sync proof, and this bit is what keeps the two apart.
    */
   readonly hasFreshCloudSyncStatus: boolean;
   /**
-   * Input 4 - cloud-durability state from `epic.subscribe@1.1`'s atomic
-   * `dirtySnapshot` and its subsequent `rootDirty` / `artifactRoomDirty`
-   * deltas. Old hosts and a new cycle before that snapshot both remain
-   * `unknown`; neither may be treated as clean.
+   * Input (iii) - the control lane's aggregate dirty bit. Pre-snapshot silence
+   * and a legacy connection both remain `unknown`; neither may be read as
+   * clean.
    */
   readonly hostDirtyState: EpicHostDirtyState;
   /**
-   * Input 5 - the renderer's own replicas (root doc + artifact-room replicas)
-   * diverging from what the host has confirmed. Subsumes the store's
-   * `hasDirtyArtifactRoomReplicas()`, which is folded into `isDirty` by
-   * `resolvePublicDirtyState`.
+   * Input (iv), doc-class arm - this replica holds root or body bytes the host
+   * has not acknowledged.
    */
-  readonly hasUnsyncedLocalChanges: boolean;
+  readonly hasUnsyncedDocClassChanges: boolean;
   /**
-   * Presentation qualifier on input 1, not a sixth leg: latched by the first
+   * Input (iv), command arm, and input (v).
+   *
+   * Invariant 8 defines leg (iv) as "unacked commands PLUS doc-class unsynced
+   * edits", so the pending and ambiguous counts join
+   * {@link hasUnsyncedDocClassChanges} as one divergence question - that is
+   * aggregation WITHIN the runtime-divergence class, which the freshness
+   * contract explicitly permits. The terminal counts are input (v) and are
+   * never folded in; they gate the green claim here and are reported on their
+   * own through {@link deriveEpicWriteCommandAlert}.
+   */
+  readonly writeCommands: EpicWriteCommandSummary;
+  /**
+   * Presentation qualifier on input (i), not a sixth leg: latched by the first
    * genuine cloud `connected` frame so a first-time bootstrap reads
    * "Connecting…" while a drop after a real connect reads "Reconnecting…".
    */
@@ -164,24 +304,31 @@ export interface EpicSyncPillInputs {
 }
 
 /**
- * Single source of the sync pill's claim.
+ * The pill's link/durability claim.
  *
  * The ordering below is the honesty contract, and every ambiguous case
  * resolves toward no durability assertion:
  *
- * 1. GUI↔host link down wins over everything. We cannot see the host's cloud
- *    state, and any local edit is renderer-memory-only.
+ * 1. GUI↔host link down wins over everything in THIS class. We cannot see the
+ *    host's cloud state, and any local edit is renderer-memory-only. It does
+ *    not silence the write-command class, which is reported separately and
+ *    stays visible beside a down link.
  * 2. Renderer-only work is `syncing`, never "saved locally". An `open`
- *    WebSocket proves neither that the host received the frame nor that it
- *    persisted it.
- * 3. An unknown cloud status or host-durability snapshot yields neutral
+ *    transport proves neither that the host received the frame nor that it
+ *    persisted it. A command whose outcome is unknown counts as divergence
+ *    too: it is unacknowledged work, and pretending otherwise is the
+ *    over-claim this ladder exists to prevent.
+ * 3. An unknown cloud status or aggregate dirty bit yields neutral
  *    `connected`, never `synced`.
- * 4. Link up + cloud up: `synced` requires a clean host snapshot and no local
- *    divergence. Host-reported pending work stays quiet as `hostPending`; the
- *    aggregate dirty bit does not prove whether the newest bytes are durable.
- * 5. Link up + cloud down: only known host-durable work with no renderer-only
- *    divergence may read "saved locally". With nothing outstanding the pill
- *    falls back to reporting the link.
+ * 4. Link up + cloud up: `synced` requires a clean aggregate, no local
+ *    divergence, AND nothing outstanding on the write path - a refused or
+ *    superseded write drops the claim to the neutral `connected`, because a
+ *    green pill that hides a rejected write is the single failure the
+ *    freshness contract names. Host-reported pending work stays quiet as
+ *    `hostPending`; the aggregate dirty bit does not prove whether the newest
+ *    bytes are durable.
+ * 5. Link up + cloud down: with nothing outstanding the pill falls back to
+ *    reporting the link.
  */
 export function deriveEpicSyncPillState(
   inputs: EpicSyncPillInputs,
@@ -190,7 +337,7 @@ export function deriveEpicSyncPillState(
   if (inputs.hostTransportStatus !== "open") {
     return linkComingUpState(inputs.hasConnectedOnce);
   }
-  if (inputs.hasUnsyncedLocalChanges) {
+  if (hasRuntimeDivergence(inputs)) {
     if (
       inputs.hasFreshCloudSyncStatus &&
       inputs.cloudSyncStatus !== "connected"
@@ -215,7 +362,16 @@ export function deriveEpicSyncPillState(
  */
 function cloudUpState(inputs: EpicSyncPillInputs): EpicSyncPillState {
   if (inputs.hostDirtyState === "dirty") return "hostPending";
-  if (syncedClaimIsHonest(inputs)) return "synced";
+  if (syncedClaimIsHonest(inputs)) {
+    // Rule 4's write-path leg (input v): a terminal verdict - refused or
+    // superseded - drops the green claim to neutral `connected`. Only the
+    // SYNCED claim is gated; the risk arms below (`unprotected`,
+    // `storedLocally`) stay, because the alert is reported beside the pill
+    // rather than allowed to mask a durability risk.
+    return deriveEpicWriteCommandAlert(inputs.writeCommands) === null
+      ? "synced"
+      : "connected";
+  }
   // Not synced anywhere in the cloud. Say which, when the host said which,
   // and otherwise claim nothing - `connected` is the neutral state that
   // exists for exactly this.
@@ -313,6 +469,15 @@ function syncedClaimIsHonest(inputs: EpicSyncPillInputs): boolean {
     return true;
   }
   return inputs.durability === "cloud";
+}
+
+/** Leg (iv) of invariant 8: unacked commands ∨ doc-class unsynced edits. */
+function hasRuntimeDivergence(inputs: EpicSyncPillInputs): boolean {
+  return (
+    inputs.hasUnsyncedDocClassChanges ||
+    inputs.writeCommands.pendingCount > 0 ||
+    inputs.writeCommands.unknownOutcomeCount > 0
+  );
 }
 
 function linkComingUpState(

@@ -582,8 +582,43 @@ describe("accumulatedSummarySetComplete", () => {
         hostChangeCount: 3,
         deliveredSummaryCount: 3, // lengths agree, and mean nothing
         generationSeated: false,
+        assemblyStarted: false,
       }),
     ).toBe(false);
+  });
+
+  it("is incomplete while a generation assembles under a count rewound to zero", () => {
+    // The count is aux and aux is last-write-wins, so a delayed same-epoch
+    // snapshot can rewind it to zero while a generation is still arriving.
+    // Every OTHER input then looks exactly like a chat that has no accumulated
+    // changes at all: nothing seated, nothing delivered, nothing promised. The
+    // assembly is the only thing that tells the two apart, and without it the
+    // equality below reads `0 === 0` and consumers act on an empty published
+    // array - a bundle path missing from it reading as reverted rather than as
+    // not yet arrived.
+    expect(
+      accumulatedSummarySetComplete({
+        windowed: true,
+        hostChangeCount: 0,
+        deliveredSummaryCount: 0,
+        generationSeated: false,
+        assemblyStarted: true,
+      }),
+    ).toBe(false);
+
+    // The other direction, so this cannot pass by calling everything
+    // incomplete: a chat with genuinely no accumulated changes assembles
+    // nothing and IS complete, unseated and zero-count though it looks
+    // identical in every other field.
+    expect(
+      accumulatedSummarySetComplete({
+        windowed: true,
+        hostChangeCount: 0,
+        deliveredSummaryCount: 0,
+        generationSeated: false,
+        assemblyStarted: false,
+      }),
+    ).toBe(true);
   });
 
   it("is complete once this generation has delivered and the counts agree", () => {
@@ -593,6 +628,7 @@ describe("accumulatedSummarySetComplete", () => {
         hostChangeCount: 3,
         deliveredSummaryCount: 3,
         generationSeated: true,
+        assemblyStarted: false,
       }),
     ).toBe(true);
   });
@@ -604,6 +640,7 @@ describe("accumulatedSummarySetComplete", () => {
         hostChangeCount: 5,
         deliveredSummaryCount: 3,
         generationSeated: true,
+        assemblyStarted: false,
       }),
     ).toBe(false);
   });
@@ -618,6 +655,7 @@ describe("accumulatedSummarySetComplete", () => {
         hostChangeCount: 0,
         deliveredSummaryCount: 0,
         generationSeated: false,
+        assemblyStarted: false,
       }),
     ).toBe(true);
   });
@@ -629,6 +667,7 @@ describe("accumulatedSummarySetComplete", () => {
         hostChangeCount: 4,
         deliveredSummaryCount: 0,
         generationSeated: false,
+        assemblyStarted: false,
       }),
     ).toBe(true);
   });
@@ -647,6 +686,7 @@ describe("accumulatedSummarySetComplete", () => {
         hostChangeCount: 2,
         deliveredSummaryCount: 5,
         generationSeated: true,
+        assemblyStarted: false,
       }),
     ).toBe(false);
     // And the sibling still answers `0` for it - the two disagreeing here is

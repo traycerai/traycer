@@ -517,6 +517,22 @@ export interface ExactReleaseFeedConfig {
   ) => ExactReleaseAssetProvider;
   readonly assets: readonly DesktopReleaseAsset[];
   readonly token: string;
+  // Needed to resolve the PREVIOUS release's assets when the differential
+  // downloader asks for its blockmap; the pinned `assets` above describe the
+  // new release alone. See `ExactReleaseAssetProvider.getBlockMapFiles`.
+  readonly owner: string;
+  readonly repo: string;
+}
+
+/**
+ * The tag a desktop release is published under.
+ *
+ * One definition of the convention, so the blockmap lookup below cannot drift
+ * from it. `projectDesktopRelease`'s pattern is the parsing counterpart: this
+ * builds a tag from a version, that recognizes a version in a tag.
+ */
+export function desktopReleaseTag(version: string): string {
+  return `desktop-v${version}`;
 }
 
 // A resolved desktop feed: the generic exact-release provider for public repos,
@@ -543,7 +559,7 @@ export function buildDesktopReleaseFeed(
       url: `https://github.com/${owner}/${repo}/releases/download/${encodeURIComponent(release.tag)}/`,
     };
   }
-  return privateExactReleaseFeed(release.assets, token);
+  return privateExactReleaseFeed(release.assets, token, owner, repo);
 }
 
 // The URL + headers used to fetch a candidate's channel manifest during
@@ -582,12 +598,16 @@ export function resolveDesktopManifestRequest(
 function privateExactReleaseFeed(
   assets: readonly DesktopReleaseAsset[],
   token: string,
+  owner: string,
+  repo: string,
 ): ExactReleaseFeedConfig {
   return {
     provider: "custom",
     updateProvider: ExactReleaseAssetProvider,
     assets,
     token,
+    owner,
+    repo,
   };
 }
 
@@ -601,6 +621,8 @@ function privateExactReleaseFeed(
 export class ExactReleaseAssetProvider extends Provider<UpdateInfo> {
   private readonly assets: readonly DesktopReleaseAsset[];
   private readonly token: string;
+  private readonly owner: string;
+  private readonly repo: string;
 
   constructor(
     options: ExactReleaseFeedConfig,
@@ -610,6 +632,8 @@ export class ExactReleaseAssetProvider extends Provider<UpdateInfo> {
     super(runtimeOptions);
     this.assets = options.assets;
     this.token = options.token;
+    this.owner = options.owner;
+    this.repo = options.repo;
   }
 
   // GitHub's asset API 302-redirects to a signed object-store URL; mirror
@@ -648,6 +672,23 @@ export class ExactReleaseAssetProvider extends Provider<UpdateInfo> {
     return this.assetHeaders("application/octet-stream");
   }
 
+  /**
+   * The URLs this provider resolves are `api.github.com/.../releases/assets/<id>`
+   * - an opaque id, with NO filename and NO extension in the pathname. That is
+   * GitHub's only authenticated download path, so it is not negotiable here, but
+   * two pieces of electron-updater read a filename out of that pathname and
+   * quietly get nothing:
+   *
+   *   - `Provider.getBlockMapFiles` - overridden below.
+   *   - `findFile(files, extension, not)`, which each platform updater uses to
+   *     pick its installer. Its extension filter matches nothing AND its
+   *     exclusion list excludes nothing, so it falls through to `files[0]`.
+   *     `_DebUpdater` asking for `deb` therefore receives whatever is first in
+   *     the channel manifest, and `dpkg -i` is handed an AppImage.
+   *
+   * So this provider must never be pointed at a platform that publishes more
+   * than one installer format in one channel manifest.
+   */
   resolveFiles(updateInfo: UpdateInfo): ResolvedUpdateFileInfo[] {
     return getFileList(updateInfo).map((file) => {
       const name = posix.basename(file.url).replace(/ /g, "-");
@@ -659,6 +700,86 @@ export class ExactReleaseAssetProvider extends Provider<UpdateInfo> {
       }
       return { url: new URL(asset.url), info: file };
     });
+  }
+
+  /**
+   * Blockmap URLs for the differential downloader, resolved by ASSET NAME.
+   *
+   * The base implementation suffixes `baseUrl.pathname` with `.blockmap` and
+   * derives the old one by substituting the version *inside that pathname*.
+   * Both halves are inert against an asset-API URL: there is no filename to
+   * suffix and no version to substitute, so the base returns two identical,
+   * malformed URLs and the delta download dies parsing a JSON error body as
+   * gzip (`incorrect header check`).
+   *
+   * Resolving by name needs TWO asset sets, not one. This provider is pinned to
+   * a single release, and `artifactName` carries no version
+   * (`traycer-desktop-windows-${arch}.${ext}`), so the previous release's
+   * blockmap has exactly the SAME name as the new one. Looking the name up in
+   * the pinned set would hand back the new blockmap for both sides, and the
+   * downloader would then "reconstruct" a file it already has - wasting the
+   * round trip and failing its digest. So the old release's assets are fetched
+   * by tag, which is what `GitLabProvider` does for this same reason.
+   *
+   * Throwing when either side is missing is the intended outcome rather than a
+   * failure to avoid: `differentialDownloadInstaller` wraps this whole call and
+   * falls back to a full download.
+   */
+  async getBlockMapFiles(
+    baseUrl: URL,
+    oldVersion: string,
+    newVersion: string,
+  ): Promise<URL[]> {
+    const blockMapName = `${this.assetNameForUrl(baseUrl)}.blockmap`;
+    const newBlockMap = this.assets.find((it) => it.name === blockMapName);
+    if (newBlockMap === undefined) {
+      throw new Error(
+        `Blockmap "${blockMapName}" is not published on the ${newVersion} release`,
+      );
+    }
+    const previous = await this.fetchReleaseAssets(
+      desktopReleaseTag(oldVersion),
+    );
+    const oldBlockMap = previous.find((it) => it.name === blockMapName);
+    if (oldBlockMap === undefined) {
+      throw new Error(
+        `Blockmap "${blockMapName}" is not published on the ${oldVersion} release`,
+      );
+    }
+    return [new URL(oldBlockMap.url), new URL(newBlockMap.url)];
+  }
+
+  // An asset-API URL carries only an opaque id, so the pinned asset set is the
+  // one place it can be mapped back to a filename. Both sides are normalized
+  // through `URL` so the comparison can't fail on incidental spelling.
+  private assetNameForUrl(url: URL): string {
+    const asset = this.assets.find((it) => new URL(it.url).href === url.href);
+    if (asset === undefined) {
+      throw new Error(
+        `Update file "${url.href}" is not among the desktop release assets`,
+      );
+    }
+    return asset.name;
+  }
+
+  private async fetchReleaseAssets(
+    tag: string,
+  ): Promise<DesktopReleaseAsset[]> {
+    const url = new URL(
+      `https://api.github.com/repos/${this.owner}/${this.repo}/releases/tags/${encodeURIComponent(tag)}`,
+    );
+    const raw = await this.httpRequest(
+      url,
+      this.assetHeaders("application/vnd.github+json"),
+    );
+    if (raw === null) {
+      throw new Error(`Release "${tag}" returned no body`);
+    }
+    const parsed: unknown = JSON.parse(raw);
+    if (!isRecord(parsed)) {
+      throw new Error(`Release "${tag}" returned a malformed response`);
+    }
+    return readReleaseAssets(parsed.assets);
   }
 
   private assetHeaders(accept: string): OutgoingHttpHeaders {

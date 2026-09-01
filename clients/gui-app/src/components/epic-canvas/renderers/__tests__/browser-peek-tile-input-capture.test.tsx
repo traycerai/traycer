@@ -8,60 +8,48 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  BrowserPeekTile,
-  type BrowserPeekNode,
-} from "@/components/epic-canvas/renderers/browser-peek-tile";
-import {
   FakeStreamClient,
+  PEEK_NODE,
+  hostDirectoryEntryModule,
+  hostStreamClientForWithAuthModule,
+  liveStream as fixtureLiveStream,
+  streamAuthRevalidatorModule,
+  tabHostIdModule,
+  tileBodyVisibleModule,
   type FakeStreamSession,
 } from "@/components/epic-canvas/renderers/__tests__/browser-peek-tile-stream-fixture";
+import { BrowserPeekTile } from "@/components/epic-canvas/renderers/browser-peek-tile";
 
 const hookState = vi.hoisted(() => ({
   streamClient: null as FakeStreamClient | null,
   visible: true,
 }));
 
-vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
-  useTabHostId: () => "host-test",
-}));
+vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () =>
+  tabHostIdModule(),
+);
 
-vi.mock("@/components/epic-canvas/hooks/use-tile-body-visible", () => ({
-  useTileBodyVisible: () => hookState.visible,
-}));
+vi.mock("@/components/epic-canvas/hooks/use-tile-body-visible", () =>
+  tileBodyVisibleModule(hookState),
+);
 
-vi.mock("@/hooks/host/use-host-directory-entry", () => ({
-  useHostDirectoryEntry: () => ({ hostId: "host-test" }),
-}));
+vi.mock("@/hooks/host/use-host-directory-entry", () =>
+  hostDirectoryEntryModule(),
+);
 
-vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
-  useHostStreamClientFor: () => hookState.streamClient,
-  authenticatedHostStreamKey: () => "authenticated-host-test",
-  authenticatedOwnerIdentityKey: () => "local\u0000host-test\u0000user-test",
-}));
+vi.mock("@/hooks/host/use-host-stream-client-for", () =>
+  hostStreamClientForWithAuthModule(hookState),
+);
 
-vi.mock("@/lib/host/stream-auth-revalidator", () => ({
-  useStreamAuthRevalidator: () => null,
-}));
-
-const PEEK_NODE: BrowserPeekNode = {
-  id: "browser-peek-headless-1",
-  instanceId: "peek-instance-1",
-  hostId: "host-test",
-  sessionId: "headless-1",
-  tabId: "headless-tab-1",
-  initialUrl: "http://localhost:3000",
-};
+vi.mock("@/lib/host/stream-auth-revalidator", () =>
+  streamAuthRevalidatorModule(),
+);
 
 const JPEG_SEQ_7 = new Uint8Array([1, 2, 3]);
 const JPEG_SEQ_8 = new Uint8Array([4, 5, 6]);
 
 function liveStream(): FakeStreamSession {
-  const sessions = hookState.streamClient?.sessions ?? [];
-  const stream = sessions.at(-1);
-  if (stream === undefined) {
-    throw new Error("expected browser.screencast stream");
-  }
-  return stream;
+  return fixtureLiveStream(hookState);
 }
 
 function overlayButton(): HTMLElement {
@@ -252,6 +240,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
     const stream = liveStream();
@@ -280,6 +269,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
     const stream = liveStream();
@@ -318,6 +308,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
     const stream = liveStream();
@@ -348,6 +339,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
     const stream = liveStream();
@@ -422,6 +414,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
     const stream = liveStream();
@@ -490,6 +483,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
     const stream = liveStream();
@@ -523,13 +517,14 @@ describe("BrowserPeekTile input capture", () => {
     expect(releasePointerCapture).toHaveBeenCalledWith(1);
   });
 
-  it("releases pointer capture on blur-disarm", () => {
+  it("releases pointer capture on an explicit Release", () => {
     render(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
     const stream = liveStream();
@@ -548,7 +543,7 @@ describe("BrowserPeekTile input capture", () => {
         detail: 0,
       }),
     );
-    fireEvent.blur(imeInput(), { relatedTarget: document.body });
+    fireEvent.click(screen.getByRole("button", { name: "Release control" }));
 
     expect(releasePointerCapture).toHaveBeenCalledWith(1);
     expect(framesOfKind(stream, "disarm")).toContainEqual({
@@ -566,6 +561,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
     const stream = liveStream();
@@ -598,6 +594,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
     const stream = liveStream();
@@ -612,6 +609,67 @@ describe("BrowserPeekTile input capture", () => {
     expect(second.getAttribute("src")).toBe("data:image/jpeg;base64,BAUG");
   });
 
+  it("latches the presented sequence only at paint, not at frame arrival", () => {
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+        isElectronWake={false}
+      />,
+    );
+    const stream = liveStream();
+    act(() => {
+      emitStarted(stream);
+      emitJpegFrame(stream, 7, JPEG_SEQ_7);
+    });
+    armPeekTile(stream);
+    const button = overlayButton();
+
+    // The frame has arrived (and been acked) but not yet painted, so the
+    // presented sequence has not latched - a pointer send has nothing to
+    // carry as `castSequence` and is dropped.
+    fireEvent.pointerDown(
+      button,
+      pointerEventInit({
+        clientX: 400,
+        clientY: 300,
+        button: 0,
+        buttons: 1,
+        detail: 0,
+      }),
+    );
+    fireEvent.pointerUp(
+      button,
+      pointerEventInit({
+        clientX: 400,
+        clientY: 300,
+        button: 0,
+        buttons: 0,
+        detail: 0,
+      }),
+    );
+    expect(framesOfKind(stream, "pointer")).toEqual([]);
+
+    loadScreencastImage();
+
+    fireEvent.pointerDown(
+      button,
+      pointerEventInit({
+        clientX: 400,
+        clientY: 300,
+        button: 0,
+        buttons: 1,
+        detail: 0,
+      }),
+    );
+
+    expect(framesOfKind(stream, "pointer")).toEqual([
+      expect.objectContaining({ type: "down", castSequence: 7 }),
+    ]);
+  });
+
   it("sends clickCount 1 on armed down/up and 0 on move/wheel", async () => {
     const frames = installAnimationFrameQueue();
     render(
@@ -620,6 +678,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
     const stream = liveStream();
@@ -670,6 +729,9 @@ describe("BrowserPeekTile input capture", () => {
         cancelable: true,
       }),
     );
+    // Wheel coalesces per animation frame; flush it like the move above.
+    frames.runNextFrame();
+    await Promise.resolve();
 
     expect(framesOfKind(stream, "pointer")).toEqual([
       expect.objectContaining({
@@ -704,6 +766,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
     const stream = liveStream();
@@ -733,6 +796,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
     const stream = liveStream();
@@ -765,6 +829,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
     const stream = liveStream();
@@ -828,6 +893,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
     const stream = liveStream();
@@ -909,6 +975,20 @@ describe("BrowserPeekTile input capture", () => {
       }),
     );
     await Promise.resolve();
+    // Neither the pending move nor the coalesced wheel has flushed yet - the
+    // wheel schedules its own animation frame rather than sending inline.
+    expect(framesOfKind(stream, "pointer").map((frame) => frame.type)).toEqual([
+      "move",
+      "down",
+      "move",
+      "up",
+    ]);
+    expect(frames.pendingCount()).toBe(2);
+
+    frames.runNextFrame();
+    await Promise.resolve();
+    frames.runNextFrame();
+    await Promise.resolve();
 
     expect(framesOfKind(stream, "pointer").map((frame) => frame.type)).toEqual([
       "move",
@@ -922,12 +1002,14 @@ describe("BrowserPeekTile input capture", () => {
   });
 
   it("normalizes armed wheel deltas and drops wheels outside the image", () => {
+    const frames = installAnimationFrameQueue();
     render(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
     const stream = liveStream();
@@ -954,6 +1036,9 @@ describe("BrowserPeekTile input capture", () => {
         cancelable: true,
       }),
     );
+    // Coalesces to one send per animation frame - flush before the next
+    // wheel tick so each normalized delta lands in its own frame.
+    frames.runNextFrame();
     button.dispatchEvent(
       new WheelEvent("wheel", {
         deltaX: 1,
@@ -965,6 +1050,7 @@ describe("BrowserPeekTile input capture", () => {
         cancelable: true,
       }),
     );
+    frames.runNextFrame();
     button.dispatchEvent(
       new WheelEvent("wheel", {
         deltaX: 0,
@@ -993,6 +1079,140 @@ describe("BrowserPeekTile input capture", () => {
         seq: 1,
       }),
     ]);
+    expect(frames.pendingCount()).toBe(0);
+  });
+
+  it("coalesces same-direction wheel deltas within an animation frame", () => {
+    const frames = installAnimationFrameQueue();
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+        isElectronWake={false}
+      />,
+    );
+    const stream = liveStream();
+    presentLiveFrame(stream, 7, JPEG_SEQ_7);
+    armPeekTile(stream);
+    const button = overlayButton();
+
+    const dispatchWheel = (deltaY: number): void => {
+      button.dispatchEvent(
+        new WheelEvent("wheel", {
+          deltaX: 0,
+          deltaY,
+          deltaMode: 0,
+          clientX: 400,
+          clientY: 300,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    };
+
+    dispatchWheel(10);
+    dispatchWheel(6);
+    dispatchWheel(4);
+    expect(framesOfKind(stream, "pointer")).toEqual([]);
+    expect(frames.pendingCount()).toBe(1);
+
+    frames.runNextFrame();
+
+    expect(framesOfKind(stream, "pointer")).toEqual([
+      expect.objectContaining({ type: "wheel", deltaX: 0, deltaY: 20 }),
+    ]);
+  });
+
+  it("sums a direction reversal into the same frame's single wheel", () => {
+    const frames = installAnimationFrameQueue();
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+        isElectronWake={false}
+      />,
+    );
+    const stream = liveStream();
+    presentLiveFrame(stream, 7, JPEG_SEQ_7);
+    armPeekTile(stream);
+    const button = overlayButton();
+
+    const dispatchWheel = (deltaY: number): void => {
+      button.dispatchEvent(
+        new WheelEvent("wheel", {
+          deltaX: 0,
+          deltaY,
+          deltaMode: 0,
+          clientX: 400,
+          clientY: 300,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    };
+
+    dispatchWheel(10);
+    dispatchWheel(6);
+    // A reversal inside one animation frame is summed like any other tick -
+    // it does not buy its own send out of the host's shared control budget.
+    dispatchWheel(-8);
+    expect(framesOfKind(stream, "pointer")).toEqual([]);
+
+    frames.runNextFrame();
+
+    expect(framesOfKind(stream, "pointer")).toEqual([
+      expect.objectContaining({ type: "wheel", deltaX: 0, deltaY: 8 }),
+    ]);
+  });
+
+  it("flushes a pending wheel before a pointerdown in the same frame, in order", () => {
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+        isElectronWake={false}
+      />,
+    );
+    const stream = liveStream();
+    presentLiveFrame(stream, 7, JPEG_SEQ_7);
+    armPeekTile(stream);
+    const button = overlayButton();
+
+    // Wheel is coalesced (still pending in its rAF) when the click lands -
+    // it must go out first, so the click isn't read against a stale scroll
+    // position on the wire.
+    button.dispatchEvent(
+      new WheelEvent("wheel", {
+        deltaX: 0,
+        deltaY: 10,
+        deltaMode: 0,
+        clientX: 400,
+        clientY: 300,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    fireEvent.pointerDown(
+      button,
+      pointerEventInit({
+        clientX: 400,
+        clientY: 300,
+        button: 0,
+        buttons: 1,
+        detail: 0,
+      }),
+    );
+
+    expect(framesOfKind(stream, "pointer").map((frame) => frame.type)).toEqual([
+      "wheel",
+      "down",
+    ]);
   });
 
   it("does not listen for wheel while unarmed", () => {
@@ -1002,6 +1222,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
     const stream = liveStream();
@@ -1030,6 +1251,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
     const stream = liveStream();
@@ -1062,6 +1284,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
     const stream = liveStream();
@@ -1098,6 +1321,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
     const stream = liveStream();
@@ -1123,6 +1347,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
 
@@ -1138,6 +1363,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
     const stream = liveStream();
@@ -1203,6 +1429,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
     const stream = liveStream();
@@ -1251,6 +1478,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
     const stream = liveStream();
@@ -1290,6 +1518,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
     const stream = liveStream();
@@ -1339,6 +1568,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
     const stream = liveStream();
@@ -1380,6 +1610,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
     const stream = liveStream();
@@ -1422,6 +1653,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
     const stream = liveStream();
@@ -1492,6 +1724,86 @@ describe("BrowserPeekTile input capture", () => {
         normalizedX: 0,
         normalizedY: 0.5,
         seq: 2,
+      }),
+    ]);
+  });
+  it("withholds pointer input while the tile is on its connecting loader", () => {
+    // The host stopped the cast to attempt video (ticket 26), so the frame
+    // that was on screen is retired and nothing has replaced it yet. There is
+    // no box to normalize a pointer against, and aiming at a surface the
+    // viewer cannot see is worse than dropping the frame. Epoch correlation
+    // itself is pinned in `screencast-input-correlation.test.tsx`, on a tile
+    // that has a plane.
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+        isElectronWake={false}
+      />,
+    );
+    const stream = liveStream();
+    presentLiveFrame(stream, 7, JPEG_SEQ_7);
+    armPeekTile(stream);
+    act(() => {
+      stream.emit(
+        { kind: "captureMode", hasBinaryPayload: false, mode: "video" },
+        null,
+      );
+      stream.emit(
+        { kind: "viewportEpoch", hasBinaryPayload: false, epoch: 9 },
+        null,
+      );
+    });
+
+    expect(screen.queryByAltText("Browser screencast")).toBeNull();
+    sendPointerClick(overlayButton(), 400, 300);
+    expect(framesOfKind(stream, "pointer")).toEqual([]);
+  });
+
+  it("drops the video plane when the transport dies", () => {
+    // The epoch and the mode were both established by a transport that is
+    // gone; the next one starts on JPEG until the host says otherwise.
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+        isElectronWake={false}
+      />,
+    );
+    const stream = liveStream();
+    presentLiveFrame(stream, 7, JPEG_SEQ_7);
+    armPeekTile(stream);
+    act(() => {
+      stream.emit(
+        { kind: "captureMode", hasBinaryPayload: false, mode: "video" },
+        null,
+      );
+      stream.emit(
+        { kind: "viewportEpoch", hasBinaryPayload: false, epoch: 9 },
+        null,
+      );
+      stream.emitStatus("closed");
+      stream.emitStatus("open");
+    });
+    presentLiveFrame(stream, 8, JPEG_SEQ_8);
+    emitArmed(stream, 2);
+
+    sendPointerClick(overlayButton(), 400, 300);
+
+    expect(framesOfKind(stream, "pointer")).toEqual([
+      expect.objectContaining({
+        type: "down",
+        castSequence: 8,
+        viewportEpoch: null,
+      }),
+      expect.objectContaining({
+        type: "up",
+        castSequence: 8,
+        viewportEpoch: null,
       }),
     ]);
   });

@@ -474,7 +474,7 @@ function installRemoteTransport(sessionsByKey: {
       return {
         session,
         messenger: new RemoteHostMessenger(session),
-        streamClient: new RemoteStreamClient(session),
+        streamClient: new RemoteStreamClient(session, () => null),
       };
     },
   );

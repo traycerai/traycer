@@ -23,8 +23,7 @@
  *   }
  */
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
-import type { ChatRecordSummary } from "@traycer/protocol/host/epic/chat-records";
-import type { TuiAgentRecordSummaryV11 } from "@traycer/protocol/host/epic/tui-agent-records";
+import type { TuiAgentRecordSummaryV12 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type {
   AgentMode,
   ChatRunSettings,
@@ -41,13 +40,16 @@ import {
   type RoleClaim,
 } from "@traycer/protocol/persistence/epic/role-claims";
 import * as Y from "yjs";
-import type { PendingMetadataOverlay } from "./pending-metadata-overlay";
+import type {
+  DeadPendingMutation,
+  PendingMetadataOverlay,
+} from "./pending-metadata-overlay";
 import {
   applyPendingOverlayToArtifacts,
   applyPendingOverlayToChats,
   applyPendingOverlayToEpicHeader,
   applyPendingOverlayToTuiAgents,
-  collectDeadPendingMutations,
+  collectDeadPendingMutationOutcomes,
 } from "./pending-metadata-overlay";
 import type {
   ArtifactProjection,
@@ -55,6 +57,7 @@ import type {
   ArtifactsSlice,
   ChatProjection,
   ChatsSlice,
+  HeldChatRecordRow,
   DeletedArtifactProjection,
   DeletedArtifactsSlice,
   EpicHeader,
@@ -68,7 +71,9 @@ import type {
 import {
   EMPTY_AGENT_ROLES_SLICE,
   EMPTY_ARRAY,
+  EMPTY_CHATS_SLICE,
   EMPTY_PROJECTED_SLICES,
+  EMPTY_TERMINAL_AGENTS_SLICE,
 } from "./types";
 import { displayTitle } from "@/lib/display-title";
 import { DEFAULT_SORT_MODE, makeNodeComparator } from "@/lib/epic-sort";
@@ -296,6 +301,13 @@ export function projectChat(id: string, entry: Y.Map<unknown>): ChatProjection {
     userId: readMaybeNullableString(entry, "userId"),
     hostId: readMaybeNullableString(entry, "hostId"),
     isTitleEditedByUser: readMaybeBoolean(entry, "isTitleEditedByUser"),
+    // A chat projected FROM THE DOC is doc-homed by construction - the doc is
+    // where this row lives, whatever the registry may also hold - so this arm
+    // is the one place the fact needs no plane to state it. T9's ruling reads
+    // the same way from the host side: a legacy-hydrated row is `home: "doc"`,
+    // and the routing gate must see `true` rather than today's `false`, which
+    // would send its rename to a writer that cannot address it.
+    docResident: true,
     settings: coerceChatRunSettings(entry.get("settings")),
     archivedAt: readMaybeNullableNumber(entry, "archivedAt"),
   };
@@ -349,6 +361,7 @@ export function projectTerminalAgent(
     // This IS the doc arm - every entry it reads is by definition still
     // pointing at the Y.Doc.
     docResident: true,
+    origin: "doc",
     harnessId,
     title: readMaybeString(entry, "title"),
     parentId: readMaybeNullableString(entry, "parentId"),
@@ -434,6 +447,11 @@ export function chatProjectionsEq(
     a.hostId === b.hostId &&
     a.isTitleEditedByUser === b.isTitleEditedByUser &&
     a.archivedAt === b.archivedAt &&
+    // In the gate because it CHANGES: a delta seeds `null` and the next poll
+    // states the home, and a projection that compared equal across that
+    // transition would leave every write affordance judging the row on the
+    // value it had before the answer arrived.
+    a.docResident === b.docResident &&
     chatRunSettingsEq(a.settings, b.settings)
   );
 }
@@ -469,6 +487,11 @@ export function terminalAgentProjectionsEq(
     // imports a frozen entry verbatim), so omitting it here would freeze the
     // stale routing decision behind the change gate.
     a.docResident === b.docResident,
+    // A row can move between planes without any other field changing - an
+    // agent this device only replicated and has since adopted reads
+    // identically apart from its origin - so omitting it here would freeze
+    // every origin-gated affordance on the stale answer.
+    a.origin === b.origin,
     a.harnessId === b.harnessId,
     a.title === b.title,
     a.parentId === b.parentId,
@@ -657,7 +680,7 @@ function projectChatsSlice(
  * plane that answered never carried one.
  */
 export function chatProjectionFromRecord(
-  record: ChatRecordSummary,
+  record: HeldChatRecordRow,
 ): ChatProjection {
   return {
     id: record.chatId,
@@ -670,6 +693,10 @@ export function chatProjectionFromRecord(
     // names the host that minted the chat.
     hostId: record.originHostId,
     isTitleEditedByUser: record.isTitleEditedByUser,
+    // Carried, never inferred. `null` here is the delta plane declining to
+    // state the home, and collapsing it to `false` is exactly the write-routing
+    // misroute the field exists to prevent.
+    docResident: record.docResident,
     settings: null,
     archivedAt: record.archived
       ? (record.archivedAt ?? record.updatedAt)
@@ -688,7 +715,7 @@ export function chatProjectionFromRecord(
  * declared safe.
  */
 export function chatRecordsSlice(
-  records: readonly ChatRecordSummary[],
+  records: readonly HeldChatRecordRow[],
 ): ChatsSlice {
   const byId: Record<string, ChatProjection> = {};
   const allIds: string[] = [];
@@ -797,13 +824,24 @@ export function unionChatsSlice(
  * derive this - `epic.subscribe`'s major is negotiated independently of
  * `epic.listTuiAgents`' minor - so this constant is the whole answer.
  *
- * FLIP IT IN THE SAME CHANGE THAT DELETES THE DOC ARM. Leaving it `true` past
- * that point costs the doc-resident agents their only remaining source (the
- * `@1` behaviour this minor exists to replace); flipping it early costs the
- * duplicate-row conflict. `true` is the safe end of that trade, which is why
- * it is the value that ships until the doc arm is actually gone.
+ * FLIPPED at the cutover, together with both request declarations, and safe to
+ * flip because the doc arm is no longer unconditional. `EpicDocRecordArms`
+ * decides per population whether the doc is still a SOURCE, from what the host
+ * negotiated:
+ *
+ *  - a host serving `@1.1` serves the doc-resident remainder, so it covers the
+ *    rows this constant used to protect, and the doc arm is off - one row, one
+ *    source, no duplicate-row conflict;
+ *  - a host that cannot read this field at all (it predates the minor) never
+ *    sees the declaration, and its doc arm stays ON because nothing else covers
+ *    its rows.
+ *
+ * So the trade this comment used to describe no longer exists: the value that
+ * was "safe" only because the doc arm was unconditional is now simply the true
+ * answer to the question the field asks. The GUI does not project records out
+ * of the epic doc on any path where a record plane can serve them.
  */
-export const GUI_PROJECTS_EPIC_DOC_REPLICA = true;
+export const GUI_PROJECTS_EPIC_DOC_REPLICA = false;
 
 function projectTerminalAgentsSlice(
   doc: Y.Doc,
@@ -847,29 +885,41 @@ function narrowTuiHarnessId(value: string): TuiHarnessId | null {
 }
 
 /**
- * One host-served registry row, in the renderer's terminal-agent shape, or
- * `null` for a row this build cannot dispatch (unknown/reserved harness).
+ * One host-served row, in the renderer's terminal-agent shape, or `null` for a
+ * row this build cannot dispatch (unknown/reserved harness).
  *
- * Unlike {@link chatProjectionFromRecord} there is no field the row lacks: a
- * terminal agent's resume metadata IS its record, so the row carries
- * everything the doc entry ever did and the union has no doc-supplied
- * exception like the chats' `settings`.
+ * ## Two populations, and only one of them carries a whole record
+ *
+ * The LOCAL arms (`registry`, `doc`) lack nothing: a terminal agent's resume
+ * metadata IS its record, so the row carries everything the doc entry ever did
+ * and the union has no doc-supplied exception like the chats' `settings`.
+ *
+ * The `cloud` arm is a replica of an agent on another of the user's machines,
+ * and the cloud metadata projection carries no resume metadata at all. Those
+ * fields are filled with the SAME inert values the launch path would have used
+ * anyway - an empty workspace list, the `regular` mode launch hardcodes - and
+ * `origin` is what tells a consumer they are placeholders. Filling them is not
+ * a claim: a replica has no launch path on this machine to mislead, because
+ * without a `harnessSessionId` there is nothing to resume and no fork to seed.
+ * The affordances that WOULD read them gate on `origin` first.
  *
  * `archivedAt` is derived from `archived`, not copied - same trap, same fix as
  * the chat row: the boolean is the rendering-authoritative field, and
  * `updatedAt` stands in when the plane that answered carried no timestamp.
  */
 export function tuiAgentProjectionFromRecord(
-  record: TuiAgentRecordSummaryV11,
+  record: TuiAgentRecordSummaryV12,
 ): TuiAgentProjection | null {
+  if (record.origin === "cloud") return cloudReplicaProjection(record);
   const harnessId = narrowTuiHarnessId(record.harnessId);
   if (harnessId === null) return null;
   return {
     id: record.tuiAgentId,
-    // Passed through, never assumed false: at `@1.1` the record plane carries
-    // BOTH registry rows and the doc-resident remainder, and the host is the
-    // only party that can still tell them apart.
+    // Passed through, never assumed false: from `@1.1` the record plane
+    // carries BOTH registry rows and the doc-resident remainder, and the host
+    // is the only party that can still tell them apart.
     docResident: record.docResident,
+    origin: record.origin,
     harnessId,
     title: record.title,
     parentId: record.parentId,
@@ -894,6 +944,81 @@ export function tuiAgentProjectionFromRecord(
 }
 
 /**
+ * A cross-host replica in the renderer's shape.
+ *
+ * `harnessId` is narrowed exactly as a local row's is, and a replica NAMING a
+ * harness this build cannot dispatch is dropped for the same reason: the
+ * roster row would open a tile that could not attach.
+ *
+ * A replica whose cloud row never recorded a harness at all is a different
+ * case and is LISTED, with `harnessId: null`. The protocol arm makes the field
+ * nullable on purpose - a row written before `runSettingsSummary` carried the
+ * harness has none - and says such a row renders without a harness mark. An
+ * earlier cut dropped it here, and this comment still described that; the
+ * agent then vanished from the roster on every other machine even though the
+ * host stored and served it correctly.
+ *
+ * `docResident: false` is a fact and not a placeholder: a replica is not the
+ * doc map's frozen copy, and it IS addressable through the registry
+ * affordances - on its OWN host, which is where every mutation aimed at it has
+ * to go regardless.
+ *
+ * ## A row whose cloud record never named a harness is LISTED, not dropped
+ *
+ * The protocol arm makes `harnessId` nullable on purpose - a cloud row written
+ * before `runSettingsSummary` carried the harness has none - and says such a
+ * row renders without a harness mark. Returning `null` here instead made the
+ * agent vanish from the roster on every other machine, which is the one
+ * outcome the contract rules out: the host stores and serves it correctly, and
+ * only this projection was losing it.
+ *
+ * So the projection carries `harnessId: null` through, and the consumers that
+ * genuinely need one refuse individually - it cannot be launched, forked or
+ * mentioned, because nothing can dispatch a harness nobody named. What it CAN
+ * do is appear in the tree, which is the whole of what phase 2 promises for an
+ * agent on another machine.
+ *
+ * A harness this build cannot NARROW is still dropped, and that is a different
+ * case: the row named something (a newer vendor), and a tile that could not
+ * dispatch it would be a row promising a session this build cannot open.
+ */
+function cloudReplicaProjection(
+  record: Extract<TuiAgentRecordSummaryV12, { origin: "cloud" }>,
+): TuiAgentProjection | null {
+  const harnessId =
+    record.harnessId === null ? null : narrowTuiHarnessId(record.harnessId);
+  if (harnessId === null && record.harnessId !== null) return null;
+  return {
+    id: record.tuiAgentId,
+    docResident: false,
+    origin: "cloud",
+    harnessId,
+    title: record.title,
+    parentId: record.parentId,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+    userId: record.ownerUserId,
+    hostId: record.hostId,
+    // Placeholders - see the header. `origin` is the discriminator that keeps
+    // a consumer from reading them as facts about the remote machine.
+    workspaceFolders: EMPTY_ARRAY,
+    workspaceMode: undefined,
+    model: null,
+    reasoningEffort: null,
+    agentMode: "regular",
+    archivedAt: record.archived ? record.updatedAt : null,
+    profileId: null,
+    // THE ABSENCE THAT MATTERS. Never crosses the cloud metadata projection,
+    // so cloning this agent onto this machine is impossible by construction
+    // rather than merely unimplemented.
+    harnessSessionId: null,
+    terminalAgentArgs: null,
+    terminalShellCommand: null,
+    terminalShellArgs: null,
+  };
+}
+
+/**
  * The host-served terminal-agent rows as a slice. A pure mapping, like
  * {@link chatRecordsSlice}: the ownership filter is the store's ingest
  * (`publishTuiAgentRecords`), applied when the signed-in user is known, so a
@@ -901,7 +1026,7 @@ export function tuiAgentProjectionFromRecord(
  * selection frozen at arrival time. Undispatchable rows are dropped here.
  */
 export function tuiAgentRecordsSlice(
-  records: readonly TuiAgentRecordSummaryV11[],
+  records: readonly TuiAgentRecordSummaryV12[],
 ): TerminalAgentsSlice {
   const byId: Record<string, TuiAgentProjection> = {};
   const allIds: string[] = [];
@@ -1004,15 +1129,27 @@ function readRoleClaims(doc: Y.Doc): RoleClaim[] {
   return claims;
 }
 
-export function projectAgentRolesSlice(
-  doc: Y.Doc,
+/**
+ * The role-claim slice from a claim SET, whatever produced it.
+ *
+ * Split from {@link projectAgentRolesSlice} because the two sources of a claim
+ * set say the same thing in different vocabularies: the `@1` root doc holds a
+ * `roleClaims` map, and `epic.state.subscribe@1.0` carries the whole visible set
+ * as one revisioned row (claims are create/destroy-only, so what races is the
+ * SET, and the set's revision is what fences it). Everything downstream of
+ * having the claims - the visibility filter, the grouping, the shared empty
+ * identity - is identical, and a second copy of it is where the two paths would
+ * quietly start disagreeing about which claims a viewer may see.
+ */
+export function projectAgentRolesSliceFromClaims(
+  claims: readonly RoleClaim[],
   currentUserId: string | null,
   chats: ChatsSlice,
   tuiAgents: TerminalAgentsSlice,
 ): AgentRolesSlice {
   if (currentUserId === null) return EMPTY_AGENT_ROLES_SLICE;
   const liveAgentIds = new Set([...chats.allIds, ...tuiAgents.allIds]);
-  const visibleClaims = projectVisibleRoleClaims(readRoleClaims(doc), {
+  const visibleClaims = projectVisibleRoleClaims(claims, {
     userId: currentUserId,
     liveAgentIds,
   });
@@ -1029,7 +1166,26 @@ export function projectAgentRolesSlice(
   return { byAgentId: Object.fromEntries(claimsByAgentId) };
 }
 
-function projectEpicHeader(doc: Y.Doc): EpicHeader {
+/** The `@1` root doc's claim set, through the one shared projection. */
+export function projectAgentRolesSlice(
+  doc: Y.Doc,
+  currentUserId: string | null,
+  chats: ChatsSlice,
+  tuiAgents: TerminalAgentsSlice,
+): AgentRolesSlice {
+  return projectAgentRolesSliceFromClaims(
+    readRoleClaims(doc),
+    currentUserId,
+    chats,
+    tuiAgents,
+  );
+}
+
+/**
+ * The `@1` root doc's epic header. Exported because the lane path needs the
+ * same SHAPE from `epic-meta` rows and the equivalence test compares the two.
+ */
+export function projectEpicHeader(doc: Y.Doc): EpicHeader {
   const epic = getEpicMap(doc);
   return {
     title: readMaybeString(epic, "title"),
@@ -1205,6 +1361,68 @@ export function projectTreeSlice(
  * inside the repo's parameter-count limit, which is the same pressure pointing
  * the same way.)
  */
+/**
+ * Whether the epic doc is still a record SOURCE, per population.
+ *
+ * `false` - the post-cutover normal - means the record plane covers that
+ * population completely and the doc's copy must not be unioned in. `true` means
+ * the record plane is structurally absent for it and the doc is the only source
+ * there is.
+ *
+ * ## Why this is per PLANE and keyed on what the host ANSWERED
+ *
+ * Neither the adapter arm nor the request constant can answer it, and the two
+ * planes do not answer alike:
+ *
+ *  - **Chats.** Complete on any host that answers `epic.listChatRecords` AT
+ *    ALL, at any minor: `EpicChatRegistry.hydrate()` runs
+ *    `hydrateLegacyDocSecondary` unconditionally, before any resolver, so a
+ *    doc-only chat is served back as a `home: "doc"` registry row without the
+ *    `@1.1` remainder having to exist. Absent only when the method answers
+ *    `E_HOST_UNSUPPORTED`.
+ *  - **Terminal agents.** Complete only at `epic.listTuiAgents@1.1`. There is
+ *    no hydration shim on that plane, and at `@1.0` the host DELIBERATELY
+ *    withholds doc-only entries because it expects the caller's own union to
+ *    cover them. So `@1.0` needs the doc arm exactly as much as an unsupported
+ *    answer does.
+ *
+ * `epic.listChatRecords` and `epic.listTuiAgents` are both off
+ * `RELEASED_FLOOR_METHOD_NAMES`, which is frozen and cannot grow, so a
+ * released-floor host answers `E_HOST_UNSUPPORTED` to both and its chats and
+ * terminal agents exist ONLY in the doc. Deleting these arms outright would
+ * make such an epic render empty - not degraded, empty - which is why they
+ * survive the cutover.
+ *
+ * **Their deletion is a Phase 5 follow-up**, on the same support-horizon
+ * decision that retires the `@1` legacy adapters: this is retained code with a
+ * named sunset, not an oversight. On the LANE path both members are `false` by
+ * construction - a lane-serving host serves `@1.1` on both methods - so the
+ * cutover's "delete the doc arm in the lane path" lands in full.
+ */
+export interface EpicDocRecordArms {
+  readonly chats: boolean;
+  readonly tuiAgents: boolean;
+}
+
+/**
+ * The doc is a source for neither population - a host complete on both record
+ * planes, and every lane connection. Shared so the common case is one
+ * reference.
+ */
+export const RECORD_PLANE_COVERS_BOTH: EpicDocRecordArms = Object.freeze({
+  chats: false,
+  tuiAgents: false,
+});
+
+/**
+ * The doc is a source for both - a released-floor host that answers neither
+ * list method.
+ */
+export const DOC_IS_THE_ONLY_RECORD_SOURCE: EpicDocRecordArms = Object.freeze({
+  chats: true,
+  tuiAgents: true,
+});
+
 export interface ProjectionInputs {
   /**
    * The host's store-backed chat records (`epic.listChatRecords`). Empty in
@@ -1233,24 +1451,131 @@ export interface ProjectionInputs {
    * projecting a bare doc).
    */
   readonly reportDeadMutations:
-    | ((requestIds: readonly string[]) => void)
+    | ((outcomes: readonly DeadPendingMutation[]) => void)
     | null;
+  /**
+   * Whether the doc is still a record source, per population. Required and
+   * never defaulted: an absent-means-`true` convention would silently restore
+   * the double-count this ticket removes on every caller someone forgets, and
+   * an absent-means-`false` one would silently empty a released-floor host's
+   * epic. See {@link EpicDocRecordArms}.
+   */
+  readonly docArm: EpicDocRecordArms;
 }
 
-export function projectFullState(
+/**
+ * The five populations a projection is composed FROM, whatever produced them.
+ *
+ * The projection has two heads now. The `@1` head reads them out of the root
+ * `Y.Doc`; the lane head decodes them from `epic.state.subscribe@1.0` rows
+ * through the shared record table. Everything downstream of having them - the
+ * unions, the dead-mutation sweep, the role-claim visibility filter, the
+ * optimistic overlay, the tree - is identical, and {@link composeEpicProjection}
+ * is that shared tail.
+ *
+ * This split is what makes the cutover's exit line ("indistinguishable to the
+ * projection layer from the legacy adapter on identical epic content")
+ * structural rather than aspirational: there is one composition, so the only
+ * thing two adapters can differ on is what they put in HERE, which is exactly
+ * what the equivalence test compares.
+ */
+export interface EpicRawProjectionSources {
+  readonly artifacts: ArtifactsSlice;
+  readonly deletedArtifacts: DeletedArtifactsSlice;
+  /**
+   * The doc's own chat entries, ALWAYS the doc's true content - never blanked
+   * to express that the doc is no longer a source. That distinction is
+   * {@link ProjectionInputs.docArm}'s job, and conflating them would break the
+   * incremental patcher, which reconciles a doc patch against this slice's own
+   * history rather than against the union.
+   */
+  readonly docChats: ChatsSlice;
+  /** The doc's own terminal-agent entries, with {@link docChats}'s contract. */
+  readonly docTuiAgents: TerminalAgentsSlice;
+  readonly epicHeader: EpicHeader;
+  readonly roleClaims: readonly RoleClaim[];
+}
+
+/** Read the `@1` root doc into {@link EpicRawProjectionSources}. */
+export function readEpicRawProjectionSources(
   doc: Y.Doc,
+  currentUserId: string | null,
+): EpicRawProjectionSources {
+  return {
+    artifacts: projectArtifactsSlice(doc),
+    deletedArtifacts: projectDeletedArtifactsSlice(doc),
+    docChats: projectChatsSlice(doc, currentUserId),
+    docTuiAgents: projectTerminalAgentsSlice(doc, currentUserId),
+    epicHeader: projectEpicHeader(doc),
+    roleClaims: readRoleClaims(doc),
+  };
+}
+
+/**
+ * The chat table as this CONNECTION should see it.
+ *
+ * The gate is applied here and nowhere else, because the union has two callers
+ * - the full composition and the incremental patcher - and a gate applied at
+ * one of them is a gate that holds until the other one runs. Passing the shared
+ * empty slice rather than skipping the union keeps the record side's visibility
+ * filter and reference-preservation on exactly one code path.
+ */
+export function unionChatsForConnection(
+  docChats: ChatsSlice,
+  chatRecords: ChatsSlice,
+  currentUserId: string | null,
+  docArm: EpicDocRecordArms,
+): ChatsSlice {
+  return unionChatsSlice(
+    docArm.chats ? docChats : EMPTY_CHATS_SLICE,
+    chatRecords,
+    currentUserId,
+  );
+}
+
+/** The terminal-agent twin of {@link unionChatsForConnection}. */
+export function unionTuiAgentsForConnection(
+  docTuiAgents: TerminalAgentsSlice,
+  tuiAgentRecords: TerminalAgentsSlice,
+  docArm: EpicDocRecordArms,
+): TerminalAgentsSlice {
+  return unionTerminalAgentsSlice(
+    docArm.tuiAgents ? docTuiAgents : EMPTY_TERMINAL_AGENTS_SLICE,
+    tuiAgentRecords,
+  );
+}
+
+/**
+ * Compose a projection from raw populations. The one tail both heads run.
+ *
+ * Ordering here is load-bearing and is the incumbent's, unchanged: the dead
+ * sweep runs on the PRE-overlay unions (the only point where the unions and the
+ * overlay are both in hand), the overlay lands on the union outputs components
+ * read and BEFORE the tree is built so a pending reparent restructures
+ * `childrenByParent` for free, and `docChats` / `docTuiAgents` are deliberately
+ * never overlaid because they are input state that must reconcile against the
+ * doc's history rather than against a display patch.
+ */
+export function composeEpicProjection(
+  raw: EpicRawProjectionSources,
   currentUserId: string | null,
   inputs: ProjectionInputs,
 ): EpicProjectedSlices {
   const { chatRecords, tuiAgentRecords, pendingOverlay, reportDeadMutations } =
     inputs;
-  const artifacts = projectArtifactsSlice(doc);
-  const deletedArtifacts = projectDeletedArtifactsSlice(doc);
-  const docChats = projectChatsSlice(doc, currentUserId);
-  const chats = unionChatsSlice(docChats, chatRecords, currentUserId);
-  const docTuiAgents = projectTerminalAgentsSlice(doc, currentUserId);
-  const tuiAgents = unionTerminalAgentsSlice(docTuiAgents, tuiAgentRecords);
-  const epicHeader = projectEpicHeader(doc);
+  const { artifacts, deletedArtifacts, docChats, docTuiAgents } = raw;
+  const chats = unionChatsForConnection(
+    docChats,
+    chatRecords,
+    currentUserId,
+    inputs.docArm,
+  );
+  const tuiAgents = unionTuiAgentsForConnection(
+    docTuiAgents,
+    tuiAgentRecords,
+    inputs.docArm,
+  );
+  const epicHeader = raw.epicHeader;
   // Sweep finished overlay chains against the PRE-overlay values - the only
   // place both the union slices and the overlay are in hand together. Runs
   // before the appliers so a chain proven dead here never patches this
@@ -1258,7 +1583,7 @@ export function projectFullState(
   // nothing else mid-projection; the appliers below read the same `pendingOverlay`
   // reference, which the callback edits in place).
   if (reportDeadMutations !== null && pendingOverlay.size > 0) {
-    const dead = collectDeadPendingMutations(pendingOverlay, {
+    const dead = collectDeadPendingMutationOutcomes(pendingOverlay, {
       artifacts,
       chats,
       tuiAgents,
@@ -1266,8 +1591,8 @@ export function projectFullState(
     });
     if (dead.length > 0) reportDeadMutations(dead);
   }
-  const agentRoles = projectAgentRolesSlice(
-    doc,
+  const agentRoles = projectAgentRolesSliceFromClaims(
+    raw.roleClaims,
     currentUserId,
     chats,
     tuiAgents,
@@ -1305,6 +1630,26 @@ export function projectFullState(
     agentRoles,
     tree,
   };
+}
+
+/**
+ * The `@1` head: read the root doc, then run the shared composition.
+ *
+ * Kept as its own name because every existing caller - the projector's three
+ * call sites and the characterisation tests - asks for exactly this, and
+ * because "project the doc" and "compose a projection" are genuinely two steps
+ * once there are two heads.
+ */
+export function projectFullState(
+  doc: Y.Doc,
+  currentUserId: string | null,
+  inputs: ProjectionInputs,
+): EpicProjectedSlices {
+  return composeEpicProjection(
+    readEpicRawProjectionSources(doc, currentUserId),
+    currentUserId,
+    inputs,
+  );
 }
 
 // ─── Y.Doc mutation helpers (used by store actions) ───────────────────────

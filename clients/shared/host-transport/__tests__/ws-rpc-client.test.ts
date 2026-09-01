@@ -15,6 +15,7 @@ import {
   defineRpcContract,
   defineUpgradePath,
   defineVersionedRpcRegistry,
+  UNARY_CAPABILITY_IDEMPOTENCY_KEY,
   type VersionedRpcRegistry,
 } from "@traycer/protocol/framework/index";
 import {
@@ -43,6 +44,7 @@ import type {
   WebSocketMessageEvent,
   WebSocketOpenEvent,
 } from "../ws-factory";
+import type { DialPriority } from "../dial-priority";
 import {
   HOST_POST_OPEN_ATTESTATION_WINDOW_MS,
   WsRpcClient,
@@ -60,6 +62,7 @@ import type {
   ClientRequestFrame,
   ClientFatalErrorFrame,
   HostFrame,
+  HostOpenAckFrame,
 } from "@traycer/protocol/framework/ws-protocol";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
@@ -102,6 +105,7 @@ type RecordedSocket = {
   readonly url: string;
   readonly socket: StubWebSocket;
   readonly sent: ClientFrame[];
+  readonly priority: DialPriority;
 };
 
 class StubWebSocket implements WebSocketLike {
@@ -159,9 +163,9 @@ function makeFactory(): {
 } {
   const sockets: RecordedSocket[] = [];
   const factory: IWebSocketFactory = {
-    create(url: string): WebSocketLike {
+    create(url: string, priority: DialPriority): WebSocketLike {
       const socket = new StubWebSocket();
-      sockets.push({ url, socket, sent: socket.sentFrames });
+      sockets.push({ url, socket, sent: socket.sentFrames, priority });
       return socket;
     },
   };
@@ -195,7 +199,11 @@ class BoundWsRpcClient<Registry extends VersionedRpcRegistry> {
     method: Method,
     params: RequestOfMethod<Registry, Method>,
   ): Promise<ResponseOfMethod<Registry, Method>> {
-    return this.inner.request(method, params, this.authority);
+    return this.inner.request(method, params, {
+      replayMustBeKeyed: false,
+      idempotencyKey: null,
+      authority: this.authority,
+    });
   }
 
   requestWithResponseTimeout<Method extends keyof Registry & string>(
@@ -207,7 +215,11 @@ class BoundWsRpcClient<Registry extends VersionedRpcRegistry> {
       method,
       params,
       responseTimeoutMs,
-      this.authority,
+      {
+        replayMustBeKeyed: false,
+        idempotencyKey: null,
+        authority: this.authority,
+      },
     );
   }
 }
@@ -270,7 +282,11 @@ async function expectPostOpenTimeoutRecovery(fatal: HostFrame): Promise<void> {
   });
   const authority = authorityForToken("token-abc");
 
-  const pending = client.request("host.echo", { message: "hi" }, authority);
+  const pending = client.request(
+    "host.echo",
+    { message: "hi" },
+    { idempotencyKey: null, authority: authority, replayMustBeKeyed: false },
+  );
   await flush();
   sockets[0].socket.fireOpen();
   await flush();
@@ -350,7 +366,7 @@ function expectTerminalFrame(frame: ClientFrame): ClientFatalErrorFrame {
 function openAckWithOptionalHostEcho(version: {
   readonly major: number;
   readonly minor: number;
-}): HostFrame {
+}): HostOpenAckFrame {
   return {
     kind: "openAck",
     manifest: {
@@ -359,6 +375,19 @@ function openAckWithOptionalHostEcho(version: {
     optionalManifest: {
       "host.echo": version,
     },
+  };
+}
+
+function openAckWithOptionalHostEchoAndCapabilities(
+  version: {
+    readonly major: number;
+    readonly minor: number;
+  },
+  capabilities: readonly string[],
+): HostOpenAckFrame {
+  return {
+    ...openAckWithOptionalHostEcho(version),
+    capabilities,
   };
 }
 
@@ -608,7 +637,11 @@ describe("WsRpcClient", () => {
     const pending = client.request(
       "host.echo",
       { message: "hi" },
-      authorityForToken("token-abc"),
+      {
+        idempotencyKey: null,
+        authority: authorityForToken("token-abc"),
+        replayMustBeKeyed: false,
+      },
     );
     await flush();
     sockets[0].socket.fireOpen();
@@ -674,6 +707,7 @@ describe("WsRpcClient", () => {
       method: "host.echo",
       schemaVersion: { major: 1, minor: 0, supportedMajors: [1] },
       params: { message: "hi" },
+      idempotencyKey: null,
     });
     expect(stub.closed).toBeNull();
 
@@ -688,6 +722,214 @@ describe("WsRpcClient", () => {
 
     await expect(pending).resolves.toEqual({ echoed: "HI" });
     expect(stub.closed).toEqual({ code: 1000, reason: "ok" });
+  });
+
+  it("dials the priority `dialPriorityForMethod` computes for the method, not a literal - background for a listed method, interactive for an unlisted one", async () => {
+    const { factory, sockets } = makeFactory();
+    let nextRequestId = 0;
+    const client = new WsRpcClient<typeof testRegistry>({
+      clientIdentity: TEST_CLIENT_IDENTITY,
+      registry: testRegistry,
+      requestId: () => `req-priority-${(nextRequestId += 1)}`,
+      webSocketFactory: factory,
+      dialTimeoutMs: 1000,
+      frameTimeoutMs: 1000,
+      hostAttestationWindowMs: 0,
+      evidence: NO_TRANSPORT_EVIDENCE,
+    });
+    const authority = authorityForToken("token-abc");
+
+    // "host.status" is on `dial-priority.ts`'s background list.
+    const backgroundPending = client.request(
+      "host.status",
+      {},
+      { idempotencyKey: null, authority, replayMustBeKeyed: false },
+    );
+    await flush();
+    // "host.echo" is not - it must fall through to the interactive default.
+    const interactivePending = client.request(
+      "host.echo",
+      { message: "hi" },
+      { idempotencyKey: null, authority, replayMustBeKeyed: false },
+    );
+    await flush();
+
+    expect(sockets).toHaveLength(2);
+    expect(sockets[0].priority).toBe("background");
+    expect(sockets[1].priority).toBe("interactive");
+
+    sockets[0].socket.fireOpen();
+    await flush();
+    sockets[0].socket.fireMessage(
+      openAckWithOptionalHostEcho({ major: 1, minor: 0 }),
+    );
+    await flush();
+    const statusRequest = expectRequestFrame(sockets[0].sent[1]);
+    sockets[0].socket.fireMessage({
+      kind: "response",
+      requestId: statusRequest.requestId,
+      method: statusRequest.method,
+      schemaVersion: statusRequest.schemaVersion,
+      result: { ready: true },
+      error: null,
+    });
+    await expect(backgroundPending).resolves.toEqual({ ready: true });
+
+    sockets[1].socket.fireOpen();
+    await flush();
+    sockets[1].socket.fireMessage(
+      openAckWithOptionalHostEcho({ major: 1, minor: 0 }),
+    );
+    await flush();
+    const echoRequest = expectRequestFrame(sockets[1].sent[1]);
+    sockets[1].socket.fireMessage({
+      kind: "response",
+      requestId: echoRequest.requestId,
+      method: echoRequest.method,
+      schemaVersion: echoRequest.schemaVersion,
+      result: { echoed: "HI" },
+      error: null,
+    });
+    await expect(interactivePending).resolves.toEqual({ echoed: "HI" });
+  });
+
+  it("strips a requested idempotency key on a legacy openAck and classifies post-send loss as unknown", async () => {
+    const { factory, sockets } = makeFactory();
+    const raw = new WsRpcClient<typeof testRegistry>({
+      clientIdentity: TEST_CLIENT_IDENTITY,
+      registry: testRegistry,
+      requestId: () => "req-legacy-key",
+      webSocketFactory: factory,
+      dialTimeoutMs: 1_000,
+      frameTimeoutMs: 1_000,
+      hostAttestationWindowMs: 0,
+      evidence: NO_TRANSPORT_EVIDENCE,
+    });
+    const pending = raw.request(
+      "host.echo",
+      { message: "hi" },
+      {
+        replayMustBeKeyed: false,
+        idempotencyKey: "requested-key",
+        authority: authorityForToken("token-abc"),
+      },
+    );
+    await flush();
+    sockets[0].socket.fireOpen();
+    await flush();
+    sockets[0].socket.fireMessage(
+      openAckWithOptionalHostEchoAndCapabilities({ major: 1, minor: 0 }, [
+        "future.capability",
+      ]),
+    );
+    await flush();
+
+    expect(expectRequestFrame(sockets[0].sent[1]).idempotencyKey).toBeNull();
+    sockets[0].socket.fireError("connection dropped after dispatch");
+
+    await expect(pending).rejects.toBeInstanceOf(HostTransportFailureError);
+    await expect(pending).rejects.not.toBeInstanceOf(RetryableTransportError);
+  });
+
+  it("sends a requested key only after unary idempotency negotiation and keeps post-send loss retryable", async () => {
+    const { factory, sockets } = makeFactory();
+    const raw = new WsRpcClient<typeof testRegistry>({
+      clientIdentity: TEST_CLIENT_IDENTITY,
+      registry: testRegistry,
+      requestId: () => "req-keyed",
+      webSocketFactory: factory,
+      dialTimeoutMs: 1_000,
+      frameTimeoutMs: 1_000,
+      hostAttestationWindowMs: 0,
+      evidence: NO_TRANSPORT_EVIDENCE,
+    });
+    const pending = raw.request(
+      "host.echo",
+      { message: "hi" },
+      {
+        replayMustBeKeyed: false,
+        idempotencyKey: "requested-key",
+        authority: authorityForToken("token-abc"),
+      },
+    );
+    await flush();
+    sockets[0].socket.fireOpen();
+    await flush();
+    sockets[0].socket.fireMessage(
+      openAckWithOptionalHostEchoAndCapabilities({ major: 1, minor: 0 }, [
+        UNARY_CAPABILITY_IDEMPOTENCY_KEY,
+      ]),
+    );
+    await flush();
+
+    expect(expectRequestFrame(sockets[0].sent[1]).idempotencyKey).toBe(
+      "requested-key",
+    );
+    sockets[0].socket.fireError("connection dropped after dispatch");
+
+    await expect(pending).rejects.toBeInstanceOf(RetryableTransportError);
+    // The CLASS on its own does not say why the retry is safe, and the two
+    // grounds are not interchangeable: this one is safe only while the host
+    // keeps deduplicating the key, which is what `createRetryingMessenger`
+    // reads to require a key on the next attempt.
+    await expect(pending).rejects.toMatchObject({ replaySafetyFromKey: true });
+  });
+
+  it("refuses to dispatch a replay the negotiated connection cannot key", async () => {
+    const { factory, sockets } = makeFactory();
+    const raw = new WsRpcClient<typeof testRegistry>({
+      clientIdentity: TEST_CLIENT_IDENTITY,
+      registry: testRegistry,
+      requestId: () => "req-unkeyable-replay",
+      webSocketFactory: factory,
+      dialTimeoutMs: 1_000,
+      frameTimeoutMs: 1_000,
+      hostAttestationWindowMs: 0,
+      evidence: NO_TRANSPORT_EVIDENCE,
+    });
+    const pending = raw.request(
+      "host.echo",
+      { message: "hi" },
+      {
+        // What `createRetryingMessenger` sets after a post-send loss that only
+        // a negotiated key made retryable.
+        replayMustBeKeyed: true,
+        idempotencyKey: "requested-key",
+        authority: authorityForToken("token-abc"),
+      },
+    );
+    // Captured BEFORE the first `flush()`, unlike the sibling tests above. The
+    // refusal lands while the openAck is being consumed, several microtask
+    // turns before an `expect(...).rejects` could attach - so deferring the
+    // handler leaves the tick in between with an unhandled rejection, and
+    // vitest fails the whole file on it while every assertion still passes.
+    const outcome = pending.then(
+      () => null,
+      (reason: unknown) => reason,
+    );
+    await flush();
+    sockets[0].socket.fireOpen();
+    await flush();
+    sockets[0].socket.fireMessage(
+      openAckWithOptionalHostEchoAndCapabilities({ major: 1, minor: 0 }, [
+        // The re-dial landed on an incarnation without unary idempotency. The
+        // sibling test above proves this same openAck strips the key and sends
+        // anyway on a FIRST attempt, which is correct there and a second
+        // undeduplicated execution here.
+        "future.capability",
+      ]),
+    );
+    await flush();
+
+    // `sent[0]` is the open frame. Nothing followed it: the refusal is the
+    // point, so a rejection alone would not distinguish this from dispatching
+    // and then failing.
+    expect(sockets[0].sent).toHaveLength(1);
+    const error: unknown = await outcome;
+    expect(error).toBeInstanceOf(HostTransportFailureError);
+    // Deliberately NOT retryable: the first attempt may already have
+    // committed, so the honest answer is ambiguity, not a third attempt.
+    expect(error).not.toBeInstanceOf(RetryableTransportError);
   });
 
   it("aborting the captured authority closes and settles the in-flight socket", async () => {
@@ -707,12 +949,16 @@ describe("WsRpcClient", () => {
       "host.echo",
       { message: "hi" },
       {
-        endpoint: {
-          hostId: mockLocalHostEntry.hostId,
-          websocketUrl: mockLocalHostEntry.websocketUrl,
+        replayMustBeKeyed: false,
+        idempotencyKey: null,
+        authority: {
+          endpoint: {
+            hostId: mockLocalHostEntry.hostId,
+            websocketUrl: mockLocalHostEntry.websocketUrl,
+          },
+          bearer: new MutableBearerLease("token-abc", "test-user"),
+          abortSignal: lifetime.signal,
         },
-        bearer: new MutableBearerLease("token-abc", "test-user"),
-        abortSignal: lifetime.signal,
       },
     );
     await flush();
@@ -784,12 +1030,16 @@ describe("WsRpcClient", () => {
         "host.echo",
         { message: "hi" },
         {
-          endpoint: {
-            hostId: mockLocalHostEntry.hostId,
-            websocketUrl: mockLocalHostEntry.websocketUrl,
+          replayMustBeKeyed: false,
+          idempotencyKey: null,
+          authority: {
+            endpoint: {
+              hostId: mockLocalHostEntry.hostId,
+              websocketUrl: mockLocalHostEntry.websocketUrl,
+            },
+            bearer: new MutableBearerLease("token-abc", "test-user"),
+            abortSignal: signal,
           },
-          bearer: new MutableBearerLease("token-abc", "test-user"),
-          abortSignal: signal,
         },
       );
     }
@@ -890,9 +1140,17 @@ describe("WsRpcClient", () => {
 
     // Fire two overlapping RPCs to the SAME host - neither awaited before the
     // next is started, so both sockets are open at once.
-    const pending1 = client.request("host.echo", { message: "one" }, authority);
+    const pending1 = client.request(
+      "host.echo",
+      { message: "one" },
+      { idempotencyKey: null, authority: authority, replayMustBeKeyed: false },
+    );
     await flush();
-    const pending2 = client.request("host.echo", { message: "two" }, authority);
+    const pending2 = client.request(
+      "host.echo",
+      { message: "two" },
+      { idempotencyKey: null, authority: authority, replayMustBeKeyed: false },
+    );
     await flush();
     expect(sockets).toHaveLength(2);
 
@@ -973,7 +1231,7 @@ describe("WsRpcClient", () => {
     const pendingOld = oldClient.request(
       "host.echo",
       { message: "old" },
-      authority,
+      { idempotencyKey: null, authority: authority, replayMustBeKeyed: false },
     );
     await flush();
     sockets[0].socket.fireOpen();
@@ -985,7 +1243,7 @@ describe("WsRpcClient", () => {
     const pendingNew = newClient.request(
       "host.echo",
       { message: "new" },
-      authority,
+      { idempotencyKey: null, authority: authority, replayMustBeKeyed: false },
     );
     await flush();
     sockets[1].socket.fireOpen();
@@ -1046,12 +1304,16 @@ describe("WsRpcClient", () => {
       "host.echo",
       { message: "hi" },
       {
-        endpoint: {
-          hostId: mockLocalHostEntry.hostId,
-          websocketUrl: mockLocalHostEntry.websocketUrl,
+        replayMustBeKeyed: false,
+        idempotencyKey: null,
+        authority: {
+          endpoint: {
+            hostId: mockLocalHostEntry.hostId,
+            websocketUrl: mockLocalHostEntry.websocketUrl,
+          },
+          bearer: new MutableBearerLease("token-abc", "test-user"),
+          abortSignal: lifetime.signal,
         },
-        bearer: new MutableBearerLease("token-abc", "test-user"),
-        abortSignal: lifetime.signal,
       },
     );
     await flush();
@@ -1071,7 +1333,11 @@ describe("WsRpcClient", () => {
     const pending2 = client.request(
       "host.echo",
       { message: "hi again" },
-      authorityForToken("token-abc"),
+      {
+        idempotencyKey: null,
+        authority: authorityForToken("token-abc"),
+        replayMustBeKeyed: false,
+      },
     );
     await flush();
     expect(sockets).toHaveLength(2);
@@ -1692,7 +1958,15 @@ describe("WsRpcClient", () => {
         hostAttestationWindowMs: HOST_ATTESTATION_WINDOW_MS,
       });
 
-      const pending = client.request("host.echo", { message: "hi" }, authority);
+      const pending = client.request(
+        "host.echo",
+        { message: "hi" },
+        {
+          idempotencyKey: null,
+          authority: authority,
+          replayMustBeKeyed: false,
+        },
+      );
       await driveUntilRequestSent(sockets);
 
       // Client response deadline fires first at 15s; grace = 50_000 - 15_000.
@@ -1725,7 +1999,15 @@ describe("WsRpcClient", () => {
         hostAttestationWindowMs: HOST_ATTESTATION_WINDOW_MS,
       });
 
-      const pending = client.request("host.echo", { message: "hi" }, authority);
+      const pending = client.request(
+        "host.echo",
+        { message: "hi" },
+        {
+          idempotencyKey: null,
+          authority: authority,
+          replayMustBeKeyed: false,
+        },
+      );
       await driveUntilRequestSent(sockets);
 
       // Client deadline equals the host's 30s post-open timer; grace = 20s.
@@ -1757,7 +2039,15 @@ describe("WsRpcClient", () => {
         hostAttestationWindowMs: HOST_ATTESTATION_WINDOW_MS,
       });
 
-      const pending = client.request("host.echo", { message: "hi" }, authority);
+      const pending = client.request(
+        "host.echo",
+        { message: "hi" },
+        {
+          idempotencyKey: null,
+          authority: authority,
+          replayMustBeKeyed: false,
+        },
+      );
       await driveUntilRequestSent(sockets);
 
       // Client fires first at 30s; grace = 50_000 - 30_000 = 20s (expires at 50s).
@@ -1793,7 +2083,15 @@ describe("WsRpcClient", () => {
         hostAttestationWindowMs: HOST_ATTESTATION_WINDOW_MS,
       });
 
-      const pending = client.request("host.echo", { message: "hi" }, authority);
+      const pending = client.request(
+        "host.echo",
+        { message: "hi" },
+        {
+          idempotencyKey: null,
+          authority: authority,
+          replayMustBeKeyed: false,
+        },
+      );
       // Attach before timers fire so the rejection is not unhandled under fake timers.
       const rejection = expect(pending).rejects.toSatisfy(
         (error: unknown) =>
@@ -1931,7 +2229,11 @@ describe("WsRpcClient", () => {
         const pending = client.request(
           "host.echo",
           { message: "hi" },
-          authority,
+          {
+            idempotencyKey: null,
+            authority: authority,
+            replayMustBeKeyed: false,
+          },
         );
         const rejection = expect(pending).rejects.toSatisfy(
           (error: unknown) =>
@@ -1980,7 +2282,15 @@ describe("WsRpcClient", () => {
         hostAttestationWindowMs: HOST_ATTESTATION_WINDOW_MS,
       });
 
-      const pending = client.request("host.echo", { message: "hi" }, authority);
+      const pending = client.request(
+        "host.echo",
+        { message: "hi" },
+        {
+          idempotencyKey: null,
+          authority: authority,
+          replayMustBeKeyed: false,
+        },
+      );
       await driveUntilRequestSent(sockets);
 
       // Response deadline → grace armed (window 30s + delivery 5s).
@@ -2025,7 +2335,15 @@ describe("WsRpcClient", () => {
         hostAttestationWindowMs: HOST_ATTESTATION_WINDOW_MS,
       });
 
-      const pending = client.request("host.echo", { message: "hi" }, authority);
+      const pending = client.request(
+        "host.echo",
+        { message: "hi" },
+        {
+          idempotencyKey: null,
+          authority: authority,
+          replayMustBeKeyed: false,
+        },
+      );
       await driveUntilRequestSent(sockets);
 
       // Response deadline → grace armed; window leg → delivery leg armed (t=45s).
@@ -2069,7 +2387,15 @@ describe("WsRpcClient", () => {
         hostAttestationWindowMs: HOST_ATTESTATION_WINDOW_MS,
       });
 
-      const pending = client.request("host.echo", { message: "hi" }, authority);
+      const pending = client.request(
+        "host.echo",
+        { message: "hi" },
+        {
+          idempotencyKey: null,
+          authority: authority,
+          replayMustBeKeyed: false,
+        },
+      );
       const rejection = expect(pending).rejects.toSatisfy(
         (error: unknown) =>
           error instanceof HostTransportFailureError &&
@@ -2109,7 +2435,15 @@ describe("WsRpcClient", () => {
         hostAttestationWindowMs: HOST_ATTESTATION_WINDOW_MS,
       });
 
-      const pending = client.request("host.echo", { message: "hi" }, authority);
+      const pending = client.request(
+        "host.echo",
+        { message: "hi" },
+        {
+          idempotencyKey: null,
+          authority: authority,
+          replayMustBeKeyed: false,
+        },
+      );
       const rejection = expect(pending).rejects.toSatisfy(
         (error: unknown) =>
           error instanceof HostTransportFailureError &&
@@ -2155,7 +2489,11 @@ describe("WsRpcClient", () => {
         "host.echo",
         { message: "slow" },
         LONG_POLL_RESPONSE_TIMEOUT_MS,
-        authority,
+        {
+          idempotencyKey: null,
+          authority: authority,
+          replayMustBeKeyed: false,
+        },
       );
       await driveUntilRequestSent(sockets);
 
@@ -2189,7 +2527,11 @@ describe("WsRpcClient", () => {
         "host.echo",
         { message: "slow" },
         LONG_POLL_RESPONSE_TIMEOUT_MS,
-        authority,
+        {
+          idempotencyKey: null,
+          authority: authority,
+          replayMustBeKeyed: false,
+        },
       );
       const rejection = expect(pending).rejects.toSatisfy(
         (error: unknown) =>
@@ -2395,12 +2737,16 @@ describe("WsRpcClient", () => {
         "host.echo",
         { message: "hi" },
         {
-          endpoint: {
-            hostId: mockLocalHostEntry.hostId,
-            websocketUrl: mockLocalHostEntry.websocketUrl,
+          replayMustBeKeyed: false,
+          idempotencyKey: null,
+          authority: {
+            endpoint: {
+              hostId: mockLocalHostEntry.hostId,
+              websocketUrl: mockLocalHostEntry.websocketUrl,
+            },
+            bearer: new MutableBearerLease("token-abc", "test-user"),
+            abortSignal: lifetime.signal,
           },
-          bearer: new MutableBearerLease("token-abc", "test-user"),
-          abortSignal: lifetime.signal,
         },
       );
       const rejection = expect(pending).rejects.toBeInstanceOf(
@@ -2437,12 +2783,16 @@ describe("WsRpcClient", () => {
         "host.echo",
         { message: "hi" },
         {
-          endpoint: {
-            hostId: mockLocalHostEntry.hostId,
-            websocketUrl: mockLocalHostEntry.websocketUrl,
+          replayMustBeKeyed: false,
+          idempotencyKey: null,
+          authority: {
+            endpoint: {
+              hostId: mockLocalHostEntry.hostId,
+              websocketUrl: mockLocalHostEntry.websocketUrl,
+            },
+            bearer: new MutableBearerLease("token-abc", "test-user"),
+            abortSignal: lifetime.signal,
           },
-          bearer: new MutableBearerLease("token-abc", "test-user"),
-          abortSignal: lifetime.signal,
         },
       );
       const rejection = expect(pending).rejects.toBeInstanceOf(
@@ -2948,6 +3298,7 @@ describe("WsRpcClient", () => {
       method: "host.status",
       schemaVersion: { major: 1, minor: 0 },
       params: {},
+      idempotencyKey: null,
     });
     expect(sockets[0].socket.closed).toBeNull();
 
@@ -3171,6 +3522,7 @@ describe("WsRpcClient", () => {
         method: "host.status",
         schemaVersion: { major: 1, minor: 0 },
         params: {},
+        idempotencyKey: null,
       });
 
       sockets[0].socket.fireMessage({
@@ -3217,6 +3569,7 @@ describe("WsRpcClient", () => {
         method: "host.status",
         schemaVersion: { major: 1, minor: 0 },
         params: {},
+        idempotencyKey: null,
       });
 
       sockets[0].socket.fireMessage({

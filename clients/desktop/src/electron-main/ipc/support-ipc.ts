@@ -34,6 +34,7 @@ import type {
 import {
   MAX_REPORT_IMAGE_BYTES,
   MAX_REPORT_IMAGES,
+  MAX_REPORT_LOG_ATTACHMENTS,
   matchesReportImageMagicBytes,
   reportImageMediaTypeForMimeType,
   reportImagesExceedBudget,
@@ -105,6 +106,28 @@ export function registerSupportIpc(bridge: RunnerIpcBridge): void {
     }
     await shell.openExternal(url);
   });
+
+  // Opens the native notification-preferences page. The URL is selected in
+  // main rather than supplied by the renderer, so this intentionally bypasses
+  // the http-only external-link gate just like the microphone settings link.
+  bridge.handleInvoke(
+    RunnerHostInvoke.notificationOpenSystemSettings,
+    async () => {
+      const url =
+        process.platform === "darwin"
+          ? "x-apple.systempreferences:com.apple.Notifications-Settings.extension"
+          : process.platform === "win32"
+            ? "ms-settings:notifications"
+            : null;
+      if (url === null) {
+        log.warn(
+          "[support] notification system settings unsupported on this platform",
+        );
+        return;
+      }
+      await shell.openExternal(url);
+    },
+  );
 
   bridge.handleInvoke(
     RunnerHostInvoke.notificationShow,
@@ -342,6 +365,7 @@ const SUPPORT_SUBMIT_REPORT_KEYS = contractKeySet<SupportSubmitReportRequest>({
   allowContact: true,
   includeDesktopLog: true,
   includeHostLog: true,
+  includeBrowserDiagnostics: true,
   includeDiagnostics: true,
   images: true,
   overrideTitle: true,
@@ -722,7 +746,7 @@ function parseSupportImageAttachments(
     (sum, image) => sum + image.bytes.byteLength,
     0,
   );
-  if (reportImagesExceedBudget(totalBytes)) {
+  if (reportImagesExceedBudget(totalBytes, MAX_REPORT_LOG_ATTACHMENTS)) {
     throw new Error(`${context} exceeds the total attachment size budget`);
   }
   return images;
@@ -755,6 +779,10 @@ function parseSupportReportRequest(
   assertBoolean(form.allowContact, `${context}.allowContact`);
   assertBoolean(form.includeDesktopLog, `${context}.includeDesktopLog`);
   assertBoolean(form.includeHostLog, `${context}.includeHostLog`);
+  assertBoolean(
+    form.includeBrowserDiagnostics,
+    `${context}.includeBrowserDiagnostics`,
+  );
   assertBoolean(form.includeDiagnostics, `${context}.includeDiagnostics`);
   // Always present on the wire (empty array when nothing attached), matching
   // frequency/location's "no missing key" contract.
@@ -791,6 +819,7 @@ function parseSupportReportRequest(
     allowContact: form.allowContact,
     includeDesktopLog: form.includeDesktopLog,
     includeHostLog: form.includeHostLog,
+    includeBrowserDiagnostics: form.includeBrowserDiagnostics,
     includeDiagnostics: form.includeDiagnostics,
     images,
     overrideTitle,

@@ -108,8 +108,9 @@ describe("teardown holder copy", () => {
       "This host reports background work in feat-octopus, but cannot identify it. That work will be stopped before sweeping.",
     );
     expect(formatUncheckedInUseUnknown()).toContain("cannot identify it");
+    expect(formatUncheckedInUseUnknown()).toContain("Check to review");
     expect(formatUncheckedInUseKnown(2)).toBe(
-      "In use by 2 processes · Select individually to review",
+      "In use by 2 processes · Check to review",
     );
   });
 

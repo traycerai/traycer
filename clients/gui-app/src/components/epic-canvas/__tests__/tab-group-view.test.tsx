@@ -203,8 +203,11 @@ vi.mock("@/lib/epic-selectors", () => ({
   useRegisteredEpicNodeArchived: () => false,
   // Chat tab strip icons (ChatProgressIcon) need activity tiers when a chat
   // tile is the active tab - not exercised by the older spec/terminal-only
-  // fixtures in this file.
+  // fixtures in this file. The icon reads the REGISTERED (keyed,
+  // non-throwing) selectors, so both forms are answered here.
   useEpicAgentActivityTiers: () => new Map<string, false>(),
+  useRegisteredEpicAgentActivityTiers: () => new Map<string, false>(),
+  useRegisteredEpicPermissionRole: () => "owner",
 }));
 
 vi.mock("@/lib/registries/chat-session-registry", () => ({

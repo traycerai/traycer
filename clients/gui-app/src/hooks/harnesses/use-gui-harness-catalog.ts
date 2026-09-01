@@ -530,7 +530,14 @@ const REFRESHABLE_CATALOG_METHODS = [
  * host started still needs a host restart, since the server's env is fixed
  * at spawn.)
  */
-export function useRefreshHarnessCatalog(): () => Promise<void> {
+export type HarnessCatalogRefreshOutcome =
+  | { readonly kind: "refreshed" }
+  | {
+      readonly kind: "unavailable";
+      readonly reason: "host-unresolved" | "rpc-endpoint-absent";
+    };
+
+export function useRefreshHarnessCatalog(): () => Promise<HarnessCatalogRefreshOutcome> {
   return useRefreshHarnessCatalogForClient(useHostClient());
 }
 
@@ -538,16 +545,24 @@ export function useRefreshHarnessCatalog(): () => Promise<void> {
  * Client-scoped catalog refresh: invalidates the catalog keys of the host
  * `client` targets, so the picker's refresh button re-fetches the catalog of
  * the host the composer runs on - never the app-wide active host's while a tab
- * or dialog is bound elsewhere. A `null` client (host not resolved yet) is a
- * no-op, matching the disabled queries it would otherwise refetch.
+ * or dialog is bound elsewhere. When the host identity or its RPC endpoint is
+ * absent, refresh returns an explicit unavailable outcome and deliberately
+ * leaves every query unmodified. Invalidating disabled catalog observers would
+ * retain the click until the endpoint appears and turn it into a deferred
+ * all-provider fan-out on the default host.
  */
 export function useRefreshHarnessCatalogForClient(
   client: HostClient<HostRpcRegistry> | null,
-): () => Promise<void> {
+): () => Promise<HarnessCatalogRefreshOutcome> {
   const queryClient = useQueryClient();
   return useCallback(async () => {
     const hostId = client?.getActiveHostId() ?? null;
-    if (hostId === null) return;
+    if (hostId === null) {
+      return { kind: "unavailable", reason: "host-unresolved" };
+    }
+    if ((client?.getActiveHost()?.websocketUrl ?? null) === null) {
+      return { kind: "unavailable", reason: "rpc-endpoint-absent" };
+    }
     getConditionPollEpisodeCoordinator(queryClient).resetQueryByKey(
       hostQueryKeys.method<HostRpcRegistry, "agent.gui.listHarnesses">(
         hostId,
@@ -565,6 +580,7 @@ export function useRefreshHarnessCatalogForClient(
         }),
       ),
     );
+    return { kind: "refreshed" };
   }, [client, queryClient]);
 }
 

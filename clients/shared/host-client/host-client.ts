@@ -9,10 +9,8 @@ import type {
 } from "../host-transport/host-messenger";
 import { HostRpcError as HostRpcErrorCtor } from "../host-transport/host-messenger";
 import type { HostDirectoryEntry } from "./host-directory";
-import {
-  HostBindingAuthorityRegistry,
-  StaleHostBindingAuthorityError,
-} from "./host-binding-authority-registry";
+import { StaleHostBindingAuthorityError } from "./host-binding-authority-error";
+import { HostBindingAuthorityRegistry } from "./host-binding-authority-registry";
 import {
   HostRequestCoordinator,
   type HostRequestAuthorityDomain,
@@ -83,9 +81,24 @@ export interface HostRequester<Registry extends VersionedRpcRegistry> {
   onChange(
     handler: (event: HostClientChangeEvent) => void,
   ): HostClientUnsubscribe;
+  /**
+   * Sends without an idempotency key. A command that needs retry safety must
+   * use {@link requestWithIdempotencyKey}; this path deliberately supplies
+   * `null` to the same implementation.
+   */
   request<Method extends keyof Registry & string>(
     method: Method,
     params: RequestOfMethod<Registry, Method>,
+  ): Promise<ResponseOfMethod<Registry, Method>>;
+  /**
+   * Selects the transport-key path explicitly. A non-null key gives a command
+   * a stable retry identity; `null` is the byte-equivalent no-key path used by
+   * {@link request}. Only the command queue may opt into a non-null key.
+   */
+  requestWithIdempotencyKey<Method extends keyof Registry & string>(
+    method: Method,
+    params: RequestOfMethod<Registry, Method>,
+    idempotencyKey: string | null,
   ): Promise<ResponseOfMethod<Registry, Method>>;
   requestWithSignal<Method extends keyof Registry & string>(
     method: Method,
@@ -329,14 +342,27 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
           return readActiveHostId;
         }
         if (property === "request") {
-          // A closure rather than a `bind` only because the trailing `signal`
-          // cannot be pre-bound; the entry is still captured HERE, at property
-          // access, so all four request members resolve at the same instant.
+          // The entry is captured HERE, at property access, so all four
+          // request members resolve at the same instant.
           const entry = resolveEntry();
           return <Method extends keyof Registry & string>(
             method: Method,
             params: RequestOfMethod<Registry, Method>,
-          ) => target.requestForWithSignal(entry, method, params, undefined);
+          ) => target.requestForWithIdempotencyKey(entry, method, params, null);
+        }
+        if (property === "requestWithIdempotencyKey") {
+          const entry = resolveEntry();
+          return <Method extends keyof Registry & string>(
+            method: Method,
+            params: RequestOfMethod<Registry, Method>,
+            idempotencyKey: string | null,
+          ) =>
+            target.requestForWithIdempotencyKey(
+              entry,
+              method,
+              params,
+              idempotencyKey,
+            );
         }
         if (property === "requestWithSignal") {
           return target.requestForWithSignal.bind(target, resolveEntry());
@@ -574,7 +600,7 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
     method: Method,
     params: RequestOfMethod<Registry, Method>,
   ): Promise<ResponseOfMethod<Registry, Method>> {
-    return this.requestWithSignal(method, params, undefined);
+    return this.requestWithIdempotencyKey(method, params, null);
   }
 
   async requestWithSignal<Method extends keyof Registry & string>(
@@ -585,6 +611,19 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
     // ∅: the spine addresses no host, so an unrouted request rejects at the
     // preflight. Callers reach a host through a requester.
     return this.requestForWithSignal(null, method, params, signal);
+  }
+
+  async requestWithIdempotencyKey<Method extends keyof Registry & string>(
+    method: Method,
+    params: RequestOfMethod<Registry, Method>,
+    idempotencyKey: string | null,
+  ): Promise<ResponseOfMethod<Registry, Method>> {
+    return this.requestForWithIdempotencyKey(
+      null,
+      method,
+      params,
+      idempotencyKey,
+    );
   }
 
   /**
@@ -657,7 +696,7 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
     method: Method,
     params: RequestOfMethod<Registry, Method>,
   ): Promise<ResponseOfMethod<Registry, Method>> {
-    return this.requestForWithSignal(entry, method, params, undefined);
+    return this.requestForWithIdempotencyKey(entry, method, params, null);
   }
 
   requestForWithSignal<Method extends keyof Registry & string>(
@@ -667,7 +706,32 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
     signal: AbortSignal | undefined,
   ): Promise<ResponseOfMethod<Registry, Method>> {
     return this.scheduleRequest(entry, method, params, signal, (authority) =>
-      this.messenger.request(method, params, authority),
+      this.messenger.request(method, params, {
+        idempotencyKey: null,
+        authority,
+        // Every dispatch this client originates is a caller's FIRST attempt.
+        // The replay requirement is raised one layer down, by
+        // `createRetryingMessenger`, and only for the attempts that follow a
+        // failure whose retryability a negotiated key earned.
+        replayMustBeKeyed: false,
+      }),
+    );
+  }
+
+  requestForWithIdempotencyKey<Method extends keyof Registry & string>(
+    entry: HostDirectoryEntry | null,
+    method: Method,
+    params: RequestOfMethod<Registry, Method>,
+    idempotencyKey: string | null,
+  ): Promise<ResponseOfMethod<Registry, Method>> {
+    return this.scheduleRequest(entry, method, params, undefined, (authority) =>
+      this.messenger.request(method, params, {
+        idempotencyKey,
+        authority,
+        // A key the CALLER supplied, which is not the same as a replay that
+        // requires one - see the sibling above.
+        replayMustBeKeyed: false,
+      }),
     );
   }
 
@@ -690,7 +754,11 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
         method,
         params,
         responseTimeoutMs,
-        authority,
+        {
+          idempotencyKey: null,
+          authority,
+          replayMustBeKeyed: false,
+        },
       ),
     );
   }

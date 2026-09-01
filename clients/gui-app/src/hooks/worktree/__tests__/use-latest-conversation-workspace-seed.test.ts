@@ -19,6 +19,9 @@ function chat(
     userId: null,
     hostId: "host-1",
     isTitleEditedByUser: false,
+    // Ordinary registry-backed chat - this suite exercises workspace-seed
+    // ordering, not doc residency.
+    docResident: false,
     archivedAt: null,
     settings: null,
   };
@@ -34,6 +37,7 @@ function terminalAgent(
     // An ordinary registry-backed agent - this suite exercises workspace-seed
     // ordering, not doc residency.
     docResident: false,
+    origin: "registry",
     harnessId: "claude",
     title: id,
     parentId: null,

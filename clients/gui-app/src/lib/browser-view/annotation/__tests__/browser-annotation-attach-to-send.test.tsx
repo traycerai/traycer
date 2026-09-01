@@ -127,6 +127,7 @@ function mountSubmit(args: {
       imagesUnsupported: false,
       attachmentPreparationPending: false,
       onSubmitMessage: args.onSubmitMessage,
+      onSideChat: null,
     }),
   );
 }
@@ -187,9 +188,11 @@ describe("browser annotation attach to send", () => {
       <BrowserAnnotationCard
         record={record}
         onRemove={null}
-        imageFetcher={() =>
-          Promise.resolve({ bytes: stub.png, mediaType: "image/png" })
-        }
+        imageFetcher={{
+          scopeKey: "test-scope",
+          fetch: () =>
+            Promise.resolve({ bytes: stub.png, mediaType: "image/png" }),
+        }}
         sessionObjectUrl={() => null}
       />,
     );

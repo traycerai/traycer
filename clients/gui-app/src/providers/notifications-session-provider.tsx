@@ -83,7 +83,7 @@ import {
 } from "@/lib/notifications";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
 import type {
-  HostNotificationEntryV21,
+  HostNotificationEntryV22,
   HostNotificationsEntityRef,
 } from "@traycer/protocol/host/notifications/contracts";
 import {
@@ -93,6 +93,7 @@ import {
 import { activationResultHandler } from "@/lib/notifications/notification-activation-result";
 import { occurrenceKeyForNotification } from "@/lib/notifications/notification-occurrence";
 import { NotificationConsumptionContext } from "@/components/notifications/notification-consumption-context";
+import { installNotificationChimeAudioWarmup } from "@/lib/notifications/notification-chime";
 
 export interface NotificationsSessionProviderProps {
   readonly children: ReactNode;
@@ -149,6 +150,7 @@ function upsertTargetsActiveEntity(
 export function NotificationsSessionProvider(
   props: NotificationsSessionProviderProps,
 ): ReactNode {
+  useEffect(() => installNotificationChimeAudioWarmup(), []);
   const hostClient = useHostClient();
   const servingHostEntry = useNotificationsServingHostEntry();
   const streamAuth = useStreamAuthRevalidator();
@@ -296,7 +298,7 @@ function NotificationsSessionBody(
   const recordCompletions = useCallback(
     (
       inputs: ReadonlyArray<{
-        readonly entry: HostNotificationEntryV21;
+        readonly entry: HostNotificationEntryV22;
         readonly originHostId: string;
         readonly semanticId: string;
       }>,

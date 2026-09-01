@@ -89,13 +89,13 @@ keyboard, and is still the end of a pairing that shows the code.
 - **The Keybindings SECTION** - chord capture is `window` `keydown` only
   (`chord-capture-core.tsx`): a tap arms the chip to "Press chord…" and nothing
   can commit it, and a binding clears only with Backspace.
-- **The Link a phone SECTION** - the one entry here that is a PRODUCT call
+- **The Link mobile app SECTION** - the one entry here that is a PRODUCT call
   rather than a capability limit, and the distinction is worth keeping. The
   panel DISPLAYS a QR and a one-time code for another device to read, and in
   the mobile app that device is the one holding the panel: the phone is the
   SCANNER (`layout/header/sign-in/link-code-sign-in.tsx` redeems a code this
-  panel mints, and its own copy says "On your desktop, open Settings → Link a
-  phone"). A phone _could_ show the code to a second phone; linking that way is
+  panel mints, and its own copy says "On your desktop, open Settings → Link
+  mobile app"). A phone _could_ show the code to a second phone; linking that way is
   given up knowingly, because a pairing surface that names the wrong end of
   itself costs more than the case it serves.
 
@@ -117,7 +117,7 @@ omitted section's own `beforeLoad` redirects to `/settings/general` with
 section is persisted across launches), and the palette's `help:keybindings`
 row, which is dropped rather than left as the one entry point that routes
 around the rest. Only Keybindings needs that last one; nothing navigates
-directly to Link a phone, so it gets no machinery it does not need.
+directly to Link mobile app, so it gets no machinery it does not need.
 
 The gate is by SHELL, not by attached hardware: an iPad running the mobile app
 with a keyboard paired loses the section, which is the accepted cost of
@@ -517,6 +517,50 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
     row that carried one was deleted along with the toggle, and the
     `SettingsRow` `risk` prop it was the sole consumer of was deleted with
     it.
+  - **Saved logins** (`browser-settings-section.tsx`'s second group,
+    `data-testid="settings-saved-logins"`): where website logins in the in-app
+    browser are kept, and the only place they can be turned off, forgotten, or
+    inspected per site. Keychain-refactor spec §7.3; the group renders NOTHING
+    without a `browserView` bridge (the web build), because every row is about
+    a machine's jar - nor without a host runtime (`useHostBinding()`, the
+    non-throwing accessor), since the list is a host's answer and both
+    destructive rows travel to hosts. That gate is on what RENDERS: the rows
+    live in their own component so the site-list query, which reaches
+    `useHostClient()` and would THROW with no provider, is never mounted
+    above it.
+    Saving is silent and on by default, Chrome-style - there is no consent
+    step, no status row and nothing to retry - so this group is passive: a
+    toggle, a destructive action, and a list.
+    - **Save website logins on this machine** is the desktop-local pref
+      (`useBrowserSaveLogins()`), not a settings-store field and not a host
+      value: it is a statement about THIS machine (decision #18), so it neither
+      syncs nor follows the scoped host. Off switches new and live `primary`
+      tiles onto a throwaway partition (they reload signed out) and leaves the
+      `persist:` jar on disk untouched - that is what Forget is for - so a
+      confirm stands in front of it and turning it back on returns to the same
+      logins. Nothing is copied in either direction.
+    - **Forget all browser logins** (destructive confirm) moved here from the
+      tile shield popover, which was ticket 08's temporary home. It calls the
+      module-level `forgetAllBrowserLogins()` on the sessions coordinator and
+      so speaks for EVERY host the user has a live browser stream to; that is
+      what "all" means, and it is why the action is not tile-scoped.
+      It answers whether any stream took the frame, and the confirm closes only
+      then - the same refusal the per-row Clear makes, so a click that reached
+      no host never reads as a completed forget.
+    - **Sites with saved logins** reads `browser.savedLoginSites` from the
+      surface's host (`useBrowserSavedLoginSitesQuery`) - registrable domains
+      and a relative last-seen, never values. The method is optional
+      (non-floor), so the query is gated on `useHostSupportsMethod` and a host
+      that never answered renders no list rather than an empty one. `sealed`
+      is NOT "no sites": it says the logins exist but this host cannot open
+      them until the desktop that wrapped its key connects, and it renders its
+      own hint. Per-row **Clear** sends the `clearSite { domain }` frame
+      (`clearSavedLoginSite()`) and refetches; the row is hidden optimistically
+      because the host merges asynchronously and the refetch behind the click
+      can still read the pre-clear slice. That optimism RELEASES itself: a
+      domain is hidden only while the latest response still names it (retired
+      from state during render), so signing back into a cleared site shows it
+      again instead of hiding it for the session.
   - **Running agents**: Prevent sleep while running
     (`prevent-sleep-settings-section.tsx`, hidden in the mobile app - see
     "Two different mobile questions"), Show global resources button, Show

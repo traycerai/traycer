@@ -12,6 +12,12 @@ import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link
 import { imageMutationKeys } from "@/lib/query-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import { cn } from "@/lib/utils";
+import { useFileSaveHost } from "@/hooks/files/use-file-save-host";
+import { useCanCopyImages } from "@/hooks/images/use-can-copy-images";
+import {
+  canDownloadToDevice,
+  hasSeparateDownloadRoute,
+} from "@/lib/files/save-blob-to-disk";
 
 import {
   type ImageAction,
@@ -39,13 +45,22 @@ const UntrustedSvgLightbox = lazy(() =>
 export function ImageLightbox(props: ImageLightboxProps): ReactNode {
   const openExternalLink = useRunnerOpenExternalLink();
   const contentRef = useRef<HTMLDivElement>(null);
+  const fileSave = useFileSaveHost();
   const openSaved = useOpenSavedFile();
   const alt = props.alt.length > 0 ? props.alt : "Image";
   const suggestedName =
     props.suggestedName ?? imageFileName(alt, props.src, props.mediaType);
   const remoteUrl = /^https:/i.test(props.src) ? props.src : null;
+  // Three facts, all required: the bytes must be local, the media type must be
+  // one the clipboard takes, and the SHELL must actually reach the system
+  // clipboard with an image - Android's WebView resolves that write having
+  // written nothing.
+  const canCopyOnShell = useCanCopyImages();
   const canCopy =
-    remoteUrl === null && isClipboardImageMediaType(props.mediaType);
+    remoteUrl === null &&
+    isClipboardImageMediaType(props.mediaType) &&
+    canCopyOnShell;
+  const canShare = hasSeparateDownloadRoute(fileSave);
 
   const imageAction = useMutation<void, Error, ImageAction>({
     mutationKey: imageMutationKeys.perform(),
@@ -56,6 +71,7 @@ export function ImageLightbox(props: ImageLightboxProps): ReactNode {
         mediaType: props.mediaType,
         suggestedName,
         openSaved: openSaved.mutate,
+        fileSave,
       }),
     onError: (error, action) =>
       toastFromRunnerError(error, `Failed to ${action} image`),
@@ -65,6 +81,8 @@ export function ImageLightbox(props: ImageLightboxProps): ReactNode {
     <ImageActions
       pendingAction={imageAction.isPending ? imageAction.variables : null}
       canCopy={canCopy}
+      canShare={canShare}
+      canDownload={canDownloadToDevice(fileSave)}
       remote={
         remoteUrl === null
           ? null
@@ -74,6 +92,7 @@ export function ImageLightbox(props: ImageLightboxProps): ReactNode {
             }
       }
       onCopy={() => imageAction.mutate("copy")}
+      onShare={() => imageAction.mutate("share")}
       onDownload={() => imageAction.mutate("download")}
     />
   );
@@ -90,9 +109,12 @@ export function ImageLightbox(props: ImageLightboxProps): ReactNode {
             {props.children}
           </button>
         </DialogTrigger>
+        {/* Hover is the disclosure on a fine pointer; a coarse pointer has no
+            hover state to reach it with, so the same bar is simply present
+            there - the app's standing answer for hover-gated chrome. */}
         <div
           role="presentation"
-          className="pointer-events-none absolute right-2 top-2 z-10 opacity-0 transition-opacity group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100 @max-[8rem]:bottom-1 @max-[8rem]:left-1 @max-[8rem]:right-auto @max-[8rem]:top-auto @max-[8rem]:pointer-events-auto @max-[8rem]:opacity-100 motion-reduce:transition-none"
+          className="pointer-events-none absolute right-2 top-2 z-10 opacity-0 transition-opacity group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100 @max-[8rem]:bottom-1 @max-[8rem]:left-1 @max-[8rem]:right-auto @max-[8rem]:top-auto @max-[8rem]:pointer-events-auto @max-[8rem]:opacity-100 motion-reduce:transition-none"
           onMouseDown={(event) => {
             event.preventDefault();
             event.stopPropagation();

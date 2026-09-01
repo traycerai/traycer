@@ -9,6 +9,10 @@ import type {
 } from "../host-stream-client";
 import type { IStreamSession } from "../i-stream-session";
 import type { ParamsOf, StreamMethodSupport } from "../ws-stream-client";
+import {
+  PLAN_RESTRICTED_FATAL_CODE,
+  planRestrictedClosedReason,
+} from "./config";
 import type { IRemoteSession } from "./remote-session";
 
 /** Monotonic source for `RemoteStreamClient.instanceId` (log correlation). */
@@ -29,10 +33,15 @@ export class RemoteStreamClient<
   StreamRegistry extends VersionedStreamRpcRegistry,
 > implements IHostStreamClient<StreamRegistry> {
   private readonly session: IRemoteSession<RpcRegistry, StreamRegistry>;
+  private readonly planRestrictedReprobeAt: () => number | null;
   readonly instanceId = `remote-stream-client-${nextRemoteStreamClientId++}`;
 
-  constructor(session: IRemoteSession<RpcRegistry, StreamRegistry>) {
+  constructor(
+    session: IRemoteSession<RpcRegistry, StreamRegistry>,
+    planRestrictedReprobeAt: () => number | null,
+  ) {
     this.session = session;
+    this.planRestrictedReprobeAt = planRestrictedReprobeAt;
   }
 
   subscribe<Method extends keyof StreamRegistry & string>(
@@ -58,9 +67,12 @@ export class RemoteStreamClient<
     return this.session.isClosed();
   }
 
-  /** Always `null`: the mux session exposes no closed-reason to report. */
   getClosedReason(): string | null {
-    return null;
+    if (this.session.terminalFatal()?.code !== PLAN_RESTRICTED_FATAL_CODE) {
+      return null;
+    }
+    const reprobeAt = this.planRestrictedReprobeAt();
+    return reprobeAt === null ? null : planRestrictedClosedReason(reprobeAt);
   }
 
   /**

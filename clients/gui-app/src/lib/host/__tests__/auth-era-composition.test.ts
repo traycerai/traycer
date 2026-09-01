@@ -677,7 +677,7 @@ describe("auth-era composition — an unverified session promotes to signed-in a
  * `buildDefaultRemoteFetcher`, on entries the production wiring actually
  * produced, for exactly that reason.
  */
-describe("auth-era composition — the plan is read from the object that owns the bearer", () => {
+describe("auth-era composition — remote hosts are available on every plan", () => {
   let restoreFetch: () => void = () => undefined;
 
   beforeEach(() => {
@@ -696,13 +696,12 @@ describe("auth-era composition — the plan is read from the object that owns th
     restoreFetch = () => undefined;
   });
 
-  it("reads an unknown plan as ALLOWED — no false upgrade prompt at a paying user mid-sign-in", () => {
+  it("allows remote hosts while the plan is still unknown", () => {
     const composition = buildComposition();
     expect(composition.auth.currentSubscriptionStatus()).toBeNull();
-    expect(composition.auth.planAllowsRemoteHosts()).toBe(true);
   });
 
-  it("projects a FREE account's LIVE host as plan-restricted, and the same row as dialable once the account is paid", async () => {
+  it("projects live hosts as dialable for both free and paid accounts", async () => {
     const endpoint = hostsEndpoint();
     restoreFetch = installFetch(endpoint.handler);
     const composition = buildComposition();
@@ -714,17 +713,13 @@ describe("auth-era composition — the plan is read from the object that owns th
       ]);
     });
 
-    // The registry row says `connectable` — the machine is up. The account is
-    // on the free plan, so the attach grant would 403 and the row must not be
-    // offered as dialable. Under the old wire this arrived as `local-only` and
-    // the client could not have told this apart from a dead host.
-    expect(composition.auth.planAllowsRemoteHosts()).toBe(false);
+    // The registry row says `connectable`, and subscription status does not
+    // change whether the route can be dialed.
     const [freeEntry] = await composition.directory.list();
-    expect(freeEntry.transportDialability).toBe("not-dialable");
-    expect(hostUnavailability(freeEntry)).toBe("plan-restricted");
+    expect(freeEntry.transportDialability).toBe("dialable");
+    expect(hostUnavailability(freeEntry)).toBeNull();
 
-    // The same registry shape, a paid account: the plan is the only thing that
-    // differs, and it is what makes the route usable.
+    // A paid account sees the same connectivity semantics.
     await composition.runnerHost.tokenStore.signIn(
       { token: TOKEN_B, refreshToken: `${TOKEN_B}-refresh` },
       { id: "user-b", email: "user-b@example.com", name: "User user-b" },
@@ -735,13 +730,12 @@ describe("auth-era composition — the plan is read from the object that owns th
       ]);
     });
 
-    expect(composition.auth.planAllowsRemoteHosts()).toBe(true);
     const [paidEntry] = await composition.directory.list();
     expect(paidEntry.transportDialability).toBe("dialable");
     expect(hostUnavailability(paidEntry)).toBeNull();
   });
 
-  it("clears the plan on sign-out, so no host list can be projected against the departed account's entitlement", async () => {
+  it("clears subscription status on sign-out without changing remote-host availability", async () => {
     const endpoint = hostsEndpoint();
     restoreFetch = installFetch(endpoint.handler);
     const composition = buildComposition();
@@ -753,7 +747,6 @@ describe("auth-era composition — the plan is read from the object that owns th
     await composition.auth.signOut();
 
     expect(composition.auth.currentSubscriptionStatus()).toBeNull();
-    expect(composition.auth.planAllowsRemoteHosts()).toBe(true);
   });
 });
 
@@ -789,16 +782,14 @@ describe("auth-era composition — auth state is committed before the transition
     const endpoint = hostsEndpoint();
     restoreFetch = installFetch(endpoint.handler);
     const composition = buildComposition();
-    // Start paid, transition to FREE: if subscription status is committed
-    // after the synchronous provider emission, the listener observes the
-    // outgoing paid entitlement alongside the incoming identity and bearer.
+    // Transition accounts to verify the identity and bearer are committed
+    // before the synchronous provider emission.
     await startSignedInAs(composition, TOKEN_B, "user-b");
 
     const observed: Array<{
       readonly emitted: string | null;
       readonly ambientIdentity: string | null;
       readonly ambientToken: string | null;
-      readonly ambientPlanAllowsRemote: boolean;
     }> = [];
     const unsubscribe = composition.auth
       .getRequestContextProvider()
@@ -811,7 +802,6 @@ describe("auth-era composition — auth state is committed before the transition
           emitted: ctx?.identity.userId ?? null,
           ambientIdentity: snapshot.profile?.userId ?? null,
           ambientToken: snapshot.token,
-          ambientPlanAllowsRemote: composition.auth.planAllowsRemoteHosts(),
         });
       });
 
@@ -833,13 +823,11 @@ describe("auth-era composition — auth state is committed before the transition
         emitted: "user-a",
         ambientIdentity: "user-a",
         ambientToken: TOKEN_A,
-        ambientPlanAllowsRemote: false,
       },
       {
         emitted: null,
         ambientIdentity: null,
         ambientToken: null,
-        ambientPlanAllowsRemote: true,
       },
     ]);
   });

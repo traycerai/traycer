@@ -1,5 +1,7 @@
+import type { PrLightItem } from "@traycer/protocol/host/pr-schemas";
 import type {
   WorktreeBinding,
+  WorktreeBindingOwnerKind,
   WorktreeHostEntryV12,
   WorktreePrState,
   WorktreeWorkspaceSummaryV14,
@@ -58,6 +60,50 @@ export function worktreePrReferences(
     if (seenUrls.has(reference.url)) return false;
     seenUrls.add(reference.url);
     return true;
+  });
+}
+
+/**
+ * Canonical owner -> PR projection for association UI. Unlike
+ * `worktreePrReferences`, this consumes the epic PR list's owner membership
+ * directly and therefore deliberately does not inherit the worktree listing's
+ * HEAD-validation and deletion-safety gates.
+ */
+export function ownerPrReferences(
+  items: readonly PrLightItem[],
+  ownerId: string,
+  ownerKind: WorktreeBindingOwnerKind,
+): readonly WorktreePrReference[] {
+  const seenUrls = new Set<string>();
+  return items.flatMap((item) => {
+    if (
+      item.base === null ||
+      item.prUrl === null ||
+      !item.owners.some(
+        (owner) => owner.ownerId === ownerId && owner.ownerKind === ownerKind,
+      ) ||
+      seenUrls.has(item.prUrl)
+    ) {
+      return [];
+    }
+    seenUrls.add(item.prUrl);
+    const prefix =
+      item.repoRole === "submodule" ? `${item.repoIdentifier.repo} ` : "";
+    return [
+      {
+        key: `${item.repoRole}:${item.base.prNumber}:${item.prUrl}`,
+        label: `${prefix}#${item.base.prNumber}`,
+        ariaLabel: `Open ${prefix}PR #${item.base.prNumber} ${PR_STATE_LABEL[item.state]}`,
+        state: item.state,
+        prNumber: item.base.prNumber,
+        url: item.prUrl,
+        githubHost: item.githubHost,
+        owner: item.base.owner,
+        repo: item.base.repo,
+        branch: item.headRefName,
+        worktreePath: item.linkGroupKey ?? "",
+      },
+    ];
   });
 }
 

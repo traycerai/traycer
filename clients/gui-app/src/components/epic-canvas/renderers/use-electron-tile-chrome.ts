@@ -8,8 +8,8 @@ import { normalizeBrowserAddressInput } from "@/lib/browser-view/link-routing/br
 import { ignoreError } from "@/lib/browser-view/ignore-error";
 import { isSameBrowserViewTile } from "@/lib/browser-view/tiles/browser-view-keys";
 import { useAddressDraft } from "@/components/epic-canvas/renderers/use-address-draft";
+import type { BrowserSessionProfileKind } from "@traycer/protocol/host/browser/contracts";
 import type {
-  BrowserCookieCryptoState,
   BrowserViewCertificateErrorChange,
   BrowserViewDownloadChange,
   BrowserViewElectronTabControlAction,
@@ -19,6 +19,7 @@ import type {
 } from "@traycer-clients/shared/platform/browser-view";
 
 interface UseElectronTabChromeArgs {
+  readonly profile: BrowserSessionProfileKind;
   readonly control: (
     action: BrowserViewElectronTabControlAction,
   ) => Promise<void>;
@@ -27,7 +28,6 @@ interface UseElectronTabChromeArgs {
   readonly initialUrl: string;
   readonly capabilities: TileChromeCapabilities;
   readonly annotation: BrowserAnnotationSessionController | null;
-  readonly cookieCryptoState: BrowserCookieCryptoState | null;
   readonly statusUrl: string;
   readonly canGoBack: boolean;
   readonly canGoForward: boolean;
@@ -57,13 +57,13 @@ export function useElectronTabChrome(
   args: UseElectronTabChromeArgs,
 ): ElectronTabChrome {
   const {
+    profile,
     control,
     surfaceServices,
     tileKey,
     initialUrl,
     capabilities,
     annotation,
-    cookieCryptoState,
     statusUrl,
     canGoBack,
     canGoForward,
@@ -178,6 +178,7 @@ export function useElectronTabChrome(
 
   const controller: TileController = {
     capabilities,
+    profile,
     url: liveUrl,
     addressValue,
     canGoBack,
@@ -185,7 +186,6 @@ export function useElectronTabChrome(
     zoomPercent,
     viewportPreset,
     disabled: false,
-    cookieCryptoState,
     zoomLocked: annotation?.zoomLocked === true,
     annotation,
     onNavigate: navigateToAddress,
@@ -207,6 +207,14 @@ export function useElectronTabChrome(
     onOpenDevTools: () => {
       void control({ kind: "openDevTools" }).catch(ignoreError);
     },
+    // The tile key is all that crosses: main derives the site from this tile's
+    // current URL, so a renderer cannot name a site it is not looking at.
+    onClearSite:
+      surfaceServices === null
+        ? null
+        : () => {
+            void surfaceServices.clearSite(tileKey).catch(ignoreError);
+          },
   };
 
   return {

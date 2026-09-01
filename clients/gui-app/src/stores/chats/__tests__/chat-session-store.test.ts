@@ -53,6 +53,8 @@ import {
   MAX_ACCEPTED_CHAT_ACTION_RECORDS,
   MAX_ERROR_NOTICE_RECORDS,
   createChatSessionStore,
+  dispatchedWorktreeIntentForDisplay,
+  projectQueueWithPendingCancellations,
   type ChatSessionStoreHandle,
   type SentChatMessageAction,
 } from "@/stores/chats/chat-session-store";
@@ -86,6 +88,7 @@ import {
 } from "@/stores/notifications/app-local-notifications-store";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
+import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
 /**
  * The plain text send these suites exercise: content in, no browser context,
@@ -338,9 +341,12 @@ class ProtocolMockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
     super({
       clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
+      // This endpoint resolves no host, so there is none to name.
+      hostId: null,
       endpoint: () => null,
       bearer: () => null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -381,6 +387,7 @@ function createHarness(): Harness {
   const sent: ChatSubscribeClientFrame[] = [];
   let callbacks: ChatStreamCallbacks | null = null;
   const handle = createChatSessionStore({
+    environment: CHAT_STORE_TEST_ENVIRONMENT,
     hostId: "host-a",
     epicId: EPIC_ID,
     chatId: CHAT_ID,
@@ -417,6 +424,7 @@ function createProtocolChainHarness(
   const mockWs = new ProtocolMockWsStreamClient(negotiatedVersion);
   const created: { client: ChatStreamClient | null } = { client: null };
   const handle = createChatSessionStore({
+    environment: CHAT_STORE_TEST_ENVIRONMENT,
     hostId: "host-a",
     epicId: EPIC_ID,
     chatId: CHAT_ID,
@@ -868,6 +876,7 @@ function assistantSteerMessage(
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
+    envCredentialVar: null,
     imageResolutions: [],
   };
 }
@@ -948,6 +957,7 @@ function persistedInterviewMessage(
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
+    envCredentialVar: null,
     imageResolutions: [],
   };
 }
@@ -1103,6 +1113,7 @@ describe("createChatSessionStore", () => {
     let lastCallbacks: ChatStreamCallbacks | null = null;
     let closeCalls = 0;
     const handle = createChatSessionStore({
+      environment: CHAT_STORE_TEST_ENVIRONMENT,
       hostId: "host-a",
       epicId: EPIC_ID,
       chatId: CHAT_ID,
@@ -1157,6 +1168,7 @@ describe("createChatSessionStore", () => {
   it("retry ignores callbacks from the stale stream client", () => {
     let lastCallbacks: ChatStreamCallbacks | null = null;
     const handle = createChatSessionStore({
+      environment: CHAT_STORE_TEST_ENVIRONMENT,
       hostId: "host-a",
       epicId: EPIC_ID,
       chatId: CHAT_ID,
@@ -1556,6 +1568,504 @@ describe("createChatSessionStore", () => {
         generation: 1,
       },
     });
+  });
+
+  // ─── The pre-restart runtime disposal is not an answer failure ───────────
+  //
+  // A Claude runtime torn down under a pending question leaves a coded `error`
+  // block in the SAME row as the interview. The host retires exactly that block
+  // when the answer settles, because the answer resumes on a fresh runtime. The
+  // fold below mirrors that projection so a client which already hydrated this
+  // (arbitrarily old) row sees it immediately, instead of keeping a red card
+  // under the answered question until some later frame happens to resend the
+  // row - which, on the windowed line, a bounded snapshot may never do.
+  function disposedInterviewRow(): Extract<Message, { role: "assistant" }> {
+    const persisted = persistedInterviewMessage({
+      deliveryId: "delivery-1",
+      status: "pending",
+      retryable: true,
+      generation: 0,
+    });
+    const interview = persisted.blocks[0];
+    if (interview.type !== "interview") throw new Error("Expected interview");
+    return {
+      ...persisted,
+      blocks: [
+        {
+          ...interview,
+          status: "streaming",
+          answers: [],
+          outcome: null,
+          settlement: null,
+          delivery: null,
+        },
+        {
+          type: "error",
+          blockId: "turn-1:unrelated-error",
+          status: "errored",
+          timestamp: 4,
+          message: "A tool call failed.",
+          recoverable: true,
+          code: "TOOL_EXECUTION_FAILED",
+        },
+        {
+          type: "error",
+          blockId: "turn-1",
+          status: "errored",
+          timestamp: 5,
+          message:
+            "Claude Code's session was torn down while this turn was still running. " +
+            "Send your message again to continue on a fresh session.",
+          recoverable: true,
+          code: "CLAUDE_RUNTIME_DISPOSED",
+        },
+        {
+          type: "error",
+          blockId: "queue-paused:message-1",
+          status: "completed",
+          timestamp: 6,
+          message:
+            "1 queued message was held because this turn ended with an error, and it was not sent. Resume the queue to send it.",
+          recoverable: true,
+          code: "QUEUE_PAUSED_AFTER_ERROR",
+        },
+      ],
+    };
+  }
+
+  function rowBlockShape(harness: Harness): ReadonlyArray<string> {
+    const message = harness.handle.store.getState().messages[0];
+    if (message.role !== "assistant") throw new Error("Expected assistant");
+    return message.blocks.map((block) =>
+      block.type === "error" ? `error:${block.code ?? "null"}` : block.type,
+    );
+  }
+
+  it("retires only the same-row runtime-disposal error when the interview is answered", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [disposedInterviewRow()],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+    expect(rowBlockShape(harness)).toEqual([
+      "interview",
+      "error:TOOL_EXECUTION_FAILED",
+      "error:CLAUDE_RUNTIME_DISPOSED",
+      "error:QUEUE_PAUSED_AFTER_ERROR",
+    ]);
+
+    callbacks.onInterviewAnswered({
+      kind: "interviewAnswered",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-delivery-retry",
+      answers: [
+        {
+          questionId: "q1",
+          question: "Which scope?",
+          values: ["Beta"],
+          notes: null,
+          selection: null,
+        },
+      ],
+      // Strictly after the disposal at 5: on this path the runtime died while
+      // the question was outstanding and the user answered afterwards, which is
+      // the chronology retirement requires.
+      resolvedAt: 10,
+      settlementId: "settlement-1",
+      settlementSource: "gui",
+      delivery: null,
+    });
+
+    const message = harness.handle.store.getState().messages[0];
+    const block =
+      message.role === "assistant"
+        ? message.blocks.find((candidate) => candidate.type === "interview")
+        : undefined;
+    expect(block).toMatchObject({ status: "completed", outcome: "answered" });
+    // The unrelated failure and the still-actionable queue-paused notice keep
+    // their places; only the coded disposal goes.
+    expect(rowBlockShape(harness)).toEqual([
+      "interview",
+      "error:TOOL_EXECUTION_FAILED",
+      "error:QUEUE_PAUSED_AFTER_ERROR",
+    ]);
+  });
+
+  it("keeps the runtime-disposal error when the interview settles unanswered", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [disposedInterviewRow()],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    callbacks.onInterviewErrored({
+      kind: "interviewErrored",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-delivery-retry",
+      reason: "No longer needed.",
+      resolvedAt: 5,
+      settlementId: "settlement-1",
+      settlementSource: "gui",
+      outcome: "failed",
+      draftAnswers: [],
+      delivery: null,
+    });
+
+    const message = harness.handle.store.getState().messages[0];
+    const block =
+      message.role === "assistant"
+        ? message.blocks.find((candidate) => candidate.type === "interview")
+        : undefined;
+    expect(block).toMatchObject({ status: "errored", outcome: "failed" });
+    // Nothing resumed, so the disposal is still the only account of why the
+    // prior turn stopped.
+    expect(rowBlockShape(harness)).toEqual([
+      "interview",
+      "error:TOOL_EXECUTION_FAILED",
+      "error:CLAUDE_RUNTIME_DISPOSED",
+      "error:QUEUE_PAUSED_AFTER_ERROR",
+    ]);
+  });
+
+  it("keeps a disposal that followed later work when the row's only interview settled before it", () => {
+    // Answering does not end the turn: the continuation streams more text into
+    // the same row, and only then is the runtime disposed. Position cannot tell
+    // this row from the one retirement is for - A is the nearest preceding
+    // interview either way - so the fold also compares chronology. A settled
+    // BEFORE the disposal, so the disposal is not about A.
+    //
+    // A stale or duplicate exact-settlement frame for A is the reachable
+    // trigger on this side: the effective block stays answered, so the fold
+    // re-runs on every one.
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const persisted = persistedInterviewMessage({
+      deliveryId: "delivery-1",
+      status: "pending",
+      retryable: true,
+      generation: 0,
+    });
+    const template = persisted.blocks[0];
+    if (template.type !== "interview") throw new Error("Expected interview");
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [
+        {
+          ...persisted,
+          blocks: [
+            // Accepted at 5 - but the block's own stamp has since DRIFTED to 9,
+            // past the disposal at 7. That is not corruption: the reducer
+            // advances the stamp on every contributing settlement, so a late
+            // losing cleanup or a delivery-generation bump moves it without
+            // touching the outcome. A stamp-based guard would read 9 > 7 and
+            // delete a truthful error; the canonical acceptance is what the
+            // frame carries as `resolvedAt`.
+            {
+              ...template,
+              blockId: "interview-a",
+              status: "completed",
+              timestamp: 9,
+              outcome: "answered",
+              settlement: { settlementId: "settlement-a", source: "gui" },
+              delivery: null,
+            },
+            {
+              type: "text",
+              blockId: "turn-1:text",
+              status: "completed",
+              timestamp: 6,
+              text: "Wiring up PostgreSQL now.",
+              providerNotice: null,
+            },
+            // Disposed at 7, after the work the answer released.
+            {
+              type: "error",
+              blockId: "turn-1",
+              status: "errored",
+              timestamp: 7,
+              message:
+                "Claude Code's session was torn down while this turn was still running. " +
+                "Send your message again to continue on a fresh session.",
+              recoverable: true,
+              code: "CLAUDE_RUNTIME_DISPOSED",
+            },
+          ],
+        },
+      ],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    // The exact settlement frame for A - a reconnect redelivering the same
+    // settlement it already applied.
+    callbacks.onInterviewAnswered({
+      kind: "interviewAnswered",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-a",
+      answers: [
+        {
+          questionId: "q1",
+          question: "Which scope?",
+          values: ["Alpha"],
+          notes: null,
+          selection: null,
+        },
+      ],
+      resolvedAt: 5,
+      settlementId: "settlement-a",
+      settlementSource: "gui",
+      delivery: null,
+    });
+
+    expect(rowBlockShape(harness)).toEqual([
+      "interview",
+      "text",
+      "error:CLAUDE_RUNTIME_DISPOSED",
+    ]);
+  });
+
+  it("keeps the disposal when a legacy lifecycle frame settles the block without settlement authority", () => {
+    // `settlementId` is nullable on the wire: a peer on the pre-settlement
+    // line sends a legacy tuple, and the fold's legacy branch settles the block
+    // to answered WITHOUT installing any authority. There is then nothing to
+    // confirm the frame's `resolvedAt` is this block's canonical acceptance, so
+    // the fold retains and waits for the host's authoritative row - the host
+    // has already made the durable decision either way.
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const persisted = persistedInterviewMessage({
+      deliveryId: "delivery-1",
+      status: "pending",
+      retryable: true,
+      generation: 0,
+    });
+    const template = persisted.blocks[0];
+    if (template.type !== "interview") throw new Error("Expected interview");
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [
+        {
+          ...persisted,
+          blocks: [
+            {
+              ...template,
+              blockId: "interview-a",
+              status: "streaming",
+              timestamp: 5,
+              answers: [],
+              outcome: null,
+              settlement: null,
+              delivery: null,
+            },
+            {
+              type: "error",
+              blockId: "turn-1",
+              status: "errored",
+              timestamp: 7,
+              message:
+                "Claude Code's session was torn down while this turn was still running. " +
+                "Send your message again to continue on a fresh session.",
+              recoverable: true,
+              code: "CLAUDE_RUNTIME_DISPOSED",
+            },
+          ],
+        },
+      ],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    callbacks.onInterviewAnswered({
+      kind: "interviewAnswered",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-a",
+      answers: [
+        {
+          questionId: "q1",
+          question: "Which scope?",
+          values: ["Beta"],
+          notes: null,
+          selection: null,
+        },
+      ],
+      // Comfortably after the disposal, so only the missing authority can be
+      // what holds the card.
+      resolvedAt: 20,
+      settlementId: null,
+      settlementSource: null,
+      delivery: null,
+    });
+
+    // The card still settles - this fold has never gated that on authority.
+    const message = harness.handle.store.getState().messages[0];
+    const block =
+      message.role === "assistant"
+        ? message.blocks.find((candidate) => candidate.type === "interview")
+        : undefined;
+    expect(block).toMatchObject({ status: "completed", outcome: "answered" });
+    expect(rowBlockShape(harness)).toEqual([
+      "interview",
+      "error:CLAUDE_RUNTIME_DISPOSED",
+    ]);
+  });
+
+  it("correlates the disposal to the nearest preceding interview when a row holds two", () => {
+    // The row is not an interview boundary: a provider turn can ask twice, and
+    // the accumulator appends both interview blocks to the same row. Here A is
+    // already answered, B is still streaming, and the disposal follows B - so
+    // it explains B, and an exact lifecycle frame for A must leave it alone.
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const persisted = persistedInterviewMessage({
+      deliveryId: "delivery-1",
+      status: "pending",
+      retryable: true,
+      generation: 0,
+    });
+    const template = persisted.blocks[0];
+    if (template.type !== "interview") throw new Error("Expected interview");
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [
+        {
+          ...persisted,
+          blocks: [
+            // A: answered, with its canonical settlement already recorded.
+            {
+              ...template,
+              blockId: "interview-a",
+              status: "completed",
+              outcome: "answered",
+              settlement: { settlementId: "settlement-a", source: "gui" },
+              delivery: null,
+            },
+            // B: still awaiting the user.
+            {
+              ...template,
+              blockId: "interview-b",
+              status: "streaming",
+              answers: [],
+              outcome: null,
+              settlement: null,
+              delivery: null,
+            },
+            {
+              type: "error",
+              blockId: "turn-1",
+              status: "errored",
+              timestamp: 6,
+              message:
+                "Claude Code's session was torn down while this turn was still running. " +
+                "Send your message again to continue on a fresh session.",
+              recoverable: true,
+              code: "CLAUDE_RUNTIME_DISPOSED",
+            },
+          ],
+        },
+      ],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    // An EXACT settlement frame for A - the strongest match the fold has - and
+    // it still must not reach B's disposal.
+    callbacks.onInterviewAnswered({
+      kind: "interviewAnswered",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-a",
+      answers: [
+        {
+          questionId: "q1",
+          question: "Which scope?",
+          values: ["Alpha"],
+          notes: null,
+          selection: null,
+        },
+      ],
+      resolvedAt: 7,
+      settlementId: "settlement-a",
+      settlementSource: "gui",
+      delivery: null,
+    });
+    expect(rowBlockShape(harness)).toEqual([
+      "interview",
+      "interview",
+      "error:CLAUDE_RUNTIME_DISPOSED",
+    ]);
+
+    // Answering B is what the disposal was waiting on.
+    callbacks.onInterviewAnswered({
+      kind: "interviewAnswered",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-b",
+      answers: [
+        {
+          questionId: "q1",
+          question: "Which scope?",
+          values: ["Beta"],
+          notes: null,
+          selection: null,
+        },
+      ],
+      resolvedAt: 8,
+      settlementId: "settlement-b",
+      settlementSource: "gui",
+      delivery: null,
+    });
+    expect(rowBlockShape(harness)).toEqual(["interview", "interview"]);
+  });
+
+  it("leaves the row untouched when the lifecycle frame names another interview", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [disposedInterviewRow()],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+    const before = harness.handle.store.getState().messages[0];
+
+    callbacks.onInterviewAnswered({
+      kind: "interviewAnswered",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "some-other-interview",
+      answers: [],
+      resolvedAt: 5,
+      settlementId: "settlement-other",
+      settlementSource: "gui",
+      delivery: null,
+    });
+
+    // Referential no-op: an unmatched frame must not rewrite the row, or every
+    // memoized row renderer downstream re-runs for nothing.
+    expect(harness.handle.store.getState().messages[0]).toBe(before);
   });
 
   it("installs lifecycle authority on a streaming block and ignores a stale settlement", () => {
@@ -2133,7 +2643,8 @@ describe("createChatSessionStore", () => {
 
   it("attaches a staged worktree intent to the send frame and consumes it", () => {
     const harness = createHarness();
-    emitSnapshot(harness.callbacks(), "owner");
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
     const key: WorktreeStagingKey = {
       surface: "owner",
       hostId: "host-a",
@@ -2196,6 +2707,67 @@ describe("createChatSessionStore", () => {
     const pendingEchoes = harness.handle.store.getState().pendingUserMessages;
     expect(pendingEchoes).toHaveLength(1);
     expect(pendingEchoes[0]?.messageId).toBe(frame.messageId);
+
+    const stagingKeyId = worktreeStagingKeyString(key);
+    const consumedClientActionId =
+      useWorktreeIntentStagingStore.getState().consumedForDispatchByKey[
+        stagingKeyId
+      ]?.clientActionId ?? null;
+    expect(consumedClientActionId).toBe(frame.clientActionId);
+    const displayIntent = (): WorktreeIntent | null => {
+      const state = harness.handle.store.getState();
+      return dispatchedWorktreeIntentForDisplay(
+        state.pendingActions,
+        state.acceptedActions,
+        consumedClientActionId,
+      );
+    };
+    expect(displayIntent()).toEqual(intent);
+
+    callbacks.onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: frame.clientActionId,
+      action: "send",
+      status: "accepted",
+      reason: null,
+      code: null,
+      backgroundStopTaskIds: [],
+    });
+    // An ack does not end the bridge: queued sends can be accepted long before
+    // their deferred worktree creation begins.
+    expect(displayIntent()).toEqual(intent);
+
+    callbacks.onMessageAccepted({
+      kind: "messageAccepted",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      message: {
+        role: "user",
+        messageId: frame.messageId,
+        sender: { type: "user", userId: OWNER_ID },
+        message: {
+          kind: "user",
+          content: CONTENT,
+          browserAnnotations: [],
+        },
+        timestamp: 2,
+        sessionAnchor: null,
+      },
+    });
+    // Host ordering guarantees the replacement binding was published before
+    // the message entered the transcript, so retained action bookkeeping must
+    // no longer override it.
+    expect(displayIntent()).toBeNull();
+    // Windowed transcript eviction must not resurrect the overlay. Accepted
+    // action records intentionally outlive hydrated rows for recovery, so the
+    // display lifetime is recorded on the action rather than re-derived from
+    // the current transcript window.
+    harness.handle.store.setState({ messages: [] });
+    expect(displayIntent()).toBeNull();
   });
 
   it("restores a staged worktree intent when the send is rejected", () => {
@@ -3729,9 +4301,16 @@ describe("createChatSessionStore", () => {
     expect(
       harness.handle.store.getState().acceptedActions[frame.clientActionId],
     ).toBeUndefined();
+    expect(
+      harness.handle.store.getState().pendingActions[frame.clientActionId],
+    ).toMatchObject({ messageConfirmedByHost: true });
+
+    // The window may evict the row before the action ack lands. The pending
+    // action must retain the host sighting independently of hydration.
+    harness.handle.store.setState({ messages: [] });
 
     // ...then the ack lands and the record is BORN. The transcript already
-    // holds the message, and the birth must say so.
+    // recorded the message, and the birth must say so even after eviction.
     acceptLastAction(harness);
     expect(
       harness.handle.store.getState().acceptedActions[frame.clientActionId],
@@ -6780,6 +7359,146 @@ describe("createChatSessionStore", () => {
     });
   });
 
+  it("projects pending queue cancellations and rolls them back on rejection or reconnect", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const queuedItem = {
+      kind: "managed-command" as const,
+      queueItemId: "queue-command-1",
+      commandId: "command-1",
+      description: "bun test --watch",
+      monitoring: true,
+      delivery: "next_turn" as const,
+      targetTurnId: null,
+      status: "pending" as const,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const emitQueuedSnapshot = (): void => {
+      emitSnapshotFrame({
+        callbacks,
+        access: "owner",
+        messages: [],
+        queue: { status: "running", items: [queuedItem] },
+        pendingFileEditApprovals: [],
+      });
+    };
+    const visibleQueueItemIds = (): string[] => {
+      const state = harness.handle.store.getState();
+      return projectQueueWithPendingCancellations(
+        state.queue,
+        state.pendingActions,
+        state.acceptedActions,
+      ).items.map((item) => item.queueItemId);
+    };
+
+    emitQueuedSnapshot();
+    const rejectedActionId = harness.handle.store
+      .getState()
+      .queueCancel(queuedItem.queueItemId);
+    expect(rejectedActionId).not.toBeNull();
+    expect(
+      harness.handle.store.getState().pendingActions[rejectedActionId ?? ""],
+    ).toMatchObject({
+      action: "queueCancel",
+      queueItemId: queuedItem.queueItemId,
+    });
+    expect(visibleQueueItemIds()).toEqual([]);
+
+    rejectLastAction(harness, "This delivery can no longer be cancelled.");
+    expect(visibleQueueItemIds()).toEqual([queuedItem.queueItemId]);
+
+    expect(
+      harness.handle.store.getState().queueCancel(queuedItem.queueItemId),
+    ).not.toBeNull();
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitQueuedSnapshot();
+    expect(harness.handle.store.getState().pendingActions).toEqual({});
+    expect(visibleQueueItemIds()).toEqual([queuedItem.queueItemId]);
+
+    expect(
+      harness.handle.store.getState().queueCancel(queuedItem.queueItemId),
+    ).not.toBeNull();
+    acceptLastAction(harness);
+    expect(visibleQueueItemIds()).toEqual([]);
+    callbacks.onQueueChanged({
+      kind: "queueChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      queue: { status: "idle", items: [] },
+    });
+    expect(visibleQueueItemIds()).toEqual([]);
+  });
+
+  it("retains an accepted queue cancellation while the accepted-action cap is full", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const queuedItem = {
+      kind: "managed-command" as const,
+      queueItemId: "queue-command-cap",
+      commandId: "command-cap",
+      description: "bun test --watch",
+      monitoring: true,
+      delivery: "next_turn" as const,
+      targetTurnId: null,
+      status: "pending" as const,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "running", items: [queuedItem] },
+      pendingFileEditApprovals: [],
+    });
+
+    for (let index = 0; index < MAX_ACCEPTED_CHAT_ACTION_RECORDS; index += 1) {
+      const actionId = harness.handle.store.getState().resumeQueue();
+      if (actionId === null) throw new Error("Expected resume action");
+      acceptLastAction(harness);
+    }
+
+    const cancelActionId = harness.handle.store
+      .getState()
+      .queueCancel(queuedItem.queueItemId);
+    if (cancelActionId === null)
+      throw new Error("Expected queue cancel action");
+    acceptLastAction(harness);
+
+    const state = harness.handle.store.getState();
+    expect(state.acceptedActions[cancelActionId]).toMatchObject({
+      action: "queueCancel",
+      queueItemId: queuedItem.queueItemId,
+    });
+    expect(
+      projectQueueWithPendingCancellations(
+        state.queue,
+        state.pendingActions,
+        state.acceptedActions,
+      ).items,
+    ).toEqual([]);
+
+    callbacks.onQueueChanged({
+      kind: "queueChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      queue: { status: "idle", items: [] },
+    });
+    expect(
+      harness.handle.store.getState().acceptedActions[cancelActionId],
+    ).toBeUndefined();
+    expect(
+      projectQueueWithPendingCancellations(
+        harness.handle.store.getState().queue,
+        harness.handle.store.getState().pendingActions,
+        harness.handle.store.getState().acceptedActions,
+      ).items,
+    ).toEqual([]);
+  });
+
   it("retains accepted send records when pruning accepted action records by cap", () => {
     const harness = createHarness();
     emitSnapshot(harness.callbacks(), "owner");
@@ -9454,6 +10173,7 @@ describe("createChatSessionStore", () => {
           usage: null,
           reasoningEffort: null,
           serviceTier: null,
+          envCredentialVar: null,
           imageResolutions: [],
         },
       ],
@@ -10202,6 +10922,7 @@ describe("createChatSessionStore", () => {
               usage: null,
               reasoningEffort: null,
               serviceTier: null,
+              envCredentialVar: null,
               imageResolutions: [],
             },
           ],
@@ -10346,6 +11067,7 @@ describe("createChatSessionStore", () => {
               usage: null,
               reasoningEffort: null,
               serviceTier: null,
+              envCredentialVar: null,
               imageResolutions: [],
             },
             persistedUserMessage("message-split-steered"),
@@ -10372,6 +11094,7 @@ describe("createChatSessionStore", () => {
               usage: null,
               reasoningEffort: null,
               serviceTier: null,
+              envCredentialVar: null,
               imageResolutions: [],
             },
           ],
@@ -11523,6 +12246,7 @@ function createCoalesceHarness(): CoalesceHarness {
   const manual = createManualCoordinator();
   let callbacks: ChatStreamCallbacks | null = null;
   const handle = createChatSessionStore({
+    environment: CHAT_STORE_TEST_ENVIRONMENT,
     hostId: "host-a",
     epicId: EPIC_ID,
     chatId: CHAT_ID,
@@ -11638,6 +12362,7 @@ function settleTurnAndEvictItsRow(callbacks: ChatStreamCallbacks): void {
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
+    envCredentialVar: null,
     imageResolutions: [],
   };
   emitSnapshotFrame({
@@ -11921,6 +12646,7 @@ describe("surface visibility rollup", () => {
       }),
     };
     const handle = createChatSessionStore({
+      environment: CHAT_STORE_TEST_ENVIRONMENT,
       hostId: "host-a",
       epicId: EPIC_ID,
       chatId: CHAT_ID,
@@ -12363,6 +13089,7 @@ describe("createChatSessionStore - persisted auth-error provider nudge", () => {
       usage: null,
       reasoningEffort: null,
       serviceTier: null,
+      envCredentialVar: null,
       imageResolutions: [],
     };
   }
@@ -12377,6 +13104,7 @@ describe("createChatSessionStore - persisted auth-error provider nudge", () => {
     let nudges = 0;
     let callbacks: ChatStreamCallbacks | null = null;
     const handle = createChatSessionStore({
+      environment: CHAT_STORE_TEST_ENVIRONMENT,
       hostId: "host-a",
       epicId: EPIC_ID,
       chatId: CHAT_ID,
@@ -12551,6 +13279,7 @@ describe("createChatSessionStore - persisted auth-error provider nudge", () => {
         usage: null,
         reasoningEffort: null,
         serviceTier: null,
+        envCredentialVar: null,
         imageResolutions: [],
       },
     ]);

@@ -13,7 +13,6 @@ import type {
   ManagedBrowserView,
 } from "../browser-view-port";
 import type {
-  BrowserViewElectronTabHandoffChange,
   BrowserViewCertificateErrorChange,
   BrowserViewDownloadChange,
   BrowserViewFindChange,
@@ -33,8 +32,8 @@ import { ANNOTATION_BINDING_NAME } from "../annotation/browser-annotation-overla
 import type {
   BrowserSessionCertificateErrorChange,
   BrowserSessionDownloadChange,
+  BrowserSessionProfileRequest,
 } from "../browser-session";
-import type { BrowserStorageStateCaptureResult } from "../storage/browser-storage-state";
 
 type BrowserViewManagerOptions = ConstructorParameters<
   typeof BrowserViewManager
@@ -620,13 +619,13 @@ interface Harness {
   readonly downloads: BrowserViewDownloadChange[];
   readonly certificateErrors: BrowserViewCertificateErrorChange[];
   readonly openTileRequests: BrowserViewOpenTileRequest[];
-  readonly electronTabHandoffNotifications: BrowserViewElectronTabHandoffChange[];
-  readonly electronTabHandoffWindowIds: string[];
   readonly snapshotInvalidations: BrowserViewSnapshotInvalidatedChange[];
   readonly annotationEvents: BrowserAnnotationSessionIpcEvent[];
   readonly annotationAttached: BrowserAnnotationAttachedIpcEvent[];
   readonly rendererResetWindowIds: string[];
   readonly primaryProfileObservedUrls: string[];
+  readonly releasedIsolatedSessions: BrowserSessionProfileRequest[];
+  readonly viewProfileRequests: BrowserSessionProfileRequest[];
   readonly registeredPopupWebContents: BrowserViewPopupWebContents[];
   emitDownload(change: BrowserSessionDownloadChange): void;
   emitCertificateError(change: BrowserSessionCertificateErrorChange): void;
@@ -634,26 +633,10 @@ interface Harness {
 }
 
 type HarnessOptions = {
-  readonly captureStorageState?: BrowserViewManagerOptions["captureStorageState"];
-  readonly notifyElectronTabHandoff?: (
-    windowId: string,
-    change: BrowserViewElectronTabHandoffChange,
-  ) => boolean;
   readonly boundsStreamLogIntervalMs?: number;
   readonly hostPlatform?: "darwin" | "other";
   readonly requireLoadedTargetForPageCommands?: boolean;
 };
-
-const DEFAULT_CAPTURE_STORAGE_STATE: BrowserViewManagerOptions["captureStorageState"] =
-  (_input, _webContents): Promise<BrowserStorageStateCaptureResult> =>
-    Promise.resolve({
-      storageState: { cookies: [], origins: [] },
-      cookieCount: 0,
-      cookieDomains: [],
-      localStorageCount: 0,
-      localStorageAvailable: true,
-      localStorageReason: null,
-    });
 
 /**
  * `send` is channel-keyed and payload-agnostic by design, so the harness
@@ -706,14 +689,13 @@ function createHarnessWithOptions(
   const downloads: BrowserViewDownloadChange[] = [];
   const certificateErrors: BrowserViewCertificateErrorChange[] = [];
   const openTileRequests: BrowserViewOpenTileRequest[] = [];
-  const electronTabHandoffNotifications: BrowserViewElectronTabHandoffChange[] =
-    [];
-  const electronTabHandoffWindowIds: string[] = [];
   const snapshotInvalidations: BrowserViewSnapshotInvalidatedChange[] = [];
   const annotationEvents: BrowserAnnotationSessionIpcEvent[] = [];
   const annotationAttached: BrowserAnnotationAttachedIpcEvent[] = [];
   const rendererResetWindowIds: string[] = [];
   const primaryProfileObservedUrls: string[] = [];
+  const releasedIsolatedSessions: BrowserSessionProfileRequest[] = [];
+  const viewProfileRequests: BrowserSessionProfileRequest[] = [];
   const registeredPopupWebContents: BrowserViewPopupWebContents[] = [];
   const windowListeners = new Set<() => void>();
   const downloadListeners = new Set<
@@ -724,7 +706,8 @@ function createHarnessWithOptions(
   >();
   let nextWebContentsId = 1;
   const options: BrowserViewManagerOptions = {
-    createView: () => {
+    createView: (request) => {
+      viewProfileRequests.push(request);
       const view = new FakeBrowserView(
         nextWebContentsId,
         harnessOptions?.requireLoadedTargetForPageCommands ?? false,
@@ -791,29 +774,17 @@ function createHarnessWithOptions(
         case RunnerHostEvent.browserViewAnnotationAttached:
           record(annotationAttached, payload);
           return true;
-        case RunnerHostEvent.browserViewElectronTabHandoff: {
-          const change =
-            asPayload<BrowserViewElectronTabHandoffChange>(payload);
-          const delivered =
-            harnessOptions?.notifyElectronTabHandoff?.(windowId, change) ??
-            true;
-          if (!delivered) return false;
-          electronTabHandoffWindowIds.push(windowId);
-          electronTabHandoffNotifications.push(change);
-          return true;
-        }
         default:
           throw new Error(`unexpected browser-view channel: ${channel}`);
       }
     },
     seedStorageState: () => Promise.resolve(),
-    captureStorageState: (input, webContents) => {
-      return (
-        harnessOptions?.captureStorageState ?? DEFAULT_CAPTURE_STORAGE_STATE
-      )(input, webContents);
-    },
-    observePrimaryProfileOrigin: (url) => {
+    observePrimaryProfileOrigin: (url, _webContents, profile) => {
+      if (profile !== "primary") return;
       primaryProfileObservedUrls.push(url);
+    },
+    releaseSessionStorage: (request) => {
+      releasedIsolatedSessions.push(request);
     },
     boundsStreamLogIntervalMs:
       harnessOptions?.boundsStreamLogIntervalMs ?? 1000,
@@ -831,13 +802,13 @@ function createHarnessWithOptions(
     downloads,
     certificateErrors,
     openTileRequests,
-    electronTabHandoffNotifications,
-    electronTabHandoffWindowIds,
     snapshotInvalidations,
     annotationEvents,
     annotationAttached,
     rendererResetWindowIds,
     primaryProfileObservedUrls,
+    releasedIsolatedSessions,
+    viewProfileRequests,
     registeredPopupWebContents,
     emitDownload: (change) => {
       for (const listener of downloadListeners) listener(change);
@@ -851,7 +822,7 @@ function createHarnessWithOptions(
   };
 }
 
-/** Flush the async closeEntry → electron-tab handoff → capture chain. */
+/** Flush the async closeEntry → native teardown chain. */
 async function flushCloseEntry(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
@@ -882,6 +853,7 @@ async function attachNativeTab(
     sessionId: "session-1",
     tabId: key.pageSessionId,
     requestedUrl,
+    profile: "primary",
     seedStorageState: null,
   });
   await harness.manager.acceptTab(capability);
@@ -907,7 +879,7 @@ async function attachNativeTab(
 }
 
 describe("BrowserViewManager primary profile observation", () => {
-  it("observes a committed main-frame URL once", async () => {
+  it("observes each committed main-frame URL, and nothing a mere load emits", async () => {
     const harness = createHarness();
     const { view } = await attachNativeTab(
       harness,
@@ -916,19 +888,101 @@ describe("BrowserViewManager primary profile observation", () => {
       "https://first.example/",
     );
 
+    // `did-navigate` is the event the entry factory actually registers for a
+    // committed main-frame navigation - the only path into the observation
+    // plane.
     view.webContents.emit(
-      "did-frame-navigate",
+      "did-navigate",
       {},
-      "https://duplicate.example/",
+      "https://second.example/",
       200,
       "OK",
-      true,
     );
+    await Promise.resolve();
+    // A load finishing is not a commit and adds nothing.
     view.webContents.emit("did-finish-load");
+    await Promise.resolve();
 
     expect(harness.primaryProfileObservedUrls).toEqual([
       "https://first.example/",
+      "https://second.example/",
     ]);
+  });
+});
+
+describe("BrowserViewManager isolated sessions", () => {
+  const ISOLATED_SESSION = "session-private";
+
+  function ensureIsolated(
+    harness: Harness,
+    tabId: string,
+  ): Promise<BrowserViewNativeTabCapability> {
+    return harness.manager.ensureTab("window-1", {
+      hostId: "host-1",
+      sessionId: ISOLATED_SESSION,
+      tabId,
+      requestedUrl: `https://example.com/${tabId}`,
+      profile: "isolated",
+      seedStorageState: null,
+    });
+  }
+
+  it("opens isolated guests on their own jar and releases it with the last tab", async () => {
+    const harness = createHarness();
+    const first = await ensureIsolated(harness, "tab-1");
+    const second = await ensureIsolated(harness, "tab-2");
+    await harness.manager.acceptTab(first);
+    await harness.manager.acceptTab(second);
+
+    // Both tabs of one isolated session share the one per-session partition.
+    expect(harness.viewProfileRequests).toEqual([
+      { profile: "isolated", sessionId: ISOLATED_SESSION },
+      { profile: "isolated", sessionId: ISOLATED_SESSION },
+    ]);
+
+    const view = harness.views[0];
+    if (view === undefined) throw new Error("expected native guest");
+    // A real committed navigation, through the event the factory registers -
+    // so what this pins is the profile filter, not a listener that was never
+    // there.
+    view.webContents.emit(
+      "did-navigate",
+      {},
+      "https://private.example/",
+      200,
+      "OK",
+    );
+    await Promise.resolve();
+    // The private jar is invisible to the primary-profile capture plane.
+    expect(harness.primaryProfileObservedUrls).toEqual([]);
+
+    await harness.manager.releaseTab(first);
+    await flushCloseEntry();
+    expect(harness.releasedIsolatedSessions).toEqual([]);
+
+    await harness.manager.releaseTab(second);
+    await flushCloseEntry();
+    expect(harness.releasedIsolatedSessions).toEqual([
+      { profile: "isolated", sessionId: ISOLATED_SESSION },
+    ]);
+  });
+
+  it("keeps a primary session's shared jar when its last tab closes", async () => {
+    const harness = createHarness();
+    const capability = await harness.manager.ensureTab("window-1", {
+      hostId: "host-1",
+      sessionId: "session-shared",
+      tabId: "tab-1",
+      requestedUrl: "https://example.com/shared",
+      profile: "primary",
+      seedStorageState: null,
+    });
+    await harness.manager.acceptTab(capability);
+
+    await harness.manager.releaseTab(capability);
+    await flushCloseEntry();
+
+    expect(harness.releasedIsolatedSessions).toEqual([]);
   });
 });
 
@@ -942,6 +996,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
       sessionId: "session-1",
       tabId: "tab-1",
       requestedUrl: "https://example.com/target",
+      profile: "primary",
       seedStorageState: {
         cookies: [],
         origins: [
@@ -993,6 +1048,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
       sessionId: "session-1",
       tabId: "tab-1",
       requestedUrl: "https://example.com/",
+      profile: "primary",
       seedStorageState: null,
     });
     const view = harness.views[0];
@@ -1035,6 +1091,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
       sessionId: "session-1",
       tabId: "tab-1",
       requestedUrl: "https://example.com/",
+      profile: "primary",
       seedStorageState: null,
     } as const;
     const ready = await harness.manager.ensureTab("window-1", input);
@@ -1079,6 +1136,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
     const ready = await harness.manager.ensureTab("window-1", {
       ...nativeKey,
       requestedUrl: "https://example.com/",
+      profile: "primary",
       seedStorageState: null,
     });
     const view = harness.views[0];
@@ -1111,6 +1169,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
     const ready = await harness.manager.ensureTab("window-1", {
       ...nativeKey,
       requestedUrl: "https://example.com/",
+      profile: "primary",
       seedStorageState: null,
     });
     const view = harness.views[0];
@@ -1200,6 +1259,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
     const ready = await harness.manager.ensureTab("window-1", {
       ...nativeKey,
       requestedUrl: "https://example.com/",
+      profile: "primary",
       seedStorageState: null,
     });
     const view = harness.views[0];
@@ -1285,6 +1345,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
     const ensureInput = {
       ...nativeKey,
       requestedUrl: "https://example.com/",
+      profile: "primary",
       seedStorageState: null,
     } as const;
     const ready = await harness.manager.ensureTab("window-1", ensureInput);
@@ -1310,7 +1371,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
 
     harness.manager.dispose();
     await flushCloseEntry();
-    expect(harness.electronTabHandoffWindowIds).toEqual(["window-2"]);
+    expect(view.webContents.closeCalls).toBe(1);
   });
 
   it("transfers a provisioning tab's lifecycle lease before awaiting readiness", async () => {
@@ -1320,6 +1381,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
       sessionId: "session-1",
       tabId: "tab-1",
       requestedUrl: "https://example.com/",
+      profile: "primary",
       seedStorageState: null,
     } as const;
     const firstEnsure = harness.manager.ensureTab("window-1", ensureInput);
@@ -1363,6 +1425,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
       sessionId: "session-1",
       tabId: "tab-1",
       requestedUrl: "https://example.com/",
+      profile: "primary",
       seedStorageState: null,
     } as const;
     const provisioned = await harness.manager.ensureTab("window-1", input);
@@ -1405,6 +1468,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
     const ensureInput = {
       ...nativeKey,
       requestedUrl: "https://example.com/",
+      profile: "primary" as const,
       seedStorageState: null,
     };
 
@@ -1568,16 +1632,14 @@ describe("BrowserViewManager native tab lifecycle", () => {
     ).toBe(0);
   });
 
-  it("serializes ensure behind an in-flight close for the same native identity", async () => {
-    const capture = Promise.withResolvers<BrowserStorageStateCaptureResult>();
-    const harness = createHarnessWithOptions({
-      captureStorageState: () => capture.promise,
-    });
+  it("gives a re-ensure of a released identity a fresh incarnation, never the destroyed guest", async () => {
+    const harness = createHarness();
     const input = {
       hostId: "host-1",
       sessionId: "session-1",
       tabId: "tab-1",
       requestedUrl: "https://example.com/",
+      profile: "primary" as const,
       seedStorageState: null,
     };
     const ready = await harness.manager.ensureTab("window-1", input);
@@ -1585,8 +1647,6 @@ describe("BrowserViewManager native tab lifecycle", () => {
     const firstView = harness.views[0];
     if (firstView === undefined) throw new Error("expected native guest");
 
-    const handoff = harness.manager.handoff.drainForWindow("window-1");
-    await flushCloseEntry();
     const firstRelease = harness.manager.releaseTab({
       hostId: input.hostId,
       sessionId: input.sessionId,
@@ -1601,64 +1661,34 @@ describe("BrowserViewManager native tab lifecycle", () => {
     });
     const replacement = harness.manager.ensureTab("window-1", input);
 
-    expect(harness.views).toHaveLength(1);
-    expect(firstView.webContents.closeCalls).toBe(0);
-
-    capture.resolve({
-      storageState: { cookies: [], origins: [] },
-      cookieCount: 0,
-      cookieDomains: [],
-      localStorageCount: 0,
-      localStorageAvailable: true,
-      localStorageReason: null,
-    });
+    // Destroying a guest is ATOMIC: the incarnation leaves the registry in the
+    // same turn the first release claims it, so only the first release finds
+    // one and the duplicate reports `false`.
     await expect(
-      Promise.all([handoff, firstRelease, duplicateRelease]),
-    ).resolves.toEqual([undefined, true, true]);
-    await expect(replacement).resolves.toMatchObject({
+      Promise.all([firstRelease, duplicateRelease]),
+    ).resolves.toEqual([true, false]);
+    const replaced = await replacement;
+    expect(replaced).toMatchObject({
       hostId: input.hostId,
       sessionId: input.sessionId,
       tabId: input.tabId,
     });
+    // The durable identity is reused; the native incarnation behind it is not.
+    // A re-ensure that restored the destroyed guest is the failure this
+    // guards - the entry must be gone from the registry, not merely marked.
+    expect(replaced.registrationId).not.toBe(ready.registrationId);
     expect(firstView.webContents.closeCalls).toBe(1);
     expect(harness.views).toHaveLength(2);
   });
 
-  it("leaves a native handoff retryable when renderer delivery fails", async () => {
-    let rendererAvailable = false;
-    const harness = createHarnessWithOptions({
-      notifyElectronTabHandoff: () => rendererAvailable,
-    });
-    const provisioned = await harness.manager.ensureTab("window-1", {
-      hostId: "host-1",
-      sessionId: "session-1",
-      tabId: "tab-1",
-      requestedUrl: "https://example.com/",
-      seedStorageState: null,
-    });
-    await harness.manager.acceptTab(provisioned);
-
-    await expect(
-      harness.manager.handoff.drainForWindow("window-1"),
-    ).rejects.toThrow("Electron tab handoff could not be delivered");
-    expect(harness.electronTabHandoffNotifications).toEqual([]);
-
-    rendererAvailable = true;
-
-    await expect(
-      harness.manager.handoff.drainForWindow("window-1"),
-    ).resolves.toBeUndefined();
-    expect(harness.electronTabHandoffNotifications).toHaveLength(1);
-    harness.manager.dispose();
-  });
-
-  it("hands off and closes only native sessions owned by the closing window", async () => {
+  it("closes only the native sessions owned by the closing window", async () => {
     const harness = createHarness();
     const closing = await harness.manager.ensureTab("window-1", {
       hostId: "host-1",
       sessionId: "session-closing",
       tabId: "tab-closing",
       requestedUrl: "https://example.com/closing",
+      profile: "primary",
       seedStorageState: null,
     });
     const remaining = await harness.manager.ensureTab("window-2", {
@@ -1666,6 +1696,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
       sessionId: "session-remaining",
       tabId: "tab-remaining",
       requestedUrl: "https://example.com/remaining",
+      profile: "primary",
       seedStorageState: null,
     });
     await harness.manager.acceptTab(closing);
@@ -1673,13 +1704,6 @@ describe("BrowserViewManager native tab lifecycle", () => {
 
     expect(harness.manager.hasNativeTabsForWindow("window-1")).toBe(true);
     expect(harness.manager.hasNativeTabsForWindow("window-2")).toBe(true);
-
-    await harness.manager.handoff.drainForWindow("window-1");
-    expect(harness.electronTabHandoffWindowIds).toEqual(["window-1"]);
-    expect(harness.electronTabHandoffNotifications[0]).toMatchObject({
-      sessionId: "session-closing",
-      tabId: "tab-closing",
-    });
 
     await harness.manager.closeNativeSessionsForWindow("window-1");
     expect(harness.views[0]?.webContents.closeCalls).toBe(1);
@@ -1690,63 +1714,60 @@ describe("BrowserViewManager native tab lifecycle", () => {
     await flushCloseEntry();
   });
 
-  it("hands off a detached native tab by exact identity and incarnation", async () => {
+  it("recreates only accepted primary guests when the saved-logins jar changes", async () => {
+    // The re-placement mechanism is the teardown itself: the host suspends the
+    // session to dormant and re-materializes the same durable tab on whichever
+    // jar the pref now names. An isolated guest's jar is throwaway and never
+    // reaches the persistent partition, and an unaccepted guest has no durable
+    // route to be revived through - tearing either down would only destroy a
+    // session nothing brings back.
     const harness = createHarness();
-    const ready = await harness.manager.ensureTab("window-1", {
+    const accepted = await harness.manager.ensureTab("window-1", {
       hostId: "host-1",
       sessionId: "session-1",
-      tabId: "tab-1",
+      tabId: "primary-tab",
       requestedUrl: "https://example.com/",
+      profile: "primary",
       seedStorageState: null,
     });
-    await harness.manager.acceptTab(ready);
+    await harness.manager.acceptTab(accepted);
+    const isolated = await harness.manager.ensureTab("window-1", {
+      hostId: "host-1",
+      sessionId: "session-2",
+      tabId: "isolated-tab",
+      requestedUrl: "https://example.com/private",
+      profile: "isolated",
+      seedStorageState: null,
+    });
+    await harness.manager.acceptTab(isolated);
+    await harness.manager.ensureTab("window-1", {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "provisional-tab",
+      requestedUrl: "https://example.com/provisional",
+      profile: "primary",
+      seedStorageState: null,
+    });
 
-    harness.manager.dispose();
+    const migrated =
+      await harness.manager.recreateNativeTabsOnCurrentPartition();
     await flushCloseEntry();
 
-    expect(harness.electronTabHandoffNotifications).toEqual([
-      {
-        hostId: "host-1",
-        sessionId: "session-1",
-        tabId: "tab-1",
-        registrationId: ready.registrationId,
-        capturedUrl: "https://example.com/",
-        capturedStorageState: { cookies: [], origins: [] },
-        siblingTabs: [],
-        reason: "gui-quit",
-      },
+    expect(migrated).toHaveLength(1);
+    expect(harness.views.map((view) => view.webContents.closeCalls)).toEqual([
+      1, 0, 0,
     ]);
-  });
-
-  it("reads the live document URL when handing off a native tab", async () => {
-    const harness = createHarness();
-    const ready = await harness.manager.ensureTab("window-1", {
-      hostId: "host-1",
-      sessionId: "session-1",
-      tabId: "tab-1",
-      requestedUrl: "https://example.com/",
-      seedStorageState: null,
-    });
-    await harness.manager.acceptTab(ready);
-    const view = harness.views[0];
-    if (view === undefined) throw new Error("expected native guest");
-
-    await view.webContents.loadURL("https://www.thecapitalgrille.com/");
     harness.manager.dispose();
-    await flushCloseEntry();
-
-    expect(harness.electronTabHandoffNotifications[0]?.capturedUrl).toBe(
-      "https://www.thecapitalgrille.com/",
-    );
   });
 
-  it("excludes an unaccepted sibling from session handoff", async () => {
+  it("destroys every guest on dispose, accepted or still provisional", async () => {
     const harness = createHarness();
     const accepted = await harness.manager.ensureTab("window-1", {
       hostId: "host-1",
       sessionId: "session-1",
       tabId: "accepted-tab",
       requestedUrl: "https://example.com/accepted",
+      profile: "primary",
       seedStorageState: null,
     });
     await harness.manager.acceptTab(accepted);
@@ -1755,17 +1776,15 @@ describe("BrowserViewManager native tab lifecycle", () => {
       sessionId: "session-1",
       tabId: "provisional-tab",
       requestedUrl: "https://example.com/provisional",
+      profile: "primary",
       seedStorageState: null,
     });
 
     harness.manager.dispose();
     await flushCloseEntry();
 
-    expect(harness.electronTabHandoffNotifications).toHaveLength(1);
-    expect(harness.electronTabHandoffNotifications[0]).toMatchObject({
-      tabId: "accepted-tab",
-      siblingTabs: [],
-    });
+    // Native teardown only: the host suspends the session to dormant when the
+    // route goes away, so nothing here reports a durable tab as closed.
     expect(harness.views.map((view) => view.webContents.closeCalls)).toEqual([
       1, 1,
     ]);
@@ -1778,6 +1797,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
       sessionId: "session-1",
       tabId: "provisional-tab",
       requestedUrl: "https://example.com/provisional",
+      profile: "primary",
       seedStorageState: null,
     });
     const accepted = await harness.manager.ensureTab("window-1", {
@@ -1785,6 +1805,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
       sessionId: "session-1",
       tabId: "accepted-tab",
       requestedUrl: "https://example.com/accepted",
+      profile: "primary",
       seedStorageState: null,
     });
     await harness.manager.acceptTab(accepted);
@@ -1809,6 +1830,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
     const ready = await harness.manager.ensureTab("window-1", {
       ...nativeKey,
       requestedUrl: "https://example.com/",
+      profile: "primary",
       seedStorageState: null,
     });
     const view = harness.views[0];
@@ -1867,6 +1889,8 @@ describe("BrowserViewManager native tab lifecycle", () => {
       { x: -300, y: -200, width: 300, height: 200 },
     ]);
     expect(view.visible).toBe(true);
+
+    harness.manager.pip.stop();
   });
 
   it("holds and releases the compositor lease for an unbound PiP tab", async () => {
@@ -1879,6 +1903,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
     const ready = await harness.manager.ensureTab("window-1", {
       ...nativeKey,
       requestedUrl: "https://example.com/",
+      profile: "primary",
       seedStorageState: null,
     });
     const view = harness.views[0];

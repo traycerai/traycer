@@ -14,8 +14,12 @@ import { describe, expect, it } from "vitest";
 // provider module: electron-updater ships no `exports` map, so these resolve
 // under both `moduleResolution: bundler` and the esbuild bundle - and the
 // values are the REAL ones, which is the point of a contract test.
-import { parseUpdateInfo } from "electron-updater/out/providers/Provider";
+import {
+  findFile,
+  parseUpdateInfo,
+} from "electron-updater/out/providers/Provider";
 import { DownloadedUpdateHelper } from "electron-updater/out/DownloadedUpdateHelper";
+import type { ResolvedUpdateFileInfo } from "electron-updater/out/types";
 
 /**
  * Vendored-source contracts at the pinned electron-updater.
@@ -271,5 +275,65 @@ describe("electron-updater 6.8.9 vendored contracts", () => {
     expect(source).toContain("result = (0, js_yaml_1.load)(rawData);");
     expect(source).toContain("return result;");
     expect(source).not.toMatch(/return \{[^}]*version:/u);
+  });
+
+  // `findFile` reads the installer's EXTENSION out of `url.pathname`, twice -
+  // once to filter for the wanted one, once to exclude the unwanted. A feed
+  // whose file URLs carry no filename satisfies neither test, and the fallback
+  // is `files[0]`. This is the whole of the Linux defect: `_DebUpdater` asked
+  // for a `.deb`, got the AppImage that happens to be first in
+  // `latest-linux.yml`, and ran `dpkg -i` on it.
+  //
+  // EXECUTED against the real `findFile`, not text-matched, and asserted in
+  // both directions so the fix is pinned alongside the bug.
+  describe("findFile resolves the installer by pathname extension", () => {
+    // The exact arguments `_DebUpdater.doDownloadUpdate` passes.
+    function pickDeb(
+      files: ResolvedUpdateFileInfo[],
+    ): ResolvedUpdateFileInfo | null | undefined {
+      return findFile(files, "deb", ["AppImage", "rpm", "pacman"]);
+    }
+
+    const LINUX_ARTIFACTS = [
+      "traycer-desktop-linux-x86_64.AppImage",
+      "traycer-desktop-linux-x86_64.deb",
+    ] as const;
+
+    // The manifest half (`info.url`) is identical in both cases; only the
+    // resolved `url` differs, which is exactly the difference the token makes.
+    function filesAt(
+      urlFor: (name: string, index: number) => string,
+    ): ResolvedUpdateFileInfo[] {
+      return LINUX_ARTIFACTS.map((name, index) => ({
+        url: new URL(urlFor(name, index)),
+        info: { url: name, sha512: "abc" },
+      }));
+    }
+
+    it("falls through to files[0] when the URLs are asset-API ids", () => {
+      // The private/authenticated shape: an opaque id, no filename anywhere in
+      // the pathname.
+      const files = filesAt(
+        (_name, index) =>
+          `https://api.github.com/repos/traycerai/traycer/releases/assets/${index + 1}`,
+      );
+
+      const picked = pickDeb(files);
+
+      // Not the `.deb` that was asked for - the AppImage, purely because it is
+      // listed first.
+      expect(picked?.info.url).toBe("traycer-desktop-linux-x86_64.AppImage");
+    });
+
+    it("picks the .deb once the URLs are browser-download URLs", () => {
+      const files = filesAt(
+        (name) =>
+          `https://github.com/traycerai/traycer/releases/download/desktop-v1.2.0/${name}`,
+      );
+
+      const picked = pickDeb(files);
+
+      expect(picked?.info.url).toBe("traycer-desktop-linux-x86_64.deb");
+    });
   });
 });

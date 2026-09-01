@@ -10,6 +10,7 @@ import {
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { subscribeAnyHostRowChanged } from "@traycer-clients/shared/host-client/host-connection-registry";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
+import { planRestrictedReprobeAtFromClosedReason } from "@traycer-clients/shared/host-transport/remote/config";
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { useHostBinding } from "@/lib/host/runtime";
@@ -251,6 +252,19 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
     let backoffTimer: number | null = null;
     const rebuild = (): void => {
       if (teardownInProgressRef.current) return;
+      const planRestrictedReprobeAt = planRestrictedReprobeAtFromClosedReason(
+        client.getClosedReason(),
+      );
+      if (planRestrictedReprobeAt !== null) {
+        backoffTimer = window.setTimeout(
+          () => {
+            backoffTimer = null;
+            setRebuildNonce((nonce) => nonce + 1);
+          },
+          Math.max(0, planRestrictedReprobeAt - Date.now()),
+        );
+        return;
+      }
       const delayMs = rebuildBackoff.nextRebuildDelayMs(Date.now());
       appLogger.warn(
         "[stream] app stream client closed underneath the provider - rebuilding",
