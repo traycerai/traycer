@@ -5,6 +5,7 @@ import {
   render,
   screen,
   waitFor,
+  type RenderResult,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -112,7 +113,9 @@ function clientWithPolicy(
   return spine.createRequester(mockLocalHostEntry);
 }
 
-function renderSection(client: HostClient<HostRpcRegistry> | null): void {
+function renderSection(
+  client: HostClient<HostRpcRegistry> | null,
+): RenderResult {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -121,7 +124,7 @@ function renderSection(client: HostClient<HostRpcRegistry> | null): void {
       <TooltipProvider>{props.children}</TooltipProvider>
     </QueryClientProvider>
   );
-  render(
+  return render(
     <Wrapper>
       <WorktreeAutoCleanupSection
         scope={hostScopeFixture({
@@ -219,6 +222,37 @@ describe("WorktreeAutoCleanupSection", () => {
     ).toContain("Next check: paused");
     // Nothing to press: every pause arm clears without the user acting.
     expect(screen.queryByRole("button", { name: /re-?authorize/i })).toBeNull();
+  });
+
+  it("shows the history button only once automatic cleanup is on or has ever run", async () => {
+    // Fresh host, never enabled, never evaluated: a history button would point
+    // at an empty list, and the history is automatic runs only - manual
+    // deletions never appear in it.
+    const { unmount } = renderSection(
+      clientWithPolicy({
+        get: () => policyFixture({}),
+        set: (r) => policyFixture(r),
+      }),
+    );
+    await waitFor(() => {
+      screen.getByRole("switch", { name: "Automatic cleanup" });
+    });
+    expect(
+      screen.queryByRole("button", { name: /automatic cleanup history/i }),
+    ).toBeNull();
+    unmount();
+
+    // Disabled AFTER it ran: the record of what was deleted must stay
+    // reachable - turning the policy off is when someone comes looking.
+    renderSection(
+      clientWithPolicy({
+        get: () => policyFixture({ enabled: false, lastEvaluatedAt: 1_000 }),
+        set: (r) => policyFixture(r),
+      }),
+    );
+    await waitFor(() => {
+      screen.getByRole("button", { name: /automatic cleanup history/i });
+    });
   });
 
   it("renders an upcoming check as a countdown, never as a past-tense label", async () => {

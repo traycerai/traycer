@@ -214,14 +214,35 @@ function AutoCleanupControls(props: {
           {AUTO_CLEANUP_PAUSED_COPY[policy.pausedReason]}
         </p>
       ) : null}
-      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/40 px-3.5 py-2">
-        {policy !== null && policy.enabled ? (
-          <AutoCleanupSchedule policy={policy} />
-        ) : (
-          <span className="text-ui-xs text-muted-foreground">
-            Cleanup is off. Nothing is deleted automatically on this host.
-          </span>
-        )}
+      <AutoCleanupFooter policy={policy} onOpenHistory={onOpenHistory} />
+    </div>
+  );
+}
+
+/** The schedule line and the history entry point. */
+function AutoCleanupFooter(props: {
+  readonly policy: WorktreeAutoCleanupPolicyState | null;
+  readonly onOpenHistory: () => void;
+}): ReactNode {
+  const { policy, onOpenHistory } = props;
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/40 px-3.5 py-2">
+      {policy !== null && policy.enabled ? (
+        <AutoCleanupSchedule policy={policy} />
+      ) : (
+        <span className="text-ui-xs text-muted-foreground">
+          Cleanup is off. Nothing is deleted automatically on this host.
+        </span>
+      )}
+      {policy !== null &&
+      (policy.enabled || policy.lastEvaluatedAt !== null) ? (
+        // History records AUTOMATIC runs only, so the button earns its spot
+        // when the policy is on or has ever run. Gated on `lastEvaluatedAt`
+        // rather than `enabled` alone: turning cleanup OFF after it deleted
+        // things is exactly when someone comes looking for the record, and
+        // every pass writes a run row, so a non-null last evaluation means
+        // there is history to show. A fresh, never-enabled host shows no
+        // button pointing at an empty list.
         <Button
           type="button"
           variant="outline"
@@ -230,9 +251,9 @@ function AutoCleanupControls(props: {
           onClick={onOpenHistory}
         >
           <History className="size-4" />
-          <span>Cleanup history</span>
+          <span>Automatic cleanup history</span>
         </Button>
-      </div>
+      ) : null}
     </div>
   );
 }

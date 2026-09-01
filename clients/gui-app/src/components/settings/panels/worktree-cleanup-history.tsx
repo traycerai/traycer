@@ -80,7 +80,7 @@ export function WorktreeCleanupHistory(props: {
           <span>Worktrees</span>
         </Button>
         <span className="min-w-0 truncate text-ui-sm font-medium text-foreground">
-          Cleanup history
+          Automatic cleanup history
         </span>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
