@@ -246,6 +246,9 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
     const response = await messenger.request(method, params, {
       idempotencyKey: null,
       authority,
+      // A caller's FIRST attempt. The replay requirement is raised by the
+      // `createRetryingMessenger` wrapper above, per failure, not here.
+      replayMustBeKeyed: false,
     });
     logger.debug("Host RPC completed", {
       environment: config.environment,
