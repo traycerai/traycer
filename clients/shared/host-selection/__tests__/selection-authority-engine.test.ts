@@ -919,6 +919,47 @@ describe("SelectionAuthorityEngineImpl - death aggregation", () => {
 
     authority.dispose();
   });
+
+  it("refreshes the reprobe deadline when a new physical session is denied", () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: null,
+        hosts: [fleetHost("H", "remote")],
+      },
+      initialIdentityKey: "acct-1",
+      clock,
+    });
+    const { engine } = authority;
+    const seq = engine.allocateAttachSeq("A");
+    const attachment = engine.attach("A", attachRequest(seq, []));
+    if (!attachment.ok) throw new Error("expected attach to succeed");
+
+    engine.ingestEvidence(
+      "A",
+      attachment.incarnationId,
+      dialRefusal("H", "first-identity", "plan-restricted", 0),
+    );
+    clock.advance(PLAN_RESTRICTED_REPROBE_MS / 2);
+    engine.ingestEvidence(
+      "A",
+      attachment.incarnationId,
+      dialRefusal("H", "new-physical-identity", "plan-restricted", 1),
+    );
+
+    // The first deadline has elapsed, but the latest authenticated refusal
+    // owns a complete window of its own.
+    clock.advance(PLAN_RESTRICTED_REPROBE_MS / 2);
+    expect(findLease(engine.snapshot().leases, "H")?.dead).toEqual({
+      reason: "plan-restricted",
+    });
+
+    clock.advance(PLAN_RESTRICTED_REPROBE_MS / 2);
+    expect(findLease(engine.snapshot().leases, "H")?.status).toBe("connecting");
+
+    authority.dispose();
+  });
 });
 
 describe("SelectionAuthorityEngineImpl - session pairing", () => {

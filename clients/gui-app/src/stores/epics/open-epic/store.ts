@@ -148,6 +148,17 @@ export interface EpicRuntimeBinding {
 export interface OpenEpicStoreOptions {
   readonly epicId: string;
   /**
+   * What to do when the host's plan-denial deadline says this session's
+   * transport is worth probing again.
+   *
+   * Injected because the store CANNOT do it. Upstream's version of
+   * `retryTransport` closed and reopened the stream client the store owned;
+   * this store owns no client - the worker holds them over a proxied
+   * transport, and the session provider owns the socket - so a transport
+   * reopen here is a new SESSION, which is the provider's to build.
+   */
+  readonly onRetryTransport: () => void;
+  /**
    * The spawned runtime. Constructed by the session provider, because the
    * worker needs the session's real stream client and this store never had one.
    */
@@ -512,6 +523,18 @@ export interface OpenEpicState {
    * Y.Doc replica without dropping the owning registry/session entry.
    */
   requestFreshSnapshot: () => void;
+  /**
+   * Asks the session's owner to rebuild this epic's transport, after the
+   * host's plan-denial deadline says it is worth probing again.
+   *
+   * A REQUEST, and a refusable one. Upstream's version of this reopened the
+   * stream client in place and so preserved the replica and buffered edits;
+   * here a rebuild is a new session, so this refuses outright while the
+   * session holds unsynced edits rather than trading them for a reconnect.
+   * A clean session rebuilds silently - no failure is presented for
+   * something the user did not do.
+   */
+  retryTransport: () => void;
   /**
    * Sends a `retryMigration` client frame so the host re-runs an
    * interrupted major migration without dropping the `epic.subscribe`
@@ -957,6 +980,7 @@ export interface OpenEpicStoreHandle {
    */
   readonly detachTransport: () => void;
   readonly requestFreshSnapshot: () => void;
+  readonly retryTransport: () => void;
   /**
    * True when this renderer has a loaded, locally clean snapshot and can
    * still reach the host. Cloud acknowledgement is intentionally not part of
@@ -1617,6 +1641,37 @@ export function createOpenEpicStore(
           requestFreshSnapshot: () => {
             runtime.command({ kind: "request-fresh-snapshot", payload: {} });
           },
+
+          retryTransport: () => {
+            // Ended covers BOTH exits: a disposed handle has nothing to
+            // rebuild, and a detached one is frozen by contract ("takes no
+            // further input").
+            if (sessionEndedReason !== null) return;
+            const state = get();
+            // THE DATA-LOSS GATE, and the reason this is not upstream's
+            // implementation. That one closed and reopened the stream client
+            // the store itself owned, so the replica and the buffered edits
+            // survived underneath it. This store owns no client - the worker
+            // holds them over a proxied transport and the provider owns the
+            // socket - so a retry here is a NEW session, and nothing persists
+            // the replica or the unsynced queue. Rebuilding a dirty session
+            // would therefore destroy the only copy of those edits, which is
+            // the rule `session-registry` states as "never evict a session
+            // holding unsynced edits" and whose violation is on record as the
+            // F10 data loss.
+            //
+            // Gated on `isDirty` + pending writes rather than on `isClean()`,
+            // deliberately, and for the reason the registry gives at its own
+            // re-point gate: `isClean()` ALSO requires an open transport,
+            // which a plan-denied one has by definition lost - so it reads
+            // false for every session this can ever be called about and the
+            // rebuild would never once fire. `snapshotLoaded` is excluded for
+            // the same shape of reason: a session that never loaded has
+            // nothing to lose, and requiring it would block exactly the
+            // sessions this exists to recover.
+            if (state.isDirty || state.writeCommands.length > 0) return;
+            options.onRetryTransport();
+          },
           retryMigration: () => {
             runtime.command({ kind: "retry-migration", payload: {} });
           },
@@ -2181,6 +2236,9 @@ export function createOpenEpicStore(
     hotArtifactRoomIdsForTests: () => bodyDocs.residentDocKeys(),
     requestFreshSnapshot: () => {
       store.getState().requestFreshSnapshot();
+    },
+    retryTransport: () => {
+      store.getState().retryTransport();
     },
     isClean: () => {
       const state = store.getState();

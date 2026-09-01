@@ -69,6 +69,7 @@ import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id
 import { shouldMergeEpicRoomSwap } from "@/lib/epics/epic-room-swap";
 import { armCarriesRootWrites } from "@/stores/epics/open-epic/runtime/epic-adapter-selection";
 import { ESTABLISHING_DEADLINE_MS } from "@/lib/host/bounded-load-budgets";
+import { attachPlanRestrictedReprobe } from "@/lib/host/owned-durable-stream-client";
 import { openEpicKey } from "@/lib/persist";
 import { adoptLegacyPersistedKey } from "@/lib/persist/zustand-persist-lifecycle";
 import { useImportedUnseenStore } from "@/stores/session-import/imported-unseen-store";
@@ -617,9 +618,22 @@ export function EpicSessionProvider(
       const transport = openTransport(targetHostId);
       const wsStreamClient = transport.wsStreamClient;
       let transportClosed = false;
+      // Filled once the handle exists, because the recovery IS the handle's
+      // `retryTransport`. Held in a slot rather than passed in because the
+      // subscription has to be live before then: the negative-cache adoption
+      // path can hand back an ALREADY-closed client, and `onClosed` does not
+      // retro-fire, so a deadline that landed during construction would be
+      // lost if this attached afterwards.
+      let reprobeHandle: OpenEpicStoreHandle | null = null;
+      const detachReprobe = attachPlanRestrictedReprobe(wsStreamClient, () => {
+        reprobeHandle?.retryTransport();
+      });
       const closeSessionTransport = (): void => {
         if (transportClosed) return;
         transportClosed = true;
+        // Before `transport.close()`, so the timer cannot outlive the socket
+        // it exists to rebuild.
+        detachReprobe();
         transport.close();
       };
       // EVERY construction between opening the transport and returning a
@@ -832,6 +846,25 @@ export function EpicSessionProvider(
           epicId,
           userId: sessionUserId,
           accounting,
+          // The rebuild half of the plan-denial reprobe. The store decides
+          // WHETHER (it owns the dirtiness that makes a rebuild lossy here);
+          // this decides HOW, because the transport is the provider's.
+          //
+          // Retiring and re-acquiring rather than reconnecting: the closed
+          // client cannot acquire the negative cache's controlled fresh
+          // session, which is the whole reason the deadline exists. Marking
+          // the handle dead is what lets the acquire pass RETIRE it - without
+          // it that pass sees `current.hostId === targetHostId` and re-presents
+          // this same closed handle as `ready`, which is the failure mode the
+          // worker-fatal path above records for the user's own Retry.
+          //
+          // No presentation is written here. A clean session rebuilding after
+          // a deadline the user never saw should not flash a failure at them;
+          // the acquire pass presents `establishing` on its own.
+          onRetryTransport: () => {
+            liveness.dead = true;
+            setRetryGeneration((generation) => generation + 1);
+          },
           runtime: {
             port: runtimeWorker.port,
             command: (command) => {
@@ -919,6 +952,11 @@ export function EpicSessionProvider(
         // stamp is what routes RPCs and capability answers to the host that owns
         // the stream (F1).
         handleHostIds.set(handle, targetHostId);
+        // Armed now that there is something to rebuild. `retryTransport` is
+        // the handle's, not `created`'s: the wrapper is what owns this
+        // session's transport close, and a reprobe that rebuilt the inner
+        // store would leave the socket behind.
+        reprobeHandle = handle;
         // The same cell the fatal relay above writes, so a death that happened
         // before this line is already recorded on the handle the moment it
         // exists.

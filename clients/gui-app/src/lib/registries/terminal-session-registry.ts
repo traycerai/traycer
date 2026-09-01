@@ -190,6 +190,7 @@ export function useTerminalSessionHandle(
       }
     }
 
+    let acquiredHandle: TerminalSessionStoreHandle | null = null;
     const factory: TerminalStreamClientFactory = (streamArgs) => {
       if (streamClientFactoryOverride !== null) {
         return streamClientFactoryOverride(streamArgs);
@@ -212,6 +213,7 @@ export function useTerminalSessionHandle(
             viewer: streamArgs.viewer,
             callbacks: streamArgs.callbacks,
           }),
+        () => acquiredHandle?.store.getState().retryTransport(),
       );
       return {
         sendAction: (frame) => result.client.sendAction(frame),
@@ -235,6 +237,7 @@ export function useTerminalSessionHandle(
       },
       args.hostId,
     );
+    acquiredHandle = next;
     handleHostIds.set(next, args.hostId);
     handleOwnerIdentityKeys.set(next, ownerIdentityKey);
     setHandle(next);

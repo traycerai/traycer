@@ -124,6 +124,19 @@ export interface OpenedStoreForTest extends OpenEpicStoreHandle {
    */
   readonly runtime: EpicReplicaRuntime;
   readonly workerPort: RuntimeWorkerPort;
+  /**
+   * How many times the store has asked its owner to rebuild the transport.
+   *
+   * The harness answers `onRetryTransport` itself instead of taking it as a
+   * per-suite option, and that is not the "defaults hide which suites depend
+   * on a path" shortcut `writeCommand` above refuses. There is exactly one
+   * thing a test can do with this callback: production's implementation tears
+   * the session down and builds a new one, which is the SESSION PROVIDER's
+   * job and something this harness has no counterpart for. So the request is
+   * the whole observable - `retryTransport` is a request the store may
+   * refuse, and the refusal is what its data-loss gate exists to produce.
+   */
+  retryTransportRequests(): number;
 }
 
 export function openStoreForTest(
@@ -280,10 +293,14 @@ function openStoreOver(
     windowLabel: "test-window",
   });
 
+  let retryTransportRequests = 0;
   const handle = createOpenEpicStore({
     epicId: options.epicId,
     userId: options.userId,
     accounting,
+    onRetryTransport: () => {
+      retryTransportRequests += 1;
+    },
     runtime: {
       port: worker.port,
       command: (command) => {
@@ -349,5 +366,6 @@ function openStoreOver(
     // bootstrap and this harness bootstraps once.
     runtime,
     workerPort: worker.port,
+    retryTransportRequests: () => retryTransportRequests,
   };
 }

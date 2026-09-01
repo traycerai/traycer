@@ -173,6 +173,7 @@ export function useChatSessionHandle(
     // tile unmount), the socket stays alive across close -> warm -> reopen, so a
     // revived session is never handed a dead transport. `retry()` re-invokes
     // this factory, rebuilding the transport with live deps.
+    let acquiredHandle: ChatSessionStoreHandle | null = null;
     const factory: ChatStreamClientFactory = (
       factoryEpicId,
       factoryChatId,
@@ -199,6 +200,7 @@ export function useChatSessionHandle(
             chatId: factoryChatId,
             callbacks,
           }),
+        () => acquiredHandle?.store.getState().retry(),
       );
       return {
         sendAction: (frame) => result.client.sendAction(frame),
@@ -243,6 +245,7 @@ export function useChatSessionHandle(
           onProviderAuthError,
         }),
     );
+    acquiredHandle = next;
     handleHostIds.set(next, hostId);
     setHandle(next);
 

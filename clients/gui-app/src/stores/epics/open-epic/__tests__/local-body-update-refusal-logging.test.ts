@@ -174,6 +174,9 @@ describe("the local body/update refusal's .catch (open-epic store.ts)", () => {
     const handle = createOpenEpicStore({
       epicId: EPIC_ID,
       userId: null,
+      // Unreached: this suite never calls `retryTransport`. Answered anyway
+      // rather than defaulted, so it stays a decision the option forces.
+      onRetryTransport: () => {},
       runtime: binding,
       accounting: createProcessBackedAccountingPort({
         hostId: "test-host",

@@ -82,6 +82,42 @@ const resolveSessionHostClient = vi.hoisted(
  * adapter-verdict reasoning that used to sit on `getMethodSupport` here moved
  * with it, to the member it describes.
  */
+const reprobeSpy = vi.hoisted(() => ({
+  attachCalls: [] as unknown[],
+  detachCount: 0,
+  /**
+   * The owner callbacks handed to `attachPlanRestrictedReprobe`, so a pin can
+   * FIRE one - the deadline coming due is the whole stimulus.
+   *
+   * An array rather than a `(() => void) | null` slot, and not for style: a
+   * pin resets the slot before mounting, and TypeScript's control flow then
+   * narrows the property to `null` for the rest of the test - so reading it
+   * back yields `null` and the guard that would recover it is a comparison
+   * between literal values, which `no-unnecessary-condition` refuses. An
+   * element read is not narrowed by the reset, and the repo's type rules
+   * leave no cast to reach for.
+   */
+  fireCallbacks: [] as Array<() => void>,
+}));
+vi.mock("@/lib/host/owned-durable-stream-client", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/lib/host/owned-durable-stream-client")
+    >();
+  return {
+    ...actual,
+    attachPlanRestrictedReprobe: (
+      wsStreamClient: unknown,
+      onReprobe: (() => void) | null,
+    ) => {
+      reprobeSpy.attachCalls.push(wsStreamClient);
+      if (onReprobe !== null) reprobeSpy.fireCallbacks.push(onReprobe);
+      return () => {
+        reprobeSpy.detachCount += 1;
+      };
+    },
+  };
+});
 vi.mock("@/lib/host/use-durable-stream-transport", async () => {
   const { fakeDurableStreamTransports } =
     await import("@/lib/host/test-support/fake-durable-stream-transport");
@@ -178,7 +214,15 @@ function sessionBody(
 async function mountSession(
   epicId: string,
   tabId: string,
-): Promise<{ handle: OpenEpicStoreHandle }> {
+): Promise<{
+  handle: OpenEpicStoreHandle;
+  /**
+   * Every handle this mount has presented, in order - a GETTER because the
+   * interesting ones arrive after this function returns. One caller: the
+   * reprobe-rebuild pin, whose whole subject is the SECOND handle.
+   */
+  handles: () => ReadonlyArray<OpenEpicStoreHandle>;
+}> {
   const seenHandles: OpenEpicStoreHandle[] = [];
   render(sessionBody(epicId, tabId, (handle) => seenHandles.push(handle)));
   await waitFor(() => {
@@ -186,7 +230,7 @@ async function mountSession(
   });
   const handle = seenHandles.at(0);
   if (handle === undefined) throw new Error("expected a handle");
-  return { handle };
+  return { handle, handles: () => seenHandles };
 }
 
 describe("<EpicSessionProvider /> transport ownership", () => {
@@ -274,6 +318,79 @@ describe("<EpicSessionProvider /> transport ownership", () => {
       handle.dispose();
     });
     expect(record.closeCount).toBe(1);
+  });
+
+  it("attaches a plan-restricted reprobe to THIS session's client, and detaches it with the transport", async () => {
+    // Upstream gave every durable-transport owner a plan-denial reprobe by
+    // adding a parameter to `openOwnedDurableStreamClient`. This session does
+    // not use that helper - it multiplexes four typed clients over one socket,
+    // so it opens its transport directly - which means the merge that brought
+    // the feature in left it live for chat/terminal/worktree and silently
+    // absent for epics. Reconnecting the closed client itself cannot acquire
+    // the cache's controlled fresh session, so without this an epic denied by
+    // plan stays denied until the tab is reloaded.
+    reprobeSpy.attachCalls.length = 0;
+    reprobeSpy.detachCount = 0;
+
+    const { handle } = await mountSession(
+      "epic-transport-test",
+      "epic-transport-test",
+    );
+    const record = transportRegistry.records.at(0);
+    if (record === undefined) throw new Error("expected a transport record");
+
+    // Attached to the SESSION's own client, not some other transport's.
+    expect(reprobeSpy.attachCalls).toEqual([record.wsStreamClient]);
+    expect(reprobeSpy.detachCount).toBe(0);
+
+    act(() => {
+      handle.dispose();
+    });
+    // Detached with the transport, so a pending rebuild timer cannot outlive
+    // the socket it exists to rebuild.
+    expect(reprobeSpy.detachCount).toBe(1);
+  });
+
+  it("rebuilds the session when the attached reprobe fires on a clean epic", async () => {
+    // THE WIRE BETWEEN THE TWO HALVES, and pinned separately because neither
+    // half can see it. The pin above proves the reprobe is SUBSCRIBED;
+    // `store.test.ts`'s two arms prove the store's gate ANSWERS correctly.
+    // What sits between them is the provider callback, and it fills
+    // `reprobeHandle` AFTER subscribing - deliberately, since `onClosed` does
+    // not retro-fire and a negative-cache adoption can hand back an
+    // already-closed client. A slot left unfilled would leave both halves
+    // green while a plan-denied epic stayed denied until the tab was
+    // reloaded, which is exactly the absence this merge recovered.
+    reprobeSpy.attachCalls.length = 0;
+    reprobeSpy.detachCount = 0;
+    reprobeSpy.fireCallbacks.length = 0;
+
+    const { handles } = await mountSession(
+      "epic-transport-test",
+      "epic-transport-test",
+    );
+    expect(transportRegistry.records).toHaveLength(1);
+    const first = transportRegistry.records.at(0);
+    if (first === undefined) throw new Error("expected a transport record");
+    const fire = reprobeSpy.fireCallbacks.at(0);
+    if (fire === undefined)
+      throw new Error("expected the reprobe to be attached");
+
+    await act(async () => {
+      fire();
+      await Promise.resolve();
+    });
+
+    // A fresh session on a fresh transport. The denied one is RETIRED rather
+    // than left beside its replacement: marking the handle dead is what lets
+    // the acquire pass retire it, and without that mark the pass sees
+    // `current.hostId === targetHostId` and re-presents the same closed
+    // handle as `ready`.
+    await waitFor(() => {
+      expect(transportRegistry.records.length).toBeGreaterThan(1);
+    });
+    expect(first.closeCount).toBe(1);
+    expect(handles().length).toBeGreaterThan(1);
   });
 
   it("detachTransport() closes the session transport too", async () => {
