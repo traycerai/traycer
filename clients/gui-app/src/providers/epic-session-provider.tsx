@@ -379,18 +379,19 @@ export function EpicSessionProvider(
     originalHostId: null,
   });
   const targetHostId = requestedHostId ?? effectiveHostId;
-  // Survives handle replacement so a host that repeatedly denies the plan
-  // cannot reset its owner-level backoff simply by causing the owner to build
-  // the next handle. A host/user move is a different session and resets it.
-  const planRestrictedSessionRebuildBackoff = useMemo(
-    () => createPlanRestrictedSessionRebuildBackoff(),
-    [epicId],
+  // One controller per mounted provider, so handle replacement cannot reset
+  // its owner-level backoff when a host repeatedly denies the plan. The reset
+  // effect below cancels it when this provider is reused for a different Epic
+  // or its host/user/ownership scope changes.
+  const [planRestrictedSessionRebuildBackoff] = useState(
+    createPlanRestrictedSessionRebuildBackoff,
   );
   useEffect(() => {
     return () => {
       planRestrictedSessionRebuildBackoff.cancel();
     };
   }, [
+    epicId,
     ownershipClaimed,
     planRestrictedSessionRebuildBackoff,
     sessionUserId,
