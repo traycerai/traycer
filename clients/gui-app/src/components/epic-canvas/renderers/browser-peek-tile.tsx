@@ -65,6 +65,14 @@ interface BrowserPeekTileProps {
   readonly node: BrowserPeekNode;
   readonly viewTabId: string;
   readonly paneId: string;
+  /**
+   * Set only by `BrowserSessionTile` while this peek is standing in for a
+   * durable Electron session's dormant/wake branch (`runtime.kind ===
+   * "electron"`). There the host's `complete` frame means "attached, going
+   * native" (`browser-screencast-plane.ts`'s `subscribeScreencast`), not a
+   * dead cast - so the lifecycle chip must not read as a failure mid-handoff.
+   */
+  readonly isElectronWake: boolean;
 }
 
 /**
@@ -130,8 +138,14 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
   }, [inputOwnerId]);
 
   const status = useMemo(
-    () => browserPeekStatus(session.lifecycle, visible, session.details),
-    [session.details, session.lifecycle, visible],
+    () =>
+      browserPeekStatus(
+        session.lifecycle,
+        visible,
+        session.details,
+        props.isElectronWake,
+      ),
+    [session.details, session.lifecycle, visible, props.isElectronWake],
   );
 
   const chrome = useScreencastTileChrome({
@@ -437,6 +451,7 @@ function browserPeekStatus(
   lifecycle: ScreencastLifecycle,
   visible: boolean,
   details: string | null,
+  isElectronWake: boolean,
 ): BrowserPeekStatus {
   if (!visible) {
     return {
@@ -466,6 +481,18 @@ function browserPeekStatus(
     };
   }
   if (lifecycle === "complete") {
+    // An Electron wake's `complete` frame means "attached, going native", not
+    // a dead cast (`browser-screencast-plane.ts`'s `subscribeScreencast`) -
+    // WifiOff/"Ended" would read as a failure at the exact moment the tab is
+    // succeeding.
+    if (isElectronWake) {
+      return {
+        label: "Going native",
+        overlay: "Handing off to the native tab.",
+        tone: "muted",
+        Icon: Radio,
+      };
+    }
     return {
       label: "Ended",
       overlay: details,
