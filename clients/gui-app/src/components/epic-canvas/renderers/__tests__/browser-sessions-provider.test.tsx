@@ -350,6 +350,15 @@ class FakeBridge {
   readonly onNativeTabStatusChange = vi.fn<
     BrowserViewBridge["onNativeTabStatusChange"]
   >(() => ({ dispose: () => {} }));
+  readonly onPrimaryProfileDelta = vi.fn<
+    BrowserViewBridge["onPrimaryProfileDelta"]
+  >(() => ({ dispose: () => {} }));
+  readonly clearSite = vi.fn<BrowserViewBridge["clearSite"]>(() =>
+    Promise.resolve(),
+  );
+  readonly evictSite = vi.fn<BrowserViewBridge["evictSite"]>(() =>
+    Promise.resolve(),
+  );
   readonly capturePrimaryProfile = vi.fn<
     BrowserViewBridge["capturePrimaryProfile"]
   >(() =>
@@ -949,6 +958,7 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
           tabId: "tab-1",
           requestedUrl: "https://app.example",
           reason: "session-bootstrap",
+          profile: "primary",
           seedStorageState: null,
         },
         null,
@@ -960,6 +970,7 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
         sessionId: "session-1",
         tabId: "tab-1",
         requestedUrl: "https://app.example",
+        profile: "primary",
         seedStorageState: null,
       });
       expect(stream.sentFrames).toContainEqual({
@@ -1402,6 +1413,7 @@ describe("BrowserSessionsProvider (ticket 08-lift live readiness)", () => {
           tabId: "tab-reconnect",
           requestedUrl: "https://app.example/reconnect",
           reason: "restore",
+          profile: "primary",
           seedStorageState: null,
         },
         null,
@@ -1551,7 +1563,7 @@ describe("BrowserSessionsProvider final capture before route loss", () => {
     hookState.browserViewBridge = null;
   });
 
-  it("captures only on the co-located host, and never closes a durable tab", async () => {
+  it("captures on every open host, and never closes a durable tab", async () => {
     const bridge = new FakeBridge();
     installNativeBridge(bridge);
     const hostATransport = installTransportForHost(
@@ -1611,20 +1623,23 @@ describe("BrowserSessionsProvider final capture before route loss", () => {
       expect(
         framesOfKind(hostAStream.sentFrames, "primaryProfileCaptured"),
       ).toHaveLength(1);
+      expect(
+        framesOfKind(hostBStream.sentFrames, "primaryProfileCaptured"),
+      ).toHaveLength(1);
     });
     expect(
       framesOfKind(hostAStream.sentFrames, "primaryProfileCaptured")[0],
     ).toMatchObject({ status: "captured", reason: null });
-    // `capturePrimaryProfile` reads THIS machine's Electron partition and the
-    // host stores what arrives as its whole jar, so host-b - which this GUI is
-    // only a viewer of - must receive nothing. Fanning out would overwrite a
-    // desktop-backed host's richer jar with a laptop's on every quit.
-    expect(bridge.capturePrimaryProfile).toHaveBeenCalledTimes(1);
     expect(
-      framesOfKind(hostBStream.sentFrames, "primaryProfileCaptured"),
-    ).toEqual([]);
-    // The quit holds until the host acks that jar as DURABLY stored. Nothing
-    // is sent to the remote stream to wait on.
+      framesOfKind(hostBStream.sentFrames, "primaryProfileCaptured")[0],
+    ).toMatchObject({ status: "captured", reason: null });
+    // The partition this renderer reads is the user's own jar, and it is that
+    // jar the remote host has to be holding when it re-materializes their
+    // session (cross-host decision #6) - so EVERY open host stream is
+    // flushed, host-b included, and `capturePrimaryProfile` reads the local
+    // Electron partition once per host coordinator's own flush.
+    expect(bridge.capturePrimaryProfile).toHaveBeenCalledTimes(2);
+    // The quit holds until BOTH hosts ack their jar as DURABLY stored.
     expect(drained).toBe(false);
 
     // The durable tabs are NOT closed: the host suspends the session to
@@ -1633,6 +1648,11 @@ describe("BrowserSessionsProvider final capture before route loss", () => {
     expect(framesOfKind(hostBStream.sentFrames, "closeTab")).toEqual([]);
 
     ackCapture(hostAStream, 0);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(drained).toBe(false);
+    ackCapture(hostBStream, 0);
     await drain;
     expect(drained).toBe(true);
     expect(framesOfKind(hostAStream.sentFrames, "closeTab")).toEqual([]);
