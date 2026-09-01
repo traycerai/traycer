@@ -194,6 +194,7 @@ describe("forget ledger durability", () => {
       hostId: HOST,
       connectionId: CONNECTION,
       revision: 1,
+      sentRevision: 1,
     });
     // The ack is persisted through the same chain as the forget, so the read
     // below has to wait for it rather than race it.
@@ -273,6 +274,7 @@ describe("forget ledger mutations", () => {
       hostId: HOST,
       connectionId: CONNECTION,
       revision: 2,
+      sentRevision: 2,
     });
 
     expect(changes).toEqual([{ revision: 1 }, { revision: 2 }]);
@@ -296,6 +298,7 @@ describe("forget ledger digests", () => {
       hostId: HOST,
       connectionId: CONNECTION,
       revision: 1,
+      sentRevision: 1,
     });
 
     // Empty, but still carrying the current revision - that is what a
@@ -324,6 +327,7 @@ describe("forget ledger digests", () => {
       hostId: HOST,
       connectionId: CONNECTION,
       revision: 1,
+      sentRevision: 1,
     });
     await recordForgottenBrowserSite("unrelated.test");
 
@@ -340,6 +344,7 @@ describe("forget ledger digests", () => {
       hostId: HOST,
       connectionId: CONNECTION,
       revision: 1,
+      sentRevision: 1,
     });
 
     expect(browserForgetLedgerDigestForHost(HOST).forgetAllAt).toBeNull();
@@ -357,6 +362,7 @@ describe("forget ledger digests", () => {
       hostId: HOST,
       connectionId: CONNECTION,
       revision: 2,
+      sentRevision: 2,
     });
     // A replayed or out-of-order ack for an older revision must not re-open
     // what a later one closed.
@@ -364,6 +370,7 @@ describe("forget ledger digests", () => {
       hostId: HOST,
       connectionId: CONNECTION,
       revision: 1,
+      sentRevision: 1,
     });
 
     expect(browserForgetLedgerDigestForHost(HOST).domains).toEqual([]);
@@ -385,6 +392,7 @@ describe("forget ledger ack bounds", () => {
       hostId: HOST,
       connectionId: CONNECTION,
       revision: Number.MAX_SAFE_INTEGER,
+      sentRevision: 1,
     });
 
     // Clamped to 1, so it counts as having pruned what it was actually told.
@@ -409,6 +417,94 @@ describe("forget ledger ack bounds", () => {
         (entry) => entry.domain,
       ),
     ).toEqual(["other.test"]);
+  });
+
+  it("declines an ack no digest earned, on both watermarks", async () => {
+    // The frame is unsolicited: nothing in it names a digest, so a host can
+    // send one the instant the stream opens. Before ticket 09 that one frame
+    // opened this connection's gate for good AND recorded the host as caught
+    // up, which emptied every digest it would ever be sent.
+    await recordForgottenBrowserSite("example.com");
+
+    await recordForgetLedgerAck({
+      hostId: HOST,
+      connectionId: CONNECTION,
+      revision: 1,
+      // Nothing has been pushed on this connection yet.
+      sentRevision: 0,
+    });
+
+    // The in-memory gate still refuses the site.
+    expect(
+      isBrowserForgetLedgerPendingAck({
+        connectionId: CONNECTION,
+        domain: "example.com",
+      }),
+    ).toBe(true);
+    // And the durable watermark did not move: the host is still owed the
+    // forget it claimed to have pruned.
+    expect(
+      browserForgetLedgerDigestForHost(HOST).domains.map(
+        (entry) => entry.domain,
+      ),
+    ).toEqual(["example.com"]);
+  });
+
+  it("clamps an ack to what this connection was actually sent", async () => {
+    // Two forgets, one digest. The host acks past what it was told, which is
+    // the same overreach as the ledger-top clamp but one the ledger's own top
+    // cannot catch - revision 2 exists here, it just never reached this
+    // connection.
+    await recordForgottenBrowserSite("first.test");
+    await recordForgottenBrowserSite("second.test");
+
+    await recordForgetLedgerAck({
+      hostId: HOST,
+      connectionId: CONNECTION,
+      revision: 2,
+      sentRevision: 1,
+    });
+
+    // Worth exactly the digest that earned it: the site named at revision 1
+    // is through, the one at revision 2 is not.
+    expect(
+      isBrowserForgetLedgerPendingAck({
+        connectionId: CONNECTION,
+        domain: "first.test",
+      }),
+    ).toBe(false);
+    expect(
+      isBrowserForgetLedgerPendingAck({
+        connectionId: CONNECTION,
+        domain: "second.test",
+      }),
+    ).toBe(true);
+    expect(
+      browserForgetLedgerDigestForHost(HOST).domains.map(
+        (entry) => entry.domain,
+      ),
+    ).toEqual(["second.test"]);
+
+    // The digest that does cover it is sent, and the same ack now lands in
+    // full - on the gate and on the durable watermark together.
+    await recordForgetLedgerAck({
+      hostId: HOST,
+      connectionId: CONNECTION,
+      revision: 2,
+      sentRevision: 2,
+    });
+
+    expect(
+      isBrowserForgetLedgerPendingAck({
+        connectionId: CONNECTION,
+        domain: "second.test",
+      }),
+    ).toBe(false);
+    expect(browserForgetLedgerDigestForHost(HOST)).toEqual({
+      forgetAllAt: null,
+      domains: [],
+      revision: 2,
+    });
   });
 });
 
@@ -493,6 +589,7 @@ describe("forget ledger acked-revision gate", () => {
       hostId: HOST,
       connectionId: CONNECTION,
       revision: 0,
+      sentRevision: 1,
     });
     expect(isBrowserForgetLedgerPendingAck(gate)).toBe(true);
 
@@ -500,6 +597,7 @@ describe("forget ledger acked-revision gate", () => {
       hostId: HOST,
       connectionId: CONNECTION,
       revision: 1,
+      sentRevision: 1,
     });
     expect(isBrowserForgetLedgerPendingAck(gate)).toBe(false);
   });
@@ -518,6 +616,7 @@ describe("forget ledger acked-revision gate", () => {
       hostId: HOST,
       connectionId: CONNECTION,
       revision: 1,
+      sentRevision: 1,
     });
     expect(
       isBrowserForgetLedgerPendingAck({
@@ -544,6 +643,7 @@ describe("forget ledger acked-revision gate", () => {
       hostId: HOST,
       connectionId: CONNECTION,
       revision: 1,
+      sentRevision: 1,
     });
     releaseBrowserForgetLedgerConnection(CONNECTION);
 
@@ -619,6 +719,7 @@ describe("in-flight observation across a local clear", () => {
       hostId: HOST,
       connectionId: CONNECTION,
       revision: 1,
+      sentRevision: 1,
     });
 
     const applied = await apply();

@@ -334,6 +334,18 @@ export interface BrowserForgetLedgerAckInput {
   readonly hostId: string;
   readonly connectionId: string;
   readonly revision: number;
+  /**
+   * The highest revision this connection was actually SENT in a digest, which
+   * is the ceiling the ack is worth (universal-sign-in ticket 09).
+   *
+   * The ack is a host echo of a number this machine minted, so on its own it
+   * proves nothing: an unsolicited one on stream open would otherwise disable
+   * the no-resurrection gate for that connection and blind every future digest
+   * to that host. Only the sender knows which digest earned it, so the sender
+   * states it and the ledger clamps to it - `0` before any digest went out,
+   * which makes such an ack a no-op on both watermarks.
+   */
+  readonly sentRevision: number;
 }
 
 /** A forget landed in this machine's ledger; every host stream pushes anew. */

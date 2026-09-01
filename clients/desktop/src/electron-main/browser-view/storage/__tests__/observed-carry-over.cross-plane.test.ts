@@ -413,6 +413,9 @@ describe("offline forget, driven from the desktop", () => {
       hostId: HOST_ID,
       connectionId: CONNECTION_ID,
       revision,
+      // What this connection was sent, which is the ceiling the ack is worth
+      // (universal-sign-in ticket 09).
+      sentRevision: revision,
     });
 
     expect(await harness.receive(carryOverObservedFrame(), CONNECTION_ID)).toBe(

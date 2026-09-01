@@ -11,7 +11,10 @@ import {
   captureFinalPrimaryProfiles,
   FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS,
 } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
-import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
+import type {
+  BrowserForgetLedgerAckInput,
+  BrowserViewBridge,
+} from "@traycer-clients/shared/platform/browser-view";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
@@ -475,6 +478,13 @@ function framesOfKind(
   return frames.filter((frame) => frame.kind === kind);
 }
 
+/** Every `ackForgetLedger` the coordinator recorded, in order. */
+function ackInputs(
+  bridge: FakeBridge,
+): ReadonlyArray<BrowserForgetLedgerAckInput> {
+  return bridge.ackForgetLedger.mock.calls.map(([input]) => input);
+}
+
 function electronProvisionedFrames(
   frames: ReadonlyArray<Record<string, unknown>>,
 ): ReadonlyArray<Record<string, unknown>> {
@@ -872,6 +882,116 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
     });
     await flushMacrotask();
     expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(1);
+  });
+
+  /**
+   * Universal-sign-in ticket 09: the ack frame is unsolicited and names no
+   * digest, so what makes it mean anything is this side's record of what it
+   * actually sent on that connection. The coordinator states it; the ledger
+   * clamps to it.
+   */
+  it("prices a ledger ack at the digest that earned it, and releases both on close", async () => {
+    const bridge = new FakeBridge();
+    bridge.readForgetLedger.mockImplementation(() =>
+      Promise.resolve({ forgetAllAt: null, domains: [], revision: 3 }),
+    );
+    installNativeBridge(bridge);
+    renderProvider();
+    const stream = hookState.streamClient?.sessions[0];
+    if (stream === undefined) throw new Error("expected browser stream");
+
+    act(() => {
+      stream.emitStatus("open");
+    });
+    await flushMacrotask();
+    // The readiness burst waits on the snapshot, so this connection has been
+    // told nothing at all - the window a host can ack in without having been
+    // asked anything.
+    expect(
+      framesOfKind(stream.sentFrames, "primaryProfileForgetLedger"),
+    ).toHaveLength(0);
+
+    act(() => {
+      stream.emit(
+        {
+          kind: "primaryProfileForgetLedgerAck",
+          hasBinaryPayload: false,
+          revision: 3,
+        },
+        null,
+      );
+    });
+    await flushMacrotask();
+    expect(ackInputs(bridge).map((input) => input.sentRevision)).toEqual([0]);
+
+    // Now the digest goes out, and the same ack is worth what it names.
+    act(() => {
+      stream.emit(
+        { kind: "snapshot", hasBinaryPayload: false, sessions: [] },
+        null,
+      );
+    });
+    await flushMacrotask();
+    // The burst carries the cached digest and the deferred push flushes the
+    // same one behind it; what matters here is only that revision 3 reached
+    // this connection.
+    const digests = framesOfKind(
+      stream.sentFrames,
+      "primaryProfileForgetLedger",
+    );
+    expect(digests.at(0)).toEqual({
+      kind: "primaryProfileForgetLedger",
+      hasBinaryPayload: false,
+      forgetAllAt: null,
+      domains: [],
+      revision: 3,
+    });
+
+    act(() => {
+      stream.emit(
+        {
+          kind: "primaryProfileForgetLedgerAck",
+          hasBinaryPayload: false,
+          revision: 3,
+        },
+        null,
+      );
+    });
+    await flushMacrotask();
+    const [preDigest, earned] = ackInputs(bridge);
+    if (preDigest === undefined || earned === undefined) {
+      throw new Error("expected two recorded acks");
+    }
+    expect(earned.sentRevision).toBe(3);
+    expect(earned.connectionId).toBe(preDigest.connectionId);
+
+    // The connection goes. Its id is released in main and its sent revision
+    // is dropped here, and the reconnect proves both: nothing has been pushed
+    // on the new incarnation, so its ack is priced at zero again.
+    act(() => {
+      stream.emitStatus("reconnecting");
+    });
+    await flushMacrotask();
+    expect(bridge.releaseForgetLedgerConnection).toHaveBeenCalledWith(
+      preDigest.connectionId,
+    );
+
+    act(() => {
+      stream.emitStatus("open");
+      stream.emit(
+        {
+          kind: "primaryProfileForgetLedgerAck",
+          hasBinaryPayload: false,
+          revision: 3,
+        },
+        null,
+      );
+    });
+    await flushMacrotask();
+    const reconnected = ackInputs(bridge).at(2);
+    if (reconnected === undefined) throw new Error("expected a third ack");
+    expect(reconnected.sentRevision).toBe(0);
+    expect(reconnected.connectionId).not.toBe(preDigest.connectionId);
   });
 
   it("declares this machine's host id as the readiness locality signal", async () => {

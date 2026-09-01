@@ -200,6 +200,13 @@ const forgetLedgerAckSchema = z.object({
   hostId: nonEmptyStringSchema,
   connectionId: nonEmptyStringSchema,
   revision: z.number().int().nonnegative(),
+  /**
+   * What that connection was actually sent, which is the ceiling the ack is
+   * worth (universal-sign-in ticket 09). Required rather than defaulted: a
+   * caller that cannot say what it sent has not established the binding, and a
+   * default would quietly restore the unsolicited ack this closes.
+   */
+  sentRevision: z.number().int().nonnegative(),
 });
 
 /** A closed stream incarnation, whose acked revision goes with it. */

@@ -599,6 +599,18 @@ function createBrowserSessionsCoordinator(args: {
      * budget. Null off-connection, which is also when no frame can arrive.
      */
     let observedConnectionId: string | null = null;
+    /**
+     * The highest forget-ledger revision this connection was actually sent
+     * (universal-sign-in ticket 09), and the ceiling every ack from it is
+     * clamped to.
+     *
+     * It lives beside {@link observedConnectionId} and is reset with it,
+     * because it means nothing without one: the pair is what a connection
+     * knows, and a new stream incarnation has been told nothing whatever its
+     * predecessor heard. Zero until a digest leaves, which is what makes an
+     * ack that no digest earned a no-op rather than a gate opener.
+     */
+    let sentForgetLedgerRevision = 0;
     // Unsolicited cookie deltas from the durable `primary` jar (spec §6.3).
     // Gated on this connection having sent `electronTabLifecycleReady`: that
     // readiness is exactly what makes the stream jar-authorized on the host, so
@@ -632,11 +644,20 @@ function createBrowserSessionsCoordinator(args: {
       ledger: BrowserForgetLedger,
       stage: "attach" | "forget",
     ): void => {
-      stream?.sendClientFrame({
+      if (stream === null) return;
+      stream.sendClientFrame({
         kind: "primaryProfileForgetLedger",
         hasBinaryPayload: false,
         ...ledger,
       });
+      // AFTER the send, and only the digests that left: this is the fact an
+      // ack is measured against, so it must not record one the wire never
+      // carried. `max` because a cached digest can follow a newer one on the
+      // deferred path, and a watermark only ever advances.
+      sentForgetLedgerRevision = Math.max(
+        sentForgetLedgerRevision,
+        ledger.revision,
+      );
       appLogger.info("[browser] pushed the forget ledger", {
         hostId: args.owner.hostId,
         stage,
@@ -686,12 +707,17 @@ function createBrowserSessionsCoordinator(args: {
       appLogger.info("[browser] host acked the forget ledger", {
         hostId: args.owner.hostId,
         revision,
+        sent: sentForgetLedgerRevision,
       });
       void browserView
         .ackForgetLedger({
           hostId: args.owner.hostId,
           connectionId,
           revision,
+          // What this connection was told, which is all its ack can be worth.
+          // The clamp itself happens in the ledger, where the connection gate
+          // and the durable watermark are both set from one value.
+          sentRevision: sentForgetLedgerRevision,
         })
         .then(refreshForgetLedger, (cause: unknown) => {
           appLogger.warn("[browser] could not record a forget-ledger ack", {
@@ -807,13 +833,21 @@ function createBrowserSessionsCoordinator(args: {
       channel.lifecycle = lifecycle;
       if (status === "open") {
         observedConnectionId = crypto.randomUUID();
+        // A new incarnation has been told nothing yet, so it can ack nothing
+        // yet either - the same fresh start main gives its own gate for an
+        // unknown connection id.
+        sentForgetLedgerRevision = 0;
         electronTabs.connect();
         sendLifecycleReadyIfReady();
       } else {
         // Retired here, and released only after: main must never be told a
-        // live connection is gone.
+        // live connection is gone. The sent revision goes with the id in the
+        // same step - it is the other half of what this connection knows, and
+        // holding it past the close would price the next one's ack off a
+        // digest it never received.
         const closed = observedConnectionId;
         observedConnectionId = null;
+        sentForgetLedgerRevision = 0;
         if (closed !== null) releaseForgetLedgerConnection(closed);
         if (wasOpen) connectionGeneration += 1;
         resolveCaptureAckWaiters();
@@ -932,6 +966,7 @@ function createBrowserSessionsCoordinator(args: {
       if (actionChannel === channel) actionChannel = null;
       const closed = observedConnectionId;
       observedConnectionId = null;
+      sentForgetLedgerRevision = 0;
       if (closed !== null) releaseForgetLedgerConnection(closed);
       primaryProfileDeltas?.dispose();
       captureFinalPrimaryProfile = (): Promise<void> => Promise.resolve();

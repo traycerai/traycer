@@ -170,6 +170,13 @@ export interface BrowserForgetLedgerAck {
   readonly hostId: string;
   readonly connectionId: string;
   readonly revision: number;
+  /**
+   * The highest revision this connection was actually sent in a digest
+   * (universal-sign-in ticket 09). See {@link recordForgetLedgerAck} for why
+   * an ack is worth no more than that, and nothing at all before the first
+   * digest.
+   */
+  readonly sentRevision: number;
 }
 
 /** What a ledger mutation tells the renderers to push. */
@@ -401,14 +408,26 @@ export function browserForgetLedgerDigestForHost(
 export async function recordForgetLedgerAck(
   ack: BrowserForgetLedgerAck,
 ): Promise<void> {
-  // CLAMPED to this machine's own top, and this is load-bearing rather than
-  // defensive. The revision is minted here and merely echoed by the host, so
-  // an ack above the current one is meaningless by construction - but taken at
-  // face value it would be recorded as "pruned through here" for a ledger that
-  // does not exist yet, which permanently disables the no-resurrection gate
-  // (every future entry compares below it) and empties every future digest for
-  // that host. A host is not trusted to bound its own echo.
-  const revision = Math.min(ack.revision, ledger.revision);
+  // CLAMPED twice, and both clamps are load-bearing rather than defensive.
+  //
+  // To this machine's own top, because the revision is minted here and merely
+  // echoed by the host: an ack above the current one is meaningless by
+  // construction, but taken at face value it would be recorded as "pruned
+  // through here" for a ledger that does not exist yet, which permanently
+  // disables the no-resurrection gate (every future entry compares below it)
+  // and empties every future digest for that host.
+  //
+  // And to what this CONNECTION was actually sent (universal-sign-in ticket
+  // 09), because the ack is otherwise unsolicited: nothing in the frame ties
+  // it to a digest, so a host that was told nothing could ack anyway and open
+  // the gate on the strength of its own claim. `sentRevision` is 0 until a
+  // digest goes out on that connection, so a pre-digest ack clamps to 0 and
+  // both watermarks below decline it - no branch of its own, because it is the
+  // BINDING between the two frames rather than a filter in front of them.
+  //
+  // A host is not trusted to bound its own echo, and it is not trusted to say
+  // what it was asked.
+  const revision = Math.min(ack.revision, ack.sentRevision, ledger.revision);
   const connection = ackedByConnectionId.get(ack.connectionId) ?? 0;
   if (revision > connection) {
     ackedByConnectionId.set(ack.connectionId, revision);
