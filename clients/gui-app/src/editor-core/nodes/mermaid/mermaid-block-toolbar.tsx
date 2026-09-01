@@ -1,4 +1,4 @@
-import { Copy, Download, Pencil, X } from "lucide-react";
+import { Copy, Download, Pencil, Share2, X } from "lucide-react";
 import { ToolbarButton } from "../../toolbar/toolbar-button";
 import { BlockFloatingToolbar } from "../shared/block-floating-toolbar";
 
@@ -7,7 +7,13 @@ export interface MermaidBlockToolbarProps {
   readonly editable: boolean;
   readonly onToggleEdit: () => void;
   readonly onCopyCode: () => void;
-  readonly onDownloadPng: () => void;
+  /** `null` where this device has no download destination at all. */
+  readonly onDownloadPng: (() => void) | null;
+  /**
+   * Hands the PNG to the OS share sheet, or `null` where the shell owns no
+   * chooser and Download is already the only route out.
+   */
+  readonly onSharePng: (() => void) | null;
   readonly downloadDisabled: boolean;
 }
 
@@ -24,6 +30,7 @@ export function MermaidBlockToolbar(props: MermaidBlockToolbarProps) {
     onToggleEdit,
     onCopyCode,
     onDownloadPng,
+    onSharePng,
     downloadDisabled,
   } = props;
 
@@ -51,14 +58,26 @@ export function MermaidBlockToolbar(props: MermaidBlockToolbarProps) {
         onClick={onCopyCode}
         className="tc-editor-toolbar-button"
       />
-      <ToolbarButton
-        icon={<Download className="size-4" aria-hidden="true" />}
-        label="Download PNG"
-        active={false}
-        disabled={downloadDisabled}
-        onClick={onDownloadPng}
-        className="tc-editor-toolbar-button"
-      />
+      {onSharePng === null ? null : (
+        <ToolbarButton
+          icon={<Share2 className="size-4" aria-hidden="true" />}
+          label="Share PNG"
+          active={false}
+          disabled={downloadDisabled}
+          onClick={onSharePng}
+          className="tc-editor-toolbar-button"
+        />
+      )}
+      {onDownloadPng === null ? null : (
+        <ToolbarButton
+          icon={<Download className="size-4" aria-hidden="true" />}
+          label="Download PNG"
+          active={false}
+          disabled={downloadDisabled}
+          onClick={onDownloadPng}
+          className="tc-editor-toolbar-button"
+        />
+      )}
     </BlockFloatingToolbar>
   );
 }

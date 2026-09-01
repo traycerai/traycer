@@ -526,6 +526,7 @@ describe("composer draft store browserAnnotations", () => {
         "action-m2": {
           clientActionId: "action-m2",
           action: "send",
+          queueItemId: null,
           interviewBlockId: null,
           interviewDeliveryRetry: null,
           messageId: "msg-m2",

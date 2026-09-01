@@ -56,6 +56,10 @@ vi.mock(
           {props.children}
         </BrowserSessionsContext.Provider>
       ),
+      // Every tile now sits behind the boundary for its own host; this suite
+      // has one ambient stream, so it stays a pass-through.
+      BrowserSessionsHostBoundary: (props: { readonly children: ReactNode }) =>
+        props.children,
     };
   },
 );
@@ -176,6 +180,7 @@ vi.mock("@/hooks/host/use-effective-host-id", () => ({
 }));
 
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
+  useRemoteSessionPollReadiness: () => false,
   useHostReachability: (hostId: string) => {
     // `UNKNOWN_HOST_PLACEHOLDER` is the sentinel tab-kind-agnostic callers
     // pass to keep hook order stable across tab kinds - the real hook answers

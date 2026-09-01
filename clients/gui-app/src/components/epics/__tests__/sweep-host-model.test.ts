@@ -5,6 +5,7 @@ import {
   buildSweepHostPickerRows,
   groupSweepHostPickerRows,
   namesHostOutsideSurface,
+  nudgeHostIds,
   sweepNeedsHostPicker,
   unionHostIds,
 } from "@/components/epics/sweep-host-model";
@@ -114,6 +115,33 @@ describe("unionHostIds", () => {
     // and neither is allowed to REMOVE a host from the picker.
     expect([...unionHostIds([null, ["host-a"]])]).toEqual(["host-a"]);
     expect([...unionHostIds([null, null])]).toEqual([]);
+  });
+});
+
+describe("nudgeHostIds", () => {
+  it("drops the host being censused, keeping the rest of the badges", () => {
+    // The badge on the host you are already looking at describes the rows in
+    // front of you; only the others are somewhere to be sent.
+    expect(
+      nudgeHostIds(new Set(["host-a", "host-b", "host-c"]), "host-b"),
+    ).toEqual(["host-a", "host-c"]);
+  });
+
+  it("answers with the whole badge set when nothing is being censused yet", () => {
+    expect(nudgeHostIds(new Set(["host-b"]), null)).toEqual(["host-b"]);
+  });
+
+  it("says nothing when the only badged host IS the one on screen", () => {
+    expect(nudgeHostIds(new Set(["host-a"]), "host-a")).toEqual([]);
+    expect(nudgeHostIds(new Set(), "host-a")).toEqual([]);
+  });
+
+  it("answers by the SET, not by the order a surface folded it in", () => {
+    // Two surfaces (History's rows, the Epic status row) fold the same
+    // provenance from different record shapes. They must nudge alike.
+    expect(nudgeHostIds(new Set(["host-c", "host-b"]), null)).toEqual(
+      nudgeHostIds(new Set(["host-b", "host-c"]), null),
+    );
   });
 });
 
