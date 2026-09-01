@@ -391,6 +391,36 @@ export function spawnEpicRuntimeWorker<TProjection>(
    * independent, and a second copy would drift on whichever one a later
    * reader thought was the incidental part.
    */
+  /**
+   * Whether construction has reached the point where `disposeHandle` can run.
+   *
+   * A fatal can arrive DURING construction, and `disposeHandle` reads bindings
+   * declared well below this line - `disposed`, and the three unsubscribes -
+   * so calling it early would hit their temporal dead zone and throw a
+   * `ReferenceError` from the constructor, replacing the failed presentation
+   * and the rejected `ready` with a crash. Two ways in, not one:
+   *
+   *  - `worker.onWorkerFault` is subscribed above the bootstrap on purpose,
+   *    because a module that fails to evaluate can have faulted already, and
+   *    nothing in `RuntimeWorkerLike` forbids an implementation that replays
+   *    that fault synchronously on subscribe;
+   *  - the bridge's own `fatal` event, which a synchronous in-process bridge
+   *    can deliver from inside the `bootstrap` emit below.
+   *
+   * Deferring rather than reordering the subscriptions: the fatal's VISIBLE
+   * half - the relay call and the `ready` rejection - still runs immediately
+   * and in the same order, and every subscription that gets created still gets
+   * torn down, which moving the teardown earlier could not promise.
+   *
+   * An OBJECT rather than two `let` booleans, and not as a style choice:
+   * `surfaceFatal` assigns them from inside a closure, which TypeScript's
+   * control-flow analysis does not model, so a plain `let x = false` stays
+   * narrowed to `false` at the discharge site below and
+   * `no-unnecessary-condition` rejects reading it. Property narrowing is
+   * invalidated by the intervening calls, so this reads honestly.
+   */
+  const fatalTeardown = { constructionComplete: false, deferred: false };
+
   const surfaceFatal = (message: string, stack: string | null): void => {
     // The runtime behind the bridge is gone, so its books must not stay
     // attached to the process planes. Without this the accountant keeps a
@@ -428,12 +458,22 @@ export function spawnEpicRuntimeWorker<TProjection>(
     // unsubscribe during it), and it touches no registry - this is the
     // runtime worker handle, one level below the session handle the provider
     // is talking about.
-    disposeHandle();
+    //
+    // Deferred when the fatal beat construction to it - see `fatalTeardown`.
+    // The phase is read, not the clock: a fatal on the very first tick and one
+    // an hour later take the same path.
+    if (fatalTeardown.constructionComplete) {
+      disposeHandle();
+      return;
+    }
+    fatalTeardown.deferred = true;
   };
 
   // The failure the bridge cannot carry. Subscribed BEFORE the bootstrap is
   // emitted below, because a module that fails to evaluate can have already
-  // faulted by the time this handle finishes constructing.
+  // faulted by the time this handle finishes constructing. An implementation
+  // that answers that by replaying the fault synchronously right here is
+  // exactly what `fatalTeardown` above exists to survive.
   worker.onWorkerFault((message) => {
     // No stack: this arrives as a DOM `ErrorEvent`, whose `error` is `null`
     // for a module that never evaluated, and the worker had no chance to
@@ -665,6 +705,15 @@ export function spawnEpicRuntimeWorker<TProjection>(
     failReady?.(
       new Error("The epic runtime worker was disposed before it was ready"),
     );
+  }
+
+  // Everything `disposeHandle` touches now exists, so the deferral above can
+  // be discharged. Before the `return`, deliberately: the caller is handed an
+  // already-disposed handle whose `ready` is already rejected with the real
+  // cause, rather than a live-looking one over a worker that is going away.
+  fatalTeardown.constructionComplete = true;
+  if (fatalTeardown.deferred) {
+    disposeHandle();
   }
 
   return {

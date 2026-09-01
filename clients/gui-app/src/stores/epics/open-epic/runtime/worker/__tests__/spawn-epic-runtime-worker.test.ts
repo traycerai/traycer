@@ -241,6 +241,53 @@ describe("spawnEpicRuntimeWorker", () => {
     handle.dispose();
   });
 
+  it("survives a fault delivered while the handle is still constructing", async () => {
+    // THE TEMPORAL DEAD ZONE THE FATAL TEARDOWN OPENED. `surfaceFatal` now
+    // calls `disposeHandle()`, which reads `disposed` and three unsubscribes
+    // declared far BELOW the `onWorkerFault` subscription - subscribed early
+    // on purpose, because a module that fails to evaluate can have faulted
+    // before this handle finishes constructing. An implementation that
+    // answers that by replaying the fault synchronously on subscribe would
+    // hit those bindings in their TDZ, and the `ReferenceError` would come
+    // out of the CONSTRUCTOR - replacing the failed presentation and the
+    // rejected `ready` with a crash, which is strictly worse than the leak
+    // the teardown was added to fix.
+    //
+    // Nothing in `RuntimeWorkerLike` forbids that implementation; the DOM
+    // adapter merely happens not to be one, since `error` arrives as a task.
+    // The bridge's own `fatal` reaches the same place by the other road, from
+    // inside the synchronous `bootstrap` emit.
+    const pair = createFakeBridgePair("sync");
+    const terminate = vi.fn();
+    const worker: RuntimeWorkerLike = {
+      ...createFakeWorkerTarget(pair),
+      terminate,
+      onWorkerFault: (listener) => {
+        listener("the epic runtime worker module failed to load");
+      },
+    };
+    const relay = { log: vi.fn(), fatal: vi.fn() };
+
+    // Construction itself is the first assertion: under the bug this throws.
+    const handle = spawnEpicRuntimeWorker(
+      spawnOptions(
+        { createWorker: () => worker, projection: SILENT_PROJECTION },
+        { relay },
+      ),
+    );
+
+    // The visible half still ran immediately, in the same order as a mid-life
+    // fatal - the deferral moves the TEARDOWN, not the presentation.
+    expect(relay.fatal).toHaveBeenCalledWith(
+      "the epic runtime worker module failed to load",
+      null,
+    );
+    // And the deferred teardown was discharged rather than dropped: a fatal
+    // that only presented would leave the thread running.
+    expect(terminate).toHaveBeenCalledTimes(1);
+    await expect(handle.ready).rejects.toThrow("module failed to load");
+  });
+
   it("disposes idempotently by sending shutdown before terminating", async () => {
     const fixture = createFixture(false);
     const handle = spawnEpicRuntimeWorker(
