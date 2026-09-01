@@ -349,6 +349,7 @@ function SavedLoginsToggleRow(props: {
         cascadeSummary={null}
         actionLabel="Stop saving"
         isPending={props.saveLogins.pending}
+        blockedReason={null}
         onConfirm={() => {
           props.saveLogins.setEnabled(false);
           setConfirming(false);
@@ -394,6 +395,7 @@ function ForgetAllLoginsRow(): ReactNode {
         cascadeSummary={null}
         actionLabel="Forget logins"
         isPending={false}
+        blockedReason={null}
         onConfirm={() => {
           // Same refusal as the per-site Clear: with no live browser stream
           // nothing went out, so the dialog stays where it is rather than

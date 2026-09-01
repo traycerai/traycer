@@ -395,6 +395,7 @@ function AgentsGuideEditor(props: {
         status={<SaveStatus saving={isSaving} error={hasError} />}
       />
       <ConfirmDestructiveDialog
+        blockedReason={null}
         open={state.confirmOpen}
         onOpenChange={(open) =>
           dispatch({ type: "confirm-open-changed", open })

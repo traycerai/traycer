@@ -1,29 +1,49 @@
 /**
- * Y.Doc → Zustand projector for the per-Epic store.
+ * Y.Doc → projection-sink projector for the per-Epic replica runtime.
  *
  * Responsibilities:
- *   - `attach(doc, store)`: install a single `observeDeep` on `doc.getMap("epic")`
+ *   - `attach(doc, sink)`: install a single `observeDeep` on `doc.getMap("epic")`
  *     and run an initial full projection.
  *   - `detach()`: tear the listener down before the doc is destroyed (replica
  *     swap on `requestFreshSnapshot`, store dispose).
  *   - On every Y transaction (regardless of origin), collect typed patches
- *     from the event list, then call `store.setState(...)` exactly ONCE so a
- *     transaction touching N artifacts produces 1 React render, not N.
+ *     from the event list, then publish exactly ONCE so a transaction touching
+ *     N artifacts produces 1 React render, not N.
  *
  * Identity contract: per-entry refs in `byId` tables only change when that
  * entry's projected fields change. Untouched siblings keep their prior
  * reference, so component selectors using `Object.is` skip the render.
  *
- * Suspension flag: `onSnapshot` applies the snapshot bytes (which fire
- * `observeDeep`) and then runs a deterministic full re-project as part of
- * its own atomic `setState`. The `suspend()` / `resume()` pair lets the
- * caller silence the intermediate observeDeep storm so projection happens
- * exactly once per snapshot.
+ * ## The sink, and why it is not a store handle
+ *
+ * This module used to hold a `StoreApi<OpenEpicState>` and call `setState` on
+ * it directly. That single coupling is what made ~3.4k lines of otherwise pure,
+ * React-free, plain-serializable-output projection code un-relocatable: a
+ * zustand handle lives on the main thread, and this kernel is scheduled to run
+ * in a worker. Everything else about the file was already portable, which is
+ * why the swap is the whole change - subscription, equality-based re-render
+ * skipping and React integration stay on the consumer's side of the sink.
+ *
+ * ## `ingest()`, and why it is not just a transaction
+ *
+ * A snapshot applies bytes to the `Y.Doc`, which fires an `observeDeep` storm,
+ * and then runs one deterministic full re-project. The sink's `transact` would
+ * coalesce the PUBLICATIONS of that storm into one delivery, which is the right
+ * end state - but not the right cost, and not the right inputs. Each suppressed
+ * event would still pay a full `collectPatches` + reconcile pass over a
+ * half-applied document, and with a metadata mutation in flight those passes
+ * take the full-projection branch, whose dead sweep would then be judging
+ * pending chains against a replica that does not hold the snapshot yet. That is
+ * the exact state the sweep's own snapshot gate exists to refuse.
+ *
+ * So `ingest` is scoped (no "who calls resume on the throwing path" question,
+ * and the sink transaction it opens still guarantees at most one delivery), and
+ * it suppresses the COMPUTATION as well as the publication. The caller applies
+ * bytes inside it and calls `projectFull()` after.
  */
 import * as Y from "yjs";
 import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
-import type { StoreApi } from "zustand";
-import type { OpenEpicState } from "./store";
+import type { ProjectionSink } from "@traycer-clients/shared/replica-runtime";
 import {
   arrayShallowEq,
   artifactProjectionsEq,
@@ -53,11 +73,20 @@ import {
   terminalAgentProjectionsEq,
   terminalAgentSlicesEq,
   treeNodesEq,
-  unionChatsSlice,
-  unionTerminalAgentsSlice,
-} from "./projection-helpers";
-import type { ProjectionInputs } from "./projection-helpers";
-import type { PendingMetadataOverlay } from "./pending-metadata-overlay";
+  composeEpicProjection,
+  readEpicRawProjectionSources,
+  unionChatsForConnection,
+  unionTuiAgentsForConnection,
+} from "../projection-helpers";
+import type {
+  EpicDocRecordArms,
+  EpicRawProjectionSources,
+  ProjectionInputs,
+} from "../projection-helpers";
+import type {
+  DeadPendingMutation,
+  PendingMetadataOverlay,
+} from "../pending-metadata-overlay";
 import type {
   AgentRolesSlice,
   ArtifactsSlice,
@@ -70,17 +99,36 @@ import type {
   TerminalAgentsSlice,
   TreeNode,
   TreeSlice,
-} from "./types";
-import { EMPTY_ARRAY, EMPTY_PROJECTED_SLICES } from "./types";
+} from "../types";
+import { EMPTY_ARRAY, EMPTY_PROJECTED_SLICES } from "../types";
 
-interface AttachedConfig {
-  readonly doc: Y.Doc;
-  readonly store: StoreApi<OpenEpicState>;
-  readonly handler: (
-    events: Array<Y.YEvent<Y.AbstractType<unknown>>>,
-    transaction: Y.Transaction,
-  ) => void;
-}
+/**
+ * What the projector is currently reading, and how.
+ *
+ * A union because the two heads differ in one structural way beyond where the
+ * rows come from: the `@1` head has an INCREMENTAL path (a Y `observeDeep`
+ * handler that turns a doc transaction into a patch), and the lane head has
+ * none - its rows arrive as decoded envelopes the replica has already
+ * reconciled, so every lane frame is a full recompute of an already-cheap
+ * source. Modelling that as one config with a nullable handler would invite a
+ * `handler?.()` somewhere and quietly make the legacy path optional.
+ */
+type AttachedConfig =
+  | {
+      readonly kind: "doc";
+      readonly doc: Y.Doc;
+      readonly sink: ProjectionSink<EpicProjectedSlices>;
+      readonly handler: (
+        events: Array<Y.YEvent<Y.AbstractType<unknown>>>,
+        transaction: Y.Transaction,
+      ) => void;
+    }
+  | {
+      readonly kind: "lane";
+      /** Read LIVE: the lane replica recomputes its slices as frames land. */
+      readonly readRaw: () => EpicRawProjectionSources;
+      readonly sink: ProjectionSink<EpicProjectedSlices>;
+    };
 
 interface ProjectorPatches {
   artifactsChanged: Set<string>;
@@ -170,25 +218,43 @@ function patchesEmpty(p: ProjectorPatches): boolean {
 }
 
 export interface EpicProjector {
-  attach: (doc: Y.Doc, store: StoreApi<OpenEpicState>) => void;
+  attach: (doc: Y.Doc, sink: ProjectionSink<EpicProjectedSlices>) => void;
+  /**
+   * Bind the LANE head instead of a `Y.Doc`.
+   *
+   * Mutually exclusive with {@link attach} - binding either detaches the other,
+   * because a projector reading two heads at once would publish whichever ran
+   * last and the two would fight over the same sink.
+   */
+  attachLaneSources: (
+    readRaw: () => EpicRawProjectionSources,
+    sink: ProjectionSink<EpicProjectedSlices>,
+  ) => void;
   detach: () => void;
   /**
    * Whether a doc is currently attached. Callers that want to force a
    * re-projection (the chat-record channel, when new rows land) must ask
    * first: {@link EpicProjector.projectFull} answers with the EMPTY slices
-   * when nothing is attached, and writing those into a live store would
+   * when nothing is attached, and publishing those into a live sink would
    * erase the projection rather than refresh it.
    */
   isAttached: () => boolean;
   /**
-   * Suspend observeDeep-driven setState calls. Used by `onSnapshot` to
-   * apply the snapshot bytes and then run a single atomic re-project as
-   * part of its own setState - without this guard the intermediate
-   * observeDeep events would each schedule a partial update.
+   * Run `body` with observeDeep-driven projection silenced, then let the
+   * caller re-project once. Used by the snapshot path to apply bytes without
+   * paying a reconcile pass per intermediate Y transaction, and without
+   * letting the overlay's dead sweep judge a half-applied document. See the
+   * module doc.
+   *
+   * Scoped rather than a `suspend()`/`resume()` pair so a throwing `body`
+   * still ends the suspension, and wrapped in the sink's own transaction so
+   * anything that does publish inside it costs one delivery.
    */
-  suspend: () => void;
-  resume: () => void;
-  /** Force a full re-projection. Returns the projected slices. */
+  ingest: (body: () => void) => void;
+  /**
+   * Force a full re-projection: publishes it through the sink and returns the
+   * same slices for a caller that wants to fold them into a wider write.
+   */
   projectFull: () => EpicProjectedSlices;
 }
 
@@ -222,6 +288,13 @@ export interface EpicProjectorSources {
    */
   readonly getTuiAgentRecords: () => TerminalAgentsSlice;
   /**
+   * Whether the doc is still a record SOURCE, per population - read at
+   * projection time like everything else here, because it is settled by what
+   * the host ANSWERED to the two list methods and those answers arrive on their
+   * own schedule. See `EpicDocRecordArms`.
+   */
+  readonly getDocArm: () => EpicDocRecordArms;
+  /**
    * Metadata mutations this client has stamped and has no answer for yet.
    * Returns the shared empty map when nothing is in flight, which makes
    * every applier a reference pass-through.
@@ -233,16 +306,16 @@ export interface EpicProjectorSources {
    * overwrote it). Must NOT republish - a dead chain already displays the
    * authoritative value, so the deletion is invisible by construction.
    */
-  readonly onDeadMutations: (requestIds: readonly string[]) => void;
+  readonly onDeadMutations: (outcomes: readonly DeadPendingMutation[]) => void;
 }
 
 export function createEpicProjector(
   sources: EpicProjectorSources,
 ): EpicProjector {
   const { getCurrentUserId, getChatRecords, getTuiAgentRecords } = sources;
-  const { getPendingOverlay, onDeadMutations } = sources;
+  const { getDocArm, getPendingOverlay, onDeadMutations } = sources;
   let attached: AttachedConfig | null = null;
-  let suspended = false;
+  let ingesting = false;
 
   function currentInputs(): ProjectionInputs {
     return {
@@ -250,24 +323,37 @@ export function createEpicProjector(
       tuiAgentRecords: getTuiAgentRecords(),
       pendingOverlay: getPendingOverlay(),
       reportDeadMutations: onDeadMutations,
+      docArm: getDocArm(),
     };
   }
 
   function detachInternal(): void {
     if (attached === null) return;
-    const epicMap = getEpicMap(attached.doc);
-    epicMap.unobserveDeep(attached.handler);
+    if (attached.kind === "doc") {
+      const epicMap = getEpicMap(attached.doc);
+      epicMap.unobserveDeep(attached.handler);
+    }
     attached = null;
   }
 
-  function attach(doc: Y.Doc, store: StoreApi<OpenEpicState>): void {
+  /** The raw populations of whichever head is attached. */
+  function readAttachedRaw(
+    config: AttachedConfig,
+    currentUserId: string | null,
+  ): EpicRawProjectionSources {
+    return config.kind === "doc"
+      ? readEpicRawProjectionSources(config.doc, currentUserId)
+      : config.readRaw();
+  }
+
+  function attach(doc: Y.Doc, sink: ProjectionSink<EpicProjectedSlices>): void {
     detachInternal();
 
     const handler = (
       events: Array<Y.YEvent<Y.AbstractType<unknown>>>,
       _transaction: Y.Transaction,
     ): void => {
-      if (suspended) return;
+      if (ingesting) return;
       const patches = collectPatches(events, doc);
       if (patchesEmpty(patches)) return;
       // With a metadata mutation in flight, take the FULL path. The
@@ -291,35 +377,43 @@ export function createEpicProjector(
         // 100-artifact epic would hand the other 99 rows fresh references -
         // exactly the churn the incremental path's per-entry identity
         // contract exists to prevent.
-        store.setState(
+        sink.publish(
           stabilizeProjectedSlices(
-            store.getState(),
+            sink.read(),
             projectFullState(doc, getCurrentUserId(), currentInputs()),
           ),
         );
         return;
       }
-      store.setState(
-        applyPatches({
-          state: store.getState(),
+      const previous = sink.read();
+      // Whole values, never patches: the identity contract that makes
+      // selectors cheap lives INSIDE the projection, and the reconcile above
+      // already left every untouched slice at its previous reference, so the
+      // spread is what turns a patch into a whole projection without
+      // disturbing one.
+      sink.publish({
+        ...previous,
+        ...applyPatches({
+          state: previous,
           doc,
           patches,
           currentUserId: getCurrentUserId(),
           chatRecords: getChatRecords(),
           tuiAgentRecords: getTuiAgentRecords(),
+          docArm: getDocArm(),
         }),
-      );
+      });
     };
-    attached = { doc, store, handler };
+    attached = { kind: "doc", doc, sink, handler };
     getEpicMap(doc).observeDeep(handler);
 
     // Initial full projection so attaching to a non-empty doc populates the
-    // store deterministically. Skipped during suspended attach so snapshot
-    // ingest can apply bytes and then call `projectFull` once.
-    if (!suspended) {
-      store.setState(
+    // sink deterministically. Skipped mid-ingest so the snapshot path can
+    // apply bytes and then call `projectFull` once.
+    if (!ingesting) {
+      sink.publish(
         stabilizeProjectedSlices(
-          store.getState(),
+          sink.read(),
           projectFullState(doc, getCurrentUserId(), currentInputs()),
         ),
       );
@@ -330,28 +424,69 @@ export function createEpicProjector(
     detachInternal();
   }
 
-  function suspend(): void {
-    suspended = true;
-  }
-
-  function resume(): void {
-    suspended = false;
+  function ingest(body: () => void): void {
+    const sink = attached?.sink ?? null;
+    const run = (): void => {
+      ingesting = true;
+      try {
+        body();
+      } finally {
+        ingesting = false;
+      }
+    };
+    // A detached projector still has to run the body - the snapshot bytes
+    // reach the replica either way, and only the projection is suppressed.
+    if (sink === null) {
+      run();
+      return;
+    }
+    sink.transact(run);
   }
 
   function projectFull(): EpicProjectedSlices {
     if (attached === null) return EMPTY_PROJECTED_SLICES;
-    return stabilizeProjectedSlices(
-      attached.store.getState(),
-      projectFullState(attached.doc, getCurrentUserId(), currentInputs()),
+    const currentUserId = getCurrentUserId();
+    const slices = stabilizeProjectedSlices(
+      attached.sink.read(),
+      composeEpicProjection(
+        readAttachedRaw(attached, currentUserId),
+        currentUserId,
+        currentInputs(),
+      ),
+    );
+    attached.sink.publish(slices);
+    return slices;
+  }
+
+  /**
+   * Bind the LANE head: raw populations decoded from
+   * `epic.state.subscribe@1.0`, with no Y observer because there is no doc to
+   * observe. Everything downstream - the union, the dead sweep, the overlay,
+   * the tree, and the identity-preserving reconcile against what is published -
+   * is the same code the doc head runs.
+   */
+  function attachLaneSources(
+    readRaw: () => EpicRawProjectionSources,
+    sink: ProjectionSink<EpicProjectedSlices>,
+  ): void {
+    detachInternal();
+    attached = { kind: "lane", readRaw, sink };
+    if (ingesting) return;
+    const currentUserId = getCurrentUserId();
+    sink.publish(
+      stabilizeProjectedSlices(
+        sink.read(),
+        composeEpicProjection(readRaw(), currentUserId, currentInputs()),
+      ),
     );
   }
 
   return {
     attach,
+    attachLaneSources,
     detach,
     isAttached: () => attached !== null,
-    suspend,
-    resume,
+    ingest,
     projectFull,
   };
 }
@@ -379,6 +514,28 @@ function pathOfEvent(event: Y.YEvent<Y.AbstractType<unknown>>): string[] {
 /**
  * Keys on an artifact entry whose change forces a tree rebuild because the
  * tree slice depends on them (parent/child grouping, sort key, label).
+ *
+ * ## `updatedAt` is absent here, and that means different things per PATH
+ *
+ * All three key sets below omit `updatedAt`, so on THIS path - the incremental
+ * doc-arm reconcile - a write that only stamps a timestamp never sets
+ * `structuralTreeDirty`, the tree is not rebuilt, and every node keeps whatever
+ * `updatedAt` it had at its last structural change. The tree's copy is a
+ * lagging one; `useEpicNodeUpdatedAt` exists because of it.
+ *
+ * On any FULL projection it is the opposite. `projectTreeSlice` builds each
+ * node with `updatedAt` taken straight from the record, so a timestamp bump
+ * does re-mint that node - and, because the default order is recency, can
+ * REORDER siblings and roots. Every full pass has this property: the lane arm
+ * (which reaches `projectFull()` from the records replica on its update paths),
+ * a snapshot ingest, and the pending-overlay fallback on the doc arm.
+ *
+ * So "does a body write move the tree?" has no single answer, and the two
+ * arms disagree. A doc-arm test reaches tree churn only through a STRUCTURAL
+ * key; the lane arm reaches it with a bare timestamp. Coverage written against
+ * one door proves nothing about the other, which has already cost this epic two
+ * rounds of a perf gate (finding 12): the fixes were right and the harness was
+ * entering through the door the field does not use.
  */
 const ARTIFACT_TREE_KEYS: ReadonlySet<string> = new Set([
   "parentId",
@@ -659,13 +816,14 @@ function collectPatches(
 
 // Mutable mirror of the projected slices so the patch builder below can
 // assign to fields without fighting `readonly` modifiers; the result is
-// returned as `Partial<OpenEpicState>` and Zustand's setState merges it
-// back into the readonly store shape.
+// returned as `Partial<EpicProjectedSlices>` and the handler spreads it over
+// the sink's current value to publish a whole projection.
 //
-// Spelled with explicit fields (instead of a `OpenEpicState[K]` mapped
-// type) so this module's type-graph stays independent of the circular
-// `store.ts` import - typed-eslint rules otherwise see the mapped lookup
-// as `error` and reject every `next.X = Y` write site.
+// Spelled with explicit fields (instead of an `EpicProjectedSlices[K]` mapped
+// type) so typed-eslint rules do not see the mapped lookup as `error` and
+// reject every `next.X = Y` write site. It was originally spelled this way to
+// keep the type-graph out of a circular `store.ts` import; the sink swap
+// removed that import, and the lint reason is what keeps the shape.
 type MutableProjectedPatch = {
   epic?: EpicHeader;
   artifacts?: ArtifactsSlice;
@@ -697,7 +855,7 @@ function roleClaimsEq(
 }
 
 function applyAgentRolesSlice(args: {
-  readonly state: OpenEpicState;
+  readonly state: EpicProjectedSlices;
   readonly doc: Y.Doc;
   readonly patches: ProjectorPatches;
   readonly chats: ChatsSlice;
@@ -736,7 +894,7 @@ function applyAgentRolesSlice(args: {
 }
 
 function applyEpicHeader(
-  state: OpenEpicState,
+  state: EpicProjectedSlices,
   doc: Y.Doc,
   patches: ProjectorPatches,
   next: MutableProjectedPatch,
@@ -859,7 +1017,7 @@ function applyMapSlice<T>(
 }
 
 function applyArtifactsSlice(
-  state: OpenEpicState,
+  state: EpicProjectedSlices,
   doc: Y.Doc,
   patches: ProjectorPatches,
   next: MutableProjectedPatch,
@@ -885,7 +1043,7 @@ function applyArtifactsSlice(
  * it only maintains a `byId`/`allIds` table the delete card resolves against.
  */
 function applyDeletedArtifactsSlice(
-  state: OpenEpicState,
+  state: EpicProjectedSlices,
   doc: Y.Doc,
   patches: ProjectorPatches,
   next: MutableProjectedPatch,
@@ -904,12 +1062,13 @@ function applyDeletedArtifactsSlice(
 }
 
 interface ApplyChatsArgs {
-  readonly state: OpenEpicState;
+  readonly state: EpicProjectedSlices;
   readonly doc: Y.Doc;
   readonly patches: ProjectorPatches;
   readonly next: MutableProjectedPatch;
   readonly currentUserId: string | null;
   readonly chatRecords: ChatsSlice;
+  readonly docArm: EpicDocRecordArms;
 }
 
 /**
@@ -924,7 +1083,8 @@ interface ApplyChatsArgs {
  * would go on losing exactly the chats this channel exists to keep.
  */
 function applyChatsSlice(args: ApplyChatsArgs): ChatsSlice {
-  const { state, doc, patches, next, currentUserId, chatRecords } = args;
+  const { state, doc, patches, next, currentUserId, chatRecords, docArm } =
+    args;
   if (patches.chatsContainerReseeded) {
     reseedFromContainer(doc, getChatsMap, patches.chatsChanged);
   }
@@ -980,6 +1140,7 @@ function applyChatsSlice(args: ApplyChatsArgs): ChatsSlice {
       docChats: state.docChats,
       chatRecords,
       currentUserId,
+      docArm,
     });
   }
   const allIds = computeIdsFromMap(byId);
@@ -992,6 +1153,7 @@ function applyChatsSlice(args: ApplyChatsArgs): ChatsSlice {
     docChats: nextDocChats,
     chatRecords,
     currentUserId,
+    docArm,
   });
 }
 
@@ -1008,26 +1170,33 @@ function applyChatsSlice(args: ApplyChatsArgs): ChatsSlice {
  * all chat consumers a new `chats` identity carrying the same content.
  */
 function unionInto(args: {
-  readonly state: OpenEpicState;
+  readonly state: EpicProjectedSlices;
   readonly next: MutableProjectedPatch;
   readonly docChats: ChatsSlice;
   readonly chatRecords: ChatsSlice;
   readonly currentUserId: string | null;
+  readonly docArm: EpicDocRecordArms;
 }): ChatsSlice {
-  const { state, next, docChats, chatRecords, currentUserId } = args;
-  const union = unionChatsSlice(docChats, chatRecords, currentUserId);
+  const { state, next, docChats, chatRecords, currentUserId, docArm } = args;
+  const union = unionChatsForConnection(
+    docChats,
+    chatRecords,
+    currentUserId,
+    docArm,
+  );
   if (chatSlicesEq(union, state.chats)) return state.chats;
   next.chats = union;
   return union;
 }
 
 interface ApplyTerminalAgentsArgs {
-  readonly state: OpenEpicState;
+  readonly state: EpicProjectedSlices;
   readonly doc: Y.Doc;
   readonly patches: ProjectorPatches;
   readonly next: MutableProjectedPatch;
   readonly currentUserId: string | null;
   readonly tuiAgentRecords: TerminalAgentsSlice;
+  readonly docArm: EpicDocRecordArms;
 }
 
 /**
@@ -1046,7 +1215,8 @@ interface ApplyTerminalAgentsArgs {
 function applyTerminalAgentsSlice(
   args: ApplyTerminalAgentsArgs,
 ): TerminalAgentsSlice {
-  const { state, doc, patches, next, currentUserId, tuiAgentRecords } = args;
+  const { state, doc, patches, next, currentUserId, tuiAgentRecords, docArm } =
+    args;
   if (patches.terminalAgentsContainerReseeded) {
     reseedFromContainer(
       doc,
@@ -1109,6 +1279,7 @@ function applyTerminalAgentsSlice(
       next,
       docTuiAgents: state.docTuiAgents,
       tuiAgentRecords,
+      docArm,
     });
   }
   const allIds = computeIdsFromMap(byId);
@@ -1120,6 +1291,7 @@ function applyTerminalAgentsSlice(
     next,
     docTuiAgents: nextDocTuiAgents,
     tuiAgentRecords,
+    docArm,
   });
 }
 
@@ -1132,20 +1304,25 @@ function applyTerminalAgentsSlice(
  * reference gate could never say "unchanged" for it.
  */
 function unionTerminalAgentsInto(args: {
-  readonly state: OpenEpicState;
+  readonly state: EpicProjectedSlices;
   readonly next: MutableProjectedPatch;
   readonly docTuiAgents: TerminalAgentsSlice;
   readonly tuiAgentRecords: TerminalAgentsSlice;
+  readonly docArm: EpicDocRecordArms;
 }): TerminalAgentsSlice {
-  const { state, next, docTuiAgents, tuiAgentRecords } = args;
-  const union = unionTerminalAgentsSlice(docTuiAgents, tuiAgentRecords);
+  const { state, next, docTuiAgents, tuiAgentRecords, docArm } = args;
+  const union = unionTuiAgentsForConnection(
+    docTuiAgents,
+    tuiAgentRecords,
+    docArm,
+  );
   if (terminalAgentSlicesEq(union, state.tuiAgents)) return state.tuiAgents;
   next.tuiAgents = union;
   return union;
 }
 
 interface ApplyTreeArgs {
-  readonly state: OpenEpicState;
+  readonly state: EpicProjectedSlices;
   readonly patches: ProjectorPatches;
   readonly nextArtifacts: ArtifactsSlice;
   readonly nextChats: ChatsSlice;
@@ -1318,7 +1495,7 @@ function stabilizeTree(next: TreeSlice, prev: TreeSlice): TreeSlice {
  * means.
  */
 function stabilizeProjectedSlices(
-  prev: OpenEpicState,
+  prev: EpicProjectedSlices,
   next: EpicProjectedSlices,
 ): EpicProjectedSlices {
   const epic =
@@ -1391,17 +1568,19 @@ function stabilizeProjectedSlices(
 
 /** Everything one transaction's reconcile reads. */
 interface ApplyPatchesArgs {
-  readonly state: OpenEpicState;
+  readonly state: EpicProjectedSlices;
   readonly doc: Y.Doc;
   readonly patches: ProjectorPatches;
   readonly currentUserId: string | null;
   readonly chatRecords: ChatsSlice;
   readonly tuiAgentRecords: TerminalAgentsSlice;
+  readonly docArm: EpicDocRecordArms;
 }
 
-function applyPatches(args: ApplyPatchesArgs): Partial<OpenEpicState> {
+function applyPatches(args: ApplyPatchesArgs): Partial<EpicProjectedSlices> {
   const { state, doc, patches, currentUserId, chatRecords, tuiAgentRecords } =
     args;
+  const docArm = args.docArm;
   const next: MutableProjectedPatch = {};
   applyEpicHeader(state, doc, patches, next);
   const nextArtifacts = applyArtifactsSlice(state, doc, patches, next);
@@ -1413,6 +1592,7 @@ function applyPatches(args: ApplyPatchesArgs): Partial<OpenEpicState> {
     next,
     currentUserId,
     chatRecords,
+    docArm,
   });
   if (nextChats.allIds !== state.chats.allIds) {
     patches.structuralTreeDirty = true;
@@ -1424,6 +1604,7 @@ function applyPatches(args: ApplyPatchesArgs): Partial<OpenEpicState> {
     next,
     currentUserId,
     tuiAgentRecords,
+    docArm,
   });
   if (nextTerminalAgents.allIds !== state.tuiAgents.allIds) {
     patches.structuralTreeDirty = true;

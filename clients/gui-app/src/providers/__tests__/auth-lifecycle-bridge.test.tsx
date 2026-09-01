@@ -1,3 +1,4 @@
+import { INERT_ROOT_STATE_PORT } from "@/stores/epics/open-epic/test-support/root-state-port-fixture";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
 
@@ -14,6 +15,7 @@ import {
 } from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
+import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
 /** Chat sessions are keyed by (epic, chat, host); sign-out / user-switch
  *  teardown is host-agnostic, so one host id serves every fixture here. */
@@ -29,8 +31,14 @@ function fakeOpenEpicHandle(id: string): OpenEpicStoreHandle & {
   const h = {
     epicId: id,
     userId: null,
-    doc: {} as never,
-    awareness: {} as never,
+    // A production handle has no `doc` / `awareness`: the replica lives on
+    // the worker thread and a `Y.Doc` cannot cross a structured clone.
+    projection: {
+      accept: () => null,
+      apply: () => {},
+      reject: () => {},
+    },
+    body: { applyDocUpdate: () => {}, applyAwareness: () => {} },
     store: {
       getState: () => ({ unsyncedQueueSize: 0, snapshotMeta: null }) as never,
       subscribe: () => () => undefined,
@@ -43,6 +51,7 @@ function fakeOpenEpicHandle(id: string): OpenEpicStoreHandle & {
     retryTransport: () => undefined,
     isClean: () => true,
     hotArtifactRoomIdsForTests: () => [],
+    ...INERT_ROOT_STATE_PORT,
     disposeCount: 0,
   };
   return h;
@@ -59,6 +68,7 @@ function fakeChatHandle(
   const calls = { close: 0 };
   return {
     handle: createChatSessionStore({
+      environment: CHAT_STORE_TEST_ENVIRONMENT,
       hostId: "host-a",
       epicId,
       chatId,

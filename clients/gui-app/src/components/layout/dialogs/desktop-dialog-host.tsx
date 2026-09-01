@@ -104,6 +104,7 @@ export function DesktopDialogHost(): ReactNode {
       {activeDialog === "update-unsynced-confirm" &&
       appUpdates.bridge !== null ? (
         <ConfirmDestructiveDialog
+          blockedReason={null}
           open
           onOpenChange={(open) => {
             if (!open) close();
