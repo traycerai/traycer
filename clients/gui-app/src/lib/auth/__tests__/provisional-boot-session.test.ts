@@ -804,7 +804,20 @@ describe("AuthService provisional boot session", () => {
       expect(emissions).toBe(2);
     });
 
-    it("C14: a rejected verdict clears the session BEFORE rotating, so a transient rotate outcome still ends signed-out rather than stranding a dead session", async () => {
+    // The defect this pins: rotating with the rejected session still installed
+    // made a TRANSIENT rotate failure terminal, because the rotate and every
+    // recovery tick stand down for a session that is already settled. Cleared
+    // first, the rotate runs.
+    //
+    // What "not stranded" looks like changed when `unverified` arrived. A
+    // transient outcome (`lock-busy` here) no longer ends `signed-out`: the
+    // transient arm of `applyRotateOutcome` holds the local plane `unverified`
+    // and arms the recovery loop at its 1s floor. That state holds NO verdict,
+    // so the stand-down guards (`hasVerifiedSession`, deliberately not
+    // `hasLiveBearer`) let the next tick run - which is the retry a stranded
+    // session never gets, and the assertion below that carries the pin.
+    it("C14: a rejected verdict clears the session BEFORE rotating, so a transient rotate outcome holds the local plane unverified with recovery armed rather than stranding a dead session", async () => {
+      vi.useFakeTimers();
       const { service, host } = makeService();
       await signInStoredCredentials(host, "user-1", "persisted-token");
       seedSnapshot(host, validSnapshotEnvelope("user-1", "FREE"));
@@ -815,12 +828,29 @@ describe("AuthService provisional boot session", () => {
       await service.start();
       expect(useAuthStore.getState().status).toBe("signed-in");
 
-      host.tokenStore.rotate = () =>
-        Promise.resolve({ outcome: "lock-busy" as const, pair: null });
+      let rotateCalls = 0;
+      host.tokenStore.rotate = () => {
+        rotateCalls += 1;
+        return Promise.resolve({ outcome: "lock-busy" as const, pair: null });
+      };
       deferred.resolve(await status(401));
-      await flush();
+      await vi.advanceTimersByTimeAsync(0);
 
-      expect(useAuthStore.getState().status).toBe("signed-out");
+      // The rotate ran at all - which it would not have with the rejected
+      // session still installed.
+      expect(rotateCalls).toBe(1);
+      // Not signed-in (the rejected session is gone) and not signed-out (the
+      // outcome was transient): the local plane is held without a verdict.
+      expect(useAuthStore.getState().status).toBe("unverified");
+
+      // Recovery is armed at the floor (`SESSION_RECOVERY_INITIAL_DELAY_MS`,
+      // 1s): nothing fires short of it, and the tick that lands on it rotates
+      // again. A stranded session would sit at one rotate call forever.
+      await vi.advanceTimersByTimeAsync(999);
+      expect(rotateCalls).toBe(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(rotateCalls).toBe(2);
+      expect(useAuthStore.getState().status).toBe("unverified");
     });
 
     // Pins: a background settle straggling from an aborted provisional boot
