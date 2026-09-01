@@ -649,21 +649,6 @@ export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
-      // One site's logins were cleared somewhere else for this user (keychain
-      // refactor ticket 07): another desktop's tile menu, or a tombstone the
-      // store recorded for `domain`. The receiving desktop removes that
-      // registrable domain's cookies and localStorage from its own persistent
-      // partition without echoing a delta back - the store already knows. Sent
-      // to every elected desktop subscriber of the user EXCEPT the one that
-      // reported the change. No `userId`: the identity is the stream's
-      // authenticated user.
-      kind: z.literal("primaryProfileEvict"),
-      ...textFrameFields,
-      domain: z.string(),
-    })
-    .strict(),
-  z
-    .object({
       // A sign-in this host witnessed inside a headless session, offered to
       // the desktops that hold the master jar (universal-sign-in decisions
       // 1-5). Emitted from headless capture events only - never echoed back
@@ -903,11 +888,11 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
       // "Clear" on one row of Settings > Browser > Sites with saved logins
       // (keychain refactor ticket 10, decision #13). Unsolicited and
       // unacknowledged: the host tombstones that registrable domain in the
-      // user's slice and fans `primaryProfileEvict` out for it - to EVERY
-      // elected desktop of the user, the sender included, because the request
-      // came from a settings page rather than from a jar that already cleared
-      // itself. No `userId` - the identity is the stream's authenticated user,
-      // and only the elected lifecycle subscriber is heard (same gate as
+      // user's slice and evicts it from its own live headless contexts. It
+      // fans NOTHING back: the host->desktop removal frame was retired by
+      // universal-sign-in ticket 08, which left the desktop's write channel
+      // add-only. No `userId` - the identity is the stream's authenticated
+      // user, and only the elected lifecycle subscriber is heard (same gate as
       // `primaryProfileDelta`).
       kind: z.literal("clearSite"),
       ...textFrameFields,

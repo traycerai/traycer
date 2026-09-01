@@ -753,11 +753,10 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.browserViewAnnotationAttachResult,
         RunnerHostInvoke.browserViewGetDebugSnapshot,
         RunnerHostInvoke.browserViewPrimaryProfileCapture,
-        // Keychain refactor tickets 07 and 08: the tile-menu clear-site, the
-        // host-driven eviction of the same site on this machine, and the
-        // whole-jar forget.
+        // Keychain refactor tickets 07 and 08: the tile-menu clear-site and
+        // the whole-jar forget. The host-driven eviction of one site went with
+        // the `primaryProfileEvict` frame (universal-sign-in ticket 08).
         RunnerHostInvoke.browserViewClearSite,
-        RunnerHostInvoke.browserViewEvictSite,
         RunnerHostInvoke.browserViewForgetLogins,
         // Universal sign-in ticket 03: the host->jar write direction.
         RunnerHostInvoke.browserViewApplyObservedProfile,

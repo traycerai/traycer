@@ -1,12 +1,16 @@
 import {
   BROWSER_PRIMARY_PROFILE_OBSERVED_MAX_BURST,
   BROWSER_PRIMARY_PROFILE_OBSERVED_MAX_COOKIES,
+  type BrowserCookieKey,
   type BrowserStorageCookie,
 } from "@traycer/protocol/host/browser/contracts";
 import { registrableDomain } from "@traycer/protocol/host/browser/registrable-domain";
 import { log, sanitizeLogFields } from "../../app/logger";
 import {
+  browserJarCookieKeys,
+  cookieKeyId,
   mergeObservedProfileCookies,
+  type BrowserObservedCookieMergeResult,
   type BrowserStorageSession,
 } from "./browser-storage-state";
 
@@ -17,11 +21,12 @@ import {
  * end.
  *
  * Nothing here believes the frame. The registrable domain of every cookie is
- * re-derived locally and checked against the domain the frame claims; the
- * volume and the rate are bounded; a site the user forgot is refused until the
- * sending connection has acked pruning it; and what survives goes through
- * Chromium's own `cookies.set`, which is what normalises the attributes away
- * from anything the sender chose.
+ * re-derived locally and checked against the domain the frame claims; a cookie
+ * NAME the desktop's own browsing owns in that domain is refused outright,
+ * which is what keeps this an ADD-ONLY channel; the volume and the rate are bounded; a site the
+ * user forgot is refused until the sending connection has acked pruning it;
+ * and what survives goes through Chromium's own `cookies.set`, which is what
+ * normalises the attributes away from anything the sender chose.
  *
  * The sending host's identity is NOT read from the frame - it comes from the
  * connection that delivered it (provenance-not-shape), which is also what the
@@ -36,6 +41,26 @@ export type BrowserObservedProfileReason =
   | "over-bound"
   | "rate-limited"
   /**
+   * The jar already holds a cookie of this NAME in this registrable domain and
+   * no observation put it there, so the desktop's own browsing did (browser
+   * security review, root cause D).
+   *
+   * This is the rule that turns a replace-by-key write channel back into an
+   * add-only one. Chromium replaces a cookie by (name, domain, path), so any
+   * write to a live key is a destructive write dressed as a merge - but the
+   * ownership unit is deliberately COARSER than that triple, because the
+   * request the browser sends is coarser too. RFC 6265 orders the `Cookie`
+   * header longest-path-first and mainstream servers read the first occurrence
+   * of a name, so a host-added `sid` on `/app` beside the desktop's `sid` on
+   * `/` IS the session for the user's real requests: an overwrite performed
+   * under another key. A `.example.com` form beside a host-only `example.com`
+   * one is the same trick by domain. So the test is (name, registrable
+   * domain), and it closes the two-second expiry, the junk value, the path
+   * shadow, the domain shadow, the forged `__Host-` prefix and the stale
+   * replay together, with no clock and no epoch on the wire.
+   */
+  | "owned-by-desktop"
+  /**
    * The user forgot this site, and the connection that sent the observation
    * has not yet acked the ledger revision that says so (universal-sign-in
    * ticket 04). It is the no-resurrection gate, and it replaced the
@@ -47,13 +72,14 @@ export type BrowserObservedProfileReason =
   | "ledger-unacked";
 
 /**
- * The frame-level verdict. `expired-cookie` is missing on purpose: an expired
- * cookie is dropped by itself and never costs the frame the rest of the
- * sign-in it belongs to.
+ * The frame-level verdict. `expired-cookie` and `owned-by-desktop` are missing
+ * on purpose: both are per-cookie and neither costs the frame the rest of the
+ * sign-in it belongs to - a real sign-in that refreshes one cookie the desktop
+ * owns still carries the others.
  */
 export type BrowserObservedProfileOutcome = Exclude<
   BrowserObservedProfileReason,
-  "expired-cookie"
+  "expired-cookie" | "owned-by-desktop"
 >;
 
 /**
@@ -83,6 +109,8 @@ export interface BrowserObservedProfileResult {
   readonly appliedCookies: number;
   readonly domainMismatchCookies: number;
   readonly expiredCookies: number;
+  /** Live keys this sender is not allowed to write over. */
+  readonly ownedByDesktopCookies: number;
   /** Cookies the jar itself would not take; counted, never fatal to the frame. */
   readonly rejectedCookies: number;
 }
@@ -92,6 +120,25 @@ export interface BrowserObservedProfileTraceContext {
   readonly hostId: string;
   readonly connectionId: string;
   readonly governor: BrowserObservedConnectionGovernor;
+}
+
+/** The jar one observation is applied to, and what kind of jar it is. */
+export interface BrowserObservedProfileTarget {
+  readonly session: BrowserStorageSession;
+  /**
+   * True only for `BROWSER_VIEW_PARTITION`. False means saved logins are off
+   * on this machine and the write is going to the in-memory jar, so no custody
+   * claim is taken at all: a durable mark describes the durable jar, and one
+   * recorded for a cookie that dies at quit would still be there - as a
+   * standing update right over the user's own login - the day they turn saved
+   * logins back on.
+   *
+   * The cost is stated and accepted: in that mode a host may ADD to the
+   * ephemeral jar but not update what it added, because nothing recorded that
+   * it did. The sign-in still reaches the user's live tiles, which is the
+   * point of applying at all.
+   */
+  readonly durableJar: boolean;
 }
 
 export interface BrowserObservedProfileDependencies {
@@ -104,8 +151,42 @@ export interface BrowserObservedProfileDependencies {
     readonly connectionId: string;
     readonly domain: string;
   }) => boolean;
-  /** The `primary` jar guests are on right now - the one an observation merges into. */
-  readonly getSession: () => BrowserStorageSession;
+  /**
+   * Did an observation put this key in the jar? See
+   * `isHeadlessOriginCookieKey` in `browser-forget-ledger.ts`, which is where
+   * the durable set lives.
+   */
+  readonly isHeadlessOriginKey: (keyId: string) => boolean;
+  /**
+   * These keys are about to be written by this applier: they become the
+   * contributing host's to update, and the desktop's own cookie observer is
+   * told not to read their insert events as local writes.
+   *
+   * Awaited before the merge, deliberately. Both halves must be in place
+   * before the first `cookies.set` fires, or the observer sees an insert it
+   * cannot attribute and hands the key straight back.
+   *
+   * Called only for a write bound for the DURABLE jar - see
+   * {@link BrowserObservedProfileTarget.durableJar}.
+   */
+  readonly claimHeadlessOriginKeys: (
+    keys: readonly BrowserCookieKey[],
+  ) => Promise<void>;
+  /**
+   * The jar refused these keys, so the claim taken over them is worthless and
+   * has to go back: the desktop owns them again, and the user's own next
+   * sign-in write must be seen as the local write it is.
+   */
+  readonly releaseHeadlessOriginKeys: (
+    keys: readonly BrowserCookieKey[],
+  ) => Promise<void>;
+  /**
+   * The `primary` jar guests are on right now - the one an observation merges
+   * into - together with whether it is the durable one. Resolved once, inside
+   * the serialized section, so the ownership test, the merge and the custody
+   * record all speak about the same jar.
+   */
+  readonly getTargetJar: () => BrowserObservedProfileTarget;
   /** Runs the merge with no competing jar work for the same site. */
   readonly serializeOnDomain: <T>(
     domain: string,
@@ -281,25 +362,47 @@ export async function applyBrowserObservedProfile(
     ) {
       return dropped(scope, "ledger-unacked");
     }
+    const target = dependencies.getTargetJar();
     const classified = classifyObservedCookies({
       scope,
       cookies: observed.cookies,
       now: dependencies.now(),
+      // Read inside the serialized section, so what the jar holds cannot
+      // change between the ownership test and the merge that test authorises.
+      jarKeys: await browserJarCookieKeys(scope, target.session),
+      isHeadlessOriginKey: dependencies.isHeadlessOriginKey,
     });
-    const merged =
-      classified.survivors.length === 0
-        ? { applied: 0, rejected: 0 }
-        : await mergeObservedProfileCookies(
-            classified.survivors,
-            dependencies.getSession(),
-          );
+    let merged: BrowserObservedCookieMergeResult = { applied: 0, refused: [] };
+    if (classified.survivors.length > 0) {
+      if (target.durableJar) {
+        await dependencies.claimHeadlessOriginKeys(
+          classified.survivors.map((cookie) => ({
+            domain: cookie.domain,
+            name: cookie.name,
+            path: cookie.path,
+          })),
+        );
+      }
+      merged = await mergeObservedProfileCookies(
+        classified.survivors,
+        target.session,
+      );
+      // Still inside the serialized section: the claim was taken over what
+      // this applier was ABOUT to write, and a cookie the jar refused makes
+      // that claim a standing right over a key nobody wrote - which the user's
+      // own later sign-in would then spend instead of revoking.
+      if (target.durableJar && merged.refused.length > 0) {
+        await dependencies.releaseHeadlessOriginKeys(merged.refused);
+      }
+    }
     return {
       domain: scope,
       outcome: "applied",
       appliedCookies: merged.applied,
       domainMismatchCookies: classified.domainMismatch,
       expiredCookies: classified.expired,
-      rejectedCookies: merged.rejected,
+      ownedByDesktopCookies: classified.ownedByDesktop,
+      rejectedCookies: merged.refused.length,
     };
   });
 }
@@ -350,6 +453,14 @@ export function traceBrowserObservedProfile(
       context,
     );
   }
+  if (result.ownedByDesktopCookies > 0) {
+    traceRejection(
+      result.domain,
+      "owned-by-desktop",
+      result.ownedByDesktopCookies,
+      context,
+    );
+  }
 }
 
 function traceRejection(
@@ -381,10 +492,11 @@ interface ClassifiedObservedCookies {
   readonly survivors: readonly BrowserStorageCookie[];
   readonly domainMismatch: number;
   readonly expired: number;
+  readonly ownedByDesktop: number;
 }
 
 /**
- * The two per-cookie rejections, both of which leave the rest of the frame
+ * The three per-cookie rejections, all of which leave the rest of the frame
  * applicable.
  *
  * `domain-mismatch` is the independent half of the trust model: the sender's
@@ -397,17 +509,38 @@ interface ClassifiedObservedCookies {
  * straight through as `expirationDate` - so without this, a frame that cannot
  * express a removal could still perform one. The comparison is against RECEIVE
  * time, which is why it cannot be a schema bound. A NEGATIVE `expires` is the
- * session-cookie sentinel and always passes.
+ * session-cookie sentinel and always passes. It stops only the ZERO-RESIDUE
+ * delete; every other destructive write is stopped by the rule below.
+ *
+ * `owned-by-desktop` is that rule, and it is the load-bearing one. The unit is
+ * a cookie NAME within this registrable domain: if the jar holds any cookie of
+ * that name that no observation put there, the desktop's own login owns the
+ * name and a remote machine may not write it under any path or domain form. A
+ * name the jar does not hold is free to add, which is the entire feature: a
+ * sign-in that happened on another machine arrives as names this jar has never
+ * seen.
  */
 function classifyObservedCookies(args: {
   readonly scope: string;
   readonly cookies: readonly BrowserStorageCookie[];
   readonly now: number;
+  readonly jarKeys: readonly BrowserCookieKey[];
+  readonly isHeadlessOriginKey: (keyId: string) => boolean;
 }): ClassifiedObservedCookies {
   const nowSeconds = args.now / 1_000;
+  // Names in this scope that no observation contributed. A name with one
+  // desktop-written form and one host-contributed form lands here, which is
+  // the conservative reading and the right one: the desktop's form is still a
+  // live login.
+  const desktopOwnedNames = new Set(
+    args.jarKeys
+      .filter((key) => !args.isHeadlessOriginKey(cookieKeyId(key)))
+      .map((key) => key.name),
+  );
   const survivors: BrowserStorageCookie[] = [];
   let domainMismatch = 0;
   let expired = 0;
+  let ownedByDesktop = 0;
   for (const cookie of args.cookies) {
     if (registrableDomain(cookie.domain) !== args.scope) {
       domainMismatch += 1;
@@ -417,9 +550,13 @@ function classifyObservedCookies(args: {
       expired += 1;
       continue;
     }
+    if (desktopOwnedNames.has(cookie.name)) {
+      ownedByDesktop += 1;
+      continue;
+    }
     survivors.push(cookie);
   }
-  return { survivors, domainMismatch, expired };
+  return { survivors, domainMismatch, expired, ownedByDesktop };
 }
 
 function dropped(
@@ -432,6 +569,7 @@ function dropped(
     appliedCookies: 0,
     domainMismatchCookies: 0,
     expiredCookies: 0,
+    ownedByDesktopCookies: 0,
     rejectedCookies: 0,
   };
 }

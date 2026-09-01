@@ -160,12 +160,6 @@ const pipCaptureStartSchema: z.ZodType<PipCaptureStartInput> =
 const storeKeyMaterialSchema = z.base64();
 
 /**
- * The registrable domain an evict names (ticket 07). Non-empty only: the scope
- * is what bounds the removal, and an empty one would name the whole jar.
- */
-const evictDomainSchema = z.object({ domain: z.string().min(1) });
-
-/**
  * One `primaryProfileObserved` frame on its way to the jar (universal-sign-in
  * ticket 03).
  *
@@ -206,6 +200,13 @@ const forgetLedgerAckSchema = z.object({
   hostId: nonEmptyStringSchema,
   connectionId: nonEmptyStringSchema,
   revision: z.number().int().nonnegative(),
+  /**
+   * What that connection was actually sent, which is the ceiling the ack is
+   * worth (universal-sign-in ticket 09). Required rather than defaulted: a
+   * caller that cannot say what it sent has not established the binding, and a
+   * default would quietly restore the unsolicited ack this closes.
+   */
+  sentRevision: z.number().int().nonnegative(),
 });
 
 /** A closed stream incarnation, whose acked revision goes with it. */
@@ -225,7 +226,6 @@ export const browserViewIpcPayload = {
   electronTabCdpDispatch: electronTabCdpDispatchSchema,
   electronTabControl: electronTabControlSchema,
   ensureTab: ensureTabSchema,
-  evictDomain: evictDomainSchema,
   findRequest: findRequestSchema,
   findStop: findStopSchema,
   forgetLedgerAck: forgetLedgerAckSchema,

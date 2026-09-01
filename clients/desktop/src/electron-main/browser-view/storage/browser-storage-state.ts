@@ -10,6 +10,7 @@ import {
   browserStorageLocalStorageEntrySchema,
   browserStorageOriginSchema as protocolStorageOriginSchema,
   browserStorageStateSchema as protocolStorageStateSchema,
+  type BrowserCookieKey,
   type BrowserStorageCookie as ProtocolStorageCookie,
   type BrowserStorageLocalStorageEntry,
   type BrowserStorageOrigin,
@@ -462,8 +463,14 @@ export interface BrowserObservedCookieMergeResult {
    * by this shell, or refused by Chromium's own `cookies.set` validation. They
    * are counted rather than thrown on, which is the whole difference between
    * this path and {@link seedBrowserViewCookies}.
+   *
+   * The KEYS rather than a count, because the applier claimed every one of
+   * them as the sending host's before writing: a key the jar refused names a
+   * cookie that does not exist, and leaving the claim standing would hand the
+   * host an update right over whatever the user's own browsing later puts
+   * there.
    */
-  readonly rejected: number;
+  readonly refused: readonly BrowserCookieKey[];
 }
 
 /**
@@ -489,8 +496,12 @@ export async function mergeObservedProfileCookies(
   browserSession: BrowserStorageSession,
 ): Promise<BrowserObservedCookieMergeResult> {
   let applied = 0;
-  let rejected = 0;
+  const refused: BrowserCookieKey[] = [];
   for (const cookie of cookies) {
+    // The key as the CALLER claimed it, not as the schema would normalise it:
+    // the claim the applier recorded was spelled this way, so a release has to
+    // be spelled the same way to find it.
+    const key = { domain: cookie.domain, name: cookie.name, path: cookie.path };
     try {
       // The parse is INSIDE the try, and that placement is the guard rather
       // than a style choice: this schema's transforms THROW on a
@@ -501,17 +512,48 @@ export async function mergeObservedProfileCookies(
       // skipped, and no count or trace of any of it.
       const parsed = desktopStorageCookieSchema.parse(cookie);
       if (!isUnpartitionedCookie(parsed)) {
-        rejected += 1;
+        refused.push(key);
         continue;
       }
       await setStorageCookie(parsed, browserSession);
       applied += 1;
     } catch {
-      rejected += 1;
+      refused.push(key);
     }
   }
   await browserSession.cookies.flushStore();
-  return { applied, rejected };
+  return { applied, refused };
+}
+
+/**
+ * A cookie's identity, as every path that has to match one across the jar, the
+ * wire and the ownership ledger spells it: (name, domain, path), which is what
+ * Chromium itself replaces by.
+ */
+export function cookieKeyId(key: BrowserCookieKey): string {
+  return `${key.domain}\u0000${key.name}\u0000${key.path}`;
+}
+
+/**
+ * The keys one registrable scope holds in this jar right now, subdomains
+ * included - Chromium's own `cookies.get` domain filter is subdomain-inclusive,
+ * which is what makes this the whole scope the ownership rule reasons over.
+ *
+ * Normalised through {@link browserStorageCookies}, so a key here is spelled
+ * exactly as the change observer and the ownership ledger spell it.
+ *
+ * KNOWN LIMIT, and the only open direction in the ownership rule: a jar cookie
+ * this shell cannot represent (an IDN domain form `readCookieDomain` refuses,
+ * say) is simply absent here, so the rule reads it as a key - and a name - the
+ * jar does not hold. It is bounded by the same normalisation refusing to
+ * capture that cookie in the first place, so such a cookie never crosses to a
+ * host either.
+ */
+export async function browserJarCookieKeys(
+  domain: string,
+  browserSession: BrowserStorageSession,
+): Promise<readonly BrowserCookieKey[]> {
+  return browserStorageCookies(await browserSession.cookies.get({ domain }));
 }
 
 /**
@@ -551,9 +593,10 @@ function isUnpartitionedCookie(cookie: DesktopStorageCookie): boolean {
  * `example.com`, and so is `notexample.com`.
  *
  * The removals fire the jar's own `changed` events, which coalesce into the
- * one delta that tells the host the scope is now empty. The evict path runs
- * this inside `suppressBrowserPrimaryProfileDelta` instead, because the host
- * already recorded the tombstones before it asked.
+ * one delta that tells the host the scope is now empty. Nothing suppresses
+ * them: the host-driven evict that once ran this under a per-domain
+ * suppression went away with the `primaryProfileEvict` frame
+ * (universal-sign-in ticket 08).
  *
  * `rememberedOrigins` is the capture coordinator's memory: cookies are
  * enumerable from the jar, localStorage is not, so those are the only origins

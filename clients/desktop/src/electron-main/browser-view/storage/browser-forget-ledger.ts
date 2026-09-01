@@ -3,14 +3,16 @@ import { join } from "node:path";
 import { z } from "zod";
 import {
   BROWSER_FORGET_LEDGER_MAX_DOMAINS,
+  type BrowserCookieKey,
   type BrowserForgetLedger,
 } from "@traycer/protocol/host/browser/contracts";
 import { registrableDomain } from "@traycer/protocol/host/browser/registrable-domain";
-import { log } from "../../app/logger";
+import { describeLogError, log } from "../../app/logger";
 import {
   createJsonFileStore,
   type StrictJsonFileStore,
 } from "../../app/json-file-store";
+import { cookieKeyId } from "./browser-storage-state";
 
 /**
  * The durable forget ledger (universal-sign-in decision 6): this machine's
@@ -42,6 +44,15 @@ import {
  * Timestamps here are this machine's clock and are never sent anywhere to be
  * compared: a host reads the digest as instructions, not as times.
  *
+ * WHAT ELSE THIS FILE CARRIES. Universal-sign-in ticket 08's ownership rule
+ * needs one more durable fact about the same jar - which cookie keys got there
+ * because a host observed them, and are therefore the only ones a host may
+ * overwrite. It lives here rather than in a file of its own because it has the
+ * same custody question, the same lifetime, and the same erasure events: a
+ * forget of a site drops its keys, and a forget-all drops every one of them.
+ * Two files would be two answers to "what does this machine remember about the
+ * user's logins".
+ *
  * KNOWN LIMITATION, accepted under spec decision 11 (single primary desktop is
  * the supported model): this ledger is per machine, and a forget performed here
  * is never pushed to another desktop of the same user. A second desktop keeps
@@ -61,6 +72,23 @@ const FORGET_LEDGER_FILE_NAME = "browser-forget-ledger.json";
  * direction (a re-login, never a resurrection), but not one to court.
  */
 const MAX_ACKED_HOSTS = 128;
+
+/**
+ * How many host-contributed cookie keys this machine remembers.
+ *
+ * Generous against a real jar - a person's saved logins are dozens of sites of
+ * a handful of cookies each - and a hard ceiling on a file a remote party can
+ * grow: every applied observation adds an entry. Eviction is oldest-first and
+ * an evicted key becomes desktop-owned, so the bound can only ever REMOVE a
+ * right, never grant one.
+ *
+ * It does have a cost, and it is a feature-level one rather than a security
+ * one: the set is global across hosts, so a host that floods it strips the
+ * refresh rights of every OTHER host of this user. Their contributed sessions
+ * stay in the jar and keep working; what they lose is the ability to update
+ * them, until the user signs in again on this machine or forgets the site.
+ */
+const MAX_HEADLESS_ORIGIN_KEYS = 4_096;
 
 const domainEntrySchema = z.strictObject({
   domain: z.string(),
@@ -101,6 +129,30 @@ const recordSchema = z.strictObject({
   ackedByHost: z.array(
     z.strictObject({ hostId: z.string(), revision: z.number() }),
   ),
+  /**
+   * Cookie keys an observed frame put in this jar, newest last - the desktop's
+   * account of what it does NOT own (universal-sign-in ticket 08).
+   *
+   * The rule it serves is add-only: a host may create a key this jar does not
+   * hold and may update one that is named here, and may never overwrite
+   * anything else. So membership is the host's PERMISSION, and every way an
+   * entry can be lost - the bound below, a corrupt file read back as empty, a
+   * forget - costs the host that permission rather than granting it.
+   *
+   * `.default([])` reads a ledger written before this field existed. Those
+   * files were written by a build whose applier could overwrite anything, so
+   * an empty set is also the honest answer for them: nothing in that jar is
+   * known to be host-contributed.
+   */
+  headlessOriginKeys: z
+    .array(
+      z.strictObject({
+        domain: z.string(),
+        name: z.string(),
+        path: z.string(),
+      }),
+    )
+    .default([]),
 });
 type ForgetLedgerRecord = z.infer<typeof recordSchema>;
 
@@ -110,6 +162,7 @@ const EMPTY_RECORD: ForgetLedgerRecord = {
   forgetAll: null,
   domains: [],
   ackedByHost: [],
+  headlessOriginKeys: [],
 };
 
 /** One connection acking a revision it finished pruning. */
@@ -117,6 +170,13 @@ export interface BrowserForgetLedgerAck {
   readonly hostId: string;
   readonly connectionId: string;
   readonly revision: number;
+  /**
+   * The highest revision this connection was actually sent in a digest
+   * (universal-sign-in ticket 09). See {@link recordForgetLedgerAck} for why
+   * an ack is worth no more than that, and nothing at all before the first
+   * digest.
+   */
+  readonly sentRevision: number;
 }
 
 /** What a ledger mutation tells the renderers to push. */
@@ -145,6 +205,13 @@ const ackedByConnectionId = new Map<string, number>();
  * at most one entry per forget action of this run.
  */
 const completedClears = new Set<number>();
+/**
+ * {@link ForgetLedgerRecord.headlessOriginKeys} as ids, for the per-cookie
+ * lookup the applier does on every observed cookie. Rebuilt from the record on
+ * every change rather than maintained alongside it, so there is one source of
+ * truth and no way for the two to drift.
+ */
+let headlessOriginKeyIds = new Set<string>();
 const changeListeners = new Set<(change: BrowserForgetLedgerChange) => void>();
 
 export function browserForgetLedgerFilePath(): string {
@@ -166,6 +233,7 @@ export async function initBrowserForgetLedger(filePath: string): Promise<void> {
   );
   completedClears.clear();
   ledger = await store.load();
+  reindexHeadlessOriginKeys();
   log.info("[browser-view] forget ledger loaded", {
     revision: ledger.revision,
     domains: ledger.domains.length,
@@ -193,6 +261,9 @@ export async function recordForgetAllBrowserLogins(): Promise<number> {
     forgetAll: { at: Date.now(), revision },
     domains: [],
     ackedByHost: ledger.ackedByHost,
+    // Every login is going, so every custody mark goes with it: the jar this
+    // machine wakes up with holds nothing a host contributed.
+    headlessOriginKeys: [],
   });
   await persist();
   return revision;
@@ -229,6 +300,12 @@ export async function recordForgottenBrowserSite(
       { domain: scope, forgottenAt: Date.now(), revision },
     ]),
     ackedByHost: ledger.ackedByHost,
+    // The custody marks go with the cookies they describe. Leaving them would
+    // let a host re-add the key AND keep the right to overwrite it later, on
+    // the strength of a contribution the user has since deleted.
+    headlessOriginKeys: ledger.headlessOriginKeys.filter(
+      (key) => registrableDomain(key.domain) !== scope,
+    ),
   });
   await persist();
   return revision;
@@ -331,14 +408,26 @@ export function browserForgetLedgerDigestForHost(
 export async function recordForgetLedgerAck(
   ack: BrowserForgetLedgerAck,
 ): Promise<void> {
-  // CLAMPED to this machine's own top, and this is load-bearing rather than
-  // defensive. The revision is minted here and merely echoed by the host, so
-  // an ack above the current one is meaningless by construction - but taken at
-  // face value it would be recorded as "pruned through here" for a ledger that
-  // does not exist yet, which permanently disables the no-resurrection gate
-  // (every future entry compares below it) and empties every future digest for
-  // that host. A host is not trusted to bound its own echo.
-  const revision = Math.min(ack.revision, ledger.revision);
+  // CLAMPED twice, and both clamps are load-bearing rather than defensive.
+  //
+  // To this machine's own top, because the revision is minted here and merely
+  // echoed by the host: an ack above the current one is meaningless by
+  // construction, but taken at face value it would be recorded as "pruned
+  // through here" for a ledger that does not exist yet, which permanently
+  // disables the no-resurrection gate (every future entry compares below it)
+  // and empties every future digest for that host.
+  //
+  // And to what this CONNECTION was actually sent (universal-sign-in ticket
+  // 09), because the ack is otherwise unsolicited: nothing in the frame ties
+  // it to a digest, so a host that was told nothing could ack anyway and open
+  // the gate on the strength of its own claim. `sentRevision` is 0 until a
+  // digest goes out on that connection, so a pre-digest ack clamps to 0 and
+  // both watermarks below decline it - no branch of its own, because it is the
+  // BINDING between the two frames rather than a filter in front of them.
+  //
+  // A host is not trusted to bound its own echo, and it is not trusted to say
+  // what it was asked.
+  const revision = Math.min(ack.revision, ack.sentRevision, ledger.revision);
   const connection = ackedByConnectionId.get(ack.connectionId) ?? 0;
   if (revision > connection) {
     ackedByConnectionId.set(ack.connectionId, revision);
@@ -394,6 +483,100 @@ export function isBrowserForgetLedgerPendingAck(input: {
 }
 
 /**
+ * Is this cookie key one an observed frame put in the jar?
+ *
+ * The whole ownership rule reads out of here (universal-sign-in ticket 08).
+ * `false` means the desktop owns the key - either its own browsing wrote it,
+ * or this machine has no record of anyone else having done so - and a host may
+ * not overwrite it. It never means "absent from the jar": whether the jar
+ * holds the key at all is the applier's question, asked of the jar.
+ */
+export function isHeadlessOriginCookieKey(keyId: string): boolean {
+  return headlessOriginKeyIds.has(keyId);
+}
+
+/**
+ * These keys are the contributing host's to update from now on.
+ *
+ * Recorded BEFORE the cookies are written, not after, and the ordering is the
+ * argument: the desktop's own cookie observer hands ownership back on any
+ * local write it sees, so recording afterwards would let a page's concurrent
+ * write to the same key be overtaken by this record and leave a
+ * desktop-written key marked as the host's. Recording first means the worst a
+ * race produces is a key that goes straight back to the desktop.
+ *
+ * A key the jar then refuses is marked all the same, which costs nothing: it
+ * names a cookie that does not exist, and the desktop's first local write of
+ * it takes the mark back.
+ */
+export async function recordHeadlessOriginCookieKeys(
+  keys: readonly BrowserCookieKey[],
+): Promise<void> {
+  const added = keys.filter(
+    (key) => !headlessOriginKeyIds.has(cookieKeyId(key)),
+  );
+  if (added.length === 0) return;
+  mutate({
+    ...ledger,
+    // Appended last and trimmed from the front, so the bound evicts the
+    // oldest contribution rather than the newest.
+    headlessOriginKeys: [
+      ...ledger.headlessOriginKeys,
+      ...added.map((key) => ({
+        domain: key.domain,
+        name: key.name,
+        path: key.path,
+      })),
+    ].slice(-MAX_HEADLESS_ORIGIN_KEYS),
+  });
+  await persist();
+}
+
+/**
+ * These keys are the desktop's again - either its own browsing wrote them, or
+ * the jar refused the write the claim was taken for.
+ *
+ * Called for every local cookie insert the observer sees, which is ordinary
+ * traffic on every site - so the common answer is "not a key anyone
+ * contributed" and nothing is written. Only the rare transfer touches the file.
+ *
+ * The persist is a DURABILITY OBLIGATION, not best effort, and it is the one
+ * direction in this file where a lost write grants a right instead of removing
+ * one: the in-memory index drops synchronously, but a crash before the file
+ * lands re-reads the key on the next boot as the host's, over a cookie the
+ * user's own browsing now owns. So it goes on the ledger's write queue with
+ * every other mutation and a failure is surfaced at WARN rather than dropped -
+ * there is nothing to retry against a jar that has moved on, but a lost mark
+ * has to be explainable.
+ */
+export async function releaseHeadlessOriginCookieKeys(
+  keys: readonly BrowserCookieKey[],
+): Promise<void> {
+  const released = new Set(
+    keys.map(cookieKeyId).filter((id) => headlessOriginKeyIds.has(id)),
+  );
+  if (released.size === 0) return;
+  mutate({
+    ...ledger,
+    headlessOriginKeys: ledger.headlessOriginKeys.filter(
+      (entry) => !released.has(cookieKeyId(entry)),
+    ),
+  });
+  try {
+    // `saveStrict` rather than `save`: same queue, but the failure reaches
+    // here instead of being swallowed as a generic store warning.
+    await store?.saveStrict(ledger);
+  } catch (error) {
+    // No cookie name or domain: a warn line is the user's browsing history if
+    // it carries one.
+    log.warn(
+      "[browser-view] forget ledger: a headless-origin key release did not reach disk",
+      { keys: released.size, err: describeLogError(error) },
+    );
+  }
+}
+
+/**
  * Every forget mutation, for the renderers that own the host streams: each one
  * pushes its own host's digest. Ack bookkeeping deliberately does NOT notify -
  * it changes what a host is owed, not what any host must be told.
@@ -415,9 +598,14 @@ function ackedRevisionForHost(hostId: string): number {
   );
 }
 
+function reindexHeadlessOriginKeys(): void {
+  headlessOriginKeyIds = new Set(ledger.headlessOriginKeys.map(cookieKeyId));
+}
+
 function mutate(next: ForgetLedgerRecord): void {
   const bumped = next.revision > ledger.revision;
   ledger = next;
+  reindexHeadlessOriginKeys();
   if (!bumped) return;
   const change: BrowserForgetLedgerChange = { revision: next.revision };
   for (const listener of [...changeListeners]) listener(change);
