@@ -842,6 +842,7 @@ function browserSessionsState(
   return {
     lifecycle: "live",
     inventoryReady: true,
+    canMaterializeElectron: false,
     items: [],
     errorMessage: null,
     retry: () => {},

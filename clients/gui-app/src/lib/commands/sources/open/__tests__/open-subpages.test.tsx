@@ -458,6 +458,7 @@ function renderBrowserItems(): ReadonlyArray<CommandItem> {
           hostId: "default-host",
           lifecycle: "live",
           inventoryReady: true,
+          canMaterializeElectron: false,
           items: [],
           errorMessage: null,
           retry: () => undefined,

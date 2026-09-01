@@ -209,6 +209,7 @@ function browserSessionsState(
     hostId: "host-A",
     lifecycle: "live",
     inventoryReady: true,
+    canMaterializeElectron: false,
     items,
     errorMessage: null,
     retry: () => undefined,
