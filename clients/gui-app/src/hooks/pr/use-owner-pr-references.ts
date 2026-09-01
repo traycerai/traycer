@@ -8,7 +8,7 @@ import { usePrListSubscriptionForClient } from "@/hooks/pr/use-pr-list-subscript
 import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
 import { useStreamMethodSupportFor } from "@/lib/host/stream-runtime-context";
 
-export interface OwnerPrReferencesResult {
+export interface OwnerListPrReferencesResult {
   readonly references: readonly WorktreePrReference[];
   readonly isPending: boolean;
   readonly error: boolean;
@@ -21,13 +21,13 @@ export interface OwnerPrReferencesResult {
  * sidebar - while the transport is pinned to the owner's host rather than the
  * app-wide effective host.
  */
-export function useOwnerPrReferences(args: {
+export function useOwnerListPrReferences(args: {
   readonly hostId: string;
   readonly epicId: string;
   readonly ownerId: string;
   readonly ownerKind: WorktreeBindingOwnerKind;
   readonly enabled: boolean;
-}): OwnerPrReferencesResult {
+}): OwnerListPrReferencesResult {
   const resolvedTarget = useHostDirectoryEntryForHostId(args.hostId);
   const target = args.enabled ? resolvedTarget : null;
   const auth = useStreamAuthRevalidator();
@@ -54,7 +54,7 @@ export function useOwnerPrReferences(args: {
   );
   return {
     references,
-    isPending: subscription.isPending,
+    isPending: methodSupport !== "unsupported" && subscription.isPending,
     error: subscription.error !== null,
     sendRefresh: subscription.sendRefresh,
   };

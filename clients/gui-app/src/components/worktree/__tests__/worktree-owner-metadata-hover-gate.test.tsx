@@ -43,7 +43,7 @@ vi.mock("@/hooks/worktree/use-worktree-owner-metadata-query", () => ({
 // reaches for a real stream client and `useQueryClient()`, neither of which
 // this file provides a provider for.
 vi.mock("@/hooks/pr/use-owner-pr-references", () => ({
-  useOwnerPrReferences: () => ({
+  useOwnerListPrReferences: () => ({
     references: [],
     isPending: false,
     error: false,
