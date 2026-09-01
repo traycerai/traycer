@@ -1375,12 +1375,20 @@ export const MAIN_CALL_RESPONSE_PARSERS: {
 function parseCommandSendFailure(value: unknown): CommandSendFailure | null {
   if (!isRecord(value)) return null;
   if (value.kind === "queued") {
+    // `retryAfterMs` gets the same treatment as `boundedRetry` and for the
+    // same reason: a payload that claimed `queued` while dropping it would
+    // reach the queue as a command nothing is ever owed to wake, which is
+    // exactly the wedge this field exists to prevent. `null` is a legal value
+    // and a missing field is not.
+    const retryAfterMs: unknown = value.retryAfterMs;
     return typeof value.reason === "string" &&
-      typeof value.boundedRetry === "boolean"
+      typeof value.boundedRetry === "boolean" &&
+      (retryAfterMs === null || typeof retryAfterMs === "number")
       ? {
           kind: "queued",
           reason: value.reason,
           boundedRetry: value.boundedRetry,
+          retryAfterMs,
         }
       : null;
   }

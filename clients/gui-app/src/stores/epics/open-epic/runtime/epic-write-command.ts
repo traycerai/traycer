@@ -1,4 +1,17 @@
 import type { CommandSendFailure } from "@traycer-clients/shared/replica-runtime";
+
+/**
+ * First re-drive delay for a host that refused a write because its idempotency
+ * cache was full, doubled per attempt by the queue and clamped by
+ * `COMMAND_SELF_RETRY_MAX_DELAY_MS`.
+ *
+ * Saturation is a load condition, not a fault: the entries that make room are
+ * the ones ahead of this command retiring, so the useful wait is on the order
+ * of seconds. Short enough that an ordinary burst clears without the user
+ * noticing, long enough that a host under sustained pressure is not re-asked
+ * on every tick.
+ */
+const COMMAND_SATURATION_RETRY_BASE_MS = 2_000;
 import {
   HostRpcError,
   HostTransportFailureError,
@@ -178,6 +191,11 @@ export function classifyEpicWriteCommandFailure(
       kind: "queued",
       reason: error instanceof Error ? error.message : String(error),
       boundedRetry: error instanceof RetryableTransportError,
+      // No self-timer: each of these three is a transport that is DOWN, and
+      // its recovery is an event the queue is already driven by - a reconnect
+      // drain or a landed root snapshot both call `retryPending()`. A timer
+      // here would only race them.
+      retryAfterMs: null,
     };
   }
   if (error instanceof HostTransportFailureError) {
@@ -186,10 +204,24 @@ export function classifyEpicWriteCommandFailure(
   if (error instanceof HostRpcError) {
     if (error.code === "E_IDEMPOTENCY_CACHE_SATURATED") {
       // The host emitted this only before resolver dispatch. Keep the command
-      // queued with its stable key: a later reconnect drain is safe and may
-      // succeed once replay capacity returns. Because the host proved it did
-      // not run, this refusal must never arm the ambiguous-send deadline.
-      return { kind: "queued", reason: error.message, boundedRetry: false };
+      // queued with its stable key: a retry is safe and may succeed once
+      // replay capacity returns. Because the host proved it did not run, this
+      // refusal must never arm the ambiguous-send deadline.
+      //
+      // AND SCHEDULE THAT RETRY, because nothing else will. "A later reconnect
+      // drain" was the plan and there is no reconnect owed: this is an
+      // ordinary unary answer over a control stream that stays open, so
+      // neither `drainWritePathsAfterReconnect` nor the snapshot-landed path
+      // ever fires. The command would sit in `blockedUntilRetry` for the life
+      // of the session - and since `pump` only ever looks at the FIFO head,
+      // every later metadata write would queue behind it with no Retry
+      // affordance on any of them.
+      return {
+        kind: "queued",
+        reason: error.message,
+        boundedRetry: false,
+        retryAfterMs: COMMAND_SATURATION_RETRY_BASE_MS,
+      };
     }
     if (error.code === "E_IDEMPOTENCY_OUTCOME_UNKNOWN") {
       // The host retained the key but could not prove the original resolver's

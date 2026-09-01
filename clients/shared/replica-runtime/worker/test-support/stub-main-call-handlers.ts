@@ -36,6 +36,7 @@ export function stubMainCallHandlers(
           kind: "queued",
           reason: "no write transport in this fixture",
           boundedRetry: false,
+          retryAfterMs: null,
         },
       }),
     "main/lane-unary": () =>

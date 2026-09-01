@@ -70,6 +70,7 @@ function spawnOptions<TProjection>(
           kind: "queued",
           reason: "no write transport in this fixture",
           boundedRetry: false,
+          retryAfterMs: null,
         },
       }),
     laneUnary: () =>

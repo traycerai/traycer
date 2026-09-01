@@ -6026,6 +6026,62 @@ describe("WsStreamClient stream-method-support-registry seed", () => {
     session.close();
   });
 
+  it("does not seed a NEGATIVE verdict: an in-place host upgrade must reach the probe, not a decided legacy arm", async () => {
+    // The two directions are not symmetric, which is why only one of them is
+    // reused. A stale `supported` is self-correcting at a cost the registry
+    // header already budgets for: the subscribe is rejected and the caller
+    // falls back to legacy.
+    //
+    // A stale `unsupported` is what a host upgraded IN PLACE leaves behind -
+    // `hostId` survives an upgrade, so the entry outlives the fact it records
+    // - and `readEpicAdapterVerdict` treats an explicit `unsupported` as a
+    // DECISION (`legacy`), not as the `undecided` that runs the probe. So
+    // every newly minted client on the upgraded host would install and
+    // subscribe the legacy arm, and only that unnecessary handshake could
+    // replace the verdict - at the price of a replica replacement onto the
+    // lanes mid-session. That reinstates the speculative legacy open and the
+    // extra round trip this memo exists to remove, exactly after the
+    // auto-update that makes the lanes available.
+    //
+    // Recorded through a REAL handshake whose ack omits the method, the same
+    // way the "own handshake evidence overrides" case above does it, so this
+    // pins what production writes rather than what a direct `record…` call
+    // would let the test assert into existence.
+    const { factory: seedingFactory, sockets: seedingSockets } = makeFactory();
+    const seeding = makeSeedClient({
+      factory: seedingFactory,
+      hostId: HOST_A_ENTRY.hostId,
+      endpoint: () => HOST_A_ENTRY,
+    });
+    const seedingSession = seeding.subscribe(SEED_METHOD, {
+      epicId: "epic-pre-upgrade",
+    });
+    await flush();
+    seedingSockets[0].socket.fireOpen();
+    seedingSockets[0].socket.fireText({
+      kind: "openAck",
+      manifest: {
+        "epic.subscribe": { major: 1, minor: 0 },
+      },
+    });
+    // The negative really was negotiated and really is in the memo - without
+    // this the assertion below would pass just as happily against an empty
+    // registry, which is the answer it is trying to distinguish from.
+    expect(seeding.getMethodSupport(SEED_METHOD)).toBe("unsupported");
+    seedingSession.close();
+
+    // THE REDDENING ASSERTION. `unsupported` here is a decided legacy arm on a
+    // host that may well serve the lanes now; `unknown` is the probe, which is
+    // the pre-memo behaviour and correct by construction.
+    const { factory } = makeFactory();
+    const afterUpgrade = makeSeedClient({
+      factory,
+      hostId: HOST_A_ENTRY.hostId,
+      endpoint: () => HOST_A_ENTRY,
+    });
+    expect(afterUpgrade.getMethodSupport(SEED_METHOD)).toBe("unknown");
+  });
+
   it("the latch: a client whose support map was cleared by a reconnect reports unknown, not the memo's value", async () => {
     await recordHostASupportedViaHandshake();
 

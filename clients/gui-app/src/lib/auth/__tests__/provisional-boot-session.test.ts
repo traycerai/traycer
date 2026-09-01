@@ -908,6 +908,58 @@ describe("AuthService provisional boot session", () => {
       expect(useAuthStore.getState().profile?.userName).toBe("New Name");
     });
 
+    it("C18: a mid-session same-user re-projection also PERSISTS, so the next launch does not repaint the old identity", async () => {
+      // C16 pins the projection; this pins the durable half, and the store
+      // write alone is not it. `applySignedIn` is the only other writer of
+      // this snapshot and this path deliberately avoids it, so on this branch
+      // nothing else persists anything: the next launch paints the cached
+      // identity again, and if that launch's validation takes the accepted
+      // network-error path (C13) the stale name and avatar stand for the whole
+      // session. `settleProvisionalSession` pairs the projection and the write
+      // for exactly this reason; the live-revalidation path had only the first
+      // half.
+      const { service, host } = makeService();
+      await signInStoredCredentials(host, "user-1", "persisted-token");
+      seedSnapshot(
+        host,
+        validSnapshotEnvelopeWithName("user-1", "FREE", "Old Name"),
+      );
+      restoreFetch();
+      restoreFetch = installFetch(() =>
+        okWithUserNamed("user-1", "FREE", "Old Name"),
+      );
+
+      await service.start();
+      await flush();
+
+      restoreFetch();
+      restoreFetch = installFetch(() =>
+        okWithUserNamed("user-1", "FREE", "New Name"),
+      );
+      const outcome = await service.revalidateCurrentContext();
+      expect(outcome?.kind).toBe("valid");
+      // The write is fire-and-forget, like its sibling in D16.
+      await flush();
+
+      const raw = host.secureStorageEntries.get(SNAPSHOT_KEY);
+      if (raw === undefined) {
+        throw new Error("expected a provisional snapshot to have been written");
+      }
+      const decoded: unknown = JSON.parse(raw);
+      // Read through the SNAPSHOT rather than the store: the store already
+      // says "New Name" under the bug (C16 made sure of that), so asserting
+      // there would be green either way. The persisted name is the only thing
+      // the next launch reads.
+      const envelope = z
+        .object({
+          userId: z.string(),
+          user: z.object({ user: z.object({ name: z.string().nullable() }) }),
+        })
+        .parse(decoded);
+      expect(envelope.userId).toBe("user-1");
+      expect(envelope.user.user.name).toBe("New Name"); // red today: "Old Name"
+    });
+
     it("C17: an identical mid-session same-user verdict leaves the store's profile object untouched", async () => {
       const { service, host } = makeService();
       await signInStoredCredentials(host, "user-1", "persisted-token");

@@ -159,7 +159,12 @@ describe("summarizeEpicWriteCommands", () => {
   it("counts a real pending record", async () => {
     const queue = makeQueue(
       () => new Promise<CommandResolution>(() => undefined),
-      () => ({ kind: "queued", reason: "offline", boundedRetry: false }),
+      () => ({
+        kind: "queued",
+        reason: "offline",
+        boundedRetry: false,
+        retryAfterMs: null,
+      }),
     );
     const record = queue.enqueue({
       intent: { value: "rename" },
@@ -228,7 +233,12 @@ describe("summarizeEpicWriteCommands", () => {
   it("counts a real superseded record", async () => {
     const queue = makeQueue(
       () => Promise.resolve(committed("host-1")),
-      () => ({ kind: "queued", reason: "offline", boundedRetry: false }),
+      () => ({
+        kind: "queued",
+        reason: "offline",
+        boundedRetry: false,
+        retryAfterMs: null,
+      }),
     );
     const record = queue.enqueue({
       intent: { value: "rename" },
@@ -258,7 +268,12 @@ describe("summarizeEpicWriteCommands", () => {
   it("counts a committed record as NOTHING, and the pill still reads synced with it present", async () => {
     const queue = makeQueue(
       () => Promise.resolve(committed("host-1")),
-      () => ({ kind: "queued", reason: "offline", boundedRetry: false }),
+      () => ({
+        kind: "queued",
+        reason: "offline",
+        boundedRetry: false,
+        retryAfterMs: null,
+      }),
     );
     const record = queue.enqueue({
       intent: { value: "rename" },

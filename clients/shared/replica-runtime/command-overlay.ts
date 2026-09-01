@@ -19,7 +19,7 @@
  *    locally committed command. That is what `"superseded"` is for, and why the
  *    committed arm names the host that committed it.
  */
-import type { RuntimeEnvironment } from "./runtime-environment";
+import type { RuntimeEnvironment, RuntimeTimer } from "./runtime-environment";
 
 /**
  * Client-generated, and generated BEFORE the first send.
@@ -212,6 +212,23 @@ export type CommandSendFailure =
        * key. Pure pre-send failures may wait offline without a deadline.
        */
       readonly boundedRetry: boolean;
+      /**
+       * Re-drive this command on the queue's OWN timer after at least this
+       * many milliseconds, or `null` to wait for an external drain.
+       *
+       * `null` is right for a queued failure that a reconnect is owed for -
+       * a dead transport, a stale host binding - because `retryPending()`
+       * fires on the events that resolve those, and a self-timer would only
+       * race them.
+       *
+       * It is wrong for a failure the transport ANSWERED. A queued command
+       * sits in `blockedUntilRetry` and `pump` refuses to look past the FIFO
+       * head, so a refusal that leaves the control stream open owes no event
+       * at all: the command waits forever and every later write waits behind
+       * it. That is the shape `E_IDEMPOTENCY_CACHE_SATURATED` has, and it is
+       * why this field exists rather than a second call to `retryPending`.
+       */
+      readonly retryAfterMs: number | null;
     }
   | { readonly kind: "unknown-outcome"; readonly reason: string }
   | { readonly kind: "rejected"; readonly resolution: CommandResolution };
@@ -223,6 +240,16 @@ export type CommandSendFailure =
  * retry instead of assuming the key is still resident.
  */
 export const COMMAND_AUTO_RETRY_WINDOW_MS = 5 * 60 * 1_000;
+
+/**
+ * Ceiling for a self-scheduled re-drive.
+ *
+ * The delay a failure asks for is doubled per attempt so a host that stays
+ * refusing is not hammered, and clamped here so a long-lived saturation still
+ * clears within a interval a person would call "it recovered on its own"
+ * rather than one that reads as a hang.
+ */
+export const COMMAND_SELF_RETRY_MAX_DELAY_MS = 30 * 1_000;
 
 export interface CommandQueueOptions<TIntent> {
   readonly environment: RuntimeEnvironment;
@@ -251,7 +278,56 @@ export function createCommandQueue<TIntent>(
   const records: CommandRecord<TIntent>[] = [];
   const blockedUntilRetry = new Set<CommandId>();
   const retryDeadlineByCommandId = new Map<CommandId, number>();
+  // Self-scheduled re-drives, one per command at most. Held so every path that
+  // ends a command's wait - resolve, retry, discard, dispose, an external
+  // `retryPending` - can cancel it: a timer that outlives its command would
+  // fire into a `pump()` that has nothing to do, and one that outlives the
+  // QUEUE would fire after dispose.
+  const selfRetryTimers = new Map<CommandId, RuntimeTimer>();
   const listeners = new Set<() => void>();
+
+  function cancelSelfRetry(commandId: CommandId): void {
+    selfRetryTimers.get(commandId)?.cancel();
+    selfRetryTimers.delete(commandId);
+  }
+
+  /**
+   * Unblock `commandId` after a backoff and let the pump take it again.
+   *
+   * Re-checked at fire time rather than trusted: the scheduler contract allows
+   * firing late, and by then the command may have been resolved, discarded or
+   * already re-driven by a reconnect.
+   */
+  function scheduleSelfRetry(
+    commandId: CommandId,
+    baseDelayMs: number,
+    attempts: number,
+  ): void {
+    cancelSelfRetry(commandId);
+    // Attempt 1 waits the base delay; each further refusal doubles it. The
+    // exponent is clamped as well as the product, so a command that somehow
+    // accumulates many attempts cannot overflow into a non-finite delay.
+    const growth = 2 ** Math.min(Math.max(attempts - 1, 0), 16);
+    const delayMs = Math.min(
+      baseDelayMs * growth,
+      COMMAND_SELF_RETRY_MAX_DELAY_MS,
+    );
+    const timer = options.environment.scheduler.schedule(delayMs, () => {
+      selfRetryTimers.delete(commandId);
+      if (disposed) return;
+      const record = records.find((entry) => entry.commandId === commandId);
+      if (
+        record === undefined ||
+        record.state !== "pending" ||
+        record.delivery !== "queued"
+      ) {
+        return;
+      }
+      blockedUntilRetry.delete(commandId);
+      pump();
+    });
+    selfRetryTimers.set(commandId, timer);
+  }
 
   function publish(): void {
     for (const listener of [...listeners]) listener();
@@ -286,6 +362,7 @@ export function createCommandQueue<TIntent>(
     records[index] = next;
     blockedUntilRetry.delete(commandId);
     retryDeadlineByCommandId.delete(commandId);
+    cancelSelfRetry(commandId);
     publish();
     options.onResolved(next);
     pump();
@@ -343,6 +420,17 @@ export function createCommandQueue<TIntent>(
           }
           if (failure.kind === "queued") {
             blockedUntilRetry.add(sending.commandId);
+            // Armed BEFORE the deadline bookkeeping below, and independent of
+            // it: `boundedRetry` answers "may this wait offline without a
+            // safety deadline", which is a different question from "will
+            // anything ever wake it".
+            if (failure.retryAfterMs !== null) {
+              scheduleSelfRetry(
+                sending.commandId,
+                failure.retryAfterMs,
+                sending.attempts,
+              );
+            }
             // The FIRST ambiguous keyed attempt starts the safety window. Never
             // slide or clear that deadline after another reconnect attempt: a
             // sequence of four-minute failures must not keep the command alive
@@ -400,6 +488,11 @@ export function createCommandQueue<TIntent>(
           ) {
             retryDeadlineByCommandId.delete(record.commandId);
             blockedUntilRetry.delete(record.commandId);
+            // This arm leaves the loop before the cancel below, and a command
+            // that just became `unknown-outcome` has no queued retry left to
+            // drive. The timer would find the wrong delivery and no-op, but it
+            // would stay armed until it fired.
+            cancelSelfRetry(record.commandId);
             const uncertain = replace(record.commandId, (current) => ({
               ...current,
               delivery: "unknown-outcome",
@@ -408,6 +501,11 @@ export function createCommandQueue<TIntent>(
             continue;
           }
           blockedUntilRetry.delete(record.commandId);
+          // The external drain supersedes any timer this command was waiting
+          // on. Leaving it armed would be harmless - it re-checks and finds
+          // nothing blocked - but it would also re-arm on the NEXT refusal
+          // from a stale attempt count, so the backoff is reset with the wait.
+          cancelSelfRetry(record.commandId);
         }
       }
       pump();
@@ -420,6 +518,7 @@ export function createCommandQueue<TIntent>(
       });
       blockedUntilRetry.delete(commandId);
       retryDeadlineByCommandId.delete(commandId);
+      cancelSelfRetry(commandId);
       pump();
     },
 
@@ -433,6 +532,7 @@ export function createCommandQueue<TIntent>(
       records.splice(index, 1);
       blockedUntilRetry.delete(commandId);
       retryDeadlineByCommandId.delete(commandId);
+      cancelSelfRetry(commandId);
       publish();
     },
 
@@ -452,6 +552,8 @@ export function createCommandQueue<TIntent>(
       records.splice(0, records.length);
       blockedUntilRetry.clear();
       retryDeadlineByCommandId.clear();
+      for (const timer of selfRetryTimers.values()) timer.cancel();
+      selfRetryTimers.clear();
       listeners.clear();
     },
   };

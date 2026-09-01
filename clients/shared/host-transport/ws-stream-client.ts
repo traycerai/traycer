@@ -604,13 +604,33 @@ export class WsStreamClient<
    * HOLDS its installed arm through the resulting `unknown` window rather than
    * re-deciding. Answering from the memo there would overturn both. So the seed
    * speaks once, before first contact, and then never again for this client.
+   *
+   * POSITIVE EVIDENCE ONLY, and the two directions are not symmetric. A stale
+   * `supported` is self-correcting at a cost the registry header already
+   * budgets for: the subscribe is rejected and `onRequiredLaneUnsupported`
+   * falls back to legacy. A stale `unsupported` is what a host UPGRADED IN
+   * PLACE leaves behind - `hostId` survives an upgrade, so the entry outlives
+   * the fact - and `readEpicAdapterVerdict` treats an explicit `unsupported`
+   * as a DECISION (`legacy`) rather than as the `undecided` that runs the
+   * probe. So every newly minted client on the upgraded host installs and
+   * subscribes the legacy arm, and only that unnecessary handshake can replace
+   * the verdict, at the price of a replica replacement onto the lanes
+   * mid-session. That reinstates the speculative legacy open and the extra
+   * round trip this memo exists to remove, exactly after the auto-update that
+   * makes the lanes available.
+   *
+   * Withholding a negative degrades to `unknown`, which is the pre-memo
+   * behaviour and the probe path - correct by construction, and the whole win
+   * this lever was measured for is on the positive side anyway.
    */
   private seededMethodSupport(method: string): StreamMethodSupport {
     if (this.hasCompletedHandshake) return "unknown";
     if (this.options.hostId === null) return "unknown";
-    return (
-      getMemoizedStreamMethodSupport(this.options.hostId, method) ?? "unknown"
+    const memoized = getMemoizedStreamMethodSupport(
+      this.options.hostId,
+      method,
     );
+    return memoized === "supported" ? "supported" : "unknown";
   }
 
   getMethodSchemaVersion<Method extends keyof Registry & string>(

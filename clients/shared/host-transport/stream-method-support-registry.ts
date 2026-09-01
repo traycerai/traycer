@@ -73,6 +73,15 @@
  * rejected subscribes `onRequiredLaneUnsupported` already budgets for, on the
  * path that already falls back to legacy.
  *
+ * The other direction is NOT symmetric, and `seededMethodSupport` is where that
+ * is handled rather than here: a `hostId` survives an in-place upgrade, so an
+ * `unsupported` recorded before one outlives the fact, and an explicit
+ * `unsupported` is a DECISION to the adapter selector rather than a reason to
+ * probe. This registry still records both verdicts - it is a faithful log of
+ * what handshakes negotiated - and the consumer withholds the negative. Putting
+ * the policy at the read keeps the record honest for any future reader that
+ * wants "what did we last observe" rather than "what may I assume".
+ *
  * Only the LOCAL transport records here. `RemoteStreamClient.getMethodSupport`
  * is a hardcoded `return "unknown"` in a different class, so the mux keeps
  * answering `unknown` forever by construction - which

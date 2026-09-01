@@ -2319,6 +2319,23 @@ export class AuthService {
         // gated on a real difference - see `reprojectSameUserIdentity` for why
         // re-entering `applySignedIn` is not available here.
         this.reprojectSameUserIdentity(outcome.user);
+        // ...and DURABLY, which the projection alone is not. `applySignedIn`
+        // is the only other writer of this snapshot and this path deliberately
+        // avoids it, so nothing else on this branch persists anything: the
+        // next launch paints the cached identity again, and if that launch's
+        // validation takes the accepted network-error path the stale name and
+        // avatar stand for the whole session. `settleProvisionalSession` pairs
+        // these two calls for exactly this reason; this is the same pair on
+        // the live-revalidation path, which had only the first half.
+        //
+        // Unconditional, matching that sibling. Gating it on
+        // `reprojectSameUserIdentity`'s notion of "changed" would couple the
+        // snapshot's contents to a comparison over the PROJECTED fields, which
+        // is a strict subset of what the snapshot stores.
+        void writeProvisionalSessionSnapshot(
+          this.runnerHost.secureStorage,
+          outcome.user,
+        );
       }
       return outcome;
     }
