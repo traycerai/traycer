@@ -9,6 +9,13 @@ import { createMacosController } from "./platforms/macos";
 import { createWindowsController } from "./platforms/windows";
 import { clearStopIntent, writeStopIntent } from "../host/stop-intent";
 import { findLiveIncumbentHost } from "../host/incumbent-check";
+import { hostHomeDir } from "../store/paths";
+import {
+  CLI_INVOCATION_TXN_POLL_MS,
+  CLI_INVOCATION_TXN_WAIT_MS,
+  runServiceRegistrationWithInvocationRecord,
+  runServiceUninstallWithInvocationRecord,
+} from "./cli-invocation-record";
 
 export type { ServiceLabel } from "./label";
 export { serviceLabelFor, serviceManifestPath, windowsTaskName } from "./label";
@@ -329,6 +336,43 @@ async function retireIntentIfHostSurvived(
   await clearStopIntent(environment);
 }
 
+/**
+ * Persist the exact structured CLI invocation used for registration, and
+ * remove it only after a confirmed matching uninstall. Wrapped HERE, at the
+ * production factory, so Linux/macOS/Windows emitters stay unchanged and no
+ * future install/uninstall path can skip the transaction.
+ *
+ * Inner relative to `withStopIntent`: a stop-intent write still precedes the
+ * OS uninstall, and the invocation record is removed only after that
+ * uninstall resolves.
+ */
+export function withCliInvocationRecord(
+  controller: ServiceController,
+): ServiceController {
+  return {
+    ...controller,
+    install: (options) =>
+      runServiceRegistrationWithInvocationRecord({
+        environment: options.label.environment,
+        hostHomeDir: hostHomeDir(options.label.environment),
+        serviceLabel: options.label.id,
+        cli: options.cli,
+        register: () => controller.install(options),
+        waitMs: CLI_INVOCATION_TXN_WAIT_MS,
+        pollIntervalMs: CLI_INVOCATION_TXN_POLL_MS,
+      }),
+    uninstall: (options) =>
+      runServiceUninstallWithInvocationRecord({
+        environment: options.label.environment,
+        hostHomeDir: hostHomeDir(options.label.environment),
+        serviceLabel: options.label.id,
+        uninstall: () => controller.uninstall(options),
+        waitMs: CLI_INVOCATION_TXN_WAIT_MS,
+        pollIntervalMs: CLI_INVOCATION_TXN_POLL_MS,
+      }),
+  };
+}
+
 export function withStopIntent(
   controller: ServiceController,
 ): ServiceController {
@@ -401,19 +445,21 @@ export function createServiceController(): ServiceController {
     logger.debug("Service controller selected macOS backend", {
       environment: config.environment,
     });
-    return withStopIntent(createMacosController(null));
+    return withStopIntent(withCliInvocationRecord(createMacosController(null)));
   }
   if (platform === "linux") {
     logger.debug("Service controller selected Linux backend", {
       environment: config.environment,
     });
-    return withStopIntent(createLinuxController(null));
+    return withStopIntent(withCliInvocationRecord(createLinuxController(null)));
   }
   if (platform === "win32") {
     logger.debug("Service controller selected Windows backend", {
       environment: config.environment,
     });
-    return withStopIntent(createWindowsController(null));
+    return withStopIntent(
+      withCliInvocationRecord(createWindowsController(null)),
+    );
   }
   logger.error(
     "Service controller unsupported platform",

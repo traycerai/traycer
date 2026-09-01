@@ -1,7 +1,16 @@
-import { chmod, mkdir, stat } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import { chmod, lstat, mkdir, open, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { hostStopIntentPath as sharedHostStopIntentPath } from "@traycer/protocol/config/host-stop-intent";
+import {
+  cliInvocationLifecyclePath as sharedCliInvocationLifecyclePath,
+  cliInvocationRecordPath as sharedCliInvocationRecordPath,
+  cliInvocationRecordStaleMarkerPath as sharedCliInvocationRecordStaleMarkerPath,
+  cliInvocationStateDir as sharedCliInvocationStateDir,
+  cliInvocationStateDirIdentityFromStats,
+  type CliInvocationStateDirIdentity,
+} from "@traycer/protocol/config/cli-invocation-record";
 import {
   cliInstallHomeDir as sharedCliInstallHomeDir,
   cliManifestPath as sharedCliManifestPath,
@@ -32,6 +41,8 @@ import { devDesktopSlotForEnvironment } from "./dev-desktop-slot";
 //   ~/.traycer/host/                         - prod host runtime root
 //   ~/.traycer/host/host.log               - prod host stdout + bootstrap markers
 //   ~/.traycer/host/pid.json                 - prod host pid metadata
+//   ~/.traycer/host/cli-invocation/          - private invocation authority dir
+//   ~/.traycer/host/cli-invocation/cli-invocation.json - structured CLI invocation cache
 //   ~/.traycer/host/update-progress.json     - prod cross-process `host update` outcome marker
 //   ~/.traycer/host/install/                 - prod host install dir (atomic-swap target)
 //   ~/.traycer/host/install/install.json     - prod host install record
@@ -334,6 +345,31 @@ export function hostStopIntentPath(
 ): string {
   return sharedHostStopIntentPath(hostHomeDir(environment));
 }
+
+// Structured CLI invocation cache: same host-home parameterization as
+// stop-intent, because the host reads these files through `--host-data-dir`
+// rather than this module's slot rules. Authority files live under
+// `<hostHome>/cli-invocation/` via the protocol helpers.
+export function hostCliInvocationStateDir(
+  environment: Environment | undefined,
+): string {
+  return sharedCliInvocationStateDir(hostHomeDir(environment));
+}
+export function hostCliInvocationRecordPath(
+  environment: Environment | undefined,
+): string {
+  return sharedCliInvocationRecordPath(hostHomeDir(environment));
+}
+export function hostCliInvocationRecordStaleMarkerPath(
+  environment: Environment | undefined,
+): string {
+  return sharedCliInvocationRecordStaleMarkerPath(hostHomeDir(environment));
+}
+export function hostCliInvocationLifecyclePath(
+  environment: Environment | undefined,
+): string {
+  return sharedCliInvocationLifecyclePath(hostHomeDir(environment));
+}
 export function bootstrapLogPath(environment: Environment | undefined): string {
   return hostLogPath(environment);
 }
@@ -451,6 +487,104 @@ export async function ensurePrivateDir(path: string): Promise<void> {
     if ((current.mode & 0o077) !== 0) await chmod(path, 0o700);
   } catch {
     return;
+  }
+}
+
+function openFlagsForStateDir(): number {
+  return (
+    fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW
+  );
+}
+
+/**
+ * Private `<hostHome>/cli-invocation/` child. The parent host home is
+ * created if missing and never chmod'd. The child is created 0700;
+ * an existing unsafe or symlinked child is rejected, not repaired.
+ * Identity and the 0700 chmod come from an `O_DIRECTORY|O_NOFOLLOW`
+ * handle so a post-mkdir pathname swap cannot redirect chmod.
+ */
+export async function ensureCliInvocationStateDir(
+  hostHomeDir: string,
+): Promise<CliInvocationStateDirIdentity> {
+  await mkdir(hostHomeDir, { recursive: true });
+  const dir = sharedCliInvocationStateDir(hostHomeDir);
+  // Create-or-observe in one syscall: a stat-then-mkdir pair would let two
+  // concurrent `service install` runs both see ENOENT, and the loser would
+  // fail with EEXIST before ever reaching the transaction lock that lives
+  // inside this directory. EEXIST simply means "validate what is there".
+  let created = true;
+  try {
+    await mkdir(dir, { recursive: false, mode: 0o700 });
+  } catch (cause: unknown) {
+    const code =
+      typeof cause === "object" && cause !== null && "code" in cause
+        ? cause.code
+        : undefined;
+    if (code !== "EEXIST") throw cause;
+    created = false;
+  }
+  return inspectCliInvocationStateDir(hostHomeDir, created);
+}
+
+/**
+ * Inspect the child without following a symlink.
+ *
+ * Windows cannot open a directory as a descriptor (`fs.open` on a
+ * directory path fails), so the entry is inspected by `lstat` there:
+ * reject a reparse point or non-directory, skip POSIX uid/mode/chmod,
+ * and take identity from that lstat. POSIX keeps the descriptor path
+ * (`O_RDONLY|O_DIRECTORY|O_NOFOLLOW`, `fstat`, `fchmod` only when we
+ * created the directory).
+ */
+export async function inspectCliInvocationStateDir(
+  hostHomeDir: string,
+  chmodCreated: boolean,
+): Promise<CliInvocationStateDirIdentity> {
+  const dir = sharedCliInvocationStateDir(hostHomeDir);
+  if (process.platform === "win32") {
+    const current = await lstat(dir);
+    if (current.isSymbolicLink()) {
+      throw Object.assign(
+        new Error("CLI invocation state directory must not be a symlink"),
+        { code: "ELOOP" },
+      );
+    }
+    if (!current.isDirectory()) {
+      throw Object.assign(
+        new Error("CLI invocation state directory is not a directory"),
+        { code: "ENOTDIR" },
+      );
+    }
+    return cliInvocationStateDirIdentityFromStats(current);
+  }
+  const handle = await open(dir, openFlagsForStateDir());
+  try {
+    if (chmodCreated) {
+      await handle.chmod(0o700);
+    }
+    const current = await handle.stat();
+    if (!current.isDirectory()) {
+      throw Object.assign(
+        new Error("CLI invocation state directory is not a directory"),
+        { code: "ENOTDIR" },
+      );
+    }
+    const uid = process.getuid?.();
+    if (uid !== undefined && current.uid !== uid) {
+      throw Object.assign(
+        new Error("CLI invocation state directory is not owned by this user"),
+        { code: "EACCES" },
+      );
+    }
+    if ((current.mode & 0o077) !== 0) {
+      throw Object.assign(
+        new Error("CLI invocation state directory is not private"),
+        { code: "EACCES" },
+      );
+    }
+    return cliInvocationStateDirIdentityFromStats(current);
+  } finally {
+    await handle.close().catch(() => undefined);
   }
 }
 
