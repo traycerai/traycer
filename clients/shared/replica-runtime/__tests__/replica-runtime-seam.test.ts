@@ -780,6 +780,15 @@ interface PolicyConfig {
     session: RegSession,
     cause: SessionDisposeCause,
   ) => SessionDisposeVerdict;
+  /**
+   * What `onRevived` throws, or `null` for the ordinary revival.
+   *
+   * Not hypothetical: the terminal plane's `onRevived` retags the session
+   * `presentation`, and that `setViewer` reconstructs the stream
+   * SYNCHRONOUSLY - which throws when the captured transport or directory has
+   * since disappeared.
+   */
+  readonly onRevivedError: Error | null;
 }
 
 function defaultPolicyConfig(): PolicyConfig {
@@ -792,6 +801,7 @@ function defaultPolicyConfig(): PolicyConfig {
     refreshOrderOnRelease: true,
     retainWhenIdle: () => true,
     onBeforeDisposeVerdict: () => "dispose",
+    onRevivedError: null,
   };
 }
 
@@ -829,6 +839,7 @@ function createTrackedPolicy(config: PolicyConfig): TrackedPolicy {
     },
     onRevived(session: RegSession): void {
       onRevivedSpy(session.id);
+      if (config.onRevivedError !== null) throw config.onRevivedError;
     },
     disposeSpy,
     onParkedSpy,
@@ -882,6 +893,67 @@ describe("createSessionRegistry", () => {
       expect(registry.peek("held-1")).toBe(held);
       expect(registry.peek("warm-1")).toBeNull();
       expect(policy.disposeSpy).toHaveBeenCalledWith("warm-1");
+    });
+  });
+
+  describe("a warm revival that FAILS", () => {
+    it("tears the entry down and rethrows, rather than leaving an unreachable entry with positive demand", () => {
+      const environment = createFakeEnvironment();
+      const revivalFailure = new Error("setViewer: the transport is gone");
+      const config: PolicyConfig = {
+        ...defaultPolicyConfig(),
+        onRevivedError: revivalFailure,
+      };
+      const policy = createTrackedPolicy(config);
+      const registry = createSessionRegistry({ environment, policy });
+
+      registry.acquire("s", "scope", () => makeSession("s"));
+      registry.release("s", "warm");
+      expect(registry.peek("s")).not.toBeNull();
+      // Parked: one idle window armed, and it is the only thing that would
+      // ever reclaim this entry.
+      expect(environment.pendingTimerCount()).toBe(1);
+
+      expect(() =>
+        registry.acquire("s", "scope", () => makeSession("s")),
+      ).toThrow(revivalFailure);
+      // The stimulus actually fired - without this the assertions below would
+      // also pass on a registry that never called `onRevived` at all.
+      expect(policy.onRevivedSpy).toHaveBeenCalledTimes(1);
+
+      // THE REDDENING ASSERTION. By the time `onRevived` throws, the demand
+      // transition has already happened: demand incremented, `parkedAtMs`
+      // cleared, idle timer cancelled. The throw escapes `attach` with no
+      // handle returned, so no caller owes a release - and the entry can
+      // neither expire (no timer, not parked) nor be pruned (the warm
+      // population excludes anything with demand).
+      expect(registry.peek("s")).toBeNull();
+      expect(policy.disposeSpy).toHaveBeenCalledWith("s");
+
+      // ...and permanently so, which is what makes it a leak rather than a
+      // delay: nothing is armed to reclaim it later.
+      expect(environment.pendingTimerCount()).toBe(0);
+      environment.advanceClock(100_000);
+      expect(registry.peek("s")).toBeNull();
+      expect(policy.disposeSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps the session when the revival SUCCEEDS - the teardown is scoped to the failure", () => {
+      // The control. Without it the assertions above are satisfied by a
+      // registry that discards every revived session, which would be a far
+      // worse bug than the one being fixed.
+      const environment = createFakeEnvironment();
+      const policy = createTrackedPolicy(defaultPolicyConfig());
+      const registry = createSessionRegistry({ environment, policy });
+
+      const created = registry.acquire("s", "scope", () => makeSession("s"));
+      registry.release("s", "warm");
+      const revived = registry.acquire("s", "scope", () => makeSession("s"));
+
+      expect(revived).toBe(created);
+      expect(policy.onRevivedSpy).toHaveBeenCalledTimes(1);
+      expect(policy.disposeSpy).not.toHaveBeenCalled();
+      expect(registry.peek("s")).toBe(created);
     });
   });
 

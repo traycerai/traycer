@@ -363,7 +363,64 @@ export function createArtifactBodyLeaseBridge(options: {
    * round trip - `resolveAcquire` clears it in the same step as the install.
    */
   const inFlight = new Map<string, InFlightAcquire>();
+  /**
+   * Where an awaiting body's doc key MOVED to, for release closures that were
+   * handed the old one.
+   *
+   * Only the `@1` arm can populate this: there a doc key is the ROOM id read
+   * off the records plane (`artifactBodyDocKey`), and the legacy root
+   * projection can reassign an artifact to a different room while its initial
+   * materialization is still awaiting a seed. On the lane arm the key IS the
+   * artifact id, which cannot change.
+   *
+   * A closure, not a lookup, is what makes this necessary: `grantFor` hands
+   * every holder a `release` captured over the key its acquire resolved, and a
+   * string captured in a closure cannot be re-pointed. Without the redirect
+   * the release decrements an entry that no longer exists and the worker keeps
+   * the NEW room's demand, observer and subscription for the rest of the
+   * session.
+   */
+  const movedAwaitingKeys = new Map<string, string>();
+  /**
+   * Timers re-driving a REFUSED awaiting release, one per doc key.
+   *
+   * There is no `BodyEntry` to hang this off: an awaiting body has no resident
+   * entry, which is exactly why its release could not use `armLinger` and got
+   * a fulfillment-only `.then` instead.
+   */
+  const awaitingReleaseRetries = new Map<string, RuntimeTimer>();
   let leaseSeq = 0;
+
+  // EVERY `const` this factory closes over belongs in the block above, before
+  // the `return`, and not beside the function that reads it. Function
+  // declarations hoist and these do not, so a `const` declared after the
+  // returned object literal is in its temporal dead zone for the entire life
+  // of the bridge - the factory returns before the declaration ever runs. It
+  // does not fail at construction; it throws a `ReferenceError` out of the
+  // first release that consults it. The two maps above were written next to
+  // their readers first, and that is how this was found.
+
+  /**
+   * Follow a key move, if this key was one. Identity for every other key.
+   *
+   * A CHAIN rather than one hop: a body can move, resolve, be released and
+   * re-acquired, and move again, and a holder from before the first move still
+   * owes a release. Bounded by the map's size, which is the number of moves
+   * this session has seen - a simple path cannot be longer than the edge count
+   * - so a cycle costs one wasted walk instead of hanging the tab. There is no
+   * cycle to find: room ids are MINTED per assignment and never recycled, so
+   * a key that has moved is never handed out again, which is also why a stale
+   * redirect can never mis-point a closure created after the move.
+   */
+  function currentKeyFor(docKey: string): string {
+    let key = docKey;
+    for (let hop = 0; hop < movedAwaitingKeys.size; hop += 1) {
+      const next = movedAwaitingKeys.get(key);
+      if (next === undefined) return key;
+      key = next;
+    }
+    return key;
+  }
 
   function postDemote(docKey: string, generation: number): void {
     const entry = entries.get(docKey);
@@ -781,6 +838,16 @@ export function createArtifactBodyLeaseBridge(options: {
         cancelLinger(entry);
         postLifecycleEnd(docKey, entry);
       }
+      // A pending awaiting-release retry is the same kind of bet as a linger,
+      // and teardown loses it the same way: the worker is going, so a timer
+      // that fires afterwards posts for a session that no longer exists.
+      for (const timer of awaitingReleaseRetries.values()) timer.cancel();
+      awaitingReleaseRetries.clear();
+      // The redirects go with them. Every release closure they exist to
+      // re-point belongs to a session that is being torn down, and this is
+      // the only place the map is emptied - it is otherwise append-only, one
+      // entry per key move, which is why it needs a floor at all.
+      movedAwaitingKeys.clear();
     },
   };
 
@@ -915,11 +982,37 @@ export function createArtifactBodyLeaseBridge(options: {
             return;
           }
           awaiting.delete(docKey);
+          // THE RETURNED KEY, not the captured one. On the `@1` arm a doc key
+          // is the ROOM id, and the legacy root projection can reassign this
+          // artifact to a different room while its materialization is awaiting
+          // a seed - so the answer can name a room this retry did not ask
+          // about. Installing under the captured key left `getArtifactFragment`
+          // reading the new key and finding nothing, so the mounted editor
+          // stayed blank, while the worker kept the new room's demand,
+          // observer and subscription alive behind an accounting entry nothing
+          // would ever release.
+          const grantedKey = answer.docKey;
+          if (grantedKey !== docKey) {
+            // Already-issued `release` closures captured the old key as a
+            // STRING, so they cannot be re-pointed; the redirect is how they
+            // still reach the right entry.
+            movedAwaitingKeys.set(docKey, grantedKey);
+            const raced = entries.get(grantedKey);
+            if (raced !== undefined) {
+              // A concurrent acquire already materialized the new room. Its
+              // entry is the live one - `installGranted` would overwrite its
+              // lease count with ours - so these holders join it instead,
+              // which is exactly what the acquire path's own raced-entry
+              // branch does.
+              reviveAndHold(raced, stillAwaiting.leases);
+              return;
+            }
+          }
           // The awaiting count carries across whole. Every one of those holders
           // is still mounted and still owes a release; restarting at one would
           // let the first unmount demote a doc the others hold.
           installGranted({
-            docKey,
+            docKey: grantedKey,
             update: answer.update,
             docGuid: answer.docGuid,
             seedMode: answer.seedMode,
@@ -1051,11 +1144,12 @@ export function createArtifactBodyLeaseBridge(options: {
    * resident entry now counts, so this falls through to that entry rather than
    * finding nothing and returning.
    */
-  function releaseAwaitingFor(docKey: string): () => void {
+  function releaseAwaitingFor(capturedKey: string): () => void {
     let live = true;
     return () => {
       if (!live) return;
       live = false;
+      const docKey = currentKeyFor(capturedKey);
       const held = awaiting.get(docKey);
       if (held === undefined) {
         // Resolved while this holder was mounted - its lease was carried into
@@ -1066,18 +1160,56 @@ export function createArtifactBodyLeaseBridge(options: {
       held.leases -= 1;
       if (held.leases > 0) return;
       awaiting.delete(docKey);
-      void options.bridge.call("body/release", { docKey }, NO_TRANSFER).then(
-        () => {},
-        () => {
-          // The worker went away mid-release. Nothing on this side holds a doc
-          // for an awaiting body, so there is nothing to keep consistent: a
-          // respawned worker starts with no demand at all.
-        },
-      );
+      postAwaitingRelease(docKey);
     };
   }
 
-  function releaseFor(docKey: string): () => void {
+  /**
+   * Post an awaiting body's release, and keep asking if the worker refuses.
+   *
+   * The refusal is real rather than defensive: the last awaiting holder can
+   * unmount AFTER the worker has materialized the room into a PINNED state - a
+   * collaborator being present is enough - and `body/release` then honestly
+   * answers `{ released: false, reason: "pinned" }`. Reading that as done left
+   * the worker holding the body demand, its observer and its subscription for
+   * the rest of the session, for a body no tile is using and nothing would ask
+   * about again.
+   *
+   * The resident path already had this shape - a refused release re-arms the
+   * linger and looks again next window - so this is that same answer on the
+   * one arm that was missing it, not a new policy.
+   */
+  function postAwaitingRelease(docKey: string): void {
+    void options.bridge.call("body/release", { docKey }, NO_TRANSFER).then(
+      (answer) => {
+        if (answer.released) return;
+        armAwaitingReleaseRetry(docKey);
+      },
+      () => {
+        // The worker went away mid-release. Nothing on this side holds a doc
+        // for an awaiting body, so there is nothing to keep consistent: a
+        // respawned worker starts with no demand at all.
+      },
+    );
+  }
+
+  function armAwaitingReleaseRetry(docKey: string): void {
+    if (awaitingReleaseRetries.has(docKey)) return;
+    awaitingReleaseRetries.set(
+      docKey,
+      options.scheduler.schedule(options.lingerMs, () => {
+        awaitingReleaseRetries.delete(docKey);
+        // Re-read rather than closing over a decision: a holder can have
+        // re-acquired inside the window, and then the demand is legitimately
+        // held again and its own release will post when it unmounts. Posting
+        // here would drop a body someone is using.
+        if (awaiting.has(docKey) || entries.has(docKey)) return;
+        postAwaitingRelease(docKey);
+      }),
+    );
+  }
+
+  function releaseFor(capturedKey: string): () => void {
     let live = true;
     return () => {
       // Idempotent per grant. Without this a caller's `finally` backstop
@@ -1085,6 +1217,11 @@ export function createArtifactBodyLeaseBridge(options: {
       // demote a document another holder is still using.
       if (!live) return;
       live = false;
+      // Follows a key move for the same reason the awaiting release does: a
+      // holder that took its grant while the body was awaiting is handed
+      // `releaseFor` through `releaseAwaitingFor`'s resolved arm, so this key
+      // can be the pre-move one too.
+      const docKey = currentKeyFor(capturedKey);
       const entry = entries.get(docKey);
       if (entry === undefined) return;
       entry.leases -= 1;

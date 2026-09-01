@@ -768,7 +768,34 @@ export function createSessionRegistry<TSession>(
         if (wasWarm && existing.demand > 0) {
           existing.parkedAtMs = null;
           cancelIdleTimer(existing);
-          policy.onRevived(existing.session);
+          try {
+            policy.onRevived(existing.session);
+          } catch (error) {
+            // FAIL TOWARD DISPOSAL, the same answer `park` gives a failed
+            // `onParked`, and for a sharper reason. The terminal plane's
+            // `onRevived` retags the session `presentation`, and that
+            // `setViewer` reconstructs the stream synchronously - which throws
+            // when the captured transport or directory has since disappeared.
+            //
+            // By then the demand transition has already happened: demand is
+            // incremented, `parkedAtMs` is cleared and the idle timer is
+            // cancelled. So the throw escaped `attach` with no handle
+            // returned, meaning no caller owes a release - and the registry
+            // kept an unreachable entry with POSITIVE demand, which can
+            // neither expire (no idle timer, not parked) nor be pruned (the
+            // warm population excludes anything with demand). One failed
+            // revival leaked a session for the life of the process.
+            //
+            // Torn down and rethrown, not swallowed: the caller's acquire
+            // failed either way, and this only changes what is left behind.
+            environment.logger.error(
+              "[session-registry] reviving a warm session failed",
+              { key: existing.key },
+              error,
+            );
+            teardown(existing, "released");
+            throw error;
+          }
         } else if (wasWarm) {
           // Still demand-free: a read that refreshes recency also restarts the
           // eviction window, which is what stops a passive reader from being
