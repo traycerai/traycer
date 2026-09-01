@@ -1,6 +1,9 @@
 import { useCallback } from "react";
 import { TabIcon } from "@/components/epic-canvas/canvas/tab-strip";
-import { useBrowserTabPresentation } from "@/components/epic-canvas/canvas/browser-tab-presentation";
+import {
+  useBrowserTabPresentation,
+  type BrowserTabPresentation,
+} from "@/components/epic-canvas/canvas/browser-tab-presentation";
 import { InlineTitleField } from "@/components/epic-canvas/mobile/inline-title-field";
 import { ContentMinimapButton } from "@/components/minimap/content-minimap-button";
 import {
@@ -16,7 +19,10 @@ import {
 import { isEditableRole } from "@/lib/epic-permissions";
 import { useChatWriteRoute } from "@/hooks/epic/use-chat-write-route";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
-import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
+import type {
+  BrowserSessionTileRef,
+  EpicCanvasTileRef,
+} from "@/stores/epics/canvas/types";
 
 interface MobileCurrentTileBarProps {
   readonly epicId: string;
@@ -39,7 +45,35 @@ interface MobileCurrentTileBarProps {
  * terminal tab shows its live host title rather than the stored name.
  */
 export function MobileCurrentTileBar(props: MobileCurrentTileBarProps) {
-  const { epicId, tile } = props;
+  if (props.tile.type === "browser-session") {
+    return <MobileBrowserCurrentTileBar {...props} tile={props.tile} />;
+  }
+  return <MobileCurrentTileBarBody {...props} browserPresentation={null} />;
+}
+
+function MobileBrowserCurrentTileBar(
+  props: Omit<MobileCurrentTileBarProps, "tile"> & {
+    readonly tile: BrowserSessionTileRef;
+  },
+) {
+  const browserPresentation = useBrowserTabPresentation(
+    props.tile,
+    props.epicId,
+  );
+  return (
+    <MobileCurrentTileBarBody
+      {...props}
+      browserPresentation={browserPresentation}
+    />
+  );
+}
+
+function MobileCurrentTileBarBody(
+  props: MobileCurrentTileBarProps & {
+    readonly browserPresentation: BrowserTabPresentation | null;
+  },
+) {
+  const { epicId, tile, browserPresentation } = props;
   const isTerminal = tile.type === "terminal";
   // Terminal titles resolve against the tab's bound host; `null` for every
   // other kind (mirrors the tab strip). `useHostClientForHostId(null)` returns
@@ -61,7 +95,6 @@ export function MobileCurrentTileBar(props: MobileCurrentTileBarProps) {
   const titleGenerationPending = useEpicLiveArtifactTitleGenerating(
     tile.type === "chat" ? tile.id : null,
   );
-  const browserPresentation = useBrowserTabPresentation(tile);
   const displayTitle = browserPresentation?.title ?? fallbackDisplayTitle;
 
   const renameKind = tileRenameKind(tile);
