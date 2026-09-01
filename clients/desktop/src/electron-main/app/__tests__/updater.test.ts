@@ -51,6 +51,7 @@ function setPlatform(value: string): void {
 const originalPrivateUpdateRepo = process.env.VITE_TRAYCER_DESKTOP_UPDATE_REPO;
 const originalPrivateUpdateToken =
   process.env.VITE_TRAYCER_DESKTOP_UPDATE_TOKEN;
+const originalStagingReleaseToken = process.env.TRAYCER_STAGING_RELEASE_TOKEN;
 
 beforeEach(() => {
   Reflect.deleteProperty(process.env, "VITE_TRAYCER_DESKTOP_UPDATE_REPO");
@@ -83,6 +84,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.doUnmock("electron");
   vi.doUnmock("electron-updater");
+  vi.doUnmock("../../../config");
   vi.doUnmock("node:fs/promises");
   vi.doUnmock("../logger");
   vi.doUnmock("../linux-update-guidance");
@@ -94,6 +96,7 @@ afterEach(() => {
     "VITE_TRAYCER_DESKTOP_UPDATE_TOKEN",
     originalPrivateUpdateToken,
   );
+  restoreEnvValue("TRAYCER_STAGING_RELEASE_TOKEN", originalStagingReleaseToken);
   // Only the architecture-selection test sets this; clean up unconditionally
   // so it can never leak into a later test's `platformChannelFile()` call.
   Reflect.deleteProperty(process.env, "TEST_UPDATER_ARCH");
@@ -2804,6 +2807,105 @@ describe("implicit RC-line following", () => {
   });
 });
 
+describe("staging updater release authentication and channel", () => {
+  async function loadStagingUpdater(): Promise<LoadedUpdater> {
+    return loadUpdaterWithControls(
+      NOT_LINUX_GUIDANCE,
+      { kind: "immediate" },
+      null,
+      STABLE_APP_VERSION,
+      "staging",
+    );
+  }
+
+  it("uses explicit-prerelease mode and treats a channel change as unchanged", async () => {
+    process.env.TRAYCER_STAGING_RELEASE_TOKEN = "staging-token";
+    const { updater } = await loadStagingUpdater();
+    await updater.installAutoUpdater(true, makeDeps(true));
+
+    expect(updater.getAppUpdateSnapshot().allowPrerelease).toBe(true);
+    await expect(
+      updater.setAllowPrereleaseUpdates(false),
+    ).resolves.toMatchObject({
+      outcome: "unchanged",
+    });
+  });
+
+  it("discovers a staging-tagged release through the staging selector", async () => {
+    process.env.TRAYCER_STAGING_RELEASE_TOKEN = "staging-token";
+    const { autoUpdater, updater } = await loadStagingUpdater();
+    const tag = "desktop-v2.0.0-staging.1.gabcdef0";
+    vi.stubGlobal(
+      "fetch",
+      fetchRouter([macReleaseFixture(tag, true)], {
+        [tag]: manifestYamlForTag(tag, macZipAssetName(tag)),
+      }),
+    );
+    autoUpdater.checkForUpdates.mockImplementation(() => {
+      autoUpdater.emit("update-available", { version: "2.0.0-staging.1" });
+      return Promise.resolve(null);
+    });
+    await updater.installAutoUpdater(true, makeDeps(true));
+    await updater.checkForUpdatesNow(false, "manual");
+
+    expect(updater.getAppUpdateSnapshot().status).toBe("available");
+    expect(autoUpdater.setFeedURL).toHaveBeenCalled();
+    expect(JSON.stringify(autoUpdater.setFeedURL.mock.calls[0]?.[0])).toContain(
+      "staging",
+    );
+  });
+
+  it("discards the token and reports unavailable without logging token bytes on a 401 check", async () => {
+    const token = "staging-token-401";
+    process.env.TRAYCER_STAGING_RELEASE_TOKEN = token;
+    const { updater, logger } = await loadStagingUpdater();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("Unauthorized", { status: 401 })),
+    );
+    await updater.installAutoUpdater(true, makeDeps(true));
+    await updater.checkForUpdatesNow(false, "manual");
+
+    expect(updater.getAppUpdateSnapshot()).toMatchObject({
+      status: "unavailable",
+      errorMessage: "Updates are not available for this build.",
+    });
+    expect(JSON.stringify(logger.warn.mock.calls)).not.toContain(token);
+  });
+
+  it("discards the token and reports unavailable without logging token bytes on a 403 download", async () => {
+    const token = "staging-token-403";
+    process.env.TRAYCER_STAGING_RELEASE_TOKEN = token;
+    const { autoUpdater, updater, logger } = await loadStagingUpdater();
+    const tag = "desktop-v2.0.0-staging.2.gabcdef1";
+    vi.stubGlobal(
+      "fetch",
+      fetchRouter([macReleaseFixture(tag, true)], {
+        [tag]: manifestYamlForTag(tag, macZipAssetName(tag)),
+      }),
+    );
+    autoUpdater.checkForUpdates.mockImplementation(() => {
+      autoUpdater.emit("update-available", { version: "2.0.0-staging.2" });
+      return Promise.resolve(null);
+    });
+    await updater.installAutoUpdater(true, makeDeps(true));
+    await updater.checkForUpdatesNow(false, "manual");
+    autoUpdater.downloadUpdate.mockImplementation(() => {
+      const error = new Error("HttpError: 403 Forbidden");
+      autoUpdater.emit("error", error);
+      return Promise.reject(error);
+    });
+    updater.startUpdateDownload();
+    await vi.waitFor(() => {
+      expect(updater.getAppUpdateSnapshot().status).toBe("unavailable");
+    });
+    expect(updater.getAppUpdateSnapshot().errorMessage).toBe(
+      "Updates are not available for this build.",
+    );
+    expect(JSON.stringify(logger.warn.mock.calls)).not.toContain(token);
+  });
+});
+
 interface LinuxGuidanceTestConfig {
   readonly packageType: "deb" | "rpm" | null;
   readonly silentInstallSupported: boolean;
@@ -2822,6 +2924,7 @@ const NOT_LINUX_GUIDANCE: LinuxGuidanceTestConfig = {
 interface LoadedUpdater {
   readonly autoUpdater: FakeAutoUpdater;
   readonly notify: Mock;
+  readonly logger: Record<string, Mock>;
   readonly preferences: { allowPrerelease: boolean };
   readonly updater: UpdaterModule;
 }
@@ -2878,6 +2981,7 @@ async function loadUpdater(
     { kind: "immediate" },
     null,
     STABLE_APP_VERSION,
+    "dev",
   );
 }
 
@@ -2893,6 +2997,7 @@ async function loadUpdaterForVersion(
     { kind: "immediate" },
     null,
     appVersion,
+    "dev",
   );
 }
 
@@ -2905,6 +3010,7 @@ async function loadUpdaterWithHydration(
     hydration,
     null,
     STABLE_APP_VERSION,
+    "dev",
   );
 }
 
@@ -2917,6 +3023,7 @@ async function loadUpdaterWithPersistControl(
     { kind: "immediate" },
     persistControl,
     STABLE_APP_VERSION,
+    "dev",
   );
 }
 
@@ -2925,16 +3032,33 @@ async function loadUpdaterWithControls(
   hydration: HydrationBehavior,
   persistControl: PersistPrereleaseControl | null,
   appVersion: string,
+  releaseChannel: "dev" | "staging",
 ): Promise<LoadedUpdater> {
   vi.resetModules();
   const autoUpdater = new FakeAutoUpdater();
   const notify = vi.fn();
+  const logger = {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  };
   const preferences = { allowPrerelease: false };
   vi.doMock("electron", () => ({
     app: {
       getVersion: () => appVersion,
     },
   }));
+  if (releaseChannel === "staging") {
+    vi.doMock("../../../config", () => ({
+      config: {
+        environment: "staging",
+        releaseRepo: "traycerai/traycer-internal",
+      },
+      configuredDesktopReleaseRepo: () => "traycerai/traycer-internal",
+      DESKTOP_RELEASE_CHANNEL: "staging",
+    }));
+  }
   vi.doMock("electron-updater", () => ({
     autoUpdater,
   }));
@@ -2948,12 +3072,7 @@ async function loadUpdaterWithControls(
     },
   }));
   vi.doMock("../logger", () => ({
-    log: {
-      debug: vi.fn(),
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-    },
+    log: logger,
   }));
   vi.doMock("../update-preferences", () => ({
     hydrateUpdatePreferences: vi.fn(
@@ -3007,6 +3126,7 @@ async function loadUpdaterWithControls(
   return {
     autoUpdater,
     notify,
+    logger,
     preferences,
     updater: await import("../updater"),
   };

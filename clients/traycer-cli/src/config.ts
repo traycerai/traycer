@@ -39,10 +39,14 @@ const bakedConfig = {
   // publish to.
   releaseRepo: "traycerai/traycer",
   // Exact host release this CLI installs by default when no local host
-  // archive is bundled beside it. Production CLI release workflows stamp this
+  // archive is bundled beside it. Released CLI workflows stamp this
   // to the matching host/CLI release version. Dev and dogfood bundle flows
   // keep it null so local archives or explicit `--release` remain in charge.
   supportedHostVersion: null as string | null,
+  // Rolling releases are target-scoped. Staging clients must never fall back
+  // to production merely because both manifests use the same asset name.
+  hostDiscoveryTag: "released-host-versions",
+  cliFeedTag: "cli-manifest",
   // minisign public keys trusted to verify downloaded host archive
   // signatures — this build's root of trust. The OSS build ships the
   // production host-signing public key here so a source checkout verifies
@@ -85,7 +89,6 @@ export function releaseManifestUrl(manifestTag: string): string {
 
 // Host release registry. The canonical `versions.json` is published as an
 // asset on the rolling `released-host-versions` GitHub Release of config.releaseRepo.
-// Non-production builds are never released on their own channel - staging is
-// exercised with local builds or production builds for testing, and dev hosts
-// come from the working tree.
-export const hostRegistryUrl = releaseManifestUrl("released-host-versions");
+// Production and staging stamp distinct rolling tags; dev hosts come from the
+// working tree.
+export const hostRegistryUrl = releaseManifestUrl(config.hostDiscoveryTag);

@@ -811,7 +811,9 @@ describe("runHostStart - installed-record launch path", () => {
     const exec = "/opt/traycer/host/install/traycer-host";
     const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
     const previousUnsetValue = process.env.TRAYCER_TEST_UNSET;
+    const previousStagingToken = process.env.TRAYCER_STAGING_RELEASE_TOKEN;
     process.env.TRAYCER_TEST_UNSET = "inherited";
+    process.env.TRAYCER_STAGING_RELEASE_TOKEN = "parent-secret";
 
     const invoke = () =>
       runHostStart(
@@ -828,6 +830,11 @@ describe("runHostStart - installed-record launch path", () => {
         delete process.env.TRAYCER_TEST_UNSET;
       } else {
         process.env.TRAYCER_TEST_UNSET = previousUnsetValue;
+      }
+      if (previousStagingToken === undefined) {
+        delete process.env.TRAYCER_STAGING_RELEASE_TOKEN;
+      } else {
+        process.env.TRAYCER_STAGING_RELEASE_TOKEN = previousStagingToken;
       }
     }
 
@@ -856,6 +863,7 @@ describe("runHostStart - installed-record launch path", () => {
       expect.anything(),
     ]);
     expect(call?.env.TRAYCER_CHANNEL).toBeUndefined();
+    expect(call?.env.TRAYCER_STAGING_RELEASE_TOKEN).toBeUndefined();
     expect(call?.env.EXTRA_FROM_OVERRIDE).toBe("1");
     expect(call?.env.TRAYCER_TEST_UNSET).toBeUndefined();
     expect(call?.env.TERM_PROGRAM).toBe("traycer");

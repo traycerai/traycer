@@ -58,6 +58,12 @@ const REAL_MODULE_PATH = path.resolve(
   "inject-host-launch-agent.cjs",
 );
 const REAL_PACKAGE_JSON_PATH = path.join(DESKTOP_ROOT, "package.json");
+const REAL_STAMP_SCRIPT_PATH = path.resolve(
+  DESKTOP_ROOT,
+  "..",
+  "scripts",
+  "release-target-stamp.cjs",
+);
 const REAL_PACKAGE_JSON = JSON.parse(
   readFileSync(REAL_PACKAGE_JSON_PATH, "utf8"),
 ) as { build: { productName: string; appId: string } };
@@ -84,16 +90,22 @@ function createFixture(environment: "dev" | "production"): {
   );
   fixtureRoots.push(root);
 
-  const scriptsPrepackDir = path.join(root, "scripts", "prepack");
+  const moduleRoot = path.join(root, "nested");
+  const scriptsPrepackDir = path.join(moduleRoot, "scripts", "prepack");
   mkdirSync(scriptsPrepackDir, { recursive: true });
   const modulePath = path.join(
     scriptsPrepackDir,
     "inject-host-launch-agent.cjs",
   );
   cpSync(REAL_MODULE_PATH, modulePath);
-  cpSync(REAL_PACKAGE_JSON_PATH, path.join(root, "package.json"));
+  cpSync(REAL_PACKAGE_JSON_PATH, path.join(moduleRoot, "package.json"));
+  mkdirSync(path.join(root, "scripts"), { recursive: true });
+  cpSync(
+    REAL_STAMP_SCRIPT_PATH,
+    path.join(root, "scripts", "release-target-stamp.cjs"),
+  );
 
-  const srcDir = path.join(root, "src");
+  const srcDir = path.join(moduleRoot, "src");
   mkdirSync(srcDir, { recursive: true });
   writeFileSync(
     path.join(srcDir, "config.ts"),

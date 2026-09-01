@@ -100,8 +100,15 @@ export function platformInstallerExtensions(
 // `desktop-v1.2.3-rc.01` that a lenient `\d+` would smuggle through - a
 // leading-zero identifier is not a valid SemVer version and must not select a
 // feed.
+//
+// `releaseChannel` is the build's BAKED channel (`DESKTOP_RELEASE_CHANNEL`):
+// a production build projects the `X.Y.Z` / `X.Y.Z-rc.N` lines exactly as
+// before, while a staging build projects only `X.Y.Z-staging.<n>.g<sha>` tags
+// - the two lines never share a repository, and a staging updater must never
+// be handed a production feed by a tag that happens to sort higher.
 export function projectDesktopRelease(
   value: unknown,
+  releaseChannel: string,
 ): DesktopReleaseCandidate[] {
   if (!isRecord(value) || value.draft === true) {
     return [];
@@ -112,10 +119,13 @@ export function projectDesktopRelease(
   ) {
     return [];
   }
-  const match =
-    /^desktop-v((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-rc\.(?:0|[1-9]\d*))?)$/.exec(
-      value.tag_name,
-    );
+  const stableOrRc =
+    /^desktop-v((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-rc\.(?:0|[1-9]\d*))?)$/;
+  const staging =
+    /^desktop-v((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)-staging\.(?:0|[1-9]\d*)\.g[0-9a-f]{7,40})$/;
+  const match = (releaseChannel === "staging" ? staging : stableOrRc).exec(
+    value.tag_name,
+  );
   if (match === null) {
     return [];
   }
@@ -127,8 +137,9 @@ export function projectDesktopRelease(
   // EQUIVALENT, not a behavior change - the tag regex above already admits only
   // `X.Y.Z` and `X.Y.Z-rc.N` with strict SemVer numerics, so both spellings
   // accept exactly the same set here. The point is that there is now one
-  // definition rather than two.
-  const isReleaseCandidate = isCanonicalReleaseCandidate(version);
+  // definition rather than two. Every staging release is a prerelease.
+  const isReleaseCandidate =
+    releaseChannel === "staging" ? true : isCanonicalReleaseCandidate(version);
   // Reject inconsistent metadata rather than trusting the tag: a stable tag
   // flagged `prerelease`, or an rc tag flagged stable, is a publishing mistake
   // that must not silently ship.

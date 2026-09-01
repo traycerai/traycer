@@ -71,10 +71,42 @@ function releasePayload(
 }
 
 describe("projectDesktopRelease", () => {
+  it("accepts a canonical staging prerelease only in staging mode", () => {
+    const tag = "desktop-v1.2.3-staging.4.gabcdef1";
+    const assets = macReleaseAsset(tag);
+
+    expect(
+      projectDesktopRelease(
+        releasePayload(tag, false, true, assets),
+        "staging",
+      ),
+    ).toEqual([{ tag, version: "1.2.3-staging.4.gabcdef1", assets }]);
+    expect(
+      projectDesktopRelease(releasePayload(tag, false, true, assets), "stable"),
+    ).toEqual([]);
+  });
+
+  it.each([
+    ["desktop-v1.2.3", false],
+    ["desktop-v1.2.3-rc.1", true],
+    ["desktop-v1.2.3-staging.4.gabcdef1", false],
+    ["desktop-v1.2.3-staging.04.gabcdef1", true],
+    ["desktop-v1.2.3-staging.4.gABCDEF1", true],
+    ["desktop-v1.2.3-staging.4.gabc_de1", true],
+  ] as const)("rejects invalid staging release %s", (tag, prerelease) => {
+    expect(
+      projectDesktopRelease(
+        releasePayload(tag, false, prerelease, macReleaseAsset(tag)),
+        "staging",
+      ),
+    ).toEqual([]);
+  });
+
   it("accepts a stable desktop release and retains its assets", () => {
     const assets = macReleaseAsset("desktop-v1.4.0");
     const result = projectDesktopRelease(
       releasePayload("desktop-v1.4.0", false, false, assets),
+      "stable",
     );
 
     expect(result).toEqual([
@@ -86,6 +118,7 @@ describe("projectDesktopRelease", () => {
     const assets = macReleaseAsset("desktop-v1.4.0-rc.2");
     const result = projectDesktopRelease(
       releasePayload("desktop-v1.4.0-rc.2", false, true, assets),
+      "stable",
     );
 
     expect(result).toEqual([
@@ -100,6 +133,7 @@ describe("projectDesktopRelease", () => {
   ])("rejects a non-rc prerelease tag form: %s", (tag) => {
     const result = projectDesktopRelease(
       releasePayload(tag, false, true, macReleaseAsset(tag)),
+      "stable",
     );
 
     expect(result).toEqual([]);
@@ -113,6 +147,7 @@ describe("projectDesktopRelease", () => {
         false,
         macReleaseAsset("host-v1.4.0"),
       ),
+      "stable",
     );
 
     expect(result).toEqual([]);
@@ -126,17 +161,21 @@ describe("projectDesktopRelease", () => {
         false,
         macReleaseAsset("desktop-v1.4.0"),
       ),
+      "stable",
     );
 
     expect(result).toEqual([]);
   });
 
   it("rejects a release with a missing prerelease field", () => {
-    const result = projectDesktopRelease({
-      tag_name: "desktop-v1.4.0",
-      draft: false,
-      assets: macReleaseAsset("desktop-v1.4.0"),
-    });
+    const result = projectDesktopRelease(
+      {
+        tag_name: "desktop-v1.4.0",
+        draft: false,
+        assets: macReleaseAsset("desktop-v1.4.0"),
+      },
+      "stable",
+    );
 
     expect(result).toEqual([]);
   });
@@ -149,6 +188,7 @@ describe("projectDesktopRelease", () => {
         "true",
         macReleaseAsset("desktop-v1.4.0"),
       ),
+      "stable",
     );
 
     expect(result).toEqual([]);
@@ -162,6 +202,7 @@ describe("projectDesktopRelease", () => {
         true,
         macReleaseAsset("desktop-v1.4.0"),
       ),
+      "stable",
     );
 
     expect(result).toEqual([]);
@@ -175,6 +216,7 @@ describe("projectDesktopRelease", () => {
         false,
         macReleaseAsset("desktop-v1.4.0-rc.2"),
       ),
+      "stable",
     );
 
     expect(result).toEqual([]);
@@ -191,6 +233,7 @@ describe("projectDesktopRelease", () => {
   ])("rejects a leading-zero numeric identifier: %s", (tag, prerelease) => {
     const result = projectDesktopRelease(
       releasePayload(tag, false, prerelease, macReleaseAsset(tag)),
+      "stable",
     );
 
     expect(result).toEqual([]);
@@ -200,6 +243,7 @@ describe("projectDesktopRelease", () => {
     const assets = macReleaseAsset("desktop-v1.2.3-rc.0");
     const result = projectDesktopRelease(
       releasePayload("desktop-v1.2.3-rc.0", false, true, assets),
+      "stable",
     );
 
     expect(result).toEqual([
@@ -211,6 +255,7 @@ describe("projectDesktopRelease", () => {
     const assets = macReleaseAsset("desktop-v1.2.3-rc.10");
     const result = projectDesktopRelease(
       releasePayload("desktop-v1.2.3-rc.10", false, true, assets),
+      "stable",
     );
 
     expect(result).toEqual([

@@ -60,9 +60,18 @@ function readUninstallMacro(): string {
       "desktop package.json build.nsis.include is unset - the uninstaller macro is not wired in at all",
     );
   }
-  return readFileSync(
+  const source = readFileSync(
     join(DESKTOP_ROOT, build.directories.buildResources, include),
     "utf8",
+  );
+  const defaults: Record<string, string> = {
+    TRAYCER_WINDOWS_TASK_NAME: "\\Traycer\\Host",
+    TRAYCER_WINDOWS_TASK_FOLDER: "Traycer",
+    TRAYCER_HOST_LAUNCHER: "$PROFILE\\.traycer\\cli\\host-start-hidden.vbs",
+  };
+  return source.replace(
+    /\$\{(TRAYCER_WINDOWS_TASK_NAME|TRAYCER_WINDOWS_TASK_FOLDER|TRAYCER_HOST_LAUNCHER)\}/g,
+    (_macro: string, name: string) => defaults[name] ?? "",
   );
 }
 

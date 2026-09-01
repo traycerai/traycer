@@ -36,6 +36,20 @@ import {
   type DesktopUpdateFeed,
 } from "./desktop-release-feed";
 import { isCanonicalReleaseCandidate } from "@traycer-clients/shared/host-version/release-line";
+import { isAuthenticationRequiredError } from "@traycer-clients/shared/github-release-auth";
+import {
+  config,
+  configuredDesktopReleaseRepo,
+  DESKTOP_RELEASE_CHANNEL,
+} from "../../config";
+import {
+  AUTHENTICATION_REQUIRED_MESSAGE,
+  discardStagingUpdateToken,
+  fetchStagingGitHubRelease,
+  prepareStagingUpdateToken,
+  stagingAuthLogMessage,
+  stagingReleaseAuthRequired,
+} from "./staging-release-auth";
 import {
   isSelectableCandidate,
   modeAllowsPrerelease,
@@ -115,9 +129,18 @@ export interface AppUpdaterDeps {
 
 const AUTOMATIC_RESUME_CHECK_DEBOUNCE_MS = 30_000;
 const CURRENT_VERSION = app.getVersion();
-const PRIVATE_UPDATE_REPO = process.env.VITE_TRAYCER_DESKTOP_UPDATE_REPO ?? "";
-const PRIVATE_UPDATE_TOKEN =
+const PRIVATE_UPDATE_REPO =
+  process.env.VITE_TRAYCER_DESKTOP_UPDATE_REPO ??
+  (config.environment === "staging" ? configuredDesktopReleaseRepo() : "");
+const BAKED_PRIVATE_UPDATE_TOKEN =
   process.env.VITE_TRAYCER_DESKTOP_UPDATE_TOKEN ?? "";
+let stagingUpdateToken = "";
+
+function currentPrivateUpdateToken(): string {
+  return config.environment === "staging"
+    ? stagingUpdateToken
+    : BAKED_PRIVATE_UPDATE_TOKEN;
+}
 
 // User-facing copy for the update failure classes. Deliberately generic and
 // reassuring - users shouldn't see release-feed internals, HTTP bodies, or be
@@ -561,7 +584,7 @@ async function configureAutoUpdater(deps: AppUpdaterDeps): Promise<void> {
     notifyUpdateWhenUnfocused("ready", info.version);
   });
   autoUpdater.on("error", (err) => {
-    log.error("[updater] error", err);
+    log.error("[updater] error", credentialSafeLogValue(err));
     handleUpdaterError(err);
   });
 }
@@ -576,6 +599,9 @@ async function configureAutoUpdater(deps: AppUpdaterDeps): Promise<void> {
  * while the preference and the app version are always authoritative.
  */
 function effectiveChannelMode(): DesktopUpdateChannelMode {
+  if (DESKTOP_RELEASE_CHANNEL === "staging") {
+    return "explicit-prerelease";
+  }
   return resolveUpdateChannelMode(prereleaseUpdatesEnabled(), CURRENT_VERSION);
 }
 
@@ -661,6 +687,14 @@ export async function checkForUpdatesNow(
     }
     return currentSnapshot;
   }
+  if (stagingReleaseAuthRequired()) {
+    const token = await prepareStagingUpdateToken();
+    if (token === null) {
+      emitStagingAuthUnavailable(intent, AUTHENTICATION_REQUIRED_MESSAGE, "");
+      return currentSnapshot;
+    }
+    stagingUpdateToken = token;
+  }
   if (checkInFlight) {
     // A check is already running. If it belongs to an older channel generation
     // it will abort without publishing, so queue a fresh check for the newest
@@ -735,8 +769,15 @@ export async function checkForUpdatesNow(
     }
     await autoUpdater.checkForUpdates();
   } catch (err) {
-    log.warn("[updater] check failed", err);
-    emitCheckErrorFromCatch(err, checkIntent ?? intent);
+    if (isStagingAuthFailure(err)) {
+      const rejectedToken = stagingUpdateToken;
+      discardStagingUpdateToken();
+      stagingUpdateToken = "";
+      emitStagingAuthUnavailable(checkIntent ?? intent, err, rejectedToken);
+    } else {
+      log.warn("[updater] check failed", credentialSafeLogValue(err));
+      emitCheckErrorFromCatch(err, checkIntent ?? intent);
+    }
   } finally {
     checkInFlight = false;
     settleCheck?.();
@@ -747,6 +788,44 @@ export async function checkForUpdatesNow(
     runPendingRecheck();
   }
   return currentSnapshot;
+}
+
+function emitStagingAuthUnavailable(
+  intent: DesktopAppUpdateCheckIntent,
+  reason: unknown,
+  rejectedToken: string,
+): void {
+  if (checkInFlight && checkErrorEmitted) return;
+  if (checkInFlight) checkErrorEmitted = true;
+  log.warn(
+    "[updater] staging update unavailable",
+    stagingAuthLogMessage(reason, rejectedToken),
+  );
+  if (intent === "manual") {
+    emitSnapshot({
+      status: "unavailable",
+      errorMessage: "Updates are not available for this build.",
+      lastCheckedAt: new Date().toISOString(),
+      lastCheckIntent: intent,
+    });
+  }
+}
+
+function credentialSafeLogValue(error: unknown): unknown {
+  return stagingReleaseAuthRequired()
+    ? stagingAuthLogMessage(error, stagingUpdateToken)
+    : error;
+}
+
+function isStagingAuthFailure(error: unknown): boolean {
+  if (!stagingReleaseAuthRequired()) return false;
+  if (isAuthenticationRequiredError(error)) return true;
+  const message = rawErrorMessage(error).toLowerCase();
+  return (
+    /\b401\b/.test(message) ||
+    (/\b403\b/.test(message) &&
+      (message.includes("forbidden") || message.includes("credentials")))
+  );
 }
 
 // Runs the check queued while a stale (older-generation) check was resolving.
@@ -793,6 +872,13 @@ async function performChannelChange(
   // feed/listener set (finding 1). The barrier always settles, so this never
   // hangs; the preference persistence below is independent of updater health.
   await updaterInitialized;
+  // Staging is its own prerelease line, not a production RC preference.
+  if (DESKTOP_RELEASE_CHANNEL === "staging") {
+    return {
+      outcome: "unchanged",
+      snapshot: emitSnapshot({ allowPrerelease: true }),
+    };
+  }
   // The mode this request asks for. Read inside the serialized section so the
   // persisted value it is compared against reflects any preceding queued change.
   const requestedMode = resolveUpdateChannelMode(
@@ -1228,7 +1314,10 @@ async function probeRcRecoveryCandidate(
     // out". Route it exactly like "nothing found": the manual link. Surfacing
     // a discovery error on top of "your app is too old" adds noise to a state
     // that already has one clear instruction.
-    log.warn("[updater] RC recovery probe failed", error);
+    log.warn(
+      "[updater] RC recovery probe failed",
+      credentialSafeLogValue(error),
+    );
     return null;
   });
   rcRecoveryProbesInFlight.set(minimumEpoch, probe);
@@ -1285,7 +1374,7 @@ async function runRcRecoveryProbe(
   const releaseCandidates = [...all].sort((a, b) =>
     compareHostVersions(b.version, a.version),
   );
-  const token = PRIVATE_UPDATE_TOKEN.trim();
+  const token = currentPrivateUpdateToken().trim();
   const channelFile = platformChannelFile();
   const currentOsRelease = osRelease();
   const isArm64Mac = process.platform === "darwin" ? isArm64MacTarget() : false;
@@ -1421,7 +1510,7 @@ export function startUpdateDownload(): DesktopAppUpdateSnapshot {
   void (async () => {
     await autoUpdater.downloadUpdate();
   })().catch((err: unknown) => {
-    log.warn("[updater] download failed", err);
+    log.warn("[updater] download failed", credentialSafeLogValue(err));
     handleUpdaterError(err);
   });
   return currentSnapshot;
@@ -1469,7 +1558,7 @@ export function installDownloadedUpdate(): DesktopAppUpdateSnapshot {
     // as an async failure - its `installingUpdate` branch lowers the flag and
     // emits the error. Call it BEFORE clearing the flag; that branch is
     // selected by it.
-    log.warn("[updater] install handoff threw", err);
+    log.warn("[updater] install handoff threw", credentialSafeLogValue(err));
     handleUpdaterError(err);
   }
   return currentSnapshot;
@@ -1529,7 +1618,7 @@ async function canCheckForUpdates(isDev: boolean): Promise<boolean> {
 }
 
 function configurePrivateGitHubUpdateFeed(): void {
-  const token = PRIVATE_UPDATE_TOKEN.trim();
+  const token = currentPrivateUpdateToken().trim();
   if (token.length === 0) {
     return;
   }
@@ -1560,7 +1649,7 @@ function configurePrivateGitHubUpdateFeed(): void {
 // feed (review finding 2).
 function resolveUpdateRepo(): GitHubRepoCoordinate | null {
   const parsed = parseGitHubRepoCoordinate(PRIVATE_UPDATE_REPO);
-  if (PRIVATE_UPDATE_TOKEN.trim().length > 0) {
+  if (currentPrivateUpdateToken().trim().length > 0) {
     return parsed;
   }
   return parsed ?? { owner: "traycerai", repo: "traycer" };
@@ -1572,7 +1661,7 @@ function resolveUpdateRepo(): GitHubRepoCoordinate | null {
 // public feed.
 function invalidPrivateConfig(): boolean {
   return (
-    PRIVATE_UPDATE_TOKEN.trim().length > 0 &&
+    currentPrivateUpdateToken().trim().length > 0 &&
     parseGitHubRepoCoordinate(PRIVATE_UPDATE_REPO) === null
   );
 }
@@ -1596,7 +1685,7 @@ function invalidPrivateConfig(): boolean {
  */
 function configureStableGitHubUpdateFeed(): void {
   const coordinate = resolveUpdateRepo();
-  const token = PRIVATE_UPDATE_TOKEN.trim();
+  const token = currentPrivateUpdateToken().trim();
   if (coordinate === null) {
     // Token set + invalid coordinate: fail closed. Leave the existing feed in
     // place rather than point an authenticated build at the public repo.
@@ -1644,7 +1733,7 @@ async function resolveDesktopReleaseFeed(
   }
   const release = await findNewestDesktopRelease(coordinate, mode);
   if (release === null) return null;
-  const token = PRIVATE_UPDATE_TOKEN.trim();
+  const token = currentPrivateUpdateToken().trim();
   log.debug("[updater] configured desktop release feed", {
     version: release.version,
     private: token.length > 0,
@@ -1703,7 +1792,7 @@ async function findNewestDesktopRelease(
       candidates: ordered.map((candidate) => candidate.version),
     });
   }
-  const token = PRIVATE_UPDATE_TOKEN.trim();
+  const token = currentPrivateUpdateToken().trim();
   const channelFile = platformChannelFile();
   const currentOsRelease = osRelease();
   // Resolved consistently with MacUpdater so discovery filters manifests by the
@@ -1767,7 +1856,7 @@ async function collectDesktopReleaseCandidates(
   coordinate: GitHubRepoCoordinate,
   signal: AbortSignal | undefined,
 ): Promise<DesktopReleaseCandidate[]> {
-  const token = PRIVATE_UPDATE_TOKEN.trim();
+  const token = currentPrivateUpdateToken().trim();
   const headers: Record<string, string> = {
     accept: "application/vnd.github+json",
   };
@@ -1776,7 +1865,7 @@ async function collectDesktopReleaseCandidates(
   const candidates: DesktopReleaseCandidate[] = [];
   for (let page = 1; page <= MAX_DISCOVERY_PAGES; page += 1) {
     const url = `https://api.github.com/repos/${coordinate.owner}/${coordinate.repo}/releases?per_page=100&page=${page}`;
-    const response = await fetch(url, { headers, signal });
+    const response = await fetchStagingGitHubRelease(url, { headers, signal });
     if (!response.ok) {
       throw new Error(
         `GitHub release discovery failed with HTTP ${response.status}`,
@@ -1786,7 +1875,11 @@ async function collectDesktopReleaseCandidates(
     if (!Array.isArray(raw)) {
       throw new Error("GitHub release discovery returned a malformed response");
     }
-    candidates.push(...raw.flatMap(projectDesktopRelease));
+    candidates.push(
+      ...raw.flatMap((value) =>
+        projectDesktopRelease(value, DESKTOP_RELEASE_CHANNEL),
+      ),
+    );
     // A short page is GitHub's signal that no releases remain.
     if (raw.length < 100) return candidates;
   }
@@ -1807,7 +1900,7 @@ async function fetchDesktopReleaseManifest(
   },
   signal: AbortSignal | undefined,
 ): Promise<string | null> {
-  const response = await fetch(request.url, {
+  const response = await fetchStagingGitHubRelease(request.url, {
     headers: request.headers,
     signal,
   });
@@ -2051,6 +2144,20 @@ function handleUpdaterError(error: unknown): void {
     return;
   }
   if (currentSnapshot.status === "ready") {
+    return;
+  }
+  if (isStagingAuthFailure(error)) {
+    const intent =
+      downloadIntent ??
+      checkIntent ??
+      currentSnapshot.lastCheckIntent ??
+      "automatic";
+    const rejectedToken = stagingUpdateToken;
+    discardStagingUpdateToken();
+    stagingUpdateToken = "";
+    downloadInProgress = false;
+    downloadIntent = null;
+    emitStagingAuthUnavailable(intent, error, rejectedToken);
     return;
   }
   const errorMessage = readErrorMessage(error);

@@ -3,6 +3,7 @@ import { createReadStream, createWriteStream, type WriteStream } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import { hashFileSha256 } from "../installer/sha256";
+import { registryFetch } from "./staging-release-auth";
 
 // Tiny resource fetcher used by the registry client. Supports the two
 // schemes the manifest URLs are allowed to use:
@@ -153,7 +154,7 @@ export async function fetchText(
       controller.abort();
     }, FETCH_TEXT_ATTEMPT_CAP_MS);
     try {
-      const response = await fetch(url, { signal: linkedSignal });
+      const response = await registryFetch(url, { signal: linkedSignal });
       if (!response.ok) {
         throw await httpStatusFailure(url, response);
       }
@@ -385,7 +386,10 @@ async function downloadAttempt(
     onTimeout: () => emitHeartbeat(opts.onHeartbeat, "watchdog", attempt, null),
   });
   try {
-    const response = await fetch(opts.url, { signal: linkedSignal, headers });
+    const response = await registryFetch(opts.url, {
+      signal: linkedSignal,
+      headers,
+    });
     if (!state.sawFirstSuccessfulResponse && response.ok) {
       state.sawFirstSuccessfulResponse = true;
       state.entityValidator = entityValidatorFrom(response);

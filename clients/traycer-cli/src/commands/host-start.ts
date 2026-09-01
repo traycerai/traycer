@@ -69,6 +69,7 @@ import {
   type ProbeMarker,
   type ProbeSupervisorAttestation,
 } from "@traycer-clients/shared/host-lifecycle";
+import { stripGitHubReleaseCredentialsFromEnv } from "@traycer-clients/shared/github-release-auth";
 import {
   applyEnvOverrides,
   listEnvOverrides,
@@ -1084,10 +1085,10 @@ export async function runHostStart(
         environment: opts.environment,
         overrideCount: Object.keys(envOverrides).length,
       });
-      env = {
+      env = stripGitHubReleaseCredentialsFromEnv({
         ...applyEnvOverrides(process.env, envOverrides),
         TERM_PROGRAM: "traycer",
-      };
+      });
       // Cap the host's V8 young generation at creation time on EVERY platform.
       // This is the single cross-platform host launch path, so applying it here
       // gives Linux (systemd) and Windows (schtasks, which cannot set env vars in
