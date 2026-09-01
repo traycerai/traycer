@@ -198,6 +198,16 @@ vi.mock("@/components/epic-canvas/binary-placeholder", () => ({
   ),
 }));
 
+// The compact PDF diff block pulls in useDraggable/useEpicCanvasStore
+// selectors this suite does not stub end to end - the routing contract under
+// test is only "a PDF row shows the compact block and skips the text query",
+// which a stub component pins the same way `ImagePreview` is stubbed above.
+vi.mock("@/components/epic-canvas/pdf-preview/pdf-diff-view", () => ({
+  PdfDiffView: (props: { readonly filePath: string }) => (
+    <div data-testid="pdf-diff-block" data-file-name={props.filePath} />
+  ),
+}));
+
 vi.mock(
   "@/components/epic-canvas/git-diff/diff-content-loading-skeleton",
   () => ({
@@ -690,6 +700,23 @@ describe("<GitDiffTile /> image routing", () => {
     expect(
       state.assetRequests.filter((request) => request?.method === "git"),
     ).toEqual([expect.objectContaining({ side: "new" })]);
+  });
+
+  it("routes an ASCII-authored .pdf row to the compact PDF block and skips the text diff query", () => {
+    const changed = changedFile({
+      path: "docs/report.pdf",
+      // The git numstat path can report a PDF as non-binary (e.g. a mostly-
+      // text PDF stream) - routing must still key off the EXTENSION, not
+      // `isBinary`, so this deliberately sets it false.
+      isBinary: false,
+    });
+
+    renderTile(changed);
+
+    expect(screen.getByTestId("pdf-diff-block")).toBeTruthy();
+    expect(screen.queryByTestId("file-diff-content")).toBeNull();
+    expect(screen.queryByTestId("binary-placeholder")).toBeNull();
+    expect(state.editableCalls.at(-1)?.queryEnabled).toBe(false);
   });
 
   // Live E2E (ticket 06) found a real conflicted binary image falling

@@ -1071,9 +1071,38 @@ describe("useFileAsset", () => {
       // The scoped shape, not a bare function: `acquire` derives its entry
       // identity from `scopeKey`, so a byte source cannot reach the cache
       // without declaring what it authorizes against.
-      expect.objectContaining({ scopeKey: "image-asset" }),
+      expect.objectContaining({ scopeKey: "file-asset" }),
       "session",
     );
+  });
+
+  // Rename case (sol re-review): the old side of a rename must classify by
+  // its PREVIOUS path, not the new one - `docs/report.bin` alone would read
+  // as a generic binary and lose the PDF-specific fallback copy/telemetry.
+  it("classifies a git rename's old side as a document by its previous PDF path", async () => {
+    const renameOldSideRequest: FileAssetRequest = {
+      method: "git",
+      runningDir: "/repo",
+      filePath: "docs/report.bin",
+      previousPath: "docs/report.pdf",
+      side: "old",
+      stage: "staged",
+      coalesceRevision: "git-revision-1",
+    };
+    const { result, unmount } = renderHook(() =>
+      useFileAsset(renameOldSideRequest),
+    );
+    expect(mockWsStreamClient.sessions).toHaveLength(1);
+    const session = mockWsStreamClient.sessions[0];
+
+    act(() => {
+      emitFailure(session, "too-large");
+    });
+    await flushPromises();
+
+    expect(result.current.status).toBe("fallback");
+    expect(result.current.reason).toBe("This PDF is too large to preview.");
+    unmount();
   });
 
   it.each(FALLBACK_CASES)(
@@ -1126,7 +1155,7 @@ describe("useFileAsset", () => {
       // The scoped shape, not a bare function: `acquire` derives its entry
       // identity from `scopeKey`, so a byte source cannot reach the cache
       // without declaring what it authorizes against.
-      expect.objectContaining({ scopeKey: "image-asset" }),
+      expect.objectContaining({ scopeKey: "file-asset" }),
       "grace",
     );
     expect(createObjectUrlMock).not.toHaveBeenCalled();

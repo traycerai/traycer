@@ -57,7 +57,7 @@ describe("<ImagePreview />", () => {
       String(IMAGE_WIDTH / IMAGE_HEIGHT),
     );
     expect(skeleton.style.width).toBe("100%");
-    expect(screen.getByText("640x480 · 2.0 KB")).toBeTruthy();
+    expect(screen.getByText("640x480 · 2.0 KiB")).toBeTruthy();
   });
 
   it("does not render a skeleton when header dimensions are unknown", () => {
@@ -69,7 +69,7 @@ describe("<ImagePreview />", () => {
     );
 
     expect(screen.queryByTestId("image-preview-skeleton")).toBeNull();
-    expect(screen.getByText("2.0 KB")).toBeTruthy();
+    expect(screen.getByText("2.0 KiB")).toBeTruthy();
   });
 
   it("shows the loading spinner before the header arrives", () => {
@@ -134,7 +134,7 @@ describe("<ImagePreview />", () => {
       screen.queryByRole("toolbar", { name: "Image preview controls" }),
     ).toBeNull();
     expect(screen.queryByRole("button")).toBeNull();
-    expect(screen.getByText("640x480 · 2.0 KB")).toBeTruthy();
+    expect(screen.getByText("640x480 · 2.0 KiB")).toBeTruthy();
   });
 
   it("skips the entrance fade for cache hits but keeps it for streamed images", () => {

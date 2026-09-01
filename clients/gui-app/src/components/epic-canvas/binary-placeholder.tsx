@@ -1,4 +1,4 @@
-import { FileQuestionMarkIcon } from "lucide-react";
+import { FileQuestionMarkIcon, FileTextIcon } from "lucide-react";
 import { isPdfAssetPath } from "@/lib/assets/image-extension-allowlist";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -17,6 +17,11 @@ interface BinaryPlaceholderProps {
 }
 
 export function BinaryPlaceholder(props: BinaryPlaceholderProps) {
+  // A PDF is a KNOWN type here (the heading below already says so) - the
+  // question-mark file icon reads as "unidentified", and the PDF diff block
+  // uses the document icon, so keep the two surfaces consistent.
+  const isPdf = isPdfAssetPath(props.fileName);
+  const Icon = isPdf ? FileTextIcon : FileQuestionMarkIcon;
   return (
     <div
       className={cn(
@@ -24,7 +29,7 @@ export function BinaryPlaceholder(props: BinaryPlaceholderProps) {
         props.compact ? "gap-2 p-4" : "gap-4 p-8",
       )}
     >
-      <FileQuestionMarkIcon
+      <Icon
         className={cn(
           "text-muted-foreground",
           props.compact ? "size-6" : "size-12",
@@ -34,7 +39,7 @@ export function BinaryPlaceholder(props: BinaryPlaceholderProps) {
         // "Binary File" above "This PDF is too large..." reads as a
         // contradiction (live-testing review, D4) - name the type we know.
         <h3 className="text-base font-semibold">
-          {isPdfAssetPath(props.fileName) ? "PDF" : "Binary File"}
+          {isPdf ? "PDF" : "Binary File"}
         </h3>
       )}
       <p

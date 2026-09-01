@@ -15,6 +15,7 @@ import { useDraggable } from "@dnd-kit/core";
 import { ExternalLink, FileTextIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
+import { formatByteSize } from "@/lib/format-byte-size";
 import { getBasename } from "@/lib/path/cross-platform-path";
 import { useOpenEpicId } from "@/lib/epic-selectors";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
@@ -39,19 +40,6 @@ export interface PdfDiffViewProps {
   readonly newStage: "staged" | "unstaged" | null;
   /** Current (new-side) size from `GitChangedFile.sizeBytes`. */
   readonly sizeBytes: number | null;
-}
-
-// Binary-suffix labels (KiB/MiB) because the math is 1024-based and the
-// sibling too-large copy already says "20 MiB" - one unit convention across
-// the feature (live-testing review, D5).
-function formatSizeBytes(sizeBytes: number): string {
-  if (sizeBytes >= 1024 * 1024) {
-    return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MiB`;
-  }
-  if (sizeBytes >= 1024) {
-    return `${(sizeBytes / 1024).toFixed(1)} KiB`;
-  }
-  return `${sizeBytes} B`;
 }
 
 function statusLabel(props: PdfDiffViewProps): string {
@@ -127,7 +115,7 @@ export function PdfDiffView(props: PdfDiffViewProps): ReactNode {
   const label = statusLabel(props);
   const sizeSuffix =
     props.newStage !== null && props.sizeBytes !== null
-      ? ` · ${formatSizeBytes(props.sizeBytes)}`
+      ? ` · ${formatByteSize(props.sizeBytes)}`
       : "";
 
   return (

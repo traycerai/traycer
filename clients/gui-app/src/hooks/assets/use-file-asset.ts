@@ -144,7 +144,7 @@ const DOCUMENT_FAILURE_MESSAGES: Record<AssetStreamFailureReason, string> = {
   // honest copy in case a gap lets it through.
   "not-image": "This host does not support PDF previews yet.",
   mismatch: "This file's contents do not match its extension.",
-  "too-large": "This PDF is too large to preview (20 MiB limit).",
+  "too-large": "This PDF is too large to preview.",
   // Host never emits this for a PDF (raster-specific check) - generic copy.
   "too-many-pixels": "This PDF could not be previewed.",
   "read-failed": "This PDF could not be read.",
@@ -167,6 +167,19 @@ const DECODE_FAILURE_REASONS: Record<FileAssetRenderKind, string> = {
 function assetSourceFor(request: FileAssetRequest): FileAssetSource {
   if (request.method === "workspace") return "workspace";
   return request.side === "old" ? "git-old" : "git-new";
+}
+
+/**
+ * The path whose extension decides what this request renders AS: the OLD side
+ * of a rename is the file at `previousPath` (sol review) - classifying it by
+ * the new path would give e.g. the pdf half of `report.pdf -> report.bin`
+ * image failure copy and drop its PDF telemetry.
+ */
+function renderPathFor(request: FileAssetRequest): string {
+  if (request.method === "git" && request.side === "old") {
+    return request.previousPath ?? request.filePath;
+  }
+  return request.filePath;
 }
 
 /** A workspace path or git running-dir can legally contain `::`/`|` - the request's own fields go into `buildFileAssetCacheKey`/`requestKeyFor` as SEPARATE array elements (JSON-encoded), never delimiter-joined into one string first. */
@@ -539,7 +552,9 @@ export function useFileAsset(
   });
   const isWorktreeBacked = request !== null && isWorktreeBackedRequest(request);
   const renderKind: FileAssetRenderKind =
-    request !== null && isPdfAssetPath(request.filePath) ? "document" : "image";
+    request !== null && isPdfAssetPath(renderPathFor(request))
+      ? "document"
+      : "image";
 
   // Re-stat on refocus (decision #11): only a worktree-backed request bumps
   // this on the pane's blurred->focused transition, so a still-mounted tile
@@ -653,7 +668,7 @@ export function useFileAsset(
     // `renderKind`) so the closure can never pair a stale kind with a new
     // request's callbacks.
     const streamRenderKind: FileAssetRenderKind = isPdfAssetPath(
-      normalizedRequest.filePath,
+      renderPathFor(normalizedRequest),
     )
       ? "document"
       : "image";

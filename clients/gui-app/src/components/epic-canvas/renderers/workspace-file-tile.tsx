@@ -7,7 +7,6 @@ import { useFileEditSession } from "@/hooks/workspace/use-file-edit-session";
 import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
 import type { FileEditRuntime } from "@/lib/workspace/file-edit-runtime";
 import { languageFromFilePath } from "@/lib/file-change-diff-hunks";
-import { resolveAbsolutePath } from "@/lib/path/cross-platform-path";
 import {
   createReportIssueContext,
   type ReportIssueContext,
@@ -81,9 +80,8 @@ import {
   ImagePreview,
 } from "@/components/epic-canvas/image-preview/image-preview";
 import { BinaryPlaceholder } from "@/components/epic-canvas/binary-placeholder";
-import { useEditorOpenForClient } from "@/hooks/editor/use-editor-open-mutation";
 import { usePdfOpenExternallyTarget } from "@/hooks/editor/use-pdf-open-target";
-import { useEditorOpenFeedback } from "@/hooks/editor/use-editor-open-feedback";
+import { useWorkspaceFileOpenExternally } from "@/hooks/editor/use-workspace-file-open-externally";
 const MAX_MARKDOWN_PREVIEW_CHARS = 100_000;
 
 type WorkspaceFileViewMode = "source" | "preview";
@@ -266,30 +264,14 @@ function WorkspaceImageFileTile(props: {
   // failure - no local decode-failed flag to track or reset.
   const handleDecodeError = assetState.reportDecodeFailure;
   const defaultEditor = useSettingsStore((s) => s.defaultEditor);
-  // The file this tile shows lives on the TAB's host; opening it app-wide would
-  // ask whichever machine the app is pointed at for a path it may not have.
-  const editorOpen = useEditorOpenForClient(useTabHostClient(), "file");
   const {
-    active: openExternallyFeedbackActive,
-    trigger: triggerOpenExternallyFeedback,
-  } = useEditorOpenFeedback();
-  const openExternallyOpening =
-    editorOpen.isPending || openExternallyFeedbackActive;
-  const handleOpenExternally = useCallback(() => {
-    if (openExternallyOpening) return;
-    triggerOpenExternallyFeedback();
-    editorOpen.mutate({
-      editorId: defaultEditor ?? "vscode",
-      paths: [resolveAbsolutePath(node.workspacePath, node.filePath)],
-    });
-  }, [
-    defaultEditor,
-    editorOpen,
-    node.filePath,
-    node.workspacePath,
-    openExternallyOpening,
-    triggerOpenExternallyFeedback,
-  ]);
+    opening: openExternallyOpening,
+    onOpenExternally: handleOpenExternally,
+  } = useWorkspaceFileOpenExternally({
+    workspacePath: node.workspacePath,
+    filePath: node.filePath,
+    target: defaultEditor ?? "vscode",
+  });
 
   // No line-goto in image mode - a reveal target aimed at this file can never
   // be consumed here, so evict it immediately rather than stranding it on the
@@ -303,7 +285,7 @@ function WorkspaceImageFileTile(props: {
   if (assetState.status === "fallback") {
     return (
       <div className="flex h-full min-h-0 flex-col bg-canvas text-canvas-foreground">
-        <WorkspaceImageFileToolbar
+        <WorkspaceMediaFileToolbar
           filePath={node.filePath}
           svgToggle={props.svgToggle}
           openExternally={null}
@@ -324,7 +306,7 @@ function WorkspaceImageFileTile(props: {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-canvas text-canvas-foreground">
-      <WorkspaceImageFileToolbar
+      <WorkspaceMediaFileToolbar
         filePath={node.filePath}
         svgToggle={props.svgToggle}
         openExternally={{
@@ -374,28 +356,14 @@ function WorkspacePdfFileTile(props: {
   // PDFs open with the OS default application when the host speaks
   // editor.openPaths >= 1.1; older hosts keep the default-editor behavior.
   const openTarget = usePdfOpenExternallyTarget(node.hostId);
-  const editorOpen = useEditorOpenForClient(useTabHostClient(), "file");
   const {
-    active: openExternallyFeedbackActive,
-    trigger: triggerOpenExternallyFeedback,
-  } = useEditorOpenFeedback();
-  const openExternallyOpening =
-    editorOpen.isPending || openExternallyFeedbackActive;
-  const handleOpenExternally = useCallback(() => {
-    if (openExternallyOpening) return;
-    triggerOpenExternallyFeedback();
-    editorOpen.mutate({
-      editorId: openTarget,
-      paths: [resolveAbsolutePath(node.workspacePath, node.filePath)],
-    });
-  }, [
-    editorOpen,
-    node.filePath,
-    node.workspacePath,
-    openExternallyOpening,
-    openTarget,
-    triggerOpenExternallyFeedback,
-  ]);
+    opening: openExternallyOpening,
+    onOpenExternally: handleOpenExternally,
+  } = useWorkspaceFileOpenExternally({
+    workspacePath: node.workspacePath,
+    filePath: node.filePath,
+    target: openTarget,
+  });
 
   // No line-goto in PDF mode either - evict a reveal target immediately
   // rather than stranding it (same rationale as the image mode above).
@@ -408,7 +376,7 @@ function WorkspacePdfFileTile(props: {
   if (assetState.status === "fallback") {
     return (
       <div className="flex h-full min-h-0 flex-col bg-canvas text-canvas-foreground">
-        <WorkspaceImageFileToolbar
+        <WorkspaceMediaFileToolbar
           filePath={node.filePath}
           svgToggle={null}
           openExternally={null}
@@ -451,7 +419,7 @@ function WorkspacePdfFileTile(props: {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-canvas text-canvas-foreground">
-      <WorkspaceImageFileToolbar
+      <WorkspaceMediaFileToolbar
         filePath={node.filePath}
         svgToggle={null}
         openExternally={{
@@ -505,7 +473,12 @@ function OpenExternallyIconButton(props: {
   );
 }
 
-function WorkspaceImageFileToolbar(props: {
+/**
+ * Toolbar for the MEDIA tile modes (image, and PDF outside its ready state -
+ * the ready PDF viewer brings its own). Distinct from `WorkspaceFileToolbar`
+ * below, the text/markdown tile's toolbar.
+ */
+function WorkspaceMediaFileToolbar(props: {
   readonly filePath: string;
   readonly svgToggle: ReactNode;
   readonly openExternally: {

@@ -487,25 +487,40 @@ interface GitFileDiffPanelProps {
   readonly isActive: boolean;
 }
 
-function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
-  const tabHostClient = useTabHostClient();
-  // PDF cards want the host to serve PDFs on `git.streamFileAsset` (>= 1.1,
-  // the minor that widened the media-type enum) - but `git.streamFileAsset`
-  // is a STREAM method, and the negotiated-manifest registry records only
-  // the unary openAck manifest, so its version here is `null` for EVERY
-  // host. A fails-closed gate on it can never open (the exact defect that
-  // shipped: the cards never rendered anywhere). Fail OPEN like the
-  // workspace tile instead: only a positively-known pre-1.1 answer
-  // suppresses the cards; otherwise render them and let each side's own
-  // stream negotiation be the authority - an old host's refusal degrades
-  // inside the View dialog to the shared placeholder.
+/**
+ * Whether this row renders the compact PDF diff block. The block wants the
+ * host to serve PDFs on `git.streamFileAsset` (>= 1.1, the minor that
+ * widened the media-type enum) - but `git.streamFileAsset` is a STREAM
+ * method, and the negotiated-manifest registry records only the unary
+ * openAck manifest, so its version here is `null` for EVERY host. A
+ * fails-closed gate on it can never open (the exact defect that shipped:
+ * the block never rendered anywhere). Fail OPEN like the workspace tile
+ * instead: only a positively-known pre-1.1 answer suppresses the block;
+ * otherwise render it and let the open tile's own stream negotiation be
+ * the authority. Image routing wins for a rename straddling both
+ * allowlists.
+ */
+function useShowPdfDiffBlock(args: {
+  readonly hostId: string;
+  readonly file: GitChangedFile;
+  readonly showImageDiff: boolean;
+}): boolean {
   const gitAssetStreamVersion = useHostMethodSchemaVersion(
-    props.node.hostId,
+    args.hostId,
     "git.streamFileAsset",
   );
-  const pdfCardsKnownUnsupported =
+  const knownUnsupported =
     gitAssetStreamVersion !== null &&
     (gitAssetStreamVersion.major !== 1 || gitAssetStreamVersion.minor < 1);
+  return (
+    !args.showImageDiff &&
+    gitRoutesToPdfDiffCards(args.file) &&
+    !knownUnsupported
+  );
+}
+
+function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
+  const tabHostClient = useTabHostClient();
   const defaultEditor = useSettingsStore((s) => s.defaultEditor);
   const editorOpen = useEditorOpenForClient(tabHostClient, "file");
   const {
@@ -516,6 +531,14 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
     editorOpen.isPending || openExternallyFeedbackActive;
 
   const { showImageDiff, svgToggle } = useGitImageDiffRouting(props.file);
+  // Decided BEFORE the diff surface below so an ASCII-authored `.pdf`
+  // (numstat says text) never fetches and find-indexes a patch the block
+  // will not render.
+  const showPdfBlock = useShowPdfDiffBlock({
+    hostId: props.node.hostId,
+    file: props.file,
+    showImageDiff,
+  });
 
   const {
     displayedDiff,
@@ -532,7 +555,7 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
     ignoreWhitespace: props.diffViewerPreferences.ignoreWhitespace,
     surfaceId: `git-diff:${props.node.instanceId}`,
     isActive: props.isActive,
-    queryEnabled: !props.file.isBinary && !showImageDiff,
+    queryEnabled: !props.file.isBinary && !showImageDiff && !showPdfBlock,
     resumeDetachedDraft: false,
   });
 
@@ -553,7 +576,7 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
         errored: displayedDiffError !== null,
         headSha: props.headSha,
         ignoreWhitespace: props.diffViewerPreferences.ignoreWhitespace,
-        showingImage: showImageDiff,
+        showingMediaView: showImageDiff || showPdfBlock,
       }),
     [
       displayedDiff,
@@ -564,6 +587,7 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
       props.headSha,
       props.node,
       showImageDiff,
+      showPdfBlock,
     ],
   );
   useRegisterDiffTileFindAdapter({
@@ -575,7 +599,7 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
       isPending: displayedDiffPending,
       hasError: displayedDiffError !== null,
       diffIsBinary: displayedDiff?.isBinary ?? true,
-      showingImage: showImageDiff,
+      showingMediaView: showImageDiff || showPdfBlock,
       findNavigation,
     }),
   });
@@ -629,7 +653,7 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
 
   // After the image routing (a rename straddling both allowlists stays an
   // image diff), before the generic binary placeholder it upgrades.
-  if (gitRoutesToPdfDiffCards(props.file) && !pdfCardsKnownUnsupported) {
+  if (showPdfBlock) {
     const sides = gitImageDiffSides(props.file);
     return (
       <>
@@ -771,13 +795,13 @@ function gitDiffFindRenderer<T>(args: {
   readonly isPending: boolean;
   readonly hasError: boolean;
   readonly diffIsBinary: boolean;
-  /** Currently showing `ImageDiffView` (raster binary, or `.svg` still on its default image view) - no searchable diff text. */
-  readonly showingImage: boolean;
+  /** Currently showing `ImageDiffView` (raster binary, or `.svg` still on its default image view) or the compact PDF diff block - no searchable diff text. */
+  readonly showingMediaView: boolean;
   readonly findNavigation: T;
 }): T | null {
   if (
     args.fileIsBinary ||
-    args.showingImage ||
+    args.showingMediaView ||
     args.isPending ||
     args.hasError ||
     args.diffIsBinary
@@ -809,15 +833,15 @@ function gitFileDiffFindSource(args: {
   readonly errored: boolean;
   readonly headSha: string;
   readonly ignoreWhitespace: boolean;
-  /** Currently showing `ImageDiffView` (raster binary, or `.svg` still on its default image view) - no searchable diff text. */
-  readonly showingImage: boolean;
+  /** Currently showing `ImageDiffView` (raster binary, or `.svg` still on its default image view) or the compact PDF diff block - no searchable diff text. */
+  readonly showingMediaView: boolean;
 }): DiffTileFindSource {
   const metadataUnits = gitFileDiffMetadataUnits({
     node: args.node,
     file: args.file,
   });
 
-  if (args.file.isBinary || args.showingImage) {
+  if (args.file.isBinary || args.showingMediaView) {
     return createMetadataOnlyDiffTileFindSource({
       metadataUnits,
       coverageMessage: GIT_DIFF_BINARY_FIND_MESSAGE,

@@ -166,6 +166,11 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
     setScalePercent(null);
     setOutline([]);
     setMatchState(null);
+    // Search state is per-document too: leaving the bar open with the old
+    // query would show a counter and highlights that never ran against the
+    // new document (no find is dispatched on load).
+    setSearchOpen(false);
+    setQuery("");
 
     const open = async (): Promise<void> => {
       // `connect-src blob:` is already in the CSP (the lightbox depends on
@@ -316,6 +321,15 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
       return;
     }
     goToPage(parsed);
+    // `goToPage` clamps, and when the clamped page IS the current page pdf.js
+    // emits no `pagechanging` - so the field would keep the typed
+    // out-of-range value ("99" on a 5-page doc). Resync it here.
+    const binding = bindingRef.current;
+    if (binding !== null) {
+      setPageInput(
+        String(Math.min(Math.max(parsed, 1), binding.document.numPages)),
+      );
+    }
   }, [goToPage, pageInput, pageNumber]);
 
   const zoomBy = useCallback((factor: number) => {
@@ -418,15 +432,22 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
   }, []);
 
   // Desktop zoom affordance beyond the buttons; touch pinch is the mobile
-  // verification pass's follow-up, not silently assumed working.
-  const handleWheel = useCallback(
-    (event: React.WheelEvent<HTMLDivElement>) => {
+  // verification pass's follow-up, not silently assumed working. A NATIVE
+  // non-passive listener, because React registers `wheel` passively - its
+  // preventDefault is a no-op there, letting the browser's own ctrl+wheel
+  // page zoom run alongside the viewer's.
+  const wheelZoneRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const zone = wheelZoneRef.current;
+    if (zone === null) return;
+    const handleWheel = (event: WheelEvent): void => {
       if (!event.ctrlKey && !event.metaKey) return;
       event.preventDefault();
       zoomBy(event.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP);
-    },
-    [zoomBy],
-  );
+    };
+    zone.addEventListener("wheel", handleWheel, { passive: false });
+    return () => zone.removeEventListener("wheel", handleWheel);
+  }, [zoomBy]);
 
   const hasOutline = outline.length > 0;
 
@@ -683,8 +704,8 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
           </div>
         ) : null}
         <div
+          ref={wheelZoneRef}
           className="relative min-h-0 min-w-0 flex-1 bg-canvas"
-          onWheel={handleWheel}
         >
           {/* PDFViewer requires an absolutely-positioned scroll container with
               a `pdfViewer`-classed child it owns wholesale. Pages keep their
