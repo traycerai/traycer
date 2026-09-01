@@ -318,7 +318,7 @@ export class HostDirectoryService implements IHostDirectoryService {
       if (snapshot !== null && snapshot.hostId !== this.lastKnownLocalHostId) {
         this.adoptLocalHostId(snapshot.hostId);
       }
-      appLogger.debug("[host-directory] local host snapshot changed", {
+      appLogger.info("[host-directory] local host snapshot changed", {
         hostId: snapshot?.hostId ?? null,
         hasWebsocketUrl: snapshot !== null,
         status: snapshot === null ? "missing" : "available",

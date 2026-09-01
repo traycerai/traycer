@@ -30,7 +30,7 @@ vi.mock("@/lib/host", () => ({
 }));
 
 vi.mock("@/hooks/host/use-host-client-for", () => ({
-  buildTransientHostClient: (
+  buildDialableHostClient: (
     globalClient: { label: string },
     entry: { hostId: string },
   ) => (entry.hostId === "host-B" ? hostBClient : globalClient),

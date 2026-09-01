@@ -36,7 +36,11 @@ vi.mock("@/hooks/host/use-host-query", () => ({
   useHostQuery: () => ({ data: mocks.data }),
 }));
 vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
-  useReactiveHostReadiness: () => ({ isReady: mocks.ready }),
+  useReactiveHostReadiness: () => ({
+    isReady: mocks.ready,
+    hasRpcEndpoint: mocks.ready,
+    canExecute: mocks.ready,
+  }),
 }));
 // Pin only the copy formatter. `useSampledNow` remains real because the
 // active/idle classification must still compare against the live clock.
