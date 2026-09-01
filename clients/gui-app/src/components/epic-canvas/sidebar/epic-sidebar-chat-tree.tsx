@@ -3761,17 +3761,25 @@ function useChatRowSharing(
   const sharingInFlight = useChatSharingInFlight(epicId);
   const cloudChat = sharing.ownCloudChatByLocalId.get(nodeId);
   const visibility = cloudChat?.visibility ?? null;
+  // A visibility flip is a CLOUD write. The cached cloud-chat rows survive a
+  // demotion to `unverified` (TanStack retains the last success), so the
+  // row's own verdict has to gate the control - the retained data is not
+  // permission to spend. The mutation re-reads the verdict at dispatch too.
+  const cloudAuthorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
+  const mayMutate = canMutate && cloudAuthorized;
   return {
     entry: decideChatSharingMenuEntry({
       supported: sharing.visibilitySupported,
       isChat: artifactType === "chat",
-      canMutate,
+      canMutate: mayMutate,
       visibility,
       pending: sharingInFlight,
     }),
     onToggle: () => {
       if (
-        !canMutate ||
+        !mayMutate ||
         !sharing.visibilitySupported ||
         sharingInFlight ||
         cloudChat === undefined

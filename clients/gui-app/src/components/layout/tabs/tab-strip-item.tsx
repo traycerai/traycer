@@ -38,10 +38,15 @@ import { cn } from "@/lib/utils";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { DropLine } from "@/components/ui/drop-line";
 import {
+  useRegisteredEpicLocalHome,
   useRegisteredEpicPermissionRole,
   useRegisteredEpicTitle,
   useRegisteredEpicTitleGenerating,
 } from "@/lib/epic-selectors";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
 import { displayTitle } from "@/lib/display-title";
 import type { TaskPinnedState } from "@/hooks/epic/use-epic-task-pinned-states-query";
 import { isEditableRole } from "@/lib/epic-permissions";
@@ -210,7 +215,21 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
   const permissionRole = useRegisteredEpicPermissionRole(
     tab.kind === "epic" ? tab.epicId : null,
   );
-  const canEditTitle = tab.kind === "epic" && isEditableRole(permissionRole);
+  // A cloud-homed epic's rename is a CLOUD write sent over the local-host
+  // connection, which does not carry the renderer's verdict - so the role
+  // alone is not admission once the session is `unverified`. A local-homed
+  // epic renames on this machine's own disk and stays editable. Same rule
+  // and exemption as the History rows and the mobile header.
+  const localHome = useRegisteredEpicLocalHome(
+    tab.kind === "epic" ? tab.epicId : null,
+  );
+  const cloudAuthorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
+  const canEditTitle =
+    tab.kind === "epic" &&
+    isEditableRole(permissionRole) &&
+    (localHome || cloudAuthorized);
   const canClose = tab.kind !== "epic" || tab.canClose;
   // Epic tabs can carry an empty name; render through `displayTitle` so it falls
   // back to "Untitled task". Other kinds render their name verbatim.
@@ -232,6 +251,14 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
   const commitEpicTitle = useCallback(
     async (next: string) => {
       if (tab.kind !== "epic") return;
+      // Re-checked at COMMIT: an edit opened before a demotion must not land
+      // on the retained credential afterwards.
+      if (
+        !localHome &&
+        !authorizesCloudCapability(useAuthStore.getState().status)
+      ) {
+        return;
+      }
       const epicId = tab.epicId;
       const tabHostId = tab.hostId;
       const handle = getOpenEpicRegistry().peek(epicId);
@@ -326,7 +353,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
     // `resolvedTabName` is gone from here with the capture/rollback pair that
     // read it - the overlay reveals the authoritative title on failure rather
     // than restoring a captured one, so this callback no longer depends on it.
-    [queryClient, tab],
+    [localHome, queryClient, tab],
   );
   const rename = useInlineRename({
     // Bind to the RAW title, not `displayName` - editing must never seed the

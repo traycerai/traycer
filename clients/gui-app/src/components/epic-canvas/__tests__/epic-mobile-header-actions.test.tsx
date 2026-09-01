@@ -1,5 +1,6 @@
 import "../../../../__tests__/test-browser-apis";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -20,6 +21,7 @@ import {
   useMobileHeaderStore,
 } from "@/stores/layout/mobile-header-store";
 import { useMobileSwitcherStore } from "@/stores/epics/mobile-switcher-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 interface RenameVariables {
   readonly epicDelta: {
@@ -32,6 +34,7 @@ interface RenameVariables {
 const holder = vi.hoisted(() => ({
   role: "owner",
   mobile: true,
+  localHome: false,
 }));
 const mutateAsyncSpy = vi.hoisted(() =>
   vi.fn<(vars: RenameVariables) => Promise<void>>(),
@@ -99,6 +102,7 @@ vi.mock("@/hooks/ui/use-mobile-viewport", () => ({
 }));
 vi.mock("@/lib/epic-selectors", () => ({
   useRegisteredEpicPermissionRole: () => holder.role,
+  useRegisteredEpicLocalHome: () => holder.localHome,
 }));
 vi.mock("@/hooks/epic/use-epic-title-mutation", () => ({
   useEpicUpdateTitle: () => ({ mutateAsync: mutateAsyncSpy, isPending: false }),
@@ -183,6 +187,10 @@ function renderWithQueryClient(element: ReactElement) {
 describe("<MobileEpicHeaderTitle />", () => {
   beforeEach(() => {
     holder.role = "owner";
+    holder.localHome = false;
+    // A cloud-homed rename follows the live cloud verdict; the store is
+    // module-scope Zustand defaulting to `signed-out`.
+    useAuthStore.setState({ status: "signed-in" });
     mutateAsyncSpy.mockClear();
     mutateAsyncSpy.mockResolvedValue(undefined);
     session.registered = false;
@@ -198,7 +206,10 @@ describe("<MobileEpicHeaderTitle />", () => {
     trackSpy.mockClear();
     reportableErrorToastSpy.mockClear();
   });
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    useAuthStore.setState({ status: "signed-out" });
+  });
 
   it("renders the epic title as an editable control for an editor", () => {
     renderWithQueryClient(
@@ -375,6 +386,46 @@ describe("<MobileEpicHeaderTitle />", () => {
     // host, and the refusal above must not have swallowed it.
     expect(mutateAsyncSpy).toHaveBeenCalledTimes(1);
     expect(reportableErrorToastSpy).not.toHaveBeenCalled();
+  });
+
+  it("renders plain text for an editor of a cloud-homed epic once the session is unverified", () => {
+    // The admission keeps the Epic open on a local-capable shell, but the
+    // rename is a cloud write over a connection that does not carry the
+    // renderer's verdict. RED before the fix: editability was role-only.
+    useAuthStore.setState({ status: "unverified" });
+    renderWithQueryClient(
+      <MobileEpicHeaderTitle epicId="epic-1" title="My Epic" />,
+    );
+    expect(screen.getByTestId("mobile-epic-header-title").tagName).toBe("SPAN");
+  });
+
+  it("keeps a local-homed epic renamable while the session is unverified", () => {
+    // The exemption: a local-homed title lives on this machine's disk and
+    // spends nothing.
+    holder.localHome = true;
+    useAuthStore.setState({ status: "unverified" });
+    renderWithQueryClient(
+      <MobileEpicHeaderTitle epicId="epic-1" title="My Epic" />,
+    );
+    expect(screen.getByTestId("mobile-epic-header-title").tagName).toBe(
+      "BUTTON",
+    );
+  });
+
+  it("refuses a commit when the session went unverified after the edit was opened", () => {
+    session.registered = true;
+    session.hasHostClient = true;
+    renderWithQueryClient(
+      <MobileEpicHeaderTitle epicId="epic-1" title="My Epic" />,
+    );
+    const input = openEdit("mobile-epic-header-title");
+    act(() => {
+      useAuthStore.setState({ status: "unverified" });
+    });
+    fireEvent.change(input, { target: { value: "Renamed epic" } });
+    fireEvent.blur(input);
+    expect(enqueueWriteCommand).not.toHaveBeenCalled();
+    expect(mutateAsyncSpy).not.toHaveBeenCalled();
   });
 
   it("renders plain text for a viewer (no editable control)", () => {

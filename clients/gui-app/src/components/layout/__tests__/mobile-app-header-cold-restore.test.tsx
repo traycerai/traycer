@@ -41,6 +41,11 @@ import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtur
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { UpdateEpicRequest } from "@traycer/protocol/host/epic/unary-schemas";
+import { useAuthStore } from "@/stores/auth/auth-store";
+
+afterEach(() => {
+  useAuthStore.setState({ status: "signed-out" });
+});
 
 // Host-backed chrome only; the registry accessors the header reads for the
 // epic's title and permission role stay REAL here - they are the half of the
@@ -297,6 +302,9 @@ function renderRestoredAtLanding(): void {
  */
 describe("MobileAppHeader on a cold-restored epic tab", () => {
   beforeEach(() => {
+    // A cloud-homed epic's rename follows the live cloud verdict; the store
+    // is module-scope Zustand defaulting to `signed-out`.
+    useAuthStore.setState({ status: "signed-in" });
     useEpicCanvasStore.setState({ tabsById: {} });
     useMobileHeaderStore.setState({ rightActionEntries: new Map() });
     useTabsStore.setState({ items: [], activeItemId: null });

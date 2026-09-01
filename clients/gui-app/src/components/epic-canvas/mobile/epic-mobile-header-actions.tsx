@@ -8,7 +8,14 @@ import {
   useMobileHeaderStore,
 } from "@/stores/layout/mobile-header-store";
 import { useMobileSwitcherStore } from "@/stores/epics/mobile-switcher-store";
-import { useRegisteredEpicPermissionRole } from "@/lib/epic-selectors";
+import {
+  useRegisteredEpicLocalHome,
+  useRegisteredEpicPermissionRole,
+} from "@/lib/epic-selectors";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
 import { isEditableRole } from "@/lib/epic-permissions";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -71,11 +78,33 @@ export function MobileEpicHeaderTitle(props: {
   readonly title: string;
 }): ReactNode {
   const { epicId, title } = props;
-  const canEdit = isEditableRole(useRegisteredEpicPermissionRole(epicId));
+  // Renaming a cloud-homed epic is a CLOUD write (`epic.updateTitle` carries
+  // the CloudData `epic.update` contract) sent over the local-host connection,
+  // which does not carry the renderer's verdict. So the role alone is not
+  // admission: a session demoted to `unverified` keeps this Epic open but must
+  // not spend the retained credential on a rename. A local-homed epic renames
+  // on this machine's own disk and stays editable - the same rule and the
+  // same exemption as the History rows and the desktop tab strip.
+  const localHome = useRegisteredEpicLocalHome(epicId);
+  const cloudAuthorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
+  const canEdit =
+    isEditableRole(useRegisteredEpicPermissionRole(epicId)) &&
+    (localHome || cloudAuthorized);
   const updateTitle = useEpicUpdateTitle();
   const queryClient = useQueryClient();
   const handleCommit = useCallback(
     async (next: string) => {
+      // Re-checked at COMMIT, not only at admission: an edit opened before a
+      // demotion would otherwise land on the retained credential after the
+      // verdict was withdrawn. Same exemption as the gate above.
+      if (
+        !localHome &&
+        !authorizesCloudCapability(useAuthStore.getState().status)
+      ) {
+        return;
+      }
       // Optimistic overlay, so this control behaves identically to the wide
       // viewport's tab strip. Both were RPC-only here until 1.1, which meant
       // the SAME user on the SAME device got different feedback either side of
@@ -147,7 +176,7 @@ export function MobileEpicHeaderTitle(props: {
           () => {},
         );
     },
-    [epicId, queryClient, updateTitle],
+    [epicId, localHome, queryClient, updateTitle],
   );
   return (
     <InlineTitleField

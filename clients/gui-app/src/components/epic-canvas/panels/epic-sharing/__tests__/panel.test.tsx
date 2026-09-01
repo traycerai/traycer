@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -699,6 +700,44 @@ describe("<SharingPanel /> My agents", () => {
     expect(toggle.hasAttribute("disabled")).toBe(true);
     fireEvent.click(toggle);
     expect(screen.queryByTestId("epic-sharing-my-agents-confirm")).toBeNull();
+  });
+
+  it("keeps the switch inert once the session is unverified, even with a retained successful list", () => {
+    // The list's last success survives a demotion, but the master toggle is a
+    // cloud write sent through the session's local-host context. RED before
+    // the fix: `isSuccess` alone armed the switch.
+    testState.sharingDefaultSupported = true;
+    testState.ownCloudChats = [
+      { visibility: "private", isOwnedByViewer: true },
+    ];
+    useAuthStore.setState({ status: "unverified" });
+
+    renderSharingPanel();
+
+    const toggle = screen.getByTestId("epic-sharing-my-agents-switch");
+    expect(toggle.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(toggle);
+    expect(screen.queryByTestId("epic-sharing-my-agents-confirm")).toBeNull();
+    expect(testState.setSharingDefault.mutate).not.toHaveBeenCalled();
+  });
+
+  it("refuses the confirm once the session goes unverified after the dialog opened", () => {
+    testState.sharingDefaultSupported = true;
+    testState.ownCloudChats = [
+      { visibility: "private", isOwnedByViewer: true },
+    ];
+
+    renderSharingPanel();
+
+    fireEvent.click(screen.getByTestId("epic-sharing-my-agents-switch"));
+    expect(screen.getByTestId("epic-sharing-my-agents-confirm")).toBeTruthy();
+    act(() => {
+      useAuthStore.setState({ status: "unverified" });
+    });
+    fireEvent.click(
+      screen.getByTestId("epic-sharing-my-agents-confirm-action"),
+    );
+    expect(testState.setSharingDefault.mutate).not.toHaveBeenCalled();
   });
 
   it("shows the section to a viewer and derives on from any task-visible own row", () => {

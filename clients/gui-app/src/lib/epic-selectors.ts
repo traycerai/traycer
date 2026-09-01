@@ -783,6 +783,34 @@ export function useRegisteredEpicPermissionRole(
   );
 }
 
+/**
+ * Whether the registered epic is LOCAL-HOMED (`local` or `promoting`), read
+ * through the same header-safe registry seam as the role, for surfaces that
+ * render outside the epic session tree. A local-homed epic's title lives on
+ * this machine's disk, so renaming it spends no cloud capability and stays
+ * admitted while the session is `unverified`.
+ *
+ * `false` covers a cloud-homed epic AND an unknown or `paused` status: a
+ * paused row says nothing about home, and a gate that must not spend the
+ * retained credential reads "not provably local" as cloud.
+ */
+export function useRegisteredEpicLocalHome(epicId: string | null): boolean {
+  const registry = getOpenEpicRegistry();
+  const handle = useSyncExternalStore(
+    (listener) => registry.subscribe(listener),
+    () => (epicId === null ? null : registry.peek(epicId)),
+    () => null,
+  );
+  return useSyncExternalStore(
+    (listener) => handle?.store.subscribe(listener) ?? noopSubscribe,
+    () => {
+      const status = handle?.store.getState().durabilityStatus ?? null;
+      return status === "local" || status === "promoting";
+    },
+    () => false,
+  );
+}
+
 export function useRegisteredEpicTitleGenerating(
   epicId: string | null,
 ): boolean {
