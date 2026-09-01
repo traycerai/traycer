@@ -33,6 +33,7 @@ import {
   createEpicLaneStateReplica,
   type EpicLaneStateReplica,
 } from "../epic-lane-state-replica";
+import { selectLaneCommentThreads } from "@/hooks/comments/use-lane-comment-threads";
 
 const EPOCH = "epoch-1";
 
@@ -448,6 +449,63 @@ describe("epic.state.subscribe read model - row rules", () => {
     expect(replica.slices().epicHeader).toEqual({ title: "", updatedAt: 0 });
   });
 
+  it("emits an AUTHORITATIVELY EMPTY thread list for a known artifact, so the selector never falls back to a stale poll", () => {
+    // `selectLaneCommentThreads` already draws the distinction: a missing key
+    // means "the lane has said nothing about this artifact" and sends the
+    // caller to the poll, an empty array means "the lane says there are none".
+    // Only the SELECTOR knew that - the producer emitted a key exclusively for
+    // artifacts that had threads, so a collaborator deleting an artifact's last
+    // thread took its key away, which read as lane silence and left the deleted
+    // thread rendered from the last poll until an unrelated refresh.
+    const { replica } = newReplica();
+    replica.apply(
+      snapshotEvent({
+        rows: [
+          artifactRow({ id: "a", title: "Live", revision: 1, parentId: null }),
+          ...metaRows({ title: "Epic", updatedAt: 10, revision: 1 }),
+        ],
+        position: 1,
+        epoch: EPOCH,
+        trust: "reconciled-with-cloud",
+        cause: "initial",
+      }),
+    );
+
+    // THE REDDENING ASSERTION. `hasOwn`, not truthiness: the whole point is
+    // that a present-and-empty entry is a different answer from an absent one,
+    // and every other way of asking collapses them.
+    const { byArtifactId } = replica.slices().commentThreads;
+    expect(Object.hasOwn(byArtifactId, "a")).toBe(true);
+    expect(byArtifactId["a"]).toEqual([]);
+
+    // The PRODUCER's own output through the real selector, rather than a
+    // hand-built keyed empty in the selector's unit test. The selector has
+    // always understood this state; nothing produced it, and that gap is
+    // invisible to a test that constructs the input it wants.
+    expect(selectLaneCommentThreads(byArtifactId, "a")).toEqual([]);
+    expect(selectLaneCommentThreads(byArtifactId, "never-seen")).toBeNull();
+  });
+
+  it("says nothing about an artifact the lane has never seen", () => {
+    // The control. Seeding an empty array for EVERY id asked about would make
+    // the lane claim authority over artifacts it has no rows for, which turns
+    // the poll fallback off for surfaces the lane genuinely cannot answer.
+    const { replica } = newReplica();
+    replica.apply(
+      snapshotEvent({
+        rows: [...metaRows({ title: "Epic", updatedAt: 10, revision: 1 })],
+        position: 1,
+        epoch: EPOCH,
+        trust: "reconciled-with-cloud",
+        cause: "initial",
+      }),
+    );
+
+    expect(
+      Object.hasOwn(replica.slices().commentThreads.byArtifactId, "never-seen"),
+    ).toBe(false);
+  });
+
   it("groups comment threads by artifact, passing the wire row through by reference", () => {
     const { replica } = newReplica();
     const frame = parseSnapshotFrame({
@@ -606,6 +664,115 @@ describe("epic.state.subscribe read model - epoch and trust", () => {
     expect(replica.appliedCursor()).toBeNull();
     expect(replica.authorityEpoch()).toBeNull();
     expect(replica.trust()).toBeNull();
+    expect(replica.slices().artifacts.allIds).toEqual([]);
+  });
+
+  it("forgets absorbed retractions when the POSITION SPACE is replaced, so the new authority's rows are not censored by the old one's tombstones", () => {
+    // Rule 3 of `record-table.ts` makes a removal absorbing "for the life of
+    // the session", and justifies it with an ordering argument about ONE store:
+    // "the host applies a removal before it emits one, so a response that still
+    // carries the row was necessarily issued before the retraction". An
+    // authority-epoch replacement is exactly the event that ends that argument
+    // - the replacement may be a different replica, on a different host, whose
+    // store legitimately still holds the row.
+    //
+    // `reset` emptied the rows and left the filter, so the replacement's first
+    // authoritative snapshot was censored by the replica it replaced, and the
+    // row stayed absent for the whole session with nothing anywhere saying why.
+    const { replica } = newReplica();
+    replica.apply(
+      snapshotEvent({
+        rows: [
+          artifactRow({ id: "a", title: "Live", revision: 1, parentId: null }),
+          ...metaRows({ title: "Epic", updatedAt: 10, revision: 1 }),
+        ],
+        position: 1,
+        epoch: EPOCH,
+        trust: "reconciled-with-cloud",
+        cause: "initial",
+      }),
+    );
+    replica.apply({
+      kind: "record-transaction",
+      cursor: cursorAt(2, EPOCH),
+      changes: [
+        {
+          kind: "remove",
+          rowId: artifactRowId("a"),
+          revision: 2,
+          reason: ARTIFACT_TOMBSTONE_REMOVE_REASON,
+        },
+      ],
+      barrier: null,
+    });
+    expect(replica.slices().artifacts.allIds).toEqual([]);
+
+    replica.reset({ origin: "authority", reason: "authority-epoch-changed" });
+    replica.apply(
+      snapshotEvent({
+        rows: [
+          artifactRow({ id: "a", title: "Live", revision: 1, parentId: null }),
+          ...metaRows({ title: "Epic", updatedAt: 10, revision: 1 }),
+        ],
+        position: 1,
+        epoch: "epoch-2",
+        trust: "reconciled-with-cloud",
+        cause: "initial",
+      }),
+    );
+
+    // THE REDDENING ASSERTION.
+    expect(replica.slices().artifacts.allIds).toEqual(["a"]);
+  });
+
+  it("KEEPS them across a same-authority reseed, where the ordering argument still holds", () => {
+    // The control, and it is the reason this is a predicate rather than an
+    // unconditional clear. `resume-too-old` is the same host and the same epoch
+    // re-serving after a compaction, so a poll answer issued before the removal
+    // can still be in flight - which is the case the absorbing rule exists for.
+    // Clearing here would resurrect a row seconds after its tab said it was
+    // gone.
+    const { replica } = newReplica();
+    replica.apply(
+      snapshotEvent({
+        rows: [
+          artifactRow({ id: "a", title: "Live", revision: 1, parentId: null }),
+          ...metaRows({ title: "Epic", updatedAt: 10, revision: 1 }),
+        ],
+        position: 1,
+        epoch: EPOCH,
+        trust: "reconciled-with-cloud",
+        cause: "initial",
+      }),
+    );
+    replica.apply({
+      kind: "record-transaction",
+      cursor: cursorAt(2, EPOCH),
+      changes: [
+        {
+          kind: "remove",
+          rowId: artifactRowId("a"),
+          revision: 2,
+          reason: ARTIFACT_TOMBSTONE_REMOVE_REASON,
+        },
+      ],
+      barrier: null,
+    });
+
+    replica.reset({ origin: "authority", reason: "resume-too-old" });
+    replica.apply(
+      snapshotEvent({
+        rows: [
+          artifactRow({ id: "a", title: "Live", revision: 1, parentId: null }),
+          ...metaRows({ title: "Epic", updatedAt: 10, revision: 1 }),
+        ],
+        position: 1,
+        epoch: EPOCH,
+        trust: "reconciled-with-cloud",
+        cause: "initial",
+      }),
+    );
+
     expect(replica.slices().artifacts.allIds).toEqual([]);
   });
 

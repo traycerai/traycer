@@ -94,6 +94,42 @@ import { artifactProjectionsEq, arrayShallowEq } from "../projection-helpers";
 import { createRecordTable, type RecordTable } from "./record-table";
 
 /**
+ * Whether a reset means the next snapshot may come from a store that never saw
+ * this session's removals.
+ *
+ * The question the absorbing-retraction rule turns on. Rule 3 of
+ * `record-table.ts` justifies keeping a tombstone for the life of the session
+ * with an ordering argument about ONE store - "the host applies a removal
+ * before it emits one, so a response that still carries the row was
+ * necessarily issued before the retraction". Four of the six replacement
+ * reasons end that argument, and the two that do not are the ones where the
+ * SAME authority re-serves the SAME epoch:
+ *
+ *  - `resume-too-old` - the history was compacted past our cursor. Same host,
+ *    same store, and a poll answer issued before a removal can still be in
+ *    flight, which is exactly what the tombstone is for.
+ *  - `security-epoch-changed` - authorization moved, the store did not.
+ *
+ * A CLIENT-origin reset is a user hitting a recovery affordance against the
+ * authority already serving them, so it keeps them too. Enumerated rather than
+ * defaulted: a reason added later is a compile error here, which is the point -
+ * getting this wrong in the retaining direction hides a row for a whole session.
+ */
+function replacesThePositionSpace(cause: ReplicaResetCause): boolean {
+  if (cause.origin === "client") return false;
+  switch (cause.reason) {
+    case "resume-too-old":
+    case "security-epoch-changed":
+      return false;
+    case "authority-epoch-changed":
+    case "migration-completed":
+    case "manifest-changed":
+    case "host-repointed":
+      return true;
+  }
+}
+
+/**
  * A lane row as the table holds it: the seam's envelope, flattened.
  *
  * The revision is lifted out of `RecordRow` and onto the held row because the
@@ -172,6 +208,39 @@ export interface EpicLaneStateReplica {
 
 function applied(cursor: LaneCursor | null): ReplicaApplyOutcome {
   return { kind: "applied", cursor };
+}
+
+/**
+ * Give every artifact the lane knows about, and has no threads for, an
+ * AUTHORITATIVELY EMPTY list.
+ *
+ * `selectLaneCommentThreads` already draws the distinction this fills in: a
+ * missing key means "the lane has said nothing about this artifact" and sends
+ * the caller to the poll, while an empty array means "the lane says there are
+ * none". Only the SELECTOR knew that. The builder emitted a key exclusively for
+ * artifacts that HAD threads, so the two states were indistinguishable coming
+ * out of it - and a collaborator deleting an artifact's last thread took its
+ * key away, which read as lane silence and fell the surface back to whatever
+ * the last poll had said. The deleted thread stayed on screen until an
+ * unrelated refresh.
+ *
+ * Called AFTER the ingest loop, never before: that loop pushes into these
+ * arrays, so a shared constant seeded ahead of it would let one artifact's
+ * thread land in every other artifact's list. A fresh `[]` each time is free
+ * for the change gate - `commentThreadsEq` compares length first, so two
+ * empties are equal without being the same object.
+ *
+ * A sibling of the builder rather than a block inside it because the builder is
+ * already at the complexity ceiling, and this is one self-contained decision.
+ */
+function seedAuthoritativeEmptyThreadLists(
+  threadsByArtifactId: Record<string, CommentThreadWire[]>,
+  artifactIds: readonly string[],
+): void {
+  for (const artifactId of artifactIds) {
+    if (Object.hasOwn(threadsByArtifactId, artifactId)) continue;
+    threadsByArtifactId[artifactId] = [];
+  }
 }
 
 function commentThreadsEq(
@@ -331,6 +400,8 @@ function buildLaneSlices(rows: readonly HeldLaneRow[]): EpicLaneStateSlices {
         break;
     }
   }
+
+  seedAuthoritativeEmptyThreadLists(threadsByArtifactId, artifactIds);
 
   return {
     artifacts: {
@@ -558,7 +629,7 @@ export function createEpicLaneStateReplica(
     authorityEpoch: () => epoch,
     trust: () => seedTrust,
 
-    reset(_cause: ReplicaResetCause): void {
+    reset(cause: ReplicaResetCause): void {
       // Everything goes, including the epoch and the trust: a replica that kept
       // its watermark would offer a resume for a position space that has been
       // replaced, and one that kept `reconciled-with-cloud` would label the
@@ -566,6 +637,18 @@ export function createEpicLaneStateReplica(
       cursor = null;
       epoch = null;
       seedTrust = null;
+      // ...and, for a REPLACEMENT, the absorbed retractions with them. Emptying
+      // the table drops its rows but leaves the tombstone filter every later
+      // snapshot is admitted through, so the replacement's first authoritative
+      // snapshot was being censored by the replica it replaced: a row removed
+      // in the old epoch and served again under the same id by the new one
+      // stayed absent for the rest of the session, with nothing anywhere
+      // saying why.
+      //
+      // Ordered before the snapshot deliberately - `applySnapshot` consults the
+      // filter, and here it is being handed the empty set anyway, but a later
+      // reader must not have to know that to see this is right.
+      if (replacesThePositionSpace(cause)) table.forgetRetractions();
       table.applySnapshot([], table.ingestSeq());
       onChanged();
     },

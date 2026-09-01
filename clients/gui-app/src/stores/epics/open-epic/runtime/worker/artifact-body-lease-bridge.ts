@@ -19,6 +19,7 @@
  * only by an opaque `docKey`. Splitting it that way is what makes the
  * lifecycle testable without standing up a document tier.
  */
+import { BridgeDisposedError } from "@traycer-clients/shared/replica-runtime/worker/bridge-endpoint";
 import type { RuntimeWorkerPort } from "@traycer-clients/shared/replica-runtime/worker/bridge-endpoint";
 import {
   NO_TRANSFER,
@@ -293,6 +294,28 @@ interface InFlightAcquire {
   readonly answer: Promise<InFlightOutcome>;
 }
 
+/**
+ * Whether a rejected bridge call is worth asking again.
+ *
+ * Every retry in this module re-arms on a rejection, because a rejection is
+ * NOT a teardown - `serve()` turns a worker-handler fault into an error reply
+ * and a malformed reply fails parsing, both on a worker that is still very much
+ * alive. There is exactly one rejection that will never succeed on a retry, and
+ * re-arming on it is an unbounded loop rather than a slow one: a disposed
+ * bridge rejects every subsequent call IMMEDIATELY, so the retry fires, the
+ * call rejects, and the handler arms the next one, for the life of the tab.
+ *
+ * It is reachable on the ordinary dispose path, not just in theory. `store.ts`
+ * calls `flushLingering()` - which cancels every armed timer - and then
+ * `runtime.dispose()`, which rejects the calls that flush just posted. Those
+ * rejections land on a LATER microtask, so an unconditional re-arm re-populates
+ * the very maps teardown had just emptied, and the closed epic's bridge state
+ * is retained behind them.
+ */
+function worthAskingAgain(error: unknown): boolean {
+  return !(error instanceof BridgeDisposedError);
+}
+
 export function createArtifactBodyLeaseBridge(options: {
   readonly bridge: RuntimeWorkerPort;
   readonly docs: MainThreadBodyDocs;
@@ -506,7 +529,7 @@ export function createArtifactBodyLeaseBridge(options: {
           options.budget.settleCold(docKey, 0);
           options.docs.drop(docKey);
         },
-        () => {
+        (error: unknown) => {
           // The doc stays live and the entry stays pending - a rejection is
           // never a settled ack, so dropping here would drop a body the worker
           // may still hold.
@@ -527,6 +550,12 @@ export function createArtifactBodyLeaseBridge(options: {
           // resend re-posts the SAME generation while a linger expiry bumps to
           // a fresh one, and the generation fence makes whichever ack arrives
           // second a no-op.
+          //
+          // Except when the bridge itself is gone - see `worthAskingAgain`.
+          // Dispose rejects this call AFTER `flushLingering` cancelled the
+          // timers, so an unconditional re-arm re-populates what teardown just
+          // emptied and then loops on a bridge that rejects instantly.
+          if (!worthAskingAgain(error)) return;
           armLinger(docKey);
         },
       );
@@ -584,11 +613,11 @@ export function createArtifactBodyLeaseBridge(options: {
           options.budget.settleCold(docKey, answer.settledBytes);
           options.docs.drop(docKey);
         },
-        () => {
+        (error: unknown) => {
           // The doc stays live and the entry stays pending. Every rejection is
-          // treated alike, because the one thing that must never happen is
-          // dropping the doc without a settled ack - and a rejection is never a
-          // settled ack.
+          // treated alike for the DOC, because the one thing that must never
+          // happen is dropping it without a settled ack - and a rejection is
+          // never a settled ack. Only whether to RETRY is discriminated below.
           //
           // "The worker went away" is NOT the only way this rejects, which is
           // what the previous version of this comment assumed when it left the
@@ -606,6 +635,11 @@ export function createArtifactBodyLeaseBridge(options: {
           // A rejection handler rather than a trailing `.catch`: a `.catch`
           // would also swallow a throw from the success arm above, where
           // `docs.drop` failing silently is a real doc leak.
+          //
+          // Same disposal guard as the release arm: a bridge that is gone
+          // rejects instantly, so re-arming on it is a loop rather than a
+          // retry.
+          if (!worthAskingAgain(error)) return;
           armLinger(docKey);
         },
       );
@@ -1193,7 +1227,7 @@ export function createArtifactBodyLeaseBridge(options: {
         if (answer.reason === "not-held") return;
         armAwaitingReleaseRetry(docKey);
       },
-      () => {
+      (error: unknown) => {
         // A REJECTION IS NOT A TEARDOWN, and reading it as one is the mistake
         // `postDemote`'s rejection arm already recorded one screen up: "the
         // worker went away" is only one of the ways this rejects. `serve()`
@@ -1207,6 +1241,12 @@ export function createArtifactBodyLeaseBridge(options: {
         // the wrong half: bytes are not what an awaiting release reclaims. The
         // WORKER's body demand, its observer and its room subscription are,
         // and those are held on the far side whatever this side is holding.
+        //
+        // One rejection is still terminal, and it is the one this round's
+        // fix made reachable: a DISPOSED bridge rejects every call
+        // immediately, so re-arming on it spins for the life of the tab
+        // while retaining the closed epic's state. See `worthAskingAgain`.
+        if (!worthAskingAgain(error)) return;
         armAwaitingReleaseRetry(docKey);
       },
     );

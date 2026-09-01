@@ -241,6 +241,28 @@ export interface RecordTable<TRow, TSlice> {
    * owner's rows; the retained raw rows make that lossless.
    */
   republish(): RecordTablePublication<TSlice> | null;
+  /**
+   * Forget every absorbed retraction.
+   *
+   * The ONE escape from rule 3, and it exists because that rule's justification
+   * is scoped to a single authority: "the host applies a removal before it
+   * emits one, so a response that still carries the row was necessarily issued
+   * before the retraction". That is an ordering argument about one store, and
+   * an authority-epoch replacement is precisely the event that ends it - the
+   * replacement may be a different replica, on a different host, whose store
+   * legitimately still holds a row this session watched the previous one
+   * remove.
+   *
+   * Left absorbing for a same-authority reseed (`resume-too-old`, a security
+   * epoch change, a client-requested reseed), where the ordering argument still
+   * holds and an in-flight poll answer issued before the removal can still
+   * arrive after it.
+   *
+   * Rows are NOT touched: a reset empties them through `applySnapshot([])` on
+   * its own, and this is only about the filter the next snapshot is admitted
+   * through.
+   */
+  forgetRetractions(): void;
   /** Whether the record plane serves `nodeId` to this viewer right now. */
   servesNodeToViewer(nodeId: string, currentUserId: string | null): boolean;
 }
@@ -310,6 +332,10 @@ export function createRecordTable<TRow, TSlice>(
     retainedRow: (rowKey: string) => rows.get(rowKey) ?? null,
     ingestSeq: () => ingestSeq,
     isRetracted: (retractionId) => retractions.has(retractionId),
+
+    forgetRetractions(): void {
+      retractions.clear();
+    },
 
     applySnapshot(served, issuedAtSeq) {
       const admitted = new Map<string, TRow>();

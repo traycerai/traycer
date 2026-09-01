@@ -105,7 +105,7 @@ type MaterializeAnswer =
  * handler faulted, which is the case the rejection arm used to read as a
  * teardown.
  */
-type ReleaseBehavior = "ok" | "pinned" | "not-held" | "reject";
+type ReleaseBehavior = "ok" | "pinned" | "not-held" | "reject" | "hang";
 
 interface ScriptedWorker {
   readonly materializeCalls: readonly string[];
@@ -129,6 +129,10 @@ function createScriptedWorker(
       const docKey = call.request.docKey;
       releasedKeys.push(docKey);
       const behavior = releaseBehavior.get(docKey) ?? "ok";
+      // Never answers, so the call is still outstanding when the bridge is
+      // disposed - which is the only way to observe `BridgeDisposedError`
+      // reaching a rejection arm.
+      if (behavior === "hang") return;
       if (behavior === "reject") {
         pair.worker.post(
           {
@@ -195,6 +199,8 @@ interface Rig {
   readonly worker: ScriptedWorker;
   readonly installedKeys: readonly string[];
   readonly timers: FakeScheduler;
+  /** Disposing this is what teardown does, and what rejects in-flight calls. */
+  readonly disposeBridge: () => void;
 }
 
 function setup(script: readonly MaterializeAnswer[]): Rig {
@@ -225,7 +231,15 @@ function setup(script: readonly MaterializeAnswer[]): Rig {
     maxHotDocs: MAX_HOT,
     reportAwaitingStalled: () => undefined,
   });
-  return { leases, worker, installedKeys, timers };
+  return {
+    leases,
+    worker,
+    installedKeys,
+    timers,
+    disposeBridge: () => {
+      main.dispose();
+    },
+  };
 }
 
 async function flushMicrotasks(): Promise<void> {
@@ -372,6 +386,39 @@ describe("an awaiting body whose release the worker REFUSES", () => {
     // THE REDDENING ASSERTION, against a `!answer.released` that treats every
     // refusal alike.
     expect(timers.liveCount()).toBe(0);
+  });
+
+  it("stops asking when the bridge itself was DISPOSED - the one rejection that is terminal", async () => {
+    // The teardown race the live-rejection retry opened. `store.ts` calls
+    // `flushLingering()` - which cancels every armed timer - and then
+    // `runtime.dispose()`, which rejects the calls flush had just posted. Those
+    // rejections land on a LATER microtask, so an unconditional re-arm
+    // re-populates the map teardown had just emptied. The timer then calls a
+    // disposed bridge, which rejects IMMEDIATELY, which re-arms again: an
+    // unbounded loop retaining the closed epic's bridge state for the life of
+    // the tab.
+    const { leases, worker, timers, disposeBridge } = setup([
+      { kind: "awaiting", docKey: DOC_KEY },
+    ]);
+    worker.releaseBehavior.set(DOC_KEY, "hang");
+
+    const grant = await leases.acquire(ARTIFACT_ID);
+    if (grant.kind !== "awaiting-seed") {
+      throw new Error(`expected an awaiting-seed grant, got ${grant.kind}`);
+    }
+    grant.release();
+    await flushMicrotasks();
+    // In flight and unanswered - the state teardown actually finds.
+    expect(worker.releasedKeys).toEqual([DOC_KEY]);
+    expect(timers.liveCount()).toBe(0);
+
+    disposeBridge();
+    await flushMicrotasks();
+
+    // THE REDDENING ASSERTION.
+    expect(timers.liveCount()).toBe(0);
+    // ...and nothing was posted again, which is the loop's first iteration.
+    expect(worker.releasedKeys).toEqual([DOC_KEY]);
   });
 
   it("stops asking once a holder re-acquires inside the window", async () => {
