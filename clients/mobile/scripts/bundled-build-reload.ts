@@ -1,5 +1,23 @@
 export const BUNDLED_BUILD_META_NAME = "traycer-bundled-build";
 
+export function resolveBundledDevelopment(
+  environment: "dev" | "staging" | "production",
+  rawMode: string | undefined,
+): boolean {
+  if (rawMode === undefined || rawMode === "vite") return false;
+  if (rawMode !== "bundled") {
+    throw new Error(
+      `TRAYCER_GUI_MODE must be vite or bundled (got "${rawMode}")`,
+    );
+  }
+  if (environment !== "dev") {
+    throw new Error(
+      `TRAYCER_GUI_MODE=bundled requires TRAYCER_MOBILE_ENV=dev (got "${environment}")`,
+    );
+  }
+  return true;
+}
+
 function htmlAttribute(tag: string, name: string): string | null {
   const expression = new RegExp(
     `\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`,

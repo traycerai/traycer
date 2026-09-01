@@ -13,6 +13,7 @@ import {
   BUNDLED_BUILD_META_NAME,
   bundledBuildIdFromHtml,
   bundledBuildReloadClient,
+  resolveBundledDevelopment,
 } from "./scripts/bundled-build-reload";
 
 // Dev-server endpoint that re-reads the host's pid.json on every request. The
@@ -80,13 +81,6 @@ function resolveMobileEnvironment(): MobileEnvironment {
   throw new Error(
     `TRAYCER_MOBILE_ENV must be dev, staging or production (got "${raw}")`,
   );
-}
-
-function isBundledDevelopment(): boolean {
-  const raw = process.env[GUI_MODE_ENV];
-  if (raw === undefined || raw === "vite") return false;
-  if (raw === "bundled") return true;
-  throw new Error(`${GUI_MODE_ENV} must be vite or bundled (got "${raw}")`);
 }
 
 function shippedConfig(
@@ -319,7 +313,10 @@ async function guiAppDevConfig(): Promise<TraycerMobileBakedConfig> {
 
 export default defineConfig(async (): Promise<UserConfig> => {
   const environment = resolveMobileEnvironment();
-  const bundledDevelopment = isBundledDevelopment();
+  const bundledDevelopment = resolveBundledDevelopment(
+    environment,
+    process.env[GUI_MODE_ENV],
+  );
   const config =
     environment === "dev"
       ? await guiAppDevConfig()

@@ -3,9 +3,25 @@ import {
   BUNDLED_BUILD_META_NAME,
   bundledBuildIdFromHtml,
   bundledBuildReloadClient,
+  resolveBundledDevelopment,
 } from "../scripts/bundled-build-reload";
 
 describe("bundled build reload", () => {
+  it("allows bundled mode only for development builds", () => {
+    expect(resolveBundledDevelopment("dev", undefined)).toBe(false);
+    expect(resolveBundledDevelopment("dev", "vite")).toBe(false);
+    expect(resolveBundledDevelopment("dev", "bundled")).toBe(true);
+    expect(() => resolveBundledDevelopment("staging", "bundled")).toThrow(
+      "requires TRAYCER_MOBILE_ENV=dev",
+    );
+    expect(() => resolveBundledDevelopment("production", "bundled")).toThrow(
+      "requires TRAYCER_MOBILE_ENV=dev",
+    );
+    expect(() => resolveBundledDevelopment("dev", "invalid")).toThrow(
+      "must be vite or bundled",
+    );
+  });
+
   it("seeds the reload client with the build that produced its HTML", () => {
     const client = bundledBuildReloadClient("build-one", "/build-revision");
 
