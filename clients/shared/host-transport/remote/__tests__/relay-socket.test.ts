@@ -10,6 +10,7 @@ import type {
   WebSocketOpenEvent,
 } from "../../ws-factory";
 import {
+  RELAY_AWAITING_DEADLINE_CAP_MULTIPLE,
   RELAY_AWAITING_PING_INTERVAL_MS,
   RELAY_AWAITING_PONG_TIMEOUT_MS,
   RELAY_PING_INTERVAL_MS,
@@ -608,6 +609,199 @@ describe("RelaySocket adaptive half-open detection", () => {
 
     // Past it, with nothing having come back: the fast deadline must fire.
     // On the 60s idle deadline this socket would still look perfectly fine.
+    vi.advanceTimersByTime(2 * RELAY_PING_TICK_MS);
+    expect(handlers.onClose).toHaveBeenCalledWith({
+      code: 4004,
+      reason: "relay-missed-pongs",
+    });
+  });
+
+  it("regression floor: an unmeasured path fails at exactly the old fixed RELAY_PONG_TIMEOUT_MS constant, not before", () => {
+    // No pong is ever answered here, so the path estimator never gets a
+    // sample and `path.deadlineMs` returns its floor argument unchanged
+    // (ticket 24, A8) - the socket must behave EXACTLY as the fixed
+    // constant did before the estimator existed.
+    const handlers = makeHandlers({});
+    openSocket(handlers);
+
+    vi.advanceTimersByTime(RELAY_PONG_TIMEOUT_MS - 1);
+    expect(handlers.onClose).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(1);
+    expect(handlers.onClose).toHaveBeenCalledWith({
+      code: 4004,
+      reason: "relay-missed-pongs",
+    });
+  });
+
+  it("the path estimator only times a ping it actually sent - an orphaned pong leaves the deadline at the floor", () => {
+    // A `relay-pong` that arrives with no outstanding ping (immediately
+    // after open, before the keepalive's first tick has sent one) must not
+    // produce a round-trip sample. Proven behaviourally: if it wrongly fed a
+    // sample, the derived deadline would move off the exact
+    // RELAY_PONG_TIMEOUT_MS floor asserted below - it would either fail
+    // early (a spuriously short sample) or survive well past it (Date.now()
+    // minus a null/garbage baseline clamped to MAX_RELAY_PATH_RTT_MS).
+    const handlers = makeHandlers({});
+    const { stream } = openSocket(handlers);
+
+    stream.emitPong();
+    expect(stream.pingsSent).toBe(0);
+
+    vi.advanceTimersByTime(RELAY_PONG_TIMEOUT_MS - 1);
+    expect(handlers.onClose).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(1);
+    expect(handlers.onClose).toHaveBeenCalledWith({
+      code: 4004,
+      reason: "relay-missed-pongs",
+    });
+  });
+
+  it("derived lengthening: slow round trips push the missed-pong deadline past the old fixed constant", () => {
+    // The keepalive's own ping/pong drives `path.notePingSent` /
+    // `path.notePongReceived` (the estimator times the round trip; there is no
+    // `noteRoundTrip` on its surface for a caller to feed), so a SLOW
+    // but genuinely live path measures its own headroom and stops reading
+    // its propagation delay as backlog (F11's false-positive teardowns).
+    const handlers = makeHandlers({});
+    const { stream } = openSocket(handlers);
+
+    // Let the idle keepalive send its first ping.
+    vi.advanceTimersByTime(RELAY_PING_INTERVAL_MS);
+    expect(stream.pingsSent).toBe(1);
+
+    // Answer it 8s later - a slow but real round trip.
+    const SLOW_ROUND_TRIP_MS = 8_000;
+    vi.advanceTimersByTime(SLOW_ROUND_TRIP_MS);
+    stream.emitPong();
+
+    // relay-liveness.ts: first sample seeds srtt=sample, rttvar=sample/2, so
+    // srtt=8000, rttvar=4000. deadlineMs(floor, roundTrips) =
+    // max(floor, round(roundTrips * (srtt + 4 * rttvar))) =
+    // max(60_000, round(3 * (8_000 + 4 * 4_000))) = max(60_000, 72_000) =
+    // 72_000 - strictly larger than the RELAY_PONG_TIMEOUT_MS floor it
+    // replaces.
+    const DERIVED_DEADLINE_MS = 72_000;
+
+    // Silence past the OLD fixed constant (60s) since this last inbound
+    // frame (the pong itself) must no longer tear the socket down.
+    vi.advanceTimersByTime(RELAY_PONG_TIMEOUT_MS + 1_000);
+    expect(handlers.onClose).not.toHaveBeenCalled();
+
+    // Only silence past the DERIVED deadline does.
+    const remainingToDerivedDeadline =
+      DERIVED_DEADLINE_MS - (RELAY_PONG_TIMEOUT_MS + 1_000);
+    vi.advanceTimersByTime(remainingToDerivedDeadline + 1_000);
+    expect(handlers.onClose).toHaveBeenCalledWith({
+      code: 4004,
+      reason: "relay-missed-pongs",
+    });
+  });
+
+  it("Karn (RFC 6298 §3): an ambiguous run - a second ping sent before the first is answered - records no sample", () => {
+    // Two idle-cadence pings go out with neither answered before the
+    // second, so the run is ambiguous; the one slow pong that eventually
+    // lands must not be credited to either ping.
+    const handlers = makeHandlers({});
+    const { stream } = openSocket(handlers);
+
+    vi.advanceTimersByTime(RELAY_PING_INTERVAL_MS);
+    expect(stream.pingsSent).toBe(1);
+
+    vi.advanceTimersByTime(RELAY_PING_INTERVAL_MS);
+    expect(stream.pingsSent).toBe(2);
+
+    // A single slow pong answers the ambiguous run.
+    stream.emitPong();
+
+    // With no sample recorded, the idle deadline still floors at
+    // RELAY_PONG_TIMEOUT_MS - measured from THIS pong (the last inbound
+    // frame), not lengthened by the run it just closed.
+    vi.advanceTimersByTime(RELAY_PONG_TIMEOUT_MS - RELAY_PING_TICK_MS);
+    expect(handlers.onClose).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(2 * RELAY_PING_TICK_MS);
+    expect(handlers.onClose).toHaveBeenCalledWith({
+      code: 4004,
+      reason: "relay-missed-pongs",
+    });
+  });
+
+  it("the awaiting-lane deadline is capped at RELAY_AWAITING_DEADLINE_CAP_MULTIPLE x RELAY_AWAITING_PONG_TIMEOUT_MS however slow the measured path is", () => {
+    const handlers = makeHandlers({});
+    const { socket, stream } = openSocket(handlers);
+
+    // One slow-but-UNAMBIGUOUS idle round trip, fed before any application
+    // traffic, is enough on its own to push the estimator's uncapped
+    // computation past the cap: first-sample seed srtt=4_500, rttvar=2_250,
+    // so round(3 * (4_500 + 4 * 2_250)) = 40_500ms - above the cap below.
+    vi.advanceTimersByTime(RELAY_PING_INTERVAL_MS);
+    expect(stream.pingsSent).toBe(1);
+    const SLOW_ROUND_TRIP_MS = 4_500;
+    vi.advanceTimersByTime(SLOW_ROUND_TRIP_MS);
+    stream.emitPong();
+
+    // Now enter the awaiting lane with application traffic that never gets
+    // a reply - the same (already-inflated) estimator sizes this deadline.
+    vi.advanceTimersByTime(1);
+    socket.sendData(new Uint8Array([1]));
+
+    const CAP_MS =
+      RELAY_AWAITING_DEADLINE_CAP_MULTIPLE * RELAY_AWAITING_PONG_TIMEOUT_MS;
+    expect(CAP_MS).toBe(36_000);
+
+    // Comfortably before the capped deadline: still open, despite the
+    // uncapped 40_500ms the estimator alone would derive.
+    vi.advanceTimersByTime(CAP_MS - RELAY_PING_TICK_MS);
+    expect(handlers.onClose).not.toHaveBeenCalled();
+
+    // The cap - not the uncapped derived value - is what closes it.
+    vi.advanceTimersByTime(2 * RELAY_PING_TICK_MS);
+    expect(handlers.onClose).toHaveBeenCalledWith({
+      code: 4004,
+      reason: "relay-missed-pongs",
+    });
+  });
+
+  it("a pong arriving after a wake probe retires a pre-suspend scheduled ping's ambiguity - no sample recorded", () => {
+    // A scheduled keepalive ping goes out and is left outstanding across a
+    // simulated suspend (nothing answers it before the wake probe fires).
+    const handlers = makeHandlers({});
+    const { socket, stream } = openSocket(handlers);
+
+    vi.advanceTimersByTime(RELAY_PING_INTERVAL_MS);
+    expect(stream.pingsSent).toBe(1);
+
+    // The runtime freezes: the clock jumps but NO timer callback runs across
+    // the gap (unlike `advanceTimersByTime`, which would fire every
+    // intervening tick) - the exact condition `pokeKeepalive` exists to
+    // catch, per its own doc comment. Kept short enough that the raw elapsed
+    // time alone does not already exceed the still-unmeasured floor
+    // (RELAY_PONG_TIMEOUT_MS), so the poke's own staleness check does not
+    // fail the socket before the retirement behaviour under test runs.
+    const SUSPEND_GAP_MS = 30_000;
+    vi.setSystemTime(Date.now() + SUSPEND_GAP_MS);
+
+    // On wake, `runKeepaliveTick` retires the pre-suspend ping
+    // (`pingSentAt = null; pingAmbiguous = true`) and force-sends its own
+    // ping, deliberately excluded from measurement - its round trip would
+    // otherwise carry the whole suspend gap as "path latency".
+    socket.pokeKeepalive(RELAY_WAKE_PROBE_TIMEOUT_MS, false);
+    expect(stream.pingsSent).toBe(2);
+
+    // The pong that eventually lands answers both the retired ping and the
+    // wake ping indistinguishably. If the retirement did not happen, this
+    // pong would be timed against the PRE-SUSPEND ping - a ~30s round trip,
+    // clamped to MAX_RELAY_PATH_RTT_MS but still ballooning the deadline
+    // (round(3 * (10_000 + 4 * 5_000)) = 90_000ms) well past the floor
+    // asserted below.
+    vi.advanceTimersByTime(1);
+    stream.emitPong();
+
+    vi.advanceTimersByTime(RELAY_PONG_TIMEOUT_MS - RELAY_PING_TICK_MS);
+    expect(handlers.onClose).not.toHaveBeenCalled();
+
     vi.advanceTimersByTime(2 * RELAY_PING_TICK_MS);
     expect(handlers.onClose).toHaveBeenCalledWith({
       code: 4004,

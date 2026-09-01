@@ -1,5 +1,5 @@
 import {
-  type HostNotificationEntryV21,
+  type HostNotificationEntryV22,
   type HostNotificationOutcome,
 } from "@traycer/protocol/host/notifications/host-notifications";
 import {
@@ -29,7 +29,7 @@ export interface HostNotificationPresentation {
  * generic copy instead of throwing or exposing untrusted raw error text.
  */
 export function formatHostNotificationPresentation(
-  entry: HostNotificationEntryV21,
+  entry: HostNotificationEntryV22,
 ): HostNotificationPresentation {
   const known = parseKnownHostNotificationPayloadForKind(
     entry.kind,
@@ -80,7 +80,21 @@ export function formatHostNotificationPresentation(
         entry.payload,
         known,
       );
+    // Host-composed title, agent-authored reason as the context. The reason is
+    // the only thing that says WHICH wall was hit, so it leads the body; a
+    // payload this build cannot parse still gets the title and the status.
+    case "browser.human.needed":
+      return {
+        title: "Browser needs you",
+        body: `${browserHumanNeededReason(known) ?? "Browser"} • ${resolvableRequestStatus(entry.resolvedAt, "Waiting for you", "Resumed")}`,
+      };
   }
+}
+
+function browserHumanNeededReason(
+  known: HostNotificationKnownPayload | null,
+): string | null {
+  return known?.kind === "browser_human_needed" ? known.reason : null;
 }
 
 /**
@@ -145,6 +159,9 @@ export function hostOperationKnownCopy(
     case "approval":
     case "interview":
     case "workspace_operation_failed":
+    // The browser park row's copy is composed above from the entry itself, not
+    // from the payload arm: `reason` is the body's context, never a title.
+    case "browser_human_needed":
       return null;
     // Worktree deletion supplies no copy of its own on purpose: the host
     // already composed `title`/`message` into the payload's common fields, and
@@ -216,6 +233,7 @@ function knownTaskTitle(payload: HostNotificationKnownPayload): string | null {
     case "workspace_operation_failed":
       return payload.taskTitle;
     case "worktree_deletion":
+    case "browser_human_needed":
       return null;
   }
 }
@@ -230,6 +248,7 @@ function knownAgentName(payload: HostNotificationKnownPayload): string | null {
     case "interview":
     case "workspace_operation_failed":
     case "worktree_deletion":
+    case "browser_human_needed":
       return null;
   }
 }
@@ -244,6 +263,7 @@ function knownChatTitle(payload: HostNotificationKnownPayload): string | null {
     case "epic":
     case "agent_stalled":
     case "worktree_deletion":
+    case "browser_human_needed":
       return null;
   }
 }
@@ -263,6 +283,7 @@ function knownStoppedReason(
     case "interview":
     case "workspace_operation_failed":
     case "worktree_deletion":
+    case "browser_human_needed":
       return null;
   }
 }
@@ -281,6 +302,7 @@ function knownProviderId(
     case "interview":
     case "workspace_operation_failed":
     case "worktree_deletion":
+    case "browser_human_needed":
       return null;
   }
 }
@@ -311,6 +333,7 @@ function knownBackgroundWorkRunning(
     case "interview":
     case "workspace_operation_failed":
     case "worktree_deletion":
+    case "browser_human_needed":
       return false;
   }
 }

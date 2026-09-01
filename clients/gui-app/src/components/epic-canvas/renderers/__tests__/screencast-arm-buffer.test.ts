@@ -2,19 +2,24 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createScreencastArmBuffer,
   SCREENCAST_ARM_BUFFER_CLICK_SLOP_PX,
-  SCREENCAST_ARM_BUFFER_TIMEOUT_MS,
   type ScreencastArmBuffer,
   type ScreencastArmGestureDown,
   type ScreencastArmGestureUp,
 } from "@/components/epic-canvas/renderers/screencast-arm-buffer";
+import { deriveSpecDeadlineMs } from "@traycer/protocol/host-transport/rtt-deadlines";
+import { VIEWER_CONTROL_PLANE_DEADLINES } from "@/lib/browser-view/sessions/control-plane-deadlines";
+
+/** What the buffer holds a press for with no measured RTT: the floor. */
+const SCREENCAST_ARM_BUFFER_TIMEOUT_MS =
+  VIEWER_CONTROL_PLANE_DEADLINES.armBuffer.floorMs;
 
 function downAt(
   payload: string,
-  castSequence: number,
+  correlationToken: number,
   clientX: number,
   clientY: number,
 ): ScreencastArmGestureDown<string> {
-  return { payload, castSequence, clientX, clientY, isPrimary: true };
+  return { payload, correlationToken, clientX, clientY, isPrimary: true };
 }
 
 function upAt(
@@ -27,7 +32,10 @@ function upAt(
 }
 
 function createBuffer(): ScreencastArmBuffer<string> {
-  return createScreencastArmBuffer(() => {});
+  return createScreencastArmBuffer(
+    () => {},
+    () => SCREENCAST_ARM_BUFFER_TIMEOUT_MS,
+  );
 }
 
 describe("createScreencastArmBuffer", () => {
@@ -56,7 +64,7 @@ describe("createScreencastArmBuffer", () => {
     expect(buffer.takeIfCurrent(7)).toBeNull();
   });
 
-  it("drops when presentedSequence does not match the buffered castSequence", () => {
+  it("drops when the current token does not match the buffered one", () => {
     const buffer = createBuffer();
 
     buffer.storeDown(downAt("down", 7, 10, 20));
@@ -65,7 +73,7 @@ describe("createScreencastArmBuffer", () => {
     expect(buffer.hasPending()).toBe(false);
   });
 
-  it("drops when presentedSequence is null", () => {
+  it("drops when no surface is current", () => {
     const buffer = createBuffer();
 
     buffer.storeDown(downAt("down", 7, 10, 20));
@@ -166,5 +174,48 @@ describe("createScreencastArmBuffer", () => {
     vi.advanceTimersByTime(SCREENCAST_ARM_BUFFER_TIMEOUT_MS - 1);
     buffer.storeMatchingUp(upAt("up", true, 30, 40));
     expect(buffer.takeIfCurrent(9)).toEqual({ down: "second", up: "up" });
+  });
+
+  it("derives the timeout from the reader at storeDown time (ticket 18)", () => {
+    const setTimeoutSpy = vi.spyOn(window, "setTimeout");
+    const measuredRttMs = 800;
+    const buffer = createScreencastArmBuffer<string>(
+      () => {},
+      () =>
+        deriveSpecDeadlineMs(
+          VIEWER_CONTROL_PLANE_DEADLINES.armBuffer,
+          measuredRttMs,
+        ),
+    );
+
+    buffer.storeDown(downAt("down", 7, 10, 20));
+
+    // roundTrips 2.5 * 800ms rtt = 2000ms, above the 1000ms floor.
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 2_000);
+  });
+
+  it("picks up a reader value that changed between two presses", () => {
+    const setTimeoutSpy = vi.spyOn(window, "setTimeout");
+    let measuredRttMs = 800;
+    const buffer = createScreencastArmBuffer<string>(
+      () => {},
+      () =>
+        deriveSpecDeadlineMs(
+          VIEWER_CONTROL_PLANE_DEADLINES.armBuffer,
+          measuredRttMs,
+        ),
+    );
+
+    buffer.storeDown(downAt("first", 7, 10, 20));
+    expect(setTimeoutSpy).toHaveBeenLastCalledWith(expect.any(Function), 2_000);
+    buffer.storeMatchingUp(upAt("up", true, 10, 20));
+    buffer.takeIfCurrent(7);
+
+    // A fresh probe landed between the two presses - the SECOND press must
+    // read the new estimate, not the one captured when the buffer was built.
+    measuredRttMs = 400;
+    buffer.storeDown(downAt("second", 9, 30, 40));
+    // roundTrips 2.5 * 400ms rtt = 1000ms, exactly the floor.
+    expect(setTimeoutSpy).toHaveBeenLastCalledWith(expect.any(Function), 1_000);
   });
 });

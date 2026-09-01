@@ -280,9 +280,12 @@ function AgentMessageDisplayView({
       <span aria-hidden className="shrink-0 text-muted-foreground/40">
         ·
       </span>
-      <span className="flex min-w-0 flex-1 items-center gap-1.5 text-ui-sm">
-        <span className="min-w-0 truncate">
-          <span className="text-muted-foreground">from agent </span>
+      {/* flex-wrap lets the badge drop to a second line on narrow (mobile)
+          widths; the name group truncates last, so the sender stays visible
+          and tappable instead of collapsing to "from agent …". */}
+      <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-1 text-ui-sm">
+        <span className="flex min-w-0 items-center gap-1">
+          <span className="shrink-0 text-muted-foreground">from agent</span>
           <AgentHeaderLink
             name={senderName}
             onOpen={openTarget !== null ? openSenderTab : null}

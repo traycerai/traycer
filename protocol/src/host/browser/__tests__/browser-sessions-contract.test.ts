@@ -334,6 +334,29 @@ describe("browser.sessions@1.0 epic-scoped open + tab-shaped session info", () =
     ).toBe(false);
   });
 
+  it("carries the GUI's declared coLocatedHostId on lifecycle-ready, real or null (ticket 01)", () => {
+    expect(
+      browserSessionsClientFrameSchema.safeParse({
+        kind: "electronTabLifecycleReady",
+        hasBinaryPayload: false,
+        coLocatedHostId: "host-1",
+      }).success,
+    ).toBe(true);
+    expect(
+      browserSessionsClientFrameSchema.safeParse({
+        kind: "electronTabLifecycleReady",
+        hasBinaryPayload: false,
+        coLocatedHostId: null,
+      }).success,
+    ).toBe(true);
+    expect(
+      browserSessionsClientFrameSchema.safeParse({
+        kind: "electronTabLifecycleReady",
+        hasBinaryPayload: false,
+      }).success,
+    ).toBe(false);
+  });
+
   it("requires epicId and tabId on screencast open requests", () => {
     expect(
       browserScreencastOpenRequestSchema.safeParse({
@@ -375,7 +398,11 @@ describe("browser.sessions@1.0 epic-scoped open + tab-shaped session info", () =
 describe("browser.sessions@1.0 correlation", () => {
   it("rejects fake request ids on events and one-way retirement", () => {
     const clientEvents = [
-      { kind: "electronTabLifecycleReady", hasBinaryPayload: false },
+      {
+        kind: "electronTabLifecycleReady",
+        hasBinaryPayload: false,
+        coLocatedHostId: "host-1",
+      },
       {
         kind: "electronTabState",
         hasBinaryPayload: false,
@@ -414,6 +441,64 @@ describe("browser.sessions@1.0 correlation", () => {
       browserSessionsServerFrameSchema.safeParse({
         ...release,
         requestId: "unsettled-request",
+      }).success,
+    ).toBe(false);
+  });
+
+  // Cross-host mention previews (spec decision #10): a snapshot-only pair,
+  // deliberately nullable rather than optional on the wire, and with no
+  // `sessionId` - the owning host resolves the tab inside the stream's epic.
+  it("round-trips the captureTabPreview / tabPreviewResult pair", () => {
+    const request = {
+      kind: "captureTabPreview",
+      hasBinaryPayload: false,
+      requestId: "preview-1",
+      tabId: "tab-1",
+    };
+    expect(browserSessionsClientFrameSchema.safeParse(request).success).toBe(
+      true,
+    );
+    expect(
+      browserSessionsClientFrameSchema.safeParse({
+        ...request,
+        sessionId: "session-1",
+      }).success,
+      "captureTabPreview is strict: no sessionId to disagree with the host",
+    ).toBe(false);
+
+    expect(
+      browserSessionsServerFrameSchema.safeParse({
+        kind: "tabPreviewResult",
+        hasBinaryPayload: false,
+        requestId: "preview-1",
+        ok: true,
+        screenshotBase64: "aGk=",
+        url: "http://localhost:3000",
+        title: "App",
+        reason: null,
+      }).success,
+    ).toBe(true);
+    // A refusal (a dormant tab) carries a reason and no payload at all.
+    expect(
+      browserSessionsServerFrameSchema.safeParse({
+        kind: "tabPreviewResult",
+        hasBinaryPayload: false,
+        requestId: "preview-1",
+        ok: false,
+        screenshotBase64: null,
+        url: null,
+        title: null,
+        reason: "dormant",
+      }).success,
+    ).toBe(true);
+    // Nullable, not optional: an omitted field is a wire error, not a default.
+    expect(
+      browserSessionsServerFrameSchema.safeParse({
+        kind: "tabPreviewResult",
+        hasBinaryPayload: false,
+        requestId: "preview-1",
+        ok: false,
+        reason: "dormant",
       }).success,
     ).toBe(false);
   });
