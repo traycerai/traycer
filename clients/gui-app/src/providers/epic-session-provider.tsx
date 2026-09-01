@@ -176,6 +176,28 @@ interface SessionPresentationState {
   readonly originalHostId: string | null;
 }
 
+/**
+ * The handle's construction host stamp, or a throw.
+ *
+ * ONE copy for the two readers - the acquire arm and `adoptWinner` - which
+ * used to carry the same six lines each. The stamp is written once, inside
+ * `createHandle`, and it is what routes RPCs and capability answers to the
+ * host that owns the stream; substituting the caller's target instead would
+ * silently re-create F1, so absence is a thrown invariant rather than a
+ * fallback. Reachable only if the write-once invariant broke - this map and
+ * the registry that hands back warm handles live in ONE module, so no module
+ * replacement can leave a surviving warm handle whose stamp was left behind.
+ * That colocation is load-bearing: moving the map elsewhere makes this throw
+ * reachable under HMR, which no test can see.
+ */
+function requireConstructionHostStamp(handle: OpenEpicStoreHandle): string {
+  const stamped = handleHostIds.get(handle);
+  if (stamped === undefined || stamped === null) {
+    throw new Error("epic session handle carries no construction host stamp");
+  }
+  return stamped;
+}
+
 export function EpicSessionProvider(
   props: EpicSessionProviderProps,
 ): ReactNode {
@@ -988,7 +1010,41 @@ export function EpicSessionProvider(
               },
         );
       }
-      const nextHandle = registry.acquireMounted(epicId, createHandle);
+      // GUARDED, because `createHandle` runs synchronously inside this call and
+      // the very first thing it does is construct a Worker. That throws outright
+      // where the runtime has none or a Content-Security-Policy refuses the
+      // script URL - a whole-environment condition, not a transport one, so the
+      // rollback `catch` inside `createHandle` closes the transport and then
+      // rethrows into this effect body. An effect that throws reaches the
+      // component error boundary, which replaces the Epic wholesale and takes
+      // the Retry affordance down with it - and Retry is the one control that
+      // could recover a session whose worker failed to start.
+      //
+      // Presenting `failed` instead is what every other unrecoverable arm in
+      // this effect does (the establishing deadline below, the dead-winner
+      // adoption above), so the surface offers the same recovery for a worker
+      // that never started as for one that died later.
+      //
+      // Scoped to the ACQUIRE alone. The stamp check immediately below is
+      // deliberately fail-loud - a missing stamp means the write-once invariant
+      // broke - and widening this `try` over it would convert that invariant
+      // into a retry loop against a handle nothing can route.
+      let nextHandle: OpenEpicStoreHandle;
+      try {
+        nextHandle = registry.acquireMounted(epicId, createHandle);
+      } catch (error: unknown) {
+        appLogger.error(
+          "epic session worker failed to start",
+          { epicId },
+          error instanceof Error ? error : new Error(String(error)),
+        );
+        presentSession({
+          kind: "failed",
+          targetHostId,
+          originalHostId: originalHostIdRef.current,
+        });
+        return;
+      }
       // The stamp is written once, at construction (inside `createHandle`).
       // When the registry returns a WARM handle the factory never ran and
       // the stamp names the host the handle's transport was built for - not
@@ -1006,12 +1062,7 @@ export function EpicSessionProvider(
       // module (e.g. beside the terminal/chat registries' equivalents) makes
       // this throw reachable under HMR, and no test can see it because HMR is
       // not in the suite.
-      const stampedHostId = handleHostIds.get(nextHandle);
-      if (stampedHostId === undefined || stampedHostId === null) {
-        throw new Error(
-          "epic session handle carries no construction host stamp",
-        );
-      }
+      const stampedHostId = requireConstructionHostStamp(nextHandle);
       const nextSession = {
         handle: nextHandle,
         hostId: stampedHostId,
@@ -1104,12 +1155,7 @@ export function EpicSessionProvider(
         });
         return;
       }
-      const stampedHostId = handleHostIds.get(winner);
-      if (stampedHostId === undefined || stampedHostId === null) {
-        throw new Error(
-          "epic session handle carries no construction host stamp",
-        );
-      }
+      const stampedHostId = requireConstructionHostStamp(winner);
       const nextSession = {
         handle: winner,
         hostId: stampedHostId,

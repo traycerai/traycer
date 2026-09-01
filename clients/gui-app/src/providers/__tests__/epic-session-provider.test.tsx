@@ -323,6 +323,22 @@ function installWorkerWithFatalOnFirstSpawn(
   };
 }
 
+/**
+ * A worker factory that THROWS, which is what a runtime with no Worker or a
+ * Content-Security-Policy refusing the script URL produces - a synchronous
+ * failure of the environment rather than of the transport, raised before any
+ * bridge exists to report a `fatal` through.
+ */
+function installWorkerThatThrowsOnSpawn(): { spawnCount(): number } {
+  previousWorkerFactory = getEpicRuntimeWorkerFactoryOverride();
+  let spawns = 0;
+  __setEpicRuntimeWorkerFactoryForTests(() => {
+    spawns += 1;
+    throw new Error("Worker construction blocked by CSP");
+  });
+  return { spawnCount: () => spawns };
+}
+
 function installStreamFactory(factory: EpicStreamClientFactory): void {
   previousWorkerFactory = getEpicRuntimeWorkerFactoryOverride();
   __setEpicRuntimeWorkerFactoryForTests(() =>
@@ -1361,6 +1377,47 @@ describe("<EpicSessionProvider />", () => {
     await act(() => Promise.resolve());
     expect(handlesB.at(-1)).toBe(handlesA.at(-1));
     expect(__getOpenEpicRegistryForTests().size()).toBe(1);
+  });
+
+  /**
+   * A worker that cannot be CONSTRUCTED must present `failed`, not crash the
+   * Epic.
+   *
+   * `createHandle` builds the worker synchronously inside
+   * `registry.acquireMounted`, so a runtime with no `Worker` - or a CSP that
+   * refuses the script URL - throws there. That throw used to escape the effect
+   * body, and an effect that throws goes to the component error boundary, which
+   * replaces the Epic wholesale and takes the Retry control down with it. Retry
+   * is the only affordance that could recover a session whose worker never
+   * started, so the boundary removed the recovery for the one failure that
+   * needed it most.
+   *
+   * The rollback already ran `closeSessionTransport()` before rethrowing, which
+   * is why this reads as a clean failure rather than a leak - the missing half
+   * was purely the PRESENTATION.
+   */
+  it("presents failed - not an error boundary - when the runtime worker cannot be constructed", async () => {
+    const presentations: Array<EpicSessionPresentation | null> = [];
+    const rig = installWorkerThatThrowsOnSpawn();
+
+    // No error boundary is installed here deliberately: under the bug the
+    // throw propagates out of `render` and this call itself rejects, so the
+    // pin fails at the render rather than on an assertion about the fallback.
+    render(
+      <EpicSessionProvider epicId="epic-session-test" tabId="epic-session-test">
+        <PresentationProbe
+          onPresentation={(presentation) => presentations.push(presentation)}
+        />
+      </EpicSessionProvider>,
+    );
+    await act(() => Promise.resolve());
+
+    expect(rig.spawnCount()).toBeGreaterThan(0);
+    const last = presentations.at(-1);
+    expect(last?.kind).toBe("failed");
+    // The session itself is not handed out - a handle was never built - so
+    // consumers gated on it stay gated rather than reading a corpse.
+    expect(presentations.some((p) => p?.kind === "ready")).toBe(false);
   });
 
   it("bounds a re-point that never snapshots and returns to the original host", async () => {
