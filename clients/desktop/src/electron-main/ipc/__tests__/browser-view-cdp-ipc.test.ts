@@ -41,6 +41,11 @@ vi.mock("electron", () => {
     constructor(_options: unknown) {}
   }
   return {
+    app: {
+      getPath: (_key: string): string => "/tmp/traycer-desktop-test",
+      relaunch: (): void => undefined,
+      exit: (_code: number): void => undefined,
+    },
     BrowserWindow,
     WebContentsView,
     dialog: {
@@ -127,27 +132,30 @@ vi.mock("../../browser-view/browser-session", () => ({
   cancelBrowserViewDownload: vi.fn(),
   clearBrowserViewPendingCertificateError: vi.fn(),
   ensureBrowserViewSession: vi.fn(),
+  ensureBrowserViewSessionForPartition: vi.fn(),
+  BROWSER_VIEW_PARTITION: "persist:traycer-browser",
+  BROWSER_VIEW_EPHEMERAL_PARTITION: "traycer-browser-ephemeral",
+  onBrowserPrimaryProfileDelta: vi.fn(() => () => undefined),
   onBrowserViewCertificateError: vi.fn(),
   onBrowserViewDownloadChange: vi.fn(),
   readBrowserViewPendingCertificateError: vi.fn(() => null),
   registerBrowserViewWebContents: vi.fn(),
 }));
 
-vi.mock("../../browser-view/storage/browser-cookie-crypto", () => ({
-  getBrowserCookieCryptoState: vi.fn(() =>
-    Promise.resolve({
-      mode: "real",
-      persistence: "persistent",
-      reason: "os-backed",
-      storageBackend: null,
-      encryptionAvailable: true,
-    }),
-  ),
+vi.mock("../../browser-view/storage/browser-saved-logins", () => ({
+  isBrowserSavedLoginsEnabled: vi.fn(() => true),
+  setBrowserSavedLoginsEnabled: vi.fn(() => Promise.resolve(true)),
+  wrapStoreKey: vi.fn(() => "wrapped"),
+  unwrapStoreKey: vi.fn(() => "unwrapped"),
 }));
 
 vi.mock("../../browser-view/storage/browser-storage-state", () => ({
   BrowserPrimaryProfileSnapshotCoordinator: class {
     observe(): void {}
+
+    rememberedOrigins() {
+      return [];
+    }
 
     capture() {
       return Promise.resolve({
@@ -165,16 +173,6 @@ vi.mock("../../browser-view/storage/browser-storage-state", () => ({
       reason: null,
     }),
   ),
-  captureBrowserViewStorageState: vi.fn(() =>
-    Promise.resolve({
-      storageState: { cookies: [], origins: [] },
-      cookieCount: 0,
-      cookieDomains: [],
-      localStorageCount: 0,
-      localStorageAvailable: true,
-      localStorageReason: null,
-    }),
-  ),
   seedBrowserViewCookies: vi.fn(() => Promise.resolve()),
 }));
 
@@ -188,6 +186,7 @@ function makeBridge() {
       off: vi.fn(),
     },
     safeSendToWindow: vi.fn(),
+    fanOut: vi.fn(),
     resolveSenderWindowId: vi.fn(() => "window-1"),
   };
 }

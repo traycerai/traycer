@@ -20,7 +20,7 @@ import {
   useHostDirectory,
   type HostRpcRegistry,
 } from "@/lib/host";
-import { buildTransientHostClient } from "@/hooks/host/use-host-client-for";
+import { buildDialableHostClient } from "@/hooks/host/use-host-client-for";
 import {
   hostClientUnavailableError,
   withHostMutationLifecycleBoundary,
@@ -64,7 +64,7 @@ function transientClientForEntry(
   defaultClient: HostClient<HostRpcRegistry>,
   entry: HostDirectoryEntry | null,
 ): HostClient<HostRpcRegistry> | null {
-  return entry === null ? null : buildTransientHostClient(defaultClient, entry);
+  return entry === null ? null : buildDialableHostClient(defaultClient, entry);
 }
 
 function useManagedCommandLifecycleMutation<Method extends LifecycleMethod>(
@@ -179,7 +179,7 @@ export function useManagedCommandStopAll(
     mutationFn: async (variables) => {
       const entry = directory.findById(variables.hostId);
       const client: HostClient<HostRpcRegistry> | null =
-        entry === null ? null : buildTransientHostClient(defaultClient, entry);
+        entry === null ? null : buildDialableHostClient(defaultClient, entry);
       // No host client means every stop would fail identically, so fail once
       // with the real reason instead of manufacturing N rejections that
       // collapse into an uninformative "couldn't stop N of N" count.

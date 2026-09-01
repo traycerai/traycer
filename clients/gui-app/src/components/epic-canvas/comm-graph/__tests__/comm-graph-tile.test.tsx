@@ -76,6 +76,21 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
 }));
 
+// Nodes render `WorktreeOwnerMetadataTooltip` for their hover card, which
+// derives PR pills from `pr.subscribeListForEpic` via this hook - unmocked,
+// it reaches for `useHostDirectoryEntryForHostId` (absent from the partial
+// host-client mock above) and a real stream client, neither of which this
+// file provides. This suite is about comm-graph node projection, not PR
+// pills, so an inert result suffices.
+vi.mock("@/hooks/pr/use-owner-pr-references", () => ({
+  useOwnerListPrReferences: () => ({
+    references: [],
+    isPending: false,
+    error: false,
+    sendRefresh: () => undefined,
+  }),
+}));
+
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

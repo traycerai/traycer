@@ -119,7 +119,7 @@ const ROUTE_TEMPLATE_LABELS: Readonly<
   "/settings/general": "Settings - General",
   "/settings/host": "Settings - Host",
   "/settings/keybindings": "Settings - Keybindings",
-  "/settings/link-phone": "Settings - Link a phone",
+  "/settings/link-phone": "Settings - Link mobile app",
   "/settings/notifications": "Settings - Notifications",
   "/settings/providers": "Settings - Providers",
   "/settings/service": "Settings - Service",
@@ -186,6 +186,7 @@ interface ReportIssueFormState {
   readonly allowContact: boolean;
   readonly includeDesktopLog: boolean;
   readonly includeHostLog: boolean;
+  readonly includeBrowserDiagnostics: boolean;
   readonly includeDiagnostics: boolean;
 }
 
@@ -198,6 +199,10 @@ const INITIAL_FORM_STATE: ReportIssueFormState = {
   allowContact: false,
   includeDesktopLog: true,
   includeHostLog: true,
+  // Full D8 symmetry: browser diagnostics follows the same bug/idea/other
+  // default split as the other two log toggles, and the same touched-by-user
+  // tracking (ticket 03 fix round).
+  includeBrowserDiagnostics: true,
   includeDiagnostics: true,
 };
 
@@ -526,6 +531,7 @@ export function ReportIssueDialog(
       allowContact: form.allowContact,
       includeDesktopLog: form.includeDesktopLog,
       includeHostLog: form.includeHostLog,
+      includeBrowserDiagnostics: form.includeBrowserDiagnostics,
       includeDiagnostics: form.includeDiagnostics,
       images: attachments.images.map((image) => ({
         fileName: image.fileName,
@@ -727,13 +733,15 @@ export function ReportIssueDialog(
   function selectType(nextType: DesktopReportType): void {
     setForm((prev) => {
       if (logsTouchedByUser) return { ...prev, type: nextType };
-      // D8: log toggles default OFF for idea/other, ON for bug.
+      // D8: log toggles default OFF for idea/other, ON for bug - browser
+      // diagnostics included, full symmetry with the desktop/host toggles.
       const logsOn = nextType === "bug";
       return {
         ...prev,
         type: nextType,
         includeDesktopLog: logsOn,
         includeHostLog: logsOn,
+        includeBrowserDiagnostics: logsOn,
       };
     });
   }
@@ -1171,6 +1179,7 @@ function CaptureScreenBody({
           support={support}
           includeDesktopLog={form.includeDesktopLog}
           includeHostLog={form.includeHostLog}
+          includeBrowserDiagnostics={form.includeBrowserDiagnostics}
           includeDiagnostics={form.includeDiagnostics}
           allowContact={form.allowContact}
           contactCheckboxVisible={contactCheckboxVisible}
@@ -1183,6 +1192,13 @@ function CaptureScreenBody({
           onToggleHostLog={(checked) => {
             onLogsTouched();
             setForm((prev) => ({ ...prev, includeHostLog: checked }));
+          }}
+          onToggleBrowserDiagnostics={(checked) => {
+            onLogsTouched();
+            setForm((prev) => ({
+              ...prev,
+              includeBrowserDiagnostics: checked,
+            }));
           }}
           onToggleDiagnostics={(checked) => {
             setForm((prev) => ({ ...prev, includeDiagnostics: checked }));
@@ -1773,9 +1789,13 @@ function AttachmentThumbnail({
   );
 }
 
-function logsToggleSummary(desktopOn: boolean, hostOn: boolean): string {
-  if (desktopOn && hostOn) return "log tails on";
-  if (!desktopOn && !hostOn) return "log tails off";
+function logsToggleSummary(
+  desktopOn: boolean,
+  hostOn: boolean,
+  browserDiagnosticsOn: boolean,
+): string {
+  if (desktopOn && hostOn && browserDiagnosticsOn) return "log tails on";
+  if (!desktopOn && !hostOn && !browserDiagnosticsOn) return "log tails off";
   return "log tails partially on";
 }
 
@@ -1787,6 +1807,7 @@ function ConsentPanel(props: {
   readonly support: DesktopSupportDialogProps["support"];
   readonly includeDesktopLog: boolean;
   readonly includeHostLog: boolean;
+  readonly includeBrowserDiagnostics: boolean;
   readonly includeDiagnostics: boolean;
   readonly allowContact: boolean;
   readonly contactCheckboxVisible: boolean;
@@ -1794,6 +1815,7 @@ function ConsentPanel(props: {
   readonly disabled: boolean;
   readonly onToggleDesktopLog: (checked: boolean) => void;
   readonly onToggleHostLog: (checked: boolean) => void;
+  readonly onToggleBrowserDiagnostics: (checked: boolean) => void;
   readonly onToggleDiagnostics: (checked: boolean) => void;
   readonly onToggleAllowContact: (checked: boolean) => void;
 }): ReactNode {
@@ -1811,6 +1833,7 @@ function ConsentPanel(props: {
     const logsState = logsToggleSummary(
       props.includeDesktopLog,
       props.includeHostLog,
+      props.includeBrowserDiagnostics,
     );
     return (
       <div className="flex items-center justify-between gap-2 rounded-md border border-border px-3 py-2 text-ui-xs text-muted-foreground">
@@ -1848,6 +1871,13 @@ function ConsentPanel(props: {
         checked={props.includeHostLog}
         disabled={props.disabled}
         onCheckedChange={props.onToggleHostLog}
+      />
+      <ConsentBrowserDiagnosticsRow
+        draftId={props.draftId}
+        support={props.support}
+        checked={props.includeBrowserDiagnostics}
+        disabled={props.disabled}
+        onCheckedChange={props.onToggleBrowserDiagnostics}
       />
       <div className="flex items-center justify-between gap-2">
         <Label
@@ -1916,6 +1946,70 @@ function ConsentLogToggleRow(props: {
           target={props.target}
         />
       ) : null}
+    </div>
+  );
+}
+
+// One consent flag, one row, two files (ticket 03 / plan D3): there is no
+// scenario where a user wants `browser-telemetry.jsonl` attached but not
+// `browser-trace.jsonl` (or vice versa), so a single switch covers both -
+// unlike `ConsentLogToggleRow`'s single target, this offers two independent
+// "view" affordances (each opening its own `FrozenLogTailView`, same as any
+// other log) since the row still spans two distinct log targets.
+function ConsentBrowserDiagnosticsRow(props: {
+  readonly draftId: number;
+  readonly support: DesktopSupportDialogProps["support"];
+  readonly checked: boolean;
+  readonly disabled: boolean;
+  readonly onCheckedChange: (checked: boolean) => void;
+}): ReactNode {
+  const [openTarget, setOpenTarget] = useState<
+    "browserTelemetry" | "browserTrace" | null
+  >(null);
+  return (
+    <div className="grid gap-1.5">
+      <div className="flex items-center justify-between gap-2">
+        <Label className="text-ui-xs font-normal">Browser diagnostics</Label>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() =>
+              setOpenTarget((current) =>
+                current === "browserTelemetry" ? null : "browserTelemetry",
+              )
+            }
+            className="text-ui-xs text-muted-foreground underline"
+          >
+            {openTarget === "browserTelemetry"
+              ? "hide telemetry"
+              : "view telemetry"}
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              setOpenTarget((current) =>
+                current === "browserTrace" ? null : "browserTrace",
+              )
+            }
+            className="text-ui-xs text-muted-foreground underline"
+          >
+            {openTarget === "browserTrace" ? "hide trace" : "view trace"}
+          </button>
+          <Switch
+            checked={props.checked}
+            disabled={props.disabled}
+            onCheckedChange={props.onCheckedChange}
+            aria-label="Include browser diagnostics"
+          />
+        </div>
+      </div>
+      {openTarget === null ? null : (
+        <FrozenLogTailView
+          support={props.support}
+          draftId={props.draftId}
+          target={openTarget}
+        />
+      )}
     </div>
   );
 }

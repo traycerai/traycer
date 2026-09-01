@@ -1623,6 +1623,13 @@ function navigationPayloadFromKnown(
         chatId: known.chatId,
         interviewBlockId: known.interviewBlockId,
       };
+    case "browser_human_needed":
+      return {
+        kind: "browserSession",
+        epicId: known.epicId,
+        sessionId: known.sessionId,
+        tabId: known.tabId,
+      };
     // No focus hint: the deleted worktree's row is gone, and the list's saved
     // filters are the authoritative view to return to. A row from a NEWER host
     // whose operation payload this build cannot parse never reaches here at

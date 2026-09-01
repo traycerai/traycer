@@ -63,6 +63,37 @@
   }
 }
 
+/* The agent ghost cursor's click ripple: a ring expanding out of the press
+   point. Plain CSS for the same reason as the indicators above - no motion
+   runtime - and `forwards`, so a finished ripple stays invisible rather than
+   snapping back to full opacity while the cursor is still on screen. */
+@keyframes agent-cursor-ripple {
+  from {
+    transform: translate(-50%, -50%) scale(0.4);
+    opacity: 0.7;
+  }
+  to {
+    transform: translate(-50%, -50%) scale(1.8);
+    opacity: 0;
+  }
+}
+
+.agent-cursor-ripple {
+  animation: agent-cursor-ripple 600ms ease-out forwards;
+}
+
+/* The base layer's blanket reduced-motion rule collapses every animation to
+   0.01ms, which would leave the ripple permanently at its `forwards` end
+   state - invisible. A press still has to read as a press, so it becomes a
+   static ring instead of a vanished one. */
+@media (prefers-reduced-motion: reduce) {
+  .agent-cursor-ripple {
+    animation: none;
+    transform: translate(-50%, -50%);
+    opacity: 0.5;
+  }
+}
+
 @keyframes prompt-stash-count-flash {
   0%,
   72% {

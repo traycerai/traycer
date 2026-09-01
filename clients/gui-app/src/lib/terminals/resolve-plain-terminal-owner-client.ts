@@ -1,6 +1,6 @@
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
-import { buildTransientHostClient } from "@/hooks/host/use-host-client-for";
+import { buildDialableHostClient } from "@/hooks/host/use-host-client-for";
 import { useHostRuntimeClient } from "@/lib/host";
 import { dialableHostEndpoint } from "@/lib/host/transport-key";
 
@@ -17,7 +17,7 @@ export function resolvePlainTerminalOwnerHostClient(args: {
   if (entry === null || dialableHostEndpoint(entry) === null) {
     return null;
   }
-  return buildTransientHostClient(args.runtimeClient, entry);
+  return buildDialableHostClient(args.runtimeClient, entry);
 }
 
 export function useResolvePlainTerminalOwnerHostClient(): (

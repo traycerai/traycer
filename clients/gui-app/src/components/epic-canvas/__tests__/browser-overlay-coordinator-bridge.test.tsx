@@ -26,6 +26,9 @@ import type {
   BrowserViewSnapshotInvalidatedChange,
   BrowserViewTileKey,
   BrowserViewBridge,
+  BrowserPrimaryProfileDelta,
+  BrowserStoreKeyUnwrapResult,
+  BrowserStoreKeyWrapResult,
 } from "@traycer-clients/shared/platform/browser-view";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 
@@ -177,20 +180,30 @@ class FakeBrowserViewBridge implements BrowserViewBridge {
     return Promise.resolve({ restoredTiles: [BASE_KEY] });
   }
 
-  getCookieCryptoState(): Promise<{
-    readonly mode: "real";
-    readonly persistence: "persistent";
-    readonly reason: "os-backed";
-    readonly storageBackend: null;
-    readonly encryptionAvailable: true;
-  }> {
-    return Promise.resolve({
-      mode: "real",
-      persistence: "persistent",
-      reason: "os-backed",
-      storageBackend: null,
-      encryptionAvailable: true,
-    });
+  getSaveLogins(): Promise<boolean> {
+    return Promise.resolve(true);
+  }
+
+  setSaveLogins(enabled: boolean): Promise<boolean> {
+    return Promise.resolve(enabled);
+  }
+
+  wrapStoreKey(rawKey: string): Promise<BrowserStoreKeyWrapResult> {
+    return Promise.resolve({ ok: true, wrappedKey: rawKey });
+  }
+
+  unwrapStoreKey(wrappedKey: string): Promise<BrowserStoreKeyUnwrapResult> {
+    return Promise.resolve({ ok: true, rawKey: wrappedKey });
+  }
+
+  forgetLogins(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  onPrimaryProfileDelta(
+    _handler: (delta: BrowserPrimaryProfileDelta) => void,
+  ): { dispose: () => void } {
+    return { dispose: () => undefined };
   }
 
   onFindChange(_handler: (change: BrowserViewFindChange) => void): {
@@ -241,6 +254,14 @@ class FakeBrowserViewBridge implements BrowserViewBridge {
   }
 
   setReservedChords(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  clearSite(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  evictSite(): Promise<void> {
     return Promise.resolve();
   }
 
@@ -302,10 +323,6 @@ class FakeBrowserViewBridge implements BrowserViewBridge {
   }
 
   onNativeTabStatusChange() {
-    return { dispose: () => undefined };
-  }
-
-  onElectronTabHandoff() {
     return { dispose: () => undefined };
   }
 

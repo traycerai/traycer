@@ -467,7 +467,7 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
  * anything, and an unknown must never displace a concrete local fact the
  * controller does know.
  *
- * A RETAINED-PHASE unknown does not lose, because it is not the absence of
+ * A RETAINED ATTEMPT phase does not lose, because it is not the absence of
  * knowledge — and rejecting it made the host-down window (Ticket 07 §5.2.7)
  * unrenderable on this surface. The projection's record arm ALWAYS returns
  * `kind: "unknown"` with `lastKnownKind` set: that is the deliberate shape for
@@ -480,6 +480,11 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
  * `showsProgressBar` an `unknown`-with-progress arm — and neither could ever be
  * reached from here.
  *
+ * Retained `idle` is different: it means the last successful read found no
+ * update attempt. It remains useful last-known context in Settings, but it is
+ * not an operation and must not raise the landing update banner merely because
+ * startup temporarily made that quiet read stale.
+ *
  * It still may not DISPLACE a concrete controller fact, which is the original
  * rule kept verbatim: a ready stage or activation debt is something the user
  * can act on now, and it outranks a phase we are only remembering.
@@ -490,7 +495,12 @@ function operationSupersedesControllerStatus(
 ): boolean {
   if (view.kind === "idle") return false;
   if (view.kind === "unknown") {
-    return view.lastKnownKind !== null && !controllerHasConcreteFact;
+    return (
+      view.lastKnownKind !== null &&
+      view.lastKnownKind !== "idle" &&
+      view.lastKnownKind !== "unknown" &&
+      !controllerHasConcreteFact
+    );
   }
   return true;
 }

@@ -50,6 +50,19 @@ vi.mock("@/hooks/use-epic-store", () => ({
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => ({ getActiveHostId: () => "host-1" }),
 }));
+// The card also derives PR pills from `pr.subscribeListForEpic` via this
+// hook - unmocked, it reaches for `useHostDirectoryEntryForHostId` (absent
+// from the partial host-client mock above) and a real stream client, neither
+// of which this file provides. This suite is about TUI identity chrome, not
+// PR pills, so an inert result suffices.
+vi.mock("@/hooks/pr/use-owner-pr-references", () => ({
+  useOwnerListPrReferences: () => ({
+    references: [],
+    isPending: false,
+    error: false,
+    sendRefresh: () => undefined,
+  }),
+}));
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   // The header's subject-harness warmup; targeting is covered by
   // `worktree-owner-settings-header.test.tsx`, so a no-op suffices here.

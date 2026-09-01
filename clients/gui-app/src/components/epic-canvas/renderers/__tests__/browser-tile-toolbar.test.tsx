@@ -10,7 +10,6 @@ import {
 } from "@/components/epic-canvas/renderers/tile-controller";
 import type { BrowserAnnotationSessionController } from "@/hooks/browser/use-browser-annotation-session";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { BrowserCookieCryptoState } from "@traycer-clients/shared/platform/browser-view";
 
 const openExternalLink = vi.hoisted(() => ({
   isPending: false,
@@ -24,14 +23,6 @@ vi.mock("@/hooks/runner/use-open-external-link-mutation", () => ({
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHostOrNull: () => ({}),
 }));
-
-const REAL_COOKIE_STATE: BrowserCookieCryptoState = {
-  mode: "real",
-  persistence: "persistent",
-  reason: "os-backed",
-  storageBackend: null,
-  encryptionAvailable: true,
-};
 
 const ANNOTATION: BrowserAnnotationSessionController = {
   isActive: false,
@@ -65,6 +56,7 @@ function makeController(
 ): TileController {
   return {
     capabilities,
+    profile: "primary",
     url: "https://example.com",
     addressValue: "https://example.com",
     canGoBack: true,
@@ -72,7 +64,6 @@ function makeController(
     zoomPercent: 100,
     viewportPreset: "responsive",
     disabled: false,
-    cookieCryptoState: REAL_COOKIE_STATE,
     zoomLocked: annotation?.zoomLocked === true,
     annotation,
     onNavigate: preventNavigate,
@@ -86,6 +77,7 @@ function makeController(
     onResetZoom: () => undefined,
     onViewportPresetChange: () => undefined,
     onOpenDevTools: () => undefined,
+    onClearSite: () => undefined,
   };
 }
 
@@ -169,6 +161,41 @@ describe("<BrowserTileToolbar /> capability gating", () => {
     expect(screen.getByRole("menuitem", { name: "Zoom out" })).not.toBeNull();
     expect(screen.getByRole("menuitem", { name: "Reset zoom" })).not.toBeNull();
     expect(screen.getByRole("menuitem", { name: "Zoom in" })).not.toBeNull();
+  });
+
+  it("shows a private-session shield with no action for an isolated session", () => {
+    const controller: TileController = {
+      ...makeController(PRIMARY_TILE_CHROME_CAPABILITIES, ANNOTATION),
+      profile: "isolated",
+    };
+    render(
+      <TooltipProvider>
+        <BrowserTileToolbar controller={controller} pictureInPicture={null} />
+      </TooltipProvider>,
+    );
+
+    const shield = screen.getByRole("button", {
+      name: "Saved logins: Private session",
+    });
+    // The persistence shield must not also be there: an isolated tile has no
+    // saved-login state to report.
+    expect(
+      screen.queryByRole("button", {
+        name: "Saved logins: Logins saved securely",
+      }),
+    ).toBeNull();
+
+    fireEvent.click(shield);
+
+    expect(screen.getByText("Private session")).not.toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Enable saved logins" }),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Restart Traycer" }),
+    ).toBeNull();
+    expect(screen.queryByRole("link", { name: /Settings/ })).toBeNull();
   });
 
   it("renders no chrome when every capability is false", () => {
@@ -294,5 +321,107 @@ describe("<BrowserTileToolbar /> capability gating", () => {
     for (const name of names) {
       expect(screen.queryByRole("menuitem", { name })).toBeNull();
     }
+  });
+});
+
+describe("<BrowserTileToolbar /> clear cookies for this site", () => {
+  afterEach(cleanup);
+
+  function renderWith(controller: TileController): void {
+    render(
+      <TooltipProvider>
+        <BrowserTileToolbar controller={controller} pictureInPicture={null} />
+      </TooltipProvider>,
+    );
+  }
+
+  const MENU_CAPABILITIES: TileChromeCapabilities = {
+    ...DISABLED_CAPABILITIES,
+    siteInfo: true,
+  };
+
+  it("names the tile's registrable domain, not its host", () => {
+    renderWith({
+      ...makeController(MENU_CAPABILITIES, null),
+      url: "https://app.example.com/inbox",
+    });
+
+    openMoreMenu();
+    const item = screen.getByRole("menuitem", {
+      name: "Clear cookies for example.com",
+    });
+    expect(item.getAttribute("aria-disabled")).not.toBe("true");
+  });
+
+  it("hides the action on a private session - its jar dies with the session", () => {
+    renderWith({
+      ...makeController(MENU_CAPABILITIES, null),
+      profile: "isolated",
+    });
+
+    openMoreMenu();
+    expect(
+      screen.queryByRole("menuitem", { name: /^Clear cookies/ }),
+    ).toBeNull();
+  });
+
+  it("hides the action where there is no local jar to clear", () => {
+    renderWith({
+      ...makeController(MENU_CAPABILITIES, null),
+      onClearSite: null,
+    });
+
+    openMoreMenu();
+    expect(
+      screen.queryByRole("menuitem", { name: /^Clear cookies/ }),
+    ).toBeNull();
+  });
+
+  it("disables the action on a non-http(s) tile, which names no site", () => {
+    renderWith({
+      ...makeController(MENU_CAPABILITIES, null),
+      url: "about:blank",
+    });
+
+    openMoreMenu();
+    const item = screen.getByRole("menuitem", {
+      name: "Clear cookies for this site",
+    });
+    expect(item.getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("confirms before clearing, and only then runs it", () => {
+    const onClearSite = vi.fn();
+    renderWith({
+      ...makeController(MENU_CAPABILITIES, null),
+      url: "https://app.example.com/inbox",
+      onClearSite,
+    });
+
+    openMoreMenu();
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Clear cookies for example.com" }),
+    );
+    expect(onClearSite).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId("confirm-action"));
+    expect(onClearSite).toHaveBeenCalledOnce();
+  });
+
+  it("does not clear when the confirm is cancelled", () => {
+    const onClearSite = vi.fn();
+    renderWith({
+      ...makeController(MENU_CAPABILITIES, null),
+      url: "https://app.example.com/inbox",
+      onClearSite,
+    });
+
+    openMoreMenu();
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Clear cookies for example.com" }),
+    );
+    fireEvent.click(screen.getByTestId("confirm-cancel"));
+
+    expect(onClearSite).not.toHaveBeenCalled();
   });
 });

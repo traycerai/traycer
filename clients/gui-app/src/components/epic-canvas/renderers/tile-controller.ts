@@ -1,9 +1,7 @@
 import type { SyntheticEvent } from "react";
 import type { BrowserAnnotationSessionController } from "@/hooks/browser/use-browser-annotation-session";
-import type {
-  BrowserCookieCryptoState,
-  BrowserViewViewportPresetId,
-} from "@traycer-clients/shared/platform/browser-view";
+import type { BrowserViewViewportPresetId } from "@traycer-clients/shared/platform/browser-view";
+import type { BrowserSessionProfileKind } from "@traycer/protocol/host/browser/contracts";
 
 /**
  * Runtime capabilities of one Electron tile. A toolbar control renders
@@ -24,6 +22,12 @@ export interface TileChromeCapabilities {
 
 export interface TileController {
   readonly capabilities: TileChromeCapabilities;
+  /**
+   * The session's credential-sharing profile. `isolated` is a private
+   * session: the toolbar says so, and offers no action, because there is
+   * nothing here to save or clear.
+   */
+  readonly profile: BrowserSessionProfileKind;
   readonly url: string;
   readonly addressValue: string;
   readonly canGoBack: boolean;
@@ -31,7 +35,6 @@ export interface TileController {
   readonly zoomPercent: number;
   readonly viewportPreset: BrowserViewViewportPresetId;
   readonly disabled: boolean;
-  readonly cookieCryptoState: BrowserCookieCryptoState | null;
   readonly zoomLocked: boolean;
   readonly annotation: BrowserAnnotationSessionController | null;
   readonly onNavigate: (
@@ -54,6 +57,15 @@ export interface TileController {
     preset: BrowserViewViewportPresetId,
   ) => void;
   readonly onOpenDevTools: () => void;
+  /**
+   * "Clear cookies for this site" (spec §6.5): removes this tile's registrable
+   * domain from the shared `primary` jar, here and - through the host's
+   * tombstones - in every other live context for this user. `null` where there
+   * is no desktop jar to clear (a screencast tile). The site is derived in the
+   * main process from this tile's own URL, so the toolbar names it but never
+   * chooses it.
+   */
+  readonly onClearSite: (() => void) | null;
 }
 
 /** Full chrome on the primary-profile runtime. */

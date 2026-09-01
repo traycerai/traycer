@@ -1,23 +1,40 @@
-import { useLayoutEffect, useMemo, useState } from "react";
+import { useLayoutEffect, useMemo, useState, type ReactElement } from "react";
 import { AlertTriangle, Pause, Radio, WifiOff } from "lucide-react";
 import { toast } from "sonner";
 import { useTileBodyVisible } from "@/components/epic-canvas/hooks/use-tile-body-visible";
 import {
   BrowserTileToolbar,
+  BrowserTileToolbarCompact,
   type BrowserPictureInPictureControl,
 } from "@/components/epic-canvas/renderers/browser-tile-toolbar";
 import { BrowserStartPage } from "@/components/epic-canvas/renderers/browser-start-page";
+import { useMaybeBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
 import { useCloseCanvasTileWithNestedFocus } from "@/components/epic-canvas/renderers/use-close-canvas-tile-with-nested-focus";
 import type { TileController } from "@/components/epic-canvas/renderers/tile-controller";
+import { ScreencastSurface } from "@/components/epic-canvas/renderers/screencast-surface";
 import { useScreencastTileChrome } from "@/components/epic-canvas/renderers/use-screencast-tile-chrome";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useHostStreamClientFor } from "@/hooks/host/use-host-stream-client-for";
 import { useRegisterVisibleBrowserTile } from "@/lib/browser-view/tiles/visible-tile-registry";
 import { compositeKey } from "@/lib/browser-view/tiles/browser-view-keys";
 import { convertBrowserTabToPip } from "@/lib/browser-view/pip/pip-store";
+import {
+  browserPeekFrameKey,
+  snapshotVideoFrameIntoPeekCache,
+  useRetainLastBrowserPeekFrame,
+} from "@/lib/browser-view/sessions/peek-frame-cache";
 import {
   useScreencastSession,
   type ScreencastDialog,
@@ -48,10 +65,28 @@ interface BrowserPeekTileProps {
   readonly node: BrowserPeekNode;
   readonly viewTabId: string;
   readonly paneId: string;
+  /**
+   * Set only by `BrowserSessionTile` while this peek is standing in for a
+   * durable Electron session's dormant/wake branch (`runtime.kind ===
+   * "electron"`). There the host's `complete` frame means "attached, going
+   * native" (`browser-screencast-plane.ts`'s `subscribeScreencast`), not a
+   * dead cast - so the lifecycle chip must not read as a failure mid-handoff.
+   */
+  readonly isElectronWake: boolean;
 }
 
+/**
+ * The streamed browser viewer, for both pointer grades (decision #13).
+ *
+ * The transport, arm/epoch protocol, viewport bridge and nav-state derivation
+ * are device-agnostic, and so is the input path: the controller translates a
+ * finger into scroll and tap frames itself, keyed off `pointerType`. What
+ * `useCoarsePointer()` picks is the chrome and the dialog containers a finger
+ * can actually reach.
+ */
 export function BrowserPeekTile(props: BrowserPeekTileProps) {
   const { epicId, node } = props;
+  const coarsePointer = useCoarsePointer();
   const hostEntry = useHostDirectoryEntry(node.hostId);
   const auth = useStreamAuthRevalidator();
   const client = useHostStreamClientFor(hostEntry, auth);
@@ -67,16 +102,27 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
     tabId: node.tabId,
     visible,
   });
+  const frameCacheKey = browserPeekFrameKey(node);
   const session = useScreencastSession({
     client,
     epicId,
+    hostId: node.hostId,
     sessionId: node.sessionId,
     tabId: node.tabId,
     visible,
+    captureDormantSnapshot: (video, wasActivePlane) => {
+      snapshotVideoFrameIntoPeekCache(frameCacheKey, video, wasActivePlane);
+    },
   });
+  // A peeked session can be isolated too; the toolbar has to say so rather
+  // than describe saved logins that this session never had.
+  const browserSessions = useMaybeBrowserSessionsContext();
+  const sessionProfile =
+    browserSessions?.items.find((item) => item.sessionId === node.sessionId)
+      ?.profile ?? "primary";
   const { image, frameSize, navState, armedEpoch, dialog } = session;
-  const { tileRef, viewportRef, overlayButtonRef, imageRef, imeInputRef } =
-    session.refs;
+  const { tileRef, viewportRef, overlayButtonRef, imeInputRef } = session.refs;
+  useRetainLastBrowserPeekFrame(frameCacheKey, image);
   const inputOwnerId =
     armedEpoch === null
       ? null
@@ -92,11 +138,18 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
   }, [inputOwnerId]);
 
   const status = useMemo(
-    () => browserPeekStatus(session.lifecycle, visible, session.details),
-    [session.details, session.lifecycle, visible],
+    () =>
+      browserPeekStatus(
+        session.lifecycle,
+        visible,
+        session.details,
+        props.isElectronWake,
+      ),
+    [session.details, session.lifecycle, visible, props.isElectronWake],
   );
 
   const chrome = useScreencastTileChrome({
+    profile: sessionProfile,
     navState,
     initialUrl: node.initialUrl,
     disabled: client === null,
@@ -130,29 +183,35 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
       ref={tileRef}
       className="flex h-full w-full flex-col bg-canvas text-foreground"
       data-testid={`browser-peek-tile-${node.instanceId}`}
-      onBlurCapture={(event) => session.onFocusExit(event.relatedTarget)}
     >
-      <ScreencastPeekChromeBar
-        controller={controller}
-        pictureInPicture={{
-          disabled: client === null,
-          convert: () => {
-            convertBrowserTabToPip({
-              epicId,
-              hostId: node.hostId,
-              sessionId: node.sessionId,
-              tabId: node.tabId,
-              origin: "manual",
-              onReady: closeCanvasTile,
-              onError: (message) => toast.error(message),
-            });
-          },
-        }}
-        loading={navState.loading}
-        armed={armedEpoch !== null}
-        status={status}
-        onRelease={session.disarm}
-      />
+      {coarsePointer ? (
+        <BrowserTileToolbarCompact
+          controller={controller}
+          loading={navState.loading}
+        />
+      ) : (
+        <ScreencastPeekChromeBar
+          controller={controller}
+          pictureInPicture={{
+            disabled: client === null,
+            convert: () => {
+              convertBrowserTabToPip({
+                epicId,
+                hostId: node.hostId,
+                sessionId: node.sessionId,
+                tabId: node.tabId,
+                origin: "manual",
+                onReady: closeCanvasTile,
+                onError: (message) => toast.error(message),
+              });
+            },
+          }}
+          loading={navState.loading}
+          armed={armedEpoch !== null}
+          status={status}
+          onRelease={session.disarm}
+        />
+      )}
       <div
         ref={viewportRef}
         className={cn(
@@ -180,37 +239,17 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
           aria-label="Browser screencast controls"
           {...session.overlayHandlers}
         >
-          {image === null ? (
-            <div className="absolute inset-0 flex items-center justify-center px-4 text-center">
-              <div>
-                <div className="text-ui-base font-medium">
-                  Waiting for frames
-                </div>
-                <div className="mt-1 max-w-[min(90vw,32rem)] text-ui-sm text-muted-foreground">
-                  Click the screencast to control this browser tab.
-                </div>
-              </div>
-            </div>
-          ) : (
-            <img
-              ref={imageRef}
-              src={image.src}
-              alt="Browser screencast"
-              className="h-full w-full object-contain"
-              draggable={false}
-              onLoad={() => session.notePainted(image.sequence)}
-            />
-          )}
+          <ScreencastSurface session={session} />
           {status.overlay === null ? null : (
             <div className="pointer-events-none absolute inset-x-3 bottom-3 rounded border border-border bg-popover/95 px-3 py-2 text-ui-sm text-popover-foreground shadow-sm">
               {status.overlay}
             </div>
           )}
-          {frameSize === null ? null : (
+          {import.meta.env.DEV && frameSize !== null ? (
             <div className="pointer-events-none absolute left-3 top-3 rounded-sm bg-background/80 px-2 py-1 font-mono text-ui-xs text-muted-foreground">
               {frameSize.width} x {frameSize.height}
             </div>
-          )}
+          ) : null}
         </button>
         <input
           ref={imeInputRef}
@@ -232,6 +271,7 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
           <BrowserDialogOverlay
             key={dialog.generation}
             dialog={dialog}
+            sheet={coarsePointer}
             onRespond={session.respondToDialog}
           />
         )}
@@ -296,8 +336,16 @@ function ScreencastPeekChromeBar(props: {
   );
 }
 
+/**
+ * One dialog body, two containers: a bottom sheet where a finger has to reach
+ * the buttons, the tile-local `<dialog>` otherwise. A backdrop dismiss has no
+ * button to read intent from - an alert has only one action (OK), so the
+ * dismiss is that; confirm/prompt read it as Cancel, exactly as Escape does
+ * for `window.confirm()`/`window.prompt()` on a real page.
+ */
 function BrowserDialogOverlay(props: {
   readonly dialog: ScreencastDialog;
+  readonly sheet: boolean;
   readonly onRespond: (
     generation: number,
     accept: boolean,
@@ -310,6 +358,66 @@ function BrowserDialogOverlay(props: {
   let title = "Confirm";
   if (isAlert) title = "Alert";
   else if (isPrompt) title = "Prompt";
+  const respond = (accept: boolean): void => {
+    props.onRespond(
+      props.dialog.generation,
+      accept,
+      accept && isPrompt ? promptText : null,
+    );
+  };
+  const promptInput = (className: string): ReactElement | null =>
+    isPrompt ? (
+      <input
+        aria-label="Prompt response"
+        className={cn(
+          "rounded border border-input bg-background px-3 py-2 text-ui-sm outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          className,
+        )}
+        value={promptText}
+        onChange={(event) => setPromptText(event.currentTarget.value)}
+      />
+    ) : null;
+  const actions = (
+    <>
+      {isAlert ? null : (
+        <Button type="button" variant="ghost" onClick={() => respond(false)}>
+          Cancel
+        </Button>
+      )}
+      <Button type="button" onClick={() => respond(true)}>
+        OK
+      </Button>
+    </>
+  );
+
+  if (props.sheet) {
+    return (
+      <Sheet
+        open
+        onOpenChange={(open) => {
+          if (open) return;
+          respond(isAlert);
+        }}
+      >
+        <SheetContent
+          side="bottom"
+          showCloseButton={false}
+          className="pb-safe-bottom"
+        >
+          <SheetHeader>
+            <SheetTitle>{title}</SheetTitle>
+            <SheetDescription className="whitespace-pre-wrap break-words text-foreground">
+              {props.dialog.message}
+            </SheetDescription>
+          </SheetHeader>
+          {promptInput("mx-4 w-auto")}
+          <SheetFooter className="flex-row justify-end gap-2">
+            {actions}
+          </SheetFooter>
+        </SheetContent>
+      </Sheet>
+    );
+  }
   return (
     <dialog
       open
@@ -322,40 +430,8 @@ function BrowserDialogOverlay(props: {
         <div className="mt-2 whitespace-pre-wrap break-words text-ui-sm">
           {props.dialog.message}
         </div>
-        {isPrompt ? (
-          <input
-            aria-label="Prompt response"
-            className="mt-3 w-full rounded border border-input bg-background px-3 py-2 text-ui-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            value={promptText}
-            onChange={(event) => setPromptText(event.currentTarget.value)}
-          />
-        ) : null}
-        <div className="mt-4 flex justify-end gap-2">
-          {isAlert ? null : (
-            <button
-              type="button"
-              className="rounded border border-border px-3 py-1.5 text-ui-sm hover:bg-foreground/8"
-              onClick={() =>
-                props.onRespond(props.dialog.generation, false, null)
-              }
-            >
-              Cancel
-            </button>
-          )}
-          <button
-            type="button"
-            className="rounded bg-primary px-3 py-1.5 text-ui-sm text-primary-foreground hover:bg-primary/90"
-            onClick={() =>
-              props.onRespond(
-                props.dialog.generation,
-                true,
-                isPrompt ? promptText : null,
-              )
-            }
-          >
-            OK
-          </button>
-        </div>
+        {promptInput("mt-3 w-full")}
+        <div className="mt-4 flex justify-end gap-2">{actions}</div>
       </div>
     </dialog>
   );
@@ -375,6 +451,7 @@ function browserPeekStatus(
   lifecycle: ScreencastLifecycle,
   visible: boolean,
   details: string | null,
+  isElectronWake: boolean,
 ): BrowserPeekStatus {
   if (!visible) {
     return {
@@ -404,6 +481,18 @@ function browserPeekStatus(
     };
   }
   if (lifecycle === "complete") {
+    // An Electron wake's `complete` frame means "attached, going native", not
+    // a dead cast (`browser-screencast-plane.ts`'s `subscribeScreencast`) -
+    // WifiOff/"Ended" would read as a failure at the exact moment the tab is
+    // succeeding.
+    if (isElectronWake) {
+      return {
+        label: "Going native",
+        overlay: "Handing off to the native tab.",
+        tone: "muted",
+        Icon: Radio,
+      };
+    }
     return {
       label: "Ended",
       overlay: details,

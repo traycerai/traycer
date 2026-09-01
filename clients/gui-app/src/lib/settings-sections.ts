@@ -161,7 +161,7 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
   // account, regardless of which host this window looks at.
   {
     id: "link-phone",
-    label: "Link a phone",
+    label: "Link mobile app",
     icon: QrCode,
     group: "account",
   },
@@ -247,11 +247,11 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
  *   the chip arms to "Press chord…" and can never resolve, and an existing
  *   binding can never be removed. A section whose every control needs a
  *   hardware keyboard is a dead end on a phone, not a sparse page.
- * - **Link a phone — the role is backwards.** The panel DISPLAYS a QR and a
+ * - **Link mobile app — the role is backwards.** The panel DISPLAYS a QR and a
  *   one-time code for another device to read, and in the mobile app that
  *   device is the one holding the panel: the phone is the SCANNER
  *   (`link-code-sign-in.tsx` redeems a code this panel mints, and its own copy
- *   says "On your desktop, open Settings → Link a phone"). A phone could
+ *   says "On your desktop, open Settings → Link mobile app"). A phone could
  *   physically show the code to a second phone, so this is a product decision
  *   about which end of the pairing each build is, not an inability.
  */
