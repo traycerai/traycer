@@ -230,8 +230,13 @@ class ObservedApplyHarness {
   readonly jar = new FakeCookieJar();
   readonly serializer = new BrowserJarSerializer();
   readonly governor = new BrowserObservedConnectionGovernor(() => Date.now());
-  /** Stands in for a local clear holding the scope, read inside the queue. */
-  clearingDomains = new Set<string>();
+  /**
+   * Sites the forget ledger covers at a revision the naming connection has not
+   * acked pruning, keyed `<connectionId> <domain>` - the real gate's two inputs
+   * (`browser-forget-ledger.ts` decides this from the ledger and the acked
+   * revisions; the end-to-end wiring is pinned in that module's own suite).
+   */
+  readonly forgottenPendingAck = new Set<string>();
 
   apply(input: {
     readonly domain: string;
@@ -246,7 +251,8 @@ class ObservedApplyHarness {
     };
     return applyBrowserObservedProfile(observed, {
       now: () => Date.now(),
-      isClearInProgress: (domain) => this.clearingDomains.has(domain),
+      isForgottenPendingAck: (gate) =>
+        this.forgottenPendingAck.has(`${gate.connectionId} ${gate.domain}`),
       getSession: () => ({ cookies: this.jar }),
       serializeOnDomain: (domain, action) =>
         this.serializer.runOnDomain(domain, action),
@@ -477,21 +483,47 @@ describe("observed sign-in apply", () => {
     );
   });
 
-  it("refuses a frame for a site that is being cleared right now", async () => {
+  it("refuses a frame for a site the sending connection has not acked forgetting", async () => {
     const harness = new ObservedApplyHarness();
-    harness.clearingDomains.add("example.com");
+    harness.forgottenPendingAck.add("connection-1 example.com");
 
     const result = await harness.applyFrame([
       observedCookie({ name: "sid", domain: "example.com", expires: -1 }),
     ]);
 
-    expect(result.outcome).toBe("suppressed");
+    expect(result.outcome).toBe("ledger-unacked");
     expect(harness.jar.names()).toEqual([]);
     expect(harness.jar.flushes).toBe(0);
     expect(log.warn).toHaveBeenCalledWith(
       "[browser-view] refused an observed sign-in",
-      expect.objectContaining({ reason: "suppressed" }),
+      expect.objectContaining({ reason: "ledger-unacked" }),
     );
+  });
+
+  it("refuses per connection, so one host's ack does not vouch for another's frames", async () => {
+    // The gate is a happens-before, and a happens-before belongs to the stream
+    // that established it: a host that acked the revision pruned before it
+    // observed anything, which says nothing about what a DIFFERENT host was
+    // holding when it captured.
+    const harness = new ObservedApplyHarness();
+    harness.forgottenPendingAck.add("connection-2 example.com");
+    const cookies = [
+      observedCookie({ name: "sid", domain: "example.com", expires: -1 }),
+    ];
+
+    const acked = await harness.apply({
+      domain: "example.com",
+      cookies,
+      connectionId: "connection-1",
+    });
+    const unacked = await harness.apply({
+      domain: "example.com",
+      cookies,
+      connectionId: "connection-2",
+    });
+
+    expect(acked.outcome).toBe("applied");
+    expect(unacked.outcome).toBe("ledger-unacked");
   });
 
   it("drops a frame whose claimed domain does not derive at all", async () => {
@@ -551,20 +583,22 @@ describe("observed sign-in serialization", () => {
     observedCookie({ name: "sid", domain: "example.com", expires: -1 }),
   ];
 
-  it("queues a merge behind a clear of the same site, so the clear-in-progress read cannot go stale", async () => {
-    // The TOCTOU this exists to remove: the applier reads "is a clear
-    // running?", then awaits, then writes. Serialising the two means the clear
-    // cannot begin AND FINISH inside that await - the merge simply runs after
-    // it, with the read taken on the far side.
+  it("queues a merge behind a clear of the same site, so the ledger read cannot go stale", async () => {
+    // The TOCTOU this exists to remove: the applier reads the gate, then
+    // awaits, then writes. Serialising the two means a clear cannot begin AND
+    // FINISH inside that await - the merge simply runs after it, with the read
+    // taken on the far side. Here the host acks the covering revision while
+    // the clear is still holding the site, which is exactly the sequence that
+    // would go stale if the read happened before the queue.
     const harness = new ObservedApplyHarness();
     let releaseClear = (): void => undefined;
     const clearRunning = new Promise<void>((resolve) => {
       releaseClear = resolve;
     });
-    harness.clearingDomains.add("example.com");
+    harness.forgottenPendingAck.add("connection-1 example.com");
     const clear = harness.serializer.runOnDomain("example.com", async () => {
       await clearRunning;
-      harness.clearingDomains.delete("example.com");
+      harness.forgottenPendingAck.delete("connection-1 example.com");
     });
 
     const applied = harness.applyFrame(LIVE_COOKIE);
@@ -576,8 +610,8 @@ describe("observed sign-in serialization", () => {
     await clear;
     const result = await applied;
 
-    // It ran after the clear finished, so its read saw no clear in progress.
-    // Without the queue it would have read the flag mid-clear and refused.
+    // It ran after the clear finished, so its read saw an acked revision.
+    // Without the queue it would have read the pending one and refused.
     expect(result.outcome).toBe("applied");
     expect(harness.jar.names()).toEqual(["sid"]);
   });
@@ -673,7 +707,7 @@ describe("observed frame rate limiting", () => {
 describe("observed rejection trace sampling", () => {
   const REFUSED: BrowserObservedProfileResult = {
     domain: "example.com",
-    outcome: "suppressed",
+    outcome: "ledger-unacked",
     appliedCookies: 0,
     domainMismatchCookies: 0,
     expiredCookies: 0,
@@ -697,12 +731,12 @@ describe("observed rejection trace sampling", () => {
     expect(log.warn).toHaveBeenNthCalledWith(
       1,
       "[browser-view] refused an observed sign-in",
-      expect.objectContaining({ reason: "suppressed", occurrences: 1 }),
+      expect.objectContaining({ reason: "ledger-unacked", occurrences: 1 }),
     );
     expect(log.warn).toHaveBeenNthCalledWith(
       3,
       "[browser-view] refused an observed sign-in",
-      expect.objectContaining({ reason: "suppressed", occurrences: 100 }),
+      expect.objectContaining({ reason: "ledger-unacked", occurrences: 100 }),
     );
   });
 
@@ -722,7 +756,7 @@ describe("observed rejection trace sampling", () => {
       connectionId: "connection-2",
       governor,
     });
-    // The second `suppressed` on connection-1 is the coalesced one.
+    // The second `ledger-unacked` on connection-1 is the coalesced one.
     traceBrowserObservedProfile(REFUSED, {
       hostId: "host-1",
       connectionId: "connection-1",

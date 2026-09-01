@@ -265,21 +265,6 @@ export async function suppressAllBrowserPrimaryProfileDeltas<T>(
   return await primaryCookieObserver.suppressAll(action);
 }
 
-/**
- * Whether a deliberate local clear is running over this domain right now - the
- * gate the universal-sign-in applier takes before merging an observation
- * (ticket 03), inside the serialized section that makes the answer stable.
- *
- * The observer owns it because it owns the suppression state, and it is the
- * durable `primary` jar's observer: a machine that has never opened that jar
- * has cleared nothing, so it refuses nothing.
- */
-export function isBrowserPrimaryProfileClearInProgress(
-  domain: string,
-): boolean {
-  return primaryCookieObserver?.clearInProgress(domain) ?? false;
-}
-
 export function createBrowserViewWebPreferences(
   request: BrowserSessionProfileRequest,
 ): WebPreferences {

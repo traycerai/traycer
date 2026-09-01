@@ -2,6 +2,7 @@ import type {
   BrowserCdpCommand,
   BrowserCdpResult,
   BrowserCdpTarget,
+  BrowserForgetLedger,
   BrowserPrimaryProfileDelta,
   BrowserScreencastServerFrame,
   BrowserSessionProfileKind,
@@ -205,7 +206,7 @@ export interface BrowserViewSnapshotInvalidatedChange extends BrowserViewTileKey
  * One coalesced cookie-change window from the durable `primary` jar. Re-exported
  * so renderer code sees the bridge and its payloads in one import.
  */
-export type { BrowserPrimaryProfileDelta };
+export type { BrowserForgetLedger, BrowserPrimaryProfileDelta };
 
 export type BrowserPrimaryProfileCaptureResult =
   | {
@@ -319,6 +320,27 @@ export interface BrowserObservedProfileInput {
   readonly cookies: readonly BrowserStorageCookie[];
 }
 
+/**
+ * One host confirming it finished pruning this machine's forget ledger through
+ * `revision` (universal-sign-in ticket 04).
+ *
+ * Both identities are the renderer's account of the stream the ack arrived on,
+ * never a field of the frame: `hostId` decides what the next digest to that
+ * host still carries, and `connectionId` decides whose observations stop being
+ * refused - a distinction that matters because a reconnect must re-earn the
+ * second while keeping the first.
+ */
+export interface BrowserForgetLedgerAckInput {
+  readonly hostId: string;
+  readonly connectionId: string;
+  readonly revision: number;
+}
+
+/** A forget landed in this machine's ledger; every host stream pushes anew. */
+export interface BrowserForgetLedgerChange {
+  readonly revision: number;
+}
+
 export interface BrowserViewBridge {
   updateBounds(input: BrowserViewBoundsUpdate): Promise<void>;
   setReservedChords(tokens: readonly string[]): Promise<void>;
@@ -369,18 +391,37 @@ export interface BrowserViewBridge {
   /** Opens a blob wrapped earlier on this machine, so the host can unseal. */
   unwrapStoreKey(wrappedKey: string): Promise<BrowserStoreKeyUnwrapResult>;
   /**
-   * "Forget all browser logins" (spec §6.5), this machine's half: clear the
-   * `primary` jars - the durable partition always, and the ephemeral one the
-   * live guests are on when saving is off, which otherwise keeps them signed
-   * in until the app restarts - drop the remembered localStorage origins, and
-   * recreate the open primary tiles at their URLs on the empty jar.
+   * "Forget all browser logins" (spec §6.5), this machine's half: record the
+   * forget in the durable ledger, clear the `primary` jars - the durable
+   * partition always, and the ephemeral one the live guests are on when saving
+   * is off, which otherwise keeps them signed in until the app restarts - drop
+   * the remembered localStorage origins, and recreate the open primary tiles at
+   * their URLs on the empty jar.
    *
-   * Called only in answer to the host's `primaryProfileForgotten`, so the key
-   * and the host's slice are already gone by the time the jar is cleared -
-   * never the other way round, which would leave the host holding logins the
-   * user believes are forgotten.
+   * Called by Settings alongside the `forgetLogins` frame that shreds each
+   * connected host's slice; there is no host fan-out any more (universal-sign-in
+   * decision 6). The ledger is what reaches a host that was disconnected, and
+   * it is written before a cookie moves so an in-flight observation for a
+   * forgotten site cannot land behind the clear.
    */
   forgetLogins(): Promise<void>;
+  /**
+   * The forget-ledger digest this host still owes: everything it has not acked
+   * pruning, plus the ledger's current revision. Read once per attach, and
+   * again on every ledger change, by the renderer that owns that host's stream.
+   */
+  readForgetLedger(hostId: string): Promise<BrowserForgetLedger>;
+  /** That host finished pruning through a revision; both watermarks advance. */
+  ackForgetLedger(input: BrowserForgetLedgerAckInput): Promise<void>;
+  /** A closed stream incarnation can ack nothing more. */
+  releaseForgetLedgerConnection(connectionId: string): Promise<void>;
+  /**
+   * Every forget recorded on this machine, whichever window performed it: the
+   * renderer holding a host stream answers by pushing that host's fresh digest.
+   */
+  onForgetLedgerChanged(handler: (change: BrowserForgetLedgerChange) => void): {
+    dispose: () => void;
+  };
   /**
    * Push for every coalesced cookie change in the durable `primary` jar (spec
    * §6.3). Unsolicited and continuous: the renderer holding the host stream

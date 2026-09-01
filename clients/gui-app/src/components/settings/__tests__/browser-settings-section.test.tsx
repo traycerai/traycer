@@ -24,7 +24,7 @@ const refetch = vi.hoisted(() => vi.fn());
 const hostBinding = vi.hoisted((): { current: object | null } => ({
   current: {},
 }));
-const forgetAllBrowserLogins = vi.hoisted(() => vi.fn(() => true));
+const forgetAllBrowserLogins = vi.hoisted(() => vi.fn(() => 1));
 const clearSavedLoginSite = vi.hoisted(() => vi.fn(() => true));
 
 vi.mock("@/providers/use-runner-host", () => ({
@@ -137,23 +137,26 @@ describe("<BrowserSettingsSection /> saved logins", () => {
     fireEvent.click(screen.getByTestId("confirm-action"));
 
     expect(forgetAllBrowserLogins).toHaveBeenCalledTimes(1);
-    // Taken by a live stream, so the dialog is done.
     expect(screen.queryByText("Forget all browser logins?")).toBeNull();
   });
 
-  it("keeps the confirm open when no live stream took the forget", () => {
+  it("still forgets, and still closes, with no live stream to take it", () => {
+    // Unlike the per-row Clear, which needs a host to act on. This machine's
+    // own jar and forget ledger are emptied whatever the streams do, and the
+    // ledger is what carries the forget to hosts that were not listening
+    // (universal-sign-in decision 6) - so there is no "nothing happened" case
+    // left to hold the dialog open for. Making it conditional would delete the
+    // ledger's whole premise.
     renderSection(controller({}), null);
-    forgetAllBrowserLogins.mockReturnValueOnce(false);
+    forgetAllBrowserLogins.mockReturnValueOnce(0);
 
     fireEvent.click(
       screen.getByRole("button", { name: "Forget all browser logins…" }),
     );
     fireEvent.click(screen.getByTestId("confirm-action"));
 
-    // Nothing went out, so nothing may look done: closing here would report a
-    // forget the app never performed. Same refusal as the per-row Clear.
     expect(forgetAllBrowserLogins).toHaveBeenCalledTimes(1);
-    expect(screen.getByText("Forget all browser logins?")).not.toBeNull();
+    expect(screen.queryByText("Forget all browser logins?")).toBeNull();
   });
 
   it("renders nothing at all without a host runtime", () => {

@@ -5,6 +5,7 @@ import {
 } from "../ipc-contracts/ipc-channels";
 import type {
   BrowserViewBridge,
+  BrowserForgetLedgerChange,
   BrowserPrimaryProfileCaptureResult,
   BrowserStoreKeyUnwrapResult,
   BrowserStoreKeyWrapResult,
@@ -22,6 +23,7 @@ import type {
 } from "@traycer-clients/shared/platform/browser-view";
 import type {
   BrowserCdpResult,
+  BrowserForgetLedger,
   BrowserPrimaryProfileDelta,
 } from "@traycer/protocol/host/browser/contracts";
 import type {
@@ -164,6 +166,24 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
         ipcRenderer.invoke(
           RunnerHostInvoke.browserViewForgetLogins,
         ) as Promise<void>,
+      readForgetLedger: (hostId) =>
+        ipcRenderer.invoke(RunnerHostInvoke.browserViewForgetLedgerRead, {
+          hostId,
+        }) as Promise<BrowserForgetLedger>,
+      ackForgetLedger: (input) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.browserViewForgetLedgerAck,
+          input,
+        ) as Promise<void>,
+      releaseForgetLedgerConnection: (connectionId) =>
+        ipcRenderer.invoke(RunnerHostInvoke.browserViewForgetLedgerRelease, {
+          connectionId,
+        }) as Promise<void>,
+      onForgetLedgerChanged: (handler) =>
+        subscribe<BrowserForgetLedgerChange>(
+          RunnerHostEvent.browserViewForgetLedgerChanged,
+          handler,
+        ),
       onPrimaryProfileDelta: (handler) =>
         subscribe<BrowserPrimaryProfileDelta>(
           RunnerHostEvent.browserViewPrimaryProfileDelta,

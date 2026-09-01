@@ -383,26 +383,53 @@ export type BrowserForgetLedgerDomain = z.infer<
 >;
 
 /**
- * The desktop's durable forget ledger, sent whole: a digest, never a delta, so
- * a host that missed a push converges on the next one with no watermark.
+ * The desktop's durable forget ledger, projected for ONE host: a set of
+ * INSTRUCTIONS ("this site is gone", "everything before this was gone"), never
+ * clock values for the receiver to reason about.
  *
  * Every timestamp on it comes from ONE clock - the authoring desktop's - and is
- * only ever compared against other entries of the same ledger. Hosts never
- * compare these against their own clock or against another desktop's ledger,
- * so no clock skew between machines can resurrect or bury a login.
+ * read only by that desktop. A host compares none of them: not against its own
+ * clock, not against another desktop's ledger, and not against each other. It
+ * clears what the digest names and answers with
+ * `primaryProfileForgetLedgerAck`.
  *
- * `forgetAllAt` is null until the user has forgotten everything at least once;
- * it is the floor every domain is measured against, which is why a per-domain
- * entry older than it carries no information. It is required and explicitly
- * nullable rather than defaulted: the frame is new on an unreleased contract,
- * so no peer can omit it, and a default would quietly absorb a producer bug
- * into "nothing was ever forgotten" - the one wrong direction for this field.
- * `domains` is bounded by {@link BROWSER_FORGET_LEDGER_MAX_DOMAINS}.
+ * WHAT `revision` IS FOR, and why this is not simply the whole ledger every
+ * time (universal-sign-in ticket 04). The ledger is monotonic and never
+ * shrinks, so re-asserting all of it on every push would re-clear a site the
+ * user has since signed back into - on every later forget action, forever. The
+ * desktop therefore records what each host has ACKED and sends only the
+ * entries above it, while `revision` always carries the ledger's current top:
+ * the ack means "pruned through here", not "pruned what was in that frame". A
+ * host that missed a push, or never acked one, is simply sent those entries
+ * again on the next push, so the digest stays idempotent and needs no
+ * host-side watermark.
+ *
+ * `forgetAllAt` is null both when the user has never forgotten everything AND
+ * when this host has already acked the revision that carried it - the two are
+ * the same instruction-set fact, "no forget-all for you in this digest". It is
+ * required and explicitly nullable rather than defaulted: the frame is new on
+ * an unreleased contract, so no peer can omit it, and a default would quietly
+ * absorb a producer bug into "nothing was ever forgotten" - the one wrong
+ * direction for this field. `domains` is bounded by
+ * {@link BROWSER_FORGET_LEDGER_MAX_DOMAINS}.
  */
 export const browserForgetLedgerSchema = z
   .object({
     forgetAllAt: z.number().nullable(),
     domains: z.array(browserForgetLedgerDomainSchema),
+    /**
+     * The authoring desktop's monotonic forget counter, bumped by every
+     * forget-all and every clear-site. Desktop-local and never compared across
+     * machines: a host only ever echoes it back on the ack.
+     *
+     * Bounded at the SCHEMA, unlike the payload bounds above, and for the
+     * opposite reason. Those bound volume, where a silent parse failure would
+     * cost the receiver its `over-bound` trace. This is a COUNTER the far end
+     * stores and compares: a fractional or negative one is not a big frame to
+     * refuse loudly, it is a value that poisons a watermark, and there is
+     * nothing a peer could usefully do with it but drop the frame.
+     */
+    revision: z.number().int().nonnegative(),
   })
   .strict();
 export type BrowserForgetLedger = z.infer<typeof browserForgetLedgerSchema>;
@@ -655,27 +682,36 @@ export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
-      // The user forgot every saved browser login (keychain refactor ticket
-      // 08). The host has already crypto-shredded its slice for this user and
-      // suspended their live `primary` sessions; each connected desktop clears
-      // its own persistent partition on receipt. Sent to every subscriber of
-      // the user, the originator included - it clears the same way the others
-      // do. No `userId`: the identity is the stream's authenticated user.
+      // This host has finished pruning everything the desktop's ledger named
+      // through `revision` - the stored slice, the headless-contributed
+      // markers, and the live headless contexts (universal-sign-in ticket 04).
+      // Sent only to the desktop whose digest it answers.
       //
-      // @deprecated RETIRED by universal-sign-in decision 6. The desktop's
-      // `primaryProfileForgetLedger` digest is the single forget mechanism
-      // now - hosts prune idempotently from it (store, session seeding, live
-      // headless contexts) instead of reacting to this one-shot fan-out, and
-      // two forget mechanisms must not coexist. The arm survives only because
-      // the host still emits it and the GUI still handles it. `browser.sessions`
-      // never shipped (see the registry note collapsing its in-repo @1.0-@1.4
-      // history into one fresh @1.0 baseline), so it is on no released
-      // baseline and no support floor: deleting the arm needs no minor bump,
-      // no compat exception and no downgrade bridge - only those two call
-      // sites, which the ledger tickets replace. Delete it with the last of
-      // them, and add no new consumers.
-      kind: z.literal("primaryProfileForgotten"),
+      // It is the HAPPENS-BEFORE the carry-over path has no clock for. A host
+      // that has acked revision N pruned everything through N before it sent
+      // this, so every `primaryProfileObserved` it emits afterwards is a
+      // post-prune capture; one emitted before the prune is exactly the frame
+      // whose connection has not acked yet, and the desktop drops it on that
+      // fact rather than on an estimate of flight time. Until a connection's
+      // first ack, every observation for a ledger-covered domain drops.
+      //
+      // `revision` is the desktop's own counter, echoed back verbatim. This
+      // host neither mints nor compares it - it is an opaque token here, which
+      // is what keeps two machines' clocks out of the ordering.
+      //
+      // Shaped like the ledger's own `revision` (integer, non-negative) so a
+      // malformed one is refused at the parse rather than stored. The desktop
+      // additionally CLAMPS what it accepts to its own current revision: an
+      // ack is an echo, so a host cannot advance a watermark past what it was
+      // told, and an inflated one would otherwise disable the desktop's
+      // no-resurrection gate permanently.
+      //
+      // This arm replaced `primaryProfileForgotten`, whose one-shot fan-out the
+      // ledger absorbed (decision 6). Do not reintroduce a second forget
+      // channel.
+      kind: z.literal("primaryProfileForgetLedgerAck"),
       ...textFrameFields,
+      revision: z.number().int().nonnegative(),
     })
     .strict(),
   z
@@ -882,26 +918,29 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
     .object({
       // "Forget all browser logins" (keychain refactor ticket 08, decision
       // #13). Unsolicited and unacknowledged: the host answers by shredding
-      // this user's key and slice and fanning `primaryProfileForgotten` back
-      // out, which is what tells this desktop to clear its own partition. No
-      // `userId` - the identity is the stream's authenticated user, and only
-      // the elected lifecycle subscriber is heard (same gate as
-      // `primaryProfileCaptured`).
+      // this user's key and slice. It fans NOTHING back - the desktop that
+      // asked clears its own partition itself and records the forget in its
+      // ledger, and the hosts that were not connected to hear this frame learn
+      // it from that ledger instead (universal-sign-in decision 6). No `userId`
+      // - the identity is the stream's authenticated user, and only the elected
+      // lifecycle subscriber is heard (same gate as `primaryProfileCaptured`).
       kind: z.literal("forgetLogins"),
       ...textFrameFields,
     })
     .strict(),
   z
     .object({
-      // The desktop's whole forget ledger (universal-sign-in decision 6),
-      // pushed on every forget action and once at attach BEFORE any observed
-      // replay - so a host can never re-offer, in the replay, a login the user
-      // forgot while that host was disconnected. Unsolicited and
-      // unacknowledged: the host prunes idempotently from it, which needs no
-      // answer and is safe to repeat. Supersedes the `primaryProfileForgotten`
-      // fan-out (see its arm on the server union). No `userId` - the identity
-      // is the stream's authenticated user, and only the elected lifecycle
-      // subscriber is heard (same gate as `primaryProfileDelta`).
+      // The desktop's forget ledger (universal-sign-in decision 6), pushed on
+      // every forget action and once at attach BEFORE any observed replay - so
+      // a host can never re-offer, in the replay, a login the user forgot while
+      // that host was disconnected. Answered with
+      // `primaryProfileForgetLedgerAck` once the prune has finished, which is
+      // what orders the desktop's applier against this host's observations;
+      // re-sending it is always safe, because the prune is idempotent.
+      // Supersedes the `primaryProfileForgotten` fan-out, which is gone. No
+      // `userId` - the identity is the stream's authenticated user, and only
+      // the elected lifecycle subscriber is heard (same gate as
+      // `primaryProfileDelta`).
       kind: z.literal("primaryProfileForgetLedger"),
       ...textFrameFields,
       ...browserForgetLedgerSchema.shape,

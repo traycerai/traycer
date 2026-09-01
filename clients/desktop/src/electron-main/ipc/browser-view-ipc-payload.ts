@@ -189,6 +189,30 @@ const observedProfileSchema = z.object({
 /** The saved-logins toggle's new value. */
 const saveLoginsSchema = z.boolean();
 
+/**
+ * The host a renderer is asking the forget ledger about (universal-sign-in
+ * ticket 04): its own coordinator's host id. The digest is per host, because
+ * what one host still owes is not what another does.
+ */
+const forgetLedgerHostSchema = z.object({ hostId: nonEmptyStringSchema });
+
+/**
+ * One host's confirmation that it pruned through `revision`. The connection is
+ * named as well as the host because the two watermarks it advances have
+ * different lifetimes, and only the connection's gates that stream's
+ * observations.
+ */
+const forgetLedgerAckSchema = z.object({
+  hostId: nonEmptyStringSchema,
+  connectionId: nonEmptyStringSchema,
+  revision: z.number().int().nonnegative(),
+});
+
+/** A closed stream incarnation, whose acked revision goes with it. */
+const forgetLedgerReleaseSchema = z.object({
+  connectionId: nonEmptyStringSchema,
+});
+
 export const browserViewIpcPayload = {
   annotationAttachResult: annotationAttachResultSchema,
   annotationStart: annotationStartSchema,
@@ -204,6 +228,9 @@ export const browserViewIpcPayload = {
   evictDomain: evictDomainSchema,
   findRequest: findRequestSchema,
   findStop: findStopSchema,
+  forgetLedgerAck: forgetLedgerAckSchema,
+  forgetLedgerHost: forgetLedgerHostSchema,
+  forgetLedgerRelease: forgetLedgerReleaseSchema,
   nativeTabCapability: nativeTabCapabilitySchema,
   observedProfile: observedProfileSchema,
   overlayOcclusion: overlayOcclusionSchema,

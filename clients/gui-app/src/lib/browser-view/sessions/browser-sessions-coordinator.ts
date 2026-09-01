@@ -1,5 +1,6 @@
 import {
   BROWSER_PRIMARY_PROFILE_OBSERVED_MAX_COOKIES,
+  type BrowserForgetLedger,
   type BrowserSessionInfo,
   type BrowserSessionsClientFrame,
   type BrowserSessionsServerFrame,
@@ -266,14 +267,35 @@ function sendOncePerHost(
 }
 
 /**
- * "Forget all browser logins" (spec §6.5, ticket 08). Answers whether any live
- * stream took it.
+ * "Forget all browser logins" (spec §6.5, ticket 08).
  *
- * Module-level, not a tile-scoped action: the trigger lives in Settings ›
- * Browser, which has no tile to hang it off.
+ * BOTH halves run, and the ORDER between them is the point. This machine's own
+ * jar and forget ledger go first and unconditionally; telling the hosts to
+ * shred their slices is best-effort on top. Universal-sign-in decision 6 is
+ * exactly the claim that a forget survives disconnection - the ledger carries
+ * it to every host that was not listening - so making the local half
+ * conditional on a live stream would delete the premise: with no host attached,
+ * nothing would be forgotten anywhere and the user would be told so by a dialog
+ * that simply refused to close.
+ *
+ * Answers how many hosts were told, for the caller's own reporting. It is NOT
+ * a success flag: zero hosts still means this machine forgot.
  */
-export function forgetAllBrowserLogins(): boolean {
-  return sendOncePerHost((coordinator) => coordinator.forgetLogins());
+export function forgetAllBrowserLogins(
+  browserView: BrowserViewBridge | null,
+): number {
+  void browserView?.forgetLogins().catch((cause: unknown) => {
+    appLogger.warn("[browser] clearing the browser partition failed", {
+      cause: cause instanceof Error ? cause.message : String(cause),
+    });
+  });
+  let hostCount = 0;
+  sendOncePerHost((coordinator) => {
+    const sent = coordinator.forgetLogins();
+    if (sent) hostCount += 1;
+    return sent;
+  });
+  return hostCount;
 }
 
 /**
@@ -384,6 +406,59 @@ function createBrowserSessionsCoordinator(args: {
   let stopCurrentStream = (): void => undefined;
   let captureFinalPrimaryProfile = (): Promise<void> => Promise.resolve();
   let disposed = false;
+  /**
+   * This host's outstanding forget-ledger digest, cached at COORDINATOR scope
+   * and refreshed off events - never read inside the attach path.
+   *
+   * That is the whole reason it is a cache. The attach burst has to leave as
+   * one synchronous, ordered unit (readiness, then the ledger, then the
+   * store-key offer), and awaiting an IPC in the middle of it puts a
+   * cross-process call on the critical path of the handshake: an invoke that
+   * never settles would strand the connection with no readiness, no handshake
+   * and no store key. Reading it here, before any stream exists, keeps the
+   * burst synchronous and takes the failure mode away rather than bounding it
+   * with a timer.
+   *
+   * `null` until the first read lands. The burst still goes out in that
+   * window - never wedging is the higher rule - and the digest follows the
+   * moment the read completes, through the same deferred push a mid-attach
+   * forget uses.
+   */
+  let forgetLedgerDigest: BrowserForgetLedger | null = null;
+  /** Set by the live stream, so a refreshed digest reaches it at once. */
+  let onForgetLedgerRefreshed = (): void => undefined;
+  /**
+   * Re-reads this host's digest. Called at construction, on every local forget,
+   * and after every ack - the last one matters most: an ack NARROWS what this
+   * host is owed, and a cache that kept the pre-ack digest would re-assert on
+   * the next reconnect exactly the forgets it already pruned, re-clearing any
+   * site the user has signed back into since.
+   */
+  const refreshForgetLedger = (): void => {
+    const browserView = runtime.browserView;
+    if (browserView === null) return;
+    void browserView.readForgetLedger(args.owner.hostId).then(
+      (digest) => {
+        forgetLedgerDigest = digest;
+        onForgetLedgerRefreshed();
+      },
+      (cause: unknown) => {
+        // Not a wedge: the burst goes out regardless, and what is lost is the
+        // ack - which fails CLOSED, leaving this host's observations refused
+        // for every site the ledger covers. The right direction for a forget
+        // record this machine cannot read.
+        appLogger.warn("[browser] could not read the forget ledger", {
+          hostId: args.owner.hostId,
+          cause: cause instanceof Error ? cause.message : String(cause),
+        });
+      },
+    );
+  };
+  const forgetLedgerChanges =
+    args.runtime.browserView?.onForgetLedgerChanged(() => {
+      refreshForgetLedger();
+    }) ?? null;
+  refreshForgetLedger();
   const publish = (state: BrowserSessionsState): void => {
     if (disposed) return;
     coordinator.state = state;
@@ -543,6 +618,101 @@ function createBrowserSessionsCoordinator(args: {
           ...delta,
         });
       }) ?? null;
+    /**
+     * One digest onto the wire, plus the only trace this path writes.
+     *
+     * Traced at INFO because it is once per attach and once per forget, and
+     * because this epic's bugs are found by forensics: "which revision did
+     * this host last hear about" is the first question a resurrection asks,
+     * and the ack line is the second. Counts and the revision only - never a
+     * domain, which would put the user's sites in a log that gets pasted into
+     * support threads.
+     */
+    const sendForgetLedger = (
+      ledger: BrowserForgetLedger,
+      stage: "attach" | "forget",
+    ): void => {
+      stream?.sendClientFrame({
+        kind: "primaryProfileForgetLedger",
+        hasBinaryPayload: false,
+        ...ledger,
+      });
+      appLogger.info("[browser] pushed the forget ledger", {
+        hostId: args.owner.hostId,
+        stage,
+        revision: ledger.revision,
+        domains: ledger.domains.length,
+        forgetAll: ledger.forgetAllAt !== null,
+      });
+    };
+    /**
+     * A digest this connection could not send when it was refreshed - because
+     * the attach burst had not gone out yet, or the very first read had not
+     * landed when it did. DEFERRED rather than dropped: the burst carries
+     * whatever was cached at that instant, so a forget recorded either side of
+     * it is one this connection would otherwise never hear about until the
+     * next attach - and "forget means forget" includes the agent session
+     * running right now.
+     */
+    let forgetLedgerPushDeferred = false;
+    const pushForgetLedger = (): void => {
+      const ledger = forgetLedgerDigest;
+      if (
+        ledger === null ||
+        actionChannel !== channel ||
+        connectionStatus !== "open" ||
+        !electronLifecycleReadySentForConnection
+      ) {
+        // Held for the announce, which flushes it as its last step.
+        forgetLedgerPushDeferred = true;
+        return;
+      }
+      forgetLedgerPushDeferred = false;
+      sendForgetLedger(ledger, "forget");
+    };
+    onForgetLedgerRefreshed = pushForgetLedger;
+    /**
+     * One host confirming it finished pruning this machine's ledger through a
+     * revision (universal-sign-in ticket 04).
+     *
+     * Handled here rather than in the frame router because both identities it
+     * needs are this connection's - the frame names neither, and a frame field
+     * could only be forged - and because the ack narrows what this host is
+     * owed, so the cached digest has to be re-read behind it.
+     */
+    const handleForgetLedgerAck = (revision: number): void => {
+      const connectionId = observedConnectionId;
+      if (browserView === null || connectionId === null) return;
+      appLogger.info("[browser] host acked the forget ledger", {
+        hostId: args.owner.hostId,
+        revision,
+      });
+      void browserView
+        .ackForgetLedger({
+          hostId: args.owner.hostId,
+          connectionId,
+          revision,
+        })
+        .then(refreshForgetLedger, (cause: unknown) => {
+          appLogger.warn("[browser] could not record a forget-ledger ack", {
+            hostId: args.owner.hostId,
+            cause: cause instanceof Error ? cause.message : String(cause),
+          });
+        });
+    };
+    /**
+     * The connection's gate state in main, released when the stream goes. Main
+     * treats an unknown connection as having acked nothing, so a release that
+     * is missed costs a little memory and never correctness - but a release
+     * that fires while the connection is still live would silently start
+     * refusing that host's observations, so it is only ever called once the id
+     * has been retired here.
+     */
+    const releaseForgetLedgerConnection = (connectionId: string): void => {
+      void browserView
+        ?.releaseForgetLedgerConnection(connectionId)
+        .catch(() => undefined);
+    };
     // Quit-flush waiters keyed by the capture `requestId` each answers. The
     // host acks a `primaryProfileCaptured` once it has DURABLY stored (or
     // rejected) that jar, which is what the quit path actually needs to know.
@@ -592,12 +762,22 @@ function createBrowserSessionsCoordinator(args: {
         return;
       }
       electronLifecycleReadySentForConnection = true;
+      // ONE synchronous burst, and the order in it is the attach ordering
+      // guarantee. `electronTabLifecycleReady` is what makes this stream
+      // jar-authorized on the host; the ledger digest rides immediately behind
+      // it on the same ordered stream; and the store-key handshake the host
+      // starts off readiness costs a full round trip - so the digest is always
+      // RECEIVED before the handshake completes, and therefore before the
+      // attach replay it must precede. Nothing here waits on a clock, and
+      // nothing here waits on an IPC.
       stream?.sendClientFrame({
         kind: "electronTabLifecycleReady",
         hasBinaryPayload: false,
         coLocatedHostId: localHostId,
         desktopWindowId: runtime.desktopWindowId,
       });
+      const ledger = forgetLedgerDigest;
+      if (ledger !== null) sendForgetLedger(ledger, "attach");
       // This machine can hold the host's store key. The host answers with a
       // wrap or an unwrap request (handled below); it ignores the offer when
       // it already has the key in memory. It rides with the readiness frame
@@ -608,6 +788,10 @@ function createBrowserSessionsCoordinator(args: {
         kind: "storeKeyOffer",
         hasBinaryPayload: false,
       });
+      // The cache was empty when the burst went out, or a forget landed while
+      // it was being assembled. Either way this connection has not been told,
+      // and the ordering above already held.
+      if (ledger === null || forgetLedgerPushDeferred) pushForgetLedger();
     };
     retryLifecycleReady = sendLifecycleReadyIfReady;
 
@@ -626,11 +810,19 @@ function createBrowserSessionsCoordinator(args: {
         electronTabs.connect();
         sendLifecycleReadyIfReady();
       } else {
+        // Retired here, and released only after: main must never be told a
+        // live connection is gone.
+        const closed = observedConnectionId;
         observedConnectionId = null;
+        if (closed !== null) releaseForgetLedgerConnection(closed);
         if (wasOpen) connectionGeneration += 1;
         resolveCaptureAckWaiters();
         electronTabs.disconnect();
         electronLifecycleReadySentForConnection = false;
+        // The next announce reads the ledger fresh, so a deferral held over
+        // from the connection that just died would only re-send what that
+        // read already carries.
+        forgetLedgerPushDeferred = false;
         snapshotReadyForConnection = false;
         rejectPendingRequests(
           pendingCloses,
@@ -656,6 +848,12 @@ function createBrowserSessionsCoordinator(args: {
       if (actionChannel !== channel) return;
       if (frame.kind === "primaryProfileCaptureAck") {
         resolveCaptureAckWaiter(frame.requestId);
+      }
+      // Answered here rather than in the router for the same reason the
+      // capture ack is: it needs this connection's own identity, and its
+      // side effect is to re-read a cache this closure owns.
+      if (frame.kind === "primaryProfileForgetLedgerAck") {
+        handleForgetLedgerAck(frame.revision);
       }
       const frameGeneration = connectionGeneration;
       handleBrowserSessionsFrame({
@@ -732,6 +930,9 @@ function createBrowserSessionsCoordinator(args: {
 
     stopCurrentStream = () => {
       if (actionChannel === channel) actionChannel = null;
+      const closed = observedConnectionId;
+      observedConnectionId = null;
+      if (closed !== null) releaseForgetLedgerConnection(closed);
       primaryProfileDeltas?.dispose();
       captureFinalPrimaryProfile = (): Promise<void> => Promise.resolve();
       resolveCaptureAckWaiters();
@@ -823,6 +1024,10 @@ function createBrowserSessionsCoordinator(args: {
     dispose: () => {
       if (disposed) return;
       disposed = true;
+      // Coordinator-scoped, unlike the delta subscription: the digest cache it
+      // feeds outlives every stream this coordinator opens.
+      forgetLedgerChanges?.dispose();
+      onForgetLedgerRefreshed = (): void => undefined;
       stopCurrentStream();
       stopCurrentStream = (): void => undefined;
     },
@@ -916,22 +1121,6 @@ type BrowserSessionsSubsystemFrame = Exclude<
   }
 >;
 
-/**
- * The host has already shredded its slice for this user; this is the desktop's
- * turn. Fire-and-forget: there is no frame to answer with, and a machine with
- * no bridge (a browser tab) has no jar to clear.
- *
- * Kept extracted rather than inlined into the frame switch: folding it back in
- * puts {@link handleBrowserSessionsSubsystemFrame} over the complexity budget.
- */
-function forgetLocalLogins(browserView: BrowserViewBridge | null): void {
-  void browserView?.forgetLogins().catch((cause: unknown) => {
-    appLogger.warn("[browser] clearing the browser partition failed", {
-      cause: cause instanceof Error ? cause.message : String(cause),
-    });
-  });
-}
-
 function handleBrowserSessionsSubsystemFrame(args: {
   readonly frame: BrowserSessionsSubsystemFrame;
   readonly epicId: string;
@@ -983,9 +1172,6 @@ function handleBrowserSessionsSubsystemFrame(args: {
         sendClientFrame: args.sendClientFrame,
       });
       return;
-    case "primaryProfileForgotten":
-      forgetLocalLogins(args.browserView);
-      return;
     case "primaryProfileEvict":
       handlePrimaryProfileEvictFrame({
         frame,
@@ -1008,11 +1194,14 @@ function handleBrowserSessionsSubsystemFrame(args: {
         sendClientFrame: args.sendClientFrame,
       });
       return;
-    // `primaryProfileCaptureAck` is answered in `onServerFrame`, which owns the
-    // quit-flush waiters; the burst frames are progress-only.
+    // `primaryProfileCaptureAck` and `primaryProfileForgetLedgerAck` are both
+    // answered in `onServerFrame`, which owns the quit-flush waiters and the
+    // connection identity the ledger ack is recorded under; the burst frames
+    // are progress-only.
     case "burstStarted":
     case "burstEnded":
     case "primaryProfileCaptureAck":
+    case "primaryProfileForgetLedgerAck":
       return;
     default: {
       // Unreachable: the stream client validates every frame against

@@ -360,12 +360,16 @@ function SavedLoginsToggleRow(props: {
 
 /**
  * The destructive one, moved here from the tile shield (ticket 08's temporary
- * home). It speaks for every host the user has a live browser stream to, which
- * is what "all" means and why it is not tile-scoped - and when there is no such
- * stream the frame reaches nobody, so the confirm stays open instead of closing
- * on work that never happened.
+ * home). It speaks for this machine AND for every host the user has a live
+ * browser stream to, which is what "all" means and why it is not tile-scoped.
+ *
+ * It always completes, unlike the per-site Clear. This machine's own jar and
+ * forget ledger are emptied whether or not a host is listening, and the ledger
+ * is what carries the forget to hosts that were not (universal-sign-in decision
+ * 6) - so there is no "nothing happened" case left to hold the dialog open for.
  */
 function ForgetAllLoginsRow(): ReactNode {
+  const browserView = useRunnerHostOrNull()?.browserView ?? null;
   const [confirming, setConfirming] = useState(false);
   return (
     <>
@@ -395,10 +399,10 @@ function ForgetAllLoginsRow(): ReactNode {
         actionLabel="Forget logins"
         isPending={false}
         onConfirm={() => {
-          // Same refusal as the per-site Clear: with no live browser stream
-          // nothing went out, so the dialog stays where it is rather than
-          // closing on a promise the app did not keep.
-          if (!forgetAllBrowserLogins()) return;
+          // Closed unconditionally: the local half runs whatever the streams
+          // do, so the work the dialog describes has begun even with no host
+          // attached - the ledger tells them when they return.
+          forgetAllBrowserLogins(browserView);
           setConfirming(false);
         }}
       />

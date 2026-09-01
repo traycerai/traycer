@@ -365,6 +365,20 @@ class FakeBridge {
   readonly applyObservedProfile = vi.fn<
     BrowserViewBridge["applyObservedProfile"]
   >(() => Promise.resolve());
+  // An empty ledger: the attach burst still carries a digest, and nothing is
+  // refused (universal-sign-in ticket 04).
+  readonly readForgetLedger = vi.fn<BrowserViewBridge["readForgetLedger"]>(() =>
+    Promise.resolve({ forgetAllAt: null, domains: [], revision: 0 }),
+  );
+  readonly ackForgetLedger = vi.fn<BrowserViewBridge["ackForgetLedger"]>(() =>
+    Promise.resolve(),
+  );
+  readonly releaseForgetLedgerConnection = vi.fn<
+    BrowserViewBridge["releaseForgetLedgerConnection"]
+  >(() => Promise.resolve());
+  readonly onForgetLedgerChanged = vi.fn<
+    BrowserViewBridge["onForgetLedgerChanged"]
+  >(() => ({ dispose: () => {} }));
   readonly capturePrimaryProfile = vi.fn<
     BrowserViewBridge["capturePrimaryProfile"]
   >(() =>
@@ -496,6 +510,20 @@ function ackCapture(stream: FakeStreamSession, index: number): void {
 
 function installNativeBridge(bridge: FakeBridge): void {
   hookState.browserViewBridge = bridge;
+}
+
+/**
+ * The readiness burst now waits on an awaited `readForgetLedger` bridge read
+ * before it lands (universal-sign-in ticket 04), so it no longer completes in
+ * the same synchronous `act()` block that triggers it. This flushes a real
+ * macrotask so both that await and the React effects it feeds have settled.
+ */
+async function flushMacrotask(): Promise<void> {
+  await act(async () => {
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+  });
 }
 
 async function expectCaptureServiced(
@@ -827,7 +855,7 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
     expect(ownerBTransport.closed).toBe(true);
   });
 
-  it("advertises native capability only after the stream snapshot", () => {
+  it("advertises native capability only after the stream snapshot", async () => {
     installNativeBridge(new FakeBridge());
     renderProvider();
     const stream = hookState.streamClient?.sessions[0];
@@ -836,6 +864,7 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
     act(() => {
       stream.emitStatus("open");
     });
+    await flushMacrotask();
 
     expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(0);
     act(() => {
@@ -844,10 +873,11 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
         null,
       );
     });
+    await flushMacrotask();
     expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(1);
   });
 
-  it("declares this machine's host id as the readiness locality signal", () => {
+  it("declares this machine's host id as the readiness locality signal", async () => {
     hookState.localHostId = "local-machine";
     installNativeBridge(new FakeBridge());
     renderProvider();
@@ -861,6 +891,7 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
         null,
       );
     });
+    await flushMacrotask();
 
     expect(electronLifecycleReadinessFrames(stream.sentFrames)).toEqual([
       {
@@ -877,7 +908,7 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
     ]);
   });
 
-  it("waits for the local host id, then declares it once it resolves", () => {
+  it("waits for the local host id, then declares it once it resolves", async () => {
     hookState.localHostId = null;
     installNativeBridge(new FakeBridge());
     const { rerender } = render(
@@ -895,6 +926,7 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
         null,
       );
     });
+    await flushMacrotask();
 
     // A null locality could never be elected, so readiness holds rather than
     // burning this connection's one-shot frame on it.
@@ -908,6 +940,7 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
         </BrowserSessionsProvider>,
       );
     });
+    await flushMacrotask();
 
     expect(electronLifecycleReadinessFrames(stream.sentFrames)).toEqual([
       {
@@ -924,7 +957,7 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
     ]);
   });
 
-  it("accepts a snapshot that arrives before the live status", () => {
+  it("accepts a snapshot that arrives before the live status", async () => {
     installNativeBridge(new FakeBridge());
     renderProvider();
     const stream = hookState.streamClient?.sessions[0];
@@ -939,11 +972,13 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
         null,
       );
     });
+    await flushMacrotask();
     expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(0);
 
     act(() => {
       stream.emitStatus("open");
     });
+    await flushMacrotask();
     expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(1);
   });
 
@@ -1027,6 +1062,7 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
     act(() => {
       stream.emitStatus("open");
     });
+    await flushMacrotask();
     expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(0);
     act(() => {
       stream.emit(
@@ -1034,6 +1070,7 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
         null,
       );
     });
+    await flushMacrotask();
     expect(stream.sentFrames).toContainEqual(
       expect.objectContaining({ kind: "electronTabLifecycleReady" }),
     );
@@ -1065,6 +1102,7 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
       );
       transport.moveEndpoint(RESTARTED_ENDPOINT);
     });
+    await flushMacrotask();
     expect(hookState.openedHostIds).toEqual(["host-test"]);
     expect(transport.dialedEndpoints).toEqual([
       INITIAL_ENDPOINT,
@@ -1090,6 +1128,7 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
         null,
       );
     });
+    await flushMacrotask();
     expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(2);
 
     cleanup();
@@ -1441,6 +1480,7 @@ describe("BrowserSessionsProvider (ticket 08-lift live readiness)", () => {
         null,
       );
     });
+    await flushMacrotask();
     const reconnectKinds = stream.sentFrames
       .slice(framesBeforeReconnect)
       .map((frame) => frame.kind);
@@ -1476,6 +1516,7 @@ describe("BrowserSessionsProvider (ticket 08-lift live readiness)", () => {
     act(() => {
       stream.emitStatus("open");
     });
+    await flushMacrotask();
     expect(screen.getByTestId("lifecycle").textContent).toBe("live");
     expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(0);
 
@@ -1485,6 +1526,7 @@ describe("BrowserSessionsProvider (ticket 08-lift live readiness)", () => {
         null,
       );
     });
+    await flushMacrotask();
     expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(1);
 
     await expectCaptureServiced(stream, "req-fresh-primary-1");
@@ -1494,6 +1536,7 @@ describe("BrowserSessionsProvider (ticket 08-lift live readiness)", () => {
     act(() => {
       stream.emitStatus("open");
     });
+    await flushMacrotask();
     expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(1);
   });
 
@@ -1509,6 +1552,7 @@ describe("BrowserSessionsProvider (ticket 08-lift live readiness)", () => {
     act(() => {
       stream.emitStatus("open");
     });
+    await flushMacrotask();
     expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(0);
     act(() => {
       stream.emit(
@@ -1516,12 +1560,14 @@ describe("BrowserSessionsProvider (ticket 08-lift live readiness)", () => {
         null,
       );
     });
+    await flushMacrotask();
     expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(1);
     await expectCaptureServiced(stream, "req-primary-before-reconnect");
 
     act(() => {
       stream.emitStatus("reconnecting");
     });
+    await flushMacrotask();
     expect(screen.getByTestId("lifecycle").textContent).toBe("reconnecting");
     // Frames during reconnect are dropped; readiness count stays at one.
     expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(1);
@@ -1529,6 +1575,7 @@ describe("BrowserSessionsProvider (ticket 08-lift live readiness)", () => {
     act(() => {
       stream.emitStatus("open");
     });
+    await flushMacrotask();
     expect(screen.getByTestId("lifecycle").textContent).toBe("live");
     expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(1);
     act(() => {
@@ -1537,6 +1584,7 @@ describe("BrowserSessionsProvider (ticket 08-lift live readiness)", () => {
         null,
       );
     });
+    await flushMacrotask();
     expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(2);
 
     await expectCaptureServiced(stream, "req-primary-after-reconnect");
@@ -1544,6 +1592,7 @@ describe("BrowserSessionsProvider (ticket 08-lift live readiness)", () => {
     act(() => {
       stream.emitStatus("open");
     });
+    await flushMacrotask();
     expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(2);
   });
 });

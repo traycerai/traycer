@@ -365,10 +365,20 @@ export const RunnerHostInvoke = {
   // Store-key handshake (keychain refactor ticket 05).
   browserViewStoreKeyWrap: "runnerHost:browserView:storeKey:wrap",
   browserViewStoreKeyUnwrap: "runnerHost:browserView:storeKey:unwrap",
-  // "Forget all browser logins" (keychain refactor ticket 08). Driven by the
-  // host's `primaryProfileForgotten`, never by the renderer on its own: the
-  // host shreds its slice first, then every connected desktop clears its jar.
+  // "Forget all browser logins" (keychain refactor ticket 08). Driven by
+  // Settings, alongside the `forgetLogins` frame that shreds each connected
+  // host's slice: this half empties the local jars and records the forget in
+  // the ledger, which is what reaches the hosts that were not connected
+  // (universal-sign-in decision 6).
   browserViewForgetLogins: "runnerHost:browserView:forgetLogins",
+  // The forget ledger (universal-sign-in ticket 04). `...Read` projects the
+  // digest one host still owes, `...Ack` records that a host finished pruning
+  // through a revision, and `...Release` drops a closed connection's gate
+  // state. All three live in main because that is where the durable ledger and
+  // the jar it protects are.
+  browserViewForgetLedgerRead: "runnerHost:browserView:forgetLedger:read",
+  browserViewForgetLedgerAck: "runnerHost:browserView:forgetLedger:ack",
+  browserViewForgetLedgerRelease: "runnerHost:browserView:forgetLedger:release",
   browserViewStartAnnotation: "runnerHost:browserView:annotation:start",
   browserViewCancelAnnotation: "runnerHost:browserView:annotation:cancel",
   browserViewSetAnnotationTargetChatLabel:
@@ -446,6 +456,10 @@ export const RunnerHostEvent = {
     "runnerHost:event:browserView:annotationAttached",
   browserViewPrimaryProfileDelta:
     "runnerHost:event:browserView:primaryProfile:delta",
+  // A forget landed in this machine's ledger (universal-sign-in ticket 04);
+  // every renderer holding a host stream pushes its own host's digest.
+  browserViewForgetLedgerChanged:
+    "runnerHost:event:browserView:forgetLedger:changed",
   // Native-tab PiP capture frames (`started` / `frame` / `stalled`).
   pipCaptureFrame: "runnerHost:event:pipCapture:frame",
   globalShortcutsChange: "runnerHost:event:globalShortcuts:change",

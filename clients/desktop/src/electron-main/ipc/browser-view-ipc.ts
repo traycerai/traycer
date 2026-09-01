@@ -30,7 +30,6 @@ import {
   clearBrowserViewPendingCertificateError,
   ensureBrowserViewSession,
   ensureBrowserViewSessionForPartition,
-  isBrowserPrimaryProfileClearInProgress,
   onBrowserPrimaryProfileDelta,
   onBrowserViewCertificateError,
   onBrowserViewDownloadChange,
@@ -62,6 +61,17 @@ import {
   traceBrowserObservedProfile,
 } from "../browser-view/storage/browser-observed-profile";
 import { BrowserJarSerializer } from "../browser-view/storage/browser-jar-serializer";
+import {
+  browserForgetLedgerDigestForHost,
+  browserForgetLedgerPendingClears,
+  isBrowserForgetLedgerPendingAck,
+  markBrowserForgetLedgerCleared,
+  onBrowserForgetLedgerChanged,
+  recordForgetAllBrowserLogins,
+  recordForgetLedgerAck,
+  recordForgottenBrowserSite,
+  releaseBrowserForgetLedgerConnection,
+} from "../browser-view/storage/browser-forget-ledger";
 import { trustBrowserCertificate } from "../app/cert-trust";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
 import type {
@@ -167,6 +177,60 @@ export function registerBrowserViewIpc(
     if (failure !== null) throw failure.error;
     primaryProfileSnapshots.forgetOriginsUnder(domain);
   };
+  /**
+   * "Forget all browser logins", the jar half only - the ledger write is the
+   * caller's, because a boot reconciliation re-runs this without recording
+   * anything new.
+   *
+   * Everything runs with the cookie-delta observer muted for every domain:
+   * `clearStorageData` fires a removal for each cookie, and those deltas would
+   * re-create the entries just deleted.
+   *
+   * The order is the rest of the correctness argument: the localStorage
+   * coordinator is reset before the tiles come back, so a recreated tile
+   * cannot be re-seeded from an origin remembered pre-forget, and the tiles
+   * are recreated last, at their current URLs. Throws if any jar refused, so
+   * the caller does not record a clear that did not happen.
+   */
+  const forgetEveryBrowserLogin = async (): Promise<void> => {
+    // Opened here, outside the suppression: the durable jar must be cleared
+    // even with saved logins off or no tile opened this run, and opening it is
+    // what installs the observer the suppression mutes.
+    const jars = primaryProfileJars();
+    // A forget names no site, so it takes the serializer's barrier over every
+    // one of them: an observed merge for ANY domain that is mid-flight
+    // finishes first, and one that arrives during the forget waits until the
+    // jar is empty rather than writing into a clear.
+    await jarSerializer.runOnEveryDomain(async () =>
+      suppressAllBrowserPrimaryProfileDeltas(async () => {
+        let failure: { readonly error: unknown } | null = null;
+        for (const primarySession of jars) {
+          try {
+            await primarySession.clearStorageData();
+          } catch (error) {
+            // The tiles still have to be recreated: they are sitting on a jar
+            // the host no longer holds a key for, and leaving them there is
+            // worse. The other jar still gets its turn for the same reason.
+            failure ??= { error };
+            log.warn("[browser-view] primary session clear failed", {
+              error: describeLogError(error),
+            });
+          }
+        }
+        // Unconditional, unlike `clearBrowserSiteEverywhere`'s prune, and for
+        // the reason that prune is conditional: a whole-jar clear names no
+        // origins, so dropping this memory starves no retry - while KEEPING it
+        // after a failed clear would let the next capture upload to the host
+        // the very localStorage it just shredded its slice for.
+        primaryProfileSnapshots.reset();
+        await manager.recreateNativeTabsOnCurrentPartition();
+        // Surfaced only once the tiles are back, and surfaced at all so the
+        // caller is not told the logins are gone when a jar still holds them.
+        if (failure !== null) throw failure.error;
+      }),
+    );
+    log.info("[browser-view] forgot the saved browser logins");
+  };
   const manager = new BrowserViewManager({
     createView: createElectronBrowserView,
     getWindow: (windowId) =>
@@ -227,6 +291,46 @@ export function registerBrowserViewIpc(
     boundsStreamLogIntervalMs: BOUNDS_STREAM_LOG_INTERVAL_MS,
     hostPlatform: hostPlatformFromProcessPlatform(process.platform),
   });
+
+  /**
+   * Forgets this machine recorded but never finished clearing, re-run at
+   * startup (universal-sign-in ticket 04, review finding F7).
+   *
+   * The ledger is written BEFORE the jar is touched, deliberately - that is
+   * what refuses an in-flight observation for a site the user just deleted -
+   * so a crash in between leaves the ledger claiming a login is gone while the
+   * jar still serves it. The jar is the master, so the next whole-jar capture
+   * would teach every host the login back, and no host-side prune undoes that.
+   *
+   * Idempotent by construction: emptying a site twice is emptying it. It runs
+   * through the same jar serializer as every other clear, so nothing this
+   * process does later can slip underneath it, and the whole-jar capture waits
+   * on it explicitly - that is the one jar read that does not queue here.
+   */
+  const forgetLedgerReconciled = (async (): Promise<void> => {
+    const pending = browserForgetLedgerPendingClears();
+    if (!pending.forgetAll && pending.domains.length === 0) return;
+    log.warn("[browser-view] re-running forgets that did not finish clearing", {
+      forgetAll: pending.forgetAll,
+      domains: pending.domains.length,
+      revision: pending.revision,
+    });
+    try {
+      if (pending.forgetAll) await forgetEveryBrowserLogin();
+      for (const domain of pending.domains) {
+        await jarSerializer.runOnDomain(domain, () =>
+          clearBrowserSiteEverywhere(domain),
+        );
+      }
+      await markBrowserForgetLedgerCleared(pending.revision);
+    } catch (error) {
+      // Left pending on purpose: the next launch tries again, and until it
+      // succeeds the ledger keeps telling every host to prune these sites.
+      log.warn("[browser-view] re-running an unfinished forget failed", {
+        error: describeLogError(error),
+      });
+    }
+  })();
 
   bridge.handleInvoke(RunnerHostInvoke.browserViewEnsureTab, (event, payload) =>
     manager.ensureTab(
@@ -416,8 +520,16 @@ export function registerBrowserViewIpc(
     },
   );
 
-  bridge.handleInvoke(RunnerHostInvoke.browserViewPrimaryProfileCapture, () =>
-    primaryProfileSnapshots.capture(),
+  // Behind the boot reconciliation, and it is the ONE jar read that has to be:
+  // every write queues on the jar serializer, but a whole-jar capture does not,
+  // and a capture taken before an unfinished forget was re-run would upload to
+  // the host exactly the logins the user deleted (finding F7).
+  bridge.handleInvoke(
+    RunnerHostInvoke.browserViewPrimaryProfileCapture,
+    async () => {
+      await forgetLedgerReconciled;
+      return await primaryProfileSnapshots.capture();
+    },
   );
 
   // "Clear cookies for this site" (spec §6.5). The manager derives the site
@@ -436,12 +548,20 @@ export function registerBrowserViewIpc(
         browserViewIpcPayload.tileKey.parse(payload),
       );
       if (domain === null) return;
+      // The ledger FIRST, before the jar is touched and before the clear is
+      // even queued. The revision it bumps is what refuses observations for
+      // this site from every host that has not yet acked pruning it, so
+      // bumping after the clear would leave exactly the window a stale
+      // in-flight observation walks through.
+      const revision = await recordForgottenBrowserSite(domain);
       // Queued on the site, like every other write to this jar: an observed
       // sign-in for the same domain must not land in the middle of the clear
       // and put back what it is removing.
       await jarSerializer.runOnDomain(domain, () =>
         clearBrowserSiteEverywhere(domain),
       );
+      // Only once the jar is actually empty of it (finding F7).
+      await markBrowserForgetLedgerCleared(revision);
       log.info("[browser-view] cleared cookies for one site", { domain });
     },
   );
@@ -454,6 +574,13 @@ export function registerBrowserViewIpc(
     RunnerHostInvoke.browserViewEvictSite,
     async (_event, payload) => {
       const domain = browserViewIpcPayload.evictDomain.parse(payload).domain;
+      // Recorded in the ledger like a local clear, and for two reasons: it
+      // makes this machine's ledger the complete record of what is gone, so a
+      // host that hears about the forget only from here still prunes; and the
+      // revision it bumps starts refusing in-flight observations for the site
+      // on every connection at once, which is the half a per-jar suppression
+      // window could never reach.
+      const revision = await recordForgottenBrowserSite(domain);
       // Serialised OUTSIDE the suppression, so the window covers the clear and
       // nothing else: opening it while still queued would refuse observations
       // for a site this handler has not begun to touch.
@@ -462,6 +589,7 @@ export function registerBrowserViewIpc(
           clearBrowserSiteEverywhere(domain),
         ),
       );
+      await markBrowserForgetLedgerCleared(revision);
       log.info("[browser-view] evicted one site on the host's request", {
         domain,
       });
@@ -485,7 +613,7 @@ export function registerBrowserViewIpc(
       const observed = browserViewIpcPayload.observedProfile.parse(payload);
       const result = await applyBrowserObservedProfile(observed, {
         now: () => Date.now(),
-        isClearInProgress: isBrowserPrimaryProfileClearInProgress,
+        isForgottenPendingAck: isBrowserForgetLedgerPendingAck,
         getSession: () => ensureBrowserViewSession(PRIMARY_PROFILE_REQUEST),
         serializeOnDomain: (domain, action) =>
           jarSerializer.runOnDomain(domain, action),
@@ -591,57 +719,62 @@ export function registerBrowserViewIpc(
     },
   );
 
-  // The desktop half of "forget all browser logins" (spec §6.5). Reached only
-  // through the host's `primaryProfileForgotten`, which the host sends after it
-  // has already shredded this user's key and slice - so the jar is never
-  // cleared while the host still holds the logins in it. Everything runs with
-  // the cookie-delta observer muted for every domain: `clearStorageData` fires
-  // a removal for each cookie, and those deltas would re-create the entry the
-  // host just deleted.
+  // The desktop half of "forget all browser logins" (spec §6.5). Driven by
+  // Settings, alongside the `forgetLogins` frame each connected host answers by
+  // shredding its own slice - and no longer by a fan-out from the host, which
+  // universal-sign-in decision 6 retired because it could only ever reach the
+  // hosts that happened to be attached. Everything runs with the cookie-delta
+  // observer muted for every domain: `clearStorageData` fires a removal for
+  // each cookie, and those deltas would re-create the entries just deleted.
   //
-  // The order is the whole correctness argument: the localStorage coordinator
-  // is reset before the tiles come back, so a recreated tile cannot be
-  // re-seeded from an origin remembered pre-forget, and the tiles are recreated
-  // last, at their current URLs.
+  // The order is the whole correctness argument. The LEDGER is written first,
+  // before a single cookie goes: its revision is what refuses in-flight
+  // observations for every site at once, and it is what a host that was
+  // disconnected here prunes from when it comes back. Then the localStorage
+  // coordinator is reset before the tiles come back, so a recreated tile cannot
+  // be re-seeded from an origin remembered pre-forget, and the tiles are
+  // recreated last, at their current URLs.
   bridge.handleInvoke(RunnerHostInvoke.browserViewForgetLogins, async () => {
-    // Opened here, outside the suppression: the durable jar must be cleared
-    // even with saved logins off or no tile opened this run, and opening it is
-    // what installs the observer the suppression mutes.
-    const jars = primaryProfileJars();
-    // A forget names no site, so it takes the serializer's barrier over every
-    // one of them: an observed merge for ANY domain that is mid-flight finishes
-    // first, and one that arrives during the forget waits until the jar is
-    // empty rather than writing into a clear.
-    await jarSerializer.runOnEveryDomain(async () =>
-      suppressAllBrowserPrimaryProfileDeltas(async () => {
-        let failure: { readonly error: unknown } | null = null;
-        for (const primarySession of jars) {
-          try {
-            await primarySession.clearStorageData();
-          } catch (error) {
-            // The tiles still have to be recreated: they are sitting on a jar the
-            // host no longer holds a key for, and leaving them there is worse.
-            // The other jar still gets its turn for the same reason.
-            failure ??= { error };
-            log.warn("[browser-view] primary session clear failed", {
-              error: describeLogError(error),
-            });
-          }
-        }
-        // Unconditional, unlike `clearBrowserSiteEverywhere`'s prune, and for the
-        // reason that prune is conditional: a whole-jar clear names no origins, so
-        // dropping this memory starves no retry - while KEEPING it after a failed
-        // clear would let the next capture upload to the host the very
-        // localStorage it just shredded its slice for.
-        primaryProfileSnapshots.reset();
-        await manager.recreateNativeTabsOnCurrentPartition();
-        // Surfaced only once the tiles are back, and surfaced at all so the
-        // caller is not told the logins are gone when a jar still holds them.
-        if (failure !== null) throw failure.error;
-      }),
-    );
-    log.info("[browser-view] forgot the saved browser logins");
+    const revision = await recordForgetAllBrowserLogins();
+    await forgetEveryBrowserLogin();
+    // Only once the jars are actually empty. Recorded after rather than with
+    // the forget, so a crash in between leaves the clear pending and the next
+    // launch re-runs it (finding F7).
+    await markBrowserForgetLedgerCleared(revision);
   });
+
+  // The digest one host still owes (universal-sign-in ticket 04). Read by the
+  // renderer holding that host's stream, which pushes it in the same burst as
+  // `electronTabLifecycleReady` - the frame that makes the stream jar-authorized
+  // - so the ledger reaches the host before anything cookie-related does.
+  bridge.handleInvoke(
+    RunnerHostInvoke.browserViewForgetLedgerRead,
+    (_event, payload) =>
+      browserForgetLedgerDigestForHost(
+        browserViewIpcPayload.forgetLedgerHost.parse(payload).hostId,
+      ),
+  );
+
+  // A host finished pruning through a revision. Two watermarks advance: the
+  // durable per-host one, which decides what the next digest still carries, and
+  // the per-connection one, which is what stops refusing that stream's
+  // observations for the sites it just cleared.
+  bridge.handleInvoke(
+    RunnerHostInvoke.browserViewForgetLedgerAck,
+    (_event, payload) =>
+      recordForgetLedgerAck(
+        browserViewIpcPayload.forgetLedgerAck.parse(payload),
+      ),
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.browserViewForgetLedgerRelease,
+    (_event, payload) => {
+      releaseBrowserForgetLedgerConnection(
+        browserViewIpcPayload.forgetLedgerRelease.parse(payload).connectionId,
+      );
+    },
+  );
 
   // Coalesced cookie deltas from the durable `primary` jar (spec §6.3). The
   // renderer that owns the host stream forwards them as `primaryProfileDelta`;
@@ -650,8 +783,17 @@ export function registerBrowserViewIpc(
     bridge.fanOut(RunnerHostEvent.browserViewPrimaryProfileDelta, delta);
   });
 
+  // A forget landed in the ledger. Fanned out to every window rather than
+  // answered to the one that asked, because a forget performed in one window's
+  // Settings has to reach every host stream this process holds - including the
+  // ones another window owns.
+  const stopForgetLedgerFanOut = onBrowserForgetLedgerChanged((change) => {
+    bridge.fanOut(RunnerHostEvent.browserViewForgetLedgerChanged, change);
+  });
+
   bridge.disposeFns.push(() => {
     stopDeltaFanOut();
+    stopForgetLedgerFanOut.dispose();
     manager.dispose();
   });
   return manager;

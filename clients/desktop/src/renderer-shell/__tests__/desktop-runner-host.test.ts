@@ -594,6 +594,15 @@ function buildFakeBridge(
         reason: "no keystore in this test bridge",
       }),
       forgetLogins: async () => undefined,
+      // An empty ledger: nothing forgotten, so nothing is refused here.
+      readForgetLedger: async () => ({
+        forgetAllAt: null,
+        domains: [],
+        revision: 0,
+      }),
+      ackForgetLedger: async () => undefined,
+      releaseForgetLedgerConnection: async () => undefined,
+      onForgetLedgerChanged: (_handler) => ({ dispose: () => undefined }),
       onPrimaryProfileDelta: (_handler) => ({ dispose: () => undefined }),
       onFindChange: (_handler) => ({ dispose: () => undefined }),
       onDownloadChange: (_handler) => ({ dispose: () => undefined }),

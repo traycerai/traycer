@@ -18,9 +18,10 @@ import {
  *
  * Nothing here believes the frame. The registrable domain of every cookie is
  * re-derived locally and checked against the domain the frame claims; the
- * volume and the rate are bounded; a site this machine is clearing is refused;
- * and what survives goes through Chromium's own `cookies.set`, which is what
- * normalises the attributes away from anything the sender chose.
+ * volume and the rate are bounded; a site the user forgot is refused until the
+ * sending connection has acked pruning it; and what survives goes through
+ * Chromium's own `cookies.set`, which is what normalises the attributes away
+ * from anything the sender chose.
  *
  * The sending host's identity is NOT read from the frame - it comes from the
  * connection that delivered it (provenance-not-shape), which is also what the
@@ -34,7 +35,16 @@ export type BrowserObservedProfileReason =
   | "expired-cookie"
   | "over-bound"
   | "rate-limited"
-  | "suppressed";
+  /**
+   * The user forgot this site, and the connection that sent the observation
+   * has not yet acked the ledger revision that says so (universal-sign-in
+   * ticket 04). It is the no-resurrection gate, and it replaced the
+   * point-in-time `suppressed` check: a clear now bumps the revision before it
+   * touches the jar, so every window that check covered is covered by this one
+   * - and this one also covers the case a local check never could, an
+   * observation captured on a remote host BEFORE it heard about the forget.
+   */
+  | "ledger-unacked";
 
 /**
  * The frame-level verdict. `expired-cookie` is missing on purpose: an expired
@@ -86,8 +96,14 @@ export interface BrowserObservedProfileTraceContext {
 
 export interface BrowserObservedProfileDependencies {
   readonly now: () => number;
-  /** True while a forget or clear-site is emptying this scope (desktop-local). */
-  readonly isClearInProgress: (domain: string) => boolean;
+  /**
+   * Has the user forgotten this site at a ledger revision the sending
+   * connection has not yet acked pruning? See `browser-forget-ledger.ts`.
+   */
+  readonly isForgottenPendingAck: (input: {
+    readonly connectionId: string;
+    readonly domain: string;
+  }) => boolean;
   /** The `primary` jar guests are on right now - the one an observation merges into. */
   readonly getSession: () => BrowserStorageSession;
   /** Runs the merge with no competing jar work for the same site. */
@@ -234,9 +250,15 @@ function refill(state: ObservedConnectionState, now: number): number {
  * frame is about to join, and the tally its own rejection would otherwise grow.
  * Then the claimed domain, then the per-frame bound, and only then the queue.
  *
- * The clear-in-progress check sits INSIDE the serialized section, where it is
- * an ordering fact rather than a guess: no clear of this site can begin or end
- * between the check and the merge it authorises.
+ * The forget-ledger gate sits INSIDE the serialized section, where it is an
+ * ordering fact rather than a guess: every local clear bumps the ledger
+ * revision before it queues, so a clear of this site can neither begin nor end
+ * between the check and the merge it authorises without that merge seeing the
+ * bump. It replaced ticket 03's point-in-time clear-in-progress read, which it
+ * strictly subsumes - that read only covered the two suppressed clear paths
+ * (the host-driven evict and forget-all) and never the tile/settings clear,
+ * which runs unsuppressed by design, while every one of the three bumps the
+ * revision.
  */
 export async function applyBrowserObservedProfile(
   observed: BrowserObservedProfile,
@@ -251,8 +273,13 @@ export async function applyBrowserObservedProfile(
     return dropped(scope, "over-bound");
   }
   return await dependencies.serializeOnDomain(scope, async () => {
-    if (dependencies.isClearInProgress(scope)) {
-      return dropped(scope, "suppressed");
+    if (
+      dependencies.isForgottenPendingAck({
+        connectionId: observed.connectionId,
+        domain: scope,
+      })
+    ) {
+      return dropped(scope, "ledger-unacked");
     }
     const classified = classifyObservedCookies({
       scope,

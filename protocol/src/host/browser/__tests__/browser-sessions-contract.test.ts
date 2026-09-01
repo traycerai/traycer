@@ -721,24 +721,26 @@ describe("browser.sessions@1.0 store-key handshake", () => {
 });
 
 describe("browser.sessions@1.0 forget all browser logins (ticket 08)", () => {
-  it("accepts the client trigger and the server fan-out, both payload-free", () => {
+  it("accepts the payload-free client trigger", () => {
     const forgetLogins = { kind: "forgetLogins", hasBinaryPayload: false };
-    const forgotten = {
-      kind: "primaryProfileForgotten",
-      hasBinaryPayload: false,
-    };
     expect(
       browserSessionsClientFrameSchema.safeParse(forgetLogins).success,
     ).toBe(true);
     expect(
       browserSessionsV1.clientFrameSchema.safeParse(forgetLogins).success,
     ).toBe(true);
-    expect(browserSessionsServerFrameSchema.safeParse(forgotten).success).toBe(
-      true,
-    );
+  });
+
+  it("has no server fan-out left: the ledger is the only forget channel", () => {
+    // universal-sign-in decision 6 retired `primaryProfileForgotten`. Two
+    // forget mechanisms must not coexist, so the arm is gone rather than
+    // deprecated - a peer that still sent one is refused here.
     expect(
-      browserSessionsV1.serverFrameSchema.safeParse(forgotten).success,
-    ).toBe(true);
+      browserSessionsServerFrameSchema.safeParse({
+        kind: "primaryProfileForgotten",
+        hasBinaryPayload: false,
+      }).success,
+    ).toBe(false);
   });
 });
 
@@ -862,6 +864,7 @@ describe("browser.sessions@1.0 universal sign-in carry-over (ticket 01)", () => 
     hasBinaryPayload: false,
     forgetAllAt: 1_700_000_000_000,
     domains: [{ domain: "example.com", forgottenAt: 1_700_000_001_000 }],
+    revision: 7,
   };
 
   it("parses an observed frame without stripping the payload it validated", () => {
@@ -936,6 +939,28 @@ describe("browser.sessions@1.0 universal sign-in carry-over (ticket 01)", () => 
         kind: "primaryProfileForgetLedger",
         hasBinaryPayload: false,
         domains: LEDGER.domains,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("requires the revision the ack echoes back", () => {
+    const { revision: _revision, ...withoutRevision } = LEDGER;
+    expect(
+      browserSessionsClientFrameSchema.safeParse(withoutRevision).success,
+    ).toBe(false);
+    const ack = {
+      kind: "primaryProfileForgetLedgerAck",
+      hasBinaryPayload: false,
+      revision: LEDGER.revision,
+    };
+    expect(browserSessionsServerFrameSchema.safeParse(ack).success).toBe(true);
+    expect(browserSessionsV1.serverFrameSchema.safeParse(ack).success).toBe(
+      true,
+    );
+    expect(
+      browserSessionsServerFrameSchema.safeParse({
+        kind: "primaryProfileForgetLedgerAck",
+        hasBinaryPayload: false,
       }).success,
     ).toBe(false);
   });

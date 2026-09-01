@@ -26,6 +26,9 @@ import type {
   BrowserViewSnapshotInvalidatedChange,
   BrowserViewTileKey,
   BrowserViewBridge,
+  BrowserForgetLedger,
+  BrowserForgetLedgerAckInput,
+  BrowserForgetLedgerChange,
   BrowserPrimaryProfileDelta,
   BrowserStoreKeyUnwrapResult,
   BrowserStoreKeyWrapResult,
@@ -198,6 +201,27 @@ class FakeBrowserViewBridge implements BrowserViewBridge {
 
   forgetLogins(): Promise<void> {
     return Promise.resolve();
+  }
+
+  /** An empty ledger: nothing forgotten, so no observation is refused. */
+  readForgetLedger(_hostId: string): Promise<BrowserForgetLedger> {
+    return Promise.resolve({ forgetAllAt: null, domains: [], revision: 0 });
+  }
+
+  ackForgetLedger(_input: BrowserForgetLedgerAckInput): Promise<void> {
+    return Promise.resolve();
+  }
+
+  releaseForgetLedgerConnection(_connectionId: string): Promise<void> {
+    return Promise.resolve();
+  }
+
+  onForgetLedgerChanged(
+    _handler: (change: BrowserForgetLedgerChange) => void,
+  ): {
+    dispose: () => void;
+  } {
+    return { dispose: () => undefined };
   }
 
   onPrimaryProfileDelta(

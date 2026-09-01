@@ -755,12 +755,17 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.browserViewPrimaryProfileCapture,
         // Keychain refactor tickets 07 and 08: the tile-menu clear-site, the
         // host-driven eviction of the same site on this machine, and the
-        // host-driven whole-jar forget.
+        // whole-jar forget.
         RunnerHostInvoke.browserViewClearSite,
         RunnerHostInvoke.browserViewEvictSite,
         RunnerHostInvoke.browserViewForgetLogins,
         // Universal sign-in ticket 03: the host->jar write direction.
         RunnerHostInvoke.browserViewApplyObservedProfile,
+        // Universal sign-in ticket 04: the forget ledger's read, ack and
+        // per-connection release.
+        RunnerHostInvoke.browserViewForgetLedgerRead,
+        RunnerHostInvoke.browserViewForgetLedgerAck,
+        RunnerHostInvoke.browserViewForgetLedgerRelease,
         RunnerHostInvoke.browserViewSaveLoginsGet,
         RunnerHostInvoke.browserViewSaveLoginsSet,
         RunnerHostInvoke.browserViewStoreKeyWrap,

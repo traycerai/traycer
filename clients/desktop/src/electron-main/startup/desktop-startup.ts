@@ -125,6 +125,10 @@ import {
   browserSavedLoginsFilePath,
   initBrowserSavedLogins,
 } from "../browser-view/storage/browser-saved-logins";
+import {
+  browserForgetLedgerFilePath,
+  initBrowserForgetLedger,
+} from "../browser-view/storage/browser-forget-ledger";
 import { installProductionProxyAuthHandler } from "../app/proxy-auth";
 import {
   installCertificateErrorHandler,
@@ -396,6 +400,13 @@ async function runOnReady(state: BootState): Promise<void> {
     // One file read: whether this machine saves browser logins. On by default.
     timed("on-ready", "browser-saved-logins", () =>
       initBrowserSavedLogins(browserSavedLoginsFilePath()),
+    ),
+    // The second: which logins the user has forgotten, and how far each host
+    // has confirmed it pruned them (universal-sign-in ticket 04). It has to be
+    // read before any host stream can attach, because an unloaded ledger reads
+    // as "nothing was ever forgotten" - the one wrong answer this file has.
+    timed("on-ready", "browser-forget-ledger", () =>
+      initBrowserForgetLedger(browserForgetLedgerFilePath()),
     ),
     timed("on-ready", "spell-check", () => enableSpellCheck()),
     timed("on-ready", "notification-handler", () =>

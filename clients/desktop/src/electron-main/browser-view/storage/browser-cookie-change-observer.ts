@@ -171,31 +171,6 @@ export class BrowserCookieChangeObserver {
   }
 
   /**
-   * Whether a deliberate local clear is running over this domain RIGHT NOW -
-   * the read the universal-sign-in applier takes before merging an observation
-   * (ticket 03).
-   *
-   * Point-in-time on purpose, and load-bearing only because the two are
-   * ORDERED: the applier and every clear path run through one keyed serial
-   * queue (`browser-jar-serializer.ts`), so an apply and a same-domain clear
-   * cannot interleave and this answer cannot change under the caller. There is
-   * deliberately no time window on either side of the clear - a clock cannot
-   * tell a capture taken BEFORE a forget from one taken after it, so the
-   * in-flight case is closed by the forget ledger's acked revision (ticket 04)
-   * rather than guessed at here.
-   *
-   * The scope is collapsed the same way {@link recordChange} collapses a
-   * cookie's domain, so a frame naming `example.com` is refused by a clear of
-   * `www.example.com` and the other way round - the clear empties the whole
-   * registrable domain, and so must the refusal.
-   */
-  clearInProgress(domain: string): boolean {
-    const scope = registrableDomain(domain);
-    if (scope === null) return false;
-    return this.isSuppressed(scope);
-  }
-
-  /**
    * Detaches for good. The epoch moves here too: dropping the open windows
    * cannot reach a flush that is already awaiting its slice, and that slice
    * landing after disposal would emit a delta from an observer the caller has
