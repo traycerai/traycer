@@ -14,7 +14,7 @@
  * The cursor itself is per-epic shared state, so closing and reopening the tile
  * does not rewind the epic's playback position.
  */
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { CommGraphTileRef } from "@/stores/epics/canvas/types";
 import type { CommGraphTileViewState } from "@/stores/epics/canvas/types";
@@ -24,10 +24,44 @@ import { useCommGraphJump } from "@/components/epic-canvas/comm-graph/use-comm-g
 import { useCommGraphSnapshot } from "@/components/epic-canvas/comm-graph/use-comm-graph-snapshot";
 import { useCommGraphTimelineProjection } from "@/components/epic-canvas/comm-graph/use-comm-graph-timeline";
 import { CommGraphTransportBar } from "@/components/epic-canvas/comm-graph/comm-graph-transport-bar";
+import {
+  createCommGraphFindAdapter,
+  type CommGraphFindRenderer,
+} from "@/components/epic-canvas/comm-graph/comm-graph-find-adapter";
+import { useRegisterTileFindAdapter } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
 
 export interface CommGraphTileProps {
   readonly node: CommGraphTileRef;
   readonly viewTabId: string;
+}
+
+const EMPTY_COMM_GRAPH_FIND_RENDERER: CommGraphFindRenderer = {
+  getNodes: () => [],
+  showMatches: () => undefined,
+  frameMatches: () => undefined,
+  focusMatch: () => undefined,
+  clear: () => undefined,
+};
+
+function EmptyCommGraph(props: { readonly tileInstanceId: string }) {
+  const findAdapter = useMemo(
+    () =>
+      createCommGraphFindAdapter({
+        tileInstanceId: props.tileInstanceId,
+        renderer: EMPTY_COMM_GRAPH_FIND_RENDERER,
+      }),
+    [props.tileInstanceId],
+  );
+  useRegisterTileFindAdapter(findAdapter);
+
+  return (
+    <div className="flex h-full w-full items-center justify-center p-6 text-center text-ui-sm text-muted-foreground">
+      <p data-testid="comm-graph-empty">
+        No agents in this epic yet. The communication graph fills in as agents
+        are created and start talking to each other.
+      </p>
+    </div>
+  );
 }
 
 export function CommGraphTile(props: CommGraphTileProps) {
@@ -62,14 +96,7 @@ export function CommGraphTile(props: CommGraphTileProps) {
   );
 
   if (agents.length === 0) {
-    return (
-      <div className="flex h-full w-full items-center justify-center p-6 text-center text-ui-sm text-muted-foreground">
-        <p data-testid="comm-graph-empty">
-          No agents in this epic yet. The communication graph fills in as agents
-          are created and start talking to each other.
-        </p>
-      </div>
-    );
+    return <EmptyCommGraph tileInstanceId={node.instanceId} />;
   }
 
   return (
