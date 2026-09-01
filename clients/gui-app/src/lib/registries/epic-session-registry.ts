@@ -90,11 +90,14 @@ export const EpicSessionPresentationContext = createStableDevContext(
  */
 interface EpicSessionDevGlobals {
   __TRAYCER_EPIC_SESSION_CONTEXT__:
-    Context<OpenEpicStoreHandle | null> | undefined;
+    | Context<OpenEpicStoreHandle | null>
+    | undefined;
   __TRAYCER_EPIC_SESSION_PRESENTATION_CONTEXT__:
-    Context<EpicSessionPresentation | null> | undefined;
+    | Context<EpicSessionPresentation | null>
+    | undefined;
   __TRAYCER_EPIC_SESSION_HOST_CLIENT_CONTEXT__:
-    Context<HostClient<HostRpcRegistry> | null> | undefined;
+    | Context<HostClient<HostRpcRegistry> | null>
+    | undefined;
 }
 
 function createStableDevContext<K extends keyof EpicSessionDevGlobals>(

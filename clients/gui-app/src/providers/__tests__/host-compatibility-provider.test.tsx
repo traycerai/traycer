@@ -114,9 +114,19 @@ type ListHarnessesResponse = ResponseOfMethod<
 type ListTasksResponse = ResponseOfMethod<HostRpcRegistry, "epic.listTasks">;
 type ListTasksRequest = RequestOfMethod<HostRpcRegistry, "epic.listTasks">;
 
+// Explicitly complete. This suite records method NAMES for the mock host,
+// never versions, and the reconciler reads a page with no `completeness`
+// marker from a host of unknown line as unproven - and an unproven page may
+// not close any tab.
 const EMPTY_LIST_TASKS_RESPONSE: ListTasksResponse = {
   tasks: [],
   hasMore: false,
+  completeness: {
+    cloudPage: "settled",
+    facets: "server",
+    localRows: "none",
+    sort: "loaded-union",
+  },
 };
 
 interface Deferred<T> {
