@@ -9,6 +9,10 @@ import type {
 } from "../host-stream-client";
 import type { IStreamSession } from "../i-stream-session";
 import type { ParamsOf, StreamMethodSupport } from "../ws-stream-client";
+import {
+  PLAN_RESTRICTED_CLOSED_REASON,
+  PLAN_RESTRICTED_FATAL_CODE,
+} from "./config";
 import type { IRemoteSession } from "./remote-session";
 
 /** Monotonic source for `RemoteStreamClient.instanceId` (log correlation). */
@@ -58,9 +62,10 @@ export class RemoteStreamClient<
     return this.session.isClosed();
   }
 
-  /** Always `null`: the mux session exposes no closed-reason to report. */
   getClosedReason(): string | null {
-    return null;
+    return this.session.terminalFatal()?.code === PLAN_RESTRICTED_FATAL_CODE
+      ? PLAN_RESTRICTED_CLOSED_REASON
+      : null;
   }
 
   /**

@@ -138,6 +138,7 @@ export const PLAN_RESTRICTED_REPROBE_MS = HOST_STANDING_BOUND_MS;
 
 /** Fatal code carried by a terminal attach-grant entitlement denial. */
 export const PLAN_RESTRICTED_FATAL_CODE = "PLAN_RESTRICTED";
+export const PLAN_RESTRICTED_CLOSED_REASON = "plan-restricted";
 
 /**
  * Relay keepalive cadence. The client sends the `relay-ping` string on this

@@ -9,6 +9,7 @@ import {
   type RemoteHostDirectoryEntry,
 } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { createRemoteHostTransport } from "@traycer-clients/shared/host-transport/remote/index";
+import { PLAN_RESTRICTED_CLOSED_REASON } from "@traycer-clients/shared/host-transport/remote/config";
 import type { HostStatusDTO } from "@traycer/protocol/host/host-status";
 import {
   hostRpcRegistry,
@@ -576,6 +577,7 @@ export function useHostStreamClientBindingFor(
     };
     const rebuild = (): void => {
       if (teardownInProgressRef.current) return;
+      if (client.getClosedReason() === PLAN_RESTRICTED_CLOSED_REASON) return;
       const delayMs = rebuildBackoff.nextRebuildDelayMs(Date.now());
       appLogger.warn(
         "[stream] transient host stream client closed underneath its binding - rebuilding",

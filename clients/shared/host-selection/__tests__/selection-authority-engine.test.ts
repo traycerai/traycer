@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { PLAN_RESTRICTED_REPROBE_MS } from "../../host-transport/remote/config";
 import {
   SELECTION_AUTHORITY_CONTRACT_VERSION,
   type AuthorityIdentitySource,
@@ -874,6 +875,14 @@ describe("SelectionAuthorityEngineImpl - death aggregation", () => {
     expect(findLease(engine.snapshot().leases, "H3")?.dead).toEqual({
       reason: "plan-restricted",
     });
+
+    // The authority owns the matching deadline too. Once it expires, the
+    // lease becomes selectable again so the cache's now-empty slot can receive
+    // the one controlled policy probe even when no tab remained mounted.
+    clock.advance(PLAN_RESTRICTED_REPROBE_MS);
+    expect(findLease(engine.snapshot().leases, "H1")?.status).toBe(
+      "connecting",
+    );
 
     engine.ingestEvidence(
       "A",

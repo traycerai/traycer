@@ -64,6 +64,7 @@ import {
   type SelectionSubscription,
   type SelectionTransportKind,
 } from "./selection-authority-contract";
+import { PLAN_RESTRICTED_REPROBE_MS } from "../host-transport/remote/config";
 
 /**
  * How many CONSECUTIVE ordinary transport-confirmed refusals/timeouts - counted
@@ -522,6 +523,7 @@ interface CompatRecord {
 interface HostEvidence {
   refusalStreak: number;
   planRestrictedRefusalObserved: boolean;
+  planRestrictedUntil: number | null;
   compat: CompatRecord | null;
   /** Authority-local deadline of the current tombstone episode, if any. */
   restartEpisodeEndsAt: number | null;
@@ -556,6 +558,7 @@ function emptyHostEvidence(): HostEvidence {
   return {
     refusalStreak: 0,
     planRestrictedRefusalObserved: false,
+    planRestrictedUntil: null,
     compat: null,
     restartEpisodeEndsAt: null,
     provedAliveAtLeastOnce: false,
@@ -1439,6 +1442,7 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     evidence.provedAliveAtLeastOnce = true;
     evidence.refusalStreak = 0;
     evidence.planRestrictedRefusalObserved = false;
+    evidence.planRestrictedUntil = null;
     evidence.restartEpisodeEndsAt = null;
     // The dial-stall counter retires with the streak, and HERE rather than
     // only on a dial success, because this is the single funnel every kind of
@@ -1508,6 +1512,13 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
       // still report an ordinary refusal after this one; only proof of life
       // (`onHostProvedAlive`) is strong enough to clear the known denial.
       evidence.planRestrictedRefusalObserved = true;
+      if (
+        evidence.planRestrictedUntil === null ||
+        evidence.planRestrictedUntil <= this.options.clock.now()
+      ) {
+        evidence.planRestrictedUntil =
+          this.options.clock.now() + PLAN_RESTRICTED_REPROBE_MS;
+      }
     }
     this.recordDialDisposition(
       report,
@@ -2899,16 +2910,21 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     }
     if (
       evidence !== null &&
-      (evidence.planRestrictedRefusalObserved ||
+      ((evidence.planRestrictedRefusalObserved &&
+        evidence.planRestrictedUntil !== null &&
+        now < evidence.planRestrictedUntil) ||
         evidence.refusalStreak >= CONFIRMED_DEATH_REFUSAL_STREAK)
     ) {
       return {
         hostId,
         status: "dead",
         dead: {
-          reason: evidence.planRestrictedRefusalObserved
-            ? "plan-restricted"
-            : "offline",
+          reason:
+            evidence.planRestrictedRefusalObserved &&
+            evidence.planRestrictedUntil !== null &&
+            now < evidence.planRestrictedUntil
+              ? "plan-restricted"
+              : "offline",
         },
       };
     }
@@ -2989,8 +3005,13 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
       if (earliest === null || deadline < earliest) earliest = deadline;
     };
     for (const entry of this.fleet.hosts) {
-      const endsAt = this.evidence.get(entry.hostId)?.restartEpisodeEndsAt;
+      const evidence = this.evidence.get(entry.hostId);
+      const endsAt = evidence?.restartEpisodeEndsAt;
       if (endsAt !== undefined && endsAt !== null) consider(endsAt);
+      const planRestrictedUntil = evidence?.planRestrictedUntil;
+      if (planRestrictedUntil !== undefined && planRestrictedUntil !== null) {
+        consider(planRestrictedUntil);
+      }
       if (entry.kind === "local" && this.localOutageStartedAt !== null) {
         consider(this.localOutageStartedAt + LOCAL_EXPECTED_OUTAGE_CEILING_MS);
       }

@@ -1448,6 +1448,15 @@ describe("wakeHeldRemoteSessions", () => {
 });
 
 describe("RemoteStreamClient reconnectAll routing", () => {
+  it("exposes PLAN_RESTRICTED as an owner-visible terminal reason", () => {
+    const session = fakeSession();
+    const client = new RemoteStreamClient(session);
+    expect(client.getClosedReason()).toBeNull();
+
+    session.fatalCode = "PLAN_RESTRICTED";
+    expect(client.getClosedReason()).toBe("plan-restricted");
+  });
+
   it("routes probeFirst:false to forceReconnect and probeFirst:true to wake, never both", () => {
     const session = fakeSession();
     const client = new RemoteStreamClient(session);
