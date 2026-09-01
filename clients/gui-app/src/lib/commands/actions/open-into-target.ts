@@ -49,7 +49,10 @@ export function openTileIntoTargetGroup(
   const prepare = () =>
     useEpicCanvasStore
       .getState()
-      .prepareOpenTileInPaneFocusTarget(tabId, groupId, args.ref);
+      .prepareOpenTileInPaneFocusTarget(tabId, groupId, args.ref, {
+        mode: "permanent",
+        index: null,
+      });
   const epicId = useEpicCanvasStore.getState().tabsById[tabId]?.epicId ?? null;
   if (epicId === null || args.navigateNestedFocus === undefined) {
     prepare();

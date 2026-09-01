@@ -192,3 +192,33 @@ export function parseHttpUrl(url: string): URL | null {
     ? parsed
     : null;
 }
+
+/**
+ * What the address bar does with what the user typed: a bare local address
+ * gets `http://`, anything else with no scheme gets `https://`, an explicit
+ * scheme is left alone, and an empty box means the blank page.
+ */
+export function normalizeBrowserAddressInput(input: string): string {
+  const trimmed = input.trim();
+  if (trimmed.length === 0) return "about:blank";
+  if (looksLikeLocalHttpAddressWithoutScheme(trimmed)) {
+    return `http://${trimmed}`;
+  }
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed)) return trimmed;
+  return `https://${trimmed}`;
+}
+
+function looksLikeLocalHttpAddressWithoutScheme(value: string): boolean {
+  const lower = value.toLowerCase();
+  return (
+    lower === "localhost" ||
+    lower.startsWith("localhost:") ||
+    lower.startsWith("localhost/") ||
+    lower.endsWith(".localhost") ||
+    lower.includes(".localhost:") ||
+    lower.startsWith("127.") ||
+    lower.startsWith("0.0.0.0") ||
+    lower.startsWith("[::1]") ||
+    lower.startsWith("::1:")
+  );
+}

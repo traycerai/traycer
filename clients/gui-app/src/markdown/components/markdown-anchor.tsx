@@ -2,7 +2,7 @@ import { use, useCallback, type MouseEvent, type ReactNode } from "react";
 import { toast } from "sonner";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { RunnerHostContext } from "@/providers/runner-host-context";
-import { useBrowserLinkRouter } from "@/lib/browser-view/link-routing/browser-link-router";
+import { useOpenLink } from "@/lib/links/open-link";
 import { classifyHref } from "@/markdown/links/classify-href";
 import { MarkdownLinkContext } from "@/markdown/links/markdown-link-context";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
@@ -29,8 +29,8 @@ interface MarkdownAnchorProps {
  * unloads the React app (the chat-link routing crash). We intercept every
  * click and route links that leave the current document explicitly:
  *
- * - web-safe links (`http(s):`, `mailto:`) open in the OS default browser via
- *   the runner host;
+ * - web-safe links (`http(s):`, `mailto:`) go to {@link useOpenLink}, which
+ *   opens them in a browser tile or the OS browser per the user's setting;
  * - file links (bare paths, rooted paths, Windows drives, `file://` URIs) are
  *   handed to the surface's `MarkdownLinkContext` policy.
  *
@@ -46,7 +46,7 @@ export function MarkdownAnchor({
 }: MarkdownAnchorProps) {
   const runnerHost = use(RunnerHostContext);
   const linkPolicy = use(MarkdownLinkContext);
-  const routeBrowserLink = useBrowserLinkRouter();
+  const openLink = useOpenLink();
 
   const reportIssueAvailable = useDesktopDialogStore(
     (state) => state.reportIssueAvailable,
@@ -109,16 +109,10 @@ export function MarkdownAnchor({
 
       linkPolicy?.supersedePendingFileLink();
       if (runnerHost !== null) {
-        routeBrowserLink("markdown", classified.url, event);
+        openLink(classified.url, "markdown", event);
       }
     },
-    [
-      navigableHref,
-      linkPolicy,
-      reportIssueAvailable,
-      routeBrowserLink,
-      runnerHost,
-    ],
+    [navigableHref, linkPolicy, openLink, reportIssueAvailable, runnerHost],
   );
 
   // Native `title` ON PURPOSE - see the eslint exemption for this file. This

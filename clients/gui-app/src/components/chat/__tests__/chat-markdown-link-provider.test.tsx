@@ -248,6 +248,7 @@ describe("ChatMarkdownLinkProvider", () => {
     const hookSpy = vi
       .spyOn(epicTileNavigationModule, "useEpicTileNavigation")
       .mockReturnValue({
+        openTile: vi.fn(() => null),
         openTileInTab: vi.fn(() => null),
         openTilePreviewInTab,
         openTileInEpic: vi.fn(() => null),

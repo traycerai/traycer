@@ -5,6 +5,7 @@ import {
   browserTabHostname,
   disambiguateSecondaryLabels,
   nextSettledTabIdentity,
+  normalizeBrowserAddressInput,
   resolveTabTitle,
 } from "@/lib/browser-view/browser-tab-display";
 
@@ -281,5 +282,18 @@ describe("browser-tab-display", () => {
     ]);
     expect(labels.get("a")).toBe("example.com");
     expect(labels.get("b")).toBe("example.com");
+  });
+});
+
+describe("browser address helpers", () => {
+  it("normalizes address bar input conservatively", () => {
+    expect(normalizeBrowserAddressInput("example.test/docs")).toBe(
+      "https://example.test/docs",
+    );
+    expect(normalizeBrowserAddressInput("localhost:5173")).toBe(
+      "http://localhost:5173",
+    );
+    expect(normalizeBrowserAddressInput("about:blank")).toBe("about:blank");
+    expect(normalizeBrowserAddressInput("   ")).toBe("about:blank");
   });
 });

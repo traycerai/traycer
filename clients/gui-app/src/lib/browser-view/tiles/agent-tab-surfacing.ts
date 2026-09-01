@@ -154,7 +154,10 @@ function placeTileGroupedBySession(args: {
     args.sessionId,
   );
   if (groupedPaneId !== null) {
-    store.openTileInPane(args.viewTabId, groupedPaneId, args.tile);
+    store.openTileInPane(args.viewTabId, groupedPaneId, args.tile, {
+      mode: "permanent",
+      index: null,
+    });
     return true;
   }
   const anchorPaneId =
@@ -173,7 +176,10 @@ function placeTileGroupedBySession(args: {
   const nextCanvas =
     useEpicCanvasStore.getState().canvasByTabId[args.viewTabId];
   if (nextCanvas?.tilesByInstanceId[args.tile.instanceId] === undefined) {
-    store.openTileInPane(args.viewTabId, anchorPaneId, args.tile);
+    store.openTileInPane(args.viewTabId, anchorPaneId, args.tile, {
+      mode: "permanent",
+      index: null,
+    });
   }
   return true;
 }

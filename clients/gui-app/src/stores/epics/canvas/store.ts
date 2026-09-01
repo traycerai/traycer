@@ -159,9 +159,15 @@ import {
   withTerminalPendingCreate,
   withoutTerminalPendingCreate,
 } from "@/lib/terminals/pending-create-identity";
+import type { PaneTileOpenOptions } from "@/lib/canvas/tile-open/intent";
 export { parseEpicNodeRef as parseArtifactRef } from "@/stores/epics/canvas/tile-schema/artifact-tile";
 
-function trackOpenedCanvasTile(
+/**
+ * `<kind>Opened` analytics for a tile that just entered the canvas. Exported
+ * for `execute-tile-open.ts`, which drives the two prepare* paths that have no
+ * `FromSource` variant of their own (split, focus-existing).
+ */
+export function trackOpenedCanvasTile(
   node: EpicCanvasTileRef,
   source: AnalyticsSource,
 ): void {
@@ -269,6 +275,12 @@ export interface TabSplitArgs {
 export interface ClosedTilePayload {
   readonly node: EpicCanvasTileRef;
   readonly pendingCreate: boolean;
+}
+
+/** {@link PaneTileOpenOptions} plus the analytics source the `*FromSource`
+ * pane opener reports the open under. */
+export interface PaneTileOpenOptionsFromSource extends PaneTileOpenOptions {
+  readonly source: AnalyticsSource;
 }
 
 export interface EpicCanvasStore {
@@ -498,23 +510,27 @@ export interface EpicCanvasStore {
   /**
    * Opener-only path: open `ref` into the explicit `paneId` as a fresh tab
    * instance, bypassing dedup. A second view of an already-open content id is
-   * allowed (distinct `instanceId`). See {@link openTileInPaneCanvas}.
+   * allowed (distinct `instanceId`). `mode` picks pinned / preview /
+   * membership-only semantics and `index` the strip position (`null`
+   * appends). See {@link openTileInPaneCanvas}.
    */
   openTileInPane: (
     tabId: string,
     paneId: string,
     ref: EpicCanvasTileRef,
+    options: PaneTileOpenOptions,
   ) => void;
   prepareOpenTileInPaneFocusTarget: (
     tabId: string,
     paneId: string,
     ref: EpicCanvasTileRef,
+    options: PaneTileOpenOptions,
   ) => NestedFocusTarget | null;
   prepareOpenTileInPaneFocusTargetFromSource: (
     tabId: string,
     paneId: string,
     ref: EpicCanvasTileRef,
-    source: AnalyticsSource,
+    options: PaneTileOpenOptionsFromSource,
   ) => NestedFocusTarget | null;
   /**
    * Opener path for a SINGLETON tile (one instance per content id, e.g. the
@@ -2047,19 +2063,23 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
           return null;
         },
 
-        openTileInPane: (tabId, paneId, ref) => {
+        openTileInPane: (tabId, paneId, ref, options) => {
           set((state) =>
             updateTabCanvas(state, tabId, (canvas) =>
-              openTileInPaneCanvas(canvas, paneId, ref),
+              openTileInPaneCanvas(canvas, paneId, ref, options),
             ),
           );
         },
 
-        prepareOpenTileInPaneFocusTarget: (tabId, paneId, ref) => {
+        prepareOpenTileInPaneFocusTarget: (tabId, paneId, ref, options) => {
           const before = canvasForExistingTab(get(), tabId);
           const targetPane =
             before === null ? null : findPaneById(before.root, paneId);
-          get().openTileInPane(tabId, paneId, ref);
+          get().openTileInPane(tabId, paneId, ref, options);
+          // A background open leaves the active tab/pane alone, so there is no
+          // new focus to commit to the route (same contract as
+          // `prepareOpenTileInBackgroundTabFocusTarget`).
+          if (options.mode === "background") return null;
           const after = currentNestedFocusTargetForTab(get(), tabId);
           const target = targetPane === null ? null : after;
           return target;
@@ -2091,14 +2111,15 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
           tabId,
           paneId,
           ref,
-          source,
+          options,
         ) => {
           const before = canvasForExistingTab(get(), tabId);
           const targetPane =
             before === null ? null : findPaneById(before.root, paneId);
-          get().openTileInPane(tabId, paneId, ref);
+          get().openTileInPane(tabId, paneId, ref, options);
           const canvas = canvasForExistingTab(get(), tabId);
-          if (before !== canvas) trackOpenedCanvasTile(ref, source);
+          if (before !== canvas) trackOpenedCanvasTile(ref, options.source);
+          if (options.mode === "background") return null;
           const after = currentNestedFocusTargetForTab(get(), tabId);
           const target = targetPane === null ? null : after;
           return target;

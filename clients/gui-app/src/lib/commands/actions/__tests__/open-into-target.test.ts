@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { openTileIntoTargetGroup } from "@/lib/commands/actions/open-into-target";
 import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
+import type { PaneTileOpenOptions } from "@/lib/canvas/tile-open/intent";
 import { paneTabRefs } from "@/stores/epics/canvas/actions";
 import { findPaneById } from "@/stores/epics/canvas/tile-tree";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -25,7 +26,14 @@ function resetCanvasStore(): void {
 
 function installOpenTileInGroupMock() {
   const mock =
-    vi.fn<(tabId: string, groupId: string, ref: EpicCanvasTileRef) => void>();
+    vi.fn<
+      (
+        tabId: string,
+        groupId: string,
+        ref: EpicCanvasTileRef,
+        options: PaneTileOpenOptions,
+      ) => void
+    >();
   useEpicCanvasStore.setState({ openTileInPane: mock });
   return mock;
 }
@@ -94,7 +102,10 @@ describe("openTileIntoTargetGroup", () => {
       ref: REF,
       navigateNestedFocus: undefined,
     });
-    expect(mock).toHaveBeenCalledWith("tab-1", "group-1", REF);
+    expect(mock).toHaveBeenCalledWith("tab-1", "group-1", REF, {
+      mode: "permanent",
+      index: null,
+    });
   });
 
   it("no-ops when the tab id is missing", () => {
@@ -159,7 +170,10 @@ describe("openTileIntoTargetGroup", () => {
       navigateNestedFocus: undefined,
     });
 
-    expect(mock).toHaveBeenCalledWith(tabId, targetGroupId, REF);
+    expect(mock).toHaveBeenCalledWith(tabId, targetGroupId, REF, {
+      mode: "permanent",
+      index: null,
+    });
   });
 
   it("falls back to a raw canvas mutation without navigating when the tab has no resolvable epic", () => {
@@ -174,6 +188,9 @@ describe("openTileIntoTargetGroup", () => {
     });
 
     expect(navigation.calls).toHaveLength(0);
-    expect(mock).toHaveBeenCalledWith("unknown-tab", "group-1", REF);
+    expect(mock).toHaveBeenCalledWith("unknown-tab", "group-1", REF, {
+      mode: "permanent",
+      index: null,
+    });
   });
 });

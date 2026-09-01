@@ -37,7 +37,7 @@ function makeEntry(sessionId: string, hostId: string | null): XtermHostEntry {
     live: {
       onUserInput: () => undefined,
       onContainerResize: () => undefined,
-      openExternalLink: () => undefined,
+      openLink: () => undefined,
       getFindTargetId: () => null,
       onSearchResults: () => undefined,
     },

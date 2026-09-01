@@ -63,6 +63,18 @@ export interface TileOpenIntent {
 export type TileOpenMode = "preview" | "permanent" | "background";
 
 /**
+ * Where inside a pane an open lands: `mode` picks pinned / preview /
+ * membership-only semantics and `index` the strip position (`null` appends).
+ * One bag rather than two positional arguments - the pane openers already
+ * carry `tabId`, `paneId` and the ref, and `(..., "permanent", null)` at a
+ * call site says nothing about what the `null` is.
+ */
+export interface PaneTileOpenOptions {
+  readonly mode: TileOpenMode;
+  readonly index: number | null;
+}
+
+/**
  * `paneId: null` on `open-in-pane` means "no pane resolved" - the empty
  * canvas. The executor lets `openTile` seed a root pane, exactly as today.
  */

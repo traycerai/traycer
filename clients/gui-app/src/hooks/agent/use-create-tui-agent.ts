@@ -301,6 +301,7 @@ export function useCreateTuiAgentForClient(
               input.tabId,
               groupId,
               placeholderRef,
+              { mode: "permanent", index: null },
             ),
           );
         } else {

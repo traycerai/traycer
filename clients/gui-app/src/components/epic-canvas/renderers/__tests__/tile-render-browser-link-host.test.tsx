@@ -4,8 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import { renderTile } from "@/components/epic-canvas/renderers/tile-render";
-import { useBrowserLinkRouter } from "@/lib/browser-view/link-routing/browser-link-router";
-import type { BrowserLinkOpenResult } from "@/lib/browser-view/link-routing/browser-link-routing-core";
+import { useOpenLink } from "@/lib/links/open-link";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
@@ -22,10 +21,6 @@ const EPIC_ID = "epic-1";
 const sessionsHarness = vi.hoisted(() => ({
   acquiredHostIds: [] as string[],
   openTabCalls: [] as Array<{ readonly hostId: string; readonly url: string }>,
-}));
-
-const routerHarness = vi.hoisted(() => ({
-  results: [] as string[],
 }));
 
 vi.mock(
@@ -133,19 +128,12 @@ function liveSessionsState(hostId: string): BrowserSessionsState {
  * links): it only reads the shared router, with no host knowledge of its own.
  */
 function LinkClickProbe() {
-  const route = useBrowserLinkRouter();
+  const openLink = useOpenLink();
   return (
     <button
       type="button"
       data-testid="tile-link"
-      onClick={() => {
-        const result: BrowserLinkOpenResult = route(
-          "markdown",
-          "https://example.test/docs",
-          null,
-        );
-        routerHarness.results.push(result);
-      }}
+      onClick={() => openLink("https://example.test/docs", "markdown", null)}
     >
       link
     </button>
@@ -166,7 +154,6 @@ describe("renderTile browser sessions host boundary", () => {
   beforeEach(() => {
     sessionsHarness.acquiredHostIds = [];
     sessionsHarness.openTabCalls = [];
-    routerHarness.results = [];
     useEpicCanvasStore.setState({ canvasByTabId: {}, tabsById: {} });
     useSettingsStore.setState({
       linkOpen: {
@@ -196,7 +183,6 @@ describe("renderTile browser sessions host boundary", () => {
     fireEvent.click(screen.getByTestId("tile-link"));
 
     expect(sessionsHarness.acquiredHostIds).toEqual([TILE_HOST_ID]);
-    expect(routerHarness.results).toEqual(["in-app"]);
     expect(sessionsHarness.openTabCalls).toEqual([
       { hostId: TILE_HOST_ID, url: "https://example.test/docs" },
     ]);

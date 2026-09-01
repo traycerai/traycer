@@ -14,13 +14,12 @@ import { TraycerMarkdown } from "@/markdown";
 import { classifyHref } from "@/markdown/links/classify-href";
 import { markdownUrlTransform } from "@/markdown/links/markdown-url-transform";
 import { MarkdownLinkContext } from "@/markdown/links/markdown-link-context";
-import { BrowserLinkRoutingProvider } from "@/lib/browser-view/link-routing/browser-link-routing";
+import { LinkTargetProvider } from "@/lib/links/link-target-provider";
 import {
   BrowserSessionsContext,
   type BrowserSessionsState,
 } from "@/components/epic-canvas/renderers/browser-sessions-context";
 import { createSingleTileCanvas } from "@/stores/epics/canvas/actions";
-import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import {
   isBrowserSessionTileRef,
@@ -106,8 +105,6 @@ function renderMarkdownWithBrowserRouting(
   host: MockRunnerHost,
 ) {
   const canvas = createSingleTileCanvas(SOURCE_TILE);
-  const pane = collectPanes(canvas.root).at(0);
-  if (pane === undefined) throw new Error("expected source pane");
   useEpicCanvasStore.setState({
     tabsById: {
       [VIEW_TAB_ID]: {
@@ -134,13 +131,7 @@ function renderMarkdownWithBrowserRouting(
           closeTab: () => Promise.resolve(),
         }}
       >
-        <BrowserLinkRoutingProvider
-          source={{
-            viewTabId: VIEW_TAB_ID,
-            paneId: pane.id,
-            hostId: SOURCE_TILE.hostId,
-          }}
-        >
+        <LinkTargetProvider epicId="epic-markdown" viewTabId={VIEW_TAB_ID}>
           <TraycerMarkdown
             className={null}
             proseSize="normal"
@@ -152,7 +143,7 @@ function renderMarkdownWithBrowserRouting(
           >
             {markdown}
           </TraycerMarkdown>
-        </BrowserLinkRoutingProvider>
+        </LinkTargetProvider>
       </BrowserSessionsContext.Provider>
     </RunnerHostContext.Provider>,
   );

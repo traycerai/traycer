@@ -354,6 +354,7 @@ function openProjectedChat(
         intent.tabId,
         intent.groupId,
         node,
+        { mode: "permanent", index: null },
       ),
     );
   } else {

@@ -245,7 +245,10 @@ export function useInitialChatHandoff(epicId: string, tabId: string): void {
       },
       openTileInPane: (targetTabId, paneId, node) => {
         navigateNested(epicId, targetTabId, () =>
-          prepareOpenTileInPaneFocusTarget(targetTabId, paneId, node),
+          prepareOpenTileInPaneFocusTarget(targetTabId, paneId, node, {
+            mode: "permanent",
+            index: null,
+          }),
         );
       },
       splitPaneWithNode: (targetTabId, targetPaneId, position, node) => {

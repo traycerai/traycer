@@ -62,6 +62,20 @@ export function useElectronTabBindingOnHost(
   );
 }
 
+/**
+ * Non-reactive lookup of a published Electron tab binding, for callers that
+ * act on a tab once (navigating a deduped link's tab to a new hash) rather
+ * than rendering it. Returns `null` for a tab this renderer does not own -
+ * a headless session, or a tab living on another machine's shell.
+ */
+export function electronTabBinding(
+  hostId: string,
+  sessionId: string,
+  tabId: string,
+): ElectronTabBinding | null {
+  return directory.get(nativeTabKey(hostId, sessionId, tabId))?.binding ?? null;
+}
+
 function subscribeDirectory(listener: () => void): () => void {
   directoryListeners.add(listener);
   return () => {

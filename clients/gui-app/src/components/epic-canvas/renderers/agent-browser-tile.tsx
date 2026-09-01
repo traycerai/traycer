@@ -40,7 +40,7 @@ import type {
   ElectronTabBinding,
   ElectronTabSurfaceLease,
 } from "@/lib/browser-view/sessions/electron-tabs";
-import { openBrowserSessionTileFromPage } from "@/lib/browser-view/link-routing/browser-link-routing-core";
+import { openBrowserSessionTileFromPage } from "@/lib/browser-view/tiles/browser-page-tile-open";
 import { cn } from "@/lib/utils";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
