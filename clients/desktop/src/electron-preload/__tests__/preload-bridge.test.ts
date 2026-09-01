@@ -934,17 +934,11 @@ describe("preload new-capability wiring", () => {
     });
   });
 
-  it("forwards browser cookie crypto state through ipcRenderer.invoke", async () => {
-    const cryptoState = {
-      mode: "degraded",
-      persistence: "ephemeral",
-      reason: "keychain-denied",
-      storageBackend: null,
-      encryptionAvailable: false,
-    };
-    const invokeFn = vi.fn(async (channel: string) => {
-      if (channel === RunnerHostInvoke.browserViewCookieCryptoStateGet) {
-        return cryptoState;
+  it("round-trips the saved-logins pref through ipcRenderer.invoke", async () => {
+    const invokeFn = vi.fn(async (channel: string, ...args: unknown[]) => {
+      if (channel === RunnerHostInvoke.browserViewSaveLoginsGet) return true;
+      if (channel === RunnerHostInvoke.browserViewSaveLoginsSet) {
+        return args[0];
       }
       return undefined;
     });
@@ -956,14 +950,17 @@ describe("preload new-capability wiring", () => {
       sendSyncFn: undefined,
     });
 
-    await expect(bridge.browserView.getCookieCryptoState()).resolves.toEqual(
-      cryptoState,
+    await expect(bridge.browserView.getSaveLogins()).resolves.toBe(true);
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.browserViewSaveLoginsGet,
     );
 
+    await expect(bridge.browserView.setSaveLogins(false)).resolves.toBe(false);
     expect(invokeFn).toHaveBeenCalledWith(
-      RunnerHostInvoke.browserViewCookieCryptoStateGet,
+      RunnerHostInvoke.browserViewSaveLoginsSet,
+      false,
     );
-    expect(invokeFn).toHaveBeenCalledTimes(1);
+    expect(invokeFn).toHaveBeenCalledTimes(2);
   });
 
   it("exposes capturePrimaryProfile as a zero-arg invoke (ticket 06)", async () => {

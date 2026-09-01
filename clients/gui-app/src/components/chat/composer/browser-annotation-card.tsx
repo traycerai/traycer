@@ -2,7 +2,7 @@ import { X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import { type ImageBytesFetcher } from "@/lib/attachments/image-blob-cache";
+import { type ScopedImageBytesFetcher } from "@/lib/attachments/image-blob-cache";
 import { useImageBlobUrl } from "@/lib/attachments/use-image-blob-url";
 import { useLiveBrowserSession } from "@/lib/browser-view/sessions/use-live-browser-session";
 import {
@@ -18,7 +18,7 @@ import { cn } from "@/lib/utils";
 export function BrowserAnnotationCard(props: {
   readonly record: BrowserAnnotationRecord;
   readonly onRemove: ((annotationId: string) => void) | null;
-  readonly imageFetcher: ImageBytesFetcher;
+  readonly imageFetcher: ScopedImageBytesFetcher;
   readonly sessionObjectUrl: (hash: string) => string | null;
 }) {
   const { record, onRemove, imageFetcher } = props;

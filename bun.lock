@@ -21,6 +21,7 @@
         "@typescript-eslint/eslint-plugin": "catalog:",
         "@typescript-eslint/parser": "catalog:",
         "@typescript/native-preview": "7.0.0-dev.20260707.2",
+        "@vitest/web-worker": "4.1.11",
         "concurrently": "^10.0.5",
         "esbuild": "catalog:",
         "eslint": "catalog:",
@@ -306,6 +307,7 @@
         "@noble/curves": "^2.3.0",
         "async-mutex": "^0.5.0",
         "fflate": "^0.8.3",
+        "tldts": "7.4.10",
         "y-utility": "^0.1.4",
         "yjs": "^13.6.32",
         "zod": "^4.4.3",
@@ -1813,6 +1815,8 @@
     "@vitest/spy": ["@vitest/spy@4.1.11", "", {}, "sha512-apNa/prQy2qCeywhnixOHPRCgGNhvg7T4Dapfl1GahLp/R+uhBm5cPyFoNVyqsNd2h1nJxL6BqqdIjiABL60YA=="],
 
     "@vitest/utils": ["@vitest/utils@4.1.11", "", { "dependencies": { "@vitest/pretty-format": "4.1.11", "convert-source-map": "^2.0.0", "tinyrainbow": "^3.1.0" } }, "sha512-zTCVGpyFsGWBhllOyKlTw/vnr6D9qxsfSDyfbyZmTyjHw5N/VuvzHpHoQjm2ZJzn4RJgx5w4r7V0er69CmLgPQ=="],
+
+    "@vitest/web-worker": ["@vitest/web-worker@4.1.11", "", { "dependencies": { "obug": "^2.1.1" }, "peerDependencies": { "vitest": "4.1.11" } }, "sha512-730ZTeK7KGvinH92mHpq2kBZNUkdF0zCijFtsBe1VQ6kDveGjYxaX+WpSnDYUh8Zoh+7jZ5oKNyWJQZEGC8S4Q=="],
 
     "@xmldom/xmldom": ["@xmldom/xmldom@0.8.13", "", {}, "sha512-KRYzxepc14G/CEpEGc3Yn+JKaAeT63smlDr+vjB8jRfgTBBI9wRj/nkQEO+ucV8p8I9bfKLWp37uHgFrbntPvw=="],
 

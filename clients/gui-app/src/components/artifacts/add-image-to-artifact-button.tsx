@@ -18,6 +18,10 @@ import {
   type ArtifactImagePreparation,
 } from "@/hooks/artifacts/use-artifact-image-operations";
 import { isEpicArtifactKind } from "@/lib/artifacts/node-display";
+import {
+  ArtifactBodyUnavailableError,
+  holdArtifactBody,
+} from "@/lib/epic-replica-reads";
 import { useEpicArtifactRecords, useOpenEpicId } from "@/lib/epic-selectors";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { cn } from "@/lib/utils";
@@ -56,17 +60,26 @@ export function AddImageToArtifactButton(props: {
                 operations.prepareBytes,
               );
         operationId = prepared.operationId;
-        const releaseBody = handle.store
-          .getState()
-          .acquireArtifactBodyLease(artifactId);
-        try {
-          const fragment = handle.store
-            .getState()
-            .getArtifactFragment(artifactId);
-          if (fragment === null) {
+        // Materializing the body is awaited: today the hold resolves at once,
+        // and once the cold tier lives in the runtime worker it resolves when
+        // that room's bytes have come back across the bridge. The `await` is
+        // here now so the mutation's control flow is already the one it will
+        // have then - the image is prepared before the body is held either
+        // way, and the abort path below already covers a failure after that.
+        const body = await holdArtifactBody(
+          handle,
+          artifactId,
+          // An interactive edit on a body the user is looking at - exactly the
+          // case the cooldown is a good bet for.
+          "linger",
+        ).catch((cause: unknown) => {
+          if (cause instanceof ArtifactBodyUnavailableError) {
             throw new Error("This artifact is not available for editing.");
           }
-          rollback = appendArtifactImage(fragment, {
+          throw cause;
+        });
+        try {
+          rollback = appendArtifactImage(body.fragment, {
             src: prepared.src,
             alt: props.alt,
             attachmentHash: prepared.attachmentHash,
@@ -79,7 +92,7 @@ export function AddImageToArtifactButton(props: {
           );
           operationId = null;
         } finally {
-          releaseBody();
+          body.release();
         }
       } catch (reason) {
         rollback?.();

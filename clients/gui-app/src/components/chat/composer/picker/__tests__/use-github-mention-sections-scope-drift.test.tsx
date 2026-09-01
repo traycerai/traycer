@@ -118,7 +118,12 @@ vi.mock("@/lib/relative-time", () => ({
 }));
 
 vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
-  useReactiveHostReadiness: () => ({ hostId: "host-1" }),
+  useReactiveHostReadiness: () => ({
+    hostId: "host-1",
+    isReady: true,
+    hasRpcEndpoint: true,
+    canExecute: true,
+  }),
 }));
 
 vi.mock("@/hooks/host/use-host-supports-method", () => ({

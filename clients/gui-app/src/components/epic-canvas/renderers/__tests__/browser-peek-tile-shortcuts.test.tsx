@@ -165,6 +165,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
     const stream = liveStream();
@@ -196,6 +197,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
     const stream = liveStream();
@@ -213,6 +215,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
     const stream = liveStream();
@@ -226,6 +229,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
     await flushMacrotask();
@@ -243,6 +247,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
     const stream = liveStream();
@@ -268,6 +273,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
     const stream = liveStream();
@@ -295,6 +301,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
     const stream = liveStream();
@@ -321,6 +328,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
     const stream = liveStream();
@@ -340,6 +348,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
     const stream = liveStream();
@@ -370,6 +379,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
     const stream = liveStream();
@@ -384,6 +394,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
     await flushMacrotask();
@@ -398,6 +409,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
     const stream = liveStream();
@@ -418,6 +430,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
     const stream = liveStream();
@@ -443,6 +456,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
     const stream = liveStream();
@@ -461,6 +475,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
     const stream = liveStream();
@@ -480,6 +495,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
     const stream = liveStream();
@@ -518,6 +534,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
     const stream = liveStream();
@@ -543,6 +560,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
     const stream = liveStream();
@@ -573,6 +591,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        isElectronWake={false}
       />,
     );
     const stream = liveStream();
@@ -602,6 +621,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
           paneId="pane-1"
           epicId="epic-1"
           node={PEEK_NODE}
+          isElectronWake={false}
         />
       </div>,
     );
@@ -633,12 +653,14 @@ describe("BrowserPeekTile shortcuts and paste", () => {
           paneId="pane-1"
           epicId="epic-1"
           node={PEEK_NODE}
+          isElectronWake={false}
         />
         <BrowserPeekTile
           viewTabId="view-tab-1"
           paneId="pane-1"
           epicId="epic-1"
           node={sibling}
+          isElectronWake={false}
         />
       </div>,
     );
@@ -652,6 +674,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
           paneId="pane-1"
           epicId="epic-1"
           node={PEEK_NODE}
+          isElectronWake={false}
         />
       </div>,
     );

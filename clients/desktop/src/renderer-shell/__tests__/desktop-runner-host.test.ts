@@ -578,13 +578,22 @@ function buildFakeBridge(
         storageState: { cookies: [], origins: [] },
         reason: null,
       }),
-      getCookieCryptoState: async () => ({
-        mode: "real" as const,
-        persistence: "persistent" as const,
-        reason: "os-backed" as const,
-        storageBackend: null,
-        encryptionAvailable: true,
+      clearSite: async () => undefined,
+      evictSite: async () => undefined,
+      getSaveLogins: async () => true,
+      setSaveLogins: async (enabled) => enabled,
+      // This shell test has no OS keystore; the store-key handshake refuses
+      // the same way a machine without one does.
+      wrapStoreKey: async () => ({
+        ok: false as const,
+        reason: "no keystore in this test bridge",
       }),
+      unwrapStoreKey: async () => ({
+        ok: false as const,
+        reason: "no keystore in this test bridge",
+      }),
+      forgetLogins: async () => undefined,
+      onPrimaryProfileDelta: (_handler) => ({ dispose: () => undefined }),
       onFindChange: (_handler) => ({ dispose: () => undefined }),
       onDownloadChange: (_handler) => ({ dispose: () => undefined }),
       onCertificateError: (_handler) => ({ dispose: () => undefined }),

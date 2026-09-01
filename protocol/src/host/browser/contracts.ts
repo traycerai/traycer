@@ -8,6 +8,7 @@
  * breaking semantics require a separately served major.
  */
 import { z } from "zod";
+import { defineRpcContract } from "@traycer/protocol/framework/index";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
   browserCdpCommandSchema,
@@ -197,6 +198,46 @@ export const browserStorageStateSchema = z
   .strict();
 export type BrowserStorageState = z.infer<typeof browserStorageStateSchema>;
 
+/** Unpartitioned cookie identity: exactly what a tombstone is keyed by. */
+export const browserCookieKeySchema = z
+  .object({
+    domain: z.string(),
+    name: z.string(),
+    path: z.string(),
+  })
+  .strict();
+export type BrowserCookieKey = z.infer<typeof browserCookieKeySchema>;
+
+/**
+ * One coalescing window's worth of cookie change for a single registrable
+ * domain (`registrable-domain.ts` derives it on both ends). The two lists
+ * answer two different questions and neither can stand in for the other.
+ *
+ * `cookies` is the **complete** picture of the domain after the window (every
+ * cookie its subtree holds), not just the ones that changed. It is what lets
+ * the host *reconcile* its cache by absence - the store converging on the
+ * desktop's jar.
+ *
+ * `removedKeys` names what the sender watched **disappear from its own jar**
+ * during the window. That is the only logout evidence on this frame:
+ * reconciliation buries cookies for all sorts of innocent reasons (a headless
+ * context contributed a cookie this desktop never had), so the host propagates
+ * a sign-out to live sessions from `removedKeys` alone and never from what a
+ * merge happened to tombstone.
+ */
+export const browserPrimaryProfileDeltaSchema = z
+  .object({
+    domain: z.string(),
+    cookies: z.array(browserStorageCookieSchema),
+    removedKeys: z.array(browserCookieKeySchema),
+    /** When the window opened, from the sender's clock. */
+    issuedAt: z.number(),
+  })
+  .strict();
+export type BrowserPrimaryProfileDelta = z.infer<
+  typeof browserPrimaryProfileDeltaSchema
+>;
+
 const cdpRequestFrameFields = {
   ...requestFrameFields,
   tabId: z.string(),
@@ -358,6 +399,10 @@ export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
       // starts it only after the host accepts the provisioned incarnation.
       requestedUrl: z.string(),
       reason: electronTabCreateReasonSchema,
+      // Which jar the guest gets. `isolated` picks a per-session in-memory
+      // partition on the desktop and is never seeded, so the desktop cannot
+      // infer it from `seedStorageState` being null.
+      profile: browserSessionProfileKindSchema,
       seedStorageState: browserStorageStateSchema.nullable(),
     })
     .strict(),
@@ -386,6 +431,51 @@ export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
       // opens a second, opportunistic renderer request path during placement.
       kind: z.literal("capturePrimaryProfile"),
       ...requestFrameFields,
+    })
+    .strict(),
+  z
+    .object({
+      // Store-key handshake (keychain refactor ticket 05). The host mints the
+      // per-user store key and asks the elected desktop to wrap it with that
+      // machine's OS keystore; the host keeps the raw bytes in memory only.
+      kind: z.literal("storeKeyWrapRequest"),
+      ...requestFrameFields,
+      rawKey: z.base64(),
+    })
+    .strict(),
+  z
+    .object({
+      // The blob some desktop wrapped earlier, handed back for `decryptString`.
+      kind: z.literal("storeKeyUnwrapRequest"),
+      ...requestFrameFields,
+      wrappedKey: z.base64(),
+    })
+    .strict(),
+  z
+    .object({
+      // One site's logins were cleared somewhere else for this user (keychain
+      // refactor ticket 07): another desktop's tile menu, or a tombstone the
+      // store recorded for `domain`. The receiving desktop removes that
+      // registrable domain's cookies and localStorage from its own persistent
+      // partition without echoing a delta back - the store already knows. Sent
+      // to every elected desktop subscriber of the user EXCEPT the one that
+      // reported the change. No `userId`: the identity is the stream's
+      // authenticated user.
+      kind: z.literal("primaryProfileEvict"),
+      ...textFrameFields,
+      domain: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      // The user forgot every saved browser login (keychain refactor ticket
+      // 08). The host has already crypto-shredded its slice for this user and
+      // suspended their live `primary` sessions; each connected desktop clears
+      // its own persistent partition on receipt. Sent to every subscriber of
+      // the user, the originator included - it clears the same way the others
+      // do. No `userId`: the identity is the stream's authenticated user.
+      kind: z.literal("primaryProfileForgotten"),
+      ...textFrameFields,
     })
     .strict(),
   z
@@ -529,6 +619,78 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
       reason: z.string().nullable(),
     })
     .strict(),
+  z
+    .object({
+      // Unsolicited: the client's persistent `primary` jar reported cookie
+      // changes for one registrable domain and coalesced them into a window
+      // (keychain refactor ticket 06). There is no request to answer and no
+      // `userId` - the identity is the stream's authenticated user, and only
+      // the elected lifecycle subscriber is heard (same gate as
+      // `primaryProfileCaptured`).
+      kind: z.literal("primaryProfileDelta"),
+      ...textFrameFields,
+      ...browserPrimaryProfileDeltaSchema.shape,
+    })
+    .strict(),
+  z
+    .object({
+      // "This machine can reach an OS keystore for you." Sent right after
+      // `electronTabLifecycleReady`; the host answers with whichever of
+      // the two key requests this user needs. The identity is the stream's
+      // authenticated user, so the frame carries no `userId`, and only the
+      // elected lifecycle subscriber is heard (same gate as
+      // `primaryProfileCaptured`).
+      kind: z.literal("storeKeyOffer"),
+      ...textFrameFields,
+    })
+    .strict(),
+  z
+    .object({
+      // `safeStorage.encryptString(rawKey)` for the `requestId` the host sent.
+      kind: z.literal("storeKeyWrapped"),
+      ...requestFrameFields,
+      wrappedKey: z.base64(),
+    })
+    .strict(),
+  z
+    .object({
+      // `safeStorage.decryptString(wrappedKey)`. `null` means this desktop
+      // cannot open the blob (keystore item ACL changed, different machine);
+      // the host then stays sealed and never re-mints over a live blob.
+      kind: z.literal("storeKeyUnwrapped"),
+      ...requestFrameFields,
+      rawKey: z.base64().nullable(),
+    })
+    .strict(),
+  z
+    .object({
+      // "Clear" on one row of Settings > Browser > Sites with saved logins
+      // (keychain refactor ticket 10, decision #13). Unsolicited and
+      // unacknowledged: the host tombstones that registrable domain in the
+      // user's slice and fans `primaryProfileEvict` out for it - to EVERY
+      // elected desktop of the user, the sender included, because the request
+      // came from a settings page rather than from a jar that already cleared
+      // itself. No `userId` - the identity is the stream's authenticated user,
+      // and only the elected lifecycle subscriber is heard (same gate as
+      // `primaryProfileDelta`).
+      kind: z.literal("clearSite"),
+      ...textFrameFields,
+      domain: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      // "Forget all browser logins" (keychain refactor ticket 08, decision
+      // #13). Unsolicited and unacknowledged: the host answers by shredding
+      // this user's key and slice and fanning `primaryProfileForgotten` back
+      // out, which is what tells this desktop to clear its own partition. No
+      // `userId` - the identity is the stream's authenticated user, and only
+      // the elected lifecycle subscriber is heard (same gate as
+      // `primaryProfileCaptured`).
+      kind: z.literal("forgetLogins"),
+      ...textFrameFields,
+    })
+    .strict(),
 ]);
 export type BrowserSessionsClientFrame = z.infer<
   typeof browserSessionsClientFrameSchema
@@ -541,6 +703,56 @@ export const browserSessionsV1 = defineStreamRpcContract({
   openRequestSchema: browserSessionsOpenRequestSchema,
   serverFrameSchema: browserSessionsServerFrameSchema,
   clientFrameSchema: browserSessionsClientFrameSchema,
+});
+
+/** One site the user's stored primary profile still holds cookies for. */
+export const browserSavedLoginSiteSchema = z
+  .object({
+    /** Registrable domain (eTLD+1) - never a cookie name, never a value. */
+    domain: z.string(),
+    /** Newest observation of any live cookie under that domain, host clock. */
+    lastSeen: z.number(),
+  })
+  .strict();
+export type BrowserSavedLoginSite = z.infer<typeof browserSavedLoginSiteSchema>;
+
+/** No input: the slice read is the caller's own, from the request identity. */
+export const browserSavedLoginSitesRequestSchema = z.object({}).strict();
+
+/**
+ * `sealed` is not "no sites": it is "this host holds no key for you yet", and
+ * the two must never render the same way - one is an empty jar, the other is a
+ * jar nobody here can open (spec section 6.2). Keeping them separate arms is
+ * what lets Settings offer "Connect this desktop to unlock saved logins"
+ * instead of claiming the user has no saved logins at all.
+ */
+export const browserSavedLoginSitesResponseSchema = z.discriminatedUnion(
+  "kind",
+  [
+    z.object({ kind: z.literal("sealed") }).strict(),
+    z
+      .object({
+        kind: z.literal("sites"),
+        sites: z.array(browserSavedLoginSiteSchema),
+      })
+      .strict(),
+  ],
+);
+export type BrowserSavedLoginSitesResponse = z.infer<
+  typeof browserSavedLoginSitesResponseSchema
+>;
+
+/**
+ * Names only, never values (spec section 7.3, decision #26). The host projects
+ * the registrable domains of the live cookie keys in the caller's own slice;
+ * the cookies themselves never leave the host on this path, so a compromised
+ * renderer learns which sites the user is signed into and nothing more.
+ */
+export const browserSavedLoginSitesV10 = defineRpcContract({
+  method: "browser.savedLoginSites",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: browserSavedLoginSitesRequestSchema,
+  responseSchema: browserSavedLoginSitesResponseSchema,
 });
 
 const browserScreencastFormatSchema = z.enum(["jpeg"]);

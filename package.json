@@ -34,6 +34,7 @@
     "@typescript-eslint/eslint-plugin": "catalog:",
     "@typescript-eslint/parser": "catalog:",
     "@typescript/native-preview": "7.0.0-dev.20260707.2",
+    "@vitest/web-worker": "4.1.11",
     "concurrently": "^10.0.5",
     "esbuild": "catalog:",
     "eslint": "catalog:",

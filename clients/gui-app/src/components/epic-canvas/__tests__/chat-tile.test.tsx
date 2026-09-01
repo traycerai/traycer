@@ -1407,7 +1407,15 @@ describe("<ChatTile />", () => {
     if (handle === null) {
       throw new Error("expected live epic handle");
     }
-    const chats = handle.doc.getMap("epic").get("chats");
+    // A registry handle is a PRODUCTION one and has no `Y.Doc` - the replica
+    // is on the worker thread. The message count is not projected either
+    // (`ChatProjection` carries no `messages`), so the honest read is the
+    // root-state port: `encodeRootState` is the production member that hands
+    // the replica's bytes across, and decoding them here reconstructs exactly
+    // the map this assertion always walked.
+    const rootState = new Y.Doc();
+    Y.applyUpdate(rootState, await handle.encodeRootState());
+    const chats = rootState.getMap("epic").get("chats");
     if (!(chats instanceof Y.Map)) {
       throw new Error("expected chats map");
     }
@@ -1420,6 +1428,7 @@ describe("<ChatTile />", () => {
       throw new Error("expected messages array");
     }
     expect(messages.length).toBe(1);
+    rootState.destroy();
   });
 
   it("uses the composer send button as the running turn stop control", async () => {
@@ -1713,8 +1722,10 @@ describe("<ChatTile />", () => {
       throw new Error("expected live epic handle");
     }
 
-    act(() => {
-      handle.store.getState().renameArtifact(CHAT_ARTIFACT.id, "Latest title");
+    await act(async () => {
+      await handle.store
+        .getState()
+        .renameArtifact(CHAT_ARTIFACT.id, "Latest title");
       emitChatSnapshotWithMessages({
         callbacks: chatHarness.callbacks(),
         access: "owner",

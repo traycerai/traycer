@@ -9,7 +9,10 @@ import {
 } from "@testing-library/react";
 import { EpicConnectionPill } from "@/components/epic-canvas/panels/epic-connection-pill";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { EpicSyncPillState } from "@/lib/epic-sync-pill-state";
+import type {
+  EpicSyncPillState,
+  EpicWriteCommandAlert,
+} from "@/lib/epic-sync-pill-state";
 import type { EpicChatBackupStatus } from "@/components/epic-canvas/panels/epic-chat-backup-status";
 import type { AgentActivityPresenceDegradedReason } from "@/hooks/agent/use-agent-activity-presence-degraded";
 import type { CommGraphFeedHealth } from "@/components/epic-canvas/comm-graph/use-comm-graph-feed-health";
@@ -28,6 +31,7 @@ const mocks = vi.hoisted(() => ({
     schemaVersion: { major: 2, minor: 1 },
   },
   commGraphFeedHealth: null as CommGraphFeedHealth | null,
+  writeCommandAlert: null as EpicWriteCommandAlert | null,
 }));
 
 vi.mock("@/hooks/agent/use-agent-activity-presence-degraded", () => ({
@@ -51,6 +55,7 @@ vi.mock("@/lib/epic-selectors", () => ({
       state === "offlineChangesSavedLocally"
     );
   },
+  useEpicWriteCommandAlert: () => mocks.writeCommandAlert,
 }));
 vi.mock("@/components/epic-canvas/panels/epic-chat-backup-status", () => ({
   useEpicChatBackupStatus: () => mocks.chatBackupStatus,
@@ -135,6 +140,7 @@ describe("<EpicConnectionPill />", () => {
       schemaVersion: { major: 2, minor: 1 },
     };
     mocks.commGraphFeedHealth = null;
+    mocks.writeCommandAlert = null;
   });
 
   it("renders the synced state icon-only with the claim on the accessible name", () => {
@@ -860,6 +866,105 @@ describe("<EpicConnectionPill />", () => {
       renderPill("synced");
 
       await expectTooltip(CLOUD_DOWN_ARIA);
+    });
+  });
+
+  describe("write-command alert (input v)", () => {
+    const REJECTED_MESSAGE =
+      "A recent change was refused and has not been applied. Make it again to retry.";
+    const SUPERSEDED_MESSAGE =
+      "A newer change from another device replaced a recent change of yours. Make it again if you still want it.";
+    const OUTCOME_UNKNOWN_MESSAGE =
+      "A recent change was sent but its result is unknown, so it may not have been applied. It settles on its own once the server confirms.";
+
+    it("a rejected write is visible while the artifact leg reads synced", async () => {
+      mocks.writeCommandAlert = "rejected";
+      renderPill("synced");
+
+      const pill = screen.getByRole<HTMLButtonElement>("button");
+      expect(pillClaimsSynced()).toBe(false);
+      expect(pill.dataset.source).toBe("write-command");
+      expect(screen.getByText("Change not saved")).not.toBeNull();
+      expect(pill.className).toContain("bg-red-500/10");
+      expect(
+        screen.getByTestId("epic-connection-pill-dot").className,
+      ).toContain("bg-red-500");
+      expect(pill.getAttribute("aria-label")).toBe(REJECTED_MESSAGE);
+      // Load-bearing: `warningAnnouncement` used to test `severity ===
+      // "warning"` exactly, so a `danger` non-artifact plane beside a healthy
+      // link announced nothing at all.
+      expect(screen.getByRole("status").textContent).toBe(REJECTED_MESSAGE);
+      await expectTooltip(REJECTED_MESSAGE);
+    });
+
+    it("a superseded write is visible (amber/warning) while the artifact leg reads synced", async () => {
+      mocks.writeCommandAlert = "superseded";
+      renderPill("synced");
+
+      const pill = screen.getByRole<HTMLButtonElement>("button");
+      expect(pillClaimsSynced()).toBe(false);
+      expect(pill.dataset.source).toBe("write-command");
+      expect(screen.getByText("Change replaced")).not.toBeNull();
+      expect(pill.className).toContain("bg-amber-500/10");
+      expect(
+        screen.getByTestId("epic-connection-pill-dot").className,
+      ).toContain("bg-amber-500");
+      expect(pill.getAttribute("aria-label")).toBe(SUPERSEDED_MESSAGE);
+      expect(screen.getByRole("status").textContent).toBe(SUPERSEDED_MESSAGE);
+      await expectTooltip(SUPERSEDED_MESSAGE);
+    });
+
+    it("an outcomeUnknown write outranks a busy artifact syncing state and takes the light", async () => {
+      mocks.writeCommandAlert = "outcomeUnknown";
+      renderPill("syncing");
+
+      const pill = screen.getByRole<HTMLButtonElement>("button");
+      expect(pill.dataset.source).toBe("write-command");
+      expect(screen.getByText("Change may not be saved")).not.toBeNull();
+      expect(pill.className).toContain("bg-amber-500/10");
+      expect(pill.getAttribute("aria-label")).toBe(OUTCOME_UNKNOWN_MESSAGE);
+      expect(screen.getByRole("status").textContent).toBe(
+        OUTCOME_UNKNOWN_MESSAGE,
+      );
+      await expectTooltip(OUTCOME_UNKNOWN_MESSAGE);
+    });
+
+    // "A second outage is never hidden behind the first": the artifact leg's
+    // own danger (a down link) wins the light on source order, but the
+    // rejected write must still ride `alsoDegraded` into the tooltip and the
+    // aria-label rather than disappearing behind the link outage.
+    it("a rejected write is not hidden behind a down link - both ride the tooltip and aria-label", async () => {
+      mocks.writeCommandAlert = "rejected";
+      renderPill("offline");
+
+      const pill = screen.getByRole<HTMLButtonElement>("button");
+      expect(pill.dataset.source).toBe("artifact");
+      expect(screen.getByText("Offline")).not.toBeNull();
+      expect(pill.getAttribute("aria-label")).toBe(
+        `${OFFLINE_COPY} ${REJECTED_MESSAGE}`,
+      );
+      expect(screen.getByRole("status").textContent).toBe(
+        `${OFFLINE_COPY} ${REJECTED_MESSAGE}`,
+      );
+      expect(await tooltipLines()).toEqual([OFFLINE_COPY, REJECTED_MESSAGE]);
+    });
+
+    it("a null alert changes nothing - the existing single-plane synced case still reads exactly as it did", () => {
+      mocks.writeCommandAlert = null;
+      renderPill("synced");
+
+      const pill = screen.getByRole<HTMLButtonElement>("button");
+      expect(pill.dataset.source).toBe("artifact");
+      expect(pillClaimsSynced()).toBe(true);
+    });
+
+    it("a null alert changes nothing - the existing single-plane offline case still reads exactly as it did", () => {
+      mocks.writeCommandAlert = null;
+      renderPill("offline");
+
+      const pill = screen.getByRole<HTMLButtonElement>("button");
+      expect(pill.dataset.source).toBe("artifact");
+      expect(pill.getAttribute("aria-label")).toBe(OFFLINE_COPY);
     });
   });
 });

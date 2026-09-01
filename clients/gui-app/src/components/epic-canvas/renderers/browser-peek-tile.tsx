@@ -8,6 +8,7 @@ import {
   type BrowserPictureInPictureControl,
 } from "@/components/epic-canvas/renderers/browser-tile-toolbar";
 import { BrowserStartPage } from "@/components/epic-canvas/renderers/browser-start-page";
+import { useMaybeBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
 import { useCloseCanvasTileWithNestedFocus } from "@/components/epic-canvas/renderers/use-close-canvas-tile-with-nested-focus";
 import type { TileController } from "@/components/epic-canvas/renderers/tile-controller";
 import { ScreencastSurface } from "@/components/epic-canvas/renderers/screencast-surface";
@@ -64,6 +65,14 @@ interface BrowserPeekTileProps {
   readonly node: BrowserPeekNode;
   readonly viewTabId: string;
   readonly paneId: string;
+  /**
+   * Set only by `BrowserSessionTile` while this peek is standing in for a
+   * durable Electron session's dormant/wake branch (`runtime.kind ===
+   * "electron"`). There the host's `complete` frame means "attached, going
+   * native" (`browser-screencast-plane.ts`'s `subscribeScreencast`), not a
+   * dead cast - so the lifecycle chip must not read as a failure mid-handoff.
+   */
+  readonly isElectronWake: boolean;
 }
 
 /**
@@ -105,6 +114,12 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
       snapshotVideoFrameIntoPeekCache(frameCacheKey, video, wasActivePlane);
     },
   });
+  // A peeked session can be isolated too; the toolbar has to say so rather
+  // than describe saved logins that this session never had.
+  const browserSessions = useMaybeBrowserSessionsContext();
+  const sessionProfile =
+    browserSessions?.items.find((item) => item.sessionId === node.sessionId)
+      ?.profile ?? "primary";
   const { image, frameSize, navState, armedEpoch, dialog } = session;
   const { tileRef, viewportRef, overlayButtonRef, imeInputRef } = session.refs;
   useRetainLastBrowserPeekFrame(frameCacheKey, image);
@@ -123,11 +138,18 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
   }, [inputOwnerId]);
 
   const status = useMemo(
-    () => browserPeekStatus(session.lifecycle, visible, session.details),
-    [session.details, session.lifecycle, visible],
+    () =>
+      browserPeekStatus(
+        session.lifecycle,
+        visible,
+        session.details,
+        props.isElectronWake,
+      ),
+    [session.details, session.lifecycle, visible, props.isElectronWake],
   );
 
   const chrome = useScreencastTileChrome({
+    profile: sessionProfile,
     navState,
     initialUrl: node.initialUrl,
     disabled: client === null,
@@ -429,6 +451,7 @@ function browserPeekStatus(
   lifecycle: ScreencastLifecycle,
   visible: boolean,
   details: string | null,
+  isElectronWake: boolean,
 ): BrowserPeekStatus {
   if (!visible) {
     return {
@@ -458,6 +481,18 @@ function browserPeekStatus(
     };
   }
   if (lifecycle === "complete") {
+    // An Electron wake's `complete` frame means "attached, going native", not
+    // a dead cast (`browser-screencast-plane.ts`'s `subscribeScreencast`) -
+    // WifiOff/"Ended" would read as a failure at the exact moment the tab is
+    // succeeding.
+    if (isElectronWake) {
+      return {
+        label: "Going native",
+        overlay: "Handing off to the native tab.",
+        tone: "muted",
+        Icon: Radio,
+      };
+    }
     return {
       label: "Ended",
       overlay: details,

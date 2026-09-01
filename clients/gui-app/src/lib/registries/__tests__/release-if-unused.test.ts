@@ -4,10 +4,8 @@ import {
   releaseOpenEpicSessionIfUnused,
 } from "@/lib/registries/epic-session-registry";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-} from "@/stores/epics/open-epic/store";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
+import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 
 /**
  * The registry is keyed by EPIC and the UI is keyed by TAB, and one window can
@@ -39,11 +37,17 @@ const noopStreamClientFactory: EpicStreamClientFactory = () => ({
 
 function mountSession(epicId: string): void {
   __getOpenEpicRegistryForTests().acquireMounted(epicId, () =>
-    createOpenEpicStore({
-      epicId,
-      streamClientFactory: noopStreamClientFactory,
+    openStoreForTest({
+      epicId: epicId,
       userId: null,
-      onAuthError: null,
+      // The factories go to the COMPOSITION now: the store stopped
+      // constructing a runtime, so a `streamClientFactory` has nowhere
+      // else to go.
+      factories: {
+        streamClientFactory: noopStreamClientFactory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     }),
   );
 }

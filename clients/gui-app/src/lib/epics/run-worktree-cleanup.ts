@@ -309,6 +309,7 @@ function runCleanupCommand(
               },
             },
           }),
+        null,
       );
       adoptClose(holder, owned.close);
     } catch (error) {
@@ -481,6 +482,7 @@ function deleteOneWorktree(input: {
               },
             },
           }),
+        null,
       );
       adoptClose(holder, owned.close);
     } catch (error) {

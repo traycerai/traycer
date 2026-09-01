@@ -21,6 +21,7 @@ import {
   useComposerDraftStore,
   type DraftState,
 } from "../composer-draft-store";
+import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
 const STORAGE_KEY = "traycer-gui-app:composer-drafts";
 
@@ -506,6 +507,7 @@ describe("composer draft store browserAnnotations", () => {
     });
     const records = draftOf("chat-m2").browserAnnotations;
     const handle = createChatSessionStore({
+      environment: CHAT_STORE_TEST_ENVIRONMENT,
       hostId: "host-m2",
       epicId: "epic-m2",
       chatId: "chat-m2",
@@ -526,6 +528,7 @@ describe("composer draft store browserAnnotations", () => {
         "action-m2": {
           clientActionId: "action-m2",
           action: "send",
+          queueItemId: null,
           interviewBlockId: null,
           interviewDeliveryRetry: null,
           messageId: "msg-m2",

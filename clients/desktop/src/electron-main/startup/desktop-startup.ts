@@ -121,7 +121,10 @@ import {
   installPowerMonitorListeners,
   trimUnusedChromiumFeatures,
 } from "../app/lifecycle";
-import { resolveBrowserCookieCryptoStateAtReady } from "../browser-view/storage/browser-cookie-crypto";
+import {
+  browserSavedLoginsFilePath,
+  initBrowserSavedLogins,
+} from "../browser-view/storage/browser-saved-logins";
 import { installProductionProxyAuthHandler } from "../app/proxy-auth";
 import {
   installCertificateErrorHandler,
@@ -390,9 +393,10 @@ async function runOnReady(state: BootState): Promise<void> {
     timed("on-ready", "user-agent", () => configureUserAgent()),
     timed("on-ready", "host-resolver-doh", () => configureHostResolverDoH()),
     timed("on-ready", "harden-session", () => hardenDefaultSession()),
-    timed("on-ready", "browser-cookie-crypto", () => {
-      resolveBrowserCookieCryptoStateAtReady();
-    }),
+    // One file read: whether this machine saves browser logins. On by default.
+    timed("on-ready", "browser-saved-logins", () =>
+      initBrowserSavedLogins(browserSavedLoginsFilePath()),
+    ),
     timed("on-ready", "spell-check", () => enableSpellCheck()),
     timed("on-ready", "notification-handler", () =>
       installNotificationActivationHandler(),
