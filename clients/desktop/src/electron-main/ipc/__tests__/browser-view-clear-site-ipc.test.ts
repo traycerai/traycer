@@ -130,6 +130,7 @@ vi.mock("../../browser-view/browser-session", () => {
     ensureBrowserViewSessionForPartition: vi.fn(
       ensureBrowserViewSessionForPartition,
     ),
+    isBrowserPrimaryProfileClearInProgress: vi.fn(() => false),
     onBrowserPrimaryProfileDelta: vi.fn(() => () => undefined),
     onBrowserViewCertificateError: vi.fn(),
     onBrowserViewDownloadChange: vi.fn(),

@@ -5,6 +5,7 @@ import type {
   BrowserPrimaryProfileDelta,
   BrowserScreencastServerFrame,
   BrowserSessionProfileKind,
+  BrowserStorageCookie,
   BrowserStorageState,
 } from "@traycer/protocol/host/browser/contracts";
 import type {
@@ -300,6 +301,24 @@ export type {
   BrowserViewElementStyle,
 } from "@traycer/protocol/persistence/epic/schemas";
 
+/**
+ * One observed sign-in on its way to the desktop's jar, with the identity of
+ * the host stream that delivered it.
+ *
+ * `connectionId` and `hostId` are read from the CONNECTION, never from the
+ * frame: the frame carries no contributor field precisely because one could
+ * only be forged. `connectionId` names a single stream incarnation and changes
+ * on every reconnect, because a reconnect is what makes the host replay its
+ * whole contributed set - and that replay is what the receive-side burst is
+ * sized against.
+ */
+export interface BrowserObservedProfileInput {
+  readonly connectionId: string;
+  readonly hostId: string;
+  readonly domain: string;
+  readonly cookies: readonly BrowserStorageCookie[];
+}
+
 export interface BrowserViewBridge {
   updateBounds(input: BrowserViewBoundsUpdate): Promise<void>;
   setReservedChords(tokens: readonly string[]): Promise<void>;
@@ -391,6 +410,24 @@ export interface BrowserViewBridge {
    * tombstones, and an echo would only re-assert what it just decided.
    */
   evictSite(domain: string): Promise<void>;
+  /**
+   * A sign-in a host witnessed inside one of its own headless sessions
+   * (`primaryProfileObserved`), offered to this machine's master jar
+   * (universal-sign-in decision 8). Merge-only: it can add cookies and never
+   * remove or replace any.
+   *
+   * The renderer forwards it without judging it. Main is the only place the
+   * frame is validated - independent domain re-derivation, the per-frame
+   * bounds, expired-cookie rejection, the no-resurrection window and the rate
+   * limit all live there - because this is the one direction in which a host
+   * writes the user's jar, and the renderer holds no jar to check it against.
+   *
+   * Resolves once the frame has been applied or dropped; nothing is reported
+   * back to the host either way. The applied cookies leave through the normal
+   * cookie-change observer as a `primaryProfileDelta`, which is what converges
+   * every other attached host.
+   */
+  applyObservedProfile(input: BrowserObservedProfileInput): Promise<void>;
   onFindChange(handler: (change: BrowserViewFindChange) => void): {
     dispose: () => void;
   };

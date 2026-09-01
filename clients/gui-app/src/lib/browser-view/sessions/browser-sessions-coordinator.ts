@@ -1,9 +1,10 @@
-import type {
-  BrowserSessionInfo,
-  BrowserSessionsClientFrame,
-  BrowserSessionsServerFrame,
-  BrowserTabIdentity,
-  BrowserTabPreview,
+import {
+  BROWSER_PRIMARY_PROFILE_OBSERVED_MAX_COOKIES,
+  type BrowserSessionInfo,
+  type BrowserSessionsClientFrame,
+  type BrowserSessionsServerFrame,
+  type BrowserTabIdentity,
+  type BrowserTabPreview,
 } from "@traycer/protocol/host/browser/contracts";
 import { BrowserSessionsStreamClient } from "@traycer-clients/shared/host-transport/browser-sessions-stream-client";
 import type {
@@ -515,6 +516,14 @@ function createBrowserSessionsCoordinator(args: {
     let snapshotReadyForConnection = false;
     let connectionStatus: StreamConnectionStatus = "connecting";
     let connectionGeneration = 0;
+    /**
+     * Identity of the live stream incarnation, minted on every open and dropped
+     * on every close. It is what the desktop's observed-frame rate limiter is
+     * keyed by: the host replays its whole contributed set once per attach, so
+     * a reconnect is a NEW burst and must not be charged to the last one's
+     * budget. Null off-connection, which is also when no frame can arrive.
+     */
+    let observedConnectionId: string | null = null;
     // Unsolicited cookie deltas from the durable `primary` jar (spec §6.3).
     // Gated on this connection having sent `electronTabLifecycleReady`: that
     // readiness is exactly what makes the stream jar-authorized on the host, so
@@ -613,9 +622,11 @@ function createBrowserSessionsCoordinator(args: {
       applyPipHostLifecycle(args.epicId, args.owner.hostId, lifecycle);
       channel.lifecycle = lifecycle;
       if (status === "open") {
+        observedConnectionId = crypto.randomUUID();
         electronTabs.connect();
         sendLifecycleReadyIfReady();
       } else {
+        observedConnectionId = null;
         if (wasOpen) connectionGeneration += 1;
         resolveCaptureAckWaiters();
         electronTabs.disconnect();
@@ -651,6 +662,7 @@ function createBrowserSessionsCoordinator(args: {
         frame,
         epicId: args.epicId,
         hostId: args.owner.hostId,
+        connectionId: observedConnectionId,
         setItems: (items) => {
           patchState({
             items,
@@ -838,6 +850,8 @@ function handleBrowserSessionsFrame(args: {
   readonly frame: BrowserSessionsServerFrame;
   readonly epicId: string;
   readonly hostId: string;
+  /** The live stream incarnation this frame arrived on; null once it closed. */
+  readonly connectionId: string | null;
   readonly currentItems: () => readonly BrowserSessionInfo[];
   readonly setItems: (items: readonly BrowserSessionInfo[]) => void;
   readonly pendingCloses: PendingRequests<void>;
@@ -871,6 +885,7 @@ function handleBrowserSessionsFrame(args: {
         frame,
         epicId: args.epicId,
         hostId: args.hostId,
+        connectionId: args.connectionId,
         pendingOpens: args.pendingOpens,
         pendingPreviews: args.pendingPreviews,
         browserView: args.browserView,
@@ -921,6 +936,7 @@ function handleBrowserSessionsSubsystemFrame(args: {
   readonly frame: BrowserSessionsSubsystemFrame;
   readonly epicId: string;
   readonly hostId: string;
+  readonly connectionId: string | null;
   readonly pendingOpens: PendingRequests<BrowserTabIdentity>;
   readonly pendingPreviews: PendingRequests<BrowserTabPreview>;
   readonly browserView: BrowserViewBridge | null;
@@ -928,13 +944,9 @@ function handleBrowserSessionsSubsystemFrame(args: {
 }): void {
   const frame = args.frame;
   switch (frame.kind) {
-    case "openTabResult": {
-      const pending = args.pendingOpens.get(frame.requestId);
-      if (pending === undefined) return;
-      if (frame.result.ok) pending.resolve(frame.result);
-      else pending.reject(new Error(frame.result.reason));
+    case "openTabResult":
+      handleOpenTabResult(frame, args.pendingOpens);
       return;
-    }
     case "tabPreviewResult": {
       const pending = args.pendingPreviews.get(frame.requestId);
       if (pending === undefined) return;
@@ -980,14 +992,13 @@ function handleBrowserSessionsSubsystemFrame(args: {
         browserView: args.browserView,
       });
       return;
-    // NOT YET APPLIED. The universal-sign-in contract arm (ticket 01) landed
-    // ahead of the desktop merge that validates and applies it - independent
-    // domain re-derivation, the frame bounds, the suppression window and the
-    // reject traces are ticket 03's scope, and applying an unvalidated
-    // host->jar write here would be exactly the injection the epic's security
-    // model bounds. Until then the observation is deliberately dropped, which
-    // is the pre-epic behaviour. Replace this arm in ticket 03.
     case "primaryProfileObserved":
+      applyObservedProfileFrame({
+        frame,
+        hostId: args.hostId,
+        connectionId: args.connectionId,
+        browserView: args.browserView,
+      });
       return;
     case "storeKeyWrapRequest":
     case "storeKeyUnwrapRequest":
@@ -1014,6 +1025,88 @@ function handleBrowserSessionsSubsystemFrame(args: {
       });
     }
   }
+}
+
+/**
+ * Settles one `openTab`, the way {@link handleCloseAck} settles one close.
+ * Extracted for the same reason: inlined, it puts
+ * {@link handleBrowserSessionsSubsystemFrame} over the complexity budget.
+ */
+function handleOpenTabResult(
+  frame: Extract<
+    BrowserSessionsServerFrame,
+    { readonly kind: "openTabResult" }
+  >,
+  pendingOpens: PendingRequests<BrowserTabIdentity>,
+): void {
+  const pending = pendingOpens.get(frame.requestId);
+  if (pending === undefined) return;
+  if (frame.result.ok) pending.resolve(frame.result);
+  else pending.reject(new Error(frame.result.reason));
+}
+
+/**
+ * A sign-in one of the user's hosts witnessed inside a headless session
+ * (universal-sign-in decisions 1-5), offered to this machine's master jar.
+ *
+ * The renderer judges the frame's CONTENT not at all: independent domain
+ * re-derivation, the expired-cookie rejection, the clear-in-progress gate and
+ * the rate limit are main's, because main is where the jar is. It owns two
+ * other things.
+ *
+ * PROVENANCE: the frame names no contributor, so the host and the stream
+ * incarnation it arrived on are taken from this coordinator's own connection
+ * and travel with it. A window with no desktop bridge, or one whose stream has
+ * closed under it, has nowhere to put the observation.
+ *
+ * SIZE: this array is about to be copied across the IPC boundary into the MAIN
+ * process, and the mux's own frame ceiling is megabytes wide, so an oversized
+ * frame is dropped here rather than handed over and rejected after the copy.
+ * Main re-checks the same bound and owns the `over-bound` trace; this is a
+ * cheap pre-filter in front of a memory cost, not the authority.
+ *
+ * Nothing here re-checks that the sending host was allowed to write this jar.
+ * That authorization is a server-side fact (`jarAuthorizedSubscribersForUser`,
+ * decided from stream facts no client declares) and the server is its only
+ * authority; all a client can add is validation of the CONTENT plus the
+ * connection provenance above, which is the only host-identity fact it holds.
+ *
+ * Fire-and-forget: the frame is a fan-out, not a request, and the applied
+ * cookies find their own way back to the hosts as an ordinary delta.
+ */
+function applyObservedProfileFrame(args: {
+  readonly frame: Extract<
+    BrowserSessionsServerFrame,
+    { readonly kind: "primaryProfileObserved" }
+  >;
+  readonly hostId: string;
+  readonly connectionId: string | null;
+  readonly browserView: BrowserViewBridge | null;
+}): void {
+  const browserView = args.browserView;
+  const connectionId = args.connectionId;
+  if (browserView === null || connectionId === null) return;
+  if (
+    args.frame.cookies.length > BROWSER_PRIMARY_PROFILE_OBSERVED_MAX_COOKIES
+  ) {
+    appLogger.warn("[browser] dropped an over-bound observed sign-in", {
+      hostId: args.hostId,
+      cookies: args.frame.cookies.length,
+    });
+    return;
+  }
+  void browserView
+    .applyObservedProfile({
+      connectionId,
+      hostId: args.hostId,
+      domain: args.frame.domain,
+      cookies: args.frame.cookies,
+    })
+    .catch((cause: unknown) => {
+      appLogger.warn("[browser] could not apply an observed sign-in", {
+        cause: cause instanceof Error ? cause.message : String(cause),
+      });
+    });
 }
 
 /**

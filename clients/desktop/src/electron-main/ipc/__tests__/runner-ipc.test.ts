@@ -759,6 +759,8 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.browserViewClearSite,
         RunnerHostInvoke.browserViewEvictSite,
         RunnerHostInvoke.browserViewForgetLogins,
+        // Universal sign-in ticket 03: the host->jar write direction.
+        RunnerHostInvoke.browserViewApplyObservedProfile,
         RunnerHostInvoke.browserViewSaveLoginsGet,
         RunnerHostInvoke.browserViewSaveLoginsSet,
         RunnerHostInvoke.browserViewStoreKeyWrap,

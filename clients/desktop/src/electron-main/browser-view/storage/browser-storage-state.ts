@@ -445,17 +445,98 @@ export async function seedBrowserViewCookies(
   webContents: BrowserStorageSeedWebContents,
 ): Promise<void> {
   if (storageState === null) return;
-  const cookieDetails = parseStorageState(storageState)
-    // Electron's cookies API has no partition key, so setting a partitioned
-    // cookie here would land it in the UNPARTITIONED jar - readable from
-    // top-level sites CHIPS scoped it out of. Skipping it costs a re-login in
-    // that embedded context; restoring it merged is a cross-site leak.
-    .cookies.filter((cookie) => cookie.partitionKey === null)
-    .map(toCookieSetDetails);
-  for (const details of cookieDetails) {
-    await webContents.session.cookies.set(toElectronCookieSetDetails(details));
+  const cookies = parseStorageState(storageState).cookies.filter(
+    isUnpartitionedCookie,
+  );
+  for (const cookie of cookies) {
+    await setStorageCookie(cookie, webContents.session);
   }
   await webContents.session.cookies.flushStore();
+}
+
+/** What one universal-sign-in observation did to the jar it was merged into. */
+export interface BrowserObservedCookieMergeResult {
+  readonly applied: number;
+  /**
+   * Cookies that reached the jar and did not land: partitioned, unrepresentable
+   * by this shell, or refused by Chromium's own `cookies.set` validation. They
+   * are counted rather than thrown on, which is the whole difference between
+   * this path and {@link seedBrowserViewCookies}.
+   */
+  readonly rejected: number;
+}
+
+/**
+ * The universal-sign-in applier's half of the seed path (ticket 03): cookies a
+ * host observed a sign-in producing, merged into one `primary` jar.
+ *
+ * It shares {@link setStorageCookie} with {@link seedBrowserViewCookies}, so an
+ * observed cookie is normalised, scoped and validated by exactly the same code
+ * - Chromium's own `cookies.set` is what decides whether the attributes are
+ * acceptable, here as there. What differs is the failure policy, and it differs
+ * on purpose: a SEED is the host's whole jar handed to a fresh tab, so one
+ * unrepresentable cookie means the seed itself is wrong and the caller has to
+ * hear about it. An OBSERVATION is untrusted remote input covering a domain the
+ * user may be signing into right now, and losing the other twenty cookies of
+ * that sign-in to one Chromium refusal would turn a bounded fidelity loss into
+ * a failed login with nothing to point at.
+ *
+ * Merge-only: it sets and never removes. The caller has already dropped the
+ * expired cookies that would otherwise reach `cookies.set` as deletes.
+ */
+export async function mergeObservedProfileCookies(
+  cookies: readonly ProtocolStorageCookie[],
+  browserSession: BrowserStorageSession,
+): Promise<BrowserObservedCookieMergeResult> {
+  let applied = 0;
+  let rejected = 0;
+  for (const cookie of cookies) {
+    try {
+      // The parse is INSIDE the try, and that placement is the guard rather
+      // than a style choice: this schema's transforms THROW on a
+      // wire-legal-but-unrepresentable cookie (an empty name, an empty path, a
+      // path without a leading slash), and a thrown error escapes `safeParse`
+      // itself. Outside the try, one such cookie would abort the loop
+      // mid-frame - an attacker-chosen PREFIX of the frame applied, the flush
+      // skipped, and no count or trace of any of it.
+      const parsed = desktopStorageCookieSchema.parse(cookie);
+      if (!isUnpartitionedCookie(parsed)) {
+        rejected += 1;
+        continue;
+      }
+      await setStorageCookie(parsed, browserSession);
+      applied += 1;
+    } catch {
+      rejected += 1;
+    }
+  }
+  await browserSession.cookies.flushStore();
+  return { applied, rejected };
+}
+
+/**
+ * One parsed cookie into one jar, through Chromium's own `cookies.set`
+ * validation. Both application paths go through here - the tab seed and the
+ * universal-sign-in observed merge - so neither can normalise or scope a cookie
+ * differently from the other.
+ */
+async function setStorageCookie(
+  cookie: DesktopStorageCookie,
+  browserSession: BrowserStorageSession,
+): Promise<void> {
+  await browserSession.cookies.set(
+    toElectronCookieSetDetails(toCookieSetDetails(cookie)),
+  );
+}
+
+/**
+ * Electron's cookies API has no partition key, so setting a partitioned cookie
+ * would land it in the UNPARTITIONED jar - readable from top-level sites CHIPS
+ * scoped it out of. Skipping it costs a re-login in that embedded context;
+ * restoring it merged is a cross-site leak.
+ */
+function isUnpartitionedCookie(cookie: DesktopStorageCookie): boolean {
+  return cookie.partitionKey === null;
 }
 
 /**

@@ -184,6 +184,14 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
         ipcRenderer.invoke(RunnerHostInvoke.browserViewEvictSite, {
           domain,
         }) as Promise<void>,
+      // Forwarded whole, unjudged: main is where an observed frame is validated
+      // and bounded, and the connection facts travel with it because the frame
+      // itself names no contributor.
+      applyObservedProfile: (input) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.browserViewApplyObservedProfile,
+          input,
+        ) as Promise<void>,
       onFindChange: (handler) =>
         subscribe<BrowserViewFindChange>(
           RunnerHostEvent.browserViewFindChange,

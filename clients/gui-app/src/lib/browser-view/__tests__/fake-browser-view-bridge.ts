@@ -183,6 +183,10 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
     return Promise.resolve();
   }
 
+  applyObservedProfile(): Promise<void> {
+    return Promise.resolve();
+  }
+
   capturePrimaryProfile() {
     return Promise.resolve({
       status: "unavailable" as const,

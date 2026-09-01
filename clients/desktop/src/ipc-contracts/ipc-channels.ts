@@ -352,6 +352,12 @@ export const RunnerHostInvoke = {
   // elsewhere, and deliberately reports nothing back.
   browserViewClearSite: "runnerHost:browserView:primaryProfile:clearSite",
   browserViewEvictSite: "runnerHost:browserView:primaryProfile:evictSite",
+  // A sign-in a host witnessed inside one of its headless sessions, offered to
+  // this machine's master jar (universal-sign-in ticket 03). The only host->jar
+  // WRITE direction the contract has, so main validates and bounds every frame
+  // itself rather than trusting the renderer that forwarded it.
+  browserViewApplyObservedProfile:
+    "runnerHost:browserView:primaryProfile:applyObserved",
   // Saved browser logins: on by default, off only if the user says so in
   // Settings. `...Set` switches the partition and brings the live tiles back.
   browserViewSaveLoginsGet: "runnerHost:browserView:saveLogins:get",

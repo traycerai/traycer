@@ -3,6 +3,7 @@ import {
   browserCdpCommandSchema,
   browserCdpTargetSchema,
   browserSessionProfileKindSchema,
+  browserStorageCookieSchema,
   browserStorageStateSchema,
 } from "@traycer/protocol/host/browser/contracts";
 import type {
@@ -164,6 +165,27 @@ const storeKeyMaterialSchema = z.base64();
  */
 const evictDomainSchema = z.object({ domain: z.string().min(1) });
 
+/**
+ * One `primaryProfileObserved` frame on its way to the jar (universal-sign-in
+ * ticket 03).
+ *
+ * `connectionId` and `hostId` name the host stream that delivered it, which the
+ * renderer knows and the frame never carries - the rate limiter is keyed by the
+ * connection, so an identity taken from the payload would be an identity the
+ * sender chose.
+ *
+ * The cookie array is deliberately NOT bounded here. A schema bound would turn
+ * an over-bound frame into a parse failure at the IPC edge, where there is no
+ * domain to key a WARN by and no `over-bound` trace to find afterwards; the
+ * applier counts and rejects instead (see the bounds' own contract note).
+ */
+const observedProfileSchema = z.object({
+  connectionId: nonEmptyStringSchema,
+  hostId: nonEmptyStringSchema,
+  domain: nonEmptyStringSchema,
+  cookies: z.array(browserStorageCookieSchema),
+});
+
 /** The saved-logins toggle's new value. */
 const saveLoginsSchema = z.boolean();
 
@@ -183,6 +205,7 @@ export const browserViewIpcPayload = {
   findRequest: findRequestSchema,
   findStop: findStopSchema,
   nativeTabCapability: nativeTabCapabilitySchema,
+  observedProfile: observedProfileSchema,
   overlayOcclusion: overlayOcclusionSchema,
   overlayPaintAck: overlayPaintAckSchema,
   overlayRelease: overlayReleaseSchema,

@@ -580,6 +580,7 @@ function buildFakeBridge(
       }),
       clearSite: async () => undefined,
       evictSite: async () => undefined,
+      applyObservedProfile: async () => undefined,
       getSaveLogins: async () => true,
       setSaveLogins: async (enabled) => enabled,
       // This shell test has no OS keystore; the store-key handshake refuses

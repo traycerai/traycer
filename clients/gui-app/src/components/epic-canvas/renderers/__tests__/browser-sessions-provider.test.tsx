@@ -20,7 +20,10 @@ import {
   hostRpcRegistry,
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
-import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
+import {
+  BROWSER_PRIMARY_PROFILE_OBSERVED_MAX_COOKIES,
+  type BrowserSessionInfo,
+} from "@traycer/protocol/host/browser/contracts";
 
 const hookState = vi.hoisted(() => ({
   streamClient: null as FakeStreamClient | null,
@@ -359,6 +362,9 @@ class FakeBridge {
   readonly evictSite = vi.fn<BrowserViewBridge["evictSite"]>(() =>
     Promise.resolve(),
   );
+  readonly applyObservedProfile = vi.fn<
+    BrowserViewBridge["applyObservedProfile"]
+  >(() => Promise.resolve());
   readonly capturePrimaryProfile = vi.fn<
     BrowserViewBridge["capturePrimaryProfile"]
   >(() =>
@@ -1788,5 +1794,137 @@ describe("BrowserSessionsProvider final capture before route loss", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+/**
+ * Universal sign-in ticket 03, renderer half: the observed frame reaches the
+ * desktop bridge with the identity of the CONNECTION that delivered it. The
+ * frame names no contributor, so anything the applier keys by has to come from
+ * here.
+ */
+describe("BrowserSessionsProvider observed sign-in carry-over", () => {
+  beforeEach(() => {
+    hookState.ownerIdentityKey = "local\u0000host-test\u0000user-test";
+    installTransport(false);
+    hookState.browserViewBridge = null;
+    hookState.localHostId = "host-test";
+  });
+
+  afterEach(() => {
+    cleanup();
+    hookState.browserViewBridge = null;
+    hookState.localHostId = "host-test";
+  });
+
+  const OBSERVED_COOKIE = {
+    name: "sid",
+    value: "abc",
+    domain: "example.com",
+    path: "/",
+    expires: -1,
+    httpOnly: true,
+    secure: true,
+    sameSite: "Lax",
+    partitionKey: null,
+  };
+
+  function emitObserved(stream: FakeStreamSession): void {
+    act(() => {
+      stream.emit(
+        {
+          kind: "primaryProfileObserved",
+          hasBinaryPayload: false,
+          domain: "example.com",
+          cookies: [OBSERVED_COOKIE],
+        },
+        null,
+      );
+    });
+  }
+
+  it("hands the frame to the desktop with the delivering host and one stable connection id", () => {
+    const bridge = new FakeBridge();
+    installNativeBridge(bridge);
+    renderProvider();
+    const stream = hookState.streamClient?.sessions[0];
+    if (stream === undefined) throw new Error("expected browser stream");
+
+    act(() => {
+      stream.emitStatus("open");
+    });
+    emitObserved(stream);
+    emitObserved(stream);
+
+    expect(bridge.applyObservedProfile).toHaveBeenCalledTimes(2);
+    const [first, second] = bridge.applyObservedProfile.mock.calls;
+    expect(first[0]).toMatchObject({
+      // The stream's own host, never a field of the frame.
+      hostId: "host-test",
+      domain: "example.com",
+      cookies: [OBSERVED_COOKIE],
+    });
+    expect(first[0].connectionId.length).toBeGreaterThan(0);
+    // One incarnation is one replay budget, so both frames of the same
+    // connection have to be charged to the same bucket.
+    expect(second[0].connectionId).toBe(first[0].connectionId);
+  });
+
+  it("drops an over-bound frame before it is copied into the main process", () => {
+    const bridge = new FakeBridge();
+    installNativeBridge(bridge);
+    renderProvider();
+    const stream = hookState.streamClient?.sessions[0];
+    if (stream === undefined) throw new Error("expected browser stream");
+
+    act(() => {
+      stream.emitStatus("open");
+    });
+    act(() => {
+      stream.emit(
+        {
+          kind: "primaryProfileObserved",
+          hasBinaryPayload: false,
+          domain: "example.com",
+          cookies: Array.from(
+            { length: BROWSER_PRIMARY_PROFILE_OBSERVED_MAX_COOKIES + 1 },
+            () => OBSERVED_COOKIE,
+          ),
+        },
+        null,
+      );
+    });
+
+    // The mux's own frame ceiling is megabytes wide, and this array is about to
+    // be copied into MAIN - so the oversized frame dies here rather than after
+    // the copy. Main re-checks the same bound and owns the trace.
+    expect(bridge.applyObservedProfile).not.toHaveBeenCalled();
+  });
+
+  it("mints a fresh connection id per incarnation, since a reconnect replays the whole set again", () => {
+    const bridge = new FakeBridge();
+    installNativeBridge(bridge);
+    renderProvider();
+    const stream = hookState.streamClient?.sessions[0];
+    if (stream === undefined) throw new Error("expected browser stream");
+
+    act(() => {
+      stream.emitStatus("open");
+    });
+    emitObserved(stream);
+    act(() => {
+      stream.emitStatus("reconnecting");
+    });
+    // Nothing to charge a closed connection: the frame cannot arrive, and the
+    // renderer has no incarnation to name.
+    emitObserved(stream);
+    act(() => {
+      stream.emitStatus("open");
+    });
+    emitObserved(stream);
+
+    expect(bridge.applyObservedProfile).toHaveBeenCalledTimes(2);
+    const [first, second] = bridge.applyObservedProfile.mock.calls;
+    expect(second[0].connectionId).not.toBe(first[0].connectionId);
   });
 });

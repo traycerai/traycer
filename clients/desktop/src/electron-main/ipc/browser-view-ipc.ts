@@ -30,6 +30,7 @@ import {
   clearBrowserViewPendingCertificateError,
   ensureBrowserViewSession,
   ensureBrowserViewSessionForPartition,
+  isBrowserPrimaryProfileClearInProgress,
   onBrowserPrimaryProfileDelta,
   onBrowserViewCertificateError,
   onBrowserViewDownloadChange,
@@ -55,6 +56,12 @@ import {
   clearBrowserSite,
   seedBrowserViewCookies,
 } from "../browser-view/storage/browser-storage-state";
+import {
+  applyBrowserObservedProfile,
+  BrowserObservedConnectionGovernor,
+  traceBrowserObservedProfile,
+} from "../browser-view/storage/browser-observed-profile";
+import { BrowserJarSerializer } from "../browser-view/storage/browser-jar-serializer";
 import { trustBrowserCertificate } from "../app/cert-trust";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
 import type {
@@ -74,6 +81,17 @@ const PRIMARY_PROFILE_REQUEST: BrowserSessionProfileRequest = {
 export function registerBrowserViewIpc(
   bridge: RunnerIpcBridge,
 ): BrowserViewManager {
+  // One governor for the process, keyed inside by the host connection each
+  // frame arrived on - so every stream's paced attach replay meets the budget
+  // it was paced against, and no host can borrow another's.
+  const observedConnections = new BrowserObservedConnectionGovernor(() =>
+    Date.now(),
+  );
+  // Everything that writes or empties the `primary` jar queues here, keyed by
+  // registrable domain. It is what makes the applier's clear-in-progress check
+  // an ordering fact instead of a read that a clear can invalidate before the
+  // merge it authorised runs.
+  const jarSerializer = new BrowserJarSerializer();
   const primaryProfileSnapshots = new BrowserPrimaryProfileSnapshotCoordinator(
     (origins) =>
       captureBrowserPrimaryProfile(origins, {
@@ -418,7 +436,12 @@ export function registerBrowserViewIpc(
         browserViewIpcPayload.tileKey.parse(payload),
       );
       if (domain === null) return;
-      await clearBrowserSiteEverywhere(domain);
+      // Queued on the site, like every other write to this jar: an observed
+      // sign-in for the same domain must not land in the middle of the clear
+      // and put back what it is removing.
+      await jarSerializer.runOnDomain(domain, () =>
+        clearBrowserSiteEverywhere(domain),
+      );
       log.info("[browser-view] cleared cookies for one site", { domain });
     },
   );
@@ -431,11 +454,47 @@ export function registerBrowserViewIpc(
     RunnerHostInvoke.browserViewEvictSite,
     async (_event, payload) => {
       const domain = browserViewIpcPayload.evictDomain.parse(payload).domain;
-      await suppressBrowserPrimaryProfileDelta(domain, () =>
-        clearBrowserSiteEverywhere(domain),
+      // Serialised OUTSIDE the suppression, so the window covers the clear and
+      // nothing else: opening it while still queued would refuse observations
+      // for a site this handler has not begun to touch.
+      await jarSerializer.runOnDomain(domain, () =>
+        suppressBrowserPrimaryProfileDelta(domain, () =>
+          clearBrowserSiteEverywhere(domain),
+        ),
       );
       log.info("[browser-view] evicted one site on the host's request", {
         domain,
+      });
+    },
+  );
+
+  // A sign-in one of the user's hosts witnessed inside a headless session
+  // (universal-sign-in decision 8) - the one direction in which a host writes
+  // this jar, and therefore the one handler that treats its whole payload as
+  // untrusted. Every check lives in `applyBrowserObservedProfile`; nothing is
+  // answered back, and the merged cookies leave again as an ordinary delta.
+  //
+  // The frame is applied to the jar `primary` guests are on right now, which is
+  // `persist:traycer-browser` whenever this machine saves logins. When the user
+  // turned saving OFF that is the ephemeral jar instead, which is the whole
+  // point: the sign-in still reaches their live tiles, and a machine told not
+  // to keep logins never writes one to disk on a remote host's say-so.
+  bridge.handleInvoke(
+    RunnerHostInvoke.browserViewApplyObservedProfile,
+    async (_event, payload) => {
+      const observed = browserViewIpcPayload.observedProfile.parse(payload);
+      const result = await applyBrowserObservedProfile(observed, {
+        now: () => Date.now(),
+        isClearInProgress: isBrowserPrimaryProfileClearInProgress,
+        getSession: () => ensureBrowserViewSession(PRIMARY_PROFILE_REQUEST),
+        serializeOnDomain: (domain, action) =>
+          jarSerializer.runOnDomain(domain, action),
+        governor: observedConnections,
+      });
+      traceBrowserObservedProfile(result, {
+        hostId: observed.hostId,
+        connectionId: observed.connectionId,
+        governor: observedConnections,
       });
     },
   );
@@ -549,32 +608,38 @@ export function registerBrowserViewIpc(
     // even with saved logins off or no tile opened this run, and opening it is
     // what installs the observer the suppression mutes.
     const jars = primaryProfileJars();
-    await suppressAllBrowserPrimaryProfileDeltas(async () => {
-      let failure: { readonly error: unknown } | null = null;
-      for (const primarySession of jars) {
-        try {
-          await primarySession.clearStorageData();
-        } catch (error) {
-          // The tiles still have to be recreated: they are sitting on a jar the
-          // host no longer holds a key for, and leaving them there is worse.
-          // The other jar still gets its turn for the same reason.
-          failure ??= { error };
-          log.warn("[browser-view] primary session clear failed", {
-            error: describeLogError(error),
-          });
+    // A forget names no site, so it takes the serializer's barrier over every
+    // one of them: an observed merge for ANY domain that is mid-flight finishes
+    // first, and one that arrives during the forget waits until the jar is
+    // empty rather than writing into a clear.
+    await jarSerializer.runOnEveryDomain(async () =>
+      suppressAllBrowserPrimaryProfileDeltas(async () => {
+        let failure: { readonly error: unknown } | null = null;
+        for (const primarySession of jars) {
+          try {
+            await primarySession.clearStorageData();
+          } catch (error) {
+            // The tiles still have to be recreated: they are sitting on a jar the
+            // host no longer holds a key for, and leaving them there is worse.
+            // The other jar still gets its turn for the same reason.
+            failure ??= { error };
+            log.warn("[browser-view] primary session clear failed", {
+              error: describeLogError(error),
+            });
+          }
         }
-      }
-      // Unconditional, unlike `clearBrowserSiteEverywhere`'s prune, and for the
-      // reason that prune is conditional: a whole-jar clear names no origins, so
-      // dropping this memory starves no retry - while KEEPING it after a failed
-      // clear would let the next capture upload to the host the very
-      // localStorage it just shredded its slice for.
-      primaryProfileSnapshots.reset();
-      await manager.recreateNativeTabsOnCurrentPartition();
-      // Surfaced only once the tiles are back, and surfaced at all so the
-      // caller is not told the logins are gone when a jar still holds them.
-      if (failure !== null) throw failure.error;
-    });
+        // Unconditional, unlike `clearBrowserSiteEverywhere`'s prune, and for the
+        // reason that prune is conditional: a whole-jar clear names no origins, so
+        // dropping this memory starves no retry - while KEEPING it after a failed
+        // clear would let the next capture upload to the host the very
+        // localStorage it just shredded its slice for.
+        primaryProfileSnapshots.reset();
+        await manager.recreateNativeTabsOnCurrentPartition();
+        // Surfaced only once the tiles are back, and surfaced at all so the
+        // caller is not told the logins are gone when a jar still holds them.
+        if (failure !== null) throw failure.error;
+      }),
+    );
     log.info("[browser-view] forgot the saved browser logins");
   });
 
