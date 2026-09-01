@@ -60,7 +60,7 @@ export function MobileCurrentTileBar(props: MobileCurrentTileBarProps) {
   const titleGenerationPending = useEpicLiveArtifactTitleGenerating(
     tile.type === "chat" ? tile.id : null,
   );
-  const browserPresentation = useBrowserTabPresentation(tile);
+  const browserPresentation = useBrowserTabPresentation(tile, epicId);
   const displayTitle = browserPresentation?.title ?? fallbackDisplayTitle;
 
   const renameKind = tileRenameKind(tile);

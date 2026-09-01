@@ -569,7 +569,7 @@ function useTabRenameControl(args: {
     epicId,
     terminalHostClient,
   );
-  const browserPresentation = useBrowserTabPresentation(tab);
+  const browserPresentation = useBrowserTabPresentation(tab, epicId);
   const displayTitle =
     browserPresentation?.title ??
     (terminalControl?.mode === "capable" || terminalControl?.mode === "unknown"
