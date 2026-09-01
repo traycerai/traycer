@@ -316,8 +316,7 @@ import {
   managedCommandViewV10,
 } from "@traycer/protocol/host/managed-command/contracts";
 import {
-  hostFileReadV10,
-  hostFileWriteV10,
+  hostDirectoryListV10,
   hostOneOffShellRunV10,
   hostResolveRepoPathsV10,
 } from "@traycer/protocol/host/host-agent-capabilities";
@@ -7293,26 +7292,13 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  "host.file.read": {
+  "host.directory.list": {
     degrade: { kind: "unsupported" },
     1: {
       latestMinor: 0,
       versions: {
         0: {
-          contract: hostFileReadV10,
-          upgradeFromPreviousVersion: null,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-  },
-  "host.file.write": {
-    degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: hostFileWriteV10,
+          contract: hostDirectoryListV10,
           upgradeFromPreviousVersion: null,
         },
       },

@@ -3,8 +3,7 @@ import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import { agentArchiveV10 } from "@traycer/protocol/host/agent/archive";
 import {
-  hostFileReadV10,
-  hostFileWriteV10,
+  hostDirectoryListV10,
   hostOneOffShellRunV10,
   hostResolveRepoPathsV10,
 } from "@traycer/protocol/host/host-agent-capabilities";
@@ -24,9 +23,8 @@ const NEW_METHODS = [
   managedCommandConfigureV10.method,
   managedCommandRestartV10.method,
   hostResolveRepoPathsV10.method,
-  hostFileReadV10.method,
-  hostFileWriteV10.method,
   hostOneOffShellRunV10.method,
+  hostDirectoryListV10.method,
 ] as const;
 
 describe("host-agent capability contracts", () => {
@@ -39,14 +37,27 @@ describe("host-agent capability contracts", () => {
     }
   });
 
-  it("parses a host.file.read request and a one-off shell result", () => {
-    expect(
-      hostFileReadV10.requestSchema.parse({
-        epicId: "epic-1",
-        path: "/tmp/workspace/a.txt",
-        encoding: "utf8",
-      }).encoding,
-    ).toBe("utf8");
+  it("projects a directory entry without the dialer's key material", () => {
+    const parsed = hostDirectoryListV10.responseSchema.parse({
+      hosts: [
+        {
+          hostId: "host-b",
+          displayName: "Studio",
+          platform: "darwin",
+          appVersion: "1.2.3",
+          relayAttached: true,
+          busy: false,
+          // A server that volunteers key material must not have it survive
+          // into the agent-facing value; the closed schema strips it.
+          publicKey: "MUST-NOT-SURVIVE",
+        },
+      ],
+    });
+    expect(parsed.hosts[0]).not.toHaveProperty("publicKey");
+    expect(parsed.hosts[0]?.platform).toBe("darwin");
+  });
+
+  it("parses a one-off shell result", () => {
     expect(
       hostOneOffShellRunV10.responseSchema.parse({
         stdout: "ok",

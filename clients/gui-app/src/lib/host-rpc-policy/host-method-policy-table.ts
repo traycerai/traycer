@@ -737,8 +737,7 @@ export const HOST_METHOD_POLL_TABLE = {
   // Archiving retires the agent record; fifo so a tap is not coalesced away.
   "agent.archive": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "host.resolveRepoPaths": { ...LATEST_SCHEDULING, poll: null },
-  "host.file.read": { ...LATEST_SCHEDULING, poll: null },
-  "host.file.write": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "host.directory.list": { ...LATEST_SCHEDULING, poll: null },
   "host.oneOffShell.run": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
