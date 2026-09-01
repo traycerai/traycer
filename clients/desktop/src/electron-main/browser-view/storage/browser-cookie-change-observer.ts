@@ -485,7 +485,7 @@ function traceSuppressedRemovals(
 ): void {
   const tallies = new Map<string, SuppressedRemoval & { removals: number }>();
   for (const removal of suppressed.values()) {
-    const id = `${removal.reason} ${removal.cause}`;
+    const id = `${removal.reason}\0${removal.cause}`;
     const tally = tallies.get(id) ?? { ...removal, removals: 0 };
     tallies.set(id, { ...tally, removals: tally.removals + 1 });
   }

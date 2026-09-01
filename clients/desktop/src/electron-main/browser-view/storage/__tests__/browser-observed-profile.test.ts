@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Cookie, CookiesSetDetails } from "electron";
+import type { Cookie } from "electron";
 import {
   BROWSER_PRIMARY_PROFILE_OBSERVED_MAX_BURST,
   BROWSER_PRIMARY_PROFILE_OBSERVED_MAX_COOKIES,
@@ -18,7 +18,7 @@ import {
   BrowserCookieChangeObserver,
 } from "../browser-cookie-change-observer";
 import { log } from "../../../app/logger";
-import { matchesDomainFilter } from "./cookie-jar-fixture";
+import { FakeCookieJar } from "./cookie-jar-fixture";
 
 /**
  * The desktop's enforcement of `primaryProfileObserved` (universal-sign-in
@@ -26,10 +26,12 @@ import { matchesDomainFilter } from "./cookie-jar-fixture";
  * real `cookies.set` conversion, and - for the echo round - the real cookie
  * change observer.
  *
- * The jar below is the one piece that has to be a stand-in, so it models the
- * two Chromium behaviours the enforcement is written against: a `set` whose
- * expiration is in the past DELETES the matching cookie, and a `set` may refuse
- * one cookie without the batch around it failing.
+ * The jar is the one piece that has to be a stand-in, and it lives in
+ * `cookie-jar-fixture.ts` so ticket 07's cross-plane suite answers to the same
+ * one: it models the two Chromium behaviours the enforcement is written
+ * against - a `set` whose expiration is in the past DELETES the matching
+ * cookie, and a `set` may refuse one cookie without the batch around it
+ * failing.
  */
 
 vi.mock("../../../app/logger", () => ({
@@ -39,141 +41,6 @@ vi.mock("../../../app/logger", () => ({
   sanitizeLogFields: (fields: Record<string, unknown>) => fields,
   describeLogError: (error: unknown) => String(error),
 }));
-
-class FakeCookieJar {
-  private readonly jar: Cookie[] = [];
-  private listener:
-    | ((
-        event: unknown,
-        cookie: Cookie,
-        cause: string,
-        removed: boolean,
-      ) => void)
-    | null = null;
-  /** Cookie names this jar refuses, standing in for Chromium's own validation. */
-  private readonly refusedNames = new Set<string>();
-  flushes = 0;
-
-  set(details: CookiesSetDetails): Promise<void> {
-    // Electron types the name as optional; the apply path always names one.
-    const name = details.name ?? "";
-    if (this.refusedNames.has(name)) {
-      return Promise.reject(new Error(`jar refused ${name}`));
-    }
-    const cookie = toJarCookie(details);
-    // Chromium's own semantics, and the reason expired cookies never reach
-    // here: setting an already-expired cookie is a DELETE of the match.
-    if (
-      details.expirationDate !== undefined &&
-      details.expirationDate * 1_000 <= Date.now()
-    ) {
-      this.removeAt(this.indexOf(cookie), cookie);
-      return Promise.resolve();
-    }
-    const index = this.indexOf(cookie);
-    if (index === -1) this.jar.push(cookie);
-    else this.jar[index] = cookie;
-    this.emit(cookie, false);
-    return Promise.resolve();
-  }
-
-  get(filter: { readonly domain?: string }): Promise<Cookie[]> {
-    const domain = filter.domain;
-    return Promise.resolve(
-      domain === undefined
-        ? [...this.jar]
-        : this.jar.filter((cookie) =>
-            matchesDomainFilter(cookie.domain ?? "", domain),
-          ),
-    );
-  }
-
-  flushStore(): Promise<void> {
-    this.flushes += 1;
-    return Promise.resolve();
-  }
-
-  on(
-    _event: "changed",
-    listener: (
-      event: unknown,
-      cookie: Cookie,
-      cause: string,
-      removed: boolean,
-    ) => void,
-  ): void {
-    this.listener = listener;
-  }
-
-  off(
-    _event: "changed",
-    listener: (
-      event: unknown,
-      cookie: Cookie,
-      cause: string,
-      removed: boolean,
-    ) => void,
-  ): void {
-    if (this.listener === listener) this.listener = null;
-  }
-
-  /** Pre-existing jar state the applier never wrote, and no `changed` event. */
-  seed(cookie: Cookie): void {
-    this.jar.push(cookie);
-  }
-
-  refuse(name: string): void {
-    this.refusedNames.add(name);
-  }
-
-  names(): readonly string[] {
-    return this.jar.map((cookie) => cookie.name).sort();
-  }
-
-  find(name: string): Cookie | undefined {
-    return this.jar.find((cookie) => cookie.name === name);
-  }
-
-  private removeAt(index: number, cookie: Cookie): void {
-    if (index === -1) return;
-    this.jar.splice(index, 1);
-    this.emit(cookie, true);
-  }
-
-  private indexOf(cookie: Cookie): number {
-    return this.jar.findIndex(
-      (existing) =>
-        existing.name === cookie.name &&
-        canonicalDomain(existing.domain ?? "") ===
-          canonicalDomain(cookie.domain ?? "") &&
-        existing.path === cookie.path,
-    );
-  }
-
-  private emit(cookie: Cookie, removed: boolean): void {
-    this.listener?.({}, cookie, "explicit", removed);
-  }
-}
-
-function canonicalDomain(domain: string): string {
-  return domain.startsWith(".") ? domain.slice(1) : domain;
-}
-
-function toJarCookie(details: CookiesSetDetails): Cookie {
-  const hostOnly = details.domain === undefined;
-  return {
-    name: details.name ?? "",
-    value: details.value ?? "",
-    domain: details.domain ?? new URL(details.url).hostname,
-    hostOnly,
-    path: details.path ?? "/",
-    secure: details.secure === true,
-    httpOnly: details.httpOnly === true,
-    session: details.expirationDate === undefined,
-    sameSite: details.sameSite ?? "no_restriction",
-    expirationDate: details.expirationDate,
-  };
-}
 
 function seededCookie(input: {
   readonly name: string;
