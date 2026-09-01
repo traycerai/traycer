@@ -1450,16 +1450,16 @@ describe("wakeHeldRemoteSessions", () => {
 describe("RemoteStreamClient reconnectAll routing", () => {
   it("exposes PLAN_RESTRICTED as an owner-visible terminal reason", () => {
     const session = fakeSession();
-    const client = new RemoteStreamClient(session);
+    const client = new RemoteStreamClient(session, () => 123_456);
     expect(client.getClosedReason()).toBeNull();
 
     session.fatalCode = "PLAN_RESTRICTED";
-    expect(client.getClosedReason()).toBe("plan-restricted");
+    expect(client.getClosedReason()).toBe("plan-restricted:123456");
   });
 
   it("routes probeFirst:false to forceReconnect and probeFirst:true to wake, never both", () => {
     const session = fakeSession();
-    const client = new RemoteStreamClient(session);
+    const client = new RemoteStreamClient(session, () => null);
 
     // The Retry-now path. Reverting the wrapper to always-wake leaves every
     // lower-level force test green - only this direct pin catches it.

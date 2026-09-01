@@ -10,8 +10,8 @@ import type {
 import type { IStreamSession } from "../i-stream-session";
 import type { ParamsOf, StreamMethodSupport } from "../ws-stream-client";
 import {
-  PLAN_RESTRICTED_CLOSED_REASON,
   PLAN_RESTRICTED_FATAL_CODE,
+  planRestrictedClosedReason,
 } from "./config";
 import type { IRemoteSession } from "./remote-session";
 
@@ -33,10 +33,15 @@ export class RemoteStreamClient<
   StreamRegistry extends VersionedStreamRpcRegistry,
 > implements IHostStreamClient<StreamRegistry> {
   private readonly session: IRemoteSession<RpcRegistry, StreamRegistry>;
+  private readonly planRestrictedReprobeAt: () => number | null;
   readonly instanceId = `remote-stream-client-${nextRemoteStreamClientId++}`;
 
-  constructor(session: IRemoteSession<RpcRegistry, StreamRegistry>) {
+  constructor(
+    session: IRemoteSession<RpcRegistry, StreamRegistry>,
+    planRestrictedReprobeAt: () => number | null,
+  ) {
     this.session = session;
+    this.planRestrictedReprobeAt = planRestrictedReprobeAt;
   }
 
   subscribe<Method extends keyof StreamRegistry & string>(
@@ -63,9 +68,11 @@ export class RemoteStreamClient<
   }
 
   getClosedReason(): string | null {
-    return this.session.terminalFatal()?.code === PLAN_RESTRICTED_FATAL_CODE
-      ? PLAN_RESTRICTED_CLOSED_REASON
-      : null;
+    if (this.session.terminalFatal()?.code !== PLAN_RESTRICTED_FATAL_CODE) {
+      return null;
+    }
+    const reprobeAt = this.planRestrictedReprobeAt();
+    return reprobeAt === null ? null : planRestrictedClosedReason(reprobeAt);
   }
 
   /**

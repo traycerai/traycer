@@ -1364,7 +1364,7 @@ describe("RemoteSession terminal close notification", () => {
       const session = buildSession(relay, lease, {
         revalidateForReconnect: revalidate,
       });
-      const streamClient = new RemoteStreamClient(session);
+      const streamClient = new RemoteStreamClient(session, () => null);
       let closedEvents = 0;
       streamClient.onClosed(() => {
         closedEvents += 1;
@@ -1549,7 +1549,7 @@ describe("RemoteSession plan-restricted entitlement denial", () => {
         evidence: NO_TRANSPORT_EVIDENCE,
         clientIdentity: TEST_CLIENT_IDENTITY,
       });
-      const streamClient = new RemoteStreamClient(session);
+      const streamClient = new RemoteStreamClient(session, () => null);
       let closedEvents = 0;
       streamClient.onClosed(() => {
         closedEvents += 1;
@@ -1582,7 +1582,7 @@ describe("RemoteSession availability-recovered evidence", () => {
       const relay = new FakeRelayHost();
       const lease = new MutableBearerLease("valid-token", "user-1");
       const session = buildSession(relay, lease, null);
-      const streamClient = new RemoteStreamClient(session);
+      const streamClient = new RemoteStreamClient(session, () => null);
       let recoveredEvents = 0;
       streamClient.subscribeAvailabilityRecovered(() => {
         recoveredEvents += 1;
@@ -1958,7 +1958,7 @@ describe("RemoteStreamClient dynamic subscribe params", () => {
       const streamClient = new RemoteStreamClient<
         VersionedRpcRegistry,
         typeof dualMajorCursorStreamRegistry
-      >(session);
+      >(session, () => null);
       const stream = streamClient.subscribe("cursor.subscribe", {
         cursor: null,
       });
@@ -1997,7 +1997,7 @@ describe("RemoteStreamClient dynamic subscribe params", () => {
       const streamClient = new RemoteStreamClient<
         VersionedRpcRegistry,
         typeof cursorStreamRegistry
-      >(session);
+      >(session, () => null);
       let cursor: number | null = null;
       const stream = streamClient.subscribeWithParamsProvider(
         "cursor.subscribe",
@@ -3638,7 +3638,7 @@ describe("RemoteSession wake", () => {
       { proactiveWakeEligible: true },
       () => session,
     );
-    const streamClient = new RemoteStreamClient(view);
+    const streamClient = new RemoteStreamClient(view, () => null);
     try {
       view.start();
       await vi.waitFor(() => expect(relay.openBearers).toHaveLength(3), {

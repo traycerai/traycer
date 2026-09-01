@@ -140,6 +140,20 @@ export const PLAN_RESTRICTED_REPROBE_MS = HOST_STANDING_BOUND_MS;
 export const PLAN_RESTRICTED_FATAL_CODE = "PLAN_RESTRICTED";
 export const PLAN_RESTRICTED_CLOSED_REASON = "plan-restricted";
 
+export function planRestrictedClosedReason(reprobeAt: number): string {
+  return `${PLAN_RESTRICTED_CLOSED_REASON}:${reprobeAt}`;
+}
+
+export function planRestrictedReprobeAtFromClosedReason(
+  reason: string | null,
+): number | null {
+  if (reason === null) return null;
+  const prefix = `${PLAN_RESTRICTED_CLOSED_REASON}:`;
+  if (!reason.startsWith(prefix)) return null;
+  const value = Number(reason.slice(prefix.length));
+  return Number.isFinite(value) ? value : null;
+}
+
 /**
  * Relay keepalive cadence. The client sends the `relay-ping` string on this
  * interval; the relay auto-responds `relay-pong` WITHOUT waking the DO

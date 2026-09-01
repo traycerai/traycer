@@ -22,6 +22,7 @@ export { RemoteHostMessenger } from "./remote-host-messenger";
 export { RemoteStreamClient } from "./remote-stream-client";
 export {
   acquireRemoteSession,
+  planRestrictedReprobeAt,
   hasReadyRemoteSession,
   hasBorrowableRemoteSession,
   tryAcquireReadyRemoteSession,

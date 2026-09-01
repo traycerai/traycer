@@ -9,10 +9,7 @@ import {
   type RemoteHostDirectoryEntry,
 } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { createRemoteHostTransport } from "@traycer-clients/shared/host-transport/remote/index";
-import {
-  PLAN_RESTRICTED_CLOSED_REASON,
-  PLAN_RESTRICTED_REPROBE_MS,
-} from "@traycer-clients/shared/host-transport/remote/config";
+import { planRestrictedReprobeAtFromClosedReason } from "@traycer-clients/shared/host-transport/remote/config";
 import type { HostStatusDTO } from "@traycer/protocol/host/host-status";
 import {
   hostRpcRegistry,
@@ -580,11 +577,17 @@ export function useHostStreamClientBindingFor(
     };
     const rebuild = (): void => {
       if (teardownInProgressRef.current) return;
-      if (client.getClosedReason() === PLAN_RESTRICTED_CLOSED_REASON) {
-        backoffTimer = window.setTimeout(() => {
-          backoffTimer = null;
-          setRebuildNonce((nonce) => nonce + 1);
-        }, PLAN_RESTRICTED_REPROBE_MS);
+      const planRestrictedReprobeAt = planRestrictedReprobeAtFromClosedReason(
+        client.getClosedReason(),
+      );
+      if (planRestrictedReprobeAt !== null) {
+        backoffTimer = window.setTimeout(
+          () => {
+            backoffTimer = null;
+            setRebuildNonce((nonce) => nonce + 1);
+          },
+          Math.max(0, planRestrictedReprobeAt - Date.now()),
+        );
         return;
       }
       const delayMs = rebuildBackoff.nextRebuildDelayMs(Date.now());

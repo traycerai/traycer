@@ -823,6 +823,7 @@ describe("SelectionAuthorityEngineImpl - death aggregation", () => {
           fleetHost("H1", "remote"),
           fleetHost("H2", "remote"),
           fleetHost("H3", "remote"),
+          fleetHost("H4", "remote"),
         ],
       },
       initialIdentityKey: "acct-1",
@@ -873,6 +874,26 @@ describe("SelectionAuthorityEngineImpl - death aggregation", () => {
       dialRefusal("H3", "mix-3", null, 0),
     );
     expect(findLease(engine.snapshot().leases, "H3")?.dead).toEqual({
+      reason: "plan-restricted",
+    });
+
+    engine.ingestEvidence(
+      "A",
+      attachA.incarnationId,
+      sessionEvidence("H4", "live", "established", 0),
+    );
+    engine.ingestEvidence(
+      "A",
+      attachA.incarnationId,
+      dialRefusal("H4", "denied-while-live", "plan-restricted", 0),
+    );
+    expect(findLease(engine.snapshot().leases, "H4")?.status).toBe("ready");
+    engine.ingestEvidence(
+      "A",
+      attachA.incarnationId,
+      sessionEvidence("H4", "live", "lost", 1),
+    );
+    expect(findLease(engine.snapshot().leases, "H4")?.dead).toEqual({
       reason: "plan-restricted",
     });
 

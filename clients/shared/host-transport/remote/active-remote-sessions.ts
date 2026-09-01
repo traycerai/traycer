@@ -288,6 +288,15 @@ function isPlanRestrictedSuppressed(entry: CacheEntry): boolean {
   );
 }
 
+export function planRestrictedReprobeAt(
+  identity: RemoteSessionIdentity,
+): number | null {
+  const entry = entriesByKey.get(remoteSessionCacheKey(identity));
+  return entry !== undefined && isPlanRestrictedSuppressed(entry)
+    ? entry.planRestrictedUntil
+    : null;
+}
+
 function armPlanRestrictedSuppression(entry: CacheEntry, key: string): void {
   if (!isPlanRestricted(entry) || entry.planRestrictedUntil !== null) {
     return;

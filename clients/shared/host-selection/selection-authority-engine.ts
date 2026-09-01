@@ -1496,27 +1496,12 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
       this.recordDialDisposition(report, "inert-indeterminate");
       return;
     }
-    if (this.hasLiveSession(hostId)) {
-      // Recorded for diagnostics, never accumulated: a live session anywhere
-      // in the app outranks every other evidence class (invariant 5). The
-      // streak resumes only once the session set for this host empties.
-      this.recordDialDisposition(report, "suppressed-live-session");
-      return;
-    }
     const evidence = this.hostEvidence(hostId);
     const now = this.options.clock.now();
-    const planRestrictionActive =
-      evidence.planRestrictedRefusalObserved &&
-      evidence.planRestrictedUntil !== null &&
-      now < evidence.planRestrictedUntil;
     if (
       report.outcome === "confirmed-refusal" &&
       report.refusalDetail === "plan-restricted"
     ) {
-      // Entitlement is a sticky terminal verdict, not the classification of
-      // merely the latest packet. Concurrent attempts already in flight may
-      // still report an ordinary refusal after this one; only proof of life
-      // (`onHostProvedAlive`) is strong enough to clear the known denial.
       evidence.planRestrictedRefusalObserved = true;
       evidence.refusalStreak = 0;
       if (
@@ -1525,6 +1510,22 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
       ) {
         evidence.planRestrictedUntil = now + PLAN_RESTRICTED_REPROBE_MS;
       }
+    }
+    if (this.hasLiveSession(hostId)) {
+      // Recorded for diagnostics, never accumulated: a live session anywhere
+      // in the app outranks every other evidence class (invariant 5). The
+      // streak resumes only once the session set for this host empties.
+      this.recordDialDisposition(report, "suppressed-live-session");
+      return;
+    }
+    const planRestrictionActive =
+      evidence.planRestrictedRefusalObserved &&
+      evidence.planRestrictedUntil !== null &&
+      now < evidence.planRestrictedUntil;
+    if (
+      report.outcome === "confirmed-refusal" &&
+      report.refusalDetail === "plan-restricted"
+    ) {
       this.recordDialDisposition(report, "suppressed-plan-restriction");
       return;
     }
