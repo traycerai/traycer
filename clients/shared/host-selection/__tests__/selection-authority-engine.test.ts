@@ -812,7 +812,7 @@ describe("SelectionAuthorityEngineImpl - death aggregation", () => {
     authority.dispose();
   });
 
-  it("plan-restricted provenance: only comes from a confirmed refusal carrying it; null-detail is offline; last-counted refusal wins", () => {
+  it("plan-restricted provenance is sticky until proof of life; ordinary refusals still derive offline", () => {
     const clock = createFakeAuthorityClock(0);
     const authority = createTestAuthority({
       initialFleet: {
@@ -872,8 +872,17 @@ describe("SelectionAuthorityEngineImpl - death aggregation", () => {
       dialRefusal("H3", "mix-3", null, 0),
     );
     expect(findLease(engine.snapshot().leases, "H3")?.dead).toEqual({
-      reason: "offline",
+      reason: "plan-restricted",
     });
+
+    engine.ingestEvidence(
+      "A",
+      attachA.incarnationId,
+      dialOutcome("H3", "recovered", "success", 1),
+    );
+    expect(findLease(engine.snapshot().leases, "H3")?.status).toBe(
+      "connecting",
+    );
 
     authority.dispose();
   });

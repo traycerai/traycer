@@ -521,7 +521,7 @@ interface CompatRecord {
 /** Per-host aggregated evidence. Pruned when the host leaves the fleet. */
 interface HostEvidence {
   refusalStreak: number;
-  lastCountedRefusalDetail: "plan-restricted" | null;
+  planRestrictedRefusalObserved: boolean;
   compat: CompatRecord | null;
   /** Authority-local deadline of the current tombstone episode, if any. */
   restartEpisodeEndsAt: number | null;
@@ -555,7 +555,7 @@ interface HostEvidence {
 function emptyHostEvidence(): HostEvidence {
   return {
     refusalStreak: 0,
-    lastCountedRefusalDetail: null,
+    planRestrictedRefusalObserved: false,
     compat: null,
     restartEpisodeEndsAt: null,
     provedAliveAtLeastOnce: false,
@@ -1438,7 +1438,7 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     // through, so no producer has to remember it separately.
     evidence.provedAliveAtLeastOnce = true;
     evidence.refusalStreak = 0;
-    evidence.lastCountedRefusalDetail = null;
+    evidence.planRestrictedRefusalObserved = false;
     evidence.restartEpisodeEndsAt = null;
     // The dial-stall counter retires with the streak, and HERE rather than
     // only on a dial success, because this is the single funnel every kind of
@@ -1499,8 +1499,16 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     }
     const evidence = this.hostEvidence(hostId);
     evidence.refusalStreak += 1;
-    evidence.lastCountedRefusalDetail =
-      report.outcome === "confirmed-refusal" ? report.refusalDetail : null;
+    if (
+      report.outcome === "confirmed-refusal" &&
+      report.refusalDetail === "plan-restricted"
+    ) {
+      // Entitlement is a sticky terminal verdict, not the classification of
+      // merely the latest packet. Concurrent attempts already in flight may
+      // still report an ordinary refusal after this one; only proof of life
+      // (`onHostProvedAlive`) is strong enough to clear the known denial.
+      evidence.planRestrictedRefusalObserved = true;
+    }
     this.recordDialDisposition(
       report,
       // Equality, not `>=`: this names the ONE report that crossed, which is
@@ -2891,17 +2899,16 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     }
     if (
       evidence !== null &&
-      (evidence.lastCountedRefusalDetail === "plan-restricted" ||
+      (evidence.planRestrictedRefusalObserved ||
         evidence.refusalStreak >= CONFIRMED_DEATH_REFUSAL_STREAK)
     ) {
       return {
         hostId,
         status: "dead",
         dead: {
-          reason:
-            evidence.lastCountedRefusalDetail === "plan-restricted"
-              ? "plan-restricted"
-              : "offline",
+          reason: evidence.planRestrictedRefusalObserved
+            ? "plan-restricted"
+            : "offline",
         },
       };
     }
