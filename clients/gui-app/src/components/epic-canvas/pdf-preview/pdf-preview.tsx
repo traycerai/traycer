@@ -450,7 +450,9 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
           </TooltipWrapper>
           <div className="flex items-center gap-1 text-ui-xs text-muted-foreground">
             <Input
-              value={pageInput}
+              // Empty until pagesinit - a "1" next to "/ 0" reads as a
+              // contradictory state, not a loading one.
+              value={documentReady ? pageInput : ""}
               disabled={!documentReady}
               onChange={(event) => setPageInput(event.target.value)}
               onBlur={handlePageInputCommit}
@@ -461,7 +463,9 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
               aria-label="Page number"
               className="h-6 w-10 px-1 text-center text-ui-xs"
             />
-            <span className="whitespace-nowrap">/ {pageCount}</span>
+            <span className="whitespace-nowrap">
+              / {pageCount > 0 ? pageCount : "\u2013"}
+            </span>
           </div>
           <TooltipWrapper
             label="Next page"
@@ -502,7 +506,7 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
             className="min-w-9 whitespace-nowrap text-center text-ui-xs tabular-nums text-muted-foreground"
             aria-label="Zoom level"
           >
-            {scalePercent === null ? "" : `${scalePercent}%`}
+            {scalePercent === null ? "\u2013" : `${scalePercent}%`}
           </span>
           <TooltipWrapper
             label="Zoom in"
