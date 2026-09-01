@@ -221,6 +221,52 @@ describe("WorktreeAutoCleanupSection", () => {
     expect(screen.queryByRole("button", { name: /re-?authorize/i })).toBeNull();
   });
 
+  it("renders an upcoming check as a countdown, never as a past-tense label", async () => {
+    renderSection(
+      clientWithPolicy({
+        get: () =>
+          policyFixture({
+            enabled: true,
+            lastEvaluatedAt: Date.now() - 5 * 60_000,
+            nextEvaluationAt: Date.now() + 10 * 60_000,
+          }),
+        set: (r) => policyFixture(r),
+      }),
+    );
+
+    await waitFor(() => {
+      screen.getByTestId("worktree-auto-cleanup-schedule");
+    });
+    const schedule = screen.getByTestId("worktree-auto-cleanup-schedule");
+    // The regression this pins: `useRelativeTimestamp` clamps a negative
+    // delta, so a check ~10m AWAY rendered as "Just now" - a past-tense claim
+    // about an event that has not happened.
+    expect(schedule.textContent).toMatch(/next check in \d+m/);
+    expect(schedule.textContent).not.toContain("next check Just now");
+    expect(schedule.textContent).toContain("Last checked");
+  });
+
+  it("renders an overdue check as due now rather than counting down to zero", async () => {
+    renderSection(
+      clientWithPolicy({
+        get: () =>
+          policyFixture({
+            enabled: true,
+            lastEvaluatedAt: Date.now() - 60 * 60_000,
+            nextEvaluationAt: Date.now() - 60_000,
+          }),
+        set: (r) => policyFixture(r),
+      }),
+    );
+
+    await waitFor(() => {
+      screen.getByTestId("worktree-auto-cleanup-schedule");
+    });
+    expect(
+      screen.getByTestId("worktree-auto-cleanup-schedule").textContent,
+    ).toContain("next check due now");
+  });
+
   it("sends the current revision with a preset threshold change", async () => {
     const requests: Array<{
       readonly inactivityDays: number;

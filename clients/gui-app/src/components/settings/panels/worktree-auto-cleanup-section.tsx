@@ -27,7 +27,11 @@ import {
   AUTO_CLEANUP_PAUSED_COPY,
   autoCleanupDaysError,
 } from "@/components/settings/panels/worktree-auto-cleanup-copy";
-import { useRelativeTimestamp } from "@/lib/relative-time";
+import {
+  formatResetCountdown,
+  useRelativeTimestamp,
+  useSampledNow,
+} from "@/lib/relative-time";
 
 /**
  * Settings ▸ Worktrees ▸ Automatic cleanup — the per-HOST opt-in.
@@ -263,7 +267,7 @@ function AutoCleanupSchedule(props: {
         <>Next check: paused</>
       ) : (
         <>
-          next check <AutoCleanupWhen at={policy.nextEvaluationAt} />
+          next check <AutoCleanupNextCheck at={policy.nextEvaluationAt} />
         </>
       )}
     </span>
@@ -274,6 +278,19 @@ function AutoCleanupSchedule(props: {
 function AutoCleanupWhen(props: { readonly at: number }): ReactNode {
   const label = useRelativeTimestamp(props.at);
   return <>{label}</>;
+}
+
+/**
+ * The FUTURE leaf. `useRelativeTimestamp` is a past-tense formatter whose
+ * negative-delta clamp renders any upcoming instant as "Just now" - which is
+ * exactly what a freshly enabled policy showed for a check ~30s away. A time
+ * that has already arrived (the scheduler picks the pass up on its next
+ * cadence tick) reads as due rather than as a countdown of zero.
+ */
+function AutoCleanupNextCheck(props: { readonly at: number }): ReactNode {
+  const now = useSampledNow();
+  if (props.at <= now) return <>due now</>;
+  return <>in {formatResetCountdown(props.at, now)}</>;
 }
 
 /**
