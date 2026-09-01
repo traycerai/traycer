@@ -157,7 +157,8 @@ function armedVersionWithin(
  *   than the most prominent — and out of the header it stops competing with
  *   the pin banner for the same corner.
  *
- * Mutations go through the four v7.0 pack RPCs.
+ * Mutations go through the v7.0 pack RPCs; the footer's update check is a read
+ * on a separate optional method, gated separately.
  *
  * Capability-gated (non-floor optional RPCs): see
  * {@link PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHODS}.
@@ -172,12 +173,9 @@ export function ProviderPackVersionManagerPanel(
   // Read unconditionally, beside the gate above, so hook order is fixed. The
   // BOOLEAN form is right because this control merely hides: an unanswered
   // handshake reads as absent, the button appears once the manifest arrives,
-  // and nothing is stranded meanwhile.
-  //
-  // Deliberately NOT a member of `PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHODS`.
-  // That array's contract is "all four or none" for the whole panel; a host
-  // that has the version manager and not this one method must keep its version
-  // manager and lose one button.
+  // and nothing is stranded meanwhile. Gated here rather than through
+  // {@link PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHODS} so it can hide
+  // alone - see that array's doc for why it is not a member.
   const canCheckForUpdates = useHostSupportsMethod(
     hostId,
     "providers.refreshPackDiscovery",
@@ -659,12 +657,14 @@ function VersionManagerBanners(props: {
  * The band used to BE the `<label>`, so the whole width toggled the switch.
  * Splitting it costs that: the label now wraps only its own text and control.
  *
- * `ml-auto` on the label rather than `justify-between` on the row, because the
- * button's presence is a capability answer that arrives LATE: the capability
- * hook fails closed until a manifest lands, so a supported host paints this
- * footer without the button for a beat and then with it. Anchoring the label to
- * the right edge keeps that flip to one element appearing, instead of the
- * preference sliding across the band.
+ * The label's own layout is conditional, because a host without the check
+ * method is not a rare state - it is every host older than this release, for as
+ * long as it stays older, plus the first paint on a supported host while the
+ * capability hook is still failing closed. Those hosts keep the original band
+ * exactly: `w-full justify-between`, text at the left edge and switch at the
+ * right. With the button present the label clusters right instead. The switch
+ * is pinned to the right edge either way, so when a manifest lands and the
+ * button appears, the label's TEXT moves and no control does.
  */
 function VersionManagerFooter(props: {
   readonly autoDownload: boolean;
@@ -692,7 +692,14 @@ function VersionManagerFooter(props: {
             Check for updates
           </Button>
         ) : null}
-        <label className="ml-auto flex shrink-0 cursor-pointer items-center gap-2">
+        <label
+          className={cn(
+            "flex cursor-pointer items-center gap-2",
+            props.canCheckForUpdates
+              ? "ml-auto shrink-0"
+              : "w-full justify-between",
+          )}
+        >
           <span>Auto-download updates</span>
           {props.policyPending ? <MutedAgentSpinner /> : null}
           <Switch
@@ -704,14 +711,11 @@ function VersionManagerFooter(props: {
         </label>
       </div>
       {props.checkNotice !== null ? (
-        // A live region, unlike the row and banner notices. Those accompany a
-        // visible change to the thing they are about - a row's buttons, the
-        // banner - whereas a check that answers "Up to date" changes nothing
-        // else on screen, so without an announcement a screen-reader user gets
-        // no answer at all.
+        // `aria-hidden` because the permanently mounted live region below is
+        // what announces this; without it the sentence is read twice.
         <p
           data-testid="provider-pack-discovery-check-notice"
-          role="status"
+          aria-hidden="true"
           className={cn(
             "text-ui-xs",
             props.checkNotice.kind === "error"
@@ -722,7 +726,34 @@ function VersionManagerFooter(props: {
           {props.checkNotice.message}
         </p>
       ) : null}
+      <VersionManagerCheckLiveStatus notice={props.checkNotice} />
     </div>
+  );
+}
+
+/**
+ * Screen-reader-only counterpart to the footer's check notice, which stays
+ * `aria-hidden`.
+ *
+ * Mounted permanently and changing only its text, which is the point: a live
+ * region inserted into the DOM together with its first content is the case
+ * assistive tech most reliably misses. That matters more here than for the row
+ * and banner notices, which accompany a visible change to the thing they are
+ * about - a row's buttons, the banner. A check that answers "Up to date."
+ * changes nothing else on screen, so a missed announcement leaves a
+ * screen-reader user with no answer at all.
+ *
+ * `sr-only` is `position: absolute`, so this is not a flex item and adds no gap
+ * to the band while it is empty. Same shape as
+ * `WorktreeBranchPrefixLiveStatus`.
+ */
+function VersionManagerCheckLiveStatus(props: {
+  readonly notice: PackDiscoveryCheckNotice | null;
+}): JSX.Element {
+  return (
+    <span className="sr-only" role="status" aria-live="polite">
+      {props.notice?.message ?? null}
+    </span>
   );
 }
 

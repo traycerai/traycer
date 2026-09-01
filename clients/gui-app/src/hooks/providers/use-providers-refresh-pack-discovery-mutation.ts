@@ -83,9 +83,13 @@ export function useProvidersRefreshPackDiscoveryForClient(
       mutationKey: providersMutationKeys.refreshPackDiscovery(),
       onMutate: () => ({ hostId: client?.getActiveHostId() ?? null, panel }),
       onSuccess: (response, _variables, context) => {
-        // Unconditional: a check that moved this host's knowledge changes
-        // `updateAvailable` and the version rows, and `unusable` CLEARS them.
-        // Only `providers.list` carries either.
+        // Unconditional, on every arm. A check that moved this host's
+        // knowledge changes `updateAvailable` and the version rows, and
+        // `unusable` CLEARS them; only `providers.list` carries either. The
+        // two refusals ran no poll, so their refetch is strictly wasted - it
+        // is folded in anyway because every sibling pack mutation invalidates
+        // the same way, and one hook that skips it on a subset of its own
+        // outcomes is a worse thing to maintain than one redundant read.
         if (context.hostId !== null) {
           void queryClient.invalidateQueries({
             queryKey: hostQueryKeys.methodScope(

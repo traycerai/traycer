@@ -4,15 +4,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JSX, ReactNode } from "react";
 
 /**
- * Coverage for `useProvidersRefreshPackDiscovery` — critique finding 3 is what
- * this file exists to pin: the extended `joinResponseTimeoutMs` the policy
- * table advertises for `providers.refreshPackDiscovery` is only a PERMISSION.
- * It does nothing unless the caller actually rides
- * `useHostMutationWithResponseTimeout`, which calls
- * `client.requestWithResponseTimeout(method, params, responseTimeoutMs)`
- * rather than plain `client.request`. A hook that quietly regressed to
- * `useHostMutation` would still compile, still pass every outcome-shaped
- * test, and silently run on the transport's 30s default.
+ * Coverage for `useProvidersRefreshPackDiscovery`. The extended
+ * `joinResponseTimeoutMs` the policy table advertises for
+ * `providers.refreshPackDiscovery` is only a PERMISSION: it does nothing
+ * unless the caller actually rides `useHostMutationWithResponseTimeout`,
+ * which calls `client.requestWithResponseTimeout(method, params,
+ * responseTimeoutMs)` rather than plain `client.request`. A hook that
+ * quietly regressed to plain `useHostMutation` would still compile, still
+ * pass every outcome-shaped test, and silently run on the transport's 30s
+ * default.
  */
 
 const HOST_ID = "host-1";
@@ -115,28 +115,41 @@ describe("useProvidersRefreshPackDiscovery response budget", () => {
     expect(mocks.request).not.toHaveBeenCalled();
   });
 
-  it("declares the same number in the policy table that the hook passes", () => {
+  it("declares a budget strictly longer than the transport's plain-request default", () => {
     // The host client rejects any `requestWithResponseTimeout` whose value is
     // not EXACTLY the row's `joinResponseTimeoutMs`, and that is a runtime
-    // rejection with no other guard. Reads the table's declared value rather
-    // than re-deriving it, so a row hand-edited to a literal fails here.
+    // rejection with no other guard. Comparing the table's declared value
+    // against the same constant the row imports cannot fail - the two agree
+    // for any value, including one small enough to make the whole
+    // extended-budget mechanism pointless. Comparing against the transport's
+    // own plain-`request` default is the version that can actually fail, if
+    // the row ever shrinks back toward it.
+    // Mirrors `DEFAULT_HOST_RPC_FRAME_TIMEOUT_MS` in
+    // `lib/host/host-messenger.ts`, which is module-private - a literal here
+    // is the only way to name it without widening that module's surface.
+    const TRANSPORT_DEFAULT_FRAME_TIMEOUT_MS = 30_000;
     const declared = hostRpcSchedulingPolicy.joinResponseTimeoutMs(
       "providers.refreshPackDiscovery",
     );
-    expect(declared).toBe(PROVIDER_PACK_DISCOVERY_CHECK_TIMEOUT_MS);
+    expect(declared).toBeGreaterThan(TRANSPORT_DEFAULT_FRAME_TIMEOUT_MS);
   });
 
   it("is sized for a joined full-set tick, not shrunk back toward the transport default", () => {
-    // The check above cannot see this on its own: the table row IMPORTS the
-    // same constant, so the two agree for any value - including a value small
-    // enough to make the whole extended-budget mechanism pointless. Shrinking
-    // the constant to the transport's 30s default frame timeout would keep
-    // every other test in this file green while silently restoring the failure
-    // mode the budget exists to prevent.
+    // The check above cannot see this on its own: it only bounds the row
+    // against the transport default, not against the actual serial-poll cost.
+    // Shrinking the constant to something still above 30s but below one full
+    // tick would pass that check while silently restoring the failure mode
+    // the budget exists to prevent.
     //
-    // So pin the DERIVATION the constant's doc comment claims. A manual check
-    // joins an in-flight tick, so one press can be waiting on the whole enabled
-    // set's serial poll.
+    // This pins the FLOOR, not the derivation: gui-app is OSS and cannot
+    // import the internal `PROVIDERS.json` pack count or the host's registry
+    // timeout constant, so the three factors below are forced literals fixed
+    // at today's pack count (15). A 16th pack raises the correct value past
+    // this floor rather than invalidating it, so this stays
+    // `toBeGreaterThanOrEqual` and does not need to move when the pack count
+    // does. The internal repo pins the other half - that `PROVIDERS.json`
+    // still has exactly this many packs - at
+    // `traycer-host/src/domain/providers/__tests__/provider-pack-count-fits-gui-discovery-check-budget.test.ts`.
     const MANAGED_PACK_COUNT = 15; // traycer-host/resources/providers/PROVIDERS.json
     const REGISTRY_GETS_PER_PACK = 2; // pointer read, then a conditional head read
     const REGISTRY_METADATA_TIMEOUT_MS = 10_000; // the registry transport's own ceiling

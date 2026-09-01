@@ -144,18 +144,22 @@ type CheckMutateOptions = {
 
 const mocks = vi.hoisted(() => {
   const supportByHostId = new Map<string, boolean | null>();
-  // Per-`${hostId}::${method}` override, keyed independently of
-  // `supportByHostId` above: that map drives `useHostMethodSupport`, which the
-  // four-method capability gate consults and which the mock file's original
-  // `useHostSupportsMethod` stub answered by IGNORING its `method` argument
-  // entirely. `providers.refreshPackDiscovery` is gated through
-  // `useHostSupportsMethod` directly (not through the four-method array), so a
-  // mock that cannot vary by method cannot express "host has the version
-  // manager but not the check RPC" at all.
+  // Per-`${hostId}::${method}` override, independent of `supportByHostId`
+  // above (which drives `useHostMethodSupport`, the four-method capability
+  // gate — host-scoped only, blind to which method was asked).
+  // `providers.refreshPackDiscovery` is gated through `useHostSupportsMethod`
+  // directly, not through the four-method array, so this map is what lets a
+  // test express "host has the version manager but not the check RPC".
   const supportByMethodOverride = new Map<string, boolean>();
   let lastSupportArgs: HostMethodSupportArgs | null = null;
   let supportCalls: HostMethodSupportArgs[] = [];
   let defaultSupport: boolean | null = true;
+  // Independent fallback for `useHostSupportsMethod` (refreshPackDiscovery)
+  // only — decoupled from `defaultSupport`, which the four-method capability
+  // gate's `useHostMethodSupport` mock consults. Without this, a test cannot
+  // prove an explicit override is what enables the discovery check, since
+  // `defaultSupport` already defaults to `true` for the capability gate.
+  let defaultDiscoverySupport = true;
   let installIsPending = false;
   let removeIsPending = false;
   let useIsPending = false;
@@ -219,6 +223,12 @@ const mocks = vi.hoisted(() => {
     set defaultSupport(value: boolean | null) {
       defaultSupport = value;
     },
+    get defaultDiscoverySupport() {
+      return defaultDiscoverySupport;
+    },
+    set defaultDiscoverySupport(value: boolean) {
+      defaultDiscoverySupport = value;
+    },
     get installIsPending() {
       return installIsPending;
     },
@@ -271,7 +281,7 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
     if (mocks.supportByHostId.has(hostId)) {
       return mocks.supportByHostId.get(hostId) === true;
     }
-    return mocks.defaultSupport === true;
+    return mocks.defaultDiscoverySupport;
   },
 }));
 
@@ -377,6 +387,7 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
     mocks.supportByMethodOverride.clear();
     mocks.lastSupportArgs = null;
     mocks.defaultSupport = true;
+    mocks.defaultDiscoverySupport = true;
     mocks.installIsPending = false;
     mocks.removeIsPending = false;
     mocks.useIsPending = false;
@@ -1132,11 +1143,10 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
     });
   });
 
-  it("hides Check for updates when the host has the version manager but not the discovery RPC", () => {
+  it("hides Check for updates when the host has the version manager but not the discovery RPC, and keeps the auto-download row's original full-width layout", () => {
     // The discriminating shape: all four PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHODS
     // answer true (the panel itself renders), while providers.refreshPackDiscovery
-    // answers false. The old mock could not express this at all — its
-    // useHostSupportsMethod stub ignored the method argument entirely.
+    // answers false.
     mocks.defaultSupport = true;
     mocks.supportByMethodOverride.set(
       "host-1::providers.refreshPackDiscovery",
@@ -1150,10 +1160,24 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
 
     expect(screen.getByTestId("provider-pack-version-manager")).toBeTruthy();
     expect(screen.queryByTestId("provider-pack-discovery-check")).toBeNull();
+    // F3: with the button absent the label must keep the band's ORIGINAL
+    // layout — every host older than this release, for as long as it stays
+    // older.
+    const label = screen
+      .getByRole("switch", { name: "Auto-download updates" })
+      .closest("label");
+    expect(label).not.toBeNull();
+    expect(label?.className).toContain("w-full");
+    expect(label?.className).toContain("justify-between");
+    expect(label?.className).not.toContain("ml-auto");
   });
 
-  it("shows Check for updates when the host supports the discovery RPC", () => {
+  it("shows Check for updates when the host supports the discovery RPC, and clusters the auto-download row against the right edge", () => {
+    // Discriminating in the opposite direction: `defaultDiscoverySupport`
+    // starts this test FALSE, so the override below is what makes the button
+    // appear — not an ambient default that already reads true.
     mocks.defaultSupport = true;
+    mocks.defaultDiscoverySupport = false;
     mocks.supportByMethodOverride.set(
       "host-1::providers.refreshPackDiscovery",
       true,
@@ -1165,6 +1189,17 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
     });
 
     expect(screen.getByTestId("provider-pack-discovery-check")).toBeTruthy();
+    // F3: with the button present the label clusters right; the switch never
+    // moves, only the label's text does.
+    const label = screen
+      .getByRole("switch", { name: "Auto-download updates" })
+      .closest("label");
+    expect(label).not.toBeNull();
+    expect(label?.className).toContain("ml-auto");
+    // Checked as separate tokens, not as the joined pair: `cn` is free to
+    // reorder, so a single substring could pass while both classes are present.
+    expect(label?.className).not.toContain("w-full");
+    expect(label?.className).not.toContain("justify-between");
   });
 
   it("disables the check button while another panel action is pending", () => {
@@ -1208,20 +1243,30 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
   });
 
   it.each([
-    { outcome: "moved" as const, expected: "Checked the registry." },
-    { outcome: "unchanged" as const, expected: "Up to date." },
+    {
+      outcome: "moved" as const,
+      expected: "Checked the registry.",
+      expectedKind: "info" as const,
+    },
+    {
+      outcome: "unchanged" as const,
+      expected: "Up to date.",
+      expectedKind: "info" as const,
+    },
     {
       outcome: "unreachable" as const,
       expected: "Couldn't reach the registry. Try again later.",
+      expectedKind: "error" as const,
     },
     {
       outcome: "unusable" as const,
       expected:
         "The registry's answer couldn't be trusted. This pack's update knowledge was cleared until the next successful check.",
+      expectedKind: "error" as const,
     },
   ])(
     "renders the exact notice for the $outcome outcome",
-    async ({ outcome, expected }) => {
+    async ({ outcome, expected, expectedKind }) => {
       const user = userEvent.setup();
       mocks.checkMutate.mockImplementation((_variables, options) => {
         options.onSuccess?.({ result: { ok: true, outcome } });
@@ -1234,8 +1279,19 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
 
       await user.click(screen.getByTestId("provider-pack-discovery-check"));
 
+      // F4: what the panel actually sent, not just what happens after.
+      expect(mocks.checkMutate.mock.calls[0]?.[0]).toEqual({
+        packId: "opencode",
+      });
+
       const notice = screen.getByTestId("provider-pack-discovery-check-notice");
       expect(notice.textContent).toBe(expected);
+      // F5: `kind` decides the visible class; a version that always answers
+      // "info" would pass every case above while the two failure sentences
+      // render in muted grey.
+      expect(notice.className).toContain(
+        expectedKind === "error" ? "text-destructive" : "text-muted-foreground",
+      );
     },
   );
 
@@ -1263,6 +1319,8 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
 
     const notice = screen.getByTestId("provider-pack-discovery-check-notice");
     expect(notice.textContent).toBe(expected);
+    // Both refusals are hard policy, never "info".
+    expect(notice.className).toContain("text-destructive");
   });
 
   it("clears the check notice when another panel action starts", async () => {
