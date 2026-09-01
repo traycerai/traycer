@@ -997,7 +997,27 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
-  "epic.listCommentThreads": { ...LATEST_SCHEDULING, poll: null },
+  // A FIXED cadence the caller gates, not an always-on one. Comment threads
+  // normally arrive pushed on the records lane, and while that lane is up this
+  // poll must stay quiet - the lane is fresher by construction and a cadence
+  // beside it would be pure waste. But the lane's rows are RETAINED when it
+  // drops, and `resolveArtifactCommentThreads` only hands precedence back once
+  // the poll has answered SINCE that drop - so with no cadence at all, a
+  // permanently dead lane on a focused window froze the surface on retained
+  // rows indefinitely, hiding remote additions, deletions and status changes.
+  // `useEpicCommentThreadsForClient` therefore passes `poll` = "the lane is
+  // down" (`commentThreadsShouldPoll`).
+  //
+  // A condition policy would be the wrong shape: `classify` reads the
+  // RESPONSE, and the lane's liveness is not in it.
+  //
+  // 15s matches that hook's `staleTime`, deliberately - inside the stale
+  // window a read is served from cache anyway, so a tighter interval would
+  // spend requests to learn nothing.
+  "epic.listCommentThreads": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 15 * SECOND_MS },
+  },
   "epic.resolveArtifactByPath": { ...LATEST_SCHEDULING, poll: null },
   "epic.searchArtifacts": { ...LATEST_SCHEDULING, poll: null },
   // The workspace context the decomposed lanes fetch at tab open. A read, so

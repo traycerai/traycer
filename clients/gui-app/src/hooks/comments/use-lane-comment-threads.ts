@@ -221,11 +221,21 @@ export function useEpicLaneCommentThreadsDroppedAt(): number | null {
  * a surface where nothing had changed.
  *
  * So a retained lane keeps precedence until the poll has answered SINCE the
- * drop. There is deliberately no lane-triggered refetch to hurry that along:
- * the rows on screen are the last thing the lane said, which is exactly what
- * retention promises, and the query already refetches on window focus and
- * after its stale window. A permanently dead lane on a never-blurred window is
- * the one case that waits, and it waits showing the newer of the two views.
+ * drop - and the poll has to be able to answer, which is what this rule's
+ * first version got wrong. It justified having no lane-triggered refetch by
+ * saying the query "already refetches on window focus and after its stale
+ * window". The second half was never true: `staleTime` marks data stale, it
+ * does not SCHEDULE a request, and a lane-status transition invalidates
+ * nothing. On a continuously focused window with a permanently dead lane the
+ * poll therefore never ran again, and this rule waited on an event that could
+ * not arrive - freezing remote additions, deletions and status changes behind
+ * retained rows, which is the resurrection above arriving by the other road.
+ *
+ * The lane's liveness now reaches the query, which polls while the lane is
+ * down - see `commentThreadsShouldPoll` in `use-epic-comment-threads.ts`.
+ * Retention is unchanged and still deliberate: the rows on screen remain the
+ * last thing the lane said, and they hold precedence until a poll genuinely
+ * answers later. What changed is that "later" is now bounded.
  *
  * Pure, and shared by every comment surface, so the sidebar, the hover preview
  * and the tile's decoration layer can never disagree about which threads exist
