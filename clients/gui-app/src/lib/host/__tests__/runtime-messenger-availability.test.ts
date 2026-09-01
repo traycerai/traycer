@@ -202,6 +202,7 @@ function authorityFor(hostId: string, websocketUrl: string) {
 
 function harness(): {
   session: ControllableSession;
+  sessions: readonly ControllableSession[];
   recovered: string[];
   requestRemote: () => void;
   requestRemoteRaw: () => Promise<unknown>;
@@ -214,15 +215,24 @@ function harness(): {
   reset: () => void;
   dispose: () => void;
 } {
-  const session = controllableSession();
-  mocks.createRemoteHostTransport.mockImplementation(() => ({
-    session,
-    messenger: {
-      request: () => Promise.resolve({}),
-      requestWithResponseTimeout: () => Promise.resolve({}),
-    },
-    streamClient: {},
-  }));
+  const firstSession = controllableSession();
+  const sessions: ControllableSession[] = [firstSession];
+  let cachedSession: ControllableSession | null = firstSession;
+  mocks.createRemoteHostTransport.mockImplementation(() => {
+    if (cachedSession === null || cachedSession.isClosed()) {
+      cachedSession = controllableSession();
+      sessions.push(cachedSession);
+    }
+    const session = cachedSession;
+    return {
+      session,
+      messenger: {
+        request: () => Promise.resolve({}),
+        requestWithResponseTimeout: () => Promise.resolve({}),
+      },
+      streamClient: {},
+    };
+  });
   const recovered: string[] = [];
   const binding = buildRuntimeHostMessenger<HostRpcRegistry>({
     registry: hostRpcRegistry,
@@ -236,7 +246,8 @@ function harness(): {
     },
   });
   return {
-    session,
+    session: firstSession,
+    sessions,
     recovered,
     requestRemote: () => {
       void binding.messenger
@@ -276,7 +287,12 @@ function harness(): {
           abortSignal,
         },
       ),
-    reset: () => binding.reset(),
+    reset: () => {
+      // Auth reset changes the cache identity even if the old shared session
+      // remains warm, so the next transport construction cannot adopt it.
+      cachedSession = null;
+      binding.reset();
+    },
     // The local branch dials for real; the dial itself is irrelevant here -
     // what matters is that taking this branch evicts the remote binding first.
     requestLocal: () => {
@@ -521,18 +537,33 @@ describe("RuntimeHostMessenger availability forwarding", () => {
     h.dispose();
   });
 
-  it("reset() keeps a still-owed orphan attached", () => {
-    // reset() fires on every hostClient change event - including the
-    // host-bound promotion that lands while this binding's session is still
-    // dialing, which is precisely the window the orphan exists for. Teardown
-    // semantics here would drop the promoted host's first ready boundary.
+  it("reset() hard-detaches a still-owed orphan from the previous auth context", () => {
     const h = harness();
     h.requestRemote();
-    h.reset();
+    h.requestLocal();
     expect(h.session.availabilityListenerCount).toBe(1);
 
-    h.session.emitReady();
-    expect(h.recovered).toEqual([REMOTE_HOST_ID]);
+    h.reset();
+    expect(h.session.availabilityListenerCount).toBe(0);
+
+    h.session.fatal = incompatibleFatal();
+    h.session.emitClosed();
+    expect(h.recovered).toEqual([]);
+
+    h.dispose();
+  });
+
+  it("reset() hard-detaches the current binding from the previous auth context", () => {
+    const h = harness();
+    h.requestRemote();
+    expect(h.session.availabilityListenerCount).toBe(1);
+
+    h.reset();
+    expect(h.session.availabilityListenerCount).toBe(0);
+
+    h.session.fatal = incompatibleFatal();
+    h.session.emitClosed();
+    expect(h.recovered).toEqual([]);
 
     h.dispose();
   });
@@ -650,7 +681,7 @@ describe("RuntimeHostMessenger availability forwarding", () => {
     h.dispose();
   });
 
-  it("auth reset clears a terminal verdict before the next credential context requests", () => {
+  it("auth reset clears a terminal verdict before the next credential context requests", async () => {
     const h = harness();
     h.requestRemote();
     h.session.fatal = incompatibleFatal();
@@ -658,8 +689,10 @@ describe("RuntimeHostMessenger availability forwarding", () => {
     expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(1);
 
     h.reset();
-    h.requestRemote();
+    await expect(h.requestRemoteRaw()).resolves.toEqual({});
     expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(2);
+    expect(h.sessions).toHaveLength(2);
+    expect(h.sessions[1]?.isClosed()).toBe(false);
 
     h.dispose();
   });

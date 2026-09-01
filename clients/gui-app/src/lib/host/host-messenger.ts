@@ -418,19 +418,27 @@ class RuntimeHostMessenger<
    */
   dispose(): void {
     this.disposed = true;
-    for (const detach of [...this.owedOrphanDetachByHost.values()]) {
-      detach();
-    }
+    this.currentBearer = null;
+    this.detachOrphanAvailability();
     this.teardownRemoteTransport();
   }
 
   reset(): void {
-    this.closeRemoteTransport();
     // `reset` is invoked only for `auth-changed` (runtime-change-scope.ts).
-    // Terminal verdicts belong to the credential context that observed them;
-    // carrying one across this boundary would block the fresh auth epoch even
-    // though the remote-session cache deliberately keys epochs separately.
+    // Both verdicts AND pending availability callbacks belong to the old
+    // credential context. Hard-detach every current/orphan listener before
+    // clearing verdicts: an old session closing synchronously or later must
+    // not repopulate the map after the new auth epoch starts requesting.
+    this.currentBearer = null;
+    this.detachOrphanAvailability();
+    this.teardownRemoteTransport();
     this.terminalVerdictByHost.clear();
+  }
+
+  private detachOrphanAvailability(): void {
+    for (const detach of [...this.owedOrphanDetachByHost.values()]) {
+      detach();
+    }
   }
 
   private remoteMessengerFor(
@@ -634,8 +642,8 @@ class RuntimeHostMessenger<
   /**
    * Release the binding for reuse: the physical session goes back to the
    * keep-warm cache and a still-owed availability listener stays attached as
-   * the host's orphan. This is the replacement/reset path - for terminal
-   * teardown see `teardownRemoteTransport`.
+   * the host's orphan. This is the ordinary target-replacement path; auth
+   * reset and terminal teardown use `teardownRemoteTransport` instead.
    */
   private closeRemoteTransport(): void {
     if (this.remoteBinding === null) {
