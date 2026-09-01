@@ -196,6 +196,11 @@ function makeBridge() {
       on: vi.fn(),
       off: vi.fn(),
     },
+    zoomController: {
+      getZoomPercent: vi.fn(() => 100),
+      getZoomFactor: vi.fn(() => 1),
+      onChange: vi.fn(() => () => undefined),
+    },
     safeSendToWindow: vi.fn(),
     fanOut: vi.fn(),
     resolveSenderWindowId: vi.fn(() => "window-1"),

@@ -137,11 +137,14 @@ export class BrowserViewPipCapture {
       entry.bounds.width > 0 &&
       entry.bounds.height > 0;
     if (!hasUsableBounds) {
+      // `size` is the DIP surface the capture wants; `entry.bounds` is CSS
+      // space, which `applyBounds` multiplies by the page zoom again.
+      const zoomFactor = this.geometry.zoomFactor();
       entry.bounds = {
         x: 0,
         y: 0,
-        width: size.width,
-        height: size.height,
+        width: size.width / zoomFactor,
+        height: size.height / zoomFactor,
       };
       this.geometry.applyBounds(entry);
     }
