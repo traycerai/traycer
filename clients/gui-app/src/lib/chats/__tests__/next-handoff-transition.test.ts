@@ -114,6 +114,7 @@ describe("nextHandoffTransition", () => {
           accountContext: null,
           deliveryPolicy: null,
           restoreWorktreeIntent: null,
+          displayWorktreeIntent: null,
           connectionEpoch: 0,
           confirmedByHost: false,
         },
