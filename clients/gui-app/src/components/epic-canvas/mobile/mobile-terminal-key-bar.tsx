@@ -25,11 +25,13 @@ import "@/components/layout/shell/mobile-shell-touch-targets.css";
 interface MobileTerminalKeyBarProps {
   readonly instanceId: string;
   /**
-   * True while the soft keyboard covers the bottom of the layout viewport
-   * (the view is already padding the bar above it). The bar then drops its
-   * safe-area bottom padding: the keyboard covers the home indicator, so
-   * keeping `--safe-area-inset-bottom` would leave a dead gap between the keys
-   * and the keyboard.
+   * True while the soft keyboard is up - the measured viewport inset in an
+   * overlay-keyboard browser (where the view pads the covered strip below
+   * this bar), the plugin-fed native state in the installed app (where
+   * native-resize shrinks the webview and the inset stays 0). Either way the
+   * bar's bottom edge meets the keyboard, not the home indicator, so keeping
+   * `--safe-area-inset-bottom` would leave a dead gap between the keys and
+   * the keyboard.
    */
   readonly keyboardOpen: boolean;
 }

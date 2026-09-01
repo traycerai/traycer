@@ -1,9 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-} from "@/stores/epics/open-epic/store";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
+import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import type {
   EpicStreamCallbacks,
   EpicStreamClient,
@@ -153,11 +151,21 @@ describe("open-epic-store doc projection", () => {
 
   it("doc receives seeded artifacts after snapshot", () => {
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-x",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
+      // The factories go to the COMPOSITION now, not the store:
+      // `createOpenEpicStore` stopped constructing a runtime, so a
+      // suite that used to hand it a `streamClientFactory` has nothing
+      // to hand it. `handle.doc` still resolves because this harness
+      // builds the runtime in THIS thread.
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      // Explicit: `null` means this suite never writes, so a write in
+      // one that said so fails rather than resolving quietly.
+      writeCommand: null,
     });
 
     const donor = new Y.Doc();

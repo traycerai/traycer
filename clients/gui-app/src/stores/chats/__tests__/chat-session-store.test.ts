@@ -88,6 +88,7 @@ import {
 } from "@/stores/notifications/app-local-notifications-store";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
+import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
 /**
  * The plain text send these suites exercise: content in, no browser context,
@@ -340,6 +341,8 @@ class ProtocolMockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
     super({
       clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
+      // This endpoint resolves no host, so there is none to name.
+      hostId: null,
       endpoint: () => null,
       bearer: () => null,
       auth: null,
@@ -384,6 +387,7 @@ function createHarness(): Harness {
   const sent: ChatSubscribeClientFrame[] = [];
   let callbacks: ChatStreamCallbacks | null = null;
   const handle = createChatSessionStore({
+    environment: CHAT_STORE_TEST_ENVIRONMENT,
     hostId: "host-a",
     epicId: EPIC_ID,
     chatId: CHAT_ID,
@@ -420,6 +424,7 @@ function createProtocolChainHarness(
   const mockWs = new ProtocolMockWsStreamClient(negotiatedVersion);
   const created: { client: ChatStreamClient | null } = { client: null };
   const handle = createChatSessionStore({
+    environment: CHAT_STORE_TEST_ENVIRONMENT,
     hostId: "host-a",
     epicId: EPIC_ID,
     chatId: CHAT_ID,
@@ -1108,6 +1113,7 @@ describe("createChatSessionStore", () => {
     let lastCallbacks: ChatStreamCallbacks | null = null;
     let closeCalls = 0;
     const handle = createChatSessionStore({
+      environment: CHAT_STORE_TEST_ENVIRONMENT,
       hostId: "host-a",
       epicId: EPIC_ID,
       chatId: CHAT_ID,
@@ -1162,6 +1168,7 @@ describe("createChatSessionStore", () => {
   it("retry ignores callbacks from the stale stream client", () => {
     let lastCallbacks: ChatStreamCallbacks | null = null;
     const handle = createChatSessionStore({
+      environment: CHAT_STORE_TEST_ENVIRONMENT,
       hostId: "host-a",
       epicId: EPIC_ID,
       chatId: CHAT_ID,
@@ -12239,6 +12246,7 @@ function createCoalesceHarness(): CoalesceHarness {
   const manual = createManualCoordinator();
   let callbacks: ChatStreamCallbacks | null = null;
   const handle = createChatSessionStore({
+    environment: CHAT_STORE_TEST_ENVIRONMENT,
     hostId: "host-a",
     epicId: EPIC_ID,
     chatId: CHAT_ID,
@@ -12638,6 +12646,7 @@ describe("surface visibility rollup", () => {
       }),
     };
     const handle = createChatSessionStore({
+      environment: CHAT_STORE_TEST_ENVIRONMENT,
       hostId: "host-a",
       epicId: EPIC_ID,
       chatId: CHAT_ID,
@@ -13095,6 +13104,7 @@ describe("createChatSessionStore - persisted auth-error provider nudge", () => {
     let nudges = 0;
     let callbacks: ChatStreamCallbacks | null = null;
     const handle = createChatSessionStore({
+      environment: CHAT_STORE_TEST_ENVIRONMENT,
       hostId: "host-a",
       epicId: EPIC_ID,
       chatId: CHAT_ID,
