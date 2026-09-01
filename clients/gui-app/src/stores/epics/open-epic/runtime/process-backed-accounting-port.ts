@@ -189,6 +189,24 @@ export function createProcessBackedAccountingPort(
         memory.accountant,
         hotDocHolderId(hostId, epicId, runtimeToken, artifactRoomId),
       );
+      // RECONCILED, symmetrically with `settleHotDocBytes` above, because a
+      // release is how a WORKER-resident tier reports what an eviction freed.
+      // `demote()` deliberately emits no completion event - the freed bytes
+      // travel as the tier's own settlements - and a demoted doc is dropped
+      // rather than re-settled, so on that path these releases are the only
+      // thing main hears. `accountant.release` deletes the holder and clears
+      // `protectedLatch` but does not re-examine the plane, so a demotion that
+      // freed SOME but fewer bytes than were asked for left the remaining
+      // overage uncharged to any later tier until unrelated hot-doc activity
+      // happened to reconcile. That is the partial-reclaim sibling of the
+      // deferred-eviction hole, and it needs the same one driver.
+      //
+      // Free on the in-process path rather than merely harmless: a release
+      // raised from inside `evict` re-enters `reconcile`, which returns early
+      // on `plane.reconciling` and leaves the outer pass to finish its own
+      // re-evaluation. The bridge path is the one that is not nested, and it
+      // is exactly the one that was silent.
+      memory.accountant.reconcile(BUDGET_PLANE_IDS.hotDocs);
     },
 
     noteHotDocEvictionDeferred(): void {
