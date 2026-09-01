@@ -1,18 +1,28 @@
 import {
   resourcesSubscribeServerFrameSchema,
   type AppResourceSnapshotWire,
+  type AppResourceSnapshotWireV15,
   type EpicResourceSnapshotWire,
+  type EpicResourceSnapshotWireV15,
   type HostTreeResourceSnapshotWire,
+  type HostTreeResourceSnapshotWireV15,
   type OtherResourceSnapshotWire,
-  type OwnerResourceSnapshotWireV14,
+  type OtherResourceSnapshotWireV15,
+  type OwnerResourceSnapshotWireV15,
+  type ResourceProcessSnapshotWire,
+  type ResourceProcessSnapshotWireV15,
+  type RestrictedResourceSnapshotWireV15,
   type ResourcesSubscribeOpenRequestV11,
+  type ResourcesSubscribeDemand,
   type ResourcesSubscribeServerFrame,
   type ResourcesSubscribeServerFrameV12,
   type ResourcesSubscribeServerFrameV13,
   type ResourcesSubscribeServerFrameV14,
+  type ResourcesSubscribeServerFrameV15,
   resourcesSubscribeServerFrameSchemaV12,
   resourcesSubscribeServerFrameSchemaV13,
   resourcesSubscribeServerFrameSchemaV14,
+  resourcesSubscribeServerFrameSchemaV15,
 } from "@traycer/protocol/host/resources/subscribe";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
@@ -34,18 +44,20 @@ import type { IStreamClient } from "./i-stream-client";
 export interface ResourcesProjectionPayload {
   readonly epicId: string;
   readonly sampledAt: number;
-  readonly app: AppResourceSnapshotWire | null;
+  readonly app: AppResourceSnapshotWireV15 | null;
   // Owners always carry `harnessId` and `managedCommand` downstream: a host on
   // `@1.3`/`@1.4` sends them; an older host has them backfilled to `null` in
   // `toPayload`. A host below `@1.4` never reports a managed-command owner at
   // all - it folds those trees into `other` - so the backfill loses nothing.
-  readonly owners: readonly OwnerResourceSnapshotWireV14[];
-  readonly epic: EpicResourceSnapshotWire | null;
-  readonly epics: readonly EpicResourceSnapshotWire[];
+  readonly owners: readonly OwnerResourceSnapshotWireV15[];
+  readonly epic: EpicResourceSnapshotWireV15 | null;
+  readonly epics: readonly EpicResourceSnapshotWireV15[];
   /** Absent when the connected host negotiated resources.subscribe <= 1.1. */
-  readonly hostTree: HostTreeResourceSnapshotWire | null | undefined;
+  readonly hostTree: HostTreeResourceSnapshotWireV15 | null | undefined;
   /** Absent when the connected host negotiated resources.subscribe <= 1.1. */
-  readonly other: OtherResourceSnapshotWire | null | undefined;
+  readonly other: OtherResourceSnapshotWireV15 | null | undefined;
+  /** Aggregate-only usage hidden by authorization/scope; @1.5+ only. */
+  readonly restricted: RestrictedResourceSnapshotWireV15 | null | undefined;
 }
 
 export type ResourcesStreamScope =
@@ -101,10 +113,10 @@ function openRequestForScope(
 /**
  * Typed handlers for a `resources.subscribe@1.0` session.
  *
- * Frames flow server → client only (apart from the heartbeat handled by
- * `WsStreamClient`), so there is no upstream API on the wrapper. `onSnapshot`
- * fires once for the initial projection; `onUpdate` fires on each subsequent
- * materially-changed projection.
+ * Projection frames flow server → client. `@1.5+` also accepts the small
+ * visibility-demand hint exposed by `setDemand`; heartbeat remains transport
+ * owned. `onSnapshot` fires once for the initial projection and `onUpdate`
+ * fires on each subsequent materially-changed projection.
  */
 export interface ResourcesStreamCallbacks {
   readonly onSnapshot: (payload: ResourcesProjectionPayload) => void;
@@ -146,6 +158,8 @@ export class ResourcesStreamClient {
   private readonly callbacks: ResourcesStreamCallbacks;
   private closed: boolean;
   private scopeSupport: ResourcesScopeSupport = "unknown";
+  private demand: ResourcesSubscribeDemand = "background";
+  private sentDemand: ResourcesSubscribeDemand | null = null;
 
   constructor(options: ResourcesStreamClientOptions) {
     this.callbacks = options.callbacks;
@@ -160,11 +174,39 @@ export class ResourcesStreamClient {
       this.handleServerFrame(envelope, binaryPayload);
     });
     this.session.onStatusChange((status, reason) => {
+      if (status !== "open") this.sentDemand = null;
       // Before the status itself, so a consumer reacting to the `closed`
       // transition already sees why rather than reading last round's verdict.
       this.updateScopeSupport(status, reason);
+      if (status === "open") this.publishDemandIfSupported();
       this.callbacks.onConnectionStatus(status, reason);
     });
+  }
+
+  /**
+   * Sets the desired host sampling tier. The choice survives reconnects and is
+   * sent only to `@1.5+`; older hosts retain their historical server-defined
+   * fast cadence.
+   */
+  setDemand(demand: ResourcesSubscribeDemand): void {
+    if (this.closed || this.demand === demand) return;
+    this.demand = demand;
+    this.publishDemandIfSupported();
+  }
+
+  private publishDemandIfSupported(): void {
+    if (this.closed || this.sentDemand === this.demand) return;
+    const version = this.session.getNegotiatedSchemaVersion();
+    if (version === null || version.major !== 1 || version.minor < 5) return;
+    this.session.sendClientFrame(
+      {
+        kind: "setDemand",
+        demand: this.demand,
+        hasBinaryPayload: false,
+      },
+      null,
+    );
+    this.sentDemand = this.demand;
   }
 
   /**
@@ -261,7 +303,8 @@ export class ResourcesStreamClient {
     envelope: StreamFrameEnvelope,
     _binaryPayload: Uint8Array | null,
   ): void {
-    // Newest-first: `@1.4` (managed-command owners), `@1.3` (owners carry
+    // Newest-first: `@1.5` (nullable Linux memory detail), `@1.4`
+    // (managed-command owners), `@1.3` (owners carry
     // harnessId), `@1.2` (hostTree + other), then the frozen `@1.0`/`@1.1`
     // base. Each schema strips unknown keys, so an older client parsing a newer
     // frame degrades cleanly.
@@ -273,7 +316,8 @@ export class ResourcesStreamClient {
       | ResourcesSubscribeServerFrame
       | ResourcesSubscribeServerFrameV12
       | ResourcesSubscribeServerFrameV13
-      | ResourcesSubscribeServerFrameV14 = parsed.data;
+      | ResourcesSubscribeServerFrameV14
+      | ResourcesSubscribeServerFrameV15 = parsed.data;
     switch (frame.kind) {
       case "snapshot": {
         this.callbacks.onSnapshot(toPayload(frame));
@@ -292,6 +336,8 @@ export class ResourcesStreamClient {
 }
 
 function parseNewestFirst(envelope: StreamFrameEnvelope) {
+  const v15 = resourcesSubscribeServerFrameSchemaV15.safeParse(envelope);
+  if (v15.success) return v15;
   const v14 = resourcesSubscribeServerFrameSchemaV14.safeParse(envelope);
   if (v14.success) return v14;
   const v13 = resourcesSubscribeServerFrameSchemaV13.safeParse(envelope);
@@ -306,14 +352,15 @@ function toPayload(
     | ResourcesSubscribeServerFrame
     | ResourcesSubscribeServerFrameV12
     | ResourcesSubscribeServerFrameV13
-    | ResourcesSubscribeServerFrameV14,
+    | ResourcesSubscribeServerFrameV14
+    | ResourcesSubscribeServerFrameV15,
     { kind: "snapshot" | "update" }
   >,
 ): ResourcesProjectionPayload {
   return {
     epicId: frame.epicId,
     sampledAt: frame.sampledAt,
-    app: frame.app,
+    app: frame.app === null ? null : normalizeApp(frame.app),
     // Backfill the later minors' owner fields for older frames so downstream
     // always reads a defined field: the provider is simply unknown on a host
     // below `@1.3`, and a host below `@1.4` reports no managed-command owners.
@@ -321,10 +368,77 @@ function toPayload(
       ...owner,
       harnessId: "harnessId" in owner ? owner.harnessId : null,
       managedCommand: "managedCommand" in owner ? owner.managedCommand : null,
+      pssBytes: "pssBytes" in owner ? owner.pssBytes : null,
+      privateBytes: "privateBytes" in owner ? owner.privateBytes : null,
+      processes: owner.processes.map(normalizeProcess),
     })),
-    epic: frame.epic,
-    epics: frame.epics ?? [],
-    hostTree: "hostTree" in frame ? frame.hostTree : undefined,
-    other: "other" in frame ? frame.other : undefined,
+    epic: frame.epic === null ? null : normalizeEpic(frame.epic),
+    epics: (frame.epics ?? []).map(normalizeEpic),
+    hostTree:
+      "hostTree" in frame
+        ? frame.hostTree === null
+          ? null
+          : normalizeHostTree(frame.hostTree)
+        : undefined,
+    other:
+      "other" in frame
+        ? frame.other === null
+          ? null
+          : normalizeOther(frame.other)
+        : undefined,
+    restricted: "restricted" in frame ? frame.restricted : undefined,
+  };
+}
+
+function normalizeProcess(
+  process: ResourceProcessSnapshotWire | ResourceProcessSnapshotWireV15,
+): ResourceProcessSnapshotWireV15 {
+  return {
+    ...process,
+    pssBytes: "pssBytes" in process ? process.pssBytes : null,
+    privateBytes: "privateBytes" in process ? process.privateBytes : null,
+    descriptor: "descriptor" in process ? process.descriptor : null,
+  };
+}
+
+function memoryDetailsOrNull(value: {
+  readonly pssBytes?: number | null;
+  readonly privateBytes?: number | null;
+}): { readonly pssBytes: number | null; readonly privateBytes: number | null } {
+  return {
+    pssBytes: value.pssBytes ?? null,
+    privateBytes: value.privateBytes ?? null,
+  };
+}
+
+function normalizeApp(
+  app: AppResourceSnapshotWire | AppResourceSnapshotWireV15,
+): AppResourceSnapshotWireV15 {
+  return {
+    ...app,
+    ...memoryDetailsOrNull(app),
+    process: app.process === null ? null : normalizeProcess(app.process),
+  };
+}
+
+function normalizeEpic(
+  epic: EpicResourceSnapshotWire | EpicResourceSnapshotWireV15,
+): EpicResourceSnapshotWireV15 {
+  return { ...epic, ...memoryDetailsOrNull(epic) };
+}
+
+function normalizeHostTree(
+  hostTree: HostTreeResourceSnapshotWire | HostTreeResourceSnapshotWireV15,
+): HostTreeResourceSnapshotWireV15 {
+  return { ...hostTree, ...memoryDetailsOrNull(hostTree) };
+}
+
+function normalizeOther(
+  other: OtherResourceSnapshotWire | OtherResourceSnapshotWireV15,
+): OtherResourceSnapshotWireV15 {
+  return {
+    ...other,
+    ...memoryDetailsOrNull(other),
+    processes: other.processes.map(normalizeProcess),
   };
 }

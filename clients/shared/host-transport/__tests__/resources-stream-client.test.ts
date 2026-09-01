@@ -286,11 +286,16 @@ describe("ResourcesStreamClient", () => {
     expect(parseText(sockets[0].textSent[1])).toEqual({
       kind: "subscribe",
       method: "resources.subscribe",
-      schemaVersion: { major: 1, minor: 4, supportedMajors: [1] },
+      schemaVersion: { major: 1, minor: 5, supportedMajors: [1] },
       params: {
         epicId: "epic-1",
         scope: { kind: "epic", epicId: "epic-1" },
       },
+    });
+    expect(parseText(sockets[0].textSent[2])).toEqual({
+      kind: "setDemand",
+      demand: "background",
+      hasBinaryPayload: false,
     });
 
     sockets[0].fireText({
@@ -320,6 +325,8 @@ describe("ResourcesStreamClient", () => {
     expect(snapshots[0].app?.process?.name).toBe("traycer-host");
     expect(snapshots[0].owners[0].owner.ownerId).toBe("s1");
     expect(snapshots[0].owners[0].harnessId).toBeNull();
+    expect(snapshots[0].owners[0].pssBytes).toBeNull();
+    expect(snapshots[0].owners[0].processes[0].privateBytes).toBeNull();
     expect(snapshots[0].owners[0].processes[0].command).toBe("/bin/bash");
     expect(snapshots[0].epic?.epicId).toBe("epic-1");
     expect(snapshots[0].epics).toEqual([]);
@@ -331,6 +338,104 @@ describe("ResourcesStreamClient", () => {
     expect(updates[0].hostTree?.cpuPercent).toBe(60);
 
     client.close();
+  });
+
+  it("preserves nullable @1.5 RSS and aggregate-only restricted usage", () => {
+    const { factory, sockets } = makeFactory();
+    const snapshots: ResourcesProjectionPayload[] = [];
+    const client = new ResourcesStreamClient({
+      wsStreamClient: makeWsStreamClient(factory),
+      scope: { kind: "epic", epicId: "epic-1" },
+      callbacks: {
+        onSnapshot: (payload) => snapshots.push(payload),
+        onUpdate: () => undefined,
+        onConnectionStatus: () => undefined,
+        onScopeSupport: () => undefined,
+      },
+    });
+    completeHandshakeAt(sockets[0], { major: 1, minor: 5 });
+    const process = {
+      ...OWNER.processes[0],
+      rssBytes: null,
+      pssBytes: 600,
+      privateBytes: 400,
+    };
+    sockets[0].fireText({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      sampledAt: 1_000,
+      app: null,
+      owners: [
+        {
+          ...OWNER,
+          rssBytes: null,
+          pssBytes: 600,
+          privateBytes: 400,
+          processes: [process],
+          managedCommand: null,
+        },
+      ],
+      epic: null,
+      hostTree: null,
+      other: null,
+      restricted: {
+        sampledAt: 1_000,
+        processCount: 2,
+        cpuPercent: 3.25,
+        rssBytes: null,
+        pssBytes: 900,
+        privateBytes: 700,
+      },
+    });
+
+    expect(snapshots[0].owners[0]).toMatchObject({
+      pssBytes: 600,
+      privateBytes: 400,
+      rssBytes: null,
+    });
+    expect(snapshots[0].owners[0].processes[0]).toMatchObject({
+      pssBytes: 600,
+      privateBytes: 400,
+      rssBytes: null,
+    });
+    expect(snapshots[0].restricted).toEqual({
+      sampledAt: 1_000,
+      processCount: 2,
+      cpuPercent: 3.25,
+      rssBytes: null,
+      pssBytes: 900,
+      privateBytes: 700,
+    });
+    client.close();
+  });
+
+  it("publishes visibility demand only to an @1.5 host", () => {
+    const latest = makeFactory();
+    const latestClient = new ResourcesStreamClient({
+      wsStreamClient: makeWsStreamClient(latest.factory),
+      scope: { kind: "global" },
+      callbacks: trackScopeSupport().callbacks,
+    });
+    completeHandshakeAt(latest.sockets[0], { major: 1, minor: 5 });
+    latestClient.setDemand("interactive");
+    expect(parseText(latest.sockets[0].textSent[3])).toEqual({
+      kind: "setDemand",
+      demand: "interactive",
+      hasBinaryPayload: false,
+    });
+    latestClient.close();
+
+    const old = makeFactory();
+    const oldClient = new ResourcesStreamClient({
+      wsStreamClient: makeWsStreamClient(old.factory),
+      scope: { kind: "global" },
+      callbacks: trackScopeSupport().callbacks,
+    });
+    completeHandshakeAt(old.sockets[0], { major: 1, minor: 4 });
+    oldClient.setDemand("interactive");
+    expect(old.sockets[0].textSent).toHaveLength(2);
+    oldClient.close();
   });
 
   it("backfills harnessId to null for a pre-1.3 (harnessId-less) frame", () => {

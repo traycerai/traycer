@@ -9,16 +9,19 @@ import {
   resourcesKillResponseSchema,
   resourcesKillV10,
   resourcesSubscribeClientFrameSchema,
+  resourcesSubscribeClientFrameSchemaV15,
   resourcesSubscribeOpenRequestV11Schema,
   resourcesSubscribeServerFrameSchema,
   resourcesSubscribeServerFrameSchemaV12,
   resourcesSubscribeServerFrameSchemaV13,
   resourcesSubscribeServerFrameSchemaV14,
+  resourcesSubscribeServerFrameSchemaV15,
   resourcesSubscribeV10,
   resourcesSubscribeV11,
   resourcesSubscribeV12,
   resourcesSubscribeV13,
   resourcesSubscribeV14,
+  resourcesSubscribeV15,
 } from "@traycer/protocol/host/resources/subscribe";
 
 /**
@@ -311,11 +314,13 @@ describe("resources.subscribe@1.0 registry membership", () => {
   it("is registered on the stream registry at major 1 / minor 0", () => {
     const entry = hostStreamRpcRegistry["resources.subscribe"];
     expect(entry).toBeDefined();
-    expect(entry[1].latestMinor).toBe(4);
+    expect(entry[1].latestMinor).toBe(5);
     expect(entry[1].versions[0].contract).toBe(resourcesSubscribeV10);
     expect(entry[1].versions[1].contract).toBe(resourcesSubscribeV11);
     expect(entry[1].versions[2].contract).toBe(resourcesSubscribeV12);
     expect(entry[1].versions[3].contract).toBe(resourcesSubscribeV13);
+    expect(entry[1].versions[4].contract).toBe(resourcesSubscribeV14);
+    expect(entry[1].versions[5].contract).toBe(resourcesSubscribeV15);
     expect(resourcesSubscribeV10.schemaVersion).toEqual({ major: 1, minor: 0 });
     expect(resourcesSubscribeV11.schemaVersion).toEqual({ major: 1, minor: 1 });
     expect(resourcesSubscribeV12.schemaVersion).toEqual({ major: 1, minor: 2 });
@@ -506,11 +511,238 @@ describe("resources.subscribe@1.4 managed-command owners", () => {
     expect(framedV13.owners[0]).not.toHaveProperty("managedCommand");
   });
 
-  it("is registered on the stream registry at minor 4", () => {
+  it("keeps @1.4 registered after @1.5 becomes latest", () => {
     const entry = hostStreamRpcRegistry["resources.subscribe"];
-    expect(entry[1].latestMinor).toBe(4);
+    expect(entry[1].latestMinor).toBe(5);
     expect(entry[1].versions[4].contract).toBe(resourcesSubscribeV14);
     expect(resourcesSubscribeV14.schemaVersion).toEqual({ major: 1, minor: 4 });
+  });
+});
+
+describe("resources.subscribe@1.5 demand control", () => {
+  it("accepts background and interactive demand without widening older frames", () => {
+    expect(
+      resourcesSubscribeClientFrameSchemaV15.parse({
+        kind: "setDemand",
+        demand: "background",
+        hasBinaryPayload: false,
+      }),
+    ).toMatchObject({ demand: "background" });
+    expect(
+      resourcesSubscribeClientFrameSchemaV15.parse({
+        kind: "setDemand",
+        demand: "interactive",
+        hasBinaryPayload: false,
+      }),
+    ).toMatchObject({ demand: "interactive" });
+    expect(
+      resourcesSubscribeClientFrameSchema.safeParse({
+        kind: "setDemand",
+        demand: "interactive",
+        hasBinaryPayload: false,
+      }).success,
+    ).toBe(false);
+    expect(resourcesSubscribeV15.schemaVersion).toEqual({ major: 1, minor: 5 });
+  });
+
+  it("carries nullable memory detail while keeping @1.4 frozen", () => {
+    const process = {
+      ...PROCESS_FIXTURE,
+      pssBytes: 3_072,
+      privateBytes: 2_048,
+    };
+    const owner = {
+      ...OWNER_FIXTURE,
+      pssBytes: 3_072,
+      privateBytes: 2_048,
+      processes: [process],
+      harnessId: null,
+      managedCommand: null,
+    };
+    const frame = {
+      kind: "snapshot" as const,
+      epicId: "epic-1",
+      sampledAt: 1_000,
+      app: null,
+      owners: [owner],
+      epic: null,
+      hostTree: null,
+      other: null,
+      hasBinaryPayload: false as const,
+    };
+    const v15 = resourcesSubscribeServerFrameSchemaV15.parse(frame);
+    if (v15.kind !== "snapshot") throw new Error("expected snapshot");
+    expect(v15.owners[0]).toMatchObject({
+      pssBytes: 3_072,
+      privateBytes: 2_048,
+    });
+    expect(v15.owners[0].processes[0]).toMatchObject({
+      pssBytes: 3_072,
+      privateBytes: 2_048,
+    });
+
+    const v14 = resourcesSubscribeServerFrameSchemaV14.parse(frame);
+    if (v14.kind !== "snapshot") throw new Error("expected snapshot");
+    expect(v14.owners[0]).not.toHaveProperty("pssBytes");
+    expect(v14.owners[0].processes[0]).not.toHaveProperty("pssBytes");
+  });
+
+  it("accepts nullable RSS on every @1.5 leaf/aggregate and keeps older minors numeric", () => {
+    const process = {
+      ...PROCESS_FIXTURE,
+      rssBytes: null,
+      pssBytes: null,
+      privateBytes: null,
+      descriptor: null,
+    };
+    const owner = {
+      ...OWNER_FIXTURE,
+      rssBytes: null,
+      pssBytes: null,
+      privateBytes: null,
+      processes: [process],
+      harnessId: null,
+      managedCommand: null,
+    };
+    const aggregate = {
+      sampledAt: 1_000,
+      processCount: 1,
+      cpuPercent: 0.25,
+      rssBytes: null,
+      pssBytes: null,
+      privateBytes: null,
+    };
+    const epic = {
+      ...EPIC_FIXTURE,
+      ...aggregate,
+      ownerCount: 1,
+    };
+    const frame = {
+      kind: "snapshot" as const,
+      epicId: "epic-1",
+      sampledAt: 1_000,
+      app: {
+        ...aggregate,
+        hostTotalMemoryBytes: APP_FIXTURE.hostTotalMemoryBytes,
+        process: null,
+      },
+      owners: [owner],
+      epic,
+      epics: [epic],
+      hostTree: aggregate,
+      other: {
+        ...aggregate,
+        rootPids: [99],
+        processes: [process],
+      },
+      restricted: aggregate,
+      hasBinaryPayload: false as const,
+    };
+
+    const parsed = resourcesSubscribeServerFrameSchemaV15.parse(frame);
+    if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
+    expect(parsed.app?.rssBytes).toBeNull();
+    expect(parsed.owners[0]?.rssBytes).toBeNull();
+    expect(parsed.owners[0]?.processes[0]?.rssBytes).toBeNull();
+    expect(parsed.epic?.rssBytes).toBeNull();
+    expect(parsed.hostTree?.rssBytes).toBeNull();
+    expect(parsed.other?.rssBytes).toBeNull();
+    expect(parsed.restricted?.rssBytes).toBeNull();
+    expect(() => resourcesSubscribeServerFrameSchemaV14.parse(frame)).toThrow();
+
+    expect(() =>
+      resourcesSubscribeServerFrameSchemaV15.parse({
+        ...frame,
+        restricted: { ...aggregate, rssBytes: -1 },
+      }),
+    ).toThrow();
+    expect(() =>
+      resourcesSubscribeServerFrameSchemaV15.parse({
+        ...frame,
+        restricted: { ...aggregate, rssBytes: 1.5 },
+      }),
+    ).toThrow();
+    expect(() =>
+      resourcesSubscribeServerFrameSchemaV15.parse({
+        ...frame,
+        restricted: { ...aggregate, pid: 42 },
+      }),
+    ).toThrow();
+  });
+
+  it("carries only bounded Chromium descriptors and defaults older @1.5 frames", () => {
+    const process = {
+      ...PROCESS_FIXTURE,
+      pssBytes: null,
+      privateBytes: null,
+      descriptor: {
+        family: "chromium" as const,
+        runtime: "cell-runner" as const,
+        role: "renderer" as const,
+      },
+    };
+    const frame = {
+      kind: "snapshot" as const,
+      epicId: "epic-1",
+      sampledAt: 1_000,
+      app: null,
+      owners: [
+        {
+          ...OWNER_FIXTURE,
+          pssBytes: null,
+          privateBytes: null,
+          processes: [process],
+          harnessId: null,
+          managedCommand: null,
+        },
+      ],
+      epic: null,
+      hostTree: null,
+      other: null,
+      hasBinaryPayload: false as const,
+    };
+
+    const v15 = resourcesSubscribeServerFrameSchemaV15.parse(frame);
+    if (v15.kind !== "snapshot") throw new Error("expected snapshot");
+    expect(v15.owners[0].processes[0].descriptor).toEqual({
+      family: "chromium",
+      runtime: "cell-runner",
+      role: "renderer",
+    });
+    const withoutDescriptor = resourcesSubscribeServerFrameSchemaV15.parse({
+      ...frame,
+      owners: [
+        {
+          ...frame.owners[0],
+          processes: [{ ...process, descriptor: undefined }],
+        },
+      ],
+    });
+    if (withoutDescriptor.kind !== "snapshot") {
+      throw new Error("expected snapshot");
+    }
+    expect(withoutDescriptor.owners[0].processes[0].descriptor).toBeNull();
+
+    expect(() =>
+      resourcesSubscribeServerFrameSchemaV15.parse({
+        ...frame,
+        owners: [
+          {
+            ...frame.owners[0],
+            processes: [
+              {
+                ...process,
+                descriptor: { ...process.descriptor, role: "zygote" },
+              },
+            ],
+          },
+        ],
+      }),
+    ).toThrow();
+
+    const v14 = resourcesSubscribeServerFrameSchemaV14.parse(frame);
+    if (v14.kind !== "snapshot") throw new Error("expected snapshot");
+    expect(v14.owners[0].processes[0]).not.toHaveProperty("descriptor");
   });
 });
 

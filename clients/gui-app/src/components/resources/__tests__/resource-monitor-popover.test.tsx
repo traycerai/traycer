@@ -27,11 +27,11 @@ import {
   screen,
 } from "@testing-library/react";
 import type {
-  AppResourceSnapshotWire,
-  HostTreeResourceSnapshotWire,
-  OtherResourceSnapshotWire,
-  OwnerResourceSnapshotWireV14,
-  ResourceProcessSnapshotWire,
+  AppResourceSnapshotWireV15,
+  HostTreeResourceSnapshotWireV15,
+  OtherResourceSnapshotWireV15,
+  OwnerResourceSnapshotWireV15,
+  ResourceProcessSnapshotWireV15,
 } from "@traycer/protocol/host/resources/subscribe";
 import type {
   ResourcesProjectionPayload,
@@ -512,8 +512,8 @@ vi.mock("@/stores/epics/canvas/store", () => {
 });
 
 function resourceProcess(
-  over: Partial<ResourceProcessSnapshotWire>,
-): ResourceProcessSnapshotWire {
+  over: Partial<ResourceProcessSnapshotWireV15>,
+): ResourceProcessSnapshotWireV15 {
   return {
     pid: 10,
     parentPid: null,
@@ -522,11 +522,14 @@ function resourceProcess(
     command: "traycer-host",
     cpuPercent: 1,
     rssBytes: 20 * 1024 * 1024,
+    pssBytes: null,
+    privateBytes: null,
+    descriptor: null,
     ...over,
   };
 }
 
-function app(): AppResourceSnapshotWire {
+function app(): AppResourceSnapshotWireV15 {
   return {
     sampledAt: 1_000,
     hostTotalMemoryBytes: 2 * 1024 * 1024 * 1024,
@@ -534,12 +537,14 @@ function app(): AppResourceSnapshotWire {
     processCount: 1,
     cpuPercent: 1,
     rssBytes: 20 * 1024 * 1024,
+    pssBytes: null,
+    privateBytes: null,
   };
 }
 
 function owner(
-  over: Partial<OwnerResourceSnapshotWireV14>,
-): OwnerResourceSnapshotWireV14 {
+  over: Partial<OwnerResourceSnapshotWireV15>,
+): OwnerResourceSnapshotWireV15 {
   return {
     owner: {
       kind: "terminal",
@@ -555,6 +560,8 @@ function owner(
     processCount: 2,
     cpuPercent: 12,
     rssBytes: 100 * 1024 * 1024,
+    pssBytes: null,
+    privateBytes: null,
     processes: [
       resourceProcess({
         pid: 100,
@@ -597,26 +604,30 @@ function owner(
 }
 
 function hostTree(
-  over: Partial<HostTreeResourceSnapshotWire>,
-): HostTreeResourceSnapshotWire {
+  over: Partial<HostTreeResourceSnapshotWireV15>,
+): HostTreeResourceSnapshotWireV15 {
   return {
     sampledAt: 1_000,
     processCount: 4,
     cpuPercent: 10,
     rssBytes: 400 * 1024 * 1024,
+    pssBytes: null,
+    privateBytes: null,
     ...over,
   };
 }
 
 function other(
-  over: Partial<OtherResourceSnapshotWire>,
-): OtherResourceSnapshotWire {
+  over: Partial<OtherResourceSnapshotWireV15>,
+): OtherResourceSnapshotWireV15 {
   return {
     sampledAt: 1_000,
     rootPids: [500],
     processCount: 2,
     cpuPercent: 5,
     rssBytes: 50 * 1024 * 1024,
+    pssBytes: null,
+    privateBytes: null,
     processes: [
       resourceProcess({
         pid: 500,
@@ -652,6 +663,7 @@ function projection(
     epics: [],
     hostTree: undefined,
     other: undefined,
+    restricted: undefined,
     ...over,
   };
 }
@@ -741,6 +753,7 @@ function ownerRowsProjection(hostId: string | null): GlobalResourceProjection {
     app: app(),
     hostTree: null,
     other: null,
+    restricted: null,
     owners: [ownerSnapshot],
     entries: [
       {
@@ -749,6 +762,7 @@ function ownerRowsProjection(hostId: string | null): GlobalResourceProjection {
         app: app(),
         hostTree: null,
         other: null,
+        restricted: null,
         owners: [ownerSnapshot],
         epic: null,
       },
@@ -1812,6 +1826,104 @@ describe("ResourceMonitorPopover", () => {
     expect(screen.getByRole("progressbar").getAttribute("aria-valuenow")).toBe(
       "24",
     );
+  });
+
+  it("shows raw RAM share while clamping only the progress indicator", () => {
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          app: app(),
+          hostTree: hostTree({ rssBytes: 3 * 1024 * 1024 * 1024 }),
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    expect(screen.getByText("150%")).not.toBeNull();
+    expect(screen.getByRole("progressbar").getAttribute("aria-valuenow")).toBe(
+      "100",
+    );
+  });
+
+  it("opens the memory explanation from keyboard focus", async () => {
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub
+        .emit()
+        .onSnapshot(projection({ app: app(), hostTree: hostTree({}) }));
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    const trigger = screen
+      .getByText("Resident memory (RSS)")
+      .closest('[data-slot="tooltip-trigger"]');
+    if (!(trigger instanceof HTMLElement)) {
+      throw new Error("Expected memory detail tooltip trigger");
+    }
+    expect(trigger.tabIndex).toBe(0);
+    fireEvent.focus(trigger);
+    expect(await screen.findByText(/shared pages divided/)).not.toBeNull();
+  });
+
+  it("shows unavailable host memory explicitly instead of manufacturing zero", () => {
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          app: app(),
+          hostTree: hostTree({
+            rssBytes: null,
+            pssBytes: null,
+            privateBytes: null,
+          }),
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    expect(
+      screen.getByLabelText("Resident memory (RSS): unavailable"),
+    ).not.toBeNull();
+    expect(screen.getByLabelText("RAM share: unavailable")).not.toBeNull();
+    expect(screen.queryByRole("progressbar")).toBeNull();
+    expect(screen.queryByText("0 B")).toBeNull();
+  });
+
+  it("renders restricted usage as an aggregate-only row", () => {
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          app: app(),
+          hostTree: hostTree({}),
+          restricted: {
+            sampledAt: 1_000,
+            processCount: 2,
+            cpuPercent: 3,
+            rssBytes: null,
+            pssBytes: null,
+            privateBytes: null,
+          },
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    expect(screen.getByText("Restricted")).not.toBeNull();
+    expect(screen.getByText("2 processes")).not.toBeNull();
+    expect(screen.getAllByLabelText("Memory unavailable")).not.toHaveLength(0);
+    expect(
+      screen.queryByRole("button", { name: /Restricted|Outside scope/ }),
+    ).toBeNull();
   });
 
   it("renders Other as a non-navigable, expandable process-root section", () => {
@@ -2988,6 +3100,15 @@ describe("ResourceMonitorPopover", () => {
                   cpuPercent: 20,
                   rssBytes: 200 * 1024 * 1024,
                 }),
+                resourceProcess({
+                  pid: 104,
+                  parentPid: 100,
+                  rootPid: 100,
+                  name: "unavailable",
+                  command: "unavailable",
+                  cpuPercent: 30,
+                  rssBytes: null,
+                }),
               ],
             }),
           ],
@@ -3016,6 +3137,7 @@ describe("ResourceMonitorPopover", () => {
 
     // Memory sort: beta's 205 MB subtree outranks alpha's 10 MB.
     expectBefore("beta (1 sub-process)", "alpha");
+    expectBefore("alpha", "unavailable");
 
     fireEvent.pointerDown(
       screen.getByRole("button", { name: "Sort resource rows" }),
@@ -3031,6 +3153,154 @@ describe("ResourceMonitorPopover", () => {
     fireEvent.click(screen.getByRole("menuitemradio", { name: "Tab order" }));
     // Tab order has no process meaning: fall back to the host's wire order.
     expectBefore("alpha", "beta (1 sub-process)");
+  });
+
+  it("uses bounded Chromium labels for display, search, name sort, accessibility, and safe fallback", () => {
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({
+              rootPids: [99],
+              processCount: 6,
+              processes: [
+                resourceProcess({
+                  pid: 99,
+                  rootPid: 99,
+                  name: "owner-root",
+                  command: "owner-root",
+                }),
+                resourceProcess({
+                  pid: 100,
+                  parentPid: 99,
+                  rootPid: 99,
+                  name: "chrome",
+                  command: "renderer-command-should-not-win",
+                  descriptor: {
+                    family: "chromium",
+                    runtime: "sessions",
+                    role: "browser",
+                  },
+                }),
+                resourceProcess({
+                  pid: 103,
+                  parentPid: 99,
+                  rootPid: 99,
+                  name: "chrome",
+                  command: "renderer-command-should-not-win",
+                  descriptor: {
+                    family: "chromium",
+                    runtime: "sessions",
+                    role: "renderer",
+                  },
+                }),
+                resourceProcess({
+                  pid: 101,
+                  parentPid: 99,
+                  rootPid: 99,
+                  name: "chrome",
+                  command: "second-renderer-command-should-not-win",
+                  descriptor: {
+                    family: "chromium",
+                    runtime: "sessions",
+                    role: "renderer",
+                  },
+                }),
+                resourceProcess({
+                  pid: 104,
+                  parentPid: 101,
+                  rootPid: 99,
+                  name: "chrome",
+                  command: "renderer-child-command-should-not-win",
+                  descriptor: {
+                    family: "chromium",
+                    runtime: "sessions",
+                    role: "utility",
+                  },
+                }),
+                resourceProcess({
+                  pid: 102,
+                  parentPid: 99,
+                  rootPid: 99,
+                  name: "worker",
+                  command: "/opt/provider/worker --serve",
+                  descriptor: null,
+                }),
+              ],
+            }),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Expand process tree" }),
+    );
+
+    // A descriptor wins over both executable name and command, while a row
+    // without one retains the bounded command fallback.
+    expect(screen.getByText("Browser sessions")).not.toBeNull();
+    expect(screen.getByText("Browser page")).not.toBeNull();
+    expect(screen.getByText("Browser page (1 sub-process)")).not.toBeNull();
+    expect(screen.getByText("/opt/provider/worker --serve")).not.toBeNull();
+    expect(screen.queryByText("renderer-command-should-not-win")).toBeNull();
+
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      { target: { value: "Browser page" } },
+    );
+    expect(screen.getAllByText(/Browser page/)).toHaveLength(2);
+
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+      { target: { value: "" } },
+    );
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Sort resource rows" }),
+      { button: 0, ctrlKey: false, pointerType: "mouse" },
+    );
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Name" }));
+    const sessions = screen.getByText("Browser sessions");
+    const pages = screen.getAllByText(/Browser page/);
+    expect(
+      pages[0]?.compareDocumentPosition(sessions) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
+    expect(
+      pages[0]?.compareDocumentPosition(pages[1] as Node) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
+
+    expect(
+      screen.getByRole("button", {
+        name: "Expand sub-processes of Browser page, PID 101",
+      }),
+    ).not.toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Kill Browser page, PID 101" }),
+    ).not.toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Kill Browser page, PID 103" }),
+    ).not.toBeNull();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Select processes to kill" }),
+    );
+    expect(
+      screen.getByRole("button", {
+        name: "Select Browser sessions, PID 100",
+      }),
+    ).not.toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Select Browser page, PID 101" }),
+    ).not.toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Select Browser page, PID 103" }),
+    ).not.toBeNull();
   });
 
   it("sorts the desktop process groups by the selected option", async () => {
@@ -3383,7 +3653,7 @@ describe("ResourceMonitorPopover", () => {
   function managedCommandOwner(
     monitoring: boolean,
     description: string,
-  ): OwnerResourceSnapshotWireV14 {
+  ): OwnerResourceSnapshotWireV15 {
     return owner({
       owner: {
         kind: "managed-command",
@@ -3476,7 +3746,7 @@ describe("ResourceMonitorPopover", () => {
 describe("ResourceMonitorPopover · shells nested under their creator", () => {
   const MiB = 1024 * 1024;
 
-  function chatOwner(): OwnerResourceSnapshotWireV14 {
+  function chatOwner(): OwnerResourceSnapshotWireV15 {
     return owner({
       owner: {
         kind: "chat",
@@ -3510,7 +3780,7 @@ describe("ResourceMonitorPopover · shells nested under their creator", () => {
     readonly pid: number;
     readonly cpuPercent: number;
     readonly rssBytes: number;
-  }): OwnerResourceSnapshotWireV14 {
+  }): OwnerResourceSnapshotWireV15 {
     return owner({
       owner: {
         kind: "managed-command",
@@ -3545,7 +3815,7 @@ describe("ResourceMonitorPopover · shells nested under their creator", () => {
 
   function deployWatcher(
     createdByAgentId: string,
-  ): OwnerResourceSnapshotWireV14 {
+  ): OwnerResourceSnapshotWireV15 {
     return shellOwner({
       commandId: "cmd-1",
       createdByAgentId,
@@ -3556,7 +3826,7 @@ describe("ResourceMonitorPopover · shells nested under their creator", () => {
     });
   }
 
-  function emitOwners(owners: readonly OwnerResourceSnapshotWireV14[]): {
+  function emitOwners(owners: readonly OwnerResourceSnapshotWireV15[]): {
     readonly emit: () => ResourcesStreamCallbacks;
   } {
     const stub = installStubFactory();
@@ -3786,8 +4056,8 @@ describe("ResourceMonitorPopover · stopping a shell rather than killing it", ()
   const MiB = 1024 * 1024;
 
   function shellOwner(
-    processes: readonly ResourceProcessSnapshotWire[],
-  ): OwnerResourceSnapshotWireV14 {
+    processes: readonly ResourceProcessSnapshotWireV15[],
+  ): OwnerResourceSnapshotWireV15 {
     return owner({
       owner: {
         kind: "managed-command",
@@ -3811,7 +4081,7 @@ describe("ResourceMonitorPopover · stopping a shell rather than killing it", ()
     });
   }
 
-  function bash(): ResourceProcessSnapshotWire {
+  function bash(): ResourceProcessSnapshotWireV15 {
     return resourceProcess({
       pid: 300,
       rootPid: 300,
@@ -3822,7 +4092,7 @@ describe("ResourceMonitorPopover · stopping a shell rather than killing it", ()
     });
   }
 
-  function chatOwner(): OwnerResourceSnapshotWireV14 {
+  function chatOwner(): OwnerResourceSnapshotWireV15 {
     return owner({
       owner: {
         kind: "chat",
@@ -3849,7 +4119,7 @@ describe("ResourceMonitorPopover · stopping a shell rather than killing it", ()
     });
   }
 
-  function openWith(owners: readonly OwnerResourceSnapshotWireV14[]): void {
+  function openWith(owners: readonly OwnerResourceSnapshotWireV15[]): void {
     const stub = installStubFactory();
     renderPopover();
     act(() => {

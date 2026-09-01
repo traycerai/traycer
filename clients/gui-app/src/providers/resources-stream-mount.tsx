@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ResourcesStreamClient } from "@traycer-clients/shared/host-transport/resources-stream-client";
 import {
   useStreamHostId,
@@ -10,12 +10,18 @@ import { resourcesRegistry } from "@/stores/resources/resources-registry";
 import {
   createResourcesStore,
   type ResourcesStreamClientFactory,
+  type ResourcesStoreHandle,
 } from "@/stores/resources/resources-store";
 import { getResourcesStreamClientFactoryOverride } from "@/providers/resources-stream-factory-override";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
 export interface ResourcesStreamMountProps {
   readonly epicId: string;
+}
+
+export interface GlobalResourcesStreamMountProps {
+  /** True only while the resource-monitor popover is actually visible. */
+  readonly interactive: boolean;
 }
 
 /**
@@ -89,7 +95,9 @@ export function ResourcesStreamMount(
   return null;
 }
 
-export function GlobalResourcesStreamMount(): ReactNode {
+export function GlobalResourcesStreamMount(
+  props: GlobalResourcesStreamMountProps,
+): ReactNode {
   const wsStreamClient = useWsStreamClient();
   // Taken from the SAME binding as the client above, never from a prop or a
   // scope model: the host id republished on the projection is what a scoped
@@ -109,6 +117,11 @@ export function GlobalResourcesStreamMount(): ReactNode {
   const resourcesUnsupported = useGlobalResourcesPreCheckUnsupported();
   // Bumped ONLY by the recovery listener below — never during a render.
   const [reprobeGeneration, setReprobeGeneration] = useState(0);
+  const activeHandleRef = useRef<ResourcesStoreHandle | null>(null);
+  const desiredDemandRef = useRef<"background" | "interactive">(
+    props.interactive ? "interactive" : "background",
+  );
+  desiredDemandRef.current = props.interactive ? "interactive" : "background";
   // "Which stream should be open": the transport, plus the re-probe generation.
   // The generation belongs in the identity rather than in the effect alone, so
   // a bump rebuilds the entry even when a second lease holder would otherwise
@@ -171,13 +184,16 @@ export function GlobalResourcesStreamMount(): ReactNode {
               callbacks,
             });
           };
-    resourcesRegistry.acquireGlobal(clientToken, hostId, () =>
+    const handle = resourcesRegistry.acquireGlobal(clientToken, hostId, () =>
       createResourcesStore({
         scope: { kind: "global" },
         streamClientFactory,
       }),
     );
+    activeHandleRef.current = handle;
+    handle.setDemand(desiredDemandRef.current);
     return () => {
+      if (activeHandleRef.current === handle) activeHandleRef.current = null;
       resourcesRegistry.releaseGlobal();
     };
     // `hostId` belongs in the deps, not just in the closure: the name is fixed
@@ -186,6 +202,10 @@ export function GlobalResourcesStreamMount(): ReactNode {
     // machine. In practice it now moves WITH `wsStreamClient` (one binding, one
     // change), so this rarely fires on its own.
   }, [hostId, reacquireToken, resourcesUnsupported, wsStreamClient]);
+
+  useEffect(() => {
+    activeHandleRef.current?.setDemand(desiredDemandRef.current);
+  }, [props.interactive, reacquireToken]);
 
   return null;
 }

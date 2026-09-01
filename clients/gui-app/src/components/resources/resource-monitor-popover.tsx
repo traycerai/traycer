@@ -11,6 +11,7 @@ import type {
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent,
   PointerEvent,
+  ReactNode,
 } from "react";
 import {
   useNavigate,
@@ -32,12 +33,13 @@ import {
   X,
 } from "lucide-react";
 import type {
+  ChromiumProcessDescriptorWire,
   ManagedCommandOwnerWire,
-  OwnerResourceSnapshotWireV14,
-  HostTreeResourceSnapshotWire,
-  OtherResourceSnapshotWire,
+  OwnerResourceSnapshotWireV15,
+  HostTreeResourceSnapshotWireV15,
+  OtherResourceSnapshotWireV15,
   ResourceOwnerKindWireV14,
-  ResourceProcessSnapshotWire,
+  ResourceProcessSnapshotWireV15,
 } from "@traycer/protocol/host/resources/subscribe";
 import type { TaskLight } from "@traycer/protocol/host/epic/unary-schemas";
 import type { EpicNodeRecord } from "@/lib/artifacts/node-display";
@@ -114,7 +116,7 @@ import type {
   AppResourceUsage,
   OtherResourceUsage,
   OwnerResourceUsage,
-  TaskResourceSummary,
+  RestrictedResourceUsage,
 } from "@/stores/resources/resources-store";
 import {
   formatCpuPercent,
@@ -160,6 +162,14 @@ import type {
   EpicViewTab,
 } from "@/stores/epics/canvas/types";
 import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
+import {
+  clampPercentage,
+  resourceMemoryBytes,
+  resourceMemoryLabel,
+  selectResourceMemoryMetric,
+  sumCompleteMemoryBytes,
+  type ResourceMemoryMetric,
+} from "@/lib/resources/memory-metric";
 
 type ResourceSortOption = "memory" | "cpu" | "name" | "tab";
 type NavigateFn = UseNavigateResult<string>;
@@ -246,7 +256,7 @@ interface CanvasOwnerCandidate {
 }
 
 interface OwnerDisplayRow {
-  readonly snapshot: OwnerResourceSnapshotWireV14;
+  readonly snapshot: OwnerResourceSnapshotWireV15;
   readonly label: string;
   readonly canOpen: boolean;
   readonly tabOrder: number;
@@ -268,7 +278,8 @@ interface OwnerDisplayRow {
   readonly synthetic: boolean;
   /** Subtree total: this row's own process tree plus its shells' trees. */
   readonly treeCpuPercent: number;
-  readonly treeRssBytes: number;
+  readonly ownMemoryBytes: number | null;
+  readonly treeMemoryBytes: number | null;
 }
 
 interface TaskDisplayRow {
@@ -276,7 +287,7 @@ interface TaskDisplayRow {
   readonly label: string;
   readonly tabOrder: number;
   readonly cpuPercent: number;
-  readonly rssBytes: number;
+  readonly memoryBytes: number | null;
   readonly owners: readonly OwnerDisplayRow[];
 }
 
@@ -292,14 +303,15 @@ interface DesktopProcessGroupEntry {
 }
 
 interface ProcessDisplayRow {
-  readonly process: ResourceProcessSnapshotWire;
+  readonly process: ResourceProcessSnapshotWireV15;
+  readonly selfMemoryBytes: number | null;
   readonly depth: number;
   readonly canExpand: boolean;
   readonly expanded: boolean;
   readonly searchForcesExpanded: boolean;
   readonly hiddenCount: number;
   readonly treeCpuPercent: number;
-  readonly treeRssBytes: number;
+  readonly treeMemoryBytes: number | null;
   readonly children: readonly ProcessDisplayRow[];
 }
 
@@ -308,15 +320,25 @@ interface OwnerProcessRows {
   readonly rootRows: readonly ProcessDisplayRow[];
   readonly canExpand: boolean;
   readonly selfCpuPercent: number;
-  readonly selfRssBytes: number;
+  readonly selfMemoryBytes: number | null;
   readonly treeCpuPercent: number;
-  readonly treeRssBytes: number;
+  readonly treeMemoryBytes: number | null;
+}
+
+interface HeadlineResourceSummary {
+  readonly cpuPercent: number;
+  readonly memoryBytes: number | null;
+  readonly rssBytes: number | null;
+  readonly pssBytes: number | null;
+  readonly privateBytes: number | null;
+  readonly trackedProcessCount: number;
 }
 
 interface ResourceSearchProjection {
   readonly desktopApp: DesktopAppResourceUsage | null;
   readonly hostApp: AppResourceUsage | null;
   readonly other: OtherResourceUsage | null;
+  readonly restricted: RestrictedResourceUsage | null;
   readonly taskRows: readonly TaskDisplayRow[];
   readonly visibleOwnerKeys: ReadonlySet<string>;
   readonly visibleKillKeys: ReadonlySet<string>;
@@ -477,7 +499,9 @@ function ScopedResourceMonitorPopover(props: {
           mounted and ignored: this mount OPENS a stream, and one opened on the
           ambient host would be sampling processes on a machine nobody asked
           about — and would then have to be disowned by every reader below. */}
-      {props.streamBoundToScope ? <GlobalResourcesStreamMount /> : null}
+      {props.streamBoundToScope ? (
+        <GlobalResourcesStreamMount interactive={open} />
+      ) : null}
       <Popover open={open} onOpenChange={setOpen}>
         <TooltipWrapper
           // The host belongs in the label only when it is NOT the obvious one.
@@ -1238,6 +1262,28 @@ function ResourceMonitorPanel(props: {
   const activeEpicId = readActiveEpicIdFromPath(activePathname);
   const activeTabId = readActiveEpicTabIdFromPath(activePathname);
   const supportsHostTree = resourcesSubscribeV12Supported(resourcesVersion);
+  const memoryMetric = useMemo(
+    () =>
+      selectResourceMemoryMetric(
+        {
+          app: projection.app,
+          hostTree: supportsHostTree ? projection.hostTree : null,
+          other: supportsHostTree ? projection.other : null,
+          restricted: projection.restricted,
+          owners: projection.owners,
+        },
+        desktopApp !== null,
+      ),
+    [
+      desktopApp,
+      projection.app,
+      projection.hostTree,
+      projection.other,
+      projection.owners,
+      projection.restricted,
+      supportsHostTree,
+    ],
+  );
   const summary = useMemo(
     () =>
       combineHeadlineResourceSummary(
@@ -1245,6 +1291,7 @@ function ResourceMonitorPanel(props: {
         projection.app,
         projection.owners,
         desktopApp,
+        memoryMetric,
       ),
     [
       desktopApp,
@@ -1252,6 +1299,7 @@ function ResourceMonitorPanel(props: {
       projection.hostTree,
       projection.owners,
       supportsHostTree,
+      memoryMetric,
     ],
   );
 
@@ -1289,6 +1337,7 @@ function ResourceMonitorPanel(props: {
         recordByOwner,
         epicTitleById,
         sortOption,
+        memoryMetric,
       }),
     [
       canvas,
@@ -1297,6 +1346,7 @@ function ResourceMonitorPanel(props: {
       projection.entries,
       recordByOwner,
       sortOption,
+      memoryMetric,
     ],
   );
   const liveOwnerTitleByKey = useMemo(
@@ -1315,6 +1365,7 @@ function ResourceMonitorPanel(props: {
         desktopApp,
         hostApp: projection.app,
         other: supportsHostTree ? projection.other : null,
+        restricted: projection.restricted,
         taskRows,
         liveOwnerTitleByKey,
         searchQuery,
@@ -1325,6 +1376,7 @@ function ResourceMonitorPanel(props: {
       expandedOwners,
       projection.app,
       projection.other,
+      projection.restricted,
       liveOwnerTitleByKey,
       searchQuery,
       supportsHostTree,
@@ -1404,9 +1456,12 @@ function ResourceMonitorPanel(props: {
   const memorySharePercent =
     projection.app !== null &&
     projection.app.hostTotalMemoryBytes > 0 &&
-    summary !== null
-      ? (summary.rssBytes / projection.app.hostTotalMemoryBytes) * 100
-      : 0;
+    summary !== null &&
+    summary.memoryBytes !== null
+      ? (summary.memoryBytes / projection.app.hostTotalMemoryBytes) * 100
+      : null;
+  const clampedMemorySharePercent =
+    memorySharePercent === null ? null : clampPercentage(memorySharePercent);
 
   const dismissSortMenuFromPanelClick = (
     event: PointerEvent<HTMLDivElement>,
@@ -1603,34 +1658,49 @@ function ResourceMonitorPanel(props: {
               <MetricBlock
                 label="CPU"
                 value={formatCpuPercent(summary.cpuPercent)}
+                detail={null}
               />
               <MetricBlock
-                label="Memory"
-                value={formatMemoryBytes(summary.rssBytes)}
+                label={resourceMemoryLabel(memoryMetric, desktopApp !== null)}
+                value={formatMemoryBytesOrUnavailable(summary.memoryBytes)}
+                detail={
+                  <MemoryMetricDetail
+                    summary={summary}
+                    metric={memoryMetric}
+                    includesDesktopWorkingSet={desktopApp !== null}
+                  />
+                }
               />
               <MetricBlock
                 label="RAM share"
-                value={formatCpuPercent(memorySharePercent)}
+                value={
+                  memorySharePercent === null
+                    ? "—"
+                    : formatCpuPercent(memorySharePercent)
+                }
+                detail={null}
               />
             </div>
-            <div
-              className="mt-3 h-1 w-full overflow-hidden rounded-full bg-foreground/6"
-              role="progressbar"
-              aria-label="Tracked RAM share"
-              aria-valuenow={Math.round(memorySharePercent)}
-              aria-valuemin={0}
-              aria-valuemax={100}
-            >
+            {clampedMemorySharePercent === null ? null : (
               <div
-                className={cn(
-                  "h-full rounded-full transition-[width] duration-300",
-                  memoryShareBarClass(memorySharePercent),
-                )}
-                style={{
-                  width: `${Math.min(100, Math.max(0, memorySharePercent))}%`,
-                }}
-              />
-            </div>
+                className="mt-3 h-1 w-full overflow-hidden rounded-full bg-foreground/6"
+                role="progressbar"
+                aria-label="Tracked RAM share"
+                aria-valuenow={Math.round(clampedMemorySharePercent)}
+                aria-valuemin={0}
+                aria-valuemax={100}
+              >
+                <div
+                  className={cn(
+                    "h-full rounded-full transition-[width] duration-300",
+                    memoryShareBarClass(clampedMemorySharePercent),
+                  )}
+                  style={{
+                    width: `${clampedMemorySharePercent}%`,
+                  }}
+                />
+              </div>
+            )}
           </>
         )}
       </div>
@@ -1644,7 +1714,10 @@ function ResourceMonitorPanel(props: {
           />
         )}
         {search.hostApp === null ? null : (
-          <HostAppResourceSection app={search.hostApp} />
+          <HostAppResourceSection
+            app={search.hostApp}
+            memoryMetric={memoryMetric}
+          />
         )}
         {summary === null ? null : (
           <div className="py-1">
@@ -1662,6 +1735,7 @@ function ResourceMonitorPanel(props: {
                   expandedOwners={expandedOwners}
                   expandedProcesses={expandedProcesses}
                   sortOption={sortOption}
+                  memoryMetric={memoryMetric}
                   onToggleOwner={toggleOwner}
                   onToggleProcess={toggleProcess}
                   onOpenOwner={openOwner}
@@ -1675,9 +1749,17 @@ function ResourceMonitorPanel(props: {
                 searchQuery={searchQuery}
                 expandedProcesses={expandedProcesses}
                 sortOption={sortOption}
+                memoryMetric={memoryMetric}
                 onToggleProcess={toggleProcess}
                 actions={rowActions.api}
                 killHostId={defaultHostId}
+              />
+            )}
+            {search.restricted === null ? null : (
+              <RestrictedResourceSection
+                usage={search.restricted}
+                memoryMetric={memoryMetric}
+                label="Restricted"
               />
             )}
             {search.noResults ? (
@@ -1826,14 +1908,80 @@ function ResourceSearchInput(props: {
 function MetricBlock(props: {
   readonly label: string;
   readonly value: string;
+  readonly detail: ReactNode;
 }) {
-  return (
-    <div className="min-w-0 px-3 first:pl-0 last:pr-0">
+  const content = (
+    <div
+      className={cn(
+        "min-w-0 px-3 first:pl-0 last:pr-0",
+        props.detail === null
+          ? null
+          : "rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+      )}
+      tabIndex={props.detail === null ? undefined : 0}
+    >
       <div className="text-ui-xs font-medium uppercase tracking-wide text-muted-foreground">
         {props.label}
       </div>
       <div className="mt-1 truncate text-lg tabular-nums text-foreground">
-        {props.value}
+        <span
+          aria-label={
+            props.value === "—" ? `${props.label}: unavailable` : undefined
+          }
+        >
+          {props.value}
+        </span>
+      </div>
+    </div>
+  );
+  if (props.detail === null) return content;
+  return (
+    <TooltipWrapper
+      label={props.detail}
+      side="bottom"
+      sideOffset={6}
+      align="center"
+    >
+      {content}
+    </TooltipWrapper>
+  );
+}
+
+function formatMemoryBytesOrUnavailable(bytes: number | null): string {
+  return bytes === null ? "—" : formatMemoryBytes(bytes);
+}
+
+function memoryAvailabilityLabel(bytes: number | null): string {
+  return bytes === null ? "Unavailable" : formatMemoryBytes(bytes);
+}
+
+function MemoryMetricDetail(props: {
+  readonly summary: HeadlineResourceSummary;
+  readonly metric: ResourceMemoryMetric;
+  readonly includesDesktopWorkingSet: boolean;
+}) {
+  const pss =
+    props.summary.pssBytes === null
+      ? "Unavailable for this complete scope"
+      : formatMemoryBytes(props.summary.pssBytes);
+  const privateMemory =
+    props.summary.privateBytes === null
+      ? "Unavailable for this complete scope"
+      : formatMemoryBytes(props.summary.privateBytes);
+  const rss = memoryAvailabilityLabel(props.summary.rssBytes);
+  return (
+    <div className="max-w-xs space-y-1 text-ui-xs">
+      <div>
+        Selected:{" "}
+        {resourceMemoryLabel(props.metric, props.includesDesktopWorkingSet)}
+      </div>
+      <div>PSS: {pss} · shared pages divided between processes.</div>
+      <div>
+        RSS: {rss} · resident pages; shared pages repeat across processes.
+      </div>
+      <div>
+        Private: {privateMemory} · pages exclusive to these processes, a lower
+        bound rather than predicted reclaim.
       </div>
     </div>
   );
@@ -1879,7 +2027,7 @@ function DesktopAppResourceSection(props: {
         <div className="flex items-center">
           <MetricPair
             cpuPercent={props.app.cpuPercent}
-            rssBytes={props.app.rssBytes}
+            memoryBytes={props.app.rssBytes}
             className="text-ui-sm text-foreground"
           />
           <span className={ROW_ACTION_SLOT} />
@@ -1907,14 +2055,17 @@ function DesktopAppProcessGroupRow(props: {
       </div>
       <MetricPair
         cpuPercent={props.usage.cpuPercent}
-        rssBytes={props.usage.rssBytes}
+        memoryBytes={props.usage.rssBytes}
         className="text-ui-xs text-muted-foreground/80"
       />
     </div>
   );
 }
 
-function HostAppResourceSection(props: { readonly app: AppResourceUsage }) {
+function HostAppResourceSection(props: {
+  readonly app: AppResourceUsage;
+  readonly memoryMetric: ResourceMemoryMetric;
+}) {
   return (
     <div className="border-b border-border/60 py-1">
       <div
@@ -1932,7 +2083,7 @@ function HostAppResourceSection(props: { readonly app: AppResourceUsage }) {
         <div className="flex items-center">
           <MetricPair
             cpuPercent={props.app.cpuPercent}
-            rssBytes={props.app.rssBytes}
+            memoryBytes={resourceMemoryBytes(props.app, props.memoryMetric)}
             className="text-ui-sm text-foreground"
           />
           <span className={ROW_ACTION_SLOT} />
@@ -1947,8 +2098,15 @@ function HostAppResourceSection(props: { readonly app: AppResourceUsage }) {
             expanded: false,
             searchForcesExpanded: false,
             hiddenCount: 0,
+            selfMemoryBytes: resourceMemoryBytes(
+              props.app.process,
+              props.memoryMetric,
+            ),
             treeCpuPercent: props.app.process.cpuPercent,
-            treeRssBytes: props.app.process.rssBytes,
+            treeMemoryBytes: resourceMemoryBytes(
+              props.app.process,
+              props.memoryMetric,
+            ),
             children: [],
           }}
           ownerDepth={0}
@@ -1957,6 +2115,7 @@ function HostAppResourceSection(props: { readonly app: AppResourceUsage }) {
           onToggleExpand={noProcessToggle}
           actions={null}
           killHostId={null}
+          memoryMetric={props.memoryMetric}
         />
       )}
     </div>
@@ -1970,11 +2129,12 @@ function resourcesSubscribeV12Supported(
 }
 
 function combineHeadlineResourceSummary(
-  hostTree: HostTreeResourceSnapshotWire | null,
+  hostTree: HostTreeResourceSnapshotWireV15 | null,
   app: AppResourceUsage | null,
-  owners: readonly OwnerResourceSnapshotWireV14[],
+  owners: readonly OwnerResourceSnapshotWireV15[],
   desktopApp: DesktopAppResourceUsage | null,
-): TaskResourceSummary | null {
+  memoryMetric: ResourceMemoryMetric,
+): HeadlineResourceSummary | null {
   if (
     hostTree === null &&
     app === null &&
@@ -1991,33 +2151,52 @@ function combineHeadlineResourceSummary(
       : {
           cpuPercent: hostTree.cpuPercent,
           rssBytes: hostTree.rssBytes,
+          pssBytes: hostTree.pssBytes,
+          privateBytes: hostTree.privateBytes,
           trackedProcessCount: hostTree.processCount,
         };
   const desktop = desktopResourceSummary(desktopApp);
 
-  return {
+  const summary = {
     cpuPercent: base.cpuPercent + desktop.cpuPercent,
-    rssBytes: base.rssBytes + desktop.rssBytes,
+    rssBytes: base.rssBytes === null ? null : base.rssBytes + desktop.rssBytes,
+    pssBytes: desktopApp === null ? base.pssBytes : null,
+    privateBytes: desktopApp === null ? base.privateBytes : null,
     trackedProcessCount: base.trackedProcessCount + desktop.processCount,
+  };
+  return {
+    ...summary,
+    memoryBytes: memoryMetric === "pss" ? summary.pssBytes : summary.rssBytes,
   };
 }
 
 function legacyHeadlineSummary(
   app: AppResourceUsage | null,
-  owners: readonly OwnerResourceSnapshotWireV14[],
-): TaskResourceSummary {
+  owners: readonly OwnerResourceSnapshotWireV15[],
+): Omit<HeadlineResourceSummary, "memoryBytes"> {
   return owners.reduce(
     (summary, owner) => ({
       cpuPercent: summary.cpuPercent + owner.cpuPercent,
-      rssBytes: summary.rssBytes + owner.rssBytes,
+      rssBytes: addNullableBytes(summary.rssBytes, owner.rssBytes),
+      pssBytes: addNullableBytes(summary.pssBytes, owner.pssBytes),
+      privateBytes: addNullableBytes(summary.privateBytes, owner.privateBytes),
       trackedProcessCount: summary.trackedProcessCount + owner.processCount,
     }),
     {
       cpuPercent: app?.cpuPercent ?? 0,
-      rssBytes: app?.rssBytes ?? 0,
+      rssBytes: app === null ? 0 : app.rssBytes,
+      pssBytes: app?.pssBytes ?? null,
+      privateBytes: app?.privateBytes ?? null,
       trackedProcessCount: app?.processCount ?? 0,
     },
   );
+}
+
+function addNullableBytes(
+  left: number | null,
+  right: number | null,
+): number | null {
+  return left === null || right === null ? null : left + right;
 }
 
 function desktopResourceSummary(
@@ -2054,6 +2233,7 @@ function TaskResourceSection(props: {
   readonly expandedOwners: ReadonlySet<string>;
   readonly expandedProcesses: ReadonlySet<string>;
   readonly sortOption: ResourceSortOption;
+  readonly memoryMetric: ResourceMemoryMetric;
   readonly onToggleOwner: (key: string) => void;
   readonly onToggleProcess: (key: string) => void;
   readonly onOpenOwner: (row: OwnerDisplayRow) => void;
@@ -2089,7 +2269,7 @@ function TaskResourceSection(props: {
         <div className="flex items-center">
           <MetricPair
             cpuPercent={props.task.cpuPercent}
-            rssBytes={props.task.rssBytes}
+            memoryBytes={props.task.memoryBytes}
             className="text-ui-sm text-foreground/90"
           />
           <span className={ROW_ACTION_SLOT} />
@@ -2106,6 +2286,7 @@ function TaskResourceSection(props: {
           expandedOwners={props.expandedOwners}
           expandedProcesses={props.expandedProcesses}
           sortOption={props.sortOption}
+          memoryMetric={props.memoryMetric}
           stickyTop={headerHeight}
           onToggleOwner={props.onToggleOwner}
           onToggleProcess={props.onToggleProcess}
@@ -2118,10 +2299,11 @@ function TaskResourceSection(props: {
 }
 
 function OtherResourceSection(props: {
-  readonly other: OtherResourceSnapshotWire;
+  readonly other: OtherResourceSnapshotWireV15;
   readonly searchQuery: string;
   readonly expandedProcesses: ReadonlySet<string>;
   readonly sortOption: ResourceSortOption;
+  readonly memoryMetric: ResourceMemoryMetric;
   readonly onToggleProcess: (key: string) => void;
   readonly actions: ResourceRowActionApi;
   readonly killHostId: string | null;
@@ -2137,6 +2319,7 @@ function OtherResourceSection(props: {
     props.expandedProcesses,
     props.other,
     props.sortOption,
+    props.memoryMetric,
   );
   const sectionMatchesSearch = matchesResourceSearch(props.searchQuery, [
     "Other",
@@ -2198,7 +2381,7 @@ function OtherResourceSection(props: {
         <div className="flex items-center">
           <MetricPair
             cpuPercent={processRows.treeCpuPercent}
-            rssBytes={processRows.treeRssBytes}
+            memoryBytes={processRows.treeMemoryBytes}
             className="text-ui-sm text-foreground/90"
           />
           <span className={ROW_ACTION_SLOT} />
@@ -2216,8 +2399,38 @@ function OtherResourceSection(props: {
               onToggleExpand={props.onToggleProcess}
               actions={props.actions}
               killHostId={props.killHostId}
+              memoryMetric={props.memoryMetric}
             />
           ))}
+    </div>
+  );
+}
+
+function RestrictedResourceSection(props: {
+  readonly usage: RestrictedResourceUsage;
+  readonly memoryMetric: ResourceMemoryMetric;
+  readonly label: "Restricted" | "Outside scope";
+}) {
+  return (
+    <div className="border-b border-border/50 py-1 last:border-b-0">
+      <div className="flex items-center justify-between px-3.5 py-1.5">
+        <div className="min-w-0">
+          <div className="truncate text-ui-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            {props.label}
+          </div>
+          <div className="text-ui-xs text-muted-foreground/80">
+            {countLabel(props.usage.processCount, "process", "processes")}
+          </div>
+        </div>
+        <div className="flex items-center">
+          <MetricPair
+            cpuPercent={props.usage.cpuPercent}
+            memoryBytes={resourceMemoryBytes(props.usage, props.memoryMetric)}
+            className="text-ui-sm text-foreground/90"
+          />
+          <span className={ROW_ACTION_SLOT} />
+        </div>
+      </div>
     </div>
   );
 }
@@ -2508,7 +2721,7 @@ function OwnerRowActionCell(props: {
  * reads the snapshot rather than the row's position in the tree.
  */
 function ownerSnapshotActionTarget(
-  snapshot: OwnerResourceSnapshotWireV14,
+  snapshot: OwnerResourceSnapshotWireV15,
   key: string,
 ): RowActionTarget | null {
   const managedCommand = snapshot.managedCommand;
@@ -2679,6 +2892,7 @@ function OwnerTreeRow(props: {
   readonly expandedOwners: ReadonlySet<string>;
   readonly expandedProcesses: ReadonlySet<string>;
   readonly sortOption: ResourceSortOption;
+  readonly memoryMetric: ResourceMemoryMetric;
   readonly stickyTop: number;
   readonly onToggleOwner: (key: string) => void;
   readonly onToggleProcess: (key: string) => void;
@@ -2697,6 +2911,7 @@ function OwnerTreeRow(props: {
     props.expandedProcesses,
     props.row.snapshot,
     props.sortOption,
+    props.memoryMetric,
   );
   const processSearch = buildOwnerProcessSearchProjection({
     row: props.row,
@@ -2802,6 +3017,7 @@ function OwnerTreeRow(props: {
               expandedOwners={props.expandedOwners}
               expandedProcesses={props.expandedProcesses}
               sortOption={props.sortOption}
+              memoryMetric={props.memoryMetric}
               stickyTop={props.stickyTop}
               onToggleOwner={props.onToggleOwner}
               onToggleProcess={props.onToggleProcess}
@@ -2821,6 +3037,7 @@ function OwnerTreeRow(props: {
               onToggleExpand={props.onToggleProcess}
               actions={props.actions}
               killHostId={owner.hostId}
+              memoryMetric={props.memoryMetric}
             />
           ))}
     </div>
@@ -2846,7 +3063,7 @@ function OwnerRowMetrics(props: {
     return (
       <MetricPair
         cpuPercent={props.row.treeCpuPercent}
-        rssBytes={props.row.treeRssBytes}
+        memoryBytes={props.row.treeMemoryBytes}
         className="text-ui-sm text-foreground/90"
       />
     );
@@ -2858,13 +3075,15 @@ function OwnerRowMetrics(props: {
           ? props.processRows.selfCpuPercent
           : props.row.treeCpuPercent
       }
-      rssBytes={
-        props.expanded ? props.processRows.selfRssBytes : props.row.treeRssBytes
+      memoryBytes={
+        props.expanded
+          ? props.processRows.selfMemoryBytes
+          : props.row.treeMemoryBytes
       }
       selfCpuPercent={props.processRows.selfCpuPercent}
-      selfRssBytes={props.processRows.selfRssBytes}
+      selfMemoryBytes={props.processRows.selfMemoryBytes}
       treeCpuPercent={props.row.treeCpuPercent}
-      treeRssBytes={props.row.treeRssBytes}
+      treeMemoryBytes={props.row.treeMemoryBytes}
       hasDescendants={props.hasDescendants}
       className="text-ui-sm text-foreground/90"
     />
@@ -2906,7 +3125,7 @@ function ProcessRowMarker(props: {
 function ProcessRowKillCell(props: {
   readonly actions: ResourceRowActionApi | null;
   readonly killHostId: string | null;
-  readonly process: ResourceProcessSnapshotWire;
+  readonly process: ResourceProcessSnapshotWireV15;
   readonly label: string;
 }) {
   // `?? null` collapses undefined to null: a partial HMR update can transiently
@@ -2940,7 +3159,7 @@ function ProcessRowKillCell(props: {
 
 function processCollapsedLabel(
   labelMode: "full" | "compact-root",
-  process: ResourceProcessSnapshotWire,
+  process: ResourceProcessSnapshotWireV15,
   hiddenCount: number,
 ): string {
   return labelMode === "compact-root"
@@ -2974,7 +3193,7 @@ function ProcessRowSelectCheckbox(props: {
 }
 
 function processExpandAriaLabel(row: ProcessDisplayRow): string {
-  const label = processLabel(row.process);
+  const label = processAccessibleLabel(row.process);
   if (row.searchForcesExpanded) {
     return `Sub-processes of ${label} expanded by search`;
   }
@@ -2994,6 +3213,7 @@ function ProcessTreeRow(props: {
   readonly onToggleExpand: (key: string) => void;
   readonly actions: ResourceRowActionApi | null;
   readonly killHostId: string | null;
+  readonly memoryMetric: ResourceMemoryMetric;
 }) {
   const {
     process,
@@ -3003,7 +3223,7 @@ function ProcessTreeRow(props: {
     searchForcesExpanded,
     hiddenCount,
     treeCpuPercent,
-    treeRssBytes,
+    treeMemoryBytes,
   } = props.processRow;
   const actions = props.actions ?? null;
   const killHostId = props.killHostId ?? null;
@@ -3022,8 +3242,8 @@ function ProcessTreeRow(props: {
     hiddenCount,
   );
   const shownMetrics = expanded
-    ? { cpu: process.cpuPercent, rss: process.rssBytes }
-    : { cpu: treeCpuPercent, rss: treeRssBytes };
+    ? { cpu: process.cpuPercent, memory: props.processRow.selfMemoryBytes }
+    : { cpu: treeCpuPercent, memory: treeMemoryBytes };
   const inner = (
     <>
       <div className="flex min-w-0 items-center gap-1.5">
@@ -3034,11 +3254,11 @@ function ProcessTreeRow(props: {
       </div>
       <ProcessMetricPair
         cpuPercent={shownMetrics.cpu}
-        rssBytes={shownMetrics.rss}
+        memoryBytes={shownMetrics.memory}
         selfCpuPercent={process.cpuPercent}
-        selfRssBytes={process.rssBytes}
+        selfMemoryBytes={props.processRow.selfMemoryBytes}
         treeCpuPercent={treeCpuPercent}
-        treeRssBytes={treeRssBytes}
+        treeMemoryBytes={treeMemoryBytes}
         hasDescendants={canExpand}
         className="text-ui-xs text-muted-foreground/80"
       />
@@ -3054,7 +3274,7 @@ function ProcessTreeRow(props: {
       <button
         type="button"
         aria-pressed={selected}
-        aria-label={`Select ${processLabel(process)}`}
+        aria-label={`Select ${processAccessibleLabel(process)}`}
         onClick={() =>
           actions.toggleSelection({
             kind: "kill",
@@ -3109,7 +3329,7 @@ function ProcessTreeRow(props: {
         <ProcessRowSelectCheckbox
           visible={selecting}
           selected={selected}
-          label={processLabel(process)}
+          label={processAccessibleLabel(process)}
           onToggle={
             selecting
               ? () =>
@@ -3127,7 +3347,7 @@ function ProcessTreeRow(props: {
           actions={props.actions}
           killHostId={props.killHostId}
           process={process}
-          label={processLabel(process)}
+          label={processAccessibleLabel(process)}
         />
       </div>
       {!expanded
@@ -3142,6 +3362,7 @@ function ProcessTreeRow(props: {
               onToggleExpand={props.onToggleExpand}
               actions={props.actions}
               killHostId={props.killHostId}
+              memoryMetric={props.memoryMetric}
             />
           ))}
     </div>
@@ -3150,18 +3371,18 @@ function ProcessTreeRow(props: {
 
 function ProcessMetricPair(props: {
   readonly cpuPercent: number;
-  readonly rssBytes: number;
+  readonly memoryBytes: number | null;
   readonly selfCpuPercent: number;
-  readonly selfRssBytes: number;
+  readonly selfMemoryBytes: number | null;
   readonly treeCpuPercent: number;
-  readonly treeRssBytes: number;
+  readonly treeMemoryBytes: number | null;
   readonly hasDescendants: boolean;
   readonly className: string;
 }) {
   const metrics = (
     <MetricPair
       cpuPercent={props.cpuPercent}
-      rssBytes={props.rssBytes}
+      memoryBytes={props.memoryBytes}
       className={props.className}
     />
   );
@@ -3172,11 +3393,11 @@ function ProcessMetricPair(props: {
         <div className="space-y-1 text-ui-xs">
           <div>
             Self: {formatCpuPercent(props.selfCpuPercent)} CPU ·{" "}
-            {formatMemoryBytes(props.selfRssBytes)} memory
+            {memoryAvailabilityLabel(props.selfMemoryBytes)} memory
           </div>
           <div>
             Tree: {formatCpuPercent(props.treeCpuPercent)} CPU ·{" "}
-            {formatMemoryBytes(props.treeRssBytes)} memory
+            {memoryAvailabilityLabel(props.treeMemoryBytes)} memory
           </div>
         </div>
       }
@@ -3191,13 +3412,20 @@ function ProcessMetricPair(props: {
 
 function MetricPair(props: {
   readonly cpuPercent: number;
-  readonly rssBytes: number;
+  readonly memoryBytes: number | null;
   readonly className: string;
 }) {
   return (
     <div className={cn(METRIC_COLS, props.className)}>
       <span className={CPU_COL}>{formatCpuPercent(props.cpuPercent)}</span>
-      <span className={MEM_COL}>{formatMemoryBytes(props.rssBytes)}</span>
+      <span
+        className={MEM_COL}
+        aria-label={
+          props.memoryBytes === null ? "Memory unavailable" : undefined
+        }
+      >
+        {formatMemoryBytesOrUnavailable(props.memoryBytes)}
+      </span>
     </div>
   );
 }
@@ -3209,6 +3437,7 @@ interface TaskRowBuildInput {
   readonly recordByOwner: ReadonlyMap<string, EpicNodeRecord>;
   readonly epicTitleById: ReadonlyMap<string, string>;
   readonly sortOption: ResourceSortOption;
+  readonly memoryMetric: ResourceMemoryMetric;
 }
 
 /** The owner kinds an agent's own program runs under - the only shell creators. */
@@ -3241,7 +3470,9 @@ function buildTaskRows(input: TaskRowBuildInput): TaskDisplayRow[] {
           (sum, owner) => sum + owner.treeCpuPercent,
           0,
         ),
-        rssBytes: owners.reduce((sum, owner) => sum + owner.treeRssBytes, 0),
+        memoryBytes: sumCompleteMemoryBytes(
+          owners.map((owner) => owner.treeMemoryBytes),
+        ),
         owners: sortOwnerRows(owners, input.sortOption),
       },
     ];
@@ -3250,7 +3481,7 @@ function buildTaskRows(input: TaskRowBuildInput): TaskDisplayRow[] {
 }
 
 function buildOwnerRow(
-  snapshot: OwnerResourceSnapshotWireV14,
+  snapshot: OwnerResourceSnapshotWireV15,
   input: TaskRowBuildInput,
 ): OwnerDisplayRow {
   const key = ownerKey(
@@ -3267,6 +3498,7 @@ function buildOwnerRow(
     NO_EXPANDED_PROCESSES,
     snapshot,
     input.sortOption,
+    input.memoryMetric,
   );
   return {
     snapshot,
@@ -3285,7 +3517,8 @@ function buildOwnerRow(
     shells: [],
     synthetic: false,
     treeCpuPercent: processRows.treeCpuPercent,
-    treeRssBytes: processRows.treeRssBytes,
+    ownMemoryBytes: processRows.treeMemoryBytes,
+    treeMemoryBytes: processRows.treeMemoryBytes,
   };
 }
 
@@ -3348,10 +3581,10 @@ function nestShellsUnderCreators(
         (sum, shell) => sum + shell.treeCpuPercent,
         row.treeCpuPercent,
       ),
-      treeRssBytes: attached.reduce(
-        (sum, shell) => sum + shell.treeRssBytes,
-        row.treeRssBytes,
-      ),
+      treeMemoryBytes: sumCompleteMemoryBytes([
+        row.ownMemoryBytes,
+        ...attached.map((shell) => shell.treeMemoryBytes),
+      ]),
     };
   };
   return [
@@ -3381,7 +3614,7 @@ function buildSyntheticAgentRow(
     const closedTile = input.canvasIndex.closedTileByOwner.get(key) ?? null;
     const record = input.recordByOwner.get(key) ?? null;
     if (location === null && closedTile === null && record === null) continue;
-    const snapshot: OwnerResourceSnapshotWireV14 = {
+    const snapshot: OwnerResourceSnapshotWireV15 = {
       owner: {
         kind,
         hostId: shell.snapshot.owner.hostId,
@@ -3394,6 +3627,8 @@ function buildSyntheticAgentRow(
       processCount: 0,
       cpuPercent: 0,
       rssBytes: 0,
+      pssBytes: 0,
+      privateBytes: 0,
       processes: [],
       harnessId: null,
       managedCommand: null,
@@ -3415,7 +3650,8 @@ function buildSyntheticAgentRow(
       shells: [],
       synthetic: true,
       treeCpuPercent: 0,
-      treeRssBytes: 0,
+      ownMemoryBytes: 0,
+      treeMemoryBytes: 0,
     };
   }
   return null;
@@ -3476,9 +3712,12 @@ function matchesResourceSearch(
 }
 
 function processSearchTerms(
-  process: ResourceProcessSnapshotWire,
+  process: ResourceProcessSnapshotWireV15,
 ): readonly (string | number | null)[] {
   return [
+    processLabel(process),
+    process.descriptor?.runtime ?? null,
+    process.descriptor?.role ?? null,
     process.name,
     process.command,
     process.pid,
@@ -3488,7 +3727,7 @@ function processSearchTerms(
 }
 
 function matchingProcessPidsForSearch(
-  processes: readonly ResourceProcessSnapshotWire[],
+  processes: readonly ResourceProcessSnapshotWireV15[],
   searchQuery: string,
   ancestorTerms: readonly (string | number | null)[],
 ): ReadonlySet<number> {
@@ -3499,7 +3738,7 @@ function matchingProcessPidsForSearch(
     processes
       .filter((process) => {
         const lineageTerms: (string | number | null)[] = [...ancestorTerms];
-        let current: ResourceProcessSnapshotWire | undefined = process;
+        let current: ResourceProcessSnapshotWireV15 | undefined = process;
         const visitedPids = new Set<number>();
         while (current !== undefined && !visitedPids.has(current.pid)) {
           visitedPids.add(current.pid);
@@ -3643,17 +3882,15 @@ function filterTaskRowsForSearch(
           shells.includes(shell) ? sum : sum + shell.treeCpuPercent,
         0,
       );
-      const droppedRss = owner.shells.reduce(
-        (sum, shell) =>
-          shells.includes(shell) ? sum : sum + shell.treeRssBytes,
-        0,
-      );
       return [
         {
           ...owner,
           shells,
           treeCpuPercent: owner.treeCpuPercent - droppedCpu,
-          treeRssBytes: owner.treeRssBytes - droppedRss,
+          treeMemoryBytes: sumCompleteMemoryBytes([
+            owner.ownMemoryBytes,
+            ...shells.map((shell) => shell.treeMemoryBytes),
+          ]),
         },
       ];
     });
@@ -3665,6 +3902,7 @@ function buildResourceSearchProjection(input: {
   readonly desktopApp: DesktopAppResourceUsage | null;
   readonly hostApp: AppResourceUsage | null;
   readonly other: OtherResourceUsage | null;
+  readonly restricted: RestrictedResourceUsage | null;
   readonly taskRows: readonly TaskDisplayRow[];
   readonly liveOwnerTitleByKey: ReadonlyMap<string, string | null>;
   readonly searchQuery: string;
@@ -3684,6 +3922,11 @@ function buildResourceSearchProjection(input: {
     input.other !== null &&
     otherResourcesMatchSearch(input.other, input.searchQuery)
       ? input.other
+      : null;
+  const restricted =
+    input.restricted !== null &&
+    matchesResourceSearch(input.searchQuery, ["Restricted", "Outside scope"])
+      ? input.restricted
       : null;
   const taskRows = filterTaskRowsForSearch(
     input.taskRows,
@@ -3712,11 +3955,13 @@ function buildResourceSearchProjection(input: {
     desktopApp !== null ||
     hostApp !== null ||
     other !== null ||
+    restricted !== null ||
     taskRows.length > 0;
   return {
     desktopApp,
     hostApp,
     other,
+    restricted,
     taskRows,
     visibleOwnerKeys,
     visibleKillKeys,
@@ -3790,7 +4035,7 @@ function buildSearchVisibleKillKeys(input: {
 }
 
 function searchVisibleProcessKeys(
-  processes: readonly ResourceProcessSnapshotWire[],
+  processes: readonly ResourceProcessSnapshotWireV15[],
   searchQuery: string,
   ancestorTerms: readonly (string | number | null)[],
 ): ReadonlySet<string> {
@@ -3813,7 +4058,7 @@ function searchVisibleProcessKeys(
   const visibleKeys = new Set<string>();
   for (const process of processes) {
     if (!matchingProcessPids.has(process.pid)) continue;
-    let current: ResourceProcessSnapshotWire | undefined = process;
+    let current: ResourceProcessSnapshotWireV15 | undefined = process;
     const visitedPids = new Set<number>();
     while (current !== undefined && !visitedPids.has(current.pid)) {
       visitedPids.add(current.pid);
@@ -3878,7 +4123,7 @@ function otherResourcesMatchSearch(
 }
 
 function matchingOtherRootPids(
-  processes: readonly ResourceProcessSnapshotWire[],
+  processes: readonly ResourceProcessSnapshotWireV15[],
   searchQuery: string,
 ): ReadonlySet<number> {
   if (matchesResourceSearch(searchQuery, ["Other"])) {
@@ -4121,7 +4366,7 @@ function collectLiveAgentRefs(
 
 /** The agent a snapshot names: the owner itself, or the shell's creator. */
 function liveAgentIdForSnapshot(
-  snapshot: OwnerResourceSnapshotWireV14,
+  snapshot: OwnerResourceSnapshotWireV15,
 ): string | null {
   const owner = snapshot.owner;
   if (isAgentOwnerKind(owner.kind)) return owner.ownerId;
@@ -4215,7 +4460,15 @@ function sortTaskRows(
   const sorted = [...rows];
   switch (sortOption) {
     case "memory":
-      sorted.sort((a, b) => b.rssBytes - a.rssBytes);
+      sorted.sort((a, b) => {
+        const byMemory = compareNullableMemoryDescending(
+          a.memoryBytes,
+          b.memoryBytes,
+        );
+        if (byMemory !== 0) return byMemory;
+        const byLabel = a.label.localeCompare(b.label);
+        return byLabel !== 0 ? byLabel : a.tabOrder - b.tabOrder;
+      });
       break;
     case "cpu":
       sorted.sort((a, b) => b.cpuPercent - a.cpuPercent);
@@ -4260,7 +4513,15 @@ function sortOwnerRows(
   const sorted = [...rows];
   switch (sortOption) {
     case "memory":
-      sorted.sort((a, b) => b.treeRssBytes - a.treeRssBytes);
+      sorted.sort((a, b) => {
+        const byMemory = compareNullableMemoryDescending(
+          a.treeMemoryBytes,
+          b.treeMemoryBytes,
+        );
+        if (byMemory !== 0) return byMemory;
+        const byLabel = a.label.localeCompare(b.label);
+        return byLabel !== 0 ? byLabel : a.tabOrder - b.tabOrder;
+      });
       break;
     case "cpu":
       sorted.sort((a, b) => b.treeCpuPercent - a.treeCpuPercent);
@@ -4273,6 +4534,16 @@ function sortOwnerRows(
       break;
   }
   return sorted;
+}
+
+/** Known values sort high-to-low; unavailable readings always sort last. */
+function compareNullableMemoryDescending(
+  left: number | null,
+  right: number | null,
+): number {
+  if (left === null) return right === null ? 0 : 1;
+  if (right === null) return -1;
+  return right - left;
 }
 
 function openResourceOwner(args: {
@@ -4482,7 +4753,7 @@ function prepareResourceTarget(
 
 // Terminals and shells are not artifacts, so neither has an artifact id to
 // focus - the tile preparation is the whole of what they navigate to.
-function focusForOwner(snapshot: OwnerResourceSnapshotWireV14): EpicRouteFocus {
+function focusForOwner(snapshot: OwnerResourceSnapshotWireV15): EpicRouteFocus {
   const kind = snapshot.owner.kind;
   return {
     focusedAt: Date.now(),
@@ -4635,7 +4906,7 @@ function ownerTileRef(
 }
 
 function ownerLabel(
-  snapshot: OwnerResourceSnapshotWireV14,
+  snapshot: OwnerResourceSnapshotWireV15,
   ref: EpicNodeRef | null,
   record: EpicNodeRecord | null,
   liveArtifactTitle: string | null,
@@ -4669,7 +4940,7 @@ function ownerLabel(
 }
 
 function canOpenOwner(
-  snapshot: OwnerResourceSnapshotWireV14,
+  snapshot: OwnerResourceSnapshotWireV15,
   location: OpenOwnerLocation | null,
   closedTile: ClosedOwnerTile | null,
   record: EpicNodeRecord | null,
@@ -4689,15 +4960,58 @@ function memoryShareBarClass(memorySharePercent: number): string {
   return "bg-foreground/40";
 }
 
-function processLabel(process: ResourceProcessSnapshotWire): string {
+function processLabel(process: ResourceProcessSnapshotWireV15): string {
+  if (process.descriptor !== null) {
+    return chromiumProcessLabel(process.descriptor);
+  }
   if (process.command !== null && process.command.trim().length > 0) {
     return process.command;
   }
   return `${process.name} (${process.pid})`;
 }
 
+/**
+ * Chromium's descriptor labels are intentionally short and semantic, so two
+ * renderer (or other same-role) rows need their numeric identity in controls'
+ * accessible names. Keep the PID out of the visible label: it is an action
+ * disambiguator, not display copy.
+ */
+function processAccessibleLabel(
+  process: ResourceProcessSnapshotWireV15,
+): string {
+  const label = processLabel(process);
+  return process.descriptor === null ? label : `${label}, PID ${process.pid}`;
+}
+
+function chromiumProcessLabel(
+  descriptor: ChromiumProcessDescriptorWire,
+): string {
+  if (descriptor.role === "browser") {
+    return descriptor.runtime === "sessions"
+      ? "Browser sessions"
+      : "Browser REPL";
+  }
+  const prefix = descriptor.runtime === "sessions" ? "Browser" : "Browser REPL";
+  switch (descriptor.role) {
+    case "renderer":
+      return `${prefix} page`;
+    case "gpu":
+      return `${prefix} GPU`;
+    case "network":
+      return `${prefix} network`;
+    case "storage":
+      return `${prefix} storage`;
+    case "audio":
+      return `${prefix} audio`;
+    case "utility":
+      return `${prefix} utility`;
+    case "subprocess":
+      return `${prefix} subprocess`;
+  }
+}
+
 function processLeafLabel(
-  process: ResourceProcessSnapshotWire,
+  process: ResourceProcessSnapshotWireV15,
   hiddenCount: number,
 ): string {
   return leafLabelFrom(processLabel(process), hiddenCount);
@@ -4710,13 +5024,14 @@ function processLeafLabel(
  * remains visible on the expanded row.
  */
 function processCompactLeafLabel(
-  process: ResourceProcessSnapshotWire,
+  process: ResourceProcessSnapshotWireV15,
   hiddenCount: number,
 ): string {
   return leafLabelFrom(processBasename(process), hiddenCount);
 }
 
-function processBasename(process: ResourceProcessSnapshotWire): string {
+function processBasename(process: ResourceProcessSnapshotWireV15): string {
+  if (process.descriptor !== null) return processLabel(process);
   const source = process.name.length > 0 ? process.name : processLabel(process);
   const segments = source.split("/");
   const base = segments[segments.length - 1];
@@ -4728,7 +5043,7 @@ function leafLabelFrom(label: string, hiddenCount: number): string {
   return `${label} (${countLabel(hiddenCount, "sub-process", "sub-processes")})`;
 }
 
-function processRowKey(process: ResourceProcessSnapshotWire): string {
+function processRowKey(process: ResourceProcessSnapshotWireV15): string {
   return `${process.rootPid}:${process.pid}`;
 }
 
@@ -4744,32 +5059,48 @@ function processRowComparator(
 ): ((a: ProcessDisplayRow, b: ProcessDisplayRow) => number) | null {
   switch (sortOption) {
     case "memory":
-      return (a, b) => b.treeRssBytes - a.treeRssBytes;
+      return (a, b) => {
+        const byMemory = compareNullableMemoryDescending(
+          a.treeMemoryBytes,
+          b.treeMemoryBytes,
+        );
+        return byMemory !== 0 ? byMemory : a.process.pid - b.process.pid;
+      };
     case "cpu":
       return (a, b) => b.treeCpuPercent - a.treeCpuPercent;
     case "name":
-      return (a, b) =>
-        processLabel(a.process).localeCompare(processLabel(b.process));
+      return (a, b) => {
+        const byLabel = processLabel(a.process).localeCompare(
+          processLabel(b.process),
+        );
+        return byLabel !== 0 ? byLabel : a.process.pid - b.process.pid;
+      };
     case "tab":
       return null;
   }
 }
 
 function buildProcessRows(
-  processes: readonly ResourceProcessSnapshotWire[],
+  processes: readonly ResourceProcessSnapshotWireV15[],
   expandedKeys: ReadonlySet<string>,
-  fallback: { readonly cpuPercent: number; readonly rssBytes: number },
+  fallback: {
+    readonly cpuPercent: number;
+    readonly rssBytes: number | null;
+    readonly pssBytes: number | null;
+  },
   sortOption: ResourceSortOption,
+  memoryMetric: ResourceMemoryMetric,
 ): OwnerProcessRows {
+  const fallbackMemoryBytes = resourceMemoryBytes(fallback, memoryMetric);
   if (processes.length === 0) {
     return {
       rows: [],
       rootRows: [],
       canExpand: false,
       selfCpuPercent: fallback.cpuPercent,
-      selfRssBytes: fallback.rssBytes,
+      selfMemoryBytes: fallbackMemoryBytes,
       treeCpuPercent: fallback.cpuPercent,
-      treeRssBytes: fallback.rssBytes,
+      treeMemoryBytes: fallbackMemoryBytes,
     };
   }
 
@@ -4784,7 +5115,7 @@ function buildProcessRows(
     siblings.push(process);
     byParent.set(process.parentPid, siblings);
     return byParent;
-  }, new Map<number, ResourceProcessSnapshotWire[]>());
+  }, new Map<number, ResourceProcessSnapshotWireV15[]>());
 
   // Rootness is purely structural: parentless, or parent outside this list.
   // `pid === rootPid` must NOT qualify — an owner can carry a second tracked
@@ -4804,7 +5135,7 @@ function buildProcessRows(
     compareRows === null ? siblingRows : [...siblingRows].sort(compareRows);
 
   const buildRow = (
-    process: ResourceProcessSnapshotWire,
+    process: ResourceProcessSnapshotWireV15,
     depth: number,
     ancestors: ReadonlySet<number>,
   ): ProcessDisplayRow => {
@@ -4820,12 +5151,14 @@ function buildProcessRows(
       (sum, child) => sum + child.treeCpuPercent,
       process.cpuPercent,
     );
-    const treeRssBytes = children.reduce(
-      (sum, child) => sum + child.treeRssBytes,
-      process.rssBytes,
-    );
+    const selfMemoryBytes = resourceMemoryBytes(process, memoryMetric);
+    const treeMemoryBytes = sumCompleteMemoryBytes([
+      selfMemoryBytes,
+      ...children.map((child) => child.treeMemoryBytes),
+    ]);
     return {
       process,
+      selfMemoryBytes,
       depth,
       canExpand: children.length > 0,
       expanded: children.length > 0 && expandedKeys.has(processRowKey(process)),
@@ -4835,7 +5168,7 @@ function buildProcessRows(
         0,
       ),
       treeCpuPercent,
-      treeRssBytes,
+      treeMemoryBytes,
       children,
     };
   };
@@ -4852,15 +5185,16 @@ function buildProcessRows(
       (sum, root) => sum + root.process.cpuPercent,
       0,
     ),
-    selfRssBytes: rootRows.reduce(
-      (sum, root) => sum + root.process.rssBytes,
-      0,
+    selfMemoryBytes: sumCompleteMemoryBytes(
+      rootRows.map((root) => root.selfMemoryBytes),
     ),
     treeCpuPercent: rootRows.reduce(
       (sum, root) => sum + root.treeCpuPercent,
       0,
     ),
-    treeRssBytes: rootRows.reduce((sum, root) => sum + root.treeRssBytes, 0),
+    treeMemoryBytes: sumCompleteMemoryBytes(
+      rootRows.map((root) => root.treeMemoryBytes),
+    ),
   };
 }
 

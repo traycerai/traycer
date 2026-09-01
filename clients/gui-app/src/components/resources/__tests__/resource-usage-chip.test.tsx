@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import type {
-  EpicResourceSnapshotWire,
-  OwnerResourceSnapshotWireV14,
-  ResourceProcessSnapshotWire,
+  EpicResourceSnapshotWireV15,
+  OwnerResourceSnapshotWireV15,
+  ResourceProcessSnapshotWireV15,
   ResourceOwnerKindWire,
 } from "@traycer/protocol/host/resources/subscribe";
 import type {
@@ -20,8 +20,8 @@ import { __setResourcesStreamClientFactoryForTests } from "@/providers/resources
 import { resourcesRegistry } from "@/stores/resources/resources-registry";
 
 function process(
-  over: Partial<ResourceProcessSnapshotWire>,
-): ResourceProcessSnapshotWire {
+  over: Partial<ResourceProcessSnapshotWireV15>,
+): ResourceProcessSnapshotWireV15 {
   return {
     pid: 1,
     parentPid: null,
@@ -30,6 +30,9 @@ function process(
     command: "/bin/bash",
     cpuPercent: 12,
     rssBytes: 357 * 1024 * 1024,
+    pssBytes: null,
+    privateBytes: null,
+    descriptor: null,
     ...over,
   };
 }
@@ -37,8 +40,8 @@ function process(
 function owner(
   kind: ResourceOwnerKindWire,
   ownerId: string,
-  over: Partial<OwnerResourceSnapshotWireV14>,
-): OwnerResourceSnapshotWireV14 {
+  over: Partial<OwnerResourceSnapshotWireV15>,
+): OwnerResourceSnapshotWireV15 {
   return {
     owner: { kind, hostId: "host-1", epicId: "epic-1", ownerId },
     sampledAt: 1_000,
@@ -49,14 +52,16 @@ function owner(
     processCount: 3,
     cpuPercent: 12,
     rssBytes: 357 * 1024 * 1024,
+    pssBytes: null,
+    privateBytes: null,
     processes: [process({})],
     ...over,
   };
 }
 
 function epicAggregate(
-  over: Partial<EpicResourceSnapshotWire>,
-): EpicResourceSnapshotWire {
+  over: Partial<EpicResourceSnapshotWireV15>,
+): EpicResourceSnapshotWireV15 {
   return {
     hostId: "host-1",
     epicId: "epic-1",
@@ -65,6 +70,8 @@ function epicAggregate(
     processCount: 3,
     cpuPercent: 40,
     rssBytes: 512 * 1024 * 1024,
+    pssBytes: null,
+    privateBytes: null,
     ...over,
   };
 }
@@ -81,6 +88,7 @@ function projection(
     epics: [],
     hostTree: undefined,
     other: undefined,
+    restricted: undefined,
     ...over,
   };
 }
@@ -111,17 +119,36 @@ describe("ResourceUsageChip", () => {
       <ResourceUsageChip
         cpuPercent={12}
         rssBytes={357 * 1024 * 1024}
+        pssBytes={null}
         processCount={3}
         label="Resource usage"
         className={undefined}
       />,
     );
     const chip = screen.getByLabelText(
-      "Resource usage: 12% CPU, 357 MB memory, 3 processes",
+      "Resource usage: 12% CPU, 357 MB RSS, 3 processes",
     );
     expect(chip.textContent).toContain("12%");
     expect(chip.textContent).toContain("357 MB");
     expect(chip.textContent).toContain("3");
+  });
+
+  it("renders unavailable memory as an em dash, never as zero", () => {
+    render(
+      <ResourceUsageChip
+        cpuPercent={12}
+        rssBytes={null}
+        pssBytes={null}
+        processCount={3}
+        label="Resource usage"
+        className={undefined}
+      />,
+    );
+    const chip = screen.getByLabelText(
+      "Resource usage: 12% CPU, memory unavailable, 3 processes",
+    );
+    expect(chip.textContent).toContain("—");
+    expect(chip.textContent).not.toContain("0 B");
   });
 });
 
