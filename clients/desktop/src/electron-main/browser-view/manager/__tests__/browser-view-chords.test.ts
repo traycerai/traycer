@@ -253,7 +253,9 @@ describe("guest-focused dispositions", () => {
     // The seam `preventDefault`s on a match. Letting a repeat fall through
     // would hand Cmd+W back to the focus-blind application accelerator while
     // the first press's asynchronous browser-tab close is still pending.
-    const { chords } = dispatchHarness([{ token: "mod+w", command: "closeTab" }]);
+    const { chords } = dispatchHarness([
+      { token: "mod+w", command: "closeTab" },
+    ]);
     expect(
       chords.match(heldKeyDown("w", { ...NO_MODS, meta: true })),
     ).not.toBeNull();
