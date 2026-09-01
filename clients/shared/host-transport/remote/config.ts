@@ -124,6 +124,22 @@ export const DIAL_FAILURE_RESTATE_MS = 5 * 60 * 1000;
 export const REMOTE_SESSION_LINGER_MS = 60_000;
 
 /**
+ * Negative-cache window for an attach-grant `plan_restricted` verdict.
+ *
+ * The verdict closes its `RemoteSession` terminally. Without a cache, the next
+ * registry/render acquisition immediately replaces that closed session and
+ * asks authn again, producing a cross-session request loop even though each
+ * individual session correctly stopped. Keep the verdict for the host's
+ * standing cadence, then permit one fresh session to probe for a policy
+ * change. A changed auth epoch, host key, or relay URL has a different session
+ * identity and therefore bypasses this cache intentionally.
+ */
+export const PLAN_RESTRICTED_REPROBE_MS = HOST_STANDING_BOUND_MS;
+
+/** Fatal code carried by a terminal attach-grant entitlement denial. */
+export const PLAN_RESTRICTED_FATAL_CODE = "PLAN_RESTRICTED";
+
+/**
  * Relay keepalive cadence. The client sends the `relay-ping` string on this
  * interval; the relay auto-responds `relay-pong` WITHOUT waking the DO
  * (`setWebSocketAutoResponse`). Missing `PONG_TIMEOUT` worth of pongs means the

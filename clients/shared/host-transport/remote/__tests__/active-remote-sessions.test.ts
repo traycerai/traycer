@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
-import { REMOTE_SESSION_LINGER_MS } from "../config";
+import {
+  PLAN_RESTRICTED_REPROBE_MS,
+  REMOTE_SESSION_LINGER_MS,
+} from "../config";
 import type { IRemoteSession } from "../remote-session";
 import type { WakeProbeTuning } from "../../host-stream-client";
 import { RemoteStreamClient } from "../remote-stream-client";
@@ -60,12 +63,15 @@ interface FakeSession extends IRemoteSession<
    * exactly the state the cache must refuse to hand out on a later acquire.
    */
   closedUnderneath: boolean;
+  fatalCode: string | null;
+  emitClosed(): void;
 }
 
 function fakeSession(): FakeSession {
   let closeCalls = 0;
   const wakeReasons: string[] = [];
   const wakeProbes: Array<WakeProbeTuning | null> = [];
+  const closedListeners = new Set<() => void>();
   const session: FakeSession = {
     get closeCalls() {
       return closeCalls;
@@ -80,6 +86,10 @@ function fakeSession(): FakeSession {
     // connected, so a fresh fake never masquerades as evidence of liveness.
     ready: false,
     closedUnderneath: false,
+    fatalCode: null,
+    emitClosed: () => {
+      for (const listener of [...closedListeners]) listener();
+    },
     start: vi.fn(),
     isClosed: () => closeCalls > 0 || session.closedUnderneath,
     isReady: () => session.ready,
@@ -99,12 +109,21 @@ function fakeSession(): FakeSession {
       wakeReasons.push(`forced:${reason}`);
       wakeProbes.push(null);
     },
-    onClosed: () => () => undefined,
+    onClosed: (listener) => {
+      closedListeners.add(listener);
+      return () => closedListeners.delete(listener);
+    },
     subscribeAvailabilityRecovered: () => () => undefined,
     subscribeReadinessLost: () => () => undefined,
-    // These cache tests never exercise fatal verdicts; the cache view only
-    // forwards this accessor.
-    terminalFatal: () => null,
+    terminalFatal: () =>
+      session.fatalCode === null
+        ? null
+        : {
+            code: session.fatalCode,
+            reason: "terminal test verdict",
+            incompatibleMethods: null,
+            upgradeGuidance: null,
+          },
     close: () => {
       closeCalls += 1;
     },
@@ -388,6 +407,57 @@ describe("acquireRemoteSession", () => {
     rebuiltView.close();
     expireLinger();
     expect(fresh.closeCalls).toBe(1);
+  });
+
+  it("negative-caches PLAN_RESTRICTED across consumer rebuilds and permits one fresh probe after the suppression window", () => {
+    const identity = freshIdentity();
+    const restricted = fakeSession();
+    const recovered = fakeSession();
+    const createSession = vi
+      .fn()
+      .mockReturnValueOnce(restricted)
+      .mockReturnValueOnce(recovered);
+
+    const first = acquireRemoteSession(
+      identity,
+      ELIGIBLE_POLICY,
+      createSession,
+    );
+    restricted.fatalCode = "PLAN_RESTRICTED";
+    restricted.closedUnderneath = true;
+    restricted.emitClosed();
+
+    // A registry rebuild while the original consumer is still mounted gets
+    // the same terminal verdict. It must not mint a second attach grant.
+    const suppressed = acquireRemoteSession(
+      identity,
+      ELIGIBLE_POLICY,
+      createSession,
+    );
+    expect(createSession).toHaveBeenCalledTimes(1);
+    expect(suppressed.terminalFatal()?.code).toBe("PLAN_RESTRICTED");
+
+    first.close();
+    suppressed.close();
+    vi.advanceTimersByTime(PLAN_RESTRICTED_REPROBE_MS - 1);
+    const stillSuppressed = acquireRemoteSession(
+      identity,
+      ELIGIBLE_POLICY,
+      createSession,
+    );
+    expect(createSession).toHaveBeenCalledTimes(1);
+    stillSuppressed.close();
+
+    vi.advanceTimersByTime(1);
+    const probe = acquireRemoteSession(
+      identity,
+      ELIGIBLE_POLICY,
+      createSession,
+    );
+    expect(createSession).toHaveBeenCalledTimes(2);
+    expect(probe.isClosed()).toBe(false);
+    probe.close();
+    expireLinger();
   });
 
   it("a session that goes fatal WHILE lingering is evicted on the next acquire, and the stale linger timer never touches the successor", () => {

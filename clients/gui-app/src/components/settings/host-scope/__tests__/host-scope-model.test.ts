@@ -51,7 +51,6 @@ function buildOne(input: {
   readonly entry: HostDirectoryEntry | null;
   readonly item: HostListItem | null;
   readonly localHostId: string | null;
-  readonly remoteHostsPlanRestricted: boolean;
 }): HostScopeOption {
   const [option] = buildHostScopeOptions({
     leases: [],
@@ -62,7 +61,6 @@ function buildOne(input: {
     activeHostId: null,
     localService: undefined,
     hasLiveSession: () => false,
-    remoteHostsPlanRestricted: input.remoteHostsPlanRestricted,
     // The helper models one host at a time and none of these cases is about a
     // machine mid-install; the "setting up" row state has its own test.
     localHostSettingUp: false,
@@ -76,7 +74,6 @@ function connectableFor(directoryEntry: HostDirectoryEntry): boolean {
     entry: directoryEntry,
     item: null,
     localHostId: null,
-    remoteHostsPlanRestricted: false,
   }).connectable;
 }
 
@@ -138,19 +135,14 @@ describe("buildHostScopeOptions connectable", () => {
     }
   });
 
-  it("refuses a remote route the account's plan does not include", () => {
-    // The relay URL is present and `available`, but attaching is refused
-    // server-side. The header and workspace pickers already disable these
-    // rows; Settings classified the route as usable and mounted RPC panels
-    // whose every call could only fail.
+  it("does not derive remote-route availability from the account plan", () => {
     expect(
       buildOne({
         entry: entry({ kind: "remote" }),
         item: null,
         localHostId: null,
-        remoteHostsPlanRestricted: true,
       }).connectable,
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("does not let the remote plan gate touch this machine", () => {
@@ -161,7 +153,6 @@ describe("buildHostScopeOptions connectable", () => {
         entry: entry({ hostId: "host-a", kind: "local" }),
         item: null,
         localHostId: "host-a",
-        remoteHostsPlanRestricted: true,
       }).connectable,
     ).toBe(true);
   });
@@ -172,15 +163,14 @@ describe("buildHostScopeOptions planRestricted", () => {
   // limit as "unreachable" — sending people debugging their network when the
   // remedy is an upgrade. `planRestricted` is true exactly when the plan gate
   // is the ONLY thing costing the route.
-  it("names the plan gate when it alone costs a live remote route", () => {
+  it("does not synthesize a plan restriction from client subscription state", () => {
     const option = buildOne({
       entry: entry({ kind: "remote" }),
       item: null,
       localHostId: null,
-      remoteHostsPlanRestricted: true,
     });
-    expect(option.connectable).toBe(false);
-    expect(option.planRestricted).toBe(true);
+    expect(option.connectable).toBe(true);
+    expect(option.planRestricted).toBe(false);
   });
 
   it("stays false for a genuinely unreachable route, restricted plan or not", () => {
@@ -191,7 +181,6 @@ describe("buildHostScopeOptions planRestricted", () => {
         entry: entry({ kind: "remote", websocketUrl: null }),
         item: null,
         localHostId: null,
-        remoteHostsPlanRestricted: true,
       }).planRestricted,
     ).toBe(false);
     expect(
@@ -199,7 +188,6 @@ describe("buildHostScopeOptions planRestricted", () => {
         entry: entry({ kind: "remote", transportDialability: "not-dialable" }),
         item: null,
         localHostId: null,
-        remoteHostsPlanRestricted: true,
       }).planRestricted,
     ).toBe(false);
   });
@@ -210,7 +198,6 @@ describe("buildHostScopeOptions planRestricted", () => {
         entry: entry({ kind: "remote" }),
         item: null,
         localHostId: null,
-        remoteHostsPlanRestricted: false,
       }).planRestricted,
     ).toBe(false);
   });
@@ -254,8 +241,7 @@ describe("buildHostScopeOptions planRestricted — composed against a real plan-
 
   it("is planRestricted even with the account's OWN render-time plan gate off — the entry's stamped plan is sufficient on its own", () => {
     // This is the case `isAdministrableRoute`/`isPlanRestrictedRoute`'s old
-    // body could never reach: `remoteHostsPlanRestricted: false` but the row
-    // is STILL not connectable, because the mapper marked the entry
+    // The row is not connectable because the mapper marked the entry
     // not-dialable from the plan stamped at FETCH time regardless of the
     // render-time flag. Requiring `status === "available"` (the old body) can
     // never be true for this entry, so a free-tier user's own host used to
@@ -269,7 +255,6 @@ describe("buildHostScopeOptions planRestricted — composed against a real plan-
       activeHostId: null,
       localService: undefined,
       hasLiveSession: () => false,
-      remoteHostsPlanRestricted: false,
       localHostSettingUp: false,
       nowMs: 0,
     });
@@ -287,7 +272,6 @@ describe("buildHostScopeOptions planRestricted — composed against a real plan-
       activeHostId: null,
       localService: undefined,
       hasLiveSession: () => true,
-      remoteHostsPlanRestricted: false,
       localHostSettingUp: false,
       nowMs: 0,
     });
@@ -329,7 +313,6 @@ describe("buildHostScopeOptions planRestricted — composed against a real plan-
       activeHostId: null,
       localService: undefined,
       hasLiveSession: () => false,
-      remoteHostsPlanRestricted: true,
       localHostSettingUp: false,
       nowMs: 0,
     });
@@ -361,7 +344,7 @@ describe("buildHostScopeOptions planRestricted — composed against a real plan-
     );
   }
 
-  it("mid-downgrade with NO session: the client-side plan gate refuses the route and keeps the billing label", () => {
+  it("does not apply a client-side plan gate when no session exists", () => {
     const [option] = buildHostScopeOptions({
       leases: [],
       authorityAttached: false,
@@ -371,19 +354,14 @@ describe("buildHostScopeOptions planRestricted — composed against a real plan-
       activeHostId: null,
       localService: undefined,
       hasLiveSession: () => false,
-      remoteHostsPlanRestricted: true,
       localHostSettingUp: false,
       nowMs: 0,
     });
-    expect(option.connectable).toBe(false);
-    expect(option.planRestricted).toBe(true);
+    expect(option.connectable).toBe(true);
+    expect(option.planRestricted).toBe(false);
   });
 
-  it("mid-downgrade with a READY session: the surviving session keeps the route administrable, the billing label stays", () => {
-    // The transport's own mid-downgrade rule: the existing session survives
-    // and the NEXT dial refuses. Settings must not report a host every other
-    // layer is still routing over as unreachable — but the "requires a paid
-    // plan" remedy remains true and stays on the row.
+  it("keeps a ready session administrable without a client billing label", () => {
     const [option] = buildHostScopeOptions({
       leases: [],
       authorityAttached: false,
@@ -393,12 +371,11 @@ describe("buildHostScopeOptions planRestricted — composed against a real plan-
       activeHostId: null,
       localService: undefined,
       hasLiveSession: () => true,
-      remoteHostsPlanRestricted: true,
       localHostSettingUp: false,
       nowMs: 0,
     });
     expect(option.connectable).toBe(true);
-    expect(option.planRestricted).toBe(true);
+    expect(option.planRestricted).toBe(false);
   });
 });
 
@@ -553,7 +530,6 @@ describe("buildHostScopeOptions name resolution", () => {
         entry: entry({ hostId: "host-a", kind: "local", label: "Old Label" }),
         item: registryItem("Registry Name"),
         localHostId: "host-a",
-        remoteHostsPlanRestricted: false,
       }).name,
     ).toBe("Registry Name");
   });
@@ -564,7 +540,6 @@ describe("buildHostScopeOptions name resolution", () => {
         entry: entry({ hostId: "host-a", label: "directory-label" }),
         item: registryItem("Deliberate Name"),
         localHostId: null,
-        remoteHostsPlanRestricted: false,
       }).name,
     ).toBe("Deliberate Name");
   });
@@ -577,7 +552,6 @@ describe("buildHostScopeOptions name resolution", () => {
         entry: entry({ hostId: "host-a", label: "directory-label" }),
         item: registryItem(null),
         localHostId: "host-a",
-        remoteHostsPlanRestricted: false,
       }).name,
     ).toBe("directory-label");
   });
@@ -591,7 +565,6 @@ describe("buildHostScopeOptions name resolution", () => {
         entry: entry({ hostId: "host-a", kind: "local", label: "" }),
         item: registryItem("Registry Name"),
         localHostId: "host-a",
-        remoteHostsPlanRestricted: false,
       }).name,
     ).toBe("Registry Name");
   });
@@ -616,7 +589,6 @@ describe("buildHostScopeOptions settingUp", () => {
       activeHostId: null,
       localService: undefined,
       hasLiveSession: () => false,
-      remoteHostsPlanRestricted: false,
       localHostSettingUp: true,
       nowMs: 0,
     });
@@ -637,7 +609,6 @@ describe("buildHostScopeOptions settingUp", () => {
       activeHostId: null,
       localService: undefined,
       hasLiveSession: () => false,
-      remoteHostsPlanRestricted: false,
       localHostSettingUp: false,
       nowMs: 0,
     });
@@ -675,7 +646,6 @@ describe("buildHostScopeOptions health — leases are looked up PER HOST", () =>
       activeHostId: null,
       localService: undefined,
       hasLiveSession: () => false,
-      remoteHostsPlanRestricted: false,
       localHostSettingUp: false,
       nowMs: 0,
     });
@@ -710,7 +680,6 @@ describe("buildHostScopeOptions health — leases are looked up PER HOST", () =>
       activeHostId: null,
       localService: undefined,
       hasLiveSession: () => false,
-      remoteHostsPlanRestricted: false,
       localHostSettingUp: false,
       nowMs: 0,
     });
