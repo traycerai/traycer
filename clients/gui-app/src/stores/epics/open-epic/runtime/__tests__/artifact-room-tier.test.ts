@@ -959,6 +959,141 @@ describe("applySnapshot — doc identity (seed/docGuid) and null-vector watermar
   });
 });
 
+// ─── 9. the doc-identity fence on INCREMENTAL frames ──────────────────────
+//
+// `applySnapshot` has always fenced on identity: a stated change REPLACES
+// everything held, because a deleted-and-recreated artifact shares no ancestor
+// with what this client holds. The incremental frames had no fence at all -
+// their guid was dropped one layer up, in `laneBodyTranslationOf`, so nothing
+// down here could compare it.
+//
+// `DocUpdateEvent.docGuid` names the owner of this check in its own words:
+// "REQUIRED, and the replica - not the adapter - owns the drop", because
+// leaving it off the event "would push a core replica invariant into every
+// adapter, where it would be enforced three times and eventually only twice".
+
+describe("incremental frames naming a superseded doc identity", () => {
+  it("DROPS an update from the generation a reseed replaced, rather than splicing two histories", () => {
+    const { tier } = createHarness();
+    trackTierDisposal(tier);
+    const leaseGrant = tier.acquireSync("room-fence");
+    const seed = makeSnapshotBytes("seed content");
+    tier.applySnapshot({
+      artifactRoomId: "room-fence",
+      snapshotBytes: seed.bytes,
+      hostStateVectorBase64: seed.hostStateVectorBase64,
+      seed: "full",
+      docGuid: "guid-current",
+    });
+    const entry = requireHotEntry(tier, "room-fence");
+    const seeded = entry.doc.getText("body").toJSON();
+
+    // A delayed `doc-update` from the generation this seed superseded. Its
+    // bytes are perfectly valid Yjs - that is exactly the problem. Applied,
+    // `Y.applyUpdate` splices two histories that share no ancestor into one
+    // document, and no later frame can separate them again.
+    tier.applyUpdate(
+      "room-fence",
+      makeSnapshotBytes("STALE GENERATION").bytes,
+      null,
+      "guid-superseded",
+    );
+
+    // THE REDDENING ASSERTION.
+    expect(entry.doc.getText("body").toJSON()).toBe(seeded);
+
+    leaseOf(leaseGrant).release();
+  });
+
+  it("APPLIES an update naming the current identity, and one naming none", () => {
+    // The two controls, and they are not decoration: a fence that dropped
+    // every update, or that dropped every update on the `@1` arm (where no
+    // identity is ever stated), would satisfy the pin above completely while
+    // making bodies stop updating for everyone.
+    const { tier } = createHarness();
+    trackTierDisposal(tier);
+    const leaseGrant = tier.acquireSync("room-fence-ok");
+    const seed = makeSnapshotBytes("seed content");
+    tier.applySnapshot({
+      artifactRoomId: "room-fence-ok",
+      snapshotBytes: seed.bytes,
+      hostStateVectorBase64: seed.hostStateVectorBase64,
+      seed: "full",
+      docGuid: "guid-current",
+    });
+    const entry = requireHotEntry(tier, "room-fence-ok");
+
+    tier.applyUpdate(
+      "room-fence-ok",
+      makeSnapshotBytes("MATCHING").bytes,
+      null,
+      "guid-current",
+    );
+    expect(entry.doc.getText("body").toJSON()).toContain("MATCHING");
+
+    // `null` is what `@1` states, on every frame, forever. An unstated
+    // identity cannot be found to have changed - the same rule
+    // `seedReplacesHeldDoc` already applies to snapshots.
+    tier.applyUpdate(
+      "room-fence-ok",
+      makeSnapshotBytes("LEGACY ARM").bytes,
+      null,
+      null,
+    );
+    expect(entry.doc.getText("body").toJSON()).toContain("LEGACY ARM");
+
+    leaseOf(leaseGrant).release();
+  });
+
+  it("DROPS a coverage ack from a superseded generation, so it cannot retire the live document's watermark", () => {
+    // The quieter loss of the two, and permanent in a way an update is not:
+    // coverage retires the dirty watermark, so an ack accepted from a
+    // generation the host has replaced marks the CURRENT document's unsent
+    // edits as durable when the host has never seen them. They then leave the
+    // divergence accounting while existing nowhere but this tab.
+    const { tier, session } = createHarness();
+    trackTierDisposal(tier);
+    const seed = makeSnapshotBytes("seed content");
+    const leaseGrant = tier.acquireSync("room-fence-coverage");
+    tier.applySnapshot({
+      artifactRoomId: "room-fence-coverage",
+      snapshotBytes: seed.bytes,
+      hostStateVectorBase64: seed.hostStateVectorBase64,
+      seed: "full",
+      docGuid: "guid-current",
+    });
+    const entry = requireHotEntry(tier, "room-fence-coverage");
+
+    // Same writable-role gate section 8 uses, and for the same reason: the
+    // doc-update handler only marks the replica dirty for a role that may
+    // write.
+    session.state.permissionRole = "owner";
+    entry.doc.getText("body").insert(0, "local-edit ");
+    expect(entry.dirtyWatermarkStateVectorBase64).not.toBeNull();
+
+    // A vector that COVERS the local edit - so the only thing standing between
+    // it and a retired watermark is the identity fence.
+    const coveringVector = encodeDocStateVectorBase64(entry.doc);
+    tier.applyCoverage(
+      "room-fence-coverage",
+      coveringVector,
+      "guid-superseded",
+    );
+
+    // THE REDDENING ASSERTION.
+    expect(entry.dirtyWatermarkStateVectorBase64).not.toBeNull();
+    expect(tier.hasDivergence()).toBe(true);
+
+    // ...and the same vector under the CURRENT identity does retire it, which
+    // is what makes the assertion above about the guid rather than the vector.
+    tier.applyCoverage("room-fence-coverage", coveringVector, "guid-current");
+    expect(entry.dirtyWatermarkStateVectorBase64).toBeNull();
+    expect(tier.hasDivergence()).toBe(false);
+
+    leaseOf(leaseGrant).release();
+  });
+});
+
 // ─── 8. applyCoverage retires local divergence on the body lane ───────────
 
 describe("applyCoverage — the body lane's own retirement path for local divergence", () => {
@@ -1005,7 +1140,7 @@ describe("applyCoverage — the body lane's own retirement path for local diverg
     // running this after the covering half below would make it vacuous — a
     // tier that clears the watermark unconditionally on any `applyCoverage`
     // call would still pass.
-    tier.applyCoverage("room-coverage", preEditVector);
+    tier.applyCoverage("room-coverage", preEditVector, null);
     expect(tier.hasDivergence()).toBe(true);
     expect(entry.dirtyWatermarkStateVectorBase64).not.toBeNull();
 
@@ -1016,7 +1151,7 @@ describe("applyCoverage — the body lane's own retirement path for local diverg
     // trivially exact by construction, matching the covering-vector pattern
     // the null-vector pin above already uses for the `@1` `room-update` path.
     const coveringVector = encodeDocStateVectorBase64(entry.doc);
-    tier.applyCoverage("room-coverage", coveringVector);
+    tier.applyCoverage("room-coverage", coveringVector, null);
 
     expect(entry.dirtyWatermarkStateVectorBase64).toBeNull();
     expect(tier.hasDivergence()).toBe(false);

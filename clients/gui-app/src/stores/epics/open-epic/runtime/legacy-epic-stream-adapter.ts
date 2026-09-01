@@ -223,6 +223,11 @@ export function createLegacyEpicStreamAdapter(
             artifactRoomId,
             update: updateBytes,
             hostStateVectorBase64: hostArtifactRoomStateVectorBase64,
+            // `null`, exactly as this arm's snapshots state: `epic.subscribe@1`
+            // claims no doc identity, so there is nothing here to fence
+            // against and an unstated identity cannot have changed. Stated
+            // rather than defaulted, for the reason the field's own doc gives.
+            docGuid: null,
           },
         });
       },

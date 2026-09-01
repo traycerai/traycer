@@ -95,11 +95,23 @@ type MaterializeAnswer =
   | { readonly kind: "awaiting"; readonly docKey: string }
   | { readonly kind: "granted"; readonly docKey: string };
 
+/**
+ * How the worker should answer one key's `body/release`.
+ *
+ * Four answers rather than a boolean, because they are not four flavours of
+ * the same thing. `pinned` is retryable - the pin clears and the demand can
+ * then be dropped. `not-held` is TERMINAL: the far side has nothing, so there
+ * is nothing left to reclaim. `reject` is neither - it is a live worker whose
+ * handler faulted, which is the case the rejection arm used to read as a
+ * teardown.
+ */
+type ReleaseBehavior = "ok" | "pinned" | "not-held" | "reject";
+
 interface ScriptedWorker {
   readonly materializeCalls: readonly string[];
   readonly releasedKeys: readonly string[];
-  /** Keys the worker refuses to release, answering `released: false`. */
-  readonly pinnedKeys: Set<string>;
+  /** Per key; absent means `"ok"`. */
+  readonly releaseBehavior: Map<string, ReleaseBehavior>;
 }
 
 function createScriptedWorker(
@@ -108,7 +120,7 @@ function createScriptedWorker(
 ): ScriptedWorker {
   const materializeCalls: string[] = [];
   const releasedKeys: string[] = [];
-  const pinnedKeys = new Set<string>();
+  const releaseBehavior = new Map<string, ReleaseBehavior>();
   const queue = [...script];
   pair.worker.subscribe((message) => {
     if (!isMainToWorkerFrame(message) || message.frame !== "call") return;
@@ -116,9 +128,26 @@ function createScriptedWorker(
     if (call.kind === "body/release") {
       const docKey = call.request.docKey;
       releasedKeys.push(docKey);
-      const value: unknown = pinnedKeys.has(docKey)
-        ? { released: false, reason: "pinned" }
-        : { released: true, reason: null };
+      const behavior = releaseBehavior.get(docKey) ?? "ok";
+      if (behavior === "reject") {
+        pair.worker.post(
+          {
+            frame: "result",
+            callId,
+            result: {
+              outcome: "error",
+              name: "Error",
+              message: "release handler faulted",
+            },
+          },
+          [],
+        );
+        return;
+      }
+      const value: unknown =
+        behavior === "ok"
+          ? { released: true, reason: null }
+          : { released: false, reason: behavior };
       pair.worker.post(
         { frame: "result", callId, result: { outcome: "ok", value } },
         [],
@@ -158,7 +187,7 @@ function createScriptedWorker(
       [],
     );
   });
-  return { materializeCalls, releasedKeys, pinnedKeys };
+  return { materializeCalls, releasedKeys, releaseBehavior };
 }
 
 interface Rig {
@@ -265,7 +294,7 @@ describe("an awaiting body whose release the worker REFUSES", () => {
     ]);
     // The worker materialized this room into a pinned state - a collaborator
     // is present - so it legitimately declines to drop the demand.
-    worker.pinnedKeys.add(DOC_KEY);
+    worker.releaseBehavior.set(DOC_KEY, "pinned");
 
     const grant = await leases.acquire(ARTIFACT_ID);
     if (grant.kind !== "awaiting-seed") {
@@ -281,11 +310,67 @@ describe("an awaiting body whose release the worker REFUSES", () => {
     expect(timers.liveCount()).toBe(1);
 
     // The pin clears, and the next window asks again - and this time it takes.
-    worker.pinnedKeys.delete(DOC_KEY);
+    worker.releaseBehavior.delete(DOC_KEY);
     timers.fireAll();
     await flushMicrotasks();
     expect(worker.releasedKeys).toEqual([DOC_KEY, DOC_KEY]);
     // Released for real, so nothing is left armed.
+    expect(timers.liveCount()).toBe(0);
+  });
+
+  it("asks again when the release call REJECTS on a live worker", async () => {
+    // A rejection is not a teardown. `serve()` turns a worker-handler fault
+    // into an error reply and a malformed reply fails parsing, and both
+    // surface as a rejected call on a worker that is still very much alive -
+    // so no respawn happens, and this side is the only thing that will ever
+    // ask again.
+    const { leases, worker, timers } = setup([
+      { kind: "awaiting", docKey: DOC_KEY },
+    ]);
+    worker.releaseBehavior.set(DOC_KEY, "reject");
+
+    const grant = await leases.acquire(ARTIFACT_ID);
+    if (grant.kind !== "awaiting-seed") {
+      throw new Error(`expected an awaiting-seed grant, got ${grant.kind}`);
+    }
+    grant.release();
+    await flushMicrotasks();
+    expect(worker.releasedKeys).toEqual([DOC_KEY]);
+
+    // THE REDDENING ASSERTION. The first version of this arm swallowed, on the
+    // reasoning that nothing on this side holds a doc so nothing can be
+    // stranded - which answered the wrong half. Bytes are not what an awaiting
+    // release reclaims; the WORKER's demand, observer and subscription are.
+    expect(timers.liveCount()).toBe(1);
+
+    worker.releaseBehavior.delete(DOC_KEY);
+    timers.fireAll();
+    await flushMicrotasks();
+    expect(worker.releasedKeys).toEqual([DOC_KEY, DOC_KEY]);
+    expect(timers.liveCount()).toBe(0);
+  });
+
+  it("stops asking when the worker answers not-held, which is terminal", async () => {
+    // The other half of the same fix, and it points the opposite way. A
+    // respawned worker starts with no demand and an epoch advance leaves
+    // `core === null`; both answer `not-held`, and there is then nothing left
+    // to reclaim. Retrying that is a 60-second spin for the life of the
+    // session - the very failure this retry exists to prevent, inverted.
+    const { leases, worker, timers } = setup([
+      { kind: "awaiting", docKey: DOC_KEY },
+    ]);
+    worker.releaseBehavior.set(DOC_KEY, "not-held");
+
+    const grant = await leases.acquire(ARTIFACT_ID);
+    if (grant.kind !== "awaiting-seed") {
+      throw new Error(`expected an awaiting-seed grant, got ${grant.kind}`);
+    }
+    grant.release();
+    await flushMicrotasks();
+
+    expect(worker.releasedKeys).toEqual([DOC_KEY]);
+    // THE REDDENING ASSERTION, against a `!answer.released` that treats every
+    // refusal alike.
     expect(timers.liveCount()).toBe(0);
   });
 
@@ -298,7 +383,7 @@ describe("an awaiting body whose release the worker REFUSES", () => {
       { kind: "awaiting", docKey: DOC_KEY },
       { kind: "awaiting", docKey: DOC_KEY },
     ]);
-    worker.pinnedKeys.add(DOC_KEY);
+    worker.releaseBehavior.set(DOC_KEY, "pinned");
 
     const first = await leases.acquire(ARTIFACT_ID);
     if (first.kind !== "awaiting-seed") {

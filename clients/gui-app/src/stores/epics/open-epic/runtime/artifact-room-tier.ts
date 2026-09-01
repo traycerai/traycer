@@ -488,6 +488,7 @@ export interface ArtifactRoomTier {
     artifactRoomId: string,
     updateBytes: Uint8Array,
     hostStateVectorBase64: string | null,
+    docGuid: string | null,
   ): void;
   /**
    * The authority's coverage of updates this client pushed - the event that
@@ -502,6 +503,7 @@ export interface ArtifactRoomTier {
   applyCoverage(
     artifactRoomId: string,
     coverageStateVectorBase64: string,
+    docGuid: string | null,
   ): void;
   /**
    * INBOUND presence, from the wire. Stamped `BIN_AWARENESS_REMOTE_ORIGIN`,
@@ -735,6 +737,34 @@ export function createArtifactRoomTier(
     const held = docGuidByRoom.get(artifactRoomId);
     if (held === undefined) return false;
     return held !== incomingGuid;
+  }
+
+  /**
+   * Whether an INCREMENTAL frame describes a document this room no longer is.
+   *
+   * The same comparison {@link seedReplacesHeldDoc} makes, named separately
+   * because the consequence is the opposite. A snapshot naming a new identity
+   * is the authority telling this client the document was replaced, so it
+   * replaces what is held and installs. An update or a coverage ack naming a
+   * different identity is a DELAYED frame from the generation that reseed
+   * superseded - the authority is not saying anything new, this frame simply
+   * outlived its document - so it is dropped.
+   *
+   * `DocUpdateEvent.docGuid` states whose job this is in its own words: "the
+   * replica - not the adapter - owns the drop", because "leaving the guid off
+   * the event would push a core replica invariant into every adapter, where it
+   * would be enforced three times and eventually only twice". This is that
+   * enforcement, once, where the guid is actually held.
+   *
+   * Applying such an update is not a lossy merge but an unrecoverable one:
+   * `Y.applyUpdate` splices two histories that share no ancestor into one
+   * document, and no later frame can separate them again.
+   */
+  function namesASupersededDoc(
+    artifactRoomId: string,
+    incomingGuid: string | null,
+  ): boolean {
+    return seedReplacesHeldDoc(artifactRoomId, incomingGuid);
   }
 
   function clearPendingRoomUpdates(entry: ArtifactRoomReplicaEntry): void {
@@ -1680,7 +1710,10 @@ export function createArtifactRoomTier(
       return hadPrior ? "merged" : "seeded";
     },
 
-    applyUpdate(artifactRoomId, updateBytes, hostStateVectorBase64) {
+    applyUpdate(artifactRoomId, updateBytes, hostStateVectorBase64, docGuid) {
+      // BEFORE the hot path and before the cold one, because both are ways of
+      // keeping the bytes. See {@link namesASupersededDoc}.
+      if (namesASupersededDoc(artifactRoomId, docGuid)) return;
       const entry = replicas.get(artifactRoomId);
       if (entry === undefined) {
         // Cold room: accumulate the bytes rather than materializing a doc for a
@@ -1719,7 +1752,12 @@ export function createArtifactRoomTier(
       scheduleCooldown(artifactRoomId);
     },
 
-    applyCoverage(artifactRoomId, coverageStateVectorBase64) {
+    applyCoverage(artifactRoomId, coverageStateVectorBase64, docGuid) {
+      // Fenced like an update, for a loss that is quieter and just as
+      // permanent: this retires the dirty watermark, so an ack from a
+      // superseded generation marks the CURRENT document's unsent edits as
+      // durable when the host has never seen them.
+      if (namesASupersededDoc(artifactRoomId, docGuid)) return;
       // The authority stating how much of what THIS client pushed it now has.
       // On `@1` the same fact rides every `room-update`'s post-apply vector;
       // the body lane separates them, because an update is other people's

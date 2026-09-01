@@ -245,6 +245,11 @@ describe("createLegacyEpicStreamAdapter - decode into plane/event", () => {
             artifactRoomId: "room-1",
             update: bytes,
             hostStateVectorBase64: "sv-after",
+            // `null` on this arm, always: `epic.subscribe@1` claims no doc
+            // identity, so there is nothing for the tier's fence to compare
+            // and an unstated identity cannot have changed. The same value
+            // this arm's snapshots already state.
+            docGuid: null,
           },
         };
       },

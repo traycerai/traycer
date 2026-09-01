@@ -101,6 +101,12 @@ export function laneBodyTranslationOf(
           // would read as "the host holds nothing" and silently un-retire the
           // body's dirty mark.
           hostStateVectorBase64: null,
+          // FORWARDED, not decided here - the same rule `doc-snapshot`'s guid
+          // follows one case up. `DocUpdateEvent.docGuid` is required and its
+          // own doc names the replica as the owner of the drop; dropping it at
+          // this boundary was the invariant going missing exactly where that
+          // comment predicted it would.
+          docGuid: event.docGuid,
         },
       };
     case "doc-coverage-ack":
@@ -110,6 +116,11 @@ export function laneBodyTranslationOf(
           kind: "room-coverage",
           artifactRoomId: event.docId,
           coverageStateVectorBase64: event.coverageStateVectorBase64,
+          // Same forward, same reason. `DocCoverageAckEvent` carries a
+          // required guid too, and an ack from a superseded generation retires
+          // the CURRENT document's dirty watermark against bytes the host has
+          // never seen.
+          docGuid: event.docGuid,
         },
       };
     case "doc-awareness":

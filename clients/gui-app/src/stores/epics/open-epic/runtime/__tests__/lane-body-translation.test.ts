@@ -7,6 +7,12 @@
  *  - `doc-snapshot`'s `seed` and `docGuid` are FORWARDED, not decided here -
  *    they are the pair the artifact-body tier's merge-vs-seed-vs-replace rule
  *    reads.
+ *  - EVERY event carrying a guid forwards it, not only the snapshot.
+ *    `doc-update` and `doc-coverage-ack` both do, and both used to drop it -
+ *    which left the replica unable to reject a frame from a generation a
+ *    reseed had replaced. `DocUpdateEvent.docGuid` states whose check that is
+ *    ("the replica - not the adapter - owns the drop"), so a translation that
+ *    drops the guid is the adapter quietly deciding not to have one.
  *  - `doc-update` always forces `hostStateVectorBase64` to `null`, because a
  *    `""` here would read as "the host holds nothing" and silently un-retire
  *    the body's dirty mark.
@@ -183,8 +189,28 @@ describe("doc-update translates to hostStateVectorBase64: null, always - this wi
         artifactRoomId: DOC_ID,
         update: UPDATE_BYTES,
         hostStateVectorBase64: null,
+        docGuid: "guid-update",
       },
     });
+  });
+
+  it("FORWARDS the doc guid, which is what lets the replica drop a superseded update", () => {
+    // `DocUpdateEvent.docGuid` is required and its own doc names the owner of
+    // the drop: "the replica - not the adapter - owns the drop", because
+    // leaving the guid off the event "would push a core replica invariant into
+    // every adapter, where it would be enforced three times and eventually
+    // only twice". Dropping it HERE was that prediction coming true - a
+    // delayed update from a generation a reseed had replaced reached
+    // `ArtifactRoomTier.applyUpdate` with nothing left to compare against, and
+    // `Y.applyUpdate` spliced two histories that share no ancestor.
+    const translated = laneBodyTranslationOf(docUpdate());
+    if (
+      translated.kind !== "room-event" ||
+      translated.event.kind !== "room-update"
+    ) {
+      throw new Error("expected a room-update event");
+    }
+    expect(translated.event.docGuid).toBe("guid-update");
   });
 
   it('the vector is explicitly null, not merely falsy - "" would silently un-retire the dirty mark', () => {
@@ -209,8 +235,25 @@ describe("doc-coverage-ack becomes room-coverage, carrying the coverage vector u
         kind: "room-coverage",
         artifactRoomId: DOC_ID,
         coverageStateVectorBase64: "coverage-vector-xyz",
+        docGuid: "guid-coverage",
       },
     });
+  });
+
+  it("FORWARDS the doc guid, for a loss that is quieter than a spliced update", () => {
+    // Coverage retires the dirty watermark, so an ack accepted from a
+    // superseded generation marks the CURRENT document's unsent edits as
+    // durable when the host has never seen them - they leave the divergence
+    // accounting while existing nowhere but this tab. No splice, no visible
+    // corruption, and the edits are simply gone on the next reload.
+    const translated = laneBodyTranslationOf(docCoverageAck("v"));
+    if (
+      translated.kind !== "room-event" ||
+      translated.event.kind !== "room-coverage"
+    ) {
+      throw new Error("expected a room-coverage event");
+    }
+    expect(translated.event.docGuid).toBe("guid-coverage");
   });
 });
 

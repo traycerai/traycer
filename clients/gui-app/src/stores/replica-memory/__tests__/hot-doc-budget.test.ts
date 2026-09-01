@@ -452,6 +452,7 @@ describe("hot-doc byte budget with a real tier", () => {
       "room-grow",
       small.bytes,
       small.hostStateVectorBase64,
+      null,
     );
     expect(harness.chargeProvisional).toHaveBeenCalled();
     expect(harness.settle).not.toHaveBeenCalled();
@@ -463,6 +464,7 @@ describe("hot-doc byte budget with a real tier", () => {
         "room-grow",
         chunk.bytes,
         chunk.hostStateVectorBase64,
+        null,
       );
       rounds += 1;
     }
@@ -491,6 +493,7 @@ describe("hot-doc byte budget with a real tier", () => {
       "room-stale",
       extra.bytes,
       extra.hostStateVectorBase64,
+      null,
     );
     const usage = harness.accountant
       .snapshot()

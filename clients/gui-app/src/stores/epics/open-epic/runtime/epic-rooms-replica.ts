@@ -333,12 +333,14 @@ export function createEpicRoomsReplica(
             event.artifactRoomId,
             event.update,
             event.hostStateVectorBase64,
+            event.docGuid,
           );
           break;
         case "room-coverage":
           tier.applyCoverage(
             event.artifactRoomId,
             event.coverageStateVectorBase64,
+            event.docGuid,
           );
           break;
         case "room-awareness":

@@ -1183,12 +1183,31 @@ export function createArtifactBodyLeaseBridge(options: {
     void options.bridge.call("body/release", { docKey }, NO_TRANSFER).then(
       (answer) => {
         if (answer.released) return;
+        // `not-held` is TERMINAL and the only refusal that is. It says the far
+        // side has no hold to drop - a respawned worker starts with none, and
+        // an epoch advance leaves `core === null`, which answers exactly this
+        // - so the demand this retry exists to reclaim is already gone.
+        // Re-arming on it would be a 60-second spin for the life of the
+        // session, which is the failure this retry was added to prevent,
+        // pointed the other way.
+        if (answer.reason === "not-held") return;
         armAwaitingReleaseRetry(docKey);
       },
       () => {
-        // The worker went away mid-release. Nothing on this side holds a doc
-        // for an awaiting body, so there is nothing to keep consistent: a
-        // respawned worker starts with no demand at all.
+        // A REJECTION IS NOT A TEARDOWN, and reading it as one is the mistake
+        // `postDemote`'s rejection arm already recorded one screen up: "the
+        // worker went away" is only one of the ways this rejects. `serve()`
+        // turns a worker-handler fault into an error reply and a malformed
+        // reply fails parsing, and both surface as a rejected call on a worker
+        // that is still very much alive - so no respawn happens, and this side
+        // is the only thing that will ever ask again.
+        //
+        // The first version of this arm swallowed, on the reasoning that
+        // nothing here holds a doc so nothing can be stranded. That answered
+        // the wrong half: bytes are not what an awaiting release reclaims. The
+        // WORKER's body demand, its observer and its room subscription are,
+        // and those are held on the far side whatever this side is holding.
+        armAwaitingReleaseRetry(docKey);
       },
     );
   }

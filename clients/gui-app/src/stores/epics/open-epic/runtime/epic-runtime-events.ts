@@ -137,6 +137,25 @@ export type EpicRoomEvent =
        * silently un-retires a body's dirty mark.
        */
       readonly hostStateVectorBase64: string | null;
+      /**
+       * The doc identity these bytes describe, or `null` on an arm that states
+       * none.
+       *
+       * The REPLICA owns the drop, not the adapter - `DocUpdateEvent` says so
+       * in those words, and the reason it gives is that leaving the guid off
+       * the event "would push a core replica invariant into every adapter,
+       * where it would be enforced three times and eventually only twice". The
+       * translation that dropped this field is that prediction coming true: a
+       * delayed update from a generation a reseed has since replaced was
+       * applied on top of the new document, splicing two Yjs histories that
+       * share no ancestor. That is not a lossy merge; no later frame can
+       * separate them again.
+       *
+       * `null` on `@1`, which claims no identity - the same value and the same
+       * meaning `room-snapshot` carries there, so an unstated identity cannot
+       * be found to have changed.
+       */
+      readonly docGuid: string | null;
     }
   /**
    * How much of what THIS client pushed the authority now holds.
@@ -150,6 +169,17 @@ export type EpicRoomEvent =
       readonly kind: "room-coverage";
       readonly artifactRoomId: string;
       readonly coverageStateVectorBase64: string;
+      /**
+       * The doc identity this coverage answers for, or `null` on an arm that
+       * states none.
+       *
+       * Same fence as `room-update`'s, for a different loss: coverage retires
+       * a body's dirty watermark, so one accepted from a superseded generation
+       * marks the CURRENT document's unsent edits as durable when the host has
+       * never seen them. The bytes are then dropped from the divergence
+       * accounting while existing nowhere but this tab.
+       */
+      readonly docGuid: string | null;
     }
   | {
       readonly kind: "room-awareness";
