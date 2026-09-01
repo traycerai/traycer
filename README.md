@@ -34,6 +34,9 @@ Traycer is an open-source AI orchestration app. Every agent keeps a durable sess
 | **Real-time team collaboration** — Invite teammates into a shared workspace: shareable boards, live co-editing, comments, and ticket assignment. | <!-- assets/collaboration.gif --> <sub><i>demo coming soon</i></sub> |
 | **Chat and Terminal, side by side** — Work with the same providers through a rich Chat interface or a real Terminal, with files and Git diff panels one keystroke away. | <!-- assets/terminal-and-diff.gif --> <sub><i>demo coming soon</i></sub> |
 | **Cross-device sync** — Close your laptop, open another machine, and pick up the same agents in the same state. Any device, any OS. | <!-- assets/cross-device.gif --> <sub><i>demo coming soon</i></sub> |
+| **Remote hosts** — Every machine you sign in on runs a Traycer Host, and the app can reach all of yours. Kick off agents on your desktop or a beefy remote box, then steer them from wherever you are. | <!-- assets/remote-hosts.gif --> <sub><i>demo coming soon</i></sub> |
+| **Mobile app** <sub>*coming soon*</sub> — Watch runs, answer your agents' questions, and start new work from your phone. iOS and Android. | <!-- assets/mobile.gif --> <sub><i>demo coming soon</i></sub> |
+| **In-app browser** <sub>*coming soon*</sub> — A browser built into Traycer that agents can drive: open the app they just built, click through flows, and debug live pages without leaving the workspace. | <!-- assets/in-app-browser.gif --> <sub><i>demo coming soon</i></sub> |
 
 ## Bring Your Own Agent
 
@@ -42,34 +45,34 @@ Traycer connects to the subscriptions you already pay for instead of locking you
 <div align="center">
 <table>
   <tr>
-    <td align="center" width="150"><a href="https://claude.com/product/claude-code"><img src="https://www.google.com/s2/favicons?domain=claude.com&sz=32" width="24" alt="Claude Code" /><br /><b>Claude Code</b></a></td>
-    <td align="center" width="150"><a href="https://openai.com/codex"><img src="https://www.google.com/s2/favicons?domain=openai.com&sz=32" width="24" alt="Codex" /><br /><b>Codex</b></a></td>
-    <td align="center" width="150"><a href="https://cursor.com"><img src="https://www.google.com/s2/favicons?domain=cursor.com&sz=32" width="24" alt="Cursor" /><br /><b>Cursor</b></a></td>
-    <td align="center" width="150"><a href="https://opencode.ai"><img src="https://www.google.com/s2/favicons?domain=opencode.ai&sz=32" width="24" alt="OpenCode" /><br /><b>OpenCode</b></a></td>
+    <td align="center" width="150"><a href="https://claude.com/product/claude-code"><img src="assets/readme/agents/claude.svg" width="28" alt="Claude Code" /><br /><b>Claude Code</b></a></td>
+    <td align="center" width="150"><a href="https://openai.com/codex"><img src="assets/readme/agents/codex.svg" width="28" alt="Codex" /><br /><b>Codex</b></a></td>
+    <td align="center" width="150"><a href="https://cursor.com"><img src="assets/readme/agents/cursor.svg" width="28" alt="Cursor" /><br /><b>Cursor</b></a></td>
+    <td align="center" width="150"><a href="https://opencode.ai"><img src="assets/readme/agents/opencode.svg" width="28" alt="OpenCode" /><br /><b>OpenCode</b></a></td>
   </tr>
   <tr>
-    <td align="center" width="150"><a href="https://traycer.ai"><img src="https://www.google.com/s2/favicons?domain=traycer.ai&sz=32" width="24" alt="Traycer" /><br /><b>Traycer</b></a></td>
-    <td align="center" width="150"><a href="https://x.ai"><img src="https://www.google.com/s2/favicons?domain=x.ai&sz=32" width="24" alt="Grok" /><br /><b>Grok</b></a></td>
-    <td align="center" width="150"><a href="https://github.com/features/copilot"><img src="https://www.google.com/s2/favicons?domain=github.com&sz=32" width="24" alt="GitHub Copilot" /><br /><b>GitHub Copilot</b></a></td>
-    <td align="center" width="150"><a href="https://devin.ai"><img src="https://www.google.com/s2/favicons?domain=devin.ai&sz=32" width="24" alt="Devin" /><br /><b>Devin</b></a></td>
+    <td align="center" width="150"><a href="https://traycer.ai"><img src="assets/readme/agents/traycer.svg" width="28" alt="Traycer" /><br /><b>Traycer</b></a></td>
+    <td align="center" width="150"><a href="https://x.ai"><img src="assets/readme/agents/grok.svg" width="28" alt="Grok" /><br /><b>Grok</b></a></td>
+    <td align="center" width="150"><a href="https://github.com/features/copilot"><img src="assets/readme/agents/copilot.svg" width="28" alt="GitHub Copilot" /><br /><b>GitHub Copilot</b></a></td>
+    <td align="center" width="150"><a href="https://devin.ai"><img src="assets/readme/agents/devin.svg" width="28" alt="Devin" /><br /><b>Devin</b></a></td>
   </tr>
   <tr>
-    <td align="center" width="150"><a href="https://ampcode.com"><img src="https://www.google.com/s2/favicons?domain=ampcode.com&sz=32" width="24" alt="Amp" /><br /><b>Amp</b></a></td>
-    <td align="center" width="150"><a href="https://factory.ai"><img src="https://www.google.com/s2/favicons?domain=factory.ai&sz=32" width="24" alt="Droid" /><br /><b>Droid</b></a></td>
-    <td align="center" width="150"><a href="https://kiro.dev"><img src="https://www.google.com/s2/favicons?domain=kiro.dev&sz=32" width="24" alt="Kiro" /><br /><b>Kiro</b></a></td>
-    <td align="center" width="150"><a href="https://kilocode.ai"><img src="https://www.google.com/s2/favicons?domain=kilocode.ai&sz=32" width="24" alt="Kilo Code" /><br /><b>Kilo Code</b></a></td>
+    <td align="center" width="150"><a href="https://ampcode.com"><img src="assets/readme/agents/amp.svg" width="28" alt="Amp" /><br /><b>Amp</b></a></td>
+    <td align="center" width="150"><a href="https://factory.ai"><img src="assets/readme/agents/droid.svg" width="28" alt="Droid" /><br /><b>Droid</b></a></td>
+    <td align="center" width="150"><a href="https://kiro.dev"><img src="assets/readme/agents/kiro.svg" width="28" alt="Kiro" /><br /><b>Kiro</b></a></td>
+    <td align="center" width="150"><a href="https://kilocode.ai"><img src="assets/readme/agents/kilocode.svg" width="28" alt="Kilo Code" /><br /><b>Kilo Code</b></a></td>
   </tr>
   <tr>
-    <td align="center" width="150"><a href="https://kimi.com"><img src="https://www.google.com/s2/favicons?domain=kimi.com&sz=32" width="24" alt="Kimi" /><br /><b>Kimi</b></a></td>
-    <td align="center" width="150"><a href="https://github.com/QwenLM/qwen-code"><img src="https://www.google.com/s2/favicons?domain=qwen.ai&sz=32" width="24" alt="Qwen Code" /><br /><b>Qwen Code</b></a></td>
-    <td align="center" width="150"><a href="https://openrouter.ai"><img src="https://www.google.com/s2/favicons?domain=openrouter.ai&sz=32" width="24" alt="OpenRouter" /><br /><b>OpenRouter</b></a></td>
-    <td align="center" width="150"><a href="https://pi.dev"><img src="https://www.google.com/s2/favicons?domain=pi.dev&sz=32" width="24" alt="Pi" /><br /><b>Pi</b></a></td>
+    <td align="center" width="150"><a href="https://kimi.com"><img src="assets/readme/agents/kimi.svg" width="28" alt="Kimi" /><br /><b>Kimi</b></a></td>
+    <td align="center" width="150"><a href="https://github.com/QwenLM/qwen-code"><img src="assets/readme/agents/qwen.svg" width="28" alt="Qwen Code" /><br /><b>Qwen Code</b></a></td>
+    <td align="center" width="150"><a href="https://openrouter.ai"><img src="assets/readme/agents/openrouter.svg" width="28" alt="OpenRouter" /><br /><b>OpenRouter</b></a></td>
+    <td align="center" width="150"><a href="https://pi.dev"><img src="assets/readme/agents/pi.svg" width="28" alt="Pi" /><br /><b>Pi</b></a></td>
   </tr>
   <tr>
-    <td align="center" width="150"><a href="https://hermes-agent.nousresearch.com"><img src="https://www.google.com/s2/favicons?domain=nousresearch.com&sz=32" width="24" alt="Hermes Agent" /><br /><b>Hermes Agent</b></a></td>
-    <td align="center" width="150"><a href="https://huggingface.co"><img src="https://www.google.com/s2/favicons?domain=huggingface.co&sz=32" width="24" alt="Hugging Face" /><br /><b>Hugging Face</b></a></td>
-    <td align="center" width="150"><a href="https://github.com/can1357/oh-my-pi"><img src="https://www.google.com/s2/favicons?domain=github.com&sz=32" width="24" alt="Oh My Pi" /><br /><b>Oh My Pi</b></a></td>
-    <td align="center" width="150"><a href="https://reasonix.io"><img src="https://www.google.com/s2/favicons?domain=reasonix.io&sz=32" width="24" alt="Reasonix" /><br /><b>Reasonix</b></a></td>
+    <td align="center" width="150"><a href="https://hermes-agent.nousresearch.com"><img src="assets/readme/agents/hermes.svg" width="28" alt="Hermes Agent" /><br /><b>Hermes Agent</b></a></td>
+    <td align="center" width="150"><a href="https://huggingface.co"><img src="assets/readme/agents/huggingface.svg" width="28" alt="Hugging Face" /><br /><b>Hugging Face</b></a></td>
+    <td align="center" width="150"><a href="https://github.com/can1357/oh-my-pi"><img src="assets/readme/agents/omp.svg" width="28" alt="Oh My Pi" /><br /><b>Oh My Pi</b></a></td>
+    <td align="center" width="150"><a href="https://reasonix.io"><img src="assets/readme/agents/reasonix.svg" width="28" alt="Reasonix" /><br /><b>Reasonix</b></a></td>
   </tr>
 </table>
 </div>
@@ -95,6 +98,7 @@ graph LR
 - **Agent** — a durable session; switch its model anytime, delegate to child agents, reach it from any device.
 - **Artifacts** — persistent documents (specs, tickets, stories, reviews) that keep decisions and context beyond the conversation.
 - **Worktrees** — run each agent in your workspace folder, a fresh Git worktree, or an existing one.
+- **Hosts** — each machine you sign in on runs a Traycer Host that owns its agents and files; every client can reach any of your hosts, local or remote.
 
 This repository contains the open-source clients, CLI, and protocol. The Traycer Host is provisioned as a signed build from GitHub Releases — see [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
@@ -109,7 +113,7 @@ This repository contains the open-source clients, CLI, and protocol. The Traycer
 | Linux (Fedora/RHEL)   | [Download .rpm](https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-linux-x86_64.rpm)           |
 | Windows (x64)         | [Download .exe](https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-windows-x64.exe)            |
 
-All builds: [latest release](https://github.com/traycerai/traycer/releases/latest).
+All builds: [latest release](https://github.com/traycerai/traycer/releases/latest). Mobile apps for iOS and Android are coming soon.
 
 ## Privacy
 
