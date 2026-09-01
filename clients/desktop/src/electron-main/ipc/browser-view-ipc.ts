@@ -634,6 +634,7 @@ function createBrowserDevToolsWindow(
     width: 1200,
     height: 800,
     backgroundColor: "#0b0b0d",
+    fullscreenable: false,
   });
 }
 
