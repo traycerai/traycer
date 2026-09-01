@@ -372,6 +372,79 @@ describe("createCommandQueue", () => {
     ]);
   });
 
+  it("retires a BOUNDED failure that also self-times, on its own timer, instead of re-driving it past the replay window", async () => {
+    // The combination this file had never seen. Until the write path's
+    // exhausted unary dial, `boundedRetry` and `retryAfterMs` were disjoint:
+    // every self-timing failure was `boundedRetry: false`, so the replay
+    // deadline was only ever consulted where it was written, in `retryPending`.
+    //
+    // A failure that is BOTH walks its own timer, and a deadline enforced only
+    // on the drain's path is no deadline at all for it: the command re-drives
+    // itself every backoff for as long as the host keeps refusing, straight
+    // past the dedupe retention its key depends on, and executes a second time
+    // on a host that has forgotten the first. That is precisely the outcome
+    // `COMMAND_AUTO_RETRY_WINDOW_MS` exists to prevent, arrived at by the one
+    // route that was not checking it.
+    //
+    // Ablate `releaseQueuedCommand` back to a bare
+    // `blockedUntilRetry.delete(commandId)` on the timer path and `attempts`
+    // climbs past 2 while `delivery` stays `"queued"`.
+    const timers = makeFakeTimers();
+    let now = 123;
+    let attempts = 0;
+    const unknown = vi.fn();
+    const queue = makeQueue({
+      ...DEFAULT_QUEUE_OPTIONS,
+      timers,
+      now: () => now,
+      // Refuses forever, which is what makes the window - rather than success -
+      // the thing that has to stop it.
+      send: () => {
+        attempts += 1;
+        return Promise.reject(new Error("dial failed"));
+      },
+      classifyFailure: (): CommandSendFailure => ({
+        kind: "queued",
+        reason: "dial failed",
+        boundedRetry: true,
+        retryAfterMs: 2_000,
+      }),
+      onUnknownOutcome: unknown,
+    });
+    const command = queue.enqueue({
+      intent: { value: "rename" },
+      expectedEntityVersion: null,
+    });
+    if (command === null) throw new Error("expected command");
+    await settleQueueMicrotasks();
+    expect(attempts).toBe(1);
+
+    // Inside the window: the timer re-drives, which is the whole point of
+    // giving this failure one. Asserted so the pin cannot pass by disabling
+    // the self-retry it is meant to bound.
+    now += COMMAND_AUTO_RETRY_WINDOW_MS - 1;
+    expect(timers.fireAll()).toBe(1);
+    await settleQueueMicrotasks();
+    expect(attempts).toBe(2);
+    expect(queue.list()[0]?.delivery).toBe("queued");
+
+    // Past it: the same timer must retire the command rather than send again.
+    now += 2;
+    expect(timers.fireAll()).toBe(1);
+    await settleQueueMicrotasks();
+    expect(attempts).toBe(2);
+    expect(queue.list()[0]?.delivery).toBe("unknown-outcome");
+    expect(unknown).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commandId: command.commandId,
+        delivery: "unknown-outcome",
+      }),
+    );
+    // And it leaves nothing armed behind it, so the retired command cannot be
+    // woken by a timer the retirement forgot to cancel.
+    expect(timers.liveCount()).toBe(0);
+  });
+
   it("a queued failure that asked for NO timer still waits for an external drain", async () => {
     // The control, and the reason the field is `number | null` rather than a
     // constant applied to every queued failure: a dead transport's recovery is

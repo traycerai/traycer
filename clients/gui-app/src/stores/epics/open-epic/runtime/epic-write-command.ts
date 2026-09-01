@@ -12,6 +12,21 @@ import type { CommandSendFailure } from "@traycer-clients/shared/replica-runtime
  * on every tick.
  */
 const COMMAND_SATURATION_RETRY_BASE_MS = 2_000;
+
+/**
+ * First re-drive delay for a write whose unary dial kept failing while this
+ * epic's lanes stayed up, doubled per attempt by the queue on the same clamp.
+ *
+ * `DEFAULT_TRANSPORT_RETRY_POLICY`'s own schedule tops out at `maxDelayMs`
+ * (2s) and gives up after three attempts spanning well under a second, so
+ * starting here resumes where the transport stopped rather than underneath it.
+ *
+ * Separate from {@link COMMAND_SATURATION_RETRY_BASE_MS} despite the equal
+ * value, because the two are tuned against different signals: one is a host
+ * that answered "my replay cache is full", the other a socket that never
+ * opened. Moving one to fit its signal must not silently move the other.
+ */
+const COMMAND_DIAL_RETRY_BASE_MS = 2_000;
 import {
   HostRpcError,
   HostTransportFailureError,
@@ -187,15 +202,45 @@ export function classifyEpicWriteCommandFailure(
     error instanceof StaleHostBindingAuthorityError ||
     error instanceof EpicWriteCommandTransportUnavailableError
   ) {
+    // Whether the DIAL is what ran out, which is the only member of this
+    // branch that is owed no wake-up. See `retryAfterMs` below.
+    const dialExhausted = error instanceof RetryableTransportError;
     return {
       kind: "queued",
       reason: error instanceof Error ? error.message : String(error),
-      boundedRetry: error instanceof RetryableTransportError,
-      // No self-timer: each of these three is a transport that is DOWN, and
-      // its recovery is an event the queue is already driven by - a reconnect
-      // drain or a landed root snapshot both call `retryPending()`. A timer
-      // here would only race them.
-      retryAfterMs: null,
+      boundedRetry: dialExhausted,
+      // A self-timer for the dial failure ONLY, and the asymmetry is the whole
+      // point: this field asks "will anything ever wake this command", and the
+      // three members of the branch answer differently.
+      //
+      // The other two are owed an event. `send`'s first gate raises
+      // `EpicWriteCommandTransportUnavailableError` on exactly the predicate
+      // `drainWritePathsAfterReconnect` gates on - transport open, fresh root
+      // snapshot for this cycle - so whatever clears it IS a `retryPending()`
+      // caller; and a stale host binding is a transport change, which reaches
+      // the same drain. A timer there would only race them. (The same error
+      // also covers a missing requester or host id past that gate, which is a
+      // state an open lane transport should not be in; it is not the case the
+      // `null` is chosen for, and a timer would be no worse there.)
+      //
+      // A `RetryableTransportError` is the opposite, and that same gate is the
+      // proof rather than an assumption: it can only be raised AFTER the gate
+      // passed, so the lane transport is open and its snapshot is fresh -
+      // nothing about the lane moved, and neither drain is owed. Unaries dial
+      // their own socket per attempt (`createRetryingMessenger` retries "on a
+      // fresh dial"), so this is a dial that kept failing underneath lanes that
+      // stayed up. `pump` refuses to look past the FIFO head, so with no timer
+      // this command and every later metadata write wait for a reconnect that
+      // is never coming.
+      //
+      // Same shape as `E_IDEMPOTENCY_CACHE_SATURATED` below, reached from the
+      // other side - there the transport answered, here it never dialled, and
+      // in both the control stream stays open so no event is owed. It differs
+      // in one way that matters: this one is `boundedRetry`, and it is the
+      // first failure to be both. `releaseQueuedCommand` in the queue is what
+      // keeps that safe, by checking the replay deadline on the TIMER's path
+      // and not only on the drain's.
+      retryAfterMs: dialExhausted ? COMMAND_DIAL_RETRY_BASE_MS : null,
     };
   }
   if (error instanceof HostTransportFailureError) {

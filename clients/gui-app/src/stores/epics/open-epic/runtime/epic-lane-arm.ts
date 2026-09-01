@@ -291,6 +291,23 @@ export function createEpicLaneArm(sources: EpicLaneArmSources): EpicLaneArm {
     // existed. Latching a failure would be worse than reporting it, since the
     // next trigger's fetch is exactly what recovers a transient one.
     //
+    // Why "the streams are supported" settles it for a UNARY, which is not in
+    // `EPIC_LANE_METHODS` and has no `getMethodSupport` entry to check: the
+    // host registry introduces `epic.getWorkspaceContext@1.0` and the three
+    // `@1.0` lane subscriptions together, each documented with the SAME
+    // degrade - a peer without them is a peer still serving `epic.subscribe@1`,
+    // whose `earlyMeta` frame is this exact payload. A host process serves the
+    // registry it was built with, so "three lanes but no context read" is not a
+    // state any host version produces. That is a fact about the release
+    // boundary, not about this arm, which is why it is worth writing down: the
+    // read IS optional and off the released floor, so the day one of the four
+    // version-gates ahead of the others, this handler is where the decision
+    // lands. Reaching for the legacy arm then would be the wrong lever anyway -
+    // it would trade three working lanes for one metadata payload - and
+    // recovering the refusal's CODE here is not available either, since
+    // `epic-lane-unary-dispatch` flattens the cause to a message string on
+    // purpose.
+    //
     // "The next trigger" is the policy's obligation, not this arm's, and it
     // holds because the policy retries a first read that failed on the status
     // lane's first `"open"`. That is the one trigger with no natural

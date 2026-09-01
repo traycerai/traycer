@@ -6,9 +6,14 @@ import {
   type CommandResolution,
   type RuntimeEnvironment,
 } from "@traycer-clients/shared/replica-runtime";
-import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  HostRpcError,
+  RetryableTransportError,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import { StaleHostBindingAuthorityError } from "@traycer-clients/shared/host-client/host-binding-authority-error";
 import {
   classifyEpicWriteCommandFailure,
+  EpicWriteCommandTransportUnavailableError,
   type EpicWriteCommandIntent,
 } from "../epic-write-command";
 
@@ -171,6 +176,62 @@ describe("classifyEpicWriteCommandFailure", () => {
     ).toEqual({
       kind: "unknown-outcome",
       reason: "E_IDEMPOTENCY_OUTCOME_UNKNOWN",
+    });
+  });
+
+  it("asks for a self-timer when the DIAL ran out, and for none when a reconnect is owed", () => {
+    // The three members of the `queued` transport branch, split by the only
+    // question `retryAfterMs` asks: will anything ever wake this command.
+    //
+    // `send`'s first gate raises `EpicWriteCommandTransportUnavailableError` on
+    // exactly the predicate `drainWritePathsAfterReconnect` gates on, and a
+    // stale binding is a transport change that reaches the same drain - both
+    // are owed an event, so a timer would only race it. A
+    // `RetryableTransportError` can
+    // only be raised on the far side of that gate, which is the proof that the
+    // lane is up and NOTHING is owed: unaries dial their own socket per
+    // attempt, so the dial ran out underneath streams that never moved. With
+    // `pump` refusing to look past the FIFO head, a null here parks this
+    // command and every later metadata write for the life of the session.
+    //
+    // Asserted as a triple rather than one case, because the defect is the
+    // branch answering UNIFORMLY - which it did, and which a single-member pin
+    // would have called correct.
+    expect(
+      classifyEpicWriteCommandFailure(
+        new RetryableTransportError({
+          code: "RPC_ERROR",
+          message: "dial failed",
+          requestId: "request-1",
+          method: "epic.updateTitle",
+          fatalDetails: null,
+        }),
+      ),
+    ).toEqual({
+      kind: "queued",
+      reason: "dial failed",
+      boundedRetry: true,
+      retryAfterMs: 2_000,
+    });
+
+    expect(
+      classifyEpicWriteCommandFailure(
+        new StaleHostBindingAuthorityError("host-1"),
+      ),
+    ).toMatchObject({
+      kind: "queued",
+      boundedRetry: false,
+      retryAfterMs: null,
+    });
+
+    expect(
+      classifyEpicWriteCommandFailure(
+        new EpicWriteCommandTransportUnavailableError(),
+      ),
+    ).toMatchObject({
+      kind: "queued",
+      boundedRetry: false,
+      retryAfterMs: null,
     });
   });
 });

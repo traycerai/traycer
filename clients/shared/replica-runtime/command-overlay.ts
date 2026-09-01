@@ -216,17 +216,25 @@ export type CommandSendFailure =
        * Re-drive this command on the queue's OWN timer after at least this
        * many milliseconds, or `null` to wait for an external drain.
        *
-       * `null` is right for a queued failure that a reconnect is owed for -
-       * a dead transport, a stale host binding - because `retryPending()`
-       * fires on the events that resolve those, and a self-timer would only
-       * race them.
+       * The question is "will anything ever wake this command", NOT whether
+       * the transport answered. `null` is right for a queued failure that a
+       * reconnect is owed for - a dead transport, a stale host binding -
+       * because `retryPending()` fires on the events that resolve those, and a
+       * self-timer would only race them.
        *
-       * It is wrong for a failure the transport ANSWERED. A queued command
-       * sits in `blockedUntilRetry` and `pump` refuses to look past the FIFO
-       * head, so a refusal that leaves the control stream open owes no event
-       * at all: the command waits forever and every later write waits behind
-       * it. That is the shape `E_IDEMPOTENCY_CACHE_SATURATED` has, and it is
-       * why this field exists rather than a second call to `retryPending`.
+       * It is wrong wherever the connection the command rides is still up,
+       * because then no event is owed at all: a queued command sits in
+       * `blockedUntilRetry` and `pump` refuses to look past the FIFO head, so
+       * it waits forever and every later write waits behind it. Two different
+       * failures land there - a refusal the host ANSWERED over an open control
+       * stream (`E_IDEMPOTENCY_CACHE_SATURATED`), and a per-call DIAL that
+       * exhausted its transport retries while the durable streams stayed open.
+       * Neither moves anything `retryPending()` watches, which is why this
+       * field exists rather than a second call to it.
+       *
+       * A failure may be both self-timing and `boundedRetry`; see
+       * `releaseQueuedCommand` for what keeps that pair from outliving the
+       * host's dedupe retention.
        */
       readonly retryAfterMs: number | null;
     }
@@ -292,11 +300,59 @@ export function createCommandQueue<TIntent>(
   }
 
   /**
-   * Unblock `commandId` after a backoff and let the pump take it again.
+   * End one queued command's wait: release it for another attempt, or retire it
+   * to `unknown-outcome` when its bounded-retry window has already run out.
+   *
+   * Shared by the external drain and by a self-retry timer, because the
+   * deadline is a property of the COMMAND rather than of whichever mechanism
+   * woke it. It used to be checked only in `retryPending`, which was sound only
+   * while the two sets were disjoint: the sole self-timing failure was
+   * `E_IDEMPOTENCY_CACHE_SATURATED`, which is `boundedRetry: false` and
+   * therefore never has a deadline to run out. A failure that is BOTH bounded
+   * and self-timing - a unary dial that kept failing while the lanes stayed up
+   * - would otherwise re-drive itself on its own timer past the host's dedupe
+   * retention and execute a second time, which is the exact outcome the
+   * deadline exists to prevent.
+   *
+   * Cancelling the timer on the ordinary arm is the drain's rule and not a
+   * no-op there: an external wake supersedes whatever backoff this command was
+   * sitting on, and leaving it armed would re-arm the NEXT refusal from a stale
+   * attempt count. Reached FROM a timer it is a no-op, since that timer has
+   * already removed itself.
+   */
+  function releaseQueuedCommand(commandId: CommandId): void {
+    const retryDeadline = retryDeadlineByCommandId.get(commandId);
+    if (
+      retryDeadline !== undefined &&
+      retryDeadline <= options.environment.clock.now()
+    ) {
+      retryDeadlineByCommandId.delete(commandId);
+      blockedUntilRetry.delete(commandId);
+      // A command that just became `unknown-outcome` has no queued retry left
+      // to drive. The timer would find the wrong delivery and no-op, but it
+      // would stay armed until it fired.
+      cancelSelfRetry(commandId);
+      const uncertain = replace(commandId, (current) => ({
+        ...current,
+        delivery: "unknown-outcome",
+      }));
+      if (uncertain !== null) options.onUnknownOutcome(uncertain);
+      return;
+    }
+    blockedUntilRetry.delete(commandId);
+    cancelSelfRetry(commandId);
+  }
+
+  /**
+   * After a backoff, hand `commandId` back to {@link releaseQueuedCommand} -
+   * which re-drives it, or retires it if its replay window has passed - and let
+   * the pump take whatever is at the head.
    *
    * Re-checked at fire time rather than trusted: the scheduler contract allows
    * firing late, and by then the command may have been resolved, discarded or
-   * already re-driven by a reconnect.
+   * already re-driven by a reconnect. LATE is also why the retirement arm has
+   * to be on this path and not only on the drain's: a timer that fires past the
+   * deadline must not send.
    */
   function scheduleSelfRetry(
     commandId: CommandId,
@@ -323,7 +379,7 @@ export function createCommandQueue<TIntent>(
       ) {
         return;
       }
-      blockedUntilRetry.delete(commandId);
+      releaseQueuedCommand(commandId);
       pump();
     });
     selfRetryTimers.set(commandId, timer);
@@ -481,31 +537,7 @@ export function createCommandQueue<TIntent>(
     retryPending(): void {
       for (const record of records) {
         if (record.state === "pending" && record.delivery === "queued") {
-          const retryDeadline = retryDeadlineByCommandId.get(record.commandId);
-          if (
-            retryDeadline !== undefined &&
-            retryDeadline <= options.environment.clock.now()
-          ) {
-            retryDeadlineByCommandId.delete(record.commandId);
-            blockedUntilRetry.delete(record.commandId);
-            // This arm leaves the loop before the cancel below, and a command
-            // that just became `unknown-outcome` has no queued retry left to
-            // drive. The timer would find the wrong delivery and no-op, but it
-            // would stay armed until it fired.
-            cancelSelfRetry(record.commandId);
-            const uncertain = replace(record.commandId, (current) => ({
-              ...current,
-              delivery: "unknown-outcome",
-            }));
-            if (uncertain !== null) options.onUnknownOutcome(uncertain);
-            continue;
-          }
-          blockedUntilRetry.delete(record.commandId);
-          // The external drain supersedes any timer this command was waiting
-          // on. Leaving it armed would be harmless - it re-checks and finds
-          // nothing blocked - but it would also re-arm on the NEXT refusal
-          // from a stale attempt count, so the backoff is reset with the wait.
-          cancelSelfRetry(record.commandId);
+          releaseQueuedCommand(record.commandId);
         }
       }
       pump();
