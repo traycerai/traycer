@@ -116,11 +116,51 @@ type SetPackPolicyVariables = {
   readonly autoDownload: boolean;
 };
 
+type RefreshPackDiscoveryVariables = {
+  readonly packId: string;
+};
+
+type RefreshPackDiscoveryOutcome =
+  | "moved"
+  | "unchanged"
+  | "unreachable"
+  | "unusable";
+
+type RefreshPackDiscoveryRefusalCode =
+  | "discovery-unavailable"
+  | "pack-disabled";
+
+type CheckMutateOptions = {
+  readonly onSuccess?: (response: {
+    readonly result:
+      | { readonly ok: true; readonly outcome: RefreshPackDiscoveryOutcome }
+      | {
+          readonly ok: false;
+          readonly code: RefreshPackDiscoveryRefusalCode;
+          readonly detail: string | null;
+        };
+  }) => void;
+};
+
 const mocks = vi.hoisted(() => {
   const supportByHostId = new Map<string, boolean | null>();
+  // Per-`${hostId}::${method}` override, keyed independently of
+  // `supportByHostId` above: that map drives `useHostMethodSupport`, which the
+  // four-method capability gate consults and which the mock file's original
+  // `useHostSupportsMethod` stub answered by IGNORING its `method` argument
+  // entirely. `providers.refreshPackDiscovery` is gated through
+  // `useHostSupportsMethod` directly (not through the four-method array), so a
+  // mock that cannot vary by method cannot express "host has the version
+  // manager but not the check RPC" at all.
+  const supportByMethodOverride = new Map<string, boolean>();
   let lastSupportArgs: HostMethodSupportArgs | null = null;
   let supportCalls: HostMethodSupportArgs[] = [];
   let defaultSupport: boolean | null = true;
+  let installIsPending = false;
+  let removeIsPending = false;
+  let useIsPending = false;
+  let setPolicyIsPending = false;
+  let checkIsPending = false;
   return {
     installMutate:
       vi.fn<
@@ -141,12 +181,22 @@ const mocks = vi.hoisted(() => {
         (variables: UsePackVersionVariables, options: UseMutateOptions) => void
       >(),
     setPolicyMutate: vi.fn<(variables: SetPackPolicyVariables) => void>(),
+    checkMutate:
+      vi.fn<
+        (
+          variables: RefreshPackDiscoveryVariables,
+          options: CheckMutateOptions,
+        ) => void
+      >(),
     /**
      * Per-host capability map. The gate must consult the *passed* hostId, not an
      * ambient default — regressions would re-introduce scoped-host bugs.
      */
     get supportByHostId() {
       return supportByHostId;
+    },
+    get supportByMethodOverride() {
+      return supportByMethodOverride;
     },
     get lastSupportArgs() {
       return lastSupportArgs;
@@ -169,6 +219,36 @@ const mocks = vi.hoisted(() => {
     set defaultSupport(value: boolean | null) {
       defaultSupport = value;
     },
+    get installIsPending() {
+      return installIsPending;
+    },
+    set installIsPending(value: boolean) {
+      installIsPending = value;
+    },
+    get removeIsPending() {
+      return removeIsPending;
+    },
+    set removeIsPending(value: boolean) {
+      removeIsPending = value;
+    },
+    get useIsPending() {
+      return useIsPending;
+    },
+    set useIsPending(value: boolean) {
+      useIsPending = value;
+    },
+    get setPolicyIsPending() {
+      return setPolicyIsPending;
+    },
+    set setPolicyIsPending(value: boolean) {
+      setPolicyIsPending = value;
+    },
+    get checkIsPending() {
+      return checkIsPending;
+    },
+    set checkIsPending(value: boolean) {
+      checkIsPending = value;
+    },
   };
 });
 
@@ -182,8 +262,12 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
     }
     return mocks.defaultSupport;
   },
-  useHostSupportsMethod: (hostId: string | null) => {
+  useHostSupportsMethod: (hostId: string | null, method: string) => {
     if (hostId === null) return false;
+    const overrideKey = `${hostId}::${method}`;
+    if (mocks.supportByMethodOverride.has(overrideKey)) {
+      return mocks.supportByMethodOverride.get(overrideKey) === true;
+    }
     if (mocks.supportByHostId.has(hostId)) {
       return mocks.supportByHostId.get(hostId) === true;
     }
@@ -196,7 +280,7 @@ vi.mock(
   () => ({
     useProvidersInstallPackVersion: () => ({
       mutate: mocks.installMutate,
-      isPending: false,
+      isPending: mocks.installIsPending,
     }),
   }),
 );
@@ -204,23 +288,33 @@ vi.mock(
 vi.mock("@/hooks/providers/use-providers-remove-pack-version-mutation", () => ({
   useProvidersRemovePackVersion: () => ({
     mutate: mocks.removeMutate,
-    isPending: false,
+    isPending: mocks.removeIsPending,
   }),
 }));
 
 vi.mock("@/hooks/providers/use-providers-use-pack-version-mutation", () => ({
   useProvidersUsePackVersion: () => ({
     mutate: mocks.useMutate,
-    isPending: false,
+    isPending: mocks.useIsPending,
   }),
 }));
 
 vi.mock("@/hooks/providers/use-providers-set-pack-policy-mutation", () => ({
   useProvidersSetPackPolicy: () => ({
     mutate: mocks.setPolicyMutate,
-    isPending: false,
+    isPending: mocks.setPolicyIsPending,
   }),
 }));
+
+vi.mock(
+  "@/hooks/providers/use-providers-refresh-pack-discovery-mutation",
+  () => ({
+    useProvidersRefreshPackDiscovery: () => ({
+      mutate: mocks.checkMutate,
+      isPending: mocks.checkIsPending,
+    }),
+  }),
+);
 
 function version(
   partial: Partial<ProviderPackVersion> & Pick<ProviderPackVersion, "version">,
@@ -278,9 +372,16 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
     mocks.removeMutate.mockReset();
     mocks.useMutate.mockReset();
     mocks.setPolicyMutate.mockReset();
+    mocks.checkMutate.mockReset();
     mocks.supportByHostId.clear();
+    mocks.supportByMethodOverride.clear();
     mocks.lastSupportArgs = null;
     mocks.defaultSupport = true;
+    mocks.installIsPending = false;
+    mocks.removeIsPending = false;
+    mocks.useIsPending = false;
+    mocks.setPolicyIsPending = false;
+    mocks.checkIsPending = false;
   });
 
   it("shows pending when hostId is null (scoped host not ready), not unsupported", () => {
@@ -1029,6 +1130,166 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
       packId: "opencode",
       autoDownload: true,
     });
+  });
+
+  it("hides Check for updates when the host has the version manager but not the discovery RPC", () => {
+    // The discriminating shape: all four PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHODS
+    // answer true (the panel itself renders), while providers.refreshPackDiscovery
+    // answers false. The old mock could not express this at all — its
+    // useHostSupportsMethod stub ignored the method argument entirely.
+    mocks.defaultSupport = true;
+    mocks.supportByMethodOverride.set(
+      "host-1::providers.refreshPackDiscovery",
+      false,
+    );
+    renderPanel({
+      hostId: "host-1",
+      available: [version({ version: "1.0.0" })],
+      managedOverrides: null,
+    });
+
+    expect(screen.getByTestId("provider-pack-version-manager")).toBeTruthy();
+    expect(screen.queryByTestId("provider-pack-discovery-check")).toBeNull();
+  });
+
+  it("shows Check for updates when the host supports the discovery RPC", () => {
+    mocks.defaultSupport = true;
+    mocks.supportByMethodOverride.set(
+      "host-1::providers.refreshPackDiscovery",
+      true,
+    );
+    renderPanel({
+      hostId: "host-1",
+      available: [version({ version: "1.0.0" })],
+      managedOverrides: null,
+    });
+
+    expect(screen.getByTestId("provider-pack-discovery-check")).toBeTruthy();
+  });
+
+  it("disables the check button while another panel action is pending", () => {
+    mocks.installIsPending = true;
+    renderPanel({
+      hostId: "host-1",
+      available: [version({ version: "1.0.0" })],
+      managedOverrides: null,
+    });
+
+    const checkButton = screen.getByTestId("provider-pack-discovery-check");
+    expect(checkButton.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("keeps rows and the auto-download switch enabled while a check is pending, but disables the check button itself", () => {
+    // `isPending: false` on the rows/switch is also the DEFAULT, so that half
+    // alone would be vacuous — asserting the check button IS disabled in the
+    // same render is what proves check.isPending was actually plumbed in and
+    // deliberately excluded from `anyPending`.
+    mocks.checkIsPending = true;
+    renderPanel({
+      hostId: "host-1",
+      available: [
+        version({ version: "1.5.0", installState: { status: "installed" } }),
+      ],
+      managedOverrides: { autoDownload: false },
+    });
+
+    const useButton = screen.getByRole("button", {
+      name: rowActionName("Use", "1.5.0"),
+    });
+    expect(useButton.hasAttribute("disabled")).toBe(false);
+
+    const toggle = screen.getByRole("switch", {
+      name: "Auto-download updates",
+    });
+    expect(toggle.hasAttribute("disabled")).toBe(false);
+
+    const checkButton = screen.getByTestId("provider-pack-discovery-check");
+    expect(checkButton.hasAttribute("disabled")).toBe(true);
+  });
+
+  it.each([
+    { outcome: "moved" as const, expected: "Checked the registry." },
+    { outcome: "unchanged" as const, expected: "Up to date." },
+    {
+      outcome: "unreachable" as const,
+      expected: "Couldn't reach the registry. Try again later.",
+    },
+    {
+      outcome: "unusable" as const,
+      expected:
+        "The registry's answer couldn't be trusted. This pack's update knowledge was cleared until the next successful check.",
+    },
+  ])(
+    "renders the exact notice for the $outcome outcome",
+    async ({ outcome, expected }) => {
+      const user = userEvent.setup();
+      mocks.checkMutate.mockImplementation((_variables, options) => {
+        options.onSuccess?.({ result: { ok: true, outcome } });
+      });
+      renderPanel({
+        hostId: "host-1",
+        available: [version({ version: "1.0.0" })],
+        managedOverrides: null,
+      });
+
+      await user.click(screen.getByTestId("provider-pack-discovery-check"));
+
+      const notice = screen.getByTestId("provider-pack-discovery-check-notice");
+      expect(notice.textContent).toBe(expected);
+    },
+  );
+
+  it.each([
+    {
+      code: "discovery-unavailable" as const,
+      expected: "Update checks aren't available on this host right now.",
+    },
+    {
+      code: "pack-disabled" as const,
+      expected: "Enable this provider to check for updates.",
+    },
+  ])("renders the $code refusal inline", async ({ code, expected }) => {
+    const user = userEvent.setup();
+    mocks.checkMutate.mockImplementation((_variables, options) => {
+      options.onSuccess?.({ result: { ok: false, code, detail: null } });
+    });
+    renderPanel({
+      hostId: "host-1",
+      available: [version({ version: "1.0.0" })],
+      managedOverrides: null,
+    });
+
+    await user.click(screen.getByTestId("provider-pack-discovery-check"));
+
+    const notice = screen.getByTestId("provider-pack-discovery-check-notice");
+    expect(notice.textContent).toBe(expected);
+  });
+
+  it("clears the check notice when another panel action starts", async () => {
+    const user = userEvent.setup();
+    mocks.checkMutate.mockImplementation((_variables, options) => {
+      options.onSuccess?.({ result: { ok: true, outcome: "unchanged" } });
+    });
+    renderPanel({
+      hostId: "host-1",
+      available: [
+        version({ version: "1.5.0", installState: { status: "installed" } }),
+      ],
+      managedOverrides: { autoDownload: false },
+    });
+
+    await user.click(screen.getByTestId("provider-pack-discovery-check"));
+    expect(
+      screen.getByTestId("provider-pack-discovery-check-notice").textContent,
+    ).toBe("Up to date.");
+
+    await user.click(
+      screen.getByRole("switch", { name: "Auto-download updates" }),
+    );
+
+    expect(
+      screen.queryByTestId("provider-pack-discovery-check-notice"),
+    ).toBeNull();
   });
 });
 

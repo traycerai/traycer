@@ -27,7 +27,9 @@ import {
   createVersionManagerPanelToken,
   registerVersionManagerPanel,
 } from "./provider-pack-version-manager-presence";
+import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { useProvidersInstallPackVersion } from "@/hooks/providers/use-providers-install-pack-version-mutation";
+import { useProvidersRefreshPackDiscovery } from "@/hooks/providers/use-providers-refresh-pack-discovery-mutation";
 import { useProvidersRemovePackVersion } from "@/hooks/providers/use-providers-remove-pack-version-mutation";
 import { useProvidersSetPackPolicy } from "@/hooks/providers/use-providers-set-pack-policy-mutation";
 import { useProvidersUsePackVersion } from "@/hooks/providers/use-providers-use-pack-version-mutation";
@@ -37,6 +39,8 @@ import {
   formatSharedWithProvidersLine,
   installPackVersionRefusalMessage,
   isBlockingCertification,
+  packDiscoveryCheckOutcomeNotice,
+  refreshPackDiscoveryRefusalMessage,
   removeResultUserMessage,
   updateBannerDownloadEligibility,
   packVersionUseRefusalMessage,
@@ -48,6 +52,7 @@ import {
   versionShowsInstallFetchAction,
   versionTroubleLine,
   versionUseEligibility,
+  type PackDiscoveryCheckNotice,
   type VersionDeleteEligibility,
   type VersionDownloadEligibility,
   type VersionRowChip,
@@ -164,6 +169,19 @@ export function ProviderPackVersionManagerPanel(
   // Gate against the settings-scoped host only. The hook already returns null
   // when hostId is null (no handshake possible yet).
   const methodSupport = useProviderPackVersionManagerSupport(hostId);
+  // Read unconditionally, beside the gate above, so hook order is fixed. The
+  // BOOLEAN form is right because this control merely hides: an unanswered
+  // handshake reads as absent, the button appears once the manifest arrives,
+  // and nothing is stranded meanwhile.
+  //
+  // Deliberately NOT a member of `PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHODS`.
+  // That array's contract is "all four or none" for the whole panel; a host
+  // that has the version manager and not this one method must keep its version
+  // manager and lose one button.
+  const canCheckForUpdates = useHostSupportsMethod(
+    hostId,
+    "providers.refreshPackDiscovery",
+  );
 
   // This panel's own identity, handed to every mutation it starts so the
   // outcome comes back to THIS panel rather than to whichever panel happens to
@@ -181,6 +199,7 @@ export function ProviderPackVersionManagerPanel(
   const remove = useProvidersRemovePackVersion(panelToken);
   const useVersion = useProvidersUsePackVersion(panelToken);
   const setPolicy = useProvidersSetPackPolicy();
+  const check = useProvidersRefreshPackDiscovery(panelToken);
 
   const [rowNotice, setRowNotice] = useState<RowNotice | null>(null);
   const [bannerNotice, setBannerNotice] = useState<BannerNotice | null>(null);
@@ -190,6 +209,11 @@ export function ProviderPackVersionManagerPanel(
   // was pending, which is most of the time. The pinned banner below renders on
   // exactly the condition that makes a clear-pin refusal possible.
   const [pinNotice, setPinNotice] = useState<BannerNotice | null>(null);
+  // Footer-scoped, and the only notice on this surface that can be GOOD news:
+  // an update check answers "up to date" as often as anything else, so unlike
+  // the row and banner notices it carries a tone rather than being error-only.
+  const [checkNotice, setCheckNotice] =
+    useState<PackDiscoveryCheckNotice | null>(null);
   const [pendingVersion, setPendingVersion] = useState<string | null>(null);
   // The version whose Delete is ARMED — its icon has been clicked once and is
   // now showing a labelled "Delete?" awaiting the second click.
@@ -248,6 +272,7 @@ export function ProviderPackVersionManagerPanel(
     setRowNotice(null);
     setBannerNotice(null);
     setPinNotice(null);
+    setCheckNotice(null);
     setArmedDelete(null);
   }, []);
 
@@ -258,6 +283,32 @@ export function ProviderPackVersionManagerPanel(
     },
     [clearNotice, packId, setPolicy],
   );
+
+  // No `pendingVersion`: a check is about the PACK, and `check.isPending` is
+  // the whole of its pending state. Both arms land here rather than only the
+  // refusal, because an outcome is the only thing this action produces - a
+  // successful check with nothing to say would otherwise look like a button
+  // that did nothing.
+  const onCheckForUpdates = useCallback(() => {
+    clearNotice();
+    check.mutate(
+      { packId },
+      {
+        onSuccess: (response) => {
+          setCheckNotice(
+            response.result.ok
+              ? packDiscoveryCheckOutcomeNotice(response.result.outcome)
+              : {
+                  kind: "error",
+                  message: refreshPackDiscoveryRefusalMessage(
+                    response.result.code,
+                  ),
+                },
+          );
+        },
+      },
+    );
+  }, [check, clearNotice, packId]);
 
   const onDownload = useCallback(
     (version: string) => {
@@ -408,6 +459,13 @@ export function ProviderPackVersionManagerPanel(
     comparePackVersionsDescending(a.version, b.version),
   );
 
+  // `check.isPending` is deliberately NOT a member. Every other action here
+  // mutates the pack, so one in flight is a reason to hold the rest; a check
+  // only reads a head, and it can hold the join window for minutes because the
+  // host answers it from the whole enabled set's poll. Locking Download / Use /
+  // Delete and the auto-download switch for that long - over a read - is the
+  // wrong trade. The check's own button still disables on `anyPending`, so the
+  // exclusion is one-way.
   const anyPending =
     install.isPending ||
     remove.isPending ||
@@ -505,7 +563,12 @@ export function ProviderPackVersionManagerPanel(
       <VersionManagerFooter
         autoDownload={managedVersions.autoDownload}
         policyPending={setPolicy.isPending}
+        canCheckForUpdates={canCheckForUpdates}
+        checkPending={check.isPending}
+        checkDisabled={anyPending || check.isPending}
+        checkNotice={checkNotice}
         onToggleAutoDownload={onToggleAutoDownload}
+        onCheckForUpdates={onCheckForUpdates}
       />
     </section>
   );
@@ -586,30 +649,80 @@ function VersionManagerBanners(props: {
 }
 
 /**
- * The one durable preference on this surface, pinned below the list.
+ * The band below the list: how this pack learns about updates, and how it takes
+ * them. One on-demand action on the left, one durable preference on the right.
  *
  * Outside the scrolling `<ul>` rather than `position: sticky` inside it: the
  * list is a sibling that scrolls its own overflow, so this row is always
  * visible by construction and never overlaps a row it is scrolling past.
+ *
+ * The band used to BE the `<label>`, so the whole width toggled the switch.
+ * Splitting it costs that: the label now wraps only its own text and control.
+ *
+ * `ml-auto` on the label rather than `justify-between` on the row, because the
+ * button's presence is a capability answer that arrives LATE: the capability
+ * hook fails closed until a manifest lands, so a supported host paints this
+ * footer without the button for a beat and then with it. Anchoring the label to
+ * the right edge keeps that flip to one element appearing, instead of the
+ * preference sliding across the band.
  */
 function VersionManagerFooter(props: {
   readonly autoDownload: boolean;
   readonly policyPending: boolean;
+  readonly canCheckForUpdates: boolean;
+  readonly checkPending: boolean;
+  readonly checkDisabled: boolean;
+  readonly checkNotice: PackDiscoveryCheckNotice | null;
   readonly onToggleAutoDownload: (next: boolean) => void;
+  readonly onCheckForUpdates: () => void;
 }): JSX.Element {
   return (
-    <label className="flex w-full shrink-0 cursor-pointer items-center justify-between gap-3 border-t border-border bg-foreground/5 px-4 py-2.5 text-ui-xs text-muted-foreground">
-      <span>Auto-download updates</span>
-      <span className="flex shrink-0 items-center gap-2">
-        {props.policyPending ? <MutedAgentSpinner /> : null}
-        <Switch
-          checked={props.autoDownload}
-          onCheckedChange={props.onToggleAutoDownload}
-          disabled={props.policyPending}
-          aria-label="Auto-download updates"
-        />
-      </span>
-    </label>
+    <div className="flex w-full shrink-0 flex-col gap-1.5 border-t border-border bg-foreground/5 px-4 py-2.5 text-ui-xs text-muted-foreground">
+      <div className="flex w-full items-center gap-3">
+        {props.canCheckForUpdates ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            data-testid="provider-pack-discovery-check"
+            disabled={props.checkDisabled}
+            onClick={props.onCheckForUpdates}
+          >
+            {props.checkPending ? <MutedAgentSpinner /> : null}
+            Check for updates
+          </Button>
+        ) : null}
+        <label className="ml-auto flex shrink-0 cursor-pointer items-center gap-2">
+          <span>Auto-download updates</span>
+          {props.policyPending ? <MutedAgentSpinner /> : null}
+          <Switch
+            checked={props.autoDownload}
+            onCheckedChange={props.onToggleAutoDownload}
+            disabled={props.policyPending}
+            aria-label="Auto-download updates"
+          />
+        </label>
+      </div>
+      {props.checkNotice !== null ? (
+        // A live region, unlike the row and banner notices. Those accompany a
+        // visible change to the thing they are about - a row's buttons, the
+        // banner - whereas a check that answers "Up to date" changes nothing
+        // else on screen, so without an announcement a screen-reader user gets
+        // no answer at all.
+        <p
+          data-testid="provider-pack-discovery-check-notice"
+          role="status"
+          className={cn(
+            "text-ui-xs",
+            props.checkNotice.kind === "error"
+              ? "text-destructive"
+              : "text-muted-foreground",
+          )}
+        >
+          {props.checkNotice.message}
+        </p>
+      ) : null}
+    </div>
   );
 }
 
