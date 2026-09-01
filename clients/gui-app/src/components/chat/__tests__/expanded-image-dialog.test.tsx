@@ -15,6 +15,15 @@ const saveBlobToDiskMock = vi.hoisted(() =>
     Promise.resolve({ name: "generated.png", path: null }),
   ),
 );
+const downloadBlobToDeviceMock = vi.hoisted(() =>
+  vi.fn<(blob: Blob, suggestedName: string) => Promise<SavedFile | null>>(() =>
+    Promise.resolve({ name: "generated.png", path: null }),
+  ),
+);
+/** Whether the shell under test hands files to an OS chooser. */
+const hasShareRoute = vi.hoisted(() => vi.fn<() => boolean>(() => false));
+/** Whether a Download can be honoured at all on that shell. */
+const canDownload = vi.hoisted(() => vi.fn<() => boolean>(() => true));
 const copyImageMock = vi.hoisted(() =>
   vi.fn<(blob: Blob) => Promise<void>>(() => Promise.resolve()),
 );
@@ -22,6 +31,12 @@ const copyImageMock = vi.hoisted(() =>
 vi.mock("@/lib/files/save-blob-to-disk", () => ({
   saveBlobToDisk: (blob: Blob, suggestedName: string) =>
     saveBlobToDiskMock(blob, suggestedName),
+  downloadBlobToDevice: (blob: Blob, suggestedName: string) =>
+    downloadBlobToDeviceMock(blob, suggestedName),
+  // Browser-runtime shape: the shell's own save route IS the download, so no
+  // chooser and no Share control.
+  hasSeparateDownloadRoute: () => hasShareRoute(),
+  canDownloadToDevice: () => canDownload(),
   canOpenSavedFile: () => false,
   openSavedFile: () => Promise.resolve(),
 }));
@@ -71,6 +86,13 @@ function renderOpenDialog(image: ExpandedImageState): void {
 beforeEach(() => {
   saveBlobToDiskMock.mockReset();
   saveBlobToDiskMock.mockResolvedValue({ name: "generated.png", path: null });
+  downloadBlobToDeviceMock.mockReset();
+  downloadBlobToDeviceMock.mockResolvedValue({
+    name: "generated.png",
+    path: null,
+  });
+  hasShareRoute.mockReturnValue(false);
+  canDownload.mockReturnValue(true);
   copyImageMock.mockReset();
   copyImageMock.mockResolvedValue(undefined);
   vi.stubGlobal(
