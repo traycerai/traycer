@@ -710,7 +710,11 @@ describe("registerWindowsCrashDumpCapture", () => {
         platform: "darwin",
         writeRegistry: write,
       }),
-    ).resolves.toEqual({ registered: false, reason: "not windows" });
+    ).resolves.toEqual({
+      registered: false,
+      skipped: true,
+      reason: "not windows",
+    });
     await expect(
       registerWindowsCrashDumpCapture({
         executable: "C:\\dev\\traycer-host.cmd",
@@ -720,6 +724,7 @@ describe("registerWindowsCrashDumpCapture", () => {
       }),
     ).resolves.toEqual({
       registered: false,
+      skipped: true,
       reason: "not a .exe: traycer-host.cmd",
     });
     expect(writes).toEqual([]);
@@ -737,6 +742,7 @@ describe("registerWindowsCrashDumpCapture", () => {
     });
     expect(result).toEqual({
       registered: false,
+      skipped: false,
       reason: "reg.exe: access denied",
     });
     await rm(dir, { recursive: true, force: true });

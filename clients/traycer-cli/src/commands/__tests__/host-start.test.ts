@@ -453,7 +453,11 @@ function makeRunStubs(
     },
     registerCrashDumpCapture: async (executable, dumpDir) => {
       recorded.crashDumpRegistrations.push({ executable, dumpDir });
-      return { registered: false, reason: "injected: no registry in tests" };
+      return {
+        registered: false,
+        skipped: true,
+        reason: "injected: no registry in tests",
+      };
     },
     findCrashReport: async (dir, sinceMs, excludeNames) => {
       recorded.findCrashReportCalls.push({

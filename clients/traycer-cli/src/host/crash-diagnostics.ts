@@ -465,9 +465,24 @@ async function regAdd(args: readonly string[]): Promise<void> {
   });
 }
 
+/**
+ * `skipped` separates "this host does not want a policy" (not Windows, or the
+ * dev `.cmd` wrapper) from "wanted one and could not write it" - only the
+ * latter is worth a warning, and the former happens at every start on macOS
+ * and Linux.
+ */
 export type CrashDumpRegistration =
   | { readonly registered: true; readonly key: string }
-  | { readonly registered: false; readonly reason: string };
+  | {
+      readonly registered: false;
+      readonly skipped: true;
+      readonly reason: string;
+    }
+  | {
+      readonly registered: false;
+      readonly skipped: false;
+      readonly reason: string;
+    };
 
 /**
  * Registers a per-executable WER `LocalDumps` policy for the host under
@@ -486,7 +501,7 @@ export async function registerWindowsCrashDumpCapture(input: {
   readonly writeRegistry: RegistryWriter;
 }): Promise<CrashDumpRegistration> {
   if (input.platform !== "win32") {
-    return { registered: false, reason: "not windows" };
+    return { registered: false, skipped: true, reason: "not windows" };
   }
   // `win32.basename` on purpose, not the host's: the executable is a Windows
   // path by contract, and the POSIX flavour (CI, a developer's Mac) would
@@ -494,7 +509,7 @@ export async function registerWindowsCrashDumpCapture(input: {
   // on it.
   const exe = win32.basename(input.executable);
   if (!/\.exe$/i.test(exe)) {
-    return { registered: false, reason: `not a .exe: ${exe}` };
+    return { registered: false, skipped: true, reason: `not a .exe: ${exe}` };
   }
   const key = `HKCU\\Software\\Microsoft\\Windows\\Windows Error Reporting\\LocalDumps\\${exe}`;
   try {
@@ -536,6 +551,7 @@ export async function registerWindowsCrashDumpCapture(input: {
   } catch (error) {
     return {
       registered: false,
+      skipped: false,
       reason: error instanceof Error ? error.message : String(error),
     };
   }
