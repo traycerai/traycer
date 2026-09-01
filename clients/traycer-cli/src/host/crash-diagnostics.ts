@@ -475,10 +475,11 @@ async function regAdd(args: readonly string[]): Promise<void> {
 }
 
 /**
- * `skipped` separates "this host does not want a policy" (not Windows, or the
- * dev `.cmd` wrapper) from "wanted one and could not write it" - only the
- * latter is worth a warning, and the former happens at every start on macOS
- * and Linux.
+ * `skipped` separates "this host cannot have a policy here" - not Windows, the
+ * dev `.cmd` wrapper, or an unelevated start that may not write the machine
+ * hive - from "could have and failed". Only the second is worth a warning; the
+ * first happens at every start on macOS and Linux, and on every ordinary
+ * Windows start too (see {@link registerWindowsCrashDumpCapture}).
  */
 export type CrashDumpRegistration =
   | { readonly registered: true; readonly key: string }
@@ -494,14 +495,29 @@ export type CrashDumpRegistration =
     };
 
 /**
- * Registers a per-executable WER `LocalDumps` policy for the host under
- * HKCU, so a fail-fast that leaves no stderr and no diagnostic report still
- * leaves a minidump. Idempotent (`/f` overwrites), per-user (no elevation),
- * and never throws: a diagnostics path must not be able to stop the host
- * from starting. Skipped outside Windows and for anything that is not a
- * `.exe` - the `make dev-desktop` host runs behind a `.cmd` wrapper under
- * `node.exe`, and a policy keyed on that would be a policy on every Node
- * process the user runs.
+ * Registers a per-executable WER `LocalDumps` policy for the host, so a
+ * fail-fast that leaves no stderr and no diagnostic report still leaves a
+ * minidump. Idempotent (`/f` overwrites) and never throws: a diagnostics path
+ * must not be able to stop the host from starting. Skipped outside Windows and
+ * for anything that is not a `.exe` - the `make dev-desktop` host runs behind a
+ * `.cmd` wrapper under `node.exe`, and a policy keyed on that would be a policy
+ * on every Node process the user runs.
+ *
+ * **HKLM, and only HKLM.** `LocalDumps` is documented under
+ * `HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\Windows Error Reporting`
+ * (Collecting User-Mode Dumps); the per-user hive is not part of that
+ * contract, and writing there would have been strictly worse than not writing
+ * at all - three `reg add` calls succeed, this function reports
+ * `registered: true`, and WER never consults the key, so the crash the whole
+ * mechanism exists for still produces nothing while the exit-code decoding
+ * sends a reader to an empty directory.
+ *
+ * The cost is that the write needs elevation, which an ordinary `host start`
+ * does not have. A denied write is therefore a SKIP, not a failure: it is the
+ * expected outcome on a normal user's machine and must not warn at every
+ * start. Where it does land - an elevated shell, a service running as
+ * LocalSystem, or an install step that adopts this later - the policy is
+ * machine-wide and the next fail-fast leaves a dump.
  */
 export async function registerWindowsCrashDumpCapture(input: {
   readonly executable: string;
@@ -520,7 +536,7 @@ export async function registerWindowsCrashDumpCapture(input: {
   if (!/\.exe$/i.test(exe)) {
     return { registered: false, skipped: true, reason: `not a .exe: ${exe}` };
   }
-  const key = `HKCU\\Software\\Microsoft\\Windows\\Windows Error Reporting\\LocalDumps\\${exe}`;
+  const key = `HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\LocalDumps\\${exe}`;
   try {
     // The folder is created here rather than trusted to WER: WER creates a
     // missing DumpFolder, but only if the parent exists, and the data dir's
@@ -558,10 +574,18 @@ export async function registerWindowsCrashDumpCapture(input: {
     ]);
     return { registered: true, key };
   } catch (error) {
+    // A SKIP, not a failure. The machine hive is the only one WER reads and
+    // an ordinary `host start` is not elevated, so a denied write is the
+    // expected outcome rather than something gone wrong - warning on it would
+    // put a line in every unelevated start's log forever. The reason still
+    // carries the underlying message, so an elevated run that fails for some
+    // other cause is not silent, just quiet.
     return {
       registered: false,
-      skipped: false,
-      reason: error instanceof Error ? error.message : String(error),
+      skipped: true,
+      reason: `HKLM LocalDumps needs an elevated start: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
     };
   }
 }

@@ -637,8 +637,12 @@ describe("findCrashReportSince", () => {
 // ---------------------------------------------------------------------------
 
 describe("registerWindowsCrashDumpCapture", () => {
+  // The MACHINE hive, spelled out here rather than imported, so a change of
+  // hive has to be a deliberate edit in two places. WER reads `LocalDumps`
+  // from HKLM only; a per-user key would let all three writes succeed while
+  // no dump is ever produced.
   const LOCAL_DUMPS =
-    "HKCU\\Software\\Microsoft\\Windows\\Windows Error Reporting\\LocalDumps";
+    "HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\LocalDumps";
 
   function recordingWriter(): {
     readonly writes: string[][];
@@ -653,7 +657,7 @@ describe("registerWindowsCrashDumpCapture", () => {
     };
   }
 
-  it("writes DumpFolder, a minidump DumpType and a bounded DumpCount under the exe's HKCU LocalDumps key", async () => {
+  it("writes DumpFolder, a minidump DumpType and a bounded DumpCount under the exe's HKLM LocalDumps key", async () => {
     const dir = await mkdtemp(join(tmpdir(), "crash-dumps-"));
     const dumpDir = crashDumpsDirFor(dir);
     const { writes, write } = recordingWriter();
@@ -730,7 +734,7 @@ describe("registerWindowsCrashDumpCapture", () => {
     expect(writes).toEqual([]);
   });
 
-  it("never throws: a failing reg write is reported, not raised", async () => {
+  it("never throws, and reports a denied machine-hive write as a SKIP rather than a failure", async () => {
     const dir = await mkdtemp(join(tmpdir(), "crash-dumps-"));
     const result = await registerWindowsCrashDumpCapture({
       executable: "traycer-host.exe",
@@ -740,10 +744,15 @@ describe("registerWindowsCrashDumpCapture", () => {
         throw new Error("reg.exe: access denied");
       },
     });
+    // `skipped` is the load-bearing half: HKLM needs elevation and an
+    // ordinary `host start` does not have it, so this is the NORMAL outcome
+    // on a user's machine. Reporting it as a failure would put a warning in
+    // every unelevated start's log forever - which is why the caller only
+    // warns on `skipped: false`. The cause still travels in the reason.
     expect(result).toEqual({
       registered: false,
-      skipped: false,
-      reason: "reg.exe: access denied",
+      skipped: true,
+      reason: "HKLM LocalDumps needs an elevated start: reg.exe: access denied",
     });
     await rm(dir, { recursive: true, force: true });
   });
