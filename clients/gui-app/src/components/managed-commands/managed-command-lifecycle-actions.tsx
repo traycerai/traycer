@@ -83,6 +83,7 @@ export function ManagedCommandLifecycleActions(
         }}
       />
       <ConfirmDestructiveDialog
+        blockedReason={null}
         open={confirmingDelete}
         onOpenChange={setConfirmingDelete}
         title={`Delete ${managedCommandTitle(command)}?`}

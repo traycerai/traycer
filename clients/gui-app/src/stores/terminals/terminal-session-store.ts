@@ -1,5 +1,10 @@
 import { create, type StoreApi, type UseBoundStore } from "zustand";
 import { v4 as uuidv4 } from "uuid";
+import {
+  createGenerationGuard,
+  guardHandler,
+  type GenerationGuard,
+} from "@traycer-clients/shared/replica-runtime";
 import type {
   TerminalSubscribeClientFrame,
   TerminalSubscribeViewer,
@@ -369,39 +374,32 @@ function currentCwdFromSession(
   return session.currentCwd.length === 0 ? null : session.currentCwd;
 }
 
+/**
+ * Every frame this store accepts, made inert once `generation` is retired.
+ *
+ * The check itself is the shared {@link guardHandler} - the same one the chat
+ * twin's twenty-seven handlers go through - so the rule that a superseded
+ * socket's frames never reach the live store is written once rather than once
+ * per plane. What stays here is the enumeration of THIS plane's frames, which
+ * is the part a bulk mapper cannot do without inventing a type-level construct
+ * nobody can read at the call site.
+ */
 function bindStreamCallbacks(
   callbacks: TerminalStreamCallbacks,
-  isCurrent: () => boolean,
+  guard: GenerationGuard,
+  generation: number,
 ): TerminalStreamCallbacks {
+  const guarded = <TArgs extends unknown[]>(
+    handler: (...args: TArgs) => void,
+  ): ((...args: TArgs) => void) => guardHandler(guard, generation, handler);
   return {
-    onSnapshot: (frame, scrollback) => {
-      if (!isCurrent()) return;
-      callbacks.onSnapshot(frame, scrollback);
-    },
-    onData: (frame, chunk) => {
-      if (!isCurrent()) return;
-      callbacks.onData(frame, chunk);
-    },
-    onResized: (frame) => {
-      if (!isCurrent()) return;
-      callbacks.onResized(frame);
-    },
-    onExit: (frame) => {
-      if (!isCurrent()) return;
-      callbacks.onExit(frame);
-    },
-    onActionAck: (frame) => {
-      if (!isCurrent()) return;
-      callbacks.onActionAck(frame);
-    },
-    onSessionUpdated: (frame) => {
-      if (!isCurrent()) return;
-      callbacks.onSessionUpdated(frame);
-    },
-    onConnectionStatus: (status, reason) => {
-      if (!isCurrent()) return;
-      callbacks.onConnectionStatus(status, reason);
-    },
+    onSnapshot: guarded(callbacks.onSnapshot),
+    onData: guarded(callbacks.onData),
+    onResized: guarded(callbacks.onResized),
+    onExit: guarded(callbacks.onExit),
+    onActionAck: guarded(callbacks.onActionAck),
+    onSessionUpdated: guarded(callbacks.onSessionUpdated),
+    onConnectionStatus: guarded(callbacks.onConnectionStatus),
   };
 }
 
@@ -414,7 +412,7 @@ export function createTerminalSessionStore(
   let viewer: TerminalSubscribeViewer = "presentation";
   // Bumped before tearing down a subscriber so its close-driven status
   // callback cannot map a deliberate viewer-intent reopen to "lost".
-  let streamGeneration = 0;
+  const streamGuard = createGenerationGuard();
   // After a viewer-intent reopen of an already-open session, ignore the
   // replacement stream's connecting/reconnecting statuses so the tile does
   // not flash a reconnect overlay (keep-warm reattach stays instant).
@@ -803,20 +801,17 @@ export function createTerminalSessionStore(
     };
 
     const attachStream = (cols: number, rows: number): void => {
-      const generation = streamGeneration;
+      const generation = streamGuard.current();
       streamClient = options.streamClientFactory({
         sessionId: options.sessionId,
         cols,
         rows,
-        callbacks: bindStreamCallbacks(
-          callbacks,
-          () => generation === streamGeneration,
-        ),
+        callbacks: bindStreamCallbacks(callbacks, streamGuard, generation),
         viewer,
       });
     };
 
-    streamGeneration = 1;
+    streamGuard.next();
     attachStream(options.cols, options.rows);
 
     const setViewer = (nextViewer: TerminalSubscribeViewer): void => {
@@ -830,7 +825,7 @@ export function createTerminalSessionStore(
       resetAckAccounting();
       // Invalidate before close() so the outgoing client's closed status
       // cannot mark this still-alive session lost.
-      streamGeneration += 1;
+      streamGuard.next();
       closeStreamClient();
       ignoreTransientStatus = wasOpen;
       attachStream(state.requestedCols, state.requestedRows);
@@ -946,7 +941,12 @@ export function createTerminalSessionStore(
         const state = get();
         if (state.status === "exited" || state.status === "reaped") return;
         resetAckAccounting();
-        streamGeneration += 1;
+        // Upstream bumped a bare `streamGeneration` counter here; this branch
+        // replaced that counter with `streamGuard`, so the bump is its
+        // `next()`. The ORDER is upstream's and is load-bearing for the same
+        // reason `setViewer` states it: invalidate before `close()`, or the
+        // outgoing client's closed status marks this still-alive session lost.
+        streamGuard.next();
         closeStreamClient();
         set({
           connectionStatus: "connecting",

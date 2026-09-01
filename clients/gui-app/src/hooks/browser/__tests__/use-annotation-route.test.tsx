@@ -59,6 +59,9 @@ function chatProjection(
     userId: null,
     hostId,
     isTitleEditedByUser: false,
+    // Neutral scaffolding: this suite exercises annotation-route resolution,
+    // not doc residency.
+    docResident: false,
     settings: null,
     archivedAt,
   };

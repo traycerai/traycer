@@ -51,6 +51,10 @@ import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messen
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { useInlineRename } from "@/hooks/ui/use-inline-rename";
 import { updateEpicTitleInCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/cache";
+import {
+  settleDetachedEpicTitleCommit,
+  settleEpicTitleWrite,
+} from "@/lib/epic-title-write-settlement";
 import { useTabLeaderModifierForIndex } from "@/providers/keybinding-context";
 import { LeaderDigitBadge } from "@/components/ui/leader-digit-badge";
 import {
@@ -225,27 +229,11 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
     [resolvedTabName, tab],
   );
   const commitEpicTitle = useCallback(
-    (next: string) => {
+    async (next: string) => {
       if (tab.kind !== "epic") return;
       const epicId = tab.epicId;
       const tabHostId = tab.hostId;
       const handle = getOpenEpicRegistry().peek(epicId);
-      // Optimistic overlay for instant feedback. This used to capture the
-      // prior title and write it back on failure; the overlay makes that pair
-      // unnecessary, because the patch sits OVER the authoritative value and
-      // dropping it reveals whatever the host actually has. Do not reintroduce
-      // a write-back - a second `setEpicTitle` on the failure path would
-      // persist the old title as a fresh local mutation rather than reverting
-      // to the server's.
-      const requestId =
-        handle?.store.getState().beginEpicTitleMutation(next) ?? null;
-      // "landed" keeps the patch applied until the doc echoes the new title
-      // back (the ack is proof the host has it); "failed" drops it, revealing
-      // the authoritative value. Both keep the pending map bounded.
-      const retire = (outcome: "landed" | "failed") => {
-        if (requestId === null) return;
-        handle?.store.getState().retirePendingMutation(requestId, outcome);
-      };
       // The header strip is app-global and not guaranteed to sit inside a
       // HostRuntimeProvider, so reach the host client through the snapshot
       // rather than a render-time hook. It is the app-wide client, already
@@ -262,9 +250,31 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
       // where the epic actually lives. `null` (no live session) keeps the
       // app-wide client, which is all this surface ever had.
       const client = epicRenameClient(tabHostId);
+      if (handle !== null) {
+        const hostId = client?.getActiveHostId() ?? null;
+        const userId = client?.getRequestContextUserId() ?? null;
+        const state = handle.store.getState();
+        const commandId = await state.enqueueWriteCommand({
+          kind: "update-epic-title",
+          title: next,
+          updatedAt: Date.now(),
+        });
+        if (commandId === null) return;
+        settleEpicTitleWrite(state.waitForWriteCommand(commandId), {
+          onCommitted: () => {
+            if (userId === null) return;
+            updateEpicTitleInCloudTaskCaches(
+              queryClient,
+              { hostId, userId },
+              epicId,
+              next,
+            );
+          },
+          source: "Epic tabs",
+        });
+        return;
+      }
       if (client === null) {
-        // No RPC ever fired, so nothing can land this stamp - drop it.
-        retire("failed");
         reportableErrorToast(
           "Couldn't reach the host to rename the epic.",
           undefined,
@@ -279,15 +289,17 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
       }
       const hostId = client.getActiveHostId();
       const userId = client.getRequestContextUserId();
-      void client
+      // RETURNED, not voided: a two-arm `.then` does not catch what its own
+      // handlers throw, so the cache update below - and the toast helper in the
+      // other arm - had no terminal handler at all. Returning the chain routes
+      // that into this callback's own promise, which the commit site now
+      // settles.
+      return client
         .request("epic.updateTitle", {
           epicDelta: { id: epicId, title: next, updatedAt: Date.now() },
         })
         .then(
           () => {
-            // Before the early return below - a null user id means there is no
-            // cloud cache to patch, not that the mutation is still pending.
-            retire("landed");
             if (userId === null) return;
             updateEpicTitleInCloudTaskCaches(
               queryClient,
@@ -297,7 +309,6 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
             );
           },
           (error: unknown) => {
-            retire("failed");
             if (error instanceof HostRpcError) {
               toastFromHostError(error, "Couldn't rename epic.");
             } else {
@@ -321,7 +332,13 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
     // "Untitled task" fallback into the input and persist it as a real title.
     value: resolvedTabName,
     canEdit: canEditTitle,
-    onCommit: commitEpicTitle,
+    // Wrapped: the property is declared void-returning and the commit is a
+    // round trip now. Fire-and-forget, but SETTLED - the enqueue inside can
+    // reject on a real bridge fault, and unhandled that is a rename which
+    // silently did nothing.
+    onCommit: (next: string) => {
+      settleDetachedEpicTitleCommit(commitEpicTitle(next), "Epic tabs");
+    },
   });
 
   const activateTab = useCallback(() => {
