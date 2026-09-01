@@ -131,6 +131,72 @@ function armedVersionWithin(
 }
 
 /**
+ * WHERE a check was dispatched from — same shape and same reason as
+ * {@link ArmedDelete}.
+ *
+ * An update check is the longest-lived request on this surface by a wide
+ * margin: it can join the host's in-flight discovery tick, so one press is
+ * budgeted `PROVIDER_PACK_DISCOVERY_CHECK_TIMEOUT_MS` — minutes, not seconds.
+ * Over that window the panel it was pressed in can stop being the panel it
+ * comes back to, in two independent ways, because it is mounted UNKEYED under
+ * a settings scope: the scope's host can AUTO-FOLLOW to another machine, and
+ * the popover can be re-pointed at another pack. Neither remounts this
+ * component, so neither resets a bare notice.
+ *
+ * Without the identity, host X's "Couldn't reach the registry" lands in host
+ * Y's footer, and pack A's still-running check keeps pack B's button disabled.
+ * Both read as a statement about what the user is looking at now.
+ */
+type CheckIdentity = {
+  readonly hostId: string | null;
+  readonly packId: string;
+};
+
+/** Whether an identity captured at dispatch is still the one on screen. */
+function checkIdentityMatches(
+  identity: CheckIdentity | null,
+  hostId: string | null,
+  packId: string,
+): boolean {
+  if (identity === null) return false;
+  return identity.hostId === hostId && identity.packId === packId;
+}
+
+/**
+ * Whether the check still running is the one THIS host and pack dispatched.
+ *
+ * A module-level predicate rather than an inline `&&` for the same reason
+ * `armedVersionWithin` is one: the panel body is at its complexity ceiling, and
+ * this is a fact about an identity, not about rendering.
+ */
+function checkIsPendingWithin(
+  identity: CheckIdentity | null,
+  isPending: boolean,
+  hostId: string | null,
+  packId: string,
+): boolean {
+  if (!isPending) return false;
+  return checkIdentityMatches(identity, hostId, packId);
+}
+
+/** The check notice, but only while the panel still shows the host and pack it answers about. */
+function checkNoticeWithin(
+  scoped: ScopedCheckNotice | null,
+  hostId: string | null,
+  packId: string,
+): PackDiscoveryCheckNotice | null {
+  if (scoped === null) return null;
+  if (!checkIdentityMatches(scoped.identity, hostId, packId)) return null;
+  return scoped.notice;
+}
+
+/** A check outcome plus the identity it is an answer about. */
+type ScopedCheckNotice = {
+  readonly identity: CheckIdentity;
+  readonly notice: PackDiscoveryCheckNotice;
+};
+
+/**
  * Per-pack version manager panel (B5-T2).
  *
  * Three regions, in the order a reader needs them: what is true of the pack
@@ -208,10 +274,21 @@ export function ProviderPackVersionManagerPanel(
   // exactly the condition that makes a clear-pin refusal possible.
   const [pinNotice, setPinNotice] = useState<BannerNotice | null>(null);
   // Footer-scoped, and the only notice on this surface that can be GOOD news:
-  // an update check answers "up to date" as often as anything else, so unlike
-  // the row and banner notices it carries a tone rather than being error-only.
-  const [checkNotice, setCheckNotice] =
-    useState<PackDiscoveryCheckNotice | null>(null);
+  // a check answers neutrally as often as not, so unlike the row and banner
+  // notices it carries a tone rather than being error-only.
+  //
+  // Carries the host and pack it is an answer ABOUT, and is read through
+  // `checkNoticeWithin` — the same derived-identity-match shape `armedDelete`
+  // uses, for the same auto-follow reason, and here also for a pack change.
+  const [checkNotice, setCheckNotice] = useState<ScopedCheckNotice | null>(
+    null,
+  );
+  // The identity the in-flight check was dispatched FOR, so `check.isPending`
+  // — which belongs to the mutation, not to any one pack — only ever disables
+  // the button that started it.
+  const [checkInFlight, setCheckInFlight] = useState<CheckIdentity | null>(
+    null,
+  );
   const [pendingVersion, setPendingVersion] = useState<string | null>(null);
   // The version whose Delete is ARMED — its icon has been clicked once and is
   // now showing a labelled "Delete?" awaiting the second click.
@@ -289,12 +366,40 @@ export function ProviderPackVersionManagerPanel(
   // that did nothing.
   const onCheckForUpdates = useCallback(() => {
     clearNotice();
+    // Captured at DISPATCH, not read at delivery: by the time this answers,
+    // `hostId` and `packId` may name a different panel (see `CheckIdentity`).
+    // Stamping the result means a stale one is filtered on render instead of
+    // overwriting an identity it says nothing about.
+    const identity: CheckIdentity = { hostId, packId };
+    setCheckInFlight(identity);
     check.mutate(
       { packId },
       {
+        // Clears the slot only while it still holds THIS dispatch, so a
+        // callback that no longer owns it cannot re-enable a button whose
+        // check is still running.
+        //
+        // Unreachable today, and deliberately not left resting on that:
+        // `MutationObserver.mutate` overwrites its single `#mutateOptions`
+        // and `removeObserver`s the superseded mutation, and `#notify` is
+        // only ever reached from that observer list - so a second press
+        // silently drops the first press's callbacks rather than racing
+        // them. That is a fact about @tanstack/query-core, not about this
+        // panel, and this slot is the panel's. One line up, `onSuccess`
+        // already declines to rest on it for the same reason.
+        //
+        // REFERENCE equality, not `checkIdentityMatches`: two dispatches for
+        // the same host and pack are value-equal but are not the same
+        // request, so a value comparison would let a re-pointed-away-and-back
+        // A's settle clear the slot the SECOND A owns - the bug this guards.
+        onSettled: () =>
+          setCheckInFlight((current) =>
+            current === identity ? null : current,
+          ),
         onSuccess: (response) => {
-          setCheckNotice(
-            response.result.ok
+          setCheckNotice({
+            identity,
+            notice: response.result.ok
               ? packDiscoveryCheckOutcomeNotice(response.result.outcome)
               : {
                   kind: "error",
@@ -302,11 +407,11 @@ export function ProviderPackVersionManagerPanel(
                     response.result.code,
                   ),
                 },
-          );
+          });
         },
       },
     );
-  }, [check, clearNotice, packId]);
+  }, [check, clearNotice, hostId, packId]);
 
   const onDownload = useCallback(
     (version: string) => {
@@ -470,6 +575,17 @@ export function ProviderPackVersionManagerPanel(
     useVersion.isPending ||
     setPolicy.isPending;
 
+  // Both scoped to the identity that DISPATCHED the check, so a request still
+  // in flight for another host or pack neither speaks for this one nor holds
+  // its button down.
+  const visibleCheckNotice = checkNoticeWithin(checkNotice, hostId, packId);
+  const checkPendingHere = checkIsPendingWithin(
+    checkInFlight,
+    check.isPending,
+    hostId,
+    packId,
+  );
+
   return (
     <section
       data-testid="provider-pack-version-manager"
@@ -562,9 +678,9 @@ export function ProviderPackVersionManagerPanel(
         autoDownload={managedVersions.autoDownload}
         policyPending={setPolicy.isPending}
         canCheckForUpdates={canCheckForUpdates}
-        checkPending={check.isPending}
-        checkDisabled={anyPending || check.isPending}
-        checkNotice={checkNotice}
+        checkPending={checkPendingHere}
+        checkDisabled={anyPending || checkPendingHere}
+        checkNotice={visibleCheckNotice}
         onToggleAutoDownload={onToggleAutoDownload}
         onCheckForUpdates={onCheckForUpdates}
       />
@@ -678,7 +794,16 @@ function VersionManagerFooter(props: {
 }): JSX.Element {
   return (
     <div className="flex w-full shrink-0 flex-col gap-1.5 border-t border-border bg-foreground/5 px-4 py-2.5 text-ui-xs text-muted-foreground">
-      <div className="flex w-full items-center gap-3">
+      {/*
+        `flex-wrap` because nothing in this row can give width back: the Button
+        primitive is `shrink-0 whitespace-nowrap` and the label is `shrink-0`
+        too, so on the narrow-viewport popover (`max-w-safe-dvw` minus this
+        band's padding) two labels, a switch and the gaps exceed the line and
+        the popover's `overflow-hidden` CLIPS a control rather than adapting.
+        Wrapping drops the label to a second line instead; the right-edge
+        clustering below is unchanged whenever both do fit.
+      */}
+      <div className="flex w-full flex-wrap items-center gap-x-3 gap-y-2">
         {props.canCheckForUpdates ? (
           <Button
             type="button"
@@ -739,7 +864,7 @@ function VersionManagerFooter(props: {
  * region inserted into the DOM together with its first content is the case
  * assistive tech most reliably misses. That matters more here than for the row
  * and banner notices, which accompany a visible change to the thing they are
- * about - a row's buttons, the banner. A check that answers "Up to date."
+ * about - a row's buttons, the banner. A check that answers "No changes found."
  * changes nothing else on screen, so a missed announcement leaves a
  * screen-reader user with no answer at all.
  *

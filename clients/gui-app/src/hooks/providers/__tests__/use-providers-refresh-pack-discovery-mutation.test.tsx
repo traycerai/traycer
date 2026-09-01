@@ -129,11 +129,11 @@ describe("useProvidersRefreshPackDiscovery response budget", () => {
     // here ever runs it against `providers.refreshPackDiscovery`.
     //
     // It reads like a tautology today because the row imports the constant.
-    // It is not. Edit the row to `7 * 60 * 1000` - a plausible "give it more
+    // It is not. Edit the row to `12 * 60 * 1000` - a plausible "give it more
     // room" change that forgets the shared constant - and without this line
     // EVERY suite stays green while EVERY real click rejects with "does not
-    // permit response timeout 360000": the mocked-client test still sees the
-    // hook pass the constant, the floor below still passes (420000 > 30000),
+    // permit response timeout 660000": the mocked-client test still sees the
+    // hook pass the constant, the floor below still passes (720000 > 30000),
     // and the sizing test reads the constant, not the row. Do not remove it
     // again on the grounds that it cannot fail.
     //
@@ -160,20 +160,30 @@ describe("useProvidersRefreshPackDiscovery response budget", () => {
     //
     // This pins the FLOOR, not the derivation: gui-app is OSS and cannot
     // import the internal `PROVIDERS.json` pack count or the host's registry
-    // timeout constant, so the three factors below are forced literals fixed
-    // at today's pack count (15). A 16th pack raises the correct value past
-    // this floor rather than invalidating it, so this stays
+    // timeout constant, so the factors below are forced literals fixed at
+    // today's pack count (15). A 16th pack raises the correct value past this
+    // floor rather than invalidating it, so this stays
     // `toBeGreaterThanOrEqual` and does not need to move when the pack count
     // does. The internal repo pins the other half - that `PROVIDERS.json`
     // still has exactly this many packs - at
     // `traycer-host/src/domain/providers/__tests__/provider-pack-count-fits-gui-discovery-check-budget.test.ts`.
+    //
+    // FOUR requests per pack, not two: `readLiveHead` calls `getSigned` twice
+    // (generation pointer, then head), and each `getSigned` fetches the object
+    // AND its `<path>.minisig` sequentially, each under its own timeout. The
+    // signature half lives inside the transport, so it is invisible at the
+    // call sites - this pin encoded the 2x-undersized figure until the
+    // constant was corrected, which is precisely why the factor is spelled out
+    // here rather than folded into one number.
     const MANAGED_PACK_COUNT = 15; // traycer-host/resources/providers/PROVIDERS.json
-    const REGISTRY_GETS_PER_PACK = 2; // pointer read, then a conditional head read
-    const REGISTRY_METADATA_TIMEOUT_MS = 10_000; // the registry transport's own ceiling
+    const SIGNED_READS_PER_PACK = 2; // reader.ts: generation pointer, then head
+    const REQUESTS_PER_SIGNED_READ = 2; // registry-transport.ts: object + .minisig
+    const REGISTRY_METADATA_TIMEOUT_MS = 10_000; // per-request transport ceiling
 
     expect(PROVIDER_PACK_DISCOVERY_CHECK_TIMEOUT_MS).toBeGreaterThanOrEqual(
       MANAGED_PACK_COUNT *
-        REGISTRY_GETS_PER_PACK *
+        SIGNED_READS_PER_PACK *
+        REQUESTS_PER_SIGNED_READ *
         REGISTRY_METADATA_TIMEOUT_MS,
     );
   });

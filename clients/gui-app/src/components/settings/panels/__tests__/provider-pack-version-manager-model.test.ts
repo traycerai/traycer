@@ -628,7 +628,7 @@ describe("labels and helpers", () => {
     });
     expect(packDiscoveryCheckOutcomeNotice("unchanged")).toEqual({
       kind: "info",
-      message: "Up to date.",
+      message: "No changes found.",
     });
     expect(packDiscoveryCheckOutcomeNotice("unreachable")).toEqual({
       kind: "error",

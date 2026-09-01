@@ -534,9 +534,14 @@ export type PackDiscoveryCheckNotice = {
  * refetched from `providers.list` on success, are the only things on this
  * surface that say a newer version exists.
  *
- * `unchanged` is also what a never-published pack reads as: the registry was
- * reached and answered, and under the four-value enum "up to date" is the
- * honest reading.
+ * `unchanged` is NEUTRAL for the mirror-image reason, and this is the one that
+ * is easy to get wrong twice. It means the registry's head did not move - NOT
+ * that nothing newer exists. A pack pinned to an older version has
+ * `updateAvailable` populated and its head perfectly still, so "Up to date."
+ * would render directly under a visible banner naming the version you do not
+ * have. `unchanged` is also what a never-published pack reads as. So the copy
+ * reports what the CHECK did and lets the banner speak for the versions; do
+ * not "improve" it back into a verdict about being current.
  *
  * The two failures are not interchangeable and do not share a sentence.
  * `unreachable` leaves knowledge in place, so it invites a retry; `unusable`
@@ -553,7 +558,7 @@ export function packDiscoveryCheckOutcomeNotice(
     case "moved":
       return { kind: "info", message: "Checked the registry." };
     case "unchanged":
-      return { kind: "info", message: "Up to date." };
+      return { kind: "info", message: "No changes found." };
     case "unreachable":
       return {
         kind: "error",

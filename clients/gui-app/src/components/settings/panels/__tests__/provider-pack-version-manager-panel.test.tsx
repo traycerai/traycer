@@ -1,9 +1,11 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   ProviderManagedVersions,
   ProviderPackVersion,
+  ProvidersRefreshPackDiscoveryRequest,
+  ProvidersRefreshPackDiscoveryResult,
 } from "@traycer/protocol/host/provider-schemas";
 import { ProviderPackVersionManagerPanel } from "@/components/settings/panels/provider-pack-version-manager-panel";
 import { PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHODS } from "@/components/settings/panels/provider-pack-version-manager-capability";
@@ -116,30 +118,15 @@ type SetPackPolicyVariables = {
   readonly autoDownload: boolean;
 };
 
-type RefreshPackDiscoveryVariables = {
-  readonly packId: string;
-};
-
-type RefreshPackDiscoveryOutcome =
-  | "moved"
-  | "unchanged"
-  | "unreachable"
-  | "unusable";
-
-type RefreshPackDiscoveryRefusalCode =
-  | "discovery-unavailable"
-  | "pack-disabled";
-
+// Derived from the protocol rather than restated. The local unions this
+// replaces would have kept compiling after an enum or field change on the wire
+// while silently no longer describing it - which is the one thing a mock of a
+// wire-shaped call must not do.
 type CheckMutateOptions = {
   readonly onSuccess?: (response: {
-    readonly result:
-      | { readonly ok: true; readonly outcome: RefreshPackDiscoveryOutcome }
-      | {
-          readonly ok: false;
-          readonly code: RefreshPackDiscoveryRefusalCode;
-          readonly detail: string | null;
-        };
+    readonly result: ProvidersRefreshPackDiscoveryResult;
   }) => void;
+  readonly onSettled?: () => void;
 };
 
 const mocks = vi.hoisted(() => {
@@ -188,7 +175,7 @@ const mocks = vi.hoisted(() => {
     checkMutate:
       vi.fn<
         (
-          variables: RefreshPackDiscoveryVariables,
+          variables: ProvidersRefreshPackDiscoveryRequest,
           options: CheckMutateOptions,
         ) => void
       >(),
@@ -377,6 +364,17 @@ function renderPanel(options: {
 function rowActionName(label: string, version: string): string {
   return `${label} ${version}`;
 }
+
+/**
+ * The check control is queried BY ROLE AND NAME, so these tests also fail if
+ * its accessible name regresses.
+ *
+ * The notice it produces is the opposite case and stays on `getByTestId`: the
+ * visible notice is deliberately `aria-hidden` (the sr-only live region does
+ * the announcing), so no role or text query can reach it — and its message is
+ * intentionally in the DOM twice, which would make `getByText` throw.
+ */
+const CHECK_BUTTON_NAME = "Check for updates";
 
 describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
   afterEach(() => {
@@ -1162,7 +1160,9 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
     });
 
     expect(screen.getByTestId("provider-pack-version-manager")).toBeTruthy();
-    expect(screen.queryByTestId("provider-pack-discovery-check")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: CHECK_BUTTON_NAME }),
+    ).toBeNull();
     // F3: with the button absent the label must keep the band's ORIGINAL
     // layout — every host older than this release, for as long as it stays
     // older.
@@ -1178,6 +1178,11 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
     expect(label?.classList.contains("w-full")).toBe(true);
     expect(label?.classList.contains("justify-between")).toBe(true);
     expect(label?.classList.contains("ml-auto")).toBe(false);
+    // The row must be able to WRAP. Nothing in it can give width back — the
+    // Button primitive is `shrink-0 whitespace-nowrap` and the label is
+    // `shrink-0` — so without this the popover's `overflow-hidden` clips a
+    // control on a narrow viewport instead of reflowing.
+    expect(label?.parentElement?.classList.contains("flex-wrap")).toBe(true);
   });
 
   it("shows Check for updates when the host supports the discovery RPC, and clusters the auto-download row against the right edge", () => {
@@ -1196,7 +1201,9 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
       managedOverrides: null,
     });
 
-    expect(screen.getByTestId("provider-pack-discovery-check")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: CHECK_BUTTON_NAME }),
+    ).toBeTruthy();
     // F3: with the button present the label clusters right; the switch never
     // moves, only the label's text does.
     const label = screen
@@ -1208,6 +1215,168 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
     // would also match a `sm:justify-between` someone adds later.
     expect(label?.classList.contains("w-full")).toBe(false);
     expect(label?.classList.contains("justify-between")).toBe(false);
+    // Right-edge clustering and wrapping are not alternatives: the row wraps
+    // in BOTH branches, and this is the branch where it has two children to
+    // fit rather than one.
+    expect(label?.parentElement?.classList.contains("flex-wrap")).toBe(true);
+  });
+
+  it.each([
+    {
+      label: "pack",
+      next: { hostId: "host-1", packId: "codex" },
+    },
+    {
+      label: "host",
+      next: { hostId: "host-2", packId: "opencode" },
+    },
+  ])(
+    "drops a check result that lands after the panel changed $label",
+    async ({ next }) => {
+      const user = userEvent.setup();
+      // A check is budgeted minutes because it can join the host's whole
+      // discovery tick. Over that window this unkeyed panel can be re-pointed
+      // at another pack, or auto-follow to another host, without remounting.
+      const deliver: Array<
+        (response: {
+          readonly result: ProvidersRefreshPackDiscoveryResult;
+        }) => void
+      > = [];
+      mocks.checkMutate.mockImplementation((_variables, options) => {
+        if (options.onSuccess !== undefined) deliver.push(options.onSuccess);
+      });
+
+      const { rerender } = render(
+        <ProviderPackVersionManagerPanel
+          hostId="host-1"
+          packId="opencode"
+          packDisplayName="opencode CLI"
+          managedVersions={managed([version({ version: "1.0.0" })], null)}
+        />,
+      );
+      await user.click(screen.getByRole("button", { name: CHECK_BUTTON_NAME }));
+      expect(deliver).toHaveLength(1);
+
+      rerender(
+        <ProviderPackVersionManagerPanel
+          hostId={next.hostId}
+          packId={next.packId}
+          packDisplayName="another CLI"
+          managedVersions={managed([version({ version: "1.0.0" })], null)}
+        />,
+      );
+
+      // `unusable` on purpose: the loudest sentence on this surface, and the
+      // one whose claim ("this pack's update knowledge was cleared") would be
+      // flatly false about the pack now on screen.
+      act(() => {
+        deliver[0]?.({ result: { ok: true, outcome: "unusable" } });
+      });
+
+      expect(
+        screen.queryByTestId("provider-pack-discovery-check-notice"),
+      ).toBeNull();
+      // And nothing is announced either — the stale result must not reach the
+      // live region any more than the visible line.
+      expect(screen.getByRole("status").textContent).toBe("");
+    },
+  );
+
+  it("keeps the new pack's check button usable while the old pack's check is still in flight", async () => {
+    const user = userEvent.setup();
+    mocks.checkMutate.mockImplementation(() => {
+      // Never settles: the request is still joined to the host's tick.
+    });
+
+    const { rerender } = render(
+      <ProviderPackVersionManagerPanel
+        hostId="host-1"
+        packId="opencode"
+        packDisplayName="opencode CLI"
+        managedVersions={managed([version({ version: "1.0.0" })], null)}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: CHECK_BUTTON_NAME }));
+
+    // The mutation is shared by the panel, so its `isPending` says nothing
+    // about WHICH pack asked. Only the identity captured at dispatch does.
+    mocks.checkIsPending = true;
+    rerender(
+      <ProviderPackVersionManagerPanel
+        hostId="host-1"
+        packId="codex"
+        packDisplayName="codex CLI"
+        managedVersions={managed([version({ version: "1.0.0" })], null)}
+      />,
+    );
+
+    expect(
+      screen
+        .getByRole("button", { name: CHECK_BUTTON_NAME })
+        .hasAttribute("disabled"),
+    ).toBe(false);
+  });
+
+  it("does not let a superseded check's settle re-enable the button of the check still running", async () => {
+    const user = userEvent.setup();
+    // READ THIS BEFORE JUDGING THE PIN. The sequence below - two live
+    // dispatches, the first one settling second - is one production cannot
+    // currently reach: `MutationObserver.mutate` keeps a SINGLE
+    // `#mutateOptions` and `removeObserver`s the superseded mutation, so the
+    // second press silently drops the first press's `onSettled` instead of
+    // racing it. This mock does not model that, by design: it is a `vi.fn`
+    // that hands every call's callbacks back to the test.
+    //
+    // So this pins the panel's own guard, not a live defect - it goes red on
+    // deleting the `current === identity` comparison and green on restoring
+    // it, both under the same @tanstack/query-core. That is deliberate: the
+    // slot is the panel's, its correctness should not rest on a supersession
+    // rule that lives in a dependency and is written down nowhere here, and
+    // the ONE edit most likely to reintroduce the bug - simplifying the
+    // functional update back to `setCheckInFlight(null)` - is exactly what
+    // this catches. Do not delete it as unreachable without also deleting the
+    // guard, and do not read it as evidence the race is live.
+    const settles: Array<() => void> = [];
+    mocks.checkMutate.mockImplementation((_variables, options) => {
+      if (options.onSettled !== undefined) settles.push(options.onSettled);
+    });
+
+    const { rerender } = render(
+      <ProviderPackVersionManagerPanel
+        hostId="host-1"
+        packId="opencode"
+        packDisplayName="opencode CLI"
+        managedVersions={managed([version({ version: "1.0.0" })], null)}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: CHECK_BUTTON_NAME }));
+
+    mocks.checkIsPending = true;
+    rerender(
+      <ProviderPackVersionManagerPanel
+        hostId="host-1"
+        packId="codex"
+        packDisplayName="codex CLI"
+        managedVersions={managed([version({ version: "1.0.0" })], null)}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: CHECK_BUTTON_NAME }));
+    expect(settles).toHaveLength(2);
+
+    // The FIRST pack's request settles while the second pack's is still
+    // running.
+    act(() => {
+      settles[0]?.();
+    });
+
+    // Still disabled: codex's own check has not settled. The spinner rides
+    // the same `checkPending` this attribute is derived from, so there is one
+    // value here to pin, not two.
+    expect(
+      screen
+        .getByRole("button", { name: CHECK_BUTTON_NAME })
+        .hasAttribute("disabled"),
+    ).toBe(true);
   });
 
   it("disables the check button while another panel action is pending", () => {
@@ -1218,16 +1387,24 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
       managedOverrides: null,
     });
 
-    const checkButton = screen.getByTestId("provider-pack-discovery-check");
+    const checkButton = screen.getByRole("button", { name: CHECK_BUTTON_NAME });
     expect(checkButton.hasAttribute("disabled")).toBe(true);
   });
 
-  it("keeps rows and the auto-download switch enabled while a check is pending, but disables the check button itself", () => {
+  it("keeps rows and the auto-download switch enabled while a check is pending, but disables the check button itself", async () => {
     // `isPending: false` on the rows/switch is also the DEFAULT, so that half
     // alone would be vacuous — asserting the check button IS disabled in the
     // same render is what proves check.isPending was actually plumbed in and
     // deliberately excluded from `anyPending`.
+    //
+    // The check has to be DISPATCHED rather than just flagged pending: the
+    // button disables on the identity captured at dispatch, so a bare
+    // `isPending` with nothing in flight is not a state production can reach.
+    const user = userEvent.setup();
     mocks.checkIsPending = true;
+    mocks.checkMutate.mockImplementation(() => {
+      // Never settles — still joined to the host's discovery tick.
+    });
     renderPanel({
       hostId: "host-1",
       available: [
@@ -1235,6 +1412,7 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
       ],
       managedOverrides: { autoDownload: false },
     });
+    await user.click(screen.getByRole("button", { name: CHECK_BUTTON_NAME }));
 
     const useButton = screen.getByRole("button", {
       name: rowActionName("Use", "1.5.0"),
@@ -1246,7 +1424,7 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
     });
     expect(toggle.hasAttribute("disabled")).toBe(false);
 
-    const checkButton = screen.getByTestId("provider-pack-discovery-check");
+    const checkButton = screen.getByRole("button", { name: CHECK_BUTTON_NAME });
     expect(checkButton.hasAttribute("disabled")).toBe(true);
   });
 
@@ -1258,7 +1436,7 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
     },
     {
       outcome: "unchanged" as const,
-      expected: "Up to date.",
+      expected: "No changes found.",
       expectedKind: "info" as const,
     },
     {
@@ -1290,7 +1468,7 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
       // the case assistive tech most reliably misses.
       expect(screen.getByRole("status").textContent).toBe("");
 
-      await user.click(screen.getByTestId("provider-pack-discovery-check"));
+      await user.click(screen.getByRole("button", { name: CHECK_BUTTON_NAME }));
 
       // F4: what the panel actually sent, not just what happens after.
       expect(mocks.checkMutate.mock.calls[0]?.[0]).toEqual({
@@ -1353,7 +1531,7 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
     // post-click query below would find a conditionally mounted region too.
     expect(screen.getByRole("status").textContent).toBe("");
 
-    await user.click(screen.getByTestId("provider-pack-discovery-check"));
+    await user.click(screen.getByRole("button", { name: CHECK_BUTTON_NAME }));
 
     const notice = screen.getByTestId("provider-pack-discovery-check-notice");
     expect(notice.textContent).toBe(expected);
@@ -1382,10 +1560,10 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
       managedOverrides: { autoDownload: false },
     });
 
-    await user.click(screen.getByTestId("provider-pack-discovery-check"));
+    await user.click(screen.getByRole("button", { name: CHECK_BUTTON_NAME }));
     expect(
       screen.getByTestId("provider-pack-discovery-check-notice").textContent,
-    ).toBe("Up to date.");
+    ).toBe("No changes found.");
 
     await user.click(
       screen.getByRole("switch", { name: "Auto-download updates" }),
