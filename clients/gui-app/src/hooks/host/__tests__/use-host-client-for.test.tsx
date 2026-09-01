@@ -5,6 +5,7 @@ import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { StaleHostBindingAuthorityError } from "@traycer-clients/shared/host-client/host-binding-authority-error";
 import {
   hostRpcRegistry,
@@ -14,6 +15,11 @@ import {
 // One global client shared between the mocked `useHostClient` and the tests.
 const globalClientRef = vi.hoisted(() => ({
   value: null as HostClient<HostRpcRegistry> | null,
+}));
+const remoteSessionReadyRef = vi.hoisted(() => ({ value: false }));
+
+vi.mock("@/hooks/agent/use-host-reachability", () => ({
+  useRemoteSessionPollReadiness: () => remoteSessionReadyRef.value,
 }));
 
 // `useHostClientFor` builds a requester for an EXPLICITLY named host, so it
@@ -34,7 +40,7 @@ vi.mock("@/providers/use-runner-host", () => ({
 }));
 
 import {
-  buildTransientHostClient,
+  buildDialableHostClient,
   useHostClientFor,
 } from "@/hooks/host/use-host-client-for";
 
@@ -105,10 +111,33 @@ const TARGET_B: HostDirectoryEntry = {
   websocketUrl: "ws://127.0.0.1:59999/stream",
 };
 
+const OFFLINE_REMOTE_TARGET: RemoteHostDirectoryEntry = {
+  hostId: "host-remote",
+  label: "Remote host",
+  kind: "remote",
+  websocketUrl: "wss://relay.test/attach",
+  version: "1.2.3",
+  transportDialability: "not-dialable",
+  publicKey: "public-key",
+  relayFuseGrace: false,
+  recentHostCheckIn: false,
+  planAllowsRemote: true,
+  remoteStatus: {
+    connectivity: "offline",
+    viewerReachability: "unknown",
+    clientCloud: "ok",
+    updateState: "current",
+    appVersion: null,
+    lastSeenAt: null,
+  },
+};
+
 describe("useHostClientFor", () => {
   afterEach(() => {
     cleanup();
     globalClientRef.value = null;
+    remoteSessionReadyRef.value = false;
+    knownHostEntries.delete(OFFLINE_REMOTE_TARGET.hostId);
     RetryTestWebSocket.reset();
     vi.unstubAllGlobals();
   });
@@ -160,6 +189,26 @@ describe("useHostClientFor", () => {
     expect(result.current?.getActiveHostId()).toBe("host-c");
   });
 
+  it("reacts to remote-session readiness without a directory-row replacement", () => {
+    globalClientRef.value = buildGlobalClient(true);
+    knownHostEntries.set(OFFLINE_REMOTE_TARGET.hostId, OFFLINE_REMOTE_TARGET);
+    const { result, rerender } = renderHook(() =>
+      useHostClientFor(OFFLINE_REMOTE_TARGET),
+    );
+
+    expect(result.current).toBeNull();
+
+    remoteSessionReadyRef.value = true;
+    rerender();
+    expect(result.current?.getActiveHostId()).toBe(
+      OFFLINE_REMOTE_TARGET.hostId,
+    );
+
+    remoteSessionReadyRef.value = false;
+    rerender();
+    expect(result.current).toBeNull();
+  });
+
   it("routes through the provider client instead of creating a transient messenger", async () => {
     vi.stubGlobal("WebSocket", RetryTestWebSocket);
     const hostA: HostDirectoryEntry = {
@@ -174,7 +223,7 @@ describe("useHostClientFor", () => {
     };
     knownHostEntries.set(hostA.hostId, hostA);
     const globalClient = buildGlobalClient(true);
-    const client = buildTransientHostClient(globalClient, hostA);
+    const client = buildDialableHostClient(globalClient, hostA);
     expect(client).not.toBeNull();
     if (client === null) {
       throw new Error("Expected a host-pinned transient client");

@@ -8,6 +8,7 @@ import {
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import {
@@ -158,6 +159,81 @@ describe("useHostQuery auth readiness", () => {
     await waitFor(() => {
       expect(fixture.requestCount.value).toBe(1);
     });
+  });
+
+  it("fetches no-data on the RPC endpoint edge without refetching an Infinity-cached slot", async () => {
+    const fixture = createEndpointGatedHostQueryFixture();
+    const rendered = renderHook(
+      () =>
+        useHostQuery({
+          cacheKeyIdentity: undefined,
+          client: fixture.client,
+          method: "host.status",
+          params: {},
+          options: { staleTime: Infinity },
+        }),
+      { wrapper: fixture.Wrapper },
+    );
+
+    expect(rendered.result.current.fetchStatus).toBe("idle");
+    expect(fixture.requestCount.value).toBe(0);
+
+    act(() => {
+      fixture.publishEndpoint(true);
+    });
+
+    await waitFor(() => {
+      expect(rendered.result.current.data?.ready).toBe(true);
+    });
+    expect(fixture.requestCount.value).toBe(1);
+
+    act(() => {
+      fixture.publishEndpoint(false);
+    });
+    act(() => {
+      fixture.publishEndpoint(true);
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(fixture.requestCount.value).toBe(1);
+  });
+
+  it("retries an errored no-data query when the RPC endpoint returns", async () => {
+    const fixture = createEndpointGatedHostQueryFixture();
+    fixture.setRequestFailure(true);
+    const rendered = renderHook(
+      () =>
+        useHostQuery({
+          cacheKeyIdentity: undefined,
+          client: fixture.client,
+          method: "host.status",
+          params: {},
+          options: { staleTime: Infinity },
+        }),
+      { wrapper: fixture.Wrapper },
+    );
+
+    act(() => {
+      fixture.publishEndpoint(true);
+    });
+    await waitFor(() => expect(rendered.result.current.error).not.toBeNull());
+    expect(fixture.requestCount.value).toBe(1);
+
+    act(() => {
+      fixture.publishEndpoint(false);
+    });
+    await waitFor(() => {
+      expect(rendered.result.current.fetchStatus).toBe("idle");
+    });
+    act(() => {
+      fixture.setRequestFailure(false);
+    });
+    act(() => {
+      fixture.publishEndpoint(true);
+    });
+
+    await waitFor(() => expect(rendered.result.current.data?.ready).toBe(true));
+    expect(fixture.requestCount.value).toBe(2);
   });
 
   it("rejects mutations without a client with a host RPC error", async () => {
@@ -701,6 +777,90 @@ function createHostQueryFixture(): {
     </QueryClientProvider>
   );
   return { client, requestCount, Wrapper };
+}
+
+function createEndpointGatedHostQueryFixture(): {
+  readonly client: HostClient<HostRpcRegistry>;
+  readonly publishEndpoint: (present: boolean) => void;
+  readonly setRequestFailure: (shouldFail: boolean) => void;
+  readonly requestCount: { value: number };
+  readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
+} {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false, staleTime: 0, gcTime: 0 },
+    },
+  });
+  const requestCount = { value: 0 };
+  let shouldFail = false;
+  let entry: HostDirectoryEntry = {
+    ...mockLocalHostEntry,
+    websocketUrl: null,
+  };
+  const listeners = new Set<() => void>();
+  const spine = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: createHostQueryInvalidator(queryClient),
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? entry : null,
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "req-endpoint-edge",
+      handlers: {
+        "host.status": () => {
+          requestCount.value += 1;
+          if (shouldFail) throw new Error("host is unavailable");
+          return {
+            ready: true,
+            hostVersion: "1.2.3",
+            protocolVersion: { major: 1, minor: 0 },
+            busy: false,
+            busySessionCount: 0,
+            updateProgress: null,
+            busyBreakdown: null,
+            updateOperation: null,
+            updateTransaction: null,
+          };
+        },
+      },
+    }),
+  });
+  spine.setRequestContext(
+    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+  );
+  installHostConnectionRegistrySource({
+    directory: {
+      findById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? entry : null,
+      onDirectoryChanged: (listener) => {
+        listeners.add(listener);
+        return { dispose: () => listeners.delete(listener) };
+      },
+    },
+    leases: null,
+  });
+  const publishEndpoint = (present: boolean): void => {
+    entry = {
+      ...entry,
+      websocketUrl: present ? mockLocalHostEntry.websocketUrl : null,
+    };
+    for (const listener of listeners) listener();
+  };
+  const setRequestFailure = (nextShouldFail: boolean): void => {
+    shouldFail = nextShouldFail;
+  };
+  const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+    <QueryClientProvider client={queryClient}>
+      {props.children}
+    </QueryClientProvider>
+  );
+  return {
+    client: spine.createRequesterForHostId(mockLocalHostEntry.hostId),
+    publishEndpoint,
+    setRequestFailure,
+    requestCount,
+    Wrapper,
+  };
 }
 
 function createConditionHostQueryFixture(): {

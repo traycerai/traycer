@@ -1877,6 +1877,87 @@ describe("<EpicSessionProvider />", () => {
     });
   });
 
+  it("patches a stale history response inserted after a generated epic title lands", async () => {
+    const queryClient = new QueryClient();
+    const sessionUserId = "alice@example.com";
+    const cloudTasksUserId = "cloud-user-1";
+    useAuthStore.setState({
+      contextMetadata: { userId: cloudTasksUserId, username: sessionUserId },
+    });
+    const queryKey = cloudEpicTasksQueryKey(
+      "host-a",
+      cloudTasksUserId,
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    const seenHandles: OpenEpicStoreHandle[] = [];
+    // Same translation as the test above, and for the same reason: the epic
+    // title is a WRITE COMMAND on this branch, and
+    // `beginEpicTitleMutationWithId` refuses one unless
+    // `session.writeGateRole()` is writable - a role that arrives only with a
+    // snapshot. So the stream is captured rather than discarded, and a
+    // snapshot is delivered before the write.
+    const streams: ControlledEpicStream[] = [];
+    installStreamFactory((_epicId, callbacks) => {
+      streams.push({ callbacks, closeCount: 0 });
+      return {
+        applyUpdate: () => undefined,
+        awareness: () => undefined,
+        applyArtifactRoomUpdate: () => undefined,
+        artifactRoomAwareness: () => undefined,
+        retryMigration: () => undefined,
+        close: () => undefined,
+      };
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <EpicSessionProvider
+          epicId="epic-session-test"
+          tabId="epic-session-test"
+        >
+          <HandleProbe
+            onHandle={(handle) => {
+              seenHandles.push(handle);
+            }}
+          />
+        </EpicSessionProvider>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(seenHandles).toHaveLength(1);
+    });
+    expect(
+      queryClient.getQueryData<ListTasksResponse>(queryKey),
+    ).toBeUndefined();
+
+    act(() => {
+      deliverSnapshot(streams[0], "room-history");
+    });
+
+    await act(async () => {
+      // `setEpicTitle` is gone; the overlay stamp `beginEpicTitleMutation`
+      // leaves is the same observable the cache patch below reads.
+      await seenHandles[0].store
+        .getState()
+        .beginEpicTitleMutation("Generated history title");
+    });
+
+    act(() => {
+      queryClient.setQueryData<ListTasksResponse>(queryKey, {
+        tasks: [makeHistoryTask("epic-session-test", "", cloudTasksUserId)],
+        hasMore: false,
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        queryClient.getQueryData<ListTasksResponse>(queryKey)?.tasks[0]?.epic
+          ?.light?.title,
+      ).toBe("Generated history title");
+    });
+  });
+
   it("claims desktop epic ownership before acquiring a renderer session", async () => {
     const streams: ControlledStream[] = [];
     const calls = {

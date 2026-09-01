@@ -50,6 +50,19 @@ vi.mock("@/lib/host/runtime", () => ({
     return globalClientRef.value;
   },
 }));
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return {
+    ...actual,
+    useHostClient: () => {
+      if (globalClientRef.value === null) {
+        throw new Error("test global client not configured");
+      }
+      return globalClientRef.value;
+    },
+    useHostBinding: () => ({ hostClient: globalClientRef.value, hostId: null }),
+  };
+});
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   useHostDirectoryList: () => ({ data: directoryRef.entries }),
 }));

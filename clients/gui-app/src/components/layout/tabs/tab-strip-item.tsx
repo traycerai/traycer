@@ -46,7 +46,7 @@ import { displayTitle } from "@/lib/display-title";
 import { isEditableRole } from "@/lib/epic-permissions";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import { getAppHostClientSnapshot } from "@/lib/host/runtime";
-import { buildTransientHostClient } from "@/hooks/host/use-host-client-for";
+import { buildDialableHostClient } from "@/hooks/host/use-host-client-for";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { useInlineRename } from "@/hooks/ui/use-inline-rename";
@@ -138,7 +138,7 @@ export interface HeaderTabDndConfig {
  * requests, and silently substituting the second is how a rename lands against
  * a host that never had the epic.
  *
- * Built through `buildTransientHostClient` - the same builder every other
+ * Built through `buildDialableHostClient` - the same builder every other
  * explicit-host consumer uses - rather than a second construction path.
  */
 function epicRenameClient(
@@ -151,7 +151,7 @@ function epicRenameClient(
   }
   const entry = appClient.resolveHostById(hostId);
   if (entry === null) return null;
-  return buildTransientHostClient(appClient, entry);
+  return buildDialableHostClient(appClient, entry);
 }
 
 export const TabItem = memo(function TabItem(props: TabItemProps) {

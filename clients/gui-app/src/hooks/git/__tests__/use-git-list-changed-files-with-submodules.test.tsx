@@ -135,6 +135,8 @@ vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
     hostId: "any",
     requestContextUserId: null,
     isReady: client !== null,
+    hasRpcEndpoint: client !== null,
+    canExecute: client !== null,
   }),
 }));
 
