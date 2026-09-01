@@ -1,5 +1,6 @@
 import type { LandingDraftTab } from "@/stores/home/landing-draft-store";
 import { landingDraftDisplayTitle } from "@/lib/composer/landing-draft-title";
+import { isEmptyLandingDraftContent } from "@/lib/composer/landing-draft-empty";
 
 export interface HistoryLandingDraft {
   readonly id: string;
@@ -22,6 +23,7 @@ export function isHistoryListedLandingDraft(
   draft: LandingDraftTab,
   currentHostId: string | null,
 ): boolean {
+  if (isEmptyLandingDraftContent(draft.content)) return false;
   if (draft.origin === "replica") return false;
   if (draft.ownerHostId !== null && draft.ownerHostId !== currentHostId) {
     return false;

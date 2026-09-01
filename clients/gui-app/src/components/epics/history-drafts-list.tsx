@@ -1,11 +1,4 @@
-import {
-  memo,
-  useCallback,
-  useMemo,
-  useState,
-  type ReactNode,
-  type RefObject,
-} from "react";
+import { memo, useCallback, useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { formatDistanceToNow } from "date-fns";
 import { LayersPlus, Trash2 } from "lucide-react";
@@ -26,23 +19,22 @@ import {
 import { cn } from "@/lib/utils";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 
+const DRAFTS_PREVIEW_LIMIT = 5;
+
 export function HistoryDraftsList(props: {
-  readonly query: string;
   readonly hostId: string | null;
   readonly onBeforeOpen: ((draftId: string) => void) | null;
-  readonly listRef: RefObject<HTMLUListElement | null>;
-  readonly onRowKeyDown: (event: React.KeyboardEvent<HTMLElement>) => void;
 }): ReactNode {
-  const { listRef, onRowKeyDown, query, hostId, onBeforeOpen } = props;
+  const { hostId, onBeforeOpen } = props;
   const drafts = useLandingDraftStore((state) => state.drafts);
   const items = useMemo(
     () =>
       listHistoryLandingDrafts({
         drafts,
-        query,
+        query: "",
         currentHostId: hostId,
       }),
-    [drafts, hostId, query],
+    [drafts, hostId],
   );
   const navigate = useNavigate();
   const openDraft = useCallback(
@@ -54,6 +46,7 @@ export function HistoryDraftsList(props: {
   );
   const [pendingDelete, setPendingDelete] =
     useState<HistoryLandingDraft | null>(null);
+  const [expanded, setExpanded] = useState(false);
   const closeDeleteDialog = useCallback(() => {
     setPendingDelete(null);
   }, []);
@@ -63,47 +56,51 @@ export function HistoryDraftsList(props: {
     setPendingDelete(null);
   }, [pendingDelete]);
 
-  if (items.length === 0 && query.trim().length === 0) {
-    return (
-      <div
-        className="flex flex-col items-center justify-center gap-2 py-16 text-center text-ui-sm text-muted-foreground"
-        data-testid="history-drafts-empty"
-      >
-        <p className="font-medium text-foreground">No start-task drafts</p>
-        <p>Closed drafts you have not deleted will show up here.</p>
-      </div>
-    );
-  }
-  if (items.length === 0) {
-    return (
-      <div
-        className="flex flex-col items-center justify-center gap-2 py-16 text-center text-ui-sm text-muted-foreground"
-        data-testid="history-drafts-filtered-empty"
-      >
-        <p className="font-medium text-foreground">
-          No drafts match this search.
-        </p>
-      </div>
-    );
-  }
+  if (items.length === 0) return null;
+
+  const visibleItems = expanded ? items : items.slice(0, DRAFTS_PREVIEW_LIMIT);
+  const canExpand = items.length > DRAFTS_PREVIEW_LIMIT;
 
   return (
     <>
-      <ul
-        ref={listRef}
-        className="flex flex-col gap-2"
-        data-testid="history-drafts-list"
+      <section
+        className="mb-5 border-b border-border/60 pb-5"
+        data-testid="history-drafts-block"
+        aria-labelledby="history-drafts-heading"
       >
-        {items.map((item) => (
-          <HistoryDraftsRow
-            key={item.id}
-            item={item}
-            onOpen={openDraft}
-            onRequestDelete={setPendingDelete}
-            onRowKeyDown={onRowKeyDown}
-          />
-        ))}
-      </ul>
+        <div className="mb-2 flex items-center justify-between gap-3 px-1">
+          <h2
+            id="history-drafts-heading"
+            className="text-ui-sm font-semibold text-foreground"
+          >
+            Drafts
+          </h2>
+          {canExpand ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-7 px-2 text-ui-xs text-muted-foreground"
+              aria-expanded={expanded}
+              onClick={() => {
+                setExpanded((current) => !current);
+              }}
+            >
+              {expanded ? "Show less" : `View all ${items.length}`}
+            </Button>
+          ) : null}
+        </div>
+        <ul className="flex flex-col gap-1" data-testid="history-drafts-list">
+          {visibleItems.map((item) => (
+            <HistoryDraftsRow
+              key={item.id}
+              item={item}
+              onOpen={openDraft}
+              onRequestDelete={setPendingDelete}
+            />
+          ))}
+        </ul>
+      </section>
       <HistoryDraftsDeleteDialog
         draft={pendingDelete}
         onOpenChange={(open) => {
@@ -119,7 +116,6 @@ const HistoryDraftsRow = memo(function HistoryDraftsRow(props: {
   readonly item: HistoryLandingDraft;
   readonly onOpen: (draftId: string) => void;
   readonly onRequestDelete: (draft: HistoryLandingDraft) => void;
-  readonly onRowKeyDown: (event: React.KeyboardEvent<HTMLElement>) => void;
 }): ReactNode {
   const { item } = props;
   const updatedLabel = formatDistanceToNow(item.lastTouchedAt, {
@@ -139,14 +135,12 @@ const HistoryDraftsRow = memo(function HistoryDraftsRow(props: {
         <button
           type="button"
           aria-label={`Open draft ${item.title}`}
-          data-history-row-target=""
           className="absolute inset-0 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
           onClick={() => {
             props.onOpen(item.id);
           }}
-          onKeyDown={props.onRowKeyDown}
         />
-        <div className="pointer-events-none relative z-10 flex items-center justify-between gap-3 p-3 pr-28 text-ui-sm">
+        <div className="pointer-events-none relative z-10 flex items-center justify-between gap-3 px-3 py-2 pr-11 text-ui-sm">
           <span className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
             <LayersPlus className="size-4 shrink-0 text-muted-foreground" />
             <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
@@ -173,21 +167,6 @@ const HistoryDraftsRow = memo(function HistoryDraftsRow(props: {
             <span className="shrink-0">edited {updatedLabel}</span>
           </span>
         </div>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          aria-label={`Open ${item.title}`}
-          data-testid="history-drafts-row-open"
-          className="pointer-events-auto absolute right-11 top-1/2 z-20 -translate-y-1/2 opacity-0 transition-opacity hover:bg-foreground/5 focus-visible:opacity-100 group-hover:opacity-100"
-          onClick={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            props.onOpen(item.id);
-          }}
-        >
-          Open
-        </Button>
         <Button
           type="button"
           variant="ghost"
