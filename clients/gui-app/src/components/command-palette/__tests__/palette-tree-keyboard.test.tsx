@@ -205,24 +205,14 @@ it("separates browser creation from the selected host's open tabs", () => {
     </Command>,
   );
 
-  const creationGroup = screen.getByText("Browser").closest("[cmdk-group]");
-  const inventoryGroup = screen
-    .getByText("Open tabs on Browser Mac")
-    .closest("[cmdk-group]");
-  expect(creationGroup).not.toBeNull();
-  expect(inventoryGroup).not.toBeNull();
-  expect(
-    within(creationGroup as HTMLElement).getByText("New browser"),
-  ).toBeTruthy();
-  expect(
-    within(creationGroup as HTMLElement).getByText("Change host"),
-  ).toBeTruthy();
-  expect(
-    within(creationGroup as HTMLElement).queryByText("Example docs"),
-  ).toBeNull();
-  expect(
-    within(inventoryGroup as HTMLElement).getByText("Example docs"),
-  ).toBeTruthy();
+  const creationGroup = screen.getByRole("group", { name: "Browser" });
+  const inventoryGroup = screen.getByRole("group", {
+    name: "Open tabs on Browser Mac",
+  });
+  expect(within(creationGroup).getByText("New browser")).toBeTruthy();
+  expect(within(creationGroup).getByText("Change host")).toBeTruthy();
+  expect(within(creationGroup).queryByText("Example docs")).toBeNull();
+  expect(within(inventoryGroup).getByText("Example docs")).toBeTruthy();
 });
 
 it("expands an actionable path branch from the command input", () => {

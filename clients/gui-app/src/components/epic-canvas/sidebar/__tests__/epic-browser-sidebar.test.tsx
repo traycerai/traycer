@@ -854,6 +854,31 @@ describe("BrowsersPanelBody", () => {
     );
   });
 
+  it("Shift+Enter makes a browser preview durable", async () => {
+    const user = userEvent.setup();
+    render(wrapper(<BrowsersPanelBody epicId="epic-1" tabId="view-tab-1" />));
+
+    const row = screen.getByRole("button", { name: /^Live page/i });
+    expect(row.getAttribute("aria-keyshortcuts")).toBe("Shift+Enter");
+    await user.click(row);
+
+    const expected = makeBrowserSessionTileRef({
+      hostId: "host-1",
+      sessionId: "sess-primary",
+      tabId: "tab-live",
+    });
+    const open = findOpenArtifactInTab("view-tab-1", expected.id);
+    expect(open).not.toBeNull();
+    if (open === null) throw new Error("expected open browser pointer");
+
+    await user.keyboard("{Shift>}{Enter}{/Shift}");
+
+    const canvas = useEpicCanvasStore.getState().canvasByTabId["view-tab-1"];
+    expect(
+      findPaneById(canvas?.root ?? null, open.paneId)?.previewTabId,
+    ).toBeNull();
+  });
+
   it("row click focuses an existing pointer tile instead of opening a duplicate", () => {
     const existing = makeBrowserSessionTileRef({
       hostId: "host-1",

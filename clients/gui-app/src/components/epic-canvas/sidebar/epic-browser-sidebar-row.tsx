@@ -173,9 +173,15 @@ export function BrowserTabRow(props: BrowserTabRowProps) {
             {...listeners}
             type="button"
             aria-label={`${title}, ${identity.url}${stateLabel}`}
+            aria-keyshortcuts="Shift+Enter"
             className="flex h-8 min-w-0 cursor-pointer items-center gap-2 rounded-md px-2 pr-1 text-left text-ui-sm outline-none focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing"
             onClick={() => onOpenTab(session, tab)}
             onDoubleClick={() => onOpenTabPermanently(session, tab)}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" || !event.shiftKey) return;
+              event.preventDefault();
+              onOpenTabPermanently(session, tab);
+            }}
           >
             <BrowserFavicon
               faviconUrl={
