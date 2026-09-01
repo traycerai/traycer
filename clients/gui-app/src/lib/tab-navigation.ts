@@ -1508,7 +1508,16 @@ export class TabNavigationController {
       routed !== null &&
       refsEqual(focusedRefOfLayout(currentLayout()), routed.ref)
     ) {
-      this.establishExternalAuthority();
+      // Seizing authority is for commits that REPLACE what the app is doing,
+      // and bookkeeping never is - so it is taken only when nothing is in
+      // flight. A pending navigation to this same tab (re-activating the
+      // active tab issues a `focus-replace`) would otherwise be superseded
+      // here, and its own commit would then arrive with a lower serial, read
+      // as stale, and be repaired away - losing the search / nested-focus
+      // state it was carrying. The delegate below needs no authority of its
+      // own: for the focused ref it is the #1474 fast path, which only
+      // remembers the route.
+      if (this.pending.size === 0) this.establishExternalAuthority();
       this.resolveExternalLocation(location, false, false, navigate);
       return;
     }

@@ -22,15 +22,29 @@ import type { NavigateOptions } from "@tanstack/react-router";
  */
 const ROUTE_BOOKKEEPING_KEY = "__traycerRouteBookkeeping";
 
+/**
+ * Composes any `state` the caller already set rather than replacing it, so
+ * marking a navigation never silently drops what it was carrying. The mark is
+ * applied last: it is the one part of the resulting state this helper owns.
+ */
 export function applyRouteBookkeeping(
   options: NavigateOptions,
 ): NavigateOptions {
+  const callerState = options.state;
   return {
     ...options,
-    state: (previous) => ({
-      ...previous,
-      [ROUTE_BOOKKEEPING_KEY]: true,
-    }),
+    state: (previous) => {
+      const carried =
+        typeof callerState === "function" ? callerState(previous) : callerState;
+      // `previous` stays the base so the router's own required entry fields
+      // survive; the caller's state overlays it, and the mark - the one part
+      // this helper owns - is applied last.
+      return {
+        ...previous,
+        ...(isRecord(carried) ? carried : {}),
+        [ROUTE_BOOKKEEPING_KEY]: true,
+      };
+    },
   };
 }
 

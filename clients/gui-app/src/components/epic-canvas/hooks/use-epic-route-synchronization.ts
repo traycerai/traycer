@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   useNavigate,
   useRouter,
@@ -146,37 +146,6 @@ export function useEpicRouteSynchronization(
       nestedRouteTargetApplied &&
       activeArtifactId === focusArtifactId);
 
-  // At most ONE focus-param replace in flight at a time. This effect re-runs
-  // on every canvas identity change - continuous on an epic with running
-  // agents - and each un-awaited `navigate` it fired stacked another pending
-  // replace into the router. A replace still in flight when the user
-  // activates another tab then commits LATE, which is the stale commit the
-  // controller's bookkeeping branch guards against; but stacking them also
-  // interferes with the router itself (an in-flight replace can starve an
-  // immediately following push of its state commit), so the storm is stopped
-  // at the source too. Convergence is not lost: a replace that applies
-  // changes `activeSearch`, which re-runs the effect; one that fails leaves
-  // the URL bare, and the next canvas change retries.
-  const nestedFocusReplaceInFlightRef = useRef(false);
-  const issueNestedFocusReplace = useCallback(
-    (target: NestedFocusTarget | null) => {
-      if (nestedFocusReplaceInFlightRef.current) return;
-      nestedFocusReplaceInFlightRef.current = true;
-      const clear = () => {
-        nestedFocusReplaceInFlightRef.current = false;
-      };
-      try {
-        replaceNestedFocusRoute(navigate, { epicId, tabId }, target).then(
-          clear,
-          clear,
-        );
-      } catch {
-        clear();
-      }
-    },
-    [navigate, epicId, tabId],
-  );
-
   const currentTabName = currentTab?.name ?? null;
   useEffect(() => {
     const nextTitle = liveTitle.trim();
@@ -221,14 +190,14 @@ export function useEpicRouteSynchronization(
       if (target === null) {
         return;
       }
-      issueNestedFocusReplace(target);
+      replaceNestedFocusRoute(navigate, { epicId, tabId }, target);
       return;
     }
 
     const resolved = resolveNestedFocusTarget(canvas, nestedRouteTarget);
     if (resolved === null) {
       const fallback = getCurrentNestedFocusTarget(canvas);
-      issueNestedFocusReplace(fallback);
+      replaceNestedFocusRoute(navigate, { epicId, tabId }, fallback);
       return;
     }
 
@@ -245,7 +214,7 @@ export function useEpicRouteSynchronization(
     focusThreadId,
     activeArtifactId,
     canvas,
-    issueNestedFocusReplace,
+    navigate,
     epicId,
     tabId,
     currentNestedTarget,
@@ -547,13 +516,22 @@ export function useEpicRouteSynchronization(
  * Marked as route bookkeeping: this replace records view state onto the route
  * its tab is already showing, so the navigation controller must never read a
  * late-landing one as the user navigating back to this epic.
+ *
+ * Deliberately NOT de-duplicated behind an "at most one in flight" guard.
+ * Suppressing a replace while another is in flight leaves the URL naming the
+ * EARLIER focus target, and this effect's own branch selection is driven by
+ * that URL: once it carries a resolvable target, the route drives the canvas
+ * (`applyNestedRouteFocus`) instead of the canvas driving the route, so a
+ * suppressed update is not merely delayed - it is inverted, pulling tile
+ * focus back to where it had already moved from. Letting every update through
+ * keeps the LAST one authoritative, which is the whole contract here.
  */
 function replaceNestedFocusRoute(
   navigate: NavigateFn,
   tab: { readonly epicId: string; readonly tabId: string },
   target: NestedFocusTarget | null,
-): Promise<void> {
-  return navigate(
+): void {
+  void navigate(
     applyRouteBookkeeping({
       to: "/epics/$epicId/$tabId",
       params: { epicId: tab.epicId, tabId: tab.tabId },

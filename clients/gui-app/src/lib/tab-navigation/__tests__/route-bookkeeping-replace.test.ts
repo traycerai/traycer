@@ -39,6 +39,7 @@ import {
   __resetTabNavigationControllerForTesting,
   activateTabIntent,
   draftTabIntent,
+  existingEpicTabIntent,
   getTabNavigationDiagnostics,
   tabNavigationController,
   type TabNavigationEnvelope,
@@ -481,6 +482,69 @@ describe("route bookkeeping: a marked replace cannot swallow user intent", () =>
     // steps: the user genuinely stepped back onto A.
     expect(focusedRefKey()).toBe(tabRefKey(a.ref));
   });
+
+  // Re-activating the ALREADY-ACTIVE tab issues a `focus-replace`, so a
+  // bookkeeping commit for that same tab arrives with a navigation pending.
+  // Seizing authority there would supersede it, and its own commit would then
+  // read as stale and be repaired away - losing the search it was carrying.
+  it("a marked replace does not supersede a pending navigation to that same tab", () => {
+    const a = openEpic("epic-a", "A");
+    seedCommittedLayout({
+      version: 2,
+      items: [{ kind: "tab", id: tabItemId(a.ref), ref: a.ref }],
+      activeItemId: tabItemId(a.ref),
+      systemTabs: { history: null, settings: null },
+    });
+    const nav = makeDeferredNavigate();
+    commitExternal({
+      navigate: nav.asNavigate,
+      pathname: a.pathname,
+      action: "REPLACE",
+      search: undefined,
+    });
+
+    const activated = activateTabIntent(
+      nav.asNavigate,
+      existingEpicTabIntent({
+        epicId: "epic-a",
+        tabId: a.tabId,
+        focus: {
+          focusedAt: undefined,
+          focusArtifactId: undefined,
+          focusThreadId: undefined,
+          migrationSource: undefined,
+        },
+      }),
+      undefined,
+    );
+    expect(activated).toBe(true);
+    expect(getTabNavigationDiagnostics().pendingTokenCount).toBe(1);
+    const pendingOptions = nav.lastOptions();
+    const navigationsBefore = nav.calls.length;
+
+    commitMarked({
+      navigate: nav.asNavigate,
+      pathname: a.pathname,
+      action: "REPLACE",
+      search: TILE_FOCUS_SEARCH,
+    });
+
+    // Still owned by its issuer, and no correction was manufactured.
+    expect(getTabNavigationDiagnostics().pendingTokenCount).toBe(1);
+    expect(nav.calls.length - navigationsBefore).toBe(0);
+
+    // ...so when it lands it is acknowledged, not repaired as stale.
+    commitAcknowledgement({
+      navigate: nav.asNavigate,
+      pathname: a.pathname,
+      action: "REPLACE",
+      options: pendingOptions,
+    });
+    expect(getTabNavigationDiagnostics().pendingTokenCount).toBe(0);
+    expect(nav.calls.length - navigationsBefore).toBe(0);
+    expect(getTabNavigationDiagnostics().resolutionFailure).toBe(false);
+    expect(focusedRefKey()).toBe(tabRefKey(a.ref));
+  });
 });
 
 describe("route-bookkeeping marker construction", () => {
@@ -493,5 +557,18 @@ describe("route-bookkeeping marker construction", () => {
     }
     expect(isRouteBookkeepingState(state({ __TSR_index: 0 }))).toBe(true);
     expect(isRouteBookkeepingState({})).toBe(false);
+  });
+
+  it("composes a caller-supplied state updater instead of dropping it", () => {
+    const options = applyRouteBookkeeping({
+      state: (previous) => ({ ...previous, carried: "value" }),
+    });
+    const state = options.state;
+    if (typeof state !== "function") {
+      throw new Error("expected navigate state updater function");
+    }
+    const result = state({ __TSR_index: 0 });
+    expect(isRouteBookkeepingState(result)).toBe(true);
+    expect(result).toMatchObject({ carried: "value", __TSR_index: 0 });
   });
 });
