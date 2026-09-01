@@ -536,6 +536,8 @@ describe("composer draft store browserAnnotations", () => {
           sender: null,
           settings: null,
           restoreWorktreeIntent: null,
+          displayWorktreeIntent: null,
+          messageConfirmedByHost: false,
           accountContext: null,
           deliveryPolicy: null,
           createdAt: 1,
