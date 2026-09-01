@@ -32,6 +32,7 @@ import { resolveAutoOpenTarget } from "@/lib/epic-auto-open";
 import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
 import { useCommentThreadsStore } from "@/stores/comments/comment-threads-store";
 import { getHistoryController } from "@/lib/persistent-history";
+import { applyRouteBookkeeping } from "@/lib/tab-navigation/route-bookkeeping";
 import {
   areNestedFocusTargetsEqual,
   buildNestedFocusSearchPatch,
@@ -511,24 +512,44 @@ export function useEpicRouteSynchronization(
   ]);
 }
 
+/**
+ * Marked as route bookkeeping: this replace records view state onto the route
+ * its tab is already showing, so the navigation controller must never read a
+ * late-landing one as the user navigating back to this epic.
+ *
+ * Deliberately NOT de-duplicated behind an "at most one in flight" guard.
+ * Suppressing a replace while another is in flight leaves the URL naming the
+ * EARLIER focus target, and this effect's own branch selection is driven by
+ * that URL: once it carries a resolvable target, the route drives the canvas
+ * (`applyNestedRouteFocus`) instead of the canvas driving the route, so a
+ * suppressed update is not merely delayed - it is inverted, pulling tile
+ * focus back to where it had already moved from. Letting every update through
+ * keeps the LAST one authoritative, which is the whole contract here.
+ */
 function replaceNestedFocusRoute(
   navigate: NavigateFn,
   tab: { readonly epicId: string; readonly tabId: string },
   target: NestedFocusTarget | null,
 ): void {
-  void navigate({
-    to: "/epics/$epicId/$tabId",
-    params: { epicId: tab.epicId, tabId: tab.tabId },
-    search: (prev) => ({
-      ...prev,
-      focusedAt: prev.focusedAt,
-      focusArtifactId: prev.focusArtifactId,
-      focusThreadId: prev.focusThreadId,
-      migrationSource: prev.migrationSource,
-      ...buildNestedFocusSearchPatch(target),
+  navigate(
+    applyRouteBookkeeping({
+      to: "/epics/$epicId/$tabId",
+      params: { epicId: tab.epicId, tabId: tab.tabId },
+      search: (prev) => ({
+        ...prev,
+        focusedAt: prev.focusedAt,
+        focusArtifactId: prev.focusArtifactId,
+        focusThreadId: prev.focusThreadId,
+        migrationSource: prev.migrationSource,
+        ...buildNestedFocusSearchPatch(target),
+      }),
+      replace: true,
     }),
-    replace: true,
-  });
+    // Bookkeeping is best-effort by nature: a rejected commit (a blocked or
+    // superseded navigation) leaves the URL without this focus target, and the
+    // next canvas change re-derives it. Swallow it rather than surfacing an
+    // unhandled rejection for something no caller is awaiting.
+  ).catch(() => undefined);
 }
 
 /**
