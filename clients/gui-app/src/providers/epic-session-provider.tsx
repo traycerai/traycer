@@ -10,7 +10,11 @@ import {
 } from "react";
 import * as Y from "yjs";
 import { useNavigate } from "@tanstack/react-router";
-import { QueryClientContext, type QueryClient } from "@tanstack/react-query";
+import {
+  QueryClientContext,
+  type QueryCacheNotifyEvent,
+  type QueryClient,
+} from "@tanstack/react-query";
 import {
   createOpenEpicStore,
   type EpicStreamClientFactory,
@@ -26,7 +30,11 @@ import { useAuthService } from "@/lib/host";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useSelectionAuthorityAttached } from "@/hooks/host/use-selection-authority-attached";
 import { useReactiveOwnerIdentityKey } from "@/hooks/host/use-reactive-owner-identity-key";
-import { updateEpicTitleInCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/cache";
+import {
+  cloudEpicTasksQueryKeyMatchesScope,
+  epicTaskContextsQueryKeyMatchesScope,
+  updateEpicTitleInCloudTaskCaches,
+} from "@/lib/cloud-epic-tasks-query/cache";
 import {
   claimDesktopEpicOwnership,
   getDesktopEpicOwnershipBridge,
@@ -933,21 +941,42 @@ function useCloudTaskTitleCacheSync(args: CloudTaskTitleCacheSyncArgs): void {
     if (queryClient === undefined) return;
     if (userId === null) return;
 
-    let lastSyncedTitle: string | null = null;
-    const syncTitle = (): void => {
+    const scope = { hostId: activeHostId, userId };
+    let lastObservedTitle: string | null = null;
+    const currentTitle = (): string | null =>
+      normalizeGeneratedTitle(handle.store.getState().epic.title);
+    const writeThroughTitle = (title: string): void => {
+      updateEpicTitleInCloudTaskCaches(queryClient, scope, epicId, title);
+    };
+    const syncChangedTitle = (): void => {
       const title = normalizeGeneratedTitle(handle.store.getState().epic.title);
-      if (title === null || title === lastSyncedTitle) return;
-      lastSyncedTitle = title;
-      updateEpicTitleInCloudTaskCaches(
-        queryClient,
-        { hostId: activeHostId, userId },
-        epicId,
-        title,
-      );
+      if (title === null || title === lastObservedTitle) return;
+      lastObservedTitle = title;
+      writeThroughTitle(title);
+    };
+    const syncMatchingQueryUpdate = (event: QueryCacheNotifyEvent): void => {
+      if (event.type !== "updated") return;
+      const queryKey: unknown = event.query.queryKey;
+      if (!Array.isArray(queryKey)) return;
+      if (
+        !cloudEpicTasksQueryKeyMatchesScope(queryKey, scope) &&
+        !epicTaskContextsQueryKeyMatchesScope(queryKey, scope)
+      ) {
+        return;
+      }
+      const title = currentTitle();
+      if (title !== null) writeThroughTitle(title);
     };
 
-    syncTitle();
-    return handle.store.subscribe(syncTitle);
+    syncChangedTitle();
+    const unsubscribeStore = handle.store.subscribe(syncChangedTitle);
+    const unsubscribeQueries = queryClient
+      .getQueryCache()
+      .subscribe(syncMatchingQueryUpdate);
+    return () => {
+      unsubscribeStore();
+      unsubscribeQueries();
+    };
   }, [activeHostId, epicId, handle, queryClient, userId]);
 }
 

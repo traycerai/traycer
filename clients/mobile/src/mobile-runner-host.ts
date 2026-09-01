@@ -180,6 +180,14 @@ export interface MobileRunnerHostOptions {
    * Access API and `<a download>`, which is exactly what gui-app falls back to.
    */
   readonly fileSave: IFileSaveHost | null;
+  /**
+   * Whether this install's WebView actually puts an image on the system
+   * clipboard - see `IRunnerHost.canCopyImages`. Decided by the entry point
+   * rather than here, for the same reason as the members above: which platform
+   * this shell runs on is the entry's business, and nothing downstream of it
+   * may branch on the answer.
+   */
+  readonly canCopyImages: boolean;
 }
 
 const STEP_UP_EXPIRY_SKEW_MS = 5_000;
@@ -226,6 +234,7 @@ export class MobileRunnerHost implements IRunnerHost {
     readNativeClipboardFilePaths: async (): Promise<readonly string[]> => [],
   };
   readonly fileSave: IFileSaveHost | null;
+  readonly canCopyImages: boolean;
   readonly zoom = null;
   readonly service = null;
   readonly traycerCli = null;
@@ -286,6 +295,7 @@ export class MobileRunnerHost implements IRunnerHost {
     this.deviceDescriber = options.deviceDescriber;
     this.linkLoginDeepLinks = options.linkLoginDeepLinks;
     this.fileSave = options.fileSave;
+    this.canCopyImages = options.canCopyImages;
     this.notifications = buildNotifications(options.pushRegistration);
     this.pushPermission = buildPushPermission(
       options.pushRegistration,

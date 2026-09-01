@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
   composerHostLabel,
@@ -24,9 +25,58 @@ import {
  * exactly that. Built through a typed factory rather than a cast: the ban on
  * `as any` / `as unknown` applies in tests too.
  */
-function clientAddressing(hostId: string): HostClient<HostRpcRegistry> {
-  const client: Pick<HostClient<HostRpcRegistry>, "getActiveHostId"> = {
+function clientAddressing(
+  hostId: string,
+  websocketUrl: string | null = "ws://127.0.0.1:4917/rpc",
+): HostClient<HostRpcRegistry> {
+  const activeHost: HostDirectoryEntry = {
+    hostId,
+    label: hostId,
+    kind: "local",
+    websocketUrl,
+    version: "0.0.0-test",
+    transportDialability: websocketUrl === null ? "not-dialable" : "dialable",
+  };
+  const client: Pick<
+    HostClient<HostRpcRegistry>,
+    "getActiveHost" | "getActiveHostId"
+  > = {
+    getActiveHost: () => activeHost,
     getActiveHostId: () => hostId,
+  };
+  return client as HostClient<HostRpcRegistry>;
+}
+
+function remoteClientAddressing(
+  overrides: Partial<RemoteHostDirectoryEntry>,
+): HostClient<HostRpcRegistry> {
+  const activeHost: RemoteHostDirectoryEntry = {
+    hostId: "host-a",
+    label: "Remote Mac",
+    kind: "remote",
+    websocketUrl: "wss://relay.test/attach",
+    version: "0.0.0-test",
+    transportDialability: "not-dialable",
+    publicKey: "public-key",
+    relayFuseGrace: false,
+    recentHostCheckIn: false,
+    planAllowsRemote: true,
+    remoteStatus: {
+      connectivity: "offline",
+      viewerReachability: "unknown",
+      clientCloud: "ok",
+      updateState: "current",
+      appVersion: null,
+      lastSeenAt: null,
+    },
+    ...overrides,
+  };
+  const client: Pick<
+    HostClient<HostRpcRegistry>,
+    "getActiveHost" | "getActiveHostId"
+  > = {
+    getActiveHost: () => activeHost,
+    getActiveHostId: () => activeHost.hostId,
   };
   return client as HostClient<HostRpcRegistry>;
 }
@@ -96,6 +146,48 @@ describe("resolveLandingPlacement", () => {
     expect(placement.kind === "refused" ? placement.message : "").toContain(
       "Studio Mac",
     );
+  });
+
+  it("refuses with starting copy while the resolved host has no RPC endpoint", () => {
+    const placement = resolveLandingPlacement(
+      targetWith({ client: clientAddressing("host-a", null) }),
+    );
+    expect(placement).toEqual({
+      kind: "refused",
+      message: "Studio Mac is starting. Wait for it to come up and send again.",
+    });
+  });
+
+  it("refuses a relay-addressed remote host with a confirmed offline verdict", () => {
+    const placement = resolveLandingPlacement(
+      targetWith({ client: remoteClientAddressing({}) }),
+    );
+    expect(placement).toEqual({
+      kind: "refused",
+      message: "Studio Mac is offline. Wait for it to come up and send again.",
+    });
+  });
+
+  it("refuses a relay-addressed remote host restricted by the current plan", () => {
+    const placement = resolveLandingPlacement(
+      targetWith({
+        client: remoteClientAddressing({
+          planAllowsRemote: false,
+          remoteStatus: {
+            connectivity: "connectable",
+            viewerReachability: "ok",
+            clientCloud: "ok",
+            updateState: "current",
+            appVersion: null,
+            lastSeenAt: null,
+          },
+        }),
+      }),
+    );
+    expect(placement).toEqual({
+      kind: "refused",
+      message: "Studio Mac isn't available on your plan.",
+    });
   });
 
   // The defect this whole row exists to prevent: the chip says one machine,
