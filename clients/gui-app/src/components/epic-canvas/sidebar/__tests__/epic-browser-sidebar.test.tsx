@@ -32,6 +32,7 @@ import {
   useEpicCanvasStore,
 } from "@/stores/epics/canvas/store";
 import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
+import { findPaneById } from "@/stores/epics/canvas/tile-tree";
 import { BROWSER_TAB_AGENT_ACTIVITY_MS } from "@/lib/browser-view/browser-tab-display";
 import { dismissPip } from "@/lib/browser-view/pip/pip-store";
 import { usePanelHeaderSearchStore } from "@/stores/epics/panel-header-search-store";
@@ -814,10 +815,11 @@ describe("BrowsersPanelBody", () => {
     });
   });
 
-  it("row click opens a browser-session pointer tile when none is open", () => {
+  it("row click previews a browser tab and double click makes it durable", () => {
     render(wrapper(<BrowsersPanelBody epicId="epic-1" tabId="view-tab-1" />));
 
-    fireEvent.click(screen.getByRole("button", { name: /^Live page/i }));
+    const row = screen.getByRole("button", { name: /^Live page/i });
+    fireEvent.click(row);
 
     const expected = makeBrowserSessionTileRef({
       hostId: "host-1",
@@ -836,6 +838,47 @@ describe("BrowsersPanelBody", () => {
       tabId: "tab-live",
       id: expected.id,
     });
+    const previewCanvas =
+      useEpicCanvasStore.getState().canvasByTabId["view-tab-1"];
+    expect(
+      findPaneById(previewCanvas?.root ?? null, open.paneId)?.previewTabId,
+    ).toBe(open.instanceId);
+
+    fireEvent.doubleClick(row);
+
+    const durableCanvas =
+      useEpicCanvasStore.getState().canvasByTabId["view-tab-1"];
+    expect(
+      findPaneById(durableCanvas?.root ?? null, open.paneId)?.previewTabId,
+    ).toBeNull();
+    expect(findOpenArtifactInTab("view-tab-1", expected.id)?.instanceId).toBe(
+      open.instanceId,
+    );
+  });
+
+  it("Shift+Enter makes a browser preview durable", async () => {
+    const user = userEvent.setup();
+    render(wrapper(<BrowsersPanelBody epicId="epic-1" tabId="view-tab-1" />));
+
+    const row = screen.getByRole("button", { name: /^Live page/i });
+    expect(row.getAttribute("aria-keyshortcuts")).toBe("Shift+Enter");
+    await user.click(row);
+
+    const expected = makeBrowserSessionTileRef({
+      hostId: "host-1",
+      sessionId: "sess-primary",
+      tabId: "tab-live",
+    });
+    const open = findOpenArtifactInTab("view-tab-1", expected.id);
+    expect(open).not.toBeNull();
+    if (open === null) throw new Error("expected open browser pointer");
+
+    await user.keyboard("{Shift>}{Enter}{/Shift}");
+
+    const canvas = useEpicCanvasStore.getState().canvasByTabId["view-tab-1"];
+    expect(
+      findPaneById(canvas?.root ?? null, open.paneId)?.previewTabId,
+    ).toBeNull();
   });
 
   it("row click focuses an existing pointer tile instead of opening a duplicate", () => {
