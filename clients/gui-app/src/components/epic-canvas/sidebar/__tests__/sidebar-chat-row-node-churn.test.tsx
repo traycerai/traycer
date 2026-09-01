@@ -89,6 +89,34 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", async (importOriginal) => {
 });
 
 /**
+ * A row's worktree tooltip reads owner PR associations, and that hook reaches
+ * THREE provider-backed seams (`useHostDirectoryEntryForHostId`,
+ * `useStreamAuthRevalidator`, `useStreamMethodSupportFor`) - each of which
+ * throws outside a `<HostRuntimeProvider>`, which this suite deliberately does
+ * not stand up. Stubbed at the hook rather than seam by seam, which is both
+ * where its own suite stubs it (`worktree-owner-metadata-error-plumbing`) and
+ * the only boundary that does not move again when it grows a fourth read.
+ *
+ * HOISTED and frozen for the same reason as the indicator query below: a result
+ * object minted per render would be a fresh prop on every row and
+ * indistinguishable from the churn this suite counts. The empty membership is
+ * the honest answer for a suite with no host - `ownerPrReferences` over an
+ * empty list returns exactly this - so no row renders a PR affordance it would
+ * not render in production against the same absence.
+ */
+const OWNER_PR_REFERENCES = vi.hoisted(() =>
+  Object.freeze({
+    references: [],
+    isPending: false,
+    error: false,
+    sendRefresh: () => undefined,
+  }),
+);
+vi.mock("@/hooks/pr/use-owner-pr-references", () => ({
+  useOwnerListPrReferences: () => OWNER_PR_REFERENCES,
+}));
+
+/**
  * The indicator query beneath it, replaced by a HOISTED constant -
  * identity-stable across renders, because an object minted per render would push
  * a fresh provider value onto every row and be indistinguishable from the churn

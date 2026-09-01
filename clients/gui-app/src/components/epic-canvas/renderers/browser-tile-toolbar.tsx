@@ -313,6 +313,7 @@ function BrowserTileToolbarTrailing(props: {
           cascadeSummary={null}
           actionLabel="Clear cookies"
           isPending={false}
+          blockedReason={null}
           onConfirm={() => {
             setClearSiteConfirmOpen(false);
             clearSite.clear();
