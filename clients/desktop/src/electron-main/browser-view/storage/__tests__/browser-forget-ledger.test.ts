@@ -10,16 +10,20 @@ import {
   initBrowserForgetLedger,
   markBrowserForgetLedgerCleared,
   isBrowserForgetLedgerPendingAck,
+  isHeadlessOriginCookieKey,
+  releaseHeadlessOriginCookieKeys,
   onBrowserForgetLedgerChanged,
   recordForgetAllBrowserLogins,
   recordForgetLedgerAck,
   recordForgottenBrowserSite,
+  recordHeadlessOriginCookieKeys,
   releaseBrowserForgetLedgerConnection,
   type BrowserForgetLedgerChange,
 } from "../browser-forget-ledger";
 import { applyBrowserObservedProfile } from "../browser-observed-profile";
 import { BrowserObservedConnectionGovernor } from "../browser-observed-profile";
 import { BrowserJarSerializer } from "../browser-jar-serializer";
+import { cookieKeyId } from "../browser-storage-state";
 import { matchesDomainFilter } from "./cookie-jar-fixture";
 
 /**
@@ -67,6 +71,83 @@ function pathIn(name: string): string {
 async function loadEmptyLedger(): Promise<void> {
   await initBrowserForgetLedger(pathIn(`${crypto.randomUUID()}.json`));
 }
+
+describe("headless-origin cookie custody", () => {
+  const sid = { domain: "example.com", name: "sid", path: "/" };
+
+  it("survives a restart, so a host keeps the right to update what it contributed", async () => {
+    const file = pathIn("custody.json");
+    await initBrowserForgetLedger(file);
+    expect(isHeadlessOriginCookieKey(cookieKeyId(sid))).toBe(false);
+
+    await recordHeadlessOriginCookieKeys([sid]);
+    await initBrowserForgetLedger(file);
+
+    expect(isHeadlessOriginCookieKey(cookieKeyId(sid))).toBe(true);
+  });
+
+  it("hands a key back the moment this machine's own browsing writes it", async () => {
+    await loadEmptyLedger();
+    await recordHeadlessOriginCookieKeys([sid]);
+
+    await releaseHeadlessOriginCookieKeys([sid]);
+
+    expect(isHeadlessOriginCookieKey(cookieKeyId(sid))).toBe(false);
+  });
+
+  it("makes a release durable, so a crash cannot re-read a released key as the host's", async () => {
+    // The asymmetry that makes this the one write in the file worth pinning:
+    // a lost RECORD costs a host a right, while a lost RELEASE grants one -
+    // over a cookie the user's own browsing owns.
+    const file = pathIn("release-durability.json");
+    await initBrowserForgetLedger(file);
+    await recordHeadlessOriginCookieKeys([sid]);
+
+    await releaseHeadlessOriginCookieKeys([sid]);
+    await initBrowserForgetLedger(file);
+
+    expect(isHeadlessOriginCookieKey(cookieKeyId(sid))).toBe(false);
+  });
+
+  it("drops a site's keys with the site, on a forget and on a forget-all", async () => {
+    await loadEmptyLedger();
+    const other = { domain: "other.test", name: "sid", path: "/" };
+    await recordHeadlessOriginCookieKeys([sid, other]);
+
+    // Registrable-domain scoped, like every other jar path: a forget of
+    // `example.com` must take `app.example.com`'s keys with it, and leave a
+    // different site alone.
+    await recordForgottenBrowserSite("app.example.com");
+    expect(isHeadlessOriginCookieKey(cookieKeyId(sid))).toBe(false);
+    expect(isHeadlessOriginCookieKey(cookieKeyId(other))).toBe(true);
+
+    await recordForgetAllBrowserLogins();
+    expect(isHeadlessOriginCookieKey(cookieKeyId(other))).toBe(false);
+  });
+
+  it("reads a ledger file written before the set existed as owning nothing", async () => {
+    const file = pathIn("legacy.json");
+    await writeFile(
+      file,
+      JSON.stringify({
+        revision: 2,
+        clearedThrough: 2,
+        forgetAll: null,
+        domains: [{ domain: "example.com", forgottenAt: 5, revision: 2 }],
+        ackedByHost: [],
+      }),
+      "utf8",
+    );
+
+    await initBrowserForgetLedger(file);
+
+    // The rest of the ledger still parses - the field is a `.default([])`, not
+    // a break - and nothing in that jar is known to be host-contributed, which
+    // is the honest answer for a file a build without the rule wrote.
+    expect(browserForgetLedgerDigestForHost(HOST).revision).toBe(2);
+    expect(isHeadlessOriginCookieKey(cookieKeyId(sid))).toBe(false);
+  });
+});
 
 describe("forget ledger durability", () => {
   it("reads a missing file as an empty ledger at revision 0", async () => {
@@ -514,7 +595,10 @@ describe("in-flight observation across a local clear", () => {
       applyBrowserObservedProfile(observed, {
         now: () => Date.now(),
         isForgottenPendingAck: isBrowserForgetLedgerPendingAck,
-        getSession: () => ({ cookies: jar }),
+        isHeadlessOriginKey: isHeadlessOriginCookieKey,
+        claimHeadlessOriginKeys: recordHeadlessOriginCookieKeys,
+        releaseHeadlessOriginKeys: releaseHeadlessOriginCookieKeys,
+        getTargetJar: () => ({ session: { cookies: jar }, durableJar: true }),
         serializeOnDomain: (domain, action) =>
           serializer.runOnDomain(domain, action),
         governor,

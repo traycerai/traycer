@@ -31,7 +31,6 @@ const fixture = vi.hoisted(() => ({
   forgottenOrigins: [] as string[],
   forgetAllResets: 0,
   tabRecreations: 0,
-  suppressedDomains: [] as string[],
   suppressedAll: 0,
 }));
 
@@ -144,12 +143,6 @@ vi.mock("../../browser-view/browser-session", () => {
         return action();
       },
     ),
-    suppressBrowserPrimaryProfileDelta: vi.fn(
-      (domain: string, action: () => Promise<unknown>) => {
-        fixture.suppressedDomains.push(domain);
-        return action();
-      },
-    ),
   };
 });
 
@@ -197,6 +190,14 @@ vi.mock("../../browser-view/storage/browser-storage-state", () => ({
     },
   ),
   seedBrowserViewCookies: vi.fn(() => Promise.resolve()),
+  // The real one: the forget ledger keys its headless-origin custody set by it
+  // (universal-sign-in ticket 08), and a stub id would make the set's own
+  // behaviour untestable from here rather than merely unexercised.
+  cookieKeyId: (key: {
+    readonly domain: string;
+    readonly name: string;
+    readonly path: string;
+  }) => `${key.domain}\u0000${key.name}\u0000${key.path}`,
 }));
 
 type InvokeHandler = (
@@ -248,10 +249,7 @@ const TILE_KEY = {
 };
 
 async function invokeHandler(
-  channel:
-    | "browserViewClearSite"
-    | "browserViewEvictSite"
-    | "browserViewForgetLogins",
+  channel: "browserViewClearSite" | "browserViewForgetLogins",
   payload: unknown,
 ): Promise<void> {
   const { registerBrowserViewIpc } = await import("../browser-view-ipc");
@@ -271,7 +269,6 @@ describe("clear-site IPC jar targeting", () => {
     fixture.forgottenOrigins = [];
     fixture.forgetAllResets = 0;
     fixture.tabRecreations = 0;
-    fixture.suppressedDomains = [];
     fixture.suppressedAll = 0;
     fixture.activePartition = fixture.durablePartition;
   });
@@ -290,21 +287,6 @@ describe("clear-site IPC jar targeting", () => {
     // The retained localStorage goes after both, never before - the second
     // clear reads the same remembered origins as the first.
     expect(fixture.forgottenOrigins).toEqual(["example.com"]);
-  });
-
-  it("clears the durable jar as well as the live one when saving is off (host evict)", async () => {
-    fixture.activePartition = fixture.ephemeralPartition;
-
-    await invokeHandler("browserViewEvictSite", { domain: "example.com" });
-
-    expect(fixture.clears).toEqual([
-      { domain: "example.com", partition: fixture.durablePartition },
-      { domain: "example.com", partition: fixture.ephemeralPartition },
-    ]);
-    expect(fixture.forgottenOrigins).toEqual(["example.com"]);
-    // Still one suppressed action: the host recorded the tombstones before it
-    // asked, so neither jar's removals may echo back to it as a delta.
-    expect(fixture.suppressedDomains).toEqual(["example.com"]);
   });
 
   it("forgets ALL logins from the ephemeral jar too when saving is off", async () => {
@@ -376,12 +358,10 @@ describe("clear-site IPC jar targeting", () => {
 
   it("clears once when saving is on and the live jar IS the durable one", async () => {
     await invokeHandler("browserViewClearSite", TILE_KEY);
-    await invokeHandler("browserViewEvictSite", { domain: "example.com" });
 
     expect(fixture.clears).toEqual([
       { domain: "example.com", partition: fixture.durablePartition },
-      { domain: "example.com", partition: fixture.durablePartition },
     ]);
-    expect(fixture.forgottenOrigins).toEqual(["example.com", "example.com"]);
+    expect(fixture.forgottenOrigins).toEqual(["example.com"]);
   });
 });

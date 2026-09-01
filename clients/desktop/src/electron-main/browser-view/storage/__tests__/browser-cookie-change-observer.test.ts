@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Cookie } from "electron";
-import type { BrowserPrimaryProfileDelta } from "@traycer/protocol/host/browser/contracts";
+import type {
+  BrowserCookieKey,
+  BrowserPrimaryProfileDelta,
+} from "@traycer/protocol/host/browser/contracts";
 import {
   BROWSER_COOKIE_DELTA_WINDOW_MS,
   BROWSER_COOKIE_REMOVAL_GRACE_MS,
@@ -136,6 +139,14 @@ class GatedCookieChangeSource extends FakeCookieChangeSource {
 }
 
 /**
+ * Every key the observer attributed to this machine's own browsing, in order.
+ *
+ * It is the ownership rule's one input (universal-sign-in ticket 08): a key
+ * that lands here is one a host may no longer overwrite.
+ */
+const localWrites: BrowserCookieKey[] = [];
+
+/**
  * Attaches with the startup grace window running: the clock reads the attach
  * instant.
  *
@@ -154,6 +165,7 @@ function makeObserverAtAttach(
     now: () => Date.now(),
     monotonicNow: () => Date.now(),
     coalesceWindowMs: BROWSER_COOKIE_DELTA_WINDOW_MS,
+    onLocalCookieWrite: (key) => localWrites.push(key),
   });
   observer.attach();
   return observer;
@@ -180,6 +192,7 @@ beforeEach(() => {
   // The trace assertions below are about what THIS test wrote, and one of them
   // is an absence.
   vi.clearAllMocks();
+  localWrites.length = 0;
 });
 
 afterEach(() => {
@@ -255,29 +268,6 @@ describe("BrowserCookieChangeObserver coalescing", () => {
     expect(delta.removedKeys).toEqual([
       { domain: "example.com", name: "gone", path: "/" },
     ]);
-
-    observer.dispose();
-  });
-
-  it("suppresses a domain's changes during the callback and drops an already-open window rather than flushing it", async () => {
-    const source = new FakeCookieChangeSource();
-    const deltas: BrowserPrimaryProfileDelta[] = [];
-    const observer = makeObserver(source, deltas);
-
-    // Opens a window that suppress() must drop, not flush, on entry.
-    source.set(makeCookie({ name: "sid", domain: "example.com" }));
-
-    await observer.suppress("example.com", async () => {
-      source.set(makeCookie({ name: "other", domain: "example.com" }));
-      await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS);
-      // Neither the pre-existing window nor the in-callback change surfaced,
-      // even though the window would ordinarily have flushed by now.
-      expect(deltas).toHaveLength(0);
-    });
-
-    // Nothing was left running after suppress() returned either.
-    await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS);
-    expect(deltas).toHaveLength(0);
 
     observer.dispose();
   });
@@ -380,11 +370,11 @@ describe("BrowserCookieChangeObserver suppression across an in-flight read", () 
     expect(source.readIsParked()).toBe(true);
     expect(deltas).toEqual([]);
 
-    // The evict the host asked for, in full: the window this suppression drops
-    // is already gone (the flush deleted it), and the suppression both starts
-    // and finishes before the read resolves - so the check before the await
-    // and the check after it BOTH see an unsuppressed observer.
-    await observer.suppress("example.com", () => {
+    // The forget the user asked for, in full: the window this suppression
+    // drops is already gone (the flush deleted it), and the suppression both
+    // starts and finishes before the read resolves - so the check before the
+    // await and the check after it BOTH see an unsuppressed observer.
+    await observer.suppressAll(() => {
       source.remove(cookie);
       return Promise.resolve();
     });
@@ -757,8 +747,10 @@ describe("BrowserCookieChangeObserver witnessed-removal hardening", () => {
     const observer = makeObserver(source, deltas);
     // Ten minutes in: the grace window is long spent and the cookie is
     // persistent, so the CAUSE is the only thing standing between Chromium's
-    // per-host capacity GC and a `primaryProfileEvict` broadcast - which is
-    // the 2026-08-31 bug verbatim.
+    // per-host capacity GC and a witnessed logout - which is the 2026-08-31
+    // bug verbatim. (It broadcast a `primaryProfileEvict` back then; ticket 08
+    // retired that frame, and what a witnessed removal now reaches is this
+    // host's own live headless contexts.)
     await vi.advanceTimersByTimeAsync(600_000);
 
     source.removeWithCause(evicted, "evicted");
@@ -831,6 +823,55 @@ describe("BrowserCookieChangeObserver witnessed-removal hardening", () => {
     expect(log.debug).not.toHaveBeenCalled();
     expect(log.info).not.toHaveBeenCalled();
 
+    observer.dispose();
+  });
+});
+
+describe("BrowserCookieChangeObserver write attribution", () => {
+  const sid: BrowserCookieKey = {
+    domain: "example.com",
+    name: "sid",
+    path: "/",
+  };
+
+  it("reports a write nobody announced as this machine's own", () => {
+    const source = new FakeCookieChangeSource();
+    const observer = makeObserver(source, []);
+
+    source.set(makeCookie({ name: "sid", domain: "example.com" }));
+
+    expect(localWrites).toEqual([sid]);
+    observer.dispose();
+  });
+
+  it("spends an announced applier write instead of claiming the key back", () => {
+    const source = new FakeCookieChangeSource();
+    const observer = makeObserver(source, []);
+
+    observer.noteAppliedKeys([sid]);
+    source.set(makeCookie({ name: "sid", domain: "example.com" }));
+    expect(localWrites).toEqual([]);
+
+    // One mark, one write. The next write of the same key is the desktop's,
+    // which is what makes a host's contribution lose its update right the
+    // moment the user signs in here themselves.
+    source.set(makeCookie({ name: "sid", domain: "example.com" }));
+    expect(localWrites).toEqual([sid]);
+
+    observer.dispose();
+  });
+
+  it("attributes a removal to nobody: only a write transfers ownership", async () => {
+    const source = new FakeCookieChangeSource();
+    const cookie = makeCookie({ name: "sid", domain: "example.com" });
+    const observer = makeObserver(source, []);
+    source.set(cookie);
+    localWrites.length = 0;
+
+    source.remove(cookie);
+    await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS);
+
+    expect(localWrites).toEqual([]);
     observer.dispose();
   });
 });

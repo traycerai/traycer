@@ -9,7 +9,7 @@ import {
   registrableDomain,
 } from "@traycer/protocol/host/browser/registrable-domain";
 import { describeLogError, log, sanitizeLogFields } from "../../app/logger";
-import { browserStorageCookies } from "./browser-storage-state";
+import { browserStorageCookies, cookieKeyId } from "./browser-storage-state";
 
 /**
  * Watches one persistent `primary` jar for cookie changes and turns them into
@@ -64,6 +64,13 @@ export interface BrowserCookieChangeSource {
 export interface BrowserCookieChangeObserverOptions {
   readonly cookies: BrowserCookieChangeSource;
   readonly emit: (delta: BrowserPrimaryProfileDelta) => void;
+  /**
+   * This jar's OWN browsing wrote `key` - the desktop owns it from here on,
+   * whatever an earlier observed frame contributed (universal-sign-in ticket
+   * 08's ownership rule). Fires only for a write that is not one the applier
+   * announced through {@link BrowserCookieChangeObserver.noteAppliedKeys}.
+   */
+  readonly onLocalCookieWrite: (key: BrowserCookieKey) => void;
   /** Wall clock. It stamps `issuedAt`, which the host orders captures by. */
   readonly now: () => number;
   /**
@@ -131,6 +138,17 @@ const HOUSEKEEPING_REMOVAL_CAUSES: ReadonlySet<string> = new Set([
  */
 export const BROWSER_COOKIE_REMOVAL_GRACE_MS = 60_000;
 
+/**
+ * How many unanswered applier writes this observer will remember at once.
+ *
+ * A mark lives from the applier's `cookies.set` to the insert event that set
+ * fires, which is immediate, so this is a leak bound rather than a working
+ * size: one observed frame carries a bounded number of cookies and a host is
+ * paced to roughly a frame a second, so a jar that answers normally never
+ * approaches it.
+ */
+const MAX_AWAITED_APPLIER_WRITES = 1_024;
+
 /** Why a removal the jar really performed was not witnessed as a logout. */
 export type BrowserCookieRemovalSuppressionReason =
   /** Chromium's own housekeeping - see {@link HOUSEKEEPING_REMOVAL_CAUSES}. */
@@ -168,10 +186,26 @@ interface CoalescingWindow {
 export class BrowserCookieChangeObserver {
   private readonly options: BrowserCookieChangeObserverOptions;
   private readonly windows = new Map<string, CoalescingWindow>();
-  /** Reference-counted so nested/overlapping suppressions cannot uncork early. */
-  private readonly suppressedDomains = new Map<string, number>();
   /** Reference-counted whole-jar suppression (`suppressAll`). */
   private suppressedGlobally = 0;
+  /**
+   * Insert events this observer is still expecting from the observed-sign-in
+   * applier, counted per key id.
+   *
+   * It is what tells a HOST write apart from a LOCAL one, and it has to be
+   * per-key rather than per-window because both arrive as ordinary `changed`
+   * events on the same jar: the applier announces the keys it is about to
+   * write, and the first insert for each one spends the mark instead of
+   * transferring ownership to the desktop.
+   *
+   * Every way a mark can go wrong lands on the SAME side - the desktop keeps
+   * the key. A local write that races the applier spends the mark, and the
+   * applier's own insert then finds none and hands ownership over; a mark the
+   * jar never answers is spent by the next local write to that key, one write
+   * late; and an overflowing map (below) drops marks rather than keys. That
+   * asymmetry is why no timer is needed to close the window.
+   */
+  private readonly awaitedApplierWrites = new Map<string, number>();
   /**
    * Bumped on every suppression state change, entry and exit alike, and on
    * {@link dispose}. A flush awaits its slice, and a suppression whose whole
@@ -237,32 +271,50 @@ export class BrowserCookieChangeObserver {
   }
 
   /**
-   * Runs `action` with this domain's deltas muted, so a deliberate local change
-   * (ticket 07's "clear cookies for this site") does not echo back to the host
-   * as a capture of the state it just destroyed. Any window already open for
-   * the domain is dropped rather than flushed: it describes a jar that no
-   * longer exists.
+   * The observed-sign-in applier is about to write these keys into this jar.
+   *
+   * Their insert events are the applier's own, so they must not be read as the
+   * desktop's browsing taking ownership of the key back (universal-sign-in
+   * ticket 08). Announced BEFORE the write, and one mark per key per write:
+   * Chromium fires one insert per `cookies.set`, and a set that lands on an
+   * existing key fires a removal beside it, which this observer already
+   * retracts when the insert arrives.
+   *
+   * The marks are bounded, and overflow drops the OLDEST rather than refusing
+   * the newest: a dropped mark costs the sending host its right to update that
+   * key later, which is the direction a bound is allowed to fail in.
    */
-  async suppress<T>(domain: string, action: () => Promise<T>): Promise<T> {
-    const scope = registrableDomain(domain);
-    if (scope === null) return await action();
-    const depth = this.suppressedDomains.get(scope) ?? 0;
-    this.suppressedDomains.set(scope, depth + 1);
-    this.suppressionEpoch += 1;
-    this.dropWindow(scope);
-    try {
-      return await action();
-    } finally {
-      const remaining = (this.suppressedDomains.get(scope) ?? 1) - 1;
-      if (remaining <= 0) this.suppressedDomains.delete(scope);
-      else this.suppressedDomains.set(scope, remaining);
-      this.suppressionEpoch += 1;
-      this.dropWindow(scope);
+  noteAppliedKeys(keys: readonly BrowserCookieKey[]): void {
+    for (const key of keys) {
+      const id = cookieKeyId(key);
+      this.awaitedApplierWrites.set(
+        id,
+        (this.awaitedApplierWrites.get(id) ?? 0) + 1,
+      );
+    }
+    // Insertion-ordered, so the first key is the oldest outstanding mark.
+    for (const id of this.awaitedApplierWrites.keys()) {
+      if (this.awaitedApplierWrites.size <= MAX_AWAITED_APPLIER_WRITES) break;
+      this.awaitedApplierWrites.delete(id);
     }
   }
 
   /**
-   * The whole-jar version of `suppress`: every domain is muted for the duration
+   * The jar refused those writes, so the marks announced for them will never
+   * be answered by an insert.
+   *
+   * Left standing they are worse than useless: the next LOCAL write to the
+   * same key spends one, and the desktop's own browsing then fails to take the
+   * key back. Dropping the whole count for a key rather than one of it is
+   * deliberate - a refused write is the applier's last word on that key in
+   * this frame, and over-releasing only ever hands ownership to the desktop.
+   */
+  forgetAppliedKeys(keys: readonly BrowserCookieKey[]): void {
+    for (const key of keys) this.awaitedApplierWrites.delete(cookieKeyId(key));
+  }
+
+  /**
+   * The whole-jar suppression: every domain is muted for the duration
    * of `action`, and every open window is dropped on the way in and on the way
    * out. Ticket 08's "forget all browser logins" is the caller - a
    * `clearStorageData()` fires a removal event for every cookie in the jar at
@@ -302,7 +354,7 @@ export class BrowserCookieChangeObserver {
 
   private recordChange(cookie: Cookie, cause: string, removed: boolean): void {
     const scope = registrableDomain(cookie.domain ?? "");
-    if (scope === null || this.isSuppressed(scope)) return;
+    if (scope === null || this.isSuppressed()) return;
     // The window opens even for a cookie whose key cannot be normalised, and
     // for a removal that will not be witnessed: the jar did change either way,
     // so the slice is re-read and the desktop's own view stays current. Only
@@ -317,6 +369,14 @@ export class BrowserCookieChangeObserver {
       // whether it was witnessed or withheld.
       window.removedKeys.delete(keyId);
       window.suppressedRemovals.delete(keyId);
+      // Whatever the applier did not announce, this jar's own browsing wrote.
+      if (!this.spendApplierWrite(keyId)) {
+        this.options.onLocalCookieWrite({
+          domain: normalized.domain,
+          name: normalized.name,
+          path: normalized.path,
+        });
+      }
       return;
     }
     const suppression = this.removalSuppression(normalized, cause);
@@ -333,6 +393,15 @@ export class BrowserCookieChangeObserver {
       name: normalized.name,
       path: normalized.path,
     });
+  }
+
+  /** One outstanding applier mark for this key, if there is one to spend. */
+  private spendApplierWrite(keyId: string): boolean {
+    const awaited = this.awaitedApplierWrites.get(keyId);
+    if (awaited === undefined) return false;
+    if (awaited <= 1) this.awaitedApplierWrites.delete(keyId);
+    else this.awaitedApplierWrites.set(keyId, awaited - 1);
+    return true;
   }
 
   /**
@@ -379,8 +448,8 @@ export class BrowserCookieChangeObserver {
     return window;
   }
 
-  private isSuppressed(domain: string): boolean {
-    return this.suppressedGlobally > 0 || this.suppressedDomains.has(domain);
+  private isSuppressed(): boolean {
+    return this.suppressedGlobally > 0;
   }
 
   private dropAllWindows(): void {
@@ -398,7 +467,7 @@ export class BrowserCookieChangeObserver {
     const window = this.windows.get(domain);
     if (window === undefined) return;
     this.windows.delete(domain);
-    if (this.isSuppressed(domain)) return;
+    if (this.isSuppressed()) return;
     traceSuppressedRemovals(domain, window.suppressedRemovals);
     const epoch = this.suppressionEpoch;
     try {
@@ -514,8 +583,4 @@ function normalizedCookieOf(cookie: Cookie): BrowserStorageCookie | null {
   // `null` this used to build its own `try` to produce.
   const [normalized] = browserStorageCookies([cookie]);
   return normalized ?? null;
-}
-
-function cookieKeyId(key: BrowserCookieKey): string {
-  return `${key.domain}\u0000${key.name}\u0000${key.path}`;
 }

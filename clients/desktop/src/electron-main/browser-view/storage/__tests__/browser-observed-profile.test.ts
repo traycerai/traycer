@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Cookie } from "electron";
+import type { Cookie, CookiesSetDetails } from "electron";
 import {
   BROWSER_PRIMARY_PROFILE_OBSERVED_MAX_BURST,
   BROWSER_PRIMARY_PROFILE_OBSERVED_MAX_COOKIES,
+  type BrowserCookieKey,
   type BrowserPrimaryProfileDelta,
   type BrowserStorageCookie,
 } from "@traycer/protocol/host/browser/contracts";
@@ -13,6 +14,7 @@ import {
   type BrowserObservedProfileResult,
 } from "../browser-observed-profile";
 import { BrowserJarSerializer } from "../browser-jar-serializer";
+import { cookieKeyId } from "../browser-storage-state";
 import {
   BROWSER_COOKIE_DELTA_WINDOW_MS,
   BrowserCookieChangeObserver,
@@ -104,6 +106,41 @@ class ObservedApplyHarness {
    * revisions; the end-to-end wiring is pinned in that module's own suite).
    */
   readonly forgottenPendingAck = new Set<string>();
+  /**
+   * The durable headless-origin key set of `browser-forget-ledger.ts`, as ids.
+   * The applier reads it to decide who owns a key the jar already holds, and
+   * claims into it as it applies; the file-backed wiring is pinned in that
+   * module's own suite.
+   */
+  readonly headlessOriginKeyIds = new Set<string>();
+  /** Keys the applier announced to the observer before writing them. */
+  readonly announcedKeys: BrowserCookieKey[] = [];
+  /** Keys the applier handed back after the jar refused the write. */
+  readonly releasedKeys: BrowserCookieKey[] = [];
+  /** Set to false to run the apply path with the ownership rule disabled. */
+  ownershipRuleEnabled = true;
+  /**
+   * False models a machine with saved logins OFF: `partitionForProfile` sends
+   * `primary` guests to the ephemeral jar, and nothing durable may be recorded
+   * about a write that lands there.
+   */
+  durableJar = true;
+  /**
+   * Parks the jar read of the next apply until it resolves, for the cases
+   * about WHERE that read happens rather than what it returns.
+   */
+  readGate: Promise<void> | null = null;
+  /** The jar as the applier sees it: the real fixture behind the read gate. */
+  private readonly gatedJar = {
+    set: (details: CookiesSetDetails): Promise<void> => this.jar.set(details),
+    get: async (filter: { readonly domain?: string }): Promise<Cookie[]> => {
+      const gate = this.readGate;
+      this.readGate = null;
+      if (gate !== null) await gate;
+      return await this.jar.get(filter);
+    },
+    flushStore: (): Promise<void> => this.jar.flushStore(),
+  };
 
   apply(input: {
     readonly domain: string;
@@ -120,7 +157,26 @@ class ObservedApplyHarness {
       now: () => Date.now(),
       isForgottenPendingAck: (gate) =>
         this.forgottenPendingAck.has(`${gate.connectionId} ${gate.domain}`),
-      getSession: () => ({ cookies: this.jar }),
+      isHeadlessOriginKey: (keyId) =>
+        !this.ownershipRuleEnabled || this.headlessOriginKeyIds.has(keyId),
+      claimHeadlessOriginKeys: (keys) => {
+        for (const key of keys) {
+          this.announcedKeys.push(key);
+          this.headlessOriginKeyIds.add(cookieKeyId(key));
+        }
+        return Promise.resolve();
+      },
+      releaseHeadlessOriginKeys: (keys) => {
+        for (const key of keys) {
+          this.releasedKeys.push(key);
+          this.headlessOriginKeyIds.delete(cookieKeyId(key));
+        }
+        return Promise.resolve();
+      },
+      getTargetJar: () => ({
+        session: { cookies: this.gatedJar },
+        durableJar: this.durableJar,
+      }),
       serializeOnDomain: (domain, action) =>
         this.serializer.runOnDomain(domain, action),
       governor: this.governor,
@@ -571,6 +627,311 @@ describe("observed frame rate limiting", () => {
   });
 });
 
+describe("observed sign-in ownership rule", () => {
+  /**
+   * The rule in one place (universal-sign-in ticket 08, security review root
+   * cause D): the jar holds `sid` because the user signed in HERE, so no host
+   * may write that key - whatever value, expiry or path it dresses the write
+   * in - while a key the jar has never held is exactly what carry-over is for.
+   */
+  it("refuses a key the desktop's own browsing owns and applies the new one beside it", async () => {
+    const harness = new ObservedApplyHarness();
+    harness.jar.seed(
+      seededCookie({
+        name: "sid",
+        value: "desktop-session",
+        domain: "example.com",
+      }),
+    );
+
+    const result = await harness.applyFrame([
+      observedCookie({
+        name: "sid",
+        domain: "example.com",
+        expires: futureSeconds(),
+      }),
+      observedCookie({ name: "csrf", domain: "example.com", expires: -1 }),
+    ]);
+
+    expect(result.outcome).toBe("applied");
+    expect(result.ownedByDesktopCookies).toBe(1);
+    expect(result.appliedCookies).toBe(1);
+    expect(harness.jar.find("sid")?.value).toBe("desktop-session");
+    expect(harness.jar.names()).toEqual(["csrf", "sid"]);
+    expect(log.warn).toHaveBeenCalledWith(
+      "[browser-view] refused an observed sign-in",
+      expect.objectContaining({ reason: "owned-by-desktop", cookies: 1 }),
+    );
+  });
+
+  it("lets the contributing host update the key its own earlier frame introduced", async () => {
+    const harness = new ObservedApplyHarness();
+
+    await harness.applyFrame([
+      observedCookie({ name: "sid", domain: "example.com", expires: -1 }),
+    ]);
+    // The applier claims what it writes, so the refresh a live remote session
+    // sends a minute later is an UPDATE rather than an overwrite.
+    const refreshed = await harness.applyFrame([
+      {
+        ...observedCookie({ name: "sid", domain: "example.com", expires: -1 }),
+        value: "rotated",
+      },
+    ]);
+
+    expect(refreshed.ownedByDesktopCookies).toBe(0);
+    expect(refreshed.appliedCookies).toBe(1);
+    expect(harness.jar.find("sid")?.value).toBe("rotated");
+    expect(harness.announcedKeys).toEqual([
+      { domain: "example.com", name: "sid", path: "/" },
+      { domain: "example.com", name: "sid", path: "/" },
+    ]);
+  });
+
+  it("refuses the two-second expiry against a desktop-owned key: the overwrite IS the delete", async () => {
+    // `expires = now + 2` passes the expired-cookie gate by construction - it
+    // is in the future - so this is the shape that gate cannot see, and the
+    // one the ownership rule exists for.
+    const harness = new ObservedApplyHarness();
+    harness.jar.seed(
+      seededCookie({
+        name: "sid",
+        value: "desktop-session",
+        domain: "example.com",
+      }),
+    );
+
+    const result = await harness.applyFrame([
+      observedCookie({
+        name: "sid",
+        domain: "example.com",
+        expires: Date.now() / 1_000 + 2,
+      }),
+    ]);
+
+    expect(result.ownedByDesktopCookies).toBe(1);
+    expect(result.expiredCookies).toBe(0);
+    expect(harness.jar.find("sid")?.value).toBe("desktop-session");
+  });
+
+  it("refuses a path-scoped shadow of a desktop-owned name: the shadow IS the overwrite", async () => {
+    const harness = new ObservedApplyHarness();
+    harness.jar.seed(
+      seededCookie({
+        name: "sid",
+        value: "desktop-session",
+        domain: "example.com",
+      }),
+    );
+
+    // `/app` is a different (name, domain, path) triple, so a key-level rule
+    // reads it as an add. It is not one. RFC 6265 orders the `Cookie` header
+    // longest-path-first and mainstream parsers take the first occurrence of a
+    // name, so on every request the user makes under `/app` this IS the
+    // session - an overwrite performed under another key. Hence the ownership
+    // unit is (name, registrable domain).
+    const shadow = await harness.applyFrame([
+      {
+        ...observedCookie({ name: "sid", domain: "example.com", expires: -1 }),
+        path: "/app",
+      },
+    ]);
+
+    expect(shadow.ownedByDesktopCookies).toBe(1);
+    expect(shadow.appliedCookies).toBe(0);
+    expect(harness.jar.names()).toEqual(["sid"]);
+    expect(harness.jar.find("sid")?.value).toBe("desktop-session");
+  });
+
+  it("refuses a domain-form shadow of a desktop-owned name, `.example.com` against `example.com`", async () => {
+    // The same trick by domain rather than path: a host-only `example.com`
+    // cookie and a `.example.com` one are two keys the browser will send
+    // together, and which the server reads is not the sender's to decide.
+    const harness = new ObservedApplyHarness();
+    harness.jar.seed(
+      seededCookie({
+        name: "sid",
+        value: "desktop-session",
+        domain: "example.com",
+      }),
+    );
+
+    const shadow = await harness.applyFrame([
+      observedCookie({ name: "sid", domain: ".example.com", expires: -1 }),
+    ]);
+
+    expect(shadow.ownedByDesktopCookies).toBe(1);
+    expect(shadow.appliedCookies).toBe(0);
+    expect(harness.jar.find("sid")?.value).toBe("desktop-session");
+
+    // And a subdomain form is refused for the same reason: the scope the rule
+    // reasons over is the registrable domain, which is the scope the jar read
+    // returns.
+    const subdomain = await harness.applyFrame([
+      observedCookie({ name: "sid", domain: "app.example.com", expires: -1 }),
+    ]);
+    expect(subdomain.ownedByDesktopCookies).toBe(1);
+    expect(harness.jar.names()).toEqual(["sid"]);
+  });
+
+  it("hands back the claim over a key the jar refused, instead of keeping a right to a cookie nobody wrote", async () => {
+    // Chromium refuses cookies the applier cannot predict from the wire alone.
+    // The claim is taken BEFORE the write (which is what stops the applier's
+    // own inserts handing the key straight back), so a refusal leaves a
+    // standing update right over a key that does not exist - and the user's
+    // own later sign-in would spend it rather than revoke it.
+    const harness = new ObservedApplyHarness();
+    harness.jar.refuse("sid");
+
+    const result = await harness.applyFrame([
+      observedCookie({ name: "sid", domain: "example.com", expires: -1 }),
+      observedCookie({ name: "csrf", domain: "example.com", expires: -1 }),
+    ]);
+
+    expect(result.appliedCookies).toBe(1);
+    expect(result.rejectedCookies).toBe(1);
+    expect(harness.releasedKeys).toEqual([
+      { domain: "example.com", name: "sid", path: "/" },
+    ]);
+    // The refused key is the desktop's again; the one that landed is not.
+    expect(
+      harness.headlessOriginKeyIds.has(
+        cookieKeyId({ domain: "example.com", name: "sid", path: "/" }),
+      ),
+    ).toBe(false);
+    expect(
+      harness.headlessOriginKeyIds.has(
+        cookieKeyId({ domain: "example.com", name: "csrf", path: "/" }),
+      ),
+    ).toBe(true);
+
+    // So the user's own sign-in on this machine owns `sid`, and the host that
+    // failed to write it cannot come back and replace it.
+    harness.jar.seed(
+      seededCookie({
+        name: "sid",
+        value: "desktop-session",
+        domain: "example.com",
+      }),
+    );
+    harness.jar.refuse("nothing");
+    const replay = await harness.applyFrame([
+      observedCookie({ name: "sid", domain: "example.com", expires: -1 }),
+    ]);
+    expect(replay.ownedByDesktopCookies).toBe(1);
+    expect(harness.jar.find("sid")?.value).toBe("desktop-session");
+  });
+
+  it("records no durable custody for a write bound for the ephemeral jar", async () => {
+    // Saved logins are off, so `partitionForProfile` sends `primary` guests to
+    // the in-memory jar. The sign-in still reaches the user's live tiles - but
+    // a durable mark would describe a cookie that dies at quit, and would
+    // still be standing as an update right over the user's own login the day
+    // they turn saving back on.
+    const harness = new ObservedApplyHarness();
+    harness.durableJar = false;
+
+    const applied = await harness.applyFrame([
+      observedCookie({ name: "sid", domain: "example.com", expires: -1 }),
+    ]);
+
+    expect(applied.appliedCookies).toBe(1);
+    expect(harness.announcedKeys).toEqual([]);
+    expect(harness.headlessOriginKeyIds.size).toBe(0);
+
+    // The stated cost of that, pinned so it is a decision rather than a
+    // surprise: nothing recorded the contribution, so the host cannot update
+    // it either. The cookie it already placed keeps working.
+    const refresh = await harness.applyFrame([
+      observedCookie({ name: "sid", domain: "example.com", expires: -1 }),
+    ]);
+    expect(refresh.ownedByDesktopCookies).toBe(1);
+  });
+
+  it("reads the jar from inside the domain's serialized section", async () => {
+    // The ownership test is only an ordering fact if the read it is made from
+    // happens where no other jar work for the site can interleave. Pinned by
+    // parking the read: while it is parked, other work queued for the same
+    // domain must not have started.
+    const harness = new ObservedApplyHarness();
+    let releaseRead = (): void => undefined;
+    harness.readGate = new Promise<void>((resolve) => {
+      releaseRead = () => resolve();
+    });
+    let queuedRan = false;
+
+    const applying = harness.applyFrame([
+      observedCookie({ name: "sid", domain: "example.com", expires: -1 }),
+    ]);
+    const queued = harness.serializer.runOnDomain("example.com", () => {
+      queuedRan = true;
+      return Promise.resolve();
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(queuedRan).toBe(false);
+
+    releaseRead();
+    await applying;
+    await queued;
+    expect(queuedRan).toBe(true);
+  });
+
+  it("refuses a stale slice replayed over a cookie the desktop rotated after contributing it", async () => {
+    // The reconnect shape: the host contributed `sid`, the user then signed in
+    // again on this machine (which is what hands the key back), and the host
+    // comes back from being offline still asserting its old slice.
+    const harness = new ObservedApplyHarness();
+    await harness.applyFrame([
+      observedCookie({ name: "sid", domain: "example.com", expires: -1 }),
+    ]);
+    harness.headlessOriginKeyIds.delete(
+      cookieKeyId({ domain: "example.com", name: "sid", path: "/" }),
+    );
+    harness.jar.seed(
+      seededCookie({
+        name: "sid",
+        value: "rotated-here",
+        domain: "example.com",
+      }),
+    );
+
+    const replayed = await harness.applyFrame([
+      observedCookie({ name: "sid", domain: "example.com", expires: -1 }),
+    ]);
+
+    expect(replayed.ownedByDesktopCookies).toBe(1);
+    expect(harness.jar.find("sid")?.value).toBe("rotated-here");
+  });
+
+  it("MUTATION GUARD: with the rule disabled the same frame destroys the desktop's session", async () => {
+    // The point of this one is to fail if the guard above is ever made
+    // vacuous: the assertions elsewhere in this block only mean something
+    // because the write they refuse is a write that would otherwise land.
+    const harness = new ObservedApplyHarness();
+    harness.ownershipRuleEnabled = false;
+    harness.jar.seed(
+      seededCookie({
+        name: "sid",
+        value: "desktop-session",
+        domain: "example.com",
+      }),
+    );
+
+    const result = await harness.applyFrame([
+      observedCookie({
+        name: "sid",
+        domain: "example.com",
+        expires: Date.now() / 1_000 + 2,
+      }),
+    ]);
+
+    expect(result.ownedByDesktopCookies).toBe(0);
+    expect(result.appliedCookies).toBe(1);
+    expect(harness.jar.find("sid")?.value).not.toBe("desktop-session");
+  });
+});
+
 describe("observed rejection trace sampling", () => {
   const REFUSED: BrowserObservedProfileResult = {
     domain: "example.com",
@@ -578,6 +939,7 @@ describe("observed rejection trace sampling", () => {
     appliedCookies: 0,
     domainMismatchCookies: 0,
     expiredCookies: 0,
+    ownedByDesktopCookies: 0,
     rejectedCookies: 0,
   };
 
@@ -646,6 +1008,7 @@ describe("observed sign-in echo", () => {
       // faked clock answers for both.
       monotonicNow: () => Date.now(),
       coalesceWindowMs: BROWSER_COOKIE_DELTA_WINDOW_MS,
+      onLocalCookieWrite: () => undefined,
     });
     observer.attach();
 

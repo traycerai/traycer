@@ -203,10 +203,6 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
     return Promise.resolve();
   }
 
-  evictSite(): Promise<void> {
-    return Promise.resolve();
-  }
-
   applyObservedProfile(): Promise<void> {
     return Promise.resolve();
   }

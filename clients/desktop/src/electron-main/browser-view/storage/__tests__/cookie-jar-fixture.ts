@@ -114,9 +114,16 @@ export class FakeCookieJar {
     if (this.listener === listener) this.listener = null;
   }
 
-  /** Pre-existing jar state the applier never wrote, and no `changed` event. */
+  /**
+   * Pre-existing jar state the applier never wrote, and no `changed` event.
+   * Replaces by key like the real jar does, so seeding over a cookie an
+   * earlier apply left behind models a local re-write rather than a duplicate
+   * key no Chromium jar could hold.
+   */
   seed(cookie: Cookie): void {
-    this.jar.push(cookie);
+    const index = this.indexOf(cookie);
+    if (index === -1) this.jar.push(cookie);
+    else this.jar[index] = cookie;
   }
 
   refuse(name: string): void {

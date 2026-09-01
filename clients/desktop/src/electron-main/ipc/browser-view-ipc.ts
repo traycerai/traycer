@@ -30,6 +30,8 @@ import {
   clearBrowserViewPendingCertificateError,
   ensureBrowserViewSession,
   ensureBrowserViewSessionForPartition,
+  forgetBrowserPrimaryProfileAppliedKeys,
+  noteBrowserPrimaryProfileAppliedKeys,
   onBrowserPrimaryProfileDelta,
   onBrowserViewCertificateError,
   onBrowserViewDownloadChange,
@@ -38,7 +40,6 @@ import {
   registerBrowserViewWebContents,
   releaseBrowserViewSession,
   suppressAllBrowserPrimaryProfileDeltas,
-  suppressBrowserPrimaryProfileDelta,
   type BrowserSessionProfileRequest,
 } from "../browser-view/browser-session";
 import { describeLogError, log } from "../app/logger";
@@ -65,12 +66,15 @@ import {
   browserForgetLedgerDigestForHost,
   browserForgetLedgerPendingClears,
   isBrowserForgetLedgerPendingAck,
+  isHeadlessOriginCookieKey,
   markBrowserForgetLedgerCleared,
   onBrowserForgetLedgerChanged,
   recordForgetAllBrowserLogins,
   recordForgetLedgerAck,
   recordForgottenBrowserSite,
+  recordHeadlessOriginCookieKeys,
   releaseBrowserForgetLedgerConnection,
+  releaseHeadlessOriginCookieKeys,
 } from "../browser-view/storage/browser-forget-ledger";
 import { trustBrowserCertificate } from "../app/cert-trust";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
@@ -566,36 +570,6 @@ export function registerBrowserViewIpc(
     },
   );
 
-  // The host says this site was cleared somewhere else for this user. Same
-  // removal, no delta: the store recorded the tombstones before it sent the
-  // frame, so an echo would only re-assert what it already decided - and with
-  // the observer suppressed there is nothing to echo with.
-  bridge.handleInvoke(
-    RunnerHostInvoke.browserViewEvictSite,
-    async (_event, payload) => {
-      const domain = browserViewIpcPayload.evictDomain.parse(payload).domain;
-      // Recorded in the ledger like a local clear, and for two reasons: it
-      // makes this machine's ledger the complete record of what is gone, so a
-      // host that hears about the forget only from here still prunes; and the
-      // revision it bumps starts refusing in-flight observations for the site
-      // on every connection at once, which is the half a per-jar suppression
-      // window could never reach.
-      const revision = await recordForgottenBrowserSite(domain);
-      // Serialised OUTSIDE the suppression, so the window covers the clear and
-      // nothing else: opening it while still queued would refuse observations
-      // for a site this handler has not begun to touch.
-      await jarSerializer.runOnDomain(domain, () =>
-        suppressBrowserPrimaryProfileDelta(domain, () =>
-          clearBrowserSiteEverywhere(domain),
-        ),
-      );
-      await markBrowserForgetLedgerCleared(revision);
-      log.info("[browser-view] evicted one site on the host's request", {
-        domain,
-      });
-    },
-  );
-
   // A sign-in one of the user's hosts witnessed inside a headless session
   // (universal-sign-in decision 8) - the one direction in which a host writes
   // this jar, and therefore the one handler that treats its whole payload as
@@ -614,7 +588,34 @@ export function registerBrowserViewIpc(
       const result = await applyBrowserObservedProfile(observed, {
         now: () => Date.now(),
         isForgottenPendingAck: isBrowserForgetLedgerPendingAck,
-        getSession: () => ensureBrowserViewSession(PRIMARY_PROFILE_REQUEST),
+        isHeadlessOriginKey: isHeadlessOriginCookieKey,
+        // The observer first, then the durable record: the observer is what
+        // stops this applier's own inserts from handing the keys straight back
+        // to the desktop, and the record is what lets the sending host update
+        // them again later.
+        //
+        // The applier calls neither for a write bound for the ephemeral jar,
+        // which is why both may write the durable ledger unconditionally.
+        claimHeadlessOriginKeys: async (keys) => {
+          noteBrowserPrimaryProfileAppliedKeys(keys);
+          await recordHeadlessOriginCookieKeys(keys);
+        },
+        // The mirror image, for the keys Chromium refused: the observer mark
+        // first (no insert is coming to spend it), then the durable claim.
+        releaseHeadlessOriginKeys: async (keys) => {
+          forgetBrowserPrimaryProfileAppliedKeys(keys);
+          await releaseHeadlessOriginCookieKeys(keys);
+        },
+        getTargetJar: () => {
+          const partition = partitionForProfile(
+            PRIMARY_PROFILE_REQUEST.profile,
+            PRIMARY_PROFILE_REQUEST.sessionId,
+          );
+          return {
+            session: ensureBrowserViewSessionForPartition(partition),
+            durableJar: partition === BROWSER_VIEW_PARTITION,
+          };
+        },
         serializeOnDomain: (domain, action) =>
           jarSerializer.runOnDomain(domain, action),
         governor: observedConnections,

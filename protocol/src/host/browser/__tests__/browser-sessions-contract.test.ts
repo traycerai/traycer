@@ -745,18 +745,21 @@ describe("browser.sessions@1.0 forget all browser logins (ticket 08)", () => {
 });
 
 describe("browser.sessions@1.0 clear cookies for one site (ticket 07)", () => {
-  const evict = {
-    kind: "primaryProfileEvict",
-    hasBinaryPayload: false,
-    domain: "example.com",
-  };
-
-  it("accepts the server evict frame carrying one registrable domain", () => {
+  it("has no server evict frame left: the host cannot remove from a jar", () => {
+    // universal-sign-in ticket 08 retired `primaryProfileEvict`. It was the
+    // last host-driven removal primitive over the master jar, and the write
+    // channel is add-only without it, so the arm is gone rather than gated - a
+    // peer that still sent one is refused here.
+    const evict = {
+      kind: "primaryProfileEvict",
+      hasBinaryPayload: false,
+      domain: "example.com",
+    };
     expect(browserSessionsServerFrameSchema.safeParse(evict).success).toBe(
-      true,
+      false,
     );
     expect(browserSessionsV1.serverFrameSchema.safeParse(evict).success).toBe(
-      true,
+      false,
     );
   });
 });

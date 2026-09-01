@@ -35,10 +35,14 @@ import {
   browserForgetLedgerDigestForHost,
   initBrowserForgetLedger,
   isBrowserForgetLedgerPendingAck,
+  isHeadlessOriginCookieKey,
   recordForgetLedgerAck,
   recordForgottenBrowserSite,
+  recordHeadlessOriginCookieKeys,
   releaseBrowserForgetLedgerConnection,
+  releaseHeadlessOriginCookieKeys,
 } from "../browser-forget-ledger";
+import { cookieKeyId } from "../browser-storage-state";
 import { FakeCookieJar } from "./cookie-jar-fixture";
 
 /**
@@ -141,6 +145,12 @@ function expiredCookieFrame(expiredAt: number): ObservedServerFrame {
  */
 class DesktopReceiveHarness {
   readonly jar = new FakeCookieJar();
+  /**
+   * The desktop's own cookie observer, when a case wires one. `browser-
+   * session.ts` hands the applier's claims to it exactly like this, and it is
+   * the half `ObservedApplyHarness` cannot exercise.
+   */
+  observer: BrowserCookieChangeObserver | null = null;
   private readonly serializer = new BrowserJarSerializer();
   private readonly governor = new BrowserObservedConnectionGovernor(() =>
     Date.now(),
@@ -161,7 +171,21 @@ class DesktopReceiveHarness {
     const result = await applyBrowserObservedProfile(observed, {
       now: () => Date.now(),
       isForgottenPendingAck: isBrowserForgetLedgerPendingAck,
-      getSession: () => ({ cookies: this.jar }),
+      isHeadlessOriginKey: isHeadlessOriginCookieKey,
+      // Wired exactly as `browser-view-ipc.ts` wires it, observer half
+      // included - the half `ObservedApplyHarness` has no observer for.
+      claimHeadlessOriginKeys: (keys) => {
+        this.observer?.noteAppliedKeys(keys);
+        return recordHeadlessOriginCookieKeys(keys);
+      },
+      releaseHeadlessOriginKeys: (keys) => {
+        this.observer?.forgetAppliedKeys(keys);
+        return releaseHeadlessOriginCookieKeys(keys);
+      },
+      getTargetJar: () => ({
+        session: { cookies: this.jar },
+        durableJar: true,
+      }),
       serializeOnDomain: (domain, action) =>
         this.serializer.runOnDomain(domain, action),
       governor: this.governor,
@@ -201,6 +225,9 @@ describe("carry-over loop, desktop side of the wire", () => {
       // answers for both.
       monotonicNow: () => Date.now(),
       coalesceWindowMs: BROWSER_COOKIE_DELTA_WINDOW_MS,
+      // This suite is about the echo, not about ownership attribution, which
+      // `browser-observed-profile.test.ts` pins against the real observer.
+      onLocalCookieWrite: () => undefined,
     });
     observer.attach();
 
@@ -233,6 +260,53 @@ describe("carry-over loop, desktop side of the wire", () => {
     // Nothing re-opens a window on its own: one applied frame is one echo.
     await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS * 3);
     expect(deltas).toHaveLength(1);
+
+    observer.dispose();
+  });
+
+  it("keeps the custody it claimed over its own writes, and loses it to the desktop's", async () => {
+    // The ORDER pin, and the one that needs a real observer: the applier
+    // claims the keys before it writes them, because its own `cookies.set`
+    // fires the same insert event the desktop's browsing does. Claim after the
+    // write and the observer sees an insert it cannot attribute, releases the
+    // key, and the sending host loses the right to refresh the session it just
+    // established. `ObservedApplyHarness` cannot see this - it wires no
+    // observer - so the case lives here, with the real one.
+    const observer = new BrowserCookieChangeObserver({
+      cookies: harness.jar,
+      emit: () => undefined,
+      now: () => Date.now(),
+      monotonicNow: () => Date.now(),
+      coalesceWindowMs: BROWSER_COOKIE_DELTA_WINDOW_MS,
+      onLocalCookieWrite: (key) => void releaseHeadlessOriginCookieKeys([key]),
+    });
+    observer.attach();
+    harness.observer = observer;
+    const sid = cookieKeyId({
+      domain: CARRY_OVER_DOMAIN,
+      name: "sid",
+      path: "/",
+    });
+
+    expect(await harness.receive(carryOverObservedFrame(), CONNECTION_ID)).toBe(
+      "applied",
+    );
+
+    expect(isHeadlessOriginCookieKey(sid)).toBe(true);
+
+    // And the desktop's own browsing writing the same key takes it straight
+    // back - the other half of the same mechanism, on the same jar.
+    await harness.jar.set({
+      url: `https://${CARRY_OVER_DOMAIN}/`,
+      name: "sid",
+      value: "signed-in-here",
+      domain: CARRY_OVER_DOMAIN,
+      path: "/",
+      secure: true,
+      expirationDate: CARRY_OVER_PERSISTENT_EXPIRES,
+    });
+
+    expect(isHeadlessOriginCookieKey(sid)).toBe(false);
 
     observer.dispose();
   });

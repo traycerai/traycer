@@ -445,23 +445,31 @@ export interface BrowserViewBridge {
    */
   clearSite(input: BrowserViewTileKey): Promise<void>;
   /**
-   * The receiving half of the same action: the host says one site was cleared
-   * somewhere else for this user (`primaryProfileEvict`), so this machine's
-   * `primary` jars drop it too. Emits **no** delta - the store already recorded the
-   * tombstones, and an echo would only re-assert what it just decided.
-   */
-  evictSite(domain: string): Promise<void>;
-  /**
    * A sign-in a host witnessed inside one of its own headless sessions
    * (`primaryProfileObserved`), offered to this machine's master jar
-   * (universal-sign-in decision 8). Merge-only: it can add cookies and never
-   * remove or replace any.
+   * (universal-sign-in decision 8). ADD-ONLY against the desktop's own
+   * browsing, and the unit of ownership is a cookie NAME within a registrable
+   * domain rather than the (name, domain, path) key Chromium replaces by: a
+   * host may introduce a name this jar holds no desktop-written cookie for,
+   * and update what its own earlier observation introduced, and nothing else.
+   * The coarser unit is what makes the claim true at the WIRE level - the
+   * `Cookie` header is ordered longest-path-first and read first-occurrence,
+   * so a `/app` cookie beside the desktop's `/` one, or a `.example.com` one
+   * beside a host-only `example.com` one, is that session for the user's real
+   * requests.
+   *
+   * One stated limit: the jar is read through the same normalisation the
+   * capture path uses, so a cookie this shell cannot represent (an IDN domain
+   * form it refuses, say) reads as a name the jar does not hold - and is
+   * therefore addable. The same normalisation is what stops that cookie
+   * reaching a host in the first place.
    *
    * The renderer forwards it without judging it. Main is the only place the
-   * frame is validated - independent domain re-derivation, the per-frame
-   * bounds, expired-cookie rejection, the no-resurrection window and the rate
-   * limit all live there - because this is the one direction in which a host
-   * writes the user's jar, and the renderer holds no jar to check it against.
+   * frame is validated - independent domain re-derivation, the ownership rule,
+   * the per-frame bounds, expired-cookie rejection, the no-resurrection window
+   * and the rate limit all live there - because this is the one direction in
+   * which a host writes the user's jar, and the renderer holds no jar to check
+   * it against.
    *
    * Resolves once the frame has been applied or dropped; nothing is reported
    * back to the host either way. The applied cookies leave through the normal

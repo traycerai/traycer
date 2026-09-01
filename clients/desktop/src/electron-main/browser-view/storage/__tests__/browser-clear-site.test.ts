@@ -318,6 +318,7 @@ describe("clearBrowserSite delta behaviour", () => {
       now: () => now,
       monotonicNow: () => now,
       coalesceWindowMs: BROWSER_COOKIE_DELTA_WINDOW_MS,
+      onLocalCookieWrite: () => undefined,
     });
     observer.attach();
     now += BROWSER_COOKIE_REMOVAL_GRACE_MS;
@@ -370,25 +371,6 @@ describe("clearBrowserSite delta behaviour", () => {
       // for an observer that had stopped tracking removals entirely.
       expect(expectedRemoved).toHaveLength(2);
       expect([...delta.removedKeys].sort(byName)).toEqual(expectedRemoved);
-      observer.dispose();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("emits no delta on the evict path - the store already knows", async () => {
-    vi.useFakeTimers();
-    try {
-      const session = new FakeClearSiteSession(SITE_JAR);
-      const deltas: BrowserPrimaryProfileDelta[] = [];
-      const observer = attachObserver(session, deltas);
-
-      await observer.suppress("example.com", () =>
-        clearBrowserSite("example.com", session, noOrigins),
-      );
-      await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS * 2);
-
-      expect(deltas).toEqual([]);
       observer.dispose();
     } finally {
       vi.useRealTimers();

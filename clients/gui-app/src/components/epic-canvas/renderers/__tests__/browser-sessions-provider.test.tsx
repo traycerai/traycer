@@ -359,9 +359,6 @@ class FakeBridge {
   readonly clearSite = vi.fn<BrowserViewBridge["clearSite"]>(() =>
     Promise.resolve(),
   );
-  readonly evictSite = vi.fn<BrowserViewBridge["evictSite"]>(() =>
-    Promise.resolve(),
-  );
   readonly applyObservedProfile = vi.fn<
     BrowserViewBridge["applyObservedProfile"]
   >(() => Promise.resolve());

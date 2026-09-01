@@ -346,12 +346,11 @@ export const RunnerHostInvoke = {
   browserViewGetDebugSnapshot: "runnerHost:browserView:getDebugSnapshot",
   browserViewPrimaryProfileCapture:
     "runnerHost:browserView:primaryProfile:capture",
-  // Clear cookies for one site (keychain refactor ticket 07). `...ClearSite` is
-  // the user's tile-menu action and reports the emptied slice to the host;
-  // `...EvictSite` is the host telling this desktop the same site was cleared
-  // elsewhere, and deliberately reports nothing back.
+  // Clear cookies for one site (keychain refactor ticket 07): the user's
+  // tile-menu action, which reports the emptied slice to the host. There is no
+  // receiving half - universal-sign-in ticket 08 retired the host-driven
+  // eviction along with the `primaryProfileEvict` frame that drove it.
   browserViewClearSite: "runnerHost:browserView:primaryProfile:clearSite",
-  browserViewEvictSite: "runnerHost:browserView:primaryProfile:evictSite",
   // A sign-in a host witnessed inside one of its headless sessions, offered to
   // this machine's master jar (universal-sign-in ticket 03). The only host->jar
   // WRITE direction the contract has, so main validates and bounds every frame

@@ -1172,12 +1172,6 @@ function handleBrowserSessionsSubsystemFrame(args: {
         sendClientFrame: args.sendClientFrame,
       });
       return;
-    case "primaryProfileEvict":
-      handlePrimaryProfileEvictFrame({
-        frame,
-        browserView: args.browserView,
-      });
-      return;
     case "primaryProfileObserved":
       applyObservedProfileFrame({
         frame,
@@ -1296,32 +1290,6 @@ function applyObservedProfileFrame(args: {
         cause: cause instanceof Error ? cause.message : String(cause),
       });
     });
-}
-
-/**
- * One site's logins were cleared for this user somewhere else (spec §6.5) - on
- * another desktop, or as a tombstone the host's store recorded. This partition
- * drops the same site.
- *
- * Nothing is sent back: the frame is a fan-out, not a request, and the desktop
- * deliberately emits no delta for the removal - the store decided these
- * tombstones before it sent the frame, so an echo would only re-assert them. A
- * window with no desktop bridge has no jar to evict from.
- */
-function handlePrimaryProfileEvictFrame(args: {
-  readonly frame: Extract<
-    BrowserSessionsServerFrame,
-    { readonly kind: "primaryProfileEvict" }
-  >;
-  readonly browserView: BrowserViewBridge | null;
-}): void {
-  const browserView = args.browserView;
-  if (browserView === null) return;
-  void browserView.evictSite(args.frame.domain).catch((cause: unknown) => {
-    appLogger.warn("[browser] could not evict a cleared site", {
-      cause: cause instanceof Error ? cause.message : String(cause),
-    });
-  });
 }
 
 /**

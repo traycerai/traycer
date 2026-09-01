@@ -579,7 +579,6 @@ function buildFakeBridge(
         reason: null,
       }),
       clearSite: async () => undefined,
-      evictSite: async () => undefined,
       applyObservedProfile: async () => undefined,
       getSaveLogins: async () => true,
       setSaveLogins: async (enabled) => enabled,
