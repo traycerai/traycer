@@ -173,6 +173,7 @@ function RemoveFromAccountRow(props: {
         }
       />
       <ConfirmDestructiveDialog
+        blockedReason={null}
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
         title={`Remove ${hostName} from this account?`}
@@ -298,6 +299,7 @@ function ClearFileEditSnapshotsRow(props: {
         }
       />
       <ConfirmDestructiveDialog
+        blockedReason={null}
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
         title={`Clear file edit snapshots on ${hostLabel}?`}
@@ -430,6 +432,7 @@ function RemoveTraycerRow(): ReactNode {
         }
       />
       <ConfirmDestructiveDialog
+        blockedReason={null}
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
         title="Remove Traycer from this computer?"

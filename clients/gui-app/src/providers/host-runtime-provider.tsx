@@ -153,8 +153,9 @@ export interface TypedHostRuntime<Registry extends VersionedRpcRegistry> {
  *   2. Build the messenger (`WsRpcClient` by default; tests inject mocks).
  *   3. Construct the shared `HostRuntime` with the services + messenger.
  *   4. `await auth.start()` to rehydrate any persisted token, then
- *      `await directory.start()` to subscribe to local-host snapshots
- *      and resolve initial remotes, then `runtime.start()` to wire auth /
+ *      `await directory.startSeeded()` to subscribe to local-host snapshots -
+ *      the registry listing is left in flight rather than waited on, because
+ *      nothing that paints reads it - then `runtime.start()` to wire auth /
  *      selection / local-host transitions into `HostClient`.
  *   5. Publish the binding so descendants can read `hostClient` / `auth`
  *      / `directory` through typed hooks.
@@ -454,7 +455,18 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
             return;
           }
           phase = "directory.start";
-          await directory.start();
+          // SEEDED, not listed. This resolves once the local-host subscription
+          // is installed - which populates the row a launch actually binds to,
+          // synchronously and with no I/O - and leaves `GET /api/v3/hosts` in
+          // flight. Awaiting the listing held this shell on
+          // `HostRuntimeBootFallback` for a cloud round trip that nothing here
+          // reads, and it is the unbounded half of the 616 ms these two starts
+          // cost of the 968 ms to first paint. The remote rows arrive on the
+          // directory's own change notification, which fires unconditionally
+          // when the listing lands; until then the directory reports
+          // `"unknown"` rather than `"zero"`, which is a state it has always
+          // been able to be in and every consumer already handles.
+          await directory.startSeeded();
           if (isDisposed()) {
             auth.dispose();
             activeRuntime.dispose();

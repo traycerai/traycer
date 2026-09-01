@@ -11,7 +11,6 @@ import { useRegisteredHosts } from "@/hooks/auth/use-registered-hosts-query";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useHostLeases } from "@/hooks/host/use-host-lease";
 import { useSelectionAuthorityAttached } from "@/hooks/host/use-selection-authority-attached";
-import { useRemoteHostsPlanRestricted } from "@/hooks/host/use-remote-hosts-plan-gate";
 import { useNowMs } from "@/components/settings/panels/host-settings-panel-hooks";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useLocalHostSnapshot } from "@/components/settings/panels/host-settings-panel-hooks";
@@ -135,10 +134,6 @@ export function useHostOptions(): HostOptions {
   const directoryQuery = useHostDirectoryList();
   const registryQuery = useRegisteredHosts();
   const localSnapshot = useLocalHostSnapshot(runnerHost);
-  // Same gate the header and workspace pickers consult, so no picker can offer
-  // a remote route another one already refuses.
-  const remoteHostsPlanRestricted = useRemoteHostsPlanRestricted();
-
   const directory = directoryQuery.data;
   const registry = registryQuery.data;
 
@@ -251,7 +246,6 @@ export function useHostOptions(): HostOptions {
         hasLiveSession,
         leases,
         authorityAttached,
-        remoteHostsPlanRestricted,
         localHostSettingUp,
         nowMs,
       }),
@@ -265,7 +259,6 @@ export function useHostOptions(): HostOptions {
       leases,
       authorityAttached,
       localHostSettingUp,
-      remoteHostsPlanRestricted,
       nowMs,
     ],
   );

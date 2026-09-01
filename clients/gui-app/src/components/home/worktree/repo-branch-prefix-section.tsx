@@ -822,6 +822,7 @@ function SavedBranchNaming(props: {
         </Button>
       </div>
       <ConfirmDestructiveDialog
+        blockedReason={null}
         open={props.confirmRemoveOpen}
         onOpenChange={props.onOpenChangeConfirmRemove}
         title="Remove repository prefix?"

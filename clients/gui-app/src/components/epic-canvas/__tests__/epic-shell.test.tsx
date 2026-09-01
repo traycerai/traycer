@@ -10,10 +10,15 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { EpicSessionProvider } from "@/providers/epic-session-provider";
 import {
   __getOpenEpicRegistryForTests,
-  __setEpicStreamClientFactoryForTests,
   EpicSessionPresentationContext,
   type EpicSessionPresentation,
 } from "@/lib/registries/epic-session-registry";
+import {
+  __setEpicRuntimeWorkerFactoryForTests,
+  getEpicRuntimeWorkerFactoryOverride,
+} from "@/lib/registries/epic-runtime-worker-factory-slot";
+import { createInProcessEpicRuntimeWorker } from "@/stores/epics/open-epic/test-support/in-process-epic-runtime-worker";
+import type { RuntimeWorkerLike } from "@/stores/epics/open-epic/runtime/worker/spawn-epic-runtime-worker";
 
 const hostClient = {
   getActiveHostId: () => "host-test",
@@ -43,16 +48,20 @@ vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => "host-test",
 }));
 
-// `EpicSessionProvider` opens its own durable transport via this factory, but
-// the test installs an `__setEpicStreamClientFactoryForTests` override that
-// short-circuits before `openTransport` runs - so a stable stub opener that is
-// never invoked lets the provider mount without the full host runtime.
-const openTransportStub = vi.hoisted(() => () => {
-  throw new Error("openTransport must not be called in this test");
+// `EpicSessionProvider` opens its own durable transport via this factory, and
+// UNCONDITIONALLY now: the stream-factory override that used to short-circuit
+// before `openTransport` ran is gone, so a stub that threw here - which was
+// this file's shape, safe only because it was never reached - would now fail
+// every test. The fake supplies "no socket in tests" at the opener instead.
+// What this suite drives the session's stream with is the WORKER factory.
+vi.mock("@/lib/host/use-durable-stream-transport", async () => {
+  const { fakeDurableStreamTransports } =
+    await import("@/lib/host/test-support/fake-durable-stream-transport");
+  return {
+    useDurableStreamTransportFactory: () =>
+      fakeDurableStreamTransports().opener,
+  };
 });
-vi.mock("@/lib/host/use-durable-stream-transport", () => ({
-  useDurableStreamTransportFactory: () => openTransportStub,
-}));
 
 vi.mock("@/hooks/epic/use-epic-title-mutation", () => ({
   useEpicUpdateTitle: () => ({
@@ -136,27 +145,55 @@ function buildSnapshot(title: string): Uint8Array {
   return Y.encodeStateAsUpdate(donor);
 }
 
+/**
+ * What was installed before this suite's worker, so `afterEach` can put it
+ * back. NEVER `null`: the jsdom setup file installs a coreless worker for every
+ * suite, and `null` means "use the production constructor" - the one form
+ * (`new Worker(new URL(...))`) jsdom cannot execute.
+ */
+let previousWorkerFactory: (() => RuntimeWorkerLike) | null = null;
+
+/**
+ * The suite's stream, one seam over.
+ *
+ * The factory itself is unchanged - the same callbacks, the same `closeCount`.
+ * What changed is where it is installed: a stream factory built on MAIN cannot
+ * cross `postMessage` to a runtime that lives in the worker, so it is supplied
+ * to the worker's own composition instead, through the shared in-process helper
+ * `openStoreForTest` also uses.
+ */
 function installControlledFactory(): {
   readonly streams: () => ReadonlyArray<ControlledStream>;
 } {
   const streams: ControlledStream[] = [];
-  __setEpicStreamClientFactoryForTests((_epicId, callbacks) => {
-    const stream: ControlledStream = {
-      callbacks,
-      closeCount: 0,
-    };
-    streams.push(stream);
-    return {
-      applyUpdate: () => undefined,
-      awareness: () => undefined,
-      applyArtifactRoomUpdate: () => undefined,
-      artifactRoomAwareness: () => undefined,
-      retryMigration: () => undefined,
-      close: () => {
-        stream.closeCount += 1;
+  previousWorkerFactory = getEpicRuntimeWorkerFactoryOverride();
+  // A FRESH helper per spawn. One instance owns one bridge pair and one
+  // composition, so a shared one would hand two sessions the same runtime -
+  // and would hand a re-acquired session a pipe its predecessor's
+  // `terminate()` already severed. Constructing per call is also what the
+  // deleted stream override did: the provider called it once per session.
+  __setEpicRuntimeWorkerFactoryForTests(() =>
+    createInProcessEpicRuntimeWorker({
+      streamClientFactory: (_epicId, callbacks) => {
+        const stream: ControlledStream = {
+          callbacks,
+          closeCount: 0,
+        };
+        streams.push(stream);
+        return {
+          applyUpdate: () => undefined,
+          awareness: () => undefined,
+          applyArtifactRoomUpdate: () => undefined,
+          artifactRoomAwareness: () => undefined,
+          retryMigration: () => undefined,
+          close: () => {
+            stream.closeCount += 1;
+          },
+        };
       },
-    };
-  });
+      laneSelection: null,
+    }).createWorker(),
+  );
   return {
     streams: () => streams,
   };
@@ -236,13 +273,13 @@ describe("<EpicShell />", () => {
   beforeEach(() => {
     window.localStorage.clear();
     __getOpenEpicRegistryForTests().disposeAll();
-    __setEpicStreamClientFactoryForTests(null);
   });
 
   afterEach(() => {
     cleanup();
     __getOpenEpicRegistryForTests().disposeAll();
-    __setEpicStreamClientFactoryForTests(null);
+    // RESTORED, not nulled - see `previousWorkerFactory`.
+    __setEpicRuntimeWorkerFactoryForTests(previousWorkerFactory);
   });
 
   it("renders the stable shell frame while the session is not ready", () => {
