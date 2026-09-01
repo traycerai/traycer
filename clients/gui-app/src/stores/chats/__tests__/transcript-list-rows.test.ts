@@ -1485,6 +1485,12 @@ describe("transcriptListRows", () => {
     // first row, and never merely adjacent to the row before it.
     expect(steerIndex).toBeGreaterThan(part0Index);
     expect(steerIndex).toBeLessThan(part1Index);
+    // A virtualized slice can contain only a LATER member of a tall recovered
+    // unit. It must still protect the unit's indexed position.
+    expect(visibleOrdinalRange(rows, steerIndex, part1Index + 1)).toEqual({
+      fromOrdinal: 1,
+      toOrdinal: 2,
+    });
     const laterIndex = rows.findIndex(
       (row) =>
         row.kind === "placeholder" && row.entry?.rowId === "later-indexed-row",
@@ -1545,6 +1551,53 @@ describe("transcriptListRows", () => {
       `H:${secondPart1}`,
       "P:4",
     ]);
+    expect(
+      rows.filter((row) => row.kind === "hydrated").map((row) => row.ordinal),
+    ).toEqual([1, 1, 1, 3, 3, 3]);
+  });
+
+  it("keeps a stale-carried split row inside its recovered unit", () => {
+    const turnId = "turn-stale-carried-split";
+    const queueItemId = "queue-stale-carried-split";
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const assistant = liveSplitAssistant(turnId, queueItemId);
+    const part0Id = assistantSliceRowId(turnId, 0, true);
+    const part1Id = assistantSliceRowId(turnId, 1, true);
+    const steerId = queueSteerRowId(queueItemId);
+
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 3,
+        spans: [],
+        staleSpans: [
+          {
+            ...span(2, [part0Id]),
+            messages: [assistant],
+          },
+        ],
+        skeleton: [
+          skeletonEntry("prior-user"),
+          skeletonEntry(assistantRowId(turnId)),
+          undefined,
+        ],
+        skeletonComplete: true,
+        invalidated: false,
+        liveMessages: [assistant],
+      }),
+      rendered: [
+        modelWithPersistentMessageId(part0Id, transientId),
+        modelWithoutPersistentMessageId(steerId),
+        modelWithPersistentMessageId(part1Id, transientId),
+      ],
+    });
+
+    expect(kinds(rows)).toEqual([
+      "P:0",
+      `H:${part0Id}`,
+      `H:${steerId}`,
+      `H:${part1Id}`,
+    ]);
+    expect(rows.filter((row) => row.key === part0Id)).toHaveLength(1);
   });
 
   it("holds a split-turn row a fresh span already seated at its pre-split ordinal", () => {
@@ -1674,7 +1727,7 @@ describe("transcriptListRows", () => {
     expect(steerIndex).toBeGreaterThan(part0Index);
     expect(steerIndex).toBeLessThan(part1Index);
     // The vacated ordinal draws nothing rather than a placeholder: a row is
-    // there, and it is being drawn in the tail unit.
+    // there, and it is being drawn in the recovered unit.
     expect(
       rows.some((row) => row.kind === "placeholder" && row.ordinal === 2),
     ).toBe(false);

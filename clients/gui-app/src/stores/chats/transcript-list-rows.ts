@@ -19,6 +19,8 @@ import {
 import { assistantTurnKey } from "@traycer/protocol/persistence/chat-transcript/fork-boundary";
 import { isTransientLiveAssistantMessageId } from "@/lib/chat/transient-live-assistant-message-id";
 
+const EMPTY_ROW_IDS: ReadonlySet<string> = new Set<string>();
+
 /**
  * # The list the transcript draws: hydrated rows and placeholders together
  *
@@ -673,6 +675,11 @@ function invalidatedPlaceholderRows(
  * materialize a row that was deliberately absent before it and after it. The
  * restriction is what keeps that apart from a row the rebase merely RENAMED;
  * see the branch itself.
+ *
+ * `excludedRowIds` protects a live pre-split unit from this fallback tier. Its
+ * live projection replaces the stale row as one anchored unit, so seating even
+ * one stale member would split the unit and make the later merge drop it as
+ * already placed.
  */
 function seatStaleRows(input: {
   readonly window: TranscriptWindow;
@@ -681,6 +688,7 @@ function seatStaleRows(input: {
   readonly modelByOrdinal: Map<number, ChatMessageModel>;
   readonly placedRowIds: Set<string>;
   readonly suppressedOrdinals: Set<number>;
+  readonly excludedRowIds: ReadonlyMap<string, number> | ReadonlySet<string>;
 }): void {
   const { window } = input;
   // A sorted COPY (the STORED order is ordinal, which `hydratedRecords` relies
@@ -707,6 +715,10 @@ function seatStaleRows(input: {
         ordinal = oldOrdinal;
       }
       if (ordinal >= window.rowCount) return;
+      if (input.excludedRowIds.has(rowId)) {
+        input.suppressedOrdinals.add(ordinal);
+        return;
+      }
       if (
         input.modelByOrdinal.has(ordinal) ||
         input.suppressedOrdinals.has(ordinal)
@@ -901,6 +913,7 @@ function invalidatedTranscriptListRows(
     // flash the empty state. Dropping one would shorten the list to buy the
     // absence of a row the reader cannot tell from its neighbours anyway.
     suppressedOrdinals: new Set<number>(),
+    excludedRowIds: EMPTY_ROW_IDS,
   });
   const unplacedRendered = rendered.filter((model) => {
     if (staleSeatedRowIds.has(model.id)) return false;
@@ -1058,6 +1071,7 @@ export function transcriptListRows(input: {
       modelByOrdinal,
       placedRowIds,
       suppressedOrdinals,
+      excludedRowIds: heldPreSplitRows,
     });
   }
 
@@ -1176,12 +1190,15 @@ function appendUnplacedRenderedRows(input: {
       while (heldIndex < heldUnits.length) {
         const entry = heldUnits[heldIndex];
         if (entry[0] > ordinal) break;
-        const unit = entry[1];
+        const [heldOrdinal, unit] = entry;
         for (const model of unit) {
           merged.push({
             kind: "hydrated" as const,
             key: model.id,
-            ordinal: null,
+            // The unit is mid-transcript, not part of the live tail. Every
+            // member shares its stale unsplit anchor so ANY virtualized slice
+            // of a tall unit protects and hydrates the surrounding range.
+            ordinal: heldOrdinal,
             model,
           });
         }
