@@ -77,7 +77,9 @@ describe("createPlanRestrictedSessionRebuildBackoff", () => {
 
     backoff.request(newOwner, newRebuild);
     expect(vi.getTimerCount()).toBe(1);
-    vi.advanceTimersByTime(PLAN_RESTRICTED_SESSION_REBUILD_INITIAL_BACKOFF_MS - 1);
+    vi.advanceTimersByTime(
+      PLAN_RESTRICTED_SESSION_REBUILD_INITIAL_BACKOFF_MS - 1,
+    );
     expect(newRebuild).not.toHaveBeenCalled();
 
     vi.advanceTimersByTime(1);
@@ -102,7 +104,9 @@ describe("createPlanRestrictedSessionRebuildBackoff", () => {
     backoff.request(thirdOwner, thirdRebuild);
 
     expect(vi.getTimerCount()).toBe(1);
-    vi.advanceTimersByTime(PLAN_RESTRICTED_SESSION_REBUILD_INITIAL_BACKOFF_MS - 1);
+    vi.advanceTimersByTime(
+      PLAN_RESTRICTED_SESSION_REBUILD_INITIAL_BACKOFF_MS - 1,
+    );
     expect(secondRebuild).not.toHaveBeenCalled();
     expect(thirdRebuild).not.toHaveBeenCalled();
 
@@ -112,7 +116,9 @@ describe("createPlanRestrictedSessionRebuildBackoff", () => {
     expect(thirdRebuild).toHaveBeenCalledTimes(1);
 
     backoff.request(fourthOwner, fourthRebuild);
-    vi.advanceTimersByTime(PLAN_RESTRICTED_SESSION_REBUILD_INITIAL_BACKOFF_MS * 2 - 1);
+    vi.advanceTimersByTime(
+      PLAN_RESTRICTED_SESSION_REBUILD_INITIAL_BACKOFF_MS * 2 - 1,
+    );
     expect(fourthRebuild).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1);
     expect(fourthRebuild).toHaveBeenCalledTimes(1);

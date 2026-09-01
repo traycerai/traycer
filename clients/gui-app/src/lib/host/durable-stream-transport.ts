@@ -23,8 +23,7 @@ export interface DurableStreamTransport {
 }
 
 /** A durable session transport whose owner can attribute its final close. */
-export interface AttributableDurableStreamTransport
-  extends DurableStreamTransport {
+export interface AttributableDurableStreamTransport extends DurableStreamTransport {
   /**
    * Same teardown, with a caller-authored diagnostic reason.
    *

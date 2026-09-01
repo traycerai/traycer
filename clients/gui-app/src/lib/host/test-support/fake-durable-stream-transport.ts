@@ -107,9 +107,7 @@ function createWsStreamClient(
 
 const records: FakeTransportRecord[] = [];
 
-const defaultOpener = (
-  hostId: string,
-): AttributableDurableStreamTransport => {
+const defaultOpener = (hostId: string): AttributableDurableStreamTransport => {
   const closeReasons: string[] = [];
   const wsStreamClient = createWsStreamClient(records.length, closeReasons);
   const record: FakeTransportRecord = {

@@ -639,10 +639,7 @@ export class OpenEpicSessionRegistry {
     // NO retention, stated rather than defaulted - see above for why the dirty
     // test would answer "the only copy" about a document nothing can read.
     entry.session.pendingRetention = null;
-    attributeEpicSessionTransportClose(
-      entry.session.handle,
-      "retry-rebuild",
-    );
+    attributeEpicSessionTransportClose(entry.session.handle, "retry-rebuild");
     this.sessions.discard(epicId, "released");
   }
 
