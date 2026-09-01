@@ -94,6 +94,7 @@ function renderTile(): void {
       paneId="pane-1"
       epicId="epic-1"
       node={peekNode}
+      isElectronWake={false}
     />,
   );
   act(() => {
