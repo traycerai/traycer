@@ -77,6 +77,7 @@ export function CommGraphTile(props: CommGraphTileProps) {
       <div className="min-h-0 min-w-0 flex-1">
         <CommGraphCanvas
           epicId={node.epicId}
+          tileInstanceId={node.instanceId}
           agents={agents}
           agentIds={projection.visibleAgentIds}
           events={projection.asOfEvents}
