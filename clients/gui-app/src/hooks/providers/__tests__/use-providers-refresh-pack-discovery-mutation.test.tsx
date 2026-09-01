@@ -115,22 +115,36 @@ describe("useProvidersRefreshPackDiscovery response budget", () => {
     expect(mocks.request).not.toHaveBeenCalled();
   });
 
-  it("declares a budget strictly longer than the transport's plain-request default", () => {
-    // The host client rejects any `requestWithResponseTimeout` whose value is
-    // not EXACTLY the row's `joinResponseTimeoutMs`, and that is a runtime
-    // rejection with no other guard. Comparing the table's declared value
-    // against the same constant the row imports cannot fail - the two agree
-    // for any value, including one small enough to make the whole
-    // extended-budget mechanism pointless. Comparing against the transport's
-    // own plain-`request` default is the version that can actually fail, if
-    // the row ever shrinks back toward it.
-    // Mirrors `DEFAULT_HOST_RPC_FRAME_TIMEOUT_MS` in
-    // `lib/host/host-messenger.ts`, which is module-private - a literal here
-    // is the only way to name it without widening that module's surface.
+  it("declares exactly the budget the hook passes, and one longer than the transport's plain-request default", () => {
+    // TWO assertions answering two different questions. Keep both.
+    //
+    // EQUALITY guards a hard runtime reject that no suite exercises:
+    // `HostClient.requestWithResponseTimeout` rejects unless the row's
+    // `joinResponseTimeoutMs` equals the passed value EXACTLY
+    // (`expectedTimeout !== responseTimeoutMs -> Promise.reject`,
+    // clients/shared/host-client/host-client.ts). This suite mocks
+    // `@/lib/host` with a plain object, so that guard is never run here.
+    //
+    // It reads like a tautology today because the row imports the constant.
+    // It is not. Edit the row to `7 * 60 * 1000` - a plausible "give it more
+    // room" change that forgets the shared constant - and without this line
+    // EVERY suite stays green while EVERY real click rejects with "does not
+    // permit response timeout 360000": the mocked-client test still sees the
+    // hook pass the constant, the floor below still passes (420000 > 30000),
+    // and the sizing test reads the constant, not the row. Do not remove it
+    // again on the grounds that it cannot fail.
+    //
+    // The FLOOR is the non-vacuous half: it is the one that fails if the pair
+    // shrinks back toward the frame default in lockstep.
+    //
+    // The literal mirrors `DEFAULT_HOST_RPC_FRAME_TIMEOUT_MS` in
+    // `lib/host/host-messenger.ts`, which is module-private - naming it here
+    // any other way would mean widening that module's surface.
     const TRANSPORT_DEFAULT_FRAME_TIMEOUT_MS = 30_000;
     const declared = hostRpcSchedulingPolicy.joinResponseTimeoutMs(
       "providers.refreshPackDiscovery",
     );
+    expect(declared).toBe(PROVIDER_PACK_DISCOVERY_CHECK_TIMEOUT_MS);
     expect(declared).toBeGreaterThan(TRANSPORT_DEFAULT_FRAME_TIMEOUT_MS);
   });
 

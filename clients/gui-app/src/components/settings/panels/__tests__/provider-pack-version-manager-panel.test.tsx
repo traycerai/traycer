@@ -272,14 +272,17 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
     }
     return mocks.defaultSupport;
   },
+  // Deliberately does NOT consult `supportByHostId`. That map is the
+  // four-method gate's knob and is host-scoped, so honouring it here would
+  // let a future test set `supportByHostId.set("host-1", true)` alongside
+  // `defaultDiscoverySupport = false` and silently get a button — the exact
+  // per-method ambiguity this second fallback exists to remove.
+  // `supportByMethodOverride` is already the precise knob for this hook.
   useHostSupportsMethod: (hostId: string | null, method: string) => {
     if (hostId === null) return false;
     const overrideKey = `${hostId}::${method}`;
     if (mocks.supportByMethodOverride.has(overrideKey)) {
       return mocks.supportByMethodOverride.get(overrideKey) === true;
-    }
-    if (mocks.supportByHostId.has(hostId)) {
-      return mocks.supportByHostId.get(hostId) === true;
     }
     return mocks.defaultDiscoverySupport;
   },
@@ -1163,13 +1166,18 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
     // F3: with the button absent the label must keep the band's ORIGINAL
     // layout — every host older than this release, for as long as it stays
     // older.
+    //
+    // `classList.contains` and not `className.toContain`: the latter is a
+    // substring match, so it reads `max-w-full` as `w-full` and
+    // `sm:justify-between` as `justify-between` — and this file already
+    // carries `sm:justify-between` on other surfaces.
     const label = screen
       .getByRole("switch", { name: "Auto-download updates" })
       .closest("label");
     expect(label).not.toBeNull();
-    expect(label?.className).toContain("w-full");
-    expect(label?.className).toContain("justify-between");
-    expect(label?.className).not.toContain("ml-auto");
+    expect(label?.classList.contains("w-full")).toBe(true);
+    expect(label?.classList.contains("justify-between")).toBe(true);
+    expect(label?.classList.contains("ml-auto")).toBe(false);
   });
 
   it("shows Check for updates when the host supports the discovery RPC, and clusters the auto-download row against the right edge", () => {
@@ -1195,11 +1203,11 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
       .getByRole("switch", { name: "Auto-download updates" })
       .closest("label");
     expect(label).not.toBeNull();
-    expect(label?.className).toContain("ml-auto");
-    // Checked as separate tokens, not as the joined pair: `cn` is free to
-    // reorder, so a single substring could pass while both classes are present.
-    expect(label?.className).not.toContain("w-full");
-    expect(label?.className).not.toContain("justify-between");
+    expect(label?.classList.contains("ml-auto")).toBe(true);
+    // Token membership, not substring: `className.toContain("justify-between")`
+    // would also match a `sm:justify-between` someone adds later.
+    expect(label?.classList.contains("w-full")).toBe(false);
+    expect(label?.classList.contains("justify-between")).toBe(false);
   });
 
   it("disables the check button while another panel action is pending", () => {
@@ -1277,6 +1285,11 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
         managedOverrides: null,
       });
 
+      // The live region is PERMANENTLY mounted and starts empty. That is the
+      // whole contract: a region inserted together with its first content is
+      // the case assistive tech most reliably misses.
+      expect(screen.getByRole("status").textContent).toBe("");
+
       await user.click(screen.getByTestId("provider-pack-discovery-check"));
 
       // F4: what the panel actually sent, not just what happens after.
@@ -1292,6 +1305,22 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
       expect(notice.className).toContain(
         expectedKind === "error" ? "text-destructive" : "text-muted-foreground",
       );
+
+      // The announcement itself. Without this the live region can be deleted
+      // outright and every assertion above still passes, leaving the notice
+      // invisible to assistive tech.
+      //
+      // `getByRole("status")` is unambiguous here BY CONSTRUCTION, and the
+      // singular query is doing double duty: the visible notice is
+      // `aria-hidden`, so it is not in the accessibility tree, and the panel's
+      // only other `role="status"` lives in the `!methodSupport` early return,
+      // which never renders alongside the footer. So a single match is also a
+      // pin on "announced exactly once".
+      const live = screen.getByRole("status");
+      expect(live.getAttribute("aria-live")).toBe("polite");
+      expect(live.classList.contains("sr-only")).toBe(true);
+      expect(live.textContent).toBe(expected);
+      expect(notice.getAttribute("aria-hidden")).toBe("true");
     },
   );
 
@@ -1321,6 +1350,14 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
     expect(notice.textContent).toBe(expected);
     // Both refusals are hard policy, never "info".
     expect(notice.className).toContain("text-destructive");
+    // A refusal is announced on the same terms as an outcome — see the
+    // outcome table above for why one `getByRole("status")` match is also the
+    // no-double-announcement pin.
+    const live = screen.getByRole("status");
+    expect(live.getAttribute("aria-live")).toBe("polite");
+    expect(live.classList.contains("sr-only")).toBe(true);
+    expect(live.textContent).toBe(expected);
+    expect(notice.getAttribute("aria-hidden")).toBe("true");
   });
 
   it("clears the check notice when another panel action starts", async () => {
