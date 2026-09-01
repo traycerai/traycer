@@ -1,24 +1,13 @@
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
+import type { WorktreeHostEntryV14 } from "@traycer/protocol/host/index";
 
 /**
  * Which host a Sweep concerns: the fleet gate in front of the host chip, the
  * chip's own popover rows, and the affordance gate that decides whether Sweep
  * is offered at all. One module because all three answer the same question
- * from the same zero-RPC evidence, and the two SURFACES (History and the Epic
- * status row) must answer it identically.
+ * from the same evidence, and the two SURFACES (History and the Epic status
+ * row) must answer it identically.
  */
-
-/**
- * The occupancy badge's words. It claims exactly what the evidence supports -
- * the Task has AGENTS on this machine - and never "has worktrees here", which
- * would be a claim only the dialog's own act-time proof can make.
- *
- * Past tense on purpose. The dialog now opens on a host and offers the others,
- * so this row sits next to a census rather than in front of one: "agents ran
- * here" reads as the evidence it is, where the old present-tense phrasing read
- * as a verdict about what is on that machine right now.
- */
-export const SWEEP_HOST_OCCUPANCY_LABEL = "agents ran here";
 
 /**
  * Does this Task's client-visible provenance name a machine OTHER than the one
@@ -37,7 +26,7 @@ export const SWEEP_HOST_OCCUPANCY_LABEL = "agents ran here";
  * also under-claims: `HistoryItem.chatHostIds` covers the signed-in user's own
  * CHATS, not terminal agents, so a Task whose only off-host node is a TUI
  * agent still under-enables there. Accepted v1 residual - in-Epic gating
- * catches that case, and the exact answer needs the v2 per-host walk.
+ * catches that case.
  *
  * `null` host ids (a peer that predates the field) answer NO rather than YES:
  * silence is not evidence, and the surface's own worktree listing is still the
@@ -75,54 +64,8 @@ export function sweepNeedsHostPicker(
   return connectableHostIds.length > 1;
 }
 
-/**
- * Folds per-Task host provenance into the badge set.
- *
- * `null` is not `[]` and the difference is load-bearing: a History row served
- * by a peer that predates `chatHostIds` cannot answer at all, and reading that
- * silence as "no hosts" would badge nothing while looking like a verdict. Both
- * cases contribute no ids - the picker lists every usable host either way -
- * but only one of them is a fact.
- */
-export function unionHostIds(
-  lists: Iterable<ReadonlyArray<string> | null>,
-): ReadonlySet<string> {
-  const union = new Set<string>();
-  for (const list of lists) {
-    if (list === null) continue;
-    for (const hostId of list) union.add(hostId);
-  }
-  return union;
-}
-
-/**
- * The badged hosts that are NOT the one being censused - the ids behind the
- * empty state's redirect and the header's nudge.
- *
- * It exists because the badge is only worth showing a person when it points
- * somewhere ELSE. On the host the dialog is already proving, "agents ran here"
- * is a fact about the rows in front of them; on another machine it is the one
- * actionable thing a zero-RPC read can offer when this host turns up empty.
- *
- * Sorted so the answer is a function of the SET rather than of whatever order
- * the surface happened to build it in - two surfaces folding the same
- * provenance must nudge toward the same machine. Which of several the copy
- * finally names is the host LIST's decision (its own this-machine / active /
- * alphabetical order), not this function's.
- */
-export function nudgeHostIds(
-  occupiedHostIds: ReadonlySet<string>,
-  currentHostId: string | null,
-): readonly string[] {
-  return [...occupiedHostIds]
-    .filter((hostId) => hostId !== currentHostId)
-    .sort();
-}
-
 export interface SweepHostPickerRow {
   readonly host: HostScopeOption;
-  /** The selected Task(s)' node records name this host. Hint, not a census. */
-  readonly occupied: boolean;
   /**
    * The host the dialog is CURRENTLY censusing - the one the chip names.
    *
@@ -137,75 +80,53 @@ export interface SweepHostPickerRow {
 
 /**
  * EVERY host in the account's merged list, in the shared picker's own order -
- * never only the badged ones, and never only the dialable ones.
+ * never only the dialable ones, and flat.
  *
- * Both exclusions are tempting and both are wrong. Filtering to badged hosts
- * would hide the case the badge cannot see: worktree owner-bindings cascade
- * best-effort on chat deletion, so a host can hold a Task's worktrees with no
- * client-visible record naming it. Filtering out dead hosts would delete the
- * only place a person learns WHY the machine they were looking for is not
- * offering to sweep. Non-selectable rows go inert with the shared status word
- * instead, which is what every other picker in the app does.
+ * Filtering out dead hosts would delete the only place a person learns WHY the
+ * machine they were looking for is not offering to sweep. Non-selectable rows
+ * go inert with the shared status word instead, which is what every other
+ * picker in the app does.
  */
 export function buildSweepHostPickerRows(input: {
   readonly hosts: readonly HostScopeOption[];
-  readonly occupiedHostIds: ReadonlySet<string>;
   readonly defaultHostId: string | null;
 }): readonly SweepHostPickerRow[] {
   return input.hosts.map((host) => ({
     host,
-    occupied: input.occupiedHostIds.has(host.hostId),
     isDefault: host.hostId === input.defaultHostId,
   }));
 }
 
-export interface SweepHostPickerGroups {
-  /**
-   * Rows shown at the top level: the badged hosts, badged-first, then the
-   * surface's own host when nothing named it.
-   */
-  readonly primary: readonly SweepHostPickerRow[];
-  /**
-   * Rows behind the collapsed disclosure. EMPTY means render flat - there is
-   * no disclosure at all, rather than an empty one.
-   */
-  readonly other: readonly SweepHostPickerRow[];
+/**
+ * How many distinct worktrees on one host belong to the selected Task(s).
+ *
+ * The SAME attribution the Sweep dialog's own candidates query uses as its
+ * first step (`use-epic-sweep-worktree-candidates-query.ts`): a worktree
+ * counts when any of its owner bindings - GUI chat or terminal agent, archived
+ * or not - names a selected Task. A worktree shared by two selected Tasks
+ * counts once, because the listing already lists it once.
+ */
+export function countTaskWorktrees(
+  worktrees: ReadonlyArray<Pick<WorktreeHostEntryV14, "owners">>,
+  selectedEpicIds: ReadonlySet<string>,
+): number {
+  let count = 0;
+  for (const entry of worktrees) {
+    if (entry.owners.some((owner) => selectedEpicIds.has(owner.epicId))) {
+      count += 1;
+    }
+  }
+  return count;
 }
 
 /**
- * Splits the (complete) row list into what a person is looking for and what
- * they are only occasionally looking for.
+ * The row's trailing pill, or `null` for no pill at all.
  *
- * The picker deliberately does NOT scope itself to the Epic's participating
- * hosts - that completeness is the whole backstop, since a host can hold a
- * Task's worktrees with no client-visible record naming it. But completeness
- * read as a flat fleet-wide list, which on a large account buries the two
- * machines that actually matter. Grouping keeps every row and demotes the
- * ones nothing points at; it is presentation, never a filter.
- *
- * Two rows are never demoted. A BADGED host is the answer the signal offers.
- * The DEFAULT host is where Sweep was already pointed, so hiding it would put
- * the pre-selected choice behind a disclosure - and it is also the row a
- * person falls back to when the badges are wrong.
- *
- * Degenerate case, and the reason this returns a union of two lists rather
- * than a predicate: when NOTHING is badged and there is no default, every row
- * would land under the disclosure. A list that is entirely collapsed is
- * strictly worse than the flat list it replaced, so that case renders flat.
+ * Positive counts only. "No number" covers zero, unknown, loading and failed
+ * alike, so a row never claims a zero it has not proven - and it keeps the
+ * word, because a bare digit next to a host name reads as anything.
  */
-export function groupSweepHostPickerRows(
-  rows: readonly SweepHostPickerRow[],
-): SweepHostPickerGroups {
-  const badged = rows.filter((row) => row.occupied);
-  const unbadgedDefault = rows.filter((row) => !row.occupied && row.isDefault);
-  if (badged.length === 0 && unbadgedDefault.length === 0) {
-    return { primary: rows, other: [] };
-  }
-  return {
-    // Badged first: the ordering claim the group is making. Stable within
-    // each half, so the shared picker's own order (this machine, active,
-    // alphabetical) still decides everything else.
-    primary: [...badged, ...unbadgedDefault],
-    other: rows.filter((row) => !row.occupied && !row.isDefault),
-  };
+export function sweepHostCountLabel(count: number | null): string | null {
+  if (count === null || count <= 0) return null;
+  return `${String(count)} worktree${count === 1 ? "" : "s"}`;
 }

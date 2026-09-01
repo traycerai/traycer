@@ -1,21 +1,16 @@
 import { useState, type ReactNode } from "react";
-import { ArrowRight, ChevronDown, Monitor } from "lucide-react";
+import { ChevronDown, Monitor } from "lucide-react";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
-import {
-  AVAILABLE_HOST_ROW_SURFACE_STATE,
-  isHostOptionSelectable,
-} from "@/components/settings/host-scope/host-option-model";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
 import { SweepHostList } from "@/components/epics/sweep-host-list";
 import {
   buildSweepHostPickerRows,
-  nudgeHostIds,
   type SweepHostPickerRow,
 } from "@/components/epics/sweep-host-model";
 import { cn } from "@/lib/utils";
@@ -46,8 +41,6 @@ export interface SweepHostChoice {
    * census runs until it is answered.
    */
   readonly hostId: string | null;
-  /** Hosts the selected Task(s)' node records name. Zero-RPC hint. */
-  readonly occupiedHostIds: ReadonlySet<string>;
   /** A host that was picked and whose client then would not build. */
   readonly unavailableHostId: string | null;
   readonly onSwitch: (hostId: string) => void;
@@ -60,30 +53,22 @@ export interface SweepHostChoice {
  * The chip arrives as an ELEMENT rather than as data because only this scope
  * holds the fleet list it is drawn from, and threading `hosts` through the
  * dialog would put a second reader on it. What the dialog does need in its own
- * words - the host's name for Review's read-only line, the machine to nudge
- * toward - are plain values.
+ * words - the host's name for Review's read-only line - is a plain value.
  */
 export interface SweepHostChoiceView {
   /** The chip, or `null` when the host cannot be named yet. */
   readonly chip: ReactNode;
   /** Human name of the host being censused, or `null` if unresolved. */
   readonly hostName: string | null;
-  /** The Task's records name the host being censused. */
-  readonly currentHostBadged: boolean;
-  /** A badged, dialable host that is NOT the one being censused. */
-  readonly nudge: { readonly hostId: string; readonly name: string } | null;
   /**
-   * THE way to change host, from anywhere — the popover row, the header's
-   * nudge, the empty state's redirect.
+   * THE way to change host - the popover row.
    *
    * `null` while switching is unavailable (a refresh in flight, a sweep of
    * these rows already streaming). A nullable callback rather than a callback
    * plus a `disabled` flag, because the two shapes are not equally safe: with
    * a flag, a new switch surface reads as complete while quietly skipping the
-   * check, which is exactly how the nudge and the redirect came to bypass the
-   * confirmation in the first place. Here a caller that wants to switch has to
-   * confront the `null`, and a caller that renders a control has the same
-   * value to disable it with.
+   * check. Here a caller that wants to switch has to confront the `null`, and
+   * a caller that renders a control has the same value to disable it with.
    *
    * It is also the only place the "changing hosts clears this selection"
    * confirmation is raised, so no entry point can forget to ask.
@@ -103,7 +88,10 @@ export interface SweepHostChoiceView {
 export function SweepHostChoiceScope(props: {
   /** `null` ⇒ unchosen: the chip asks instead of naming. */
   readonly hostId: string | null;
-  readonly occupiedHostIds: ReadonlySet<string>;
+  /** The Task(s) whose worktrees the popover's rows count. */
+  readonly selectedEpicIds: ReadonlySet<string>;
+  /** The censused host's own count from the dialog's proof; `null` unsettled. */
+  readonly currentHostCount: number | null;
   readonly unavailableHostId: string | null;
   /** Refreshing or sweeping: the census the chip names is not settled. */
   readonly disabled: boolean;
@@ -116,17 +104,13 @@ export function SweepHostChoiceScope(props: {
   // The host somebody has asked for while a hand-made selection is still on
   // screen. Held rather than applied, because the retarget it triggers clears
   // that selection and there is no undo for a list you spent a minute on.
-  // It lives HERE rather than in the chip because the nudge and the empty
-  // state's redirect raise it too, and one pending switch is one question.
   const [pendingHostId, setPendingHostId] = useState<string | null>(null);
   const rows = buildSweepHostPickerRows({
     hosts,
-    occupiedHostIds: props.occupiedHostIds,
     defaultHostId: props.hostId,
   });
   const hostName = hostNameOf(hosts, props.hostId);
   const unavailableName = hostNameOf(hosts, props.unavailableHostId);
-  const nudge = firstNudgeHost(hosts, props.occupiedHostIds, props.hostId);
   // THE policy value. Both the gesture that RAISES a switch and the one that
   // COMMITS a held question derive from it, so a switch cannot be admitted by
   // a check that ran at a moment which has since passed. The confirmation is
@@ -161,6 +145,8 @@ export function SweepHostChoiceScope(props: {
           hostName={hostName}
           unavailableHostName={unavailableName}
           rows={rows}
+          selectedEpicIds={props.selectedEpicIds}
+          currentHostCount={props.currentHostCount}
           isLoading={isLoading}
           listsFailed={listsFailed}
           onRetryLists={retryLists}
@@ -175,9 +161,6 @@ export function SweepHostChoiceScope(props: {
         />
       ),
     hostName,
-    currentHostBadged:
-      props.hostId !== null && props.occupiedHostIds.has(props.hostId),
-    nudge,
     requestSwitch,
   };
   return props.render(view);
@@ -199,12 +182,14 @@ function SweepHostChip(props: {
   readonly hostName: string | null;
   readonly unavailableHostName: string | null;
   readonly rows: readonly SweepHostPickerRow[];
+  readonly selectedEpicIds: ReadonlySet<string>;
+  readonly currentHostCount: number | null;
   readonly isLoading: boolean;
   readonly listsFailed: boolean;
   readonly onRetryLists: () => void;
   /** The gated seam; `null` while switching is unavailable. */
   readonly onPick: ((hostId: string) => void) | null;
-  /** A switch waiting on the person's answer, raised from ANY entry point. */
+  /** A switch waiting on the person's answer. */
   readonly pendingHost: HostScopeOption | null;
   readonly onCancelPending: () => void;
   /**
@@ -219,9 +204,8 @@ function SweepHostChip(props: {
   const [open, setOpen] = useState(false);
   const pendingHost = props.pendingHost;
   const confirmPending = props.onConfirmPending;
-  // Forced open while a switch is waiting on an answer, so a confirmation
-  // raised by the header's nudge or the empty state's redirect appears where
-  // the host decision lives rather than beside the button that asked for it.
+  // Forced open while a switch is waiting on an answer, so the confirmation
+  // appears where the host decision lives.
   const popoverOpen = open || pendingHost !== null;
   return (
     <div className="flex min-w-0 flex-col items-start gap-1">
@@ -263,6 +247,8 @@ function SweepHostChip(props: {
           {pendingHost === null ? (
             <SweepHostList
               rows={props.rows}
+              selectedEpicIds={props.selectedEpicIds}
+              currentHostCount={props.currentHostCount}
               isLoading={props.isLoading}
               listsFailed={props.listsFailed}
               onRetryLists={props.onRetryLists}
@@ -334,42 +320,6 @@ function SweepHostChip(props: {
 }
 
 /**
- * "Its agents ran on {other} → check {other}" as a control.
- *
- * The same button behind the empty state's redirect and the header's nudge,
- * because they are one gesture with two reasons to appear: this host turned up
- * nothing, or this host was never the one the records pointed at.
- */
-export function SweepHostRedirectButton(props: {
-  readonly hostName: string;
-  /**
-   * The gated seam, straight from the view. `null` disables the button rather
-   * than offering a gesture the policy would refuse — and, because it is the
-   * same value the chip is disabled by, the two can never disagree about
-   * whether the host may be changed right now.
-   */
-  readonly onSwitch: ((hostId: string) => void) | null;
-  readonly hostId: string;
-  readonly testId: string;
-}): ReactNode {
-  const onSwitch = props.onSwitch;
-  return (
-    <Button
-      type="button"
-      size="xs"
-      variant="ghost"
-      className="px-1.5"
-      disabled={onSwitch === null}
-      onClick={onSwitch === null ? undefined : () => onSwitch(props.hostId)}
-      data-testid={props.testId}
-    >
-      {`Check ${props.hostName}`}
-      <ArrowRight className="size-3.5" aria-hidden />
-    </Button>
-  );
-}
-
-/**
  * What the chip reads, or `null` for no chip at all.
  *
  * Three states, and the third is the one worth spelling out. Unchosen ASKS;
@@ -392,28 +342,4 @@ function hostNameOf(
 ): string | null {
   if (hostId === null) return null;
   return hosts.find((host) => host.hostId === hostId)?.name ?? null;
-}
-
-/**
- * The one badged host worth pointing at, chosen in the LIST's own order (this
- * machine, then the active host, then alphabetically) so the nudge names the
- * machine the popover would show first.
- *
- * Restricted to hosts a person could actually be sent to. A redirect onto a
- * dead or plan-restricted machine would retarget the dialog at a host whose
- * own row is inert - an offer that can only fail, made by the copy that exists
- * to rescue an empty census.
- */
-function firstNudgeHost(
-  hosts: readonly HostScopeOption[],
-  occupiedHostIds: ReadonlySet<string>,
-  currentHostId: string | null,
-): { readonly hostId: string; readonly name: string } | null {
-  const candidates = new Set(nudgeHostIds(occupiedHostIds, currentHostId));
-  const host = hosts.find(
-    (option) =>
-      candidates.has(option.hostId) &&
-      isHostOptionSelectable(option, "pin", AVAILABLE_HOST_ROW_SURFACE_STATE),
-  );
-  return host === undefined ? null : { hostId: host.hostId, name: host.name };
 }
