@@ -445,6 +445,41 @@ export function createArtifactBodyLeaseBridge(options: {
     return key;
   }
 
+  /**
+   * Move one awaiting body onto the key `body/materialize` just named, and
+   * publish the redirect that lets already-issued closures follow it.
+   *
+   * Returns the entry the caller must go on using: usually the one passed in,
+   * now filed under `nextKey`, but the one ALREADY awaiting there when two
+   * artifacts' materializations converge on the same reassigned room. Merging
+   * rather than overwriting for the same reason the granted path joins a raced
+   * `BodyEntry`: both sets of holders are mounted and both owe a release, so a
+   * lease count that replaced the other's would demote a doc someone holds.
+   *
+   * `retryRequested` merges as an OR. It is a signal that a projection push
+   * arrived and has not been acted on, and dropping either side's would strand
+   * whichever body was waiting on that push.
+   */
+  function adoptMovedAwaiting(
+    previousKey: string,
+    nextKey: string,
+    held: AwaitingBody,
+  ): AwaitingBody {
+    // Already-issued `release` closures captured the old key as a STRING, so
+    // they cannot be re-pointed; the redirect is how they still reach the
+    // right entry.
+    movedAwaitingKeys.set(previousKey, nextKey);
+    awaiting.delete(previousKey);
+    const existing = awaiting.get(nextKey);
+    if (existing === undefined) {
+      awaiting.set(nextKey, held);
+      return held;
+    }
+    existing.leases += held.leases;
+    existing.retryRequested = existing.retryRequested || held.retryRequested;
+    return existing;
+  }
+
   function postDemote(docKey: string, generation: number): void {
     const entry = entries.get(docKey);
     // FORWARD-ONLY bodies are never DEMOTED. `body/demote` names an identity
@@ -999,46 +1034,66 @@ export function createArtifactBodyLeaseBridge(options: {
           // nothing to keep waiting for.
           if (stillAwaiting === undefined) return;
           stillAwaiting.retrying = false;
-          if (answer.docKey === null || answer.update === null) {
-            if (stillAwaiting.retryRequested) {
+          // THE RETURNED KEY, not the captured one, and re-keyed BEFORE either
+          // outcome is handled rather than only on the granted one. On the `@1`
+          // arm a doc key is the ROOM id, and the legacy root projection can
+          // reassign this artifact to a different room while its
+          // materialization is awaiting a seed - so the answer can name a room
+          // this retry did not ask about. Installing under the captured key
+          // left `getArtifactFragment` reading the new key and finding nothing,
+          // so the mounted editor stayed blank, while the worker kept the new
+          // room's demand, observer and subscription alive behind an accounting
+          // entry nothing would ever release.
+          //
+          // The reassignment does not wait for the new room to have bytes. A
+          // non-null `docKey` beside `update: null` is the AWAITING answer, and
+          // that answer's whole contract is that THE DEMAND IS RETAINED - under
+          // the key it just named. Handling the move only where bytes arrived
+          // left exactly the same leak on the byteless path: the entry stayed
+          // under the old key with no redirect, readiness kept targeting the
+          // old room, and the release posted `body/release` for a key the
+          // worker no longer held anything under.
+          const grantedKey = answer.docKey;
+          const moved = grantedKey !== null && grantedKey !== docKey;
+          const activeKey = moved ? grantedKey : docKey;
+          // NOT named `held`: that is this function's own parameter, captured
+          // when the retry was started, and this is the entry as it stands now
+          // - re-read after the await and possibly merged into another by the
+          // move above.
+          const activeAwaiting = moved
+            ? adoptMovedAwaiting(docKey, grantedKey, stillAwaiting)
+            : stillAwaiting;
+          if (grantedKey === null || answer.update === null) {
+            if (activeAwaiting.retryRequested) {
               // A newer projection landed mid-flight, so this answer is already
               // stale - which is the ordinary seed sequence, not a fault. Ask
               // again on the state that push described, and say nothing.
-              stillAwaiting.retryRequested = false;
-              startAwaitingRetry(docKey, stillAwaiting);
+              activeAwaiting.retryRequested = false;
+              startAwaitingRetry(activeKey, activeAwaiting);
               return;
             }
             // STILL byteless, with the room reading ready and nothing newer to
             // go on. Stay awaiting - a later push tries again - but say so: this
             // is a disagreement between the availability map and the tier, and
             // the symptom it produces is a tile that never fills in.
-            options.reportAwaitingStalled(docKey, held.artifactId);
+            //
+            // Named by the ACTIVE key. A move that just happened is reported
+            // against the room the demand is actually on, and the later push
+            // that resolves it drives a retry keyed there - whose granted arm
+            // is where a room that turns out to be already resident is joined.
+            options.reportAwaitingStalled(activeKey, activeAwaiting.artifactId);
             return;
           }
-          awaiting.delete(docKey);
-          // THE RETURNED KEY, not the captured one. On the `@1` arm a doc key
-          // is the ROOM id, and the legacy root projection can reassign this
-          // artifact to a different room while its materialization is awaiting
-          // a seed - so the answer can name a room this retry did not ask
-          // about. Installing under the captured key left `getArtifactFragment`
-          // reading the new key and finding nothing, so the mounted editor
-          // stayed blank, while the worker kept the new room's demand,
-          // observer and subscription alive behind an accounting entry nothing
-          // would ever release.
-          const grantedKey = answer.docKey;
-          if (grantedKey !== docKey) {
-            // Already-issued `release` closures captured the old key as a
-            // STRING, so they cannot be re-pointed; the redirect is how they
-            // still reach the right entry.
-            movedAwaitingKeys.set(docKey, grantedKey);
-            const raced = entries.get(grantedKey);
+          awaiting.delete(activeKey);
+          if (moved) {
+            const raced = entries.get(activeKey);
             if (raced !== undefined) {
               // A concurrent acquire already materialized the new room. Its
               // entry is the live one - `installGranted` would overwrite its
               // lease count with ours - so these holders join it instead,
               // which is exactly what the acquire path's own raced-entry
               // branch does.
-              reviveAndHold(raced, stillAwaiting.leases);
+              reviveAndHold(raced, activeAwaiting.leases);
               return;
             }
           }
@@ -1046,13 +1101,13 @@ export function createArtifactBodyLeaseBridge(options: {
           // is still mounted and still owes a release; restarting at one would
           // let the first unmount demote a doc the others hold.
           installGranted({
-            docKey: grantedKey,
+            docKey: activeKey,
             update: answer.update,
             docGuid: answer.docGuid,
             seedMode: answer.seedMode,
             hostStateVector: answer.hostStateVector,
             awarenessFrames: answer.awarenessFrames,
-            leases: stillAwaiting.leases,
+            leases: activeAwaiting.leases,
           });
         },
         // The rejection arm, which this call was the only one in this module
@@ -1258,12 +1313,19 @@ export function createArtifactBodyLeaseBridge(options: {
       docKey,
       options.scheduler.schedule(options.lingerMs, () => {
         awaitingReleaseRetries.delete(docKey);
+        // Through the redirect, for the same reason a `release` closure is: a
+        // key captured when this timer was armed can be moved before it fires,
+        // and the demand the retry exists to reclaim is on the new room. Read
+        // literally, the guard below would find the old key empty - because the
+        // move emptied it - and post a release for a key the worker holds
+        // nothing under, while the new room stayed retained.
+        const current = currentKeyFor(docKey);
         // Re-read rather than closing over a decision: a holder can have
         // re-acquired inside the window, and then the demand is legitimately
         // held again and its own release will post when it unmounts. Posting
         // here would drop a body someone is using.
-        if (awaiting.has(docKey) || entries.has(docKey)) return;
-        postAwaitingRelease(docKey);
+        if (awaiting.has(current) || entries.has(current)) return;
+        postAwaitingRelease(current);
       }),
     );
   }

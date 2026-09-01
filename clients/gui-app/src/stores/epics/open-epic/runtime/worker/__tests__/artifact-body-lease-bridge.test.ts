@@ -1071,3 +1071,110 @@ describe("a demote that fails on a LIVE worker", () => {
     expect(docs.dropped).toEqual([]);
   });
 });
+
+/**
+ * A body reassigned to a different room WHILE STILL AWAITING ITS SEED.
+ *
+ * The moved-key rule was already applied where bytes arrived. This is the same
+ * reassignment reaching the other outcome, and the answer's own contract is
+ * what makes it a leak rather than a cosmetic difference: a non-null `docKey`
+ * beside `update: null` is AWAITING SEED, and awaiting seed means THE DEMAND IS
+ * RETAINED - under the key the answer just named. Handling the move only on the
+ * granted path left the entry filed under the old key with no redirect, so the
+ * release posted `body/release` for a room the worker holds nothing under and
+ * the new room's demand, observer and subscription stayed retained for the life
+ * of the session.
+ *
+ * Driven over the real bridge like every test above: the move is expressed by
+ * the worker answering a second `body/materialize` with a different room, which
+ * is exactly how the legacy `@1` root projection expresses it.
+ */
+describe("an awaiting body reassigned to another byteless room", () => {
+  function movedAwaitingSetup(answers: readonly (string | null)[]) {
+    const pair = createFakeBridgePair("sync");
+    const releases: string[] = [];
+    let materializeCount = 0;
+    pair.worker.subscribe((message) => {
+      if (!isMainToWorkerFrame(message) || message.frame !== "call") return;
+      const { callId, call } = message;
+      const respond = (value: unknown): void => {
+        pair.worker.post(
+          { frame: "result", callId, result: { outcome: "ok", value } },
+          [],
+        );
+      };
+      if (call.kind === "body/materialize") {
+        const docKey = answers[materializeCount] ?? answers.at(-1) ?? null;
+        materializeCount += 1;
+        // AWAITING: a key, and no bytes. The demand is retained on this key.
+        respond({
+          docKey,
+          update: null,
+          docGuid: null,
+          seedMode: "full",
+          hostStateVector: null,
+          awarenessFrames: [],
+        });
+        return;
+      }
+      if (call.kind === "body/release") {
+        releases.push(call.request.docKey);
+        respond({ released: true, reason: null });
+      }
+    });
+    const leases = createArtifactBodyLeaseBridge({
+      bridge: createMainBridgeEndpoint(pair.main, stubMainCallHandlers({})),
+      docs: createDocs(),
+      budget: createBudget(),
+      scheduler: createScheduler(),
+      lingerMs: LINGER_MS,
+      maxHotDocs: MAX_HOT,
+      reportAwaitingStalled: IGNORE_STALL_REPORT,
+    });
+    return { leases, releases, materializeCount: () => materializeCount };
+  }
+
+  async function settle(): Promise<void> {
+    for (let index = 0; index < 6; index += 1) await Promise.resolve();
+  }
+
+  it("releases the room the worker actually retained, not the one the acquire asked about", async () => {
+    const { leases, releases } = movedAwaitingSetup(["room-1", "room-2"]);
+    const grant = await leases.acquire("artifact-1");
+    if (grant.kind !== "awaiting-seed") {
+      throw new Error("expected an awaiting-seed grant");
+    }
+    expect(grant.docKey).toBe("room-1");
+
+    // The projection calls room-1 ready, so the bridge re-materializes - and
+    // the answer names room-2, still byteless.
+    leases.retryAwaitingBodies((docKey) => docKey === "room-1");
+    await settle();
+
+    grant.release();
+    await settle();
+
+    // THE REDDENING ASSERTION. Without the re-key this is `["room-1"]`, and
+    // room-2's demand is retained with nothing left that can release it.
+    expect(releases).toEqual(["room-2"]);
+  });
+
+  it("still releases the original room when the retry names the same one", async () => {
+    // The control. Without it the assertion above passes against a bridge that
+    // simply released whatever the last materialize returned, and it pins that
+    // an ordinary byteless retry is not treated as a move.
+    const { leases, releases } = movedAwaitingSetup(["room-1", "room-1"]);
+    const grant = await leases.acquire("artifact-1");
+    if (grant.kind !== "awaiting-seed") {
+      throw new Error("expected an awaiting-seed grant");
+    }
+
+    leases.retryAwaitingBodies((docKey) => docKey === "room-1");
+    await settle();
+
+    grant.release();
+    await settle();
+
+    expect(releases).toEqual(["room-1"]);
+  });
+});
