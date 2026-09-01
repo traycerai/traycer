@@ -63,7 +63,7 @@ const OWNERSHIP_OPTIONS: ReadonlyArray<{
 const DRAFT_OPTIONS: ReadonlyArray<{
   readonly value: HistoryDraftScope;
   readonly label: string;
-}> = [{ value: "landing", label: "Start-task drafts" }];
+}> = [{ value: "landing", label: "Drafts" }];
 
 function historyFilterActiveCount(search: HistorySearchState): number {
   return (

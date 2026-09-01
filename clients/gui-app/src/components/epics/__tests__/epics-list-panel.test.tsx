@@ -1572,9 +1572,7 @@ describe("<EpicsListPanel />", () => {
     renderPanel("embedded", "/");
 
     fireEvent.click(await screen.findByRole("button", { name: /filter/i }));
-    fireEvent.click(
-      await screen.findByRole("checkbox", { name: /start-task drafts/i }),
-    );
+    fireEvent.click(await screen.findByRole("checkbox", { name: /drafts/i }));
 
     await waitFor(() => {
       expect(useHistorySearchStore.getState().search.drafts).toEqual([
@@ -1718,9 +1716,7 @@ describe("<EpicsListPanel />", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: /filter/i }));
     expect(await screen.findByTestId("epics-filter-popover")).not.toBeNull();
-    expect(
-      screen.queryByRole("checkbox", { name: /start-task drafts/i }),
-    ).toBeNull();
+    expect(screen.queryByRole("checkbox", { name: /drafts/i })).toBeNull();
   });
 });
 
