@@ -1,4 +1,5 @@
 import { FileQuestionMarkIcon } from "lucide-react";
+import { isPdfAssetPath } from "@/lib/assets/image-extension-allowlist";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { cn } from "@/lib/utils";
@@ -30,7 +31,11 @@ export function BinaryPlaceholder(props: BinaryPlaceholderProps) {
         )}
       />
       {props.compact ? null : (
-        <h3 className="text-base font-semibold">Binary File</h3>
+        // "Binary File" above "This PDF is too large..." reads as a
+        // contradiction (live-testing review, D4) - name the type we know.
+        <h3 className="text-base font-semibold">
+          {isPdfAssetPath(props.fileName) ? "PDF" : "Binary File"}
+        </h3>
       )}
       <p
         className={cn(

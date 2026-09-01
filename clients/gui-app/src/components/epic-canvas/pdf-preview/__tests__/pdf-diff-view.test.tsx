@@ -77,7 +77,7 @@ describe("PdfDiffView", () => {
 
     expect(screen.getByTestId("pdf-diff-block")).toBeTruthy();
     expect(screen.getByText("docs/report.pdf")).toBeTruthy();
-    expect(screen.getByText("Modified · 2.0 KB")).toBeTruthy();
+    expect(screen.getByText("Modified · 2.0 KiB")).toBeTruthy();
   });
 
   it("opens the current version as a workspace file tile", () => {
@@ -99,7 +99,7 @@ describe("PdfDiffView", () => {
   it("labels an added PDF and still offers Open", () => {
     renderView({ oldStage: null });
 
-    expect(screen.getByText("Added · 2.0 KB")).toBeTruthy();
+    expect(screen.getByText("Added · 2.0 KiB")).toBeTruthy();
     expect(
       screen.getByRole("button", { name: "Open report.pdf" }),
     ).toBeTruthy();
@@ -115,7 +115,7 @@ describe("PdfDiffView", () => {
   it("shows the old path for a rename", () => {
     renderView({ previousPath: "docs/old-report.pdf" });
 
-    expect(screen.getByText("Renamed · 2.0 KB")).toBeTruthy();
+    expect(screen.getByText("Renamed · 2.0 KiB")).toBeTruthy();
     expect(screen.getByText("from docs/old-report.pdf")).toBeTruthy();
   });
 

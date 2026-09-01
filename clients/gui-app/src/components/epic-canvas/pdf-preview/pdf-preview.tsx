@@ -139,7 +139,8 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
   }, [searchOpen]);
 
   const matchCountLabel = (() => {
-    if (matchState !== null && matchState.total > 0) {
+    if (matchState === null) return "";
+    if (matchState.total > 0) {
       return `${matchState.current} / ${matchState.total}`;
     }
     return query === "" ? "" : "0 results";
@@ -200,6 +201,14 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
         linkService,
         findController,
         maxCanvasPixels: MAX_CANVAS_PIXELS,
+        // pdfjs-dist 5.7's PDFPageDetailView (the sharp overlay canvas for
+        // deep zoom on restricted-scale pages) defines no `resume()`, yet
+        // the render queue calls `view.resume()` whenever a paused detail
+        // view regains priority - an uncaught TypeError on every zoom /
+        // page-nav interaction on multi-page documents (found by live
+        // testing). Disable the detail path: within our 2^24 canvas budget
+        // the base canvas already covers a full page at ~3x DPR.
+        enableDetailCanvas: false,
       });
       linkService.setViewer(viewer);
 
@@ -364,6 +373,30 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
     },
     [query],
   );
+
+  // Live search: dispatch a fresh find as the query changes (debounced), the
+  // way every findbar behaves - live testing showed Enter-only search reads
+  // as broken (a standing "0 results" while typing, nothing until Enter).
+  // An emptied query dispatches too: pdf.js treats it as "clear highlights".
+  // Enter stays "next match" via `dispatchFind("again", ...)`.
+  useEffect(() => {
+    if (!searchOpen) return;
+    const timer = setTimeout(() => {
+      const binding = bindingRef.current;
+      if (binding === null) return;
+      binding.eventBus.dispatch("find", {
+        source: null,
+        type: "",
+        query,
+        caseSensitive: false,
+        entireWord: false,
+        highlightAll: true,
+        findPrevious: false,
+        matchDiacritics: false,
+      });
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [query, searchOpen]);
 
   const closeSearch = useCallback(() => {
     setSearchOpen(false);
@@ -594,8 +627,8 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                dispatchFind(query === "" ? "" : "again", event.shiftKey);
+              if (event.key === "Enter" && query !== "") {
+                dispatchFind("again", event.shiftKey);
               }
               if (event.key === "Escape") closeSearch();
             }}

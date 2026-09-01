@@ -41,12 +41,15 @@ export interface PdfDiffViewProps {
   readonly sizeBytes: number | null;
 }
 
+// Binary-suffix labels (KiB/MiB) because the math is 1024-based and the
+// sibling too-large copy already says "20 MiB" - one unit convention across
+// the feature (live-testing review, D5).
 function formatSizeBytes(sizeBytes: number): string {
   if (sizeBytes >= 1024 * 1024) {
-    return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MiB`;
   }
   if (sizeBytes >= 1024) {
-    return `${(sizeBytes / 1024).toFixed(1)} KB`;
+    return `${(sizeBytes / 1024).toFixed(1)} KiB`;
   }
   return `${sizeBytes} B`;
 }
