@@ -140,9 +140,9 @@ export function BrowserTileToolbar(props: {
 }
 
 /**
- * The touch-grade chrome: the same nav buttons, a read-only address line, and
- * the page-loading spinner. No address field, no PiP and no more-menu - a
- * coarse pointer has no hover to reveal them and the tile has no room.
+ * The touch-grade chrome: the same nav buttons, the address field, and the
+ * page-loading spinner. No PiP and no more-menu - a coarse pointer has no
+ * hover to reveal them and the tile has no room.
  */
 export function BrowserTileToolbarCompact(props: {
   readonly controller: TileController;
@@ -155,9 +155,13 @@ export function BrowserTileToolbarCompact(props: {
       data-testid="browser-tile-toolbar-compact"
     >
       <BrowserTileToolbarNav controller={props.controller} />
-      <div className="min-w-0 flex-1 truncate px-1 text-ui-sm text-muted-foreground">
-        {url === "" ? "New tab" : url}
-      </div>
+      {props.controller.capabilities.navigate ? (
+        <BrowserTileToolbarAddress controller={props.controller} />
+      ) : (
+        <div className="min-w-0 flex-1 truncate px-1 text-ui-sm text-muted-foreground">
+          {url === "" ? "New tab" : url}
+        </div>
+      )}
       {props.loading ? (
         <span role="status" aria-label="Page loading" className="shrink-0">
           <AgentSpinningDots
