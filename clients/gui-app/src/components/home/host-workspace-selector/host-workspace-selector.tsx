@@ -2049,7 +2049,6 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   // the chat session keeps its captured copy visible until the existing
   // pending/accepted action lifecycle retires it. This overlay is deliberately
   // render-only: dispatch and commit capture continue reading `stagedIntent`.
-  const visibleIntent = stagedIntent ?? surface.inFlightWorktreeIntent ?? null;
   const setSuspendedWorkspacePaths = useWorktreeIntentStagingStore(
     (state) => state.setSuspendedWorkspacePaths,
   );
@@ -2074,22 +2073,26 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   }, [stagedIntent]);
   const visibleEntryByPath = useMemo(() => {
     const map = new Map<string, WorktreeFolderIntent>();
-    if (visibleIntent === null) return map;
-    for (const entry of visibleIntent.entries) {
+    for (const entry of surface.inFlightWorktreeIntent?.entries ?? []) {
+      map.set(entry.workspacePath, entry);
+    }
+    // A live re-pick supersedes only its own folder. The remainder of a
+    // multi-folder dispatched intent stays visible until that dispatch
+    // resolves; dispatch capture itself continues reading stagedIntent only.
+    for (const entry of stagedIntent?.entries ?? []) {
       map.set(entry.workspacePath, entry);
     }
     return map;
-  }, [visibleIntent]);
+  }, [stagedIntent, surface.inFlightWorktreeIntent]);
   const pendingBranchByPath = useMemo(() => {
     const map = new Map<string, string>();
-    if (visibleIntent === null) return map;
-    for (const entry of visibleIntent.entries) {
+    for (const entry of visibleEntryByPath.values()) {
       if (entry.kind === "worktree" && entry.branch.name.length > 0) {
         map.set(entry.workspacePath, entry.branch.name);
       }
     }
     return map;
-  }, [visibleIntent]);
+  }, [visibleEntryByPath]);
   const gitWorkspaces = useMemo(
     () => workspaces.filter((ws) => ws.resolvedAt !== null && ws.isGitRepo),
     [workspaces],

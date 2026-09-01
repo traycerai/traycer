@@ -356,6 +356,11 @@ export interface PendingChatAction {
    */
   readonly displayWorktreeIntent: WorktreeIntent | null;
   /**
+   * A live `messageAccepted` sighting retained across transcript-window
+   * eviction until the action ack copies it to `AcceptedChatAction`.
+   */
+  readonly messageConfirmedByHost: boolean;
+  /**
    * Staging revision immediately after the send consumes its selection. A
    * rejection restores only when the user has made no newer picker choice.
    */
@@ -4362,25 +4367,33 @@ export function createChatSessionStoreWithNotificationDependencies(
                 state.acceptedActions,
                 pending,
                 Date.now(),
-                // An ack confirms the host RECEIVED the frame, nothing about
-                // whether the message exists - that rule stands. What CAN
-                // confirm at this door is the transcript the record is born
-                // into: `messageAccepted` legitimately arrives BEFORE the ack
-                // (`takeSetupFailedRestoration` slot 2 documents the order),
-                // and in that order door 5 fired while the send was still
-                // pending, found no accepted record to stamp, and this birth
-                // is the only chance to carry that sighting. A hardcoded
-                // `false` here re-opened the resurrection through the other
-                // arm of the same race.
-                //
-                // The transcript ONLY - deliberately not `state.queue`, which
-                // is merged with locally-minted optimistic items, so reading
-                // it would let our own write confirm our own send. A false
-                // confirmation fails in the dangerous direction (quiet about
-                // a real loss); queue-parked sends are covered in both orders
-                // by the queue and snapshot doors.
-                pending.messageId !== null &&
-                  messageExists(state.messages, pending.messageId),
+                {
+                  // An ack confirms the host RECEIVED the frame, nothing about
+                  // whether the message exists - that rule stands. What CAN
+                  // confirm at this door is the transcript the record is born
+                  // into: `messageAccepted` legitimately arrives BEFORE the ack
+                  // (`takeSetupFailedRestoration` slot 2 documents the order),
+                  // and in that order door 5 fired while the send was still
+                  // pending, found no accepted record to stamp, and this birth
+                  // is the only chance to carry that sighting. A hardcoded
+                  // `false` here re-opened the resurrection through the other
+                  // arm of the same race.
+                  //
+                  // The transcript ONLY - deliberately not `state.queue`, which
+                  // is merged with locally-minted optimistic items, so reading
+                  // it would let our own write confirm our own send. A false
+                  // confirmation fails in the dangerous direction (quiet about
+                  // a real loss); queue-parked sends are covered in both orders
+                  // by the queue and snapshot doors.
+                  confirmedByHost:
+                    pending.messageConfirmedByHost ||
+                    (pending.messageId !== null &&
+                      messageExists(state.messages, pending.messageId)),
+                  messageConfirmedByHost:
+                    pending.messageConfirmedByHost ||
+                    (pending.messageId !== null &&
+                      messageExists(state.messages, pending.messageId)),
+                },
               ),
               pendingUserMessages: nextPendingUsers,
               pendingBackgroundStops: backgroundStopAck.pendingStops,
@@ -5477,6 +5490,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             accountContext: frame.accountContext,
             restoreWorktreeIntent: worktreeIntent,
             displayWorktreeIntent: worktreeIntent,
+            messageConfirmedByHost: false,
             deliveryPolicy: frame.deliveryPolicy,
             createdAt: Date.now(),
           },
@@ -5600,6 +5614,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             settings: input.settings,
             restoreWorktreeIntent: null,
             displayWorktreeIntent: null,
+            messageConfirmedByHost: false,
             // The DISPATCHED context, not a default. A Team-billed first
             // message that strands would otherwise report that it was going
             // to bill personal - a drift statement lying about the very thing
@@ -5707,6 +5722,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             settings: null,
             restoreWorktreeIntent: worktreeIntent,
             displayWorktreeIntent: worktreeIntent,
+            messageConfirmedByHost: false,
             accountContext: null,
             deliveryPolicy: null,
             createdAt: Date.now(),
@@ -5781,6 +5797,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             settings: null,
             restoreWorktreeIntent: null,
             displayWorktreeIntent: null,
+            messageConfirmedByHost: false,
             accountContext: null,
             deliveryPolicy: null,
             createdAt: Date.now(),
@@ -6533,6 +6550,7 @@ function basicPending(
     settings: null,
     restoreWorktreeIntent: null,
     displayWorktreeIntent: null,
+    messageConfirmedByHost: false,
     accountContext: null,
     deliveryPolicy: null,
     createdAt: Date.now(),
@@ -6604,12 +6622,17 @@ function releasePendingWorktreeIntentDisplayByMessageId(
     (candidate) =>
       candidate.action === "send" &&
       candidate.messageId === messageId &&
-      candidate.displayWorktreeIntent !== null,
+      (!candidate.messageConfirmedByHost ||
+        candidate.displayWorktreeIntent !== null),
   );
   if (pending === undefined) return pendingActions;
   return {
     ...pendingActions,
-    [pending.clientActionId]: { ...pending, displayWorktreeIntent: null },
+    [pending.clientActionId]: {
+      ...pending,
+      displayWorktreeIntent: null,
+      messageConfirmedByHost: true,
+    },
   };
 }
 

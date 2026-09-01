@@ -477,6 +477,34 @@ it("keeps a dispatched new-worktree branch visible while the binding is unchange
   ).toContain("feat-replacement");
 });
 
+it("merges a one-folder re-pick over a multi-folder dispatched intent", async () => {
+  seedResolvedBindingMetadata();
+  inFlightWorktreeIntent = {
+    entries: [
+      newWorktreeIntent("/repo/alpha", "feat-alpha-dispatched"),
+      newWorktreeIntent("/repo/beta", "feat-beta-dispatched"),
+    ],
+  };
+  useWorktreeIntentStagingStore.getState().stageIntent(CHAT_STAGING_KEY, {
+    entries: [newWorktreeIntent("/repo/alpha", "feat-alpha-repicked")],
+  });
+
+  renderBoundSurface("chat", true);
+  fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
+  const rows = await screen.findAllByTestId("folder-row");
+  const branchFor = (workspacePath: string): string | null => {
+    const row = rows.find(
+      (candidate) => candidate.getAttribute("data-path") === workspacePath,
+    );
+    return row === undefined
+      ? null
+      : within(row).getByTestId("folder-branch-trigger").textContent;
+  };
+
+  expect(branchFor("/repo/alpha")).toContain("feat-alpha-repicked");
+  expect(branchFor("/repo/beta")).toContain("feat-beta-dispatched");
+});
+
 describe.each(["chat", "terminal-agent"] as const)(
   "InEpicSurface (%s owner)",
   (kind) => {

@@ -4294,9 +4294,16 @@ describe("createChatSessionStore", () => {
     expect(
       harness.handle.store.getState().acceptedActions[frame.clientActionId],
     ).toBeUndefined();
+    expect(
+      harness.handle.store.getState().pendingActions[frame.clientActionId],
+    ).toMatchObject({ messageConfirmedByHost: true });
+
+    // The window may evict the row before the action ack lands. The pending
+    // action must retain the host sighting independently of hydration.
+    harness.handle.store.setState({ messages: [] });
 
     // ...then the ack lands and the record is BORN. The transcript already
-    // holds the message, and the birth must say so.
+    // recorded the message, and the birth must say so even after eviction.
     acceptLastAction(harness);
     expect(
       harness.handle.store.getState().acceptedActions[frame.clientActionId],
