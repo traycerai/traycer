@@ -30,6 +30,14 @@ describe("bundled build reload", () => {
     expect(client).not.toContain("activeBuild === null");
   });
 
+  it("waits for each build check before scheduling the next one", () => {
+    const client = bundledBuildReloadClient("build-one", "/build-revision");
+
+    expect(client).toContain("await checkForBuild();");
+    expect(client).toContain("setTimeout(() => void pollForBuild(), 750);");
+    expect(client).not.toContain("setInterval(");
+  });
+
   it("reads the build ID from the served HTML marker", () => {
     expect(
       bundledBuildIdFromHtml(

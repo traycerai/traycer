@@ -55,7 +55,10 @@ export function bundledBuildReloadClient(
       // A build can replace dist/web between polls. Retry on the next tick.
     }
   };
-  void checkForBuild();
-  setInterval(() => void checkForBuild(), 750);
+  const pollForBuild = async () => {
+    await checkForBuild();
+    setTimeout(() => void pollForBuild(), 750);
+  };
+  void pollForBuild();
 })();`;
 }
