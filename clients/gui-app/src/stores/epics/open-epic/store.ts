@@ -512,6 +512,8 @@ export interface OpenEpicState {
    * Y.Doc replica without dropping the owning registry/session entry.
    */
   requestFreshSnapshot: () => void;
+  /** Reopens only the transport, preserving the replica and buffered edits. */
+  retryTransport: () => void;
   /**
    * Sends a `retryMigration` client frame so the host re-runs an
    * interrupted major migration without dropping the `epic.subscribe`
@@ -870,6 +872,7 @@ export interface OpenEpicStoreHandle {
    */
   readonly detachTransport: () => void;
   readonly requestFreshSnapshot: () => void;
+  readonly retryTransport: () => void;
   /**
    * True when this renderer has a loaded, locally clean snapshot and can
    * still reach the host. Cloud acknowledgement is intentionally not part of
@@ -4030,6 +4033,45 @@ export function createOpenEpicStore(
             requestFreshSnapshotImpl?.();
           },
 
+          retryTransport: () => {
+            if (disposed || transportDetached) return;
+            const prior = get();
+            const priorHasFreshRootSnapshot = hasFreshRootSnapshotForOpenCycle;
+            transportStatus = "connecting";
+            currentStatus = deriveConnectionStatus(
+              transportStatus,
+              cloudSyncStatus,
+              hasConnectedOnce,
+            );
+            const cycleDurabilityState = resetDurabilityProofForOpenCycle();
+            closeStreamClient();
+            set({
+              ...connectionStateSlice(),
+              snapshotFetchError: null,
+              ...cycleDurabilityState,
+            });
+            try {
+              openStreamClient();
+            } catch (cause) {
+              transportStatus = prior.hostTransportStatus;
+              cloudSyncStatus = prior.cloudSyncStatus;
+              hasFreshCloudSyncStatus = prior.hasFreshCloudSyncStatus;
+              hasConnectedOnce = prior.hasConnectedOnce;
+              currentStatus = prior.connectionStatus;
+              hasFreshRootSnapshotForOpenCycle = priorHasFreshRootSnapshot;
+              set({
+                ...connectionStateSlice(),
+                snapshotFetchError: prior.snapshotFetchError,
+                artifactRoomDirtyByArtifactRoomId:
+                  prior.artifactRoomDirtyByArtifactRoomId,
+                rootDirty: prior.rootDirty,
+                hasDirtySnapshotForOpenCycle:
+                  prior.hasDirtySnapshotForOpenCycle,
+              });
+              throw cause;
+            }
+          },
+
           retryMigration: () => {
             if (disposed) return;
             // Nothing to retry until at least one migration has surfaced on
@@ -4659,6 +4701,9 @@ export function createOpenEpicStore(
     hotArtifactRoomIdsForTests: () => Array.from(artifactRoomReplicas.keys()),
     requestFreshSnapshot: () => {
       store.getState().requestFreshSnapshot();
+    },
+    retryTransport: () => {
+      store.getState().retryTransport();
     },
     isClean: () => {
       const state = store.getState();

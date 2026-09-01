@@ -4,6 +4,7 @@ export {
   setMobileApp,
   setMobileAppPlatform,
 } from "@/lib/mobile-app";
+export { setNativeKeyboardState } from "@/lib/native-keyboard";
 export {
   setAnalyticsAppSurface,
   type AnalyticsAppSurface,

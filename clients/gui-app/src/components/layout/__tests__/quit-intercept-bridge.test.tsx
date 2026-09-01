@@ -110,6 +110,7 @@ function buildHandle(epicId: string, title: string): FakeHandle {
     dispose: () => undefined,
     detachTransport: () => undefined,
     requestFreshSnapshot: () => undefined,
+    retryTransport: () => undefined,
     isClean: () => !state.isDirty,
     hotArtifactRoomIdsForTests: () => [],
     setDirty: (isDirty, queueSize) => {

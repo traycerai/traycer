@@ -40,6 +40,7 @@ function fakeOpenEpicHandle(id: string): OpenEpicStoreHandle & {
     },
     detachTransport: () => undefined,
     requestFreshSnapshot: () => undefined,
+    retryTransport: () => undefined,
     isClean: () => true,
     hotArtifactRoomIdsForTests: () => [],
     disposeCount: 0,

@@ -74,6 +74,7 @@ function buildTestHandle(id: string, clean: boolean): TestHandle {
       return base.store;
     },
     requestFreshSnapshot: () => base.requestFreshSnapshot(),
+    retryTransport: () => base.retryTransport(),
     dispose: testDispose,
     detachTransport: () => base.detachTransport(),
     isClean: () => isCleanOverride,

@@ -382,6 +382,76 @@ describe("createOpenEpicStore", () => {
     opened.dispose();
   });
 
+  it("retries only the transport without discarding offline Epic edits", () => {
+    const { factory, handle, handles } = fakeFactory();
+    const opened = createOpenEpicStore({
+      epicId: "epic-a",
+      streamClientFactory: factory,
+      userId: null,
+      onAuthError: null,
+    });
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", new Y.Doc()),
+      emptySnapshot(),
+    );
+    handle().callbacks.onConnectionStatus("reconnecting", null);
+    opened.doc.getMap("epic").set("title", "Buffered title");
+    const docBeforeRetry = opened.doc;
+
+    expect(opened.store.getState().unsyncedQueueSize).toBe(1);
+    opened.retryTransport();
+
+    expect(handles()).toHaveLength(2);
+    expect(handles()[0].closeCount).toBe(1);
+    expect(opened.doc).toBe(docBeforeRetry);
+    expect(opened.doc.getMap("epic").get("title")).toBe("Buffered title");
+    expect(opened.store.getState().unsyncedQueueSize).toBe(1);
+    expect(opened.store.getState().isDirty).toBe(true);
+
+    opened.dispose();
+  });
+
+  it("restores the prior Epic recovery state when reprobe construction throws", () => {
+    const streams = fakeFactory();
+    let attempts = 0;
+    const opened = createOpenEpicStore({
+      epicId: "epic-a",
+      streamClientFactory: (epicId, callbacks, seedOfferProvider) => {
+        attempts += 1;
+        if (attempts > 1) throw new Error("subscription wiring failed");
+        return streams.factory(epicId, callbacks, seedOfferProvider);
+      },
+      userId: null,
+      onAuthError: null,
+    });
+    streams
+      .handle()
+      .callbacks.onSnapshot(buildMeta("editor", new Y.Doc()), emptySnapshot());
+    streams.handle().callbacks.onConnectionStatus("closed", {
+      kind: "fatalError",
+      details: {
+        code: "PLAN_RESTRICTED",
+        reason: "remote access unavailable",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+    opened.doc.getMap("epic").set("title", "Buffered title");
+    const prior = opened.store.getState();
+
+    expect(() => opened.retryTransport()).toThrow("subscription wiring failed");
+    expect(opened.store.getState()).toMatchObject({
+      connectionStatus: prior.connectionStatus,
+      hostTransportStatus: prior.hostTransportStatus,
+      snapshotFetchError: prior.snapshotFetchError,
+      unsyncedQueueSize: 1,
+      isDirty: true,
+    });
+    expect(opened.doc.getMap("epic").get("title")).toBe("Buffered title");
+
+    opened.dispose();
+  });
+
   it("collapses a long offline queue on flush without losing edits or under-reporting its size", () => {
     const { factory, handle } = fakeFactory();
     const opened = createOpenEpicStore({
