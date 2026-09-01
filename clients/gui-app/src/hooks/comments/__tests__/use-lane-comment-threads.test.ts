@@ -4,6 +4,8 @@ import {
   resolveArtifactCommentThreads,
   selectLaneCommentThreads,
 } from "@/hooks/comments/use-lane-comment-threads";
+import { commentThreadsShouldPoll } from "@/hooks/comments/use-epic-comment-threads";
+import { HOST_METHOD_POLL_TABLE } from "@/lib/host-rpc-policy/host-method-policy-table";
 
 const ARTIFACT_ID = "artifact-1";
 
@@ -16,6 +18,45 @@ function threadFixture(threadId: string): CommentThreadWire {
     data: { createdByUserId: "user-1" },
   };
 }
+
+describe("commentThreadsShouldPoll", () => {
+  // THE PREMISE `resolveArtifactCommentThreads` RESTS ON. Its fallback hands
+  // precedence back to the poll only once the poll has answered SINCE the lane
+  // dropped - so if nothing makes the poll answer, that arm is unreachable and
+  // the resolver holds retained rows forever.
+  //
+  // Nothing did. The query configures `staleTime` and `refetchOnWindowFocus`,
+  // and `staleTime` marks data stale without SCHEDULING a request; a
+  // lane-status transition invalidates nothing. On a continuously focused
+  // window with a permanently dead lane, remote additions, deletions and
+  // status changes stayed frozen indefinitely.
+  it("polls while the lane is DOWN", () => {
+    expect(commentThreadsShouldPoll(1_000)).toBe(true);
+  });
+
+  it("does not poll while the lane is UP - the lane is the fresher source by construction", () => {
+    expect(commentThreadsShouldPoll(null)).toBe(false);
+  });
+
+  it("polls at a drop instant of 0, which is a real epoch value and not 'no drop'", () => {
+    // The same `0`-is-not-null trap the resolver's `pollUpdatedAt` documents,
+    // on the other input. A truthiness check here would read epoch as "the
+    // lane is up" and never poll.
+    expect(commentThreadsShouldPoll(0)).toBe(true);
+  });
+
+  it("has a table cadence for the flag to opt into - the flag alone polls nothing", () => {
+    // Both halves are required and they live in different files, so either can
+    // be removed without the other failing to compile. `poll: true` against a
+    // `poll: null` table entry is silently inert - `useHostQuery` only reads
+    // the flag when a policy exists - which is exactly the shape of the bug
+    // being fixed: a mechanism that looks wired and schedules nothing.
+    expect(HOST_METHOD_POLL_TABLE["epic.listCommentThreads"].poll).toEqual({
+      kind: "fixed",
+      intervalMs: 15_000,
+    });
+  });
+});
 
 describe("selectLaneCommentThreads", () => {
   it("returns null for a MISSING key - the lane has said nothing", () => {

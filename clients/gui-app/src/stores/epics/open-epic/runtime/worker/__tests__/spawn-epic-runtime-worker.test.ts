@@ -241,6 +241,53 @@ describe("spawnEpicRuntimeWorker", () => {
     handle.dispose();
   });
 
+  it("survives a fault delivered while the handle is still constructing", async () => {
+    // THE TEMPORAL DEAD ZONE THE FATAL TEARDOWN OPENED. `surfaceFatal` now
+    // calls `disposeHandle()`, which reads `disposed` and three unsubscribes
+    // declared far BELOW the `onWorkerFault` subscription - subscribed early
+    // on purpose, because a module that fails to evaluate can have faulted
+    // before this handle finishes constructing. An implementation that
+    // answers that by replaying the fault synchronously on subscribe would
+    // hit those bindings in their TDZ, and the `ReferenceError` would come
+    // out of the CONSTRUCTOR - replacing the failed presentation and the
+    // rejected `ready` with a crash, which is strictly worse than the leak
+    // the teardown was added to fix.
+    //
+    // Nothing in `RuntimeWorkerLike` forbids that implementation; the DOM
+    // adapter merely happens not to be one, since `error` arrives as a task.
+    // The bridge's own `fatal` reaches the same place by the other road, from
+    // inside the synchronous `bootstrap` emit.
+    const pair = createFakeBridgePair("sync");
+    const terminate = vi.fn();
+    const worker: RuntimeWorkerLike = {
+      ...createFakeWorkerTarget(pair),
+      terminate,
+      onWorkerFault: (listener) => {
+        listener("the epic runtime worker module failed to load");
+      },
+    };
+    const relay = { log: vi.fn(), fatal: vi.fn() };
+
+    // Construction itself is the first assertion: under the bug this throws.
+    const handle = spawnEpicRuntimeWorker(
+      spawnOptions(
+        { createWorker: () => worker, projection: SILENT_PROJECTION },
+        { relay },
+      ),
+    );
+
+    // The visible half still ran immediately, in the same order as a mid-life
+    // fatal - the deferral moves the TEARDOWN, not the presentation.
+    expect(relay.fatal).toHaveBeenCalledWith(
+      "the epic runtime worker module failed to load",
+      null,
+    );
+    // And the deferred teardown was discharged rather than dropped: a fatal
+    // that only presented would leave the thread running.
+    expect(terminate).toHaveBeenCalledTimes(1);
+    await expect(handle.ready).rejects.toThrow("module failed to load");
+  });
+
   it("disposes idempotently by sending shutdown before terminating", async () => {
     const fixture = createFixture(false);
     const handle = spawnEpicRuntimeWorker(
@@ -351,6 +398,54 @@ describe("spawnEpicRuntimeWorker", () => {
     expect(kinds.lastIndexOf("stream/status")).toBeLessThan(
       kinds.indexOf("shutdown"),
     );
+  });
+
+  it("releases the transport when the worker fatals, without waiting for a retry", () => {
+    // THE LEAK THE FATAL PATH USED TO LEAVE BEHIND. `surfaceFatal` freed the
+    // accounting books and presented Retry, and stopped there - so `proxy`
+    // kept every real `IStreamSession` the worker had opened. Nothing else
+    // collected them: the provider MARKS the handle dead rather than
+    // disposing it (registry mutation belongs to the acquire effect), and
+    // that pass only runs if the user retries or reopens the epic. A user who
+    // does neither leaves host subscriptions live indefinitely, forwarding
+    // frames toward a bridge nothing reads.
+    //
+    // Cap-eviction cannot stand in for it either: the registry's
+    // `isEvictable` is `handle.isClean()`, which requires
+    // `hostTransportStatus === "open"` - not true of a session whose runtime
+    // just died.
+    const fixture = createFixture(false);
+    const recording = createRecordingStreamClient();
+    const relay = { log: vi.fn(), fatal: vi.fn() };
+    const handle = spawnEpicRuntimeWorker(
+      spawnOptions(
+        { createWorker: () => fixture.worker, projection: SILENT_PROJECTION },
+        { streams: recording.client, relay },
+      ),
+    );
+    openStreams(fixture, 3);
+    expect(recording.closedCount()).toBe(0);
+
+    fixture.pair.worker.post(
+      {
+        frame: "event",
+        event: { kind: "fatal", message: "runtime blew up", stack: null },
+      },
+      [],
+    );
+
+    // Every real session closed, and the thread stopped - no second gesture
+    // from the user required.
+    expect(recording.closedCount()).toBe(3);
+    expect(fixture.terminate).toHaveBeenCalledTimes(1);
+    // The relay still ran, and FIRST: the teardown must not cost the user the
+    // presentation that carries Retry.
+    expect(relay.fatal).toHaveBeenCalledWith("runtime blew up", null);
+    // And the handshake still rejects with the CAUSE. `dispose()` rejects an
+    // unsettled `ready` with its own "disposed before it was ready", so a
+    // teardown ordered before the rejection would replace the reason with the
+    // consequence.
+    return expect(handle.ready).rejects.toThrow("runtime blew up");
   });
 
   it("closes every real session the worker opened when it disposes", () => {

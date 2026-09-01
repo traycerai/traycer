@@ -353,12 +353,15 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
     useTabHostId(),
     tabHostClient,
   );
+  // Read BEFORE the query below, which now takes it: the poll has to know
+  // whether the lane is still pushing to decide its cadence.
+  const laneDroppedAt = useEpicLaneCommentThreadsDroppedAt();
   const threadsQuery = useEpicCommentThreadsForClient({
     client: tabHostClient,
     epicId,
     artifactType: commentArtifactKind ?? "spec",
     artifactId: node.id,
-    options: { enabled: commentsSupported },
+    options: { enabled: commentsSupported, laneDroppedAt },
   });
   const clearFlashThread = useCommentThreadsStore((s) => s.clearFlashThread);
   // The state lane's records for this artifact, or `null` where it has said
@@ -368,7 +371,6 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
   // whose anchor the decoration layer strips as an orphan, leaving nothing to
   // hover.
   const laneThreads = useEpicLaneCommentThreads(node.id);
-  const laneDroppedAt = useEpicLaneCommentThreadsDroppedAt();
   const commentThreads = useMemo(
     () =>
       resolveArtifactCommentThreads({

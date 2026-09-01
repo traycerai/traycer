@@ -95,7 +95,7 @@ export function CommentSidebar(props: CommentSidebarProps) {
     epicId,
     artifactType: artifactType,
     artifactId: artifactId,
-    options: { enabled: true },
+    options: { enabled: true, laneDroppedAt },
   });
 
   const resolved = useMemo(
