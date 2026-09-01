@@ -1312,10 +1312,14 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
       //
       // `getByRole("status")` is unambiguous here BY CONSTRUCTION, and the
       // singular query is doing double duty: the visible notice is
-      // `aria-hidden`, so it is not in the accessibility tree, and the panel's
+      // `aria-hidden`, so it is not in the accessibility tree, the panel's
       // only other `role="status"` lives in the `!methodSupport` early return,
-      // which never renders alongside the footer. So a single match is also a
-      // pin on "announced exactly once".
+      // which never renders alongside the footer, and `renderPanel` mounts the
+      // panel bare (no toaster, no portal host) so nothing outside it
+      // contributes. `getByRole` THROWS on more than one match, so the same
+      // line also pins "exactly one status-role node" - re-adding
+      // `role="status"` to the visible notice fails here. Keep it singular;
+      // `getAllByRole(...)[0]` would silently drop that half.
       const live = screen.getByRole("status");
       expect(live.getAttribute("aria-live")).toBe("polite");
       expect(live.classList.contains("sr-only")).toBe(true);
@@ -1343,6 +1347,11 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
       available: [version({ version: "1.0.0" })],
       managedOverrides: null,
     });
+
+    // Permanent mount, empty before the click - asserted here as well as in
+    // the outcome table so each table pins the F2 contract on its own: the
+    // post-click query below would find a conditionally mounted region too.
+    expect(screen.getByRole("status").textContent).toBe("");
 
     await user.click(screen.getByTestId("provider-pack-discovery-check"));
 

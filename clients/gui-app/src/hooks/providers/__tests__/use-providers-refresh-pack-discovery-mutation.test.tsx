@@ -118,12 +118,15 @@ describe("useProvidersRefreshPackDiscovery response budget", () => {
   it("declares exactly the budget the hook passes, and one longer than the transport's plain-request default", () => {
     // TWO assertions answering two different questions. Keep both.
     //
-    // EQUALITY guards a hard runtime reject that no suite exercises:
-    // `HostClient.requestWithResponseTimeout` rejects unless the row's
+    // EQUALITY guards a hard runtime reject that no suite exercises FOR THIS
+    // METHOD: `HostClient.requestWithResponseTimeout` rejects unless the row's
     // `joinResponseTimeoutMs` equals the passed value EXACTLY
     // (`expectedTimeout !== responseTimeoutMs -> Promise.reject`,
-    // clients/shared/host-client/host-client.ts). This suite mocks
-    // `@/lib/host` with a plain object, so that guard is never run here.
+    // clients/shared/host-client/host-client.ts). The guard itself is pinned
+    // generically (`host-request-coordinator.test.ts`,
+    // `local-maintenance-fallback-client.test.ts`), but against other
+    // methods; this suite mocks `@/lib/host` with a plain object, so nothing
+    // here ever runs it against `providers.refreshPackDiscovery`.
     //
     // It reads like a tautology today because the row imports the constant.
     // It is not. Edit the row to `7 * 60 * 1000` - a plausible "give it more
