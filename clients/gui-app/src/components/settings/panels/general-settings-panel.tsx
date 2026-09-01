@@ -6,7 +6,9 @@ import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { VoiceSettingsSection } from "@/components/settings/voice-settings-section";
+import { PreventSleepSettingsSection } from "@/components/settings/prevent-sleep-settings-section";
 import { WorktreeBranchPrefixSection } from "@/components/settings/worktree-branch-prefix-section";
+import { BrowserSettingsSection } from "@/components/settings/browser-settings-section";
 import { useSettingsDensity } from "@/providers/settings-density-context";
 import { cn } from "@/lib/utils";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -28,6 +30,14 @@ import {
   type MigrationRunState,
 } from "@/stores/migration/migration-run-store";
 import { startMigrationRun } from "@/components/migration/migration-run-handle";
+import { SessionImportDialog } from "@/components/session-import/session-import-dialog";
+import { useSessionImportAvailable } from "@/hooks/session-import/use-session-import-available";
+import { useSessionImportStatus } from "@/hooks/session-import/use-session-import-status-query";
+import {
+  sessionImportDoneCount,
+  sessionImportIsRunning,
+  useSessionImportRunStore,
+} from "@/stores/session-import/session-import-run-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { trackSettingChanged, type AnalyticsSetting } from "@/lib/analytics";
@@ -67,12 +77,6 @@ export function GeneralSettingsPanel() {
   const migrationProgressLabel = formatMigrationProgress(migrationState);
   const migrationIsRunning =
     migrationState.status === "running" || migrationState.remoteRunning;
-  const preventSleepWhileRunning = useSettingsStore(
-    (s) => s.preventSleepWhileRunning,
-  );
-  const setPreventSleepWhileRunning = useSettingsStore(
-    (s) => s.setPreventSleepWhileRunning,
-  );
   const showGlobalResourceMonitor = useSettingsStore(
     (s) => s.showGlobalResourceMonitor,
   );
@@ -162,26 +166,15 @@ export function GeneralSettingsPanel() {
           />
         </SettingsGroup>
 
+        <BrowserSettingsSection />
+
         <SettingsGroup
           title="Running agents"
           tone="default"
           dataTestId={undefined}
           fill={false}
         >
-          <SettingsRow
-            label="Prevent sleep while running"
-            description="Keep the computer awake while an agent is running, so work continues when you step away."
-            control={
-              <Switch
-                checked={preventSleepWhileRunning}
-                onCheckedChange={(value) => {
-                  trackGeneralSetting("preventSleepWhileRunning");
-                  setPreventSleepWhileRunning(value);
-                }}
-                aria-label="Prevent sleep while running"
-              />
-            }
-          />
+          <PreventSleepSettingsSection />
           <SettingsRow
             label="Show global resources button"
             description="Show the app-wide resource monitor in the header."
@@ -258,6 +251,7 @@ export function GeneralSettingsPanel() {
           dataTestId={undefined}
           fill={false}
         >
+          <SessionImportSettingsRow />
           <SettingsRow
             label="Product tour"
             description="Replay the first-launch onboarding tour."
@@ -312,6 +306,80 @@ export function GeneralSettingsPanel() {
         <DangerZoneSection />
       </div>
     </SettingsPanelShell>
+  );
+}
+
+/**
+ * The single "Import your work" entry (spec §5): one row for every provider,
+ * not one per provider and not in the Providers panel. Hidden entirely on a host
+ * that predates the feature - it is deliberately de-emphasised, so there is
+ * nothing worth explaining in its absence.
+ *
+ * Live progress comes from the run store, which is only populated for a run
+ * this window started or is attached to; `sessionImport.status` covers the
+ * colder questions - a run left going by a quit, and the last run's summary -
+ * and is asked on mount rather than polled (see the host method policy).
+ */
+function SessionImportSettingsRow() {
+  const [importOpen, setImportOpen] = useState(false);
+  const available = useSessionImportAvailable();
+  const statusQuery = useSessionImportStatus(available);
+  const run = useSessionImportRunStore(
+    useShallow((s) => ({
+      running: sessionImportIsRunning(s),
+      done: sessionImportDoneCount(s),
+      total: s.total,
+    })),
+  );
+  if (!available) return null;
+
+  const status = statusQuery.data ?? null;
+  const active = run.running
+    ? { done: run.done, total: run.total }
+    : (status?.active ?? null);
+
+  let description =
+    "Bring work you already started in Claude Code, Codex, or OpenCode into Traycer as tasks.";
+  if (active !== null) {
+    // A run is active from the moment it is submitted, but its size is the
+    // host's answer to that submission - so between the two there is a real
+    // run with nothing yet to count, and "Importing 0 of 0…" would be the row
+    // reporting a number it does not have. The spinner keeps turning either
+    // way: `active` is what drives it, and this only changes what is said.
+    description =
+      active.total === 0
+        ? "Starting import…"
+        : `Importing ${active.done} of ${active.total}…`;
+  }
+
+  return (
+    <>
+      <SettingsRow
+        label="Import your work"
+        description={description}
+        control={
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            data-testid="settings-import-sessions"
+            onClick={() => setImportOpen(true)}
+          >
+            {active !== null ? (
+              <AgentSpinningDots
+                className="text-muted-foreground"
+                testId="settings-import-sessions-spinner"
+                variant={undefined}
+              />
+            ) : null}
+            Import
+          </Button>
+        }
+      />
+      {importOpen ? (
+        <SessionImportDialog onClose={() => setImportOpen(false)} />
+      ) : null}
+    </>
   );
 }
 

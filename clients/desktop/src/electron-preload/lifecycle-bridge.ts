@@ -6,7 +6,6 @@ import {
 import type {
   AppLifecycleBridge,
   CrossWindowUnsyncableReport,
-  FreshUnsyncedSnapshotRequest,
   FreshUnsyncedSnapshotResponse,
   QuitDecisionResponse,
   QuitRequest,
@@ -47,13 +46,25 @@ export function buildLifecycleBridge(): LifecycleBridgeSurface {
           response,
         ) as Promise<void>,
       onGetFreshUnsyncedSnapshot: (handler) =>
-        subscribe<FreshUnsyncedSnapshotRequest>(
+        subscribe<{ readonly requestId: string }>(
           RunnerHostEvent.getFreshUnsyncedSnapshot,
           handler,
         ),
       respondFreshUnsyncedSnapshot: (reply: FreshUnsyncedSnapshotResponse) =>
         ipcRenderer.invoke(
           RunnerHostInvoke.freshUnsyncedSnapshotResponse,
+          reply,
+        ) as Promise<void>,
+      onCaptureFinalBrowserState: (handler) =>
+        subscribe<{ readonly requestId: string }>(
+          RunnerHostEvent.captureFinalBrowserState,
+          handler,
+        ),
+      respondFinalBrowserStateCaptured: (reply: {
+        readonly requestId: string;
+      }) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.finalBrowserStateCaptured,
           reply,
         ) as Promise<void>,
       unsyncableWorkAcrossWindows: () =>

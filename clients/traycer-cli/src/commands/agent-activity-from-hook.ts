@@ -12,7 +12,7 @@ import {
 } from "@traycer/protocol/host/agent/shared";
 import {
   callHostRpcFastFail,
-  parseHostResponse,
+  parseCanonicalHostResponse,
   parseUserInput,
   toAgentCliError,
 } from "../internal/host-rpc";
@@ -24,7 +24,10 @@ import type { CommandFn } from "../runner/runner";
 type ActivityHookEvent = "start" | "stop";
 
 type NoopReason =
-  "missing-context" | "unknown-event" | "unknown-provider" | "host-unreachable";
+  | "missing-context"
+  | "unknown-event"
+  | "unknown-provider"
+  | "host-unreachable";
 
 // Identity fields shared by the `promptSubmitted` call and its `recordActivity`
 // fallback - both carry the exact same payload (see the module doc).
@@ -186,7 +189,8 @@ async function submitPrompt(identity: HookActivityIdentity) {
     };
   }
 
-  const { accepted, pendingPromptContext } = parseHostResponse(
+  const { accepted, pendingPromptContext } = parseCanonicalHostResponse(
+    "agent.tui.promptSubmitted",
     tuiAgentPromptSubmittedResponseSchema,
     rpcResult,
   );
@@ -228,7 +232,11 @@ async function callRecordActivity(
     throw err;
   });
   if (rpcResult === "host-unreachable") return "host-unreachable";
-  return parseHostResponse(recordTuiAgentActivityResponseSchema, rpcResult);
+  return parseCanonicalHostResponse(
+    "agent.tui.recordActivity",
+    recordTuiAgentActivityResponseSchema,
+    rpcResult,
+  );
 }
 
 function userPromptSubmitEnvelope(additionalContext: string): string {

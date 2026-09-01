@@ -4,6 +4,7 @@ import type { Environment } from "../runner/environment";
 import { createCliLogger } from "../logger";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { ProgressInfo } from "../runner/output";
+import type { HostStartAdoptionPublisher } from "../host/host-start-adoption";
 import {
   readHostInstallRecord,
   type HostInstallRecord,
@@ -13,7 +14,7 @@ import { hostStagedDir } from "../store/paths";
 import { assertHostNotBusy } from "../host/busy-check";
 import type { ServiceState } from "../service";
 import { createServiceInstallLifecycle } from "../service/install-lifecycle";
-import { reconcileHostStage } from "./stage-reconcile";
+import { reconcileHostStageWithAttempt } from "./stage-reconcile";
 import { commitInstallFromSource, currentInstallPlatform } from "./install";
 
 // `host apply` core - Host Update Layer Redesign Tech Plan, "New/changed
@@ -45,6 +46,14 @@ export interface ApplyHostOptions {
   // bearing for releasing file handles the rename needs.
   readonly noService: boolean;
   readonly onProgress: (info: ProgressInfo) => void;
+  /** See `commitInstallFromSource` for the final-actuator contract. */
+  readonly verifyMutationCapability: () => Promise<void>;
+  /**
+   * Published immediately before a lifecycle-controlled OS service launch.
+   * A parent contender supplies this one-shot supervisor adoption proof so
+   * `host start` does not deadlock trying to reacquire the same outer lock.
+   */
+  readonly publishHostStartAdoption?: HostStartAdoptionPublisher;
 }
 
 // The facts `createServiceInstallLifecycle` observed around the swap -
@@ -76,8 +85,11 @@ export type ApplyHostOutcome =
       readonly record: HostInstallRecord;
       readonly previous: HostInstallRecord | null;
       // False whenever `--no-service` was set (no start was even
-      // attempted) or the post-swap start/restart failed - true only when
-      // the newly-committed bytes are confirmed running.
+      // attempted) or the post-swap start/restart failed. True means the
+      // start was REQUESTED and the request was accepted - NOT that the host
+      // is serving: `launchctl kickstart` returns as soon as launchd accepts,
+      // so an unspawnable job answers success. Nothing here probes health;
+      // `host update` does, and `host status` answers it directly.
       readonly runningActivated: boolean;
       // The attested, committed canonical install-generation fingerprint -
       // read from the record this call itself just wrote, never a later
@@ -114,13 +126,16 @@ export async function applyHost(
     });
   }
 
-  await reconcileHostStage(opts.environment);
+  await reconcileHostStageWithAttempt(
+    opts.environment,
+    opts.verifyMutationCapability,
+  );
 
   const installed = await readHostInstallRecord(opts.environment);
   if (installed === null) {
     throw cliError({
       code: CLI_ERROR_CODES.HOST_NOT_INSTALLED,
-      message: `host apply: no host installed for environment=${opts.environment}; run 'traycer host install latest' first`,
+      message: `host apply: no host installed for environment=${opts.environment}; run 'traycer host install' first`,
       details: { environment: opts.environment },
       exitCode: 1,
     });
@@ -177,6 +192,11 @@ export async function applyHost(
         // anyway.
         force: opts.force,
       });
+  if (lifecycleHandle !== null && opts.publishHostStartAdoption !== undefined) {
+    lifecycleHandle.lifecycle.setHostStartAdoptionPublisher?.(
+      opts.publishHostStartAdoption,
+    );
+  }
 
   const stagedDir = hostStagedDir(opts.environment);
   const { record, previous } = await commitInstallFromSource({
@@ -193,6 +213,7 @@ export async function applyHost(
     onProgress: opts.onProgress,
     lifecycle: lifecycleHandle?.lifecycle ?? null,
     onCommitted: () => {},
+    verifyMutationCapability: opts.verifyMutationCapability,
   });
 
   // `createServiceInstallLifecycle`'s `afterSwap` already swallows its own

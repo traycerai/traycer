@@ -26,7 +26,10 @@
  * fleet that had something new to say.
  */
 export type ChatPublicationDefinitiveReason =
-  "chat-deleted" | "lineage-superseded" | "backup-halted" | "unexplained";
+  | "chat-deleted"
+  | "lineage-superseded"
+  | "backup-halted"
+  | "unexplained";
 
 /**
  * `null` when the ordinary reading applies and the state may still move on its

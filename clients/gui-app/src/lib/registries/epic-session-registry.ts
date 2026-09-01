@@ -1,4 +1,4 @@
-import { createContext } from "react";
+import { createContext, type Context } from "react";
 import {
   DEFAULT_MAX_LIVE_EPICS,
   OpenEpicSessionRegistry,
@@ -14,8 +14,9 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { releaseDesktopEpicOwnershipForEpic } from "@/lib/windows/desktop-epic-ownership";
 
-export const EpicSessionContext = createContext<OpenEpicStoreHandle | null>(
-  null,
+export const EpicSessionContext = createStableDevContext(
+  "__TRAYCER_EPIC_SESSION_CONTEXT__",
+  () => createContext<OpenEpicStoreHandle | null>(null),
 );
 
 type EpicSessionPresentationState =
@@ -46,16 +47,72 @@ export type EpicSessionPresentation = EpicSessionPresentationState & {
  * complete snapshot; consumers use this presentation state to show a bounded
  * recovery result instead of treating a missing effective host as silence.
  */
-export const EpicSessionPresentationContext =
-  createContext<EpicSessionPresentation | null>(null);
+export const EpicSessionPresentationContext = createStableDevContext(
+  "__TRAYCER_EPIC_SESSION_PRESENTATION_CONTEXT__",
+  () => createContext<EpicSessionPresentation | null>(null),
+);
+
+/**
+ * The three epic-session contexts are pinned on `globalThis` in Vite's hot
+ * runtime, exactly as `HostCompatibilityContext` and the host runtime state are
+ * (`lib/host/compatibility-state.ts`, `lib/host/runtime.ts`): Fast Refresh can
+ * keep a provider from one module generation mounted while a refreshed
+ * consumer reads hooks from the next, and a context object created per
+ * generation makes those two sides address DIFFERENT contexts - the consumer
+ * reads the default `null` and the throwing `useOpenEpicHandle()` blanks the
+ * window with "must be called inside <EpicSessionProvider>" (observed during a
+ * dev-slot live pass, 2026-08-30). Reusing one object per page removes the only
+ * way two epic-session contexts can coexist. A production build has no
+ * `import.meta.hot` and gets ordinary page-local contexts; a real reload resets
+ * `globalThis`. Vitest's `import.meta.hot` stub exercises the same
+ * module-reimport path.
+ *
+ * All three are pinned, not just the handle context: the provider writes them
+ * as one tuple (`epic-session-provider.tsx`), and a split on any one of them
+ * leaves a consumer reading a stale presentation or host client.
+ */
+interface EpicSessionDevGlobals {
+  __TRAYCER_EPIC_SESSION_CONTEXT__:
+    | Context<OpenEpicStoreHandle | null>
+    | undefined;
+  __TRAYCER_EPIC_SESSION_PRESENTATION_CONTEXT__:
+    | Context<EpicSessionPresentation | null>
+    | undefined;
+  __TRAYCER_EPIC_SESSION_HOST_CLIENT_CONTEXT__:
+    | Context<HostClient<HostRpcRegistry> | null>
+    | undefined;
+}
+
+function createStableDevContext<K extends keyof EpicSessionDevGlobals>(
+  key: K,
+  create: () => NonNullable<EpicSessionDevGlobals[K]>,
+): NonNullable<EpicSessionDevGlobals[K]> {
+  if (import.meta.hot === undefined) {
+    return create();
+  }
+  // Typed as the dev-globals record alone (not the `typeof globalThis`
+  // intersection) so the keyed write below type-checks against the one
+  // property this function is generic over.
+  const devGlobals: EpicSessionDevGlobals = globalThis as typeof globalThis &
+    EpicSessionDevGlobals;
+  const existing = devGlobals[key];
+  if (existing !== undefined) {
+    return existing;
+  }
+  const context = create();
+  devGlobals[key] = context;
+  return context;
+}
 
 /**
  * The RPC client resolved for the same host that owns `EpicSessionContext`.
  * Session-level provisioning prevents sidebar rows from independently mounting
  * host-directory subscriptions just to address the same Epic host.
  */
-export const EpicSessionHostClientContext =
-  createContext<HostClient<HostRpcRegistry> | null>(null);
+export const EpicSessionHostClientContext = createStableDevContext(
+  "__TRAYCER_EPIC_SESSION_HOST_CLIENT_CONTEXT__",
+  () => createContext<HostClient<HostRpcRegistry> | null>(null),
+);
 
 export const handleHostIds = new WeakMap<OpenEpicStoreHandle, string | null>();
 // The R-1 rotation rationale that used to live here now lives at the acquire
@@ -70,6 +127,25 @@ export function getEpicSessionHandleHostId(
   handle: OpenEpicStoreHandle,
 ): string | null {
   return handleHostIds.get(handle) ?? null;
+}
+
+/**
+ * The session's host client, stamped by `epic-session-provider.tsx` from the
+ * same value it provides through {@link EpicSessionHostClientContext} - for
+ * the imperative callers (DnD commits) that run outside that subtree and
+ * address the host the session's records live on. A `null` entry means the
+ * session has no serving client right now; an absent entry, a handle the
+ * provider never saw (tests).
+ */
+export const handleHostClients = new WeakMap<
+  OpenEpicStoreHandle,
+  HostClient<HostRpcRegistry> | null
+>();
+
+export function getEpicSessionHandleHostClient(
+  handle: OpenEpicStoreHandle,
+): HostClient<HostRpcRegistry> | null {
+  return handleHostClients.get(handle) ?? null;
 }
 
 /**

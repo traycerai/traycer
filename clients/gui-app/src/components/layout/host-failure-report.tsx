@@ -1,4 +1,5 @@
 import { type ReactNode } from "react";
+import { describeHostBusy } from "@/components/host/host-restart-copy";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import {
   presentsLocalHostLifecycle,
@@ -130,7 +131,22 @@ function describeCompatHealth(
   // An older host reports `busy` without a count. It used to arrive as a
   // fabricated `0`, which read as "busy 0 sessions"; it now arrives as `null`,
   // which would interpolate as the word "null" in a diagnostic someone pastes
-  // into an issue. Say only what the host said.
+  // into an issue. Say only what the host said. A typed breakdown names
+  // kinds; a null one keeps the count copy, including the load-bearing
+  // "busy 0 sessions" vs "busy" split.
+  const copy = describeHostBusy({
+    breakdown: hostStatus.busyBreakdown,
+    busySessionCount: hostStatus.busySessionCount,
+    busy: hostStatus.busy,
+  });
+  if (
+    hostStatus.busyBreakdown !== null &&
+    copy.label !== null &&
+    copy.label !== "Idle" &&
+    copy.label !== "Busy"
+  ) {
+    return `${verdict}, busy ${copy.label}`;
+  }
   const count = hostStatus.busySessionCount;
   if (count === null) return `${verdict}, busy`;
   return `${verdict}, busy ${count} ${count === 1 ? "session" : "sessions"}`;

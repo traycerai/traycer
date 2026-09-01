@@ -158,7 +158,9 @@ export type TuiAgentPlacement =
   | { readonly kind: "target-group"; readonly groupId: string };
 
 export type CreateTuiAgentStatus =
-  "preparing-workspace" | "forking-session" | "starting-terminal";
+  | "preparing-workspace"
+  | "forking-session"
+  | "starting-terminal";
 
 export interface CreateTuiAgentInput {
   readonly epicId: string;
@@ -172,7 +174,7 @@ export interface CreateTuiAgentInput {
   readonly reasoningEffort: string | null;
   readonly forkSourceHarnessSessionId: string | null;
   /**
-   * The fork source's own stable artifact id (T3 "stable source id"). `null`
+   * The fork source's own stable artifact id. `null`
    * for a non-fork launch. Threaded onto `agent.tui.prepareLaunch` as
    * `forkSourceTuiAgentId` so the resolver validates the exact
    * `{id, epic, harness, session, user, host}` tuple instead of scanning for
@@ -239,7 +241,7 @@ export function useCreateTuiAgentForClient(
 } {
   const startSession = useAgentStartTerminalSession(hostClient);
   const createTuiAgent = useEpicCreateTuiAgentForClient(hostClient);
-  const worktreeCreate = useWorktreeCreateForClient(hostClient);
+  const worktreeCreate = useWorktreeCreateForClient(hostClient, undefined);
   const validateForkProfile = useValidateTuiForkProfile(hostClient);
   const forkProfilePreflightSupported =
     useTuiForkProfileSupported(placeholderHostId);
@@ -313,7 +315,7 @@ export function useCreateTuiAgentForClient(
         // Preflight cross-profile fork admission BEFORE anything else -
         // including the placeholder tile and worktree/binding work below -
         // so a rejection leaves NOTHING created (tech plan governing
-        // mechanism 2, T3 client ordering). See
+        // client-side ordering). See
         // `resolveForkProfilePreflightTarget` for when this actually applies.
         const preflightTarget = resolveForkProfilePreflightTarget(
           input,
@@ -491,7 +493,7 @@ interface PreflightForkProfileAdmissionArgs {
   readonly validateForkProfile: ValidateForkProfileMutateAsync;
 }
 
-// Read-only preflight against the guard core's bulk-verdict shape (T3), asked
+// Read-only preflight against the guard core's bulk-verdict shape, asked
 // for exactly this one target profile. Rejects with `TuiForkProfileRejectedError`
 // - never a silent no-op - so the caller's `try` aborts before any
 // worktree/binding side effect. `agent.tui.prepareLaunch` re-runs the SAME

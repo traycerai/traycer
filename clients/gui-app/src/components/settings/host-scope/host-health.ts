@@ -50,6 +50,14 @@ import {
  * button. Any host — including a remote one on someone else's desk — can be
  * `local-only`.
  *
+ * Where that state comes from changed, though the state and its copy did not.
+ * It used to be a wire value (`connectivity: "local-only"`), which meant the
+ * server decided it and liveness was lost behind it. Now the wire carries
+ * pure liveness and this reads the ACCOUNT's plan alongside it
+ * (`planAllowsRemote`) — so a plan-gated host that is genuinely `offline`
+ * reaches `offline` here, with a last-seen detail, instead of being dressed
+ * as a billing state forever.
+ *
  * `reported-reachable` is the state that exists because the honest answer for
  * a never-dialled host is neither "Online" nor "Offline" (F26). See
  * `deriveHostPresence`.
@@ -146,6 +154,15 @@ export interface DeriveHostHealthOptions {
    * cold start.
    */
   readonly authorityAttached: boolean;
+  /**
+   * Whether the ACCOUNT's plan includes remote hosts — the axis the wire no
+   * longer carries, combined with `connectivity` in `deriveHostPresence`. This
+   * surface reads the raw registry DTO rather than a directory entry, so the
+   * caller supplies it (the negation of `useRemoteHostsPlanRestricted`), where
+   * an entry-based surface reads the `planAllowsRemote` stamped at projection
+   * time.
+   */
+  readonly planAllowsRemote: boolean;
   readonly nowMs: number;
 }
 
@@ -380,6 +397,8 @@ function registryHealth(options: DeriveHostHealthOptions): HostHealth {
   const presence = deriveHostPresence({
     status: item.status,
     hasLiveSession,
+    planAllowsRemote: options.planAllowsRemote,
+    nowMs,
   });
   switch (presence.reading) {
     case "online":

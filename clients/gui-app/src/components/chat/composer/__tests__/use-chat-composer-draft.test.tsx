@@ -10,6 +10,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
+import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
+import { STUB_ANNOTATION_ELEMENT } from "@/lib/browser-view/annotation/__tests__/browser-annotation-fixtures";
 import {
   buildQuoteBlockquote,
   appendQuoteToDraft,
@@ -61,15 +63,23 @@ function fakeHandle(ready: boolean) {
 }
 
 interface BridgeHookProps {
-  readonly taskId: string;
+  readonly chatId: string;
   readonly editorRef: { current: ComposerPromptEditorHandle | null };
   readonly editorReadyTick: number;
 }
 
 function renderBridgeHook(initial: BridgeHookProps) {
-  return renderHook((props: BridgeHookProps) => useChatComposerDraft(props), {
-    initialProps: initial,
-  });
+  return renderHook(
+    (props: BridgeHookProps) =>
+      useChatComposerDraft({
+        chatId: props.chatId,
+        epicId: "epic-1",
+        hostId: "host-1",
+        editorRef: props.editorRef,
+        editorReadyTick: props.editorReadyTick,
+      }),
+    { initialProps: initial },
+  );
 }
 
 describe("useChatComposerDraft bridge", () => {
@@ -78,7 +88,7 @@ describe("useChatComposerDraft bridge", () => {
     const { handle, syncContent } = fakeHandle(true);
     const editorRef = { current: handle as ComposerPromptEditorHandle | null };
 
-    renderBridgeHook({ taskId, editorRef, editorReadyTick: 1 });
+    renderBridgeHook({ chatId: taskId, editorRef, editorReadyTick: 1 });
 
     act(() => {
       useComposerDraftStore
@@ -97,7 +107,7 @@ describe("useChatComposerDraft bridge", () => {
     };
 
     const { rerender } = renderBridgeHook({
-      taskId,
+      chatId: taskId,
       editorRef,
       editorReadyTick: 0,
     });
@@ -114,13 +124,13 @@ describe("useChatComposerDraft bridge", () => {
     // The editor finishes construction: ComposerPromptEditor fires
     // onEditorReady, which the owner turns into an editorReadyTick bump.
     editorRef.current = handle;
-    rerender({ taskId, editorRef, editorReadyTick: 1 });
+    rerender({ chatId: taskId, editorRef, editorReadyTick: 1 });
 
     expect(syncContent).toHaveBeenCalledTimes(1);
     expect(syncContent).toHaveBeenCalledWith(doc("quoted"), null);
 
     // A further rerender with nothing new must not replay the same epoch.
-    rerender({ taskId, editorRef, editorReadyTick: 1 });
+    rerender({ chatId: taskId, editorRef, editorReadyTick: 1 });
     expect(syncContent).toHaveBeenCalledTimes(1);
   });
 
@@ -133,7 +143,7 @@ describe("useChatComposerDraft bridge", () => {
     const editorRef = { current: handle as ComposerPromptEditorHandle | null };
 
     const { rerender } = renderBridgeHook({
-      taskId,
+      chatId: taskId,
       editorRef,
       editorReadyTick: 0,
     });
@@ -146,7 +156,7 @@ describe("useChatComposerDraft bridge", () => {
     expect(syncContent).not.toHaveBeenCalled();
 
     markReady();
-    rerender({ taskId, editorRef, editorReadyTick: 1 });
+    rerender({ chatId: taskId, editorRef, editorReadyTick: 1 });
 
     expect(syncContent).toHaveBeenCalledTimes(1);
     expect(syncContent).toHaveBeenCalledWith(doc("quoted"), null);
@@ -157,7 +167,7 @@ describe("useChatComposerDraft bridge", () => {
     const { handle, syncContent } = fakeHandle(true);
     const editorRef = { current: handle as ComposerPromptEditorHandle | null };
 
-    renderBridgeHook({ taskId, editorRef, editorReadyTick: 1 });
+    renderBridgeHook({ chatId: taskId, editorRef, editorReadyTick: 1 });
 
     act(() => {
       useComposerDraftStore
@@ -199,12 +209,12 @@ describe("useChatComposerDraft bridge", () => {
     });
 
     renderBridgeHook({
-      taskId,
+      chatId: taskId,
       editorRef: editorRefA,
       editorReadyTick: 1,
     });
     renderBridgeHook({
-      taskId,
+      chatId: taskId,
       editorRef: editorRefB,
       editorReadyTick: 1,
     });
@@ -231,7 +241,7 @@ describe("useChatComposerDraft bridge", () => {
     });
 
     const { rerender } = renderBridgeHook({
-      taskId,
+      chatId: taskId,
       editorRef,
       editorReadyTick: 0,
     });
@@ -244,7 +254,7 @@ describe("useChatComposerDraft bridge", () => {
     expect(syncContent).not.toHaveBeenCalled();
 
     markReady();
-    rerender({ taskId, editorRef, editorReadyTick: 1 });
+    rerender({ chatId: taskId, editorRef, editorReadyTick: 1 });
 
     expect(syncContent).toHaveBeenCalledTimes(1);
     expect(syncContent).toHaveBeenCalledWith(EMPTY_DOC, EMPTY_SELECTION);
@@ -265,7 +275,9 @@ function QuoteFocusHarness(props: QuoteFocusHarnessProps) {
   // keys its handle-ready catch-up on.
   const [editorReadyTick, setEditorReadyTick] = useState(0);
   const { initialContent, initialSelection } = useChatComposerDraft({
-    taskId,
+    chatId: taskId,
+    epicId: "epic-1",
+    hostId: "host-1",
     editorRef,
     editorReadyTick,
   });
@@ -448,5 +460,73 @@ describe("appendQuoteToDraft + useChatComposerDraft integration", () => {
       from: expectedEnd,
       to: expectedEnd,
     });
+  });
+});
+
+function draftAnnotation(annotationId: string): BrowserAnnotationRecord {
+  return {
+    kind: "browser-annotation",
+    annotationId,
+    tabId: "t-1",
+    sessionId: "s-1",
+    origin: "https://example.com",
+    pageUrl: "https://example.com/",
+    pageTitle: "Example Domain",
+    capturedAt: 1_700_000_000_000,
+    comment: "annotate",
+    counts: { elements: 1, regions: 0, strokes: 0 },
+    elements: [STUB_ANNOTATION_ELEMENT],
+    imageFileName: `browser-annotation-${annotationId}.png`,
+    imageHash: `hash-${annotationId}`,
+    droppedElementCount: 0,
+  };
+}
+
+describe("useChatComposerDraft browser annotation image gating", () => {
+  it("sets draftHasImages when the draft has a browser annotation and no editor images", () => {
+    const taskId = "task-ann-images";
+    const { handle } = fakeHandle(true);
+    const editorRef = { current: handle as ComposerPromptEditorHandle | null };
+
+    act(() => {
+      useComposerDraftStore
+        .getState()
+        .addBrowserAnnotation(taskId, draftAnnotation("ann-gate"));
+    });
+
+    const { result } = renderBridgeHook({
+      chatId: taskId,
+      editorRef,
+      editorReadyTick: 1,
+    });
+
+    expect(result.current.draftHasText).toBe(false);
+    expect(result.current.draftHasImages).toBe(true);
+  });
+
+  it("clears draftHasImages when the last browser annotation is removed", () => {
+    const taskId = "task-ann-remove";
+    const { handle } = fakeHandle(true);
+    const editorRef = { current: handle as ComposerPromptEditorHandle | null };
+
+    act(() => {
+      useComposerDraftStore
+        .getState()
+        .addBrowserAnnotation(taskId, draftAnnotation("ann-remove"));
+    });
+
+    const { result } = renderBridgeHook({
+      chatId: taskId,
+      editorRef,
+      editorReadyTick: 1,
+    });
+    expect(result.current.draftHasImages).toBe(true);
+
+    act(() => {
+      useComposerDraftStore
+        .getState()
+        .removeBrowserAnnotation(taskId, "ann-remove");
+    });
+    expect(result.current.draftHasImages).toBe(false);
   });
 });

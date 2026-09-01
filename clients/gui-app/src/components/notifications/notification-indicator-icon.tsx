@@ -5,6 +5,7 @@ import {
   attentionTone,
   DONE_TONE,
   terminalFailureTone,
+  type AgentNotificationSurface,
   type IndicatorTone,
 } from "@/components/notifications/notification-indicator-tones";
 import type { NotificationIndicatorState } from "@/stores/notifications/notification-indicator-state";
@@ -34,6 +35,9 @@ interface NotificationIndicatorIconProps {
   readonly runningTitle: string;
   readonly defaultIcon: ReactNode;
   readonly statusPresentation: "message" | "spinner";
+  /** Agent surface whose identity owns the failure glyph. "Terminal" in the
+   * indicator state means a latest outcome, not necessarily a TUI agent. */
+  readonly agentSurface: AgentNotificationSurface;
 }
 
 /**
@@ -41,8 +45,8 @@ interface NotificationIndicatorIconProps {
  * over live activity for high-attention states: chat/other failures first,
  * then unresolved prompts, followed by the session-backed running indicator
  * (turn spinner, or the muted background variant), unread completion, and
- * finally terminal failure. Producers suppress historical failures per exact
- * entity before aggregate state reaches this renderer.
+ * finally terminal failure. Producers retain historical failures in the feed
+ * while projecting only the latest terminal outcome into this renderer.
  */
 export function NotificationIndicatorIcon(
   props: NotificationIndicatorIconProps,
@@ -76,7 +80,7 @@ export function NotificationIndicatorIcon(
       <IndicatorTonePresentation tone={DONE_TONE} indicatorProps={props} />
     );
   }
-  const terminalTone = terminalFailureTone(props.state);
+  const terminalTone = terminalFailureTone(props.state, props.agentSurface);
   if (terminalTone !== null) {
     return (
       <IndicatorTonePresentation tone={terminalTone} indicatorProps={props} />

@@ -1,5 +1,5 @@
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import {
   defineRpcContract,
@@ -11,6 +11,7 @@ import {
   type RequestContext,
 } from "@traycer/protocol/auth/request-context";
 import {
+  HOST_AVAILABILITY_SWEEP_WINDOW_MS,
   HostClient,
   type HostClientChangeEvent,
   type HostQueryInvalidationOptions,
@@ -39,6 +40,7 @@ import type {
 } from "@traycer/protocol/framework/ws-protocol";
 import { createAuthenticatedUserFixture } from "../../test-fixtures/authenticated-user";
 import type { RpcSchedulingPolicy } from "../rpc-scheduling-policy";
+import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
 const pingV10 = defineRpcContract({
   method: "host.ping",
@@ -373,6 +375,37 @@ describe("HostClient", () => {
     expect(events).toEqual([]);
   });
 
+  it("coalesces recovery bursts across wiring cooldowns while unannounced sweeps bypass the time gate", async () => {
+    vi.useFakeTimers();
+    try {
+      const { client, invalidator, events } = buildHostClientWithMock();
+
+      client.notifyHostAvailabilityRecovered("mock-local");
+      await flushAvailabilityCoalescing();
+      expect(invalidator.calls).toEqual(["mock-local"]);
+
+      await vi.advanceTimersByTimeAsync(HOST_AVAILABILITY_SWEEP_WINDOW_MS / 2);
+      client.notifyHostAvailabilityRecovered("mock-local");
+      await flushAvailabilityCoalescing();
+      expect(invalidator.calls).toHaveLength(1);
+
+      // Rotation/ready-boundary sweeps are correctness boundaries, not noisy
+      // recovery hints, so they remain immediate even inside the recovery gate.
+      client.invalidateHostScopeUnannounced("mock-local");
+      await flushAvailabilityCoalescing();
+      expect(invalidator.calls).toHaveLength(2);
+      expect(events).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(HOST_AVAILABILITY_SWEEP_WINDOW_MS / 2);
+      await flushAvailabilityCoalescing();
+      expect(invalidator.calls).toHaveLength(3);
+      expect(events).toHaveLength(2);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
   it("delegates a requester's unary request to the messenger under that host's authority", async () => {
     const { client, requester, messenger } = buildHostClientWithMock();
     client.setRequestContext(makeContext("user-1", "tok-1"));
@@ -461,6 +494,7 @@ describe("HostClient", () => {
     };
 
     const wsClient = new WsRpcClient({
+      clientIdentity: TEST_CLIENT_IDENTITY,
       registry,
       requestId: () => "req-1",
       webSocketFactory: factory,
@@ -524,6 +558,7 @@ describe("HostClient", () => {
     ctx.release();
 
     const wsClient = new WsRpcClient({
+      clientIdentity: TEST_CLIENT_IDENTITY,
       registry,
       requestId: () => "req-1",
       webSocketFactory: factory,

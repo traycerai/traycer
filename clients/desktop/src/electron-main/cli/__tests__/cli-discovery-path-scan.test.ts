@@ -137,8 +137,9 @@ describe.skipIf(process.platform === "win32")(
       process.env.PATH = [squatterDir, realDir].join(delimiter);
       stageBundledArchCli();
 
-      const { discoverCli } = await import("../cli-discovery");
-      const result = await discoverCli();
+      const { discoverCli, CLI_INVOCATION_PROBE_TIMEOUT_MS } =
+        await import("../cli-discovery");
+      const result = await discoverCli(CLI_INVOCATION_PROBE_TIMEOUT_MS);
       expect(result.kind).toBe("path");
       if (result.kind === "path") {
         expect(result.binaryPath).toBe(real);
@@ -154,8 +155,9 @@ describe.skipIf(process.platform === "win32")(
       process.env.PATH = squatterDir;
       const bundled = stageBundledArchCli();
 
-      const { discoverCli } = await import("../cli-discovery");
-      const result = await discoverCli();
+      const { discoverCli, CLI_INVOCATION_PROBE_TIMEOUT_MS } =
+        await import("../cli-discovery");
+      const result = await discoverCli(CLI_INVOCATION_PROBE_TIMEOUT_MS);
       expect(result.kind).toBe("bundled");
       if (result.kind === "bundled") {
         expect(result.binaryPath).toBe(bundled);
@@ -168,8 +170,9 @@ describe.skipIf(process.platform === "win32")(
       writePathCli(squatterDir, false);
       process.env.PATH = squatterDir;
 
-      const { discoverCli } = await import("../cli-discovery");
-      const result = await discoverCli();
+      const { discoverCli, CLI_INVOCATION_PROBE_TIMEOUT_MS } =
+        await import("../cli-discovery");
+      const result = await discoverCli(CLI_INVOCATION_PROBE_TIMEOUT_MS);
       expect(result.kind).toBe("none");
     });
 
@@ -183,8 +186,9 @@ describe.skipIf(process.platform === "win32")(
       process.env.PATH = [firstDir, secondDir].join(delimiter);
       stageBundledArchCli();
 
-      const { discoverCli } = await import("../cli-discovery");
-      const result = await discoverCli();
+      const { discoverCli, CLI_INVOCATION_PROBE_TIMEOUT_MS } =
+        await import("../cli-discovery");
+      const result = await discoverCli(CLI_INVOCATION_PROBE_TIMEOUT_MS);
       expect(result.kind).toBe("path");
       if (result.kind === "path") {
         expect(result.binaryPath).toBe(first);

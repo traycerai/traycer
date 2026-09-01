@@ -6,7 +6,7 @@
  *
  * Builds a pane-scoped `CommandContext` (`targetGroupId = this pane's group`,
  * `activeTabId`/`activeEpicId` = this pane's tab/epic), so leaves open into
- * THIS pane via `openTileInPane` (T3). Host-dependent hooks work directly -
+ * THIS pane via `openTileInPane`. Host-dependent hooks work directly -
  * the pane renders within the app provider stack (unlike the app-root modal).
  *
  * Precedent for inline cmdk (Command outside a Dialog): worktree-picker.tsx,
@@ -22,6 +22,7 @@ import {
 import { ArrowLeftIcon } from "lucide-react";
 import { Command, CommandInput, CommandList } from "@/components/ui/command";
 import { InputGroupButton } from "@/components/ui/input-group";
+import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import { useCommandPaletteRouter } from "@/components/command-palette/command-palette-context";
 import {
   OpenerDeepView,
@@ -35,8 +36,11 @@ import {
   usePaletteScrollReset,
 } from "@/components/command-palette/palette-cmdk-controller";
 import { getOpenerItems } from "@/lib/commands/registry";
+import { deletedArtifactsOpenerItem } from "@/lib/commands/sources/open/deleted-artifacts-leaf";
 import { PaletteQueryProvider } from "@/lib/commands/palette-query-context";
 import { SearchRunView } from "@/components/epic-canvas/canvas/search-run-view";
+import { useDeletedArtifactsAvailable } from "@/hooks/epic/use-deleted-artifacts-available";
+import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import {
   isSearchRunSubpageId,
   parseSearchRunSubpageId,
@@ -61,14 +65,20 @@ export function PaneOpener(props: PaneOpenerProps) {
   const router = useCommandPaletteRouter();
   const [query, setQuery] = useState("");
   const containerRef = useRef<HTMLDivElement>(null);
+  const coarsePointer = useCoarsePointer();
 
   useEffect(() => {
-    if (!active) return;
+    // Suppress autofocus on coarse pointers: opening an empty pane on a touch
+    // device would otherwise pop the soft keyboard over the very list of
+    // things to open. A fine pointer is unchanged, including a desktop window
+    // narrow enough to look like a phone - what decides is whether focusing
+    // costs screen space, not how wide the window is.
+    if (!active || coarsePointer) return;
     const input = containerRef.current?.querySelector<HTMLInputElement>(
       'input[data-slot="command-input"]',
     );
     input?.focus();
-  }, [active]);
+  }, [active, coarsePointer]);
 
   const ctx = useMemo<CommandContext>(
     () => ({
@@ -90,7 +100,14 @@ export function PaneOpener(props: PaneOpenerProps) {
     close: () => undefined,
   });
 
-  const openerItems = useMemo(() => getOpenerItems(ctx), [ctx]);
+  const epicHostId = useEpicSessionHostId();
+  const deletedArtifactsAvailable = useDeletedArtifactsAvailable(epicHostId);
+  const openerItems = useMemo(() => {
+    const items = getOpenerItems(ctx);
+    return deletedArtifactsAvailable && epicHostId !== null
+      ? [...items, deletedArtifactsOpenerItem(ctx, epicHostId)]
+      : items;
+  }, [ctx, deletedArtifactsAvailable, epicHostId]);
   const { activeSubpage, runItem, popSubpage } = controller;
 
   // The text-search step-2 sub-page is rendered by a bespoke view (query +

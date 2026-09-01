@@ -334,6 +334,7 @@ describe("useHeaderRateLimitBars", () => {
   it("resolves fetch eligibility from the selected managed target instead of the signed-out ambient target", () => {
     const ambient: ProviderProfile = {
       profileId: "ambient",
+      enabled: true,
       kind: "ambient",
       authType: "oauth",
       label: "Terminal",

@@ -19,6 +19,7 @@ describe("mux-frame codec", () => {
       chunked: false,
       chunkFirst: false,
       chunkLast: false,
+      compressed: false,
       json: { bearer: "tok", muxVersion: 1 },
       binary: null,
     });
@@ -41,6 +42,7 @@ describe("mux-frame codec", () => {
       chunked: false,
       chunkFirst: false,
       chunkLast: false,
+      compressed: false,
       json: { kind: "data", hasBinaryPayload: true },
       binary: payload,
     });
@@ -60,6 +62,7 @@ describe("mux-frame codec", () => {
       chunked: true,
       chunkFirst: false,
       chunkLast: true,
+      compressed: false,
       json: null,
       binary: new Uint8Array([9]),
     });
@@ -82,6 +85,7 @@ describe("mux-frame codec", () => {
       chunked: false,
       chunkFirst: false,
       chunkLast: false,
+      compressed: false,
       json: { credits: 1 },
       binary: null,
     });
@@ -99,6 +103,7 @@ describe("mux-frame codec", () => {
         chunked: false,
         chunkFirst: false,
         chunkLast: false,
+        compressed: false,
         json: { payload: "x".repeat(MAX_MUX_FRAME_BYTES) },
         binary: null,
       }),

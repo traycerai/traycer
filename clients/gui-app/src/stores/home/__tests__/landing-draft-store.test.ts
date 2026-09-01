@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setMobileApp } from "@/lib/mobile-app";
 import {
   applyLandingDraftDesktopProjection,
   emptyLandingDraftWorkspaceSnapshot,
@@ -9,9 +10,11 @@ import {
   setLandingDraftDesktopProjectionBridge,
   setLandingDraftWorkspacePrimary,
   useLandingDraftStore,
+  freshLandingMirrorState,
   type LandingDraftTab,
 } from "@/stores/home/landing-draft-store";
 import * as landingImageGc from "@/lib/composer/landing-image-gc";
+import * as landingImageMove from "@/lib/composer/landing-image-move";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
@@ -71,8 +74,18 @@ import type {
   DesktopPerWindowStatePatch,
 } from "@/lib/windows/types";
 import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
+import { tabSourceRefs } from "@/stores/tabs/source-refs";
 import { useTabsStore } from "@/stores/tabs/store";
+import {
+  setDraftLocalDeleteListener,
+  setDraftLocalEditListener,
+} from "@/lib/drafts/draft-local-edits";
+import { resetDraftMirrorCoordinatorForTests } from "@/lib/drafts/draft-mirror-coordinator";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import {
+  draftRuntimeRegistry,
+  type DraftSubmissionPlacement,
+} from "@/stores/home/draft-runtime-registry";
 
 // `readCurrentLandingDraftWorkspaceSnapshot` resolves the app-wide host
 // imperatively via `activeHostIdOrNull()` (see landing-draft-store.ts), which
@@ -270,6 +283,8 @@ describe("useLandingDraftStore", () => {
 
   afterEach(() => {
     resetStore();
+    draftRuntimeRegistry.resetForTesting();
+    resetDraftMirrorCoordinatorForTests();
   });
 
   describe("localStorage rehydration sanitization", () => {
@@ -593,6 +608,7 @@ describe("useLandingDraftStore", () => {
               [WORKSPACE_B.path]: "worktree",
             },
           },
+          closed: null,
         },
       ],
       activeLandingDraftId: "draft-a",
@@ -692,7 +708,7 @@ describe("useLandingDraftStore", () => {
     ).toBe(WORKSPACE_A.path);
   });
 
-  it("closeDraft removes the draft and picks another as active", () => {
+  it("closeDraft retains a non-empty draft as closed and picks another as active", () => {
     const { createDraft, setDraftContent, closeDraft } =
       useLandingDraftStore.getState();
     const a = createDraft(null);
@@ -700,13 +716,15 @@ describe("useLandingDraftStore", () => {
     const b = createDraft(null);
 
     closeDraft(a);
-    expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
-    expect(useLandingDraftStore.getState().drafts[0].id).toBe(b);
-    expect(useLandingDraftStore.getState().activeDraftId).toBe(b);
+    const state = useLandingDraftStore.getState();
+    expect(state.drafts).toHaveLength(2);
+    expect(state.drafts.find((draft) => draft.id === a)?.closed).toBe(true);
+    expect(state.drafts.find((draft) => draft.id === b)?.closed).toBe(false);
+    expect(state.activeDraftId).toBe(b);
     expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]);
   });
 
-  it("closeDraft sets activeDraftId to null when last draft is removed", () => {
+  it("closeDraft deletes an empty draft and sets activeDraftId to null when last", () => {
     const { createDraft, closeDraft } = useLandingDraftStore.getState();
     const id = createDraft(null);
     closeDraft(id);
@@ -719,6 +737,149 @@ describe("useLandingDraftStore", () => {
     const before = useLandingDraftStore.getState();
     useLandingDraftStore.getState().closeDraft("nonexistent");
     expect(useLandingDraftStore.getState()).toBe(before);
+  });
+
+  it("closeDraft of a non-empty adopted draft does not host-delete", () => {
+    const deleted: string[] = [];
+    const edited: string[] = [];
+    setDraftLocalDeleteListener((id) => {
+      deleted.push(id);
+    });
+    setDraftLocalEditListener((id) => {
+      edited.push(id);
+    });
+    const id = useLandingDraftStore.getState().createDraft(null);
+    useLandingDraftStore.setState((state) => ({
+      drafts: state.drafts.map((draft) =>
+        draft.id === id
+          ? { ...draft, adoption: { state: "adopted", hostId: HOST_A } }
+          : draft,
+      ),
+    }));
+    useLandingDraftStore
+      .getState()
+      .setDraftContent(id, textContent("keep me"), null);
+    edited.length = 0;
+    useLandingDraftStore.getState().closeDraft(id);
+    expect(deleted).toEqual([]);
+    expect(edited).toEqual([id]);
+    expect(useLandingDraftStore.getState().drafts[0]?.closed).toBe(true);
+  });
+
+  it("deleteDraft removes a retained draft from the local store", () => {
+    const id = useLandingDraftStore.getState().createDraft(null);
+    useLandingDraftStore
+      .getState()
+      .setDraftContent(id, textContent("keep me"), null);
+    useLandingDraftStore.setState((state) => ({
+      drafts: state.drafts.map((draft) =>
+        draft.id === id
+          ? {
+              ...draft,
+              closed: true,
+              adoption: { state: "adopted", hostId: HOST_A },
+            }
+          : draft,
+      ),
+    }));
+    useLandingDraftStore.getState().deleteDraft(id);
+    expect(useLandingDraftStore.getState().drafts).toEqual([]);
+  });
+
+  it("openDraft clears closed and makes the draft active", () => {
+    const id = useLandingDraftStore.getState().createDraft(null);
+    useLandingDraftStore
+      .getState()
+      .setDraftContent(id, textContent("keep me"), null);
+    useLandingDraftStore.getState().closeDraft(id);
+    expect(useLandingDraftStore.getState().activeDraftId).toBeNull();
+    useLandingDraftStore.getState().openDraft(id);
+    expect(useLandingDraftStore.getState().drafts[0].closed).toBe(false);
+    expect(useLandingDraftStore.getState().activeDraftId).toBe(id);
+  });
+
+  it("openDraft after submit→close-before-settle clears runtime closed so the draft is not deleted", () => {
+    const placement: DraftSubmissionPlacement = {
+      refKey: "draft:test",
+      activeItemId: "tab:draft:test",
+      focusedRefKey: "draft:test",
+      layoutRevision: "test-layout",
+    };
+    const id = useLandingDraftStore.getState().createDraft(null);
+    useLandingDraftStore
+      .getState()
+      .setDraftContent(id, textContent("send me"), null);
+    const runtime = draftRuntimeRegistry.attach(id);
+    if (runtime === null) throw new Error("expected keyed draft runtime");
+    runtime.setSnapshot(textContent("send me"), null);
+    const attempt = runtime.startSubmission(placement);
+    if (attempt === null) throw new Error("expected submission attempt");
+    expect(runtime.markCreateStarted(attempt)).toBe(true);
+
+    useLandingDraftStore.getState().closeDraft(id);
+    expect(useLandingDraftStore.getState().drafts[0]?.closed).toBe(true);
+    expect(draftRuntimeRegistry.settlement(attempt)).toEqual({
+      kind: "closed",
+    });
+
+    useLandingDraftStore.getState().openDraft(id);
+    expect(useLandingDraftStore.getState().drafts[0]?.closed).toBe(false);
+    expect(draftRuntimeRegistry.settlement(attempt)).toEqual({
+      kind: "current",
+    });
+    draftRuntimeRegistry.complete(attempt);
+    expect(runtime.startSubmission(placement)).not.toBeNull();
+  });
+
+  it("tabSourceRefs omit closed drafts so they stay out of the strip", () => {
+    const { createDraft, setDraftContent, closeDraft } =
+      useLandingDraftStore.getState();
+    const kept = createDraft(null);
+    setDraftContent(kept, textContent("open"), null);
+    const hidden = createDraft(null);
+    setDraftContent(hidden, textContent("hidden"), null);
+    closeDraft(hidden);
+    const draftRefs = tabSourceRefs().filter((ref) => ref.kind === "draft");
+    expect(draftRefs.map((ref) => ref.id)).toEqual([kept]);
+  });
+
+  it("rehydrates a closed draft without restoring it as active or a strip source", async () => {
+    setLandingDraftDesktopProjectionBridge(null);
+    window.localStorage.setItem(
+      LANDING_DRAFT_PERSIST_KEY,
+      JSON.stringify({
+        state: {
+          drafts: [
+            {
+              id: "closed-draft",
+              content: {
+                type: "doc",
+                content: [
+                  {
+                    type: "paragraph",
+                    content: [{ type: "text", text: "wip" }],
+                  },
+                ],
+              },
+              selection: null,
+              lastTouchedAt: 1,
+              settings: null,
+              composerMode: "chat",
+              closed: true,
+            },
+          ],
+          activeDraftId: "closed-draft",
+        },
+        version: 1,
+      }),
+    );
+    await useLandingDraftStore.persist.rehydrate();
+    expect(useLandingDraftStore.getState().drafts[0].id).toBe("closed-draft");
+    expect(useLandingDraftStore.getState().drafts[0].closed).toBe(true);
+    expect(useLandingDraftStore.getState().activeDraftId).toBeNull();
+    expect(tabSourceRefs().some((ref) => ref.id === "closed-draft")).toBe(
+      false,
+    );
   });
 
   it("setActiveDraft switches the active draft", () => {
@@ -768,6 +929,7 @@ describe("useLandingDraftStore", () => {
           settings: null,
           composerMode: "chat",
           workspace: emptyLandingDraftWorkspaceSnapshot(),
+          ...freshLandingMirrorState(),
         },
         {
           id: "draft-old",
@@ -777,6 +939,7 @@ describe("useLandingDraftStore", () => {
           settings: null,
           composerMode: "chat",
           workspace: emptyLandingDraftWorkspaceSnapshot(),
+          ...freshLandingMirrorState(),
         },
       ],
       activeDraftId: "draft-old",
@@ -822,6 +985,7 @@ describe("useLandingDraftStore", () => {
           settings: null,
           composerMode: "chat",
           workspace: emptyLandingDraftWorkspaceSnapshot(),
+          ...freshLandingMirrorState(),
         },
       ],
       activeDraftId: "draft-a",
@@ -861,6 +1025,7 @@ describe("useLandingDraftStore", () => {
           settings: null,
           composerMode: null,
           workspace: null,
+          closed: null,
         },
       ],
       activeLandingDraftId: "draft-a",
@@ -883,6 +1048,7 @@ describe("useLandingDraftStore", () => {
         settings: null,
         composerMode: "chat",
         workspace: emptyLandingDraftWorkspaceSnapshot(),
+        ...freshLandingMirrorState(),
       },
     ]);
   });
@@ -903,6 +1069,7 @@ describe("useLandingDraftStore", () => {
           settings: null,
           composerMode: null,
           workspace: null,
+          closed: null,
         },
         {
           id: "draft-a",
@@ -912,6 +1079,7 @@ describe("useLandingDraftStore", () => {
           settings: null,
           composerMode: null,
           workspace: null,
+          closed: null,
         },
       ],
       activeLandingDraftId: "draft-a",
@@ -929,6 +1097,7 @@ describe("useLandingDraftStore", () => {
         settings: null,
         composerMode: "chat",
         workspace: emptyLandingDraftWorkspaceSnapshot(),
+        ...freshLandingMirrorState(),
       },
     ]);
   });
@@ -959,6 +1128,7 @@ describe("useLandingDraftStore", () => {
             settings: null,
             composerMode: null,
             workspace: null,
+            closed: null,
           },
           {
             id: "draft-window-b",
@@ -968,6 +1138,7 @@ describe("useLandingDraftStore", () => {
             settings: null,
             composerMode: null,
             workspace: null,
+            closed: null,
           },
         ],
         activeLandingDraftId: "draft-window-b",
@@ -981,6 +1152,7 @@ describe("useLandingDraftStore", () => {
         settings: null,
         composerMode: "chat",
         workspace: emptyLandingDraftWorkspaceSnapshot(),
+        ...freshLandingMirrorState(),
       },
       {
         id: "draft-window-b",
@@ -989,6 +1161,7 @@ describe("useLandingDraftStore", () => {
         settings: null,
         composerMode: "chat",
         workspace: emptyLandingDraftWorkspaceSnapshot(),
+        ...freshLandingMirrorState(),
       },
     ]);
     expect(useLandingDraftStore.getState().activeDraftId).toBe(
@@ -1077,6 +1250,7 @@ describe("useLandingDraftStore", () => {
           settings: null,
           composerMode: null,
           workspace: null,
+          closed: null,
         },
       ],
       activeLandingDraftId: "bad",
@@ -1103,6 +1277,7 @@ describe("useLandingDraftStore", () => {
           settings: null,
           composerMode: null,
           workspace: null,
+          closed: null,
         },
       ],
       activeLandingDraftId: "draft-a",
@@ -1123,6 +1298,7 @@ describe("useLandingDraftStore", () => {
         settings: null,
         composerMode: "chat",
         workspace: emptyLandingDraftWorkspaceSnapshot(),
+        ...freshLandingMirrorState(),
       },
     ]);
   });
@@ -1314,6 +1490,81 @@ describe("useLandingDraftStore", () => {
     });
   });
 
+  describe("draft-move image adoption", () => {
+    it("adopts for a draft whenever it FIRST appears, not only on the first projection, and once per draft", () => {
+      // The regression this pins: adoption gated on "is this the first
+      // projection". Subscription order vs the seeded snapshot is an ordering
+      // fact, not an invariant - an empty snapshot arriving first must not
+      // permanently skip a moved draft that lands on the next one.
+      const adopt = vi
+        .spyOn(landingImageMove, "adoptDraftImageHandoff")
+        .mockImplementation(() => Promise.resolve());
+      const snapshot = emptyWindowSnapshot({
+        landingDrafts: [
+          {
+            id: "draft-adopt-late",
+            content: desktopTextContent("moved here"),
+            selection: null,
+            lastTouchedAt: 1,
+            settings: null,
+            composerMode: null,
+            workspace: null,
+            closed: null,
+          },
+        ],
+        activeLandingDraftId: "draft-adopt-late",
+      });
+
+      applyLandingDraftDesktopProjection(emptyWindowSnapshot({}));
+      expect(adopt).not.toHaveBeenCalled();
+
+      applyLandingDraftDesktopProjection(snapshot);
+      expect(adopt).toHaveBeenCalledWith("draft-adopt-late", []);
+
+      applyLandingDraftDesktopProjection(snapshot);
+      expect(adopt).toHaveBeenCalledTimes(1);
+    });
+
+    it("retries a draft whose adoption FAILED - a transient IndexedDB error must not skip it for the session", async () => {
+      const adopt = vi
+        .spyOn(landingImageMove, "adoptDraftImageHandoff")
+        .mockImplementationOnce(() => Promise.reject(new Error("idb closing")))
+        .mockImplementation(() => Promise.resolve());
+      // `spyOn` hands back the spy the sibling test above already installed,
+      // call history included - this suite restores no mocks between tests.
+      adopt.mockClear();
+      const snapshot = emptyWindowSnapshot({
+        landingDrafts: [
+          {
+            id: "draft-adopt-retry",
+            content: desktopTextContent("moved here"),
+            selection: null,
+            lastTouchedAt: 1,
+            settings: null,
+            composerMode: null,
+            workspace: null,
+            closed: null,
+          },
+        ],
+        activeLandingDraftId: "draft-adopt-retry",
+      });
+
+      applyLandingDraftDesktopProjection(snapshot);
+      expect(adopt).toHaveBeenCalledTimes(1);
+      // Let the rejection reach the handler that releases the attempted-set.
+      await Promise.resolve();
+      await Promise.resolve();
+
+      applyLandingDraftDesktopProjection(snapshot);
+      expect(adopt).toHaveBeenCalledTimes(2);
+
+      // The retry succeeded, so the draft is settled and probed no further.
+      await Promise.resolve();
+      applyLandingDraftDesktopProjection(snapshot);
+      expect(adopt).toHaveBeenCalledTimes(2);
+    });
+  });
+
   describe("[B1] empty-inbound clobber guard", () => {
     it("preserves non-empty in-memory drafts on empty inbound and re-projects outbound", () => {
       // Stub the GC gates (no call-through): this suite has no idb-keyval mock,
@@ -1440,6 +1691,52 @@ describe("useLandingDraftStore", () => {
       } finally {
         markReady.mockRestore();
       }
+    });
+  });
+
+  describe("mobile app draft model", () => {
+    afterEach(() => {
+      // Module-level product flag - must not leak across tests.
+      setMobileApp(false);
+    });
+
+    it("never mints a second draft in the mobile app, even over real content", () => {
+      setMobileApp(true);
+      const { createDraft, setDraftContent } = useLandingDraftStore.getState();
+      const first = createDraft(null);
+      setDraftContent(first, textContent("half-typed task"), null);
+      // The phone's one stable composer: New task lands back on it.
+      const again = createDraft(null);
+      expect(again).toBe(first);
+      expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
+      expect(useLandingDraftStore.getState().activeDraftId).toBe(first);
+    });
+
+    it("returns the newest draft on a lastTouchedAt tie (later entry wins)", () => {
+      setMobileApp(true);
+      const { createDraft, createDraftWithId } =
+        useLandingDraftStore.getState();
+      // Restore paths can stamp several drafts within one millisecond;
+      // drafts are append-ordered, so the later entry is the newer one.
+      createDraftWithId("restored-older", null);
+      createDraftWithId("restored-newer", null);
+      const sameStamp = useLandingDraftStore
+        .getState()
+        .drafts.map((draft) => ({ ...draft, lastTouchedAt: 1_000 }));
+      useLandingDraftStore.setState({ drafts: sameStamp });
+      const reused = createDraft(null);
+      expect(reused).toBe("restored-newer");
+      expect(useLandingDraftStore.getState().drafts).toHaveLength(2);
+    });
+
+    it("still honors explicit restore ids in the mobile app", () => {
+      setMobileApp(true);
+      const { createDraft, createDraftWithId } =
+        useLandingDraftStore.getState();
+      createDraft(null);
+      const restored = createDraftWithId("restored-draft", null);
+      expect(restored).toBe("restored-draft");
+      expect(useLandingDraftStore.getState().drafts).toHaveLength(2);
     });
   });
 });

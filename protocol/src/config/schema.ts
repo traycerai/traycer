@@ -45,8 +45,9 @@ export type LogsConfig = z.infer<typeof logsConfigSchema>;
 export const featureSettingsSchema = z
   .object({
     agentRoles: z.boolean().default(false),
+    artifactVersioning: z.boolean().default(false),
   })
-  .default({ agentRoles: false });
+  .default({ agentRoles: false, artifactVersioning: false });
 export type FeatureSettings = z.infer<typeof featureSettingsSchema>;
 
 /**
@@ -146,7 +147,20 @@ export interface DetectedShell {
   readonly isDefault: boolean;
   readonly source: "detected" | "added";
   readonly missing: boolean;
+  /**
+   * Present only on a Windows `wsl.exe` row whose WSL cannot actually host a
+   * terminal. On Windows 11 `System32\wsl.exe` exists even when WSL was never
+   * installed - it is the installer stub, and spawning it as a shell prints
+   * usage text and exits immediately. `"not-installed"` means exactly that
+   * stub; `"no-distro"` means WSL itself works but no Linux distribution is
+   * registered. Probed at list time (never persisted); absent means healthy,
+   * not probed, or not a wsl.exe row.
+   */
+  readonly wslHealth?: WslHealth;
 }
+
+/** See {@link DetectedShell.wslHealth}. */
+export type WslHealth = "not-installed" | "no-distro";
 
 /**
  * Shape written when no config file exists yet. Kept schema-valid so the
@@ -157,5 +171,5 @@ export const EMPTY_CLI_CONFIG: CliConfig = {
   shell: { path: null, args: null, entries: [] },
   envOverrides: {},
   logs: { cliLogLevel: DEFAULT_LOG_LEVEL, hostLogLevel: DEFAULT_LOG_LEVEL },
-  features: { agentRoles: false },
+  features: { agentRoles: false, artifactVersioning: false },
 };

@@ -64,6 +64,16 @@ function seedStack(
   return history;
 }
 
+function readEntryKeyOf(state: unknown): string {
+  if (typeof state !== "object" || state === null) {
+    throw new Error("expected a location state object");
+  }
+  if (!("__TSR_key" in state) || typeof state.__TSR_key !== "string") {
+    throw new Error("expected a stamped __TSR_key");
+  }
+  return state.__TSR_key;
+}
+
 beforeEach(() => {
   window.localStorage.clear();
   window.sessionStorage.clear();
@@ -306,6 +316,63 @@ describe("createPersistentMemoryHistory", () => {
     expect(controller.getEntries()).toEqual(["/epics/epic-a/tab-a"]);
     expect(controller.getIndex()).toBe(0);
   });
+
+  // The mobile app's whole persistence contract, stated as behavior rather than
+  // as trust in the two null-window early returns that implement it. A refusal
+  // is easy to relax by accident - a default window id, a "harmless" per-install
+  // key - and nothing else in this file would notice.
+  describe("a null window is the session-scoped mobile stack", () => {
+    it("writes nothing while the session navigates", () => {
+      const history = createPersistentMemoryHistory(null, null);
+      history.push("/epics/epic-a/tab-a");
+      history.push("/settings/general");
+      history.push("/history");
+
+      const controller = controllerOf(history);
+      // The stack is REAL - this is not passing because nothing happened.
+      expect(controller.getIndex()).toBe(3);
+      expect(controller.getEntries()).toEqual([
+        "/",
+        "/epics/epic-a/tab-a",
+        "/settings/general",
+        "/history",
+      ]);
+      // Not "no last-route key" - NO key. A write under any name is a write
+      // that a later cold start could learn to read.
+      expect(window.localStorage.length).toBe(0);
+      expect(window.sessionStorage.length).toBe(0);
+    });
+
+    it("starts the next launch with nothing behind it", () => {
+      const first = createPersistentMemoryHistory(null, null);
+      first.push("/epics/epic-a/tab-a");
+      first.push("/settings/general");
+      expect(controllerOf(first).getIndex()).toBe(2);
+
+      // A cold launch: the shell builds a second history from the same
+      // arguments. It must not inherit the first one's stack - a restored one
+      // would hand the launch's first back swipe a surface from the last
+      // sitting.
+      const next = createPersistentMemoryHistory(null, null);
+      const controller = controllerOf(next);
+
+      expect(next.location.pathname).toBe("/");
+      expect(controller.getEntries()).toEqual(["/"]);
+      expect(controller.getIndex()).toBe(0);
+      expect(next.canGoBack()).toBe(false);
+    });
+
+    // The contrast that makes the two cases above mean something: the SAME
+    // constructor, one argument different, does remember.
+    it("still restores a window that has an id", () => {
+      const first = createPersistentMemoryHistory(null, "window-a");
+      first.push("/epics/epic-a/tab-a");
+
+      const next = createPersistentMemoryHistory(null, "window-a");
+
+      expect(next.location.pathname).toBe("/epics/epic-a/tab-a");
+    });
+  });
 });
 
 describe("getHistoryController", () => {
@@ -360,6 +427,27 @@ describe("PersistentHistoryController", () => {
     history.back();
     expect(controller.canGoBack()).toBe(false);
     expect(controller.canGoForward()).toBe(true);
+  });
+
+  it("keeps the current entry's identity when a prune collapses it into an earlier duplicate", () => {
+    const history = seedStack("window-a", [
+      "/epics/epic-a/tab-a",
+      "/draft/dead-draft",
+      "/epics/epic-a/tab-a",
+    ]);
+    const controller = controllerOf(history);
+    const currentKey = readEntryKeyOf(history.location.state);
+
+    const changed = controller.prune((href) => href === "/draft/dead-draft");
+
+    expect(changed).toBe(true);
+    expect(controller.getEntries()).toEqual(["/epics/epic-a/tab-a"]);
+    expect(controller.getIndex()).toBe(0);
+    // The prune is load-free, so the router's cached location keeps carrying
+    // the CURRENT entry's key. The collapsed survivor must carry the same one
+    // - a survivor wearing the earlier duplicate's key would strand everything
+    // filed against the cached identity.
+    expect(controller.getEntryKeys()).toEqual([currentKey]);
   });
 
   it("prunes dead non-current entries and remaps the cursor", () => {

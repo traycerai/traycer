@@ -103,10 +103,18 @@ describe("nextHandoffTransition", () => {
         "action-1": {
           action: "send",
           interviewBlockId: null,
+          interviewDeliveryRetry: null,
           clientActionId: "action-1",
           messageId: "message-1",
           acceptedAt: 1000,
-          restoreContent: null,
+          restore: null,
+          sender: null,
+          settings: null,
+          accountContext: null,
+          deliveryPolicy: null,
+          restoreWorktreeIntent: null,
+          connectionEpoch: 0,
+          confirmedByHost: false,
         },
       },
     });
@@ -129,6 +137,7 @@ describe("nextHandoffTransition", () => {
       message: {
         kind: "user",
         content: CONTENT,
+        browserAnnotations: [],
       },
       timestamp: 1000,
       sessionAnchor: null,
@@ -149,7 +158,10 @@ describe("nextHandoffTransition", () => {
       failedSendRestoration: {
         clientActionId: "action-1",
         content: CONTENT,
+        browserAnnotations: [],
         reason: "Rejected",
+        displacedReason: "Rejected",
+        stated: false,
       },
     });
     expect(nextHandoffTransition(handoff, ctx)).toEqual({
@@ -168,13 +180,17 @@ describe("nextHandoffTransition", () => {
       failedSendRestoration: {
         clientActionId: "action-1",
         content: CONTENT,
+        browserAnnotations: [],
         reason: "Rejected",
+        displacedReason: "Rejected",
+        stated: false,
       },
     });
     expect(nextHandoffTransition(handoff, ctx)).toEqual({
       kind: "restoreAndAckFailed",
       clientActionId: "action-1",
       content: CONTENT,
+      browserAnnotations: [],
     });
   });
 
@@ -183,13 +199,17 @@ describe("nextHandoffTransition", () => {
       failedSendRestoration: {
         clientActionId: "action-1",
         content: CONTENT,
+        browserAnnotations: [],
         reason: "Rejected",
+        displacedReason: "Rejected",
+        stated: false,
       },
     });
     expect(nextHandoffTransition(null, ctx)).toEqual({
       kind: "restoreAndAckFailed",
       clientActionId: "action-1",
       content: CONTENT,
+      browserAnnotations: [],
     });
   });
 });

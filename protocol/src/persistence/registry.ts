@@ -1,5 +1,7 @@
 import {
   defineRecordContract,
+  defineRecordDowngradePath,
+  defineRecordUpgradePath,
   defineVersionedRecordRegistry,
   type RecordValue,
 } from "@traycer/protocol/framework/index";
@@ -7,8 +9,13 @@ import {
   chatHeadRecordSchema,
   chatShardRecordSchema,
 } from "@traycer/protocol/persistence/_internal/chat-sync-schemas";
+import { draftHeadRecordSchema } from "@traycer/protocol/persistence/_internal/draft-schemas";
 import { CHAT_SYNC_SCHEMA_VERSION } from "@traycer/protocol/persistence/chat-sync/version";
-import { epicSchema } from "@traycer/protocol/persistence/_internal/epic-schemas";
+import { DRAFT_HEAD_SCHEMA_VERSION } from "@traycer/protocol/persistence/draft/version";
+import {
+  epicSchema,
+  epicSchemaPreReasonix,
+} from "@traycer/protocol/persistence/_internal/epic-schemas";
 import { roomMetadataSchema } from "@traycer/protocol/persistence/_internal/room-metadata-schemas";
 
 /**
@@ -30,6 +37,10 @@ import { roomMetadataSchema } from "@traycer/protocol/persistence/_internal/room
  *   release cadences (cloud renderers, clone targets) assemble them. They share
  *   ONE version line (`chat-sync/version.ts`), because a shard embeds the
  *   sub-schemas the head's core is built from.
+ * - `draft-head` - a published draft / stash / interview in the personal
+ *   `drafts` scope. Same tenant envelope (`parts`) as `chat-head`; the
+ *   payload is the `draft/v1` dialect. Images are blobs, so v1 names no
+ *   shards and the envelope is empty.
  *
  * Cloud-catalog / task-ref / workspace-association caches are owned by
  * the cloud data client (internal, not in this repo) and are NOT versioned
@@ -43,7 +54,42 @@ import { roomMetadataSchema } from "@traycer/protocol/persistence/_internal/room
 export const epicRecordV200 = defineRecordContract({
   name: "epic",
   schemaVersion: { major: 2, minor: 0 } as const,
+  schema: epicSchemaPreReasonix,
+});
+
+export const epicRecordV300 = defineRecordContract({
+  name: "epic",
+  schemaVersion: { major: 3, minor: 0 } as const,
   schema: epicSchema,
+});
+
+const epicUpgradeV200ToV300 = defineRecordUpgradePath<
+  typeof epicRecordV200,
+  typeof epicRecordV300
+>({
+  from: epicRecordV200.schemaVersion,
+  to: epicRecordV300.schemaVersion,
+  upgradeRecord: (record) => epicRecordV300.schema.parse(record),
+});
+
+const epicDowngradeV300ToV200 = defineRecordDowngradePath<
+  typeof epicRecordV300,
+  typeof epicRecordV200
+>({
+  from: epicRecordV300.schemaVersion,
+  to: epicRecordV200.schemaVersion,
+  downgradeRecord: (record) => {
+    const parsed = epicRecordV200.schema.safeParse(record);
+    if (parsed.success) return { ok: true as const, value: parsed.data };
+    return {
+      ok: false as const,
+      error: {
+        code: "DOWNGRADE_UNSUPPORTED" as const,
+        message:
+          "Epic contains Reasonix harness state that the 2.0 record contract cannot represent",
+      },
+    };
+  },
 });
 
 export const roomMetadataRecordV100 = defineRecordContract({
@@ -58,16 +104,22 @@ export const roomMetadataRecordV100 = defineRecordContract({
 // schema embeds, so a copied `{ major: 1, minor: 0 }` here would let a future
 // bump register 1.1 while the payload schema and the writers stayed on 1.0.
 
-export const chatHeadRecordV110 = defineRecordContract({
+export const chatHeadRecordV130 = defineRecordContract({
   name: "chat-head",
   schemaVersion: CHAT_SYNC_SCHEMA_VERSION,
   schema: chatHeadRecordSchema,
 });
 
-export const chatShardRecordV110 = defineRecordContract({
+export const chatShardRecordV130 = defineRecordContract({
   name: "chat-shard",
   schemaVersion: CHAT_SYNC_SCHEMA_VERSION,
   schema: chatShardRecordSchema,
+});
+
+export const draftHeadRecordV100 = defineRecordContract({
+  name: "draft-head",
+  schemaVersion: DRAFT_HEAD_SCHEMA_VERSION,
+  schema: draftHeadRecordSchema,
 });
 
 export const persistenceRecordRegistry = defineVersionedRecordRegistry({
@@ -78,6 +130,16 @@ export const persistenceRecordRegistry = defineVersionedRecordRegistry({
         0: { contract: epicRecordV200, upgradeFromPreviousVersion: null },
       },
       downgradePathsFromLatest: {},
+    },
+    3: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicRecordV300,
+          upgradeFromPreviousVersion: epicUpgradeV200ToV300,
+        },
+      },
+      downgradePathsFromLatest: { 2: epicDowngradeV300ToV200 },
     },
   },
   "room-metadata": {
@@ -94,18 +156,27 @@ export const persistenceRecordRegistry = defineVersionedRecordRegistry({
   },
   "chat-head": {
     1: {
-      latestMinor: 1,
+      latestMinor: 3,
       versions: {
-        1: { contract: chatHeadRecordV110, upgradeFromPreviousVersion: null },
+        3: { contract: chatHeadRecordV130, upgradeFromPreviousVersion: null },
       },
       downgradePathsFromLatest: {},
     },
   },
   "chat-shard": {
     1: {
-      latestMinor: 1,
+      latestMinor: 3,
       versions: {
-        1: { contract: chatShardRecordV110, upgradeFromPreviousVersion: null },
+        3: { contract: chatShardRecordV130, upgradeFromPreviousVersion: null },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "draft-head": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: { contract: draftHeadRecordV100, upgradeFromPreviousVersion: null },
       },
       downgradePathsFromLatest: {},
     },
@@ -123,3 +194,4 @@ export type RoomMetadata = RecordValue<
 >;
 export type ChatHead = RecordValue<PersistenceRecordRegistry, "chat-head">;
 export type ChatShard = RecordValue<PersistenceRecordRegistry, "chat-shard">;
+export type DraftHead = RecordValue<PersistenceRecordRegistry, "draft-head">;

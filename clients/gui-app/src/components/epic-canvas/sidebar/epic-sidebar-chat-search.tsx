@@ -15,18 +15,12 @@
  */
 import { useCallback, useEffect, useRef, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
-import { Search, X } from "lucide-react";
 import {
   usePanelHeaderSearchQuery,
   usePanelHeaderSearchSlot,
   usePanelHeaderSearchStore,
 } from "@/stores/epics/panel-header-search-store";
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupButton,
-  InputGroupInput,
-} from "@/components/ui/input-group";
+import { PanelSearchField } from "@/components/epic-canvas/sidebar/epic-sidebar-search-field";
 
 /** The panel whose header this search takes over while it is active. */
 const CHATS_PANEL_ID = "chats";
@@ -75,48 +69,21 @@ export function ChatSearchHeaderInput(props: ChatSearchHeaderInputProps) {
   );
 
   const inputRow = (
-    <InputGroup className="h-7 w-full">
-      <InputGroupAddon align="inline-start">
-        <Search className="size-3.5" aria-hidden />
-      </InputGroupAddon>
-      <InputGroupInput
-        ref={inputRef}
-        type="text"
-        value={searchQuery}
-        onChange={(event) => onSearchQueryChange(event.target.value)}
-        onKeyDown={handleInputKeyDown}
-        placeholder="Search agents…"
-        aria-label="Search agents"
-        autoComplete="off"
-        spellCheck={false}
-        className="text-ui-sm"
-        data-testid="epic-chat-search-input"
-      />
-      <InputGroupAddon align="inline-end">
-        {searchQuery.length > 0 ? (
-          <InputGroupButton
-            type="button"
-            size="icon-xs"
-            aria-label="Clear agent search"
-            onClick={clearSearch}
-            data-testid="epic-chat-search-clear"
-          >
-            <X className="size-3.5" aria-hidden />
-          </InputGroupButton>
-        ) : null}
-        <InputGroupButton
-          type="button"
-          size="icon-xs"
-          aria-label="Close agent search"
-          onClick={exitSearch}
-          data-testid="epic-chat-search-close"
-        >
-          <span aria-hidden className="text-overline uppercase">
-            esc
-          </span>
-        </InputGroupButton>
-      </InputGroupAddon>
-    </InputGroup>
+    <PanelSearchField
+      value={searchQuery}
+      onValueChange={onSearchQueryChange}
+      onClear={clearSearch}
+      onClose={exitSearch}
+      onKeyDown={handleInputKeyDown}
+      ref={inputRef}
+      combobox={null}
+      placeholder="Search agents…"
+      label="Search agents"
+      clearLabel="Clear agent search"
+      closeLabel="Close agent search"
+      testIdPrefix="epic-chat-search"
+      className="h-7"
+    />
   );
 
   return (

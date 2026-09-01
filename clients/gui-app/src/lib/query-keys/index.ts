@@ -26,17 +26,20 @@ export { configMutationKeys } from "@/lib/query-keys/config-mutation-keys";
 export { hostMaintenanceMutationKeys } from "@/lib/query-keys/host-maintenance-mutation-keys";
 export { epicMutationKeys } from "@/lib/query-keys/epic-mutation-keys";
 export { migrationMutationKeys } from "@/lib/query-keys/migration-mutation-keys";
+export { sessionImportQueryKeys } from "@/lib/query-keys/session-import-query-keys";
 export {
   editorMutationKeys,
   editorQueryKeys,
 } from "@/lib/query-keys/editor-mutation-keys";
 export { terminalMutationKeys } from "@/lib/query-keys/terminal-mutation-keys";
+export { browserMutationKeys } from "@/lib/query-keys/browser-mutation-keys";
 export { resourcesMutationKeys } from "@/lib/query-keys/resources-mutation-keys";
 export { managedCommandMutationKeys } from "@/lib/query-keys/managed-command-mutation-keys";
 export { agentMutationKeys } from "@/lib/query-keys/agent-mutation-keys";
 export { worktreeMutationKeys } from "@/lib/query-keys/worktree-mutation-keys";
 export { snapshotsMutationKeys } from "@/lib/query-keys/snapshots-mutation-keys";
 export { providersMutationKeys } from "@/lib/query-keys/providers-mutation-keys";
+export { providersListQueryKey } from "@/lib/query-keys/providers-query-keys";
 export {
   CLASSIC_PROVIDERS_LIST_PARAMS,
   isNativeMcpListQueryKey,
@@ -55,6 +58,7 @@ export { notificationsQueryKeys } from "@/lib/query-keys/notifications-query-key
 export { prQueryKeys } from "@/lib/query-keys/pr-query-keys";
 export { mentionQueryKeys } from "@/lib/query-keys/mention-query-keys";
 export { imageMutationKeys } from "@/lib/query-keys/image-mutation-keys";
+export { draftsMutationKeys } from "@/lib/query-keys/drafts-mutation-keys";
 
 export const queryKeys = {
   hostBase: hostQueryKeys.base,

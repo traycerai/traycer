@@ -187,8 +187,18 @@ export function buildProviderRateLimitEnvelope(
   response: RateLimitUsageResponse,
   now: number,
 ): ProviderRateLimitEnvelope {
-  const latest = response.providerRateLimits;
+  return buildProviderRateLimitEnvelopeFromSnapshot(
+    previous,
+    response.providerRateLimits,
+    now,
+  );
+}
 
+export function buildProviderRateLimitEnvelopeFromSnapshot(
+  previous: ProviderRateLimitEnvelope | undefined,
+  latest: ProviderRateLimits | null,
+  now: number,
+): ProviderRateLimitEnvelope {
   if (latest !== null && latest.available) {
     const retainedLatest = retainCodexResetCreditDetails(previous, latest);
     return {

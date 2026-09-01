@@ -30,7 +30,7 @@ import type {
   MutationOutcome,
   MutationProgress,
   MutationKind,
-  MutationLaneStatus,
+  LifecycleAdmissionBlock,
   RemoveTraycerOk,
   ServiceRegistrationOk,
   UninstallOk,
@@ -164,6 +164,9 @@ interface RecordedControllerCall {
  */
 class FakeHostController implements IpcHostController {
   readonly calls: RecordedControllerCall[] = [];
+  // Idle by default: the maintenance install handler tests the lane before it
+  // submits, so a non-null value here would refuse every install.
+  lifecycleAdmissionBlock: LifecycleAdmissionBlock | null = null;
   private progressListeners = new Set<(progress: MutationProgress) => void>();
 
   installVersionResult: MutationOutcome<InstallVersionOk> = {
@@ -180,13 +183,18 @@ class FakeHostController implements IpcHostController {
   };
   uninstallHostResult: MutationOutcome<UninstallOk> = {
     kind: "ok",
-    value: { removedInstallDir: true, deregisteredService: true },
+    value: {
+      removedInstallDir: true,
+      deregisteredService: true,
+      serviceRegistrationRetained: null,
+    },
   };
   removeTraycerResult: MutationOutcome<RemoveTraycerOk> = {
     kind: "ok",
     value: {
       removedHost: true,
       deregisteredService: true,
+      serviceRegistrationRetained: null,
       removedLoginItem: false,
     },
   };
@@ -225,6 +233,7 @@ class FakeHostController implements IpcHostController {
     updateReady: false,
     activation: "unavailable",
     reachable: false,
+    localAttempt: null,
     removedByUser: false,
     checkedAt: "2026-01-01T00:00:00.000Z",
   };
@@ -354,6 +363,13 @@ interface FakeBridge {
     readonly host: {
       readonly reloadSnapshotFromDisk: Mock;
       readonly getSnapshot: Mock;
+      // The identity-fenced handlers classify this machine from these two
+      // files. Pointed into the test home with NEITHER written, which is the
+      // `unenrolled` arm - a legacy install with no identity machinery, where
+      // the fence has nothing to compare and admits. That keeps these argv
+      // tests about argv; the fence itself is pinned in the maintenance suite.
+      readonly identityEnrollmentFile: string;
+      readonly pidMetadataFile: string;
     };
     readonly hostController: FakeHostController;
   };
@@ -382,6 +398,8 @@ function makeBridgeWithHostController(
       host: {
         reloadSnapshotFromDisk: vi.fn(() => Promise.resolve(null)),
         getSnapshot: vi.fn(() => ({ version: "1.7.0" })),
+        identityEnrollmentFile: join(workHome, "identity", "enrollment.json"),
+        pidMetadataFile: join(workHome, "pid.json"),
       },
       hostController,
     },

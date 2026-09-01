@@ -6,7 +6,7 @@ import {
 } from "@traycer/protocol/host/registry";
 import {
   hostNotificationsSubscribeClientFrameSchema,
-  type HostNotificationEntryV21,
+  type HostNotificationEntryV22,
   type HostNotificationsAttentionCursor,
   type HostNotificationsChronologicalCursor,
   type HostNotificationsSubscribeClientFrame,
@@ -38,6 +38,7 @@ import {
   useHostNotificationsStore,
 } from "@/stores/notifications/host-notifications-store";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
+import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
 const reconnectEngine = createHostReconnectEngine();
 
@@ -50,7 +51,7 @@ function entry(
   id: string,
   updatedAt: number,
   readAt: number | null,
-): HostNotificationEntryV21 {
+): HostNotificationEntryV22 {
   return {
     id,
     updatedAt,
@@ -69,14 +70,14 @@ function entry(
   };
 }
 
-function promptEntry(id: string): HostNotificationEntryV21 {
+function promptEntry(id: string): HostNotificationEntryV22 {
   return promptOccurrence(id, 10);
 }
 
 function promptOccurrence(
   id: string,
   updatedAt: number,
-): HostNotificationEntryV21 {
+): HostNotificationEntryV22 {
   return {
     id,
     updatedAt,
@@ -107,7 +108,7 @@ function attentionCursor(
 }
 
 function defaultSummaryFor(
-  entries: ReadonlyArray<HostNotificationEntryV21>,
+  entries: ReadonlyArray<HostNotificationEntryV22>,
 ): HostNotificationsSummary {
   return {
     unreadCount: entries.filter((item) => item.readAt === null).length,
@@ -120,7 +121,7 @@ function defaultSummaryFor(
 }
 
 function applySimpleSnapshot(input: {
-  readonly entries: ReadonlyArray<HostNotificationEntryV21>;
+  readonly entries: ReadonlyArray<HostNotificationEntryV22>;
   readonly summary: HostNotificationsSummary;
   readonly recentCursor: HostNotificationsChronologicalCursor | null;
   readonly attentionNext: HostNotificationsAttentionCursor | null;
@@ -210,11 +211,14 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
 
   constructor() {
     super({
+      clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
       endpoint: () => null,
       bearer: () => null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: {
         create: () => {
@@ -1532,7 +1536,7 @@ describe("host notifications store", () => {
 
   it("uses channelEmission as the only host-source display path", () => {
     const client = new MockWsStreamClient();
-    const displayed: Array<ReadonlyArray<HostNotificationEntryV21>> = [];
+    const displayed: Array<ReadonlyArray<HostNotificationEntryV22>> = [];
     const liveEntry = entry("live", 200, null);
 
     const close = openHostNotificationsStream(reconnectEngine, client, null, {
@@ -1575,12 +1579,12 @@ describe("host notifications store", () => {
 
   it("uses the latest feed copy for renderer channel emissions", () => {
     const client = new MockWsStreamClient();
-    const displayed: Array<ReadonlyArray<HostNotificationEntryV21>> = [];
+    const displayed: Array<ReadonlyArray<HostNotificationEntryV22>> = [];
     const staleEmissionEntry = entry("live", 200, null);
     if (staleEmissionEntry.kind !== "agent.stopped") {
       throw new Error("Expected an agent-stopped notification fixture");
     }
-    const richFeedEntry: HostNotificationEntryV21 = {
+    const richFeedEntry: HostNotificationEntryV22 = {
       ...staleEmissionEntry,
       updatedAt: 201,
       payload: {
@@ -1624,7 +1628,7 @@ describe("host notifications store", () => {
 
   it("ignores non-renderer channelEmission frames for in-app display", () => {
     const client = new MockWsStreamClient();
-    const displayed: Array<ReadonlyArray<HostNotificationEntryV21>> = [];
+    const displayed: Array<ReadonlyArray<HostNotificationEntryV22>> = [];
     const liveEntry = entry("webhook-live", 240, null);
 
     const close = openHostNotificationsStream(reconnectEngine, client, null, {

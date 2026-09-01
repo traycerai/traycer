@@ -104,6 +104,7 @@ export const hostNotificationChatStoppedPayloadSchema = z
     kind: z.literal("chat"),
     epicId: idSchema,
     chatId: idSchema.nullable(),
+    hostId: idSchema.optional(),
     agentName: z.string(),
     taskTitle: z.string(),
     outcome: hostNotificationOutcomeSchema,
@@ -111,6 +112,11 @@ export const hostNotificationChatStoppedPayloadSchema = z
     message: z.string().optional(),
     reason: z.string().optional(),
     providerId: z.string().optional(),
+    occurrenceId: idSchema.optional(),
+    messageId: idSchema.optional(),
+    eventId: idSchema.optional(),
+    backgroundWorkRunning: z.boolean().optional(),
+    automaticRecovery: z.literal(true).optional(),
   })
   .catchall(z.unknown());
 export type HostNotificationChatStoppedPayload = z.infer<
@@ -135,6 +141,9 @@ export const hostNotificationEpicStoppedPayloadSchema = z
     message: z.string().optional(),
     reason: z.string().optional(),
     providerId: z.string().optional(),
+    occurrenceId: idSchema.optional(),
+    backgroundWorkRunning: z.boolean().optional(),
+    automaticRecovery: z.literal(true).optional(),
   })
   .catchall(z.unknown());
 export type HostNotificationEpicStoppedPayload = z.infer<
@@ -298,6 +307,8 @@ export const hostNotificationWorktreeDeletionPayloadSchema = z
     /** Open string, not the wire enum: a row minted by a newer host with a
      * source this build has never heard of must still render and route. */
     source: idSchema,
+    /** Task that initiated a single-Task sweep. */
+    epicId: idSchema.optional(),
     requestedCount: z.number().int().nonnegative(),
     deletedCount: z.number().int().nonnegative(),
     failedCount: z.number().int().nonnegative(),
@@ -305,6 +316,79 @@ export const hostNotificationWorktreeDeletionPayloadSchema = z
   .catchall(z.unknown());
 export type HostNotificationWorktreeDeletionPayload = z.infer<
   typeof hostNotificationWorktreeDeletionPayloadSchema
+>;
+
+/**
+ * The `operation` identifier of the automatic worktree-cleanup scheduler.
+ *
+ * Distinct from `worktree.deletion` on purpose: that operation is a deletion
+ * the user asked for and is waiting on, this one is an unattended background
+ * pass they authorized once. They differ in severity (this arm is always
+ * informational, including for failures - the detail lives in cleanup history),
+ * in addressing (per RUN, not per command), and in cadence, so collapsing them
+ * into one operation would make both harder to reason about.
+ */
+export const HOST_OPERATION_WORKTREE_AUTO_CLEANUP = "worktree.autoCleanup";
+
+/**
+ * `host.operation.finished` payload for one automatic-cleanup run.
+ *
+ * ONE row per run that had candidates - never one per deleted worktree, and
+ * none at all for the ordinary no-op daily check. An unattended feature that
+ * notifies on every quiet pass trains the user to ignore it, which is exactly
+ * when the one interesting run arrives.
+ *
+ * `hostId` is carried because the run is host-scoped and the reader may be
+ * looking at a different host: routing has to name WHICH host's cleanup history
+ * to open. `runId` is the focus hint, and the row id derived from it is what
+ * makes minting idempotent per run.
+ *
+ * Excludes, for the same reason the worktree-deletion arm does: worktree paths,
+ * teardown output, and raw errors. A durable row outlives the filesystem it
+ * describes. `interruptedCount` is reported alongside the other three because a
+ * host that stopped mid-cleanup must say so rather than silently round the run
+ * down to what it could confirm.
+ */
+export const hostNotificationWorktreeAutoCleanupPayloadSchema = z
+  .object({
+    kind: z.literal("worktree_auto_cleanup"),
+    operation: z.literal(HOST_OPERATION_WORKTREE_AUTO_CLEANUP),
+    title: z.string().min(1),
+    message: z.string().min(1),
+    runId: idSchema,
+    hostId: idSchema,
+    deletedCount: z.number().int().nonnegative(),
+    skippedCount: z.number().int().nonnegative(),
+    failedCount: z.number().int().nonnegative(),
+    interruptedCount: z.number().int().nonnegative(),
+  })
+  .catchall(z.unknown());
+export type HostNotificationWorktreeAutoCleanupPayload = z.infer<
+  typeof hostNotificationWorktreeAutoCleanupPayloadSchema
+>;
+
+/**
+ * `browser.human.needed` payload: the parked session's tile plus the agent's
+ * own reason for parking.
+ *
+ * `reason` is model-authored prose and is the only copy this row has, so it is
+ * rendered as the body and never as a title or an identifier. `sessionId` and
+ * `tabId` address the tile the click deep-links to; they are host-local by
+ * construction (browser sessions never move hosts), so the row's originHostId
+ * is what says where to open it.
+ */
+export const hostNotificationBrowserHumanNeededPayloadSchema = z
+  .object({
+    kind: z.literal("browser_human_needed"),
+    epicId: idSchema,
+    chatId: idSchema,
+    sessionId: idSchema,
+    tabId: idSchema,
+    reason: z.string().min(1),
+  })
+  .catchall(z.unknown());
+export type HostNotificationBrowserHumanNeededPayload = z.infer<
+  typeof hostNotificationBrowserHumanNeededPayloadSchema
 >;
 
 export const hostNotificationKnownPayloadSchema = z.discriminatedUnion("kind", [
@@ -315,6 +399,8 @@ export const hostNotificationKnownPayloadSchema = z.discriminatedUnion("kind", [
   hostNotificationApprovalPayloadSchema,
   hostNotificationInterviewPayloadSchema,
   hostNotificationWorktreeDeletionPayloadSchema,
+  hostNotificationWorktreeAutoCleanupPayloadSchema,
+  hostNotificationBrowserHumanNeededPayloadSchema,
 ]);
 export type HostNotificationKnownPayload = z.infer<
   typeof hostNotificationKnownPayloadSchema
@@ -370,11 +456,16 @@ function payloadKindMatchesNotificationKind(
       return payloadKind === "approval";
     case "interview.requested":
       return payloadKind === "interview";
-    // One operation arm exists so far. A FUTURE operation adds its arm above
-    // and its kind to this list; until a client learns that kind, its rows
-    // degrade to the common-field tier rather than failing - which is the
-    // property the whole payload tier exists to provide.
+    // Two operation arms so far. A FUTURE operation adds its arm above and its
+    // kind to this list; until a client learns that kind, its rows degrade to
+    // the common-field tier rather than failing - which is the property the
+    // whole payload tier exists to provide.
     case "host.operation.finished":
-      return payloadKind === "worktree_deletion";
+      return (
+        payloadKind === "worktree_deletion" ||
+        payloadKind === "worktree_auto_cleanup"
+      );
+    case "browser.human.needed":
+      return payloadKind === "browser_human_needed";
   }
 }

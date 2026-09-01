@@ -15,7 +15,12 @@ interface RevertOnEditDialogProps {
   readonly onOpenChange: (open: boolean) => void;
   readonly onRevert: (revertArtifacts: boolean) => void;
   readonly onDontRevert: () => void;
-  readonly artifactCount: number;
+  /**
+   * `null` when the transcript below the edit point is not fully hydrated and
+   * the artifacts in scope therefore cannot be counted from this side. The
+   * opt-out still renders, without a number.
+   */
+  readonly artifactCount: number | null;
   /**
    * Items parked in the message queue. The edit neither clears them nor
    * changes when they run, so the dialog names them to avoid surprise. The
@@ -85,7 +90,7 @@ function RevertOnEditDialogContent(props: RevertOnEditDialogProps) {
           </DialogDescription>
         </DialogHeader>
 
-        {artifactCount > 0 ? (
+        {artifactCount === null || artifactCount > 0 ? (
           <div className="px-6 pt-1 pb-2">
             <RevertArtifactsCheckbox
               count={artifactCount}

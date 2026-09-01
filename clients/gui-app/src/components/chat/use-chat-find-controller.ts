@@ -16,7 +16,12 @@ import {
   type ChatTimelineNavigationLocation,
 } from "@/components/chat/chat-messages-scroll-helpers";
 import { TileFindContext } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
-import { useSetChatFindForcedOpen } from "@/stores/chats/chat-find-force-store-context";
+import {
+  useChatFindActiveTargetClearEpoch,
+  useReconcileChatFindActiveTarget,
+  useSetChatFindActiveTarget,
+  useSetChatFindForcedOpen,
+} from "@/stores/chats/chat-find-force-store-context";
 import { arrayShallowEq } from "@/stores/epics/open-epic/projection-helpers";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import {
@@ -51,7 +56,16 @@ interface ChatFindControllerArgs {
   readonly backgroundToolBlockIds: ReadonlySet<string>;
   /** Latest promotion set, read lazily by the adapter's getRows supplier. */
   readonly backgroundToolBlockIdsRef: RefObject<ReadonlySet<string>>;
-  readonly messageIndexByIdRef: RefObject<ReadonlyMap<string, number>>;
+  /**
+   * Caveat describing the rows `messagesRef` does NOT contain, read lazily
+   * beside it.
+   *
+   * A ref-free supplier rather than a value, for the same reason the rows are:
+   * a closed find bar must not re-register its adapter every time the window
+   * hydrates.
+   */
+  readonly getFindCoverageMessage: () => string | null;
+  readonly rowIndexByKeyRef: RefObject<ReadonlyMap<string, number>>;
   readonly getScroller: () => HTMLElement | null;
   readonly scrollToLocation: (location: ChatTimelineNavigationLocation) => void;
   /** Manual-navigation cancel (decision #21: find performs it first). */
@@ -84,7 +98,8 @@ export function useChatFindController(
     messagesRef,
     backgroundToolBlockIds,
     backgroundToolBlockIdsRef,
-    messageIndexByIdRef,
+    getFindCoverageMessage,
+    rowIndexByKeyRef,
     getScroller,
     scrollToLocation,
     cancelManualNavigation,
@@ -92,6 +107,9 @@ export function useChatFindController(
   } = args;
 
   const setFindForcedOpen = useSetChatFindForcedOpen();
+  const setFindActiveTarget = useSetChatFindActiveTarget();
+  const reconcileFindActiveTarget = useReconcileChatFindActiveTarget();
+  const activeTargetClearEpoch = useChatFindActiveTargetClearEpoch();
   const tileFindContext = use(TileFindContext);
 
   const chatFindAdapterRef = useRef<ChatFindAdapter | null>(null);
@@ -135,7 +153,13 @@ export function useChatFindController(
     cancelMountedHighlightSyncFrame();
     mountedHighlightSyncFrameRef.current = window.requestAnimationFrame(() => {
       mountedHighlightSyncFrameRef.current = null;
-      if (activeFindRevealRef.current !== null) return;
+      if (activeFindRevealRef.current !== null) {
+        scheduleFindRevealStepRef.current(
+          findRevealGenerationRef.current,
+          findRevealSkipUnitScrollRef.current,
+        );
+        return;
+      }
       chatFindAdapterRef.current?.syncMountedHighlight();
     });
   }, [cancelMountedHighlightSyncFrame]);
@@ -156,7 +180,7 @@ export function useChatFindController(
       );
       const location = chatTimelineLocationForMessage(
         messageId,
-        messageIndexByIdRef.current,
+        rowIndexByKeyRef.current,
         false,
       );
       if (location === null) return;
@@ -164,7 +188,7 @@ export function useChatFindController(
     },
     [
       cancelManualNavigation,
-      messageIndexByIdRef,
+      rowIndexByKeyRef,
       messagesRef,
       scrollToLocation,
       setScrolledActiveUserMessageIdIfChanged,
@@ -236,6 +260,18 @@ export function useChatFindController(
       // stability mechanism (behavior contract) - the chain-open flows
       // directly into it, with no bespoke scroll-preservation wrapper.
       applyFindOpenedChain(target.owningChain);
+      const interviewKey = target.owningChain.find(
+        (key) => key.kind === "interview",
+      );
+      const findTarget =
+        interviewKey === undefined
+          ? null
+          : { key: interviewKey, unitId: target.unitId };
+      if (forceApply) {
+        setFindActiveTarget(findTarget);
+      } else {
+        reconcileFindActiveTarget(findTarget);
+      }
       findOpenedTargetRef.current = {
         messageId: target.messageId,
         unitId: target.unitId,
@@ -243,24 +279,38 @@ export function useChatFindController(
       };
       return true;
     },
-    [applyFindOpenedChain],
+    [applyFindOpenedChain, reconcileFindActiveTarget, setFindActiveTarget],
   );
 
-  const releaseFindOpenedChain = useCallback((): void => {
-    findOpenedChainRef.current.forEach((key) => {
-      setFindForcedOpen(key, false);
-    });
-    findOpenedChainRef.current = [];
-    findOpenedTargetRef.current = null;
-  }, [setFindForcedOpen]);
+  const releaseFindOpenedChain = useCallback(
+    (clearActiveTarget: boolean): void => {
+      findOpenedChainRef.current.forEach((key) => {
+        setFindForcedOpen(key, false);
+      });
+      findOpenedChainRef.current = [];
+      findOpenedTargetRef.current = null;
+      if (clearActiveTarget) setFindActiveTarget(null);
+    },
+    [setFindActiveTarget, setFindForcedOpen],
+  );
 
   const clearFindReveal = useCallback((): void => {
     findRevealGenerationRef.current += 1;
     activeFindRevealRef.current = null;
     findRevealAnchorMissCountRef.current = 0;
     cancelFindRevealFrame();
-    releaseFindOpenedChain();
+    releaseFindOpenedChain(true);
   }, [cancelFindRevealFrame, releaseFindOpenedChain]);
+
+  useLayoutEffect(() => {
+    if (activeTargetClearEpoch === 0) return;
+    findRevealGenerationRef.current += 1;
+    activeFindRevealRef.current = null;
+    findRevealAnchorMissCountRef.current = 0;
+    cancelFindRevealFrame();
+    releaseFindOpenedChain(false);
+    chatFindAdapterRef.current?.dismissActiveMatch();
+  }, [activeTargetClearEpoch, cancelFindRevealFrame, releaseFindOpenedChain]);
 
   const scheduleFindRevealStep = useCallback(
     (generation: number, skipUnitScroll: boolean): void => {
@@ -386,6 +436,7 @@ export function useChatFindController(
           instanceId,
           backgroundToolBlockIdsRef.current,
         ),
+      getCoverageMessage: getFindCoverageMessage,
       revealMatch: requestFindReveal,
       reconcileMatch: requestFindReconcile,
       clearReveal: clearFindReveal,
@@ -406,6 +457,7 @@ export function useChatFindController(
   }, [
     backgroundToolBlockIdsRef,
     clearFindReveal,
+    getFindCoverageMessage,
     getMountedMessageRoot,
     instanceId,
     messagesRef,

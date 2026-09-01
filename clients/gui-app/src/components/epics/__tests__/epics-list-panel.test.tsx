@@ -1,3 +1,5 @@
+import "./stub-sweep-dialog-host-hooks";
+
 vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
   useHostNotificationIndicators: () => ({
     data: { epics: {}, chats: {} },
@@ -34,7 +36,9 @@ import type { HistoryItem } from "@/components/home/data/home-page.data";
 import type { HistoryFacets } from "@/hooks/home/use-history-query";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useHistorySearchStore } from "@/stores/home/history-search-store";
+import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { DEFAULT_HISTORY_SEARCH } from "@/lib/history-search";
+import type { JsonContent } from "@traycer/protocol/common/registry";
 import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
 import { setDesktopEpicOwnershipBridge } from "@/lib/windows/desktop-epic-ownership";
 import type { DesktopWindowsBridge } from "@/lib/windows/types";
@@ -172,6 +176,13 @@ const testState = vi.hoisted(() => ({
   pendingSetPinnedEpicIds: new Set<string>(),
   refetch: vi.fn(),
   fetchNextPage: vi.fn(),
+  openLandingDraftFromHistory: vi.fn(),
+}));
+
+vi.mock("@/lib/commands/actions/open-landing-draft-from-history", () => ({
+  openLandingDraftFromHistory: (navigate: unknown, draftId: string): void => {
+    testState.openLandingDraftFromHistory(navigate, draftId);
+  },
 }));
 
 vi.mock("@/hooks/home/use-history-query", () => ({
@@ -209,33 +220,6 @@ vi.mock("@/hooks/epic/use-task-delete-worktree-candidates-query", () => ({
   }),
 }));
 
-// The list panel hands the sweep dialog the app-wide following client; the
-// panel renders outside a HostRuntimeProvider here, and the sweep query is
-// mocked below anyway.
-vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
-  useHostClientForHostId: () => null,
-}));
-
-vi.mock("@/hooks/epic/use-epic-sweep-worktree-candidates-query", () => ({
-  useEpicSweepWorktreeCandidatesForClient: () => ({
-    hostId: "host-test",
-    rows: [],
-    isPending: false,
-    isError: false,
-    checkedAt: null,
-    canRefresh: true,
-    refresh: () => Promise.resolve(),
-  }),
-}));
-
-vi.mock("@/hooks/epic/use-epic-sweep-worktrees-mutation", () => ({
-  useEpicSweepWorktrees: () => ({
-    isPending: false,
-    mutate: () => {},
-  }),
-  useSweepingWorktreePaths: () => new Set<string>(),
-}));
-
 vi.mock("@/hooks/epic/use-epic-title-mutation", () => ({
   useEpicUpdateTitle: () => ({
     isPending: false,
@@ -269,6 +253,7 @@ function historyItem(overrides: Partial<HistoryItem>): HistoryItem {
     updatedBucket: "today",
     linkedRepos: [],
     linkedWorkspaces: [],
+    chatHostIds: null,
     pullRequestNumbers: [],
     worktreeBranches: [],
     worktreePaths: [],
@@ -394,7 +379,9 @@ describe("<EpicsListPanel />", () => {
     testState.pendingSetPinnedEpicIds = new Set();
     testState.refetch.mockReset();
     testState.fetchNextPage.mockReset();
+    testState.openLandingDraftFromHistory.mockReset();
     testState.activityByEpicId.clear();
+    useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
     queryClient.clear();
     // This fixture renders the panel without the application root bridge. The
     // bridge releases the controller's hydration gate in production, so make
@@ -456,6 +443,7 @@ describe("<EpicsListPanel />", () => {
     setDesktopEpicOwnershipBridge(null);
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useHistorySearchStore.setState({ search: DEFAULT_HISTORY_SEARCH });
+    useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   });
 
   it("opens landing history rows through the canonical epic tab route", async () => {
@@ -623,6 +611,9 @@ describe("<EpicsListPanel />", () => {
 
   it("keeps a disabled Sweep action on a task with no worktrees", async () => {
     testState.worktreesByEpicId = new Map();
+    // Provenance that names only THIS host adds nothing: the listing above is
+    // this host's, and it is empty.
+    testState.items = [historyItem({ chatHostIds: ["host-test"] })];
     renderPanel("embedded", "/");
 
     const disabled = await screen.findByRole("button", {
@@ -632,6 +623,37 @@ describe("<EpicsListPanel />", () => {
     expect(
       screen.queryByRole("button", { name: /^sweep worktrees for /i }),
     ).toBeNull();
+  });
+
+  it("keeps the row Sweep action live when the task's chats ran on another host", async () => {
+    // `worktreesByEpicId` is THIS host's listing, so it is silent about a Task
+    // whose agents ran elsewhere. Gating on it alone made the host picker
+    // unreachable for exactly the multi-host Tasks it exists for.
+    testState.worktreesByEpicId = new Map();
+    testState.items = [historyItem({ chatHostIds: ["host-elsewhere"] })];
+    renderPanel("embedded", "/");
+
+    const sweep = await screen.findByRole("button", {
+      name: /^sweep worktrees for /i,
+    });
+    expect(sweep.getAttribute("aria-disabled")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /^no worktrees to sweep for /i }),
+    ).toBeNull();
+  });
+
+  it("keeps the row Sweep action faded when the row cannot answer at all", async () => {
+    // `null` is a serving peer that predates `chatHostIds` - silence, not
+    // evidence of another machine. It must not enable the affordance on its
+    // own, or every row on an older peer would claim a multi-host Task.
+    testState.worktreesByEpicId = new Map();
+    testState.items = [historyItem({ chatHostIds: null })];
+    renderPanel("embedded", "/");
+
+    const disabled = await screen.findByRole("button", {
+      name: /^no worktrees to sweep for /i,
+    });
+    expect(disabled.getAttribute("aria-disabled")).toBe("true");
   });
 
   it("shows task PR pills without replacing the row navigation layer", async () => {
@@ -862,7 +884,7 @@ describe("<EpicsListPanel />", () => {
   it("keeps bulk Sweep closed for a selection where no task owns a worktree", async () => {
     // The row control is already gated this way, so a selection of only
     // worktree-less tasks must not open a Sweep dialog with nothing in it.
-    testState.items = [historyItem({})];
+    testState.items = [historyItem({ chatHostIds: ["host-test"] })];
     testState.worktreesByEpicId = new Map();
     renderPanel("embedded", "/");
 
@@ -874,6 +896,32 @@ describe("<EpicsListPanel />", () => {
     expect(
       screen.getByTestId("epics-list-sweep-selected").matches(":disabled"),
     ).toBe(true);
+  });
+
+  it("opens bulk Sweep when a selected task's chats ran on another host", async () => {
+    // The same multi-host clause as the row control, asked of the SELECTION:
+    // nothing in this selection owns a worktree HERE, and the picker behind
+    // the button is the only way to reach the machine that does.
+    testState.items = [
+      historyItem({ chatHostIds: ["host-test"] }),
+      historyItem({
+        id: "history-epic-2",
+        epicId: "epic-two",
+        title: "Second history item",
+        chatHostIds: ["host-elsewhere"],
+      }),
+    ];
+    testState.worktreesByEpicId = new Map();
+    renderPanel("embedded", "/");
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Select history items" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+
+    expect(
+      screen.getByTestId("epics-list-sweep-selected").matches(":disabled"),
+    ).toBe(false);
   });
 
   it("opens bulk Sweep as soon as one selected task owns a worktree", async () => {
@@ -1410,10 +1458,14 @@ describe("<EpicsListPanel />", () => {
     const input = await screen.findByRole("searchbox", {
       name: "Search tasks",
     });
-    const toolbar = screen.getByRole("button", { name: /filter/i })
-      .parentElement?.parentElement;
+    // Picker mode puts the search inside the chrome bar rather than as a
+    // page-level block above it. Assert against the bar itself instead of
+    // walking parentElement hops from the filter button - the bar's internal
+    // wrapper nesting is layout detail (it changes when the row gains
+    // responsive wrapping) and not what this test is about.
+    const toolbar = screen.getByTestId("panel-chrome-bar");
 
-    expect(toolbar?.contains(input)).toBe(true);
+    expect(toolbar.contains(input)).toBe(true);
     fireEvent.change(input, { target: { value: "logging" } });
     await waitFor(() => {
       expect(useHistorySearchStore.getState().search.query).toBe("logging");
@@ -1506,4 +1558,137 @@ describe("<EpicsListPanel />", () => {
     expect(event.defaultPrevented).toBe(false);
     expect(document.activeElement).toBe(input);
   });
+
+  it("shows retained drafts above the task list without selecting a filter", async () => {
+    seedRetainedLandingDraft("abandoned prompt");
+    renderPanel("embedded", "/");
+
+    const drafts = await screen.findByTestId("history-drafts-block");
+    const tasks = await screen.findByTestId("epics-list-rows");
+    expect(screen.getByText("abandoned prompt")).not.toBeNull();
+    expect(await screen.findByText("Open from landing")).not.toBeNull();
+    expect(
+      drafts.compareDocumentPosition(tasks) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
+  });
+
+  it("does not show a block for an empty start-task composer", async () => {
+    useLandingDraftStore.getState().createDraft(null);
+    renderPanel("embedded", "/");
+
+    expect(await screen.findByText("Open from landing")).not.toBeNull();
+    expect(screen.queryByTestId("history-drafts-block")).toBeNull();
+  });
+
+  it("does not expose drafts as a task filter", async () => {
+    seedRetainedLandingDraft("abandoned prompt");
+    renderPanel("embedded", "/");
+
+    fireEvent.click(await screen.findByRole("button", { name: /filter/i }));
+    expect(await screen.findByTestId("epics-filter-popover")).not.toBeNull();
+    expect(screen.queryByRole("checkbox", { name: /drafts/i })).toBeNull();
+  });
+
+  it("opens a retained draft through openLandingDraftFromHistory", async () => {
+    const draftId = seedRetainedLandingDraft("abandoned prompt");
+    renderPanel("embedded", "/");
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Open draft abandoned prompt",
+      }),
+    );
+
+    expect(testState.openLandingDraftFromHistory).toHaveBeenCalledTimes(1);
+    expect(testState.openLandingDraftFromHistory.mock.calls[0][1]).toBe(
+      draftId,
+    );
+  });
+
+  it("asks for confirmation before deleting a retained draft", async () => {
+    const draftId = seedRetainedLandingDraft("abandoned prompt");
+    renderPanel("embedded", "/");
+
+    expect(await screen.findByText("abandoned prompt")).not.toBeNull();
+    fireEvent.click(screen.getByTestId("history-drafts-row-delete"));
+
+    expect(
+      await screen.findByTestId("history-drafts-delete-dialog"),
+    ).not.toBeNull();
+    expect(screen.getByText('Delete "abandoned prompt"?')).not.toBeNull();
+    expect(
+      screen.getByText(/removes the start-task draft on every device/i),
+    ).not.toBeNull();
+    expect(
+      useLandingDraftStore
+        .getState()
+        .drafts.some((draft) => draft.id === draftId),
+    ).toBe(true);
+
+    fireEvent.click(screen.getByTestId("history-drafts-delete-cancel"));
+    await waitFor(() => {
+      expect(screen.queryByTestId("history-drafts-delete-dialog")).toBeNull();
+    });
+    expect(
+      useLandingDraftStore
+        .getState()
+        .drafts.some((draft) => draft.id === draftId),
+    ).toBe(true);
+
+    fireEvent.click(screen.getByTestId("history-drafts-row-delete"));
+    fireEvent.click(await screen.findByTestId("history-drafts-delete-confirm"));
+
+    await waitFor(() => {
+      expect(
+        useLandingDraftStore
+          .getState()
+          .drafts.some((draft) => draft.id === draftId),
+      ).toBe(false);
+    });
+    expect(screen.queryByText("abandoned prompt")).toBeNull();
+  });
+
+  it("warns that an open draft will be deleted on every device", async () => {
+    const draftId = seedRetainedLandingDraft("live tab");
+    useLandingDraftStore.getState().openDraft(draftId);
+    renderPanel("embedded", "/");
+
+    fireEvent.click(await screen.findByTestId("history-drafts-row-delete"));
+    expect(
+      await screen.findByText(/this draft is currently open/i),
+    ).not.toBeNull();
+    expect(screen.getByText(/every device/i)).not.toBeNull();
+  });
+
+  it("caps the draft block and expands it on request", async () => {
+    for (let index = 0; index < 6; index += 1) {
+      seedRetainedLandingDraft(`draft ${index}`);
+    }
+
+    renderPanel("page", "/");
+
+    expect(await screen.findAllByTestId("history-drafts-row")).toHaveLength(5);
+    fireEvent.click(screen.getByRole("button", { name: "View all 6" }));
+    expect(screen.getAllByTestId("history-drafts-row")).toHaveLength(6);
+    expect(screen.getByRole("button", { name: "Show less" })).not.toBeNull();
+  });
+
+  it("hides the drafts block in the destination picker", async () => {
+    seedRetainedLandingDraft("abandoned prompt");
+    renderPanel("picker", "/");
+
+    expect(await screen.findByText("Open from landing")).not.toBeNull();
+    expect(screen.queryByTestId("history-drafts-block")).toBeNull();
+  });
 });
+
+function seedRetainedLandingDraft(text: string): string {
+  const content: JsonContent = {
+    type: "doc",
+    content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+  };
+  const id = useLandingDraftStore.getState().createDraft(null);
+  useLandingDraftStore.getState().setDraftContent(id, content, null);
+  useLandingDraftStore.getState().closeDraft(id);
+  return id;
+}

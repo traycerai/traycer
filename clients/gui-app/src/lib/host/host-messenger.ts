@@ -24,6 +24,8 @@ import { DEFAULT_DIAL_TIMEOUT_MS } from "@traycer-clients/shared/host-transport/
 import { createWhatwgStreamWebSocketFactory } from "@traycer-clients/shared/host-transport/whatwg-stream-ws-factory";
 import { createWhatwgWebSocketFactory } from "@traycer-clients/shared/host-transport/whatwg-ws-factory";
 import { transportEvidenceRelay } from "@/lib/host/transport-evidence";
+import { appServerClock } from "@/lib/clock/app-server-clock";
+import { getGuiClientIdentity } from "@/lib/host/client-identity";
 import {
   HOST_POST_OPEN_ATTESTATION_WINDOW_MS,
   WsRpcClient,
@@ -116,11 +118,24 @@ export function buildRawHostMessengerForTarget<
       hostPublicKey: params.target.publicKey,
       bearer: params.bearer,
       auth: params.auth,
+      // MUST match what `buildHostStreamClient` passes, and this is not a
+      // stylistic point: `clock` is deliberately not part of the session cache
+      // identity, so whichever consumer builds the `(hostId, userId)` session
+      // FIRST is the one whose value every later consumer inherits. A `null`
+      // here would silently disable the clock-skew park for a session a stream
+      // consumer later joins.
+      clock: appServerClock,
       rpcRegistry: params.registry,
       streamRegistry: hostStreamRpcRegistry,
       webSocketFactory: browserStreamWebSocketFactory,
       requestId: params.requestId,
       evidence: transportEvidenceRelay,
+      clientIdentity: getGuiClientIdentity(),
+      // A messenger binding carries unary RPCs (and, if a stream client is
+      // built over the same session, snapshot-shaped streams): nothing a
+      // reconnect replay could double-execute. Messenger-only bindings are in
+      // fact a case the process-wide sweep exists to reach.
+      proactiveWakeEligible: true,
     });
     if (remoteTransport === null) return null;
     return {
@@ -143,6 +158,7 @@ export function buildRawHostMessengerForTarget<
       // 30s). This window keeps the socket open long enough for the host's
       // no-dispatch attestation when the client's timer wins that race.
       hostAttestationWindowMs: HOST_POST_OPEN_ATTESTATION_WINDOW_MS,
+      clientIdentity: getGuiClientIdentity(),
     }),
     remoteTransport: null,
   };
@@ -279,6 +295,7 @@ class RuntimeHostMessenger<
       evidence: transportEvidenceRelay,
       // Same post-`openAck` attestation grace as the standalone builder above.
       hostAttestationWindowMs: HOST_POST_OPEN_ATTESTATION_WINDOW_MS,
+      clientIdentity: getGuiClientIdentity(),
     });
   }
 

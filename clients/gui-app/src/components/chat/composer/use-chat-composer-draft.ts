@@ -12,13 +12,19 @@ import {
   readComposerDraftSnapshot,
   useComposerDraftStore,
 } from "@/stores/composer/composer-draft-store";
+import {
+  bindComposerDraftHost,
+  unbindComposerDraftHost,
+} from "@/lib/drafts/draft-mirror-coordinator";
 import { containsImageAtoms } from "@/lib/composer/image-atoms";
 import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
 
 import type { ComposerPromptEditorHandle } from "./composer-prompt-editor";
 
 interface UseChatComposerDraftArgs {
-  readonly taskId: string;
+  readonly chatId: string;
+  readonly epicId: string | null;
+  readonly hostId: string;
   readonly editorRef: RefObject<ComposerPromptEditorHandle | null>;
   /** Bumped by the owner when `ComposerPromptEditor` fires `onEditorReady`. */
   readonly editorReadyTick: number;
@@ -31,38 +37,41 @@ export function useChatComposerDraft(args: UseChatComposerDraftArgs) {
   const setSelectionInStore = useComposerDraftStore(
     (state) => state.setSelection,
   );
-  const [initialDraft] = useState(() => readComposerDraftSnapshot(args.taskId));
+  const [initialDraft] = useState(() => readComposerDraftSnapshot(args.chatId));
   const initialContent = initialDraft.content;
   const initialSelection = initialDraft.selection;
 
   const draftContent = useComposerDraftStore(
-    (state) => state.drafts[args.taskId]?.content ?? initialContent,
+    (state) => state.drafts[args.chatId]?.content ?? initialContent,
   );
   const draftResetEpoch = useComposerDraftStore(
-    (state) => state.drafts[args.taskId]?.resetEpoch ?? 0,
+    (state) => state.drafts[args.chatId]?.resetEpoch ?? 0,
   );
   const draftHasText = useMemo(
     () =>
       extractPlainTextFromComposerJSONContent(draftContent).trim().length > 0,
     [draftContent],
   );
+  const draftAnnotationCount = useComposerDraftStore(
+    (state) => state.drafts[args.chatId]?.browserAnnotations.length ?? 0,
+  );
   const draftHasImages = useMemo(
-    () => containsImageAtoms(draftContent),
-    [draftContent],
+    () => containsImageAtoms(draftContent) || draftAnnotationCount > 0,
+    [draftContent, draftAnnotationCount],
   );
 
   const handleDocumentChange = useCallback(
     (content: JsonContent, selection: { from: number; to: number }) => {
-      setSnapshotInStore(args.taskId, content, selection);
+      setSnapshotInStore(args.chatId, content, selection);
     },
-    [args.taskId, setSnapshotInStore],
+    [args.chatId, setSnapshotInStore],
   );
 
   const handleSelectionChange = useCallback(
     (selection: { from: number; to: number }) => {
-      setSelectionInStore(args.taskId, selection);
+      setSelectionInStore(args.chatId, selection);
     },
-    [args.taskId, setSelectionInStore],
+    [args.chatId, setSelectionInStore],
   );
 
   // `resetEpoch` bumps (queue-edit restore, failed-send restore, a quote
@@ -84,11 +93,20 @@ export function useChatComposerDraft(args: UseChatComposerDraftArgs) {
     if (draftResetEpoch === appliedResetEpochRef.current) return;
     const editor = args.editorRef.current;
     if (editor === null || !editor.isReady()) return;
-    const draft = useComposerDraftStore.getState().drafts[args.taskId];
+    const draft = useComposerDraftStore.getState().drafts[args.chatId];
     if (draft === undefined) return;
     editor.syncContent(draft.content, draft.selection);
     appliedResetEpochRef.current = draft.resetEpoch;
-  }, [args.editorRef, args.taskId, args.editorReadyTick, draftResetEpoch]);
+  }, [args.editorRef, args.chatId, args.editorReadyTick, draftResetEpoch]);
+
+  const bindTarget = useComposerDraftStore((state) => state.bindTarget);
+  useEffect(() => {
+    bindComposerDraftHost(args.chatId, args.hostId);
+    if (args.epicId !== null) bindTarget(args.chatId, args.epicId);
+    return () => {
+      unbindComposerDraftHost(args.chatId, args.hostId);
+    };
+  }, [args.chatId, args.epicId, args.hostId, bindTarget]);
 
   return {
     initialContent,

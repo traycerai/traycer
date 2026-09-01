@@ -13,6 +13,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { ChatRecordSummary } from "@traycer/protocol/host/epic/chat-records";
+import type { TuiAgentRecordSummary } from "@traycer/protocol/host/epic/tui-agent-records";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type {
   IStreamSession,
@@ -23,10 +24,11 @@ import type {
 } from "../i-stream-session";
 import {
   ChatRecordsStreamClient,
-  type ChatRecordDelta,
+  type ChatRecordsStreamDelta,
 } from "../chat-records-stream-client";
 import { WsStreamClient } from "../ws-stream-client";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
+import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
 class StubSession implements IStreamSession {
   private serverFrameHandler: ServerFrameHandler = () => undefined;
@@ -67,11 +69,14 @@ function makeWsStreamClient(
   session: IStreamSession,
 ): WsStreamClient<typeof hostStreamRpcRegistry> {
   const client = new WsStreamClient({
+    clientIdentity: TEST_CLIENT_IDENTITY,
     registry: hostStreamRpcRegistry,
     endpoint: () => null,
     bearer: () => null,
     auth: null,
+    clock: null,
     hostCredentialMint: null,
+    onHostCredentialState: null,
     evidence: NO_TRANSPORT_EVIDENCE,
     webSocketFactory: {
       create: () => {
@@ -109,6 +114,36 @@ function row(overrides: Partial<ChatRecordSummary>): ChatRecordSummary {
   };
 }
 
+function tuiRow(
+  overrides: Partial<TuiAgentRecordSummary>,
+): TuiAgentRecordSummary {
+  return {
+    tuiAgentId: "tui-1",
+    ownerUserId: "user-a",
+    hostId: "host-1",
+    harnessId: "claude",
+    harnessSessionId: "sess-1",
+    parentId: null,
+    title: "A terminal agent",
+    isTitleEditedByUser: false,
+    createdAt: 1,
+    updatedAt: 2,
+    archived: false,
+    archivedAt: null,
+    workspaceFolders: ["/repo"],
+    workspaceMode: null,
+    model: "opus",
+    reasoningEffort: null,
+    agentMode: "regular",
+    profileId: null,
+    terminalAgentArgs: null,
+    terminalShellCommand: null,
+    terminalShellArgs: null,
+    revision: 3,
+    ...overrides,
+  };
+}
+
 interface StatusCall {
   readonly status: StreamConnectionStatus;
   readonly reason: StreamCloseReason | null;
@@ -116,7 +151,7 @@ interface StatusCall {
 
 interface Harness {
   readonly session: StubSession;
-  readonly deltas: ChatRecordDelta[];
+  readonly deltas: ChatRecordsStreamDelta[];
   readonly client: ChatRecordsStreamClient;
   readonly statuses: StatusCall[];
   readonly wsStreamClient: WsStreamClient<typeof hostStreamRpcRegistry>;
@@ -125,7 +160,7 @@ interface Harness {
 function harness(): Harness {
   const session = new StubSession();
   const wsStreamClient = makeWsStreamClient(session);
-  const deltas: ChatRecordDelta[] = [];
+  const deltas: ChatRecordsStreamDelta[] = [];
   const statuses: StatusCall[] = [];
   const client = new ChatRecordsStreamClient({
     wsStreamClient,
@@ -175,6 +210,155 @@ describe("ChatRecordsStreamClient", () => {
         reason: "revoked",
       },
     ]);
+    h.client.close();
+  });
+
+  it("delivers the @1.1 terminal-agent kinds as typed deltas, each naming its epic", () => {
+    const h = harness();
+    const record = tuiRow({ tuiAgentId: "tui-a", revision: 9 });
+    h.session.emitFrame({
+      kind: "tuiUpsert",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      tuiAgentId: "tui-a",
+      revision: 9,
+      record,
+    });
+    h.session.emitFrame({
+      kind: "tuiRemove",
+      hasBinaryPayload: false,
+      epicId: "epic-2",
+      tuiAgentId: "tui-b",
+      reason: "deleted",
+    });
+
+    // The `@1.1` row is PROMOTED to the current union on the way through, and
+    // both fills are exact rather than defaults: a `@1.1` host is never sent
+    // the `@1.2` cloud arm (the host gates its emission on the negotiated
+    // version), and the delta plane has no doc-resident producer at all - such
+    // a row reaches a client through `epic.listTuiAgents` alone.
+    expect(h.deltas).toEqual([
+      {
+        kind: "tuiUpsert",
+        epicId: "epic-1",
+        record: { ...record, docResident: false, origin: "registry" },
+      },
+      {
+        kind: "tuiRemove",
+        epicId: "epic-2",
+        tuiAgentId: "tui-b",
+        reason: "deleted",
+      },
+    ]);
+    h.client.close();
+  });
+
+  it("TRIPWIRE: still delivers a tuiUpsert when the session negotiated @1.1", () => {
+    // THE REGRESSION THIS PINS. A newer app talking to a host that only
+    // negotiates `@1.1` parsed every frame with the `@1.2` schema - whose
+    // `tuiUpsert` row is a union DISCRIMINATED on `origin`, a key the frozen
+    // `@1.1` row does not have. So the upsert failed to parse and was dropped
+    // while `tuiRemove`, unchanged between the minors, kept arriving: rows
+    // vanished on removal and never came back on creation.
+    const h = harness();
+    h.session.negotiatedSchemaVersion = { major: 1, minor: 1 };
+    const record = tuiRow({ tuiAgentId: "tui-legacy", revision: 4 });
+    h.session.emitFrame({
+      kind: "tuiUpsert",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      tuiAgentId: "tui-legacy",
+      revision: 4,
+      record,
+    });
+
+    expect(h.deltas).toEqual([
+      {
+        kind: "tuiUpsert",
+        epicId: "epic-1",
+        record: { ...record, docResident: false, origin: "registry" },
+      },
+    ]);
+    h.client.close();
+  });
+
+  it("delivers the @1.2 cloud arm verbatim when the session negotiated @1.2", () => {
+    // The other side of the branch: at `@1.2` the row is already the union, so
+    // it passes through untouched - including the narrow cloud arm, which the
+    // `@1.1` schema would reject.
+    const h = harness();
+    h.session.negotiatedSchemaVersion = { major: 1, minor: 2 };
+    const record = {
+      origin: "cloud" as const,
+      tuiAgentId: "tui-remote",
+      ownerUserId: "user-a",
+      hostId: "host-elsewhere",
+      harnessId: "claude",
+      parentId: null,
+      title: "An agent on my other machine",
+      isTitleEditedByUser: false,
+      createdAt: 1,
+      updatedAt: 2,
+      archived: false,
+      revision: 7,
+    };
+    h.session.emitFrame({
+      kind: "tuiUpsert",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      tuiAgentId: "tui-remote",
+      revision: 7,
+      record,
+    });
+
+    expect(h.deltas).toEqual([{ kind: "tuiUpsert", epicId: "epic-1", record }]);
+    h.client.close();
+  });
+
+  it("drops a tuiUpsert whose envelope disagrees with the row it carries", () => {
+    // The contract's envelope invariant, exercised through this client: a
+    // frame addressing one agent while carrying another's row (or ordering by
+    // a revision the row does not hold) is refused outright, not guessed at.
+    const h = harness();
+    h.session.emitFrame({
+      kind: "tuiUpsert",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      tuiAgentId: "tui-OTHER",
+      revision: 9,
+      record: tuiRow({ tuiAgentId: "tui-a", revision: 9 }),
+    });
+    h.session.emitFrame({
+      kind: "tuiUpsert",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      tuiAgentId: "tui-a",
+      revision: 1,
+      record: tuiRow({ tuiAgentId: "tui-a", revision: 9 }),
+    });
+    expect(h.deltas).toEqual([]);
+    h.client.close();
+  });
+
+  it("drops a malformed terminal-agent frame instead of guessing at it", () => {
+    const h = harness();
+    // A removal reason from a later, widened minor.
+    h.session.emitFrame({
+      kind: "tuiRemove",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      tuiAgentId: "tui-a",
+      reason: "quarantined",
+    });
+    // An upsert with no row.
+    h.session.emitFrame({
+      kind: "tuiUpsert",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      tuiAgentId: "tui-a",
+      revision: 1,
+    });
+    expect(h.deltas).toEqual([]);
     h.client.close();
   });
 

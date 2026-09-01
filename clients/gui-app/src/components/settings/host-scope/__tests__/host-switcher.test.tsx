@@ -44,6 +44,7 @@ function renderEmpty(props: {
       isLoading={props.isLoading}
       listsFailed={props.listsFailed}
       onRetryLists={props.onRetryLists ?? (() => undefined)}
+      updateViewForHost={null}
     />,
   );
 }
@@ -113,6 +114,7 @@ describe("<HostSwitcher /> empty vs failed", () => {
         isLoading={false}
         listsFailed
         onRetryLists={() => undefined}
+        updateViewForHost={null}
       />,
     );
 
@@ -145,6 +147,7 @@ describe("<HostSwitcher /> empty vs failed", () => {
         isLoading={false}
         listsFailed
         onRetryLists={onRetryLists}
+        updateViewForHost={null}
       />,
     );
 
@@ -202,6 +205,7 @@ describe("<HostSwitcher /> empty vs failed", () => {
         isLoading={false}
         listsFailed={false}
         onRetryLists={() => undefined}
+        updateViewForHost={null}
       />,
     );
 
@@ -210,6 +214,54 @@ describe("<HostSwitcher /> empty vs failed", () => {
     );
     expect(screen.getByText("requires upgrade")).not.toBeNull();
     expect(screen.queryByText("unreachable")).toBeNull();
+  });
+});
+
+describe("<HostSwitcher /> trigger status", () => {
+  it("keeps healthy hosts quiet and names an offline selection", () => {
+    const healthy = hostScopeOptionFixture({
+      hostId: "host-a",
+      name: "Host A",
+    });
+    const common = {
+      refusalByHostId: NO_HOST_OPTION_REFUSALS,
+      inertExceptHostId: null,
+      activeHostId: "host-a",
+      onSelect: () => undefined,
+      action: { kind: "manage-hosts" as const, onSelect: () => undefined },
+      surface: "inline" as const,
+      intent: "pin" as const,
+      disabled: false,
+      isLoading: false,
+      listsFailed: false,
+      onRetryLists: () => undefined,
+      updateViewForHost: null,
+    };
+    const { rerender } = render(
+      <HostSwitcher hosts={[healthy]} selected={healthy} {...common} />,
+    );
+
+    expect(screen.queryByTestId("settings-host-switcher-status")).toBeNull();
+
+    const offline = hostScopeOptionFixture({
+      hostId: "host-a",
+      name: "Host A",
+      health: {
+        state: "offline",
+        label: "Offline",
+        detail: null,
+        tone: "idle",
+        live: false,
+      },
+    });
+    rerender(<HostSwitcher hosts={[offline]} selected={offline} {...common} />);
+
+    expect(
+      screen.getByTestId("settings-host-switcher-status").textContent,
+    ).toBe("offline");
+    expect(
+      screen.getByRole("button", { name: "Host: Host A, offline" }),
+    ).not.toBeNull();
   });
 });
 
@@ -238,6 +290,7 @@ describe("<HostSwitcher /> trailing action", () => {
         isLoading={false}
         listsFailed={false}
         onRetryLists={() => undefined}
+        updateViewForHost={null}
       />,
     );
 
@@ -273,6 +326,7 @@ describe("<HostSwitcher /> trailing action", () => {
         isLoading={false}
         listsFailed={false}
         onRetryLists={() => undefined}
+        updateViewForHost={null}
       />,
     );
 
@@ -317,6 +371,7 @@ describe("<HostSwitcher /> setting-up status word (M5)", () => {
         isLoading={false}
         listsFailed={false}
         onRetryLists={() => undefined}
+        updateViewForHost={null}
       />,
     );
 

@@ -121,7 +121,7 @@ export function useCommGraphJump(
   }, [agents, events]);
   // Dialability now depends on the pull-only session cache, so the directory
   // subscription alone cannot see a session dying or appearing under an
-  // `offline`/`local-only` origin. This second subscription re-renders on a
+  // `offline`/plan-restricted origin. This second subscription re-renders on a
   // readiness flip; the snapshot read below then re-runs with the new answer,
   // so jump affordances follow the route's real state instead of freezing at
   // whatever was true on the last directory emit.
@@ -173,11 +173,14 @@ export function useCommGraphJump(
       if (agent === undefined) return;
       tileNavigation.openTileInEpic(epicId, openableRefForAgent(agent));
       if (target.kind === "chat-block") {
-        requestJump(target.chatId, { kind: "block", blockId: target.blockId });
+        requestJump(event.hostId, target.chatId, {
+          kind: "block",
+          blockId: target.blockId,
+        });
         return;
       }
       if (target.kind === "chat-message") {
-        requestJump(target.chatId, {
+        requestJump(event.hostId, target.chatId, {
           kind: "message",
           messageId: target.messageId,
         });
@@ -213,7 +216,7 @@ export function useCommGraphJump(
       const sender = agentById.get(event.senderAgentId);
       if (sender === undefined || sender.kind !== "chat") return;
       tileNavigation.openTileInEpic(epicId, openableRefForAgent(sender));
-      requestJump(event.senderAgentId, {
+      requestJump(event.hostId, event.senderAgentId, {
         kind: "sent-message",
         receiverAgentId: event.receiverAgentId,
         messageText: event.messageText,
@@ -242,7 +245,9 @@ export function useCommGraphJump(
       const created = agentById.get(event.receiverAgentId);
       if (created === undefined || created.kind !== "chat") return;
       tileNavigation.openTileInEpic(epicId, openableRefForAgent(created));
-      requestJump(event.receiverAgentId, { kind: "first-message" });
+      requestJump(event.hostId, event.receiverAgentId, {
+        kind: "first-message",
+      });
     },
     [agentById, epicId, isOriginAvailable, requestJump, tileNavigation],
   );

@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import { AddHostDialog } from "@/components/settings/host-scope/add-host-dialog";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
@@ -20,6 +27,9 @@ import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 const scopeMocks: { scope: Partial<HostScope> } = vi.hoisted(() => ({
   scope: {},
 }));
+const navigationMocks = vi.hoisted(() => ({
+  navigateToSettingsSection: vi.fn(),
+}));
 
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   const { hostScopeFixture } =
@@ -29,7 +39,10 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   };
 });
 
+vi.mock("@/lib/settings-navigation", () => navigationMocks);
+
 beforeEach(() => {
+  navigationMocks.navigateToSettingsSection.mockClear();
   useAddHostDialogStore.getState().closeDialog();
 });
 
@@ -73,7 +86,7 @@ describe("<AddHostDialog /> arrival", () => {
     expect(screen.getByTestId("add-host-arrived")).not.toBeNull();
     // ...and the copy claims registration, not a connection that is not there.
     expect(
-      screen.getByRole("heading", { name: "Office Linux is registered" }),
+      screen.getByRole("heading", { name: "Host registered" }),
     ).not.toBeNull();
     expect(screen.queryByText(/ready to run agents/)).toBeNull();
   });
@@ -95,7 +108,7 @@ describe("<AddHostDialog /> arrival", () => {
     render(<AddHostDialog />);
 
     expect(
-      screen.getByRole("heading", { name: "Office Linux is connected" }),
+      screen.getByRole("heading", { name: "Host connected" }),
     ).not.toBeNull();
     expect(screen.getByText(/ready to run agents/)).not.toBeNull();
   });
@@ -145,7 +158,7 @@ describe("<AddHostDialog /> arrival", () => {
 
     expect(screen.getByTestId("add-host-arrived")).not.toBeNull();
     expect(
-      screen.getByRole("heading", { name: "Office Linux is connected" }),
+      screen.getByRole("heading", { name: "Host connected" }),
     ).not.toBeNull();
   });
 
@@ -204,8 +217,59 @@ describe("<AddHostDialog /> arrival", () => {
 
     expect(screen.getByTestId("add-host-arrived")).not.toBeNull();
     expect(
-      screen.getByRole("heading", { name: "Office Linux is connected" }),
+      screen.getByRole("heading", { name: "Host connected" }),
     ).not.toBeNull();
+  });
+
+  it("contains a long unbroken host name inside the identity card", async () => {
+    const longName = `host-${"a".repeat(160)}.internal`;
+    const newcomer = await hostOption({
+      hostId: "host-long",
+      name: longName,
+      registered: true,
+      connectable: true,
+    });
+    scopeMocks.scope = {
+      hosts: [newcomer],
+      isLoading: false,
+      listsFailed: false,
+    };
+    useAddHostDialogStore.getState().openDialog([]);
+
+    render(<AddHostDialog />);
+
+    const card = screen.getByTestId("add-host-arrived");
+    const name = within(card).getByLabelText(longName);
+    expect(name.className).toContain("[overflow-wrap:anywhere]");
+    expect(
+      screen.getByRole("heading", { name: "Host connected" }),
+    ).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Set up host" })).not.toBeNull();
+  });
+
+  it("opens the arrived host's Overview page", async () => {
+    const setHostId = vi.fn();
+    const newcomer = await hostOption({
+      hostId: "host-new",
+      name: "Office Linux",
+      registered: true,
+      connectable: true,
+    });
+    scopeMocks.scope = {
+      hosts: [newcomer],
+      isLoading: false,
+      listsFailed: false,
+      setHostId,
+    };
+    useAddHostDialogStore.getState().openDialog([]);
+
+    render(<AddHostDialog />);
+    fireEvent.click(screen.getByRole("button", { name: "Set up host" }));
+
+    expect(setHostId).toHaveBeenCalledWith("host-new");
+    expect(navigationMocks.navigateToSettingsSection).toHaveBeenCalledWith(
+      "host",
+    );
   });
 
   it("does not announce a directory-only row that never registered", async () => {
@@ -261,6 +325,29 @@ describe("<AddHostDialog /> setup instructions", () => {
     expect(steps[1].textContent).toContain("traycer login");
     // The step whose absence made the whole dialog unreachable.
     expect(steps[2].textContent).toContain("traycer host ensure");
+  });
+
+  it("shows one installer command and switches it in place", async () => {
+    const user = userEvent.setup();
+    render(<AddHostDialog />);
+    const npmTab = screen.getByRole("tab", { name: "npm" });
+    const homebrewTab = screen.getByRole("tab", { name: "Homebrew" });
+
+    expect(npmTab.getAttribute("data-state")).toBe("active");
+    expect(npmTab.className).toContain("data-[state=active]:bg-background");
+    expect(screen.getByText("npm install -g @traycerai/cli")).not.toBeNull();
+    expect(
+      screen.queryByText("brew install traycerai/traycer/traycer"),
+    ).toBeNull();
+
+    await user.click(homebrewTab);
+
+    expect(homebrewTab.getAttribute("data-state")).toBe("active");
+    expect(
+      screen.getByText("brew install traycerai/traycer/traycer"),
+    ).not.toBeNull();
+    expect(screen.queryByText("npm install -g @traycerai/cli")).toBeNull();
+    expect(screen.getByText("Available on macOS and Linux.")).not.toBeNull();
   });
 
   it("no longer prints the curl installer", () => {

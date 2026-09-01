@@ -1,5 +1,7 @@
 import { useState, type ReactNode } from "react";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
+import type { HostBusyBreakdown } from "@traycer/protocol/host/status/index";
+import { describeHostBusy } from "@/components/host/host-restart-copy";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -92,8 +94,18 @@ export interface VersionPickerProps {
   readonly totalCount: number;
   readonly showAll: boolean;
   readonly onToggleShowAll: () => void;
+  /**
+   * What the catalog actually did — the host's resolved inclusion until the
+   * user overrides it, not a preference this checkbox owns.
+   */
   readonly includePreReleases: boolean;
   readonly onIncludePreReleasesChange: (value: boolean) => void;
+  /**
+   * Why the catalog resolved that way, when it is worth saying. Non-null only
+   * for a host that derived inclusion from its own installed release
+   * candidate; see `describeIncludePreReleasesSource`.
+   */
+  readonly includePreReleasesExplanation: string | null;
   readonly installingVersion: string | null;
   readonly disabled: boolean;
   readonly onInstall: (version: string) => void;
@@ -151,6 +163,14 @@ function VersionPicker(props: VersionPickerProps): ReactNode {
         >
           <span className="text-foreground">Include release candidates</span>
           <span>Show RC host versions when choosing a version.</span>
+          {/* Provenance, and worded as a fact about the host rather than a
+              setting: there is no stored preference behind this state, so copy
+              implying one would point at a switch that does not exist. */}
+          {props.includePreReleasesExplanation !== null ? (
+            <span data-testid="host-overview-include-pre-releases-reason">
+              {props.includePreReleasesExplanation}
+            </span>
+          ) : null}
         </label>
       </div>
       {props.awaitingFirstCheck ? (
@@ -229,12 +249,14 @@ export interface OsServiceSectionProps {
   readonly deregisterPending: boolean;
   readonly busy: boolean;
   /**
-   * What the host said about open sessions, `null` while unsettled. The
-   * register CONFIRM names it: on macOS re-registering bootouts the running
-   * job before bootstrapping it again, ending those sessions without ever
-   * consulting the busy-session refusal the restart flow enforces.
+   * What the host said is working, `null`/false while unsettled. The register
+   * CONFIRM names it: on macOS re-registering bootouts the running job before
+   * bootstrapping it again, ending that work without ever consulting the
+   * busy-session refusal the restart flow enforces.
    */
+  readonly settledBusy: boolean;
   readonly settledBusySessionCount: number | null;
+  readonly settledBusyBreakdown: HostBusyBreakdown | null;
   readonly onRegister: () => void;
   readonly onDeregister: () => void;
 }
@@ -336,10 +358,12 @@ function OsServiceSection(props: OsServiceSectionProps): ReactNode {
           if (!next) setConfirmRegister(false);
         }}
         title="Re-register this host's OS service?"
-        description={describeRegisterConfirm(
-          props.hostName,
-          props.settledBusySessionCount,
-        )}
+        description={describeRegisterConfirm({
+          hostName: props.hostName,
+          settledBusy: props.settledBusy,
+          settledBusySessionCount: props.settledBusySessionCount,
+          settledBusyBreakdown: props.settledBusyBreakdown,
+        })}
         cascadeSummary={null}
         actionLabel="Re-register"
         isPending={props.registerPending}
@@ -368,26 +392,26 @@ function OsServiceSection(props: OsServiceSectionProps): ReactNode {
 }
 
 /**
- * The register confirm's body, sized to what is known about open sessions.
- * `null` is NOT zero: a host that has not said it is idle gets the hedged
- * sentence, never a claim that nothing is running.
+ * The register confirm's body, sized to what is known about work on the host.
+ * A null helper sentence is NOT idle: a host that has not said it is idle
+ * gets the hedged sentence, never a claim that nothing is running.
  */
-function describeRegisterConfirm(
-  hostName: string,
-  settledBusySessionCount: number | null,
-): string {
-  const restart = `Re-registering restarts ${hostName}: its OS service is booted out and registered again.`;
-  if (settledBusySessionCount === null) {
+function describeRegisterConfirm(input: {
+  readonly hostName: string;
+  readonly settledBusy: boolean;
+  readonly settledBusySessionCount: number | null;
+  readonly settledBusyBreakdown: HostBusyBreakdown | null;
+}): string {
+  const restart = `Re-registering restarts ${input.hostName}: its OS service is booted out and registered again.`;
+  const copy = describeHostBusy({
+    breakdown: input.settledBusyBreakdown,
+    busySessionCount: input.settledBusySessionCount,
+    busy: input.settledBusy,
+  });
+  if (copy.sentence === null) {
     return `${restart} Any work running on it right now will be interrupted.`;
   }
-  if (settledBusySessionCount === 0) {
-    return `${restart} It reports no active sessions, so nothing should be interrupted.`;
-  }
-  const sessions =
-    settledBusySessionCount === 1
-      ? "1 active session"
-      : `${settledBusySessionCount} active sessions`;
-  return `${restart} It reports ${sessions}, and re-registering will end ${settledBusySessionCount === 1 ? "it" : "them"}.`;
+  return `${restart} ${copy.sentence}`;
 }
 
 function OsServiceHeading(props: {

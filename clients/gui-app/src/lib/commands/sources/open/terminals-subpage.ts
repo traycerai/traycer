@@ -35,17 +35,17 @@ import {
 } from "@/lib/host";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { openTileIntoTargetGroup } from "@/lib/commands/actions";
+import { makeListedEpicTerminalRef } from "@/lib/terminals/listed-epic-terminal-ref";
 import { isVisibleEpicTerminalSession } from "@/lib/terminals/terminal-session-filters";
-import { isWorkspaceResolvePending } from "@/lib/worktree/worktree-row-resolve-pending";
+import { isWorkspaceResolvePending } from "@traycer-clients/shared/worktree/worktree-row-state";
 import { withoutResolvedMissingRows } from "@/lib/worktree/worktree-row-resolved-missing";
-import { formatWorktreeFolderDisabledReason } from "@/lib/worktree/worktree-folder-disabled-reason";
-import { existingSessionOriginFields } from "@/stores/epics/canvas/types";
-import { providerLoginTerminalProviderId } from "@/stores/providers/provider-login-terminals";
-import { isSetupTerminal } from "@/stores/worktree/setup-terminals";
 import {
-  deriveTitleSourceFromSessionTitle,
-  terminalSessionTitle,
-} from "@/lib/terminals/terminal-title";
+  formatWorktreeFolderDisabledReason,
+  worktreeFolderRowBadge,
+  type WorktreeFolderRowBadge,
+} from "@/lib/worktree/worktree-folder-disabled-reason";
+import { isBrowsable } from "@/lib/worktree/worktree-row-browsable";
+import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
 import {
   openerActionLeaf,
   openerExistingLeaf,
@@ -57,16 +57,18 @@ import type {
   CommandSubpage,
 } from "@/lib/commands/types";
 
-function terminalWorkspaceLeaf(
-  ctx: CommandContext,
-  target: { readonly hostId: string; readonly cwd: string },
-  label: string,
-  hostClient: HostClient<HostRpcRegistry>,
-): CommandItem {
+function terminalWorkspaceLeaf(props: {
+  readonly ctx: CommandContext;
+  readonly target: { readonly hostId: string; readonly cwd: string };
+  readonly label: string;
+  readonly hostClient: HostClient<HostRpcRegistry>;
+  readonly status: WorktreeFolderRowBadge | null;
+}): CommandItem {
+  const { ctx, target, label, hostClient, status } = props;
   // Cmdk can invoke a selected row twice before its view rerenders. Keep this
   // synchronous per-leaf latch so one workspace selection creates one terminal.
   let hasLaunched = false;
-  return openerActionLeaf({
+  const leaf = openerActionLeaf({
     id: `open:terminals:new:${target.hostId}:${encodeURIComponent(target.cwd)}`,
     label,
     keywords: [target.cwd, "new", "terminal", "workspace"],
@@ -86,15 +88,20 @@ function terminalWorkspaceLeaf(
         );
         return;
       }
+      const epicId = ctx.activeEpicId;
+      if (epicId === null) return;
       hasLaunched = true;
       openTileIntoTargetGroup({
         tabId: ctx.activeTabId,
         groupId: ctx.targetGroupId,
-        ref: mintNewEpicTerminalTile(target),
+        ref: mintNewEpicTerminalTile({ ...target, epicId }),
         navigateNestedFocus: ctx.router.navigateNestedFocus,
       });
     },
   });
+  if (status === null) return leaf;
+  const statusBadge = `${status.label.charAt(0).toUpperCase()}${status.label.slice(1)}`;
+  return { ...leaf, statusBadge, description: status.detail };
 }
 
 function terminalWorkspaceCheckingHint(
@@ -169,22 +176,21 @@ function terminalWorkspaceLeaves(
   const visibleRows = rowsWithoutResolvedMissing.filter(
     (row) => row.hostId === hostId,
   );
-  const selectableRows = visibleRows.filter(
-    (row) => row.disabledReason === null,
-  );
+  const selectableRows = visibleRows.filter(isBrowsable);
   const checkingRows = visibleRows.filter(
-    (row) => row.disabledReason !== null && isWorkspaceResolvePending(row),
+    (row) => !isBrowsable(row) && isWorkspaceResolvePending(row),
   );
   const disabledRows = visibleRows.filter(
-    (row) => row.disabledReason !== null && !isWorkspaceResolvePending(row),
+    (row) => !isBrowsable(row) && !isWorkspaceResolvePending(row),
   );
   const leaves = selectableRows.map((row) =>
-    terminalWorkspaceLeaf(
+    terminalWorkspaceLeaf({
       ctx,
-      { hostId: row.hostId, cwd: row.runningDir },
-      row.runningDir,
+      target: { hostId: row.hostId, cwd: row.runningDir },
+      label: row.runningDir,
       hostClient,
-    ),
+      status: worktreeFolderRowBadge(row),
+    }),
   );
   const checkingHints = checkingRows.map(terminalWorkspaceCheckingHint);
   const disabledHints = disabledRows.map(terminalWorkspaceDisabledHint);
@@ -203,12 +209,13 @@ function terminalWorkspaceLeaves(
     workspace.folderlessCwd !== null
   ) {
     return [
-      terminalWorkspaceLeaf(
+      terminalWorkspaceLeaf({
         ctx,
-        { hostId, cwd: workspace.folderlessCwd },
-        workspace.folderlessCwd,
+        target: { hostId, cwd: workspace.folderlessCwd },
+        label: workspace.folderlessCwd,
         hostClient,
-      ),
+        status: null,
+      }),
     ];
   }
   if (rowsWithoutResolvedMissing.length === 0) {
@@ -328,7 +335,7 @@ function useNewTerminalWorkspaceItems(
   const directory = useHostDirectoryList();
   // Dialability depends on the pull-only session cache, so a memo keyed on
   // directory state alone freezes the row list while the palette is open: a
-  // session dying under an `offline`/`local-only` host would keep offering a
+  // session dying under an `offline`/plan-restricted host would keep offering a
   // row whose launch gate then silently declines. The subscription re-renders
   // on a readiness flip; the launch-time gate inside `run` stays an ambient
   // live read, which is correct for an action.
@@ -422,33 +429,22 @@ export function useTerminalsOpenerItems(
       subpage: NEW_TERMINAL_WORKSPACE_SUBPAGE,
     });
     const existing = sessions.map((session) => {
-      // A host-created sign-in terminal must carry its origin here too, or the
-      // eviction-recreate below - correct for an ordinary shell - spawns a bare
-      // prompt under the sign-in session's id and label. `terminal.list` cannot
-      // tell us; the renderer's record of host-created sign-in terminals can.
-      const signInProviderId = providerLoginTerminalProviderId(
-        defaultHostId,
-        session.sessionId,
-      );
-      const setupSession = isSetupTerminal(defaultHostId, session.sessionId);
+      const ref = makeListedEpicTerminalRef({
+        session,
+        hostId: defaultHostId,
+        instanceId: uuidv4(),
+        durable: false,
+      });
       return openerExistingLeaf(
         "terminals",
         ctx,
         {
-          id: session.sessionId,
-          instanceId: uuidv4(),
-          type: "terminal",
+          ...ref,
           name: terminalSessionTitle({
             title: session.title,
             activeProcessName: session.activeProcessName,
             currentCwd: session.currentCwd,
           }),
-          titleSource: deriveTitleSourceFromSessionTitle(session.title),
-          hostId: defaultHostId,
-          // Recorded so an eviction-recreate lands back in the session's
-          // directory - same as the sidebar's open-existing path.
-          cwd: session.cwd,
-          ...existingSessionOriginFields(signInProviderId, setupSession),
         },
         // `terminal.list` is issued against the epic's host client
         // (`hostClient` above) - there is no cross-host terminal listing

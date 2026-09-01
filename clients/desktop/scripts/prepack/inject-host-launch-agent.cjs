@@ -247,6 +247,22 @@ set -eu
 launcher_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 cli="$launcher_dir/${CLI_BINARY_NAME}"
 label="$1"
+# No outstanding parent grant is the ordinary boot path. The nonce command
+# reserves exit status 1 for that absence; any other failure is an actual
+# launcher/CLI failure and must not be silently reclassified as no proof.
+nonce=""
+if nonce="$("$cli" host adoption-nonce --service-label "$label" 2>/dev/null)"; then
+  :
+else
+  status="$?"
+  if [ "$status" -ne 1 ]; then
+    exit "$status"
+  fi
+  nonce=""
+fi
+if [ -n "$nonce" ]; then
+  exec "$cli" host start --service-label "$label" --adoption-nonce "$nonce"
+fi
 exec "$cli" host start --service-label "$label"
 `,
     "utf8",

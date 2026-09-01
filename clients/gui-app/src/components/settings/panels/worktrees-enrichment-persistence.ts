@@ -48,6 +48,7 @@ const persistedWorktreeHostEntrySchema = worktreeHostEntrySchemaV12.extend({
   // Snapshots written before listAllForHost@1.4 had no freshness marker.
   // Restore them fail-closed as unresolved until a live host response lands.
   resolvedAt: z.number().nonnegative().nullable().default(null),
+  gitUnreadable: z.boolean().default(false),
 });
 
 const worktreeSnapshotSchema = z.object({

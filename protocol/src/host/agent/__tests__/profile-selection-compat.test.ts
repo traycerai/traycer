@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   downgradeRequestAcrossMajors,
   splitConnectionManifest,
+  SERVES_EVERY_INSTALLED_MAJOR,
   upgradeRequestToVersion,
 } from "@traycer/protocol/framework/index";
 import {
@@ -567,25 +568,34 @@ describe("optional-method capability negotiation", () => {
     const split = splitConnectionManifest(
       hostRpcRegistry,
       RELEASED_FLOOR_METHOD_NAMES,
+      SERVES_EVERY_INSTALLED_MAJOR,
     );
     expect(split.manifest["agent.listProviderProfiles"]).toBeUndefined();
     expect(
       split.manifest["agent.getProviderProfileRateLimits"],
     ).toBeUndefined();
     expect(split.manifest["agent.configure"]).toBeUndefined();
-    // list/configure and rate-limit reads all sit on the v4.0 line: the
-    // OpenCode arm and credentialGeneration ride major 4 rather than a
-    // separate 5, since 4 has never shipped.
+    // All three now sit on the v5.0 line. Major 4 DID ship - the v1.2.0 tags
+    // (2026-08-24) carry it - so the sentence this comment used to end with
+    // ("since 4 has never shipped") stopped being true, and with it the reason
+    // these three could keep absorbing ids in place. `reasonix` opened major 5
+    // on each, with fail-closed v5->v4 bridges.
+    // `supportedMajors` is every major the line INSTALLS, so opening major 5
+    // widens it to [1..5] on all three. It is not a restatement of `major`:
+    // `major` is the canonical one a peer picks by default, `supportedMajors`
+    // is the set it can still be talked down to.
     expect(split.optionalManifest["agent.listProviderProfiles"]).toEqual({
-      major: 4,
+      major: 5,
       minor: 0,
+      supportedMajors: [1, 2, 3, 4, 5],
     });
     expect(
       split.optionalManifest["agent.getProviderProfileRateLimits"],
-    ).toEqual({ major: 4, minor: 0 });
+    ).toEqual({ major: 5, minor: 0, supportedMajors: [1, 2, 3, 4, 5] });
     expect(split.optionalManifest["agent.configure"]).toEqual({
-      major: 4,
+      major: 5,
       minor: 0,
+      supportedMajors: [1, 2, 3, 4, 5],
     });
   });
 

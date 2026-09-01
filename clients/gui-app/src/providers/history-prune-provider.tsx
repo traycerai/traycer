@@ -61,8 +61,8 @@ export function HistoryPruneProvider(
     if (!hydrated) return;
     // Sanitize the restored stack before it can service a Back/Forward action.
     // The scheduler below only reacts to future source mutations; without this
-    // eager pass, a session-restored dead entry could reach T3 and be treated
-    // as an ordinary external route, which would recreate its source tab.
+    // eager pass, a session-restored dead entry could reach navigation and be
+    // treated as an ordinary external route, which would recreate its source tab.
     const controller = getHistoryController(router.history);
     const hasInitialDeadEntry =
       controller !== null &&
@@ -98,16 +98,15 @@ export function HistoryPruneProvider(
 }
 
 /**
- * `true` while the router is mid-navigation — loading a match or otherwise
- * pending. Reading both supported flags (rather than just `status`) keeps the
- * scheduler conservative: over-reporting in-flight only
+ * `true` while the router is mid-navigation — loading a match, committing a React
+ * transition, or otherwise pending. Reading all three flags (rather than just
+ * `status`) keeps the scheduler conservative: over-reporting in-flight only
  * defers a prune by a frame, while under-reporting would let a prune interleave
  * with an in-flight navigation (critique Blocker 1 / High 3).
  */
 function isRouterLoadInFlight(router: AppRouter): boolean {
   const state = router.state;
-  if (state.isLoading) return true;
-  return state.status === "pending";
+  return state.isLoading || state.isTransitioning || state.status === "pending";
 }
 
 /**

@@ -2,6 +2,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -45,10 +46,14 @@ import { resolveComposerTopBannerKind } from "./chat-composer-top-banner";
 import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
 import { useTabBodySelected } from "@/components/epic-canvas/canvas/tab-body-selected-context";
 import { chatTileCatalogActivity } from "@/components/epic-canvas/renderers/chat-tile-surface-activity";
+import type { ChatSendRestore } from "@/stores/chats/chat-session-store";
 import type { Attachment } from "@/lib/composer/types";
 import { cn } from "@/lib/utils";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
+import { hasLandingImageBytes } from "@/lib/composer/landing-image-store";
+import { ChatComposerDraftAuthorityBanner } from "./chat-composer-draft-authority";
+import { useChatComposerDraftAuthority } from "@/hooks/drafts/use-chat-composer-draft-authority";
 import { redactEmail } from "@/lib/providers/redact-email";
 
 import type { ComposerPromptEditorHandle } from "./composer-prompt-editor";
@@ -58,9 +63,19 @@ import { ChatComposerToolbarSlot } from "./chat-composer-toolbar-slot";
 import { createComposerPickerStore } from "./picker/composer-picker-store";
 import { ProviderReauthBanner } from "./provider-reauth-banner";
 import { ProfileRateLimitSwitchBanner } from "./profile-rate-limit-switch-banner";
+import { ProfileDisabledBanner } from "./profile-disabled-banner";
+import {
+  useProfileEligibilityGate,
+  type ProfileEligibilityGate,
+} from "./use-profile-eligibility-gate";
 import { ChatComposerBannerPortal } from "./chat-composer-banner-portal";
 import { useChatComposerDraft } from "./use-chat-composer-draft";
-import { useChatComposerSubmit } from "./use-chat-composer-submit";
+import {
+  useChatComposerSubmit,
+  type ChatComposerSideChatInput,
+} from "./use-chat-composer-submit";
+import { NO_LOCAL_SLASH_COMMANDS } from "@/hooks/composer/use-slash-commands";
+import { sideChatSlashCommands } from "@/lib/chats/side-chat-command";
 import {
   useProviderReauthGate,
   type ProviderReauthGate,
@@ -87,6 +102,11 @@ import {
 } from "./use-chat-prompt-stash-adapters";
 import { PromptStashControl } from "./prompt-stash-control";
 import { ComposerAttachmentDropZone } from "./composer-attachment-drop-zone";
+import { toggleActiveModelPicker } from "@/lib/commands/active-model-picker-registry";
+
+// Re-exported beside `ChatComposerSubmitInput` so a caller wiring both
+// handlers imports them from one place.
+export type { ChatComposerSideChatInput };
 
 interface ChatComposerProps {
   readonly taskId: string;
@@ -122,7 +142,16 @@ interface ChatComposerProps {
   readonly settingsSeed: ChatRunSettings | null;
   readonly fallbackSettingsSeed: ChatRunSettings | null;
   readonly onSubmitMessage:
-    ((input: ChatComposerSubmitInput) => boolean) | null;
+    | ((input: ChatComposerSubmitInput) => boolean)
+    | null;
+  /**
+   * Handles a prompt that leads with `/btw` / `/side`
+   * (`lib/chats/side-chat-command.ts`): fork this chat and ask the remainder
+   * there. Also what makes the two names appear in this composer's `/` picker.
+   * `null` where no chat exists to fork - the command is then not offered, and
+   * a typed one is sent like any other text.
+   */
+  readonly onSideChat: ((input: ChatComposerSideChatInput) => boolean) | null;
   readonly onSettingsChange: ((settings: ChatRunSettings) => void) | null;
   readonly activeTurnStatus: ChatActiveTurn["status"] | null;
   /**
@@ -176,6 +205,11 @@ export interface ChatComposerSubmitInput {
   readonly attachments: ReadonlyArray<Attachment>;
   readonly settings: ChatRunSettings;
   readonly deliveryPolicy: ChatQueueDeliveryPolicy;
+  /**
+   * Editor document without submit-only crop atoms, plus the annotation cards
+   * that left with the send.
+   */
+  readonly restore: ChatSendRestore;
 }
 
 function composerUtilityNeedsClearance(args: {
@@ -185,6 +219,14 @@ function composerUtilityNeedsClearance(args: {
 }): boolean {
   const triggerVisible = args.rowCount > 0 || args.saving;
   return triggerVisible && args.connectedUpperSurface;
+}
+
+/** Kept out of `ChatComposerImpl` so its complexity stays inside the lint cap. */
+function composerAttachmentPending(
+  pastePending: boolean,
+  annotationPreparationPending: boolean,
+): boolean {
+  return pastePending || annotationPreparationPending;
 }
 
 function ComposerUtilityClearanceFill(props: {
@@ -202,6 +244,21 @@ function ComposerUtilityClearanceFill(props: {
   );
 }
 
+function ProfileDisabledRecovery(props: {
+  readonly eligibility: ProfileEligibilityGate;
+  readonly onChooseProfile: () => void;
+}): ReactNode {
+  if (!props.eligibility.disabled) return null;
+  return (
+    <ProfileDisabledBanner
+      profileLabel={props.eligibility.profileLabel}
+      enablePending={props.eligibility.enablePending}
+      onEnableProfile={props.eligibility.enableProfile}
+      onChooseProfile={props.onChooseProfile}
+    />
+  );
+}
+
 function ChatComposerImpl(props: ChatComposerProps) {
   const {
     taskId,
@@ -215,6 +272,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     settingsSeed,
     fallbackSettingsSeed,
     onSubmitMessage,
+    onSideChat,
     onSettingsChange,
     activeTurnStatus,
     steerCapable,
@@ -241,7 +299,15 @@ function ChatComposerImpl(props: ChatComposerProps) {
   const workspaceBlocked = !workspaceComposerCanStart(workspaceAvailability);
 
   const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
-  const hasPastedImageBytes = useEpicAttachmentBytesPresence();
+  const epicImagePresence = useEpicAttachmentBytesPresence();
+  const hasPastedImageBytes = useCallback(
+    (hash: string) => {
+      if (hasLandingImageBytes(hash)) return true;
+      if (epicImagePresence === null) return true;
+      return epicImagePresence(hash);
+    },
+    [epicImagePresence],
+  );
   // Counts editor-ready transitions (a counter, not a boolean, so a torn-down
   // and re-created editor re-fires). The draft-reset bridge keys its
   // handle-ready catch-up on this - a ref flip alone never re-renders us.
@@ -279,7 +345,9 @@ function ChatComposerImpl(props: ChatComposerProps) {
     handleDocumentChange,
     handleSelectionChange,
   } = useChatComposerDraft({
-    taskId,
+    chatId: taskId,
+    epicId: currentEpicId,
+    hostId: tabHostId,
     editorRef,
     editorReadyTick,
   });
@@ -325,6 +393,12 @@ function ChatComposerImpl(props: ChatComposerProps) {
     focused,
     seedSource.kind,
   );
+  const profileEligibility = useProfileEligibilityGate(
+    hostClient,
+    harnessId,
+    profileId,
+    focused,
+  );
   // Managed-pack gate, scoped to the TAB's host - a tab bound to another host
   // must gate on that host's packs, never the app-wide default's. Same shape as
   // the reauth gate above: block send and say why, so a doomed turn can't
@@ -335,6 +409,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     signedOut: reauthGate.signedOut,
     packPreparingHint: packGate.hint,
     packBlocked: packGate.blocked,
+    profileDisabled: profileEligibility.disabled,
     sendDisabled,
     sendDisabledHint,
   });
@@ -388,6 +463,15 @@ function ChatComposerImpl(props: ChatComposerProps) {
   );
   const unsupportedImagesMessage = imageAttachmentWarning(imagesUnsupported);
 
+  // The side-chat command is offered exactly where it can be honored: stamped
+  // with the current harness so its chip matches a provider command's.
+  const localSlashCommands = useMemo(
+    () =>
+      onSideChat === null
+        ? NO_LOCAL_SLASH_COMMANDS
+        : sideChatSlashCommands(harnessId),
+    [harnessId, onSideChat],
+  );
   useComposerPickerItems({
     pickerStore,
     hostClient,
@@ -395,6 +479,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     mentionRoots: resolvedMentionRoots,
     currentEpicId,
     isActive: focused,
+    localSlashCommands,
   });
 
   const {
@@ -408,7 +493,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     isIngestingImages,
     isResolvingFilePaths,
   } = useComposerPaste(editorRef, runnerHost.fileDrops, resolvedMentionRoots);
-  const attachmentPending = isAttachmentIngestPending({
+  const pastePending = isAttachmentIngestPending({
     isIngestingImages,
     isResolvingFilePaths,
   });
@@ -430,31 +515,44 @@ function ChatComposerImpl(props: ChatComposerProps) {
   );
   const promptStash = usePromptStash({
     active: focused,
-    disabled: attachmentPending,
+    disabled: pastePending,
     editorRef,
     readHashImage: readPromptStashImage,
     source: promptStashSource,
     destination: promptStashDestination,
+    hostId: tabHostId,
+  });
+  const authority = useChatComposerDraftAuthority({
+    chatId: taskId,
+    tabHostId,
+    client: hostClient,
   });
 
   const steerEnabled = useSettingsStore((s) => s.steerOnModEnterEnabled);
-  const { submitDraft, steerConflict } = useChatComposerSubmit({
-    taskId,
-    editorRef,
-    pickerStore,
-    toolbarStore,
-    activeTurnStatus,
-    steerCapable,
-    steerEnabled,
-    steerProtocolSupported,
-    getActiveTurnForSteer,
-    hasPendingApprovals,
-    sendDisabled: sendBlocked,
-    workspaceBlocked,
-    imagesUnsupported,
-    attachmentPreparationPending: attachmentPending,
-    onSubmitMessage,
-  });
+  const { submitDraft, steerConflict, annotationPreparationPending } =
+    useChatComposerSubmit({
+      taskId,
+      editorRef,
+      pickerStore,
+      toolbarStore,
+      activeTurnStatus,
+      steerCapable,
+      steerEnabled,
+      steerProtocolSupported,
+      getActiveTurnForSteer,
+      hasPendingApprovals,
+      sendDisabled: sendBlocked,
+      workspaceBlocked,
+      imagesUnsupported,
+      attachmentPreparationPending: pastePending,
+      draftReadOnly: authority.readOnly,
+      onSubmitMessage,
+      onSideChat,
+    });
+  const attachmentPending = composerAttachmentPending(
+    pastePending,
+    annotationPreparationPending,
+  );
   const ambientDrift = useAmbientDriftGate(
     hostClient,
     reauthGate.state,
@@ -483,6 +581,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
   });
   const reauthBanner = resolveReauthBannerProps(reauthGate);
   const topBannerKind = resolveComposerTopBannerKind({
+    profileDisabled: profileEligibility.disabled,
     reauthVisible: reauthBanner !== null,
     ambientDriftVisible: ambientDrift.pendingNotice !== null,
     rateLimitVisible:
@@ -516,6 +615,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     attachmentPreparationPending: attachmentPending,
     draftHasText,
     draftHasImages,
+    draftReadOnly: authority.readOnly,
   });
   const utilityClearanceVisible = composerUtilityNeedsClearance({
     rowCount: promptStash.rows.length,
@@ -525,6 +625,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
 
   return (
     <>
+      <ChatComposerDraftAuthorityBanner authority={authority} />
       {topBannerKind === "rate-limit" ? (
         <ChatComposerBannerPortal>
           <div className="pointer-events-none px-4">
@@ -561,6 +662,10 @@ function ChatComposerImpl(props: ChatComposerProps) {
             topSpacing === "normal" ? "pt-4" : "pt-0",
           )}
         >
+          <ProfileDisabledRecovery
+            eligibility={profileEligibility}
+            onChooseProfile={toggleActiveModelPicker}
+          />
           {topBannerKind === "reauth" && reauthBanner !== null ? (
             <ProviderReauthBanner
               providerId={reauthBanner.providerId}
@@ -616,6 +721,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
                 }
                 attachmentsStrip={
                   <ChatComposerAttachmentsStrip
+                    taskId={taskId}
                     content={draftContent}
                     editingQueueItemId={editingQueueItemId}
                     onCancelQueueEdit={onCancelQueueEdit}
@@ -632,6 +738,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
                     hasPastedImageBytes={hasPastedImageBytes}
                     ingestPastedComposerImages={null}
                     isActive={focused}
+                    disabled={authority.readOnly}
                     onDocumentChange={handleDocumentChange}
                     onSelectionChange={handleSelectionChange}
                     onSubmit={handleSubmitDraft}
@@ -797,6 +904,13 @@ interface CanSubmitDraftArgs {
   readonly attachmentPreparationPending: boolean;
   readonly draftHasText: boolean;
   readonly draftHasImages: boolean;
+  /**
+   * The draft belongs to another host and has not been claimed. Disabling the
+   * editor is not enough on its own: the toolbar's send button and the
+   * editor's own Enter handler both reach `submitDraft` without going through
+   * it, so the gate has to sit on the submit path too.
+   */
+  readonly draftReadOnly: boolean;
 }
 
 /**
@@ -809,6 +923,7 @@ function resolveSendBlock(args: {
   readonly signedOut: boolean;
   readonly packPreparingHint: string | null;
   readonly packBlocked: boolean;
+  readonly profileDisabled: boolean;
   readonly sendDisabled: boolean | undefined;
   readonly sendDisabledHint: string | null | undefined;
 }): {
@@ -817,7 +932,10 @@ function resolveSendBlock(args: {
 } {
   return {
     sendBlocked:
-      args.sendDisabled === true || args.signedOut || args.packBlocked,
+      args.sendDisabled === true ||
+      args.profileDisabled ||
+      args.signedOut ||
+      args.packBlocked,
     sendBlockedHint: resolveSendBlockedHint(args),
   };
 }
@@ -831,11 +949,15 @@ function resolveSendBlock(args: {
 function resolveSendBlockedHint(args: {
   readonly workspaceDisabledHint: string | null;
   readonly signedOut: boolean;
+  readonly profileDisabled: boolean;
   readonly packPreparingHint: string | null;
   readonly sendDisabled: boolean | undefined;
   readonly sendDisabledHint: string | null | undefined;
 }): string | null {
   if (args.workspaceDisabledHint !== null) return args.workspaceDisabledHint;
+  if (args.profileDisabled) {
+    return "Profile disabled — enable it or choose another profile";
+  }
   if (args.signedOut) {
     return "Signed out of the provider — sign in to send messages";
   }
@@ -852,6 +974,7 @@ function canSubmitDraft(args: CanSubmitDraftArgs): boolean {
     !args.workspaceBlocked &&
     !args.imagesUnsupported &&
     !args.attachmentPreparationPending &&
+    !args.draftReadOnly &&
     (args.draftHasText || args.draftHasImages)
   );
 }

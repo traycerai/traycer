@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { CHAT_SYNC_SCHEMA_VERSION } from "@traycer/protocol/persistence/chat-sync/version";
 import {
   encodeBase64,
   utf8Bytes,
@@ -574,9 +575,14 @@ describe("the version gate", () => {
     const published = await publishCloudChat(DEFAULT_PUBLISH);
     const serving = servingBehaviour(published);
     // Forged at the document level: the major is pinned in both the writer AND
-    // the reader schema, so no schema in this build will produce one.
+    // the reader schema, so no schema in this build will produce one. The minor
+    // is read off the published document rather than written in, because a
+    // literal turns every minor bump into a silently-passing test - the forge
+    // stops matching, the head stays valid, and the gate is never exercised.
+    const canonicalVersion = `"schemaVersion":{"major":${CHAT_SYNC_SCHEMA_VERSION.major},"minor":${CHAT_SYNC_SCHEMA_VERSION.minor}}`;
+    expect(published.headDocument).toContain(canonicalVersion);
     const foreign = published.headDocument.replace(
-      '"schemaVersion":{"major":1,"minor":1}',
+      canonicalVersion,
       '"schemaVersion":{"major":9,"minor":0}',
     );
     const foreignSha = await webCryptoSha256Hex(utf8Bytes(foreign));

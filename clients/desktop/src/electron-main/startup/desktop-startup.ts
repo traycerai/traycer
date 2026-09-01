@@ -1,4 +1,5 @@
 import { app, nativeImage } from "electron";
+import type { Event as ElectronEvent } from "electron";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { initLogger, log } from "../app/logger";
@@ -26,7 +27,13 @@ import {
   DESKTOP_LOCK_WAIT_MS,
   HostController,
 } from "../host/host-controller";
-import { getHostFsLayout, labelForEnvironment } from "../host/host-paths";
+import {
+  cliLockPath,
+  getHostFsLayout,
+  labelForEnvironment,
+  smAppServiceAgentLabelId,
+} from "../host/host-paths";
+import { backfillSubstrateOwnerAtLaunch } from "../host/substrate-backfill-contender";
 import { readPublishedHostProcessLiveness } from "../host/host-process-liveness";
 import { createHostRecoveryGovernor } from "../host/host-recovery-governor";
 import {
@@ -114,6 +121,7 @@ import {
   installPowerMonitorListeners,
   trimUnusedChromiumFeatures,
 } from "../app/lifecycle";
+import { resolveBrowserCookieCryptoStateAtReady } from "../browser-view/storage/browser-cookie-crypto";
 import { installProductionProxyAuthHandler } from "../app/proxy-auth";
 import {
   installCertificateErrorHandler,
@@ -157,10 +165,8 @@ import {
 import { installHostWakeRecovery } from "./host-wake-recovery";
 import { startHostHealthMonitor } from "../host/host-health-monitor";
 import { startPendingLoginItemRevisionMonitor } from "../host/pending-login-item-revision-monitor";
-import {
-  hostManagesHostLoginItem,
-  retireCompetingCliRegistrationAtLaunch,
-} from "../app/host-login-item";
+import { hostManagesHostLoginItem } from "../app/host-login-item";
+import { retireCompetingCliRegistrationWithContender } from "../host/launch-repair-contender";
 import { DESKTOP_APP_NAME } from "../../config";
 
 // Per-window fresh-snapshot query budget during `before-quit`. Each renderer,
@@ -343,6 +349,9 @@ async function timed(
 export function runPreReady(state: BootState): void {
   trimUnusedChromiumFeatures();
   configureV8HeapSize();
+  // No `setWebRTCIPHandlingPolicy` call, deliberately - full write-up in
+  // `traycer-host`'s `BROWSER_CAPTURE_HELPER_PERMISSIONS`
+  // (browser-capture-helper.ts).
   applyHardwareAccelerationPreference();
   suppressWslKernelCoreDumps();
   // `initCrashReporter()` must run before `registerAppScheme()`. When a
@@ -381,6 +390,9 @@ async function runOnReady(state: BootState): Promise<void> {
     timed("on-ready", "user-agent", () => configureUserAgent()),
     timed("on-ready", "host-resolver-doh", () => configureHostResolverDoH()),
     timed("on-ready", "harden-session", () => hardenDefaultSession()),
+    timed("on-ready", "browser-cookie-crypto", () => {
+      resolveBrowserCookieCryptoStateAtReady();
+    }),
     timed("on-ready", "spell-check", () => enableSpellCheck()),
     timed("on-ready", "notification-handler", () =>
       installNotificationActivationHandler(),
@@ -423,8 +435,44 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
   const windowGeometryStore = createWindowGeometryStore();
   const windowGeometryPersistence =
     createWindowGeometryPersistence(windowGeometryStore);
+  // Set on the first before-quit pass. Ordinary window close remains a
+  // separate lifecycle and takes one final browser capture first.
+  const shellQuitState = new ShellQuitState();
+  const closingWindowIds = new Set<string>();
   let zoomController: WindowZoomController | null = null;
   let windowRegistry: WindowRegistry | null = null;
+  /**
+   * Read `state.bridge` / `windowRegistry` at call time: a window can close
+   * before the bridge exists, and a `close` listener captured at window
+   * construction must not silently skip the final browser capture in that
+   * gap.
+   */
+  function onWindowClose(windowId: string, event: ElectronEvent): void {
+    const bridge = state.bridge;
+    const registry = windowRegistry;
+    if (bridge === null || registry === null) return;
+    if (
+      shellQuitState.isQuitting() ||
+      !bridge.needsFinalBrowserCaptureForWindow(windowId)
+    ) {
+      return;
+    }
+    event.preventDefault();
+    if (closingWindowIds.has(windowId)) return;
+    closingWindowIds.add(windowId);
+    void bridge
+      .prepareBrowserWindowClose(windowId)
+      .catch((error: unknown) => {
+        log.warn("[desktop] final browser capture failed during window close", {
+          windowId,
+          error,
+        });
+      })
+      .finally(() => {
+        closingWindowIds.delete(windowId);
+        void registry.forceCloseById(windowId);
+      });
+  }
   windowRegistry = new WindowRegistry({
     createWindow: (request) => {
       const zoomFactor =
@@ -459,6 +507,9 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
           },
         );
       }
+      createdWindow.on("close", (event) => {
+        onWindowClose(request.windowId, event);
+      });
       return createdWindow;
     },
     loadWindow: (createdWindow) => loadMainWindow(createdWindow),
@@ -562,11 +613,6 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
   });
 
   const tray = await createTraySafe(createMruWindowProxy(windowRegistry));
-
-  // Flipped once `before-quit` fires (any quit path). The windows registry-change
-  // listener reads it so a `closed` event that is part of a quit never prunes the
-  // per-window restore snapshot.
-  const shellQuitState = new ShellQuitState();
 
   log.debug("[desktop] authn base URL", { authnBaseUrl: config.authnBaseUrl });
   const bridge = new RunnerIpcBridge({
@@ -770,6 +816,44 @@ function runDeferredBackground(state: BootState, services: AppServices): void {
     state.bridge?.disposeFns.push(() => healthMonitor.dispose());
   });
 
+  // macOS-only: commit the durable service-registration owner before any
+  // other host mutation this launch.
+  //
+  // Ordering is the point, not tidiness. `substrate.json` is the only durable
+  // answer to "who owns launchd for this host", and on the installed base it
+  // has never been written - so every machine reads `unknown` until this
+  // lands. The two darwin sections below both take the same desktop lock and
+  // can both mutate registration, so they await this rather than racing it:
+  // an owner committed AFTER a repair has already run is a fact about a
+  // machine that was in a different state when the repair decided.
+  //
+  // Fail-open by construction: every refusal path leaves the record untouched
+  // and the projection at `unknown`, which is fail-closed for service
+  // mutation and never resolves to `raw-fallback` by guess. A launch that
+  // cannot backfill is therefore no worse than today.
+  const substrateBackfilled: Promise<void> =
+    process.platform === "darwin"
+      ? timed("deferred", "substrate-owner-backfill", async () => {
+          if (!(await hostManagesHostLoginItem())) return;
+          const launchLayout = getHostFsLayout(state.config.environment);
+          const cliLabelId = labelForEnvironment(state.config.environment).id;
+          const outcome = await backfillSubstrateOwnerAtLaunch({
+            layout: launchLayout,
+            lockPath: cliLockPath(state.config.environment),
+            waitMs: DESKTOP_LOCK_WAIT_MS,
+            pollIntervalMs: DESKTOP_LOCK_POLL_INTERVAL_MS,
+            agentLabelId: smAppServiceAgentLabelId(cliLabelId),
+            cliLabelId,
+          });
+          log.debug("[host-owner] launch substrate backfill outcome", {
+            outcome,
+          });
+        }).then(
+          () => undefined,
+          () => undefined,
+        )
+      : Promise.resolve();
+
   // macOS-only: guarantees a busy-preserved install's pending LaunchAgent
   // revision (see `desktop-install-cloud.js`'s marker +
   // `HostController.applyPendingLoginItemRevisionIfIdle`) gets applied
@@ -783,6 +867,8 @@ function runDeferredBackground(state: BootState, services: AppServices): void {
     void hostReady.then(async () => {
       if (state.bridge === null) return;
       if (!(await hostManagesHostLoginItem())) return;
+      await substrateBackfilled;
+      if (state.bridge === null) return;
       const revisionMonitor = startPendingLoginItemRevisionMonitor({
         hostController: services.hostController,
         intervalMs: undefined,
@@ -802,7 +888,14 @@ function runDeferredBackground(state: BootState, services: AppServices): void {
   // becomes ready. All of its own gates live inside; see its doc comment.
   if (process.platform === "darwin") {
     void timed("deferred", "competing-registration-repair", async () => {
-      const outcome = await retireCompetingCliRegistrationAtLaunch();
+      await substrateBackfilled;
+      const launchLayout = getHostFsLayout(state.config.environment);
+      const outcome = await retireCompetingCliRegistrationWithContender({
+        hostHomeDir: launchLayout.rootDir,
+        lockPath: cliLockPath(state.config.environment),
+        waitMs: DESKTOP_LOCK_WAIT_MS,
+        pollIntervalMs: DESKTOP_LOCK_POLL_INTERVAL_MS,
+      });
       log.debug("[host-login-item] launch repair outcome", { outcome });
     });
   }
@@ -1051,10 +1144,27 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
   };
 
   const authorizeQuitAfterFlush = (): void => {
-    void flushShellState().finally(() => {
-      quitAuthorized = true;
-      app.quit();
-    });
+    const finalBrowserCapture =
+      state.bridge?.captureFinalBrowserState() ?? Promise.resolve();
+    void Promise.all([
+      flushShellState(),
+      finalBrowserCapture.catch((error) => {
+        log.warn(
+          "[desktop] final browser capture failed - quitting anyway",
+          error,
+        );
+      }),
+    ])
+      .then(() => {
+        quitAuthorized = true;
+        app.quit();
+      })
+      .catch((error) => {
+        log.error(
+          "[desktop] failed to authorize quit after state flush",
+          error,
+        );
+      });
   };
 
   app.on("before-quit", (event) => {

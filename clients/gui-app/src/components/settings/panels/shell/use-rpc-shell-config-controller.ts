@@ -20,7 +20,14 @@ import type {
   ShellProbeSource,
 } from "@/components/settings/panels/shell/shell-config-controller";
 
-/** Detected shells barely change; the picker always accepts a typed path. */
+/**
+ * Detected shells barely change; the picker always accepts a typed path. The
+ * list stays never-stale, but every panel visit refetches (`refetchOnMount:
+ * "always"` below) because one thing on it CAN change mid-session: the
+ * `wslHealth` annotation, which flips when the user installs WSL and comes
+ * back. The explicit "re-detect" control covers changes while the panel is
+ * already open.
+ */
 const SHELL_LIST_STALE_MS = Number.POSITIVE_INFINITY;
 
 /**
@@ -65,7 +72,11 @@ export function useRpcShellConfigController(props: {
     client,
     method: "config.shell.listDetected",
     params: {},
-    options: { enabled: props.enabled, staleTime: SHELL_LIST_STALE_MS },
+    options: {
+      enabled: props.enabled,
+      staleTime: SHELL_LIST_STALE_MS,
+      refetchOnMount: "always",
+    },
   });
   const envListQuery = useHostQuery<HostRpcRegistry, "config.env.list">({
     cacheKeyIdentity: undefined,
@@ -191,6 +202,10 @@ export function useRpcShellConfigController(props: {
       void shellListQuery.refetch();
     },
     shells: shellListQuery.data?.shells ?? [],
+    refreshShells: () => {
+      void shellListQuery.refetch();
+    },
+    shellsRefreshing: shellListQuery.isFetching,
     overrides: envListQuery.data?.entries ?? [],
     shellPending:
       setMutation.isPending ||

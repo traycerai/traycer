@@ -17,18 +17,43 @@ import { sanitizeUntrustedSvg } from "@/lib/images/untrusted-svg";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 
 const saveBlobToDiskMock = vi.hoisted(() =>
-  vi.fn<(blob: Blob, suggestedName: string) => Promise<string | null>>(() =>
-    Promise.resolve("generated.png"),
-  ),
+  vi.fn<
+    (
+      blob: Blob,
+      suggestedName: string,
+    ) => Promise<{ name: string; path: string | null } | null>
+  >(() => Promise.resolve({ name: "generated.png", path: null })),
 );
 const copyImageMock = vi.hoisted(() =>
   vi.fn<(blob: Blob) => Promise<void>>(() => Promise.resolve()),
 );
+const downloadBlobToDeviceMock = vi.hoisted(() =>
+  vi.fn<
+    (
+      blob: Blob,
+      suggestedName: string,
+    ) => Promise<{ name: string; path: string | null } | null>
+  >(() => Promise.resolve({ name: "generated.png", path: null })),
+);
+/** Whether the shell under test hands files to an OS chooser. */
+const hasShareRoute = vi.hoisted(() => vi.fn<() => boolean>(() => false));
+/** Whether a Download can be honoured at all on that shell. */
+const canDownload = vi.hoisted(() => vi.fn<() => boolean>(() => true));
 const trustedMarkupSpy = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/files/save-blob-to-disk", () => ({
   saveBlobToDisk: (blob: Blob, suggestedName: string) =>
     saveBlobToDiskMock(blob, suggestedName),
+  downloadBlobToDevice: (blob: Blob, suggestedName: string) =>
+    downloadBlobToDeviceMock(blob, suggestedName),
+  // Browser-runtime shape by default: the shell's own save route IS the
+  // download, so there is no chooser and no Share control. A case that wants
+  // the share-sheet shape opts into it.
+  hasSeparateDownloadRoute: () => hasShareRoute(),
+  canDownloadToDevice: () => canDownload(),
+  // Browser-runtime shape: no path comes back, so no "Open file" action.
+  canOpenSavedFile: () => false,
+  openSavedFile: vi.fn(),
 }));
 
 vi.mock("@/lib/images/copy-image-to-clipboard", () => ({
@@ -102,7 +127,14 @@ beforeEach(() => {
     traycerCli: undefined,
   });
   saveBlobToDiskMock.mockReset();
-  saveBlobToDiskMock.mockResolvedValue("generated.png");
+  saveBlobToDiskMock.mockResolvedValue({ name: "generated.png", path: null });
+  downloadBlobToDeviceMock.mockReset();
+  downloadBlobToDeviceMock.mockResolvedValue({
+    name: "generated.png",
+    path: null,
+  });
+  hasShareRoute.mockReturnValue(false);
+  canDownload.mockReturnValue(true);
   copyImageMock.mockReset();
   copyImageMock.mockResolvedValue(undefined);
   trustedMarkupSpy.mockClear();
@@ -159,7 +191,7 @@ describe("<ImageLightbox /> actions", () => {
     expect(onMouseDown).not.toHaveBeenCalled();
   });
 
-  it("downloads through saveBlobToDisk with the suggested file name", async () => {
+  it("downloads through downloadBlobToDevice with the suggested file name", async () => {
     renderWithRunner(
       <ImageLightbox
         src="blob:http://localhost/raster"
@@ -175,17 +207,86 @@ describe("<ImageLightbox /> actions", () => {
     fireEvent.click(screen.getByRole("button", { name: "Download image" }));
 
     await waitFor(() => {
-      expect(saveBlobToDiskMock).toHaveBeenCalledTimes(1);
+      expect(downloadBlobToDeviceMock).toHaveBeenCalledTimes(1);
     });
     expect(screen.getByRole("button", { name: "Copy image" })).toBeTruthy();
     expect(vi.mocked(fetch)).toHaveBeenCalledWith(
       "blob:http://localhost/raster",
     );
-    const [blob, name] = saveBlobToDiskMock.mock.calls[0];
+    const [blob, name] = downloadBlobToDeviceMock.mock.calls[0];
     expect(name).toBe("pier.png");
     // jsdom may not share Blob identity across realms; assert blob-shaped.
     expect(blob.size).toBeGreaterThan(0);
     expect(typeof blob.arrayBuffer).toBe("function");
+  });
+
+  it("offers no share control where the shell's save route is the download", () => {
+    renderWithRunner(
+      <ImageLightbox
+        src="blob:http://localhost/raster"
+        alt="a misty pier"
+        mediaType="image/png"
+        suggestedName="pier.png"
+        className={undefined}
+      >
+        <img src="blob:http://localhost/raster" alt="a misty pier" />
+      </ImageLightbox>,
+    );
+
+    expect(screen.queryByRole("button", { name: "Share image" })).toBeNull();
+  });
+
+  it("adds a share control where the shell's save route is an OS chooser", async () => {
+    hasShareRoute.mockReturnValue(true);
+    renderWithRunner(
+      <ImageLightbox
+        src="blob:http://localhost/raster"
+        alt="a misty pier"
+        mediaType="image/png"
+        suggestedName="pier.png"
+        className={undefined}
+      >
+        <img src="blob:http://localhost/raster" alt="a misty pier" />
+      </ImageLightbox>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Share image" }));
+
+    // Share takes the shell's OWN save route - the sheet - while Download
+    // goes past it. Two controls, two routes.
+    await waitFor(() => {
+      expect(saveBlobToDiskMock).toHaveBeenCalledTimes(1);
+    });
+    expect(downloadBlobToDeviceMock).not.toHaveBeenCalled();
+  });
+
+  it("drops copy where the shell cannot reach the image clipboard", () => {
+    // Android's WebView resolves the write having written nothing, so the
+    // control would report a success the clipboard never received.
+    runnerHost = new MockRunnerHost({
+      signInUrl: "https://auth.traycer.test/sign-in",
+      authnBaseUrl: "https://auth.traycer.test",
+      localHost: null,
+      hosts: [],
+      workspaceFolderPickerPaths: undefined,
+      hasLocalHost: undefined,
+      traycerCli: undefined,
+    });
+    Object.defineProperty(runnerHost, "canCopyImages", { value: false });
+    renderWithRunner(
+      <ImageLightbox
+        src="blob:http://localhost/raster"
+        alt="a misty pier"
+        mediaType="image/png"
+        suggestedName="pier.png"
+        className={undefined}
+      >
+        <img src="blob:http://localhost/raster" alt="a misty pier" />
+      </ImageLightbox>,
+    );
+
+    expect(screen.queryByRole("button", { name: "Copy image" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Download image" })).toBeTruthy();
   });
 
   it("copies through copyImageBlobToClipboard (ClipboardItem path lives there)", async () => {

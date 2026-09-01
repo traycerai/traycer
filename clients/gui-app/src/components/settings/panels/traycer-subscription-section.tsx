@@ -22,7 +22,7 @@ import {
   TraycerAccountSelect,
   TraycerSubscriptionView,
 } from "@/components/settings/panels/traycer-subscription-views";
-import { resolveManageSubscriptionUrl } from "@/lib/auth/manage-subscription-url";
+import { resolvePlatformBaseUrl } from "@/lib/auth/platform-base-url";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import {
   accountContextValue,
@@ -53,7 +53,7 @@ export function TraycerSubscriptionSection() {
   const resolved = resolveAccountContext(stored, teamIds);
   const subscription = selectSubscription(user, resolved, teams);
 
-  const manageUrl = resolveManageSubscriptionUrl(runnerHost.authnBaseUrl);
+  const manageUrl = resolvePlatformBaseUrl(runnerHost.signInUrl);
 
   return (
     <div className="mb-3 flex flex-col gap-3 rounded-lg border border-border/60 p-3">

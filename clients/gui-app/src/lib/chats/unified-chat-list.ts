@@ -187,6 +187,33 @@ export function cloudRowIsViewersOwn(chat: CloudChatSummary): boolean {
   return chat.isOwnedByViewer;
 }
 
+/** The cloud's content-activity clock for one chat row. */
+export function cloudChatLastActiveAt(chat: CloudChatSummary): number {
+  return chat.publishedAt ?? chat.metadataUpdatedAt;
+}
+
+/**
+ * The best content-activity clock for a row already present in the local tree.
+ *
+ * The serving host's own record comes straight from its chat store and is the
+ * freshest answer. A record replicated from a different owner host carries a
+ * metadata timestamp instead, so its matching cloud head is authoritative.
+ */
+export function chatRowLastActiveAt(input: {
+  readonly recordUpdatedAt: number;
+  readonly ownerHostId: string | null;
+  readonly sessionHostId: string | null;
+  readonly cloudChat: CloudChatSummary | null;
+}): number {
+  const isForeignRecord =
+    input.ownerHostId !== null &&
+    input.sessionHostId !== null &&
+    input.ownerHostId !== input.sessionHostId;
+  return isForeignRecord && input.cloudChat !== null
+    ? cloudChatLastActiveAt(input.cloudChat)
+    : input.recordUpdatedAt;
+}
+
 /**
  * The sort keys a cloud row contributes, in the shape the shared comparator
  * already reads so one ordering rule covers both kinds of row.
@@ -202,7 +229,7 @@ export function cloudChatSortable(chat: CloudChatSummary): SortableNode {
     id: cloudChatRowKey(chat.identity),
     title: chat.title ?? "",
     createdAt: chat.createdAt,
-    updatedAt: chat.publishedAt ?? chat.metadataUpdatedAt,
+    updatedAt: cloudChatLastActiveAt(chat),
   };
 }
 

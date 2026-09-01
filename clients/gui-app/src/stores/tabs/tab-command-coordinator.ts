@@ -8,7 +8,12 @@ import {
   resolveTabIdForPhaseMigration,
   useEpicCanvasStore,
 } from "@/stores/epics/canvas/store";
-import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import {
+  isOpenLandingDraft,
+  newestLandingDraftId,
+  useLandingDraftStore,
+} from "@/stores/home/landing-draft-store";
+import { isMobileApp } from "@/lib/mobile-app";
 import {
   isRegisteredTabKind,
   tabSurfaceDescriptor,
@@ -308,7 +313,7 @@ function sourceHasRef(ref: TabRef): boolean {
   if (ref.kind === "draft") {
     return useLandingDraftStore
       .getState()
-      .drafts.some((draft) => draft.id === ref.id);
+      .drafts.some((draft) => draft.id === ref.id && isOpenLandingDraft(draft));
   }
   return currentLayout().systemTabs[ref.kind] !== null;
 }
@@ -1013,18 +1018,38 @@ export class TabCommandCoordinator {
     target: Extract<CoordinatedTabActivationTarget, { kind: "draft" }>,
     layout: PersistedTabStripLayout,
   ): ResolvedCoordinatedActivation | null {
-    const draftId = target.draftId ?? (target.create ? uuidv4() : null);
+    // The installed mobile app has ONE stable composer (no tab strip to close
+    // a second draft tab), so an id-less create lands on the newest existing
+    // draft instead of minting - mirroring `createDraft`'s product-flag gate.
+    const mobileStableDraftId =
+      target.draftId === null && target.create && isMobileApp()
+        ? newestLandingDraftId()
+        : null;
+    const draftId =
+      target.draftId ??
+      mobileStableDraftId ??
+      (target.create ? uuidv4() : null);
     if (draftId === null) return null;
-    const exists = useLandingDraftStore
-      .getState()
-      .drafts.some((draft) => draft.id === draftId);
-    if (!target.create && !exists) return null;
+    const drafts = useLandingDraftStore.getState().drafts;
+    const present = drafts.some((draft) => draft.id === draftId);
+    const open = drafts.some(
+      (draft) => draft.id === draftId && isOpenLandingDraft(draft),
+    );
+    if (!target.create && !open) return null;
     const ref: TabRef = { kind: "draft", id: draftId };
     return this.activationForRef(layout, ref, () => {
-      if (!exists) {
+      if (!present) {
         useLandingDraftStore
           .getState()
           .createDraftWithId(draftId, target.settings);
+        return;
+      }
+      if (!open) {
+        // Retained-but-closed. `createDraftWithId` would no-op on the
+        // existing row and leave `closed` set, so the ref we are installing
+        // would name a draft `tabSourceRefs()` excludes - a tab pointing at
+        // nothing reachable. Reopening is the create this target asked for.
+        useLandingDraftStore.getState().openDraft(draftId);
         return;
       }
       useLandingDraftStore.getState().setActiveDraft(draftId);
@@ -1149,7 +1174,9 @@ export class TabCommandCoordinator {
     if (ref.kind === "draft") {
       const exists = useLandingDraftStore
         .getState()
-        .drafts.some((draft) => draft.id === ref.id);
+        .drafts.some(
+          (draft) => draft.id === ref.id && isOpenLandingDraft(draft),
+        );
       if (!exists) return null;
       return this.activationForRef(layout, ref, () => {
         useLandingDraftStore.getState().setActiveDraft(ref.id);
@@ -1201,7 +1228,7 @@ export class TabCommandCoordinator {
       },
       applyRemovals: () => {
         this.applyExpectedSourceMutation(() => {
-          useLandingDraftStore.getState().closeDraft(command.draftId);
+          useLandingDraftStore.getState().deleteDraft(command.draftId);
         });
       },
     });
@@ -1403,8 +1430,8 @@ export class TabCommandCoordinator {
       reservedAdditions: additions,
       pendingRemovals: removals,
       // Direct legacy source writers still own their active-id compatibility
-      // fields until T3 converts every activation entry point. Hydration and
-      // external source reconciliation therefore repair layout only; they
+      // fields until every activation entry point uses the coordinator.
+      // Hydration and external source reconciliation therefore repair layout only; they
       // must not echo a source snapshot back through desktop persistence.
       projectSourceCompatibility: false,
       applySources: () => undefined,
@@ -1782,12 +1809,18 @@ export class TabCommandCoordinator {
     const currentDrafts = useLandingDraftStore.getState().drafts;
     const activeDraftId =
       selected?.kind === "draft" &&
-      currentDrafts.some((draft) => draft.id === selected.id)
+      currentDrafts.some(
+        (draft) => draft.id === selected.id && isOpenLandingDraft(draft),
+      )
         ? selected.id
         : null;
     if (activeDraftId !== useLandingDraftStore.getState().activeDraftId) {
       this.applyExpectedSourceMutation(() => {
-        useLandingDraftStore.setState({ activeDraftId });
+        if (activeDraftId === null) {
+          useLandingDraftStore.getState().clearActiveDraft();
+        } else {
+          useLandingDraftStore.getState().setActiveDraft(activeDraftId);
+        }
       });
     }
   }

@@ -94,6 +94,8 @@ export interface OwnerResourceChipProps {
   readonly epicId: string;
   readonly kind: ResourceOwnerKindWireV14;
   readonly ownerId: string;
+  /** Immutable owner host. Required for terminal rows; null for chat/agent. */
+  readonly hostId: string | null;
   readonly className: string | undefined;
 }
 
@@ -102,7 +104,12 @@ export interface OwnerResourceChipProps {
  * owner - absent means "not currently tracked" (unknown), never zero use.
  */
 export function OwnerResourceChip(props: OwnerResourceChipProps) {
-  const usage = useOwnerResourceUsage(props.epicId, props.kind, props.ownerId);
+  const usage = useOwnerResourceUsage(
+    props.epicId,
+    props.kind,
+    props.ownerId,
+    props.hostId,
+  );
   if (usage === null) return null;
   return (
     <ResourceUsageChip

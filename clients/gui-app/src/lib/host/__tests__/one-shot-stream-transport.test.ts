@@ -37,14 +37,19 @@ beforeEach(() => {
 });
 
 describe("openOneShotStreamTransport", () => {
-  it("builds the transport with auth: null so an UNAUTHORIZED rejection is terminal", () => {
+  it("builds the transport with auth: null AND proactiveWakeEligible: false - both halves of the one-shot safety contract", () => {
     const fakeWs = { close: vi.fn() };
     mocks.buildHostStreamClient.mockReturnValue(fakeWs);
 
     const transport = openOneShotStreamTransport(buildParams());
 
+    // Both fields pinned together: `auth: null` makes UNAUTHORIZED terminal,
+    // and `proactiveWakeEligible: false` bars the process-wide sweep from
+    // force-dropping a healthy mux whose reconnect would REPLAY the
+    // destructive `worktree.deleteByPath` subscribe. Flipping either one
+    // re-opens a real replay path, so this assertion must fail for either.
     expect(mocks.buildHostStreamClient).toHaveBeenCalledWith(
-      expect.objectContaining({ auth: null }),
+      expect.objectContaining({ auth: null, proactiveWakeEligible: false }),
     );
     expect(transport.wsStreamClient).toBe(fakeWs);
 

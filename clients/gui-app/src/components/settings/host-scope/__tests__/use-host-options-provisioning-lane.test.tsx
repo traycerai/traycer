@@ -81,6 +81,7 @@ const IDLE_CONTROLLER_STATUS: HostControllerStatus = {
   updateReady: false,
   activation: "activated",
   reachable: true,
+  localAttempt: null,
   removedByUser: false,
   checkedAt: "2026-05-15T00:00:00Z",
 };
@@ -118,7 +119,19 @@ function makeHostManagement(kind: MutationKind | null): IHostManagement {
     deregisterService: notImplemented("deregisterService"),
     registryCheck: notImplemented("registryCheck"),
     freePortAndRestart: (input) => Promise.resolve(input),
+    runDoctorRepairQueued: () => Promise.resolve({ kind: "applied" as const }),
+    freePortAndRestartIfIdle: () =>
+      Promise.resolve({
+        kind: "dispatched" as const,
+        outcome: { kind: "ok" as const, value: null },
+      }),
     cliManifest: () => Promise.resolve(null),
+    maintenanceUpdateCheck: notImplemented("maintenanceUpdateCheck"),
+    maintenanceDoctor: notImplemented("maintenanceDoctor"),
+    maintenanceInstallationInfo: notImplemented("maintenanceInstallationInfo"),
+    maintenanceInstallVersion: notImplemented("maintenanceInstallVersion"),
+    restartHostIfIdle: notImplemented("restartHostIfIdle"),
+    runDoctorRepairIfIdle: notImplemented("runDoctorRepairIfIdle"),
     getHostName: notImplemented("getHostName"),
     setHostName: notImplemented("setHostName"),
   };

@@ -1,13 +1,21 @@
 import {
-  commitHostInstallSource,
   currentInstallPlatform,
   discardStagedHostInstallSource,
   stageHostInstallSource,
   type InstallSourceArg,
 } from "../installer";
 import { assertHostNotBusy } from "../host/busy-check";
+import {
+  formatCredentialProvisionNote,
+  maybeProvisionCredential,
+  runSignInPreflight,
+} from "../host/install-auth";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
-import type { CommandFn, CommandResult } from "../runner/runner";
+import type {
+  CommandContext,
+  CommandFn,
+  CommandResult,
+} from "../runner/runner";
 import {
   createServiceController,
   formatServiceLifecycleWarning,
@@ -18,10 +26,21 @@ import {
   createServiceInstallLifecycle,
   type ServiceInstallLifecycleHandle,
 } from "../service/install-lifecycle";
-import { withCliLock } from "../store/cli-lock";
+import {
+  requireCliUpdateMutationCapability,
+  withCliAttemptMutation,
+  withCliUpdateExecutionSegment,
+} from "../host/update-contender";
+import { resolveAttemptAdoptionFromNonce } from "../host/update-adoption";
+import { hostHomeDir } from "../store/paths";
+import { commitHostInstallSourceWithAttempt } from "../host/update-mutation";
 
-// `traycer host install <version|latest>` - registry path (NP-4) /
-// `--from <path>` local-file path (NP-2).
+// `traycer host install [--release <version>]` - registry path (NP-4) /
+// `--from <path>` local-file path (NP-2). There is NO positional argument:
+// bare `install` means latest, and a pin is spelled `--release <version>`
+// (the root `--version` collision is why it isn't `--version`). Recovery
+// text elsewhere in the CLI must use those two spellings - `host install
+// latest` is rejected by Commander as an excess argument.
 //
 // Lifecycle ordering (Tech Plan, Decision 3): stage + verify + extract
 // happen before we touch the OS service. Only once the new bytes are
@@ -45,6 +64,25 @@ import { withCliLock } from "../store/cli-lock";
 // `--allow-self-invocation` flag is forwarded to
 // `resolveServiceCliInvocation` so dev / local-file installs that pre-
 // date the packaged CLI (NP-3) can still register a working service.
+//
+// Sign-in pre-flight (client/host token split): the started host reads its
+// owner from the shared credentials file, so installing while signed out
+// stands up a host that denies every connection ("unprovisioned"). Before
+// staging anything, a signed-out interactive run is offered the device-flow
+// sign-in inline; a run that cannot prompt (JSON mode - every Desktop/Doctor
+// shellout - CI, or a non-TTY stdout) warns and continues instead, and so
+// does a declined or failed sign-in. Install-now-login-later stays legal
+// throughout: the host picks up a later `traycer login` within one
+// connection, no reinstall needed, which is why the guard never hard-fails.
+// `--no-service-register` skips the pre-flight entirely - bytes-only,
+// nothing is started, and the actor that later starts the service owns the
+// sign-in question.
+//
+// Post-install credential provisioning: a signed-in install that started a
+// host follows up with a short-lived stream connection carrying the CLI mint
+// flow (`provisionInstalledHostCredential`), so the host comes up holding its
+// own `aud: "host"` credential instead of waiting for the first minting
+// client. Best-effort and deadline-bounded; failures warn.
 export interface HostInstallArgs {
   // Always a concrete version token - "latest" or a semver. A local
   // file is signalled by a non-null `fromPath` and supersedes
@@ -81,6 +119,8 @@ export interface HostInstallArgs {
   // other kills it). Inert on the bytes-only path (`noServiceRegister`):
   // that path performs no stop for force to escalate.
   readonly force: boolean;
+  /** See `HostApplyArgs.attemptAdoption`. `null` for an ordinary invocation. */
+  readonly attemptAdoption: string | null;
 }
 
 export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
@@ -114,6 +154,12 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
       ifIdle: args.ifIdle,
       force: args.force,
     });
+    const authPreflight = await runSignInPreflight(ctx, args.noServiceRegister);
+    ctx.runtime.logger.info("Host install sign-in pre-flight resolved", {
+      environment: ctx.runtime.environment,
+      state: authPreflight.state,
+      reason: authPreflight.reason,
+    });
     const source: InstallSourceArg =
       args.fromPath !== null
         ? { kind: "local-file", path: args.fromPath }
@@ -121,15 +167,6 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
             kind: "registry",
             versionRequest: args.versionRequest,
           };
-
-    const staged = await stageHostInstallSource({
-      environment: ctx.runtime.environment,
-      source,
-      onProgress: (info) => ctx.progress(info),
-      // `host install` records the registry version or the derived
-      // local-file version - it is not stamping this build's identity.
-      recordVersionOverride: null,
-    });
 
     // `--no-service-register` must be truly bytes-only: no stop, no
     // register/rewrite, no start - even when a service is already
@@ -160,36 +197,65 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
       bytesOnly: handle === null,
     });
 
-    let result;
-    try {
-      result = await withCliLock(
-        {
+    const contenderOptions = {
+      environment: ctx.runtime.environment,
+      reason: "host-install",
+      waitMs: 30_000,
+      pollIntervalMs: 100,
+      admission: "legacy-update-shadow" as const,
+      adoption: await resolveAttemptAdoptionFromNonce(
+        hostHomeDir(ctx.runtime.environment),
+        args.attemptAdoption,
+        Date.now(),
+      ),
+    };
+    const result = await withCliUpdateExecutionSegment(
+      contenderOptions,
+      async (capability) => {
+        const verify = (): Promise<void> =>
+          requireCliUpdateMutationCapability(capability, contenderOptions);
+        // The outer attempt capability intentionally spans staging. This
+        // preserves the existing no-download-under-cli-lock rule while
+        // refusing active/corrupt attempt state before the first byte.
+        const staged = await stageHostInstallSource({
           environment: ctx.runtime.environment,
-          reason: "host-install",
-          waitMs: 30_000,
-          pollIntervalMs: 100,
-        },
-        async () => {
-          if (args.ifIdle) {
-            await assertHostNotBusy(ctx.runtime.environment);
-          }
-          return commitHostInstallSource({
-            environment: ctx.runtime.environment,
+          source,
+          onProgress: (info) => ctx.progress(info),
+          recordVersionOverride: null,
+          verifyMutationCapability: verify,
+        });
+        try {
+          return await withCliAttemptMutation(
+            capability,
+            contenderOptions,
+            async () => {
+              if (args.ifIdle) {
+                await assertHostNotBusy(ctx.runtime.environment);
+              }
+              return commitHostInstallSourceWithAttempt(
+                capability,
+                contenderOptions,
+                {
+                  environment: ctx.runtime.environment,
+                  staged,
+                  onProgress: (info) => ctx.progress(info),
+                  lifecycle,
+                },
+              );
+            },
+          );
+        } catch (err) {
+          // A failed final mutation leaves the pre-staged temp owned by this
+          // execution segment. Scrub it before capability release.
+          await discardStagedHostInstallSource(
+            ctx.runtime.environment,
             staged,
-            onProgress: (info) => ctx.progress(info),
-            lifecycle,
-          });
-        },
-      );
-    } catch (err) {
-      // Any failure that prevented `commitHostInstallSource` from ever
-      // running (the busy probe, a cli-lock timeout) leaves the
-      // extracted temp orphaned - scrub it (a no-op if
-      // `commitHostInstallSource` already cleaned up itself before
-      // this error reached us).
-      await discardStagedHostInstallSource(ctx.runtime.environment, staged);
-      throw err;
-    }
+            verify,
+          );
+          throw err;
+        }
+      },
+    );
 
     ctx.runtime.logger.info("Host install command completed", {
       environment: ctx.runtime.environment,
@@ -198,6 +264,27 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
       postSwapAction: handle !== null ? handle.state.postSwapAction : "none",
       hasPostSwapError: handle !== null && handle.state.postSwapError !== null,
     });
+
+    // Post-install credential provisioning: leave the just-started host
+    // holding its own `aud: "host"` credential rather than waiting for the
+    // first minting client to happen to connect. Only where it can help:
+    //   - the service lifecycle actually started/restarted a host
+    //     (`postSwapAction`), cleanly - a host that failed its post-swap
+    //     start has nothing to dial;
+    //   - the pre-flight left us signed in (the mint spends the bearer).
+    // Deliberately NOT gated on output mode - `--json` is the automation
+    // surface that most needs a credentialed host, and a Desktop shellout
+    // racing the GUI's own mint resolves inside the probe (a superseded mint
+    // verifies the winner's credential rather than failing).
+    // Best-effort throughout: any failure is a warning, never a failed
+    // install - an unprovisioned host self-heals on the next minting client.
+    const credentialProvision = await maybeProvisionCredential(
+      ctx,
+      handle !== null && handle.state.postSwapError === null
+        ? handle.state.postSwapAction
+        : "none",
+      authPreflight,
+    );
     const lifecycleData =
       handle !== null
         ? {
@@ -207,6 +294,20 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
             postSwapError: handle.state.postSwapError,
           }
         : null;
+    let human = `installed host ${result.record.version} (executable=${result.record.executablePath})`;
+    if (handle !== null && handle.state.postSwapError !== null) {
+      human = `${human}; ${formatServiceLifecycleWarning(handle.state.postSwapAction, handle.state.postSwapError)}`;
+    }
+    // Restate the unauthenticated warning on the terminal line - the
+    // pre-flight's copy printed before a potentially long download and
+    // may have scrolled away.
+    if (authPreflight.state === "unauthenticated") {
+      human = `${human}; not signed in - the host is unprovisioned until you run \`traycer login\``;
+    }
+    const provisionNote = formatCredentialProvisionNote(credentialProvision);
+    if (provisionNote !== null) {
+      human = `${human}; ${provisionNote}`;
+    }
     return {
       data: {
         version: result.record.version,
@@ -220,11 +321,10 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
         previousVersion: result.previous?.version ?? null,
         serviceLifecycle: lifecycleData,
         installGeneration: result.installGeneration,
+        authPreflight,
+        credentialProvision,
       },
-      human:
-        handle !== null && handle.state.postSwapError !== null
-          ? `installed host ${result.record.version} (executable=${result.record.executablePath}); ${formatServiceLifecycleWarning(handle.state.postSwapAction, handle.state.postSwapError)}`
-          : `installed host ${result.record.version} (executable=${result.record.executablePath})`,
+      human,
       exitCode: 0,
     };
   };

@@ -45,6 +45,27 @@ const boundHostSupport = vi.hoisted<{ value: StreamMethodSupport }>(() => ({
   value: "supported",
 }));
 
+const virtualizerConfig = vi.hoisted<{
+  useFlushSync: boolean | null;
+  anchorTo: "start" | "end" | null;
+}>(() => ({
+  useFlushSync: null,
+  anchorTo: null,
+}));
+
+vi.mock("@tanstack/react-virtual", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@tanstack/react-virtual")>();
+  return {
+    ...actual,
+    useVirtualizer: (options: Parameters<typeof actual.useVirtualizer>[0]) => {
+      virtualizerConfig.useFlushSync = options.useFlushSync ?? null;
+      virtualizerConfig.anchorTo = options.anchorTo ?? null;
+      return actual.useVirtualizer(options);
+    },
+  };
+});
+
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
   useHostReachability: () => ({
     status: reachability.value,
@@ -141,6 +162,7 @@ const noopStreamClientFactory: EpicStreamClientFactory = () => ({
 
 let epicHandle: OpenEpicStoreHandle;
 let sentFrames: ManagedCommandSubscribeOutputClientFrame[];
+let restoreLayoutGeometry: () => void;
 
 /**
  * `factoryCalls` lets a Retry test prove a fresh stream was actually opened
@@ -167,6 +189,9 @@ function installOutputStub(): {
       return {
         loadOlder: (frame) => {
           sentFrames.push(frame);
+        },
+        resnapshot: () => {
+          sentFrames.push({ kind: "resnapshot", hasBinaryPayload: false });
         },
         close: () => undefined,
         streamMethodSupport: boundStreamMethodSupport,
@@ -266,13 +291,12 @@ const STREAM_FAILED: FatalErrorDetails = {
 /**
  * jsdom has no layout, so the scroll geometry a follow-mode decision reads has
  * to be stated outright. `scrollHeight` is installed as a getter over a box the
- * test owns, because prepend compensation is only meaningful when the document
- * can actually grow between two reads.
+ * test owns so individual interactions can change the viewport geometry.
  */
 function setScrollGeometry(
   element: HTMLElement,
   geometry: { scrollTop: number; scrollHeight: number; clientHeight: number },
-): { setScrollHeight: (value: number) => void } {
+): void {
   const box = { scrollHeight: geometry.scrollHeight };
   Object.defineProperty(element, "scrollHeight", {
     configurable: true,
@@ -283,15 +307,10 @@ function setScrollGeometry(
     value: geometry.clientHeight,
   });
   element.scrollTop = geometry.scrollTop;
-  return {
-    setScrollHeight: (value: number) => {
-      box.scrollHeight = value;
-    },
-  };
 }
 
 function timeline(): HTMLElement {
-  return screen.getByRole("log");
+  return screen.getByTestId("managed-command-output-timeline");
 }
 
 function rowChannels(): string[] {
@@ -301,9 +320,26 @@ function rowChannels(): string[] {
 }
 
 beforeEach(() => {
+  // TanStack Virtual reads offset geometry synchronously when the scroll
+  // element attaches. jsdom's permanent 0x0 default would otherwise describe
+  // a genuinely invisible viewport and correctly produce no virtual rows.
+  const heightSpy = vi
+    .spyOn(HTMLElement.prototype, "offsetHeight", "get")
+    .mockImplementation(function (this: HTMLElement) {
+      return this.dataset.index === undefined ? 600 : 24;
+    });
+  const widthSpy = vi
+    .spyOn(HTMLElement.prototype, "offsetWidth", "get")
+    .mockReturnValue(800);
+  restoreLayoutGeometry = () => {
+    heightSpy.mockRestore();
+    widthSpy.mockRestore();
+  };
   reachability.value = "reachable";
   defaultHostSupport.value = "supported";
   boundHostSupport.value = "supported";
+  virtualizerConfig.useFlushSync = null;
+  virtualizerConfig.anchorTo = null;
   sentFrames = [];
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useEpicCanvasStore.setState({
@@ -321,6 +357,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  restoreLayoutGeometry();
   __setManagedCommandOutputStreamClientFactoryForTests(null);
   epicHandle.dispose();
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
@@ -375,6 +412,29 @@ describe("managed-command output window", () => {
     expect(
       screen.getAllByTestId(/^managed-command-output-time-/)[0].textContent,
     ).toMatch(/\d{1,2}:\d{2}:\d{2}/);
+  });
+
+  it("mounts only a viewport-sized window for a large output timeline", () => {
+    const stub = installOutputStub();
+    renderTile();
+
+    openAtTail(
+      stub.emit,
+      Array.from({ length: 10_000 }, (_, index) =>
+        line("stdout", `line-${index}`),
+      ),
+    );
+
+    const mountedRows = screen.queryAllByTestId(
+      /^managed-command-output-line-/,
+    );
+    expect(mountedRows.length).toBeGreaterThan(0);
+    expect(mountedRows.length).toBeLessThan(100);
+    expect(virtualizerConfig.useFlushSync).toBe(false);
+    // A fresh window first reaches an estimated tail. End anchoring is what
+    // keeps it there when wrapped rows are measured and enlarge the document;
+    // without this option the viewport can settle in the middle of the log.
+    expect(virtualizerConfig.anchorTo).toBe("end");
   });
 
   it("floats live status over the log instead of titling itself", () => {
@@ -463,7 +523,7 @@ describe("managed-command output window", () => {
     expect(screen.getByRole("button", { name: "Close tab" })).toBeTruthy();
   });
 
-  it("keeps its chrome off the log's flow, and reserves a lane for it", () => {
+  it("keeps its chrome off the log's flow, and clears it from above", () => {
     const stub = installOutputStub();
     renderTile();
     openAtTail(stub.emit, [line("stdout", "watching src/")]);
@@ -483,11 +543,12 @@ describe("managed-command output window", () => {
     expect(
       screen.getByTestId(`managed-command-delete-${COMMAND.id}`),
     ).toBeTruthy();
-    // And the log holds a lane clear on the right, or the cluster would sit on
-    // the tail of whichever line scrolled under it - permanently. Fluid and
-    // capped: a fixed lane would take a third of a narrow pane away from the
-    // log, and on a wide one it must never grow past what the cluster needs.
-    expect(view.getAttribute("class")).toContain("pr-[min(30%,12rem)]");
+    // Clearance is vertical, not a reserved lane: every line gets the full
+    // width of the pane, and the log begins below the cluster so nothing sits
+    // under it at rest. What scrolls up passes behind the scrim instead.
+    expect(view.getAttribute("class")).not.toContain("pr-[min(30%,12rem)]");
+    expect(view.getAttribute("class")).toContain("pt-9.5");
+    expect(screen.getByTestId("managed-command-output-scrim")).not.toBeNull();
   });
 
   it("follows new output until the human scrolls up, then offers a way back", () => {
@@ -520,6 +581,41 @@ describe("managed-command output window", () => {
     expect(screen.queryByTestId("managed-command-output-jump-live")).toBeNull();
   });
 
+  it("owns Home and End as retained-start and live-tail navigation", () => {
+    const stub = installOutputStub();
+    renderTile();
+    openAtTail(stub.emit, [line("stdout", "held history")]);
+
+    const view = timeline();
+    setScrollGeometry(view, {
+      scrollTop: 1_000,
+      scrollHeight: 4_000,
+      clientHeight: 400,
+    });
+    view.focus();
+
+    expect(view.tabIndex).toBe(0);
+    expect(document.activeElement).toBe(view);
+    expect(fireEvent.keyDown(view, { key: "Home" })).toBe(false);
+    expect(view.scrollTop).toBe(0);
+    expect(sentFrames).toHaveLength(1);
+    expect(sentFrames[0].kind).toBe("loadOlder");
+
+    act(() => {
+      stub.emit().onOutput({
+        lines: [line("stdout", "arrived while paused")],
+        start: { segmentId: "seg-live", byteOffset: 80 },
+      });
+    });
+
+    expect(fireEvent.keyDown(view, { key: "End" })).toBe(false);
+    expect(view.scrollTop).toBe(4_000);
+    expect(sentFrames).toContainEqual({
+      kind: "resnapshot",
+      hasBinaryPayload: false,
+    });
+  });
+
   it("asks for older lines when the viewer reaches the top", () => {
     const stub = installOutputStub();
     renderTile();
@@ -541,37 +637,48 @@ describe("managed-command output window", () => {
     ).toEqual({ segmentId: "seg-2", byteOffset: 40 });
   });
 
-  it("holds the reading position when a page of older lines is prepended", () => {
+  it("pauses live output while reading history and resnapshots on return to live", () => {
     const stub = installOutputStub();
     renderTile();
-    openAtTail(stub.emit, [line("stdout", "tail")]);
+    openAtTail(stub.emit, [line("stdout", "held history")]);
 
     const view = timeline();
-    const geometry = setScrollGeometry(view, {
-      scrollTop: 10,
+    setScrollGeometry(view, {
+      scrollTop: 1_000,
       scrollHeight: 4_000,
       clientHeight: 400,
     });
     fireEvent.scroll(view);
-    const request = sentFrames[0];
-    if (request.kind !== "loadOlder") throw new Error("expected loadOlder");
 
-    // The page lands and the document grows by 5,000px ABOVE the viewport.
-    geometry.setScrollHeight(9_000);
     act(() => {
-      stub.emit().onOlder({
-        requestId: request.requestId,
-        lines: [line("stdout", "older-1"), line("stdout", "older-2")],
-        start: { segmentId: "seg-1", byteOffset: 0 },
-        reachedStart: false,
+      stub.emit().onOutput({
+        lines: [line("stdout", "arrived while paused")],
+        start: { segmentId: "seg-live", byteOffset: 80 },
       });
     });
 
-    // Without compensation the viewport stays at 10 and the line the human was
-    // reading is 5,000px below - the whole point of scrolling up is lost.
-    // Chromium's native scroll anchoring cannot save this: the spec disables it
-    // at the very top, which is exactly where a load-older fires.
-    expect(view.scrollTop).toBe(5_010);
+    expect(screen.getByText("held history")).not.toBeNull();
+    expect(screen.queryByText("arrived while paused")).toBeNull();
+    expect(
+      screen.getByTestId("managed-command-output-jump-live").textContent,
+    ).toContain("New output available");
+
+    fireEvent.click(screen.getByTestId("managed-command-output-jump-live"));
+
+    expect(sentFrames).toContainEqual({
+      kind: "resnapshot",
+      hasBinaryPayload: false,
+    });
+    expect(
+      screen.getByTestId("managed-command-output-jump-live").textContent,
+    ).toContain("Loading live output");
+
+    openAtTail(stub.emit, [line("stdout", "arrived while paused")]);
+
+    expect(screen.getByText("arrived while paused")).not.toBeNull();
+    expect(screen.queryByText("held history")).toBeNull();
+    expect(screen.queryByTestId("managed-command-output-jump-live")).toBeNull();
+    expect(view.scrollTop).toBe(4_000);
   });
 
   it("drops the cached scrollback with the shell", () => {

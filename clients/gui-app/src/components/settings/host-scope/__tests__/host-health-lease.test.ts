@@ -54,6 +54,7 @@ const BASE = {
   isLocalMachine: false,
   hasLiveSession: false,
   service: undefined,
+  planAllowsRemote: true,
   nowMs: NOW_MS,
 };
 
@@ -265,6 +266,7 @@ describe("deriveHostHealth — every dead reason gets its own answer", () => {
             code: "PROTOCOL_MAJOR_MISMATCH",
             hostVersion: "1.1.4",
             minSupportedVersion: "1.2.0",
+            clientCompatibility: null,
           },
         },
       },
@@ -299,6 +301,7 @@ describe("deriveHostHealth — every dead reason gets its own answer", () => {
             code: "PROTOCOL_MAJOR_MISMATCH",
             hostVersion: "1.1.4",
             minSupportedVersion: "1.2.0",
+            clientCompatibility: null,
           },
         },
       ] as const

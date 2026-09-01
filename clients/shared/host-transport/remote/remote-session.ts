@@ -9,15 +9,8 @@ import {
 import type { RemoteSessionAuth } from "@traycer/protocol/host-transport/remote/auth";
 import { extractBearerForOpenFrame } from "../ws-rpc-client";
 import { recordNegotiatedHostManifest } from "../negotiated-manifest-registry";
-import {
-  ATTACH_ACK_TIMEOUT_MS,
-  NOISE_HANDSHAKE_TIMEOUT_MS,
-  RELAY_DIAL_TIMEOUT_MS,
-  RELAY_PING_INTERVAL_MS,
-  RELAY_PONG_TIMEOUT_MS,
-  SESSION_OPEN_ACK_TIMEOUT_MS,
-  UNARY_RESPONSE_TIMEOUT_MS,
-} from "./config";
+import { CLIENT_SERVED_STREAM_MAJORS } from "../served-stream-majors";
+import { UNARY_RESPONSE_TIMEOUT_MS } from "./config";
 
 export type { IRemoteSession };
 export { PLAN_RESTRICTED_FATAL_CODE } from "@traycer/protocol/host-transport/remote/session";
@@ -29,7 +22,11 @@ export interface RemoteSessionOptions<
     import("@traycer/protocol/framework/versioned-stream-rpc").VersionedStreamRpcRegistry,
 > extends Omit<
   ProtocolRemoteSessionOptions<RpcRegistry, StreamRegistry>,
-  "auth" | "timing" | "onNegotiatedMethods" | "evidence"
+  | "auth"
+  | "onNegotiatedMethods"
+  | "evidence"
+  | "servedStreamMajors"
+  | "unaryResponseMs"
 > {
   readonly bearer: BearerSourceProvider;
   readonly auth: StreamAuthRevalidator | null;
@@ -52,16 +49,9 @@ export class RemoteSession<
     super({
       ...coreOptions,
       auth: createClientRemoteSessionAuth(bearer, auth),
-      timing: {
-        relayDialMs: RELAY_DIAL_TIMEOUT_MS,
-        attachAckMs: ATTACH_ACK_TIMEOUT_MS,
-        noiseHandshakeMs: NOISE_HANDSHAKE_TIMEOUT_MS,
-        sessionOpenAckMs: SESSION_OPEN_ACK_TIMEOUT_MS,
-        unaryResponseMs: UNARY_RESPONSE_TIMEOUT_MS,
-        relayPingIntervalMs: RELAY_PING_INTERVAL_MS,
-        relayPongTimeoutMs: RELAY_PONG_TIMEOUT_MS,
-      },
       onNegotiatedMethods: recordNegotiatedHostManifest,
+      servedStreamMajors: CLIENT_SERVED_STREAM_MAJORS,
+      unaryResponseMs: UNARY_RESPONSE_TIMEOUT_MS,
     });
   }
 }

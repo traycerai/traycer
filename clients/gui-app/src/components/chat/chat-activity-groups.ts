@@ -1,19 +1,14 @@
-import type {
-  InterviewAnswer,
-  InterviewQuestion,
-} from "@traycer/protocol/persistence/epic/schemas";
 import {
   isKnownInterviewDisplayToolName,
   toolUseIdFromInterviewBlockId,
 } from "@traycer/protocol/host/agent/gui/interview-tools";
 import { filePathFromInputDetail } from "@/lib/segment-summary";
 import { formatClockDuration } from "@/lib/format-duration";
-import { formatSingleLine } from "@/lib/utils";
+import { formatSingleLine } from "@/lib/text/format-single-line";
 import type {
   ApprovalSegment,
   CommandSegment,
   FileChangeSegment,
-  InterviewSegment,
   MessageSegment,
   ReasoningSegment,
   SubagentSegment,
@@ -23,6 +18,7 @@ import {
   deriveActivityGroupRenderId,
   derivePromotedSubagentRenderId,
 } from "./chat-collapsible-key";
+import { isTraycerBrowserReplToolName } from "@traycer/protocol/host/agent/gui/browser-tools";
 
 export type ActivitySegment =
   | ToolSegment
@@ -66,12 +62,6 @@ export type ChatActivityTimelineItem =
       readonly kind: "activity_group";
       readonly id: string;
       readonly group: ActivityGroupModel;
-    }
-  | {
-      readonly kind: "answered_questions";
-      readonly id: string;
-      readonly segment: InterviewSegment;
-      readonly summary: string;
     }
   | {
       readonly kind: "promoted_subagent";
@@ -124,6 +114,7 @@ interface ActivitySummaryCounts {
   readonly editedFiles: Set<string>;
   ranCommands: number;
   ranHooks: number;
+  browsed: number;
   spawnedSubagents: number;
   approved: number;
   denied: number;
@@ -131,7 +122,14 @@ interface ActivitySummaryCounts {
 }
 
 type ToolActivityKind =
-  "explore" | "read" | "search" | "edit" | "run" | "hook" | "tool";
+  | "explore"
+  | "read"
+  | "search"
+  | "edit"
+  | "run"
+  | "hook"
+  | "browser"
+  | "tool";
 
 const SUMMARY_MAX = 96;
 const EMPTY_QUESTION_TOOL_IDS: ReadonlySet<string> = new Set();
@@ -212,6 +210,7 @@ function createEmptyCounts(): ActivitySummaryCounts {
     editedFiles: new Set(),
     ranCommands: 0,
     ranHooks: 0,
+    browsed: 0,
     spawnedSubagents: 0,
     approved: 0,
     denied: 0,
@@ -305,16 +304,7 @@ function buildChatActivityTimelineImpl(
     }
     if (segment.kind === "interview") {
       flushRun();
-      if (segment.status === "completed") {
-        out.push({
-          kind: "answered_questions",
-          id: `answered:${segment.id}`,
-          segment,
-          summary: answeredQuestionsSummary(segment),
-        });
-      } else {
-        out.push({ kind: "segment", id: segment.id, segment });
-      }
+      out.push({ kind: "segment", id: segment.id, segment });
       continue;
     }
     if (segment.kind === "subagent") {
@@ -361,33 +351,6 @@ function buildChatActivityTimelineImpl(
   return out;
 }
 
-export function answeredQuestionsSummary(segment: InterviewSegment): string {
-  return answeredQuestionsSummaryFromCounts(segment.questions, segment.answers);
-}
-
-export function answeredQuestionsSummaryFromCounts(
-  questions: ReadonlyArray<InterviewQuestion>,
-  answers: ReadonlyArray<InterviewAnswer>,
-): string {
-  const total = questions.length > 0 ? questions.length : answers.length;
-  const answered = answers.filter(answerHasValues).length;
-  return formatAnsweredQuestionsSummary(answered, total);
-}
-
-function answerHasValues(answer: InterviewAnswer): boolean {
-  return answer.values.length > 0;
-}
-
-function formatAnsweredQuestionsSummary(
-  answered: number,
-  total: number,
-): string {
-  if (answered === total) {
-    return `Answered ${answered} ${answered === 1 ? "question" : "questions"}`;
-  }
-  return `Answered ${answered}/${total} questions`;
-}
-
 export function activityGroupSummary(
   segments: ReadonlyArray<ActivityGroupDetailSegment>,
 ): string {
@@ -401,6 +364,7 @@ export function activityGroupSummary(
     countPhrase(counts.editedFiles.size, "edited", "file", "files"),
     countPhrase(counts.ranCommands, "ran", "command", "commands"),
     countPhrase(counts.ranHooks, "ran", "hook", "hooks"),
+    countPhrase(counts.browsed, "browsed", "page", "pages"),
     countPhrase(counts.spawnedSubagents, "spawned", "subagent", "subagents"),
     countPhrase(counts.approved, "approved", "request", "requests"),
     countPhrase(counts.denied, "denied", "request", "requests"),
@@ -600,6 +564,8 @@ function toolActivityLabel(segment: ToolSegment): string {
       return `Ran ${singleLine(detail)}`;
     case "hook":
       return `Ran ${singleLine(segment.toolName)}`;
+    case "browser":
+      return `Browsed ${singleLine(detail)}`;
     case "tool":
       return `Used ${singleLine(detail)}`;
     default: {
@@ -783,10 +749,15 @@ function countActivitySegment(
     counts.ranHooks += 1;
     return;
   }
+  if (kind === "browser") {
+    counts.browsed += 1;
+    return;
+  }
   counts.usedTools += 1;
 }
 
 function toolActivityKind(toolName: string): ToolActivityKind {
+  if (isTraycerBrowserReplToolName(toolName)) return "browser";
   const normalized = normalizedToolName(toolName);
   if (normalized.includes("hook")) return "hook";
   if (READ_TOOL_NAMES.has(normalized)) return "read";

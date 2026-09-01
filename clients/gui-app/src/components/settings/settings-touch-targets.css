@@ -1,0 +1,45 @@
+/*
+ * Settings-scoped touch-target enlargement (see SETTINGS.md).
+ *
+ * On coarse-pointer devices, the shadcn primitives used across settings
+ * (Switch ~18px, Button sm/icon 28-32px, SelectTrigger 28-32px) sit below the
+ * 44px touch-target guideline. These rules extend each control's *hit area*
+ * to >=44px via an invisible pseudo-element - visual size and layout are
+ * unchanged on every device, and the scope attribute (set by SettingsLayout)
+ * keeps the rest of the app untouched.
+ *
+ * Buttons and select triggers get vertical-only slop: flush horizontal
+ * neighbours exist (e.g. the env editor's apply/discard pair), and horizontal
+ * slop would let them capture each other's taps. The switch is never flush
+ * against another control, so it grows on both axes.
+ */
+@media (pointer: coarse) {
+  [data-settings-touch-scope]
+    :is(
+      [data-slot="switch"],
+      [data-slot="button"],
+      [data-slot="select-trigger"]
+    ) {
+    position: relative;
+  }
+
+  [data-settings-touch-scope]
+    :is([data-slot="button"], [data-slot="select-trigger"])::after {
+    content: "";
+    position: absolute;
+    inset-inline: 0;
+    top: 50%;
+    height: max(100%, 44px);
+    transform: translateY(-50%);
+  }
+
+  [data-settings-touch-scope] [data-slot="switch"]::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: max(100%, 44px);
+    height: max(100%, 44px);
+    transform: translate(-50%, -50%);
+  }
+}

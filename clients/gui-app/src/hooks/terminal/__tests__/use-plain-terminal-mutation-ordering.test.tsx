@@ -25,6 +25,7 @@ import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import {
   deletePlainTerminal,
+  getPlainTerminal,
   replacePlainTerminalSnapshot,
   setPlainTerminalStreamStatus,
   settlePlainTerminalSnapshot,
@@ -141,6 +142,7 @@ function setup(
           collection,
         },
         client,
+        resolveOwnerClient: (hostId) => (hostId === HOST_ID ? client : null),
       }),
     { wrapper: Wrapper },
   );
@@ -229,6 +231,7 @@ describe("plain terminal mutation projection ordering", () => {
     const rename = deferred<RenamePlainTerminalResponse>();
     const test = setup({ "terminal.plain.rename": () => rename.promise });
     const pending = test.result.current.rename.mutateAsync({
+      hostId: HOST_ID,
       terminalId: "terminal-1",
       manualTitle: "renamed",
     });
@@ -251,7 +254,11 @@ describe("plain terminal mutation projection ordering", () => {
     });
     await act(async () => pending);
 
-    const projection = cached(test.queryClient).terminalsById["terminal-1"];
+    const projection = getPlainTerminal(
+      cached(test.queryClient),
+      HOST_ID,
+      "terminal-1",
+    );
     expect(
       projection?.runtime.status === "running"
         ? projection.runtime.activeProcessName
@@ -263,6 +270,7 @@ describe("plain terminal mutation projection ordering", () => {
     const rename = deferred<RenamePlainTerminalResponse>();
     const test = setup({ "terminal.plain.rename": () => rename.promise });
     const pending = test.result.current.rename.mutateAsync({
+      hostId: HOST_ID,
       terminalId: "terminal-1",
       manualTitle: "late",
     });
@@ -281,7 +289,7 @@ describe("plain terminal mutation projection ordering", () => {
     });
     await act(async () => pending);
     expect(
-      cached(test.queryClient).terminalsById["terminal-1"],
+      getPlainTerminal(cached(test.queryClient), HOST_ID, "terminal-1"),
     ).toBeUndefined();
   });
 
@@ -289,6 +297,7 @@ describe("plain terminal mutation projection ordering", () => {
     const rename = deferred<RenamePlainTerminalResponse>();
     const test = setup({ "terminal.plain.rename": () => rename.promise });
     const pending = test.result.current.rename.mutateAsync({
+      hostId: HOST_ID,
       terminalId: "terminal-1",
       manualTitle: "late",
     });
@@ -296,14 +305,19 @@ describe("plain terminal mutation projection ordering", () => {
 
     test.queryClient.setQueryData<PlainTerminalCollection>(
       hostQueryKeys.plainTerminals(HOST_ID, SCOPE),
-      (current) => deletePlainTerminal(current, "terminal-1", 2),
+      (current) =>
+        deletePlainTerminal(
+          current,
+          { hostId: HOST_ID, terminalId: "terminal-1" },
+          2,
+        ),
     );
     rename.resolve({
       terminal: terminal({ revision: 2, manualTitle: "late" }),
     });
     await act(async () => pending);
     expect(
-      cached(test.queryClient).terminalsById["terminal-1"],
+      getPlainTerminal(cached(test.queryClient), HOST_ID, "terminal-1"),
     ).toBeUndefined();
   });
 
@@ -315,6 +329,7 @@ describe("plain terminal mutation projection ordering", () => {
       "terminal.plain.importLegacy": () => legacyImport.promise,
     });
     const renamePending = test.result.current.rename.mutateAsync({
+      hostId: HOST_ID,
       terminalId: "terminal-1",
       manualTitle: "older rename",
     });
@@ -339,7 +354,8 @@ describe("plain terminal mutation projection ordering", () => {
     });
     await act(async () => renamePending);
     expect(
-      cached(test.queryClient).terminalsById["terminal-1"]?.record.manualTitle,
+      getPlainTerminal(cached(test.queryClient), HOST_ID, "terminal-1")?.record
+        .manualTitle,
     ).toBe("canonical winner");
   });
 
@@ -363,7 +379,10 @@ describe("plain terminal mutation projection ordering", () => {
       );
       const pending =
         scenario === "close"
-          ? test.result.current.close.mutateAsync({ terminalId: "terminal-1" })
+          ? test.result.current.close.mutateAsync({
+              hostId: HOST_ID,
+              terminalId: "terminal-1",
+            })
           : test.result.current.importLegacy.mutateAsync({
               terminalId: "terminal-1",
               hostId: HOST_ID,
@@ -391,7 +410,7 @@ describe("plain terminal mutation projection ordering", () => {
       await act(async () => pending);
 
       expect(
-        cached(test.queryClient).terminalsById["terminal-1"],
+        getPlainTerminal(cached(test.queryClient), HOST_ID, "terminal-1"),
       ).toMatchObject({ record: { revision: 3 } });
       expectPresentationRefs();
       expect(epicRemove).not.toHaveBeenCalled();
@@ -412,6 +431,7 @@ describe("plain terminal mutation projection ordering", () => {
       "removeHostTerminal",
     );
     const pending = test.result.current.close.mutateAsync({
+      hostId: HOST_ID,
       terminalId: "terminal-1",
     });
     await waitFor(() => expect(test.messenger.calls).toHaveLength(1));
@@ -533,7 +553,10 @@ describe("plain terminal mutation projection ordering", () => {
 
       const pending =
         scenario === "close"
-          ? test.result.current.close.mutateAsync({ terminalId: "terminal-1" })
+          ? test.result.current.close.mutateAsync({
+              hostId: HOST_ID,
+              terminalId: "terminal-1",
+            })
           : test.result.current.importLegacy.mutateAsync({
               terminalId: "terminal-1",
               hostId: HOST_ID,

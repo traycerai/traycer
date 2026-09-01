@@ -27,7 +27,10 @@ export function isActivationPhase(value: unknown): value is ActivationPhase {
 }
 
 export type ActivationFailureClass =
-  "readiness" | "stale-precondition" | "indeterminate" | "unknown";
+  | "readiness"
+  | "stale-precondition"
+  | "indeterminate"
+  | "unknown";
 
 /**
  * Relative generations make the accepted disk states mechanically checkable

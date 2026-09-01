@@ -36,6 +36,7 @@ import type { ComposerPickerStore } from "@/components/chat/composer/picker/comp
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
+import { ShortcutHint } from "@/components/ui/shortcut-hint";
 import { useBareKeyClaimer } from "@/lib/keybindings/use-bare-key-claimer";
 import { ComposerContentPreview } from "@/components/chat/composer/composer-content-preview";
 
@@ -435,9 +436,11 @@ function PromptStashEntryRowView(props: {
                 }}
               >
                 <span>Insert</span>
-                <Kbd className="h-4 min-w-4 rounded px-1 font-mono text-[10px]">
-                  ↵
-                </Kbd>
+                <ShortcutHint>
+                  <Kbd className="h-4 min-w-4 rounded px-1 font-mono text-[10px]">
+                    ↵
+                  </Kbd>
+                </ShortcutHint>
               </button>
               <button
                 type="button"
@@ -451,9 +454,11 @@ function PromptStashEntryRowView(props: {
                 onClick={props.onDelete}
               >
                 <span>Delete</span>
-                <Kbd className="h-4 min-w-4 rounded px-1 font-mono text-[10px]">
-                  D
-                </Kbd>
+                <ShortcutHint>
+                  <Kbd className="h-4 min-w-4 rounded px-1 font-mono text-[10px]">
+                    D
+                  </Kbd>
+                </ShortcutHint>
               </button>
             </>
           )}
@@ -584,9 +589,11 @@ function PromptStashUnavailableRowView(props: {
                 onClick={props.onDelete}
               >
                 <span>Delete</span>
-                <Kbd className="h-4 min-w-4 rounded px-1 font-mono text-[10px]">
-                  D
-                </Kbd>
+                <ShortcutHint>
+                  <Kbd className="h-4 min-w-4 rounded px-1 font-mono text-[10px]">
+                    D
+                  </Kbd>
+                </ShortcutHint>
               </button>
             </>
           )}

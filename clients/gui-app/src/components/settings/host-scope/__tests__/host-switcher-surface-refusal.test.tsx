@@ -39,6 +39,7 @@ function renderSwitcher(refusalByHostId: ReadonlyMap<string, string>): void {
       isLoading={false}
       listsFailed={false}
       onRetryLists={() => undefined}
+      updateViewForHost={null}
     />,
   );
   fireEvent.click(screen.getByRole("button", { name: "Host: Unknown host" }));
@@ -105,6 +106,7 @@ describe("<HostSwitcher /> surface refusals for a fork target", () => {
         isLoading={false}
         listsFailed={false}
         onRetryLists={() => undefined}
+        updateViewForHost={null}
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Host: Tab host" }));
@@ -144,6 +146,7 @@ describe("<HostSwitcher /> surface refusals for a fork target", () => {
         isLoading={false}
         listsFailed={false}
         onRetryLists={() => undefined}
+        updateViewForHost={null}
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Host: Tab host" }));
@@ -190,6 +193,7 @@ describe("<HostSwitcher /> surface refusals for a fork target", () => {
         isLoading={false}
         listsFailed={false}
         onRetryLists={() => undefined}
+        updateViewForHost={null}
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Host: Tab host" }));

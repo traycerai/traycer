@@ -67,7 +67,7 @@ vi.mock("../../store/paths", async () => {
 
 import {
   PROCESS_START_PUBLICATION_ALLOWANCE_MS,
-  stampRuntime,
+  stampRuntime as stampRuntimeWithAuthority,
 } from "../stamp-runtime";
 import { buildHostInstallCommand } from "../../commands/host-install";
 import { noopLogger } from "../../logger";
@@ -81,6 +81,18 @@ import {
   readProcessStartTimeMs,
 } from "../../store/process-identity";
 import type { CommandContext, CommandResult } from "../../runner/runner";
+
+const testMutationVerifier = async (): Promise<void> => undefined;
+type StampOptions = Parameters<typeof stampRuntimeWithAuthority>[0];
+const stampRuntime = (
+  options: Omit<StampOptions, "verifyMutationCapability"> &
+    Partial<Pick<StampOptions, "verifyMutationCapability">>,
+) =>
+  stampRuntimeWithAuthority({
+    ...options,
+    verifyMutationCapability:
+      options.verifyMutationCapability ?? testMutationVerifier,
+  });
 
 // The worker invokes the source CLI, whose baked source environment is dev.
 // Keep the parent on that same environment so both genuine command paths
@@ -105,6 +117,7 @@ async function writeInstall(
     signatureKeyId: "test-key",
     sizeBytes: 1,
     executablePath: join(installDir, "traycer-host"),
+    executableSha256: null,
     ...overrides,
   };
   await writeHostInstallRecord(ENV, record);
@@ -386,7 +399,7 @@ describe("stampRuntime", () => {
 
     const stored = await readHostInstallRecord(ENV);
     expect(stored?.runtimeVersion).toBeNull();
-    expect(stored).toEqual(installed);
+    expect(stored).toEqual({ ...installed, executableSha256: null });
   });
 });
 
@@ -714,6 +727,7 @@ describe.skipIf(process.platform === "win32")(
         noServiceRegister: true,
         ifIdle: false,
         force: false,
+        attemptAdoption: null,
       })(commandContext());
       const pid = writePid({});
       const recordA = await readHostInstallRecord(ENV);

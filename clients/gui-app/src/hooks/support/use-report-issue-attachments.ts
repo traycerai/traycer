@@ -31,7 +31,12 @@ export interface ReportIssueAttachmentImage {
 }
 
 export type ReportIssueAttachmentRejectionReason =
-  "count" | "type" | "size" | "budget" | "corrupt" | "read_failed";
+  | "count"
+  | "type"
+  | "size"
+  | "budget"
+  | "corrupt"
+  | "read_failed";
 
 export interface ReportIssueAttachmentRejection {
   readonly reason: ReportIssueAttachmentRejectionReason;

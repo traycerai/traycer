@@ -33,6 +33,7 @@ import {
 } from "@/lib/host-error-toast";
 import { invalidateEpicChatRecords } from "@/hooks/chats/use-epic-chat-records";
 import { invalidateChatRunSettings } from "@/hooks/chats/use-chat-run-settings-query";
+import { invalidateEpicTuiAgentRecords } from "@/hooks/chats/use-epic-tui-agent-records";
 import { getChatSessionRegistry } from "@/lib/registries/chat-session-registry";
 import {
   beginPendingChatCreation,
@@ -41,6 +42,7 @@ import {
 import { isRecoverableLatestForkRefusal } from "@/lib/chats/recoverable-fork-refusal";
 import { evictChatTabPersistenceForChat } from "@/stores/chats/chat-tab-persistence-eviction";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 
 /**
  * Variables for `useEpicCreateChatForHostClient.mutate`/`mutateAsync`
@@ -507,6 +509,12 @@ function useEpicArchiveChatMutation(
         // That stopped being true at the single-write pivot: `archivedAt` is a
         // chat-database fact now, and the record list is how it reaches here.
         invalidateEpicChatRecords(queryClient, ctx.hostId);
+        // ONE archive RPC covers both record kinds (the host resolves the id
+        // across chats and terminal agents) and the response does not say
+        // which one it hit, so refresh both record lists - the extra read is a
+        // local registry lookup, and guessing the kind here would leave the
+        // other table stale exactly when the guess is wrong.
+        invalidateEpicTuiAgentRecords(queryClient, ctx.hostId);
       },
       onError:
         failurePresentation === "individual"
@@ -639,6 +647,17 @@ export function useEpicDeleteChat(): UseMutationResult<
             variables.chatId,
             ctx.hostId,
           );
+          // This mutation-level callback survives the optimistic sidebar row
+          // unmounting. Per-call callbacks owned by that row do not, which can
+          // otherwise leave a deleted chat tile visible indefinitely while the
+          // cloud record query is unresolved.
+          useEpicCanvasStore
+            .getState()
+            .closeConfirmedDeletedChatTiles(
+              variables.epicId,
+              variables.chatId,
+              ctx.hostId,
+            );
         }
         // Ticket 15 (decision #29): a deleted chat can never be reopened -
         // drop its durable chat-key entries across all seven per-tab
@@ -666,7 +685,12 @@ export function useEpicDeleteChat(): UseMutationResult<
         // happens for a chat whose entry the sweep already took.
         invalidateEpicChatRecords(queryClient, ctx.hostId);
       },
-      onError: (error) => {
+      onError: (error, variables) => {
+        // The optimistic sidebar row may already be unmounted, so its
+        // per-call error callback is not a reliable rollback owner either.
+        useEpicCanvasStore
+          .getState()
+          .unmarkArtifactSelfDeleted(variables.chatId);
         toastFromHostError(error, "Couldn't delete agent.");
       },
     },

@@ -22,7 +22,10 @@ import type { EpicViewTab } from "@/stores/epics/canvas/types";
 import {
   ACTION_IDS,
   ACTION_META,
+  resolveActionDefaultChord,
+  resolveActionSecondaryChord,
   type ActionId,
+  type TerminalPolicy,
 } from "@/lib/keybindings/actions";
 import {
   digitFromCode,
@@ -45,7 +48,7 @@ import {
   type FocusDirection,
 } from "@/lib/keybindings/tile-geometry";
 import {
-  SETTINGS_SECTIONS,
+  visibleSettingsSections,
   type SettingsSectionId,
 } from "@/lib/settings-sections";
 import { findHostedTileElement } from "@/components/epic-canvas/surface-host/hosted-tile-resolver";
@@ -129,13 +132,45 @@ export function registerDynamicActionHandler(
 // Chord lookup
 // ---------------------------------------------------------------------------
 
-export function findActionForChord(chord: ChordString): ActionId | null {
+export interface ActionChordMatch {
+  readonly actionId: ActionId;
+  readonly terminalPolicy: TerminalPolicy;
+}
+
+export function findActionMatchForChord(
+  chord: ChordString,
+): ActionChordMatch | null {
   const bindings = useKeybindingStore.getState().bindings;
   for (const id of ACTION_IDS) {
-    if (ACTION_META[id].kind !== "chord") continue;
-    if (bindings[id] === chord) return id;
+    const meta = ACTION_META[id];
+    if (meta.kind !== "chord") continue;
+    const binding = bindings[id];
+    if (binding === null) continue;
+    if (binding === chord) {
+      const terminalPolicy =
+        binding === resolveActionDefaultChord(meta)
+          ? meta.terminalPolicy
+          : "app";
+      return { actionId: id, terminalPolicy };
+    }
+  }
+
+  for (const id of ACTION_IDS) {
+    const meta = ACTION_META[id];
+    if (meta.kind !== "chord" || bindings[id] === null) continue;
+    const secondaryChord = resolveActionSecondaryChord(meta);
+    if (secondaryChord === chord) {
+      return {
+        actionId: id,
+        terminalPolicy: meta.secondaryTerminalPolicy ?? meta.terminalPolicy,
+      };
+    }
   }
   return null;
+}
+
+export function findActionForChord(chord: ChordString): ActionId | null {
+  return findActionMatchForChord(chord)?.actionId ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -154,9 +189,11 @@ export interface DigitActionMatch {
   readonly digit: number;
   readonly run: () => boolean;
   readonly dispatchSequence:
-    ((digits: ReadonlyArray<number>) => boolean) | null;
+    | ((digits: ReadonlyArray<number>) => boolean)
+    | null;
   readonly sequenceState:
-    ((digits: ReadonlyArray<number>) => LeaderDigitSequenceState) | null;
+    | ((digits: ReadonlyArray<number>) => LeaderDigitSequenceState)
+    | null;
 }
 
 export function matchDigitAction(
@@ -453,12 +490,17 @@ function moveHeaderTabFocus(router: KeybindingRouter, delta: -1 | 1): boolean {
   return true;
 }
 
+// Indexes the OFFERED sections, which is the same list the sidebar renders and
+// badges - a digit means "the nth row of the rail", so a build that offers
+// fewer sections must resolve the digit against the shorter list or the badge
+// and the shortcut name different rows.
 function switchToSettingsSection(
   router: KeybindingRouter,
   index: number,
 ): boolean {
-  if (index < 0 || index >= SETTINGS_SECTIONS.length) return false;
-  router.navigateSettingsSection(SETTINGS_SECTIONS[index].id);
+  const sections = visibleSettingsSections();
+  if (index < 0 || index >= sections.length) return false;
+  router.navigateSettingsSection(sections[index].id);
   return true;
 }
 

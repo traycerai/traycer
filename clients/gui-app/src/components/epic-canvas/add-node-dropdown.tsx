@@ -75,7 +75,8 @@ export interface AddArtifactDropdownProps {
    * dropdown cleanup cannot clear the binding before the dispatcher sees it.
    */
   onAddTerminalAgent:
-    ((input: TerminalAgentWorktreeCreateInput) => void) | undefined;
+    | ((input: TerminalAgentWorktreeCreateInput) => void)
+    | undefined;
   /**
    * Optional seed copied from the latest chat's visible workspace binding.
    * Terminal-agent submenu uses it both for the initial folder rows and for the
@@ -424,6 +425,7 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
         </DropdownMenuLabel>
         <div className="flex min-w-0 items-center gap-2 px-1">
           <HarnessModelPicker
+            labelDisplay="responsive"
             store={toolbarStore}
             withServiceTier={false}
             tuiOnly

@@ -1,7 +1,11 @@
 {
   "name": "@traycer/protocol",
-  "license": "MIT",
   "version": "0.3.0",
+  "license": "MIT",
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
@@ -32,14 +36,13 @@
     "./persistence/*": "./src/persistence/*.ts",
     "./utils/yjs-utils": "./utils/yjs-utils/index.ts",
     "./utils/yjs-utils/*": "./utils/yjs-utils/*.ts",
-    "./utils/text/*": "./utils/text/*.ts"
+    "./utils/text/*": "./utils/text/*.ts",
+    "./host-transport/relay-liveness": "./src/host-transport/relay-liveness.ts",
+    "./host-transport/rtt-deadlines": "./src/host-transport/rtt-deadlines.ts",
+    "./host-transport/vantage": "./src/host-transport/vantage.ts",
+    "./worktree/*": "./src/worktree/*.ts"
   },
-  "files": [
-    "dist",
-    "README.md"
-  ],
   "publishConfig": {
-    "access": "public",
     "types": "./dist/src/index.d.ts",
     "exports": {
       ".": {
@@ -153,8 +156,25 @@
       "./utils/text/*": {
         "types": "./dist/utils/text/*.d.ts",
         "import": "./dist/utils/text/*.js"
+      },
+      "./host-transport/relay-liveness": {
+        "types": "./dist/src/host-transport/relay-liveness.d.ts",
+        "import": "./dist/src/host-transport/relay-liveness.js"
+      },
+      "./host-transport/rtt-deadlines": {
+        "types": "./dist/src/host-transport/rtt-deadlines.d.ts",
+        "import": "./dist/src/host-transport/rtt-deadlines.js"
+      },
+      "./host-transport/vantage": {
+        "types": "./dist/src/host-transport/vantage.d.ts",
+        "import": "./dist/src/host-transport/vantage.js"
+      },
+      "./worktree/*": {
+        "types": "./dist/src/worktree/*.d.ts",
+        "import": "./dist/src/worktree/*.js"
       }
-    }
+    },
+    "access": "public"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node scripts/patch-dist-esm-imports.cjs",

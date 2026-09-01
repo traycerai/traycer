@@ -1,12 +1,13 @@
 import {
   cleanup,
-  render,
+  render as renderComponent,
   screen,
   type RenderResult,
 } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createStore } from "zustand/vanilla";
-import type { ReactNode } from "react";
+import type { ReactElement, ReactNode } from "react";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type { ModelOption } from "@/components/home/data/landing-options";
 import type {
@@ -70,6 +71,15 @@ vi.mock("@/hooks/providers/use-provider-pack-gate", () => ({
     blocked: false,
     hint: null,
     preparing: null,
+  }),
+}));
+
+vi.mock("@/components/chat/composer/use-profile-eligibility-gate", () => ({
+  useProfileEligibilityGate: () => ({
+    disabled: false,
+    profileLabel: null,
+    enablePending: false,
+    enableProfile: vi.fn(),
   }),
 }));
 
@@ -274,6 +284,7 @@ function profile(
 ): ProviderProfile {
   return {
     profileId,
+    enabled: true,
     kind,
     authType: "oauth",
     label: profileId,
@@ -302,6 +313,21 @@ function renderLandingComposer(): RenderResult {
       workspaceControls={() => null}
     />,
   );
+}
+
+// `LandingComposer` claims a foreign draft through `useHostMutation`
+// (`useDraftAuthorityControl`), so it needs a Query client the way every
+// host-RPC surface in the app does. Shadows RTL's `render` so each case below
+// keeps reading as a plain render.
+function render(ui: ReactElement): RenderResult {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  return renderComponent(ui, {
+    wrapper: ({ children }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    ),
+  });
 }
 
 afterEach(() => {

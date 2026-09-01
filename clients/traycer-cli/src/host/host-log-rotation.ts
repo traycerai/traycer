@@ -69,7 +69,19 @@ async function fileSize(filePath: string): Promise<number> {
   }
 }
 
-async function removeQuietly(filePath: string): Promise<void> {
+type MutationVerifier = () => Promise<void>;
+
+const legacyMutationVerifier: MutationVerifier = async (): Promise<void> =>
+  undefined;
+
+async function removeQuietly(
+  filePath: string,
+  verifyMutationCapability: MutationVerifier,
+): Promise<void> {
+  // Keep authority failures outside the best-effort I/O catch. A failed
+  // capability check is not a failed cleanup: it means this process must stop
+  // changing the install tree immediately.
+  await verifyMutationCapability();
   try {
     await rm(filePath, { force: true });
   } catch {
@@ -103,7 +115,9 @@ async function isRegularFile(filePath: string): Promise<boolean> {
 async function rotate(
   logPath: string,
   backupPath: string,
+  verifyMutationCapability: MutationVerifier,
 ): Promise<"rotated" | "skipped"> {
+  await verifyMutationCapability();
   try {
     await rename(logPath, backupPath);
     return "rotated";
@@ -119,18 +133,21 @@ async function rotate(
   }
 
   const displacedBackupPath = `${backupPath}.replace-${randomUUID()}`;
+  await verifyMutationCapability();
   try {
     await rename(backupPath, displacedBackupPath);
   } catch {
     return "skipped";
   }
 
+  await verifyMutationCapability();
   try {
     await rename(logPath, backupPath);
   } catch {
     // If rollback itself is blocked, the prior evidence still survives at the
     // displaced path rather than being deleted. A successful rollback removes
     // that exceptional extra file and restores the normal single generation.
+    await verifyMutationCapability();
     try {
       await rename(displacedBackupPath, backupPath);
     } catch {
@@ -139,7 +156,7 @@ async function rotate(
     return "skipped";
   }
 
-  await removeQuietly(displacedBackupPath);
+  await removeQuietly(displacedBackupPath, verifyMutationCapability);
   return "rotated";
 }
 
@@ -181,7 +198,11 @@ export async function rotateHostLogIfOversized(
   const logPath = hostLogPath(environment);
   if ((await fileSize(logPath)) < MAX_HOST_LOG_BYTES) return "skipped";
   if (await hostIsLive(environment)) return "skipped";
-  return await rotate(logPath, hostLogBackupPath(environment));
+  return await rotate(
+    logPath,
+    hostLogBackupPath(environment),
+    legacyMutationVerifier,
+  );
 }
 
 /**
@@ -199,12 +220,32 @@ export async function rotateHostLogIfOversized(
 export async function rotateHostLogForPurge(
   environment: Environment,
 ): Promise<"rotated" | "skipped"> {
+  return await rotateHostLogForPurgeWithVerifier(
+    environment,
+    legacyMutationVerifier,
+  );
+}
+
+/**
+ * Capability-bound variant used by attempt-admitted uninstall. Every actual
+ * rename or removal checks the still-live capability immediately beforehand;
+ * authority loss is deliberately propagated rather than hidden by the
+ * diagnostics best-effort contract.
+ */
+export async function rotateHostLogForPurgeWithVerifier(
+  environment: Environment,
+  verifyMutationCapability: MutationVerifier,
+): Promise<"rotated" | "skipped"> {
   const logPath = hostLogPath(environment);
   if ((await fileSize(logPath)) === 0) {
     // Nothing worth keeping (absent, empty, or unreadable). Still drop a
     // zero-length file so the purge leaves no stragglers.
-    await removeQuietly(logPath);
+    await removeQuietly(logPath, verifyMutationCapability);
     return "skipped";
   }
-  return await rotate(logPath, hostLogBackupPath(environment));
+  return await rotate(
+    logPath,
+    hostLogBackupPath(environment),
+    verifyMutationCapability,
+  );
 }

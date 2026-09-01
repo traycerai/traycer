@@ -7,9 +7,9 @@ import {
   ExternalLink,
   EyeOff,
   type LucideIcon,
-  RotateCcw,
   Settings2,
 } from "lucide-react";
+import { RefreshIcon } from "@/components/refresh-icon";
 import { DiffSplitIcon, DiffUnifiedIcon } from "./diff-mode-icons";
 import type { GitDiffTileViewState } from "@/stores/epics/canvas/types";
 import type {
@@ -27,6 +27,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { paneActivationDeferProps } from "@/components/epic-canvas/pane-activation";
 import { cn } from "@/lib/utils";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -179,9 +180,7 @@ export function DiffTabToolbar(props: DiffTabToolbarProps) {
               aria-label="Refresh diff"
               className="text-muted-foreground hover:text-foreground"
             >
-              <RotateCcw
-                className={cn("size-4", props.refreshing && "animate-spin")}
-              />
+              <RefreshIcon refreshing={props.refreshing} />
             </Button>
           </span>
         </TooltipWrapper>
@@ -206,7 +205,11 @@ export function DiffTabToolbar(props: DiffTabToolbarProps) {
             </Button>
           </TooltipWrapper>
         </PopoverTrigger>
-        <PopoverContent align="end" className="w-[min(80vw,15rem)] gap-0 p-1">
+        <PopoverContent
+          {...paneActivationDeferProps}
+          align="end"
+          className="w-[min(80vw,15rem)] gap-0 p-1"
+        >
           {settings.map((setting) => (
             <DiffSettingRow
               key={setting.label}

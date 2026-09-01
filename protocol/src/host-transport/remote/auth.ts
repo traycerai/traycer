@@ -2,7 +2,9 @@ import type { ReservedAuthzSlot, SessionOpenPayload } from "../mux";
 import type { AttachGrant } from "./grant";
 
 export type RemoteSessionAuthRecoveryOutcome =
-  "rotated" | "rejected" | "network-error";
+  | "rotated"
+  | "rejected"
+  | "network-error";
 
 /** Authentication fields placed inside the encrypted session-open frame. */
 export interface RemoteSessionOpenAuth {
@@ -29,5 +31,6 @@ export interface RemoteSessionAuth {
   readonly readCredentialUpdateBearer: () => string | null;
   readonly currentFingerprint: () => string | null;
   readonly revalidateForReconnect:
-    (() => Promise<RemoteSessionAuthRecoveryOutcome>) | null;
+    | (() => Promise<RemoteSessionAuthRecoveryOutcome>)
+    | null;
 }

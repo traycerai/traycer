@@ -1,20 +1,42 @@
 import { create } from "zustand";
+import type { DraftDocument } from "@traycer/protocol/host";
 import {
   appLogger,
   describeLogError,
   describeLogErrorSummary,
 } from "@/lib/logger";
 import { interviewDraftKey, interviewDraftKeyPrefix } from "@/lib/persist";
+import { interviewDraftBindingKey, mintDraftId } from "@/lib/drafts/draft-ids";
+import { notifyDraftLocalEdit } from "@/lib/drafts/draft-local-edits";
 
 export interface StoredInterviewDraftAnswer {
+  // Stable identity of the question that owned the interaction-time indices.
+  // This full framing snapshot proves whether option indices remain exact.
+  // Missing on legacy rows, which may restore labels visibly but cannot prove
+  // exact selection.
+  readonly questionIdentity?: string;
+  // Legacy label snapshot, retained only so pre-index local rows can restore
+  // their visible choices. It is never enough to manufacture exact evidence.
   readonly selected: ReadonlyArray<string>;
+  // Interaction-time option identity. New rows always write indices; omitted
+  // means an old label-only draft whose later settlement must be neutral.
+  readonly selectedOptionIndices?: ReadonlyArray<number>;
   readonly otherText: string;
   readonly otherSelected: boolean;
 }
 
-export interface StoredInterviewDraft {
+export interface InterviewDraftPayload {
   readonly pageIndex: number;
   readonly answers: ReadonlyArray<StoredInterviewDraftAnswer>;
+}
+
+export interface StoredInterviewDraft extends InterviewDraftPayload {
+  readonly draftId: string;
+  readonly hostRevision: number;
+  readonly targetEpicId: string | null;
+  readonly lastTouchedAt: number;
+  readonly generation: number;
+  readonly syncedGeneration: number;
 }
 
 type StoredInterviewDrafts = Readonly<
@@ -29,7 +51,12 @@ interface InterviewDraftStore {
   readonly saveDraft: (
     chatId: string,
     blockId: string,
-    draft: StoredInterviewDraft,
+    draft: InterviewDraftPayload,
+  ) => void;
+  readonly bindTarget: (
+    chatId: string,
+    blockId: string,
+    epicId: string,
   ) => void;
   readonly clearDraft: (chatId: string, blockId: string) => void;
   // Drop this chat's stored drafts whose block IDs are absent from
@@ -39,6 +66,17 @@ interface InterviewDraftStore {
     keepBlockIds: ReadonlySet<string>,
   ) => void;
 }
+
+/**
+ * Targets bound by a card whose row does not exist yet. `bindTarget` runs on
+ * mount, before the first keystroke creates a row, so without this the first
+ * `saveDraft` writes `targetEpicId: null` and the coordinator withholds every
+ * upsert for that draft until something re-binds - which nothing does, since
+ * the bind effect does not re-run when the row appears. Keyed by
+ * `interviewDraftBindingKey`; an entry is the epic the chat belongs to, so a
+ * stale one can only ever re-state the same fact.
+ */
+const pendingInterviewTargets = new Map<string, string>();
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -53,15 +91,35 @@ function parseStoredAnswer(value: unknown): StoredInterviewDraftAnswer | null {
     return null;
   }
   return {
+    questionIdentity:
+      typeof value.questionIdentity === "string"
+        ? value.questionIdentity
+        : undefined,
     selected: value.selected.filter(
       (label): label is string => typeof label === "string",
     ),
+    selectedOptionIndices: Array.isArray(value.selectedOptionIndices)
+      ? value.selectedOptionIndices.filter(
+          (index): index is number =>
+            typeof index === "number" && Number.isInteger(index) && index >= 0,
+        )
+      : undefined,
     otherText: value.otherText,
     otherSelected: value.otherSelected,
   };
 }
 
-function parseStoredDraft(value: unknown): StoredInterviewDraft | null {
+interface ParsedStoredDraft {
+  readonly draft: StoredInterviewDraft;
+  /**
+   * The persisted row carried no id, so `draft.draftId` was minted while
+   * reading it. The caller writes the row back so the id becomes the
+   * persisted one - see `readAllStoredDraftsUnguarded`.
+   */
+  readonly mintedDraftId: boolean;
+}
+
+function parseStoredDraft(value: unknown): ParsedStoredDraft | null {
   if (
     !isRecord(value) ||
     typeof value.pageIndex !== "number" ||
@@ -72,12 +130,45 @@ function parseStoredDraft(value: unknown): StoredInterviewDraft | null {
   }
   const parsedAnswers = value.answers.map(parseStoredAnswer);
   if (parsedAnswers.some((answer) => answer === null)) return null;
+  const storedId =
+    typeof value.draftId === "string" && value.draftId.length > 0
+      ? value.draftId
+      : null;
   return {
-    pageIndex: Math.max(0, Math.trunc(value.pageIndex)),
-    answers: parsedAnswers.filter(
-      (answer): answer is StoredInterviewDraftAnswer => answer !== null,
-    ),
+    mintedDraftId: storedId === null,
+    draft: {
+      pageIndex: Math.max(0, Math.trunc(value.pageIndex)),
+      answers: parsedAnswers.filter(
+        (answer): answer is StoredInterviewDraftAnswer => answer !== null,
+      ),
+      draftId: storedId ?? mintDraftId(),
+      hostRevision: nonNegative(value.hostRevision),
+      targetEpicId:
+        typeof value.targetEpicId === "string" && value.targetEpicId.length > 0
+          ? value.targetEpicId
+          : null,
+      lastTouchedAt: nonNegative(value.lastTouchedAt),
+      // The mirror bookkeeping is PERSISTED (`writeStoredDraft` serializes
+      // the whole row), so read it back. Resetting to 1/0 here made every
+      // synced row dirty again on each storage event, and this window then
+      // re-published it. A row that never carried the pair is genuinely
+      // legacy and starts dirty exactly once.
+      generation: countOrDefault(value.generation, 1),
+      syncedGeneration: countOrDefault(value.syncedGeneration, 0),
+    },
   };
+}
+
+function nonNegative(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : 0;
+}
+
+function countOrDefault(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.trunc(value)
+    : fallback;
 }
 
 // ── Prototype-safe map access ──────────────────────────────────────────────
@@ -110,7 +201,7 @@ export function selectInterviewDraft(
 // map and erases another window's unrelated draft. The reactive `draftsByChat`
 // map below mirrors these keys for in-memory reads and cross-pane subscription.
 
-function parseStoredDraftJson(raw: string): StoredInterviewDraft | null {
+function parseStoredDraftJson(raw: string): ParsedStoredDraft | null {
   // Boundary: raw storage bytes are untrusted and can be malformed JSON. A
   // JSON.parse SyntaxError can echo a fragment of the offending input, and
   // that input is the user's own persisted interview answer text - use the
@@ -200,11 +291,16 @@ function readAllStoredDraftsUnguarded(): StoredInterviewDraftsByChat {
     if (chatId === null || blockId === null) continue;
     const raw = window.localStorage.getItem(key);
     if (raw === null) continue;
-    const draft = parseStoredDraftJson(raw);
-    if (draft === null) continue;
+    const parsed = parseStoredDraftJson(raw);
+    if (parsed === null) continue;
+    // Migrate a pre-id row in place. Keeping the minted id in memory only
+    // let a second window mint a DIFFERENT id for the same row and publish
+    // two host rows for one interview; the first window to read it fixes
+    // the id in storage, and every later rehydration reads that one.
+    if (parsed.mintedDraftId) writeStoredDraft(chatId, blockId, parsed.draft);
     const chatMap =
       byChat.get(chatId) ?? new Map<string, StoredInterviewDraft>();
-    chatMap.set(blockId, draft);
+    chatMap.set(blockId, parsed.draft);
     byChat.set(chatId, chatMap);
   }
   return Object.fromEntries(
@@ -245,77 +341,138 @@ function removeStoredDraft(chatId: string, blockId: string): void {
   }
 }
 
-export const useInterviewDraftStore = create<InterviewDraftStore>()((set) => ({
-  draftsByChat: readAllStoredDrafts(),
-  saveDraft: (chatId, blockId, draft) => {
-    writeStoredDraft(chatId, blockId, draft);
-    set((state) => {
-      const existingChat = ownValue(state.draftsByChat, chatId);
-      return {
-        // Computed keys create OWN properties even for `"__proto__"`.
-        draftsByChat: {
-          ...state.draftsByChat,
-          [chatId]: { ...existingChat, [blockId]: draft },
-        },
-      };
-    });
-  },
-  clearDraft: (chatId, blockId) => {
-    removeStoredDraft(chatId, blockId);
-    set((state) => {
-      const chatDrafts = ownValue(state.draftsByChat, chatId);
-      if (chatDrafts === undefined || !Object.hasOwn(chatDrafts, blockId)) {
-        return state;
+export const useInterviewDraftStore = create<InterviewDraftStore>()(
+  (set, get) => ({
+    draftsByChat: readAllStoredDrafts(),
+    saveDraft: (chatId, blockId, draft) => {
+      let draftId = "";
+      set((state) => {
+        const existingChat = ownValue(state.draftsByChat, chatId);
+        const current =
+          existingChat === undefined
+            ? undefined
+            : ownValue(existingChat, blockId);
+        draftId = current?.draftId ?? mintDraftId();
+        const next: StoredInterviewDraft = {
+          pageIndex: draft.pageIndex,
+          answers: draft.answers,
+          draftId,
+          hostRevision: current?.hostRevision ?? 0,
+          targetEpicId:
+            current?.targetEpicId ??
+            pendingInterviewTargets.get(
+              interviewDraftBindingKey(chatId, blockId),
+            ) ??
+            null,
+          lastTouchedAt: Date.now(),
+          generation: (current?.generation ?? 0) + 1,
+          syncedGeneration: current?.syncedGeneration ?? 0,
+        };
+        writeStoredDraft(chatId, blockId, next);
+        return {
+          draftsByChat: {
+            ...state.draftsByChat,
+            [chatId]: { ...existingChat, [blockId]: next },
+          },
+        };
+      });
+      notifyDraftLocalEdit(draftId);
+    },
+    bindTarget: (chatId, blockId, epicId) => {
+      // Record it even when there is no row yet: `saveDraft` seeds the first
+      // one from here.
+      pendingInterviewTargets.set(
+        interviewDraftBindingKey(chatId, blockId),
+        epicId,
+      );
+      const existingChat = ownValue(get().draftsByChat, chatId);
+      const current =
+        existingChat === undefined
+          ? undefined
+          : ownValue(existingChat, blockId);
+      if (current === undefined || current.targetEpicId === epicId) {
+        return;
       }
-      const nextChatEntries = Object.entries(chatDrafts).filter(
-        ([candidateBlockId]) => candidateBlockId !== blockId,
-      );
-      const otherChatEntries = Object.entries(state.draftsByChat).filter(
-        ([candidateChatId]) => candidateChatId !== chatId,
-      );
-      if (nextChatEntries.length === 0) {
-        return { draftsByChat: Object.fromEntries(otherChatEntries) };
-      }
-      return {
-        draftsByChat: Object.fromEntries([
-          ...otherChatEntries,
-          [chatId, Object.fromEntries(nextChatEntries)],
-        ]),
-      };
-    });
-  },
-  pruneChatDrafts: (chatId, keepBlockIds) => {
-    // Prune every PERSISTED key for this chat, not just the in-memory
-    // mirror: a cross-window write can exist in localStorage before its
-    // storage event updates `draftsByChat`, and this authoritative snapshot
-    // must still be able to remove it - otherwise the delayed event later
-    // rehydrates a draft for an interview that already resolved. This runs
-    // even when the chat has no in-memory entry yet.
-    persistedBlockIdsForChat(chatId)
-      .filter((blockId) => !keepBlockIds.has(blockId))
-      .forEach((blockId) => removeStoredDraft(chatId, blockId));
-    set((state) => {
-      const chatDrafts = ownValue(state.draftsByChat, chatId);
-      if (chatDrafts === undefined) return state;
-      const keptEntries = Object.entries(chatDrafts).filter(([blockId]) =>
-        keepBlockIds.has(blockId),
-      );
-      if (keptEntries.length === Object.keys(chatDrafts).length) return state;
-      const otherChatEntries = Object.entries(state.draftsByChat).filter(
-        ([candidateChatId]) => candidateChatId !== chatId,
-      );
-      if (keptEntries.length === 0) {
-        return { draftsByChat: Object.fromEntries(otherChatEntries) };
-      }
-      return {
-        draftsByChat: Object.fromEntries([
-          ...otherChatEntries,
-          [chatId, Object.fromEntries(keptEntries)],
-        ]),
-      };
-    });
-  },
-}));
+      const notifyId = current.draftId;
+      const shouldNotify = current.generation > current.syncedGeneration;
+      set((state) => {
+        const chatDrafts = ownValue(state.draftsByChat, chatId);
+        const existing =
+          chatDrafts === undefined ? undefined : ownValue(chatDrafts, blockId);
+        if (existing === undefined || existing.targetEpicId === epicId) {
+          return state;
+        }
+        const next: StoredInterviewDraft = {
+          ...existing,
+          targetEpicId: epicId,
+        };
+        writeStoredDraft(chatId, blockId, next);
+        return {
+          draftsByChat: {
+            ...state.draftsByChat,
+            [chatId]: { ...chatDrafts, [blockId]: next },
+          },
+        };
+      });
+      if (shouldNotify) notifyDraftLocalEdit(notifyId);
+    },
+    clearDraft: (chatId, blockId) => {
+      removeStoredDraft(chatId, blockId);
+      set((state) => {
+        const chatDrafts = ownValue(state.draftsByChat, chatId);
+        if (chatDrafts === undefined || !Object.hasOwn(chatDrafts, blockId)) {
+          return state;
+        }
+        const nextChatEntries = Object.entries(chatDrafts).filter(
+          ([candidateBlockId]) => candidateBlockId !== blockId,
+        );
+        const otherChatEntries = Object.entries(state.draftsByChat).filter(
+          ([candidateChatId]) => candidateChatId !== chatId,
+        );
+        if (nextChatEntries.length === 0) {
+          return { draftsByChat: Object.fromEntries(otherChatEntries) };
+        }
+        return {
+          draftsByChat: Object.fromEntries([
+            ...otherChatEntries,
+            [chatId, Object.fromEntries(nextChatEntries)],
+          ]),
+        };
+      });
+    },
+    pruneChatDrafts: (chatId, keepBlockIds) => {
+      // Prune every PERSISTED key for this chat, not just the in-memory
+      // mirror: a cross-window write can exist in localStorage before its
+      // storage event updates `draftsByChat`, and this authoritative snapshot
+      // must still be able to remove it - otherwise the delayed event later
+      // rehydrates a draft for an interview that already resolved. This runs
+      // even when the chat has no in-memory entry yet.
+      persistedBlockIdsForChat(chatId)
+        .filter((blockId) => !keepBlockIds.has(blockId))
+        .forEach((blockId) => removeStoredDraft(chatId, blockId));
+      set((state) => {
+        const chatDrafts = ownValue(state.draftsByChat, chatId);
+        if (chatDrafts === undefined) return state;
+        const keptEntries = Object.entries(chatDrafts).filter(([blockId]) =>
+          keepBlockIds.has(blockId),
+        );
+        if (keptEntries.length === Object.keys(chatDrafts).length) return state;
+        const otherChatEntries = Object.entries(state.draftsByChat).filter(
+          ([candidateChatId]) => candidateChatId !== chatId,
+        );
+        if (keptEntries.length === 0) {
+          return { draftsByChat: Object.fromEntries(otherChatEntries) };
+        }
+        return {
+          draftsByChat: Object.fromEntries([
+            ...otherChatEntries,
+            [chatId, Object.fromEntries(keptEntries)],
+          ]),
+        };
+      });
+    },
+  }),
+);
 
 // Rebuild the in-memory map from the per-draft keys. Runs at construction (cold
 // start) and again whenever another window mutates the shared storage.
@@ -348,4 +505,194 @@ export function readInterviewDraftSnapshot(
     chatId,
     blockId,
   );
+}
+
+export function interviewDraftIsDirty(draftId: string): boolean {
+  const found = findInterviewByDraftId(draftId);
+  if (found === null) return false;
+  return found.draft.generation > found.draft.syncedGeneration;
+}
+
+export function interviewDraftRememberSynced(
+  draftId: string,
+  hostRevision: number,
+  collectedGeneration: number,
+): void {
+  const found = findInterviewByDraftId(draftId);
+  if (found === null) return;
+  useInterviewDraftStore.setState((state) => {
+    const chatDrafts = ownValue(state.draftsByChat, found.chatId);
+    const current =
+      chatDrafts === undefined
+        ? undefined
+        : ownValue(chatDrafts, found.blockId);
+    if (current === undefined) return state;
+    const next: StoredInterviewDraft = {
+      ...current,
+      hostRevision,
+      syncedGeneration:
+        collectedGeneration >= current.generation
+          ? current.generation
+          : current.syncedGeneration,
+    };
+    writeStoredDraft(found.chatId, found.blockId, next);
+    return {
+      draftsByChat: {
+        ...state.draftsByChat,
+        [found.chatId]: { ...chatDrafts, [found.blockId]: next },
+      },
+    };
+  });
+}
+
+export function applyInterviewHostDocument(document: DraftDocument): void {
+  if (document.kind !== "interview") return;
+  const chatId = document.target.chatId;
+  const blockId = document.target.blockId;
+  if (chatId === null || blockId === null) return;
+  useInterviewDraftStore.setState((state) => {
+    const chatDrafts = ownValue(state.draftsByChat, chatId);
+    const current =
+      chatDrafts === undefined ? undefined : ownValue(chatDrafts, blockId);
+    const next: StoredInterviewDraft = {
+      pageIndex: document.portable.pageIndex,
+      // Restore the interaction-time evidence, not just the labels: an
+      // answer that arrives without indices is a genuinely legacy row, and
+      // dropping them here would manufacture one out of an exact selection.
+      answers: document.portable.answers.map((answer) => ({
+        questionIdentity: answer.questionIdentity,
+        selected: [...answer.selected],
+        selectedOptionIndices:
+          answer.selectedOptionIndices === undefined
+            ? undefined
+            : [...answer.selectedOptionIndices],
+        otherText: answer.otherText,
+        otherSelected: answer.otherSelected,
+      })),
+      draftId: document.draftId,
+      hostRevision: document.revision,
+      // Same rule as the dirty branch below: the store withholds every
+      // upsert until the target is known, so a document with no epic must
+      // never clear one this window already bound.
+      targetEpicId: document.target.epicId ?? current?.targetEpicId ?? null,
+      lastTouchedAt: document.lastTouchedAt,
+      generation: current?.generation ?? 0,
+      syncedGeneration: current?.generation ?? 0,
+    };
+    if (
+      current !== undefined &&
+      current.generation > current.syncedGeneration
+    ) {
+      const keep: StoredInterviewDraft = {
+        ...current,
+        draftId: document.draftId,
+        hostRevision: document.revision,
+        targetEpicId: document.target.epicId ?? current.targetEpicId,
+      };
+      writeStoredDraft(chatId, blockId, keep);
+      return {
+        draftsByChat: {
+          ...state.draftsByChat,
+          [chatId]: { ...chatDrafts, [blockId]: keep },
+        },
+      };
+    }
+    writeStoredDraft(chatId, blockId, next);
+    return {
+      draftsByChat: {
+        ...state.draftsByChat,
+        [chatId]: { ...chatDrafts, [blockId]: next },
+      },
+    };
+  });
+}
+
+export function applyInterviewHostDelete(draftId: string): void {
+  const found = findInterviewByDraftId(draftId);
+  if (found === null) return;
+  useInterviewDraftStore.getState().clearDraft(found.chatId, found.blockId);
+}
+
+export function collectInterviewDirtyWrites(): ReadonlyArray<{
+  readonly chatId: string;
+  readonly blockId: string;
+  readonly draft: StoredInterviewDraft;
+}> {
+  const out: Array<{
+    readonly chatId: string;
+    readonly blockId: string;
+    readonly draft: StoredInterviewDraft;
+  }> = [];
+  const draftsByChat = useInterviewDraftStore.getState().draftsByChat;
+  for (const [chatId, chatDrafts] of Object.entries(draftsByChat)) {
+    if (chatDrafts === undefined) continue;
+    for (const [blockId, draft] of Object.entries(chatDrafts)) {
+      if (draft === undefined) continue;
+      if (draft.generation <= draft.syncedGeneration) continue;
+      out.push({ chatId, blockId, draft });
+    }
+  }
+  return out;
+}
+
+export function dropInterviewAbsentFromList(
+  hostId: string,
+  listedIds: ReadonlySet<string>,
+  boundHostByKey: ReadonlyMap<string, string>,
+): void {
+  const draftsByChat = useInterviewDraftStore.getState().draftsByChat;
+  for (const [chatId, chatDrafts] of Object.entries(draftsByChat)) {
+    if (chatDrafts === undefined) continue;
+    for (const [blockId, draft] of Object.entries(chatDrafts)) {
+      if (draft === undefined) continue;
+      const boundHostId = boundHostByKey.get(
+        interviewDraftBindingKey(chatId, blockId),
+      );
+      if (boundHostId === undefined || boundHostId !== hostId) continue;
+      if (draft.generation > draft.syncedGeneration) continue;
+      if (listedIds.has(draft.draftId)) continue;
+      dropInterviewLocalMirror(draft.draftId);
+    }
+  }
+}
+
+/**
+ * List-absence drops host revision bookkeeping only. Answers stay put;
+ * `applyInterviewHostDelete` is the authoritative content clear.
+ */
+function dropInterviewLocalMirror(draftId: string): void {
+  const found = findInterviewByDraftId(draftId);
+  if (found === null) return;
+  if (found.draft.hostRevision === 0) return;
+  const next: StoredInterviewDraft = {
+    ...found.draft,
+    hostRevision: 0,
+  };
+  writeStoredDraft(found.chatId, found.blockId, next);
+  useInterviewDraftStore.setState((state) => {
+    const chatDrafts = ownValue(state.draftsByChat, found.chatId);
+    return {
+      draftsByChat: {
+        ...state.draftsByChat,
+        [found.chatId]: { ...chatDrafts, [found.blockId]: next },
+      },
+    };
+  });
+}
+
+export function findInterviewByDraftId(draftId: string): {
+  readonly chatId: string;
+  readonly blockId: string;
+  readonly draft: StoredInterviewDraft;
+} | null {
+  const draftsByChat = useInterviewDraftStore.getState().draftsByChat;
+  for (const [chatId, chatDrafts] of Object.entries(draftsByChat)) {
+    if (chatDrafts === undefined) continue;
+    for (const [blockId, draft] of Object.entries(chatDrafts)) {
+      if (draft?.draftId === draftId) {
+        return { chatId, blockId, draft };
+      }
+    }
+  }
+  return null;
 }

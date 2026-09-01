@@ -4,7 +4,9 @@ import {
   RunnerHostInvoke,
   RunnerHostSync,
 } from "../../ipc-contracts/ipc-channels";
+import type { BrowserScreencastServerFrame } from "@traycer/protocol/host/browser/contracts";
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation-types";
+import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
 import type { DesktopNotificationForegroundDisplay } from "../../ipc-contracts/notification-types";
 
 /**
@@ -152,6 +154,7 @@ interface PreloadBridge {
     dispose: () => void;
   };
   notifications: {
+    readonly systemSettings: { open(): Promise<void> } | null;
     onForegroundDisplay(
       handler: (display: DesktopNotificationForegroundDisplay) => void,
     ): { dispose: () => void };
@@ -168,7 +171,8 @@ interface PreloadBridge {
     getPathForFile(file: File): string;
     writeTemporaryFile(input: unknown): Promise<string>;
     copyTemporaryFiles(paths: readonly string[]): Promise<readonly string[]>;
-    saveFile(input: unknown): Promise<string | null>;
+    saveFile(input: unknown): Promise<unknown>;
+    openSavedFile(path: string): Promise<void>;
   };
   requestHostRespawn(): Promise<unknown>;
   hostManagement: {
@@ -192,6 +196,7 @@ interface PreloadBridge {
     revealLog(target: unknown): Promise<unknown>;
     tailLog(input: unknown): Promise<unknown>;
   };
+  browserView: BrowserViewBridge;
   service: {
     install(): Promise<void>;
     uninstall(purge: boolean): Promise<void>;
@@ -497,6 +502,32 @@ describe("preload new-capability wiring", () => {
     expect(bridge.initialRoute).toBe("/epics/epic-a/tab-a");
   });
 
+  it("routes native notification settings through dedicated IPC", async () => {
+    const platform = vi
+      .spyOn(process, "platform", "get")
+      .mockReturnValue("darwin");
+    const calls: Array<{ readonly channel: string; readonly args: unknown[] }> =
+      [];
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn: (channel, ...args) => {
+        calls.push({ channel, args });
+        return Promise.resolve(undefined);
+      },
+      sendSyncFn: undefined,
+    });
+
+    await bridge.notifications.systemSettings?.open();
+
+    expect(calls).toContainEqual({
+      channel: RunnerHostInvoke.notificationOpenSystemSettings,
+      args: [],
+    });
+    platform.mockRestore();
+  });
+
   it("forwards Windows top-level menu popup requests with their anchor", async () => {
     const calls: Array<{ readonly channel: string; readonly args: unknown[] }> =
       [];
@@ -677,6 +708,12 @@ describe("preload new-capability wiring", () => {
       type: "image/png",
       bytes,
     });
+
+    await bridge.fileDrops.openSavedFile("/tmp/saved/diagram.png");
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.fileOpenSaved,
+      "/tmp/saved/diagram.png",
+    );
   });
 
   it("exposes menu-command and support bridges", async () => {
@@ -894,6 +931,157 @@ describe("preload new-capability wiring", () => {
         userName: "User",
         email: "user@example.com",
       },
+    });
+  });
+
+  it("forwards browser cookie crypto state through ipcRenderer.invoke", async () => {
+    const cryptoState = {
+      mode: "degraded",
+      persistence: "ephemeral",
+      reason: "keychain-denied",
+      storageBackend: null,
+      encryptionAvailable: false,
+    };
+    const invokeFn = vi.fn(async (channel: string) => {
+      if (channel === RunnerHostInvoke.browserViewCookieCryptoStateGet) {
+        return cryptoState;
+      }
+      return undefined;
+    });
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn,
+      sendSyncFn: undefined,
+    });
+
+    await expect(bridge.browserView.getCookieCryptoState()).resolves.toEqual(
+      cryptoState,
+    );
+
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.browserViewCookieCryptoStateGet,
+    );
+    expect(invokeFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("exposes capturePrimaryProfile as a zero-arg invoke (ticket 06)", async () => {
+    const primaryResult = {
+      status: "captured",
+      storageState: {
+        cookies: [
+          {
+            name: "sid",
+            value: "abc",
+            domain: "example.com",
+            path: "/",
+            expires: -1,
+            httpOnly: true,
+            secure: true,
+            sameSite: "Lax",
+          },
+        ],
+        origins: [],
+      },
+      reason: null,
+    };
+    const invokeFn = vi.fn(async (channel: string) => {
+      if (channel === RunnerHostInvoke.browserViewPrimaryProfileCapture) {
+        return primaryResult;
+      }
+      return undefined;
+    });
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn,
+      sendSyncFn: undefined,
+    });
+
+    await expect(bridge.browserView.capturePrimaryProfile()).resolves.toEqual(
+      primaryResult,
+    );
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.browserViewPrimaryProfileCapture,
+    );
+    expect(invokeFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("exposes native PiP capture through the browser view bridge", async () => {
+    const invokeFn = vi.fn(() => Promise.resolve(undefined));
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn,
+      sendSyncFn: undefined,
+    });
+    const input = {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      registrationId: "registration-1",
+      maxWidth: 640,
+      maxHeight: 360,
+      quality: 70,
+    };
+    const frames: BrowserScreencastServerFrame[] = [];
+    const subscription = bridge.browserView.onPipCaptureFrame((frame) => {
+      frames.push(frame);
+    });
+
+    await bridge.browserView.startPipCapture(input);
+    fakeElectron.emit(RunnerHostEvent.pipCaptureFrame, {
+      frame: {
+        kind: "stalled",
+        hasBinaryPayload: false,
+      },
+      jpegBytes: null,
+    });
+    // The video plane's frame kinds ride this bridge unfiltered (webrtc
+    // ticket 12, G5): the payload is the whole server-frame union, so a kind
+    // the bridge never heard of must still reach the renderer intact.
+    fakeElectron.emit(RunnerHostEvent.pipCaptureFrame, {
+      frame: {
+        kind: "agentCursor",
+        hasBinaryPayload: false,
+        type: "move",
+        epoch: 3,
+        normalizedX: 0.25,
+        normalizedY: 0.75,
+        label: "Agent",
+      },
+      jpegBytes: null,
+    });
+    subscription.dispose();
+    fakeElectron.emit(RunnerHostEvent.pipCaptureFrame, {
+      frame: {
+        kind: "stalled",
+        hasBinaryPayload: false,
+      },
+      jpegBytes: null,
+    });
+    await bridge.browserView.stopPipCapture();
+
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.pipCaptureStart,
+      input,
+    );
+    expect(invokeFn).toHaveBeenCalledWith(RunnerHostInvoke.pipCaptureStop);
+    expect(frames.map((frame) => frame.kind)).toEqual([
+      "stalled",
+      "agentCursor",
+    ]);
+    expect(frames.at(1)).toEqual({
+      kind: "agentCursor",
+      hasBinaryPayload: false,
+      type: "move",
+      epoch: 3,
+      normalizedX: 0.25,
+      normalizedY: 0.75,
+      label: "Agent",
     });
   });
 });

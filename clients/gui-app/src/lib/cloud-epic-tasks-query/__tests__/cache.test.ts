@@ -100,6 +100,53 @@ describe("removeDeletedEpicsFromCloudTaskCaches", () => {
       queryClient.getQueryData<ListTasksResponse>(otherUserKey)?.tasks,
     ).toHaveLength(1);
   });
+
+  it("keeps the chat-host facet group when deleting, decrementing its counts", () => {
+    // The group's PRESENCE is a sentinel: `useHistoryQuery` reads a missing
+    // `chatHosts` as proof the server never applied the host filter and
+    // withholds every row. Rebuilding facets without it would strand a
+    // host-filtered list in "can't filter by host here" - permanently, since
+    // these entries never refetch on their own.
+    const queryClient = new QueryClient();
+    const key = cloudEpicTasksQueryKey(
+      "host-a",
+      "user-1",
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    queryClient.setQueryData<ListTasksResponse>(key, {
+      tasks: [
+        {
+          ...taskLight("epic-a", "Alpha", "traycer/gui-app", "user-1"),
+          chatHostIds: ["host-a", "host-b"],
+        },
+        {
+          ...taskLight("epic-b", "Beta", "traycer/server", "user-1"),
+          chatHostIds: ["host-b"],
+        },
+      ],
+      hasMore: false,
+      facets: {
+        repos: [],
+        workspaces: [],
+        ownershipScopes: [{ value: "mine", count: 2 }],
+        chatHosts: [
+          { hostId: "host-a", count: 1 },
+          { hostId: "host-b", count: 2 },
+        ],
+      },
+    });
+
+    removeDeletedEpicsFromCloudTaskCaches(
+      queryClient,
+      { hostId: null, userId: "user-1" },
+      ["epic-a"],
+    );
+
+    // host-a lost its only task and drops out; host-b keeps the survivor.
+    expect(
+      queryClient.getQueryData<ListTasksResponse>(key)?.facets?.chatHosts,
+    ).toEqual([{ hostId: "host-b", count: 1 }]);
+  });
 });
 
 describe("readEpicTitlesFromCloudTaskCaches", () => {

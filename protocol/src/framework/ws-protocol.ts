@@ -1,5 +1,16 @@
 import { z } from "zod";
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
+import {
+  clientCompatibilityRequirementSchema,
+  clientHandshakeIdentitySchema,
+  type ClientCompatibilityRequirement,
+  type ClientHandshakeIdentity,
+} from "@traycer/protocol/framework/client-identity";
+import {
+  holdersRevisionWireFieldSchema,
+  worktreeBusyHoldersWireFieldSchema,
+  type WorktreeBusyHolder,
+} from "./worktree-busy-holders";
 
 /**
  * Wire-level frame types for the per-request WebSocket RPC protocol.
@@ -16,14 +27,13 @@ import type { SchemaVersion } from "@traycer/protocol/framework/index";
  */
 
 /**
- * Per-method canonical version manifest exchanged on connection open.
+ * Per-method version manifest exchanged on connection open.
  *
- * Each side advertises, per known method, only its canonical (highest
- * installed) `{ major, minor }`. Local registries carry the structural
- * invariants required to answer "can I bridge from my canonical to theirs?"
- * without extra data on the wire.
+ * Each side advertises, per known method, its canonical (highest installed)
+ * `{ major, minor }` plus every installed major. An omitted `supportedMajors`
+ * is reserved for legacy peers that predate this additive field.
  */
-export type ConnectionManifest = Readonly<Record<string, SchemaVersion>>;
+export type ConnectionManifest = Readonly<Record<string, ManifestMethodEntry>>;
 
 /**
  * Discriminated reason for a method being incompatible between two sides.
@@ -34,7 +44,9 @@ export type ConnectionManifest = Readonly<Record<string, SchemaVersion>>;
  *   between the two canonicals using its installed upgrade/downgrade paths.
  */
 export type IncompatibleMethodBlocking =
-  "client-missing-method" | "host-missing-method" | "no-bridge";
+  | "client-missing-method"
+  | "host-missing-method"
+  | "no-bridge";
 
 /**
  * Per-method incompatibility record carried on a fatal error frame. Either
@@ -147,17 +159,37 @@ export type FatalErrorDetails = {
    * retryable fatal it already understands.
    */
   readonly restartIntent?: HostRestartIntent;
+  /**
+   * Present exactly when this connection was refused by the host's CLIENT
+   * COMPATIBILITY EPOCH gate - see {@link ClientCompatibilityRequirement}.
+   *
+   * Additive and optional under the same rule as the two fields above, and it
+   * is what makes this rejection survivable for the population it targets: a
+   * released old app strips this member and is left with `code`, `reason`,
+   * `upgradeGuidance` and `retryable: false`, which it already handles as a
+   * terminal stop. That is precisely why the epoch rejection keeps the
+   * existing `INCOMPATIBLE` code and why its `reason` has to be independently
+   * actionable - the clients that most need to read it are the ones that
+   * cannot see this field at all.
+   */
+  readonly clientCompatibilityRequirement?: ClientCompatibilityRequirement;
 };
 
 /**
  * First frame sent by the client: bearer token plus the client's per-method
- * canonical manifest.
+ * version manifest.
  */
 export type ClientOpenFrame = {
   readonly kind: "open";
   readonly token: string;
   readonly manifest: ConnectionManifest;
   readonly optionalManifest?: ConnectionManifest;
+  /**
+   * Who is connecting - see {@link ClientHandshakeIdentity}. Optional on the
+   * wire so an old client's omission reaches the host's deliberate
+   * legacy-epoch verdict instead of a generic parse failure.
+   */
+  readonly clientIdentity?: ClientHandshakeIdentity;
 };
 
 /**
@@ -187,12 +219,14 @@ export type ClientFatalErrorFrame = {
  * connection.
  */
 export type ClientFrame =
-  ClientOpenFrame | ClientRequestFrame | ClientFatalErrorFrame;
+  | ClientOpenFrame
+  | ClientRequestFrame
+  | ClientFatalErrorFrame;
 
 /**
  * Host acknowledgement of a successful token + compatibility check, carrying
- * the host's per-method canonical manifest so the client can run its own
- * mirror check.
+ * the host's selected per-method manifest so the client can run its own mirror
+ * check.
  */
 export type HostOpenAckFrame = {
   readonly kind: "openAck";
@@ -211,7 +245,12 @@ export type HostResponseFrame = {
   readonly method: string;
   readonly schemaVersion: SchemaVersion;
   readonly result: unknown | null;
-  readonly error: { readonly code: string; readonly message: string } | null;
+  readonly error: {
+    readonly code: string;
+    readonly message: string;
+    readonly holders?: readonly WorktreeBusyHolder[];
+    readonly holdersRevision?: string;
+  } | null;
 };
 
 /**
@@ -228,7 +267,9 @@ export type HostFatalErrorFrame = {
  * connection.
  */
 export type HostFrame =
-  HostOpenAckFrame | HostResponseFrame | HostFatalErrorFrame;
+  | HostOpenAckFrame
+  | HostResponseFrame
+  | HostFatalErrorFrame;
 
 // ---- Canonical Zod schemas -------------------------------------------- //
 
@@ -239,12 +280,23 @@ export const schemaVersionSchema = z.object({
 });
 
 /**
- * Canonical schema for the per-method canonical version manifest exchanged
- * on `open` / `openAck`.
+ * Per-method manifest entry. This deliberately remains non-strict: a newer
+ * peer's future additive keys must be stripped by an older peer rather than
+ * rejecting an otherwise compatible connection.
+ */
+export const manifestMethodEntrySchema = schemaVersionSchema.extend({
+  supportedMajors: z.array(z.number().int().nonnegative()).min(1).optional(),
+});
+
+export type ManifestMethodEntry = z.infer<typeof manifestMethodEntrySchema>;
+
+/**
+ * Canonical schema for the per-method version manifest exchanged on `open` /
+ * `openAck`.
  */
 export const connectionManifestSchema = z.record(
   z.string(),
-  schemaVersionSchema,
+  manifestMethodEntrySchema,
 );
 
 /**
@@ -302,6 +354,12 @@ export const fatalErrorDetailsSchema = z.object({
   // Additive/optional, same rule as `retryable`: absent from every host that
   // predates the restart tombstone, and stripped by every client that does.
   restartIntent: hostRestartIntentSchema.optional(),
+  // Additive/optional, same rule again: absent from every host that predates
+  // the compatibility-epoch gate, and stripped by every client that does -
+  // which is exactly the population this rejection is aimed at, so the
+  // envelope's `reason` carries the whole remedy on its own.
+  clientCompatibilityRequirement:
+    clientCompatibilityRequirementSchema.optional(),
 });
 
 /** Canonical schema for the client `open` frame. */
@@ -310,6 +368,11 @@ export const clientOpenFrameSchema = z.object({
   token: z.string(),
   manifest: connectionManifestSchema,
   optionalManifest: connectionManifestSchema.optional(),
+  // Additive/optional in BOTH directions: a released old host's copy of this
+  // schema strips it (so a new client still connects), and a released old
+  // client omits it (so a new host sees "no identity" and applies its legacy
+  // epoch rule rather than rejecting the frame as malformed).
+  clientIdentity: clientHandshakeIdentitySchema.optional(),
 });
 
 /** Canonical schema for the client `request` frame. */
@@ -354,6 +417,11 @@ export const hostOpenAckFrameSchema = z.object({
 export const hostResponseErrorSchema = z.object({
   code: z.string(),
   message: z.string(),
+  // Typed `WORKTREE_BUSY` inventory. Malformed values are sanitized to
+  // absent rather than rejecting the envelope — adding this optional
+  // field must never fail a `{ code, message }` that parsed before it.
+  holders: worktreeBusyHoldersWireFieldSchema,
+  holdersRevision: holdersRevisionWireFieldSchema,
 });
 
 /** Canonical schema for the host `response` frame. */

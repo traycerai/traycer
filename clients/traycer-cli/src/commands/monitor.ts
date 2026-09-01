@@ -7,6 +7,7 @@ import {
   agentInboxSubscribeServerFrameSchema,
   agentInboxSubscribeServerFrameSchemaV10,
   agentInboxSubscribeServerFrameSchemaV11,
+  agentInboxSubscribeServerFrameSchemaV12,
   type AgentInboxMessage,
   type AgentInboxNotice,
 } from "@traycer/protocol/host/agent/inbox";
@@ -51,6 +52,7 @@ import {
   createStoreBackedRevalidator,
 } from "../store/credentials-store";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
+import { CLI_CLIENT_IDENTITY } from "../cli-version";
 
 /**
  * `traycer monitor` — long-running background command spawned inside a Claude
@@ -66,6 +68,25 @@ import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/tr
  *
  * stdout carries inbox messages only; all connection/diagnostic noise goes to
  * stderr so it never pollutes the agent-facing stream.
+ *
+ * NOT read-only, despite "stream" (CLI-021). Three durable effects, all of them
+ * required for the stream to be correct rather than incidental:
+ *
+ *  1. Delivery acknowledgement - a message confirmed onto stdout advances the
+ *     agent's inbox server-side, so the at-least-once inbox stops redelivering
+ *     it on reconnect. From the negotiated `@1.2` this CLI enqueues the
+ *     `agent.inbox.ack` itself; below that there is no event id on the frame
+ *     and the host retires the row on its own (see `handleServerFrame`).
+ *  2. Credential maintenance - the store-backed revalidator rotates and
+ *     PERSISTS this machine's credentials, proactively before expiry and
+ *     reactively on `UNAUTHORIZED`. A rotation spends a single-use refresh
+ *     token, which is why it goes through the locked store.
+ *  3. Host-credential provisioning - a host reporting `missing` gets a
+ *     delegated credential minted for it, so it keeps serving after this
+ *     process exits.
+ *
+ * On the readonly agent surface this command is hidden but NOT refused; see
+ * `MONITOR_SURFACE_NOTE` in `../agent-surface.ts` for that decision.
  */
 const SUBSCRIBE_METHOD = "agent.inbox.subscribe" as const;
 const OPEN_ACK_TIMEOUT_MS = 10_000;
@@ -154,7 +175,13 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
   // land a `commit-failed` spend while the monitor keeps running - disposed in
   // the `finally` below.
   const store = createCliCredentialsStore();
-  const revalidator = createStoreBackedRevalidator({ store, lease });
+  // `signal: null`: the monitor's revalidator lives as long as the command
+  // itself - there is no earlier deadline to cancel a rotation against.
+  const revalidator = createStoreBackedRevalidator({
+    store,
+    lease,
+    signal: null,
+  });
 
   // The shared client reads `endpoint()` on every (re)connect, so a poller that
   // refreshes the cached endpoint is the CLI's equivalent of the renderer's
@@ -206,6 +233,7 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
     // back off and re-subscribe on `network-error`), so wiring the client
     // handler too would double up. Non-UNAUTHORIZED fatals stay terminal there.
     auth: null,
+    clock: null,
     // Delegated host-credential provisioning. `monitor` is the CLI command that
     // most needs it: the host it watches should keep serving after this process
     // exits. Provisioning is silent, so this works the same whether `monitor` is
@@ -214,7 +242,14 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
       authnBaseUrl: auth.authnBaseUrl,
       bearer: () => readLeaseBearer(lease),
       diag: (message) => diag(message),
+      signal: null,
+      unavailableNote:
+        "continuing without a host credential — it will stop working when this connection ends.",
+      onUnauthorized: null,
     }),
+    // The monitor provisions opportunistically and never verifies adoption -
+    // the next connection's ack settles it.
+    onHostCredentialState: null,
     // The CLI has no selection authority to feed: it holds no lease
     // state and never fails a window over.
     evidence: NO_TRANSPORT_EVIDENCE,
@@ -225,6 +260,7 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
     pongTimeoutMs: PONG_TIMEOUT_MS,
     initialBackoffMs: INITIAL_BACKOFF_MS,
     maxBackoffMs: MAX_BACKOFF_MS,
+    clientIdentity: CLI_CLIENT_IDENTITY,
   });
 
   // Proactively refresh the bearer shortly before its ~4h TTL so a long-running
@@ -598,6 +634,12 @@ type NormalizedServerFrame =
   | { readonly kind: "role-awareness"; readonly event: RoleAwarenessEvent }
   | { readonly kind: "pong" };
 
+function noticeWithoutStopProvenance(
+  notice: Omit<AgentInboxNotice, "stopInitiator">,
+): AgentInboxNotice {
+  return { ...notice, stopInitiator: null };
+}
+
 /**
  * Parses against the schema tree matching the NEGOTIATED minor, not always
  * the latest one this build knows. A new monitor talking to an old host
@@ -616,7 +658,10 @@ function parseServerFrame(
       return { kind: "message", item: parsed.data.item, eventId: null };
     }
     if (parsed.data.kind === "notice") {
-      return { kind: "notice", notice: parsed.data.notice };
+      return {
+        kind: "notice",
+        notice: noticeWithoutStopProvenance(parsed.data.notice),
+      };
     }
     return { kind: "pong" };
   }
@@ -627,7 +672,31 @@ function parseServerFrame(
       return { kind: "message", item: parsed.data.item, eventId: null };
     }
     if (parsed.data.kind === "notice") {
-      return { kind: "notice", notice: parsed.data.notice };
+      return {
+        kind: "notice",
+        notice: noticeWithoutStopProvenance(parsed.data.notice),
+      };
+    }
+    if (parsed.data.kind === "role-awareness") {
+      return { kind: "role-awareness", event: parsed.data.event };
+    }
+    return { kind: "pong" };
+  }
+  if (negotiated !== null && negotiated.major === 1 && negotiated.minor === 2) {
+    const parsed = agentInboxSubscribeServerFrameSchemaV12.safeParse(envelope);
+    if (!parsed.success) return null;
+    if (parsed.data.kind === "message") {
+      return {
+        kind: "message",
+        item: parsed.data.item,
+        eventId: parsed.data.item.eventId,
+      };
+    }
+    if (parsed.data.kind === "notice") {
+      return {
+        kind: "notice",
+        notice: noticeWithoutStopProvenance(parsed.data.notice),
+      };
     }
     if (parsed.data.kind === "role-awareness") {
       return { kind: "role-awareness", event: parsed.data.event };
@@ -841,8 +910,17 @@ function inactivityHeadline(
         ? `${receiverLabel} is blocked waiting on a human — it ${detail} — and will not reply until someone responds`
         : `${receiverLabel} is blocked waiting on a human and will not reply until someone responds`;
     case "receiver-cancelled":
-      return `${receiverLabel} was stopped by the user — your message could not be delivered and this request is now closed`;
+      return `${receiverLabel} was stopped by ${stopInitiatorLabel(notice)} — your message could not be delivered and this request is now closed`;
   }
+}
+
+function stopInitiatorLabel(notice: AgentInboxNotice): string {
+  const initiator = notice.stopInitiator;
+  if (initiator === null || initiator.type === "user") return "the user";
+  const title = initiator.agentTitle?.trim();
+  return title !== undefined && title.length > 0
+    ? `agent ${title} (${initiator.agentId})`
+    : `agent ${initiator.agentId}`;
 }
 
 function printInboxNotice(notice: AgentInboxNotice): void {
@@ -897,7 +975,7 @@ function printReceiverCancelledNotice(
   const plural = dropped.length > 1;
   const headlineLines = plural
     ? [
-        `[traycer inbox] inactivity notice — ${dropped.length} messages you sent could not be delivered; the user stopped the agents you were waiting on:`,
+        `[traycer inbox] inactivity notice — ${dropped.length} messages you sent could not be delivered; ${stopInitiatorLabel(notice)} stopped the agents you were waiting on:`,
         ...dropped.map(
           (thread) =>
             `[traycer inbox]   · agent ${thread.receiverAgentId} (responseId ${thread.responseId})`,

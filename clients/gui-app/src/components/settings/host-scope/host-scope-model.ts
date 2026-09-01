@@ -154,6 +154,11 @@ export function buildHostScopeOptions(
         service: isLocalMachine ? input.localService : undefined,
         lease: leases.get(hostId) ?? null,
         authorityAttached: input.authorityAttached,
+        // The registry row carries pure liveness; the account's entitlement is
+        // this input, the same one the route gates below read. Passing it here
+        // is what keeps the health word and the route verdict from disagreeing
+        // about the same host.
+        planAllowsRemote: !input.remoteHostsPlanRestricted,
         nowMs: input.nowMs,
       }),
       updateState: item?.status.updateState ?? null,
@@ -186,13 +191,20 @@ export function buildHostScopeOptions(
  * call hangs — the scope read `ready`, panels mounted, and the Add-host dialog
  * announced a machine as connected and ready to run agents.
  *
+ * EXPORTED for `useConnectableHostIds`, which answers the same question of the
+ * raw directory for a surface that must know the fleet's shape before it can
+ * afford to mount `useHostOptions` (Sweep's host-picker gate). It calls THIS
+ * rather than restating it, for exactly the reason the paragraph above gives:
+ * a hand-copied dialability predicate is only right until the transport learns
+ * something the copy cannot be told.
+ *
  * The plan gate is the same kind of claim. A remote host on a plan without
  * remote hosts advertises a relay URL the server refuses to attach
  * (`plan_restricted`); the header and workspace pickers already disable those
  * rows. Registry-backed administration is account-level and unaffected, so it
  * keeps rendering — the entitlement costs the RPC route, not the whole host.
  */
-function isAdministrableRoute(
+export function isAdministrableRoute(
   entry: HostDirectoryEntry | null,
   remoteHostsPlanRestricted: boolean,
   hasLiveSession: boolean,
@@ -225,9 +237,8 @@ function isAdministrableRoute(
  *
  *   - the CLIENT's own plan gate (`remoteHostsPlanRestricted`) — the route is
  *     live and the server would refuse the attach;
- *   - the CLOUD's verdict (`connectivity: "local-only"` ⇒ `plan-restricted`) —
- *     the host never attaches to a relay at all, because the owner's plan does
- *     not include remote hosts.
+ *   - the ENTRY's stamped plan (`planAllowsRemote: false` ⇒ `plan-restricted`)
+ *     — the host is alive or unreadable, but this account has no remote route.
  *
  * The old body demanded a dialable entry, which the second case can never
  * satisfy: a `local-only` host is exactly the one the mapper marks

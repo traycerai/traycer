@@ -1,4 +1,5 @@
 import {
+  defineDowngradePath,
   defineRpcContract,
   defineUpgradePath,
 } from "@traycer/protocol/framework/index";
@@ -48,12 +49,15 @@ import {
   listEpicCollaboratorsResponseSchema,
   getTaskContextsRequestSchema,
   getTaskContextsResponseSchema,
+  getTaskContextsResponseSchemaPre12,
   getTaskContextsResponseSchemaV10,
   isFoundTaskContext,
   listTasksRequestSchema,
   listTasksRequestSchemaV11,
+  listTasksRequestSchemaPre13,
   listTasksResponseSchema,
   listTasksResponseSchemaV10,
+  listTasksResponseSchemaPre13,
   prepareArtifactImageRequestSchema,
   prepareArtifactImageResponseSchema,
   removeEpicRepoRequestSchema,
@@ -104,6 +108,8 @@ import {
   epicSubscribeV10,
   epicSubscribeV11,
   epicSubscribeV12,
+  epicSubscribeV13,
+  epicSubscribeV20,
 } from "@traycer/protocol/host/epic/subscribe";
 import {
   listCloudChatPayloadsRequestSchema,
@@ -138,11 +144,34 @@ import {
   listChatRecordsResponseSchema,
   getChatRunSettingsRequestSchema,
   getChatRunSettingsResponseSchema,
+  getChatRunSettingsResponseSchemaV10,
 } from "@traycer/protocol/host/epic/chat-records";
 import {
   readChatAttachmentRequestSchema,
   readChatAttachmentResponseSchema,
 } from "@traycer/protocol/host/epic/chat-attachment";
+import {
+  artifactVersionsGetBlobRequestSchema,
+  artifactVersionsGetBlobResponseSchema,
+  artifactVersionsListRequestSchema,
+  artifactVersionsListResponseSchema,
+  artifactVersionsRestoreRequestSchema,
+  artifactVersionsRestoreResponseSchema,
+  deletedArtifactsListRequestSchema,
+  deletedArtifactsListResponseSchema,
+  deletedArtifactsReviveRequestSchema,
+  deletedArtifactsReviveResponseSchema,
+  artifactVersionSettingsGetRequestSchema,
+  artifactVersionSettingsGetResponseSchema,
+  artifactVersionSettingsSetEnabledRequestSchema,
+  artifactVersionSettingsSetRetentionPolicyRequestSchema,
+  artifactVersionSettingsClearHistoryRequestSchema,
+  artifactVersionSettingsCommandResponseSchema,
+} from "@traycer/protocol/host/epic/artifact-versions";
+import {
+  fetchArtifactAttachmentRequestSchema,
+  fetchArtifactAttachmentResponseSchema,
+} from "@traycer/protocol/host/epic/artifact-attachment";
 
 // `epic.listTasks@1.0` - frozen pre-pinning host entry point for the CloudData
 // task-list query. Both request and response preserve the released wire shape.
@@ -160,7 +189,7 @@ export const epicListTasksV11 = defineRpcContract({
   method: "epic.listTasks",
   schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: listTasksRequestSchemaV11,
-  responseSchema: listTasksResponseSchema,
+  responseSchema: listTasksResponseSchemaPre13,
 });
 
 export const epicListTasksUpgradeV10ToV11 = defineUpgradePath<
@@ -181,8 +210,8 @@ export const epicListTasksUpgradeV10ToV11 = defineUpgradePath<
 export const epicListTasksV12 = defineRpcContract({
   method: "epic.listTasks",
   schemaVersion: { major: 1, minor: 2 } as const,
-  requestSchema: listTasksRequestSchema,
-  responseSchema: listTasksResponseSchema,
+  requestSchema: listTasksRequestSchemaPre13,
+  responseSchema: listTasksResponseSchemaPre13,
 });
 
 export const epicListTasksUpgradeV11ToV12 = defineUpgradePath<
@@ -192,6 +221,32 @@ export const epicListTasksUpgradeV11ToV12 = defineUpgradePath<
   from: epicListTasksV11.schemaVersion,
   to: epicListTasksV12.schemaVersion,
   upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+// `epic.listTasks@1.3` adds the chat-host dimension: a `chatHostIds` filter on
+// the request and a matching `chatHosts` facet group on the response. Both are
+// optional, so a v1.2 request is already a valid latest request - but the
+// version gate is what stops a NEW client from believing an OLD host applied a
+// host filter it silently dropped, which would render an unfiltered list as a
+// filtered one.
+export const epicListTasksV13 = defineRpcContract({
+  method: "epic.listTasks",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  requestSchema: listTasksRequestSchema,
+  responseSchema: listTasksResponseSchema,
+});
+
+export const epicListTasksUpgradeV12ToV13 = defineUpgradePath<
+  typeof epicListTasksV12,
+  typeof epicListTasksV13
+>({
+  from: epicListTasksV12.schemaVersion,
+  to: epicListTasksV13.schemaVersion,
+  upgradeRequest: (request) => request,
+  // A v1.2 host never counted chat hosts. `chatHosts` stays absent rather
+  // than becoming `[]`: an empty array reads as "no host has any task", and
+  // the popover would render an empty section instead of falling back.
   upgradeResponse: (response) => response,
 });
 
@@ -231,7 +286,7 @@ export const epicGetTaskContextsV11 = defineRpcContract({
   method: "epic.getTaskContexts",
   schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: getTaskContextsRequestSchema,
-  responseSchema: getTaskContextsResponseSchema,
+  responseSchema: getTaskContextsResponseSchemaPre12,
 });
 
 export const epicGetTaskContextsUpgradeV10ToV11 = defineUpgradePath<
@@ -251,6 +306,32 @@ export const epicGetTaskContextsUpgradeV10ToV11 = defineUpgradePath<
       ]),
     ),
   }),
+});
+
+// `epic.getTaskContexts@1.2` carries `chatHostIds` on the found row, matching
+// `epic.listTasks@1.3`. These rows are fetched BY ID and so never pass through
+// the list filter; without the field a client cannot tell whether an id-fetched
+// task belongs to a selected host, and has to choose between showing it
+// unfiltered or dropping it entirely. Both are wrong answers.
+export const epicGetTaskContextsV12 = defineRpcContract({
+  method: "epic.getTaskContexts",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: getTaskContextsRequestSchema,
+  responseSchema: getTaskContextsResponseSchema,
+});
+
+export const epicGetTaskContextsUpgradeV11ToV12 = defineUpgradePath<
+  typeof epicGetTaskContextsV11,
+  typeof epicGetTaskContextsV12
+>({
+  from: epicGetTaskContextsV11.schemaVersion,
+  to: epicGetTaskContextsV12.schemaVersion,
+  upgradeRequest: (request) => request,
+  // `chatHostIds` stays ABSENT on an upgraded v1.1 row rather than becoming
+  // `[]`. An old host did not report no visible chat hosts; it reported
+  // nothing, and only absence lets the local predicate abstain instead of
+  // filtering the row out.
+  upgradeResponse: (response) => response,
 });
 
 /**
@@ -444,7 +525,6 @@ export const epicCreateChatUpgradeV10ToV11 = defineUpgradePath<
   }),
   upgradeResponse: (response) => response,
 });
-
 
 export const epicRenameChatV10 = defineRpcContract({
   method: "epic.renameChat",
@@ -827,6 +907,83 @@ export const epicReadChatAttachmentV10 = defineRpcContract({
   responseSchema: readChatAttachmentResponseSchema,
 });
 
+// Host-local artifact history. Every method is optional/non-floor: a client
+// connected to a host that predates this family hides the History surfaces,
+// while the rest of the Epic remains fully usable.
+export const epicArtifactVersionsListV10 = defineRpcContract({
+  method: "epic.artifactVersions.list",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: artifactVersionsListRequestSchema,
+  responseSchema: artifactVersionsListResponseSchema,
+});
+
+export const epicArtifactVersionsGetBlobV10 = defineRpcContract({
+  method: "epic.artifactVersions.getBlob",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: artifactVersionsGetBlobRequestSchema,
+  responseSchema: artifactVersionsGetBlobResponseSchema,
+});
+
+export const epicArtifactVersionsRestoreV10 = defineRpcContract({
+  method: "epic.artifactVersions.restore",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: artifactVersionsRestoreRequestSchema,
+  responseSchema: artifactVersionsRestoreResponseSchema,
+});
+
+export const epicDeletedArtifactsListV10 = defineRpcContract({
+  method: "epic.deletedArtifacts.list",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: deletedArtifactsListRequestSchema,
+  responseSchema: deletedArtifactsListResponseSchema,
+});
+
+export const epicDeletedArtifactsReviveV10 = defineRpcContract({
+  method: "epic.deletedArtifacts.revive",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: deletedArtifactsReviveRequestSchema,
+  responseSchema: deletedArtifactsReviveResponseSchema,
+});
+
+export const epicArtifactVersionSettingsGetV10 = defineRpcContract({
+  method: "epic.artifactVersionSettings.get",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: artifactVersionSettingsGetRequestSchema,
+  responseSchema: artifactVersionSettingsGetResponseSchema,
+});
+
+export const epicArtifactVersionSettingsSetEnabledV10 = defineRpcContract({
+  method: "epic.artifactVersionSettings.setEnabled",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: artifactVersionSettingsSetEnabledRequestSchema,
+  responseSchema: artifactVersionSettingsCommandResponseSchema,
+});
+
+export const epicArtifactVersionSettingsSetRetentionPolicyV10 =
+  defineRpcContract({
+    method: "epic.artifactVersionSettings.setRetentionPolicy",
+    schemaVersion: { major: 1, minor: 0 } as const,
+    requestSchema: artifactVersionSettingsSetRetentionPolicyRequestSchema,
+    responseSchema: artifactVersionSettingsCommandResponseSchema,
+  });
+
+export const epicArtifactVersionSettingsClearHistoryV10 = defineRpcContract({
+  method: "epic.artifactVersionSettings.clearHistory",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: artifactVersionSettingsClearHistoryRequestSchema,
+  responseSchema: artifactVersionSettingsCommandResponseSchema,
+});
+
+// Artifact attachment bytes remain canonical in the root document during the
+// @2 rollout, but no longer travel on `epic.subscribe`. The artifact id is the
+// authorization subject; the hash is only a content address.
+export const epicFetchArtifactAttachmentV10 = defineRpcContract({
+  method: "epic.fetchArtifactAttachment",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: fetchArtifactAttachmentRequestSchema,
+  responseSchema: fetchArtifactAttachmentResponseSchema,
+});
+
 // The per-chat run-settings tuple the row above deliberately does not carry.
 // Optional and host-local for the same reason as the list: it answers out of
 // this host's own chat store. A client without it renders the harness mark the
@@ -836,7 +993,84 @@ export const epicGetChatRunSettingsV10 = defineRpcContract({
   method: "epic.getChatRunSettings",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: getChatRunSettingsRequestSchema,
+  // Frozen at the harness id set the v1.2.0 tags shipped. Until Reasonix this
+  // pointed at the live response, whose `settings.harnessId` is the PERSISTED
+  // `guiHarnessIdSchema` - a second copy of the harness enum, on a method whose
+  // name gives no hint that it carries a catalog id. It is `degrade:
+  // unsupported` and off the released floor, so only the tag-based
+  // `protocol-compat` gate could see the growth; a plain `bun run test` stayed
+  // green. Grep RESPONSES for id enums when adding a harness, not just the
+  // three canonical catalog methods.
+  responseSchema: getChatRunSettingsResponseSchemaV10,
+});
+
+export const epicGetChatRunSettingsV20 = defineRpcContract({
+  method: "epic.getChatRunSettings",
+  schemaVersion: { major: 2, minor: 0 } as const,
+  requestSchema: getChatRunSettingsRequestSchema,
   responseSchema: getChatRunSettingsResponseSchema,
 });
 
-export { epicSubscribeV10, epicSubscribeV11, epicSubscribeV12 };
+export const epicGetChatRunSettingsUpgradeV10ToV20 = defineUpgradePath<
+  typeof epicGetChatRunSettingsV10,
+  typeof epicGetChatRunSettingsV20
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 2, minor: 0 },
+  // Request shape is identical; a v1.0 settings tuple is a valid v2.0 one
+  // (only the `harnessId` enum grows), so both upgrades are identity.
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const epicGetChatRunSettingsDowngradeV20ToV10 = defineDowngradePath<
+  typeof epicGetChatRunSettingsV20,
+  typeof epicGetChatRunSettingsV10
+>({
+  from: { major: 2, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    // A v1.0 caller only ever asks about a chat on a harness it knows, so the
+    // common case reparses cleanly. This response carries exactly ONE settings
+    // tuple, so - like the `agent.*ProviderProfile*` bridges - there is nothing
+    // to filter and the only honest options are pass-through or refuse.
+    //
+    // Refuse, deliberately, rather than answering `{ settings: null }`. That
+    // arm is in-contract and renders as "nothing to show", which makes it a
+    // tempting degrade - but it is a claim ("this chat has no persisted
+    // settings") that would be FALSE for a Reasonix chat, and the caller has no
+    // way to tell the lie from the truth. The hover card that reads this
+    // already renders the record row's harness mark when the read fails, which
+    // is exactly the documented degrade for a host that predates the method.
+    //
+    // The message names no harness, so it stays honest as the enum grows.
+    const parsed = getChatRunSettingsResponseSchemaV10.safeParse(response);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Reading this chat's run settings requires a newer Traycer client.",
+        },
+      };
+    }
+    return { ok: true, value: parsed.data };
+  },
+});
+
+// The terminal-agent RECORD read (`epic.listTuiAgents@1.0`) lives in
+// `tui-agent-records.ts` beside its schemas - the TUI eviction's sibling of
+// the chat record channel above, optional and host-local for the same
+// reason, and owner-rows-only always (terminal agents are private by user
+// ruling). Exported from there via the epic index, not re-exported here,
+// so `export *` consumers see exactly one binding.
+
+export {
+  epicSubscribeV10,
+  epicSubscribeV11,
+  epicSubscribeV12,
+  epicSubscribeV13,
+  epicSubscribeV20,
+};

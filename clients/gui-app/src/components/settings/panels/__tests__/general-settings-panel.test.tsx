@@ -24,6 +24,7 @@ import {
   useMigrationRunStore,
   type MigrationRunState,
 } from "@/stores/migration/migration-run-store";
+import { useSessionImportRunStore } from "@/stores/session-import/session-import-run-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -129,20 +130,12 @@ const windowsBridgeMock = vi.hoisted(
   (): { current: TestWindowsBridge | null } => ({ current: null }),
 );
 
-interface TestRunnerHost {
-  hostManagement: { uninstallTraycer: Mock } | null;
-}
-
 interface TestFeatureSettingsBridge {
   readonly get: Mock<() => Promise<{ readonly agentRoles: boolean }>>;
   readonly setAgentRolesEnabled: Mock<
     (enabled: boolean) => Promise<{ readonly agentRoles: boolean }>
   >;
 }
-
-const runnerHostMock = vi.hoisted((): { current: TestRunnerHost } => ({
-  current: { hostManagement: null },
-}));
 
 const hostQueryMocks = vi.hoisted((): HostQueryMocks => ({
   queryResult: {
@@ -239,10 +232,6 @@ vi.mock("@/providers/windows-bridge-context", () => ({
   useWindowsBridge: () => windowsBridgeMock.current,
 }));
 
-vi.mock("@/providers/use-runner-host", () => ({
-  useRunnerHost: () => runnerHostMock.current,
-}));
-
 vi.mock("@tanstack/react-router", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@tanstack/react-router")>();
@@ -274,6 +263,7 @@ describe("GeneralSettingsPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useMigrationRunStore.setState(idleState);
+    useSessionImportRunStore.getState().reset();
     hostQueryMocks.queryResult = {
       data: { bytes: 432 * 1024 * 1024 },
       isPending: false,
@@ -301,7 +291,6 @@ describe("GeneralSettingsPanel", () => {
     ];
     navigateMock.mockReset();
     windowsBridgeMock.current = null;
-    runnerHostMock.current = { hostManagement: null };
     clearAllPersistedStoresMock.mockClear();
     clearAllPersistedStoresMock.mockResolvedValue(undefined);
     useAuthStore.setState({
@@ -323,6 +312,10 @@ describe("GeneralSettingsPanel", () => {
       showNavigatorResourceStats: false,
       pinContextUsageBreakdown: false,
       quoteReplyEnabled: true,
+      browserLinkDefaultMode: "in-app",
+      terminalBrowserLinkOpenMode: "in-app",
+      markdownBrowserLinkOpenMode: "in-app",
+      browserDevOrigins: [],
     });
   });
 
@@ -470,6 +463,29 @@ describe("GeneralSettingsPanel", () => {
     expect(useSettingsStore.getState().quoteReplyEnabled).toBe(false);
   });
 
+  it("renders the web link default row unconditionally", () => {
+    renderPanel();
+
+    expect(screen.getByText("Web link default")).toBeTruthy();
+  });
+
+  it("renders per-kind browser link settings and removable dev origins", () => {
+    useSettingsStore.setState({
+      browserLinkDefaultMode: "per-kind",
+      browserDevOrigins: ["http://localhost:5173"],
+    });
+
+    renderPanel();
+
+    expect(screen.getByText("Terminal links")).toBeTruthy();
+    expect(screen.getByText("Markdown links")).toBeTruthy();
+    expect(screen.getByText("http://localhost:5173")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+
+    expect(useSettingsStore.getState().browserDevOrigins).toEqual([]);
+  });
+
   it("labels the steering chord with the platform modifier", () => {
     renderPanel();
 
@@ -515,6 +531,28 @@ describe("GeneralSettingsPanel", () => {
     expect(
       screen.getByText("Migrating tasks - tasks 2/7, epics 0/3"),
     ).toBeTruthy();
+  });
+
+  // A submitted run is active before the host has said how big it is, and the
+  // row must not report a size it does not have yet.
+  it("says the import is starting until the host confirms a total, then counts", () => {
+    useSessionImportRunStore.getState().markStarting(new Map());
+
+    renderPanel();
+
+    expect(screen.getByText("Starting import…")).toBeTruthy();
+    expect(screen.queryByText("Importing 0 of 0…")).toBeNull();
+    // Same run, same spinner - only the sentence was waiting on the total.
+    expect(screen.getByTestId("settings-import-sessions-spinner")).toBeTruthy();
+
+    cleanup();
+    useSessionImportRunStore
+      .getState()
+      .applyStarted({ runId: "run-1", total: 3, attached: false });
+
+    renderPanel();
+
+    expect(screen.getByText("Importing 0 of 3…")).toBeTruthy();
   });
 
   // The Danger Zone used to mix three scopes in one red box: one machine's

@@ -84,6 +84,9 @@ import { registerPowerIpc } from "./power-ipc";
 import { registerAppUpdateIpc } from "./app-update-ipc";
 import { registerGlobalShortcutsIpc } from "./global-shortcuts-ipc";
 import { registerZoomIpc } from "./zoom-ipc";
+import { registerBrowserViewIpc } from "./browser-view-ipc";
+import { registerPipCaptureIpc } from "./pip-capture-ipc";
+import type { BrowserViewManager } from "../browser-view/browser-view-manager";
 import { registerMenuIpc } from "./menu-ipc";
 import { getAppUpdateSnapshot } from "../app/updater";
 import type { HostTrayCommand } from "../../ipc-contracts/host-management-types";
@@ -96,11 +99,14 @@ import type {
   ApplyStagedOk,
   ApplyStagedTrigger,
   ConvergeReadyOk,
+  GuardedMutationOutcome,
   HostControllerStatus,
+  LifecycleAdmissionBlock,
   InstallVersionOk,
   MutationOutcome,
   MutationProgress,
   RemoveTraycerOk,
+  LocalHostMutationIntent,
   ServiceRegistrationOk,
   UninstallOk,
 } from "../host/host-controller-types";
@@ -128,6 +134,8 @@ export interface IpcWindowRecord {
 
 type IpcWindowRegistryChangeListener = () => void;
 
+export type IpcWindowRegistryEvent = "change" | "geometry";
+
 export interface IpcWindowRegistry {
   create(options: {
     readonly initialRoute: string | null;
@@ -143,8 +151,15 @@ export interface IpcWindowRegistry {
   getRecordByWebContentsId(webContentsId: number): IpcWindowRecord | null;
   getMruRecord(): IpcWindowRecord | null;
   mostRecentlyFocusedId(): string | null;
-  on(event: "change", listener: IpcWindowRegistryChangeListener): void;
-  off(event: "change", listener: IpcWindowRegistryChangeListener): void;
+  /** `geometry` fires on minimize/restore/(un)maximize only - see WindowRegistry. */
+  on(
+    event: IpcWindowRegistryEvent,
+    listener: IpcWindowRegistryChangeListener,
+  ): void;
+  off(
+    event: IpcWindowRegistryEvent,
+    listener: IpcWindowRegistryChangeListener,
+  ): void;
 }
 
 type IpcOwnershipChangeListener = (snapshot: readonly OwnershipEntry[]) => void;
@@ -215,6 +230,7 @@ export interface IpcAuthTokenStore {
     readonly token: string;
   }): Promise<TokenRotateResult>;
   delete(): Promise<void>;
+  deleteIfToken(expectedToken: string): Promise<"deleted" | "kept">;
   subscribe(listener: (change: TokenStoreChange) => void): () => void;
   migrateLegacyCredentials(
     legacy: StoredAuthTokens,
@@ -273,6 +289,18 @@ type HostChangeListener = (
 ) => void;
 
 export const QUIT_REQUEST_SERVICE_ACK_TIMEOUT_MS = 1_000;
+
+/**
+ * Upper bound on how long the quit/close path waits for a renderer to report
+ * its final browser capture. A wedged renderer that never replies must not
+ * make the app unquittable (`authorizeQuitAfterFlush` awaits this) or the
+ * window unclosable (`handleWindowClose` already preventDefault'ed), so the
+ * wait resolves as "captured as far as we can tell" instead of hanging. What
+ * that costs is every login minted since the last successful capture: the
+ * session re-materializes from the older jar, so those sites ask the user to
+ * sign in again.
+ */
+export const FINAL_BROWSER_CAPTURE_TIMEOUT_MS = 10_000;
 
 export interface QuitDecisionWaiter {
   readonly requestId: string;
@@ -360,8 +388,20 @@ export interface IpcHostLifecycle {
  * `implements` needed.
  */
 export interface IpcHostController {
+  /**
+   * The lifecycle admission verdict sampled synchronously, for a handler that
+   * must test it and submit in one stretch. `getStatus()` carries the lane
+   * half but only after awaiting disk reads, which is already too late to
+   * decide whether submitting would QUEUE behind a running intent — and it
+   * cannot see the pending-login-item revision cycle at all, which this
+   * includes. Deliberately the ONLY admission surface exposed here.
+   */
+  readonly lifecycleAdmissionBlock: LifecycleAdmissionBlock | null;
   getStatus(): Promise<HostControllerStatus>;
-  convergeReady(force: boolean): Promise<MutationOutcome<ConvergeReadyOk>>;
+  convergeReady(
+    force: boolean,
+    intent: LocalHostMutationIntent,
+  ): Promise<GuardedMutationOutcome<ConvergeReadyOk>>;
   stageLatest(): Promise<void>;
   applyStaged(
     trigger: ApplyStagedTrigger,
@@ -374,16 +414,21 @@ export interface IpcHostController {
     pin: string,
     force: boolean,
   ): Promise<MutationOutcome<InstallVersionOk>>;
-  registerService(): Promise<MutationOutcome<ServiceRegistrationOk>>;
+  registerService(
+    intent: LocalHostMutationIntent,
+  ): Promise<GuardedMutationOutcome<ServiceRegistrationOk>>;
   deregisterService(): Promise<MutationOutcome<ServiceRegistrationOk>>;
-  respawn(): Promise<MutationOutcome<ActivateInstalledOk>>;
+  respawn(
+    intent: LocalHostMutationIntent,
+  ): Promise<GuardedMutationOutcome<ActivateInstalledOk>>;
   recoverIfDown(): Promise<
     MutationOutcome<ActivateInstalledOk> | { readonly kind: "suppressed" }
   >;
   freePortAndRestart(
     pid: number | null,
     port: number | null,
-  ): Promise<MutationOutcome<ActivateInstalledOk>>;
+    intent: LocalHostMutationIntent,
+  ): Promise<GuardedMutationOutcome<ActivateInstalledOk>>;
   uninstallHost(all: boolean): Promise<MutationOutcome<UninstallOk>>;
   removeTraycer(): Promise<MutationOutcome<RemoveTraycerOk>>;
   isPendingRevisionRefreshQuarantined(): boolean;
@@ -424,7 +469,8 @@ export interface RunnerIpcRegistryOptions {
 }
 
 export type RunnerIpcBridgeOptions =
-  RunnerIpcOptions | RunnerIpcRegistryOptions;
+  | RunnerIpcOptions
+  | RunnerIpcRegistryOptions;
 
 interface FreshSnapshotWaiter {
   readonly windowId: string;
@@ -437,6 +483,13 @@ interface FreshSnapshotWaiter {
    * cannot reuse it without lying about freshness; they call this instead.
    */
   readonly resolveStale: () => void;
+}
+
+interface FinalBrowserCaptureWaiter {
+  readonly windowId: string;
+  readonly resolve: () => void;
+  readonly reject: (error: Error) => void;
+  readonly timer: NodeJS.Timeout;
 }
 
 /**
@@ -478,6 +531,11 @@ export class RunnerIpcBridge {
    * `setUnsyncedEditsSnapshot` pushes during the wait do NOT settle these.
    */
   readonly freshSnapshotWaiters = new Map<string, FreshSnapshotWaiter>();
+  private readonly finalBrowserCaptureWaiters = new Map<
+    string,
+    FinalBrowserCaptureWaiter
+  >();
+  private browserViewManager: BrowserViewManager | null = null;
 
   constructor(options: RunnerIpcBridgeOptions) {
     this.options = options;
@@ -526,6 +584,9 @@ export class RunnerIpcBridge {
     registerAppUpdateIpc(this);
     registerGlobalShortcutsIpc(this);
     registerZoomIpc(this);
+    const primaryBrowserViewManager = registerBrowserViewIpc(this);
+    this.browserViewManager = primaryBrowserViewManager;
+    registerPipCaptureIpc(this, primaryBrowserViewManager);
     registerMenuIpc(this);
     // Power IPC (renderer-driven sleep prevention) registers a `disposeFn`
     // that releases the OS power-save blocker on teardown.
@@ -767,6 +828,120 @@ export class RunnerIpcBridge {
   }
 
   /**
+   * Asks every mounted renderer, not only the ones holding a live native
+   * guest. What has to be flushed is the primary-profile store, and a window
+   * whose last native tab was already torn down (or whose tabs went dormant on
+   * a route change) still holds the coordinator that can report a jar. Only
+   * that coordinator knows whether it has anything to say, and it answers
+   * immediately when it does not.
+   */
+  async captureFinalBrowserState(): Promise<void> {
+    const windowIds = this.windowRegistry
+      .records()
+      .map((record) => record.windowId)
+      .filter((windowId) => this.appLifecycleReadyWindowIds.has(windowId));
+    // Every window gets its full chance BEFORE the first failure is re-raised.
+    // A bare `Promise.all` settles on the first rejection (an undeliverable
+    // window whose renderer is already gone), and `authorizeQuitAfterFlush`
+    // catches that and calls `app.quit()` with a healthy sibling's capture
+    // still in flight - losing the jar this path exists to save. The failure
+    // is still surfaced afterwards so the quit path can log it.
+    const attempts = windowIds.map((windowId) =>
+      this.requestFinalBrowserCapture(windowId),
+    );
+    await Promise.allSettled(attempts);
+    // Everything has settled, so this only re-raises the first failure for the
+    // caller to log; it never shortens the wait.
+    await Promise.all(attempts);
+  }
+
+  /** The native-teardown gate: this window owns guests that are about to die. */
+  needsFinalBrowserCaptureForWindow(windowId: string): boolean {
+    return (
+      this.appLifecycleReadyWindowIds.has(windowId) &&
+      this.browserViewManager?.hasNativeTabsForWindow(windowId) === true
+    );
+  }
+
+  async prepareBrowserWindowClose(windowId: string): Promise<void> {
+    const manager = this.browserViewManager;
+    if (manager === null || !this.needsFinalBrowserCaptureForWindow(windowId)) {
+      return;
+    }
+    try {
+      await this.requestFinalBrowserCapture(windowId);
+    } finally {
+      // Native teardown only. The host suspends the session to dormant on
+      // route loss and re-materializes the same durable tabs later, so a
+      // window close must never read as the user closing those tabs.
+      await manager.closeNativeSessionsForWindow(windowId);
+    }
+  }
+
+  /**
+   * Asks this window's renderer for one last browser capture and waits
+   * (bounded) for it to report back, before its native tabs are destroyed.
+   */
+  private requestFinalBrowserCapture(windowId: string): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const requestId = randomUUID();
+      const timer = setTimeout(() => {
+        if (!this.finalBrowserCaptureWaiters.delete(requestId)) return;
+        log.warn("[runner-ipc] final browser capture timed out", {
+          windowId,
+          timeoutMs: FINAL_BROWSER_CAPTURE_TIMEOUT_MS,
+        });
+        resolve();
+      }, FINAL_BROWSER_CAPTURE_TIMEOUT_MS);
+      this.finalBrowserCaptureWaiters.set(requestId, {
+        windowId,
+        resolve,
+        reject,
+        timer,
+      });
+      if (
+        this.safeSendToWindow(
+          windowId,
+          RunnerHostEvent.captureFinalBrowserState,
+          { requestId },
+        )
+      ) {
+        return;
+      }
+      this.finalBrowserCaptureWaiters.delete(requestId);
+      clearTimeout(timer);
+      reject(
+        new Error(
+          `Final browser capture request could not be delivered to window ${windowId}`,
+        ),
+      );
+    });
+  }
+
+  acknowledgeFinalBrowserCapture(windowId: string, requestId: string): void {
+    const waiter = this.finalBrowserCaptureWaiters.get(requestId);
+    if (waiter?.windowId !== windowId) return;
+    this.finalBrowserCaptureWaiters.delete(requestId);
+    clearTimeout(waiter.timer);
+    waiter.resolve();
+  }
+
+  markRendererUnavailable(windowId: string): void {
+    this.appLifecycleReadyWindowIds.delete(windowId);
+    this.rejectQuitDecisionWaitersForWindow(
+      windowId,
+      new Error("Renderer reset before resolving quit interception"),
+    );
+    this.settleFreshSnapshotWaitersAsStale(
+      (waiter) => waiter.windowId === windowId,
+    );
+    this.rejectFinalBrowserCaptureWaiters(
+      (waiter) => waiter.windowId === windowId,
+      new Error("Renderer reset before reporting its final browser capture"),
+    );
+  }
+
+  /**
    * Sends a `quitRequested` event to the renderer and resolves with the
    * renderer's decision. Used by the `before-quit` handler to coordinate the
    * "Saving - please wait" modal with the Electron shutdown sequence. The
@@ -848,6 +1023,12 @@ export class RunnerIpcBridge {
     this.syncListeners.length = 0;
     this.rejectAllQuitDecisionWaiters(
       new Error("Runner IPC bridge disposed before quit decision resolved"),
+    );
+    this.rejectFinalBrowserCaptureWaiters(
+      () => true,
+      new Error(
+        "Runner IPC bridge disposed before the final browser capture resolved",
+      ),
     );
     // Mirrors the quit-decision cleanup above: a fresh-snapshot request left
     // armed past dispose() would either fire its setTimeout against a bridge
@@ -1190,6 +1371,10 @@ export class RunnerIpcBridge {
     this.settleFreshSnapshotWaitersAsStale(
       (waiter) => !liveWindowIds.has(waiter.windowId),
     );
+    this.rejectFinalBrowserCaptureWaiters(
+      (waiter) => !liveWindowIds.has(waiter.windowId),
+      new Error("Window closed before reporting its final browser capture"),
+    );
   }
 
   removeQuitDecisionWaiter(requestId: string): QuitDecisionWaiter | null {
@@ -1251,6 +1436,18 @@ export class RunnerIpcBridge {
       if (predicate(waiter)) {
         waiter.resolveStale();
       }
+    }
+  }
+
+  private rejectFinalBrowserCaptureWaiters(
+    predicate: (waiter: FinalBrowserCaptureWaiter) => boolean,
+    error: Error,
+  ): void {
+    for (const [requestId, waiter] of this.finalBrowserCaptureWaiters) {
+      if (!predicate(waiter)) continue;
+      this.finalBrowserCaptureWaiters.delete(requestId);
+      clearTimeout(waiter.timer);
+      waiter.reject(error);
     }
   }
 }
@@ -1327,9 +1524,15 @@ class SingleWindowRegistry implements IpcWindowRegistry {
     return this.record.windowId;
   }
 
-  on(_event: "change", _listener: IpcWindowRegistryChangeListener): void {}
+  on(
+    _event: IpcWindowRegistryEvent,
+    _listener: IpcWindowRegistryChangeListener,
+  ): void {}
 
-  off(_event: "change", _listener: IpcWindowRegistryChangeListener): void {}
+  off(
+    _event: IpcWindowRegistryEvent,
+    _listener: IpcWindowRegistryChangeListener,
+  ): void {}
 }
 
 // Default quit-state for the single-window `window:` bridge variant (and any
@@ -1360,6 +1563,10 @@ class NullAuthTokenStore implements IpcAuthTokenStore {
 
   delete(): Promise<void> {
     return Promise.resolve();
+  }
+
+  deleteIfToken(): Promise<"deleted" | "kept"> {
+    return Promise.resolve("kept");
   }
 
   subscribe(): () => void {

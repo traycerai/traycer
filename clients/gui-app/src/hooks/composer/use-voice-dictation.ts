@@ -17,7 +17,11 @@ import {
 } from "@/lib/analytics";
 
 export type VoiceDictationState =
-  "idle" | "requesting" | "recording" | "transcribing" | "error";
+  | "idle"
+  | "requesting"
+  | "recording"
+  | "transcribing"
+  | "error";
 
 /**
  * Which path aborted a dictation attempt. Passed to `fail()` as a required

@@ -143,6 +143,7 @@ export function QuoteSelectionPopover(props: QuoteSelectionPopoverProps) {
     <div
       ref={floatingRef}
       data-slot="quote-selection-popover"
+      data-browser-overlay="quote-selection-popover"
       // No entrance animation: `animate-in` runs the `enter` keyframe, whose
       // only `from` frame drives `transform` to the element's underlying value.
       // Since positioning here IS a `transform` (Floating UI, set below), the

@@ -25,8 +25,10 @@ import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import type {
   DesktopAppUpdateCheckIntent,
+  DesktopAppUpdateChannelChange,
   DesktopAppUpdateSnapshot,
   DesktopAppUpdatesBridge,
+  DesktopCompatRecoveryPlan,
   DesktopReportIssueForm,
   DesktopSubmitReportResult,
   DesktopSupportBridge,
@@ -297,6 +299,7 @@ function createRunnerHostWithoutPrivateDelivery(
 
 function createBaseRunnerHost(): IRunnerHost {
   return {
+    browserView: null,
     selectionAuthority: createInertSelectionAuthorityClient(),
     refreshHostFleet: () => Promise.resolve(),
     onRegisteredHostsChange: () => null,
@@ -304,6 +307,7 @@ function createBaseRunnerHost(): IRunnerHost {
     authnBaseUrl: "https://auth.example.invalid",
     relayBaseUrl: "wss://relay.example.invalid/attach",
     hasLocalHost: true,
+    canCopyImages: true,
     validateAuthTokenIdentity: () =>
       Promise.resolve({ kind: "rejected" as const }),
     listRegisteredHosts: () =>
@@ -319,6 +323,13 @@ function createBaseRunnerHost(): IRunnerHost {
       Promise.resolve({ kind: "network-error" as const }),
     verifyStepUpChallenge: () =>
       Promise.resolve({ kind: "network-error" as const }),
+    mintLinkLoginCode: () =>
+      Promise.resolve({ kind: "network-error" as const }),
+    linkLoginStatus: () => Promise.resolve({ kind: "network-error" as const }),
+    respondLinkLogin: () => Promise.resolve({ kind: "network-error" as const }),
+    linkCodeScanner: null,
+    deviceDescriber: null,
+    linkLoginDeepLinks: null,
     updateHostVersionPolicy: () =>
       Promise.resolve({ kind: "network-error" as const }),
     deregisterHostFromAccount: () =>
@@ -336,6 +347,7 @@ function createBaseRunnerHost(): IRunnerHost {
       delete: () => Promise.resolve(),
     },
     notifications: {
+      systemSettings: null,
       show: () => Promise.resolve("presented" as const),
       onForegroundDisplay: () => ({ dispose: () => undefined }),
       onClick: () => ({ dispose: () => undefined }),
@@ -354,18 +366,21 @@ function createBaseRunnerHost(): IRunnerHost {
       copyDroppedFilePaths: (paths) => Promise.resolve(paths),
       readNativeClipboardFilePaths: () => Promise.resolve([]),
     },
+    fileSave: null,
     tokenStore: {
       get: () => Promise.resolve(null),
       signIn: () => Promise.resolve(),
       rotate: () =>
         Promise.resolve({ outcome: "deleted" as const, pair: null }),
       delete: () => Promise.resolve(),
+      deleteIfToken: () => Promise.resolve("kept" as const),
       subscribe: () => ({ dispose: () => undefined }),
       migrateLegacyCredentials: () =>
         Promise.resolve("identity-unknown" as const),
     },
     onLocalHostChange: () => ({ dispose: () => undefined }),
     onSystemResumed: () => ({ dispose: () => undefined }),
+    onNetworkPathChanged: () => ({ dispose: () => undefined }),
     requestHostRespawn: () => Promise.resolve({ kind: "restarted" as const }),
     getLastKnownLocalHostId: () => Promise.resolve(null),
     service: null,
@@ -374,6 +389,7 @@ function createBaseRunnerHost(): IRunnerHost {
     hostManagement: null,
     hostTray: null,
     zoom: null,
+    pushPermission: null,
   };
 }
 
@@ -444,6 +460,8 @@ function createDirtyEpicHandle(
     chatRecords: EMPTY_CHATS_SLICE,
     chatRecordListAuthoritative: true,
     chatRetractions: {},
+    tuiAgentRecords: EMPTY_PROJECTED_SLICES.tuiAgents,
+    tuiAgentRetractions: {},
     artifactRooms: { stateByArtifactRoomId: {} },
     artifactRoomDirtyByArtifactRoomId: {},
     rootDirty: false,
@@ -485,8 +503,12 @@ function createDirtyEpicHandle(
     requestFreshSnapshot: () => undefined,
     retryMigration: () => undefined,
     applyChatRecords: () => undefined,
+    peekChatIngestSeq: () => 0,
     markChatRecordListAuthoritative: () => undefined,
     applyChatRecordDelta: () => undefined,
+    applyTuiAgentRecords: () => undefined,
+    peekTuiAgentIngestSeq: () => 0,
+    applyTuiAgentRecordDelta: () => undefined,
     republishChatRecordsForCurrentUser: () => undefined,
     beginPendingChatCreation: () => undefined,
     clearPendingChatCreation: () => undefined,
@@ -494,6 +516,12 @@ function createDirtyEpicHandle(
     createArtifact: () => "fake-id",
     createTerminalChat: () => null,
     renameArtifact: () => false,
+    beginRenameMutation: () => null,
+    beginEpicTitleMutation: () => null,
+    beginReparentMutation: () => null,
+    retirePendingMutation: () => false,
+    isLatestRenameStamp: () => false,
+    ingestFenceIdentity: 0,
     deleteArtifact: () => false,
     reparentArtifact: () => false,
     setEpicTitle: () => false,
@@ -1065,6 +1093,7 @@ describe("<DesktopDialogHost />", () => {
       currentVersion: "1.0.0",
       allowPrerelease: false,
       latestVersion: null,
+      latestCompatibilityEpoch: null,
       downloadProgress: null,
       installBlockedReason: null,
       installGuidance: null,
@@ -1084,8 +1113,17 @@ describe("<DesktopDialogHost />", () => {
       ): Promise<DesktopAppUpdateSnapshot> {
         return Promise.resolve(IDLE);
       }
-      setAllowPrerelease(_allow: boolean): Promise<DesktopAppUpdateSnapshot> {
-        return Promise.resolve(IDLE);
+      setAllowPrerelease(
+        _allow: boolean,
+      ): Promise<DesktopAppUpdateChannelChange> {
+        return Promise.resolve({ outcome: "changed", snapshot: IDLE });
+      }
+      resolveCompatRecovery(): Promise<DesktopCompatRecoveryPlan> {
+        return Promise.resolve({
+          route: "manual",
+          rcCandidateVersion: null,
+          stagedVersion: null,
+        });
       }
       downloadUpdate(): Promise<DesktopAppUpdateSnapshot> {
         return Promise.resolve(IDLE);

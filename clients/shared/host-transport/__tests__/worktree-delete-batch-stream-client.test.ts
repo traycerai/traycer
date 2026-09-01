@@ -19,6 +19,7 @@ import type {
 import { WorktreeDeleteBatchStreamClient } from "../worktree-delete-batch-stream-client";
 import { WsStreamClient } from "../ws-stream-client";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
+import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
 const COMMAND_ID = "6f1a6a0e-1f0f-4a1e-9f0d-1b6f0c2c9f11";
 
@@ -81,11 +82,14 @@ function makeClient(
     externalAbortSignal: undefined,
   });
   return new WsStreamClient({
+    clientIdentity: TEST_CLIENT_IDENTITY,
     registry: hostStreamRpcRegistry,
     endpoint: () => mockLocalHostEntry,
     bearer: () => context.credentials,
     auth: null,
+    clock: null,
     hostCredentialMint: null,
+    onHostCredentialState: null,
     evidence: NO_TRANSPORT_EVIDENCE,
     webSocketFactory: factory,
     dialTimeoutMs: 1_000,
@@ -158,6 +162,27 @@ describe("WorktreeDeleteBatchStreamClient replay safety", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("sends a Task sweep's destination only on the start request", () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory);
+    const batch = new WorktreeDeleteBatchStreamClient({
+      wsStreamClient: client,
+      commandId: COMMAND_ID,
+      source: "task_sweep",
+      epicId: "epic-1",
+      targets: [{ worktreePath: "/wt/a", scripts: null }],
+      callbacks: NOOP_CALLBACKS,
+    });
+
+    completeHandshake(sockets[0]);
+    expect(subscribeParams(sockets[0])).toMatchObject({
+      mode: "start",
+      source: "task_sweep",
+      epicId: "epic-1",
+    });
+    batch.close();
   });
 
   it("re-subscribes as observe after a drop, so the transport can never replay the start", () => {

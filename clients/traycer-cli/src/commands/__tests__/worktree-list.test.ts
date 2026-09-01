@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { WorktreeHostEntryV14 } from "@traycer/protocol/host";
+import type { WorktreeHostEntryV16 } from "@traycer/protocol/host";
 import type { WorktreeTier } from "@traycer-clients/shared/worktree/classify-worktree";
 import {
   buildWorktreeListCommand,
@@ -7,6 +7,7 @@ import {
   parseWorktreeListLimit,
   type WorktreeListRow,
 } from "../worktree-list";
+import { worktreeListAllForHostResponseSchemaV16 } from "@traycer/protocol/host";
 import { callHostRpc } from "../../internal/host-rpc";
 import type { CommandContext } from "../../runner/runner";
 import { CLI_ERROR_CODES } from "../../runner/errors";
@@ -46,7 +47,7 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-function entry(overrides: Partial<WorktreeHostEntryV14>): WorktreeHostEntryV14 {
+function entry(overrides: Partial<WorktreeHostEntryV16>): WorktreeHostEntryV16 {
   return {
     worktreePath: "/Users/dev/.traycer/worktrees/acme__web/feature-x",
     repoLabel: "acme/web",
@@ -67,12 +68,14 @@ function entry(overrides: Partial<WorktreeHostEntryV14>): WorktreeHostEntryV14 {
     submodules: [],
     atBaseCommit: false,
     resolvedAt: 1,
+    presence: "present",
+    gitUnreadable: false,
     ...overrides,
   };
 }
 
 function row(
-  overrides: Partial<WorktreeHostEntryV14>,
+  overrides: Partial<WorktreeHostEntryV16>,
   tier: WorktreeTier | null,
 ): WorktreeListRow {
   return { ...entry(overrides), tier };
@@ -265,6 +268,49 @@ describe("buildWorktreeListCommand", () => {
       ],
       nextCursor: null,
     });
+  });
+
+  it("classifies a gitUnreadable row as review, not orphaned - the v1.4 regression this canonical parse fixes", async () => {
+    // The real host pairs `gitUnreadable: true` with `gitRemovable: false`
+    // (git can neither read the pointed-at repo nor prove it removable). A
+    // stale v1.4 parse strips `gitUnreadable`, so `classifyWorktreeTier` falls
+    // through to rung 2 (`!gitRemovable`) and mislabels the row "orphaned" -
+    // a forced-cleanup reading this shape must never get, since its branch
+    // and dirty count are unknowable, not proven empty.
+    rpcMock.mockResolvedValue({
+      worktrees: [entry({ gitUnreadable: true, gitRemovable: false })],
+      nextCursor: null,
+    });
+
+    const result = await buildWorktreeListCommand(defaultOpts)(ctx);
+
+    expect(result.data).toEqual({
+      worktrees: [
+        {
+          ...entry({ gitUnreadable: true, gitRemovable: false }),
+          tier: "review",
+        },
+      ],
+      nextCursor: null,
+    });
+    const listedWorktrees = (result.data as { worktrees: WorktreeListRow[] })
+      .worktrees;
+    expect(listedWorktrees[0]?.tier).toBe("review");
+    expect(listedWorktrees[0]?.tier).not.toBe("orphaned");
+    // `--json` callers read these two fields straight off the row; a stale
+    // schema silently drops both.
+    expect(listedWorktrees[0]?.gitUnreadable).toBe(true);
+    expect(listedWorktrees[0]?.presence).toBe("present");
+  });
+
+  it("round-trips gitUnreadable and presence through the canonical v1.6 response parse", () => {
+    const wireEntry = entry({ gitUnreadable: true, presence: "absent" });
+    const parsed = worktreeListAllForHostResponseSchemaV16.parse({
+      worktrees: [wireEntry],
+      nextCursor: null,
+    });
+    expect(parsed.worktrees[0]?.gitUnreadable).toBe(true);
+    expect(parsed.worktrees[0]?.presence).toBe("absent");
   });
 
   it("emits tier null without --include-activity (unprobed entries are never classified)", async () => {

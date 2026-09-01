@@ -191,6 +191,40 @@ describe("useHostQuery auth readiness", () => {
       fatalDetails: null,
     });
   });
+
+  it("captures a raw mutation response before success lifecycle work", async () => {
+    const fixture = createHostQueryFixture();
+    fixture.client.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "tok-1",
+      }),
+    );
+    const order: string[] = [];
+    const rendered = renderHook(
+      () =>
+        useHostMutation({
+          client: fixture.client.createRequester(mockLocalHostEntry),
+          method: "host.status",
+          options: {
+            onSuccess: () => {
+              order.push("success");
+            },
+          },
+          mapVariables: () => ({}),
+          onResponse: () => {
+            order.push("response");
+          },
+        }),
+      { wrapper: fixture.Wrapper },
+    );
+
+    await act(async () => {
+      await rendered.result.current.mutateAsync({});
+    });
+
+    expect(order).toEqual(["response", "success"]);
+  });
 });
 
 // The `HostRpcError` error generic on these hooks is an unchecked assertion:
@@ -651,6 +685,11 @@ function createHostQueryFixture(): {
             busy: false,
             busySessionCount: 0,
             updateProgress: null,
+            busyBreakdown: null,
+            // `null` = this fixture's host did not report the durable attempt,
+            // which is exactly what host.status@1.2-and-older peers send.
+            updateOperation: null,
+            updateTransaction: null,
           };
         },
       },

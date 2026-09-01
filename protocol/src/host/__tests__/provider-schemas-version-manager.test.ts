@@ -112,7 +112,7 @@ describe("providers.list@7.0 carries the version manager and bridges older lines
 
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      7,
+      8,
       6,
       response,
     );
@@ -151,7 +151,7 @@ describe("providers.list@7.0 carries the version manager and bridges older lines
     for (const target of [6, 5, 4, 3, 2, 1] as const) {
       const downgraded = downgradeResponseAcrossMajors(
         hostRpcRegistry["providers.list"],
-        7,
+        8,
         target,
         response,
       );
@@ -183,7 +183,7 @@ describe("providers.list@7.0 carries the version manager and bridges older lines
     for (const target of [6, 5, 4, 3, 2, 1] as const) {
       const downgraded = downgradeRequestAcrossMajors(
         hostRpcRegistry["providers.list"],
-        7,
+        8,
         target,
         request,
       );
@@ -257,7 +257,7 @@ describe("providers.list@6.0 -> @7.0 upgrades", () => {
 
       const downgraded = downgradeResponseAcrossMajors(
         hostRpcRegistry["providers.list"],
-        7,
+        8,
         6,
         response,
       );
@@ -329,10 +329,13 @@ describe("per-pack RPC contracts", () => {
       major: 1,
       minor: 0,
     });
-    expect(providersEnsurePackRequestSchema.safeParse({ providerId: "codex" }).success).toBe(
-      true,
-    );
-    expect(providersEnsurePackResponseSchema.parse({ managedInstallState: null })).toEqual({
+    expect(
+      providersEnsurePackRequestSchema.safeParse({ providerId: "codex" })
+        .success,
+    ).toBe(true);
+    expect(
+      providersEnsurePackResponseSchema.parse({ managedInstallState: null }),
+    ).toEqual({
       managedInstallState: null,
     });
   });
@@ -375,7 +378,11 @@ describe("per-pack RPC contracts", () => {
       const parsed = providersInstallPackVersionResponseSchema.parse({
         result: { ok: false, code, detail: "not available" },
       });
-      expect(parsed.result).toEqual({ ok: false, code, detail: "not available" });
+      expect(parsed.result).toEqual({
+        ok: false,
+        code,
+        detail: "not available",
+      });
     }
     // The enum is closed: a plausible-looking code the producer never emits
     // must not decode, or a typo'd resolver would ship a refusal no renderer
@@ -469,7 +476,11 @@ describe("provider-pack schema distinctions", () => {
   it("keeps uncertified distinct from yanked and eligible", () => {
     // The protocol keeps `uncertified` as a distinct value; collapsing it into
     // `yanked` or `eligible` would erase the distinction for consumers.
-    for (const certification of ["eligible", "yanked", "uncertified"] as const) {
+    for (const certification of [
+      "eligible",
+      "yanked",
+      "uncertified",
+    ] as const) {
       const parsed = providerPackVersionSchema.parse({
         version: "1.2.3",
         sizeBytes: null,
@@ -480,7 +491,9 @@ describe("provider-pack schema distinctions", () => {
       });
       expect(parsed.certification).toBe(certification);
     }
-    expect(providerPackVersionCertificationSchema.options).toContain("uncertified");
+    expect(providerPackVersionCertificationSchema.options).toContain(
+      "uncertified",
+    );
   });
 
   it("keeps unverified distinct from corrupt and both round-trip as unusable", () => {
@@ -491,8 +504,12 @@ describe("provider-pack schema distinctions", () => {
       });
       expect(parsed).toEqual({ status: "unusable", reason });
     }
-    expect(providerPackVersionUnusableReasonSchema.options).toContain("unverified");
-    expect(providerPackVersionUnusableReasonSchema.options).toContain("corrupt");
+    expect(providerPackVersionUnusableReasonSchema.options).toContain(
+      "unverified",
+    );
+    expect(providerPackVersionUnusableReasonSchema.options).toContain(
+      "corrupt",
+    );
   });
 
   it("treats null download percent as a transient downloading state, not error", () => {
@@ -502,11 +519,13 @@ describe("provider-pack schema distinctions", () => {
     });
     expect(parsed).toEqual({ status: "downloading", percent: null });
     expect(parsed.status).not.toBe("error");
-    expect(providerManagedInstallStateSchema.parse({
-      status: "downloading",
-      percent: null,
-      version: null,
-    })).toEqual({ status: "downloading", percent: null, version: null });
+    expect(
+      providerManagedInstallStateSchema.parse({
+        status: "downloading",
+        percent: null,
+        version: null,
+      }),
+    ).toEqual({ status: "downloading", percent: null, version: null });
   });
 
   it("accepts a null size tombstone and only the multi-version union has unusable", () => {

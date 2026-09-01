@@ -20,6 +20,7 @@ import {
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { setMobileApp } from "@/lib/mobile-app";
 
 const hostStatus = vi.hoisted(() => ({
   data: undefined as
@@ -277,6 +278,7 @@ afterEach(() => {
   useSelectionAuthorityStore.getState().reset();
   useDesktopDialogStore.getState().setReportIssueAvailable(false);
   useAuthStore.setState({ status: "signed-out" });
+  setMobileApp(false);
 });
 
 describe("<WindowHostModalHost />", () => {
@@ -879,6 +881,7 @@ describe("<WindowHostModalHost />", () => {
             code: "protocol-major-behind",
             hostVersion: "1.0.0",
             minSupportedVersion: "1.5.0",
+            clientCompatibility: null,
           },
         }),
       ],
@@ -929,6 +932,7 @@ describe("<WindowHostModalHost />", () => {
             code: "protocol-major-behind",
             hostVersion: "0.9.0",
             minSupportedVersion: "1.5.0",
+            clientCompatibility: null,
           },
         }),
       ],
@@ -990,6 +994,7 @@ describe("<WindowHostModalHost />", () => {
             code: "protocol-major-ahead",
             hostVersion: "2.0.0",
             minSupportedVersion: "2.0.0",
+            clientCompatibility: null,
           },
         }),
       ],
@@ -1185,6 +1190,78 @@ describe("<WindowHostModalHost />", () => {
         panel.compareDocumentPosition(toggle) &
           Node.DOCUMENT_POSITION_FOLLOWING,
       ).toBeGreaterThan(0);
+    });
+  });
+
+  /**
+   * The mobile app's post-latch narration, whose subject is the DOCUMENT rather
+   * than the copy: a modal layer over a mounted shell raises the pointer
+   * barrier, and on that shell the barrier is what the edge-swipe recognizer
+   * reads before it reserves a touch. The gesture is the phone's only history
+   * affordance, so the narration must not cost it.
+   */
+  describe("on the mobile app", () => {
+    beforeEach(() => {
+      setMobileApp(true);
+    });
+
+    function applyPostLatchEmptyFleet(): void {
+      applySnapshot({
+        attached: true,
+        effectiveHostId: null,
+        targetHostId: REMOTE_HOST_ID,
+        leases: [deadLease(REMOTE_HOST_ID, { reason: "offline" })],
+      });
+    }
+
+    it("post-latch ∅ narrates through the non-modal card, and raises no document barrier", async () => {
+      applyPostLatchEmptyFleet();
+
+      renderHost(
+        { ...EMPTY_PRESENTATION, targetKind: "remote" },
+        false,
+        undefined,
+      );
+
+      // Existence before absence: a narrator that rendered nothing at all would
+      // satisfy both negative assertions below.
+      await waitFor(() => {
+        expect(screen.getByTestId("window-host-startup-card")).toBeTruthy();
+      });
+      expect(
+        screen
+          .getByTestId("window-host-startup-card")
+          .getAttribute("data-cause"),
+      ).toBe("no-usable-host");
+      // The words survive the presentation change - this is still the surface
+      // that says a fleet is unreachable, and it still offers the escape hatch.
+      expect(
+        screen.getByTestId("window-host-modal-open-settings"),
+      ).toBeTruthy();
+
+      expect(screen.queryByTestId("window-host-modal")).toBeNull();
+      expect(screen.queryByTestId("window-host-modal-overlay")).toBeNull();
+      expect(document.body.style.pointerEvents).not.toBe("none");
+    });
+
+    // The novelty guard: a narrator that had simply stopped drawing the dialog
+    // everywhere would pass the case above just as well as one that forks on
+    // the product signal, and the dialog is still the honest form on a shell
+    // whose app is driven with a pointer.
+    it("leaves the dialog in place on every other shell", async () => {
+      setMobileApp(false);
+      applyPostLatchEmptyFleet();
+
+      renderHost(
+        { ...EMPTY_PRESENTATION, targetKind: "remote" },
+        false,
+        undefined,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId("window-host-modal")).toBeTruthy();
+      });
+      expect(screen.queryByTestId("window-host-startup-card")).toBeNull();
     });
   });
 });

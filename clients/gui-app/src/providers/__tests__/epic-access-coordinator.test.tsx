@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, waitFor } from "@testing-library/react";
+import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   Outlet,
@@ -19,6 +19,11 @@ import {
   cloudEpicTasksQueryKey,
 } from "@/lib/cloud-epic-tasks-query";
 import { DELETED_EPIC_NOTIFICATION_STORAGE_KEY } from "@/lib/epics/deleted-epic-events";
+import {
+  clearSessionCreatedEpics,
+  CREATED_EPIC_UNAVAILABLE_RETRY_DELAYS_MS,
+  markEpicCreatedThisSession,
+} from "@/lib/epics/session-created-epics";
 import {
   __getOpenEpicRegistryForTests,
   __setEpicStreamClientFactoryForTests,
@@ -198,6 +203,7 @@ describe("EpicAccessCoordinator", () => {
     useAuthStore.getState().setSignedOut();
     useComposerRunSettingsStore.getState().resetForTests();
     __getOpenEpicRegistryForTests().disposeAll();
+    clearSessionCreatedEpics();
     toastInfo.mockClear();
   });
 
@@ -209,6 +215,7 @@ describe("EpicAccessCoordinator", () => {
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useTabsStore.setState(useTabsStore.getInitialState(), true);
     useComposerRunSettingsStore.getState().resetForTests();
+    clearSessionCreatedEpics();
     vi.restoreAllMocks();
   });
 
@@ -554,6 +561,323 @@ describe("EpicAccessCoordinator", () => {
         .getState()
         .getEpicRunSettings("epic-ghost", TEST_HOST_ID),
     ).toBeNull();
+  });
+
+  it("holds a created-this-session epic open on 'unavailable' and retries via requestFreshSnapshot after the first grace delay", async () => {
+    vi.useFakeTimers();
+    try {
+      markEpicCreatedThisSession("epic-1", "host-x");
+      const handle = registerSession("epic-1");
+      seedTabs(
+        [{ tabId: "tab-1", epicId: "epic-1", name: "Epic One" }],
+        "tab-1",
+      );
+      const requestFreshSnapshotSpy = vi.spyOn(handle, "requestFreshSnapshot");
+
+      const { router } = renderCoordinatorAt("/epics/epic-1/tab-1");
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(router.state.location.pathname).toBe("/epics/epic-1/tab-1");
+
+      act(() => {
+        handle.store.setState({
+          snapshotFetchError: {
+            code: "NOT_FOUND",
+            message: "room lookup is unavailable",
+            upgradeGuidance: null,
+          },
+        });
+      });
+      // Flush the `evaluate` microtask the store subscription queues.
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      // Neither ejected nor toasted while the grace's first retry is pending.
+      expect(useEpicCanvasStore.getState().openTabOrder).toEqual(["tab-1"]);
+      expect(router.state.location.pathname).toBe("/epics/epic-1/tab-1");
+      expect(toastInfo).not.toHaveBeenCalled();
+      expect(requestFreshSnapshotSpy).not.toHaveBeenCalled();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000);
+      });
+
+      expect(requestFreshSnapshotSpy).toHaveBeenCalledTimes(1);
+      expect(useEpicCanvasStore.getState().openTabOrder).toEqual(["tab-1"]);
+      expect(toastInfo).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ejects a created-this-session epic once every grace retry is spent and 'unavailable' lands again", async () => {
+    vi.useFakeTimers();
+    try {
+      markEpicCreatedThisSession("epic-1", "host-x");
+      const handle = registerSession("epic-1");
+      seedTabs(
+        [{ tabId: "tab-1", epicId: "epic-1", name: "Epic One" }],
+        "tab-1",
+      );
+      const requestFreshSnapshotSpy = vi.spyOn(handle, "requestFreshSnapshot");
+      const unavailableError = {
+        code: "NOT_FOUND" as const,
+        message: "room lookup is unavailable",
+        upgradeGuidance: null,
+      };
+
+      const { router } = renderCoordinatorAt("/epics/epic-1/tab-1");
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      // Driven by the PRODUCTION schedule rather than a copy of it: this test
+      // asserts "every slot, then eject", and hardcoding the delays here made
+      // that claim silently wrong the moment the schedule was resized.
+      act(() => {
+        handle.store.setState({ snapshotFetchError: unavailableError });
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      let attempt = 0;
+      for (const delay of CREATED_EPIC_UNAVAILABLE_RETRY_DELAYS_MS) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(delay);
+        });
+        attempt += 1;
+        expect(requestFreshSnapshotSpy).toHaveBeenCalledTimes(attempt);
+        // Still open: a spent slot is not a verdict.
+        expect(useEpicCanvasStore.getState().openTabOrder).toEqual(["tab-1"]);
+        expect(toastInfo).not.toHaveBeenCalled();
+        // `requestFreshSnapshot` resets `snapshotFetchError` to null; simulate
+        // the retry itself failing the same way the real reconnect would, so
+        // the next slot is taken by a genuine re-arrival.
+        act(() => {
+          handle.store.setState({ snapshotFetchError: unavailableError });
+        });
+        await act(async () => {
+          await Promise.resolve();
+        });
+      }
+
+      expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]);
+      expect(router.state.location.pathname).toBe("/");
+      expect(toastInfo).toHaveBeenCalledWith(
+        expect.stringContaining("no longer available"),
+        { id: "epic-access:epic-1", cancel: null },
+      );
+      // No retry beyond the schedule was scheduled - the eject ran instead.
+      expect(requestFreshSnapshotSpy).toHaveBeenCalledTimes(
+        CREATED_EPIC_UNAVAILABLE_RETRY_DELAYS_MS.length,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ejects a created-this-session epic immediately on a 'deleted' signal - the grace applies only to 'unavailable'", async () => {
+    markEpicCreatedThisSession("epic-1", "host-x");
+    const handle = registerSession("epic-1");
+    seedTabs([{ tabId: "tab-1", epicId: "epic-1", name: "Epic One" }], "tab-1");
+
+    const { router } = renderCoordinatorAt("/epics/epic-1/tab-1");
+    await waitFor(() =>
+      expect(router.state.location.pathname).toBe("/epics/epic-1/tab-1"),
+    );
+
+    handle.store.setState({
+      epicDeleted: { deletedByDisplayName: null, deletedByTraycerUserId: null },
+    });
+
+    await waitFor(() =>
+      expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]),
+    );
+    await waitFor(() => expect(router.state.location.pathname).toBe("/"));
+    expect(toastInfo).toHaveBeenCalledWith('Epic "Epic One" was deleted', {
+      id: "epic-access:epic-1",
+      cancel: null,
+    });
+  });
+
+  it("does not grace an epic created outside the create-race window", async () => {
+    vi.useFakeTimers();
+    try {
+      markEpicCreatedThisSession("epic-1", "host-x");
+      const handle = registerSession("epic-1");
+      // Freshly built, so this cannot be mistaken for the dirty-replica guard
+      // below - the eject here must be explained purely by the window having
+      // elapsed.
+      handle.store.setState({ isDirty: false, unsyncedQueueSize: 0 });
+      seedTabs(
+        [{ tabId: "tab-1", epicId: "epic-1", name: "Epic One" }],
+        "tab-1",
+      );
+      const requestFreshSnapshotSpy = vi.spyOn(handle, "requestFreshSnapshot");
+
+      const { router } = renderCoordinatorAt("/epics/epic-1/tab-1");
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(router.state.location.pathname).toBe("/epics/epic-1/tab-1");
+
+      // Past the 2-minute create-race window - a NOT_FOUND now means what it
+      // says, so this must NOT get the silent-retry grace the tests above
+      // exercise for a genuinely fresh create.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2 * 60 * 1000 + 1);
+      });
+
+      act(() => {
+        handle.store.setState({
+          snapshotFetchError: {
+            code: "NOT_FOUND",
+            message: "room lookup is unavailable",
+            upgradeGuidance: null,
+          },
+        });
+      });
+      // Flush the `evaluate` microtask the store subscription queues.
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]);
+      expect(router.state.location.pathname).toBe("/");
+      expect(toastInfo).toHaveBeenCalledWith(
+        expect.stringContaining("no longer available"),
+        { id: "epic-access:epic-1", cancel: null },
+      );
+      expect(requestFreshSnapshotSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not grace a replica that holds unsynced work (isDirty)", async () => {
+    markEpicCreatedThisSession("epic-1", "host-x");
+    const handle = registerSession("epic-1");
+    // Explicit, not incidental: a freshly built handle from `fakeFactory`
+    // starts clean, so this is what actually exercises the guard rather than
+    // some setup side effect.
+    handle.store.setState({ isDirty: true, unsyncedQueueSize: 0 });
+    seedTabs([{ tabId: "tab-1", epicId: "epic-1", name: "Epic One" }], "tab-1");
+    const requestFreshSnapshotSpy = vi.spyOn(handle, "requestFreshSnapshot");
+
+    const { router } = renderCoordinatorAt("/epics/epic-1/tab-1");
+    await waitFor(() =>
+      expect(router.state.location.pathname).toBe("/epics/epic-1/tab-1"),
+    );
+
+    handle.store.setState({
+      snapshotFetchError: {
+        code: "NOT_FOUND",
+        message: "room lookup is unavailable",
+        upgradeGuidance: null,
+      },
+    });
+
+    await waitFor(() =>
+      expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]),
+    );
+    await waitFor(() => expect(router.state.location.pathname).toBe("/"));
+    expect(toastInfo).toHaveBeenCalledWith(
+      expect.stringContaining("no longer available"),
+      { id: "epic-access:epic-1", cancel: null },
+    );
+    expect(requestFreshSnapshotSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not grace a replica that holds unsynced work (unsyncedQueueSize)", async () => {
+    markEpicCreatedThisSession("epic-1", "host-x");
+    const handle = registerSession("epic-1");
+    handle.store.setState({ isDirty: false, unsyncedQueueSize: 1 });
+    seedTabs([{ tabId: "tab-1", epicId: "epic-1", name: "Epic One" }], "tab-1");
+    const requestFreshSnapshotSpy = vi.spyOn(handle, "requestFreshSnapshot");
+
+    const { router } = renderCoordinatorAt("/epics/epic-1/tab-1");
+    await waitFor(() =>
+      expect(router.state.location.pathname).toBe("/epics/epic-1/tab-1"),
+    );
+
+    handle.store.setState({
+      snapshotFetchError: {
+        code: "NOT_FOUND",
+        message: "room lookup is unavailable",
+        upgradeGuidance: null,
+      },
+    });
+
+    await waitFor(() =>
+      expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]),
+    );
+    await waitFor(() => expect(router.state.location.pathname).toBe("/"));
+    expect(toastInfo).toHaveBeenCalledWith(
+      expect.stringContaining("no longer available"),
+      { id: "epic-access:epic-1", cancel: null },
+    );
+    expect(requestFreshSnapshotSpy).not.toHaveBeenCalled();
+  });
+
+  it("closes instead of rebuilding when local work appears while a grace retry is pending", async () => {
+    vi.useFakeTimers();
+    try {
+      markEpicCreatedThisSession("epic-1", "host-x");
+      const handle = registerSession("epic-1");
+      handle.store.setState({ isDirty: false, unsyncedQueueSize: 0 });
+      seedTabs(
+        [{ tabId: "tab-1", epicId: "epic-1", name: "Epic One" }],
+        "tab-1",
+      );
+      const requestFreshSnapshotSpy = vi.spyOn(handle, "requestFreshSnapshot");
+
+      const { router } = renderCoordinatorAt("/epics/epic-1/tab-1");
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(router.state.location.pathname).toBe("/epics/epic-1/tab-1");
+
+      // Schedules the first grace retry (clean handle, inside the window).
+      act(() => {
+        handle.store.setState({
+          snapshotFetchError: {
+            code: "NOT_FOUND",
+            message: "room lookup is unavailable",
+            upgradeGuidance: null,
+          },
+        });
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(useEpicCanvasStore.getState().openTabOrder).toEqual(["tab-1"]);
+      expect(requestFreshSnapshotSpy).not.toHaveBeenCalled();
+
+      // Local work appears while that retry is still pending on its timer.
+      act(() => {
+        handle.store.setState({ isDirty: true });
+      });
+
+      // Advance past the first grace delay - the timer's re-check must see
+      // the now-dirty state and hand the verdict to the ordinary close
+      // instead of calling the destructive `requestFreshSnapshot`.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000);
+      });
+
+      expect(requestFreshSnapshotSpy).not.toHaveBeenCalled();
+      expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]);
+      expect(router.state.location.pathname).toBe("/");
+      expect(toastInfo).toHaveBeenCalledWith(
+        expect.stringContaining("no longer available"),
+        { id: "epic-access:epic-1", cancel: null },
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

@@ -1,4 +1,4 @@
-import { memo, useCallback, useMemo, type ReactNode } from "react";
+import { memo, useCallback, useMemo, useRef, type ReactNode } from "react";
 import { useDroppable } from "@dnd-kit/core";
 import * as m from "motion/react-m";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,7 @@ import {
   type HeaderTabSlotDropData,
 } from "@/components/layout/tabs/header-tab-dnd";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
+import { useHeaderTabDisplacement } from "./use-header-tab-displacement";
 import { cn } from "@/lib/utils";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import type {
@@ -28,7 +29,7 @@ import {
   TabItem,
 } from "@/components/layout/tabs/tab-strip-item";
 import {
-  HEADER_TAB_LAYOUT_TRANSITION,
+  useHeaderTabDisplacementTransition,
   TAB_CLASS_BASE,
 } from "@/components/layout/tabs/tab-chrome-tokens";
 import {
@@ -39,6 +40,7 @@ import {
 export interface SplitTabItemProps {
   readonly item: Extract<HeaderStripItem, { readonly kind: "split" }>;
   readonly stripIndex: number;
+  readonly offsetX: number;
   readonly leftMemberIndex: number;
   readonly rightMemberIndex: number;
   readonly isActive: boolean;
@@ -95,13 +97,41 @@ export const SplitTabItem = memo(function SplitTabItem(
   const quickActionsTab =
     memberTab(props.item.left) ?? memberTab(props.item.right);
 
+  const transition = useHeaderTabDisplacementTransition();
+  // A split group is a strip item like any other, so it takes part in the
+  // commit re-base like any other. It rendered its own `animate={{x}}` frame
+  // and was therefore never registered - which made the widest item in the
+  // strip exempt from every commit, in both directions, while its neighbours
+  // were corrected.
+  const frameRef = useRef<HTMLDivElement | null>(null);
+  const x = useHeaderTabDisplacement({
+    nodeRef: frameRef,
+    offsetX: props.offsetX,
+    transition,
+  });
+  const setFrameRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      frameRef.current = node;
+      setNodeRef(node);
+    },
+    [setNodeRef],
+  );
   return (
     <m.div
-      ref={setNodeRef}
-      layout="position"
+      ref={setFrameRef}
       initial={false}
-      animate={{ opacity: isDragging ? 0.36 : 1, scale: isDragging ? 0.96 : 1 }}
-      transition={HEADER_TAB_LAYOUT_TRANSITION}
+      animate={{ opacity: isDragging ? 0 : 1 }}
+      style={{ x }}
+      // Explicit x from the drag model - deliberately NOT `layout="position"`
+      // plus CSS `order`. That pairing strands a translateX when the item set
+      // changes under an in-flight projection; binding x to state makes the
+      // class unrepresentable rather than merely currently unreachable.
+      transition={transition}
+      // A split group is one strip item, but it is never a merge target: the
+      // pair target carries a single TabRef and a two-ref item has no
+      // unambiguous one. Passing over it reorders.
+      data-strip-item-id={props.item.id}
+      data-strip-item-mergeable="false"
       role="group"
       aria-label="Split tab group"
       data-testid={`split-tab-group-${props.item.id}`}
@@ -380,6 +410,7 @@ function SplitMember(props: SplitMemberProps): ReactNode {
         dnd={dnd}
         chrome="member"
         includeMotionFrame={false}
+        offsetX={0}
         isActive={props.focused}
         showSeparatorAfter={false}
         showDropIndicatorBefore={props.showDropIndicatorBefore}

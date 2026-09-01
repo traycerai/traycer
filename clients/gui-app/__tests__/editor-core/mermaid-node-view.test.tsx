@@ -13,11 +13,27 @@ import * as Y from "yjs";
 import { Awareness } from "y-protocols/awareness";
 import { buildArtifactExtensions, deriveCollabUser } from "@/editor-core";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { saveBlobToDisk } from "@/lib/files/save-blob-to-disk";
+import {
+  downloadBlobToDevice,
+  saveBlobToDisk,
+  type SavedFile,
+} from "@/lib/files/save-blob-to-disk";
 
 // The download path lives in a shared lib module; mock it on its own.
 vi.mock("@/lib/files/save-blob-to-disk", () => ({
-  saveBlobToDisk: vi.fn().mockResolvedValue("mermaid-diagram.png"),
+  saveBlobToDisk: vi
+    .fn()
+    .mockResolvedValue({ name: "mermaid-diagram.png", path: null }),
+  downloadBlobToDevice: vi
+    .fn()
+    .mockResolvedValue({ name: "mermaid-diagram.png", path: null }),
+  // Browser-runtime shape: the shell's own save route IS the download, so
+  // there is no chooser, no Share control, and a Download is always offered.
+  hasSeparateDownloadRoute: () => false,
+  canDownloadToDevice: () => true,
+  // Browser-runtime shape: no path comes back, so no "Open file" action.
+  canOpenSavedFile: () => false,
+  openSavedFile: vi.fn(),
 }));
 
 // Mocks must be declared before the editor imports the service.
@@ -126,8 +142,16 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  vi.mocked(downloadBlobToDevice).mockReset();
+  vi.mocked(downloadBlobToDevice).mockResolvedValue({
+    name: "mermaid-diagram.png",
+    path: null,
+  });
   vi.mocked(saveBlobToDisk).mockReset();
-  vi.mocked(saveBlobToDisk).mockResolvedValue("mermaid-diagram.png");
+  vi.mocked(saveBlobToDisk).mockResolvedValue({
+    name: "mermaid-diagram.png",
+    path: null,
+  });
   // jsdom does not implement clipboard.writeText; install a stub.
   Object.defineProperty(navigator, "clipboard", {
     configurable: true,
@@ -220,12 +244,13 @@ describe("MermaidNodeView", () => {
   });
 
   it("ignores overlapping download clicks while the save picker is open", async () => {
-    const saveBlobToDiskMock = vi.mocked(saveBlobToDisk);
-    let resolveSave = (_value: string | null): void => undefined;
-    const pendingSave = new Promise<string | null>((resolve) => {
+    // Download takes the device route; the share sheet is a separate control.
+    const downloadMock = vi.mocked(downloadBlobToDevice);
+    let resolveSave = (_value: SavedFile | null): void => undefined;
+    const pendingSave = new Promise<SavedFile | null>((resolve) => {
       resolveSave = resolve;
     });
-    saveBlobToDiskMock.mockReturnValueOnce(pendingSave);
+    downloadMock.mockReturnValueOnce(pendingSave);
 
     const editor = mountMermaidEditor({
       code: "graph TD\n  A --> B",
@@ -245,12 +270,12 @@ describe("MermaidNodeView", () => {
 
     fireEvent.click(download);
     await waitFor(() => {
-      expect(saveBlobToDiskMock).toHaveBeenCalledTimes(1);
+      expect(downloadMock).toHaveBeenCalledTimes(1);
       expect((download as HTMLButtonElement).disabled).toBe(true);
     });
     fireEvent.click(download);
-    expect(saveBlobToDiskMock).toHaveBeenCalledTimes(1);
-    resolveSave("mermaid-diagram.png");
+    expect(downloadMock).toHaveBeenCalledTimes(1);
+    resolveSave({ name: "mermaid-diagram.png", path: null });
     await waitFor(() => {
       expect((download as HTMLButtonElement).disabled).toBe(false);
     });

@@ -29,6 +29,7 @@ import {
   publishedChatLockReason,
   replicaChatLockReason,
 } from "@/components/epic-canvas/renderers/published-chat-lock-reason";
+import { useOwnedByViewer } from "@/hooks/chats/use-owned-by-viewer";
 
 /**
  * A chat whose owning host is out of reach, rendered through the ORDINARY chat
@@ -77,6 +78,7 @@ import {
 export interface PublishedChatTileProps {
   readonly node: PublishedChatTileRef;
   readonly viewTabId: string;
+  readonly tileId: string;
   readonly isActive: boolean;
   readonly epicId: string;
 }
@@ -132,6 +134,12 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
   // `chat-not-on-this-host`, whose banner this footer sits under.
   const ownerIsThisHost =
     node.ownerHostId.length > 0 && node.ownerHostId === node.hostId;
+  // Whether this copy is the viewer's own chat, read off the ref like the
+  // owner-host equality above. A collaborator's chat swaps the lock sentence
+  // (and, in the child banner, the clone copy) for the foreign-owner arm -
+  // the offline/back-soon vocabulary below is about the viewer's own fleet
+  // and cannot be honestly said about a machine this account never sees.
+  const ownedByViewer = useOwnedByViewer(node.ownerUserId);
 
   // The same Clone offer the LIVE tile's dead-tile banner makes, on the copy.
   // Gated (inside the child) on the SAME two signals the lock sentence below
@@ -287,11 +295,13 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
             name: node.name,
           }}
           viewTabId={props.viewTabId}
+          tileId={props.tileId}
           isActive={props.isActive}
           currentEpicId={props.epicId}
           readOnlyNotice={replicaChatLockReason({
             ownerIsReachable: ownerReachability.status === "reachable",
             ownerIsThisHost,
+            ownedByViewer,
             ownerLabel,
             unreadableCount: replicaConversion.unreadableCount,
           })}
@@ -347,11 +357,13 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
             name: node.name,
           }}
           viewTabId={props.viewTabId}
+          tileId={props.tileId}
           isActive={props.isActive}
           currentEpicId={props.epicId}
           readOnlyNotice={publishedChatLockReason({
             ownerIsReachable: ownerReachability.status === "reachable",
             ownerIsThisHost,
+            ownedByViewer,
             ownerLabel,
             unreadableCount: conversion.unreadableCount,
             fidelityNotice: state.fidelityNotice,
@@ -402,6 +414,7 @@ function PublishedChatDeadTileBanner(props: {
       sourceHostId={props.node.ownerHostId}
       hostLabel={props.ownerLabel}
       reason="host-offline"
+      showsPublishedCopy
       testId={`published-chat-dead-tile-${props.node.chatId}`}
       sourceOwnerUserId={props.node.ownerUserId}
     />

@@ -41,7 +41,13 @@ function isHostFeedId(feedId: string | null): boolean {
 export function notificationPayloadRequiresOriginHost(
   payload: NotificationPayload,
 ): boolean {
-  return payload.kind === "approval" || payload.kind === "interview";
+  // A parked browser session lives on ONE host for life, so a row routed
+  // anywhere else opened nothing - same rule as a prompt.
+  return (
+    payload.kind === "approval" ||
+    payload.kind === "interview" ||
+    payload.kind === "browserSession"
+  );
 }
 
 function hostFeedStayedOnOrigin(input: {
@@ -163,7 +169,10 @@ export function useNotificationActivationWithNavigate(
         navigate,
         input.payload,
         input.receivedAt,
-        originHostId,
+        {
+          originHostId,
+          effectiveHostId: beforeRouteHostId,
+        },
       );
       if (
         requiresOriginHost &&

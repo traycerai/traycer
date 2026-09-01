@@ -58,7 +58,8 @@ vi.mock("electron", () => ({
     setTitleCalls: string[] = [];
     private readyToShow: (() => void) | null = null;
     private pageTitleUpdated:
-      ((event: { preventDefault(): void }) => void) | null = null;
+      | ((event: { preventDefault(): void }) => void)
+      | null = null;
     readonly webContents = {
       setVisualZoomLevelLimits: vi.fn(() => Promise.resolve()),
       setWindowOpenHandler: vi.fn(),
@@ -349,6 +350,24 @@ describe("loadMainWindow", () => {
           symbolColor: "#e5e5e5",
           height: 54,
         },
+      }),
+    ]);
+  });
+
+  it("keeps compositing and timers running while the window is occluded", () => {
+    createMainWindowForTest({
+      preloadPath: "/preload.js",
+      windowId: "window-a",
+      initialRoute: "/",
+      zoomFactor: 1,
+      placement: createFirstLaunchWindowPlacement(),
+    });
+
+    expect(electronState.browserWindowOptions).toEqual([
+      expect.objectContaining({
+        webPreferences: expect.objectContaining({
+          backgroundThrottling: false,
+        }),
       }),
     ]);
   });

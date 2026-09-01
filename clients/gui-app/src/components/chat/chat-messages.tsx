@@ -12,15 +12,32 @@ import type {
 } from "@/components/chat/chat-timeline-follow-latch";
 import {
   acceptExhaustedPersistedRestoreFallback,
-  buildMessageIdToIndex,
+  buildRowKeyToIndex,
   CHAT_ARROW_SCROLL_STEP_PX,
   chatTimelineLocationForMessage,
   chatTimelineNavigationLandedAtLocation,
   selectActiveUserMessageId,
-  viewportAnchorMessageId,
+  viewportAnchorRowKey,
   viewportActiveUserMessageId,
   type ChatTimelineNavigationLocation,
 } from "@/components/chat/chat-messages-scroll-helpers";
+import {
+  isUnplacedRowKey,
+  transcriptListRows,
+  visibleOrdinalRange,
+  type TranscriptListRow,
+} from "@/stores/chats/transcript-list-rows";
+import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
+import {
+  createChatTranscriptRowHeightMemory,
+  type ChatTranscriptRowHeightMemory,
+} from "@/components/chat/chat-transcript-row-height-memory";
+import { unhydratedRowCount } from "@/stores/chats/transcript-window";
+import { chatFindCoverageMessage } from "@/components/chat/chat-find";
+import type {
+  OrdinalRange,
+  TranscriptWindow,
+} from "@/stores/chats/transcript-window";
 import { captureChatFreeScrollingOffset } from "@/components/chat/chat-scroll-restoration";
 import {
   commitChatTabStateToDurable,
@@ -33,7 +50,11 @@ import {
 } from "@/stores/chats/chat-tab-state-cache";
 import { registerChatTabViewportCapture } from "@/stores/chats/chat-tab-viewport-handoff";
 import { ChatTurnMinimap } from "@/components/chat/chat-turn-minimap";
-import { CHAT_TURN_MINIMAP_KEYBOARD_OWNER_SELECTOR } from "@/components/chat/chat-turn-minimap-logic";
+import {
+  CHAT_TURN_MINIMAP_KEYBOARD_OWNER_SELECTOR,
+  shouldMountChatTurnMinimap,
+} from "@/components/chat/chat-turn-minimap-logic";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { buildChatActivityTimeline } from "@/components/chat/chat-activity-groups";
 import { resolveScrollToEndPillState } from "@/components/chat/chat-scroll-to-end-pill-state";
 import { ScrollToEndPill } from "@/components/chat/scroll-to-end-pill";
@@ -104,6 +125,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useInsertionEffect,
   useMemo,
   useRef,
   useState,
@@ -123,11 +145,39 @@ interface ChatMessagesProps {
   /** The full derived, pinned-todo-stripped row history to hand to LegendList. */
   messages: ReadonlyArray<ChatMessageModel>;
   /**
+   * The transcript index on the windowed line (`chat.subscribe@1.8`), or
+   * `null` on the legacy line where `messages` IS the whole transcript. The
+   * merge with `messages` happens here (`transcriptListRows`), so everything
+   * below this component - the timeline, the minimap, every saved or computed
+   * LIST index - lives in one index space that includes placeholder rows.
+   */
+  transcriptWindow: TranscriptWindow | null;
+  /**
+   * Reports which ordinals the viewport is showing, for viewport-driven
+   * hydration. Called with `null` when no placed row is visible (the pending
+   * tail, or the legacy line where rows own no ordinals) - the store treats
+   * that as "no viewport obligation", never as a request.
+   */
+  onVisibleOrdinalRangeChange: (range: OrdinalRange | null) => void;
+  /**
    * `ChatSessionState.transcriptBaselineEpoch` - which connection's snapshot
    * established these rows. The polite-announcement deriver needs it to tell
    * a live arrival from (re)hydrated history without guessing from row shape.
    */
   baselineEpoch: number;
+  /**
+   * `ChatSessionState.transcriptHydrationSequence` - bumped when a range
+   * response seated rows the reader scrolled to, so the deriver can absorb
+   * them as history rather than announce them as arrivals.
+   */
+  hydrationSequence: number;
+  /**
+   * `ChatSessionState.coldRewrittenMessageIds` - rows rewritten while their
+   * span was evicted. The announcement deriver exempts these from the history
+   * rule above, once each, because a row updated while cold first appears
+   * during a hydration and is otherwise indistinguishable from old scrollback.
+   */
+  coldRewrittenMessageIds: ReadonlySet<string>;
   /** Live host-owned background items; undefined means the connected host lacks support. */
   backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
   getMessageActions: (message: ChatMessageModel) => ChatMessageActions | null;
@@ -145,14 +195,23 @@ interface ChatMessagesProps {
   composerOverlayHeight: number;
 }
 
-export interface ChatMessageScrollRequest {
-  readonly messageId: string;
-  /** Card to open within the target row, or `null` for a row-level jump. */
-  readonly blockId: string | null;
-  readonly requestId: number;
-}
+export type ChatMessageScrollRequest =
+  | {
+      readonly kind: "message";
+      readonly messageId: string;
+      /** Card to open within the target row, or `null` for a row-level jump. */
+      readonly blockId: string | null;
+      readonly requestId: number;
+    }
+  | {
+      readonly kind: "end";
+      readonly requestId: number;
+    };
 
 const EMPTY_BACKGROUND_TOOL_BLOCK_IDS: ReadonlySet<string> = new Set();
+const EMPTY_ROW_INDEX_BY_KEY: ReadonlyMap<string, number> = new Map();
+/** Stable identity, so the legacy line's skeleton hand-off stays a no-op. */
+const EMPTY_ROW_SKELETON: readonly (RowSkeletonEntry | undefined)[] = [];
 const NAVIGATION_HIGHLIGHT_DURATION_MS = 3_000;
 /** `awaitScrollSettle`'s fallback timeout when `scrollend` never fires
  *  (jsdom, some browsers) - exported so tests can wait past it rather than
@@ -277,7 +336,7 @@ function measureFreeRestoreGeometry(
  *  wherever the geometry currently sits. */
 interface IssuedFreeRestoreTarget {
   readonly targetScrollTop: number | null;
-  readonly messages: ReadonlyArray<ChatMessageModel>;
+  readonly rows: ReadonlyArray<TranscriptListRow>;
   readonly geometry: FreeRestoreGeometry;
 }
 
@@ -285,17 +344,17 @@ interface IssuedFreeRestoreTarget {
  *  trustworthy as reader motion if nothing that could have moved the
  *  viewport out from under the restore happened in between - append,
  *  in-place growth, or a reorder all drive LegendList's own static
- *  `maintainScrollAtEnd` regardless of reader input. Require message
+ *  `maintainScrollAtEnd` regardless of reader input. Require row
  *  identity/order, scroll height, viewport height, and the target row's own
  *  position to still match what was issued before trusting the raw
  *  scrollTop comparison. */
 function isDemonstrablyPastIssuedFreeRestoreTarget(
   issued: IssuedFreeRestoreTarget,
-  liveMessages: ReadonlyArray<ChatMessageModel>,
+  liveRows: ReadonlyArray<TranscriptListRow>,
   live: FreeRestoreGeometry,
 ): boolean {
   const geometryAndContentUnchanged =
-    liveMessages === issued.messages &&
+    liveRows === issued.rows &&
     issued.geometry.scrollHeight !== null &&
     live.scrollHeight === issued.geometry.scrollHeight &&
     issued.geometry.clientHeight !== null &&
@@ -312,7 +371,12 @@ function isDemonstrablyPastIssuedFreeRestoreTarget(
 }
 
 type ChatKeyboardScrollAction =
-  "page-up" | "page-down" | "line-up" | "line-down" | "top" | "bottom";
+  | "page-up"
+  | "page-down"
+  | "line-up"
+  | "line-down"
+  | "top"
+  | "bottom";
 
 function isEditableTarget(target: EventTarget | null): boolean {
   return (
@@ -884,25 +948,42 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     getMessageActions,
     backgroundItems,
     baselineEpoch,
+    coldRewrittenMessageIds,
+    hydrationSequence,
     composerOverlayHeight,
     identity,
     instanceId,
     messages,
     nextStepActions,
+    onVisibleOrdinalRangeChange,
     scrollRequest,
     systemOverlayActive,
     taskId,
     taskTitle,
+    transcriptWindow,
     visible,
   } = props;
+
+  // The array the list actually renders: hydrated bodies and placeholders in
+  // one sequence. On the legacy line (`transcriptWindow === null`) this is the
+  // identity mapping over `messages`, so nothing below behaves differently
+  // there. Computed before the mount-time restore initializers because they
+  // resolve saved anchors against LIST indexes, which are row indexes.
+  const listRows = useMemo(
+    () => transcriptListRows({ window: transcriptWindow, rendered: messages }),
+    [transcriptWindow, messages],
+  );
 
   // Restore the persisted reading position once, on mount (ticket 15: tries
   // the tab-key entry first, then the durable chat-key entry - RESTORE-FIRST,
   // decision #29). The identity is stable for the mount, so re-reading per
-  // render would only repeat an O(n) message scan whose result the
+  // render would only repeat an O(n) row scan whose result the
   // initializers below already captured.
   const [restoredTabState] = useState<SavedChatTabScrollState>(() =>
-    restoreChatTabState(identity, messages),
+    restoreChatTabState(
+      identity,
+      listRows.map((row) => row.key),
+    ),
   );
   // Ticket 5: a restored row becomes LegendList's own `initialScrollIndex`
   // measurement bootstrap - the same self-correcting path
@@ -917,8 +998,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       ) {
         return null;
       }
-      const index = messages.findIndex(
-        (message) => message.id === restoredTabState.anchorMessageId,
+      const index = listRows.findIndex(
+        (row) => row.key === restoredTabState.anchorMessageId,
       );
       if (index === -1) return null;
       return { index, viewOffset: restoredTabState.offset, viewPosition: 0 };
@@ -952,16 +1033,79 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     null,
   );
   const chatTimelineRef = useRef<LegendListRef | null>(null);
+  // Per mounted transcript, exactly like the row-stability caches: row ids are
+  // chat-scoped, and a memory that outlived its tile would hold heights
+  // measured at a width this one may not share.
+  // `useState` with a lazy initializer, not a ref: render READS this to hand it
+  // to the timeline, and a ref read during render is exactly what
+  // `react-hooks/refs` forbids. Same shape as `restoredTabState` above - a
+  // value computed once for the mount and never set again.
+  const [rowHeightMemory] = useState<ChatTranscriptRowHeightMemory>(() =>
+    createChatTranscriptRowHeightMemory(),
+  );
+  const rowSkeleton = transcriptWindow?.skeleton ?? EMPTY_ROW_SKELETON;
+  // The skeleton is how a measured row is matched back to the `byteLength` it
+  // was estimated from. A layout effect rather than a render-time call: this
+  // writes, and the memory must not be advanced by a render React discards.
+  // LegendList measures inside its OWN layout effect, which runs before this
+  // one, so the first commit's measurements land before the memory has a
+  // skeleton to match them against - `observeSkeleton` back-fills exactly
+  // those on its next call, which is what that pass is for.
+  useLayoutEffect(() => {
+    rowHeightMemory.observeSkeleton(rowSkeleton);
+  }, [rowHeightMemory, rowSkeleton]);
+  // The effective root font size the rows lay out at - `theme-provider` writes
+  // it to `document.documentElement.style.fontSize`, and this is the setting it
+  // writes from. Read here rather than via `getComputedStyle` so a change is
+  // reactive: the height memory has to be told, and nothing else would.
+  const uiFontSize = useSettingsStore((state) => state.uiFontSize);
   const followLatchRef = useRef<ChatTimelineFollowLatch | null>(null);
   const minimapInViewRefreshRef = useRef<() => void>(() => undefined);
   const transcriptContainerRef = useRef<HTMLDivElement>(null);
+  // Width AND typography invalidate every remembered height at once - see
+  // `observeLayoutBasis`. A ResizeObserver on the container rather than React
+  // state, for the reason the memory itself is not state: a resize must not
+  // re-render a mounted transcript, and the basis is only wanted as a hint for
+  // the placeholders that mount next. A layout effect for the same ordering as
+  // the skeleton pass above - LegendList measures in its own, which runs first,
+  // so the opening commit's heights are already recorded when the baseline is
+  // adopted (and `observeLayoutBasis` deliberately keeps them).
+  //
+  // `uiFontSize` is a DEPENDENCY, not just a read: changing it re-flows every
+  // row without necessarily changing the container's width, so the
+  // ResizeObserver may never fire and this effect re-running is the only thing
+  // that reports the new basis.
+  useLayoutEffect(() => {
+    const container = transcriptContainerRef.current;
+    if (container === null) return;
+    const report = (): void => {
+      rowHeightMemory.observeLayoutBasis({
+        width: container.getBoundingClientRect().width,
+        fontSizePx: uiFontSize,
+      });
+    };
+    const observer = new ResizeObserver(report);
+    observer.observe(container);
+    report();
+    return () => observer.disconnect();
+  }, [rowHeightMemory, uiFontSize]);
   const messagesRef = useRef(messages);
-  const messageIndexByIdRef = useRef(buildMessageIdToIndex(messages));
+  const listRowsRef = useRef(listRows);
+  // Seeded EMPTY, not with `buildRowKeyToIndex(listRows)`: a `useRef`
+  // argument is evaluated on every render and discarded after the first, and
+  // this one is an O(rows) map build per streaming token. Its layout effect
+  // populates it before paint. Unlike `listRowsRef`, no descendant layout
+  // callback consumes this map, so it does not need insertion-phase freshness.
+  const rowIndexByKeyRef = useRef(EMPTY_ROW_INDEX_BY_KEY);
   const scrollRequestRef = useRef(scrollRequest);
   const handledScrollRequestIdRef = useRef<number | null>(null);
   const backgroundToolBlockIdsRef = useRef<ReadonlySet<string>>(
     EMPTY_BACKGROUND_TOOL_BLOCK_IDS,
   );
+  // Read only by find's coverage supplier, and through a ref for the same
+  // reason `messages` is: the window changes identity on every hydration, and
+  // a value dependency would re-register the find adapter each time.
+  const transcriptWindowRef = useRef<TranscriptWindow | null>(transcriptWindow);
   // Ticket 5 / decision #18: LegendList's measured header size (the main
   // component of getTopOffsetAdjustment). Capture folds this into the saved
   // viewOffset so initialScrollIndex restore lands on the same pixel - bare
@@ -1272,7 +1416,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // ChatTimeline unmounts LegendList entirely for an empty transcript
   // (ChatEmptyState instead), so this - not just `messages` identity - is
   // the signal that tracks whether a real scroll node can exist right now.
-  const hasContent = messages.length > 0;
+  const hasContent = listRows.length > 0;
   const endInset = composerOverlayHeight;
 
   const reconcileInvalidTimelineLanding = useCallback((): void => {
@@ -1434,11 +1578,16 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
 
   useLayoutEffect(() => {
     messagesRef.current = messages;
-  }, [messages]);
+    transcriptWindowRef.current = transcriptWindow;
+  }, [messages, transcriptWindow]);
+
+  useInsertionEffect(() => {
+    listRowsRef.current = listRows;
+  }, [listRows]);
 
   useLayoutEffect(() => {
-    messageIndexByIdRef.current = buildMessageIdToIndex(messages);
-  }, [messages]);
+    rowIndexByKeyRef.current = buildRowKeyToIndex(listRows);
+  }, [listRows]);
 
   useLayoutEffect(() => {
     scrollRequestRef.current = scrollRequest;
@@ -1517,23 +1666,36 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     const liveViewportAnchorMessageId =
       list === null
         ? null
-        : viewportAnchorMessageId(
+        : viewportAnchorRowKey(
             {
               ...list.getState(),
               scroll: list.getScrollableNode().scrollTop,
               topOffsetAdjustment: listTopOffsetAdjustmentRef.current,
             },
-            messagesRef.current,
+            listRowsRef.current,
           );
-    const anchorMessageId =
+    const resolvedAnchorMessageId =
       mode === "free-scrolling"
         ? (liveViewportAnchorMessageId ??
           scrolledActiveUserMessageIdRef.current)
         : null;
+    // A placeholder the skeleton has not described yet has a SYNTHESIZED key -
+    // an ordinal, with no row identity and no epoch (`isUnplacedRowKey`). It is
+    // fine to scroll by and useless to persist: reindex the transcript before
+    // the tab is reopened and that same key names a different row, which
+    // `restoreChatTabState` accepts as an exact match and restores to. Saving
+    // no anchor at all is the better answer - restore falls back to the offset
+    // and to its pending-hydration correction, both of which are built for
+    // "the anchor is not resolvable yet".
+    const anchorMessageId =
+      resolvedAnchorMessageId !== null &&
+      isUnplacedRowKey(resolvedAnchorMessageId)
+        ? null
+        : resolvedAnchorMessageId;
     const anchorIndex =
       anchorMessageId === null
         ? undefined
-        : messageIndexByIdRef.current.get(anchorMessageId);
+        : rowIndexByKeyRef.current.get(anchorMessageId);
     // Narrow measurement source so capture can fold in the live header pad
     // (list.getState() does not expose headerSize; metrics keep it current).
     const measurementSource =
@@ -1672,6 +1834,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const chatTurnMinimapSide = useSettingsStore(
     (state) => state.chatTurnMinimapSide,
   );
+  const isMobileViewport = useIsMobileViewport();
   const quoteSelection = useQuoteSelection({
     containerRef: transcriptContainerRef,
     enabled: quoteReplyEnabled && visible && !systemOverlayActive,
@@ -1737,13 +1900,14 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         };
         const nextActiveUserMessageId = viewportActiveUserMessageId(
           state,
+          listRows,
           messages,
         );
         if (nextActiveUserMessageId !== null) {
           setScrolledActiveUserMessageIdIfChanged(nextActiveUserMessageId);
         }
       },
-      [messages, setScrolledActiveUserMessageIdIfChanged],
+      [listRows, messages, setScrolledActiveUserMessageIdIfChanged],
     ),
   );
 
@@ -1924,14 +2088,14 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     ): boolean => {
       const { isAborted, onValidated, onExhausted } = policy;
       const list = chatTimelineRef.current;
-      const initialIndex = messageIndexByIdRef.current.get(messageId);
+      const initialIndex = rowIndexByKeyRef.current.get(messageId);
       if (!list || initialIndex === undefined) return false;
 
       activeNavigationSettleCleanupRef.current?.();
       const generationAtIssue = anchorUserScrollGenerationRef.current;
       const scrollNode = list.getScrollableNode();
       const targetIndex = (): number | null =>
-        messageIndexByIdRef.current.get(messageId) ?? null;
+        rowIndexByKeyRef.current.get(messageId) ?? null;
       const landedAtSavedLocation = (): boolean => {
         const index = targetIndex();
         if (index === null) return false;
@@ -2042,7 +2206,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     // LATEST list state would follow that same movement and always agree
     // with wherever the geometry currently sits.
     const list = chatTimelineRef.current;
-    const issuedIndex = messageIndexByIdRef.current.get(pending.messageId);
+    const issuedIndex = rowIndexByKeyRef.current.get(pending.messageId);
     const issuedTarget: IssuedFreeRestoreTarget = {
       targetScrollTop:
         list === null || issuedIndex === undefined
@@ -2053,13 +2217,13 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
               pending.viewOffset,
               listTopOffsetAdjustmentRef.current,
             ),
-      messages: messagesRef.current,
+      rows: listRowsRef.current,
       geometry: measureFreeRestoreGeometry(list, issuedIndex),
     };
     const resolvePendingEndLanding = (): boolean => {
       const isPastTarget = isDemonstrablyPastIssuedFreeRestoreTarget(
         issuedTarget,
-        messagesRef.current,
+        listRowsRef.current,
         measureFreeRestoreGeometry(chatTimelineRef.current, issuedIndex),
       );
       if (isPastTarget) {
@@ -2189,7 +2353,10 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       return;
     }
 
-    const replay = restoreChatTabState(identity, messagesRef.current);
+    const replay = restoreChatTabState(
+      identity,
+      listRowsRef.current.map((row) => row.key),
+    );
     if (replay.mode === "following-end") {
       void chatTimelineRef.current?.scrollToEnd({ animated: false });
       return;
@@ -2248,7 +2415,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       setScrolledActiveUserMessageIdIfChanged(messageId);
       const location = chatTimelineLocationForMessage(
         messageId,
-        messageIndexByIdRef.current,
+        rowIndexByKeyRef.current,
         animated,
       );
       if (location === null) return;
@@ -2309,7 +2476,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   useEffect(() => {
     const anchorId = pendingHydrationRestoreAnchorIdRef.current;
     if (anchorId === null) return;
-    const index = messageIndexByIdRef.current.get(anchorId);
+    const index = rowIndexByKeyRef.current.get(anchorId);
     if (index === undefined) return;
     const rawOffset = rawSavedTabState?.offset ?? 0;
     restorePersistedTimelineLocation(anchorId, rawOffset, {
@@ -2320,7 +2487,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       },
       onExhausted: () => undefined,
     });
-  }, [identity, messages, rawSavedTabState, restorePersistedTimelineLocation]);
+  }, [identity, listRows, rawSavedTabState, restorePersistedTimelineLocation]);
 
   const onMinimapItemSelect = useCallback(
     (messageId: string): void => navigateToMessage(messageId, false, true),
@@ -2339,19 +2506,56 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     });
   }, [cancelTimelineLiveFollowForUserNavigation, identity]);
 
-  const { onRenderedDataChange: onChatFindRenderedDataChange } =
-    useChatFindController({
-      instanceId,
-      messages,
-      messagesRef,
-      backgroundToolBlockIds,
-      backgroundToolBlockIdsRef,
-      messageIndexByIdRef,
-      getScroller,
-      scrollToLocation: scrollToTimelineLocationSuppressingFollowRestore,
-      cancelManualNavigation: cancelManualNavigationForFind,
-      setScrolledActiveUserMessageIdIfChanged,
-    });
+  // Find scans the records the client HOLDS. On the windowed line that is a
+  // subset, so the bar has to say so - a count over a subset presented as a
+  // total is wrong in the one direction a reader cannot detect.
+  const getFindCoverageMessage = useCallback((): string | null => {
+    const window = transcriptWindowRef.current;
+    if (window === null) return null;
+    return chatFindCoverageMessage(unhydratedRowCount(window));
+  }, []);
+
+  const {
+    onRenderedDataChange: onChatFindRenderedDataChange,
+    scheduleMountedHighlightSync: scheduleChatFindMountedHighlightSync,
+  } = useChatFindController({
+    instanceId,
+    messages,
+    messagesRef,
+    backgroundToolBlockIds,
+    backgroundToolBlockIdsRef,
+    getFindCoverageMessage,
+    rowIndexByKeyRef,
+    getScroller,
+    scrollToLocation: scrollToTimelineLocationSuppressingFollowRestore,
+    cancelManualNavigation: cancelManualNavigationForFind,
+    setScrolledActiveUserMessageIdIfChanged,
+  });
+
+  // Viewport-driven hydration (slice C of the windowed line): translate the
+  // list's visible ROW indexes into the ordinal range they cover and report
+  // upward, where the session store folds it into `planTranscriptHydration`.
+  // Keep one callback identity for LegendList's passive callback slot. The
+  // library can run a new-data layout pass before installing a changed callback
+  // prop; closing over `listRows` would therefore pair new indexes with old
+  // rows. `useInsertionEffect` refreshes this ref before any child layout
+  // callback in the commit, while the stable callback avoids the slot race.
+  const onChatTimelineVisibleRowsChange = useCallback(
+    (fromIndex: number, toIndex: number): void => {
+      onVisibleOrdinalRangeChange(
+        visibleOrdinalRange(listRowsRef.current, fromIndex, toIndex),
+      );
+    },
+    [onVisibleOrdinalRangeChange],
+  );
+
+  const onChatTimelineItemSizeChanged = useCallback((): void => {
+    onTimelineItemSizeChanged();
+  }, [onTimelineItemSizeChanged]);
+
+  const onChatTimelineRowMount = useCallback((): void => {
+    scheduleChatFindMountedHighlightSync();
+  }, [scheduleChatFindMountedHighlightSync]);
 
   // The controller does not diff message arrays to decide scrolling - append,
   // prepend, reorder/weave, in-place update, and suffix replacement all flow
@@ -2364,13 +2568,18 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       timelineScrollModeRef.current === "following-end",
     );
     onChatFindRenderedDataChange();
-  }, [messages, scheduleActiveViewportUpdate, onChatFindRenderedDataChange]);
+  }, [listRows, scheduleActiveViewportUpdate, onChatFindRenderedDataChange]);
 
   useLayoutEffect(() => {
     const request = scrollRequestRef.current;
     if (request === null) return;
     if (handledScrollRequestIdRef.current === request.requestId) return;
     handledScrollRequestIdRef.current = request.requestId;
+    if (request.kind === "end") {
+      scrollToEnd(true);
+      scrollRequestRef.current = null;
+      return;
+    }
     const activityGroupId =
       request.blockId === null
         ? null
@@ -2402,14 +2611,24 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     // a cross-tile jump is a real navigation the reader triggered elsewhere.
     navigateToMessage(request.messageId, true, true);
     scrollRequestRef.current = null;
-  }, [activityGroupOpenStore, navigateToMessage, scrollRequest?.requestId]);
+  }, [
+    activityGroupOpenStore,
+    navigateToMessage,
+    scrollRequest?.requestId,
+    scrollToEnd,
+  ]);
 
   // --- Accessibility (decision #24): polite turn-completion announcement ----
 
   // Liveness is NOT inferred here: `useChatAnnouncements` reads the store's
   // transcript baseline (which connection hydrated these rows) and reports
   // the semantic transition. This layer only renders it.
-  const announcement = useChatAnnouncements({ messages, baselineEpoch });
+  const announcement = useChatAnnouncements({
+    messages,
+    baselineEpoch,
+    coldRewrittenMessageIds,
+    hydrationSequence,
+  });
   // The rendered sentence is FROZEN when the announcement is made, not
   // recomputed per render: `taskTitle` is live (a chat is auto-titled right
   // after its first turn, and can be renamed any time). Recomputing would
@@ -2474,7 +2693,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           className="relative flex-1 overflow-hidden"
         >
           <ChatTimeline
-            messages={messages}
+            rows={listRows}
+            onVisibleRowRangeChange={onChatTimelineVisibleRowsChange}
             taskTitle={taskTitle}
             backgroundToolBlockIds={backgroundToolBlockIds}
             getMessageActions={getMessageActions}
@@ -2490,22 +2710,36 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
             isFollowCorrectionSuppressed={isFollowCorrectionSuppressed}
             resolveSuppressedEndLanding={resolveSuppressedEndLanding}
             navigationHighlightedMessageId={navigationHighlightedMessageId}
-            onItemSizeChanged={onTimelineItemSizeChanged}
+            rowHeightMemory={rowHeightMemory}
+            onItemSizeChanged={onChatTimelineItemSizeChanged}
+            onRowMount={onChatTimelineRowMount}
             onListMetricsChange={onListMetricsChange}
             data-testid="chat-messages-scroll"
             data-scroll-mode={scrollMode}
           />
-          {hasContent && chatTurnMinimapSide !== "hide" ? (
-            <ChatTurnMinimap
-              messages={messages}
-              inViewRefreshRef={minimapInViewRefreshRef}
-              listRef={chatTimelineRef}
-              topOffsetAdjustmentRef={listTopOffsetAdjustmentRef}
-              viewportRef={transcriptContainerRef}
-              bottomInset={endInset}
-              onSelect={onMinimapItemSelect}
-              side={chatTurnMinimapSide}
-            />
+          {/* The minimap rail is untappable on touch and its hover-expand
+              never fires; hide it below md and reclaim the right edge.
+              `contents` keeps the absolutely-positioned rail's layout
+              identical on desktop (>=768px). The `side` setting is a user
+              preference, not a viewport rule, so it cannot stand in for this. */}
+          {shouldMountChatTurnMinimap({
+            hasContent,
+            side: chatTurnMinimapSide,
+            mobileViewport: isMobileViewport,
+          }) ? (
+            <div className="contents max-md:hidden">
+              <ChatTurnMinimap
+                rows={listRows}
+                transcriptWindow={transcriptWindow}
+                inViewRefreshRef={minimapInViewRefreshRef}
+                listRef={chatTimelineRef}
+                topOffsetAdjustmentRef={listTopOffsetAdjustmentRef}
+                viewportRef={transcriptContainerRef}
+                bottomInset={endInset}
+                onSelect={onMinimapItemSelect}
+                side={chatTurnMinimapSide}
+              />
+            </div>
           ) : null}
           {hasContent ? (
             <ScrollToEndPill

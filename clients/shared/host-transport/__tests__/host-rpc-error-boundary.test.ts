@@ -6,6 +6,19 @@ import {
   withHostRpcErrorBoundary,
 } from "../host-messenger";
 
+const worktreeBusyHolders = [
+  {
+    ownerRef: {
+      epicId: "epic-1",
+      ownerKind: "chat" as const,
+      ownerId: "chat-1",
+    },
+    holdKind: "chat-turn" as const,
+    activity: "working" as const,
+    label: "Chat is mid-turn",
+  },
+];
+
 describe("toHostRpcError", () => {
   it("returns a HostRpcError unchanged, preserving the subclass", () => {
     const rpcError = new HostRpcError({
@@ -47,6 +60,138 @@ describe("toHostRpcError", () => {
     expect(wrapped).toBeInstanceOf(HostRpcError);
     expect(wrapped.code).toBe("RPC_ERROR");
     expect(wrapped.message).toBe("Unknown host request failure");
+  });
+});
+
+describe("HostRpcError holders", () => {
+  it("fromErrorDetails keeps a valid WORKTREE_BUSY holder list", () => {
+    const error = HostRpcError.fromErrorDetails(
+      {
+        code: "WORKTREE_BUSY",
+        message: "in use",
+        holders: worktreeBusyHolders,
+      },
+      "req-1",
+      "worktree.delete",
+    );
+    expect(error.holders).toEqual(worktreeBusyHolders);
+  });
+
+  it("fromErrorDetails leaves holders null when the envelope omitted them", () => {
+    const error = HostRpcError.fromErrorDetails(
+      { code: "WORKTREE_BUSY", message: "in use" },
+      "req-1",
+      "worktree.delete",
+    );
+    expect(error.holders).toBeNull();
+  });
+
+  it("fromWireEnvelope keeps holders and collapses unknown codes", () => {
+    const error = HostRpcError.fromWireEnvelope(
+      {
+        code: "WORKTREE_BUSY",
+        message: "in use",
+        holders: worktreeBusyHolders,
+      },
+      "req-2",
+      "worktree.delete",
+    );
+    expect(error.code).toBe("WORKTREE_BUSY");
+    expect(error.holders).toEqual(worktreeBusyHolders);
+  });
+
+  it("fromErrorDetails ignores a valid holder list on a non-busy code", () => {
+    const error = HostRpcError.fromErrorDetails(
+      {
+        code: "RPC_ERROR",
+        message: "resolver failed",
+        holders: worktreeBusyHolders,
+      },
+      "req-4",
+      "worktree.delete",
+    );
+    expect(error.code).toBe("RPC_ERROR");
+    expect(error.holders).toBeNull();
+  });
+
+  it("fromWireEnvelope ignores a valid holder list on a non-busy code", () => {
+    const error = HostRpcError.fromWireEnvelope(
+      {
+        code: "RPC_ERROR",
+        message: "resolver failed",
+        holders: worktreeBusyHolders,
+      },
+      "req-5",
+      "worktree.delete",
+    );
+    expect(error.code).toBe("RPC_ERROR");
+    expect(error.holders).toBeNull();
+  });
+
+  it("fromWireEnvelope drops a malformed holders payload rather than throwing", () => {
+    const error = HostRpcError.fromWireEnvelope(
+      {
+        code: "WORKTREE_BUSY",
+        message: "in use",
+        holders: [{ not: "a holder" }],
+      },
+      "req-3",
+      "worktree.delete",
+    );
+    expect(error.code).toBe("WORKTREE_BUSY");
+    expect(error.holders).toBeNull();
+  });
+
+  it("fromErrorDetails keeps holders and holdersRevision on WORKTREE_HOLDERS_CHANGED", () => {
+    const error = HostRpcError.fromErrorDetails(
+      {
+        code: "WORKTREE_HOLDERS_CHANGED",
+        message: "holders changed",
+        holders: worktreeBusyHolders,
+        holdersRevision:
+          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      },
+      "req-6",
+      "worktree.delete",
+    );
+    expect(error.code).toBe("WORKTREE_HOLDERS_CHANGED");
+    expect(error.holders).toEqual(worktreeBusyHolders);
+    expect(error.holdersRevision).toBe(
+      "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    );
+  });
+
+  it("fromWireEnvelope keeps holdersRevision on WORKTREE_HOLDERS_CHANGED", () => {
+    const error = HostRpcError.fromWireEnvelope(
+      {
+        code: "WORKTREE_HOLDERS_CHANGED",
+        message: "holders changed",
+        holders: worktreeBusyHolders,
+        holdersRevision:
+          "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      },
+      "req-7",
+      "worktree.delete",
+    );
+    expect(error.holders).toEqual(worktreeBusyHolders);
+    expect(error.holdersRevision).toBe(
+      "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    );
+  });
+
+  it("drops holdersRevision on a non-holder-carrying code", () => {
+    const error = HostRpcError.fromErrorDetails(
+      {
+        code: "RPC_ERROR",
+        message: "resolver failed",
+        holders: worktreeBusyHolders,
+        holdersRevision: "rev-x",
+      },
+      "req-8",
+      "worktree.delete",
+    );
+    expect(error.holders).toBeNull();
+    expect(error.holdersRevision).toBeNull();
   });
 });
 

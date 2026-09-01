@@ -5,6 +5,7 @@ import { Popover as PopoverPrimitive } from "radix-ui";
 
 import { usePaneAwareContentGuard } from "@/components/epic-tabs/pane-visibility-context";
 import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
+import { useSafeAreaCollisionPadding } from "@/components/ui/safe-area-collision-padding";
 import { cn } from "@/lib/utils";
 
 function Popover({
@@ -31,6 +32,7 @@ function PopoverContent({
   className,
   align = "center",
   sideOffset = 4,
+  collisionPadding,
   container,
   onCloseAutoFocus,
   ...props
@@ -45,15 +47,22 @@ function PopoverContent({
   // escapes the region's own concealment, so it un-presents here and
   // re-presents intact when the region returns.
   const concealed = usePortalConcealed();
+  // Read above the early returns so hook order does not depend on presentation.
+  // The insets are the DEFAULT collision padding and `max-w-safe-dvw` the
+  // default width cap; both are displaceable by a caller (see
+  // `safe-area-collision-padding.ts` and `dropdown-menu.tsx`).
+  const safeAreaInsets = useSafeAreaCollisionPadding();
   if (!paneFocused || concealed) return null;
   return (
     <PopoverPrimitive.Portal container={container}>
       <PopoverPrimitive.Content
         data-slot="popover-content"
+        data-browser-overlay="popover"
         align={align}
         sideOffset={sideOffset}
+        collisionPadding={collisionPadding ?? safeAreaInsets}
         className={cn(
-          "z-50 flex w-72 origin-(--radix-popover-content-transform-origin) flex-col gap-2.5 rounded-lg bg-popover p-2.5 text-ui-sm text-popover-foreground shadow-md ring-1 ring-foreground/10 outline-hidden duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          "z-50 flex w-72 max-w-safe-dvw origin-(--radix-popover-content-transform-origin) flex-col gap-2.5 rounded-lg bg-popover p-2.5 text-ui-sm text-popover-foreground shadow-md ring-1 ring-foreground/10 outline-hidden duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           className,
         )}
         onCloseAutoFocus={handleCloseAutoFocus}

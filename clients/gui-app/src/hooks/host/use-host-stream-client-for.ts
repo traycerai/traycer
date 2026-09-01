@@ -21,11 +21,16 @@ import type { HostEndpointProvider } from "@traycer-clients/shared/host-transpor
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
-import { appHostCredentialMintFlow } from "@/lib/auth/host-credential-provisioning";
+import {
+  appHostCredentialMintFlow,
+  noteHostCredentialState,
+} from "@/lib/auth/host-credential-provisioning";
 import { acquireHostStreamClient } from "@/lib/host/host-stream-client-cache";
 import { useHostBinding } from "@/lib/host/runtime";
 import { processReconnectEngine } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
 import { transportEvidenceRelay } from "@/lib/host/transport-evidence";
+import { appServerClock } from "@/lib/clock/app-server-clock";
+import { getGuiClientIdentity } from "@/lib/host/client-identity";
 import { appLogger } from "@/lib/logger";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import {
@@ -205,6 +210,15 @@ export function buildHostStreamClient(params: {
    * consulted on the `target.kind === "remote"` branch.
    */
   readonly userId: string;
+  /**
+   * Whether the process-wide wake sweep may proactively poke or force-drop
+   * the shared session behind this client (remote branch only). The caller's
+   * statement that a reconnect's subscribe replay is safe for the streams it
+   * will open: durable/warm transports pass `true`; the one-shot
+   * side-effecting transport passes `false`, because a forced replay would
+   * re-run its operation. See `RemoteSessionAcquirePolicy`.
+   */
+  readonly proactiveWakeEligible: boolean;
   // Whether to eagerly `start()` the remote session (warm-connect). Owned-
   // lifetime callers (`openDurableStreamTransport`, one-shot) pass `true`.
   // Render-path callers (`useHostStreamClientBindingFor`, `HostStreamProvider`)
@@ -243,11 +257,18 @@ export function buildHostStreamClient(params: {
       // bearer at a wake-time re-attach revalidates + redials instead of
       // terminally closing the shared session (`RemoteSessionOptions.auth`).
       auth: params.auth,
+      // The same app-wide verdict the local branch passes below. A wrong wall
+      // clock wedges a remote session identically - it is the machine's clock,
+      // not the host's - and a user connected across a relay is the one least
+      // placed to guess why nothing works.
+      clock: appServerClock,
       rpcRegistry: hostRpcRegistry,
       streamRegistry: hostStreamRpcRegistry,
       webSocketFactory: browserStreamWebSocketFactory,
       requestId: uuidv4,
       evidence: transportEvidenceRelay,
+      clientIdentity: getGuiClientIdentity(),
+      proactiveWakeEligible: params.proactiveWakeEligible,
     });
     if (remoteTransport === null) return null;
     if (params.autoStart) {
@@ -261,11 +282,27 @@ export function buildHostStreamClient(params: {
     endpoint: params.endpoint,
     bearer: params.bearer,
     auth: params.auth,
+    // App-wide for the same reason the mint flow below is: the wall clock is a
+    // property of the machine, so every stream in the renderer parks and
+    // resumes on ONE verdict. Without it, a bearer that reads "expired" only
+    // because the clock is hours off walks this session to `goTerminal` with a
+    // diagnosis that blames the credential.
+    clock: appServerClock,
     // Always the app-wide flow, never a per-caller one: the renderer holds
     // several clients against one host, and the shared module is what keeps
-    // that from becoming several OTP dialogs. It resolves `declined` until the
-    // provisioning provider is mounted, so dev shells and tests are unaffected.
+    // that from becoming several concurrent mints revoking each other. It
+    // resolves `unavailable` until the provisioning provider is mounted, so
+    // dev shells and tests are unaffected.
     hostCredentialMint: appHostCredentialMintFlow,
+    // Kept wired as the one place transports report credential state into,
+    // but the report is deliberately INERT today: an `openAck` state carries
+    // no provenance (which credential, which transport, when), so `active`
+    // must NOT release the app-wide adoption claim - a delayed `active(A)`
+    // observed before A was burned would free B's claim and reopen the
+    // double-mint it exists to prevent. The claim expires on its TTL alone;
+    // see `noteHostCredentialState`'s own doc. If a future frame carries the
+    // credential's identity, this is the seam that starts trusting it.
+    onHostCredentialState: noteHostCredentialState,
     // The LOCAL host's long-lived connection, so this is the leg that hears a
     // restart tombstone from a local host restarted by somebody other than
     // this app - a `traycer host restart` on the box, an update install. The
@@ -278,6 +315,7 @@ export function buildHostStreamClient(params: {
     pongTimeoutMs: PONG_TIMEOUT_MS,
     initialBackoffMs: INITIAL_BACKOFF_MS,
     maxBackoffMs: MAX_BACKOFF_MS,
+    clientIdentity: getGuiClientIdentity(),
   });
 }
 
@@ -414,6 +452,12 @@ export function useHostStreamClientBindingFor(
             remoteStatus: PLACEHOLDER_REMOTE_STATUS,
             // Fabricated endpoint, not a directory verdict: never in fuse grace.
             relayFuseGrace: false,
+            recentHostCheckIn: false,
+            // Same reason `transportDialability` is written coarsely above:
+            // the plan gate ran upstream against the real directory entry, and
+            // re-asserting a refusal here would contradict a dial this effect
+            // has already been cleared to make.
+            planAllowsRemote: true,
           } satisfies RemoteHostDirectoryEntry)
         : ({
             hostId: endpointHostId,
@@ -450,6 +494,10 @@ export function useHostStreamClientBindingFor(
           authnBaseUrl,
           auth,
           userId,
+          // A render-path durable client (chat/terminal/epic tiles): its
+          // streams are snapshot-shaped, so a swept reconnect only
+          // re-snapshots.
+          proactiveWakeEligible: true,
           // Never eager-start: this acquire is guaranteed exactly one matching
           // release (unlike the old memo-based build), but the connect-on-first-
           // subscribe laziness is an independent, unchanged behavior. `start()`

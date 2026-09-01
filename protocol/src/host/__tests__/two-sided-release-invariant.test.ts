@@ -3,6 +3,7 @@ import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import {
   checkCompatibility,
   splitConnectionManifest,
+  SERVES_EVERY_INSTALLED_MAJOR,
 } from "@traycer/protocol/framework/index";
 import type { ConnectionManifest } from "@traycer/protocol/framework/index";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
@@ -70,6 +71,7 @@ describe("two-sided release invariant: current registry vs support matrix", () =
   const { manifest: currentManifest } = splitConnectionManifest(
     hostRpcRegistry,
     RELEASED_FLOOR_METHOD_NAMES,
+    SERVES_EVERY_INSTALLED_MAJOR,
   );
 
   it.each(supportMatrix)(

@@ -82,8 +82,9 @@ export type CommGraphSubscriptionOpener = (
  * Purely a reporting threshold - the session keeps retrying underneath on its
  * own backoff, and a later `live` clears it. Without it, a host with no
  * dialable endpoint (removed, offline, never provisioned) cycles
- * connecting → reconnecting forever and its agents would read "Reconnecting…"
- * indefinitely, never reaching the muted unreachable state the graph promises.
+ * connecting → reconnecting forever and the header's feed-health dot would
+ * report "reconnecting…" indefinitely, never reaching the unreachable state
+ * the graph promises.
  * Two, not one, so an ordinary transient blip does not immediately mute a
  * healthy host.
  */
@@ -199,6 +200,10 @@ export class CommGraphSubscriptionManager {
     if (this.disposed || this.attached) return;
     this.attached = true;
     this.reconcile();
+    // `isAttached` is part of what subscribers read (the header's feed-health
+    // dot gates on it), so an attach that reconciled to no status change must
+    // still notify. The snapshot itself is unchanged.
+    this.notify();
   }
 
   /**
@@ -214,10 +219,22 @@ export class CommGraphSubscriptionManager {
       this.clearRetryTimer(entry);
       this.closeEntry(entry);
     }
+    // Same reason as `attach`: the retained statuses are now stale as a REPORT,
+    // and a reader gated on `isAttached` must get the chance to say nothing.
+    this.notify();
   }
 
   getSnapshot(): CommGraphSnapshot {
     return this.snapshot;
+  }
+
+  /**
+   * Whether some surface currently holds this epic's sockets open. A detached
+   * manager still carries the last statuses it saw, so a reader that reports
+   * feed health must gate on this rather than on the retained snapshot.
+   */
+  isAttached(): boolean {
+    return this.attached;
   }
 
   subscribe(listener: () => void): () => void {
@@ -641,6 +658,11 @@ export class CommGraphSubscriptionManager {
         }),
       lastArrival: this.lastArrival,
     };
+    this.notify();
+  }
+
+  private notify(): void {
+    if (this.disposed) return;
     for (const listener of Array.from(this.listeners)) listener();
   }
 }

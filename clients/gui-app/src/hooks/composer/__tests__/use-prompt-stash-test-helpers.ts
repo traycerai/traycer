@@ -147,7 +147,8 @@ export interface MutableDestination extends PromptStashDestinationAdapter {
     PromptStashDestinationAdapter["importAndInsert"]
   >;
   readonly materialize:
-    Mock<NonNullable<PromptStashDestinationAdapter["materialize"]>> | undefined;
+    | Mock<NonNullable<PromptStashDestinationAdapter["materialize"]>>
+    | undefined;
   setIdentity: (identity: string | null) => void;
   setSurface: (surface: string) => void;
   /**
@@ -340,6 +341,7 @@ export function hookArgs(partial: {
   active?: boolean;
   disabled?: boolean;
   readHashImage?: (hash: string) => Promise<Uint8Array<ArrayBuffer> | null>;
+  hostId?: string | null;
 }) {
   return {
     active: partial.active ?? true,
@@ -348,5 +350,6 @@ export function hookArgs(partial: {
     readHashImage: partial.readHashImage ?? (() => Promise.resolve(null)),
     source: partial.source ?? makeSource({ content: emptyDoc() }),
     destination: partial.destination,
+    hostId: partial.hostId ?? null,
   };
 }

@@ -1,6 +1,11 @@
+import { useEffect } from "react";
 import { vi } from "vitest";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
-import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { useMutation } from "@tanstack/react-query";
+import {
+  HostClient,
+  type IHostQueryInvalidator,
+} from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
   MockHostMessenger,
@@ -12,13 +17,16 @@ import type {
   HostControllerStatus,
   HostInstalledRecord,
   HostRegistryUpdateState,
+  HostRestartRequestResult,
   IHostManagement,
 } from "@traycer-clients/shared/platform/runner-host";
+import { runnerMutationKeys } from "@/lib/query-keys/runner-mutation-keys";
 import type { HostIdentity } from "@traycer/protocol/host/identity/index";
 import type {
   HostAvailableManifest,
-  HostGetInstallationInfoResponse,
+  HostGetInstallationInfoResponseV11,
 } from "@traycer/protocol/host/maintenance/index";
+import type { HostBusyBreakdown } from "@traycer/protocol/host/status/index";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 
 /**
@@ -68,6 +76,33 @@ export async function openHostOverviewMenu(): Promise<void> {
 }
 
 /**
+ * Mounts nothing and fires one host-restart mutation on demand, under the
+ * SAME mutation key the Overview's own restart button uses.
+ *
+ * Shared by the doctor-fixes and local-maintenance-fallback suites: both pin
+ * how the panel reacts to a restart that some OTHER surface started (the
+ * pending flag, the disabled states), so the trigger has to be an outside
+ * component publishing on `runnerMutationKeys.hostRestart()` rather than a
+ * click on the panel itself.
+ */
+export function ExternalHostRestartTrigger(props: {
+  readonly mutationFn: () => Promise<HostRestartRequestResult>;
+  readonly onReady: (mutate: () => void) => void;
+}): null {
+  const { mutate } = useMutation({
+    mutationKey: runnerMutationKeys.hostRestart(),
+    mutationFn: props.mutationFn,
+  });
+  const { onReady } = props;
+  useEffect(() => {
+    onReady(() => {
+      mutate();
+    });
+  }, [mutate, onReady]);
+  return null;
+}
+
+/**
  * Open the Updates card's **Advanced** disclosure and wait for its body.
  *
  * The auto-update switch, the OS service controls and the whole version picker
@@ -103,8 +138,10 @@ export function buildOverviewHostFixture(options: {
   readonly customName?: string | null;
   readonly systemName?: string;
   readonly hostVersion?: string;
+  readonly busy?: boolean;
   readonly busySessionCount?: number;
-  readonly installation?: HostGetInstallationInfoResponse;
+  readonly busyBreakdown?: HostBusyBreakdown | null;
+  readonly installation?: HostGetInstallationInfoResponseV11;
   /**
    * Replaces (rather than merges into) individual method handlers after the
    * defaults are built — for a test that needs a pending/erroring RPC, or a
@@ -112,6 +149,12 @@ export function buildOverviewHostFixture(options: {
    * update.
    */
   readonly overrideHandlers?: MockHandlerMap<HostRpcRegistry>;
+  /**
+   * Wired into the fixture's `HostClient` so a test can fire
+   * `notifyHostAvailabilityRecovered` against the real query-invalidation
+   * port. Omitted, the invalidator is a no-op (every other Overview suite).
+   */
+  readonly invalidator?: IHostQueryInvalidator;
 }): OverviewHostFixture {
   let identity: HostIdentity = {
     systemName: options.systemName ?? options.hostId,
@@ -129,10 +172,18 @@ export function buildOverviewHostFixture(options: {
       return {
         ready: true,
         hostVersion: options.hostVersion ?? "1.5.0",
-        protocolVersion: { major: 1, minor: 1 },
-        busy: false,
+        protocolVersion: {
+          major: 1,
+          minor: options.busyBreakdown === undefined ? 1 : 2,
+        },
+        busy: options.busy ?? false,
         busySessionCount: options.busySessionCount ?? 0,
         updateProgress: null,
+        busyBreakdown: options.busyBreakdown ?? null,
+        // `null` = this fixture's host did not report the durable attempt,
+        // which is exactly what host.status@1.2-and-older peers send.
+        updateOperation: null,
+        updateTransaction: null,
       };
     },
     "host.identity.get": () => ({ ...identity }),
@@ -159,6 +210,8 @@ export function buildOverviewHostFixture(options: {
     }),
     "host.update.check": () => ({
       outcome: "ok" as const,
+      effectiveIncludePreReleases: false,
+      includePreReleasesSource: "stable-default" as const,
       manifest: {
         schemaVersion: 1 as const,
         generatedAt: "2026-08-12T00:00:00Z",
@@ -166,7 +219,10 @@ export function buildOverviewHostFixture(options: {
         versions: [],
       },
     }),
-    "host.update.install": () => ({ outcome: "accepted" as const }),
+    "host.update.install": () => ({
+      outcome: "accepted" as const,
+      attemptId: null,
+    }),
     // Answered by default so the Advanced disclosure's OS service section
     // renders its normal shape. Left unanswered, the query rejects and every
     // suite that opens Advanced would read the "couldn't be read" copy — a
@@ -200,7 +256,9 @@ export function buildOverviewHostFixture(options: {
   };
   const client = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
-    invalidator: { invalidateHostScope: () => undefined },
+    invalidator: options.invalidator ?? {
+      invalidateHostScope: () => undefined,
+    },
     // REQUIRED for the requester below: `captureAuthority` re-resolves a
     // requester's entry against the live directory and refuses one it cannot
     // find. `bind()` used to satisfy that lookup through the client's own
@@ -244,6 +302,7 @@ const NOT_INSTALLED_CONTROLLER_STATUS: HostControllerStatus = {
   updateReady: false,
   activation: "unavailable",
   reachable: false,
+  localAttempt: null,
   removedByUser: false,
   checkedAt: "2026-08-12T00:00:00Z",
 };
@@ -277,7 +336,7 @@ export function buildOverviewManagement(
     clearRemoval: vi.fn(() => Promise.resolve()),
     restartHost: vi.fn(() => Promise.resolve({ kind: "restarted" as const })),
     getHostLogs: vi.fn(() => Promise.resolve({ path: null, tail: "" })),
-    runDoctor: vi.fn(() =>
+    runDoctor: vi.fn((_input: { readonly expectedHostId: string }) =>
       Promise.resolve({ issues: [], ranAt: "2026-08-12T00:00:00Z" }),
     ),
     availableVersions: vi.fn(() =>
@@ -303,7 +362,26 @@ export function buildOverviewManagement(
       }),
     ),
     freePortAndRestart: vi.fn((input) => Promise.resolve(input)),
+    runDoctorRepairQueued: vi.fn(() =>
+      Promise.resolve({ kind: "applied" as const }),
+    ),
+    freePortAndRestartIfIdle: vi.fn((_input) =>
+      Promise.resolve({
+        kind: "dispatched" as const,
+        outcome: { kind: "ok" as const, value: null },
+      }),
+    ),
     cliManifest: vi.fn(() => Promise.resolve(null)),
+    maintenanceUpdateCheck: vi.fn(notImplemented("maintenanceUpdateCheck")),
+    maintenanceDoctor: vi.fn(notImplemented("maintenanceDoctor")),
+    maintenanceInstallationInfo: vi.fn(
+      notImplemented("maintenanceInstallationInfo"),
+    ),
+    maintenanceInstallVersion: vi.fn(
+      notImplemented("maintenanceInstallVersion"),
+    ),
+    restartHostIfIdle: vi.fn(notImplemented("restartHostIfIdle")),
+    runDoctorRepairIfIdle: vi.fn(notImplemented("runDoctorRepairIfIdle")),
     getHostName: vi.fn(() =>
       Promise.resolve({
         systemName: "recovery-host",

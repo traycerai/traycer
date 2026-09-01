@@ -1,5 +1,6 @@
 import * as Y from "yjs";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -23,6 +24,7 @@ import {
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
+import type { BrowserSessionsState } from "@/components/epic-canvas/renderers/browser-sessions-context";
 
 interface FakeStream {
   readonly callbacks: EpicStreamCallbacks;
@@ -32,6 +34,35 @@ interface FakeStream {
 const hostBoundary = vi.hoisted(() => ({
   seenTileHostIds: new Set<string>(),
 }));
+
+vi.mock(
+  "@/components/epic-canvas/renderers/browser-sessions-provider",
+  async () => {
+    const { BrowserSessionsContext } =
+      await import("@/components/epic-canvas/renderers/browser-sessions-context");
+    const state: BrowserSessionsState = {
+      hostId: "host-test",
+      lifecycle: "connecting",
+      inventoryReady: false,
+      items: [],
+      errorMessage: null,
+      retry: () => undefined,
+      openTab: () => Promise.reject(new Error("not used")),
+      closeTab: () => Promise.reject(new Error("not used")),
+    };
+    return {
+      BrowserSessionsProvider: (props: { readonly children: ReactNode }) => (
+        <BrowserSessionsContext.Provider value={state}>
+          {props.children}
+        </BrowserSessionsContext.Provider>
+      ),
+      // Every tile now sits behind the boundary for its own host; this suite
+      // has one ambient stream, so it stays a pass-through.
+      BrowserSessionsHostBoundary: (props: { readonly children: ReactNode }) =>
+        props.children,
+    };
+  },
+);
 
 const activeHostEntry = vi.hoisted(() => ({
   hostId: "default-host",

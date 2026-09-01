@@ -15,7 +15,11 @@ import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import { projectFullState } from "@/stores/epics/open-epic/projection-helpers";
-import { EMPTY_CHATS_SLICE } from "@/stores/epics/open-epic/types";
+import { EMPTY_PENDING_OVERLAY } from "@/stores/epics/open-epic/pending-metadata-overlay";
+import {
+  EMPTY_CHATS_SLICE,
+  EMPTY_TERMINAL_AGENTS_SLICE,
+} from "@/stores/epics/open-epic/types";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 function encodeBase64(bytes: Uint8Array): string {
@@ -163,7 +167,6 @@ describe("epic-projector", () => {
     expect(state.artifacts.allIds).toEqual([]);
     expect(state.chats.allIds).toEqual([]);
     expect(state.tree.rootIds).toEqual([]);
-    expect(Object.keys(state.contentRevByArtifactId)).toEqual([]);
     expect(state.epic.title).toBe("");
     handle.dispose();
   });
@@ -268,6 +271,47 @@ describe("epic-projector", () => {
     handle.dispose();
   });
 
+  it("optimistic delete writes an enriched tombstone before removing the live key", () => {
+    const { handle } = newSession();
+    const ticket = createArtifactInDocForTests(handle.doc, "ticket", null);
+
+    handle.store.getState().deleteArtifact(ticket);
+
+    const root = handle.doc.getMap("epic");
+    const artifacts = root.get("artifacts");
+    const deleted = root.get("deletedArtifacts");
+    if (!(artifacts instanceof Y.Map) || !(deleted instanceof Y.Map)) {
+      throw new Error("artifact maps missing");
+    }
+    const tombstone: unknown = deleted.get(ticket);
+    if (!(tombstone instanceof Y.Map)) throw new Error("tombstone missing");
+    expect(artifacts.has(ticket)).toBe(false);
+    expect(tombstone.toJSON()).toMatchObject({
+      id: ticket,
+      kind: "ticket",
+      title: "New ticket",
+      parentId: null,
+      artifactRoomId: null,
+      assignee: "",
+      status: 0,
+    });
+    expect([...tombstone.keys()]).toEqual(
+      expect.arrayContaining([
+        "folderName",
+        "createdAt",
+        "createdManually",
+        "artifactRoomId",
+        "assignee",
+        "status",
+        "deletedAt",
+      ]),
+    );
+    const deletedAt: unknown = tombstone.get("deletedAt");
+    expect(typeof deletedAt).toBe("string");
+    expect(Number.isNaN(Date.parse(deletedAt as string))).toBe(false);
+    handle.dispose();
+  });
+
   it("chat creation populates chats slice and tree as a chat node", () => {
     const { handle } = newSession();
     const id = createArtifactInDocForTests(handle.doc, "chat", null);
@@ -302,7 +346,12 @@ describe("epic-projector", () => {
     void a;
     void c;
 
-    const live = projectFullState(handle.doc, null, EMPTY_CHATS_SLICE);
+    const live = projectFullState(handle.doc, null, {
+      chatRecords: EMPTY_CHATS_SLICE,
+      tuiAgentRecords: EMPTY_TERMINAL_AGENTS_SLICE,
+      pendingOverlay: EMPTY_PENDING_OVERLAY,
+      reportDeadMutations: null,
+    });
     const state = handle.store.getState();
 
     expect(state.epic).toEqual(live.epic);
@@ -331,13 +380,23 @@ describe("epic-projector", () => {
 
     // Signed in as user-a: their own chat + the unowned chat show; user-b's
     // chat is hidden from every derived slice.
-    const mine = projectFullState(doc, "user-a", EMPTY_CHATS_SLICE);
+    const mine = projectFullState(doc, "user-a", {
+      chatRecords: EMPTY_CHATS_SLICE,
+      tuiAgentRecords: EMPTY_TERMINAL_AGENTS_SLICE,
+      pendingOverlay: EMPTY_PENDING_OVERLAY,
+      reportDeadMutations: null,
+    });
     expect(mine.chats.allIds.slice().sort()).toEqual(["mine", "orphan"]);
     expect(Object.keys(mine.chats.byId).sort()).toEqual(["mine", "orphan"]);
     expect(mine.tree.rootIds.slice().sort()).toEqual(["mine", "orphan"]);
 
     // Fail open when the signed-in user is unknown (hydrating): show everything.
-    const anon = projectFullState(doc, null, EMPTY_CHATS_SLICE);
+    const anon = projectFullState(doc, null, {
+      chatRecords: EMPTY_CHATS_SLICE,
+      tuiAgentRecords: EMPTY_TERMINAL_AGENTS_SLICE,
+      pendingOverlay: EMPTY_PENDING_OVERLAY,
+      reportDeadMutations: null,
+    });
     expect(anon.chats.allIds.slice().sort()).toEqual([
       "mine",
       "orphan",
@@ -359,13 +418,23 @@ describe("epic-projector", () => {
     tuiAgents.set("legacy", makeTerminalAgentEntry("legacy", null, "Legacy"));
     doc.getMap("epic").set("tuiAgents", tuiAgents);
 
-    const mine = projectFullState(doc, "user-a", EMPTY_CHATS_SLICE);
+    const mine = projectFullState(doc, "user-a", {
+      chatRecords: EMPTY_CHATS_SLICE,
+      tuiAgentRecords: EMPTY_TERMINAL_AGENTS_SLICE,
+      pendingOverlay: EMPTY_PENDING_OVERLAY,
+      reportDeadMutations: null,
+    });
     expect(mine.tuiAgents.allIds.slice().sort()).toEqual(["legacy", "mine"]);
     expect(Object.keys(mine.tuiAgents.byId).sort()).toEqual(["legacy", "mine"]);
     expect(mine.tree.rootIds.slice().sort()).toEqual(["legacy", "mine"]);
     expect(mine.tree.nodeById.theirs).toBeUndefined();
 
-    const anon = projectFullState(doc, null, EMPTY_CHATS_SLICE);
+    const anon = projectFullState(doc, null, {
+      chatRecords: EMPTY_CHATS_SLICE,
+      tuiAgentRecords: EMPTY_TERMINAL_AGENTS_SLICE,
+      pendingOverlay: EMPTY_PENDING_OVERLAY,
+      reportDeadMutations: null,
+    });
     expect(anon.tuiAgents.allIds.slice().sort()).toEqual([
       "legacy",
       "mine",

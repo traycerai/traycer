@@ -15,7 +15,10 @@ import type {
   IpcHostController,
   IpcHostLifecycle,
 } from "../../ipc/runner-ipc-bridge";
-import type { HostControllerStatus } from "../../host/host-controller-types";
+import type {
+  HostControllerStatus,
+  LifecycleAdmissionBlock,
+} from "../../host/host-controller-types";
 import type {
   ActivateInstalledOk,
   ApplyStagedOk,
@@ -1380,6 +1383,7 @@ function buildControllerStatus(
     updateReady: false,
     activation: "activated",
     reachable: true,
+    localAttempt: null,
     removedByUser: false,
     checkedAt: "2026-01-01T00:00:00.000Z",
   };
@@ -1540,6 +1544,7 @@ class FakeHostController implements IpcHostController {
     value: { running: true, version: "1.0.0" },
   };
 
+  readonly lifecycleAdmissionBlock: LifecycleAdmissionBlock | null = null;
   async getStatus(): Promise<HostControllerStatus> {
     return buildControllerStatus(null);
   }
@@ -1595,7 +1600,11 @@ class FakeHostController implements IpcHostController {
   async uninstallHost(_all: boolean): Promise<MutationOutcome<UninstallOk>> {
     return {
       kind: "ok",
-      value: { removedInstallDir: true, deregisteredService: true },
+      value: {
+        removedInstallDir: true,
+        deregisteredService: true,
+        serviceRegistrationRetained: null,
+      },
     };
   }
   async removeTraycer(): Promise<MutationOutcome<RemoveTraycerOk>> {
@@ -1604,6 +1613,7 @@ class FakeHostController implements IpcHostController {
       value: {
         removedHost: true,
         deregisteredService: true,
+        serviceRegistrationRetained: null,
         removedLoginItem: false,
       },
     };

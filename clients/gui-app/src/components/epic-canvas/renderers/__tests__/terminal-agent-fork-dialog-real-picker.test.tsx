@@ -4,6 +4,7 @@ import type {
   ProviderCliState,
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
+import type { ForkableTuiAgent } from "../terminal-agent-fork-dialog";
 
 // Real Radix DropdownMenu opens on pointerdown; swap only the low-level
 // primitive so the REAL ProfileDropdown / HarnessModelPicker admission wiring
@@ -145,6 +146,14 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   }),
 }));
 
+vi.mock("@/hooks/providers/use-providers-set-profile-enabled-mutation", () => ({
+  useProviderProfileEnablementPending: () => () => false,
+  useProvidersSetProfileEnabledForClient: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+  }),
+}));
+
 // useResolvedSeededProfileId still hits useHostQuery directly (not the
 // providers-list-query wrapper). Mirror the same provider list so a managed
 // seed is not tombstoned to ambient mid-test.
@@ -200,7 +209,8 @@ vi.mock("react-virtuoso", async () => {
     readonly totalCount?: number;
     readonly computeItemKey?: (index: number, item: undefined) => Key;
     readonly initialTopMostItemIndex?:
-      number | { readonly index: number | "LAST" };
+      | number
+      | { readonly index: number | "LAST" };
     readonly itemContent?: (index: number, item: undefined) => ReactNode;
   }
 
@@ -355,7 +365,6 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import type { TuiAgentProjection } from "@/stores/epics/open-epic/types";
 import type { ForkWorkspaceSeed } from "@/lib/worktree/fork-workspace-seed";
 import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
 import { useSeededWorkspaceSnapshotStore } from "@/stores/worktree/seeded-workspace-snapshot-store";
@@ -573,7 +582,7 @@ describe("<TerminalAgentForkDialog /> real HarnessModelPicker rows", () => {
 
 function renderDialog(input: {
   readonly intent: "fork" | "continue";
-  readonly sourceAgent: TuiAgentProjection;
+  readonly sourceAgent: ForkableTuiAgent;
 }): void {
   render(
     <TooltipProvider delayDuration={0}>
@@ -610,9 +619,13 @@ function titleInputValue(): string {
   return input.value;
 }
 
-function sourceAgent(): TuiAgentProjection {
+function sourceAgent(): ForkableTuiAgent {
   return {
     id: "source-agent",
+    // An ordinary registry-backed agent - this suite exercises the fork
+    // dialog's profile picker, not doc residency.
+    docResident: false,
+    origin: "registry",
     harnessId: "claude",
     title: "Source terminal",
     parentId: "source-parent",
@@ -644,6 +657,7 @@ function emptyWorkspaceSeed(): ForkWorkspaceSeed {
 function ambientProfile(label: string): ProviderProfile {
   return {
     profileId: "ambient",
+    enabled: true,
     kind: "ambient",
     authType: "oauth",
     label,
@@ -666,6 +680,7 @@ function ambientProfile(label: string): ProviderProfile {
 function managedProfile(profileId: string, label: string): ProviderProfile {
   return {
     profileId,
+    enabled: true,
     kind: "managed",
     authType: "oauth",
     label,

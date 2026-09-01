@@ -448,6 +448,7 @@ describe("<QueuedMessagePanel />", () => {
           message: {
             kind: "user",
             content: orderedListContent(["First step", "Second step"]),
+            browserAnnotations: [],
           },
         },
       ]),
@@ -877,7 +878,8 @@ function renderPanel(input: {
   readonly onPause?: () => string | null;
   readonly onResume?: () => string | null;
   readonly onReorder:
-    ((item: ChatQueuedItem, beforeQueueItemId: string | null) => void) | null;
+    | ((item: ChatQueuedItem, beforeQueueItemId: string | null) => void)
+    | null;
 }) {
   return render(
     <TooltipProvider delayDuration={0}>
@@ -926,6 +928,7 @@ function queuedItem(
     message: {
       kind: "user",
       content: content(text),
+      browserAnnotations: [],
     },
     sender: { type: "user", userId: "owner-1" },
     settings: SETTINGS,

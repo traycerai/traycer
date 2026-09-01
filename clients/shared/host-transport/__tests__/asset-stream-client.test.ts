@@ -24,6 +24,7 @@ import {
 } from "../asset-stream-client";
 import { WsStreamClient } from "../ws-stream-client";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
+import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
 class StubStreamWebSocket implements StreamWebSocketLike {
   onopen: ((event: WebSocketOpenEvent) => void) | null = null;
@@ -92,11 +93,14 @@ function makeClient(
     externalAbortSignal: undefined,
   });
   return new WsStreamClient({
+    clientIdentity: TEST_CLIENT_IDENTITY,
     registry: hostStreamRpcRegistry,
     endpoint: () => mockLocalHostEntry,
     bearer: () => context.credentials,
     auth: null,
+    clock: null,
     hostCredentialMint: null,
+    onHostCredentialState: null,
     evidence: NO_TRANSPORT_EVIDENCE,
     webSocketFactory: factory,
     dialTimeoutMs: 1_000,

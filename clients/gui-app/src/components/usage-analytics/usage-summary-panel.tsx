@@ -1,16 +1,11 @@
 import { useMemo, useRef, useState, type ReactNode } from "react";
-import { Copy, Download } from "lucide-react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { Button } from "@/components/ui/button";
-import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import type { HostRpcRegistry } from "@/lib/host";
-import {
-  useUsageImageExport,
-  type UsageImageExportMutation,
-} from "@/hooks/usage-analytics/use-usage-image-export";
+import { useUsageImageExport } from "@/hooks/usage-analytics/use-usage-image-export";
+import { UsageExportImageActions } from "@/components/usage-analytics/usage-export-image-actions";
 import { USAGE_EXPORT_REGION_SELECTOR } from "@/lib/usage-analytics/usage-export-image";
 import {
   buildUsageSummaryRequest,
@@ -249,22 +244,23 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
   const exportReady =
     query.data !== undefined &&
     usageActivityLaneSettled(activityQuery, activityFallbackQuery);
-  const { mutation, copyImage, downloadImage } = useUsageImageExport({
-    getExportNode: () =>
-      panelRef.current?.querySelector<HTMLElement>(
-        USAGE_EXPORT_REGION_SELECTOR,
-      ) ?? null,
-    fileName: `traycer-usage-${String(windowDays)}d.png`,
-    heading: "Usage",
-    // The metric belongs in the subheading because its toggle sits OUTSIDE
-    // the capture region: the chart and the activity calendar both obey it,
-    // so a tokens-mode capture is a page of magnitudes with nothing naming
-    // what they measure - a reader would take them for dollars. The date
-    // range alone describes only half the scope of what the image shows.
-    subheading: `${dateRangeLabel} · ${USAGE_METRIC_LABELS[metric]}`,
-    errorSource: "Usage settings",
-    analyticsSource: "settings",
-  });
+  const { pendingAction, copyImage, shareImage, downloadImage } =
+    useUsageImageExport({
+      getExportNode: () =>
+        panelRef.current?.querySelector<HTMLElement>(
+          USAGE_EXPORT_REGION_SELECTOR,
+        ) ?? null,
+      fileName: `traycer-usage-${String(windowDays)}d.png`,
+      heading: "Usage",
+      // The metric belongs in the subheading because its toggle sits OUTSIDE
+      // the capture region: the chart and the activity calendar both obey it,
+      // so a tokens-mode capture is a page of magnitudes with nothing naming
+      // what they measure - a reader would take them for dollars. The date
+      // range alone describes only half the scope of what the image shows.
+      subheading: `${dateRangeLabel} · ${USAGE_METRIC_LABELS[metric]}`,
+      errorSource: "Usage settings",
+      analyticsSource: "settings",
+    });
   return (
     <div ref={panelRef} className="flex w-full max-w-4xl flex-col gap-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -291,9 +287,13 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
           <UsageMetricToggle metric={metric} onChange={setMetric} />
           <UsageExportImageActions
             exportReady={exportReady}
-            mutation={mutation}
-            onCopyImage={copyImage}
-            onDownloadImage={downloadImage}
+            pendingAction={pendingAction}
+            copyImage={copyImage}
+            shareImage={shareImage}
+            downloadImage={downloadImage}
+            testIdPrefix="usage"
+            variant="icon"
+            buttonClassName={undefined}
           />
         </div>
       </div>
@@ -313,81 +313,6 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
         }
       />
     </div>
-  );
-}
-
-/**
- * The header's Copy image / Download image pair. One export runs at a time,
- * so BOTH buttons go disabled while either is pending; only the button that
- * started it shows the spinner, which is what the mutation's variables
- * discriminate. Extracted from the panel so the pending derivations live
- * beside the buttons they gate.
- */
-function UsageExportImageActions(props: {
-  readonly exportReady: boolean;
-  readonly mutation: UsageImageExportMutation;
-  readonly onCopyImage: () => void;
-  readonly onDownloadImage: () => void;
-}): ReactNode {
-  const { exportReady, mutation } = props;
-  const isExporting = mutation.isPending;
-  const isCopying = isExporting && mutation.variables.action === "copy";
-  const isDownloading = isExporting && mutation.variables.action === "download";
-  return (
-    <>
-      <TooltipWrapper
-        label="Copy image"
-        side="top"
-        sideOffset={undefined}
-        align={undefined}
-      >
-        <Button
-          type="button"
-          variant="outline"
-          size="icon-sm"
-          aria-label="Copy usage image"
-          data-testid="usage-copy-image"
-          disabled={!exportReady || isExporting}
-          onClick={props.onCopyImage}
-        >
-          {isCopying ? (
-            <AgentSpinningDots
-              className="size-3"
-              testId={undefined}
-              variant={undefined}
-            />
-          ) : (
-            <Copy aria-hidden className="size-3.5" />
-          )}
-        </Button>
-      </TooltipWrapper>
-      <TooltipWrapper
-        label="Download image"
-        side="top"
-        sideOffset={undefined}
-        align={undefined}
-      >
-        <Button
-          type="button"
-          variant="outline"
-          size="icon-sm"
-          aria-label="Download usage image"
-          data-testid="usage-download-image"
-          disabled={!exportReady || isExporting}
-          onClick={props.onDownloadImage}
-        >
-          {isDownloading ? (
-            <AgentSpinningDots
-              className="size-3"
-              testId={undefined}
-              variant={undefined}
-            />
-          ) : (
-            <Download aria-hidden className="size-3.5" />
-          )}
-        </Button>
-      </TooltipWrapper>
-    </>
   );
 }
 
@@ -546,11 +471,11 @@ function UsageSummaryPanelBody(props: {
   );
 
   return (
-    // `usage-chart-root` carries the `--usage-series-*` palette, and it has
+    // `usage-chart-root` carries the series and harness palettes, and it has
     // to sit on the common ancestor rather than on the chart alone:
     // `UsageHarnessSplit` is the chart's SIBLING here and colors its dots and
     // bars from the same scale, so while the scope lived only on
-    // `UsageDailyChart` those `var(--usage-series-N)` reads resolved against
+    // `UsageDailyChart` those palette-variable reads resolved against
     // nothing and the split rendered colorless. `UsageDailyChart` keeps its
     // own copy of the class for the epic dialog, where it stands alone.
     <div className="usage-chart-root flex flex-col gap-5">

@@ -18,10 +18,8 @@
 
 import { createStore, del, get, keys, set, type UseStore } from "idb-keyval";
 
+import type { ImageBytes } from "@/lib/attachments/image-bytes";
 import { PERSIST_PREFIX } from "@/lib/persist/keys";
-
-/** A view guaranteed to be backed by a plain `ArrayBuffer` (not shared). */
-type ImageBytes = Uint8Array<ArrayBuffer>;
 
 /**
  * Session entry for a hash seen this session. Holds the bytes (so submit can
@@ -116,6 +114,21 @@ async function sha256Hex(bytes: ImageBytes): Promise<string> {
 // unambiguous: exactly one flight owns the seeding it added, so a failed durable
 // write can't revoke session/known entries a concurrent sibling is relying on.
 const inFlightPuts = new Map<string, Promise<string>>();
+
+/**
+ * Store already-hashed bytes under `hash`. Refuses a digest mismatch
+ * (never writes). Used by `drafts.readBlob` so the local partition
+ * remains the render/GC tier after a host fetch.
+ */
+export async function putImageBytesAtHash(
+  hash: string,
+  bytes: ImageBytes,
+): Promise<boolean> {
+  const actual = await sha256Hex(bytes);
+  if (actual !== hash) return false;
+  await writeImageUnderHash(hash, bytes);
+  return true;
+}
 
 export async function putImage(bytes: ImageBytes): Promise<string> {
   const hash = await sha256Hex(bytes);

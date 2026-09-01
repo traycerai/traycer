@@ -12,12 +12,16 @@ import {
 } from "@/components/chat/chat-find";
 import {
   deriveActivityGroupRenderId,
+  deriveInterviewCollapsibleKey,
   derivePromotedSubagentRenderId,
 } from "@/components/chat/chat-collapsible-key";
+import { formatAbsoluteDateTime } from "@/lib/relative-time";
+import { deriveInterviewReviewModel } from "@/components/chat/segments/interview-review-model";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   ApprovalSegment,
   ChatMessage as ChatMessageModel,
+  InterviewSegment,
   MessageSegment,
 } from "@/stores/composer/chat-store";
 import { makeMessage } from "./chat-message-fixtures";
@@ -25,6 +29,214 @@ import { makeMessage } from "./chat-message-fixtures";
 const TILE_INSTANCE_ID = "chat-find-test-tile";
 
 describe("chat find projection", () => {
+  it("projects completed and errored terminal interviews from review fields", () => {
+    const assistant: ChatMessageModel = {
+      ...makeMessage(2, "assistant"),
+      segments: [
+        interviewSegment("interview-completed", "completed"),
+        interviewSegment("interview-errored", "errored"),
+      ],
+    };
+
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set())[0];
+    const completedQuestion = row.units.find(
+      (unit) =>
+        unit.unitId ===
+        "interview:interview-completed:question:0:question-text",
+    );
+    const failedReason = row.units.find(
+      (unit) => unit.unitId === "interview:interview-errored:block:reason",
+    );
+
+    expect(completedQuestion?.text).toBe("Where should this deploy?");
+    expect(completedQuestion?.owningChain).toEqual([
+      deriveInterviewCollapsibleKey(TILE_INSTANCE_ID, "interview-completed"),
+    ]);
+    expect(failedReason?.text).toBe("Provider stopped");
+    expect(
+      row.units.some((unit) => unit.unitId.includes("answered_questions")),
+    ).toBe(false);
+  });
+
+  it("keeps multiple question targets distinct and positional", () => {
+    const segment: InterviewSegment = {
+      ...interviewSegment("interview-multiple", "completed"),
+      questions: [
+        {
+          questionId: "q1",
+          question: "Where should this deploy?",
+          header: null,
+          options: [],
+          multiSelect: false,
+        },
+        {
+          questionId: "q2",
+          question: "Which region?",
+          header: null,
+          options: [],
+          multiSelect: false,
+        },
+      ],
+      answers: [
+        {
+          questionId: "q1",
+          question: "Where should this deploy?",
+          values: ["Staging"],
+          notes: null,
+          selection: null,
+        },
+        {
+          questionId: "q2",
+          question: "Which region?",
+          values: ["us-east-1"],
+          notes: null,
+          selection: null,
+        },
+      ],
+    };
+
+    const row = buildChatFindRows(
+      [
+        {
+          ...makeMessage(3, "assistant"),
+          segments: [segment],
+        },
+      ],
+      TILE_INSTANCE_ID,
+      new Set(),
+    )[0];
+
+    expect(
+      row.units
+        .filter((unit) => unit.unitId.includes(":question:"))
+        .map((unit) => unit.unitId),
+    ).toContain("interview:interview-multiple:question:0:question-text");
+    expect(
+      row.units
+        .filter((unit) => unit.unitId.includes(":question:"))
+        .map((unit) => unit.unitId),
+    ).toContain("interview:interview-multiple:question:1:question-text");
+    expect(rowSearchText(row)).toContain("Where should this deploy?");
+    expect(rowSearchText(row)).toContain("Which region?");
+  });
+
+  it("projects every rendered interview field under the card's owning chain", () => {
+    const segment: InterviewSegment = {
+      ...interviewSegment("interview-all-fields", "errored"),
+      title: "Deployment title",
+      description: "Rollout description",
+      questions: [
+        {
+          questionId: "q-options",
+          question: "Which environment?",
+          header: "Environment",
+          options: [
+            {
+              label: "Staging",
+              description: "Shared test environment",
+              preview: "No production traffic",
+            },
+          ],
+          multiSelect: false,
+        },
+        {
+          questionId: "q-text",
+          question: "What should the release note say?",
+          header: null,
+          options: [],
+          multiSelect: false,
+        },
+        {
+          questionId: "q-draft",
+          question: "What should remain a draft?",
+          header: null,
+          options: [],
+          multiSelect: false,
+        },
+      ],
+      answers: [
+        {
+          questionId: "q-options",
+          question: "Which environment?",
+          values: ["Custom environment"],
+          notes: "Only after approval",
+          selection: {
+            questionIndex: 0,
+            optionIndices: [],
+            optionLabels: [],
+            customText: "Custom environment",
+          },
+        },
+        {
+          questionId: "q-text",
+          question: "What should the release note say?",
+          values: ["Ship carefully"],
+          notes: "Mention the migration",
+          selection: null,
+        },
+        {
+          questionId: "missing-question",
+          question: "Which unknown question?",
+          values: ["Fallback value"],
+          notes: "Fallback note",
+          selection: null,
+        },
+      ],
+      draftAnswers: [
+        {
+          questionId: "q-draft",
+          question: "What should remain a draft?",
+          values: ["Draft response"],
+          notes: "Draft note",
+          selection: null,
+        },
+      ],
+      outcome: "failed",
+      error: "Provider stopped",
+      delivery: {
+        deliveryId: "delivery-all-fields",
+        status: "failed",
+        retryable: true,
+        generation: 2,
+      },
+      settlement: { settlementId: "settlement-all-fields", source: "gui" },
+    };
+    const assistant: ChatMessageModel = {
+      ...makeMessage(4, "assistant"),
+      segments: [segment],
+    };
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set())[0];
+    const model = deriveInterviewReviewModel({
+      blockId: segment.id,
+      status: segment.status,
+      toolName: segment.toolName,
+      title: segment.title,
+      description: segment.description,
+      questions: segment.questions,
+      answers: segment.answers,
+      draftAnswers: segment.draftAnswers,
+      outcome: segment.outcome,
+      settlement: segment.settlement,
+      error: segment.error,
+      delivery: segment.delivery,
+      forkedWithoutAnswer: segment.forkedWithoutAnswer,
+    });
+    const owningChain = [
+      deriveInterviewCollapsibleKey(TILE_INSTANCE_ID, segment.id),
+    ];
+
+    expect(row.units.map(({ unitId, text }) => ({ unitId, text }))).toEqual(
+      model.searchableFields.map(({ unitId, text }) => ({ unitId, text })),
+    );
+    expect(row.units).toHaveLength(model.searchableFields.length);
+    expect(
+      row.units.every(
+        (unit) =>
+          JSON.stringify(unit.owningChain) === JSON.stringify(owningChain),
+      ),
+    ).toBe(true);
+  });
+
   it("projects markdown links and code as rendered text, not markdown syntax", () => {
     const text = markdownToChatSearchText(
       [
@@ -968,7 +1180,83 @@ describe("chat find projection", () => {
     ]);
     expect(rowSearchText(row)).toContain("Forked from Legacy Thread");
   });
+
+  // The marker's anchor paints one line: the provider's DISPLAY name and the
+  // import date. Indexing the harness id or the source directory (tooltip-only,
+  // and rendered in a portal outside the anchor) would count matches the
+  // highlighter has no text to paint.
+  it("indexes an imported-chat-marker by the line it renders, not the raw provider id or the source path", () => {
+    const synthesized: ChatMessageModel = {
+      ...makeMessage(34, "system"),
+      content: "",
+      segments: [
+        {
+          id: "imported-1",
+          kind: "imported-chat-marker",
+          sourceProvider: "claude",
+          importedAt: 1700000000000,
+          sourceCwd: "/repo/work",
+        },
+      ],
+    };
+
+    const row = buildChatFindRows(
+      [synthesized],
+      TILE_INSTANCE_ID,
+      new Set(),
+    )[0];
+
+    expect(row.units.map((unit) => unit.unitId)).toEqual([
+      chatFindSegmentUnitId("imported-1"),
+    ]);
+    const text = rowSearchText(row);
+    expect(text).toBe(
+      `Imported from Claude Code · ${formatAbsoluteDateTime(1700000000000)}`,
+    );
+    expect(text).not.toContain("/repo/work");
+  });
 });
+
+function interviewSegment(
+  id: string,
+  status: InterviewSegment["status"],
+): InterviewSegment {
+  return {
+    id,
+    kind: "interview",
+    status,
+    toolName: "AskUserQuestion",
+    title: null,
+    description: null,
+    questions: [
+      {
+        questionId: "q1",
+        question: "Where should this deploy?",
+        header: null,
+        options: [],
+        multiSelect: false,
+      },
+    ],
+    answers:
+      status === "errored"
+        ? []
+        : [
+            {
+              questionId: "q1",
+              question: "Where should this deploy?",
+              values: ["Staging"],
+              notes: null,
+              selection: null,
+            },
+          ],
+    draftAnswers: [],
+    outcome: status === "errored" ? "failed" : "answered",
+    settlement: null,
+    error: status === "errored" ? "Provider stopped" : null,
+    delivery: null,
+    forkedWithoutAnswer: false,
+  };
+}
 
 function rowSearchText(row: ChatFindRow): string {
   return row.units.map((unit) => unit.text).join("\n");

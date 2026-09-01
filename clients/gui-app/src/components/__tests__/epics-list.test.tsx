@@ -1,3 +1,4 @@
+import "@/components/epics/__tests__/stub-sweep-dialog-host-hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -105,6 +106,11 @@ function buildMessengerFactory(
             busy: false,
             busySessionCount: 0,
             updateProgress: null,
+            busyBreakdown: null,
+            // `null` = this fixture's host did not report the durable attempt,
+            // which is exactly what host.status@1.2-and-older peers send.
+            updateOperation: null,
+            updateTransaction: null,
           }),
       },
     });
@@ -208,7 +214,7 @@ function setInitialAuthState(status: AuthStatus): void {
     return;
   }
   if (status === "signing-in") {
-    useAuthStore.getState().setSigningIn();
+    useAuthStore.getState().setSigningIn("device");
     return;
   }
   useAuthStore.getState().setSignedOut();

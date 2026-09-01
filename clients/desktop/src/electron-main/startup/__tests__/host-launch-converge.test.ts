@@ -107,6 +107,7 @@ function fakeStatus(
   removedByUser: boolean,
 ): HostControllerStatus {
   return {
+    localAttempt: null,
     download: null,
     mutation: null,
     installedVersion: "1.4.0",
@@ -165,6 +166,7 @@ function fakeHostController(
   let stageLatestCalls = 0;
   let getStatusCalls = 0;
   return {
+    lifecycleAdmissionBlock: null,
     get callOrder() {
       return callOrder;
     },

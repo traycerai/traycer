@@ -1,4 +1,12 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render as renderComponent,
+  screen,
+  type RenderResult,
+} from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createStore } from "zustand/vanilla";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -24,7 +32,8 @@ const testState = vi.hoisted(() => ({
   resolvingPaths: false,
   /** Captures the real-ish pending job runner used by in-place landing paste. */
   runPendingImageJob: null as
-    ((job: (signal: AbortSignal) => Promise<void>) => void) | null,
+    | ((job: (signal: AbortSignal) => Promise<void>) => void)
+    | null,
 }));
 
 vi.mock("@/components/home/composer/composer-body", async () => {
@@ -74,6 +83,7 @@ vi.mock("@/stores/home/landing-draft-store", () => {
     // (reusing a pre-minted pendingCreateId when present) rather than
     // createDraft directly.
     createDraftWithId: vi.fn(() => "draft-for-test"),
+    restoreDraftWorkspaceForHost: vi.fn(),
     setDraftContent: vi.fn(),
   };
   const useLandingDraftStore = Object.assign(
@@ -214,6 +224,15 @@ vi.mock("@/hooks/providers/use-provider-pack-gate", () => ({
   }),
 }));
 
+vi.mock("@/components/chat/composer/use-profile-eligibility-gate", () => ({
+  useProfileEligibilityGate: () => ({
+    disabled: false,
+    profileLabel: null,
+    enablePending: false,
+    enableProfile: vi.fn(),
+  }),
+}));
+
 vi.mock("@/hooks/composer/use-composer-dictation", () => ({
   useComposerDictation: () => ({
     dictationControl: null,
@@ -277,6 +296,21 @@ vi.mock(
 vi.mock("@/hooks/providers/use-refresh-providers-list-on-turn", () => ({
   useRefreshProvidersListOnTurn: () => undefined,
 }));
+
+// `LandingComposer` claims a foreign draft through `useHostMutation`
+// (`useDraftAuthorityControl`), so it needs a Query client the way every
+// host-RPC surface in the app does. Shadows RTL's `render` so each case below
+// keeps reading as a plain render.
+function render(ui: ReactElement): RenderResult {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  return renderComponent(ui, {
+    wrapper: ({ children }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    ),
+  });
+}
 
 afterEach(() => {
   cleanup();

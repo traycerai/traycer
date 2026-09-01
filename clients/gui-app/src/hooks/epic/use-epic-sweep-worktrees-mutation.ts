@@ -35,11 +35,20 @@ export interface SweepTargetWorktree {
    * the host could not identify the repo (no parseable origin).
    */
   readonly repoIdentifier: RemovedBranchRepo | null;
+  /** In-use rows the user selected deliberately: deleteByPath with stopOwners. */
+  readonly stopOwners: boolean;
+  /**
+   * Reviewed `holdersRevision` for a 1.2 compare-and-refuse. `undefined`
+   * on an old host (no digest) — stopOwners still runs.
+   */
+  readonly expectedHoldersRevision: string | undefined;
 }
 
 export interface SweepWorktreesVariables {
   /** Host on which the dialog's act-time safety proof was computed. */
   readonly hostId: string;
+  /** The one Task that initiated the sweep; absent for bulk Task sweeps. */
+  readonly epicId?: string;
   readonly worktrees: ReadonlyArray<SweepTargetWorktree>;
 }
 
@@ -47,6 +56,7 @@ export interface SweepWorktreesResult {
   readonly removed: ReadonlyArray<string>;
   readonly failed: ReadonlyArray<string>;
   readonly uncertain: ReadonlyArray<string>;
+  readonly holdersChanged: WorktreeCleanupOutcome["holdersChanged"];
   readonly hostId: string;
 }
 
@@ -82,22 +92,49 @@ export function useEpicSweepWorktrees(): UseMutationResult<
       toast.info(
         `Sweeping ${count} worktree${count === 1 ? "" : "s"} in the background…`,
       );
-      const outcome = await runWorktreeCleanup(
-        openStreamTransport,
-        variables.hostId,
-        variables.worktrees.map((target) => target.worktreePath),
-        "task_sweep",
+      const stopOwnersPaths = new Set(
+        variables.worktrees.flatMap((target) =>
+          target.stopOwners ? [target.worktreePath] : [],
+        ),
       );
+      const expectedHoldersRevisionByPath = new Map<string, string>();
+      for (const target of variables.worktrees) {
+        if (
+          target.expectedHoldersRevision !== undefined &&
+          target.expectedHoldersRevision.length > 0
+        ) {
+          expectedHoldersRevisionByPath.set(
+            target.worktreePath,
+            target.expectedHoldersRevision,
+          );
+        }
+      }
+      const outcome = await runWorktreeCleanup(openStreamTransport, {
+        hostId: variables.hostId,
+        paths: variables.worktrees.map((target) => target.worktreePath),
+        source: "task_sweep",
+        epicId: variables.epicId,
+        stopOwnersPaths,
+        expectedHoldersRevisionByPath,
+      });
       return { ...outcome, hostId: variables.hostId };
     },
     onSuccess: (result, variables) => {
-      emitSweepSummaryToast(result);
-      purgeIntentsForRemovedWorktrees(
-        result.hostId,
-        variables.worktrees,
-        result.removed,
-      );
-      invalidateWorktreeListingAndBindingCaches(queryClient, result.hostId);
+      const settled =
+        result.removed.length > 0 ||
+        result.failed.length > 0 ||
+        result.uncertain.length > 0;
+      if (settled) {
+        emitSweepSummaryToast(result);
+        purgeIntentsForRemovedWorktrees(
+          result.hostId,
+          variables.worktrees,
+          result.removed,
+        );
+        invalidateWorktreeListingAndBindingCaches(queryClient, result.hostId);
+      }
+      if (result.holdersChanged.length > 0) return;
+      if (!settled) emitSweepSummaryToast(result);
     },
     onError: (error) => {
       toast.error(error.message);
@@ -191,7 +228,9 @@ function isSweepWorktreesVariables(
 function isSweepTargetWorktree(value: unknown): value is SweepTargetWorktree {
   if (value === null || typeof value !== "object") return false;
   if (!("worktreePath" in value)) return false;
-  return typeof value.worktreePath === "string";
+  if (typeof value.worktreePath !== "string") return false;
+  if (!("stopOwners" in value)) return true;
+  return typeof value.stopOwners === "boolean";
 }
 
 export interface SweepWorktreeSummary {

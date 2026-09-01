@@ -50,7 +50,8 @@ function getFollowingClient(): HostClient<HostRpcRegistry> {
   );
 }
 
-vi.mock("@/lib/host", () => ({
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: getFollowingClient,
   // `useHostClientForHostId` reads BOTH through the barrel: the spine for
   // the directory lookups, the effective host for the following branch.
@@ -62,7 +63,8 @@ vi.mock("@/lib/host", () => ({
 // (redesign P2.1). Every case here passes an explicit tab host id, so the
 // following-client mirror keeps the mock's shape honest rather than serving a
 // case.
-vi.mock("@/lib/host/runtime", () => ({
+vi.mock("@/lib/host/runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
   useHostRuntimeClient: getGlobalClient,
   useHostClient: getFollowingClient,
 }));

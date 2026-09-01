@@ -140,6 +140,7 @@ describe("PerWindowState + EpicWindowOwnership persistence", () => {
           settings: DRAFT_SETTINGS_PAYLOAD,
           composerMode: null,
           workspace: null,
+          closed: null,
         },
       ],
       activeLandingDraftId: "draft-a",
@@ -174,6 +175,7 @@ describe("PerWindowState + EpicWindowOwnership persistence", () => {
           settings: DRAFT_SETTINGS_PAYLOAD,
           composerMode: null,
           workspace: null,
+          closed: null,
         },
       ],
       activeLandingDraftId: "draft-a",
@@ -214,6 +216,7 @@ describe("PerWindowState + EpicWindowOwnership persistence", () => {
           settings: DRAFT_SETTINGS_PAYLOAD,
           composerMode: null,
           workspace: null,
+          closed: null,
         },
       ],
       activeLandingDraftId: "draft-a",
@@ -338,6 +341,7 @@ describe("PerWindowState + EpicWindowOwnership persistence", () => {
           settings: null,
           composerMode: null,
           workspace: null,
+          closed: null,
         },
         {
           id: "draft-a",
@@ -347,6 +351,7 @@ describe("PerWindowState + EpicWindowOwnership persistence", () => {
           settings: null,
           composerMode: null,
           workspace: null,
+          closed: null,
         },
       ],
       activeLandingDraftId: "draft-a",
@@ -364,6 +369,7 @@ describe("PerWindowState + EpicWindowOwnership persistence", () => {
         settings: null,
         composerMode: null,
         workspace: null,
+        closed: null,
       },
     ]);
   });

@@ -120,6 +120,16 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
       // `process.argv`), so the flip is mechanical. All OS-touching work
       // already lives in main behind IPC.
       sandbox: true,
+      // An occluded window's timers are throttled to ~1/min by default, which
+      // collapses the WebRTC receiver's own reporting and stops
+      // `requestVideoFrameCallback` entirely. The browser tile's sender reads
+      // that silence as a path that cannot carry frames and ratchets its
+      // capture rate down for the rest of the session; the GUI must keep
+      // compositing and reporting while it is not being looked at. The cost
+      // is accepted and whole-renderer: an occluded window keeps its timers,
+      // rAF and compositing running, so it goes on spending CPU (and battery)
+      // in the background rather than idling.
+      backgroundThrottling: false,
       zoomFactor: options.zoomFactor,
     },
   });

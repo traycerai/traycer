@@ -31,6 +31,10 @@ import {
   worktreeListAllForHostResponseSchemaV14,
   worktreeListAllForHostRequestSchemaV15,
   worktreeListAllForHostResponseSchemaV15,
+  worktreeListAllForHostRequestSchemaV16,
+  worktreeListAllForHostResponseSchemaV16,
+  worktreeListAllForHostRequestSchemaV17,
+  worktreeListAllForHostResponseSchemaV17,
   worktreeListBindingsForEpicResponseSchemaV11,
   worktreeListBindingsForEpicResponseSchemaV12,
   worktreeListByWorkspacePathsRequestSchemaV11,
@@ -56,6 +60,8 @@ const V12 = { major: 1, minor: 2 } as const;
 const V13 = { major: 1, minor: 3 } as const;
 const V14 = { major: 1, minor: 4 } as const;
 const V15 = { major: 1, minor: 5 } as const;
+const V16 = { major: 1, minor: 6 } as const;
+const V17 = { major: 1, minor: 7 } as const;
 
 const listAllForHostRegistry = hostRpcRegistry["worktree.listAllForHost"];
 const listByWorkspacePathsRegistry =
@@ -896,8 +902,8 @@ describe("worktree.listAllForHost v1.0 <-> v1.2 negotiation", () => {
     ).not.toHaveProperty("resolvedAt");
   });
 
-  it("exposes v1.5 as the latest installed minor of major 1", () => {
-    expect(listAllForHostRegistry[1].latestMinor).toBe(5);
+  it("exposes v1.7 as the latest installed minor of major 1", () => {
+    expect(listAllForHostRegistry[1].latestMinor).toBe(7);
     expect(Object.keys(listAllForHostRegistry[1].versions).sort()).toEqual([
       "0",
       "1",
@@ -905,6 +911,8 @@ describe("worktree.listAllForHost v1.0 <-> v1.2 negotiation", () => {
       "3",
       "4",
       "5",
+      "6",
+      "7",
     ]);
   });
 
@@ -979,6 +987,115 @@ describe("worktree.listAllForHost v1.0 <-> v1.2 negotiation", () => {
     expect(
       worktreeListAllForHostResponseSchemaV14.parse(upgraded).worktrees[0],
     ).not.toHaveProperty("presence");
+  });
+
+  it("upgrades v1.5 to v1.6 defaulting gitUnreadable to false", () => {
+    const request = {
+      includeActivity: false,
+      activityPaths: null,
+      cursor: null,
+      limit: null,
+      forceRefresh: false,
+    };
+    expect(
+      upgradeRequestToVersion(listAllForHostRegistry, V15, V16, request),
+    ).toEqual(request);
+    expect(worktreeListAllForHostRequestSchemaV16.parse(request)).toEqual(
+      request,
+    );
+
+    const response = {
+      worktrees: [
+        {
+          ...v10Entry,
+          lastActivityAt: null,
+          owners: [],
+          branchStatus: null,
+          createdAt: null,
+          ...mergeProvenanceAbsent,
+          submodules: [],
+          resolvedAt: 1_700_000_000_000,
+          presence: "present" as const,
+        },
+      ],
+      nextCursor: null,
+    };
+    const upgraded = upgradeResponseToVersion(
+      listAllForHostRegistry,
+      V15,
+      V16,
+      response,
+    );
+    expect(upgraded.worktrees[0].gitUnreadable).toBe(false);
+    expect(worktreeListAllForHostResponseSchemaV16.parse(upgraded)).toEqual(
+      upgraded,
+    );
+    expect(
+      worktreeListAllForHostResponseSchemaV15.parse(upgraded).worktrees[0],
+    ).not.toHaveProperty("gitUnreadable");
+  });
+
+  /**
+   * v1.7 is a SEMANTIC minor: it re-defines what `lastActivityAt` means (the
+   * authoritative `max(birthtime, reflog, durable activity)` automatic cleanup
+   * applies its cutoff to) without touching a single field. These two cases pin
+   * the two halves of that claim - the shape did not move, and a v1.6 peer's
+   * value is carried across verbatim rather than being silently re-labelled as
+   * authoritative, which is the whole reason the semantics ride a negotiated
+   * minor instead of a new field.
+   */
+  it("keeps the v1.7 request and response shapes identical to v1.6", () => {
+    expect(worktreeListAllForHostRequestSchemaV17).toBe(
+      worktreeListAllForHostRequestSchemaV16,
+    );
+    expect(worktreeListAllForHostResponseSchemaV17).toBe(
+      worktreeListAllForHostResponseSchemaV16,
+    );
+  });
+
+  it("bridges v1.6 to v1.7 without inventing an authoritative lastActivityAt", () => {
+    const request = {
+      includeActivity: true,
+      activityPaths: null,
+      cursor: null,
+      limit: null,
+      forceRefresh: false,
+    };
+    expect(
+      upgradeRequestToVersion(listAllForHostRegistry, V16, V17, request),
+    ).toEqual(request);
+
+    const response = {
+      worktrees: [
+        {
+          ...v10Entry,
+          // A v1.6 host derived this under the OLD formula. The bridge cannot
+          // recompute it (it has none of the inputs), so it must survive
+          // unchanged - a client that needs the authoritative age negotiates
+          // v1.7 with the host rather than trusting a bridged row.
+          lastActivityAt: 1_600_000_000_000,
+          owners: [],
+          branchStatus: null,
+          createdAt: null,
+          ...mergeProvenanceAbsent,
+          submodules: [],
+          resolvedAt: 1_700_000_000_000,
+          presence: "present" as const,
+          gitUnreadable: false,
+        },
+      ],
+      nextCursor: null,
+    };
+    const upgraded = upgradeResponseToVersion(
+      listAllForHostRegistry,
+      V16,
+      V17,
+      response,
+    );
+    expect(upgraded).toEqual(response);
+    expect(worktreeListAllForHostResponseSchemaV17.parse(upgraded)).toEqual(
+      upgraded,
+    );
   });
 });
 
@@ -1161,12 +1278,10 @@ describe("worktree.listByWorkspacePaths v1.1 <-> v1.2 negotiation", () => {
       }).workspaces[0].presence,
     ).toBe("absent");
     // OLD CLIENT + NEW HOST: a v1.3 caller strips the fields it never knew.
-    const asV13 =
-      worktreeListByWorkspacePathsResponseSchemaV13.parse(upgraded);
+    const asV13 = worktreeListByWorkspacePathsResponseSchemaV13.parse(upgraded);
     expect(asV13.workspaces[0]).not.toHaveProperty("repoBranchPrefix");
     expect(asV13.workspaces[0]).not.toHaveProperty("presence");
   });
-
 });
 
 describe("workspacePresenceSchema", () => {

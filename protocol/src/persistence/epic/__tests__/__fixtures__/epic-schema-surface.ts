@@ -86,7 +86,8 @@ export const epicSchemaSurfaceBaseline = {
                         "pi",
                         "hermes",
                         "omp",
-                        "huggingface"
+                        "huggingface",
+                        "reasonix"
                       ]
                     },
                     "model": {
@@ -181,7 +182,8 @@ export const epicSchemaSurfaceBaseline = {
                         "pi",
                         "hermes",
                         "omp",
-                        "huggingface"
+                        "huggingface",
+                        "reasonix"
                       ]
                     },
                     "sessionId": {
@@ -301,7 +303,8 @@ export const epicSchemaSurfaceBaseline = {
                               "pi",
                               "hermes",
                               "omp",
-                              "huggingface"
+                              "huggingface",
+                              "reasonix"
                             ]
                           },
                           "sessionId": {
@@ -434,7 +437,8 @@ export const epicSchemaSurfaceBaseline = {
                                   "pi",
                                   "hermes",
                                   "omp",
-                                  "huggingface"
+                                  "huggingface",
+                                  "reasonix"
                                 ]
                               },
                               "agentId": {
@@ -517,6 +521,255 @@ export const epicSchemaSurfaceBaseline = {
                               },
                               "content": {
                                 "$ref": "#/$defs/__schema0"
+                              },
+                              "browserAnnotations": {
+                                "default": [],
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "const": "browser-annotation"
+                                    },
+                                    "annotationId": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "tabId": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "sessionId": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "origin": {
+                                      "type": "string"
+                                    },
+                                    "pageUrl": {
+                                      "type": "string"
+                                    },
+                                    "pageTitle": {
+                                      "type": "string"
+                                    },
+                                    "capturedAt": {
+                                      "type": "number"
+                                    },
+                                    "comment": {
+                                      "type": "string"
+                                    },
+                                    "counts": {
+                                      "type": "object",
+                                      "properties": {
+                                        "elements": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "regions": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "strokes": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        }
+                                      },
+                                      "required": [
+                                        "elements",
+                                        "regions",
+                                        "strokes"
+                                      ]
+                                    },
+                                    "elements": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "selector": {
+                                            "type": "string"
+                                          },
+                                          "tagName": {
+                                            "type": "string"
+                                          },
+                                          "elementId": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "classNames": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string"
+                                            }
+                                          },
+                                          "attributes": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "object",
+                                              "properties": {
+                                                "name": {
+                                                  "type": "string"
+                                                },
+                                                "value": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "required": [
+                                                "name",
+                                                "value"
+                                              ]
+                                            }
+                                          },
+                                          "outerHtml": {
+                                            "type": "string"
+                                          },
+                                          "outerHtmlTruncated": {
+                                            "type": "boolean"
+                                          },
+                                          "textPreview": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "ariaRole": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "accessibleName": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "boundingBox": {
+                                            "type": "object",
+                                            "properties": {
+                                              "x": {
+                                                "type": "number"
+                                              },
+                                              "y": {
+                                                "type": "number"
+                                              },
+                                              "width": {
+                                                "type": "number"
+                                              },
+                                              "height": {
+                                                "type": "number"
+                                              },
+                                              "top": {
+                                                "type": "number"
+                                              },
+                                              "right": {
+                                                "type": "number"
+                                              },
+                                              "bottom": {
+                                                "type": "number"
+                                              },
+                                              "left": {
+                                                "type": "number"
+                                              }
+                                            },
+                                            "required": [
+                                              "x",
+                                              "y",
+                                              "width",
+                                              "height",
+                                              "top",
+                                              "right",
+                                              "bottom",
+                                              "left"
+                                            ]
+                                          },
+                                          "computedStyles": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "object",
+                                              "properties": {
+                                                "property": {
+                                                  "type": "string"
+                                                },
+                                                "value": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "required": [
+                                                "property",
+                                                "value"
+                                              ]
+                                            }
+                                          }
+                                        },
+                                        "required": [
+                                          "selector",
+                                          "tagName",
+                                          "elementId",
+                                          "classNames",
+                                          "attributes",
+                                          "outerHtml",
+                                          "outerHtmlTruncated",
+                                          "textPreview",
+                                          "ariaRole",
+                                          "accessibleName",
+                                          "boundingBox",
+                                          "computedStyles"
+                                        ]
+                                      }
+                                    },
+                                    "imageFileName": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "imageHash": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "droppedElementCount": {
+                                      "default": 0,
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    }
+                                  },
+                                  "required": [
+                                    "kind",
+                                    "annotationId",
+                                    "tabId",
+                                    "sessionId",
+                                    "origin",
+                                    "pageUrl",
+                                    "pageTitle",
+                                    "capturedAt",
+                                    "comment",
+                                    "counts",
+                                    "elements",
+                                    "imageFileName",
+                                    "imageHash"
+                                  ]
+                                }
                               }
                             },
                             "required": [
@@ -2621,6 +2874,109 @@ export const epicSchemaSurfaceBaseline = {
                                   "opencodeUserMessageId",
                                   "createdAt"
                                 ]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "harnessId": {
+                                    "type": "string",
+                                    "const": "reasonix"
+                                  },
+                                  "hostId": {
+                                    "type": "string"
+                                  },
+                                  "sessionId": {
+                                    "type": "string"
+                                  },
+                                  "sessionWorkspaceSnapshot": {
+                                    "type": "object",
+                                    "properties": {
+                                      "workspaceKind": {
+                                        "type": "string",
+                                        "const": "session-snapshot"
+                                      },
+                                      "primaryWorkspace": {
+                                        "type": "string"
+                                      },
+                                      "secondaryWorkspaces": {
+                                        "default": [],
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string"
+                                        }
+                                      }
+                                    },
+                                    "required": [
+                                      "workspaceKind",
+                                      "primaryWorkspace"
+                                    ]
+                                  },
+                                  "createdAt": {
+                                    "type": "number"
+                                  },
+                                  "coveredUntilMessageId": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "profileId": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "labelSnapshot": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "accountUuid": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "accentColor": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "harnessId",
+                                  "hostId",
+                                  "sessionId",
+                                  "sessionWorkspaceSnapshot",
+                                  "createdAt"
+                                ]
                               }
                             ]
                           },
@@ -2678,7 +3034,8 @@ export const epicSchemaSurfaceBaseline = {
                               "pi",
                               "hermes",
                               "omp",
-                              "huggingface"
+                              "huggingface",
+                              "reasonix"
                             ]
                           },
                           "agentId": {
@@ -2813,7 +3170,8 @@ export const epicSchemaSurfaceBaseline = {
                                             "pi",
                                             "hermes",
                                             "omp",
-                                            "huggingface"
+                                            "huggingface",
+                                            "reasonix"
                                           ]
                                         },
                                         "noticeKind": {
@@ -2821,7 +3179,8 @@ export const epicSchemaSurfaceBaseline = {
                                           "enum": [
                                             "model_rerouted",
                                             "model_verification",
-                                            "safety_buffering"
+                                            "safety_buffering",
+                                            "harness_message"
                                           ]
                                         },
                                         "tone": {
@@ -4379,7 +4738,8 @@ export const epicSchemaSurfaceBaseline = {
                                     "pi",
                                     "hermes",
                                     "omp",
-                                    "huggingface"
+                                    "huggingface",
+                                    "reasonix"
                                   ]
                                 },
                                 "source": {
@@ -4406,7 +4766,8 @@ export const epicSchemaSurfaceBaseline = {
                                         "pi",
                                         "hermes",
                                         "omp",
-                                        "huggingface"
+                                        "huggingface",
+                                        "reasonix"
                                       ]
                                     },
                                     "sessionId": {
@@ -5096,7 +5457,8 @@ export const epicSchemaSurfaceBaseline = {
                                                 "pi",
                                                 "hermes",
                                                 "omp",
-                                                "huggingface"
+                                                "huggingface",
+                                                "reasonix"
                                               ]
                                             },
                                             "agentId": {
@@ -5362,6 +5724,54 @@ export const epicSchemaSurfaceBaseline = {
                                             "type": "null"
                                           }
                                         ]
+                                      },
+                                      "selection": {
+                                        "default": null,
+                                        "anyOf": [
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "questionIndex": {
+                                                "type": "integer",
+                                                "minimum": 0,
+                                                "maximum": 9007199254740991
+                                              },
+                                              "optionIndices": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "integer",
+                                                  "minimum": 0,
+                                                  "maximum": 9007199254740991
+                                                }
+                                              },
+                                              "optionLabels": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "customText": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              }
+                                            },
+                                            "required": [
+                                              "questionIndex",
+                                              "optionIndices",
+                                              "optionLabels",
+                                              "customText"
+                                            ]
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
                                       }
                                     },
                                     "required": [
@@ -5395,6 +5805,223 @@ export const epicSchemaSurfaceBaseline = {
                                       "type": "null"
                                     }
                                   ]
+                                },
+                                "outcome": {
+                                  "default": null,
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "enum": [
+                                        "answered",
+                                        "skipped",
+                                        "failed"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "draftAnswers": {
+                                  "default": [],
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "questionId": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "question": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "values": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "notes": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "selection": {
+                                        "default": null,
+                                        "anyOf": [
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "questionIndex": {
+                                                "type": "integer",
+                                                "minimum": 0,
+                                                "maximum": 9007199254740991
+                                              },
+                                              "optionIndices": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "integer",
+                                                  "minimum": 0,
+                                                  "maximum": 9007199254740991
+                                                }
+                                              },
+                                              "optionLabels": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "customText": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              }
+                                            },
+                                            "required": [
+                                              "questionIndex",
+                                              "optionIndices",
+                                              "optionLabels",
+                                              "customText"
+                                            ]
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      }
+                                    },
+                                    "required": [
+                                      "questionId",
+                                      "question",
+                                      "values",
+                                      "notes"
+                                    ]
+                                  }
+                                },
+                                "settlement": {
+                                  "default": null,
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "settlementId": {
+                                          "type": "string"
+                                        },
+                                        "source": {
+                                          "type": "string",
+                                          "enum": [
+                                            "gui",
+                                            "runtime"
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "settlementId",
+                                        "source"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "diagnostics": {
+                                  "default": [],
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "diagnosticId": {
+                                        "type": "string"
+                                      },
+                                      "code": {
+                                        "type": "string"
+                                      },
+                                      "source": {
+                                        "type": "string",
+                                        "enum": [
+                                          "runtime",
+                                          "delivery",
+                                          "reconcile"
+                                        ]
+                                      }
+                                    },
+                                    "required": [
+                                      "diagnosticId",
+                                      "code",
+                                      "source"
+                                    ]
+                                  }
+                                },
+                                "delivery": {
+                                  "default": null,
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "deliveryId": {
+                                          "type": "string"
+                                        },
+                                        "status": {
+                                          "type": "string",
+                                          "enum": [
+                                            "pending",
+                                            "delivering",
+                                            "delivered",
+                                            "failed"
+                                          ]
+                                        },
+                                        "retryable": {
+                                          "type": "boolean"
+                                        },
+                                        "generation": {
+                                          "default": 0,
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        }
+                                      },
+                                      "required": [
+                                        "deliveryId",
+                                        "status",
+                                        "retryable"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "settlementExtensions": {
+                                  "default": {},
+                                  "type": "object",
+                                  "propertyNames": {
+                                    "type": "string"
+                                  },
+                                  "additionalProperties": {}
                                 }
                               },
                               "required": [
@@ -5594,6 +6221,17 @@ export const epicSchemaSurfaceBaseline = {
                         ]
                       },
                       "serviceTier": {
+                        "default": null,
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "envCredentialVar": {
                         "default": null,
                         "anyOf": [
                           {
@@ -5859,7 +6497,8 @@ export const epicSchemaSurfaceBaseline = {
                                   "pi",
                                   "hermes",
                                   "omp",
-                                  "huggingface"
+                                  "huggingface",
+                                  "reasonix"
                                 ]
                               },
                               "agentId": {
@@ -6371,6 +7010,79 @@ export const epicSchemaSurfaceBaseline = {
                 },
                 "deletedAt": {
                   "type": "string"
+                },
+                "folderName": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "parentId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdAt": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdManually": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "assignee": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "status": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "const": 0
+                        },
+                        {
+                          "type": "number",
+                          "const": 1
+                        },
+                        {
+                          "type": "number",
+                          "const": 2
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 }
               },
               "required": [
@@ -6407,19 +7119,76 @@ export const epicSchemaSurfaceBaseline = {
                 "deletedAt": {
                   "type": "string"
                 },
+                "folderName": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "parentId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdAt": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdManually": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "assignee": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "status": {
                   "anyOf": [
                     {
-                      "type": "number",
-                      "const": 0
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "const": 0
+                        },
+                        {
+                          "type": "number",
+                          "const": 1
+                        },
+                        {
+                          "type": "number",
+                          "const": 2
+                        }
+                      ]
                     },
                     {
-                      "type": "number",
-                      "const": 1
-                    },
-                    {
-                      "type": "number",
-                      "const": 2
+                      "type": "null"
                     }
                   ]
                 }
@@ -6429,8 +7198,7 @@ export const epicSchemaSurfaceBaseline = {
                 "id",
                 "title",
                 "artifactRoomId",
-                "deletedAt",
-                "status"
+                "deletedAt"
               ]
             },
             {
@@ -6459,19 +7227,76 @@ export const epicSchemaSurfaceBaseline = {
                 "deletedAt": {
                   "type": "string"
                 },
+                "folderName": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "parentId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdAt": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdManually": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "assignee": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "status": {
                   "anyOf": [
                     {
-                      "type": "number",
-                      "const": 0
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "const": 0
+                        },
+                        {
+                          "type": "number",
+                          "const": 1
+                        },
+                        {
+                          "type": "number",
+                          "const": 2
+                        }
+                      ]
                     },
                     {
-                      "type": "number",
-                      "const": 1
-                    },
-                    {
-                      "type": "number",
-                      "const": 2
+                      "type": "null"
                     }
                   ]
                 }
@@ -6481,8 +7306,7 @@ export const epicSchemaSurfaceBaseline = {
                 "id",
                 "title",
                 "artifactRoomId",
-                "deletedAt",
-                "status"
+                "deletedAt"
               ]
             },
             {
@@ -6510,6 +7334,79 @@ export const epicSchemaSurfaceBaseline = {
                 },
                 "deletedAt": {
                   "type": "string"
+                },
+                "folderName": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "parentId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdAt": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdManually": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "assignee": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "status": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "const": 0
+                        },
+                        {
+                          "type": "number",
+                          "const": 1
+                        },
+                        {
+                          "type": "number",
+                          "const": 2
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 }
               },
               "required": [
@@ -7498,7 +8395,8 @@ export const epicSchemaSurfaceBaseline = {
                         "pi",
                         "hermes",
                         "omp",
-                        "huggingface"
+                        "huggingface",
+                        "reasonix"
                       ]
                     },
                     "model": {
@@ -7596,7 +8494,8 @@ export const epicSchemaSurfaceBaseline = {
                         "pi",
                         "hermes",
                         "omp",
-                        "huggingface"
+                        "huggingface",
+                        "reasonix"
                       ]
                     },
                     "sessionId": {
@@ -7721,7 +8620,8 @@ export const epicSchemaSurfaceBaseline = {
                               "pi",
                               "hermes",
                               "omp",
-                              "huggingface"
+                              "huggingface",
+                              "reasonix"
                             ]
                           },
                           "sessionId": {
@@ -7861,7 +8761,8 @@ export const epicSchemaSurfaceBaseline = {
                                   "pi",
                                   "hermes",
                                   "omp",
-                                  "huggingface"
+                                  "huggingface",
+                                  "reasonix"
                                 ]
                               },
                               "agentId": {
@@ -7949,11 +8850,268 @@ export const epicSchemaSurfaceBaseline = {
                               },
                               "content": {
                                 "$ref": "#/$defs/__schema0"
+                              },
+                              "browserAnnotations": {
+                                "default": [],
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "const": "browser-annotation"
+                                    },
+                                    "annotationId": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "tabId": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "sessionId": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "origin": {
+                                      "type": "string"
+                                    },
+                                    "pageUrl": {
+                                      "type": "string"
+                                    },
+                                    "pageTitle": {
+                                      "type": "string"
+                                    },
+                                    "capturedAt": {
+                                      "type": "number"
+                                    },
+                                    "comment": {
+                                      "type": "string"
+                                    },
+                                    "counts": {
+                                      "type": "object",
+                                      "properties": {
+                                        "elements": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "regions": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "strokes": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        }
+                                      },
+                                      "required": [
+                                        "elements",
+                                        "regions",
+                                        "strokes"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    "elements": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "selector": {
+                                            "type": "string"
+                                          },
+                                          "tagName": {
+                                            "type": "string"
+                                          },
+                                          "elementId": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "classNames": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string"
+                                            }
+                                          },
+                                          "attributes": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "object",
+                                              "properties": {
+                                                "name": {
+                                                  "type": "string"
+                                                },
+                                                "value": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "required": [
+                                                "name",
+                                                "value"
+                                              ],
+                                              "additionalProperties": false
+                                            }
+                                          },
+                                          "outerHtml": {
+                                            "type": "string"
+                                          },
+                                          "outerHtmlTruncated": {
+                                            "type": "boolean"
+                                          },
+                                          "textPreview": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "ariaRole": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "accessibleName": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "boundingBox": {
+                                            "type": "object",
+                                            "properties": {
+                                              "x": {
+                                                "type": "number"
+                                              },
+                                              "y": {
+                                                "type": "number"
+                                              },
+                                              "width": {
+                                                "type": "number"
+                                              },
+                                              "height": {
+                                                "type": "number"
+                                              },
+                                              "top": {
+                                                "type": "number"
+                                              },
+                                              "right": {
+                                                "type": "number"
+                                              },
+                                              "bottom": {
+                                                "type": "number"
+                                              },
+                                              "left": {
+                                                "type": "number"
+                                              }
+                                            },
+                                            "required": [
+                                              "x",
+                                              "y",
+                                              "width",
+                                              "height",
+                                              "top",
+                                              "right",
+                                              "bottom",
+                                              "left"
+                                            ],
+                                            "additionalProperties": false
+                                          },
+                                          "computedStyles": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "object",
+                                              "properties": {
+                                                "property": {
+                                                  "type": "string"
+                                                },
+                                                "value": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "required": [
+                                                "property",
+                                                "value"
+                                              ],
+                                              "additionalProperties": false
+                                            }
+                                          }
+                                        },
+                                        "required": [
+                                          "selector",
+                                          "tagName",
+                                          "elementId",
+                                          "classNames",
+                                          "attributes",
+                                          "outerHtml",
+                                          "outerHtmlTruncated",
+                                          "textPreview",
+                                          "ariaRole",
+                                          "accessibleName",
+                                          "boundingBox",
+                                          "computedStyles"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "imageFileName": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "imageHash": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "droppedElementCount": {
+                                      "default": 0,
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    }
+                                  },
+                                  "required": [
+                                    "kind",
+                                    "annotationId",
+                                    "tabId",
+                                    "sessionId",
+                                    "origin",
+                                    "pageUrl",
+                                    "pageTitle",
+                                    "capturedAt",
+                                    "comment",
+                                    "counts",
+                                    "elements",
+                                    "imageFileName",
+                                    "imageHash",
+                                    "droppedElementCount"
+                                  ],
+                                  "additionalProperties": false
+                                }
                               }
                             },
                             "required": [
                               "kind",
-                              "content"
+                              "content",
+                              "browserAnnotations"
                             ],
                             "additionalProperties": false
                           },
@@ -10210,6 +11368,117 @@ export const epicSchemaSurfaceBaseline = {
                                   "accentColor"
                                 ],
                                 "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "harnessId": {
+                                    "type": "string",
+                                    "const": "reasonix"
+                                  },
+                                  "hostId": {
+                                    "type": "string"
+                                  },
+                                  "sessionId": {
+                                    "type": "string"
+                                  },
+                                  "sessionWorkspaceSnapshot": {
+                                    "type": "object",
+                                    "properties": {
+                                      "workspaceKind": {
+                                        "type": "string",
+                                        "const": "session-snapshot"
+                                      },
+                                      "primaryWorkspace": {
+                                        "type": "string"
+                                      },
+                                      "secondaryWorkspaces": {
+                                        "default": [],
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string"
+                                        }
+                                      }
+                                    },
+                                    "required": [
+                                      "workspaceKind",
+                                      "primaryWorkspace",
+                                      "secondaryWorkspaces"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  "createdAt": {
+                                    "type": "number"
+                                  },
+                                  "coveredUntilMessageId": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "profileId": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "labelSnapshot": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "accountUuid": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "accentColor": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "harnessId",
+                                  "hostId",
+                                  "sessionId",
+                                  "sessionWorkspaceSnapshot",
+                                  "createdAt",
+                                  "coveredUntilMessageId",
+                                  "profileId",
+                                  "labelSnapshot",
+                                  "accountUuid",
+                                  "accentColor"
+                                ],
+                                "additionalProperties": false
                               }
                             ]
                           },
@@ -10268,7 +11537,8 @@ export const epicSchemaSurfaceBaseline = {
                               "pi",
                               "hermes",
                               "omp",
-                              "huggingface"
+                              "huggingface",
+                              "reasonix"
                             ]
                           },
                           "agentId": {
@@ -10408,7 +11678,8 @@ export const epicSchemaSurfaceBaseline = {
                                             "pi",
                                             "hermes",
                                             "omp",
-                                            "huggingface"
+                                            "huggingface",
+                                            "reasonix"
                                           ]
                                         },
                                         "noticeKind": {
@@ -10416,7 +11687,8 @@ export const epicSchemaSurfaceBaseline = {
                                           "enum": [
                                             "model_rerouted",
                                             "model_verification",
-                                            "safety_buffering"
+                                            "safety_buffering",
+                                            "harness_message"
                                           ]
                                         },
                                         "tone": {
@@ -12041,7 +13313,8 @@ export const epicSchemaSurfaceBaseline = {
                                     "pi",
                                     "hermes",
                                     "omp",
-                                    "huggingface"
+                                    "huggingface",
+                                    "reasonix"
                                   ]
                                 },
                                 "source": {
@@ -12068,7 +13341,8 @@ export const epicSchemaSurfaceBaseline = {
                                         "pi",
                                         "hermes",
                                         "omp",
-                                        "huggingface"
+                                        "huggingface",
+                                        "reasonix"
                                       ]
                                     },
                                     "sessionId": {
@@ -12735,7 +14009,8 @@ export const epicSchemaSurfaceBaseline = {
                                                 "pi",
                                                 "hermes",
                                                 "omp",
-                                                "huggingface"
+                                                "huggingface",
+                                                "reasonix"
                                               ]
                                             },
                                             "agentId": {
@@ -13011,13 +14286,63 @@ export const epicSchemaSurfaceBaseline = {
                                             "type": "null"
                                           }
                                         ]
+                                      },
+                                      "selection": {
+                                        "default": null,
+                                        "anyOf": [
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "questionIndex": {
+                                                "type": "integer",
+                                                "minimum": 0,
+                                                "maximum": 9007199254740991
+                                              },
+                                              "optionIndices": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "integer",
+                                                  "minimum": 0,
+                                                  "maximum": 9007199254740991
+                                                }
+                                              },
+                                              "optionLabels": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "customText": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              }
+                                            },
+                                            "required": [
+                                              "questionIndex",
+                                              "optionIndices",
+                                              "optionLabels",
+                                              "customText"
+                                            ],
+                                            "additionalProperties": false
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
                                       }
                                     },
                                     "required": [
                                       "questionId",
                                       "question",
                                       "values",
-                                      "notes"
+                                      "notes",
+                                      "selection"
                                     ],
                                     "additionalProperties": false
                                   }
@@ -13045,6 +14370,230 @@ export const epicSchemaSurfaceBaseline = {
                                       "type": "null"
                                     }
                                   ]
+                                },
+                                "outcome": {
+                                  "default": null,
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "enum": [
+                                        "answered",
+                                        "skipped",
+                                        "failed"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "draftAnswers": {
+                                  "default": [],
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "questionId": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "question": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "values": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "notes": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "selection": {
+                                        "default": null,
+                                        "anyOf": [
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "questionIndex": {
+                                                "type": "integer",
+                                                "minimum": 0,
+                                                "maximum": 9007199254740991
+                                              },
+                                              "optionIndices": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "integer",
+                                                  "minimum": 0,
+                                                  "maximum": 9007199254740991
+                                                }
+                                              },
+                                              "optionLabels": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "customText": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              }
+                                            },
+                                            "required": [
+                                              "questionIndex",
+                                              "optionIndices",
+                                              "optionLabels",
+                                              "customText"
+                                            ],
+                                            "additionalProperties": false
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      }
+                                    },
+                                    "required": [
+                                      "questionId",
+                                      "question",
+                                      "values",
+                                      "notes",
+                                      "selection"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                },
+                                "settlement": {
+                                  "default": null,
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "settlementId": {
+                                          "type": "string"
+                                        },
+                                        "source": {
+                                          "type": "string",
+                                          "enum": [
+                                            "gui",
+                                            "runtime"
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "settlementId",
+                                        "source"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "diagnostics": {
+                                  "default": [],
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "diagnosticId": {
+                                        "type": "string"
+                                      },
+                                      "code": {
+                                        "type": "string"
+                                      },
+                                      "source": {
+                                        "type": "string",
+                                        "enum": [
+                                          "runtime",
+                                          "delivery",
+                                          "reconcile"
+                                        ]
+                                      }
+                                    },
+                                    "required": [
+                                      "diagnosticId",
+                                      "code",
+                                      "source"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                },
+                                "delivery": {
+                                  "default": null,
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "deliveryId": {
+                                          "type": "string"
+                                        },
+                                        "status": {
+                                          "type": "string",
+                                          "enum": [
+                                            "pending",
+                                            "delivering",
+                                            "delivered",
+                                            "failed"
+                                          ]
+                                        },
+                                        "retryable": {
+                                          "type": "boolean"
+                                        },
+                                        "generation": {
+                                          "default": 0,
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        }
+                                      },
+                                      "required": [
+                                        "deliveryId",
+                                        "status",
+                                        "retryable",
+                                        "generation"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "settlementExtensions": {
+                                  "default": {},
+                                  "type": "object",
+                                  "propertyNames": {
+                                    "type": "string"
+                                  },
+                                  "additionalProperties": {}
                                 }
                               },
                               "required": [
@@ -13058,7 +14607,13 @@ export const epicSchemaSurfaceBaseline = {
                                 "questions",
                                 "answers",
                                 "error",
-                                "metadata"
+                                "metadata",
+                                "outcome",
+                                "draftAnswers",
+                                "settlement",
+                                "diagnostics",
+                                "delivery",
+                                "settlementExtensions"
                               ],
                               "additionalProperties": false
                             },
@@ -13260,6 +14815,17 @@ export const epicSchemaSurfaceBaseline = {
                           }
                         ]
                       },
+                      "envCredentialVar": {
+                        "default": null,
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
                       "imageResolutions": {
                         "default": [],
                         "type": "array",
@@ -13409,6 +14975,7 @@ export const epicSchemaSurfaceBaseline = {
                       "usage",
                       "reasoningEffort",
                       "serviceTier",
+                      "envCredentialVar",
                       "imageResolutions"
                     ],
                     "additionalProperties": false
@@ -13529,7 +15096,8 @@ export const epicSchemaSurfaceBaseline = {
                                   "pi",
                                   "hermes",
                                   "omp",
-                                  "huggingface"
+                                  "huggingface",
+                                  "reasonix"
                                 ]
                               },
                               "agentId": {
@@ -14059,6 +15627,79 @@ export const epicSchemaSurfaceBaseline = {
                 },
                 "deletedAt": {
                   "type": "string"
+                },
+                "folderName": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "parentId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdAt": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdManually": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "assignee": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "status": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "const": 0
+                        },
+                        {
+                          "type": "number",
+                          "const": 1
+                        },
+                        {
+                          "type": "number",
+                          "const": 2
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 }
               },
               "required": [
@@ -14096,19 +15737,76 @@ export const epicSchemaSurfaceBaseline = {
                 "deletedAt": {
                   "type": "string"
                 },
+                "folderName": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "parentId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdAt": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdManually": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "assignee": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "status": {
                   "anyOf": [
                     {
-                      "type": "number",
-                      "const": 0
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "const": 0
+                        },
+                        {
+                          "type": "number",
+                          "const": 1
+                        },
+                        {
+                          "type": "number",
+                          "const": 2
+                        }
+                      ]
                     },
                     {
-                      "type": "number",
-                      "const": 1
-                    },
-                    {
-                      "type": "number",
-                      "const": 2
+                      "type": "null"
                     }
                   ]
                 }
@@ -14118,8 +15816,7 @@ export const epicSchemaSurfaceBaseline = {
                 "id",
                 "title",
                 "artifactRoomId",
-                "deletedAt",
-                "status"
+                "deletedAt"
               ],
               "additionalProperties": false
             },
@@ -14149,19 +15846,76 @@ export const epicSchemaSurfaceBaseline = {
                 "deletedAt": {
                   "type": "string"
                 },
+                "folderName": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "parentId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdAt": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdManually": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "assignee": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "status": {
                   "anyOf": [
                     {
-                      "type": "number",
-                      "const": 0
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "const": 0
+                        },
+                        {
+                          "type": "number",
+                          "const": 1
+                        },
+                        {
+                          "type": "number",
+                          "const": 2
+                        }
+                      ]
                     },
                     {
-                      "type": "number",
-                      "const": 1
-                    },
-                    {
-                      "type": "number",
-                      "const": 2
+                      "type": "null"
                     }
                   ]
                 }
@@ -14171,8 +15925,7 @@ export const epicSchemaSurfaceBaseline = {
                 "id",
                 "title",
                 "artifactRoomId",
-                "deletedAt",
-                "status"
+                "deletedAt"
               ],
               "additionalProperties": false
             },
@@ -14201,6 +15954,79 @@ export const epicSchemaSurfaceBaseline = {
                 },
                 "deletedAt": {
                   "type": "string"
+                },
+                "folderName": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "parentId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdAt": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdManually": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "assignee": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "status": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "const": 0
+                        },
+                        {
+                          "type": "number",
+                          "const": 1
+                        },
+                        {
+                          "type": "number",
+                          "const": 2
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 }
               },
               "required": [

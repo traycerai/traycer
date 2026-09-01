@@ -145,6 +145,7 @@ function createFlowInstanceStub(
     updateEdge: noop,
     updateEdgeData: noop,
     getNodesBounds: vi.fn(() => ({ x: 0, y: 0, width: 0, height: 0 })),
+    // oxlint-disable-next-line typescript/no-deprecated -- ReactFlowInstance still requires this legacy member in @xyflow/react 12.
     getHandleConnections: vi.fn(() => []),
     getNodeConnections: vi.fn(() => []),
     fitView: vi.fn(() => Promise.resolve(false)),

@@ -66,7 +66,10 @@ export function modelProviderAuthErrorMessage(
  * - `report` — show the message and let the user decide.
  */
 export type ModelProviderAuthErrorDisposition =
-  "stand-down" | "restart" | "reprompt" | "report";
+  | "stand-down"
+  | "restart"
+  | "reprompt"
+  | "report";
 
 export function modelProviderAuthErrorDisposition(
   code: ModelProviderAuthErrorCode,

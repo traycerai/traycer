@@ -1,6 +1,7 @@
 import {
   downgradeRequestAcrossMajors,
   upgradeResponseToVersion,
+  upgradeResponseToVersionWithContext,
   type MethodVersionRegistry,
   type SchemaVersion,
 } from "../../framework/index";
@@ -81,6 +82,30 @@ export function decodeResponsePayload<Payload>(
   requestId: string,
   method: string,
 ): Payload {
+  return decodeResponsePayloadWithContext(
+    methodRegistry,
+    clientCanonical,
+    hostCanonical,
+    result,
+    requestId,
+    method,
+    null,
+    "",
+  );
+}
+
+export function decodeResponsePayloadWithContext<Payload>(
+  methodRegistry: MethodVersionRegistry,
+  clientCanonical: SchemaVersion,
+  hostCanonical: SchemaVersion,
+  result: unknown,
+  requestId: string,
+  method: string,
+  onWireRequest: unknown,
+  hostId: string,
+): Payload {
+  const context =
+    hostId.length === 0 ? null : { request: onWireRequest, hostId };
   if (clientCanonical.major === hostCanonical.major) {
     if (clientCanonical.minor <= hostCanonical.minor) return result as Payload;
     return upgradeResponseAlongChain(
@@ -90,6 +115,7 @@ export function decodeResponsePayload<Payload>(
       result,
       requestId,
       method,
+      context,
     );
   }
   if (clientCanonical.major < hostCanonical.major) return result as Payload;
@@ -100,6 +126,7 @@ export function decodeResponsePayload<Payload>(
     result,
     requestId,
     method,
+    context,
   );
 }
 
@@ -110,6 +137,7 @@ function upgradeResponseAlongChain<Payload>(
   result: unknown,
   requestId: string,
   method: string,
+  context: { readonly request: unknown; readonly hostId: string } | null,
 ): Payload {
   try {
     const fromEntry =
@@ -124,12 +152,22 @@ function upgradeResponseAlongChain<Payload>(
       }
       chainInput = parsed.data;
     }
-    return upgradeResponseToVersion(
-      methodRegistry,
-      fromVersion,
-      toVersion,
-      chainInput as never,
-    ) as Payload;
+    const upgraded =
+      context === null
+        ? upgradeResponseToVersion(
+            methodRegistry,
+            fromVersion,
+            toVersion,
+            chainInput as never,
+          )
+        : upgradeResponseToVersionWithContext(
+            methodRegistry,
+            fromVersion,
+            toVersion,
+            chainInput as never,
+            { request: context.request as never, hostId: context.hostId },
+          );
+    return upgraded as Payload;
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : String(cause);
     throw new HostRpcError({

@@ -1,6 +1,5 @@
 import { lexer, type MarkedToken, type Token, type Tokens } from "marked";
 import {
-  answeredQuestionsSummary,
   buildChatActivityTimeline,
   hidesSoleReasoningHeader,
   reasoningBlockLabel,
@@ -9,14 +8,17 @@ import {
   deriveA2AReceivedCollapsibleKey,
   deriveA2ASendCollapsibleKey,
   deriveActivityGroupCollapsibleKey,
+  deriveInterviewCollapsibleKey,
   derivePromotedSubagentRenderId,
   deriveSubagentCollapsibleKey,
   type ChatCollapsibleKey,
 } from "@/components/chat/chat-collapsible-key";
+import { deriveInterviewReviewModel } from "@/components/chat/segments/interview-review-model";
 import {
   adjacentDedupedProgressItems,
   cleanSubagentNotificationText,
 } from "@/components/chat/segments/subagent-display";
+import { importedChatMarkerLabel } from "@/components/chat/segments/imported-chat-marker-display";
 import { singleSpecialSegment } from "@/components/chat/chat-special-segment";
 import { parseTraycerNextStepsMarkdown } from "@/markdown/traycer-next-steps";
 import { composerDisplayPlainText } from "@/lib/composer/composer-clipboard";
@@ -29,7 +31,7 @@ import {
   planHeadline,
   planStatusBadgeLabel,
 } from "@/components/chat/segments/plan-display";
-import { formatSingleLine } from "@/lib/utils";
+import { formatSingleLine } from "@/lib/text/format-single-line";
 import type {
   ActivityGroupModel,
   ChatActivityTimelineItem,
@@ -172,6 +174,7 @@ function chatFindUnitsForMessage(
   }
 
   // A synthesized row whose single segment is a setup-card / forked-chat-link
+  // / imported-chat-marker
   // renders that segment's own find anchor and no content block (the render side
   // is renderSingleSpecialSegment in chat-message.tsx; both key off the shared
   // singleSpecialSegment predicate), so index the segment.
@@ -207,15 +210,6 @@ function timelineItemSearchUnits(
 ): ReadonlyArray<ChatFindUnit> {
   if (item.kind === "segment") {
     return segmentSearchUnits(item.segment, tileInstanceId);
-  }
-  if (item.kind === "answered_questions") {
-    return compactUnits([
-      chatFindUnit({
-        unitId: chatFindSegmentUnitId(item.segment.id),
-        text: item.summary,
-        owningChain: [],
-      }),
-    ]);
   }
   if (item.kind === "promoted_subagent") {
     const renderId = derivePromotedSubagentRenderId(item.segment.id);
@@ -332,6 +326,9 @@ function segmentSearchUnits(
   segment: MessageSegment,
   tileInstanceId: string,
 ): ReadonlyArray<ChatFindUnit> {
+  if (segment.kind === "interview") {
+    return interviewSearchUnits(segment, tileInstanceId);
+  }
   if (segment.kind === "subagent") {
     const renderId = segment.id;
     return subagentSegmentSearchUnits({
@@ -359,6 +356,39 @@ function segmentSearchUnits(
       owningChain: [],
     }),
   ]);
+}
+
+function interviewSearchUnits(
+  segment: InterviewSegment,
+  tileInstanceId: string,
+): ReadonlyArray<ChatFindUnit> {
+  if (segment.status === "streaming") return [];
+  const model = deriveInterviewReviewModel({
+    blockId: segment.id,
+    status: segment.status,
+    toolName: segment.toolName,
+    title: segment.title,
+    description: segment.description,
+    questions: segment.questions,
+    answers: segment.answers,
+    draftAnswers: segment.draftAnswers,
+    outcome: segment.outcome,
+    settlement: segment.settlement,
+    error: segment.error,
+    delivery: segment.delivery,
+    forkedWithoutAnswer: segment.forkedWithoutAnswer,
+  });
+  // Historical interview details live behind the card disclosure. Every field
+  // therefore owns the same force-open chain as the rendered card, including
+  // the summary (which remains mounted both before and after expansion).
+  const owningChain = [
+    deriveInterviewCollapsibleKey(tileInstanceId, segment.id),
+  ];
+  return model.searchableFields.map((field) => ({
+    unitId: field.unitId,
+    text: field.text,
+    owningChain,
+  }));
 }
 
 // The branch count mirrors the persisted chat segment taxonomy.
@@ -418,10 +448,23 @@ function segmentSearchText(segment: MessageSegment): ReadonlyArray<string> {
     case "provider_notice":
       return providerNoticeSegmentSearchText(segment);
     case "interview":
-      return interviewSegmentSearchText(segment);
+      return [];
     case "forked-chat-link":
       return [
         normalizeSearchableText(`Forked from ${segment.sourceChatTitle}`),
+      ];
+    case "imported-chat-marker":
+      // The marker's own label, and nothing else it does not paint. The raw
+      // `sourceProvider` id is never on screen (the row shows "Claude Code"),
+      // and `sourceCwd` lives in a tooltip portal outside the find anchor -
+      // indexing either counts matches the highlighter has no text to paint.
+      return [
+        normalizeSearchableText(
+          importedChatMarkerLabel({
+            sourceProvider: segment.sourceProvider,
+            importedAt: segment.importedAt,
+          }),
+        ),
       ];
     case "setup-card":
       return [
@@ -716,14 +759,6 @@ function todoSegmentSearchText(
     `${done} of ${segment.items.length} Done`,
     ...segment.items.map((item) => segmentStepLabel(item)),
   ];
-}
-
-function interviewSegmentSearchText(
-  segment: InterviewSegment,
-): ReadonlyArray<string> {
-  if (segment.status === "streaming") return [];
-  if (segment.status === "errored") return ["Question failed"];
-  return [answeredQuestionsSummary(segment)];
 }
 
 function tokensToText(tokens: ReadonlyArray<Token>): string {

@@ -536,10 +536,11 @@ export function useOwnerResourceUsage(
   epicId: string,
   kind: ResourceOwnerKindWireV14,
   ownerId: string,
+  hostId: string | null,
 ): OwnerResourceUsage | null {
   const handle = useResourcesHandle(epicId);
   const store = handle === null ? emptyResourcesStore : handle.store;
-  const key = resourceOwnerKey(kind, ownerId);
+  const key = resourceOwnerKey(kind, ownerId, hostId);
   return useStore(store, (state) => {
     const owner = state.owners.get(key);
     return owner === undefined ? null : owner;

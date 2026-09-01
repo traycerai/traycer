@@ -1,3 +1,4 @@
+import type { UpdateMutationCapabilityAdoption } from "@traycer-clients/shared/host-update";
 import { config } from "../config";
 import { currentInstallPlatform, type InstallSourceArg } from "../installer";
 import { resolveBundledHostArchive } from "../installer/bundled-host";
@@ -12,10 +13,32 @@ import {
 import { defaultRegistryHostVersionRequest } from "./supported-host-version";
 import { installSourceLogFields } from "./install-source-log-fields";
 
-// `host ensure` - the desktop's post-auth provisioning call. A thin
-// source-resolving wrapper over the shared `provisionHost` core
-// (host/provision.ts), which `maybeAutoBootstrap` (login / host status)
-// also routes through.
+// `host ensure` - the desktop's post-auth provisioning call, and now the
+// CLI's ONLY convergent install/register/start path. A thin source-resolving
+// wrapper over the shared `provisionHost` core (host/provision.ts).
+//
+// It used to share that core with `maybeAutoBootstrap`, which ran the same
+// pipeline implicitly off `traycer host status`. That was removed (audit
+// finding CLI-001): a status read must not install software. Anything that
+// wants a host to exist asks for it here, or via `host install` /
+// `host service install`.
+//
+// ONE SEMANTIC DIFFERENCE FROM AUTO-BOOTSTRAP IS DELIBERATE, and is the point
+// rather than an oversight. When bytes were already installed but the OS
+// service registration was missing, auto-bootstrap forced `satisfaction:
+// presence` so a registration repair could never replace the installed host.
+// `ensureHost` does NOT: it derives satisfaction from the resolved source, so
+// bytes that differ from this CLI's expected version are reinstalled even
+// when the only visible gap was the registration.
+//
+// That asymmetry tracks implicit vs explicit. Auto-bootstrap ran off a READ,
+// where swapping a user's host bytes as a side effect is indefensible;
+// `ensure` is a convergence verb someone typed, and converging to the
+// expected version is what it promises (Desktop's post-auth call depends on
+// exactly that). Do not "restore" presence-only semantics here to match the
+// deleted module - it would break that contract. A caller that wants
+// registration repaired WITHOUT touching bytes wants `host service install`,
+// which is the narrower tool and still has that behaviour.
 //
 // Source resolution order (offline-capable, self-contained when the host
 // ships beside the CLI):
@@ -44,6 +67,12 @@ export interface EnsureHostOptions {
   // desktop "Force restart"). Threaded into `provisionHost`.
   readonly force: boolean;
   readonly onProgress: ((info: ProgressInfo) => void) | null;
+  // Forwarded to `provisionHost`: runs only once this call has committed to
+  // installing, registering or starting a host, never on the no-op fast
+  // path. `host ensure` hangs its sign-in pre-flight here.
+  readonly beforeMutate: (() => Promise<void>) | null;
+  /** See `ProvisionHostOptions.adoption`. Forwarded verbatim. */
+  readonly adoption: UpdateMutationCapabilityAdoption | undefined;
 }
 
 export async function ensureHost(
@@ -101,6 +130,7 @@ export async function ensureHost(
     registerService: !opts.noServiceRegister,
   });
   const result = await provisionHost({
+    adoption: opts.adoption,
     runtime: opts.runtime,
     resolveInstallSource: () => Promise.resolve(source),
     satisfaction,
@@ -111,6 +141,7 @@ export async function ensureHost(
     lockReason: "host-ensure",
     force: opts.force,
     onProgress: opts.onProgress,
+    beforeMutate: opts.beforeMutate,
   });
   opts.runtime.logger.info("Host ensure completed", {
     environment: opts.runtime.environment,

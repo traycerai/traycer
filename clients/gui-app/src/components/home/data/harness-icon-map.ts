@@ -17,6 +17,7 @@ import {
   OpenRouterIcon,
   PiIcon,
   QwenIcon,
+  ReasonixIcon,
   TraycerIcon,
   type HarnessIcon,
 } from "@/components/home/pickers/harness-icons";
@@ -47,4 +48,5 @@ export const PROVIDER_ICON_CONFIG: Record<ProviderId, HarnessIconConfig> = {
   pi: { Icon: PiIcon, className: "text-foreground" },
   hermes: { Icon: HermesIcon, className: "text-foreground" },
   omp: { Icon: OmpIcon, className: "text-foreground" },
+  reasonix: { Icon: ReasonixIcon, className: "text-foreground" },
 };

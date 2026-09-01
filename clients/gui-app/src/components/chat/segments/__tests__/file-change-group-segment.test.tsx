@@ -172,6 +172,8 @@ function renderGroup(input: RenderGroupInput) {
             restoreActionPending: input.restoreActionPending,
             restoreCheckpoint: input.restoreCheckpoint,
             accumulatedFileChanges: [],
+            undeliveredChangeCount: 0,
+            accumulatedSetComplete: true,
             revertFileChanges: () => null,
           }}
         >

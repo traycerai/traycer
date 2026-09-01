@@ -1,5 +1,6 @@
 import { useState, type ButtonHTMLAttributes, type Ref } from "react";
 import { ChevronDown, TriangleAlert } from "lucide-react";
+import { Slot } from "radix-ui";
 import {
   Popover,
   PopoverContent,
@@ -9,6 +10,8 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { HoverPreviewCard } from "@/components/ui/hover-preview-card";
 import { cn } from "@/lib/utils";
 import { WorkspaceFolderHoverList } from "./workspace-folder-hover-list";
+import { WorkspaceFolderPreviewSheet } from "./workspace-folder-preview-sheet";
+import { useWorkspaceFolderPreviewReveal } from "./use-workspace-folder-preview-reveal";
 import { WorkspaceFolderRows } from "./workspace-folder-rows";
 import { WorkspaceModeIcon } from "./workspace-mode-icon";
 import {
@@ -31,10 +34,19 @@ export function WorkspaceSummaryTrigger(
     readonly items: ReadonlyArray<WorkspaceRunItem>;
     readonly readOnly: boolean;
     readonly bindingResolved: boolean;
+    readonly draftPending?: boolean;
     readonly ref?: Ref<HTMLButtonElement>;
   },
 ) {
-  const { items, readOnly, bindingResolved, className, ref, ...rest } = props;
+  const {
+    items,
+    readOnly,
+    bindingResolved,
+    draftPending,
+    className,
+    ref,
+    ...rest
+  } = props;
   // Resolve by the marked `isPrimary` row, not array order: the host
   // normalizes binding flags without reordering entries, so the collapsed
   // chip must agree with the primary pin/row rather than always reading
@@ -47,6 +59,7 @@ export function WorkspaceSummaryTrigger(
   const anyMissing = items.some((item) => item.missing);
   const [readOnlyPopoverOpen, setReadOnlyPopoverOpen] = useState(false);
   const [readOnlyHoverOpen, setReadOnlyHoverOpen] = useState(false);
+  const preview = useWorkspaceFolderPreviewReveal();
 
   const triggerButton = (
     <button
@@ -93,6 +106,13 @@ export function WorkspaceSummaryTrigger(
               +{extraCount}
             </span>
           ) : null}
+          {draftPending === true ? (
+            <span
+              className="size-1.5 shrink-0 rounded-full bg-foreground"
+              data-testid="workspace-summary-draft"
+              aria-label="Uncommitted workspace draft"
+            />
+          ) : null}
         </>
       )}
       <ChevronDown className="size-3.5 shrink-0 text-current" />
@@ -109,51 +129,68 @@ export function WorkspaceSummaryTrigger(
   if (readOnly) {
     if (items.length === 0) return trigger;
     return (
-      <Popover
-        open={readOnlyPopoverOpen}
-        onOpenChange={(nextOpen) => {
-          setReadOnlyPopoverOpen(nextOpen);
-          if (nextOpen) setReadOnlyHoverOpen(false);
-        }}
-      >
-        <HoverPreviewCard
-          content={<WorkspaceFolderHoverList items={items} />}
-          side="bottom"
-          sideOffset={4}
-          align="start"
-          open={!readOnlyPopoverOpen && readOnlyHoverOpen}
+      <>
+        <Popover
+          open={readOnlyPopoverOpen}
           onOpenChange={(nextOpen) => {
-            if (readOnlyPopoverOpen) return;
-            setReadOnlyHoverOpen(nextOpen);
+            setReadOnlyPopoverOpen(nextOpen);
+            if (nextOpen) setReadOnlyHoverOpen(false);
           }}
         >
-          <PopoverTrigger asChild>{trigger}</PopoverTrigger>
-        </HoverPreviewCard>
-        <PopoverContent
-          side="bottom"
-          align="start"
-          collisionPadding={12}
-          className="w-[min(92vw,42rem)] max-w-[var(--radix-popover-content-available-width)] max-h-[min(var(--radix-popover-content-available-height),32rem)] gap-0 overflow-y-auto p-3"
-          data-testid="workspace-readonly-folders-popover"
-          onOpenAutoFocus={(event) => event.preventDefault()}
-        >
-          <WorkspaceFolderRows
-            items={items}
-            trailingSlot={null}
-            addFolderPending={false}
-            addFolderDisabled
-            addFolderDisabledReason={null}
-            onAddFolder={NOOP_ADD}
-            onUpdate={null}
-            updateEnabled={false}
-            updatePending={false}
-            onEditEnvironment={NOOP}
-            readOnly
-            nestedInPopover={false}
-            bindingResolved={bindingResolved}
-          />
-        </PopoverContent>
-      </Popover>
+          <HoverPreviewCard
+            content={<WorkspaceFolderHoverList items={items} />}
+            side="bottom"
+            sideOffset={4}
+            align="start"
+            open={!readOnlyPopoverOpen && readOnlyHoverOpen}
+            onOpenChange={(nextOpen) => {
+              if (readOnlyPopoverOpen) return;
+              setReadOnlyHoverOpen(nextOpen);
+            }}
+          >
+            <PopoverTrigger asChild>
+              {/* Innermost, so the press guard runs BEFORE the popover's own
+                  open handler and can prevent it - `Slot` composes a child's
+                  handler ahead of the slot's. */}
+              <Slot.Root {...preview.triggerProps}>{trigger}</Slot.Root>
+            </PopoverTrigger>
+          </HoverPreviewCard>
+          <PopoverContent
+            side="bottom"
+            align="start"
+            collisionPadding={12}
+            // Same desktop-scrolls-here / phone-scrolls-the-list split as the
+            // editable panel in `WorkspaceFolderSummaryControl` - see the note there.
+            className="w-[min(92vw,42rem)] max-w-[var(--radix-popover-content-available-width)] max-h-[min(var(--radix-popover-content-available-height),32rem)] gap-0 overflow-y-auto p-3 max-md:overflow-hidden"
+            data-testid="workspace-readonly-folders-popover"
+            onOpenAutoFocus={(event) => event.preventDefault()}
+          >
+            <WorkspaceFolderRows
+              items={items}
+              trailingSlot={null}
+              addFolderPending={false}
+              addFolderDisabled
+              addFolderDisabledReason={null}
+              onAddFolder={NOOP_ADD}
+              onUpdate={null}
+              updateEnabled={false}
+              updatePending={false}
+              discardDisabled={false}
+              onEditEnvironment={NOOP}
+              readOnly
+              nestedInPopover={false}
+              bindingResolved={bindingResolved}
+              recentWorkspaces={null}
+              moveToRecent={false}
+            />
+          </PopoverContent>
+        </Popover>
+        <WorkspaceFolderPreviewSheet
+          items={items}
+          open={preview.open}
+          onClose={preview.close}
+        />
+      </>
     );
   }
 
@@ -162,7 +199,7 @@ export function WorkspaceSummaryTrigger(
 
 function SummaryEmptyState(props: { readonly bindingResolved: boolean }) {
   if (props.bindingResolved) {
-    return <span className="text-current/70">No workspace linked</span>;
+    return <span className="text-current/70">No folder attached</span>;
   }
   return (
     <>
@@ -171,7 +208,7 @@ function SummaryEmptyState(props: { readonly bindingResolved: boolean }) {
         testId={undefined}
         variant="dots"
       />
-      <span className="text-current/70">Linking workspace…</span>
+      <span className="text-current/70">Linking folder…</span>
     </>
   );
 }

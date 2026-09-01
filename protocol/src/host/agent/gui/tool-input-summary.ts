@@ -94,6 +94,17 @@ function summarizeCommand(record: Record<string, unknown>): string | null {
   return trim(cmd);
 }
 
+// The two comment-thread summarizers below outlive their tools on purpose.
+// `traycer_list_comment_threads` / `traycer_set_comment_thread_status` were
+// removed from the agent surface when artifact comment threads became files
+// (`.comments/<threadId>.md`), so no NEW call can reach either entry - but
+// transcripts recorded while the tools existed still hold those tool calls,
+// and `chat-storage-shape-migration.ts` re-derives a block's `inputSummary`
+// from its raw persisted input when it converts an old-shape chat. Dropping
+// the entries would silently degrade those rows to the generic fallback,
+// which yields `null` for a `{updates: [...]}` payload - a historical call
+// rendered with no detail at all. Keep them; they are display-only and cost
+// nothing at runtime.
 function summarizeCommentThreadList(
   record: Record<string, unknown>,
 ): string | null {

@@ -311,7 +311,10 @@ export function deriveUpdateReady(
 }
 
 export type HostActivationState =
-  "activated" | "pendingActivation" | "activationUnknown" | "unavailable";
+  | "activated"
+  | "pendingActivation"
+  | "activationUnknown"
+  | "unavailable";
 
 /**
  * Runtime-domain activation state, equality-only (Tech Plan, "Version

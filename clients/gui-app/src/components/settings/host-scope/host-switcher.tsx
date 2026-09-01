@@ -13,10 +13,11 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { HostPresenceDot } from "@/components/settings/host-scope/host-glyph";
 import { HostOptionRow } from "@/components/settings/host-scope/host-option-row";
 import {
+  AVAILABLE_HOST_ROW_SURFACE_STATE,
   hostRowSurfaceState,
+  hostOptionStatusWord,
   isHostOptionSelectable,
   type HostPickIntent,
 } from "@/components/settings/host-scope/host-option-model";
@@ -27,7 +28,9 @@ import {
   type HostScopeOption,
 } from "@/components/settings/host-scope/host-scope-model";
 import { useRefreshHostDirectoryOnOpen } from "@/hooks/host/use-refresh-host-directory-on-open";
+import { useCoarsePointerOpenAutoFocus } from "@/hooks/ui/use-coarse-pointer-open-autofocus";
 import { useHostBinding } from "@/lib/host";
+import type { FleetUpdateView } from "@/lib/host/fleet-update/fleet-update-view";
 import { cn } from "@/lib/utils";
 
 /**
@@ -44,19 +47,19 @@ const SEARCH_THRESHOLD = 6;
 function hostSwitcherLabel(
   intent: HostPickIntent,
   selected: HostScopeOption | null,
+  status: string | null,
 ): string {
   const subject = intent === "view" ? "Settings host" : "Host";
   return selected === null
     ? `${subject}: none selected`
-    : `${subject}: ${selected.name}`;
+    : `${subject}: ${selected.name}${status === null ? "" : `, ${status}`}`;
 }
 
 export type HostSwitcherActionKind = "add-host" | "manage-hosts";
 
 /**
- * The picker's trailing action — the one thing that differs between the two
- * surfaces mounting this component, and a prop rather than a constant because
- * they cannot honestly offer the same verb.
+ * The picker's trailing action — a prop rather than a constant because only
+ * Settings owns the add-host flow; every other surface points back to it.
  *
  * Settings owns ADD: the dialog, the known-hosts snapshot it takes and every
  * failure state it can land in all live there, and this footer is its only
@@ -94,6 +97,9 @@ interface HostSwitcherActionPresentation {
  *   so the row read as a heading with a stray chevron rather than something you
  *   could open. It borrows the search field's own border and fill, which is
  *   what makes the two read as siblings instead of as a label above a control.
+ * - `inline`: a compact peer of other ghost controls below a composer. It
+ *   shares their muted resting text and foreground-alpha hover, while its
+ *   list still uses the same full host-row vocabulary as every other surface.
  * - `panel-header`: the picker IS the top strip of the card it heads (the
  *   header's usage popover). Here a floating list is actively wrong: a rounded
  *   panel inset inside a rounded panel puts two borders a few pixels apart on
@@ -102,7 +108,7 @@ interface HostSwitcherActionPresentation {
  *   square, and the list drops flush from its bottom edge at exactly its width
  *   — one shared edge, one continuous surface.
  */
-export type HostSwitcherSurface = "rail" | "panel-header" | "field";
+export type HostSwitcherSurface = "rail" | "panel-header" | "field" | "inline";
 
 interface HostSwitcherSurfacePresentation {
   /**
@@ -153,6 +159,12 @@ const HOST_SWITCHER_SURFACES: Record<
     list: "",
     sideOffsetPx: 4,
   },
+  inline: {
+    trigger:
+      "h-7 w-fit max-w-full gap-1.5 rounded-lg px-1.5 py-0 text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+    list: "",
+    sideOffsetPx: 4,
+  },
 };
 
 const HOST_SWITCHER_ACTIONS: Record<
@@ -178,31 +190,17 @@ const HOST_SWITCHER_ACTIONS: Record<
 };
 
 /**
- * THE host selector. There is exactly one of these in Settings, and it heads
- * the sidebar group whose sections it scopes. The header's usage popover
- * mounts the same component to head ITS panes (`rate-limit-popover.tsx`) —
- * reuse, not a second picker: two controls over one concept is precisely the
- * fragmentation the next paragraph describes, and it does not stop being that
- * because the second one lives outside Settings. What differs between the two
- * is only the SELECTION each writes to (`HostScopeSelection`), never the row
- * vocabulary or the scoping mechanism.
+ * THE host selector. Settings, monitoring surfaces, worktree pickers, and the
+ * composer all mount this component. They may write different selections, but
+ * host rows, states, keyboard behavior, and menu layout stay identical.
  *
  * It replaced four separate `Select`s (Providers' header, Worktrees' toolbar,
  * the snapshots row, the agent-instructions strip) that differed in width,
  * placement and scoping mechanism while doing one job — and, in an earlier
  * pass, a whole second "Hosts" page that duplicated every host verb.
  *
- * Its row anatomy is deliberately the composer's host picker
- * (`components/home/host-workspace-selector/host-section.tsx`): kind glyph,
- * name, status dot, check. Two pickers over the same concept must not each
- * invent their own vocabulary, so this one inherits the shape people already
- * know from choosing a host below the composer.
- *
- * It is NOT the active-host control. Choosing here swaps a transient client
- * and nothing else — no notification rebinding, no change to where new work
- * lands. That verb lives on the Overview page and states its consequence in
- * words. Hence the two independent marks: the CHECK is what Settings is
- * scoped to, the ACTIVE chip is what this window runs on.
+ * The caller's `intent` owns the consequence of choosing; it never changes the
+ * picker anatomy or invents a second status vocabulary.
  */
 export function HostSwitcher(props: {
   readonly hosts: readonly HostScopeOption[];
@@ -215,9 +213,9 @@ export function HostSwitcher(props: {
   readonly surface: HostSwitcherSurface;
   /**
    * What choosing a host here DOES. `bind` surfaces (the composer, the worktree
-   * pickers) point the whole window at the host, so a host this client cannot
-   * dial is not a legal answer and its row goes inert; `view` surfaces may
-   * point at one regardless. See `HostPickIntent`.
+   * pickers) and `pin` surfaces (the composer and scoped tools) require a host
+   * this client can dial; `view` surfaces may point at one regardless. See
+   * `HostPickIntent`.
    */
   readonly intent: HostPickIntent;
   /**
@@ -238,12 +236,32 @@ export function HostSwitcher(props: {
    * whose every row would be refused.
    */
   readonly disabled: boolean;
+  /** Keep a disabled trigger focusable so its explanatory tooltip is reachable. */
+  readonly keepFocusableWhenDisabled?: boolean;
   readonly isLoading: boolean;
   /** A host list request FAILED, so an empty `hosts` proves nothing. */
   readonly listsFailed: boolean;
   readonly onRetryLists: () => void;
+  /**
+   * Resolves each row's projected update state, or `null` for a picker that
+   * does not show update badges.
+   *
+   * `null` for three of the four callers — the landing workspace selector, the
+   * header rate-limit popover, the resource monitor — because the settled
+   * product decision puts fleet update state in **Settings**, and `intent` is
+   * not a proxy for that (those popovers are `view` surfaces too). Only
+   * `SettingsSidebar` passes a resolver.
+   *
+   * Passing the RESOLVER rather than a flag is what keeps this honest: a
+   * surface can only badge state it already has, so no picker can turn badges
+   * on and reach for a per-row query to feed them — which is the "Settings
+   * does not silently connect to other hosts to improve their badges" rule.
+   */
+  readonly updateViewForHost: ((hostId: string) => FleetUpdateView) | null;
 }): ReactNode {
   const [open, setOpen] = useState(false);
+  const { contentRef, onOpenAutoFocus: coarseOpenAutoFocus } =
+    useCoarsePointerOpenAutoFocus();
   const binding = useHostBinding();
   useRefreshHostDirectoryOnOpen(open, binding?.directory ?? null);
   const { hosts, selected } = props;
@@ -315,49 +333,14 @@ export function HostSwitcher(props: {
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger
-        // The DESTINATION belongs in the accessible name, not just the role.
-        // A bare "Host" would tell a screen-reader user what the control is
-        // for while withholding the one thing it displays.
-        // Named for what choosing DOES here. "Settings host" is the viewing
-        // scope; a `bind` surface is choosing the host the window runs on, and
-        // a screen reader that hears "Settings host" in the composer is being
-        // told about a different control than the one it is on.
-        aria-label={hostSwitcherLabel(props.intent, selected)}
+      <HostSwitcherTrigger
+        intent={props.intent}
+        selected={selected}
         disabled={props.disabled}
-        data-testid="settings-host-switcher"
-        className={cn(
-          "flex w-full items-center gap-3 px-3 py-2 text-left transition-colors",
-          "focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
-          "disabled:pointer-events-none disabled:opacity-60",
-          surface.trigger,
-        )}
-      >
-        {/* `selected` is null while the scoped host is gone but others remain.
-            The row stays a live control in that state — it is the way out. */}
-        <span className="flex size-4 shrink-0 items-center justify-center">
-          <HostPresenceDot
-            tone={selected === null ? "idle" : selected.health.tone}
-            animate={selected !== null && selected.health.live}
-            className={undefined}
-          />
-        </span>
-        {/* No ACTIVE chip here. Host names are long and this row is narrow, so
-            a chip that is present in the common case bought one word and cost
-            the name — and it was never the row's job: the rail says what you
-            are VIEWING. Which host is active is stated where it has room and
-            where it matters, on the dropdown rows and on Overview, and its
-            absence is called out by the "Viewing —" note below. */}
-        <span
-          className={cn(
-            "min-w-0 flex-1 truncate text-ui-sm font-medium",
-            selected === null ? "text-muted-foreground" : "text-foreground",
-          )}
-        >
-          {selected === null ? "Select a host" : selected.name}
-        </span>
-        <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
-      </PopoverTrigger>
+        keepFocusableWhenDisabled={props.keepFocusableWhenDisabled}
+        surfaceKind={props.surface}
+        surface={surface}
+      />
       <PopoverContent
         align="start"
         sideOffset={surface.sideOffsetPx}
@@ -373,6 +356,13 @@ export function HostSwitcher(props: {
         )}
         data-testid="settings-host-switcher-list"
         {...{ [HOST_SWITCHER_LIST_ATTRIBUTE]: "true" }}
+        ref={contentRef}
+        // Only the search input is worth declining for; below the threshold
+        // there is no input and Radix's default lands on a host row, which
+        // summons nothing.
+        onOpenAutoFocus={
+          hosts.length >= SEARCH_THRESHOLD ? coarseOpenAutoFocus : undefined
+        }
       >
         <Command>
           {hosts.length >= SEARCH_THRESHOLD ? (
@@ -395,6 +385,7 @@ export function HostSwitcher(props: {
                     props.inertExceptHostId !== null &&
                     host.hostId !== props.inertExceptHostId
                   }
+                  updateView={props.updateViewForHost?.(host.hostId) ?? null}
                   onSelect={() => {
                     props.onSelect(host.hostId);
                     setOpen(false);
@@ -449,6 +440,74 @@ export function HostSwitcher(props: {
   );
 }
 
+function HostSwitcherTrigger(props: {
+  readonly intent: HostPickIntent;
+  readonly selected: HostScopeOption | null;
+  readonly disabled: boolean;
+  readonly keepFocusableWhenDisabled?: boolean;
+  readonly surfaceKind: HostSwitcherSurface;
+  readonly surface: HostSwitcherSurfacePresentation;
+}): ReactNode {
+  const { selected } = props;
+  const triggerStatus =
+    selected === null
+      ? null
+      : hostOptionStatusWord(selected, AVAILABLE_HOST_ROW_SURFACE_STATE);
+  const keepFocusableWhenDisabled =
+    props.disabled && props.keepFocusableWhenDisabled === true;
+
+  return (
+    <PopoverTrigger
+      // The DESTINATION belongs in the accessible name, not just the role.
+      // A bare "Host" would tell a screen-reader user what the control is
+      // for while withholding the one thing it displays.
+      // Named for what choosing DOES here. "Settings host" is the viewing
+      // scope; a `bind` surface is choosing the host the window runs on, and
+      // a screen reader that hears "Settings host" in the composer is being
+      // told about a different control than the one it is on.
+      aria-label={hostSwitcherLabel(props.intent, selected, triggerStatus)}
+      aria-disabled={keepFocusableWhenDisabled ? true : undefined}
+      disabled={props.disabled ? !keepFocusableWhenDisabled : undefined}
+      onClick={
+        keepFocusableWhenDisabled
+          ? (event) => event.preventDefault()
+          : undefined
+      }
+      data-testid="settings-host-switcher"
+      className={cn(
+        "group/host-switcher flex w-full items-center gap-3 px-3 py-2 text-start transition-colors",
+        "focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
+        "disabled:pointer-events-none disabled:opacity-60",
+        "aria-disabled:cursor-not-allowed aria-disabled:opacity-60 aria-disabled:hover:bg-transparent",
+        props.surface.trigger,
+      )}
+    >
+      {/* Healthy is the default and stays silent. Only an exception status
+          earns space in this compact trigger. */}
+      <span
+        className={cn(
+          "min-w-0 flex-1 truncate text-ui-sm font-medium",
+          selected === null || props.surfaceKind === "inline"
+            ? "text-muted-foreground"
+            : "text-foreground",
+          !props.disabled && "group-hover/host-switcher:text-foreground",
+        )}
+      >
+        {selected === null ? "Select a host" : selected.name}
+      </span>
+      {triggerStatus === null ? null : (
+        <span
+          className="shrink-0 text-ui-xs text-muted-foreground"
+          data-testid="settings-host-switcher-status"
+        >
+          {triggerStatus}
+        </span>
+      )}
+      <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+    </PopoverTrigger>
+  );
+}
+
 /**
  * The combobox's interaction shell around the shared row: a cmdk item, its
  * search keywords, and the assistive-tech mark for "this is the one you are
@@ -464,6 +523,8 @@ function HostSwitcherRow(props: {
   readonly surfaceRefusal: string | null;
   /** Inert with no word on the row — see `HostSwitcher`'s `inertExceptHostId`. */
   readonly surfaceInert: boolean;
+  /** This row's projected update state, or `null` for a non-badging picker. */
+  readonly updateView: FleetUpdateView | null;
   readonly onSelect: () => void;
 }): ReactNode {
   const { host } = props;
@@ -488,6 +549,7 @@ function HostSwitcherRow(props: {
       onSelect={props.onSelect}
       data-testid={`settings-host-switcher-option-${host.hostId}`}
       data-scoped={props.scoped ? "true" : "false"}
+      data-checked={props.scoped ? "true" : undefined}
       // The check mark inside the row is aria-hidden and `data-scoped` reaches
       // no assistive tech, so without this a screen reader heard the scoped row
       // and every other row as the same text.
@@ -500,6 +562,7 @@ function HostSwitcherRow(props: {
         active={props.active}
         intent={props.intent}
         surfaceState={surfaceState}
+        updateView={props.updateView}
       />
     </CommandItem>
   );

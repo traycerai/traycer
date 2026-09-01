@@ -17,12 +17,14 @@ interface UnanswerableInterviewNoticeProps {
   /** True while a dismissal for any of these blocks is in flight. */
   readonly isBusy: boolean;
   /**
-   * Sends `interviewError` for one block. `null` disables the affordance while
+   * Sends the local interview Skip action for one block. `null` disables the
+   * affordance while
    * the chat cannot act (viewer, or the stream is not open) - the notice still
    * renders so the deadlock is at least legible.
    */
   readonly onDismiss:
-    ((blockId: string, reason: string) => string | null) | null;
+    | ((blockId: string, reason: string) => string | null)
+    | null;
 }
 
 /**

@@ -135,7 +135,8 @@ export interface HostHealthMonitorDeps {
   readonly intervalMs: number | undefined;
   readonly probe: ((websocketUrl: string) => Promise<boolean>) | undefined;
   readonly readMetadata:
-    ((path: string) => Promise<DesktopLocalHostSnapshot | null>) | undefined;
+    | ((path: string) => Promise<DesktopLocalHostSnapshot | null>)
+    | undefined;
   /**
    * The platform-correct recovery entry point - production callers pass
    * `HostController.recoverIfDown()` wrapped to this monitor's void/throw
@@ -156,7 +157,8 @@ export interface HostHealthMonitorDeps {
    * itself.
    */
   readonly readLiveness:
-    ((pidMetadataFile: string) => Promise<HostProcessLiveness>) | undefined;
+    | ((pidMetadataFile: string) => Promise<HostProcessLiveness>)
+    | undefined;
 }
 
 export interface HostHealthMonitor {

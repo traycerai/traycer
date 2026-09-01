@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- maximum-scale=1 disables iOS's automatic zoom-in when a sub-16px
+         input gains focus (the page never zooms back out on blur). Browsers
+         ignore the cap for user-initiated pinch zoom, so accessibility zoom
+         still works.
+         interactive-widget=resizes-content makes Android Chrome shrink the
+         layout viewport when the soft keyboard opens, so the h-dvh app shell
+         (and the terminal key bar at its bottom) resizes natively. iOS
+         ignores it and keeps overlaying; the gui-app compensates there via
+         the measured visualViewport inset. -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1, viewport-fit=cover, interactive-widget=resizes-content"
+    />
+    <meta name="color-scheme" content="dark light" />
+    <title>Traycer</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./main.tsx"></script>
+  </body>
+</html>

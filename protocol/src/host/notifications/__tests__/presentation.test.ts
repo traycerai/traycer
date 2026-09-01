@@ -37,6 +37,27 @@ const CASES: readonly {
     body: "Implement confirmation policy • Done",
   },
   {
+    name: "completed GUI agent with background work still running",
+    entry: {
+      ...BASE,
+      kind: "agent.stopped",
+      severity: "done",
+      outcome: "completed",
+      payload: {
+        kind: "chat",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        agentName: "Repo survey agent",
+        taskTitle:
+          "Spin up a Cursor, Fable agent to find out what this repo is about",
+        outcome: "completed",
+        backgroundWorkRunning: true,
+      },
+    },
+    title: "Spin up a Cursor, Fable agent to find out what this repo is about",
+    body: "Repo survey agent • Background work running",
+  },
+  {
     name: "stopped terminal agent",
     entry: {
       ...BASE,

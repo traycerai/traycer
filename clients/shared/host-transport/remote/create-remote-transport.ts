@@ -1,10 +1,14 @@
-import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
+import type {
+  FirstPartyClientIdentity,
+  VersionedRpcRegistry,
+} from "@traycer/protocol/framework/index";
 import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type {
   BearerSourceProvider,
   OpenFrameBearerSource,
 } from "@traycer-clients/shared/auth/bearer-source";
 import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
+import type { ServerClockSkewSignal } from "@traycer-clients/shared/clock/server-time-offset-tracker";
 import type { TransportEvidenceReporter } from "@traycer-clients/shared/host-selection/transport-evidence";
 import type { IStreamWebSocketFactory } from "../ws-stream-factory";
 import { RemoteSession, type IRemoteSession } from "./remote-session";
@@ -52,6 +56,17 @@ export interface CreateRemoteTransportOptions<
    * the app revalidator - a cache hit reuses whatever the creator wired.
    */
   readonly auth: StreamAuthRevalidator | null;
+  /**
+   * Clock-skew verdict for the session's `UNAUTHORIZED` park (see
+   * `RemoteSessionOptions.clock`).
+   *
+   * Deliberately NOT part of the cache identity above, for the same reason
+   * `clientIdentity` is not: unlike `auth`, this cannot vary between
+   * consumers. The wall clock is a property of the machine, so every consumer
+   * in the process passes the one app-wide tracker - a cache hit inheriting it
+   * is inheriting the only value any consumer could have passed.
+   */
+  readonly clock: ServerClockSkewSignal | null;
   readonly rpcRegistry: RpcRegistry;
   readonly streamRegistry: StreamRegistry;
   readonly webSocketFactory: IStreamWebSocketFactory;
@@ -67,6 +82,26 @@ export interface CreateRemoteTransportOptions<
    * reporter that outlives its consumer.
    */
   readonly evidence: TransportEvidenceReporter;
+  /**
+   * WHO THIS CLIENT IS - see `RemoteSessionOptions.clientIdentity`.
+   *
+   * Deliberately NOT part of the cache identity above, unlike `authRecovery` /
+   * `authEpoch`. Those two vary per consumer, so inheriting the first
+   * acquirer's value is a real hazard; this one cannot vary at all - kind,
+   * epoch and build version are process constants and updating the
+   * application restarts the process - so a cache hit inheriting it is
+   * inheriting the only value any consumer could have passed.
+   */
+  readonly clientIdentity: FirstPartyClientIdentity;
+  /**
+   * Whether the process-wide wake sweep may proactively poke or force-drop
+   * the session this consumer acquires - the consumer's statement that a
+   * reconnect's subscribe replay is safe for the streams it will carry. A
+   * one-shot side-effecting transport passes `false`; see
+   * `RemoteSessionAcquirePolicy.proactiveWakeEligible` for why this is not
+   * inferred from `auth`.
+   */
+  readonly proactiveWakeEligible: boolean;
 }
 
 export interface RemoteHostTransport<
@@ -136,6 +171,7 @@ export function createRemoteHostTransport<
       // just which policy they implement. See `RemoteSessionIdentity.authEpoch`.
       authEpoch: authEpochFor(bearerSource),
     },
+    { proactiveWakeEligible: options.proactiveWakeEligible },
     () => {
       const grantProvider = createAttachGrantProvider({
         authnBaseUrl: options.authnBaseUrl,
@@ -149,11 +185,13 @@ export function createRemoteHostTransport<
         grantProvider,
         bearer: options.bearer,
         auth: options.auth,
+        clock: options.clock,
         rpcRegistry: options.rpcRegistry,
         streamRegistry: options.streamRegistry,
         webSocketFactory: options.webSocketFactory,
         requestId: options.requestId,
         evidence: options.evidence,
+        clientIdentity: options.clientIdentity,
       });
     },
   );

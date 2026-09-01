@@ -177,6 +177,30 @@ function normalizePosixPreservingBackslashes(path: string): string {
   return joined.length > 0 ? joined : ".";
 }
 
+/**
+ * True when `candidate` is `root` or a descendant. Browser-safe: folds
+ * Windows separators, trailing seps, relative segments, and drive-letter
+ * case. POSIX paths keep literal backslashes so a `\` filename is not a
+ * separator.
+ */
+export function pathContainsDirectory(
+  root: string,
+  candidate: string,
+): boolean {
+  return (
+    stripRootPrefix(
+      stripTrailingSeparators(root),
+      stripTrailingSeparators(candidate),
+    ) !== null
+  );
+}
+
+function stripTrailingSeparators(path: string): string {
+  if (path === "/" || path === "\\") return path;
+  if (/^[A-Za-z]:[/\\]$/.test(path)) return path;
+  return path.replace(/[/\\]+$/, "");
+}
+
 function stripRootPrefix(root: string, path: string): string | null {
   const windowsLike = isWindowsLikePath(root) || isWindowsLikePath(path);
   const normalizedRoot = windowsLike

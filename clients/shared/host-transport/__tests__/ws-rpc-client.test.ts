@@ -61,6 +61,7 @@ import type {
   ClientFatalErrorFrame,
   HostFrame,
 } from "@traycer/protocol/framework/ws-protocol";
+import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
 const echoV10 = defineRpcContract({
   method: "host.echo",
@@ -225,6 +226,7 @@ function makeClient(options: {
   readonly hostAttestationWindowMs: number | undefined;
 }): BoundWsRpcClient<typeof testRegistry> {
   const inner = new WsRpcClient<typeof testRegistry>({
+    clientIdentity: TEST_CLIENT_IDENTITY,
     registry: testRegistry,
     requestId: () => options.requestId,
     webSocketFactory: options.factory,
@@ -240,6 +242,7 @@ async function expectPostOpenTimeoutRecovery(fatal: HostFrame): Promise<void> {
   const { factory, sockets } = makeFactory();
   let requestNumber = 0;
   const raw = new WsRpcClient<typeof testRegistry>({
+    clientIdentity: TEST_CLIENT_IDENTITY,
     registry: testRegistry,
     requestId: () => {
       requestNumber += 1;
@@ -548,6 +551,86 @@ class RecordingEvidence implements TransportEvidenceReporter {
 }
 
 describe("WsRpcClient", () => {
+  it("puts the configured client identity on every open frame", async () => {
+    // EVERY open frame, not just the first: this transport dials a fresh
+    // socket per RPC, so an identity resolved anywhere other than
+    // construction would be sent inconsistently across a session's calls -
+    // and against a floored host, inconsistently ADMITTED.
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "token-abc",
+      requestId: "req-identity",
+      dialTimeoutMs: 1000,
+      frameTimeoutMs: 1000,
+      hostAttestationWindowMs: undefined,
+    });
+
+    for (let call = 0; call < 2; call += 1) {
+      const pending = client.request("host.echo", { message: "hi" });
+      await flush();
+      const stub = sockets[call].socket;
+      stub.fireOpen();
+      await flush();
+      expect(expectOpenFrame(sockets[call].sent[0]).clientIdentity).toEqual({
+        kind: TEST_CLIENT_IDENTITY.kind,
+        compatibilityEpoch: TEST_CLIENT_IDENTITY.compatibilityEpoch,
+        appVersion: TEST_CLIENT_IDENTITY.appVersion,
+      });
+      stub.fireMessage(openAckWithOptionalHostEcho({ major: 1, minor: 0 }));
+      await flush();
+      stub.fireMessage({
+        kind: "response",
+        requestId: "req-identity",
+        method: "host.echo",
+        schemaVersion: { major: 1, minor: 0 },
+        result: { echoed: "HI" },
+        error: null,
+      });
+      await expect(pending).resolves.toEqual({ echoed: "HI" });
+    }
+    expect(sockets).toHaveLength(2);
+  });
+
+  it("omits only a null appVersion, never the identity or the epoch", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = new WsRpcClient<typeof testRegistry>({
+      clientIdentity: { kind: "cli", compatibilityEpoch: 2, appVersion: null },
+      registry: testRegistry,
+      requestId: () => "req-no-version",
+      webSocketFactory: factory,
+      dialTimeoutMs: 1000,
+      frameTimeoutMs: 1000,
+      hostAttestationWindowMs: 0,
+      evidence: NO_TRANSPORT_EVIDENCE,
+    });
+    const pending = client.request(
+      "host.echo",
+      { message: "hi" },
+      authorityForToken("token-abc"),
+    );
+    await flush();
+    sockets[0].socket.fireOpen();
+    await flush();
+    expect(expectOpenFrame(sockets[0].sent[0]).clientIdentity).toEqual({
+      kind: "cli",
+      compatibilityEpoch: 2,
+    });
+    sockets[0].socket.fireMessage(
+      openAckWithOptionalHostEcho({ major: 1, minor: 0 }),
+    );
+    await flush();
+    sockets[0].socket.fireMessage({
+      kind: "response",
+      requestId: "req-no-version",
+      method: "host.echo",
+      schemaVersion: { major: 1, minor: 0 },
+      result: { echoed: "HI" },
+      error: null,
+    });
+    await expect(pending).resolves.toEqual({ echoed: "HI" });
+  });
+
   it("walks dial → open → openAck → request → response → close on the happy path", async () => {
     const { factory, sockets } = makeFactory();
     const client = makeClient({
@@ -573,10 +656,10 @@ describe("WsRpcClient", () => {
     const openFrame = expectOpenFrame(sockets[0].sent[0]);
     expect(openFrame.token).toBe("token-abc");
     expect(openFrame.manifest).toEqual({
-      "host.status": { major: 1, minor: 0 },
+      "host.status": { major: 1, minor: 0, supportedMajors: [1] },
     });
     expect(openFrame.optionalManifest).toEqual({
-      "host.echo": { major: 1, minor: 0 },
+      "host.echo": { major: 1, minor: 0, supportedMajors: [1] },
     });
 
     stub.fireMessage(openAckWithOptionalHostEcho({ major: 1, minor: 0 }));
@@ -588,7 +671,7 @@ describe("WsRpcClient", () => {
       kind: "request",
       requestId: "req-1",
       method: "host.echo",
-      schemaVersion: { major: 1, minor: 0 },
+      schemaVersion: { major: 1, minor: 0, supportedMajors: [1] },
       params: { message: "hi" },
     });
     expect(stub.closed).toBeNull();
@@ -609,6 +692,7 @@ describe("WsRpcClient", () => {
   it("aborting the captured authority closes and settles the in-flight socket", async () => {
     const { factory, sockets } = makeFactory();
     const client = new WsRpcClient<typeof testRegistry>({
+      clientIdentity: TEST_CLIENT_IDENTITY,
       registry: testRegistry,
       requestId: () => "req-abort",
       webSocketFactory: factory,
@@ -662,6 +746,7 @@ describe("WsRpcClient", () => {
       const { factory, sockets } = makeFactory();
       const recorder = new RecordingEvidence();
       const client = new WsRpcClient<typeof testRegistry>({
+        clientIdentity: TEST_CLIENT_IDENTITY,
         registry: testRegistry,
         requestId: () => requestId,
         webSocketFactory: factory,
@@ -791,6 +876,7 @@ describe("WsRpcClient", () => {
     const recorder = new RecordingEvidence();
     let nextRequestId = 0;
     const client = new WsRpcClient<typeof testRegistry>({
+      clientIdentity: TEST_CLIENT_IDENTITY,
       registry: testRegistry,
       requestId: () => `req-${(nextRequestId += 1)}`,
       webSocketFactory: factory,
@@ -870,6 +956,7 @@ describe("WsRpcClient", () => {
     let nextRequestId = 0;
     const makeClient = () =>
       new WsRpcClient<typeof testRegistry>({
+        clientIdentity: TEST_CLIENT_IDENTITY,
         registry: testRegistry,
         requestId: () => `req-${(nextRequestId += 1)}`,
         webSocketFactory: factory,
@@ -944,6 +1031,7 @@ describe("WsRpcClient", () => {
     const recorder = new RecordingEvidence();
     let nextRequestId = 0;
     const client = new WsRpcClient<typeof testRegistry>({
+      clientIdentity: TEST_CLIENT_IDENTITY,
       registry: testRegistry,
       requestId: () => `req-${(nextRequestId += 1)}`,
       webSocketFactory: factory,
@@ -1038,6 +1126,7 @@ describe("WsRpcClient", () => {
     ctx.release();
     const client = new BoundWsRpcClient(
       new WsRpcClient<typeof testRegistry>({
+        clientIdentity: TEST_CLIENT_IDENTITY,
         registry: testRegistry,
         requestId: () => "req-released",
         webSocketFactory: factory,
@@ -1536,6 +1625,7 @@ describe("WsRpcClient", () => {
     } {
       let requestNumber = 0;
       const raw = new WsRpcClient<typeof testRegistry>({
+        clientIdentity: TEST_CLIENT_IDENTITY,
         registry: testRegistry,
         requestId: () => {
           requestNumber += 1;
@@ -2291,6 +2381,7 @@ describe("WsRpcClient", () => {
       const { factory, sockets } = makeFactory();
       const lifetime = new AbortController();
       const client = new WsRpcClient<typeof testRegistry>({
+        clientIdentity: TEST_CLIENT_IDENTITY,
         registry: testRegistry,
         requestId: () => "req-grace-abort",
         webSocketFactory: factory,
@@ -2332,6 +2423,7 @@ describe("WsRpcClient", () => {
       const { factory, sockets } = makeFactory();
       const lifetime = new AbortController();
       const client = new WsRpcClient<typeof testRegistry>({
+        clientIdentity: TEST_CLIENT_IDENTITY,
         registry: testRegistry,
         requestId: () => "req-grace-abort-rearmed",
         webSocketFactory: factory,
@@ -2609,7 +2701,158 @@ describe("WsRpcClient", () => {
       return (
         error instanceof HostRpcError &&
         error.code === "DOWNGRADE_UNSUPPORTED" &&
-        error.message === "no bridge"
+        error.message === "no bridge" &&
+        error.holders === null
+      );
+    });
+  });
+
+  it("preserves WORKTREE_BUSY holders from a response error envelope", async () => {
+    const holders = [
+      {
+        ownerRef: {
+          epicId: "epic-1",
+          ownerKind: "chat" as const,
+          ownerId: "chat-1",
+        },
+        holdKind: "chat-turn" as const,
+        activity: "working" as const,
+        label: "Chat is mid-turn",
+      },
+    ];
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "t",
+      requestId: "req-busy-holders",
+      dialTimeoutMs: 1000,
+      frameTimeoutMs: 1000,
+      hostAttestationWindowMs: undefined,
+    });
+
+    const pending = client.request("host.echo", { message: "x" });
+    await flush();
+    sockets[0].socket.fireOpen();
+    await flush();
+    sockets[0].socket.fireMessage(
+      openAckWithOptionalHostEcho({ major: 1, minor: 0 }),
+    );
+    await flush();
+
+    sockets[0].socket.fireMessage({
+      kind: "response",
+      requestId: "req-busy-holders",
+      method: "host.echo",
+      schemaVersion: { major: 1, minor: 0 },
+      result: null,
+      error: {
+        code: "WORKTREE_BUSY",
+        message: "in use",
+        holders,
+      },
+    });
+
+    await expect(pending).rejects.toSatisfy((error: unknown) => {
+      return (
+        error instanceof HostRpcError &&
+        error.code === "WORKTREE_BUSY" &&
+        error.message === "in use" &&
+        error.holders !== null &&
+        JSON.stringify(error.holders) === JSON.stringify(holders)
+      );
+    });
+  });
+
+  it("rejects a WORKTREE_BUSY envelope with malformed holders promptly, keeping code/message", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "t",
+      requestId: "req-busy-malformed",
+      dialTimeoutMs: 1000,
+      frameTimeoutMs: 1000,
+      hostAttestationWindowMs: undefined,
+    });
+
+    const pending = client.request("host.echo", { message: "x" });
+    await flush();
+    sockets[0].socket.fireOpen();
+    await flush();
+    sockets[0].socket.fireMessage(
+      openAckWithOptionalHostEcho({ major: 1, minor: 0 }),
+    );
+    await flush();
+
+    sockets[0].socket.fireRawMessage(
+      JSON.stringify({
+        kind: "response",
+        requestId: "req-busy-malformed",
+        method: "host.echo",
+        schemaVersion: { major: 1, minor: 0 },
+        result: null,
+        error: {
+          code: "WORKTREE_BUSY",
+          message: "in use",
+          holders: [{ not: "a holder" }],
+        },
+      }),
+    );
+
+    await expect(pending).rejects.toSatisfy((error: unknown) => {
+      return (
+        error instanceof HostRpcError &&
+        !(error instanceof HostTransportFailureError) &&
+        error.code === "WORKTREE_BUSY" &&
+        error.message === "in use" &&
+        error.holders === null &&
+        !error.message.includes("Malformed host frame")
+      );
+    });
+  });
+
+  it("still accepts a non-busy error envelope whose holders field is malformed", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "t",
+      requestId: "req-other-malformed",
+      dialTimeoutMs: 1000,
+      frameTimeoutMs: 1000,
+      hostAttestationWindowMs: undefined,
+    });
+
+    const pending = client.request("host.echo", { message: "x" });
+    await flush();
+    sockets[0].socket.fireOpen();
+    await flush();
+    sockets[0].socket.fireMessage(
+      openAckWithOptionalHostEcho({ major: 1, minor: 0 }),
+    );
+    await flush();
+
+    sockets[0].socket.fireRawMessage(
+      JSON.stringify({
+        kind: "response",
+        requestId: "req-other-malformed",
+        method: "host.echo",
+        schemaVersion: { major: 1, minor: 0 },
+        result: null,
+        error: {
+          code: "RPC_ERROR",
+          message: "resolver failed",
+          holders: [{ not: "a holder" }],
+        },
+      }),
+    );
+
+    await expect(pending).rejects.toSatisfy((error: unknown) => {
+      return (
+        error instanceof HostRpcError &&
+        !(error instanceof HostTransportFailureError) &&
+        error.code === "RPC_ERROR" &&
+        error.message === "resolver failed" &&
+        error.holders === null &&
+        !error.message.includes("Malformed host frame")
       );
     });
   });
@@ -2660,6 +2903,7 @@ describe("WsRpcClient", () => {
     const ctx = makeRequestContext("t");
     const client = new BoundWsRpcClient(
       new WsRpcClient<typeof fallbackRegistry>({
+        clientIdentity: TEST_CLIENT_IDENTITY,
         registry: fallbackRegistry,
         requestId: () => "req-fallback",
         webSocketFactory: factory,
@@ -2678,10 +2922,14 @@ describe("WsRpcClient", () => {
 
     const openFrame = expectOpenFrame(sockets[0].sent[0]);
     expect(openFrame.manifest).toEqual({
-      "host.status": { major: 1, minor: 0 },
+      "host.status": { major: 1, minor: 0, supportedMajors: [1] },
     });
     expect(openFrame.optionalManifest).toEqual({
-      "host.syntheticFallback": { major: 1, minor: 0 },
+      "host.syntheticFallback": {
+        major: 1,
+        minor: 0,
+        supportedMajors: [1],
+      },
     });
 
     sockets[0].socket.fireMessage({
@@ -2750,6 +2998,7 @@ describe("WsRpcClient", () => {
     const ctx = makeRequestContext("t");
     const client = new BoundWsRpcClient(
       new WsRpcClient<typeof unsupportedRegistry>({
+        clientIdentity: TEST_CLIENT_IDENTITY,
         registry: unsupportedRegistry,
         requestId: () => "req-unsupported",
         webSocketFactory: factory,
@@ -2867,6 +3116,7 @@ describe("WsRpcClient", () => {
       const ctx = makeRequestContext("t");
       return new BoundWsRpcClient(
         new WsRpcClient<typeof fallbackSkewRegistry>({
+          clientIdentity: TEST_CLIENT_IDENTITY,
           registry: fallbackSkewRegistry,
           requestId: () => options.requestId,
           webSocketFactory: options.factory,
@@ -2895,10 +3145,14 @@ describe("WsRpcClient", () => {
 
       const openFrame = expectOpenFrame(sockets[0].sent[0]);
       expect(openFrame.manifest).toEqual({
-        "host.status": { major: 1, minor: 1 },
+        "host.status": { major: 1, minor: 1, supportedMajors: [1] },
       });
       expect(openFrame.optionalManifest).toEqual({
-        "host.syntheticSkewFallback": { major: 1, minor: 0 },
+        "host.syntheticSkewFallback": {
+          major: 1,
+          minor: 0,
+          supportedMajors: [1],
+        },
       });
 
       sockets[0].socket.fireMessage({
@@ -3166,6 +3420,7 @@ describe("WsRpcClient", () => {
       const ctx = makeRequestContext("t");
       return new BoundWsRpcClient(
         new WsRpcClient<Registry>({
+          clientIdentity: TEST_CLIENT_IDENTITY,
           registry,
           requestId: () => options.requestId,
           webSocketFactory: options.factory,
@@ -3270,7 +3525,11 @@ describe("WsRpcClient", () => {
 
       expect(sockets[0].sent).toHaveLength(2);
       const requestFrame = expectRequestFrame(sockets[0].sent[1]);
-      expect(requestFrame.schemaVersion).toEqual({ major: 1, minor: 0 });
+      expect(requestFrame.schemaVersion).toEqual({
+        major: 1,
+        minor: 0,
+        supportedMajors: [1],
+      });
       expect(requestFrame.params).toEqual({ message: "hi" });
 
       sockets[0].socket.fireMessage({
@@ -3381,7 +3640,11 @@ describe("WsRpcClient", () => {
 
       expect(sockets[0].sent).toHaveLength(2);
       const requestFrame = expectRequestFrame(sockets[0].sent[1]);
-      expect(requestFrame.schemaVersion).toEqual({ major: 1, minor: 1 });
+      expect(requestFrame.schemaVersion).toEqual({
+        major: 1,
+        minor: 1,
+        supportedMajors: [1],
+      });
       expect(requestFrame.params).toEqual({ message: "hi", loud: true });
 
       sockets[0].socket.fireMessage({

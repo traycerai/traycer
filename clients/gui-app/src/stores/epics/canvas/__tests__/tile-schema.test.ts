@@ -289,6 +289,22 @@ describe("parseTileRef / serializeTileRef", () => {
     );
   });
 
+  it("round-trips manager lifecycleOwner without origin enrichment", () => {
+    const managerTerminal: EpicTerminalRef = {
+      id: "term-manager",
+      instanceId: "inst-term-manager",
+      type: "terminal",
+      name: "manager row",
+      titleSource: "manual",
+      hostId: HOST,
+      cwd: "/worktrees/repo",
+      lifecycleOwner: "manager",
+    };
+    expect(parseTileRef(serializeTileRef(managerTerminal))).toEqual(
+      managerTerminal,
+    );
+  });
+
   it("drops origin and originProviderId for an ordinary shell ref (undefined, not omitted)", () => {
     const shellTerminal: EpicTerminalRef = {
       id: "term-shell",
@@ -472,7 +488,7 @@ describe("parseTileRef / serializeTileRef", () => {
     });
 
     expect(parsed).not.toBeNull();
-    expect(parsed?.name).toBe("traycer · Changes");
+    expect(parsed === null ? null : parsed.name).toBe("traycer · Changes");
   });
 
   it("rejects unknown tile kinds", () => {

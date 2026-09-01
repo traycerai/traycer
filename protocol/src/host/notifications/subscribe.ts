@@ -27,6 +27,7 @@
  */
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
+import { hostBusyBreakdownSchema } from "@traycer/protocol/host/status/contracts";
 
 /**
  * Awareness state field under which each host publishes its agent-activity
@@ -99,16 +100,24 @@ export const AGENT_ACTIVITY_HOST_ID_AWARENESS_FIELD = "agentActivityHostId";
  *   busy: boolean;
  *   busySessionCount: number;
  *   updateProgress: { state: "updating" | "failed"; error: string | null } | null;
+ *   busyBreakdown?: {
+ *     workingAgents: number;
+ *     activeTerminalAgents: number;
+ *     busyTerminals: number;
+ *   } | null;
  * }
  * ```
  *
- * These three used to ride the cloud `GET /api/v3/hosts` DTO, on a lease the
+ * These facts used to ride the cloud `GET /api/v3/hosts` DTO, on a lease the
  * host refreshed every 20 seconds. That lease is gone, and its replacement is
  * refreshed on the order of MINUTES — far too coarse for a session count that
  * gates a destructive "Apply now — ends N sessions" button. So they moved to
- * the two channels that are actually live: `host.status@1.1` for a client
+ * the two channels that are actually live: `host.status@1.2` for a client
  * holding a session to the host, and this field for a client that holds the
  * room but no session (the cross-host case — the My-Hosts-style surfaces).
+ * `busyBreakdown` is optional here (and nullable) because awareness is
+ * unnegotiated: an older host omits the key, a newer host that cannot split
+ * the total may send `null`, and both must still parse.
  *
  * ADDITIVE, and additive is the whole point: awareness entries are per-host and
  * unnegotiated, so a host that does not publish this is not an error state, it
@@ -130,8 +139,11 @@ export const HOST_RUNTIME_STATUS_AWARENESS_FIELD = "hostRuntimeStatus";
  *
  * Shared so the publishing host and the reading client cannot drift on a field
  * the stream contract's `major`/`minor` negotiation does not cover. Mirrors
- * `host.status@1.1`'s `updateProgress` arm exactly — the same fact reaching a
- * client by a second route must not arrive in a second shape.
+ * `host.status@1.2`'s `updateProgress` and `busyBreakdown` arms — the same
+ * fact reaching a client by a second route must not arrive in a second shape.
+ * `busyBreakdown` is `.optional()` here (and `.nullable()`) so an older host's
+ * entry, which never had the key, still parses; a negotiated RPC upgrade
+ * instead writes `null`.
  *
  * Deliberately NOT `.strict()`, unlike the `GET /api/v3/hosts` DTO. There,
  * strictness makes a server-side addition fail loudly, because both ends of a
@@ -149,6 +161,7 @@ export const hostRuntimeStatusAwarenessSchema = z.object({
       error: z.string().nullable(),
     })
     .nullable(),
+  busyBreakdown: hostBusyBreakdownSchema.nullable().optional(),
 });
 export type HostRuntimeStatusAwareness = z.infer<
   typeof hostRuntimeStatusAwarenessSchema

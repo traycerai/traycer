@@ -52,12 +52,15 @@ import {
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { worktreeRowKey } from "@/lib/worktree/worktree-row-key";
 import { isGitSelectable } from "@/lib/worktree/worktree-git-selectable";
-import { isWorkspaceResolvePending } from "@/lib/worktree/worktree-row-resolve-pending";
+import { isWorkspaceResolvePending } from "@traycer-clients/shared/worktree/worktree-row-state";
 import { withoutResolvedMissingRows } from "@/lib/worktree/worktree-row-resolved-missing";
 import { getBasename } from "@/lib/path/cross-platform-path";
 import { WorkspacePickerWithOpener } from "@/components/worktree/workspace-picker-with-opener";
 import { WorktreePickerHostSection } from "@/components/worktree/worktree-picker-host-section";
+import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { CapabilityGate } from "./capability-gate";
+import { GitDiffPanelInlineActions } from "./git-diff-panel-actions";
 import { DiffLoadingSkeleton } from "./diff-loading-skeleton";
 import { GitBindingsUnreadable } from "./empty-states/git-bindings-unreadable";
 import { GitHostUnreachable } from "./empty-states/git-host-unreachable";
@@ -448,10 +451,9 @@ function renderGitDiffPanelBody(input: {
   // produce) and no refetch (host queries disable every automatic recovery
   // route), so the panel stayed there across reloads: the pin is persisted.
   //
-  // The premise the whole pin design rests on is written down in
-  // `host-select-row-refused.ts` - "a dial that fails is recoverable where an
-  // un-pickable row is not". It only holds while the picker outlives the
-  // failure.
+  // The shared host-option model keeps an indeterminate route selectable: a
+  // dial that fails is recoverable where an un-pickable row is not. That only
+  // helps while the picker outlives the failure.
   return (
     <GitDiffPanelDegraded
       surfaceKey={input.surfaceKey}
@@ -548,8 +550,10 @@ interface GitDiffPanelDegradedProps {
  */
 function GitDiffPanelDegraded(props: GitDiffPanelDegradedProps): ReactNode {
   const [repoSwitcherOpen, setRepoSwitcherOpen] = useState(false);
+  const coarsePointer = useCoarsePointer();
   const setSelectedRepo = useGitPanelStore((s) => s.setSelectedRepo);
   const { epicId, onLatchHost } = props;
+  const isMobileViewport = useIsMobileViewport();
 
   const roots: ReadonlyArray<GitDiffRepoSwitcherRootInput> = useMemo(
     () =>
@@ -589,7 +593,12 @@ function GitDiffPanelDegraded(props: GitDiffPanelDegradedProps): ReactNode {
                 hostSection={
                   <WorktreePickerHostSection surfaceKey={props.surfaceKey} />
                 }
-                autoFocusSearch={repoSwitcherOpen}
+                // Opening the switcher is a tap to pick a workspace, not to
+                // type. A touch pointer would pay for the search's focus with
+                // a software keyboard over the list; a fine one gets
+                // type-to-filter for free. Focus stays on the still-mounted
+                // trigger either way.
+                autoFocusSearch={coarsePointer ? false : repoSwitcherOpen}
                 triggerClassName={undefined}
                 contentClassName={undefined}
                 triggerTestId="git-diff-repo-switcher-trigger"
@@ -600,6 +609,12 @@ function GitDiffPanelDegraded(props: GitDiffPanelDegradedProps): ReactNode {
             hostClient={props.client}
           />
         </div>
+        {/* Degraded keeps the overflow menu for the same reason it keeps the
+            picker: desktop's panel header carries it in every state, and the
+            phone has no other home for it. */}
+        {isMobileViewport ? (
+          <GitDiffPanelInlineActions epicId={epicId} />
+        ) : null}
       </div>
       {/* The bodies below are written as `h-full` blocks (they used to be the
           panel's ONLY child). A percentage height needs a definite parent, so
@@ -643,10 +658,16 @@ function GitDiffPanelLoaded(props: GitDiffPanelLoadedProps): ReactNode {
   const { selected, selectedRootRow, epicId, onLatchHost, surfaceKey, client } =
     props;
   const [repoSwitcherOpen, setRepoSwitcherOpen] = useState(false);
+  const coarsePointer = useCoarsePointer();
   const ignoreWhitespace = useSettingsStore(
     (s) => s.diffViewerPreferences.ignoreWhitespace,
   );
   const setSelectedRepo = useGitPanelStore((s) => s.setSelectedRepo);
+  // Below md the epic sidebar - and with it this panel's header Actions slot -
+  // is never mounted; the tab switcher shows the body alone. The overflow menu
+  // moves into the body header there so the layout toggle and the manual
+  // refresh stay reachable, and stays out of it wherever the header exists.
+  const isMobileViewport = useIsMobileViewport();
 
   // Live parent status for the active root: drives the nested-snapshot refetch
   // (its fingerprint is the change token) and the immediate pre-snapshot render.
@@ -798,7 +819,12 @@ function GitDiffPanelLoaded(props: GitDiffPanelLoadedProps): ReactNode {
                 hostSection={
                   <WorktreePickerHostSection surfaceKey={surfaceKey} />
                 }
-                autoFocusSearch={repoSwitcherOpen}
+                // Opening the switcher is a tap to pick a workspace, not to
+                // type. A touch pointer would pay for the search's focus with
+                // a software keyboard over the list; a fine one gets
+                // type-to-filter for free. Focus stays on the still-mounted
+                // trigger either way.
+                autoFocusSearch={coarsePointer ? false : repoSwitcherOpen}
                 triggerClassName={undefined}
                 contentClassName={undefined}
                 triggerTestId="git-diff-repo-switcher-trigger"
@@ -819,6 +845,9 @@ function GitDiffPanelLoaded(props: GitDiffPanelLoadedProps): ReactNode {
           className={undefined}
           compact={false}
         />
+        {isMobileViewport ? (
+          <GitDiffPanelInlineActions epicId={epicId} />
+        ) : null}
       </div>
       <CapabilityGate
         hostId={selectedRootRow.hostId}

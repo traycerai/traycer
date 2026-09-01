@@ -5,6 +5,8 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { FolderPlus } from "lucide-react";
+import { Slot } from "radix-ui";
 import {
   Popover,
   PopoverContent,
@@ -15,6 +17,8 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { HoverPreviewCard } from "@/components/ui/hover-preview-card";
 import { Kbd } from "@/components/ui/kbd";
+import { ShortcutHint } from "@/components/ui/shortcut-hint";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
 import type { WorktreeWorkspacesRefresh } from "@/hooks/worktree/use-worktree-workspaces-refresh";
 import { isEditableEventTarget } from "@/lib/keybindings/editable-target";
@@ -28,6 +32,8 @@ import {
   WorkspaceFolderRows,
 } from "./workspace-folder-rows";
 import { WorkspaceFolderHoverList } from "./workspace-folder-hover-list";
+import { WorkspaceFolderPreviewSheet } from "./workspace-folder-preview-sheet";
+import { useWorkspaceFolderPreviewReveal } from "./use-workspace-folder-preview-reveal";
 import { WorkspaceSummaryTrigger } from "./workspace-summary-trigger";
 import type { WorkspaceRunItem } from "./workspace-run-item";
 
@@ -84,7 +90,7 @@ function useExternalRefreshDeadline(args: {
 /**
  * Resting folder control shared by landing and in-epic composers. It is the
  * single owner of the empty-state shortcut: resolved + no folders renders
- * "Add folder" directly instead of a "No workspace linked" summary popover.
+ * "Add folder" directly instead of a "No folder attached" summary popover.
  */
 interface WorkspaceRefreshUi {
   readonly checkedAt: number | null;
@@ -142,7 +148,11 @@ export function WorkspaceFolderSummaryControl(props: {
   readonly onUpdate: (() => void) | null;
   readonly updateEnabled: boolean;
   readonly updatePending: boolean;
+  /** Uncommitted workspace draft on the summary chip. */
+  readonly draftPending?: boolean;
   readonly onDiscardStaged: (() => void) | null;
+  /** True while a captured Update/teardown run is in flight. */
+  readonly discardDisabled: boolean;
   readonly onEditEnvironment: (workspacePath: string) => void;
   /**
    * Re-derives these folders from disk, or `null` on a surface with no host to
@@ -154,12 +164,16 @@ export function WorkspaceFolderSummaryControl(props: {
   readonly refresh: WorktreeWorkspacesRefresh | null;
   readonly popoverTestId: string;
   readonly popoverSide: "top" | "bottom";
+  readonly recentWorkspaces: ReactNode;
+  readonly recentWorkspaceCount: number;
+  readonly moveToRecent: boolean;
 }) {
   const itemCount = props.items.length;
   const [overlayState, setOverlayState] = useState<SummaryOverlayState>({
     workspacePopoverOpen: false,
     summaryHoverOpen: false,
   });
+  const preview = useWorkspaceFolderPreviewReveal();
   const refreshUi = useWorkspaceRefreshUi(props.refresh);
   const triggerRefresh = refreshUi.triggerRefresh;
   const canRefresh = refreshUi.canRefresh;
@@ -254,12 +268,17 @@ export function WorkspaceFolderSummaryControl(props: {
         items={props.items}
         readOnly
         bindingResolved={props.bindingResolved}
+        draftPending={props.draftPending === true}
         className="max-w-full"
       />
     );
   }
 
-  if (itemCount === 0 && props.bindingResolved) {
+  if (
+    itemCount === 0 &&
+    props.bindingResolved &&
+    props.recentWorkspaceCount === 0
+  ) {
     return (
       <AddFolderButton
         onAddFolder={handleExternalAddFolder}
@@ -270,18 +289,47 @@ export function WorkspaceFolderSummaryControl(props: {
     );
   }
 
-  const trigger = (
+  const emptyRecentTrigger = itemCount === 0 && props.bindingResolved;
+  const emptyRecentDisabled = props.addFolderPending || props.addFolderDisabled;
+  const trigger = emptyRecentTrigger ? (
+    <button
+      type="button"
+      data-testid="folder-add"
+      disabled={emptyRecentDisabled}
+      className="inline-flex w-fit items-center gap-2 rounded-md px-1.5 py-1 text-ui-sm text-muted-foreground outline-none transition-[background-color,color] hover:bg-foreground/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
+    >
+      {props.addFolderPending ? (
+        <AgentSpinningDots
+          className="text-current"
+          testId={undefined}
+          variant="dots"
+        />
+      ) : (
+        <FolderPlus className="size-4" aria-hidden />
+      )}
+      <span>Add folder</span>
+    </button>
+  ) : (
     <WorkspaceSummaryTrigger
       items={props.items}
       readOnly={false}
       bindingResolved={props.bindingResolved}
+      draftPending={props.draftPending === true}
       className="justify-start overflow-hidden"
     />
   );
   // Controlled hover, gated on the click-open popover: a HoverCard is purely
   // hover-driven and (unlike a Tooltip) does not dismiss when the trigger is
   // clicked, so the preview must be forced closed while the picker is open.
-  const popoverTrigger = (
+  const popoverTrigger = emptyRecentTrigger ? (
+    <EmptyRecentFolderTrigger
+      trigger={trigger}
+      disabled={emptyRecentDisabled}
+      disabledReason={
+        props.addFolderDisabled ? props.addFolderDisabledReason : null
+      }
+    />
+  ) : (
     <HoverPreviewCard
       content={<WorkspaceFolderHoverList items={props.items} />}
       side={props.popoverSide}
@@ -295,11 +343,16 @@ export function WorkspaceFolderSummaryControl(props: {
         });
       }}
     >
-      <PopoverTrigger asChild>{trigger}</PopoverTrigger>
+      <PopoverTrigger asChild>
+        {/* Innermost, so the press guard runs BEFORE the popover's own open
+            handler and can prevent it - `Slot` composes a child's handler
+            ahead of the slot's. */}
+        <Slot.Root {...preview.triggerProps}>{trigger}</Slot.Root>
+      </PopoverTrigger>
     </HoverPreviewCard>
   );
 
-  return (
+  const picker = (
     <Popover
       open={overlayState.workspacePopoverOpen}
       onOpenChange={(open) => {
@@ -326,9 +379,6 @@ export function WorkspaceFolderSummaryControl(props: {
         // folder details" - an error toast the user never asked for, next to a
         // Refresh button correctly rendered disabled.
         if (open && canRefresh) triggerRefresh();
-        if (!open && props.onDiscardStaged !== null) {
-          props.onDiscardStaged();
-        }
       }}
     >
       {popoverTrigger}
@@ -363,10 +413,15 @@ export function WorkspaceFolderSummaryControl(props: {
             onUpdate={props.onUpdate === null ? null : handleUpdate}
             updateEnabled={props.updateEnabled}
             updatePending={props.updatePending}
+            onDiscardStaged={props.onDiscardStaged}
+            discardDisabled={props.discardDisabled}
+            draftPending={props.draftPending === true}
             onEditEnvironment={props.onEditEnvironment}
             readOnly={false}
             nestedInPopover={dialogBoundaryEl !== null}
             bindingResolved={props.bindingResolved}
+            recentWorkspaces={props.recentWorkspaces}
+            moveToRecent={props.moveToRecent}
           />
         </div>
         {props.refresh === null ? null : (
@@ -381,6 +436,42 @@ export function WorkspaceFolderSummaryControl(props: {
         )}
       </PopoverContent>
     </Popover>
+  );
+  return (
+    <>
+      {picker}
+      <WorkspaceFolderPreviewSheet
+        items={props.items}
+        open={preview.open}
+        onClose={preview.close}
+      />
+    </>
+  );
+}
+
+function EmptyRecentFolderTrigger(props: {
+  readonly trigger: ReactNode;
+  readonly disabled: boolean;
+  readonly disabledReason: string | null;
+}): ReactNode {
+  if (!props.disabled) {
+    return <PopoverTrigger asChild>{props.trigger}</PopoverTrigger>;
+  }
+  if (props.disabledReason === null) return props.trigger;
+  return (
+    <TooltipWrapper
+      label={props.disabledReason}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      <span
+        className="inline-flex w-fit"
+        data-testid="folder-add-disabled-reason"
+      >
+        {props.trigger}
+      </span>
+    </TooltipWrapper>
   );
 }
 
@@ -459,7 +550,9 @@ function WorkspaceRefreshFooter(props: {
             />
           ) : null}
           Refresh
-          <Kbd className="ml-0.5 font-mono">R</Kbd>
+          <ShortcutHint>
+            <Kbd className="ml-0.5 font-mono">R</Kbd>
+          </ShortcutHint>
         </Button>
       </div>
     </div>

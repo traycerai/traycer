@@ -4,8 +4,8 @@ export {
   type IRemoteSession,
   type RemoteSessionEvidence,
   type RemoteSessionOptions,
-  type RemoteSessionTiming,
 } from "./session";
+export type { WakeProbeTuning } from "./session-client-params";
 export type {
   RemoteSessionAuth,
   RemoteSessionAuthRecoveryOutcome,

@@ -477,6 +477,7 @@ describe("<WindowsBridgeProvider />", () => {
           settings: null,
           composerMode: null,
           workspace: null,
+          closed: null,
         },
       ],
       activeLandingDraftId: "draft-a",
@@ -700,6 +701,7 @@ describe("<WindowsBridgeProvider />", () => {
         settings: null,
         composerMode: "chat",
         workspace: emptyLandingDraftWorkspaceSnapshot(),
+        closed: false,
       },
     ]);
     expect(typeof latestDrafts?.[0].lastTouchedAt).toBe("number");
@@ -753,6 +755,7 @@ describe("<WindowsBridgeProvider />", () => {
         settings: null,
         composerMode: "chat",
         workspace: emptyLandingDraftWorkspaceSnapshot(),
+        closed: false,
       },
     ]);
     expect(typeof flushedDrafts?.[0].lastTouchedAt).toBe("number");

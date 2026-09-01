@@ -5,6 +5,7 @@ import type { SnapshotSourceBlockIds } from "@/lib/chat/snapshot-source-block-id
 import type { DesktopJsonValue } from "@/lib/windows/types";
 import type { GitStage } from "@traycer/protocol/host";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
+import type { BrowserViewViewportPresetId } from "@traycer-clients/shared/platform/browser-view";
 import type {
   EdgeDropPosition,
   SizesByGroupId,
@@ -12,7 +13,9 @@ import type {
 } from "./tile-tree";
 import {
   TILE_KIND_BLANK,
+  TILE_KIND_BROWSER_SESSION,
   TILE_KIND_COMM_GRAPH,
+  TILE_KIND_DELETED_ARTIFACTS,
   TILE_KIND_GIT_DIFF,
   TILE_KIND_MANAGED_COMMAND_OUTPUT,
   TILE_KIND_PR_DETAIL,
@@ -60,6 +63,18 @@ export const isRecordBackedEpicNodeKind =
     review: true,
   });
 
+/**
+ * Per-epic remembered PiP position and size. Persisted with the canvas
+ * store so geometry survives GUI relaunch; everything else about the PiP
+ * is in-memory and resets.
+ */
+export interface EpicPipGeometry {
+  readonly anchorX: number;
+  readonly anchorY: number;
+  readonly previewWidth: number;
+  readonly previewHeight: number;
+}
+
 export const WORKSPACE_FILE_TAB_KIND = "workspace-file" as const;
 export type WorkspaceFileTabKind = typeof WORKSPACE_FILE_TAB_KIND;
 export type OpenableCanvasTabKind = OpenableEpicNodeKind | WorkspaceFileTabKind;
@@ -68,8 +83,8 @@ export type TerminalTitleSource = "default" | "manual";
 /**
  * Reference to a record-backed epic artifact as it lives inside a tab.
  * Stored as a flat shape (not a full record) so canvas state stays stable
- * when the underlying Y.Doc projection evolves. Terminal tabs use
- * `EpicTerminalRef` instead.
+ * when the underlying Y.Doc projection evolves. Renderer-local terminal and
+ * browser tabs use their own ref shapes instead.
  *
  * `hostId` is the host (== device) the artifact lives on. Per
  * CLAUDE.md, chat/terminal artifacts are bound to a host for life;
@@ -141,6 +156,26 @@ interface EpicTerminalRefBase {
    * provider it is standing in for.
    */
   readonly originProviderId?: ProviderId;
+  /**
+   * Host-authoritative lifetime owner from `terminal.list@2.3`. `manager`
+   * means this presentation must stay on the live-session path and never
+   * enter `terminal.plain.importLegacy`. `registry` is a durable/plain
+   * shadow. Absent on pre-v2.3 persisted tiles and on refs that did not
+   * come from an updated-host list.
+   */
+  readonly lifecycleOwner?: "registry" | "manager";
+}
+
+/** Renderer-local view pointer to one host-owned epic browser tab. */
+export interface BrowserSessionTileRef {
+  readonly id: string;
+  readonly instanceId: string;
+  readonly type: typeof TILE_KIND_BROWSER_SESSION;
+  readonly name: string;
+  readonly hostId: string;
+  readonly sessionId: string;
+  readonly tabId: string;
+  readonly viewportPreset: BrowserViewViewportPresetId;
 }
 
 /** Pre-migration ref. These semantic fields are import/old-host evidence only. */
@@ -181,10 +216,12 @@ export interface UnsupportedEpicTerminalRef extends EpicTerminalRefBase {
 }
 
 export type SupportedEpicTerminalRef =
-  LegacyEpicTerminalRef | HostEpicTerminalRef;
+  | LegacyEpicTerminalRef
+  | HostEpicTerminalRef;
 
 export type EpicTerminalRef =
-  SupportedEpicTerminalRef | UnsupportedEpicTerminalRef;
+  | SupportedEpicTerminalRef
+  | UnsupportedEpicTerminalRef;
 
 export function isHostEpicTerminalRef(
   ref: EpicTerminalRef,
@@ -212,6 +249,19 @@ export function isImportExemptEpicTerminalOrigin(
   origin: EpicTerminalRef["origin"],
 ): boolean {
   return origin === "provider-login" || origin === "setup";
+}
+
+/**
+ * Import exemption for one presentation. Wire `lifecycleOwner` is the
+ * authority when present: a manager row stays manager-owned even with an
+ * empty origin cache, and a registry row still imports even if a stale
+ * setup/provider-login cache would otherwise mark it exempt. Absent
+ * lifecycleOwner falls back to origin enrichment for pre-v2.3 tiles.
+ */
+export function isImportExemptEpicTerminalRef(ref: EpicTerminalRef): boolean {
+  if (ref.lifecycleOwner === "manager") return true;
+  if (ref.lifecycleOwner === "registry") return false;
+  return isImportExemptEpicTerminalOrigin(ref.origin);
 }
 
 export function existingSessionOriginFields(
@@ -345,6 +395,21 @@ export interface SnapshotSegmentDiffTilePayload {
   readonly chatId: string;
   readonly sourceBlockIds: SnapshotSourceBlockIds;
   readonly filePath: string;
+  /**
+   * The endpoints the source blocks had when the tile was opened - the FALLBACK
+   * for when re-reading those blocks from the chat session no longer finds
+   * them, which on a windowed transcript is the ordinary state of any row old
+   * enough to have been evicted.
+   *
+   * Not part of the tile's identity (that stays `chatId` + `sourceBlockIds`),
+   * so two opens of the same edit still dedupe to one tile whatever their
+   * captured endpoints say.
+   *
+   * `null` for a tile persisted before this field existed. Those degrade
+   * exactly as every segment tile did: block lookup or nothing.
+   */
+  readonly beforeHash: string | null;
+  readonly afterHash: string | null;
 }
 
 export interface SnapshotCumulativeDiffTilePayload {
@@ -369,7 +434,8 @@ export interface SnapshotHashDiffTilePayload {
 }
 
 export type GitDiffTilePayload =
-  GitDiffFileTilePayload | GitDiffBundleTilePayload;
+  | GitDiffFileTilePayload
+  | GitDiffBundleTilePayload;
 
 export type SnapshotDiffTilePayload =
   | SnapshotSegmentDiffTilePayload
@@ -454,6 +520,23 @@ export interface CommGraphTileRef {
   readonly hostId: string;
   readonly epicId: string;
   readonly view: CommGraphTileViewState;
+}
+
+/**
+ * One recovery surface for all retained deletions in an epic.
+ *
+ * The content id is derived from the epic so reopening focuses the existing
+ * tile. Unlike the communication graph, the recovery RPCs are served by the
+ * epic session's host, so `hostId` is a real lifetime binding captured when
+ * the tile first opens.
+ */
+export interface DeletedArtifactsTileRef {
+  readonly id: string;
+  readonly instanceId: string;
+  readonly type: typeof TILE_KIND_DELETED_ARTIFACTS;
+  readonly name: string;
+  readonly hostId: string;
+  readonly epicId: string;
 }
 
 /**
@@ -556,10 +639,12 @@ export interface PrDiffTileRef {
 
 export type EpicCanvasTileRef =
   | EpicNodeRef
+  | BrowserSessionTileRef
   | GitDiffTileRef
   | SnapshotDiffTileRef
   | ManagedCommandOutputTileRef
   | CommGraphTileRef
+  | DeletedArtifactsTileRef
   | PublishedChatTileRef
   | PrDetailTileRef
   | PrDiffTileRef
@@ -589,10 +674,22 @@ export function isCommGraphTileRef(
   return value.type === TILE_KIND_COMM_GRAPH;
 }
 
+export function isDeletedArtifactsTileRef(
+  value: EpicCanvasTileRef,
+): value is DeletedArtifactsTileRef {
+  return value.type === TILE_KIND_DELETED_ARTIFACTS;
+}
+
 export function isGitDiffTileRef(
   value: EpicCanvasTileRef,
 ): value is GitDiffTileRef {
   return value.type === TILE_KIND_GIT_DIFF;
+}
+
+export function isBrowserSessionTileRef(
+  value: EpicCanvasTileRef,
+): value is BrowserSessionTileRef {
+  return value.type === TILE_KIND_BROWSER_SESSION;
 }
 
 export function isWorkspaceFileRef(

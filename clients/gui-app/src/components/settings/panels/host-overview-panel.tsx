@@ -26,6 +26,7 @@ import {
   HostOverviewNotice,
   HostOverviewUpdateProgress,
 } from "@/components/settings/panels/host-overview-status-card";
+import { HostOverviewOperationCard } from "@/components/settings/panels/host-overview-operation-card";
 import { HostOverviewUpdatesRegion } from "@/components/settings/panels/host-overview-updates";
 import { useHostOverviewUpdates } from "@/components/settings/panels/host-overview-updates-state";
 import { useOverviewOsService } from "@/components/settings/panels/host-overview-os-service";
@@ -34,14 +35,20 @@ import {
   customNameFromIdentityDraft,
   describeOverviewDegrade,
   overviewMethodDegrade,
+  resolveOverviewMethodDegrade,
   type OverviewDegradeReason,
 } from "@/components/settings/panels/host-overview-model";
 import {
+  liveBusyBreakdown,
   liveBusySessionCount,
+  liveHostBusy,
+  settledBusyBreakdown,
   settledBusySessionCount,
+  settledHostBusy,
 } from "@/components/settings/panels/my-hosts-model";
 import { persistedDraftFromIdentity } from "@/components/settings/panels/host-settings-panel-model";
 import { LocalPackageManagerUpgradeHint } from "@/components/settings/panels/host-settings-package-manager-upgrade-hint";
+import { ArtifactVersionSettingsSection } from "@/components/settings/panels/artifact-version-settings-section";
 import { useRunnerConvergeReady } from "@/hooks/runner/use-runner-converge-ready-mutation";
 import { useRunnerHostRemovalStateQuery } from "@/hooks/runner/use-runner-host-removal-state-query";
 import { useRunnerReinstallTraycer } from "@/hooks/runner/use-runner-reinstall-traycer-mutation";
@@ -55,6 +62,7 @@ import {
   useHostOverviewStatusQuery,
   useHostRestart,
   useHostServiceStatusQuery,
+  useRefreshOverviewStatusOnSessionActivity,
 } from "@/components/settings/panels/host-overview-rpc";
 import { newTransitionId } from "@/components/settings/panels/host-overview-transition-id";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
@@ -66,6 +74,13 @@ import {
 } from "@/components/settings/panels/host-service-write-latch-store";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import {
+  holdsLifecycleGate,
+  projectFleetUpdateView,
+  UNKNOWN_FLEET_UPDATE_VIEW,
+} from "@/lib/host/fleet-update/fleet-update-view";
+import { observationFromCanonicalRead } from "@/lib/host/fleet-update/canonical-status-observation";
+import { useActiveUpdatePollAccelerator } from "@/hooks/host/use-active-update-poll-accelerator";
 import {
   toastHostRestartDeclined,
   toastHostRestartRequested,
@@ -82,7 +97,15 @@ import type { HostScopeOption } from "@/components/settings/host-scope/host-scop
 import type { HostIdentity } from "@traycer/protocol/host/identity/index";
 import type { HostRestartBusyVerdict } from "@traycer/protocol/host/restart/index";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
-import type { HostStatusUpdateProgress } from "@traycer/protocol/host/status/index";
+import type {
+  HostBusyBreakdown,
+  HostStatusUpdateProgress,
+  HostStatusUpdateOperation,
+} from "@traycer/protocol/host/status/index";
+
+// Matches the RPC Doctor card's own tail size, so a report read over the
+// bridge shows the same amount of log as one read over `diagnostics.logs.tail`.
+const DOCTOR_BRIDGE_LOG_TAIL_LINES = 200;
 
 /** How long an accepted install may hold the page before progress appears. */
 const UPDATE_INSTALL_ACCEPTED_LATCH_MS = 60_000;
@@ -207,10 +230,38 @@ export function HostOverviewPanel(props: {
     onError: () => toast.error("Couldn't copy the host ID"),
   });
 
+  // The pre-rework recovery console offered Force restart when the host
+  // denied the shutdown claim (OSS #1156 dropped the offer); this is that
+  // offer's home on the one-page Overview. LOCAL machine with a bridge only,
+  // by the nature of the transport rather than a scope rule: the bridge
+  // respawn recycles THIS machine's host process, so surfacing it for a
+  // remote host would kill the wrong process. The claim-gated `host.restart`
+  // stays the default path for every host; force is the explicit consent to
+  // end the sessions the claim protects.
+  const management = useRunnerHostOrNull()?.hostManagement ?? null;
+  // The host a force offer would be ABOUT, or `null` when this page has no
+  // force route at all: the respawn goes over THIS machine's CLI bridge, so it
+  // exists for the local host with a bridge attached and for nothing else. A
+  // remote host has no transport that can kill its process.
+  //
+  // One value rather than a boolean gate beside an id, because the two must
+  // never disagree - the id IS the reason the route exists, and reading them
+  // apart is how an offer ends up pinned to a host the gate already refused.
+  const forceRestartLocalHostId =
+    host !== null &&
+    host.isLocalMachine &&
+    props.hasLocalBridge &&
+    management !== null
+      ? host.hostId
+      : null;
+
   const {
     identity: identityDegrade,
     identitySet: identitySetDegrade,
     restart: restartDegrade,
+    restartViaForceFallback,
+    restartSupported,
+    logsSupported,
     doctor: doctorDegrade,
     installInfo: installInfoDegrade,
     updateCheck: updateCheckDegrade,
@@ -218,9 +269,20 @@ export function HostOverviewPanel(props: {
     serviceStatus: serviceStatusDegrade,
     serviceRegister: serviceRegisterDegrade,
     serviceDeregister: serviceDeregisterDegrade,
-  } = useOverviewCapabilities(scope.hostId);
+  } = useOverviewCapabilities(scope.hostId, {
+    maintenanceFallback: scope.localMaintenanceFallback,
+    restartForceRoute: forceRestartLocalHostId !== null,
+  });
 
-  const statusQuery = useHostOverviewStatusQuery({ client, enabled: usable });
+  const statusQuery = useHostOverviewStatusQuery({
+    client,
+    enabled: usable,
+    hostId: scope.hostId,
+  });
+  useRefreshOverviewStatusOnSessionActivity({
+    hostId: scope.hostId,
+    enabled: usable,
+  });
   const identityQuery = useHostIdentityQuery({
     client,
     enabled: usable && identityDegrade === null,
@@ -254,15 +316,6 @@ export function HostOverviewPanel(props: {
   });
   const { identity, displayName } = view;
 
-  // The pre-rework recovery console offered Force restart when the host
-  // denied the shutdown claim (OSS #1156 dropped the offer); this is that
-  // offer's home on the one-page Overview. LOCAL machine with a bridge only,
-  // by the nature of the transport rather than a scope rule: the bridge
-  // respawn recycles THIS machine's host process, so surfacing it for a
-  // remote host would kill the wrong process. The claim-gated `host.restart`
-  // stays the default path for every host; force is the explicit consent to
-  // end the sessions the claim protects.
-  const management = useRunnerHostOrNull()?.hostManagement ?? null;
   // The busy verdict, as the offer it is: `host.restart` refused, and force is
   // the explicit consent to end the sessions it refused to interrupt.
   //
@@ -301,13 +354,35 @@ export function HostOverviewPanel(props: {
       if (management === null) {
         return Promise.reject(new Error("No local host bridge is available."));
       }
-      return management.restartHost();
+      // The REFUSING respawn, for both of this page's callers — the busy-force
+      // offer and the fallback confirm. `restartHost()` queues behind whatever
+      // owns the desktop's exclusive mutation lane, which the tray and menu
+      // keep deliberately — they are RECOVERY surfaces, reachable when this
+      // page cannot render, so they must never learn to refuse — and which is
+      // wrong for a restart someone is watching: an install or service cycle
+      // running underneath would swallow the click and fire the kill
+      // afterwards, against a host in a state they never saw. Force overrides
+      // the HOST's veto — a live claim, busy work — never the desktop's own
+      // serialization. The refusal comes
+      // back as `declined`, which this mutation already renders as
+      // information rather than an error.
+      // The host this page is scoped to, not whatever is local by the time
+      // main handles it: `forceRestartLocalHostId` is this machine's host as
+      // this render saw it, and main refuses if that is no longer true.
+      const expectedHostId = forceRestartLocalHostId;
+      if (expectedHostId === null) {
+        return Promise.reject(new Error("No local host bridge is available."));
+      }
+      return management.restartHostIfIdle({ expectedHostId });
     },
     onSuccess: (result) => {
       // The offer is answered either way — a `declined` respawn performed
       // nothing, but it did ANSWER, and the toast below carries what happened.
-      // Leaving the dialog up would re-offer a decision already made.
+      // Leaving the dialog up would re-offer a decision already made. The
+      // fallback confirm (a capability-`false` host's Restart dispatches the
+      // respawn from the confirm dialog itself) closes for the same reason.
       setForceRestartOffer(null);
+      setRestartConfirmOpen(false);
       // `declined` survives even a forced respawn (removed-by-user, another
       // process holds the management lock) - informational, not an error.
       if (result.kind === "declined") {
@@ -318,9 +393,40 @@ export function HostOverviewPanel(props: {
     },
     onError: (error) => {
       setForceRestartOffer(null);
+      setRestartConfirmOpen(false);
       toastFromRunnerError(error, "Couldn't restart host");
     },
   });
+  // The Doctor sheet's log read for a host with no `diagnostics.*` family —
+  // every released host below the maintenance floor, which is exactly the
+  // population this fallback serves. Same file, read from this machine
+  // instead of asked for over an RPC the host does not have, so the report's
+  // Show logs button keeps working rather than becoming a refusal. Keyed on
+  // the shared runner key so it dedupes with any other read of this log.
+  const bridgeDoctorLogs = useMutation<readonly string[]>({
+    mutationKey: runnerMutationKeys.hostDoctorBridgeLogs(),
+    mutationFn: async () => {
+      if (management === null) {
+        throw new Error("No local host bridge is available.");
+      }
+      // Fenced on the SAME id the page's other bridge writes use. Without it
+      // this read is the one place a replaced local host still gets rendered
+      // under the old host's report — a log is host-scoped content, and the
+      // fallback exists precisely for hosts too old to answer for themselves.
+      // `null` means this page's host is not this machine, where a local log
+      // has nothing to do with the report; refused rather than read, exactly
+      // like `restartHostIfIdle`'s own null arm above.
+      if (forceRestartLocalHostId === null) {
+        throw new Error("This page's host is not this computer.");
+      }
+      const result = await management.getHostLogs({
+        tailLines: DOCTOR_BRIDGE_LOG_TAIL_LINES,
+        expectedHostId: forceRestartLocalHostId,
+      });
+      return result.tail.length === 0 ? [] : result.tail.split("\n");
+    },
+  });
+
   // CACHE-derived, not observer-derived, for the page-wide gate. The panel's
   // inner tree is keyed per scope, so switching hosts unmounts this
   // component and a remounted `useMutation` observer starts idle even while
@@ -330,21 +436,6 @@ export function HostOverviewPanel(props: {
   // under this key, which survives any number of remounts.
   const forceRestartInFlight =
     useIsMutating({ mutationKey: runnerMutationKeys.hostRestart() }) > 0;
-  // The host a force offer would be ABOUT, or `null` when this page has no
-  // force route at all: the respawn goes over THIS machine's CLI bridge, so it
-  // exists for the local host with a bridge attached and for nothing else. A
-  // remote host has no transport that can kill its process.
-  //
-  // One value rather than a boolean gate beside an id, because the two must
-  // never disagree - the id IS the reason the route exists, and reading them
-  // apart is how an offer ends up pinned to a host the gate already refused.
-  const forceRestartLocalHostId =
-    host !== null &&
-    host.isLocalMachine &&
-    props.hasLocalBridge &&
-    management !== null
-      ? host.hostId
-      : null;
   // The live local host at the instant of a CLICK, not as of the last committed
   // render. A host identity change arrives as a store update, so a press
   // processed against the previous render would compare stale against stale and
@@ -414,7 +505,93 @@ export function HostOverviewPanel(props: {
   // `updating` is the only state that means "still going". `failed` is terminal
   // and deliberately leaves the controls live, because that is exactly when
   // someone needs to retry.
-  const updateInFlight = view.updateProgress?.state === "updating";
+  // ONE projection, used by both the lifecycle gate below and the card that
+  // renders it — deriving these separately is how a page ends up locked for a
+  // state it is simultaneously describing as parked.
+  //
+  // ⚠ THE FRESHNESS HERE IS DERIVED, NOT ASSERTED, and the previous version of
+  // these lines is why that is worth a paragraph. It built the observation with
+  // `freshUntilMs: Number.POSITIVE_INFINITY` and `connected: true`, and read
+  // `nowMs` from `dataUpdatedAt` — three ways of saying "assume this reading is
+  // current" — on the theory that the page's own live-source helpers already
+  // demoted a retained read. They demoted the BUSY snapshot. Nothing applied
+  // them here, so the two projections read one retained response and disagreed
+  // about it.
+  //
+  // What that cost: a host that reported `downloading` and then went
+  // unreachable kept projecting `downloading` forever. `holdsLifecycleGate`
+  // stayed true, an open restart confirmation closed itself, the Doctor card's
+  // bridge restart stayed refused — on a host whose only way back was the
+  // restart being blocked. Same class as the parked-attempt gate this page
+  // already fixed: a fact consumed outside the conditions that keep it true.
+  //
+  // `observationFromCanonicalRead` now carries those conditions with the fact,
+  // and it is the same function the landing banner and the fleet's coalesced
+  // reads use, so a fourth staleness rule cannot appear here by accident.
+  const operationObservation =
+    view.updateOperation === null || statusQuery.data === undefined
+      ? null
+      : observationFromCanonicalRead({
+          hostId: scope.hostId ?? "",
+          status: statusQuery.data,
+          dataUpdatedAt: statusQuery.dataUpdatedAt,
+          health: {
+            isError: statusQuery.isError,
+            fetchStatus: statusQuery.fetchStatus,
+            isStale: statusQuery.isStale,
+            hasLiveSource: usable,
+          },
+          source: "selected",
+        });
+  const operationView =
+    operationObservation === null
+      ? null
+      : projectFleetUpdateView({
+          observation: operationObservation,
+          // `dataUpdatedAt` rather than a clock: the demotion this page needs
+          // travels in the deadline, which `observationFromCanonicalRead`
+          // derives from the query's own health and stamps as already expired
+          // for a retained, failed, paused or aged read. `nowMs` only has to be
+          // a finite instant at or after the observation for that to apply, and
+          // a render-time clock would be both impure and less reactive — it
+          // advances only when something else re-renders this page, whereas the
+          // health signals move the query's state and notify on their own.
+          nowMs: statusQuery.dataUpdatedAt,
+          connected: usable,
+        });
+  // The same 2s acceleration the landing banner runs, for the same attempt.
+  // Not a correctness mechanism — freshness is settled above — but a
+  // CONSISTENCY one: without it this card renders the identical operation off
+  // the 10s baseline while the banner shows it at 2s, so the same download
+  // advances at two different rates depending on which surface you are looking
+  // at, and the slower one reads as stalled. `warrantsFastPoll` bounds it to
+  // operations that are genuinely moving.
+  useActiveUpdatePollAccelerator({
+    hostId: scope.hostId,
+    view: operationView ?? UNKNOWN_FLEET_UPDATE_VIEW,
+  });
+  // ATTEMPT-AWARE, with the coarse field as the fallback — and the difference
+  // is a lockout bug, not a refinement.
+  //
+  // Ticket 04's coarse derivation maps a PARKED attempt
+  // (`waiting-for-work`/`waiting-to-activate`) to `{state:"updating"}`, which is
+  // right for what that field means. But this gate reads "updating" as "a
+  // mutation is in flight, lock the page", and `waiting-to-activate` is designed
+  // to survive a reboot and sit for days waiting for a restart. Read off the
+  // coarse field alone, a parked update would close the restart confirmation
+  // (below), refuse the Doctor card's bridge restart, and lock the service verbs
+  // — for as long as the park lasted, with the restart it is waiting for being
+  // the very thing it blocked.
+  //
+  // `holdsLifecycleGate` answers the narrower question (`execution === "active"`)
+  // that this gate actually wants. For a pre-@1.3 peer `updateOperation` is
+  // `null`, the projection is `unknown`, and we fall back to the coarse field —
+  // which is exactly the behaviour those hosts ship with today, so no host
+  // regresses and only the ones that CAN tell us more get the fix.
+  const updateInFlight =
+    operationView === null
+      ? view.updateProgress?.state === "updating"
+      : holdsLifecycleGate(operationView);
   const corePending =
     restart.isPending ||
     // Unscoped on purpose: the forced bridge respawn replaces the LOCAL host
@@ -441,7 +618,9 @@ export function HostOverviewPanel(props: {
     busy: corePending,
     hostId: scope.hostId,
     scopeUsable: usable,
+    settledBusy: view.settledBusy,
     settledBusySessionCount: view.settledBusySessionCount,
+    settledBusyBreakdown: view.settledBusyBreakdown,
     refetchStatus: () => {
       void serviceStatusQuery.refetch();
     },
@@ -509,6 +688,10 @@ export function HostOverviewPanel(props: {
   const updates = useHostOverviewUpdates({
     client,
     hostName: displayName,
+    // Identifies whose filter the RC override belongs to. `HostScopeGate` can
+    // swap the scoped host under a mounted subtree, and an override carried
+    // across that swap would apply one machine's decision to another.
+    hostId: scope.hostId,
     installedVersion: view.hostVersion,
     platformKey: host?.platform ?? null,
     // The check reads on its own now, so this gate is load-bearing rather than
@@ -521,14 +704,27 @@ export function HostOverviewPanel(props: {
   });
   const anyPending = updateGatePending || updates.summary.installing;
 
+  // Which write IS this dialog's own dispatch: the cooperative `host.restart`
+  // ordinarily, the bridge respawn when the fallback routes Restart to the
+  // force leg (`restartViaForceFallback`). The dialog's spinner, its stale-open
+  // close below, and the header item's pending state must all read the same
+  // answer, or a fallback confirm would close itself the moment it dispatched.
+  // OBSERVER-derived on both legs, unlike the page-wide gate above: this
+  // panel's `forceRestart.mutate` is the only dispatch that is OURS, while the
+  // cache-wide `forceRestartInFlight` also counts a menu/tray respawn — which
+  // must close this confirm like any competing write, not impersonate its
+  // spinner and hand back an answerable dialog when the external settle lands.
+  const restartDialogOwnDispatch = restartViaForceFallback
+    ? forceRestart.isPending
+    : restart.isPending;
   // The restart confirmation has the same stale-open window the OS-service
   // confirms do (`host-overview-advanced.tsx`): opened while idle, it stays
   // answerable while an automatic install or another lifecycle write arms the
   // page-wide gate under it. Close it for every arming EXCEPT its own
-  // dispatch — this dialog deliberately stays open through `restart.mutate`
-  // to show its spinner and route the busy verdict. Adjust-during-render so
-  // the close lands in the arming commit.
-  if (restartConfirmOpen && anyPending && !restart.isPending) {
+  // dispatch — this dialog deliberately stays open through its own dispatch
+  // to show its spinner (and, on the cooperative leg, route the busy
+  // verdict). Adjust-during-render so the close lands in the arming commit.
+  if (restartConfirmOpen && anyPending && !restartDialogOwnDispatch) {
     setRestartConfirmOpen(false);
   }
   // The force offer has the same window and a sharper reason to close in it: no
@@ -644,7 +840,7 @@ export function HostOverviewPanel(props: {
         primaryAction={null}
         restartDegrade={restartDegrade}
         doctorDegrade={doctorDegrade}
-        restartPending={restart.isPending}
+        restartPending={restartDialogOwnDispatch}
         anyPending={anyPending}
         isActive={host.isActive}
         connectable={host.connectable}
@@ -676,7 +872,9 @@ export function HostOverviewPanel(props: {
         version={view.hostVersion ?? host.version}
         // What the HOST says about its own work, which is the fact that decides
         // whether Restart is safe to press. `null` until it answers.
-        sessionCount={view.busySessionCount}
+        busy={view.busy}
+        busySessionCount={view.busySessionCount}
+        busyBreakdown={view.busyBreakdown}
         nameAction={
           !usable ? null : (
             <HostOverviewNameAction
@@ -693,7 +891,17 @@ export function HostOverviewPanel(props: {
               // otherwise Save calls a method the handshake already declined.
               degrade={renameDegrade}
               loaded={identity !== null}
-              failed={identity === null && identityQuery.isError}
+              // NOT `isError`, which goes false the instant the retry starts.
+              // TanStack's `fetchState` clears `error` and returns `status` to
+              // `pending` whenever a fetch begins with no data behind it, so an
+              // `isError` gate unmounts the arm on the click that starts the
+              // read — taking the spinner inside it with it, and flickering the
+              // disabled pencil in for the duration of the very retry the
+              // person just pressed. `errorUpdateCount` is the settle counter
+              // the reducer never resets, so `no identity && it has settled in
+              // error at least once` says exactly what this prop means: the
+              // last settled read failed and there is still no name to edit.
+              failed={identity === null && identityQuery.errorUpdateCount > 0}
               retrying={identityQuery.isFetching}
               onRetry={() => {
                 void identityQuery.refetch();
@@ -718,7 +926,24 @@ export function HostOverviewPanel(props: {
           <HostUpdateRequiredSlot host={host} canManageHost={canManageHost} />
         }
       >
-        {view.updateProgress === null ? null : (
+        {/* The ATTEMPT, when this peer speaks it. Supersedes the coarse notice
+            below rather than sitting beside it — two update lines describing one
+            operation in different vocabularies is the drift the shared
+            projection exists to prevent. A pre-@1.3 peer has no attempt to
+            show and keeps the coarse notice unchanged. */}
+        {operationView === null ? null : (
+          <HostOverviewOperationCard
+            view={operationView}
+            hostName={displayName}
+            onForceRestart={() => {
+              // Same route as the overflow Restart: re-ask the host about live
+              // work, then the EXISTING confirmation. This never restarts on
+              // the first click and never consumes update-force authorization.
+              setRestartConfirmOpen(true);
+            }}
+          />
+        )}
+        {operationView !== null || view.updateProgress === null ? null : (
           <HostOverviewUpdateProgress
             state={view.updateProgress.state}
             error={view.updateProgress.error}
@@ -745,7 +970,9 @@ export function HostOverviewPanel(props: {
             item={registryItem}
             mutation={policyMutation}
             liveBusySessionCount={view.busySessionCount}
+            liveBusyBreakdown={view.busyBreakdown}
             settledBusySessionCount={view.settledBusySessionCount}
+            settledBusyBreakdown={view.settledBusyBreakdown}
           />
         )}
       </HostIdentityCard>
@@ -787,6 +1014,12 @@ export function HostOverviewPanel(props: {
         }
       />
 
+      <ArtifactVersionSettingsSection
+        client={client}
+        hostId={scope.hostId}
+        enabled={usable}
+      />
+
       {/* Local machine only, by the nature of the fact rather than a scope
           rule: the hint is Desktop's launch-time comparison of ITS bundled CLI
           against THIS machine's package-manager CLI, recorded in Desktop-local
@@ -809,8 +1042,27 @@ export function HostOverviewPanel(props: {
         onOpenChange={(open) => {
           if (!open) setRestartConfirmOpen(false);
         }}
-        isPending={restart.isPending}
+        isPending={restartDialogOwnDispatch}
         onConfirm={() => {
+          // A host whose handshake refused `host.restart` has no cooperative
+          // leg to dispatch — the only restart this page can perform is the
+          // bridge respawn, and this dialog's copy already states the force
+          // consequences (sessions end, in-flight requests cancel). So on the
+          // fallback route the confirm IS the force consent: same click-time
+          // identity guard and same shared mutation key as the busy-offer
+          // dialog's Force, so menu/tray/Settings respawns keep deduping.
+          if (restartViaForceFallback) {
+            const liveHostId = liveLocalHostIdNow();
+            if (liveHostId !== null && liveHostId !== forceRestartLocalHostId) {
+              setRestartConfirmOpen(false);
+              toast.info("Host changed", {
+                description: HOST_CHANGED_DESCRIPTION,
+              });
+              return;
+            }
+            forceRestart.mutate();
+            return;
+          }
           // Minted at CONFIRM — the moment the action is armed — then REUSED
           // for every attempt at that same action, including a retry after an
           // ambiguous transport failure. See `newTransitionId` for why neither
@@ -915,7 +1167,17 @@ export function HostOverviewPanel(props: {
           // page names — the misattribution the rpc-only rule guards against
           // cannot happen when the subject is this computer.
           localDown
-            ? { kind: "bridge" }
+            ? {
+                kind: "bridge",
+                // Non-null in this branch by construction, and the `??` is
+                // unreachable: `localDown` requires `hasLocalBridge`, which the
+                // parent defines as `management !== null && isLocalMachine` —
+                // every conjunct `forceRestartLocalHostId` needs. Not a
+                // fail-closed default: an empty id is ALLOWED against a host
+                // with no identity machinery (the `unenrolled` arm), so this
+                // rests on the proof above, not on the fallback.
+                expectedHostId: forceRestartLocalHostId ?? "",
+              }
             : {
                 kind: "rpc",
                 client,
@@ -923,6 +1185,40 @@ export function HostOverviewPanel(props: {
                 isLocalMachine: host.isLocalMachine,
                 hasLocalBridge: props.hasLocalBridge,
                 degrade: doctorDegrade,
+                // The capability itself, NOT `!restartViaForceFallback`: a
+                // remote host can refuse `host.restart` too, where no force
+                // route exists and the inverse would misread as "the RPC
+                // works" — putting a live Restart button on the one host it
+                // cannot restart.
+                rpcRestartSupported: restartSupported,
+                // The same derived fact the confirm dialog's dispatch leg
+                // branches on, threaded rather than re-derived from
+                // `isLocalMachine && hasLocalBridge` inside the card: the two
+                // readings could tear (the force route also needs a runner
+                // bridge), and a torn pair routes a Doctor restart to a
+                // confirm whose dispatch leg then sends the refused RPC.
+                bridgeRestartRoute: restartViaForceFallback,
+                // OPENS THE SAME CONFIRM the header's Restart uses rather
+                // than dispatching — the bridge respawn always forces, ending
+                // sessions and cancelling in-flight requests, and the header
+                // puts that consent behind `RestartHostConfirmDialog`. On the
+                // fallback route the dialog's confirm IS the force consent:
+                // same click-time identity guard, same page-wide lifecycle
+                // gate, same cross-surface mutation key. A one-click Doctor
+                // dispatch here was the one surface skipping all three.
+                onBridgeRestart: () => {
+                  if (anyPending) return;
+                  setRestartConfirmOpen(true);
+                },
+                bridgeRestartPending: forceRestartInFlight || anyPending,
+                // `diagnostics.logs.tail` is absent from every released host
+                // below the maintenance floor (verified against the
+                // `host-v1.1.11` protocol-surface asset: no `diagnostics.*`
+                // at all), and this fallback is what puts a Doctor report —
+                // and its Show logs button — in front of those hosts.
+                rpcLogsSupported: logsSupported,
+                onBridgeLogs: () => bridgeDoctorLogs.mutateAsync(),
+                bridgeLogsPending: bridgeDoctorLogs.isPending,
                 onLocalFix: props.onLocalDoctorFix,
                 localFixPendingCode: props.localDoctorFixPendingCode,
               }
@@ -1100,6 +1396,27 @@ function LocalHostDownActions(props: {
 interface OverviewCapabilities {
   readonly identity: OverviewDegradeReason | null;
   readonly restart: OverviewDegradeReason | null;
+  /**
+   * `host.restart` came back handshake-`false` and this page has a force
+   * route: Restart stays live but the confirm dispatches the bridge respawn —
+   * there is no cooperative leg to send. Reads the same two inputs as
+   * `restart` above, so the button and its routing cannot tear.
+   */
+  readonly restartViaForceFallback: boolean;
+  /**
+   * Whether `host.restart` itself is servable — the capability alone, apart
+   * from any fallback route. The Doctor sheet needs this fact and not its
+   * routing consequence: a REMOTE host can refuse `host.restart` too, where
+   * no force route exists and `!restartViaForceFallback` would misread as
+   * "the RPC works". Same tri-state treatment as `logsSupported` below.
+   */
+  readonly restartSupported: boolean;
+  /**
+   * Whether `diagnostics.logs.tail` is servable. `false` only for a host below
+   * the maintenance floor, whose Doctor sheet this fallback enables — its log
+   * read has to go over the bridge or the Show logs button cannot work.
+   */
+  readonly logsSupported: boolean;
   readonly doctor: OverviewDegradeReason | null;
   readonly installInfo: OverviewDegradeReason | null;
   readonly updateCheck: OverviewDegradeReason | null;
@@ -1118,7 +1435,28 @@ interface OverviewCapabilities {
   readonly serviceDeregister: OverviewDegradeReason | null;
 }
 
-function useOverviewCapabilities(hostId: string | null): OverviewCapabilities {
+/**
+ * What can stand in for a method the handshake refused, threaded from the
+ * page rather than re-derived here so enablement and routing read the same
+ * facts the client construction read.
+ */
+interface OverviewFallbackRoutes {
+  /**
+   * `scope.localMaintenanceFallback`: the scope's client is the decorator
+   * that serves the pinned four maintenance methods over the desktop CLI
+   * lane (`lib/host/local-maintenance-fallback-client.ts`).
+   */
+  readonly maintenanceFallback: boolean;
+  /** A bridge respawn exists to stand in for a refused `host.restart`. */
+  readonly restartForceRoute: boolean;
+}
+
+function useOverviewCapabilities(
+  hostId: string | null,
+  fallback: OverviewFallbackRoutes,
+): OverviewCapabilities {
+  const restartSupport = useHostMethodSupport(hostId, "host.restart");
+  const logsSupport = useHostMethodSupport(hostId, "diagnostics.logs.tail");
   return {
     identity: overviewMethodDegrade(
       useHostMethodSupport(hostId, "host.identity.get"),
@@ -1128,22 +1466,44 @@ function useOverviewCapabilities(hostId: string | null): OverviewCapabilities {
     // the other - and inferring write support from a readable identity opened
     // Edit name against a host whose handshake said it cannot save, turning
     // Save into an RPC the negotiation already ruled out.
+    //
+    // DELIBERATELY NOT fallback-served. A ≤1.1.11 host never reads
+    // `host-name.json`, so a bridge-written rename would split this page's
+    // name from the registry `displayName` every other surface shows for as
+    // long as the host stays old. A degraded pencil is honest; identity
+    // split-brain is not.
     identitySet: overviewMethodDegrade(
       useHostMethodSupport(hostId, "host.identity.set"),
     ),
-    restart: overviewMethodDegrade(
-      useHostMethodSupport(hostId, "host.restart"),
+    restart: resolveOverviewMethodDegrade(
+      restartSupport,
+      fallback.restartForceRoute,
     ),
-    doctor: overviewMethodDegrade(useHostMethodSupport(hostId, "host.doctor")),
-    installInfo: overviewMethodDegrade(
+    restartViaForceFallback:
+      restartSupport === false && fallback.restartForceRoute,
+    restartSupported: restartSupport !== false,
+    logsSupported: logsSupport !== false,
+    doctor: resolveOverviewMethodDegrade(
+      useHostMethodSupport(hostId, "host.doctor"),
+      fallback.maintenanceFallback,
+    ),
+    installInfo: resolveOverviewMethodDegrade(
       useHostMethodSupport(hostId, "host.getInstallationInfo"),
+      fallback.maintenanceFallback,
     ),
-    updateCheck: overviewMethodDegrade(
+    updateCheck: resolveOverviewMethodDegrade(
       useHostMethodSupport(hostId, "host.update.check"),
+      fallback.maintenanceFallback,
     ),
-    updateInstall: overviewMethodDegrade(
+    updateInstall: resolveOverviewMethodDegrade(
       useHostMethodSupport(hostId, "host.update.install"),
+      fallback.maintenanceFallback,
     ),
+    // The service trio is DELIBERATELY outside the fallback: no IPC member
+    // carries service state, `label`, or `manifestPath` (required in the ok
+    // arm), and the old bridge derivation lacked `externally-managed` — the
+    // NORMAL state on a Desktop-managed macOS. They keep today's unsupported
+    // notice until the host updates.
     serviceStatus: overviewMethodDegrade(
       useHostMethodSupport(hostId, "host.service.status"),
     ),
@@ -1177,21 +1537,32 @@ interface OverviewDisplay {
   readonly hostVersion: string | null;
   readonly updateProgress: HostStatusUpdateProgress | null;
   /**
-   * Live open-session count from `host.status`, or `null` when this client has
-   * no live read of the host. `null` is not zero — see `deriveUpdateAffordance`.
+   * The rich attempt projection when this peer speaks `host.status@1.3`, `null`
+   * otherwise. Distinct from `updateProgress`: the coarse field cannot tell a
+   * PARKED attempt from an executing one, which is the difference between
+   * informing the user and locking them out of their own host.
+   */
+  readonly updateOperation: HostStatusUpdateOperation | null;
+  /**
+   * Live busy total from `host.status`, or `null` when this client has no live
+   * read of the host. `null` is not zero — see `deriveUpdateAffordance`.
    *
    * The DISPLAY read: it survives a refetch of stale data so the row does not
    * blank for a round trip.
    */
+  readonly busy: boolean;
   readonly busySessionCount: number | null;
+  readonly busyBreakdown: HostBusyBreakdown | null;
   /**
-   * The same count, but only when the read is SETTLED — what the drain force
-   * may be armed and confirmed against. Diverges from `busySessionCount`
-   * exactly while a fetch is in flight, which is the window in which the
-   * confirm-time equality guard would otherwise compare a retained number to
-   * itself and wave through a force sized to a count nobody was shown.
+   * The same facts, but only when the read is SETTLED — what the drain force
+   * and re-register confirm may be armed against. Diverges from the display
+   * fields exactly while a fetch is in flight, which is the window in which
+   * the confirm-time equality guard would otherwise compare a retained number
+   * to itself and wave through a force sized to a count nobody was shown.
    */
+  readonly settledBusy: boolean;
   readonly settledBusySessionCount: number | null;
+  readonly settledBusyBreakdown: HostBusyBreakdown | null;
 }
 
 function useOverviewDisplay(input: {
@@ -1209,6 +1580,7 @@ function useOverviewDisplay(input: {
   };
 }): OverviewDisplay {
   const { scope, host, identity, status, statusHealth } = input;
+  const busy = overviewBusySnapshot(status, statusHealth);
   return {
     identity,
     displayName: identity?.effectiveName ?? host?.name ?? scope.hostLabel,
@@ -1216,27 +1588,62 @@ function useOverviewDisplay(input: {
     // The loopback URL and pid that used to ride alongside this are GONE, and
     // with them the local/remote fork in the meta line. They were the page's
     // one legitimate per-kind difference, and what they bought was a monospace
-    // band nobody acts on from Settings; the session count is the half that
+    // band nobody acts on from Settings; the busy snapshot is the half that
     // answers a question the buttons below actually depend on.
-    //
-    // Routed through `liveBusySessionCount` rather than read straight off the
-    // response: a retained cache entry is not a live read, and this count is
-    // what the chip states and the drain force is sized from.
-    busySessionCount: liveBusySessionCount({
-      reportedCount: status?.busySessionCount ?? null,
-      isError: statusHealth.isError,
-      fetchStatus: statusHealth.fetchStatus,
-      isStale: statusHealth.isStale,
-      hasLiveSource: statusHealth.hasLiveSource,
-    }),
     hostVersion: status?.hostVersion ?? null,
     updateProgress: status?.updateProgress ?? null,
-    settledBusySessionCount: settledBusySessionCount({
-      reportedCount: status?.busySessionCount ?? null,
-      isError: statusHealth.isError,
-      fetchStatus: statusHealth.fetchStatus,
-      isStale: statusHealth.isStale,
-      hasLiveSource: statusHealth.hasLiveSource,
+    updateOperation: status?.updateOperation ?? null,
+    ...busy,
+  };
+}
+
+/**
+ * Routed through the live-source helpers rather than read straight off the
+ * response: a retained cache entry is not a live read, and this snapshot is
+ * what the chip states and the drain force is sized from.
+ */
+function overviewBusySnapshot(
+  status: ResponseOfMethod<HostRpcRegistry, "host.status"> | null,
+  statusHealth: {
+    readonly isError: boolean;
+    readonly fetchStatus: "fetching" | "paused" | "idle";
+    readonly isStale: boolean;
+    readonly hasLiveSource: boolean;
+  },
+): Pick<
+  OverviewDisplay,
+  | "busy"
+  | "busySessionCount"
+  | "busyBreakdown"
+  | "settledBusy"
+  | "settledBusySessionCount"
+  | "settledBusyBreakdown"
+> {
+  const liveSource = {
+    reportedCount: status?.busySessionCount ?? null,
+    isError: statusHealth.isError,
+    fetchStatus: statusHealth.fetchStatus,
+    isStale: statusHealth.isStale,
+    hasLiveSource: statusHealth.hasLiveSource,
+  };
+  return {
+    busy: liveHostBusy({
+      ...liveSource,
+      reportedBusy: status?.busy ?? false,
+    }),
+    busySessionCount: liveBusySessionCount(liveSource),
+    busyBreakdown: liveBusyBreakdown({
+      ...liveSource,
+      reportedBreakdown: status?.busyBreakdown ?? null,
+    }),
+    settledBusy: settledHostBusy({
+      ...liveSource,
+      reportedBusy: status?.busy ?? false,
+    }),
+    settledBusySessionCount: settledBusySessionCount(liveSource),
+    settledBusyBreakdown: settledBusyBreakdown({
+      ...liveSource,
+      reportedBreakdown: status?.busyBreakdown ?? null,
     }),
   };
 }

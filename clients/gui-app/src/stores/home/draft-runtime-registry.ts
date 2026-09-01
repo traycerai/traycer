@@ -237,7 +237,9 @@ export class DraftRuntime {
     if (this.store.getState().contentRevision !== attempt.contentRevision) {
       return { kind: "content-changed" };
     }
-    if (this.source()?.read(this.draftId) === null) {
+    // Close no longer destroys the row; `this.closed` is the signal. Row
+    // absence still counts (explicit delete / out-of-band drop).
+    if (this.closed || this.source()?.read(this.draftId) === null) {
       return { kind: "closed" };
     }
     return { kind: "current" };
@@ -261,6 +263,17 @@ export class DraftRuntime {
       this.attempt.abortController.abort();
       if (!this.attempt.createStarted) this.finishSubmission(this.attempt);
     }
+  }
+
+  /**
+   * Undo `close()` on a runtime that outlived unmount (an in-flight create
+   * is not disposable). T11's open-from-history path reopens a retained
+   * draft; without this, `startSubmission` stays blocked and settlement
+   * still reports `"closed"` → `deleteDraft` of the draft the user just
+   * restored.
+   */
+  reopen(): void {
+    this.closed = false;
   }
 
   canDispose(): boolean {
@@ -344,6 +357,10 @@ export class DraftRuntimeRegistry {
     if (runtime === undefined) return;
     runtime.close();
     if (runtime.canDispose()) this.runtimes.delete(draftId);
+  }
+
+  reopen(draftId: string): void {
+    this.runtimes.get(draftId)?.reopen();
   }
 
   complete(attempt: DraftSubmissionAttempt): void {

@@ -19,6 +19,12 @@ import type {
   HostUninstallResult,
   HostRestartRequestResult,
   InstallVersionOk,
+  MaintenanceDoctorProjection,
+  MaintenanceInstallDispatch,
+  DoctorRepairDispatch,
+  QueuedDoctorRepair,
+  QueuedDoctorRepairResult,
+  DoctorRepairIntent,
   MutationOutcome,
   NotificationFeedSource,
   NotificationForegroundAppLocal,
@@ -30,8 +36,10 @@ import type {
   IHostManagement,
   IHostTray,
   IFileDropHost,
+  IFileSaveHost,
   IMigrationHost,
   INotificationHost,
+  IRendererCrashTelemetryHost,
   IRunnerHost,
   ISecureStorage,
   IServiceHost,
@@ -43,6 +51,7 @@ import type {
   LocalHostSnapshot,
   MigrationRunningSnapshot,
   RegisteredHostsChange,
+  SystemResumeEvent,
   TrayEpic,
   TrayIndicatorState,
   TraycerHostStatusSnapshot,
@@ -53,11 +62,17 @@ import type {
   TraycerShellProbeResult,
 } from "@traycer-clients/shared/platform/runner-host";
 import type {
+  HostGetInstallationInfoResponse,
+  HostUpdateCheckResponseV11,
+} from "../ipc-contracts/host-management-types";
+import type {
   AccessibilityThemeSnapshot,
   BackgroundMaterial,
+  CertificateTrustScope,
   DisplaySnapshot,
   DisplayTopology,
   FileSaveInput,
+  FileSaveResult,
   InstalledFont,
   PendingCertificateError,
   ProcessMetricsSnapshot,
@@ -73,6 +88,7 @@ import {
 export type {
   AccessibilityThemeSnapshot,
   BackgroundMaterial as DesktopBackgroundMaterial,
+  CertificateTrustScope,
   DisplaySnapshot,
   DisplayTopology,
   PendingCertificateError,
@@ -92,6 +108,14 @@ import type {
   StepUpChallengeFetchResult,
   RetainedStepUpVerifyFetchResult,
 } from "@traycer-clients/shared/auth/devices-sessions-fetcher";
+import {
+  linkLoginStatusViaHttp,
+  mintLinkLoginCodeViaHttp,
+  respondLinkLoginViaHttp,
+  type LinkLoginStatusFetchResult,
+  type MintLinkLoginCodeFetchResult,
+  type RespondLinkLoginFetchResult,
+} from "@traycer-clients/shared/auth/link-login";
 import type { MintHostCredentialRequest } from "@traycer/protocol/auth/devices-sessions";
 import type {
   UpdateHostVersionPolicyFetchResult,
@@ -101,7 +125,9 @@ import type { DeregisterHostFetchResult } from "@traycer-clients/shared/host-cli
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 import type {
   DesktopAppUpdateCheckIntent,
+  DesktopAppUpdateChannelChange,
   DesktopAppUpdateSnapshot,
+  DesktopCompatRecoveryPlan,
 } from "../ipc-contracts/app-update-types";
 import type {
   GlobalShortcutId,
@@ -114,6 +140,7 @@ import type {
   DesktopRuntimePlatform,
   DesktopTopLevelMenuId,
   MenuCommandPayload,
+  OpenDraftInNewWindowResult,
   OpenEpicInNewWindowResult,
   OwnershipClaimResult,
   OwnershipEntry,
@@ -128,6 +155,7 @@ import type {
   WindowSummary,
 } from "../ipc-contracts/window-types";
 import type { ZoomPercent } from "../ipc-contracts/zoom-types";
+import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
 
 /**
  * Shape of the `window.runnerHost` object installed by the Electron preload
@@ -190,6 +218,7 @@ export interface DesktopPreloadBridge {
     start(): Promise<DeviceFlowSession | null>;
   };
   notifications: {
+    readonly systemSettings: { open(): Promise<void> } | null;
     show(
       title: string,
       body: string,
@@ -235,6 +264,7 @@ export interface DesktopPreloadBridge {
   platform: DesktopPlatformBridge;
   power: DesktopPowerBridge;
   zoom: DesktopZoomBridge;
+  browserView: BrowserViewBridge;
   hostManagement: DesktopHostManagementBridge;
   hostTray: DesktopHostTrayBridge;
   hostControllerStatus: DesktopHostControllerStatusBridge;
@@ -256,7 +286,8 @@ export interface DesktopFileDropsBridge {
   }): Promise<string>;
   copyTemporaryFiles(paths: readonly string[]): Promise<readonly string[]>;
   readNativeClipboardFilePaths(): Promise<readonly string[]>;
-  saveFile(input: FileSaveInput): Promise<string | null>;
+  saveFile(input: FileSaveInput): Promise<FileSaveResult | null>;
+  openSavedFile(path: string): Promise<void>;
 }
 
 /**
@@ -286,8 +317,11 @@ export interface DesktopHostManagementBridge {
   restartHost(): Promise<HostRestartRequestResult>;
   getHostLogs(input: {
     readonly tailLines: number;
+    readonly expectedHostId: string;
   }): Promise<HostLogsTailResult>;
-  runDoctor(): Promise<HostDoctorReport>;
+  runDoctor(input: {
+    readonly expectedHostId: string;
+  }): Promise<HostDoctorReport>;
   availableVersions(
     input: HostAvailableVersionsInput,
   ): Promise<HostAvailableSnapshot>;
@@ -298,9 +332,37 @@ export interface DesktopHostManagementBridge {
     readonly force: boolean;
   }): Promise<HostRegistryUpdateState>;
   freePortAndRestart(
-    input: FreePortAndRestartInput,
+    input: FreePortAndRestartInput & { readonly expectedHostId: string },
   ): Promise<FreePortAndRestartInput>;
+  freePortAndRestartIfIdle(
+    input: FreePortAndRestartInput & { readonly expectedHostId: string },
+  ): Promise<DoctorRepairDispatch>;
   cliManifest(): Promise<CliInstallManifestSnapshot | null>;
+  maintenanceUpdateCheck(
+    input: HostAvailableVersionsInput & { readonly expectedHostId: string },
+  ): Promise<HostUpdateCheckResponseV11>;
+  maintenanceDoctor(input: {
+    readonly expectedHostId: string;
+  }): Promise<MaintenanceDoctorProjection>;
+  maintenanceInstallationInfo(input: {
+    readonly expectedHostId: string;
+  }): Promise<HostGetInstallationInfoResponse>;
+  maintenanceInstallVersion(input: {
+    readonly version: string;
+    readonly force: boolean;
+    readonly expectedHostId: string;
+  }): Promise<MaintenanceInstallDispatch>;
+  restartHostIfIdle(input: {
+    readonly expectedHostId: string;
+  }): Promise<HostRestartRequestResult>;
+  runDoctorRepairQueued(input: {
+    readonly repair: QueuedDoctorRepair;
+    readonly expectedHostId: string;
+  }): Promise<QueuedDoctorRepairResult>;
+  runDoctorRepairIfIdle(input: {
+    readonly repair: DoctorRepairIntent;
+    readonly expectedHostId: string;
+  }): Promise<DoctorRepairDispatch>;
   getHostName(): Promise<HostNameSettings>;
   setHostName(input: {
     readonly customName: string | null;
@@ -328,6 +390,7 @@ export interface DesktopMigrationBridge {
 }
 
 export interface DesktopPlatformBridge {
+  crashTelemetry: IRendererCrashTelemetryHost;
   clipboard?: {
     writeImage(input: {
       readonly type: string;
@@ -387,7 +450,11 @@ export interface DesktopPlatformBridge {
   certTrust: {
     list(): Promise<ReadonlyArray<TrustedCertificateEntry>>;
     trust(hostname: string, certificate: unknown): Promise<unknown>;
-    untrust(fingerprint: string, hostname: string): Promise<void>;
+    untrust(
+      scope: CertificateTrustScope,
+      fingerprint: string,
+      hostname: string,
+    ): Promise<void>;
     listPending(): Promise<ReadonlyArray<PendingCertificateError>>;
     dismissPending(id: string): Promise<void>;
     showSystemDialog(certificate: unknown, message: string): Promise<boolean>;
@@ -400,7 +467,9 @@ export interface DesktopPlatformBridge {
     onTopologyChange(
       handler: (event: {
         readonly reason:
-          "display-added" | "display-removed" | "display-metrics-changed";
+          | "display-added"
+          | "display-removed"
+          | "display-metrics-changed";
         readonly topology: DisplayTopology;
       }) => void,
     ): { dispose: () => void };
@@ -485,9 +554,13 @@ export interface DesktopAppUpdatesBridge {
   ): Promise<DesktopAppUpdateSnapshot>;
   setAllowPrerelease(
     allowPrerelease: boolean,
-  ): Promise<DesktopAppUpdateSnapshot>;
+  ): Promise<DesktopAppUpdateChannelChange>;
   downloadUpdate(): Promise<DesktopAppUpdateSnapshot>;
   installUpdate(): Promise<DesktopAppUpdateSnapshot>;
+  resolveCompatRecovery(request: {
+    readonly minimumEpoch: number;
+    readonly hostAllowsRcRecovery: boolean;
+  }): Promise<DesktopCompatRecoveryPlan>;
   onChange(handler: (snapshot: DesktopAppUpdateSnapshot) => void): {
     dispose: () => void;
   };
@@ -527,6 +600,9 @@ export interface DesktopWindowsBridge {
     title: string,
     tabId: string,
   ): Promise<OpenEpicInNewWindowResult>;
+  requestOpenDraftInNewWindow(
+    draftId: string,
+  ): Promise<OpenDraftInNewWindowResult>;
   ownership: {
     snapshot(): Promise<readonly OwnershipEntry[]>;
     claim(tabId: string, epicId: string): Promise<OwnershipClaimResult>;
@@ -579,6 +655,9 @@ export class DesktopRunnerHost implements IRunnerHost {
   readonly authnBaseUrl: string;
   readonly relayBaseUrl: string;
   readonly hasLocalHost: boolean = true;
+  // The renderer's own clipboard takes images, and where a MIME type defeats
+  // it the main-process nativeImage bridge picks the write up.
+  readonly canCopyImages: boolean = true;
 
   readonly secureStorage: ISecureStorage;
   readonly tokenStore: ITokenStore;
@@ -586,6 +665,7 @@ export class DesktopRunnerHost implements IRunnerHost {
   readonly tray: ITrayState;
   readonly workspaceFolders: IWorkspaceFoldersHost;
   readonly fileDrops: IFileDropHost;
+  readonly fileSave: IFileSaveHost;
   readonly windows: DesktopWindowsBridge;
   readonly menu: DesktopMenuBridge;
   readonly appUpdates: DesktopAppUpdatesBridge;
@@ -595,10 +675,15 @@ export class DesktopRunnerHost implements IRunnerHost {
   readonly traycerCli: ITraycerCli;
   readonly migration: IMigrationHost;
   readonly platform: DesktopPlatformBridge;
+  readonly crashTelemetry: IRendererCrashTelemetryHost;
   readonly power: DesktopPowerBridge;
   readonly zoom: IZoomHost;
+  readonly browserView: BrowserViewBridge;
   readonly hostManagement: IHostManagement;
   readonly hostTray: IHostTray;
+  // No OS push on the desktop: notifications here are native `show` calls, not
+  // an APNs/FCM permission the user can revoke from a settings app.
+  readonly pushPermission: null = null;
   readonly hostControllerStatus: DesktopHostControllerStatusBridge;
   readonly selectionAuthority: SelectionAuthorityClient;
   private readonly refreshSelectionFleet: () => Promise<void>;
@@ -609,7 +694,9 @@ export class DesktopRunnerHost implements IRunnerHost {
   private readonly localHostHandlers = new Set<
     (snapshot: LocalHostSnapshot | null) => void
   >();
-  private readonly systemResumedHandlers = new Set<() => void>();
+  private readonly systemResumedHandlers = new Set<
+    (event: SystemResumeEvent) => void
+  >();
   private readonly bridgeSubscriptions: Disposable[] = [];
 
   constructor(options: DesktopRunnerHostOptions) {
@@ -623,7 +710,9 @@ export class DesktopRunnerHost implements IRunnerHost {
     this.globalShortcuts = options.bridge.globalShortcuts;
     this.support = options.bridge.support;
     this.platform = options.bridge.platform;
+    this.crashTelemetry = options.bridge.platform.crashTelemetry;
     this.power = options.bridge.power;
+    this.browserView = options.bridge.browserView;
     // Passed straight through: the client instance, its issued attach
     // generation and its buffering all belong to the preload load, so
     // re-wrapping it here could only add a second identity for the same
@@ -650,7 +739,9 @@ export class DesktopRunnerHost implements IRunnerHost {
       }),
       this.bridge.onSystemResumed(() => {
         for (const handler of this.systemResumedHandlers) {
-          handler();
+          // `powerMonitor` reports no sleep duration, so this shell cannot
+          // measure how long the runtime was actually suspended.
+          handler({ backgroundedForMs: null });
         }
       }),
     );
@@ -678,6 +769,7 @@ export class DesktopRunnerHost implements IRunnerHost {
     this.tokenStore = options.bridge.tokenStore;
 
     this.notifications = {
+      systemSettings: this.bridge.notifications.systemSettings,
       show: (
         title,
         body,
@@ -714,6 +806,7 @@ export class DesktopRunnerHost implements IRunnerHost {
       pickFolders: () => this.bridge.workspaceFolders.pickFolders(),
     };
     this.fileDrops = buildDesktopFileDrops(this.bridge.fileDrops);
+    this.fileSave = buildDesktopFileSave(this.bridge.fileDrops);
     this.service = {
       install: () => this.bridge.service.install(),
       uninstall: (purge) => this.bridge.service.uninstall(purge),
@@ -765,14 +858,28 @@ export class DesktopRunnerHost implements IRunnerHost {
       clearRemoval: () => managementBridge.clearRemoval(),
       restartHost: () => managementBridge.restartHost(),
       getHostLogs: (input) => managementBridge.getHostLogs(input),
-      runDoctor: () => managementBridge.runDoctor(),
+      runDoctor: (input) => managementBridge.runDoctor(input),
       availableVersions: (input) => managementBridge.availableVersions(input),
       installedRecord: () => managementBridge.installedRecord(),
       registerService: () => managementBridge.registerService(),
       deregisterService: () => managementBridge.deregisterService(),
       registryCheck: (input) => managementBridge.registryCheck(input),
       freePortAndRestart: (input) => managementBridge.freePortAndRestart(input),
+      freePortAndRestartIfIdle: (input) =>
+        managementBridge.freePortAndRestartIfIdle(input),
       cliManifest: () => managementBridge.cliManifest(),
+      maintenanceUpdateCheck: (input) =>
+        managementBridge.maintenanceUpdateCheck(input),
+      maintenanceDoctor: (input) => managementBridge.maintenanceDoctor(input),
+      maintenanceInstallationInfo: (input) =>
+        managementBridge.maintenanceInstallationInfo(input),
+      maintenanceInstallVersion: (input) =>
+        managementBridge.maintenanceInstallVersion(input),
+      restartHostIfIdle: (input) => managementBridge.restartHostIfIdle(input),
+      runDoctorRepairQueued: (input) =>
+        managementBridge.runDoctorRepairQueued(input),
+      runDoctorRepairIfIdle: (input) =>
+        managementBridge.runDoctorRepairIfIdle(input),
       getHostName: () => managementBridge.getHostName(),
       setHostName: (input) => managementBridge.setHostName(input),
     };
@@ -861,6 +968,50 @@ export class DesktopRunnerHost implements IRunnerHost {
     return this.bridge.revokeAllSessions(bearerToken);
   }
 
+  // No camera on the desktop shell; sign-in by link code is a phone surface.
+  readonly linkCodeScanner = null;
+  readonly deviceDescriber = null;
+  readonly linkLoginDeepLinks = null;
+
+  mintLinkLoginCode(
+    bearerToken: string,
+    signal: AbortSignal,
+  ): Promise<MintLinkLoginCodeFetchResult> {
+    // Runs in the renderer rather than behind the preload bridge, and that is
+    // fine in a PACKAGED build too: authn allows the renderer's own origin
+    // unconditionally, not just in dev. `registerPlugins` unions the env
+    // allowlist with `corsOrigins(...)`, which always contains
+    // `DESKTOP_RENDERER_ORIGIN` = `app://renderer` — the privileged scheme
+    // Electron serves the packaged GUI from. The dev Vite origin arrives
+    // through the same union's `desktopDevOrigin`.
+    //
+    // The bridge is what `listUserSessions` needs for a different reason: it
+    // handles retained step-up credentials, which must not cross into the
+    // renderer. Nothing here touches those, so there is no second reason to
+    // pay for a main-process hop.
+    return mintLinkLoginCodeViaHttp(this.authnBaseUrl, bearerToken, signal);
+  }
+  linkLoginStatus(
+    bearerToken: string,
+    code: string,
+    signal: AbortSignal,
+  ): Promise<LinkLoginStatusFetchResult> {
+    return linkLoginStatusViaHttp(this.authnBaseUrl, bearerToken, code, signal);
+  }
+
+  respondLinkLogin(
+    bearerToken: string,
+    code: string,
+    approve: boolean,
+  ): Promise<RespondLinkLoginFetchResult> {
+    return respondLinkLoginViaHttp(
+      this.authnBaseUrl,
+      bearerToken,
+      code,
+      approve,
+    );
+  }
+
   mintHostCredential(
     bearerToken: string,
     request: MintHostCredentialRequest,
@@ -920,12 +1071,22 @@ export class DesktopRunnerHost implements IRunnerHost {
     return this.bridge.getLastKnownLocalHostId();
   }
 
-  onSystemResumed(handler: () => void): Disposable {
+  onSystemResumed(handler: (event: SystemResumeEvent) => void): Disposable {
     this.systemResumedHandlers.add(handler);
     return {
       dispose: () => {
         this.systemResumedHandlers.delete(handler);
       },
+    };
+  }
+
+  onNetworkPathChanged(handler: () => void): Disposable {
+    // Desktop has no native reachability edge to bridge; its consumers cover
+    // the equivalent transitions with `window 'online'` and the OS-wake
+    // signal above. No-op subscription per the IRunnerHost contract.
+    void handler;
+    return {
+      dispose: () => undefined,
     };
   }
 
@@ -994,6 +1155,27 @@ function isEphemeralDropPath(filePath: string): boolean {
     /[\\/]TemporaryItems[\\/]/i.test(filePath) ||
     /screencaptureui/i.test(filePath)
   );
+}
+
+/**
+ * The desktop's `IFileSaveHost`, over the same preload surface the drop
+ * helpers use. The sandboxed renderer cannot write through the File System
+ * Access API (`createWritable()` throws `NotAllowedError`), so the bytes go to
+ * the main process, which shows a native save dialog and writes them there;
+ * the dialog is also what makes this the one shell that learns an absolute
+ * path, and therefore the one that can re-open the file afterwards.
+ */
+function buildDesktopFileSave(bridge: DesktopFileDropsBridge): IFileSaveHost {
+  return {
+    saveFile: (request) => bridge.saveFile(request),
+    // The native dialog writes the file the user named.
+    saveRoute: "download" as const,
+    openSavedFile: (path) => bridge.openSavedFile(path),
+    // The save dialog already writes the file the user named, so there is no
+    // second, chooser-free route to offer - and nothing here for a surface to
+    // split into separate "share" and "download" affordances.
+    downloadFile: null,
+  };
 }
 
 function buildDesktopFileDrops(bridge: DesktopFileDropsBridge): IFileDropHost {

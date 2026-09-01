@@ -63,6 +63,13 @@ const MOCK_HOST_DIRECTORY = {
   findById: () => null,
 };
 
+// ENUMERATES deliberately - do NOT convert to an `importOriginal` spread.
+// `@/lib/host` is a barrel of provider-coupled hooks, so the un-overridden
+// residue is not inert: spreading leaks the real `useAuthService` into
+// `EpicSessionProvider` -> `useStreamAuthRevalidator`, which throws "Host
+// runtime hooks must be used inside a <HostRuntimeProvider>" from deep inside
+// an unrelated component (~55 tests across these files). Enumeration fails the
+// useful way instead: vitest names the missing export and the module.
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
   useHostDirectory: () => MOCK_HOST_DIRECTORY,
@@ -164,6 +171,7 @@ function renderChatTile() {
                 <ChatTile
                   node={CHAT_ARTIFACT}
                   viewTabId="tab-bounded-loading"
+                  tileId="pane-bounded-loading"
                   isActive
                 />
               </TabHostProvider>
@@ -263,5 +271,26 @@ describe("S2 — host-starting is bounded, and Clone arrives AT the deadline", (
     expect(
       screen.queryByRole("button", { name: "Clone agent" }),
     ).not.toBeNull();
+  });
+
+  // Shared-chat support, wired through the REAL container: `epic.createChat`
+  // is editor-gated host-side, so a known viewer role must withhold the Clone
+  // button the same banner would otherwise offer - the alternative was a
+  // click that died on a bare "You don't have permission" toast. The
+  // editor-role sibling above is the control: same tile, same deadline, the
+  // button present.
+  it("withholds Clone at the deadline for a viewer role, and says why", async () => {
+    epicHarness.install(null, "viewer");
+    renderChatTile();
+    await settleEpicSession();
+
+    act(() => {
+      vi.advanceTimersByTime(HOST_STARTING_BUDGET_MS);
+    });
+
+    const banner = screen.getByTestId(`chat-dead-tile-${CHAT_ARTIFACT.id}`);
+    expect(banner).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Clone agent" })).toBeNull();
+    expect(banner.textContent).toContain("view-only access");
   });
 });

@@ -36,6 +36,7 @@ function incompatibility(hostVersion: string | null): SelectionIncompatibility {
     code: "PROTOCOL_MAJOR_MISMATCH",
     hostVersion,
     minSupportedVersion: "1.2.0",
+    clientCompatibility: null,
   };
 }
 

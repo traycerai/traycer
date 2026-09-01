@@ -8,8 +8,10 @@ import {
   downgradeRequestAcrossMajors,
   isRpcErrorCode,
   mergeConnectionManifests,
+  SERVES_EVERY_INSTALLED_MAJOR,
   splitConnectionManifest,
   upgradeResponseToVersion,
+  upgradeResponseToVersionWithContext,
 } from "@traycer/protocol/framework/index";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import { CredentialLeaseReleasedError } from "@traycer/protocol/auth/request-context";
@@ -36,7 +38,10 @@ import type {
 import {
   checkCompatibility,
   hostFrameSchema,
+  toClientHandshakeIdentity,
   RPC_REQUEST_TIMEOUT_FATAL_CODE,
+  type ClientHandshakeIdentity,
+  type FirstPartyClientIdentity,
   type ClientFrame,
   type ConnectionManifest,
   type HostFrame,
@@ -174,6 +179,21 @@ export interface WsRpcClientOptions<Registry extends VersionedRpcRegistry> {
    * something the transport contract should encode.
    */
   readonly hostAttestationWindowMs: number;
+  /**
+   * WHO THIS CLIENT IS, sent on every `open` frame this transport writes.
+   *
+   * REQUIRED, not optional, and that is the whole safety property: a current
+   * first-party build must not be able to ship a connection that forgot to
+   * identify itself, because the host reads an absent identity as legacy
+   * epoch 1 and will terminally refuse it once a floor is active. A default
+   * here would let a new composition root silently produce that outcome; the
+   * compiler refuses instead.
+   *
+   * It is a PROCESS CONSTANT (kind, epoch, and build version are all fixed
+   * for the life of the process - updating the app restarts it), which is why
+   * it is a construction dependency rather than something resolved per call.
+   */
+  readonly clientIdentity: FirstPartyClientIdentity;
 }
 
 /**
@@ -253,6 +273,12 @@ export class WsRpcClient<
   private readonly hostAttestationWindowMs: number;
   private readonly evidence: TransportEvidenceReporter;
   private readonly liveness: LocalHostLiveness;
+  /**
+   * Serialized ONCE at construction, not per request: every member is a
+   * process constant, so re-projecting it on each of this transport's
+   * per-request sockets would allocate an identical object per RPC.
+   */
+  private readonly clientIdentity: ClientHandshakeIdentity;
 
   constructor(options: WsRpcClientOptions<Registry>) {
     this.registry = options.registry;
@@ -263,6 +289,7 @@ export class WsRpcClient<
     this.hostAttestationWindowMs = options.hostAttestationWindowMs;
     this.evidence = options.evidence;
     this.liveness = new LocalHostLiveness(options.evidence);
+    this.clientIdentity = toClientHandshakeIdentity(options.clientIdentity);
   }
 
   async request<Method extends keyof Registry & string>(
@@ -332,6 +359,7 @@ export class WsRpcClient<
         token,
         manifest: clientManifest.manifest,
         optionalManifest: clientManifest.optionalManifest,
+        clientIdentity: this.clientIdentity,
       });
 
       // Handshake stays on the transport default even when the caller
@@ -416,6 +444,7 @@ export class WsRpcClient<
           params,
           requestId,
           responseTimeoutMs,
+          selected.hostId,
         );
       }
 
@@ -431,6 +460,7 @@ export class WsRpcClient<
         params,
         requestId,
         responseTimeoutMs,
+        selected.hostId,
       );
     } finally {
       authority.abortSignal.removeEventListener("abort", onAbort);
@@ -439,7 +469,13 @@ export class WsRpcClient<
   }
 
   private buildManifest(): SplitConnectionManifest {
-    return splitConnectionManifest(this.registry, RELEASED_FLOOR_METHOD_NAMES);
+    // See the note in `remote-session.ts`: unary majors are all serveable by
+    // a client, so only the stream manifest narrows.
+    return splitConnectionManifest(
+      this.registry,
+      RELEASED_FLOOR_METHOD_NAMES,
+      SERVES_EVERY_INSTALLED_MAJOR,
+    );
   }
 }
 
@@ -452,6 +488,7 @@ async function executeAvailableMethodRequest<Payload, Response>(
   params: Payload,
   requestId: string,
   responseTimeoutMs: number,
+  hostId: string,
 ): Promise<Response> {
   const preparedRequest = prepareRequestPayload<Payload>(
     methodRegistry,
@@ -487,13 +524,15 @@ async function executeAvailableMethodRequest<Payload, Response>(
 
   const decodedResult = decodeResponseFrame(responseFrame, requestId, method);
 
-  return decodeResponsePayload<Response>(
+  return decodeResponsePayloadWithContext<Response>(
     methodRegistry,
     clientCanonical,
     hostCanonical,
     decodedResult,
     requestId,
     method,
+    preparedRequest.onWirePayload,
+    hostId,
   );
 }
 
@@ -511,6 +550,7 @@ async function executeUnavailableMethodDegrade<
   params: RequestOfMethod<Registry, Method>,
   requestId: string,
   responseTimeoutMs: number,
+  hostId: string,
 ): Promise<ResponseOfMethod<Registry, Method>> {
   // Degrade POLICY is shared with the remote mux transport (see
   // `unavailable-method-degrade.ts`); only the dispatch below is ws-specific.
@@ -533,6 +573,7 @@ async function executeUnavailableMethodDegrade<
         input.params,
         requestId,
         responseTimeoutMs,
+        hostId,
       ),
   })) as ResponseOfMethod<Registry, Method>;
 }
@@ -638,6 +679,47 @@ export function decodeResponsePayload<Payload>(
   requestId: string,
   method: string,
 ): Payload {
+  return decodeResponsePayloadInternal(
+    methodRegistry,
+    clientCanonical,
+    hostCanonical,
+    result,
+    requestId,
+    method,
+    null,
+  );
+}
+
+export function decodeResponsePayloadWithContext<Payload>(
+  methodRegistry: MethodVersionRegistry,
+  clientCanonical: SchemaVersion,
+  hostCanonical: SchemaVersion,
+  result: unknown,
+  requestId: string,
+  method: string,
+  onWireRequest: unknown,
+  hostId: string,
+): Payload {
+  return decodeResponsePayloadInternal(
+    methodRegistry,
+    clientCanonical,
+    hostCanonical,
+    result,
+    requestId,
+    method,
+    { request: onWireRequest, hostId },
+  );
+}
+
+function decodeResponsePayloadInternal<Payload>(
+  methodRegistry: MethodVersionRegistry,
+  clientCanonical: SchemaVersion,
+  hostCanonical: SchemaVersion,
+  result: unknown,
+  requestId: string,
+  method: string,
+  context: { readonly request: unknown; readonly hostId: string } | null,
+): Payload {
   if (clientCanonical.major === hostCanonical.major) {
     if (clientCanonical.minor <= hostCanonical.minor) {
       return result as Payload;
@@ -649,6 +731,7 @@ export function decodeResponsePayload<Payload>(
       result,
       requestId,
       method,
+      context,
     );
   }
   if (clientCanonical.major < hostCanonical.major) {
@@ -661,6 +744,7 @@ export function decodeResponsePayload<Payload>(
     result,
     requestId,
     method,
+    context,
   );
 }
 
@@ -671,6 +755,7 @@ function upgradeResponseAlongChain<Payload>(
   result: unknown,
   requestId: string,
   method: string,
+  context: { readonly request: unknown; readonly hostId: string } | null,
 ): Payload {
   try {
     // The host is the older side here, so `result` is raw wire data framed at
@@ -694,12 +779,21 @@ function upgradeResponseAlongChain<Payload>(
       }
       chainInput = parsed.data;
     }
-    const upgraded = upgradeResponseToVersion(
-      methodRegistry,
-      fromVersion,
-      toVersion,
-      chainInput as never,
-    );
+    const upgraded =
+      context === null
+        ? upgradeResponseToVersion(
+            methodRegistry,
+            fromVersion,
+            toVersion,
+            chainInput as never,
+          )
+        : upgradeResponseToVersionWithContext(
+            methodRegistry,
+            fromVersion,
+            toVersion,
+            chainInput as never,
+            { request: context.request as never, hostId: context.hostId },
+          );
     return upgraded as Payload;
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : String(cause);
@@ -827,13 +921,7 @@ function decodeResponseFrame(
   }
 
   if (frame.error !== null) {
-    throw new HostRpcError({
-      code: isRpcErrorCode(frame.error.code) ? frame.error.code : "RPC_ERROR",
-      message: frame.error.message,
-      requestId,
-      method,
-      fatalDetails: null,
-    });
+    throw HostRpcError.fromWireEnvelope(frame.error, requestId, method);
   }
 
   return frame.result;

@@ -232,6 +232,7 @@ export function FloatingDraftPopover(props: FloatingDraftPopoverProps) {
       open
       aria-label="New comment"
       data-slot="floating-draft-popover"
+      data-browser-overlay="floating-draft-popover"
       className={cn(
         "absolute top-0 left-0 z-50 m-0 w-[min(90vw,22rem)] rounded-md border border-border bg-popover p-2 text-popover-foreground shadow-lg outline-none",
       )}

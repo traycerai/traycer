@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { WorktreeBusyHolder } from "./worktree-busy-holders";
 
 declare const validatedMethodVersionRegistryBrand: unique symbol;
 declare const validatedVersionedRpcRegistryBrand: unique symbol;
@@ -23,6 +24,7 @@ export const RPC_ERROR_CODES = [
   "VERB_NOT_ALLOWED",
   "E_HOST_UNSUPPORTED",
   "WORKTREE_BUSY",
+  "WORKTREE_HOLDERS_CHANGED",
   "WORKTREE_REBIND_BLOCKED",
   "WORKTREE_SETUP_FAILED",
   "WORKTREE_SETUP_CANCELLED",
@@ -75,6 +77,15 @@ export const RPC_ERROR_CODES = [
   // must never be reported as "still syncing". Same additive degrade story
   // as E_INVALID_ARGUMENT.
   "E_FORK_BOUNDARY_NOT_PUBLISHED",
+  // `worktree.setAutoCleanupPolicy` was called with an `expectedRevision` the
+  // host no longer holds - another surface changed this host's automatic
+  // cleanup policy first. A precondition failure on the CALLER's stale read,
+  // not a server fault, and never a blind retry: the loser of the race would
+  // be re-enabling scheduled DELETION under a threshold the user has since
+  // moved. Clients re-read the policy and re-present it. Same additive degrade
+  // story as E_INVALID_ARGUMENT - the code carries the whole meaning, so no
+  // typed details channel is widened for it.
+  "AUTO_CLEANUP_POLICY_REVISION_CONFLICT",
 ] as const;
 
 export type RpcErrorCode = (typeof RPC_ERROR_CODES)[number];
@@ -86,6 +97,18 @@ export function isRpcErrorCode(value: string): value is RpcErrorCode {
 export type RpcErrorDetails = {
   code: RpcErrorCode;
   message: string;
+  /**
+   * Typed holder inventory on `WORKTREE_BUSY` and
+   * `WORKTREE_HOLDERS_CHANGED`. Optional: omitted on every other code, and
+   * omitted by hosts that predate the holders minor. See
+   * `worktreeBusyHolderSchema`.
+   */
+  holders?: readonly WorktreeBusyHolder[];
+  /**
+   * Host-computed digest of `holders`. Present on `WORKTREE_BUSY` and
+   * `WORKTREE_HOLDERS_CHANGED` from a current host; omitted otherwise.
+   */
+  holdersRevision?: string;
 };
 
 export type RpcContract<
@@ -138,7 +161,13 @@ export type RpcErrorFor<Contract> = Contract extends AnyRpcContract
   : never;
 
 export type RpcResultFor<Contract> =
-  RpcSuccessFor<Contract> | RpcErrorFor<Contract>;
+  | RpcSuccessFor<Contract>
+  | RpcErrorFor<Contract>;
+
+export type RpcResponseUpgradeContext<Request> = {
+  readonly request: Request;
+  readonly hostId: string;
+};
 
 type SameMethodPair<
   From extends AnyRpcContract,
@@ -149,21 +178,43 @@ type SameMethodPair<
     : false
   : false;
 
-export type UpgradePath<
+type UpgradePathBase<From extends AnyRpcContract, To extends AnyRpcContract> = {
+  from: From["schemaVersion"];
+  to: To["schemaVersion"];
+  upgradeRequest: (request: RequestOf<From>) => RequestOf<To>;
+};
+
+export type ContextlessUpgradePath<
   From extends AnyRpcContract,
   To extends AnyRpcContract,
 > =
   SameMethodPair<From, To> extends true
-    ? {
-        from: From["schemaVersion"];
-        to: To["schemaVersion"];
-        upgradeRequest: (request: RequestOf<From>) => RequestOf<To>;
+    ? UpgradePathBase<From, To> & {
         upgradeResponse: (response: ResponseOf<From>) => ResponseOf<To>;
       }
     : never;
 
+export type ContextualUpgradePath<
+  From extends AnyRpcContract,
+  To extends AnyRpcContract,
+> =
+  SameMethodPair<From, To> extends true
+    ? UpgradePathBase<From, To> & {
+        upgradeResponse: (
+          response: ResponseOf<From>,
+          context: RpcResponseUpgradeContext<RequestOf<From>> | undefined,
+        ) => ResponseOf<To>;
+      }
+    : never;
+
+export type UpgradePath<
+  From extends AnyRpcContract,
+  To extends AnyRpcContract,
+> = ContextlessUpgradePath<From, To> | ContextualUpgradePath<From, To>;
+
 export type DowngradeResult<Value> =
-  { ok: true; value: Value } | { ok: false; error: RpcErrorDetails };
+  | { ok: true; value: Value }
+  | { ok: false; error: RpcErrorDetails };
 
 export type DowngradePath<
   From extends AnyRpcContract,
@@ -243,7 +294,10 @@ export type AnyUpgradePath = {
   from: SchemaVersion;
   to: SchemaVersion;
   upgradeRequest: (request: never) => object;
-  upgradeResponse: (response: never) => object;
+  upgradeResponse: (
+    response: never,
+    context: RpcResponseUpgradeContext<never> | undefined,
+  ) => object;
 };
 
 /**
@@ -280,6 +334,13 @@ export type VersionEntry<
    * cannot check; other structural reductions remain forbidden.
    */
   readonly responseGrowthProjectionGated?: true;
+  /**
+   * Declares that the first contract in a new major changes semantics even
+   * when its isolated request/response schemas remain structurally
+   * compatible. Use only when the method belongs to a coherently negotiated
+   * family whose authority or topology changed across the major boundary.
+   */
+  readonly semanticMajorBreakFromPreviousMajor?: true;
 };
 
 export type AnyVersionEntry = VersionEntry<
@@ -711,6 +772,9 @@ export type RuntimeUpgradePath<Registry extends MethodVersionRegistry> = {
   ) => RegistryRequestValue<Registry>;
   upgradeResponse: (
     response: RegistryResponseValue<Registry>,
+    context:
+      | RpcResponseUpgradeContext<RegistryRequestValue<Registry>>
+      | undefined,
   ) => RegistryResponseValue<Registry>;
 };
 

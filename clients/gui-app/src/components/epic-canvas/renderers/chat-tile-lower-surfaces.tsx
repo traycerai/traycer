@@ -13,6 +13,7 @@ import type { InterviewAnswer } from "@traycer/protocol/persistence/epic/schemas
 import type { ChatForkMode } from "@/components/chat/chat-message";
 import {
   ChatComposer,
+  type ChatComposerSideChatInput,
   type ChatComposerSubmitInput,
 } from "@/components/chat/composer/chat-composer";
 import { ChatComposerBannerPortalProvider } from "@/components/chat/composer/chat-composer-banner-portal";
@@ -28,6 +29,7 @@ import { useAgentStop } from "@/hooks/agent/use-stop-agent-mutation";
 import { StopChildrenDialog } from "@/components/chat/chat-stop-children-dialog";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import { PendingInterviewCard } from "@/components/chat/segments/pending-interview/pending-interview-card";
+import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { UnanswerableInterviewNotice } from "@/components/chat/segments/pending-interview/unanswerable-interview-notice";
 import { ComposerSlotApprovalQueue } from "@/components/chat/segments/composer-slot-approval-queue";
 import { ComposerSlotFileEditApprovalQueue } from "@/components/chat/segments/composer-slot-file-edit-approval-queue";
@@ -147,7 +149,11 @@ export interface ChatLowerInterviewState {
     blockId: string,
     answers: ReadonlyArray<InterviewAnswer>,
   ) => string | null;
-  readonly onError: (blockId: string, reason: string) => string | null;
+  readonly onSkip: (
+    blockId: string,
+    reason: string,
+    draftAnswers: ReadonlyArray<InterviewAnswer> | undefined,
+  ) => string | null;
   // Branch the chat at the pending question (see ChatForkMode). null when the
   // pending interview has no stable fork boundary.
   readonly onFork: ((mode: ChatForkMode) => void) | null;
@@ -191,6 +197,8 @@ export interface ChatLowerComposerState {
   readonly fallbackToGlobalMentionRoots: boolean;
   readonly currentEpicId: string;
   readonly onSubmitMessage: (input: ChatComposerSubmitInput) => boolean;
+  /** `/btw` / `/side`: fork this chat and ask there (`startSideChat`). */
+  readonly onSideChat: (input: ChatComposerSideChatInput) => boolean;
   readonly onSettingsChange: ((settings: ChatRunSettings) => void) | null;
   /** The Location / Mode+branch / Environment chip cluster (+ context usage). */
   readonly workspaceControls: ReactNode;
@@ -507,6 +515,7 @@ function ComposerSurface(props: {
   readonly layout: ComposerSurfaceLayout;
 }): ReactNode {
   const { model, layout } = props;
+  const tabHostId = useTabHostId();
   if (!model.runtime.snapshotLoaded) {
     return null;
   }
@@ -543,7 +552,12 @@ function ComposerSurface(props: {
         <UnanswerableInterviewNotice
           interviews={model.interview.unanswerable}
           isBusy={model.interview.unanswerableBusy}
-          onDismiss={model.access.canAct ? model.interview.onError : null}
+          onDismiss={
+            model.access.canAct
+              ? (blockId, reason) =>
+                  model.interview.onSkip(blockId, reason, undefined)
+              : null
+          }
         />
       </ComposerSlotShell>
     ) : null;
@@ -567,8 +581,10 @@ function ComposerSurface(props: {
             isActive={model.composer.isActive}
             isBusy={model.interview.isBusy}
             onSubmit={model.access.canAct ? model.interview.onAnswer : null}
-            onSkip={model.access.canAct ? model.interview.onError : null}
+            onSkip={model.access.canAct ? model.interview.onSkip : null}
             onFork={model.access.canAct ? model.interview.onFork : null}
+            epicId={model.composer.currentEpicId}
+            hostId={tabHostId}
           />
         </ComposerSlotShell>
       </>
@@ -608,6 +624,7 @@ function LiveChatComposer(props: {
       }
       fallbackSettingsSeed={model.composer.fallbackSettingsSeed}
       onSubmitMessage={model.composer.onSubmitMessage}
+      onSideChat={model.composer.onSideChat}
       onSettingsChange={model.composer.onSettingsChange}
       activeTurnStatus={model.turn.activeTurnStatus}
       steerCapable={model.turn.steerCapable}

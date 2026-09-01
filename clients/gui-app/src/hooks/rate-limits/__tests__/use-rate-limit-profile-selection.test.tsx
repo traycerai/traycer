@@ -65,6 +65,7 @@ function profile(
 ): ProviderProfile {
   return {
     profileId,
+    enabled: true,
     kind,
     authType: "oauth",
     label: kind === "ambient" ? "Terminal" : profileId,
@@ -122,6 +123,8 @@ function registerChatSession(): ChatSessionStoreHandle {
         streamClientFactory: () => ({
           sendAction: () => undefined,
           sameTurnSteeringProtocolSupported: () => true,
+          requestTranscriptRange: () => undefined,
+          requestResnapshot: () => undefined,
           close: () => undefined,
         }),
       }),

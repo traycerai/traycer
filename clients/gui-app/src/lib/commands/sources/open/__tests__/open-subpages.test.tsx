@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import type { PropsWithChildren, ReactNode } from "react";
 import type {
   WorktreeBindingSelectorRowV12,
   WorktreeIntent,
@@ -21,6 +22,7 @@ const spies = vi.hoisted(() => ({
   createTuiAgent: vi.fn(),
   refreshHostDirectory: vi.fn(() => Promise.resolve([])),
   toast: vi.fn(),
+  openBrowserTab: vi.fn(),
 }));
 vi.mock("sonner", () => ({ toast: spies.toast }));
 const activeHostIdMock = vi.hoisted<{ current: string | null }>(() => ({
@@ -125,11 +127,12 @@ function chat(
   id: string,
   title: string,
   hostId: string | null,
+  parentId: string | null,
 ): ChatProjection {
   return {
     id,
     title,
-    parentId: null,
+    parentId,
     createdAt: 0,
     updatedAt: 0,
     userId: null,
@@ -142,6 +145,10 @@ function chat(
 function agent(id: string, title: string): TuiAgentProjection {
   return {
     id,
+    // An ordinary registry-backed agent - this suite exercises the open
+    // command's subpages, not doc residency.
+    docResident: false,
+    origin: "registry",
     harnessId: "claude",
     title,
     parentId: null,
@@ -162,17 +169,23 @@ function agent(id: string, title: string): TuiAgentProjection {
     terminalShellArgs: null,
   };
 }
-function artifact(id: string, title: string): ArtifactProjection {
+function artifact(args: {
+  readonly id: string;
+  readonly title: string;
+  readonly kind: "spec" | "ticket" | "story" | "review";
+  readonly parentId: string | null;
+  readonly status: number | null;
+}): ArtifactProjection {
   return {
-    id,
-    kind: "spec",
-    title,
+    id: args.id,
+    kind: args.kind,
+    title: args.title,
     folderName: "",
-    parentId: null,
+    parentId: args.parentId,
     artifactRoomId: null,
     createdAt: 0,
     updatedAt: 0,
-    status: null,
+    status: args.status,
     createdManually: false,
   };
 }
@@ -180,20 +193,39 @@ function artifact(id: string, title: string): ArtifactProjection {
 const FAKE_PROJECTION: EpicProjectedSlices = {
   ...EMPTY_PROJECTED_SLICES,
   chats: {
-    allIds: ["c1", "c2", "c3"],
+    allIds: ["c1", "c2", "c3", "c:colon"],
     byId: {
       // Lives on a different host than the active one ("default-host") -
       // should carry a host badge.
-      c1: chat("c1", "Chat One", "chat-host"),
+      c1: chat("c1", "Chat One", "chat-host", null),
       // Lives on the active host - no badge.
-      c2: chat("c2", "Chat Two", "default-host"),
+      c2: chat("c2", "Chat Two", "default-host", "c1"),
       // Lives on a directory-listed host whose label is blank - the badge
       // must fall back to the raw hostId, not render an empty chip.
-      c3: chat("c3", "Chat Three", "blank-label-host"),
+      c3: chat("c3", "Chat Three", "blank-label-host", "c1"),
+      "c:colon": chat("c:colon", "Colon Chat", "default-host", null),
     },
   },
   tuiAgents: { allIds: ["a1"], byId: { a1: agent("a1", "Agent One") } },
-  artifacts: { allIds: ["s1"], byId: { s1: artifact("s1", "Spec One") } },
+  artifacts: {
+    allIds: ["s1", "t1"],
+    byId: {
+      s1: artifact({
+        id: "s1",
+        title: "Spec One",
+        kind: "spec",
+        parentId: null,
+        status: null,
+      }),
+      t1: artifact({
+        id: "t1",
+        title: "Ticket One",
+        kind: "ticket",
+        parentId: "s1",
+        status: 1,
+      }),
+    },
+  },
 };
 
 vi.mock("@/lib/commands/actions", () => ({
@@ -318,6 +350,7 @@ vi.mock("@/hooks/terminal/use-terminal-list-query", () => ({
           status: "running",
           title: "Copilot sign-in",
           cwd: "~",
+          lifecycleOwner: "manager",
         },
         {
           sessionId: "term-setup",
@@ -326,6 +359,16 @@ vi.mock("@/hooks/terminal/use-terminal-list-query", () => ({
           status: "running",
           title: "Setup: traycer feature",
           cwd: "/work/repo",
+          lifecycleOwner: "manager",
+        },
+        {
+          sessionId: "term-registry",
+          scope: { kind: "epic", epicId: "epic-1" },
+          sessionKind: "terminal",
+          status: "running",
+          title: "durable shadow",
+          cwd: "/work/repo",
+          lifecycleOwner: "registry",
         },
       ],
     },
@@ -351,7 +394,13 @@ vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
 
 import { useAgentsOpenerItems } from "@/lib/commands/sources/open/agents-subpage";
 import { useTerminalsOpenerItems } from "@/lib/commands/sources/open/terminals-subpage";
+import { useBrowserOpenerItems } from "@/lib/commands/sources/open/browser-subpage";
+import { BrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
 import { useArtifactsOpenerItems } from "@/lib/commands/sources/open/artifacts-subpage";
+import {
+  DEFAULT_BROWSER_TILE_URL,
+  DEFAULT_BROWSER_VIEWPORT_PRESET,
+} from "@/stores/epics/canvas/tile-schema/browser-tile";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 import {
@@ -401,6 +450,29 @@ function renderItems(
     .current;
 }
 
+function renderBrowserItems(): ReadonlyArray<CommandItem> {
+  function Wrapper({ children }: PropsWithChildren): ReactNode {
+    return (
+      <BrowserSessionsContext.Provider
+        value={{
+          hostId: "default-host",
+          lifecycle: "live",
+          inventoryReady: true,
+          items: [],
+          errorMessage: null,
+          retry: () => undefined,
+          openTab: spies.openBrowserTab,
+          closeTab: () => Promise.resolve(),
+        }}
+      >
+        {children}
+      </BrowserSessionsContext.Provider>
+    );
+  }
+  return renderHook(() => useBrowserOpenerItems(CTX), { wrapper: Wrapper })
+    .result.current;
+}
+
 function runById(items: ReadonlyArray<CommandItem>, id: string): void {
   const item = items.find((entry) => entry.id === id);
   if (item === undefined) throw new Error(`no opener item ${id}`);
@@ -446,7 +518,7 @@ afterEach(() => {
 });
 
 describe("Agents opener sub-page", () => {
-  it("leads with both interfaces' creation leaves, then every Agent record", () => {
+  it("leads with creation leaves, then follows the canonical nested Agent tree", () => {
     const items = renderItems(useAgentsOpenerItems);
     // Creation for both interfaces sits at the top; records follow as one list
     // rather than two interface-grouped collections.
@@ -460,6 +532,31 @@ describe("Agents opener sub-page", () => {
     const ids = items.map((i) => i.id);
     expect(ids).toContain("open:chats:c1");
     expect(ids).toContain("open:tui:a1");
+    expect(ids).toContain("open:chats:c:colon");
+    expect(ids.indexOf("open:chats:c2")).toBeGreaterThan(
+      ids.indexOf("open:chats:c1"),
+    );
+    expect(ids.indexOf("open:chats:c3")).toBeGreaterThan(
+      ids.indexOf("open:chats:c1"),
+    );
+    expect(
+      items.find((item) => item.id === "open:chats:c1")?.agentTreeRow,
+    ).toMatchObject({
+      depth: 0,
+      ancestorIds: [],
+      hasChildren: true,
+      interface: "chat",
+      activity: "idle",
+    });
+    expect(
+      items.find((item) => item.id === "open:chats:c2")?.agentTreeRow,
+    ).toMatchObject({
+      depth: 1,
+      ancestorIds: ["c1"],
+      hasChildren: false,
+      interface: "chat",
+      activity: "idle",
+    });
   });
 
   it("preserves the leaf id prefixes the palette keys analytics off", () => {
@@ -746,9 +843,15 @@ describe("Terminals opener sub-page", () => {
     expect(spies.openTileIntoTargetGroup).not.toHaveBeenCalled();
   });
 
-  it("keeps setup-disabled workspaces visible as non-actionable rows", () => {
+  it("keeps failed setup visible while allowing terminal creation", () => {
     terminalBindingsMock.active.data.rows = [
-      { ...ACTIVE_ROWS[0], disabledReason: "setup_failed" },
+      {
+        ...ACTIVE_ROWS[0],
+        setupState: "failed",
+        // Compatibility with an older host that still projected setup failure
+        // as a disabled reason.
+        disabledReason: "setup_failed",
+      },
     ];
     const items = renderItems(useTerminalsOpenerItems);
     const newTerminal = items[0];
@@ -756,17 +859,19 @@ describe("Terminals opener sub-page", () => {
       throw new Error("expected terminal workspace subpage");
     }
 
-    const disabled = renderItems(newTerminal.subpage.useItems).find(
+    const warning = renderItems(newTerminal.subpage.useItems).find(
       (item) => item.label === "/work/active-repo",
     );
-    if (disabled === undefined) {
-      throw new Error("expected disabled workspace row");
+    if (warning === undefined) {
+      throw new Error("expected setup warning workspace row");
     }
-    expect(disabled.description).toBe("Workspace unavailable: failed");
-    expect(disabled.statusBadge).toBe("Unavailable: failed");
-    expect(disabled.disabled).toBe(true);
-    void disabled.run(CTX);
-    expect(spies.openTileIntoTargetGroup).not.toHaveBeenCalled();
+    expect(warning.description).toBe(
+      "Setup did not complete, but the worktree is still usable.",
+    );
+    expect(warning.statusBadge).toBe("Setup failed");
+    expect(warning.disabled).not.toBe(true);
+    void warning.run(CTX);
+    expect(spies.openTileIntoTargetGroup).toHaveBeenCalledTimes(1);
   });
 
   it("shows an error when a folderless terminal directory cannot be resolved", () => {
@@ -851,12 +956,99 @@ describe("Terminals opener sub-page", () => {
     }
     expect(plainOpened.ref.origin).toBeUndefined();
   });
+
+  it("carries manager lifecycleOwner from the list without origin-store evidence", () => {
+    const items = renderItems(useTerminalsOpenerItems);
+    runById(items, "open:terminals:term-setup");
+    const setupOpened = lastTileOpen();
+    if (setupOpened.ref.type !== "terminal") {
+      throw new Error("expected terminal");
+    }
+    expect(setupOpened.ref.lifecycleOwner).toBe("manager");
+    expect(setupOpened.ref.origin).toBeUndefined();
+    expect(setupOpened.ref.hostId).toBe("default-host");
+    expect(isHostEpicTerminalRef(setupOpened.ref)).toBe(false);
+
+    runById(items, "open:terminals:term-signin");
+    const loginOpened = lastTileOpen();
+    if (loginOpened.ref.type !== "terminal") {
+      throw new Error("expected terminal");
+    }
+    expect(loginOpened.ref.lifecycleOwner).toBe("manager");
+    expect(loginOpened.ref.origin).toBeUndefined();
+  });
+
+  it("keeps a registry listed row as an import candidate even with a stale origin cache", () => {
+    recordSetupTerminal({
+      hostId: "default-host",
+      sessionId: "term-registry",
+    });
+    const items = renderItems(useTerminalsOpenerItems);
+    runById(items, "open:terminals:term-registry");
+    const opened = lastTileOpen();
+    if (opened.ref.type !== "terminal") {
+      throw new Error("expected terminal");
+    }
+    expect(opened.ref.lifecycleOwner).toBe("registry");
+    expect(opened.ref.origin).toBe("setup");
+    expect(isHostEpicTerminalRef(opened.ref)).toBe(false);
+  });
+});
+
+describe("Browser opener sub-page", () => {
+  it("opens New browser through the host and places its session pointer", async () => {
+    spies.openBrowserTab.mockResolvedValueOnce({
+      sessionId: "session-new",
+      tabId: "tab-new",
+    });
+    const items = renderBrowserItems();
+    expect(items).toHaveLength(1);
+    expect(items[0].id).toBe("open:browser:new");
+    expect(items[0].label).toBe("New browser");
+
+    act(() => runById(items, "open:browser:new"));
+
+    expect(spies.openBrowserTab).toHaveBeenCalledWith(
+      null,
+      DEFAULT_BROWSER_TILE_URL,
+    );
+    await waitFor(() => {
+      expect(spies.openTileIntoTargetGroup).toHaveBeenCalledOnce();
+    });
+    const opened = lastTileOpen();
+    expect(opened.groupId).toBe("group-1");
+    expect(opened.tabId).toBe("tab-1");
+    expect(opened.ref).toMatchObject({
+      type: "browser-session",
+      hostId: "default-host",
+      sessionId: "session-new",
+      tabId: "tab-new",
+      viewportPreset: DEFAULT_BROWSER_VIEWPORT_PRESET,
+    });
+  });
 });
 
 describe("Artifacts opener sub-page", () => {
-  it("lists existing artifacts and opens them into the target", () => {
+  it("lists the nested artifact tree with status metadata and opens a node", () => {
     const items = renderItems(useArtifactsOpenerItems);
-    expect(items.map((i) => i.id)).toEqual(["open:artifacts:s1"]);
+    expect(items.map((i) => i.id)).toEqual([
+      "open:artifacts:s1",
+      "open:artifacts:t1",
+    ]);
+    expect(items[0].artifactTreeRow).toMatchObject({
+      depth: 0,
+      ancestorIds: [],
+      hasChildren: true,
+      kind: "spec",
+      status: null,
+    });
+    expect(items[1].artifactTreeRow).toMatchObject({
+      depth: 1,
+      ancestorIds: ["s1"],
+      hasChildren: false,
+      kind: "ticket",
+      status: 1,
+    });
     runById(items, "open:artifacts:s1");
     const opened = lastTileOpen();
     expect(opened.groupId).toBe("group-1");

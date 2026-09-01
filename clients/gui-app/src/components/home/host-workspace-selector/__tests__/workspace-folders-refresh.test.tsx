@@ -332,6 +332,9 @@ describe("folder-mapping refresh affordance", () => {
       >
         <TooltipProvider>
           <WorkspaceFolderSummaryControl
+            recentWorkspaces={null}
+            recentWorkspaceCount={0}
+            moveToRecent={false}
             items={[ITEM]}
             readOnly={false}
             bindingResolved
@@ -343,6 +346,7 @@ describe("folder-mapping refresh affordance", () => {
             updateEnabled={false}
             updatePending={false}
             onDiscardStaged={null}
+            discardDisabled={false}
             onEditEnvironment={NOOP}
             refresh={state}
             popoverTestId="home-workspace-rows-popover"
@@ -397,6 +401,9 @@ describe("folder-mapping refresh affordance", () => {
       >
         <TooltipProvider>
           <WorkspaceFolderSummaryControl
+            recentWorkspaces={null}
+            recentWorkspaceCount={0}
+            moveToRecent={false}
             items={[ITEM]}
             readOnly={false}
             bindingResolved
@@ -408,6 +415,7 @@ describe("folder-mapping refresh affordance", () => {
             updateEnabled={false}
             updatePending={false}
             onDiscardStaged={null}
+            discardDisabled={false}
             onEditEnvironment={NOOP}
             refresh={state.current}
             popoverTestId="home-workspace-rows-popover"
@@ -532,6 +540,9 @@ function renderControl(over: {
     >
       <TooltipProvider>
         <WorkspaceFolderSummaryControl
+          recentWorkspaces={null}
+          recentWorkspaceCount={0}
+          moveToRecent={false}
           items={[ITEM]}
           readOnly={false}
           bindingResolved
@@ -543,6 +554,7 @@ function renderControl(over: {
           updateEnabled={false}
           updatePending={false}
           onDiscardStaged={null}
+          discardDisabled={false}
           onEditEnvironment={NOOP}
           refresh={state}
           popoverTestId="home-workspace-rows-popover"

@@ -14,6 +14,8 @@ export interface ChatFindAdapter extends TileFindAdapter {
   // query, so a closed bar pays no projection cost on streaming updates.
   notifyRowsChanged(): void;
   syncMountedHighlight(): void;
+  /** Leave the current result without closing the query or discarding matches. */
+  dismissActiveMatch(): void;
   dispose(): void;
 }
 
@@ -23,6 +25,16 @@ interface ChatFindAdapterOptions {
   // opens, the query changes, or a notified message change must be rescanned -
   // never while the bar is closed.
   readonly getRows: () => ReadonlyArray<ChatFindRow>;
+  /**
+   * Lazy supplier of the caveat describing what `getRows()` could NOT see, read
+   * at exactly the moments the rows are.
+   *
+   * On the windowed line (`chat.subscribe@1.8`) the transcript the client holds
+   * is a subset, so every count this adapter publishes is a count over a
+   * subset. `null` when the scan was complete - the legacy line always, and the
+   * windowed line once every row is hydrated.
+   */
+  readonly getCoverageMessage: () => string | null;
   readonly revealMatch: (target: ChatFindRevealTarget) => void;
   readonly reconcileMatch: (target: ChatFindReconcileTarget) => void;
   readonly clearReveal: () => void;
@@ -81,6 +93,24 @@ const EMPTY_MATCHES: ReadonlyArray<ChatFindMatch> = [];
 // land elsewhere in the (often concatenated) unit.
 const FIND_RECONCILE_CONTEXT_WINDOW = 32;
 
+/**
+ * The find bar's caveat for a transcript the client only partly holds.
+ *
+ * Takes the count rather than the window so the copy stays a pure function of
+ * one number and this module keeps no dependency on the transcript store.
+ * Phrased like the diff tiles' `bundleCoverageMessage`, because a user meets
+ * these two caveats in the same bar and they should read as one feature.
+ *
+ * The case this matters most for is not a short count - it is **zero** matches
+ * over a subset, which without the caveat reads as a definitive "not in this
+ * chat".
+ */
+export function chatFindCoverageMessage(unhydratedRows: number): string | null {
+  if (unhydratedRows <= 0) return null;
+  const noun = unhydratedRows === 1 ? "message is" : "messages are";
+  return `Partial results: ${unhydratedRows.toLocaleString()} older ${noun} not loaded.`;
+}
+
 export function createChatFindAdapter(
   options: ChatFindAdapterOptions,
 ): ChatFindAdapter {
@@ -93,6 +123,7 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
   readonly replace = null;
 
   private readonly getRows: () => ReadonlyArray<ChatFindRow>;
+  private readonly getCoverageMessage: () => string | null;
   private readonly revealMatch: (target: ChatFindRevealTarget) => void;
   private readonly reconcileMatch: (target: ChatFindReconcileTarget) => void;
   private readonly clearReveal: () => void;
@@ -107,15 +138,24 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
   private readonly highlighter: ChatFindHighlighter;
 
   private rows: ReadonlyArray<ChatFindRow> = [];
+  // Refreshed with `rows`, never independently: the caveat has to describe the
+  // very scan whose counts are being published, and a window that hydrates
+  // between the two reads would otherwise let a stale caveat outlive its scan.
+  private coverage: string | null = null;
   private matches: ReadonlyArray<ChatFindMatch> = EMPTY_MATCHES;
   private activeMatchIndex = 0;
   private snapshot: TileFindStateSnapshot;
   private paintFrameId: number | null = null;
   private paintGeneration = 0;
+  // Clearing the find target is an explicit user dismissal. Passive rescans
+  // and virtual-row mount syncs must preserve that state until navigation or a
+  // new search deliberately selects an active match again.
+  private activeMatchDismissed = false;
 
   constructor(options: ChatFindAdapterOptions) {
     this.tileInstanceId = options.tileInstanceId;
     this.getRows = options.getRows;
+    this.getCoverageMessage = options.getCoverageMessage;
     this.revealMatch = options.revealMatch;
     this.reconcileMatch = options.reconcileMatch;
     this.clearReveal = options.clearReveal;
@@ -129,6 +169,7 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
       matchCase: false,
       current: 0,
       total: 0,
+      coverageMessage: null,
       activeUnitId: null,
       exactHighlight: "none",
     });
@@ -149,13 +190,16 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
     this.clearReveal();
     this.cancelScheduledPaint();
     this.highlighter.clear();
+    this.activeMatchDismissed = false;
     if (input.query.length === 0) {
       // An empty query needs no projection: skip the supplier entirely and let
       // publishMatchState reset to the idle snapshot.
       this.matches = EMPTY_MATCHES;
+      this.coverage = null;
     } else {
       // Opening or changing the query is the point at which rows must be built.
       this.rows = this.getRows();
+      this.coverage = this.getCoverageMessage();
       this.matches = findMatches({
         rows: this.rows,
         query: input.query,
@@ -173,6 +217,7 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
 
   next(): void {
     if (this.matches.length === 0 || this.snapshot.query.length === 0) return;
+    this.activeMatchDismissed = false;
     this.activeMatchIndex = (this.activeMatchIndex + 1) % this.matches.length;
     this.publishMatchState({
       requestId: this.snapshot.requestId,
@@ -184,6 +229,7 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
 
   previous(): void {
     if (this.matches.length === 0 || this.snapshot.query.length === 0) return;
+    this.activeMatchDismissed = false;
     this.activeMatchIndex =
       (this.activeMatchIndex - 1 + this.matches.length) % this.matches.length;
     this.publishMatchState({
@@ -206,6 +252,7 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
     // snapshot so a closed bar does no per-token work; reopening re-runs search
     // from scratch.
     this.matches = EMPTY_MATCHES;
+    this.coverage = null;
     this.activeMatchIndex = 0;
     this.snapshot = createChatFindSnapshot({
       requestId: this.snapshot.requestId,
@@ -214,6 +261,7 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
       matchCase: this.snapshot.matchCase,
       current: 0,
       total: 0,
+      coverageMessage: null,
       activeUnitId: null,
       exactHighlight: "none",
     });
@@ -226,6 +274,7 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
     // transcript projection and markdown tokenizer.
     if (this.snapshot.query.length === 0) return;
     this.rows = this.getRows();
+    this.coverage = this.getCoverageMessage();
     const previousActive = this.matches[this.activeMatchIndex] ?? null;
     this.matches = findMatches({
       rows: this.rows,
@@ -246,8 +295,33 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
   }
 
   syncMountedHighlight(): void {
-    if (this.matches.length === 0 || this.snapshot.query.length === 0) return;
+    if (
+      this.activeMatchDismissed ||
+      this.matches.length === 0 ||
+      this.snapshot.query.length === 0
+    ) {
+      return;
+    }
     this.requestHighlightPaint();
+  }
+
+  dismissActiveMatch(): void {
+    if (this.snapshot.query.length === 0) return;
+    this.cancelScheduledPaint();
+    this.highlighter.clear();
+    this.activeMatchDismissed = true;
+    if (
+      this.snapshot.activeUnitId === null &&
+      this.snapshot.exactHighlight === "none"
+    ) {
+      return;
+    }
+    this.snapshot = {
+      ...this.snapshot,
+      activeUnitId: null,
+      exactHighlight: "none",
+    };
+    this.notify();
   }
 
   dispose(): void {
@@ -265,6 +339,7 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
   }): void {
     if (args.query.length === 0) {
       this.matches = EMPTY_MATCHES;
+      this.coverage = null;
       this.activeMatchIndex = 0;
       this.clearReveal();
       this.snapshot = createChatFindSnapshot({
@@ -274,6 +349,7 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
         matchCase: args.matchCase,
         current: 0,
         total: 0,
+        coverageMessage: null,
         activeUnitId: null,
         exactHighlight: "none",
       });
@@ -292,6 +368,9 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
         matchCase: args.matchCase,
         current: 0,
         total: 0,
+        // The load-bearing one: "no matches" over a partial transcript is the
+        // reading a caveat has to qualify, not the one it can be dropped from.
+        coverageMessage: this.coverage,
         activeUnitId: null,
         exactHighlight: "none",
       });
@@ -302,6 +381,22 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
 
     const activeMatch = this.matches.at(this.activeMatchIndex);
     if (activeMatch === undefined) return;
+    if (this.activeMatchDismissed) {
+      this.snapshot = createChatFindSnapshot({
+        requestId: args.requestId,
+        status: "ready",
+        query: args.query,
+        matchCase: args.matchCase,
+        current: this.activeMatchIndex + 1,
+        total: this.matches.length,
+        coverageMessage: this.coverage,
+        activeUnitId: null,
+        exactHighlight: "none",
+      });
+      this.highlighter.clear();
+      this.notify();
+      return;
+    }
     this.snapshot = createChatFindSnapshot({
       requestId: args.requestId,
       status: "ready",
@@ -309,6 +404,7 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
       matchCase: args.matchCase,
       current: this.activeMatchIndex + 1,
       total: this.matches.length,
+      coverageMessage: this.coverage,
       activeUnitId: activeMatch.unitId,
       exactHighlight: "pending",
     });
@@ -445,6 +541,7 @@ function createChatFindSnapshot(args: {
   readonly matchCase: boolean;
   readonly current: number;
   readonly total: number;
+  readonly coverageMessage: string | null;
   readonly activeUnitId: string | null;
   readonly exactHighlight: TileFindStateSnapshot["exactHighlight"];
 }): TileFindStateSnapshot {
@@ -457,7 +554,7 @@ function createChatFindSnapshot(args: {
     replaceText: "",
     current: args.current,
     total: args.total,
-    coverageMessage: null,
+    coverageMessage: args.coverageMessage,
     errorMessage: null,
     activeUnitId: args.activeUnitId,
     exactHighlight: args.exactHighlight,

@@ -90,6 +90,7 @@ function mentionItem(path: string): ComposerPickerItem {
       action: { kind: "complete", mention: fileMention(path) },
       updatedAt: null,
       archived: false,
+      dormant: false,
       preview: null,
     },
   };

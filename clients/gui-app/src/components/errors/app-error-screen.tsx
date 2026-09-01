@@ -39,7 +39,7 @@ export function AppErrorScreen(props: AppErrorScreenProps): ReactNode {
     <div
       data-testid="app-error-screen"
       role="alert"
-      className="flex min-h-svh w-full items-center justify-center bg-background p-6 text-foreground"
+      className="flex min-h-safe-svh w-full items-center justify-center bg-background p-6 text-foreground"
     >
       <Card className="w-full max-w-md">
         <CardContent className="flex flex-col items-center gap-4 py-8 text-center">

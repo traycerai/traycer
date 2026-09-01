@@ -6,7 +6,7 @@ import { createReportIssueContext } from "@/lib/report-issue-context";
 import { worktreeFolderRowBadge } from "@/lib/worktree/worktree-folder-disabled-reason";
 
 /**
- * Loading / error / list states shared by the badge-less worktree pickers
+ * Loading / error / list states shared by the standard worktree pickers
  * (terminal creation, file tree). Surfaces that need custom row rules (the git
  * diff picker) use `WorktreeFolderList` directly.
  */
@@ -54,7 +54,7 @@ export function WorktreeFolderListBody(props: WorktreeFolderListBodyProps) {
       rows={props.rows}
       selectedRow={props.selectedRow}
       secondaryLabel={props.secondaryLabel}
-      disabledBadge={worktreeFolderRowBadge}
+      rowBadge={worktreeFolderRowBadge}
       onSelect={props.onSelect}
       autoFocusSearch={props.autoFocusSearch}
       emptyMessage={props.emptyMessage}

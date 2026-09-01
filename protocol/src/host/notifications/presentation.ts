@@ -1,5 +1,5 @@
 import {
-  type HostNotificationEntryV21,
+  type HostNotificationEntryV22,
   type HostNotificationOutcome,
 } from "@traycer/protocol/host/notifications/host-notifications";
 import {
@@ -29,7 +29,7 @@ export interface HostNotificationPresentation {
  * generic copy instead of throwing or exposing untrusted raw error text.
  */
 export function formatHostNotificationPresentation(
-  entry: HostNotificationEntryV21,
+  entry: HostNotificationEntryV22,
 ): HostNotificationPresentation {
   const known = parseKnownHostNotificationPayloadForKind(
     entry.kind,
@@ -41,9 +41,17 @@ export function formatHostNotificationPresentation(
       const context = notificationContext(agentName, title);
       const reason = known === null ? null : knownStoppedReason(known);
       const providerId = known === null ? null : knownProviderId(known);
+      const backgroundWorkRunning =
+        known === null ? false : knownBackgroundWorkRunning(known);
+      const status = agentStoppedStatus(
+        entry.outcome,
+        reason,
+        providerId,
+        backgroundWorkRunning,
+      );
       return {
         title,
-        body: `${context} • ${agentStoppedStatus(entry.outcome, reason, providerId)}`,
+        body: `${context} • ${status}`,
       };
     }
     case "agent.stalled":
@@ -72,7 +80,21 @@ export function formatHostNotificationPresentation(
         entry.payload,
         known,
       );
+    // Host-composed title, agent-authored reason as the context. The reason is
+    // the only thing that says WHICH wall was hit, so it leads the body; a
+    // payload this build cannot parse still gets the title and the status.
+    case "browser.human.needed":
+      return {
+        title: "Browser needs you",
+        body: `${browserHumanNeededReason(known) ?? "Browser"} • ${resolvableRequestStatus(entry.resolvedAt, "Waiting for you", "Resumed")}`,
+      };
   }
+}
+
+function browserHumanNeededReason(
+  known: HostNotificationKnownPayload | null,
+): string | null {
+  return known?.kind === "browser_human_needed" ? known.reason : null;
 }
 
 /**
@@ -137,14 +159,18 @@ export function hostOperationKnownCopy(
     case "approval":
     case "interview":
     case "workspace_operation_failed":
+    // The browser park row's copy is composed above from the entry itself, not
+    // from the payload arm: `reason` is the body's context, never a title.
+    case "browser_human_needed":
       return null;
-    // Worktree deletion supplies no copy of its own on purpose: the host
-    // already composed `title`/`message` into the payload's common fields, and
-    // that exact wording is what reached email and notification hooks at mint
-    // time. Re-deriving it here would make the in-app row and the email
-    // disagree about the same command for no gain - the arm's value is the
-    // structured counts and the navigation target, not the prose.
+    // Neither worktree operation supplies copy of its own, on purpose: the
+    // host already composed `title`/`message` into the payload's common
+    // fields, and that exact wording is what reached email and notification
+    // hooks at mint time. Re-deriving it here would make the in-app row and
+    // the email disagree about the same run for no gain - these arms' value is
+    // the structured counts and the navigation target, not the prose.
     case "worktree_deletion":
+    case "worktree_auto_cleanup":
       return null;
   }
 }
@@ -208,6 +234,8 @@ function knownTaskTitle(payload: HostNotificationKnownPayload): string | null {
     case "workspace_operation_failed":
       return payload.taskTitle;
     case "worktree_deletion":
+    case "worktree_auto_cleanup":
+    case "browser_human_needed":
       return null;
   }
 }
@@ -222,6 +250,8 @@ function knownAgentName(payload: HostNotificationKnownPayload): string | null {
     case "interview":
     case "workspace_operation_failed":
     case "worktree_deletion":
+    case "worktree_auto_cleanup":
+    case "browser_human_needed":
       return null;
   }
 }
@@ -236,6 +266,8 @@ function knownChatTitle(payload: HostNotificationKnownPayload): string | null {
     case "epic":
     case "agent_stalled":
     case "worktree_deletion":
+    case "worktree_auto_cleanup":
+    case "browser_human_needed":
       return null;
   }
 }
@@ -255,6 +287,8 @@ function knownStoppedReason(
     case "interview":
     case "workspace_operation_failed":
     case "worktree_deletion":
+    case "worktree_auto_cleanup":
+    case "browser_human_needed":
       return null;
   }
 }
@@ -273,6 +307,8 @@ function knownProviderId(
     case "interview":
     case "workspace_operation_failed":
     case "worktree_deletion":
+    case "worktree_auto_cleanup":
+    case "browser_human_needed":
       return null;
   }
 }
@@ -281,12 +317,32 @@ function agentStoppedStatus(
   outcome: HostNotificationOutcome,
   reason: string | null,
   providerId: ProviderId | null,
+  backgroundWorkRunning: boolean,
 ): string {
   if (outcome === "errored") {
     return agentStoppedFailureStatus(reason, providerId);
   }
   if (outcome === "stopped") return "Stopped";
+  if (backgroundWorkRunning) return "Background work running";
   return "Done";
+}
+
+function knownBackgroundWorkRunning(
+  payload: HostNotificationKnownPayload,
+): boolean {
+  switch (payload.kind) {
+    case "chat":
+    case "epic":
+      return payload.backgroundWorkRunning === true;
+    case "agent_stalled":
+    case "approval":
+    case "interview":
+    case "workspace_operation_failed":
+    case "worktree_deletion":
+    case "worktree_auto_cleanup":
+    case "browser_human_needed":
+      return false;
+  }
 }
 
 function agentStoppedFailureStatus(

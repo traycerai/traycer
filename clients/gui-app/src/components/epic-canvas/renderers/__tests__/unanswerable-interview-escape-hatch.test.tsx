@@ -3,7 +3,7 @@
  * the transcript renders no answer card for it (the block is settled or
  * missing), and every send is rejected with `DETACHED_INTERVIEW_PENDING`. The
  * only way out from inside the chat is dismissing the stuck block, so these
- * pin that the affordance appears and actually dispatches `interviewError`.
+ * pin that the affordance appears and actually dispatches local `interviewSkip`.
  */
 import {
   cleanup,
@@ -42,6 +42,7 @@ import type { PendingInterviewView } from "@/components/epic-canvas/renderers/ch
 import { WORKSPACE_COMPOSER_READY } from "@/lib/composer/workspace-composer-availability";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 
 const EMPTY_BACKGROUND_STOP_TASK_IDS: ReadonlySet<string> = new Set();
 
@@ -55,6 +56,8 @@ const RESTORE_CONTEXT: ChatRestoreContextValue = {
   restoreActionPending: false,
   restoreCheckpoint: () => null,
   accumulatedFileChanges: [],
+  undeliveredChangeCount: 0,
+  accumulatedSetComplete: true,
   revertFileChanges: () => null,
 };
 
@@ -77,9 +80,11 @@ const ANSWERABLE_CARD: PendingInterviewView = {
 
 function render(ui: ReactElement) {
   return testingRender(
-    <TooltipProvider delayDuration={0}>
-      <LazyMotion features={domAnimation}>{ui}</LazyMotion>
-    </TooltipProvider>,
+    <TabHostProvider hostId="host-1">
+      <TooltipProvider delayDuration={0}>
+        <LazyMotion features={domAnimation}>{ui}</LazyMotion>
+      </TooltipProvider>
+    </TabHostProvider>,
   );
 }
 
@@ -136,6 +141,7 @@ function props(
       fallbackToGlobalMentionRoots: true,
       currentEpicId: "epic-1",
       onSubmitMessage: () => false,
+      onSideChat: () => false,
       onSettingsChange: null,
       workspaceControls: null,
       workspaceAvailability: WORKSPACE_COMPOSER_READY,
@@ -159,7 +165,7 @@ function interviewState(
     unanswerable: [],
     unanswerableBusy: false,
     onAnswer: () => null,
-    onError: () => null,
+    onSkip: () => null,
     onFork: null,
     ...overrides,
   };
@@ -183,9 +189,9 @@ describe("unanswerable interview escape hatch", () => {
     expect(screen.queryByTestId("composer-stub")).not.toBeNull();
   });
 
-  it("dismisses the stuck block as errored when the composer is deadlocked", async () => {
+  it("skips the stuck block when the composer is deadlocked", async () => {
     const user = userEvent.setup();
-    const onError = vi.fn<(blockId: string, reason: string) => string | null>(
+    const onSkip = vi.fn<(blockId: string, reason: string) => string | null>(
       () => "action-1",
     );
     render(
@@ -193,7 +199,7 @@ describe("unanswerable interview escape hatch", () => {
         {...props(
           interviewState({
             unanswerable: [{ blockId: "settled-block", requestedAt: 10 }],
-            onError,
+            onSkip,
           }),
           true,
         )}
@@ -205,14 +211,14 @@ describe("unanswerable interview escape hatch", () => {
     ).not.toBeNull();
     await user.click(dismissButton());
 
-    expect(onError.mock.calls).toEqual([
-      ["settled-block", UNANSWERABLE_INTERVIEW_DISMISS_REASON],
+    expect(onSkip.mock.calls).toEqual([
+      ["settled-block", UNANSWERABLE_INTERVIEW_DISMISS_REASON, undefined],
     ]);
   });
 
   it("clears every stuck block in one dismissal, oldest first", async () => {
     const user = userEvent.setup();
-    const onError = vi.fn<(blockId: string, reason: string) => string | null>(
+    const onSkip = vi.fn<(blockId: string, reason: string) => string | null>(
       () => "action-1",
     );
     render(
@@ -223,7 +229,7 @@ describe("unanswerable interview escape hatch", () => {
               { blockId: "older-block", requestedAt: 10 },
               { blockId: "newer-block", requestedAt: 20 },
             ],
-            onError,
+            onSkip,
           }),
           true,
         )}
@@ -236,9 +242,9 @@ describe("unanswerable interview escape hatch", () => {
       screen.getByRole("button", { name: "Dismiss 2 questions" }),
     );
 
-    expect(onError.mock.calls).toEqual([
-      ["older-block", UNANSWERABLE_INTERVIEW_DISMISS_REASON],
-      ["newer-block", UNANSWERABLE_INTERVIEW_DISMISS_REASON],
+    expect(onSkip.mock.calls).toEqual([
+      ["older-block", UNANSWERABLE_INTERVIEW_DISMISS_REASON, undefined],
+      ["newer-block", UNANSWERABLE_INTERVIEW_DISMISS_REASON, undefined],
     ]);
   });
 

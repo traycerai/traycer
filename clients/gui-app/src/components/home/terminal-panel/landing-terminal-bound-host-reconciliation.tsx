@@ -1,7 +1,6 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type {
-  ClosePlainTerminalRequest,
   ImportLegacyPlainTerminalRequest,
   ImportLegacyPlainTerminalResponse,
 } from "@traycer/protocol/host/terminal/plain-schemas";
@@ -99,7 +98,8 @@ function LandingTerminalBoundHostReconciliation(props: {
       landingPageId,
       capability: authority.capability,
       canMutate: authority.canMutate,
-      closeTerminal: (request) => entry.mutations.close.mutateAsync(request),
+      closeTerminal: (request) =>
+        entry.mutations.close.mutateAsync({ ...request, hostId }),
       importLegacyTerminal: (request) =>
         entry.mutations.importLegacy.mutateAsync(request),
       queryClient,
@@ -135,9 +135,10 @@ export interface LandingTerminalBoundHostAuthorityEntry {
   >;
   readonly mutations: {
     readonly close: {
-      readonly mutateAsync: (
-        request: ClosePlainTerminalRequest,
-      ) => Promise<unknown>;
+      readonly mutateAsync: (request: {
+        readonly hostId: string;
+        readonly terminalId: string;
+      }) => Promise<unknown>;
     };
     readonly importLegacy: {
       readonly mutateAsync: (

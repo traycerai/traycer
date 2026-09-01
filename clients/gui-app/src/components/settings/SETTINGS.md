@@ -53,12 +53,155 @@ navigation event. The two `SETTINGS_PATHS` sets (`stores/tabs/store.ts` and
 gate at all: a section absent from them stops being recognised as a settings
 route for persistence. `devices` was missing from both for its whole life.
 
+## Responsive Behavior (mobile)
+
+The **route** presentation collapses to a drill-down below the 768px
+`useIsMobileViewport()` breakpoint: `/settings` renders the section list full-screen
+(`SettingsSidebar` with `variant="mobile-list"` - the index no longer
+redirects on phones), tapping a section navigates to its existing route
+full-screen, and `settings-layout.tsx` shows a back-to-list header instead of
+the rail. Desktop keeps the exact two-pane shell; the **modal** presentation
+is deliberately unchanged internally (it always renders the rail variant) and
+simply never opens on phones: `openSettings` in
+`src/stores/tabs/use-system-tab-modal.ts` - the single funnel for every modal
+entry point (user menu, deep-links, the palette/keybinding bridge) - gates on
+`isMobileViewport()` and navigates to the full-page route instead
+(`/settings/<section>` when a section is requested, else `/settings`).
+History keeps its modal on every viewport.
+
+### Two different mobile questions
+
+Everything above is VIEWPORT (`useIsMobileViewport()`) - it flips when a window
+is resized, and a narrow desktop window gets all of it. A separate, smaller set
+of rows is gated on the BUILD (`isMobileApp()`, the Capacitor bundle), because
+what they need is either a capability the shell does not have at any width or a
+product role that build does not play. Do not reach for the viewport hook for
+these: a narrow desktop window still has a power bridge and a hardware
+keyboard, and is still the end of a pairing that shows the code.
+
+- **Voice input** (`voice-settings-section.tsx`) - the build refuses dictation.
+- **Prevent sleep while running** (`prevent-sleep-settings-section.tsx`) - the
+  setting's only consumer, `PreventSleepController`, holds an OS power-save
+  blocker through the desktop power bridge, and `resolveDesktopPowerBridge`
+  returns null there. Extracted from `general-settings-panel.tsx` for exactly
+  this reason; the Running-agents group keeps two other rows, so it never
+  empties.
+- **The Keybindings SECTION** - chord capture is `window` `keydown` only
+  (`chord-capture-core.tsx`): a tap arms the chip to "Press chord…" and nothing
+  can commit it, and a binding clears only with Backspace.
+- **The Link mobile app SECTION** - the one entry here that is a PRODUCT call
+  rather than a capability limit, and the distinction is worth keeping. The
+  panel DISPLAYS a QR and a one-time code for another device to read, and in
+  the mobile app that device is the one holding the panel: the phone is the
+  SCANNER (`layout/header/sign-in/link-code-sign-in.tsx` redeems a code this
+  panel mints, and its own copy says "On your desktop, open Settings → Link
+  mobile app"). A phone _could_ show the code to a second phone; linking that way is
+  given up knowingly, because a pairing surface that names the wrong end of
+  itself costs more than the case it serves.
+
+Each returns `null` outright rather than rendering disabled with rewritten
+copy: a control the build will never perform is worse than no control.
+
+A whole section needs more than hiding its row, because a section id is
+addressable. `visibleSettingsSections()` (`lib/settings-sections.ts`) is the
+OFFERED list and `SETTINGS_SECTIONS` stays the whole RESOLVER table - ids are a
+compatibility surface, so a route, a remembered tab path and a title must keep
+resolving one that is not offered. Three surfaces present a choice and so read
+the offered list: the sidebar, the palette's settings sub-page
+(`navigation.source.ts`), and the leader digits (`keybindings/dispatch.ts`,
+which indexes positionally and must walk the same list the sidebar badges).
+Three more can arrive holding an id and each resolves it: the route (each
+omitted section's own `beforeLoad` redirects to `/settings/general` with
+`replace` - `settings.keybindings.tsx`, `settings.link-phone.tsx`), the modal
+(falls back to General for any section the build does not offer, since its
+section is persisted across launches), and the palette's `help:keybindings`
+row, which is dropped rather than left as the one entry point that routes
+around the rest. Only Keybindings needs that last one; nothing navigates
+directly to Link mobile app, so it gets no machinery it does not need.
+
+The gate is by SHELL, not by attached hardware: an iPad running the mobile app
+with a keyboard paired loses the section, which is the accepted cost of
+matching the Voice precedent. A capability signal (`IRunnerHost` fields) is
+what a finer rule would be built on.
+
+Supporting pieces, all viewport-agnostic where possible:
+
+- `settings-row-layout.ts` (`SETTINGS_ROW_STACK`) holds the narrow-width half
+  of the label-beside-control geometry every row shares. It is a WIDTH FLOOR,
+  not a stack: flex line-breaking reads an item's basis clamped by its own
+  `min-width`, so raising the label's floor to `70%` below `md` pushes any
+  control wider than the remaining third onto a line of its own before any
+  shrinking happens. Wide controls (selects, inputs, chip rows, action
+  clusters) therefore stack under the label at phone width, while a switch or
+  an icon button stays beside it - a settings toggle reads as one line on a
+  phone, the way it does natively. Every class carries `max-md:` bar the
+  `flex-wrap` the mechanism depends on, so it layers onto the row that uses it
+  (padding, borders and typography stay that row's own) and is inert from `md`
+  up - the pointer-width rendering is unchanged.
+  Rows that are two columns from their own markup rather than through
+  `SettingsRow` - the Shell panel's program and startup-flags rows,
+  Diagnostics' memory and log-detail rows, the host identity/updates rows, the
+  worktree branch-prefix row, the Skills header and the notification-hook rows
+  - apply it directly. Without a floor the control keeps its intrinsic width
+    and the label takes what is left, which on a phone is a sliver: a two-word
+    label breaks one word per line.
+- `settings-row.tsx` uses `flex-wrap` + a label `basis` so small controls
+  (switches) stay inline while wide controls wrap below the label on narrow
+  containers; `SETTINGS_ROW_STACK` raises that floor below `md` so the split
+  lands in the right place on a phone.
+- `settings-panel-shell.tsx` (and the inline shells in the Keybindings and
+  Shell panels) step padding down below `sm`; the shell header wraps.
+- A row whose control wrapped still has to decide what to DO with its new
+  line, and that is per-control rather than something the floor can express -
+  a button should not stretch, a text field should. The worktree branch-prefix
+  row is the worked example: below `md` its cluster spans the line
+  (`max-md:w-full`), the input flexes into it, and its description drops to
+  `md:truncate` so the sentence wraps once it owns the width instead of
+  ellipsing. Its reserved reset slot keeps leading the field at every width,
+  and the small inset that costs below `md` is deliberate - responsive
+  `order-*` would close it by splitting visual order from DOM order, and the
+  slot holds a labelled button, so focus and screen-reader order would then
+  reach Reset before the field it acts on (WCAG 2.4.3 / 1.3.2). No `order-*`
+  on interactive content: source order is the only order.
+- The Providers rail collapses below `md` into a full-width provider `Select`
+  above the detail pane, and the detail pane's own tab rail collapses into a
+  second `Select` (`provider-section-select.tsx`) in the rail's slot - so
+  picking a section is the same gesture as picking the provider one row above
+  it, rather than a bespoke one. Both arms read the same `tabs` list and the
+  same `providerTabLabel`; only the container differs, and `Tabs` stays
+  controlled by the panel, so exactly one section body is mounted either way.
+  Rows are icon + label only: the state a section is in belongs in its BODY,
+  one tap away, and a two-line row inside a menu is a card in other clothes.
+  The phone arm has no tab TRIGGERS, so it labels each pane with `aria-label`
+  and clears the `aria-labelledby` Radix would otherwise point at a trigger
+  that is not rendered. `EnvOverrideEditor` rows restack onto two lines below
+  `sm` and hide the column header.
+- `settings-touch-targets.css` (imported by `settings-layout.tsx`, scoped
+  under `[data-settings-touch-scope]`) enlarges the _hit areas_ of
+  switch/button/select-trigger primitives to >=44px on coarse-pointer devices
+  without changing any visual size - settings-only, the shared primitives in
+  `src/components/ui/` are untouched.
+  - The scope reaches only what the settings subtree CONTAINS, so the rows
+    inside an open menu are out of its range by construction: Radix portals
+    popover content to the body. A control the scope enlarges can therefore
+    open a list it cannot, which is how the Providers `Select` came to have a
+    44px trigger over 28px rows. Anything living in a portal owns its own
+    target instead, at the primitive: `pointer-coarse:min-h-11` on
+    `ui/select.tsx`'s `SelectItem` and on all four of `ui/dropdown-menu.tsx`'s
+    row types (item, checkbox, radio, sub-trigger - keep them in step). Reach
+    for a scope rule only for a control that renders in place.
+
 ## Key Files
 
 - `settings-layout.tsx` Owns the two-column shell for the settings route.
 - `settings-sidebar.tsx` Renders navigation from `settings-sections.ts`.
 - `settings-panel-shell.tsx` Shared width, header, and panel spacing - density-
   aware (see below).
+- `settings-touch-targets.css` Coarse-pointer hit-area rules for the route
+  shell (see below).
+- `settings-row-layout.ts` The `max-md:` label floor shared by every
+  label-beside-control row, `SettingsRow`'s and the bespoke ones alike - what
+  decides, per row width, which controls stack and which stay inline.
 - `settings-row.tsx` Shared label/description/control row - also density-aware.
   The label owns the flexible width; controls stay pinned to the trailing edge.
   If a wide control wraps, it remains right-aligned on its new line instead of
@@ -205,8 +348,8 @@ picker is NOT permanently on screen. The rail is a single `overflow-y-auto`
 anything else in it. The argument for removing the readout is
 non-duplication, not permanent visibility. `settings-host-select.tsx` and `use-settings-host-scope.ts`
 are deleted; `useHostScope` is the only host scope in Settings.
-`settings-host-labels.ts` survives solely for the composer's
-`host-workspace-selector`.
+The composer uses the shared `HostSwitcher`; it does not keep a parallel
+Settings label formatter.
 
 **Two host relationships, kept apart by grammar.** Merging them is the defect
 the whole surface guards against:
@@ -351,9 +494,34 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
     chord's mid-turn-steering semantics - stays out of Keybindings, which is
     for rebinding), Pin context usage breakdown (global toggle for the
     always-visible agent context-window breakdown, default off).
-  - **Running agents**: Prevent sleep while running, Show global resources
-    button, Show navigator resource stats (these stay out of Appearance -
-    they change information visibility, not styling).
+  - **Browser**: the in-app browser has no toggle - it is always on, and the
+    group carries no master switch.
+    Web link default + per-kind terminal/markdown link open-mode selects are
+    always active (no `disabled` state).
+    Agent tab surfacing (`agentTabSurfacingMode`: `pip` | `tile` | `off`,
+    default `off` - what the GUI does when the AGENT opens a browser tab via
+    its REPL `openTab` tool) governs suppressing host-driven opens that
+    previously always split the canvas.
+    `pip` floats the tab picture-in-picture unless a user-converted PiP is
+    showing or the epic surface is hidden; `tile` places a canvas tile
+    grouped by session - same-session opens become tabs of one pane - even
+    in hidden epics; `off` answers electron foreground creates with a hidden
+    off-screen view so the agent's open still succeeds, and leaves headless
+    tabs in the sidebar.
+    Disposition decisions live in `lib/browser-view/agent-tab-surfacing.ts`;
+    headless-origin tabs are diffed from `browser.sessions` lifecycle frames
+    in the dock, seeded snapshot-only so surfacing stays ephemeral across
+    reloads.
+    A conditional Detected dev origins row follows.
+    There is no standing risk disclosure in this group - the master toggle
+    row that carried one was deleted along with the toggle, and the
+    `SettingsRow` `risk` prop it was the sole consumer of was deleted with
+    it.
+  - **Running agents**: Prevent sleep while running
+    (`prevent-sleep-settings-section.tsx`, hidden in the mobile app - see
+    "Two different mobile questions"), Show global resources button, Show
+    navigator resource stats (these stay out of Appearance - they change
+    information visibility, not styling).
   - **Setup & migration**: Product tour (replay onboarding), Data migration
     (retry moving local SQLite tasks/epics to cloud - stays out of
     Diagnostics, which is support capture, not user data recovery).
@@ -564,7 +732,7 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       what the rename fixes.
       **`usage`'s label is PER-PROVIDER** (`providerTabLabel`): that tab holds
       managed profiles and usage limits, but managed profiles exist for
-      `claude-code` and `codex` only — so on the other ten providers the fixed
+      `claude-code`, `codex`, and `grok` only — so on the other providers the fixed
       label promised a section that is not there. Elsewhere it reads
       **"Usage limits"**, which is the panel's own words for what remains (the
       section inside is headed exactly that). The ID never varies; this is
@@ -690,7 +858,7 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     `totalTokens`/`remainingTokens` come from the inference `GetRateLimitUsage`
     gRPC, which the gui-app/daemon stack doesn't expose. Also a "Manage
     subscription" link (opens the platform URL via
-    `resolveManageSubscriptionUrl(runnerHost.authnBaseUrl)`, reused from
+    `resolvePlatformBaseUrl(runnerHost.signInUrl)`, reused from
     `user-menu.tsx`), and a refresh icon. A global account-context selector
     (Personal / each Team, shown only when the user has `teamSubscriptions`)
     chooses which subscription is displayed - the selection persists in the
@@ -1472,9 +1640,9 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
   `agent.selectionGuide.getGlobal` (returns `{ content, generatedDefaultContent }`),
   `agent.selectionGuide.setGlobal`, and
   `agent.selectionGuide.resetGlobalToDefault` through the agent selection guide
-  hooks. The global guide is the only scope: per-workspace
-  `.traycer/agent-selection-guide.md` overrides were removed (older hosts may
-  still send them, current clients ignore them).
+  hooks. This settings panel edits only the global guide. A workspace can add
+  `.traycer/agent-selection-guide.md` manually; agents layer that file over the
+  global guide when they work in that workspace.
 - `Keybindings` Keyboard shortcut customization.
 - `Shell` Shell binary + args used for every terminal PTY
   (`TerminalSessionManager` reads the effective config per spawn, file-watched,
@@ -1536,9 +1704,9 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
     default - reverting the SELECTED shell via `config.shell.revertArgs`). **On Windows hosts with WSL
     selected** (classified by binary via `windowsShellCaptionFamily`, shared
     with the host resolver) a single quiet line sits directly under the picker
-    in its column - "Agents won't see tools installed in WSL", amber dot +
-    `Info` glyph - with the explanation and the "run the Traycer host inside
-    WSL" remedy link (docs.traycer.ai/settings/shell#using-wsl) in a
+    in its column - "WSL applies to terminal tabs only", amber dot + `Info`
+    glyph - with the shell/host boundary and an "Install Traycer in WSL" WSLg
+    remedy link (docs.traycer.ai/install#windows-via-wsl) in a
     `HoverCard`; the glyph is itself a focusable anchor to that docs page so
     keyboard users reach the remedy without the pointer-only hover card. Only
     WSL earns a caption: PowerShell / Git Bash profile loading and cmd's plain
@@ -1719,6 +1887,86 @@ aria-live="polite"` carrying the equivalent text for
       call sites in `host-workspace-selector.tsx` and the cached-default path
       in `use-landing-composer-actions.ts`; entirely client-local, no host
       RPC or protocol change.
+  - **Automatic cleanup** (`worktree-auto-cleanup-section.tsx`) — a compact
+    host-scoped card above the inventory, holding the opt-in that lets this
+    host delete proven-safe, long-idle worktrees unattended. **Default off**,
+    per HOST identity (not per signed-in user), and backed entirely by the
+    host: `worktree.getAutoCleanupPolicy` / `setAutoCleanupPolicy` through
+    `useHostQuery` / `useHostMutation`. Nothing here schedules, retries, or
+    simulates cleanup client-side — deletion authority is the host's, and a
+    local fallback would be a second scheduler nobody asked for.
+    - **Five states, decided by one pure function** (`resolveAutoCleanupGate`,
+      exported for its own test): `absent` (no resolved host — the inventory's
+      own `HostScopeGate` one card below names that state, and a second copy of
+      it here would be two answers to one question), `checking`, `offline`,
+      `unsupported`, `ready`. The ladder fails OPEN into `checking` on
+      `useHostMethodSupport`'s `null`: telling someone their host is too old
+      because no handshake has completed yet is a claim about a fact not in
+      evidence. The card sits ABOVE the gate, so it makes the gate's two checks
+      — scope usability and reachability — itself before mounting any host read.
+      `offline` and `unsupported` are deliberately different sentences: one
+      calls for starting a machine, the other for updating it.
+    - **Writes carry the revision they read.** `expectedRevision` is required by
+      the contract, so the toggle stays disabled until the policy read lands.
+      A mismatch comes back as `AUTO_CLEANUP_POLICY_REVISION_CONFLICT`, which
+      is NOT toasted as a transport error: the hook re-reads the policy and the
+      card explains inline that the setting moved somewhere else. The success
+      response IS the fresh policy state, so it is written straight into the
+      read query's slot and no second round trip is needed.
+    - **Threshold**: presets 7 / 14 / 30 / 60 / 90 days plus a free value
+      validated against the host's own `bounds` (`autoCleanupDaysError`), never
+      a constant here — a host that moves its bounds needs no client release,
+      and the control can never offer a value the host is about to refuse.
+    - **Paused** states render the reason in plain English
+      (`AUTO_CLEANUP_PAUSED_COPY`, a `Record` over the closed wire enum so a new
+      arm fails to compile rather than rendering as silence) and offer NO repair
+      affordance: every arm clears without the user acting. `nextEvaluationAt`
+      is `null` while paused, and reads as "Next check: paused" — a real state,
+      not a missing timestamp. That line is why the pause copy exists at all: a
+      stale "last checked" must never be the only evidence nothing is happening.
+  - **Cleanup history** (`worktree-cleanup-history.tsx`) — a SUB-VIEW, not a
+    third card: it replaces the panel body and carries a back control. Reached
+    from the cleanup card's button, or arrived at directly from an
+    automatic-cleanup notification. Cursor-paginated newest-first over
+    `worktree.listAutoCleanupRuns` with an explicit **Load more** (no
+    auto-advance: history holds up to 200 runs and the user asked for the newest
+    ones); expanding a run fetches its targets through
+    `worktree.getAutoCleanupRun`, so a page costs one request rather than one
+    per row.
+    - **The presentation rule is a product decision, not styling**
+      (`worktree-auto-cleanup-copy.ts`). A `skipped` target is the safety engine
+      WORKING — it lost eligibility between selection and deletion — so it reads
+      "No longer eligible" in neutral styling. An `interrupted` one is honestly
+      unconfirmed ("Unconfirmed — Host stopped during cleanup"): the row may not
+      claim a deletion just because the directory is gone now, nor a failure
+      that never happened. **Only `failed` wears failure styling.** Putting the
+      other two in red trains people to ignore the one state that means Traycer
+      could not do something it was authorized to do.
+    - The host's `displayMessage` wins wherever it exists: `reasonCode` is an
+      OPEN string by contract, so a code this build has never heard of still
+      renders host-composed prose.
+    - **Every target row stands alone.** A later re-selection of the same path is
+      an ordinary new row, never folded into the attempt before it.
+      `worktreePath` renders verbatim — it names a directory on the very host
+      the panel is already talking to, which is why history never leaves it.
+    - **Arriving from a notification.** A `worktree_auto_cleanup` row routes
+      through the `hostSurface` family with `view: "cleanupHistory"`, the run id
+      as its focus hint, AND the run's `hostId`.
+      `routeHostSurfaceNotification` applies both BEFORE navigating, so the
+      panel reads them on its first render rather than flashing the wrong host
+      or the wrong sub-view: `carryViewedHostIntoSettingsScope` (history is
+      host-local, so the destination is only well defined once Settings is
+      administering the host the run happened on) and `selectWorktreeCleanupView`
+      (`stores/settings/worktree-cleanup-view-store` — not persisted, mirroring
+      `settings-host-scope-store`). The focus hint is consumed ONCE, on arrival,
+      so re-entering history later never silently re-expands a run the user
+      closed. Manual `worktree_deletion` rows carry NEITHER field, which is
+      exactly why their behavior is unchanged: they select the inventory for
+      whichever host is already being administered.
+    - `run: null` from `getAutoCleanupRun` is an ordinary outcome, not an error:
+      retention GC bounds history, so a notification can outlive the run it
+      names and the honest answer is "this run is no longer in this host's
+      history".
   - **Worktree inventory.** Host-wide management of the git worktrees Traycer
     creates under `~/.traycer/worktrees/`, presented as a calm
     inspection-and-cleanup list, not a delete console - own bordered card,
@@ -1864,10 +2112,13 @@ aria-live="polite"` carrying the equivalent text for
       half is actionable from Settings - the pid names a process this page can
       only reach through the Restart button beside it, and the relay origin is
       infrastructure the account picked. What it carried that anyone acts on is
-      the session count, which is now a chip on the identity line straight off
-      `host.status.busySessionCount`: emerald and pulsing above zero, muted at
-      zero, and ABSENT while the host has not answered, because "No active
-      sessions" is a claim and silence is not. `host-overview-parity.test.tsx`
+      whether the host is busy, which is now a chip on the identity line from
+      `host.status.busyBreakdown` (via `describeHostBusy`): "2 agents · 1
+      terminal working" / "1 terminal agent working" / "Idle". Emerald and
+      pulsing only when `busy`; muted when idle; ABSENT while the host has not
+      answered, because "Idle" is a claim and silence is not. A @1.1 host
+      (`busyBreakdown: null`) falls back to "N sessions"; a host that is busy
+      with no count at all says "Busy". `host-overview-parity.test.tsx`
       is correspondingly stricter - `endpointText` is no longer a named
       exception, so the two variants now differ on the "This computer" tag and
       the danger zone's removal plane and nothing else.

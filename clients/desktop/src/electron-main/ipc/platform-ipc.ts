@@ -48,13 +48,17 @@ import {
   setHardwareAccelerationPreference,
 } from "../app/gpu-acceleration";
 import { RunnerHostInvoke } from "../../ipc-contracts/ipc-channels";
-import type { FileSaveInput } from "../../ipc-contracts/platform-types";
+import type {
+  FileSaveInput,
+  FileSaveResult,
+} from "../../ipc-contracts/platform-types";
 import {
   app,
   BrowserWindow,
   clipboard,
   dialog,
   nativeImage,
+  shell,
   type ProxyConfig,
 } from "electron";
 import { randomUUID } from "node:crypto";
@@ -82,6 +86,8 @@ import type {
   LogLevelsSnapshot,
   FeatureSettingsSnapshot,
 } from "../../ipc-contracts/platform-types";
+import { log, redactCrashComponentStack, redactLogText } from "../app/logger";
+import { parseRendererCrashTelemetryInput } from "../../ipc-contracts/renderer-crash-telemetry";
 
 /**
  * Registers IPC handlers that expose platform-integration primitives to the
@@ -95,6 +101,24 @@ import type {
 export function registerPlatformIpc(
   bridge: Pick<RunnerIpcBridge, "handleInvoke">,
 ): void {
+  bridge.handleInvoke(
+    RunnerHostInvoke.rendererCrashPersist,
+    (_event, input: unknown): void => {
+      const telemetry = parseRendererCrashTelemetryInput(input);
+      log.error("[renderer-crash] RootErrorBoundary captured uncaught error", {
+        appVersion: redactNullableText(telemetry.appVersion),
+        buildRevision: redactNullableText(telemetry.buildRevision),
+        componentStack:
+          telemetry.componentStack === null
+            ? null
+            : redactCrashComponentStack(telemetry.componentStack),
+        correlationId: redactLogText(telemetry.correlationId),
+        fingerprint: redactLogText(telemetry.fingerprint),
+        timestamp: telemetry.timestamp,
+      });
+    },
+  );
+
   bridge.handleInvoke(
     RunnerHostInvoke.fileDropWriteTemporary,
     async (_event, input: unknown): Promise<string> => {
@@ -139,9 +163,15 @@ export function registerPlatformIpc(
     },
   );
 
+  // Every path `fileSave` wrote this process lifetime. `fileOpenSaved` opens
+  // only members of this set, so the renderer's "Open file" affordance can
+  // reach exactly the files the user just picked in the native dialog and
+  // nothing else on disk.
+  const savedFilePaths = new Set<string>();
+
   bridge.handleInvoke(
     RunnerHostInvoke.fileSave,
-    async (event, input: unknown): Promise<string | null> => {
+    async (event, input: unknown): Promise<FileSaveResult | null> => {
       const file = parseFileSaveInput(input);
       const defaultPath = path.basename(file.name) || "download";
       const options = {
@@ -155,7 +185,24 @@ export function registerPlatformIpc(
           : await dialog.showSaveDialog(window, options);
       if (result.canceled || !result.filePath) return null;
       await writeFile(result.filePath, Buffer.from(new Uint8Array(file.bytes)));
-      return path.basename(result.filePath);
+      savedFilePaths.add(result.filePath);
+      return { name: path.basename(result.filePath), path: result.filePath };
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.fileOpenSaved,
+    async (_event, input: unknown): Promise<void> => {
+      if (typeof input !== "string" || !savedFilePaths.has(input)) {
+        throw new Error("file.openSaved: path was not saved by this session");
+      }
+      // `shell.openPath` resolves to "" on success and to an OS error message
+      // on failure (file gone, no handler app) - surface that as a rejection
+      // so the renderer can toast it instead of silently doing nothing.
+      const failure = await shell.openPath(input);
+      if (failure.length > 0) {
+        throw new Error(failure);
+      }
     },
   );
 
@@ -368,11 +415,14 @@ export function registerPlatformIpc(
 
   bridge.handleInvoke(
     RunnerHostInvoke.certTrustRemove,
-    async (_event, fingerprint: unknown, hostname: unknown) => {
+    async (_event, scope: unknown, fingerprint: unknown, hostname: unknown) => {
+      if (scope !== "app-shell" && scope !== "browser") {
+        throw new Error("cert:untrust requires a known trust scope");
+      }
       if (typeof fingerprint !== "string" || typeof hostname !== "string") {
         throw new Error("cert:untrust requires string fingerprint + hostname");
       }
-      await untrustCertificate(fingerprint, hostname);
+      await untrustCertificate(scope, fingerprint, hostname);
     },
   );
 
@@ -472,6 +522,10 @@ export function registerPlatformIpc(
   bridge.handleInvoke(RunnerHostInvoke.fontsList, () => {
     return listInstalledFonts();
   });
+}
+
+function redactNullableText(value: string | null): string | null {
+  return value === null ? null : redactLogText(value);
 }
 
 async function readLogLevelsSnapshot(): Promise<LogLevelsSnapshot> {

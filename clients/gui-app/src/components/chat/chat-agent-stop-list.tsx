@@ -2,6 +2,7 @@ import { useDraggable } from "@dnd-kit/core";
 import { useCallback, useId, useMemo, type ReactNode } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { BackgroundActivityGlyph } from "@/components/notifications/background-activity-glyph";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { AgentStopButton } from "@/components/chat/agent-stop-button";
 import {
@@ -9,6 +10,7 @@ import {
   getActiveAgentDragId,
   type EpicCanvasActiveAgentDragData,
 } from "@/components/epic-canvas/dnd/dnd";
+import { useDragSourceDisabled } from "@/components/epic-canvas/dnd/use-drag-source-disabled";
 import type { AgentRow } from "@/hooks/agent/use-agent-stop-controls";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { useMaybeEpicTuiAgentHarnessId } from "@/lib/epic-selectors";
@@ -23,13 +25,23 @@ function nodeKindForSurface(surface: "gui" | "tui"): "chat" | "terminal-agent" {
   return surface === "gui" ? "chat" : "terminal-agent";
 }
 
-function ActivityDot(props: { readonly active: boolean }) {
-  if (props.active) {
+function ActivityDot(props: {
+  readonly activity: AgentRow["activity"];
+  readonly agentId: string;
+}) {
+  if (props.activity === "turn") {
     return (
       <AgentSpinningDots
         className="shrink-0 text-muted-foreground"
         testId={undefined}
         variant={undefined}
+      />
+    );
+  }
+  if (props.activity === "background") {
+    return (
+      <BackgroundActivityGlyph
+        testId={`active-agent-background-activity-${props.agentId}`}
       />
     );
   }
@@ -54,7 +66,7 @@ function StopAffordance(props: {
 }) {
   if (!props.revealOnHover) return <>{props.children}</>;
   return (
-    <span className="inline-flex opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+    <span className="inline-flex opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 pointer-coarse:opacity-100">
       {props.children}
     </span>
   );
@@ -104,6 +116,7 @@ function AgentStopRow(props: {
       viewTabId,
     ],
   );
+  const dragDisabled = useDragSourceDisabled();
   const {
     attributes,
     listeners,
@@ -111,11 +124,13 @@ function AgentStopRow(props: {
     isDragging,
   } = useDraggable({
     id: getActiveAgentDragId(occurrenceId),
-    disabled: false,
+    disabled: dragDisabled,
     data: dragData,
   });
   const openAgent = useCallback(() => onOpen(agent), [agent, onOpen]);
-  const cursorClass = isDragging ? "cursor-grabbing" : "cursor-grab";
+  // No grab affordance where the gesture is gone: the row is a plain button.
+  const grabCursor = isDragging ? "cursor-grabbing" : "cursor-grab";
+  const cursorClass = dragDisabled ? null : grabCursor;
 
   return (
     <li
@@ -143,7 +158,7 @@ function AgentStopRow(props: {
             cursorClass,
           )}
         >
-          <ActivityDot active={agent.active} />
+          <ActivityDot activity={agent.activity} agentId={agent.id} />
           <span
             className={cn(
               "block min-w-0 flex-1 truncate text-ui-xs text-foreground/85",

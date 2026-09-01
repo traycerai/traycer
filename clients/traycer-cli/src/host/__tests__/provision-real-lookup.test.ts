@@ -90,6 +90,8 @@ describe("provisionHost real yank lookup construction", () => {
       lockReason: "test",
       onProgress: null,
       force: false,
+      adoption: undefined,
+      beforeMutate: null,
     });
 
     expect(result.action).toBe("noop");

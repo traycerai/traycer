@@ -1,23 +1,26 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { constants } from "node:fs";
-import { access, mkdtemp, rm } from "node:fs/promises";
+import { rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { createServer as createTcpServer } from "node:net";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import {
+  findChrome,
+  launchChromeWithDevTools,
+  terminateProcessTree,
+} from "./chrome-launcher.mjs";
 
 const projectRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
 );
 const fixtureUrlPath = "/src/__tests__/browser/diff-edit-focus.html";
-const chromePath = await findChrome();
-const profilePath = await mkdtemp(path.join(tmpdir(), "traycer-diff-edit-"));
+const chromePath = await findChrome("the diff edit browser regression");
 const vitePort = await freePort();
 let chrome;
+let chromeProfilePath;
 let client;
 let viteProcess;
 
@@ -38,6 +41,7 @@ try {
       path.join(projectRoot, "vitest.config.ts"),
       "--host",
       "127.0.0.1",
+      "--force",
       "--port",
       String(vitePort),
       "--strictPort",
@@ -51,46 +55,18 @@ try {
   });
   await waitForHttp(pageUrl, viteProcess, () => viteError, "Vite");
 
-  const chromeEnv = { ...process.env };
-  delete chromeEnv.DBUS_SESSION_BUS_ADDRESS;
-  chrome = spawn(
+  const launched = await launchChromeWithDevTools(
     chromePath,
-    [
-      "--headless=new",
-      "--disable-background-networking",
-      "--disable-component-update",
-      "--disable-default-apps",
-      "--disable-extensions",
-      "--disable-features=Translate",
-      "--disable-sync",
-      "--no-default-browser-check",
-      "--no-first-run",
-      "--no-sandbox",
-      "--remote-debugging-port=0",
-      `--user-data-dir=${profilePath}`,
-      "about:blank",
-    ],
-    { env: chromeEnv, stdio: ["ignore", "ignore", "pipe"] },
+    "traycer-diff-edit-",
   );
-  let chromeError = "";
-  chrome.stderr.setEncoding("utf8");
-  chrome.stderr.on("data", (chunk) => {
-    chromeError += chunk;
-  });
-
-  const devtoolsWebSocketUrl = await waitForDevToolsUrl(
-    chrome,
-    () => chromeError,
-  );
-  const devtoolsUrl = new URL(devtoolsWebSocketUrl);
-  devtoolsUrl.protocol = "http:";
-  devtoolsUrl.pathname = "";
-  devtoolsUrl.search = "";
-  devtoolsUrl.hash = "";
+  chrome = launched.chrome;
+  chromeProfilePath = launched.profilePath;
+  const readChromeError = launched.readError;
+  const devtoolsUrl = launched.devtoolsHttpUrl;
   await waitForHttp(
     new URL("/json/version", devtoolsUrl).href,
     chrome,
-    () => chromeError,
+    readChromeError,
     "Chrome DevTools",
   );
   const targetResponse = await fetch(
@@ -119,6 +95,83 @@ try {
   await waitFor(
     client,
     "the painted split diff",
+    `Boolean(document.querySelector("diffs-container")?.shadowRoot?.querySelector('[data-additions] [data-content] > [data-line="24"]'))`,
+  );
+  const initialContext = await evaluate(
+    client,
+    `(() => {
+      const root = document.querySelector("diffs-container")?.shadowRoot;
+      return {
+        expanders: root?.querySelectorAll("[data-expand-button]").length ?? 0,
+        trailing: root?.querySelector("[data-separator-last] [data-expand-button]") !== null,
+      };
+    })()`,
+  );
+  assert.ok(
+    initialContext.expanders > 0,
+    "collapsed context is not expandable before the diff is edited",
+  );
+  assert.equal(
+    initialContext.trailing,
+    true,
+    "trailing EOF context has no expander",
+  );
+  await clickShadowSelector(
+    client,
+    "[data-separator-last] [data-expand-button]",
+    "the trailing context expander",
+  );
+  await waitFor(
+    client,
+    "the expanded trailing context",
+    `Boolean(document.querySelector("diffs-container")?.shadowRoot?.querySelector('[data-additions] [data-content] > [data-line="30"]'))`,
+  );
+  assert.ok(
+    await evaluate(
+      client,
+      `Boolean(
+        document
+          .querySelector("diffs-container")
+          ?.shadowRoot?.querySelector(
+            '[data-separator-last] [data-expand-button]:not([data-collapse-button])',
+          ),
+      )`,
+    ),
+    "partial context expansion lost its remaining expander",
+  );
+  const collapseControl = await evaluate(
+    client,
+    `(() => {
+      const element = document.querySelector("diffs-container")?.shadowRoot?.querySelector("[data-collapse-button]");
+      return element === null ? null : {
+        tagName: element.tagName,
+        label: element.getAttribute("aria-label"),
+      };
+    })()`,
+  );
+  assert.deepEqual(
+    collapseControl,
+    { tagName: "BUTTON", label: "Collapse expanded lines" },
+    "expanded context has no collapse control",
+  );
+  await clickShadowSelector(
+    client,
+    "[data-collapse-button]",
+    "the context collapse control",
+  );
+  await waitFor(
+    client,
+    "the collapsed trailing context",
+    `!document.querySelector("diffs-container")?.shadowRoot?.querySelector('[data-additions] [data-content] > [data-line="30"]')`,
+  );
+  await clickShadowSelector(
+    client,
+    "[data-separator-last] [data-expand-button]",
+    "the restored trailing context expander",
+  );
+  await waitFor(
+    client,
+    "the re-expanded trailing context",
     `Boolean(document.querySelector("diffs-container")?.shadowRoot?.querySelector('[data-additions] [data-content] > [data-line="30"]'))`,
   );
   const clickPoint = await evaluate(
@@ -157,6 +210,63 @@ try {
   // Worker-backed first attach still has an in-flight highlight generation.
   // Typing before it settles accepts the key without painting the caret.
   await evaluate(client, `new Promise((resolve) => setTimeout(resolve, 500))`);
+
+  const dragPoints = await evaluate(
+    client,
+    `(() => {
+      const line = document.querySelector("diffs-container")?.shadowRoot?.querySelector('[data-additions] [data-content] > [data-line="30"]');
+      if (!(line instanceof HTMLElement)) return null;
+      const rect = line.getBoundingClientRect();
+      return {
+        start: { x: rect.left + 24, y: rect.top + rect.height / 2 },
+        end: { x: rect.left + 128, y: rect.top + rect.height / 2 },
+      };
+    })()`,
+  );
+  if (dragPoints === null) {
+    throw new Error("Could not resolve the editable text drag points");
+  }
+  const dragSelection = await drag(client, dragPoints.start, dragPoints.end);
+  await evaluate(client, `new Promise((resolve) => setTimeout(resolve, 1000))`);
+  const selectionRangeCount = await getSelectionRangeCount(client);
+  assert.ok(
+    dragSelection.during > 0,
+    `mouse drag never created a selection: ${JSON.stringify(dragSelection)}`,
+  );
+  assert.ok(
+    selectionRangeCount > 0,
+    `mouse-drag selection disappeared after the pointer gesture settled: ${JSON.stringify({ ...dragSelection, settled: selectionRangeCount })}`,
+  );
+  await click(client, clickPoint.x, clickPoint.y);
+  await waitFor(
+    client,
+    "the selection to collapse for the typing checks",
+    `document.querySelector("diffs-container")?.shadowRoot?.querySelector("[data-selection-range]") === null`,
+  );
+  await click(client, clickPoint.x, clickPoint.y, 2);
+  await evaluate(client, `new Promise((resolve) => setTimeout(resolve, 500))`);
+  assert.ok(
+    (await getSelectionRangeCount(client)) > 0,
+    "double-click selection disappeared after the pointer gesture settled",
+  );
+  await click(client, clickPoint.x, clickPoint.y);
+  await waitFor(
+    client,
+    "the double-click selection to collapse for the typing checks",
+    `document.querySelector("diffs-container")?.shadowRoot?.querySelector("[data-selection-range]") === null`,
+  );
+  await click(client, clickPoint.x, clickPoint.y, 3);
+  await evaluate(client, `new Promise((resolve) => setTimeout(resolve, 500))`);
+  assert.ok(
+    (await getSelectionRangeCount(client)) > 0,
+    "whole-line selection disappeared after the pointer gesture settled",
+  );
+  await click(client, clickPoint.x, clickPoint.y);
+  await waitFor(
+    client,
+    "the whole-line selection to collapse for the typing checks",
+    `document.querySelector("diffs-container")?.shadowRoot?.querySelector("[data-selection-range]") === null`,
+  );
 
   const attached = await snapshot(client);
   await typeKey(client, "x");
@@ -305,32 +415,17 @@ try {
   console.log("diff edit browser regression passed");
 } finally {
   client?.close();
-  chrome?.kill("SIGTERM");
-  viteProcess?.kill("SIGTERM");
-  await rm(profilePath, { recursive: true, force: true, maxRetries: 3 });
-}
-
-async function findChrome() {
-  const candidates = [
-    process.env.CHROME_BIN,
-    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-    "/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
-    "/usr/bin/google-chrome",
-    "/usr/bin/google-chrome-stable",
-    "/usr/bin/chromium",
-    "/usr/bin/chromium-browser",
-  ].filter((candidate) => candidate !== undefined);
-  for (const candidate of candidates) {
-    try {
-      await access(candidate, constants.X_OK);
-      return candidate;
-    } catch {
-      // Try the next platform-standard location.
-    }
+  if (chrome !== undefined) {
+    await terminateProcessTree(chrome);
   }
-  throw new Error(
-    "Chrome is required for the diff edit browser regression. Set CHROME_BIN to its executable.",
-  );
+  viteProcess?.kill("SIGTERM");
+  if (chromeProfilePath !== undefined) {
+    await rm(chromeProfilePath, {
+      recursive: true,
+      force: true,
+      maxRetries: 3,
+    });
+  }
 }
 
 async function freePort() {
@@ -365,23 +460,6 @@ async function waitForHttp(url, process, readError, label) {
     await delay(50);
   }
   throw new Error(`Timed out waiting for ${label}:\n${readError()}`);
-}
-
-async function waitForDevToolsUrl(process, readError) {
-  const deadline = Date.now() + 30_000;
-  while (Date.now() < deadline) {
-    if (process.exitCode !== null) {
-      throw new Error(
-        `Chrome exited before DevTools was ready:\n${readError()}`,
-      );
-    }
-    const match = readError().match(
-      /DevTools listening on (ws:\/\/[^\s]+\/devtools\/browser\/[^\s]+)/,
-    );
-    if (match !== null) return match[1];
-    await delay(50);
-  }
-  throw new Error(`Timed out waiting for Chrome DevTools:\n${readError()}`);
 }
 
 async function connectCdp(url) {
@@ -465,28 +543,93 @@ async function waitFor(client, label, expression) {
   );
 }
 
-async function click(client, x, y) {
+async function click(client, x, y, clickCount = 1) {
   await client.send("Input.dispatchMouseEvent", {
     type: "mouseMoved",
     x,
     y,
   });
+  for (let count = 1; count <= clickCount; count += 1) {
+    await client.send("Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      x,
+      y,
+      button: "left",
+      buttons: 1,
+      clickCount: count,
+    });
+    await client.send("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      x,
+      y,
+      button: "left",
+      buttons: 0,
+      clickCount: count,
+    });
+  }
+}
+
+async function drag(client, start, end) {
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x: start.x,
+    y: start.y,
+  });
   await client.send("Input.dispatchMouseEvent", {
     type: "mousePressed",
-    x,
-    y,
+    x: start.x,
+    y: start.y,
     button: "left",
     buttons: 1,
     clickCount: 1,
   });
   await client.send("Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x: end.x,
+    y: end.y,
+    button: "left",
+    buttons: 1,
+  });
+  const during = await getSelectionRangeCount(client);
+  await client.send("Input.dispatchMouseEvent", {
     type: "mouseReleased",
-    x,
-    y,
+    x: end.x,
+    y: end.y,
     button: "left",
     buttons: 0,
     clickCount: 1,
   });
+  const released = await getSelectionRangeCount(client);
+  return { during, released };
+}
+
+async function getSelectionRangeCount(client) {
+  return await evaluate(
+    client,
+    `document.querySelector("diffs-container")?.shadowRoot?.querySelectorAll("[data-selection-range]").length ?? 0`,
+  );
+}
+
+async function clickShadowSelector(client, selector, label) {
+  const point = await evaluate(
+    client,
+    `(() => {
+      const element = document.querySelector("diffs-container")?.shadowRoot?.querySelector(${JSON.stringify(selector)});
+      if (!(element instanceof HTMLElement)) return null;
+      element.scrollIntoView({ block: "center" });
+      const rect = element.getBoundingClientRect();
+      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    })()`,
+  );
+  if (
+    point === null ||
+    typeof point !== "object" ||
+    typeof point.x !== "number" ||
+    typeof point.y !== "number"
+  ) {
+    throw new Error(`Could not resolve ${label}`);
+  }
+  await click(client, point.x, point.y);
 }
 
 async function typeKey(client, key) {

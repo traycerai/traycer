@@ -127,16 +127,19 @@ export function attentionTone(
 
 export function terminalFailureTone(
   state: NotificationIndicatorState,
+  surface: AgentNotificationSurface,
 ): IndicatorTone | null {
-  return state.unreadFailure && state.unreadTerminalFailure === true
-    ? TERMINAL_FAILURE_TONE
-    : null;
+  if (!state.unreadFailure || state.unreadTerminalFailure !== true) return null;
+  return surface === "tui" ? TERMINAL_FAILURE_TONE : FAILURE_TONE;
 }
+
+export type AgentNotificationSurface = "gui" | "tui";
 
 interface NotificationFeedToneInput {
   readonly severity: HostNotificationSeverity;
   readonly hostKind: HostNotificationKind | null;
   readonly resolvedAt: number | null;
+  readonly agentSurface?: AgentNotificationSurface | null;
 }
 
 /** Resolve a durable feed event onto the same semantic status vocabulary used
@@ -148,7 +151,9 @@ interface NotificationFeedToneInput {
 export function notificationFeedTone(
   input: NotificationFeedToneInput,
 ): IndicatorTone | null {
-  if (input.severity === "failure") return FAILURE_TONE;
+  if (input.severity === "failure") {
+    return input.agentSurface === "tui" ? TERMINAL_FAILURE_TONE : FAILURE_TONE;
+  }
   if (input.severity === "done") return DONE_TONE;
   if (input.severity !== "needs_action") return null;
   if (input.hostKind === "interview.requested") {

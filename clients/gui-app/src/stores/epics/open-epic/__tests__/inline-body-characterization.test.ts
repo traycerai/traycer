@@ -14,9 +14,9 @@
  *     the artifact's `artifactRoomId` (the expected state after a fresh
  *     create).
  *   - Chat / unknown artifacts still return null.
- *   - The projector no longer bumps `contentRevByArtifactId` on edits to
- *     the legacy root `content` fragment because body edits now live on
- *     the artifact-room doc - the root doc carries metadata only.
+ *   - Editing a leftover legacy root `content` fragment does not produce
+ *     a bindable body (`getArtifactFragment` stays null) because body
+ *     edits now live on the artifact-room doc.
  */
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
@@ -115,10 +115,9 @@ describe("open-epic store artifact-room binding (post-B6)", () => {
     handle.dispose();
   });
 
-  it("does not bump contentRevByArtifactId for legacy root content edits", () => {
+  it("legacy root content edits do not produce a bindable body fragment", () => {
     const { handle } = newSession();
     const id = createArtifactInDocForTests(handle.doc, "spec", null);
-    const before = handle.store.getState().contentRevByArtifactId[id];
 
     const epic = handle.doc.getMap<unknown>("epic");
     const artifacts = epic.get("artifacts");
@@ -133,7 +132,6 @@ describe("open-epic store artifact-room binding (post-B6)", () => {
     text.insert(0, "legacy root body");
     legacyRootContent.insert(0, [text]);
 
-    expect(handle.store.getState().contentRevByArtifactId[id]).toBe(before);
     expect(handle.store.getState().getArtifactFragment(id)).toBeNull();
     handle.dispose();
   });

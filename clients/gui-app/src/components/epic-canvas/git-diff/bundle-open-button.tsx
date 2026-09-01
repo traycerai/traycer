@@ -4,6 +4,7 @@ import {
   getPaneScopedDndId,
   type EpicCanvasGitDiffTileDragData,
 } from "@/components/epic-canvas/dnd/dnd";
+import { useDragSourceDisabled } from "@/components/epic-canvas/dnd/use-drag-source-disabled";
 import { Button } from "@/components/ui/button";
 import {
   gitBundleGroupLabel,
@@ -54,10 +55,11 @@ export function BundleOpenButton(props: BundleOpenButtonProps): ReactNode {
     }),
     [props.epicId, props.viewTabId, tile],
   );
+  const dragDisabled = useDragSourceDisabled();
   const { listeners, setNodeRef: dragRef } = useDraggable({
     id: getPaneScopedDndId(props.viewTabId, getGitDiffTileDragId(tile.id)),
     data: dragData,
-    disabled: props.disabled,
+    disabled: props.disabled || dragDisabled,
   });
   const openBundle = useCallback(() => {
     navigateNested(props.epicId, props.viewTabId, () =>

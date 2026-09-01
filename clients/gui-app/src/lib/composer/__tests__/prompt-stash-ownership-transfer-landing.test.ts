@@ -99,6 +99,7 @@ describe("prompt-stash ownership transfer: landing", () => {
           runtimeStore: runtime.store,
           editorRef: editor.editorRef,
         }),
+        hostId: null,
       }),
     );
 
@@ -221,6 +222,7 @@ describe("prompt-stash ownership transfer: landing", () => {
           runtimeStore: runtime.store,
           editorRef: editorA.editorRef,
         }),
+        hostId: null,
       }),
     );
 
@@ -282,6 +284,7 @@ describe("prompt-stash ownership transfer: landing", () => {
           runtimeStore: runtimeB.store,
           editorRef: editorB.editorRef,
         }),
+        hostId: null,
       }),
     );
 

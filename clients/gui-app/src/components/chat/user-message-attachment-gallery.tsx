@@ -1,12 +1,8 @@
 import { useMemo, type ReactNode } from "react";
 import { ImageOff } from "lucide-react";
 
-import {
-  Dialog,
-  DialogContent,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
+import { Dialog, DialogTrigger } from "@/components/ui/dialog";
+import { ExpandedImageDialogContent } from "@/components/chat/expanded-image-dialog";
 import {
   type AttachmentBlobSrcState,
   useChatAttachmentBlobSrc,
@@ -16,6 +12,7 @@ import {
   fallbackImageAttachmentDisplayLabel,
   type ImageAttachmentDisplayLabel,
 } from "@/lib/composer/image-attachment-labels";
+import type { BrowserAnnotationRecord } from "@traycer/protocol/persistence/epic/schemas";
 import type { Attachment, ImageAttachment } from "@/lib/composer/types";
 import { cn } from "@/lib/utils";
 
@@ -23,14 +20,32 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 interface UserMessageAttachmentGalleryProps {
   readonly align: "start" | "end";
   readonly attachments: ReadonlyArray<Attachment>;
+  /**
+   * Annotation crops are rendered by the reference chips, not here, so the
+   * gallery hides the attachments they own. Taken as the message's own array
+   * (a stable reference) and reduced to hashes inside the memo below - passing
+   * a freshly built `Set` defeated the memo on every parent render.
+   */
+  readonly browserAnnotations:
+    | ReadonlyArray<BrowserAnnotationRecord>
+    | undefined;
 }
 
 export function UserMessageAttachmentGallery({
   align,
   attachments,
+  browserAnnotations,
 }: UserMessageAttachmentGalleryProps): ReactNode {
   const images = useMemo(() => {
-    const imageAttachments = attachments.filter(isImageAttachment);
+    const excludeHashes = new Set(
+      (browserAnnotations ?? []).map((annotation) => annotation.imageHash),
+    );
+    const imageAttachments = attachments
+      .filter(isImageAttachment)
+      .filter(
+        (attachment) =>
+          attachment.hash === null || !excludeHashes.has(attachment.hash),
+      );
     const labels = buildImageAttachmentDisplayLabels(
       imageAttachments.map((attachment, index) => ({
         id: String(index),
@@ -44,7 +59,7 @@ export function UserMessageAttachmentGallery({
       attachment,
       label: labels.get(String(index)),
     }));
-  }, [attachments]);
+  }, [attachments, browserAnnotations]);
   if (images.length === 0) return null;
   return (
     <div
@@ -140,35 +155,6 @@ function ImageAttachmentThumb({
     );
   }
 
-  let dialogBody: ReactNode;
-  if (image.status === "loading") {
-    dialogBody = (
-      <div
-        className="aspect-video w-full animate-pulse rounded-lg bg-foreground/10"
-        aria-hidden
-      />
-    );
-  } else if (image.status === "unavailable") {
-    dialogBody = (
-      <div
-        className="flex aspect-video w-full flex-col items-center justify-center gap-2 rounded-lg bg-foreground/5 px-4 py-8 text-center text-muted-foreground"
-        role="status"
-      >
-        <ImageOff className="size-8" aria-hidden />
-        <p className="text-ui-sm">Image unavailable</p>
-      </div>
-    );
-  } else {
-    dialogBody = (
-      <img
-        src={image.src}
-        alt={alt}
-        className="block max-h-[min(90vh,52rem)] w-full rounded-lg object-contain"
-        draggable={false}
-      />
-    );
-  }
-
   return (
     <Dialog>
       <DialogTrigger asChild>
@@ -194,13 +180,13 @@ function ImageAttachmentThumb({
           </button>
         </TooltipWrapper>
       </DialogTrigger>
-      <DialogContent
-        className="w-[min(95vw,80rem)] max-w-[min(95vw,80rem)] bg-popover/95 p-2 sm:max-w-[min(95vw,80rem)]"
-        showCloseButton
-      >
-        <DialogTitle className="sr-only">{alt}</DialogTitle>
-        {dialogBody}
-      </DialogContent>
+      <ExpandedImageDialogContent
+        title={alt}
+        alt={alt}
+        image={image}
+        suggestedName={attachment.name ?? null}
+        onCloseAutoFocus={undefined}
+      />
     </Dialog>
   );
 }

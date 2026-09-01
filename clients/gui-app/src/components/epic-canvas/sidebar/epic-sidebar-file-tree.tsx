@@ -29,8 +29,8 @@ import {
   useMemo,
   useRef,
   useState,
-  type ChangeEvent,
   type MouseEvent,
+  type RefObject,
 } from "react";
 import { FileTree, useFileTree, useFileTreeSearch } from "@pierre/trees/react";
 import { cn } from "@/lib/utils";
@@ -40,7 +40,6 @@ import type {
   FileTreeItemHandle,
   GitStatusEntry,
 } from "@pierre/trees";
-import { Search } from "lucide-react";
 import type { GitChangedFile } from "@traycer/protocol/host";
 import type {
   WorkspaceListFileTreeResponse,
@@ -57,19 +56,19 @@ import {
 } from "@/components/epic-canvas/dnd/dnd";
 import { usePierreCanvasDragBridge } from "@/components/epic-canvas/dnd/use-pierre-canvas-drag-bridge";
 import { extractPierreItemPathFromEvent } from "@/components/epic-canvas/pierre-tree-adapter";
-import { PIERRE_FILE_TREE_THEME_STYLE } from "@/components/epic-canvas/pierre-tree-theme";
+import {
+  PIERRE_FILE_TREE_THEME_STYLE,
+  PIERRE_FILE_TREE_TRUNCATION_TOLERANCE_CSS,
+} from "@/components/epic-canvas/pierre-tree-theme";
 import { workspaceFileRefFromTreePath } from "@/components/epic-canvas/workspace-file/workspace-file-ref";
 import { getBasename } from "@/lib/path/cross-platform-path";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupInput,
-} from "@/components/ui/input-group";
+import { PanelSearchField } from "@/components/epic-canvas/sidebar/epic-sidebar-search-field";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useGitListChangedFilesSubscription } from "@/hooks/git/use-git-list-changed-files-subscription";
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
+import { useShadowScrollerTouchShield } from "@/hooks/ui/use-shadow-scroller-touch-shield";
 import { useWorkspaceListFileTree } from "@/hooks/workspace/use-list-file-tree-query";
 import {
   useWorkspaceFileListSubscription,
@@ -80,6 +79,7 @@ import {
   useWorkspaceSearchPaths,
 } from "@/hooks/workspace/use-workspace-search-paths-query";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { gitChangedFileToPierreStatusEntry } from "@/lib/git/panel-file-rendering";
 import {
   StreamRuntimeContext,
@@ -91,7 +91,15 @@ import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { WorkspaceFileRef } from "@/stores/epics/canvas/types";
-import { mergeExpandedDirectoryPaths } from "@/lib/workspace/workspace-file-list-tree";
+import {
+  ancestorDirectoryPathsOf,
+  mergeExpandedDirectoryPaths,
+} from "@/lib/workspace/workspace-file-list-tree";
+import {
+  clearFileTreeRevealRequest,
+  useFileTreeRevealRequest,
+  type FileTreeRevealRequest,
+} from "@/stores/file-tree/file-tree-reveal-store";
 import {
   projectWorkspaceSearchPaths,
   type WorkspaceSearchPathsProjection,
@@ -199,6 +207,9 @@ function useFileTreeSource(args: {
     hostId: args.hostId,
     workspacePath: args.workspacePath,
     enabled: !useUnaryFallback,
+    streamClient: undefined,
+    expandedPathsOverride: null,
+    onPrunedOverride: null,
   });
   const search = useHostPathSearch({
     epicId: args.epicId,
@@ -485,6 +496,11 @@ export function FileTreePanelBodyForWorkspace(
   // The value to PROVIDE: ambient while following, the pin's own binding once
   // built, null while pending - never the ambient socket for a pinned host.
   const pinnedStreamBinding = useSurfaceHostStreamBinding(props.hostId);
+  // No viewport key: pierre bakes `density` / `itemHeight` at construction and
+  // offers no setter, so this body used to remount across the breakpoint to
+  // rebuild a touch-sized model. Both viewports now build the same geometry,
+  // leaving nothing to rebuild - and a remount is not free, since it drops the
+  // filter query.
   return (
     <StreamRuntimeContext.Provider value={pinnedStreamBinding}>
       <FileTreeBodyForResolvedHost {...props} />
@@ -500,6 +516,7 @@ function FileTreeBodyForResolvedHost(
   // so they keep resolving against the same host after a later swap
   // (CLAUDE.md: tabs are bound to a host for life).
   const { hostId, onLatchHost } = props;
+  const isMobileViewport = useIsMobileViewport();
   // The box is a filter, not a search field: the query is applied on a pause,
   // and the same debounced value gates both the host RPC and the local row
   // filter so the two can never disagree about what is being filtered for.
@@ -562,6 +579,13 @@ function FileTreeBodyForResolvedHost(
       onLatchHost();
       navigateNested(props.epicId, props.tabId, () => open(props.tabId, ref));
     };
+    // Preview is right on a touch viewport too, even though the double-click
+    // that promotes it there has no touch equivalent: that viewport shows ONE
+    // tile at a time, none of its lists surfaces an open workspace-file tile,
+    // and nothing there can close one - so a permanent open buys nothing
+    // visible and leaves an unreachable tile behind. Recycling the single
+    // preview is what browsing a tree by tap wants, and the row itself is the
+    // way back to a file already visited.
     handlersRef.current.onSelect = (treePath) => {
       openInTab(treePath, prepareOpenTilePreviewInTabFocusTarget);
     };
@@ -578,28 +602,45 @@ function FileTreeBodyForResolvedHost(
     onLatchHost,
   ]);
 
+  // True while the REVEAL path is rewriting the selection programmatically.
+  // Pierre reports every selection change through the same `onSelectionChange`
+  // a click lands in, and that handler opens the row's preview - which for a
+  // reveal would re-navigate to the very tile the gesture came from. A flag
+  // rather than a one-path marker: the rewrite is a deselect of every other
+  // row followed by one select, and with two rows selected the first deselect
+  // already reports a non-empty selection. Pierre notifies synchronously from
+  // inside each `select()` / `deselect()`, so the flag brackets the whole
+  // block and a later user click is never suppressed.
+  const suppressSelectionOpenRef = useRef(false);
   const { model } = useFileTree({
     paths: treePaths,
     initialExpansion: "closed",
+    // One geometry everywhere: the tree is the desktop tree, and its row pitch
+    // is pierre's own on every viewport. Touch used to inflate this to a 44px
+    // row because the rows are in a shadow root the mobile hit-area stylesheet
+    // cannot reach - the compact pitch is deliberately kept instead, so the
+    // phone shows the same tree as the desktop app. If the rows ever need to be
+    // easier to hit, the lever is pierre's `--trees-item-padding`, which grows
+    // the target without forking the pitch.
     density: "compact",
+    itemHeight: undefined,
     icons: "complete",
     stickyFolders: true,
     gitStatus,
     // `hide-non-matches`: the filter input below drops every row whose
     // name does not match, keeping only matches and their parents.
     fileTreeSearchMode: "hide-non-matches",
+    unsafeCSS: PIERRE_FILE_TREE_TRUNCATION_TOLERANCE_CSS,
     onSelectionChange: (selectedPaths) => {
       const selectedPath = selectedPaths.at(-1);
       if (selectedPath === undefined) return;
+      if (suppressSelectionOpenRef.current) return;
       handlersRef.current.onSelect(selectedPath);
     },
   });
-  const handleSearchQueryChange = useCallback(
-    (event: ChangeEvent<HTMLInputElement>) => {
-      setSearchQuery(event.target.value);
-    },
-    [],
-  );
+  const handleSearchQueryChange = useCallback((next: string) => {
+    setSearchQuery(next);
+  }, []);
 
   // Runs BEFORE the path reset below, deliberately. Clearing the tree
   // adapter's filter restores the expansion it captured when the filter was
@@ -621,6 +662,34 @@ function FileTreeBodyForResolvedHost(
     localFilterQuery: source.localFilterQuery,
   });
 
+  // "Reveal in Sidebar" for a workspace-file tab. Only a request for THIS
+  // host + workspace is this body's to serve; one naming another workspace is
+  // routed by the panel above (it switches the selection, which remounts this
+  // body for the right workspace). Declared AFTER the expansion hook on
+  // purpose: its per-tick effect must run after the reset that re-seeds the
+  // model from a new path list, so it sees the rows that list just added.
+  const revealRequest = useFileTreeRevealRequest(props.tabId);
+  const activeRevealRequest =
+    revealRequest !== null &&
+    hostId !== null &&
+    revealRequest.hostId === hostId &&
+    revealRequest.workspacePath === props.workspacePath
+      ? revealRequest
+      : null;
+  const clearSearchQuery = useCallback(() => {
+    setSearchQuery("");
+  }, []);
+  useWorkspaceFileTreeReveal({
+    model,
+    request: activeRevealRequest,
+    viewTabId: props.tabId,
+    treePaths,
+    fileNameByPath: nameByTreePath,
+    browsing: source.mode === "browse",
+    clearSearchQuery,
+    suppressSelectionOpenRef,
+  });
+
   // Git status arrives from its own subscription; push it into Pierre's
   // imperative model whenever it changes. Pierre dedupes on stable inputs.
   useEffect(() => {
@@ -639,11 +708,19 @@ function FileTreeBodyForResolvedHost(
         pierreSearch.value.length > 0 &&
         pierreSearch.matchingPaths.length === 0;
 
-  const handleDoubleClick = useCallback((event: MouseEvent<HTMLElement>) => {
-    const treePath = extractPierreItemPathFromEvent(event);
-    if (treePath === null) return;
-    handlersRef.current.onOpen(treePath);
-  }, []);
+  const handleDoubleClick = useCallback(
+    (event: MouseEvent<HTMLElement>) => {
+      // A touch browser synthesises `dblclick` from a rapid double tap, which
+      // would promote the preview to a permanent tile - the one outcome this
+      // viewport cannot undo, since nothing there lists or closes an open
+      // workspace-file tile. Promotion stays a pointer gesture.
+      if (isMobileViewport) return;
+      const treePath = extractPierreItemPathFromEvent(event);
+      if (treePath === null) return;
+      handlersRef.current.onOpen(treePath);
+    },
+    [isMobileViewport],
+  );
 
   // Bridge Pierre's shadow-DOM rows into the root dnd-kit drag flow. Files keep
   // their canvas-openable source; directory rows carry a composer-only mention
@@ -689,26 +766,53 @@ function FileTreeBodyForResolvedHost(
     ),
     resolveSourceData: resolveDragSourceData,
   });
+  const touchShieldRef = useShadowScrollerTouchShield();
 
   return (
     <div
       className="relative flex min-h-0 flex-1 flex-col px-2 pb-2"
       onDoubleClickCapture={handleDoubleClick}
     >
-      <InputGroup className="mb-1.5 h-7 shrink-0">
-        <InputGroupAddon align="inline-start">
-          <Search className="size-3.5" aria-hidden />
-        </InputGroupAddon>
-        <InputGroupInput
-          type="text"
+      {/* The sidebar's 28px filter row is below the touch target every other
+          phone control meets, and this one is a text field the user has to hit
+          precisely rather than a control with room for invisible hit-slop. */}
+      <div className="mb-1.5 shrink-0">
+        <PanelSearchField
           value={searchQuery}
-          onChange={handleSearchQueryChange}
+          onValueChange={handleSearchQueryChange}
+          onClear={clearSearchQuery}
+          onClose={null}
+          onKeyDown={null}
+          ref={null}
+          combobox={null}
           placeholder="Filter files by name…"
-          aria-label="Filter files by name"
-          className="text-ui-sm"
+          label="Filter files by name"
+          clearLabel="Clear file filter"
+          closeLabel=""
+          testIdPrefix="epic-file-tree-filter"
+          className="h-7"
         />
-      </InputGroup>
-      <div {...bridge.wrapperProps} className="relative min-h-0 flex-1">
+      </div>
+      {/* `data-vaul-no-drag`: inside the mobile switcher sheet this tree is a
+          vaul drawer descendant, and vaul's `shouldDrag` walks up from the
+          touch target looking for a scroller. Pierre's scroller lives in a
+          SHADOW ROOT and a touch inside one retargets to the host, so that walk
+          sees nothing scrollable and would claim a downward swipe as a drawer
+          dismiss. The attribute states what vaul cannot observe: this subtree
+          owns its own scrolling.
+
+          It governs the DISMISS path only. An upward finger returns earlier via
+          `isDraggingInDirection` and never reaches the walk - and this marker is
+          NOT what makes the tree scroll on touch: that is `touchShieldRef`,
+          which keeps the sheet's modal scroll lock from freezing the
+          shadow-rooted scroller (see `useShadowScrollerTouchShield`). Both are
+          inert on desktop, which mounts no drawer. */}
+      <div
+        {...bridge.wrapperProps}
+        ref={touchShieldRef}
+        data-vaul-no-drag=""
+        className="relative min-h-0 flex-1"
+      >
         {/* `invisible`, not unmount: the model keeps its DOM/state for the
             instant the query changes to something that does match. */}
         <div className={cn("h-full", noMatches && "invisible")}>
@@ -881,6 +985,102 @@ function useWorkspaceFileTreeExpansion(args: {
     model,
     setExpandedPaths,
     workspacePath,
+  ]);
+}
+
+/**
+ * Serves a "Reveal in Sidebar" request for a file in THIS body's workspace:
+ * clears the filter (a filtered tree hides non-matching rows and owns
+ * expansion while active), opens the file's ancestor folders, and once the
+ * file's row is listed, selects it, scrolls it into view, and consumes the
+ * request.
+ *
+ * Ancestors are opened on the MODEL, one listed level per tick, never by
+ * writing them into the expansion store directly. The store is derived from
+ * the model for every directory the model knows (`mergeExpandedDirectoryPaths`
+ * treats a known row as authoritative), so a store write for a known-but-
+ * collapsed folder would be folded straight back out on the next sync. An
+ * `expand()` instead flows the same way a click does: sync writes it to the
+ * store, the store's coverage asks the host for that listing, the listing
+ * re-seeds the model with the next level's rows, and this effect - keyed on
+ * the listed files - opens the next folder. The file row appearing ends the
+ * walk. With the unary snapshot every row is already listed, so it is one
+ * pass.
+ *
+ * A request for a file the workspace never lists (deleted, or a root that
+ * stopped serving) stays pending until a newer request for the same view tab
+ * replaces it; it is in-memory and per view tab, so that is bounded.
+ */
+function useWorkspaceFileTreeReveal(args: {
+  readonly model: PierreFileTreeModel;
+  /** The request for this host + workspace, or `null` when none is pending. */
+  readonly request: FileTreeRevealRequest | null;
+  readonly viewTabId: string;
+  /**
+   * Every listed row. A dependency of the walk because a listing can add the
+   * NEXT folder without adding a file (`fileNameByPath` unchanged), and the
+   * walk has to wake up for it.
+   */
+  readonly treePaths: ReadonlyArray<string>;
+  /** Listed file rows; a path absent here is not (yet) a selectable row. */
+  readonly fileNameByPath: ReadonlyMap<string, string>;
+  /** False while a filter drives the tree (either mode) - reveal waits. */
+  readonly browsing: boolean;
+  readonly clearSearchQuery: () => void;
+  /** Set for the whole selection rewrite so no notification opens a preview. */
+  readonly suppressSelectionOpenRef: RefObject<boolean>;
+}): void {
+  const {
+    model,
+    request,
+    viewTabId,
+    treePaths,
+    fileNameByPath,
+    browsing,
+    clearSearchQuery,
+    suppressSelectionOpenRef,
+  } = args;
+
+  // Once per request: drop an active filter so the tree returns to browsing
+  // (debounced, so the walk below starts on a later tick).
+  useEffect(() => {
+    if (request === null) return;
+    clearSearchQuery();
+  }, [clearSearchQuery, request]);
+
+  useEffect(() => {
+    if (request === null || !browsing) return;
+    // Nothing listed yet - the first listing re-runs this.
+    if (treePaths.length === 0) return;
+    const { filePath } = request;
+    for (const directoryPath of ancestorDirectoryPathsOf(filePath)) {
+      const directory = model.getItem(directoryPath);
+      if (directory === null || !isDirectoryHandle(directory)) continue;
+      if (!directory.isExpanded()) directory.expand();
+    }
+    if (!fileNameByPath.has(filePath)) return;
+    const item = model.getItem(filePath);
+    if (item === null) return;
+    suppressSelectionOpenRef.current = true;
+    try {
+      for (const selectedPath of model.getSelectedPaths()) {
+        if (selectedPath === filePath) continue;
+        model.getItem(selectedPath)?.deselect();
+      }
+      if (!item.isSelected()) item.select();
+    } finally {
+      suppressSelectionOpenRef.current = false;
+    }
+    model.scrollToPath(filePath, { offset: "nearest" });
+    clearFileTreeRevealRequest(viewTabId, request.nonce);
+  }, [
+    browsing,
+    fileNameByPath,
+    model,
+    request,
+    suppressSelectionOpenRef,
+    treePaths,
+    viewTabId,
   ]);
 }
 

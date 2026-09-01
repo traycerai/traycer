@@ -9,7 +9,10 @@ import type {
   UsageActivityCalendar,
   UsageActivityCell,
 } from "@/lib/usage-analytics/usage-activity";
-import { formatMetricValue } from "@/lib/usage-analytics/format-metric-value";
+import {
+  formatDayLabel,
+  formatMetricValue,
+} from "@/lib/usage-analytics/format-metric-value";
 import type { UsageMetric } from "@/lib/usage-analytics/usage-chart-data";
 
 const WEEKDAY_ROW_LABELS: ReadonlyArray<{
@@ -42,8 +45,11 @@ function zipWeekdays(
  * GitHub-style activity calendar: one column per week (Sunday-first rows),
  * one tile per day, intensity = the day's metric value quantized to
  * quartiles (`buildUsageActivityCalendar`). Colors come from the
- * `--usage-heat-N` sequential ramp (one hue, light→dark, its own dark-mode
- * steps) scoped under `.usage-chart-root` beside the categorical palette.
+ * `--usage-heat-N` sequential ramp (one hue; light→dark in light mode,
+ * dark→bright in dark mode - GitHub's own convention, since "busier" means
+ * "further from the surface") scoped under `.usage-chart-root` beside the
+ * categorical palette. Hovering a tile states the day's cost and tokens
+ * together, whichever metric is coloring it.
  * Tiles are marks, not layout, so their fixed pixel size is fine; the grid
  * itself scrolls horizontally rather than squeezing tiles unreadable.
  */
@@ -102,7 +108,7 @@ export function UsageActivityHeatmap(props: {
           </div>
         </div>
       </div>
-      <UsageActivityDataTable calendar={calendar} metric={metric} />
+      <UsageActivityDataTable calendar={calendar} />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <ActivityStats stats={calendar.stats} />
         <LevelLegend />
@@ -175,29 +181,78 @@ function DayTile(props: {
         />
       </TooltipTrigger>
       <TooltipContent>
-        <p>
-          <span className="font-medium">{cell.day}</span>
-          {" · "}
-          {activityValueLabel(cell, metric)}
-        </p>
+        <DayTooltipBody cell={cell} metric={metric} />
       </TooltipContent>
     </Tooltip>
   );
 }
 
 /**
- * What a day reads as. A day can hold real turns whose cost was never
- * available: under the Cost metric its value is 0, and calling that
- * "No usage" would report work as inactivity. It says how many turns ran
- * and that they are not counted - the same words the headline footnote
- * uses, and never the banned vocabulary (see the pricing artifact's
- * product framing).
+ * The hover states BOTH metrics for the day, whichever one is coloring
+ * the tiles: the reader comparing two days wants the dollars and the
+ * tokens side by side, not a picker round-trip. The selected metric leads
+ * so the number that explains the tile's shade is the first one read.
+ * A day with no turns says so once rather than listing two zeros.
+ */
+function DayTooltipBody(props: {
+  readonly cell: UsageActivityCell;
+  readonly metric: UsageMetric;
+}): ReactNode {
+  const { cell, metric } = props;
+  const ordered: readonly UsageMetric[] =
+    metric === "cost" ? ["cost", "tokens"] : ["tokens", "cost"];
+  return (
+    <div className="flex flex-col gap-0.5">
+      <p className="font-medium">{formatDayWithYear(cell.day)}</p>
+      {cell.factCount === 0 ? (
+        <p>No usage</p>
+      ) : (
+        <dl className="grid grid-cols-[auto_auto] gap-x-3 gap-y-0.5">
+          {ordered.map((entry) => (
+            <div key={entry} className="contents">
+              <dt className="text-muted-foreground">
+                {entry === "cost" ? "Cost" : "Tokens"}
+              </dt>
+              <dd className="text-right tabular-nums">
+                {activityValueLabel(cell, entry)}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      )}
+    </div>
+  );
+}
+
+/** "Aug 14, 2026" - a year calendar repeats month names, so the day carries its year. */
+function formatDayWithYear(day: string): string {
+  const year = day.split("-").at(0);
+  const label = formatDayLabel(day);
+  return year === undefined || label === day ? day : `${label}, ${year}`;
+}
+
+function metricValueOf(cell: UsageActivityCell, metric: UsageMetric): number {
+  return metric === "cost" ? cell.costUsd : cell.tokens;
+}
+
+/**
+ * What a day reads as under one metric. A day can hold real turns whose
+ * cost was never available: under the Cost metric its value is 0, and
+ * calling that "No usage" would report work as inactivity. It says how
+ * many turns ran and that they are not counted - the same words the
+ * headline footnote uses, and never the banned vocabulary (see the
+ * pricing artifact's product framing). A day that MIXES priced and
+ * unpriced turns shows only its figure - the not-counted note is reserved
+ * for a day with nothing priced at all (user ruling: a per-tile caveat on
+ * every mixed day is overload; the headline footnote already carries the
+ * window-wide count).
  */
 function activityValueLabel(
   cell: UsageActivityCell,
   metric: UsageMetric,
 ): string {
-  if (cell.value > 0) return formatMetricValue(cell.value, metric);
+  const value = metricValueOf(cell, metric);
+  if (value > 0) return formatMetricValue(value, metric);
   if (cell.factCount === 0) return "No usage";
   const turnWord = cell.factCount === 1 ? "turn" : "turns";
   return `${String(cell.factCount)} ${turnWord} · not counted`;
@@ -207,10 +262,13 @@ function activityValueLabel(
  * The calendar's values for anyone not using a pointer: one row per day
  * that saw activity. Days with none are omitted - a year of "No usage"
  * rows is noise, and their absence is itself the information.
+ *
+ * Metric-independent by construction: it states both columns, exactly as
+ * the tooltip does, so the relief channel never depends on which metric
+ * happens to be coloring the grid.
  */
 function UsageActivityDataTable(props: {
   readonly calendar: UsageActivityCalendar;
-  readonly metric: UsageMetric;
 }): ReactNode {
   const active = props.calendar.weeks
     .flatMap((week) => week.cells)
@@ -223,14 +281,16 @@ function UsageActivityDataTable(props: {
       <thead>
         <tr>
           <th scope="col">Day</th>
-          <th scope="col">Usage</th>
+          <th scope="col">Cost</th>
+          <th scope="col">Tokens</th>
         </tr>
       </thead>
       <tbody>
         {active.map((cell) => (
           <tr key={cell.day}>
             <th scope="row">{cell.day}</th>
-            <td>{activityValueLabel(cell, props.metric)}</td>
+            <td>{activityValueLabel(cell, "cost")}</td>
+            <td>{activityValueLabel(cell, "tokens")}</td>
           </tr>
         ))}
       </tbody>
