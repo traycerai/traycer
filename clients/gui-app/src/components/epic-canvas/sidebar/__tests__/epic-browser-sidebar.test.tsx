@@ -164,6 +164,7 @@ const sessionsState = vi.hoisted<{
     hostId: "host-1",
     lifecycle: "live",
     inventoryReady: true,
+    canMaterializeElectron: false,
     items: [],
     errorMessage: null,
     retry: vi.fn(),
@@ -311,6 +312,7 @@ describe("BrowsersPanelBody", () => {
       hostId: "host-1",
       lifecycle: "live",
       inventoryReady: true,
+      canMaterializeElectron: false,
       items: [
         session({
           sessionId: "sess-primary",
@@ -1347,6 +1349,7 @@ describe("BrowsersPanelActions", () => {
       hostId: "host-1",
       lifecycle: "live",
       inventoryReady: true,
+      canMaterializeElectron: false,
       items: [],
       errorMessage: null,
       retry: vi.fn(),
