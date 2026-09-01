@@ -134,15 +134,14 @@ describe("SweepWorktreesDialog refresh", () => {
     expect(screen.getByTestId("sweep-worktrees-checked-at")).toBeTruthy();
     // The flow never holds the user: rows stay selectable and Remove stays
     // live through a refresh, because the click re-proves before acting.
-    const checkbox = screen.getByTestId<HTMLButtonElement>(
-      "sweep-worktrees-checkbox",
-    );
-    const confirm = screen.getByTestId<HTMLButtonElement>(
-      "sweep-worktrees-confirm",
-    );
+    const checkbox = screen.getByRole<HTMLButtonElement>("checkbox", {
+      name: "Sweep worktree traycer/refresh",
+    });
+    const confirm = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Remove 1 worktree",
+    });
     expect(checkbox.disabled).toBe(false);
     expect(confirm.disabled).toBe(false);
-    expect(confirm.textContent).toBe("Remove 1 worktree");
     // Only the Refresh control itself waits for the in-flight read.
     expect(
       screen.getByRole<HTMLButtonElement>("button", {

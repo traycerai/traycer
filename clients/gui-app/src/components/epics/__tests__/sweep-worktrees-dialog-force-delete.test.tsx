@@ -977,8 +977,10 @@ describe("SweepWorktreesDialog ergonomics", () => {
       screen.getByRole("checkbox", { name: "Sweep worktree feat-busy" }),
     );
     fireEvent.click(screen.getByTestId("sweep-worktrees-confirm"));
+    // The Choose and Review primaries share a testid, so the barrier is the
+    // Review heading - false until the proof has landed and opened review.
     await waitFor(() => {
-      expect(screen.getByTestId("sweep-worktrees-confirm")).toBeTruthy();
+      expect(screen.getByText("Review this sweep")).toBeTruthy();
     });
     fireEvent.click(screen.getByTestId("sweep-worktrees-confirm"));
     expect(testState.mutate).toHaveBeenCalledTimes(1);

@@ -8,7 +8,7 @@ import {
 } from "@/components/settings/host-scope/host-option-model";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useRegisteredHostsPollLiveness } from "@/hooks/auth/use-registered-hosts-query";
-import { useSweepHostWorktreeCount } from "@/hooks/epic/use-sweep-host-worktree-count-query";
+import { useEpicSweepHostWorktreeCount } from "@/hooks/epic/use-epic-sweep-host-worktree-count-query";
 import {
   sweepHostCountLabel,
   type SweepHostPickerRow,
@@ -177,7 +177,7 @@ function SweepHostOption(props: {
   // The censused host is not asked again - the dialog's own proof already
   // counted it. Every other dialable row is asked once, here, while the
   // popover is open; an inert row is never asked at all.
-  const askedCount = useSweepHostWorktreeCount({
+  const askedCount = useEpicSweepHostWorktreeCount({
     client: rowClient,
     selectedEpicIds: props.selectedEpicIds,
     enabled: !row.isDefault && selectable,

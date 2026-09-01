@@ -56,7 +56,7 @@ const state = vi.hoisted(() => ({
   /** The directory has said what the fleet is. */
   fleetResolved: true,
   /**
-   * What `useSweepHostWorktreeCount` reports for a NON-censused host, keyed
+   * What `useEpicSweepHostWorktreeCount` reports for a NON-censused host, keyed
    * by the client's host id. A missing key answers `null`, matching the real
    * hook's "not known" answer.
    */
@@ -130,8 +130,8 @@ vi.mock("@/hooks/epic/use-epic-sweep-worktree-candidates-query", () => ({
   },
 }));
 
-vi.mock("@/hooks/epic/use-sweep-host-worktree-count-query", () => ({
-  useSweepHostWorktreeCount: (
+vi.mock("@/hooks/epic/use-epic-sweep-host-worktree-count-query", () => ({
+  useEpicSweepHostWorktreeCount: (
     input: SweepHostWorktreeCountInput,
   ): number | null => {
     if (!input.enabled) return null;

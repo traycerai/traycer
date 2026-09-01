@@ -26,7 +26,7 @@ const SWEEP_HOST_COUNT_STALE_MS = 60_000;
  * the answer for loading, failed and unreachable alike; the row renders no
  * number for any of them, so it can never claim a zero it has not proven.
  */
-export function useSweepHostWorktreeCount(input: {
+export function useEpicSweepHostWorktreeCount(input: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly selectedEpicIds: ReadonlySet<string>;
   readonly enabled: boolean;

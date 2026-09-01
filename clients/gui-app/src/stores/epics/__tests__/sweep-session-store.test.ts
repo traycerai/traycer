@@ -87,6 +87,21 @@ describe("useSweepSessionStore", () => {
     expect(useSweepSessionStore.getState().take("host:a\nepic-1")).toBe(second);
   });
 
+  it("keeps parked reviews isolated per session key", () => {
+    // A review proven on host A must never reach a dialog pointed at host B.
+    const onA = fakeReview("/wt/a");
+    const onB = fakeReview("/wt/b");
+    const store = useSweepSessionStore.getState();
+    store.park("host:a\nepic-1", onA);
+    store.park("host:b\nepic-1", onB);
+
+    expect(useSweepSessionStore.getState().take("host:a\nepic-1")).toBe(onA);
+    expect(useSweepSessionStore.getState().parked.get("host:b\nepic-1")).toBe(
+      onB,
+    );
+    expect(useSweepSessionStore.getState().take("host:b\nepic-1")).toBe(onB);
+  });
+
   it("tracks which sessions have an open dialog, independently", () => {
     const store = useSweepSessionStore.getState();
     store.setOpen("host:a\nepic-1", true);

@@ -261,12 +261,7 @@ function sweepCandidatesQueryOptions(
   client: HostClient<HostRpcRegistry> | null,
   hostId: string | null,
   selectedEpicIds: ReadonlyArray<string> | null,
-): {
-  readonly queryKey: ReturnType<typeof hostQueryKeys.sweepWorktreeCandidates>;
-  readonly queryFn: () => Promise<SweepCandidatesPayload>;
-  readonly staleTime: 0;
-  readonly retry: false;
-} {
+) {
   // The key names the HOST (`hostId`) rather than the client object: a client
   // is the requester for exactly one host, so the identity is already in the
   // key, and the object itself is not a cache identity.
@@ -274,7 +269,7 @@ function sweepCandidatesQueryOptions(
     withHostQueryErrorBoundary("worktree.listAllForHost", () =>
       fetchSweepCandidatesPayload(client, selectedEpicIds),
     );
-  return {
+  return queryOptions<SweepCandidatesPayload, HostRpcError>({
     queryKey: hostQueryKeys.sweepWorktreeCandidates(
       hostId,
       selectedEpicIds === null ? "" : selectedEpicIds.join(","),
@@ -282,7 +277,7 @@ function sweepCandidatesQueryOptions(
     queryFn,
     staleTime: 0,
     retry: false,
-  };
+  });
 }
 
 async function fetchSweepCandidatesPayload(
