@@ -321,6 +321,9 @@ describe("<EpicSessionProvider /> transport ownership", () => {
     });
     expect(record.closeCount).toBe(1);
     expect(record.closeReasons).toEqual(["durable-transport-closed:tab-close"]);
+    expect(record.wsStreamClient.getClosedReason()).toBe(
+      "durable-transport-closed:tab-close",
+    );
 
     // Idempotent on its own: a second dispose (e.g. a duplicate teardown path)
     // must not double-close the socket.

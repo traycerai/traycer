@@ -1,17 +1,18 @@
 /**
- * The `.catch` on `onLocalDocUpdate`'s `body/update` call (`store.ts`,
- * `createMainThreadBodyDocStore({ onLocalDocUpdate: ... })`).
+ * The refusal settlement on `onLocalDocUpdate`'s `body/update` call
+ * (`store.ts`, `createMainThreadBodyDocStore({ onLocalDocUpdate: ... })`).
  *
  * That callback fires on every LOCAL Yjs edit to a resident artifact body and
- * posts it as `void runtime.port.call("body/update", ...)`. A rejected answer
- * is not a failed user action, but it is observable state: the main-thread doc
- * is still the only proven holder and must keep `isDirty` latched until that
- * doc retires. The test also keeps the original unhandled-rejection pin: a
- * `.catch` on a `void`ed chain that RETHROWS mints a new rejection nobody
- * awaits. It fires once per keystroke, so one broken worker handler used to
- * produce one unhandled rejection per edit for as long as the person kept
- * typing. The fix logs via `appLogger.error` instead of rethrowing, and leaves
- * the `BridgeDisposedError` early-return (teardown, not a fault) unchanged.
+ * posts it as `void runtime.port.call("body/update", ...)`. A dropped answer or
+ * rejected call is not a failed user action, but it is observable state: the
+ * main-thread doc is still the only proven holder and must keep `isDirty`
+ * latched until that doc retires. The test also keeps the original
+ * unhandled-rejection pin: rethrowing from a `.catch` on a `void`ed chain mints
+ * a new rejection nobody awaits. It fires once per keystroke, so one broken
+ * worker handler used to produce one unhandled rejection per edit for as long
+ * as the person kept typing. The fix logs via `appLogger.error` instead of
+ * rethrowing, and leaves the `BridgeDisposedError` early-return (teardown, not
+ * a fault) unchanged.
  *
  * Reached through the REAL `createOpenEpicStore`, over a REAL
  * `createMainBridgeEndpoint`/`createFakeBridgePair` pair - not a hand-typed
@@ -141,7 +142,10 @@ function createWorkerSide(pair: FakeBridgePair): {
         {
           frame: "result",
           callId,
-          result: { outcome: { kind: "dropped", reason } },
+          result: {
+            outcome: "ok",
+            value: { outcome: { kind: "dropped", reason } },
+          },
         },
         [],
       );
@@ -171,7 +175,7 @@ function typeInto(fragment: Y.XmlFragment, text: string): void {
   fragment.insert(0, [paragraph]);
 }
 
-describe("the local body/update refusal's .catch (open-epic store.ts)", () => {
+describe("local body/update refusal settlement (open-epic store.ts)", () => {
   it("logs a non-disposal refusal once and never as an unhandled rejection; a disposed-bridge refusal is silent and also never unhandled", async () => {
     const capture = captureUnhandledRejections();
     const errorSpy = vi.spyOn(appLogger, "error").mockImplementation(() => {});
@@ -288,4 +292,117 @@ describe("the local body/update refusal's .catch (open-epic store.ts)", () => {
       handle.dispose();
     }
   });
+
+  it.each(["dropped", "error"] as const)(
+    "does not let a delayed %s refusal dirty a replacement resident body",
+    async (settlement) => {
+      const pair = createFakeBridgePair("sync");
+      const worker = createWorkerSide(pair);
+      const main = createMainBridgeEndpoint(
+        pair.main,
+        stubMainCallHandlers({}),
+      );
+      const binding: EpicRuntimeBinding = {
+        port: main,
+        command: () => {},
+        awarenessOut: () => {},
+        currentUser: () => {},
+        detach: () => {},
+        dispose: () => {},
+      };
+      const handle = createOpenEpicStore({
+        epicId: `${EPIC_ID}-lineage-${settlement}`,
+        userId: null,
+        onRetryTransport: () => {},
+        runtime: binding,
+        accounting: createProcessBackedAccountingPort({
+          hostId: "test-host",
+          epicId: `${EPIC_ID}-lineage-${settlement}`,
+          environment: createRendererRuntimeEnvironment(),
+        }),
+      });
+
+      let revision = 1;
+      const replaceResident = async (
+        previousDoc: Y.Doc,
+      ): Promise<{
+        readonly fragment: Y.XmlFragment;
+        readonly doc: Y.Doc;
+      }> => {
+        handle.projection.apply(
+          {
+            artifactRooms: {
+              stateByArtifactId: { [ARTIFACT_ID]: "unavailable" },
+            },
+          },
+          ++revision,
+        );
+        expect(handle.hotArtifactRoomIdsForTests()).toEqual([]);
+
+        handle.projection.apply(
+          {
+            artifactRooms: {
+              stateByArtifactId: { [ARTIFACT_ID]: "ready" },
+            },
+          },
+          ++revision,
+        );
+        const lease = handle.store
+          .getState()
+          .acquireResidentArtifactBodyLease(ARTIFACT_ID, "linger");
+        await lease.resident;
+
+        const replacement = handle.store
+          .getState()
+          .getArtifactFragment(ARTIFACT_ID);
+        if (replacement === null) {
+          throw new Error("replacement artifact body did not become resident");
+        }
+        const replacementDoc = replacement.doc;
+        if (replacementDoc === null) {
+          throw new Error("replacement artifact body did not expose its doc");
+        }
+        expect(replacementDoc).not.toBe(previousDoc);
+        expect(handle.hotArtifactRoomIdsForTests()).toEqual([ARTIFACT_ID]);
+        return { fragment: replacement, doc: replacementDoc };
+      };
+
+      try {
+        handle.projection.apply({ installedArm: "lanes" }, revision);
+        const initialLease = handle.store
+          .getState()
+          .acquireResidentArtifactBodyLease(ARTIFACT_ID, "linger");
+        await initialLease.resident;
+        const initialFragment = handle.store
+          .getState()
+          .getArtifactFragment(ARTIFACT_ID);
+        if (initialFragment === null || initialFragment.doc === null) {
+          throw new Error("initial artifact body did not become resident");
+        }
+
+        typeInto(initialFragment, `${settlement} predecessor`);
+        expect(worker.pendingBodyUpdateCallIds).toHaveLength(1);
+        const replacement = await replaceResident(initialFragment.doc);
+        expect(handle.store.getState().isDirty).toBe(false);
+        expect(worker.pendingBodyUpdateCallIds).toHaveLength(1);
+
+        if (settlement === "dropped") {
+          worker.respondBodyUpdateDropped("predecessor retired");
+        } else {
+          worker.respondBodyUpdateError("Error", "late worker failure");
+        }
+        await drainRejections();
+
+        // The distinct replacement was resident before settlement, so this is
+        // not a vacuous "nothing remained to dirty" assertion. Ablation:
+        // without the dispatched-generation fence, each parameterized case
+        // independently latches the replacement's same docKey dirty.
+        expect(replacement.fragment.doc).toBe(replacement.doc);
+        expect(handle.store.getState().isDirty).toBe(false);
+      } finally {
+        worker.unsubscribe();
+        handle.dispose();
+      }
+    },
+  );
 });

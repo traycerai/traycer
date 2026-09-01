@@ -76,17 +76,19 @@ function createWsStreamClient(
   closeReasons: string[],
 ): IHostStreamClient<HostStreamRpcRegistry> {
   let closed = false;
+  let closedReason: string | null = null;
   return {
     subscribe: () => fakeStreamSession(),
     subscribeWithParamsProvider: () => fakeStreamSession(),
     close: (reason) => {
       if (closed) return;
       closed = true;
+      closedReason = reason;
       closeReasons.push(reason);
     },
     isClosed: () => closed,
     isReady: () => true,
-    getClosedReason: () => null,
+    getClosedReason: () => closedReason,
     notifyBearerRotated: () => undefined,
     reconnectAll: () => undefined,
     // "unsupported" on every lane method pins the adapter-selection verdict to
