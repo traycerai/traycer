@@ -59,12 +59,14 @@ interface TabStripTestState {
   draggableInputs: CapturedDraggableInput[];
   droppableInputs: CapturedDroppableInput[];
   isDragging: boolean;
+  browserSessionsByHost: Map<string, readonly BrowserSessionInfo[]>;
 }
 
 const testState = vi.hoisted((): TabStripTestState => ({
   draggableInputs: [],
   droppableInputs: [],
   isDragging: false,
+  browserSessionsByHost: new Map(),
 }));
 
 interface TerminalAuthorityTestState {
@@ -130,6 +132,22 @@ vi.mock("@/lib/epic-selectors", () => {
 // tests render outside a <HostRuntimeProvider>, so stub the host seam.
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
+}));
+
+vi.mock("@/components/epic-canvas/renderers/use-browser-sessions", () => ({
+  useBrowserSessionsForHost: (args: { readonly hostId: string | null }) => ({
+    hostId: args.hostId,
+    lifecycle: "live",
+    inventoryReady: true,
+    items:
+      args.hostId === null
+        ? []
+        : (testState.browserSessionsByHost.get(args.hostId) ?? []),
+    errorMessage: null,
+    retry: () => undefined,
+    openTab: () => Promise.reject(new Error("not used")),
+    closeTab: () => Promise.resolve(),
+  }),
 }));
 
 vi.mock("@/hooks/terminal/use-terminal-rename-for-mutation", () => ({
@@ -272,6 +290,10 @@ function renderTabStripForTab(
   },
   browserSessions: readonly BrowserSessionInfo[],
 ) {
+  for (const session of browserSessions) {
+    const current = testState.browserSessionsByHost.get(session.hostId) ?? [];
+    testState.browserSessionsByHost.set(session.hostId, [...current, session]);
+  }
   seedActivePreviewTab(tab);
   const queryClient = createQueryClient();
   const onSplit = input.onSplit === undefined ? () => undefined : input.onSplit;
@@ -321,6 +343,7 @@ describe("<TabStrip />", () => {
     testState.draggableInputs = [];
     testState.droppableInputs = [];
     testState.isDragging = false;
+    testState.browserSessionsByHost.clear();
     terminalAuthorityState.capability = "legacy";
     terminalAuthorityState.canMutate = false;
     terminalAuthorityState.viewModel = null;
@@ -417,6 +440,60 @@ describe("<TabStrip />", () => {
           ],
         },
       ],
+    );
+
+    const tab = screen.getByRole("tab", {
+      name: /Waterfront Hotel in Baltimore \| Pier 5 Hotel/,
+    });
+    expect(
+      tooltipTextFor(screen.getByTestId("tab-title-browser-instance-1")),
+    ).toContain("https://thepier5.com/");
+    expect(tab.querySelector("img")?.getAttribute("src")).toBe(
+      "https://thepier5.com/favicon.ico",
+    );
+  });
+
+  it("uses the browser tab's host inventory for cross-host presentation", () => {
+    const browserTab: EpicCanvasTileRef = {
+      id: "browser-session:session-1:browser-tab-1",
+      instanceId: "browser-instance-1",
+      type: "browser-session",
+      name: "Browser",
+      hostId: "host-B",
+      sessionId: "session-1",
+      tabId: "browser-tab-1",
+      viewportPreset: "responsive",
+    };
+    testState.browserSessionsByHost.set("host-B", [
+      {
+        sessionId: "session-1",
+        epicId: "epic-1",
+        hostId: "host-B",
+        profile: "primary",
+        lastActivityAt: 2,
+        runtime: { kind: "electron", revision: 0 },
+        tabs: [
+          {
+            tabId: "browser-tab-1",
+            url: "https://thepier5.com/",
+            originTier: "external",
+            status: "ready",
+            title: "Waterfront Hotel in Baltimore | Pier 5 Hotel",
+            viewed: true,
+            drivenBy: [],
+          },
+        ],
+      },
+    ]);
+    renderTabStripForTab(
+      browserTab,
+      {
+        onClose: () => undefined,
+        onPromotePreview: () => undefined,
+        onOpenBlankTab: () => undefined,
+        onSplit: () => undefined,
+      },
+      [],
     );
 
     const tab = screen.getByRole("tab", {
