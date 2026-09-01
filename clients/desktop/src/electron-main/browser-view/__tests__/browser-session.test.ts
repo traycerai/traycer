@@ -1,9 +1,10 @@
 import { EventEmitter } from "node:events";
-import type { Certificate, CertificatePrincipal } from "electron";
+import type { Certificate, CertificatePrincipal, Cookie } from "electron";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   BrowserSessionCertificateErrorChange,
   BrowserSessionDownloadChange,
+  BrowserSessionProfileRequest,
 } from "../browser-session";
 
 type BrowserPermissionRequestHandler = (
@@ -21,6 +22,12 @@ type BrowserPermissionCheckHandler = (
 type BrowserDisplayMediaRequestHandler = (
   request: unknown,
   callback: (streams: object) => void,
+) => void;
+type FakeCookieChangeListener = (
+  event: unknown,
+  cookie: Cookie,
+  cause: string,
+  removed: boolean,
 ) => void;
 type BrowserDownloadListener = (
   event: unknown,
@@ -45,6 +52,9 @@ const electronState = vi.hoisted(() => {
 });
 
 vi.mock("electron", () => ({
+  app: {
+    getPath: (_key: string): string => "/tmp/traycer-desktop-test",
+  },
   safeStorage: {
     isEncryptionAvailable: () => true,
     getSelectedStorageBackend: () => "unknown",
@@ -98,6 +108,18 @@ class FakePolicySession {
   displayMediaRequestHandler: BrowserDisplayMediaRequestHandler | null = null;
   readonly downloadListeners: BrowserDownloadListener[] = [];
 
+  /**
+   * The `Session["cookies"]` slice the primary-profile delta observer
+   * subscribes to. An empty jar that never fires: these suites are about
+   * session policy, not deltas - the observer only has to find the seam.
+   */
+  readonly cookies = {
+    get: (_filter: { readonly domain: string }): Promise<Cookie[]> =>
+      Promise.resolve([]),
+    on: (_event: "changed", _listener: FakeCookieChangeListener): void => {},
+    off: (_event: "changed", _listener: FakeCookieChangeListener): void => {},
+  };
+
   setPermissionRequestHandler(
     handler: BrowserPermissionRequestHandler | null,
   ): void {
@@ -142,6 +164,13 @@ class FakePolicySession {
   on(event: "will-download", listener: BrowserDownloadListener): void {
     expect(event).toBe("will-download");
     this.downloadListeners.push(listener);
+  }
+
+  clearStorageDataCalls = 0;
+
+  clearStorageData(): Promise<void> {
+    this.clearStorageDataCalls += 1;
+    return Promise.resolve();
   }
 }
 
@@ -285,25 +314,17 @@ function requestAllowed(
   return allowed;
 }
 
-function realCookieCryptoState() {
-  return {
-    mode: "real" as const,
-    persistence: "persistent" as const,
-    reason: "os-backed" as const,
-    storageBackend: null,
-    encryptionAvailable: true,
-  };
-}
+const PRIMARY: BrowserSessionProfileRequest = {
+  profile: "primary",
+  sessionId: "session-1",
+};
 
-function degradedCookieCryptoState() {
-  return {
-    mode: "degraded" as const,
-    persistence: "ephemeral" as const,
-    reason: "keychain-denied" as const,
-    storageBackend: null,
-    encryptionAvailable: false,
-  };
-}
+const ISOLATED: BrowserSessionProfileRequest = {
+  profile: "isolated",
+  sessionId: "session-9",
+};
+
+const ISOLATED_PARTITION = "traycer-isolated-session-9";
 
 describe("browser view session policy", () => {
   beforeEach(() => {
@@ -315,17 +336,18 @@ describe("browser view session policy", () => {
     electronState.messageBoxResult = 1;
     electronState.messageBoxCalls = 0;
     vi.clearAllMocks();
+    // `browser-session` memoises one hardened Session per partition name, so
+    // each case needs a fresh module instance to pair with its fresh fakes.
+    vi.resetModules();
   });
 
   it("uses a dedicated persistent partition without mutating defaultSession", async () => {
-    const crypto = await import("../storage/browser-cookie-crypto");
-    vi.spyOn(crypto, "getBrowserCookieCryptoState").mockReturnValue(
-      realCookieCryptoState(),
-    );
+    const savedLogins = await import("../storage/browser-saved-logins");
+    vi.spyOn(savedLogins, "isBrowserSavedLoginsEnabled").mockReturnValue(true);
     const mod = await import("../browser-session");
 
-    const browserSession = mod.ensureBrowserViewSession();
-    const preferences = mod.createBrowserViewWebPreferences();
+    const browserSession = mod.ensureBrowserViewSession(PRIMARY);
+    const preferences = mod.createBrowserViewWebPreferences(PRIMARY);
 
     expect(electronState.fromPartitionCalls).toEqual([
       {
@@ -348,15 +370,13 @@ describe("browser view session policy", () => {
     expect(electronState.defaultSession?.downloadListeners).toEqual([]);
   });
 
-  it("uses a session-only partition when cookie crypto is degraded", async () => {
-    const crypto = await import("../storage/browser-cookie-crypto");
-    vi.spyOn(crypto, "getBrowserCookieCryptoState").mockReturnValue(
-      degradedCookieCryptoState(),
-    );
+  it("uses the ephemeral partition when saved logins is turned off", async () => {
+    const savedLogins = await import("../storage/browser-saved-logins");
+    vi.spyOn(savedLogins, "isBrowserSavedLoginsEnabled").mockReturnValue(false);
     const mod = await import("../browser-session");
 
-    mod.ensureBrowserViewSession();
-    const preferences = mod.createBrowserViewWebPreferences();
+    mod.ensureBrowserViewSession(PRIMARY);
+    const preferences = mod.createBrowserViewWebPreferences(PRIMARY);
     const partition = preferences.partition;
     if (partition === undefined) throw new Error("partition missing");
 
@@ -366,10 +386,153 @@ describe("browser view session policy", () => {
         options: { cache: true },
       },
     ]);
+    expect(partition).toBe(mod.BROWSER_VIEW_EPHEMERAL_PARTITION);
     expect(partition.startsWith("persist:")).toBe(false);
     expect(preferences).toMatchObject({
       partition,
     });
+  });
+
+  it("keeps one hardened session per partition and never re-installs policy", async () => {
+    const savedLogins = await import("../storage/browser-saved-logins");
+    const readEnabled = vi
+      .spyOn(savedLogins, "isBrowserSavedLoginsEnabled")
+      .mockReturnValue(false);
+    const mod = await import("../browser-session");
+
+    const first = mod.ensureBrowserViewSession(PRIMARY);
+    const second = mod.ensureBrowserViewSession({
+      profile: "primary",
+      sessionId: "session-2",
+    });
+
+    expect(second).toBe(first);
+    expect(electronState.fromPartitionCalls).toHaveLength(1);
+    expect(electronState.fromPartitionCalls[0]?.partition).toBe(
+      mod.BROWSER_VIEW_EPHEMERAL_PARTITION,
+    );
+
+    // Turning saved logins on later moves new guests to the durable
+    // partition, which is a different session and gets its own hardening pass.
+    readEnabled.mockReturnValue(true);
+    const hardened = new FakePolicySession();
+    electronState.browserSession = hardened;
+    const persistent = mod.ensureBrowserViewSession(PRIMARY);
+
+    expect(persistent).not.toBe(first);
+    expect(persistent).toBe(hardened);
+    expect(electronState.fromPartitionCalls).toHaveLength(2);
+    expect(electronState.fromPartitionCalls[1]?.partition).toBe(
+      mod.BROWSER_VIEW_PARTITION,
+    );
+    expect(requestAllowed(readRequestHandler(hardened), "fullscreen")).toBe(
+      true,
+    );
+    expect(hardened.downloadListeners).toHaveLength(1);
+  });
+
+  it("maps the saved-logins pref to a partition for primary guests", async () => {
+    const savedLogins = await import("../storage/browser-saved-logins");
+    const readEnabled = vi.spyOn(savedLogins, "isBrowserSavedLoginsEnabled");
+    const mod = await import("../browser-session");
+
+    readEnabled.mockReturnValue(true);
+    expect(mod.partitionForProfile("primary", "session-1")).toBe(
+      mod.BROWSER_VIEW_PARTITION,
+    );
+    readEnabled.mockReturnValue(false);
+    expect(mod.partitionForProfile("primary", "session-1")).toBe(
+      mod.BROWSER_VIEW_EPHEMERAL_PARTITION,
+    );
+    expect(mod.BROWSER_VIEW_PARTITION.startsWith("persist:")).toBe(true);
+    expect(mod.BROWSER_VIEW_EPHEMERAL_PARTITION.startsWith("persist:")).toBe(
+      false,
+    );
+  });
+
+  it("gives an isolated session its own in-memory partition, hardened alike", async () => {
+    const savedLogins = await import("../storage/browser-saved-logins");
+    // Saved logins being on must not pull an isolated guest onto the durable
+    // jar - the pref is not consulted for this profile at all.
+    const readEnabled = vi
+      .spyOn(savedLogins, "isBrowserSavedLoginsEnabled")
+      .mockReturnValue(true);
+    const mod = await import("../browser-session");
+    const isolatedSession = new FakePolicySession();
+    electronState.browserSession = isolatedSession;
+
+    expect(mod.partitionForProfile("isolated", "session-9")).toBe(
+      ISOLATED_PARTITION,
+    );
+    expect(ISOLATED_PARTITION.startsWith("persist:")).toBe(false);
+    expect(ISOLATED_PARTITION).toContain("session-9");
+    expect(readEnabled).not.toHaveBeenCalled();
+
+    mod.ensureBrowserViewSession(ISOLATED);
+    const preferences = mod.createBrowserViewWebPreferences(ISOLATED);
+
+    expect(electronState.fromPartitionCalls).toEqual([
+      { partition: ISOLATED_PARTITION, options: { cache: true } },
+    ]);
+    expect(preferences).toMatchObject({
+      partition: ISOLATED_PARTITION,
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    });
+    // Same hardening as any other jar: allow-list permissions, no devices,
+    // downloads routed through the app's own prompt.
+    const requestHandler = readRequestHandler(isolatedSession);
+    expect(requestAllowed(requestHandler, "fullscreen")).toBe(true);
+    expect(requestAllowed(requestHandler, "geolocation")).toBe(false);
+    expect(
+      readCheckHandler(isolatedSession)(
+        null,
+        "storage-access",
+        "https://example.com",
+        {},
+      ),
+    ).toBe(true);
+    expect(isolatedSession.devicePermissionHandler?.({})).toBe(false);
+    expect(isolatedSession.usbProtectedClassesHandler?.({})).toEqual([]);
+    expect(isolatedSession.downloadListeners).toHaveLength(1);
+    expect(electronState.defaultSession?.permissionRequestHandler).toBeNull();
+    expect(electronState.defaultSession?.permissionCheckHandler).toBeNull();
+    expect(electronState.defaultSession?.downloadListeners).toEqual([]);
+  });
+
+  it("clears an isolated partition and forgets it on release", async () => {
+    const mod = await import("../browser-session");
+    const first = new FakePolicySession();
+    electronState.browserSession = first;
+
+    expect(mod.ensureBrowserViewSession(ISOLATED)).toBe(first);
+
+    await mod.releaseBrowserViewSession(ISOLATED_PARTITION);
+
+    expect(first.clearStorageDataCalls).toBe(1);
+    // The memo is dropped too, so a later session id collision cannot inherit
+    // the released jar's hardened Session object.
+    const second = new FakePolicySession();
+    electronState.browserSession = second;
+    expect(mod.ensureBrowserViewSession(ISOLATED)).toBe(second);
+    expect(electronState.fromPartitionCalls).toHaveLength(2);
+    expect(second.downloadListeners).toHaveLength(1);
+  });
+
+  it("refuses to clear a shared browser partition", async () => {
+    const mod = await import("../browser-session");
+    const shared = new FakePolicySession();
+    electronState.browserSession = shared;
+    mod.ensureBrowserViewSessionForPartition(mod.BROWSER_VIEW_PARTITION);
+
+    await expect(
+      mod.releaseBrowserViewSession(mod.BROWSER_VIEW_PARTITION),
+    ).rejects.toThrow(/Refusing to clear/);
+    await expect(
+      mod.releaseBrowserViewSession(mod.BROWSER_VIEW_EPHEMERAL_PARTITION),
+    ).rejects.toThrow(/Refusing to clear/);
+    expect(shared.clearStorageDataCalls).toBe(0);
   });
 
   it("installs browser-specific permission and download handlers", async () => {
@@ -377,7 +540,7 @@ describe("browser view session policy", () => {
     const session = new FakePolicySession();
     electronState.browserSession = session;
 
-    mod.ensureBrowserViewSession();
+    mod.ensureBrowserViewSession(PRIMARY);
 
     const requestHandler = readRequestHandler(session);
     const checkHandler = readCheckHandler(session);
@@ -405,7 +568,7 @@ describe("browser view session policy", () => {
     });
     electronState.browserSession = session;
 
-    mod.ensureBrowserViewSession();
+    mod.ensureBrowserViewSession(PRIMARY);
     const listener = session.downloadListeners[0];
     if (listener === undefined) throw new Error("download listener missing");
     const webContents = new FakeDownloadWebContents(7, "https://app.test/");
@@ -473,7 +636,7 @@ describe("browser view session policy", () => {
     electronState.messageBoxResult = 0;
     electronState.browserSession = session;
 
-    mod.ensureBrowserViewSession();
+    mod.ensureBrowserViewSession(PRIMARY);
     const listener = session.downloadListeners[0];
     if (listener === undefined) throw new Error("download listener missing");
     const item = new FakeDownloadItem(

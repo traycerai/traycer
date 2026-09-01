@@ -72,6 +72,21 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
 }));
 
+// Nodes render `WorktreeOwnerMetadataTooltip` for their hover card, which
+// derives PR pills from `pr.subscribeListForEpic` via this hook - unmocked,
+// it reaches for `useHostDirectoryEntryForHostId` (absent from the partial
+// host-client mock above) and a real stream client, neither of which this
+// file provides. This suite is about comm-graph timeline projection, not PR
+// pills, so an inert result suffices.
+vi.mock("@/hooks/pr/use-owner-pr-references", () => ({
+  useOwnerListPrReferences: () => ({
+    references: [],
+    isPending: false,
+    error: false,
+    sendRefresh: () => undefined,
+  }),
+}));
+
 const tileNavigationMocks = vi.hoisted(() => ({
   openTileInEpic: vi.fn(),
   openTileInTab: vi.fn(),

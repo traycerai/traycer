@@ -1,6 +1,5 @@
 import type { Cookie, CookiesSetDetails } from "electron";
 import { describe, expect, it, vi } from "vitest";
-import type { BrowserCookieCryptoState } from "@traycer-clients/shared/platform/browser-view";
 import {
   BrowserPrimaryProfileSnapshotCoordinator,
   captureBrowserPrimaryProfile,
@@ -9,29 +8,6 @@ import {
   type BrowserPrimaryProfileOriginSnapshot,
   type BrowserStorageCaptureWebContents,
 } from "../browser-storage-state";
-
-vi.mock("electron", () => ({
-  safeStorage: {
-    isEncryptionAvailable: () => true,
-    getSelectedStorageBackend: () => "unknown",
-  },
-}));
-
-const realState: BrowserCookieCryptoState = {
-  mode: "real",
-  persistence: "persistent",
-  reason: "os-backed",
-  storageBackend: null,
-  encryptionAvailable: true,
-};
-
-const degradedState: BrowserCookieCryptoState = {
-  mode: "degraded",
-  persistence: "ephemeral",
-  reason: "keychain-denied",
-  storageBackend: null,
-  encryptionAvailable: false,
-};
 
 describe("seedBrowserViewCookies", () => {
   it("seeds supplied cookies without replacing unrelated cookies", async () => {
@@ -215,7 +191,7 @@ describe("captureBrowserPrimaryProfile", () => {
 
     const result = await captureBrowserPrimaryProfile(
       origins,
-      primaryCaptureDependencies(realState, cookieGetFilters, [
+      primaryCaptureDependencies(true, cookieGetFilters, [
         {
           name: "host-only",
           value: "cookie",
@@ -275,7 +251,7 @@ describe("captureBrowserPrimaryProfile", () => {
     });
   });
 
-  it("short-circuits when cookie persistence is unavailable", async () => {
+  it("short-circuits when saved logins is turned off", async () => {
     const getSession = vi.fn();
     const result = await captureBrowserPrimaryProfile(
       [
@@ -285,7 +261,7 @@ describe("captureBrowserPrimaryProfile", () => {
         },
       ],
       {
-        readCryptoState: () => degradedState,
+        readSaveLogins: () => false,
         getSession,
       },
     );
@@ -293,7 +269,7 @@ describe("captureBrowserPrimaryProfile", () => {
     expect(result).toEqual({
       status: "unavailable",
       storageState: null,
-      reason: "keychain-denied",
+      reason: "saved-logins-off",
     });
     expect(getSession).not.toHaveBeenCalled();
   });
@@ -393,6 +369,54 @@ describe("BrowserPrimaryProfileSnapshotCoordinator", () => {
         "https://seeded.example",
       ],
     ]);
+  });
+
+  it("forgets remembered origins on reset, including an observation still in flight", async () => {
+    let resolveInFlight: (
+      snapshot: BrowserPrimaryProfileOriginSnapshot,
+    ) => void = () => undefined;
+    const coordinator = new BrowserPrimaryProfileSnapshotCoordinator(
+      (origins) =>
+        Promise.resolve({
+          status: "captured",
+          storageState: {
+            cookies: [],
+            origins: origins.map((origin) => ({
+              origin: origin.origin,
+              localStorage: [...origin.localStorage],
+            })),
+          },
+          reason: null,
+        }),
+      (origin) =>
+        origin === "https://settled.example"
+          ? Promise.resolve({
+              origin,
+              localStorage: [{ name: "token", value: "kept" }],
+            })
+          : new Promise((resolve) => {
+              resolveInFlight = resolve;
+            }),
+    );
+    const webContents = {
+      getURL: () => "https://unused.example/",
+      executeJavaScript: () => Promise.resolve([]),
+    };
+    coordinator.observe("https://settled.example/inbox", webContents);
+    coordinator.observe("https://in-flight.example/inbox", webContents);
+    await Promise.resolve();
+    expect(coordinator.rememberedOrigins()).toHaveLength(1);
+
+    coordinator.reset();
+    // Read from the jar the forget is clearing: landing after the reset would
+    // re-seed a recreated tile with the localStorage just forgotten.
+    resolveInFlight({
+      origin: "https://in-flight.example",
+      localStorage: [{ name: "token", value: "stale" }],
+    });
+    await coordinator.capture();
+
+    expect(coordinator.rememberedOrigins()).toEqual([]);
   });
 
   it("keeps a demoted origin's fresh value when a LATER tab re-seeds the same jar", async () => {
@@ -630,7 +654,7 @@ describe("BrowserPrimaryProfileSnapshotCoordinator", () => {
         captureBrowserPrimaryProfile(
           origins,
           primaryCaptureDependencies(
-            realState,
+            true,
             [],
             [
               {
@@ -700,12 +724,12 @@ function storageCookie(name: string): {
 }
 
 function primaryCaptureDependencies(
-  cryptoState: BrowserCookieCryptoState,
+  saveLogins: boolean,
   cookieGetFilters: Array<{ readonly url?: string }>,
   cookies: Cookie[],
 ): BrowserPrimaryProfileCaptureDependencies {
   return {
-    readCryptoState: () => cryptoState,
+    readSaveLogins: () => saveLogins,
     getSession: () => ({
       cookies: {
         get: (filter) => {
