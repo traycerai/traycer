@@ -1197,12 +1197,23 @@ describe("an awaiting body reassigned to another byteless room", () => {
     leases.retryAwaitingBodies((docKey) => docKey === "room-1");
     await settle();
 
+    // BEFORE the holder releases anything: room-1's demand comes off at the
+    // moment the move is adopted, not at unmount. Asserted here rather than
+    // only in the final list, because the list alone cannot tell "released
+    // when vacated" from "released along with everything else at the end".
+    expect(releases).toEqual(["room-1"]);
+
     grant.release();
     await settle();
 
-    // THE REDDENING ASSERTION. Without the re-key this is `["room-1"]`, and
-    // room-2's demand is retained with nothing left that can release it.
-    expect(releases).toEqual(["room-2"]);
+    // BOTH rooms, and each for its own reason. room-2 is the re-key: without
+    // it this reads `["room-1"]` and room-2's demand is retained with nothing
+    // left that can release it. room-1 is the vacated demand: `body/materialize`
+    // is sent by `artifactId`, so the retry made the worker re-resolve the room
+    // and take a SECOND awaiting entry, and from the moment of the redirect
+    // every release this side issues targets room-2 - leaving room-1's entry,
+    // its observer and its subscription held until teardown.
+    expect(releases).toEqual(["room-1", "room-2"]);
   });
 
   it("still releases the original room when the retry names the same one", async () => {
@@ -1221,6 +1232,40 @@ describe("an awaiting body reassigned to another byteless room", () => {
     grant.release();
     await settle();
 
+    // Exactly ONE release. The vacated-key release must not fire when nothing
+    // was vacated - a fix that posted on every retry would read as correct in
+    // the moved case above and silently drop the demand of a body that stayed
+    // put.
     expect(releases).toEqual(["room-1"]);
+  });
+
+  it("releases every room a body vacates when it moves twice", async () => {
+    // Reassignment is not once-per-body. A second move must release room-2 the
+    // same way the first released room-1, or the fix only closes the leak for
+    // bodies that move exactly once - and the redirect is explicitly a CHAIN
+    // because more than one hop is expected.
+    const { leases, releases } = movedAwaitingSetup([
+      "room-1",
+      "room-2",
+      "room-3",
+    ]);
+    const grant = await leases.acquire("artifact-1", "linger");
+    if (grant.kind !== "awaiting-seed") {
+      throw new Error("expected an awaiting-seed grant");
+    }
+
+    leases.retryAwaitingBodies((docKey) => docKey === "room-1");
+    await settle();
+    leases.retryAwaitingBodies((docKey) => docKey === "room-2");
+    await settle();
+
+    expect(releases).toEqual(["room-1", "room-2"]);
+
+    grant.release();
+    await settle();
+
+    // The holder's own release still lands on the room it actually moved to,
+    // reached through the two-hop redirect.
+    expect(releases).toEqual(["room-1", "room-2", "room-3"]);
   });
 });

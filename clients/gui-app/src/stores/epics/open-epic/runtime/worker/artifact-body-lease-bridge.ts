@@ -435,6 +435,18 @@ export function createArtifactBodyLeaseBridge(options: {
    * a fulfillment-only `.then` instead.
    */
   const awaitingReleaseRetries = new Map<string, RuntimeTimer>();
+  /**
+   * Pending re-posts of a VACATED key's worker release, keyed by that key.
+   *
+   * Separate from {@link awaitingReleaseRetries} because the two retries answer
+   * different questions. That one asks "is this body still unwanted?", so it
+   * re-reads through the redirect and stands down if someone re-acquired. A
+   * vacated key can have neither: nothing can re-acquire it - room ids are
+   * minted per assignment and never recycled - and following the redirect would
+   * re-target the very key whose demand is legitimately held. So this retry
+   * re-posts the literal key until the worker says it let go.
+   */
+  const vacatedReleaseRetries = new Map<string, RuntimeTimer>();
   let leaseSeq = 0;
 
   // EVERY `const` this factory closes over belongs in the block above, before
@@ -493,6 +505,16 @@ export function createArtifactBodyLeaseBridge(options: {
     // right entry.
     movedAwaitingKeys.set(previousKey, nextKey);
     awaiting.delete(previousKey);
+    // ...and the WORKER's demand for the old key comes off explicitly, because
+    // nothing else will ever ask it to. `body/materialize` is sent by
+    // `artifactId`, so the retry made the worker re-resolve the room and take a
+    // SECOND `awaitingDemand` entry under the new key; from this moment every
+    // release this side issues is redirected to that new key. The first entry
+    // is then unreachable from main - held, with its observer and its room
+    // subscription, until the epic is torn down. The redirect fixed which entry
+    // a holder reaches; it could not fix the one the holder no longer points
+    // at.
+    postVacatedRelease(previousKey);
     const existing = awaiting.get(nextKey);
     if (existing === undefined) {
       awaiting.set(nextKey, held);
@@ -941,6 +963,11 @@ export function createArtifactBodyLeaseBridge(options: {
       // that fires afterwards posts for a session that no longer exists.
       for (const timer of awaitingReleaseRetries.values()) timer.cancel();
       awaitingReleaseRetries.clear();
+      // Same bet, same loss: a vacated key's re-post is for a session that is
+      // going away, and the worker drops every retained demand on teardown
+      // regardless.
+      for (const timer of vacatedReleaseRetries.values()) timer.cancel();
+      vacatedReleaseRetries.clear();
       // The redirects go with them. Every release closure they exist to
       // re-point belongs to a session that is being torn down, and this is
       // the only place the map is emptied - it is otherwise append-only, one
@@ -1336,6 +1363,57 @@ export function createArtifactBodyLeaseBridge(options: {
         if (!worthAskingAgain(error)) return;
         armAwaitingReleaseRetry(docKey);
       },
+    );
+  }
+
+  /**
+   * Drop the worker's retained demand for a key an awaiting body has MOVED off.
+   *
+   * `postAwaitingRelease` is deliberately not reused, and not because of the
+   * message - both post the same `body/release`. Its RETRY reads through
+   * `currentKeyFor` and stands down when `awaiting.has(current)`, which for a
+   * vacated key resolves to the key that just took the body over: a refusal
+   * would re-target the live room and then decline to release it, which is
+   * both wrong and silently a no-op. This one re-posts the literal key.
+   *
+   * Safe to keep asking about, for the reason `currentKeyFor` already relies
+   * on: room ids are minted per assignment and never recycled, so this key
+   * cannot come back into use and a late release cannot land on a body someone
+   * acquired in the meantime.
+   */
+  function postVacatedRelease(vacatedKey: string): void {
+    void options.bridge
+      .call("body/release", { docKey: vacatedKey }, NO_TRANSFER)
+      .then(
+        (answer) => {
+          if (answer.released) return;
+          // Terminal for the same reason it is on the awaiting path: the far
+          // side has nothing to drop, so there is nothing left to reclaim.
+          if (answer.reason === "not-held") return;
+          // Anything else - a room still pinned by a present collaborator -
+          // is a "not yet", and this is the only caller that will ever ask
+          // again.
+          armVacatedReleaseRetry(vacatedKey);
+        },
+        (error: unknown) => {
+          if (!worthAskingAgain(error)) return;
+          armVacatedReleaseRetry(vacatedKey);
+        },
+      );
+  }
+
+  function armVacatedReleaseRetry(vacatedKey: string): void {
+    if (vacatedReleaseRetries.has(vacatedKey)) return;
+    vacatedReleaseRetries.set(
+      vacatedKey,
+      options.scheduler.schedule(options.lingerMs, () => {
+        vacatedReleaseRetries.delete(vacatedKey);
+        // No redirect and no re-read of `awaiting`/`entries`, unlike the
+        // awaiting retry: this key is vacated by construction and can never be
+        // re-acquired, so there is no later state that could make releasing it
+        // the wrong answer.
+        postVacatedRelease(vacatedKey);
+      }),
     );
   }
 

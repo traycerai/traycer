@@ -294,10 +294,16 @@ describe("an awaiting body whose doc key MOVES before its seed arrives", () => {
     expect(timers.fireAll()).toBeGreaterThan(0);
     await flushMicrotasks();
 
-    // THE REDDENING ASSERTION. Under the bug the entry lives under `DOC_KEY`,
-    // so the release settles a room the worker was never asked about and the
-    // NEW room's demand, observer and subscription stay held for the session.
-    expect(worker.releasedKeys).toEqual([MOVED_DOC_KEY]);
+    // THE REDDENING ASSERTION, in both directions. Under the re-key bug the
+    // entry lives under `DOC_KEY`, so the release settles a room the worker was
+    // never asked about and the NEW room's demand, observer and subscription
+    // stay held for the session. `DOC_KEY` leading it is the other half: the
+    // retry re-materializes by `artifactId`, so the worker resolved the moved
+    // room and took a SECOND awaiting demand - and once the redirect exists,
+    // every release this side issues targets the new key, leaving the old
+    // entry held with nothing able to reach it. It comes off when the move is
+    // adopted, which is why it is first.
+    expect(worker.releasedKeys).toEqual([DOC_KEY, MOVED_DOC_KEY]);
   });
 });
 
