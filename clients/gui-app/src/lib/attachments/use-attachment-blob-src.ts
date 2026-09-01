@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 
@@ -160,36 +160,134 @@ async function readArtifactAttachmentFromHost(
 export function useEpicImageFetcher(): ImageBytesFetcher {
   const handle = useMaybeOpenEpicHandle();
   const scope = useArtifactAttachmentScope();
+  // SUBSCRIBED, not read imperatively at call time. The arm decides which of
+  // the two legs below runs, and the legacy leg's contract is to WAIT - so an
+  // in-place host upgrade that swaps `@1` for `lanes` mid-read leaves that
+  // wait parked on a root-document attachments map the lane arm never seeds.
+  // Reading `getState()` inside the callback kept this hook referentially
+  // stable across exactly that transition, so nothing re-acquired.
+  const installedArm = useSyncExternalStore(
+    useCallback(
+      (onStoreChange: () => void) =>
+        handle === null ? () => {} : handle.store.subscribe(onStoreChange),
+      [handle],
+    ),
+    useCallback(() => handle?.store.getState().installedArm ?? null, [handle]),
+  );
+  // One controller per arm GENERATION. Identity alone does not free a parked
+  // read: `imageBlobCache` keys entries by hash and later acquirers reuse the
+  // first in-flight fetch, so a new fetcher would attach to the same stuck
+  // promise - and so would another mounted copy of the same image. Aborting
+  // rejects it instead, which is the path the cache already handles by
+  // dropping the poisoned entry, and the re-acquire below then runs on the
+  // new arm.
+  //
+  // Built in render rather than an effect so it exists before the consumer's
+  // own fetch effect runs; nothing observable happens until `abort()`, which
+  // is the cleanup's job. A memo React discards just yields a fresh unaborted
+  // controller, which is inert.
+  const armGeneration = useMemo(
+    // The arm is IN the value, not only in the dependency list: a memo whose
+    // body ignores its own dep reads to the exhaustive-deps rule as an
+    // unnecessary dependency, and the dep is the entire point here.
+    () => ({ arm: installedArm, abort: new AbortController() }),
+    [installedArm],
+  );
+  useEffect(
+    () => () => {
+      armGeneration.abort.abort();
+    },
+    [armGeneration],
+  );
   return useCallback<ImageBytesFetcher>(
-    async (h, signal) => {
+    async (h, callerSignal) => {
       if (handle === null) {
         throw new Error("No open-epic handle to fetch image attachment");
       }
-      if (handle.store.getState().installedArm === "lanes") {
-        const fromHost = await readArtifactAttachmentFromHost(scope, h, signal);
-        if (fromHost !== null) return fromHost;
-        const held = await readHeldEpicAttachmentBytes(handle, h);
-        if (held === null) {
+      const composed = signalUntilArmChanges(
+        callerSignal,
+        armGeneration.abort.signal,
+      );
+      try {
+        const signal = composed.signal;
+        if (installedArm === "lanes") {
+          const fromHost = await readArtifactAttachmentFromHost(
+            scope,
+            h,
+            signal,
+          );
+          if (fromHost !== null) return fromHost;
+          const held = await readHeldEpicAttachmentBytes(handle, h);
+          if (held === null) {
+            throw new Error(`Image attachment ${h} unavailable`);
+          }
+          return { bytes: new Uint8Array(held), mediaType: null };
+        }
+        // Through the replica-read seam rather than the store directly: this
+        // is one of the byte reads that resolves against the worker-held root
+        // replica once the runtime moves, and the seam is where that swap
+        // happens. The WAITING variant deliberately - an artifact image whose
+        // bytes are still replicating must resolve when they land, not read as
+        // missing (see the seam for why the chat leg takes the other one).
+        const bytes = await readEpicAttachmentBytes(handle, h, signal);
+        if (bytes === null) {
           throw new Error(`Image attachment ${h} unavailable`);
         }
-        return { bytes: new Uint8Array(held), mediaType: null };
+        // The doc replica stores raw bytes with no sniffed header of its own,
+        // so it has no verdict to offer and the caller's declared type stands.
+        return { bytes: new Uint8Array(bytes), mediaType: null };
+      } finally {
+        // On EVERY path, resolve included. The arm signal outlives this fetch
+        // by design and is shared by every image in the epic, so a listener
+        // left behind by a fetch that simply succeeded is retained until the
+        // arm next changes - one per thumbnail the user scrolled past.
+        composed.clear();
       }
-      // Through the replica-read seam rather than the store directly: this is
-      // one of the byte reads that resolves against the worker-held root
-      // replica once the runtime moves, and the seam is where that swap
-      // happens. The WAITING variant deliberately - an artifact image whose
-      // bytes are still replicating must resolve when they land, not read as
-      // missing (see the seam for why the chat leg takes the other one).
-      const bytes = await readEpicAttachmentBytes(handle, h, signal);
-      if (bytes === null) {
-        throw new Error(`Image attachment ${h} unavailable`);
-      }
-      // The doc replica stores raw bytes with no sniffed header of its own, so
-      // it has no verdict to offer and the caller's declared type stands.
-      return { bytes: new Uint8Array(bytes), mediaType: null };
     },
-    [handle, scope],
+    [handle, scope, installedArm, armGeneration],
   );
+}
+
+/**
+ * A signal that fires when EITHER the caller's does or the arm generation ends.
+ *
+ * `AbortSignal.any` would be one line and is deliberately not used: the mobile
+ * shell's deployment floor predates it, and there it throws out of the call
+ * rather than degrading - the same reason `clients/shared/auth/request-abort.ts`
+ * hand-rolls its composition.
+ *
+ * `clear()` is not optional bookkeeping, the same point
+ * `composeRequestAbort` makes about its own. `once: true` would remove only
+ * the listener that FIRED, and on the ordinary path neither fires - the fetch
+ * simply resolves. The arm signal outlives the fetch by design and is shared
+ * by every image in the epic, so each resolved thumbnail would leave a live
+ * composed controller attached to it until the arm next changed.
+ */
+interface ArmScopedAbort {
+  readonly signal: AbortSignal;
+  /** Call once the fetch settles, on every path including failure. */
+  readonly clear: () => void;
+}
+
+function signalUntilArmChanges(
+  callerSignal: AbortSignal,
+  armSignal: AbortSignal,
+): ArmScopedAbort {
+  const noop = (): void => {};
+  if (armSignal.aborted) return { signal: armSignal, clear: noop };
+  if (callerSignal.aborted) return { signal: callerSignal, clear: noop };
+  const controller = new AbortController();
+  const detach = (): void => {
+    callerSignal.removeEventListener("abort", forward);
+    armSignal.removeEventListener("abort", forward);
+  };
+  const forward = (): void => {
+    detach();
+    controller.abort();
+  };
+  callerSignal.addEventListener("abort", forward);
+  armSignal.addEventListener("abort", forward);
+  return { signal: controller.signal, clear: detach };
 }
 
 /** Synchronously checks the currently-open epic's local attachment replica. */

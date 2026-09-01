@@ -69,7 +69,10 @@ import { appLogger } from "@/lib/logger";
 // HERE because this is the layer that sees the grant say so. The edge back is
 // type-only (`OpenEpicStoreHandle`), so there is no runtime cycle.
 import { ArtifactBodyUnavailableError } from "@/lib/epic-replica-reads";
-import { createArtifactBodyLeaseBridge } from "./runtime/worker/artifact-body-lease-bridge";
+import {
+  createArtifactBodyLeaseBridge,
+  type ArtifactBodyRetention,
+} from "./runtime/worker/artifact-body-lease-bridge";
 import { createRendererRuntimeEnvironment } from "./runtime/runtime-environment";
 import { ARTIFACT_ROOM_LEASE_POLICY } from "./runtime/artifact-room-tier";
 import { createHotBodyBudgetAdapter } from "./runtime/worker/hot-body-budget-adapter";
@@ -900,6 +903,12 @@ export interface OpenEpicState {
    */
   acquireResidentArtifactBodyLease: (
     artifactId: string,
+    /**
+     * What the LAST release does with the body. `"linger"` for anything a
+     * human may return to; `"immediate"` for a transient programmatic hold
+     * whose caller knows it will not - see `ArtifactBodyRetention`.
+     */
+    retention: ArtifactBodyRetention,
   ) => ArtifactBodyResidentLease;
   /** Snapshot-read the title for optimistic-rename rollback. */
   readArtifactTitle: (artifactId: string) => string | null;
@@ -1248,12 +1257,13 @@ export function createOpenEpicStore(
    */
   function acquireResidentBodyLease(
     artifactId: string,
+    retention: ArtifactBodyRetention,
   ): ArtifactBodyResidentLease {
     let released = false;
     let grantedRelease: (() => void) | null = null;
     let abandonResidency: (() => void) | null = null;
     const resident = bodyLeases
-      .acquire(artifactId)
+      .acquire(artifactId, retention)
       .catch((cause: unknown) => {
         // A bridge that went away underneath the call is THIS ARTIFACT'S BODY
         // being unavailable, said in the only vocabulary the callers have copy
@@ -1982,7 +1992,9 @@ export function createOpenEpicStore(
            * never cools.
            */
           acquireArtifactBodyLease: (artifactId) => {
-            const lease = acquireResidentBodyLease(artifactId);
+            // The layout-effect holder is an EDITOR mount, which is exactly
+            // the bet the cooldown is for.
+            const lease = acquireResidentBodyLease(artifactId, "linger");
             // HANDLED, not ignored, and CLASSIFIED rather than blanket. This
             // caller has no residency question - it is holding the room open
             // for an editor that binds the fragment by reference and re-reads
@@ -2012,8 +2024,8 @@ export function createOpenEpicStore(
             });
             return lease.release;
           },
-          acquireResidentArtifactBodyLease: (artifactId) =>
-            acquireResidentBodyLease(artifactId),
+          acquireResidentArtifactBodyLease: (artifactId, retention) =>
+            acquireResidentBodyLease(artifactId, retention),
           readArtifactTitle: (artifactId) => {
             // The PROJECTION, in the doc read's own family order: artifacts,
             // then chats, then terminal agents, falling through on ENTRY

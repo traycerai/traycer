@@ -5,6 +5,7 @@ import type {
   ArtifactBodyResidentLease,
   OpenEpicStoreHandle,
 } from "@/stores/epics/open-epic/store";
+import type { ArtifactBodyRetention } from "@/stores/epics/open-epic/runtime/worker/artifact-body-lease-bridge";
 import {
   ArtifactBodyUnavailableError,
   holdArtifactBody,
@@ -20,6 +21,9 @@ interface FakeState {
    */
   readonly acquireResidentArtifactBodyLease: (
     artifactId: string,
+    // Mirrors the store member: the fixture is cast to the real type, so a
+    // narrower arity here is a mismatch the cast can no longer bridge.
+    retention: ArtifactBodyRetention,
   ) => ArtifactBodyResidentLease;
   readonly getArtifactFragment: (artifactId: string) => Y.XmlFragment | null;
   /**
@@ -130,7 +134,11 @@ describe("holdArtifactBody", () => {
       getArtifactFragment: () => (residentSettled ? fragment : null),
     });
 
-    const holdPromise = holdArtifactBody(createHandle(state), "artifact-1");
+    const holdPromise = holdArtifactBody(
+      createHandle(state),
+      "artifact-1",
+      "linger",
+    );
     // Not resident yet - the fragment must not be readable through this same
     // fixture until residency settles.
     expect(state.getArtifactFragment("artifact-1")).toBeNull();
@@ -157,7 +165,7 @@ describe("holdArtifactBody", () => {
     });
 
     await expect(
-      holdArtifactBody(createHandle(state), "artifact-1"),
+      holdArtifactBody(createHandle(state), "artifact-1", "linger"),
     ).rejects.toBeInstanceOf(ArtifactBodyUnavailableError);
     expect(release).toHaveBeenCalledTimes(1);
   });
@@ -172,7 +180,7 @@ describe("holdArtifactBody", () => {
     });
 
     await expect(
-      holdArtifactBody(createHandle(state), "artifact-1"),
+      holdArtifactBody(createHandle(state), "artifact-1", "linger"),
     ).rejects.toBe(cause);
     // Nothing to release: the acquire never handed a lease back, and the
     // `catch` must not invent one. Kept from before the resident lease
@@ -191,7 +199,11 @@ describe("holdArtifactBody", () => {
       getArtifactFragment: () => fragment,
     });
 
-    const hold = await holdArtifactBody(createHandle(state), "artifact-1");
+    const hold = await holdArtifactBody(
+      createHandle(state),
+      "artifact-1",
+      "linger",
+    );
     hold.release();
     hold.release();
     hold.release();

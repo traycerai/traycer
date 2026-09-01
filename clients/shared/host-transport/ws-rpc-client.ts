@@ -415,6 +415,30 @@ export class WsRpcClient<
           true
           ? idempotencyKey
           : null;
+      // A REPLAY may not go out unkeyed. Stripping is right on a first attempt
+      // against a host that predates the capability - nothing was dispatched,
+      // so an unkeyed send is a first send - but this connection is not the one
+      // that earned the retry. That was granted because the PREVIOUS connection
+      // negotiated a key and the host was therefore deduplicating it; a
+      // reconnect onto an incarnation without the capability breaks the very
+      // premise the retry rests on, and the earlier attempt may already have
+      // committed.
+      //
+      // Ambiguous rather than retryable, and that is the point of failing here
+      // instead of dispatching: the outcome of the first attempt is genuinely
+      // unknown, so the honest answer is the one that makes a caller reconcile
+      // (`classifyEpicWriteCommandFailure` routes `HostTransportFailureError`
+      // to `unknown-outcome`) rather than one that invites a third attempt into
+      // the same hole.
+      if (options.replayMustBeKeyed && wireIdempotencyKey === null) {
+        throw new HostTransportFailureError({
+          code: "RPC_ERROR",
+          message: `Host '${selected.hostId}' cannot honour the idempotency key a replay of '${method}' requires`,
+          requestId,
+          method,
+          fatalDetails: null,
+        });
+      }
 
       const compat = checkCompatibility(
         this.registry,
@@ -885,6 +909,11 @@ function hostFatalError(
   ) {
     return new RetryableTransportError({
       code: "RPC_ERROR",
+      // BOTH arms above are no-dispatch, which is why this is `false` and not
+      // a judgement call: one is `phase === "beforeRequest"`, the other is the
+      // host's own attestation that it stayed `awaitingRequest`. Neither owes
+      // the next attempt a key.
+      replaySafetyFromKey: false,
       message: details.reason,
       requestId,
       method,
@@ -1201,6 +1230,11 @@ function openSession(options: SessionOptions): Session {
           requestId,
           method,
           fatalDetails: null,
+          // The ground for the retry, read straight off the branch that
+          // granted it: reaching here with `requestSent` means the key is the
+          // only thing making a replay safe, so the next attempt has to carry
+          // one. Pre-send needs no key - the host never saw the call.
+          replaySafetyFromKey: requestSent,
         });
 
   /**

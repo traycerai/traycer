@@ -187,7 +187,7 @@ describe("the local body/update refusal's .catch (open-epic store.ts)", () => {
 
       const lease = handle.store
         .getState()
-        .acquireResidentArtifactBodyLease(ARTIFACT_ID);
+        .acquireResidentArtifactBodyLease(ARTIFACT_ID, "linger");
       await lease.resident;
 
       const fragment = handle.store.getState().getArtifactFragment(ARTIFACT_ID);

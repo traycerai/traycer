@@ -127,8 +127,31 @@ export type ArtifactBodyGrant =
   | { readonly kind: "awaiting-seed"; readonly docKey: string; release(): void }
   | { readonly kind: "unavailable"; readonly reason: string };
 
+/**
+ * What a holder's LAST release should do with the body.
+ *
+ * `"linger"` is the default everywhere a human might come back: the cooldown
+ * is a bet that a closed editor reopens, and paying re-materialization for a
+ * scroll-out/scroll-in costs more than the memory it reclaims.
+ *
+ * `"immediate"` is for a transient, programmatic hold that knows the bet is
+ * wrong - a bulk export reads each body once and moves on. Without it the loop
+ * that carefully serializes one body at a time still leaves every previous one
+ * hot for the whole cooldown, which defeats the SEQUENTIAL RETENTION that loop
+ * exists for. (Not unbounded: `enforceHotCap` runs on every install and caps
+ * the hot population at `maxHotDocs`. Bounded is not the same as one.)
+ *
+ * Decided by whoever releases LAST, which is sound because an earlier return
+ * from `entry.leases > 0` means no other holder is left - an editor still
+ * holding the same body keeps it hot regardless of who else lets go.
+ */
+export type ArtifactBodyRetention = "linger" | "immediate";
+
 export interface ArtifactBodyLeaseBridge {
-  acquire(artifactId: string): Promise<ArtifactBodyGrant>;
+  acquire(
+    artifactId: string,
+    retention: ArtifactBodyRetention,
+  ): Promise<ArtifactBodyGrant>;
   /**
    * Re-materialize every awaiting body whose room the projection now calls
    * ready.
@@ -804,7 +827,10 @@ export function createArtifactBodyLeaseBridge(options: {
    * grant is minted per holder - each with its own idempotent release, so N
    * holders own N releases against a count of N.
    */
-  function grantFor(outcome: InFlightOutcome): ArtifactBodyGrant {
+  function grantFor(
+    outcome: InFlightOutcome,
+    retention: ArtifactBodyRetention,
+  ): ArtifactBodyGrant {
     if (outcome.kind === "unavailable") {
       return { kind: "unavailable", reason: outcome.reason };
     }
@@ -812,22 +838,25 @@ export function createArtifactBodyLeaseBridge(options: {
       return {
         kind: "awaiting-seed",
         docKey: outcome.docKey,
-        release: releaseAwaitingFor(outcome.docKey),
+        release: releaseAwaitingFor(outcome.docKey, retention),
       };
     }
     return {
       kind: "granted",
       docKey: outcome.docKey,
-      release: releaseFor(outcome.docKey),
+      release: releaseFor(outcome.docKey, retention),
     };
   }
 
   return {
-    async acquire(artifactId): Promise<ArtifactBodyGrant> {
+    async acquire(artifactId, retention): Promise<ArtifactBodyGrant> {
       const existing = findByArtifact(entries, artifactId);
       if (existing !== null) {
         reviveAndHold(existing.entry, 1);
-        return grantFor({ kind: "resident", docKey: existing.docKey });
+        return grantFor(
+          { kind: "resident", docKey: existing.docKey },
+          retention,
+        );
       }
       // COALESCED, and counted SYNCHRONOUSLY. A second acquire arriving while
       // the first one's `body/materialize` is still outstanding joins it here
@@ -840,14 +869,14 @@ export function createArtifactBodyLeaseBridge(options: {
       const outstanding = inFlight.get(artifactId);
       if (outstanding !== undefined) {
         outstanding.holders += 1;
-        return grantFor(await outstanding.answer);
+        return grantFor(await outstanding.answer, retention);
       }
       const record: InFlightAcquire = {
         holders: 1,
         answer: resolveAcquire(artifactId),
       };
       inFlight.set(artifactId, record);
-      return grantFor(await record.answer);
+      return grantFor(await record.answer, retention);
     },
     retryAwaitingBodies(isReadyDocKey): void {
       // A COPY of the keys: each iteration can resolve an entry and delete it,
@@ -1233,7 +1262,10 @@ export function createArtifactBodyLeaseBridge(options: {
    * resident entry now counts, so this falls through to that entry rather than
    * finding nothing and returning.
    */
-  function releaseAwaitingFor(capturedKey: string): () => void {
+  function releaseAwaitingFor(
+    capturedKey: string,
+    retention: ArtifactBodyRetention,
+  ): () => void {
     let live = true;
     return () => {
       if (!live) return;
@@ -1243,7 +1275,7 @@ export function createArtifactBodyLeaseBridge(options: {
       if (held === undefined) {
         // Resolved while this holder was mounted - its lease was carried into
         // the resident entry, so that is where the decrement belongs.
-        releaseFor(docKey)();
+        releaseFor(docKey, retention)();
         return;
       }
       held.leases -= 1;
@@ -1330,7 +1362,10 @@ export function createArtifactBodyLeaseBridge(options: {
     );
   }
 
-  function releaseFor(capturedKey: string): () => void {
+  function releaseFor(
+    capturedKey: string,
+    retention: ArtifactBodyRetention,
+  ): () => void {
     let live = true;
     return () => {
       // Idempotent per grant. Without this a caller's `finally` backstop
@@ -1352,6 +1387,13 @@ export function createArtifactBodyLeaseBridge(options: {
       if (entry.demotingGeneration !== null) return;
       // ...nor arm a second linger for a doc already inside one.
       if (entry.lingerTimer !== null) return;
+      if (retention === "immediate") {
+        // The same demote `enforceHotCap` and `flushLingering` post, taken
+        // now rather than after the cooldown. Reached only on the LAST
+        // release, so nothing is holding this body.
+        postLifecycleEnd(docKey, entry);
+        return;
+      }
       armLinger(docKey);
     };
   }

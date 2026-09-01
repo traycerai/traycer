@@ -45,6 +45,28 @@ export interface HostRequestAuthority {
 export interface HostRequestOptions {
   readonly idempotencyKey: string | null;
   readonly authority: HostRequestAuthority;
+  /**
+   * This dispatch is a REPLAY of an attempt that may already have committed,
+   * so it must not go out unkeyed.
+   *
+   * `false` on a caller's first attempt, and set by
+   * `createRetryingMessenger` for every attempt after a failure whose
+   * retryability was earned by a negotiated key
+   * ({@link RetryableTransportError.replaySafetyFromKey}).
+   *
+   * The two are not the same question as `idempotencyKey !== null`. A key is
+   * what the CALLER asked for; this is whether dropping it is still allowed.
+   * Both transports strip a key the handshake cannot honour
+   * (`ws-rpc-client`'s `wireIdempotencyKey`, `remote-session`'s), which is
+   * correct on a first attempt against a host that predates the capability -
+   * nothing has been dispatched, so an unkeyed send is a first send. It is not
+   * correct on a replay: the first attempt's retryability was granted BECAUSE
+   * that connection negotiated a key, and a second connection that cannot
+   * honour it - a reconnect onto a host replaced by an older incarnation -
+   * would execute the mutation a second time with no dedupe. On that path both
+   * transports must refuse and answer ambiguously instead of dispatching.
+   */
+  readonly replayMustBeKeyed: boolean;
 }
 
 /**
@@ -343,15 +365,34 @@ export class HostTransportFailureError extends HostRpcError {
  * propagate on the first attempt.
  */
 export class RetryableTransportError extends HostTransportFailureError {
+  /**
+   * This retryability was earned by a NEGOTIATED KEY rather than by proof that
+   * nothing was dispatched.
+   *
+   * The two grounds are not interchangeable and the difference decides what a
+   * retry is allowed to do. A pre-dispatch failure is safe to replay however
+   * the next connection is configured, because the host never saw the call. A
+   * post-send failure is safe only for as long as the host is deduplicating
+   * the key - so a replay of one must itself be keyed, which is what
+   * {@link HostRequestOptions.replayMustBeKeyed} carries into the next attempt.
+   *
+   * Defaulted nowhere: every construction states its ground, because a
+   * `false` assumed by omission would silently license exactly the unkeyed
+   * replay this field exists to prevent.
+   */
+  readonly replaySafetyFromKey: boolean;
+
   constructor(details: {
     code: RpcErrorCode;
     message: string;
     requestId: string;
     method: string;
     fatalDetails: FatalErrorDetails | null;
+    replaySafetyFromKey: boolean;
   }) {
     super(details);
     this.name = "RetryableTransportError";
+    this.replaySafetyFromKey = details.replaySafetyFromKey;
   }
 }
 

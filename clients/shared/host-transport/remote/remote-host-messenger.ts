@@ -53,6 +53,7 @@ export class RemoteHostMessenger<
       // No caller-specific budget: the session's shared
       // `UNARY_RESPONSE_TIMEOUT_MS` applies, as it always has.
       undefined,
+      options.replayMustBeKeyed,
     );
   }
 
@@ -81,6 +82,7 @@ export class RemoteHostMessenger<
       options.idempotencyKey,
       options.authority.abortSignal,
       responseTimeoutMs,
+      options.replayMustBeKeyed,
     );
   }
 }

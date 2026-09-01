@@ -1,6 +1,7 @@
 import { useCallback, useRef, useSyncExternalStore } from "react";
 import type { CommentThreadWire } from "@traycer/protocol/host/epic/unary-schemas";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
+import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 
 /**
  * Which of the two sources answered for an artifact.
@@ -158,7 +159,27 @@ export function useEpicLaneCommentThreadsDroppedAt(): number | null {
   // predicate orders come from the records lane, so its liveness is the one
   // that decides.
   const droppedAtRef = useRef<number | null>(null);
+  // The handle the instant above was stamped FOR. Without it the ref outlives
+  // the `useCallback` and carries one session's instant into the next.
+  //
+  // That used to be argued harmless - "the new store's lane slice has said
+  // nothing about the artifact yet, so the resolver takes the poll on its
+  // 'nothing to outrank' arm regardless". The premise is what fails:
+  // `EpicSessionProvider` can adopt an already-WARM handle, whose store
+  // arrives holding retained lane rows, so the new slice HAS spoken. The
+  // carried instant then sits between the old handle's drop and the new one's,
+  // and a poll that answered in that window is ordered as older than rows it
+  // is actually newer than - which is how a thread deleted in the replacement
+  // session comes back.
+  const stampedForRef = useRef<OpenEpicStoreHandle | null>(null);
   const getSnapshot = useCallback((): number | null => {
+    if (stampedForRef.current !== handle) {
+      stampedForRef.current = handle;
+      // Re-derived below from THIS handle's status, on this same call, so the
+      // snapshot stays stable for the reader - the reset is never observable
+      // as an intermediate value.
+      droppedAtRef.current = null;
+    }
     const live =
       handle !== null &&
       handle.store.getState().recordsTransportStatus === "open";
@@ -166,10 +187,6 @@ export function useEpicLaneCommentThreadsDroppedAt(): number | null {
     else droppedAtRef.current ??= Date.now();
     return droppedAtRef.current;
   }, [handle]);
-  // A handle swap keeps the previous session's instant, since the ref outlives
-  // the `useCallback`. Harmless: the new store's lane slice has said nothing
-  // about the artifact yet, so the resolver takes the poll on its
-  // "nothing to outrank" arm regardless of how the instant compares.
   return useSyncExternalStore(subscribe, getSnapshot);
 }
 

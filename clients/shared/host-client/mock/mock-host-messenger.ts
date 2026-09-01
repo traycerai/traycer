@@ -285,7 +285,14 @@ function restampHostRpcError(
     holders: cause.holders,
   };
   if (cause instanceof RetryableTransportError) {
-    return new RetryableTransportError(details);
+    // Carried from the cause, not re-decided: the whole point of this restamp
+    // is to preserve the contract the caller's error already states, and
+    // `replaySafetyFromKey` is the part of it that decides whether a retry of
+    // this call may go out unkeyed.
+    return new RetryableTransportError({
+      ...details,
+      replaySafetyFromKey: cause.replaySafetyFromKey,
+    });
   }
   if (cause instanceof HostTransportFailureError) {
     return new HostTransportFailureError(details);

@@ -173,10 +173,10 @@ describe("four concurrent acquires for one artifact", () => {
     // two hooks per mount, two mounts - so none of them can see an entry the
     // others have not installed yet.
     const grants: Promise<ArtifactBodyGrant>[] = [
-      leases.acquire(ARTIFACT),
-      leases.acquire(ARTIFACT),
-      leases.acquire(ARTIFACT),
-      leases.acquire(ARTIFACT),
+      leases.acquire(ARTIFACT, "linger"),
+      leases.acquire(ARTIFACT, "linger"),
+      leases.acquire(ARTIFACT, "linger"),
+      leases.acquire(ARTIFACT, "linger"),
     ];
     await pair.flush();
     expect(worker.pendingMaterializes.length).toBeGreaterThan(0);
@@ -225,7 +225,10 @@ describe("four concurrent acquires for one artifact", () => {
       reportAwaitingStalled: () => undefined,
     });
 
-    const grants = [leases.acquire(ARTIFACT), leases.acquire(ARTIFACT)];
+    const grants = [
+      leases.acquire(ARTIFACT, "linger"),
+      leases.acquire(ARTIFACT, "linger"),
+    ];
     await pair.flush();
     while (worker.pendingMaterializes.length > 0) await worker.answerNext();
 

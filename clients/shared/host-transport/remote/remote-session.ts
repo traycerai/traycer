@@ -380,6 +380,15 @@ export interface IRemoteSession<
      * rather than re-scoring every unary this session carries.
      */
     responseTimeoutMs: number | undefined,
+    /**
+     * This send is a REPLAY whose predecessor was only retryable because the
+     * key was negotiated (`HostRequestOptions.replayMustBeKeyed` in
+     * `host-messenger.ts`, which documents the full rule). The key-stripping
+     * this session does for a host that predates the capability is a
+     * legitimate downgrade on a FIRST send and a double-execution on this
+     * one, so a stripped key here refuses instead of dispatching.
+     */
+    replayMustBeKeyed: boolean,
   ): Promise<ResponseOfMethod<RpcRegistry, Method>>;
   subscribe<Method extends keyof StreamRegistry & string>(
     method: Method,
@@ -988,6 +997,7 @@ export class RemoteSession<
     idempotencyKey: string | null,
     abortSignal: AbortSignal | null,
     responseTimeoutMs: number | undefined,
+    replayMustBeKeyed: boolean,
   ): Promise<ResponseOfMethod<RpcRegistry, Method>> {
     this.start();
     const requestId = this.options.requestId();
@@ -1054,6 +1064,9 @@ export class RemoteSession<
           requestId,
           method,
           fatalDetails: null,
+          // Pre-send: the frame was never enqueued, so the next attempt is a
+          // first send however it is keyed.
+          replaySafetyFromKey: false,
         }),
       );
     }
@@ -1066,6 +1079,8 @@ export class RemoteSession<
           requestId,
           method,
           fatalDetails: null,
+          // Pre-send, same as the detached case above.
+          replaySafetyFromKey: false,
         }),
       );
     }
@@ -1094,6 +1109,7 @@ export class RemoteSession<
         requestId,
         responseTimeoutMs,
         idempotencyKey,
+        replayMustBeKeyed,
       );
     }
 
@@ -1107,6 +1123,7 @@ export class RemoteSession<
       requestId,
       responseTimeoutMs,
       idempotencyKey,
+      replayMustBeKeyed,
     ) as Promise<ResponseOfMethod<RpcRegistry, Method>>;
   }
 
@@ -1215,7 +1232,12 @@ export class RemoteSession<
     };
     return this.isClosed()
       ? new HostTransportFailureError(notReady)
-      : new RetryableTransportError(notReady);
+      : new RetryableTransportError({
+          ...notReady,
+          // "Not ready" is decided before anything is enqueued, so this
+          // retryability is the no-dispatch guarantee, not a key.
+          replaySafetyFromKey: false,
+        });
   }
 
   /**
@@ -1237,6 +1259,7 @@ export class RemoteSession<
     requestId: string,
     responseTimeoutMs: number | undefined,
     idempotencyKey: string | null,
+    replayMustBeKeyed: boolean,
   ): Promise<unknown> {
     let prepared: { onWireVersion: SchemaVersion; onWirePayload: unknown };
     try {
@@ -1252,10 +1275,34 @@ export class RemoteSession<
       return Promise.reject(asHostRpcError(cause, requestId, method));
     }
 
-    const streamId = this.allocateStreamId();
     const wireIdempotencyKey = connection.idempotencyKeySupported
       ? idempotencyKey
       : null;
+    if (replayMustBeKeyed && wireIdempotencyKey === null) {
+      // Decided BEFORE `allocateStreamId` so a refusal costs no stream id: it
+      // reads `connection.idempotencyKeySupported` and nothing else, so
+      // hoisting it above the allocation changes no other ordering.
+      //
+      // An earlier attempt of this call went out keyed and its outcome is
+      // unknown; the only reason it was replayable at all is that THAT
+      // connection deduplicates the key. This connection does not - either
+      // the caller never had a key, or the re-dial landed on a host
+      // incarnation whose handshake omits the capability - so dispatching
+      // would execute a mutation the host may already have run. Ambiguous
+      // (`HostTransportFailureError`, not the retryable subclass) is the
+      // honest answer: the first attempt genuinely may have committed, and
+      // this session must not turn "may have" into "did, twice".
+      return Promise.reject(
+        new HostTransportFailureError({
+          code: "RPC_ERROR",
+          message: `Remote session cannot honour the idempotency key a replay of '${method}' requires`,
+          requestId,
+          method,
+          fatalDetails: null,
+        }),
+      );
+    }
+    const streamId = this.allocateStreamId();
     const replaySafe = wireIdempotencyKey !== null;
     return new Promise<unknown>((resolve, reject) => {
       {
@@ -2288,6 +2335,7 @@ export class RemoteSession<
     requestId: string,
     responseTimeoutMs: number | undefined,
     idempotencyKey: string | null,
+    replayMustBeKeyed: boolean,
   ): Promise<ResponseOfMethod<RpcRegistry, Method>> {
     return resolveUnavailableMethodDegrade({
       registry: this.options.rpcRegistry,
@@ -2318,6 +2366,10 @@ export class RemoteSession<
           // reverting to the shared default.
           responseTimeoutMs,
           idempotencyKey,
+          // Same caller request on an older contract, so it is the same
+          // replay: a degrade must not become the unkeyed dispatch the
+          // direct path just refused.
+          replayMustBeKeyed,
         ),
     }) as Promise<ResponseOfMethod<RpcRegistry, Method>>;
   }
@@ -4459,6 +4511,13 @@ function unaryTimeoutError(
   });
 }
 
+/**
+ * The POST-SEND retryable failure: a timeout or a connection drop for a
+ * request whose frame is already on the wire. Both call sites reach it only
+ * on `replaySafe`, i.e. only because the connection negotiated the key - so
+ * every error minted here carries `replaySafetyFromKey: true`, and the retry
+ * it licenses is one the next attempt must itself key.
+ */
 function retryableUnaryFailure(
   requestId: string,
   method: string,
@@ -4470,6 +4529,7 @@ function retryableUnaryFailure(
     requestId,
     method,
     fatalDetails: null,
+    replaySafetyFromKey: true,
   });
 }
 

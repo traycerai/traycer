@@ -66,14 +66,18 @@ export function AddImageToArtifactButton(props: {
         // here now so the mutation's control flow is already the one it will
         // have then - the image is prepared before the body is held either
         // way, and the abort path below already covers a failure after that.
-        const body = await holdArtifactBody(handle, artifactId).catch(
-          (cause: unknown) => {
-            if (cause instanceof ArtifactBodyUnavailableError) {
-              throw new Error("This artifact is not available for editing.");
-            }
-            throw cause;
-          },
-        );
+        const body = await holdArtifactBody(
+          handle,
+          artifactId,
+          // An interactive edit on a body the user is looking at - exactly the
+          // case the cooldown is a good bet for.
+          "linger",
+        ).catch((cause: unknown) => {
+          if (cause instanceof ArtifactBodyUnavailableError) {
+            throw new Error("This artifact is not available for editing.");
+          }
+          throw cause;
+        });
         try {
           rollback = appendArtifactImage(body.fragment, {
             src: prepared.src,

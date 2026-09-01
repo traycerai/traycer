@@ -259,7 +259,7 @@ describe("acquireResidentArtifactBodyLease teardown", () => {
 
     const lease = rig.handle.store
       .getState()
-      .acquireResidentArtifactBodyLease(ARTIFACT);
+      .acquireResidentArtifactBodyLease(ARTIFACT, "linger");
     // Let the acquisition settle into "awaiting-seed" before releasing -
     // otherwise this collapses into pin 3's already-correct
     // release-before-grant case.
@@ -282,7 +282,7 @@ describe("acquireResidentArtifactBodyLease teardown", () => {
 
     const lease = rig.handle.store
       .getState()
-      .acquireResidentArtifactBodyLease(ARTIFACT);
+      .acquireResidentArtifactBodyLease(ARTIFACT, "linger");
     await rig.handle.flush();
     rig.handle.dispose();
 
@@ -296,7 +296,7 @@ describe("acquireResidentArtifactBodyLease teardown", () => {
 
     const lease = rig.handle.store
       .getState()
-      .acquireResidentArtifactBodyLease(ARTIFACT);
+      .acquireResidentArtifactBodyLease(ARTIFACT, "linger");
     // NOT flushed, deliberately - this is the one window pins 1 and 2 cannot
     // reach. They both let the acquire settle into `awaiting-seed` first; here
     // `body/materialize` is still on the wire when the bridge goes away, so
@@ -317,7 +317,7 @@ describe("acquireResidentArtifactBodyLease teardown", () => {
 
     const lease = rig.handle.store
       .getState()
-      .acquireResidentArtifactBodyLease(ARTIFACT);
+      .acquireResidentArtifactBodyLease(ARTIFACT, "linger");
     // Released in the SAME tick, before `acquire()`'s bridge round trip can
     // possibly answer - the `released` flag this rejects on is checked
     // synchronously inside the `.then` that runs when the grant lands, which
@@ -338,7 +338,7 @@ describe("acquireResidentArtifactBodyLease teardown", () => {
     rig.handle.store.getState().acquireArtifactBodyLease(ARTIFACT);
     const lease = rig.handle.store
       .getState()
-      .acquireResidentArtifactBodyLease(ARTIFACT);
+      .acquireResidentArtifactBodyLease(ARTIFACT, "linger");
     await statusReady;
     await rig.handle.flush();
 
@@ -357,7 +357,7 @@ describe("acquireResidentArtifactBodyLease teardown", () => {
 
     const lease = rig.handle.store
       .getState()
-      .acquireResidentArtifactBodyLease(ARTIFACT);
+      .acquireResidentArtifactBodyLease(ARTIFACT, "linger");
     await rig.handle.flush();
 
     await rig.seed();
@@ -379,7 +379,7 @@ describe("acquireResidentArtifactBodyLease teardown", () => {
 
     const lease = handle.store
       .getState()
-      .acquireResidentArtifactBodyLease("no-such-artifact");
+      .acquireResidentArtifactBodyLease("no-such-artifact", "linger");
 
     await expect(lease.resident).rejects.toBeInstanceOf(
       ArtifactBodyUnavailableError,

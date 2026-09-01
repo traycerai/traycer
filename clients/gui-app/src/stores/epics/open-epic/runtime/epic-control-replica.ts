@@ -211,13 +211,56 @@ export interface EpicControlReplica extends Replica<
   noteTransportDetached(): void;
 }
 
+/**
+ * The worse of two transport legs, so a session reports `open` only when every
+ * required leg is open.
+ *
+ * Ordered by how much a reader should distrust the session, not by the
+ * lifecycle: `closed` outranks `reconnecting` outranks `connecting` outranks
+ * `open`. `closed` leads because it is the only one that is not on its way
+ * back, and `reconnecting` beats `connecting` so a leg that has been up keeps
+ * saying so - `deriveConnectionStatus` folds `reconnecting` down to
+ * `connecting` itself when the session has never connected, and doing it twice
+ * would lose that distinction here.
+ */
+function mostDegradedTransportStatus(
+  a: StreamConnectionStatus,
+  b: StreamConnectionStatus,
+): StreamConnectionStatus {
+  const rank: Record<StreamConnectionStatus, number> = {
+    closed: 3,
+    reconnecting: 2,
+    connecting: 1,
+    open: 0,
+  };
+  return rank[a] >= rank[b] ? a : b;
+}
+
 export function createEpicControlReplica(
   sources: EpicControlReplicaSources,
 ): EpicControlReplica {
   const { epicId, environment, sink, effects, onAuthError, isDisposed } =
     sources;
 
+  /**
+   * The session's transport leg: the WORST of the required legs below, never
+   * the last one to report.
+   *
+   * Last-writer-wins was the bug. The lane arm opens two sockets that
+   * reconnect independently, so a status lane coming back under a records lane
+   * that is still closed set this to `open` for the whole session - and once
+   * the control snapshot restored `hasFreshRootSnapshotForOpenCycle`, the
+   * session rendered as connected and `canSendBodyWrites` admitted writes
+   * while no artifact record was arriving. `@1` is unaffected: one socket
+   * reports as both legs, so the aggregate is that socket's own value.
+   */
   let transportStatus: StreamConnectionStatus = "connecting";
+  /**
+   * The leg that carries the CONTROL SNAPSHOT (`ownsControlCycle`), tracked
+   * separately for the same reason `recordsTransportStatus` is - so the
+   * aggregate above can be recomputed rather than overwritten.
+   */
+  let controlTransportStatus: StreamConnectionStatus = "connecting";
   // Same initial value as the blended slot: before any lane reports, neither
   // is open and both say so.
   let recordsTransportStatus: StreamConnectionStatus = "connecting";
@@ -348,6 +391,41 @@ export function createEpicControlReplica(
    * write gate with no snapshot owed to reopen it, and every write was refused
    * for the rest of the connection.
    */
+  /**
+   * Move the reporting lane's leg and re-derive the session's aggregate.
+   *
+   * Extracted from `applyTransportStatus` so that handler stays under the
+   * complexity ceiling, and because this IS one decision: which leg moved, and
+   * what the session therefore reports.
+   *
+   * AGGREGATED, not assigned. "A required lane going away is the session's
+   * problem whichever lane it was" was always the intent; taking the last
+   * report satisfied it only for the lane that happened to report last, and a
+   * reconnect is precisely when the two disagree.
+   *
+   * The fallback keeps a hypothetical third lane that claims neither role from
+   * silently ceasing to move the session's status: it reports for itself,
+   * exactly as before. No arm emits that shape today.
+   */
+  function recordLegTransportStatus(
+    status: StreamConnectionStatus,
+    ownsControlCycle: boolean,
+    carriesRecords: boolean,
+  ): void {
+    if (ownsControlCycle) controlTransportStatus = status;
+    // Tracked SEPARATELY from the blended slot, and only off the socket that
+    // actually delivers rows - so a consumer asking "are records arriving
+    // right now" reads the records leg rather than the session's aggregate.
+    if (carriesRecords) recordsTransportStatus = status;
+    transportStatus =
+      ownsControlCycle || carriesRecords
+        ? mostDegradedTransportStatus(
+            controlTransportStatus,
+            recordsTransportStatus,
+          )
+        : status;
+  }
+
   function applyTransportStatus(
     status: StreamConnectionStatus,
     reason: StreamCloseReason | null,
@@ -355,14 +433,7 @@ export function createEpicControlReplica(
     carriesRecords: boolean,
   ): void {
     const previousTransportStatus = transportStatus;
-    transportStatus = status;
-    // Tracked SEPARATELY from the blended slot above, and only off the socket
-    // that actually delivers rows. `transportStatus` is deliberately written
-    // by every lane - a required lane going away is the session's problem
-    // whichever lane it was - which makes it the wrong answer for "are records
-    // arriving right now", because a records lane reconnecting under a live
-    // status lane still reads `open` there.
-    if (carriesRecords) recordsTransportStatus = status;
+    recordLegTransportStatus(status, ownsControlCycle, carriesRecords);
     const startedSubscriptionCycle =
       ownsControlCycle &&
       previousTransportStatus !== "open" &&
@@ -653,6 +724,10 @@ export function createEpicControlReplica(
      */
     reset(_cause: ReplicaResetCause): void {
       transportStatus = "connecting";
+      // Both legs, or the next lane report re-derives the aggregate from a
+      // pre-reset value this reset was supposed to have cleared.
+      controlTransportStatus = "connecting";
+      recordsTransportStatus = "connecting";
       cloudSyncStatus = "connected";
       hasFreshCloudSyncStatus = false;
       hasConnectedOnce = false;
@@ -695,6 +770,9 @@ export function createEpicControlReplica(
 
     beginFreshCycle(): void {
       transportStatus = "connecting";
+      // Both legs, for the reason `reset` gives.
+      controlTransportStatus = "connecting";
+      recordsTransportStatus = "connecting";
       cloudSyncStatus = "connected";
       const cycleDurabilityState = resetDurabilityProofForOpenCycle();
       // A fresh re-subscribe bootstraps from scratch, so the next connect is

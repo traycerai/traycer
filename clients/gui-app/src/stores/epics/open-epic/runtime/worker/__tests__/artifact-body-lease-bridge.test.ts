@@ -261,7 +261,7 @@ describe("acquire / materialize", () => {
   it("installs the worker's bytes once and charges the doc hot", async () => {
     const { leases, docs, budget } = setup();
 
-    const grant = await leases.acquire("artifact-1");
+    const grant = await leases.acquire("artifact-1", "linger");
 
     expect(grantedKey(grant)).toBe("artifact-1");
     expect(docs.installed).toEqual(["artifact-1"]);
@@ -302,7 +302,7 @@ describe("acquire / materialize", () => {
       reportAwaitingStalled: IGNORE_STALL_REPORT,
     });
 
-    const grant = await leases.acquire("artifact-missing");
+    const grant = await leases.acquire("artifact-missing", "linger");
 
     expect(grant.kind).toBe("unavailable");
     expect(docs.installed).toEqual([]);
@@ -312,7 +312,7 @@ describe("acquire / materialize", () => {
 describe("constraint 1 — the doc stays hot until the ack", () => {
   it("does not drop the doc, nor settle the charge, before the worker answers", async () => {
     const { leases, docs, budget, worker, scheduler } = setup();
-    const grant = await leases.acquire("artifact-1");
+    const grant = await leases.acquire("artifact-1", "linger");
 
     if (grant.kind !== "granted") throw new Error("expected a grant");
     grant.release();
@@ -331,9 +331,55 @@ describe("constraint 1 — the doc stays hot until the ack", () => {
     expect(leases.unacknowledgedDemoteKeys()).toEqual(["artifact-1"]);
   });
 
+  it("posts the demote on the last IMMEDIATE release, without waiting out the linger", async () => {
+    // The transient-hold arm. A bulk export reads each body once and moves on,
+    // so the cooldown - a bet that the user is coming back - is known wrong,
+    // and taking it left every already-serialized body hot behind the one the
+    // loop believed was the only resident.
+    const { leases, worker, scheduler } = setup();
+    const grant = await leases.acquire("artifact-1", "immediate");
+
+    if (grant.kind !== "granted") throw new Error("expected a grant");
+    grant.release();
+
+    // BEFORE advancing the scheduler, which is the whole assertion: the
+    // sibling above needs `scheduler.advance(LINGER_MS)` to reach this state.
+    expect(worker.demotes).toHaveLength(1);
+    expect(leases.unacknowledgedDemoteKeys()).toEqual(["artifact-1"]);
+
+    // And no timer was armed to post a SECOND one when the window elapses.
+    scheduler.advance(LINGER_MS);
+    expect(worker.demotes).toHaveLength(1);
+  });
+
+  it("keeps the body hot while another holder remains, whatever the releaser asked for", async () => {
+    // The retention is the LAST releaser's call, and this is why that is safe:
+    // an earlier return on `leases > 0` means the question is never reached
+    // while anyone still holds the body. Without this pin, "immediate wins"
+    // would read as "immediate evicts a body an editor is bound to".
+    const { leases, worker, scheduler } = setup();
+    const editor = await leases.acquire("artifact-1", "linger");
+    const exporter = await leases.acquire("artifact-1", "immediate");
+
+    if (exporter.kind !== "granted") throw new Error("expected a grant");
+    exporter.release();
+
+    expect(worker.demotes).toEqual([]);
+    scheduler.advance(LINGER_MS);
+    expect(worker.demotes).toEqual([]);
+
+    if (editor.kind !== "granted") throw new Error("expected a grant");
+    editor.release();
+    // The editor is last, so ITS retention decides - the linger, not the
+    // exporter's immediate.
+    expect(worker.demotes).toEqual([]);
+    scheduler.advance(LINGER_MS);
+    expect(worker.demotes).toHaveLength(1);
+  });
+
   it("settles cold with the WORKER's byte count and drops the doc on the ack", async () => {
     const { leases, docs, budget, worker, scheduler } = setup();
-    const grant = await leases.acquire("artifact-1");
+    const grant = await leases.acquire("artifact-1", "linger");
 
     if (grant.kind !== "granted") throw new Error("expected a grant");
     grant.release();
@@ -356,8 +402,8 @@ describe("constraint 1 — the doc stays hot until the ack", () => {
 
   it("does not post a second demote, nor charge twice, on a second release before the ack", async () => {
     const { leases, worker, budget, scheduler } = setup();
-    const first = await leases.acquire("artifact-1");
-    const second = await leases.acquire("artifact-1");
+    const first = await leases.acquire("artifact-1", "linger");
+    const second = await leases.acquire("artifact-1", "linger");
 
     if (first.kind !== "granted" || second.kind !== "granted") {
       throw new Error("expected two grants");
@@ -390,7 +436,7 @@ describe("constraint 1 — the doc stays hot until the ack", () => {
 
   it("keeps the doc when the worker declines the generation", async () => {
     const { leases, docs, budget, worker, scheduler } = setup();
-    const grant = await leases.acquire("artifact-1");
+    const grant = await leases.acquire("artifact-1", "linger");
 
     if (grant.kind !== "granted") throw new Error("expected a grant");
     grant.release();
@@ -412,7 +458,7 @@ describe("constraint 1 — the doc stays hot until the ack", () => {
 describe("constraint 2 — a worker that dies mid-demote", () => {
   it("keeps the doc, and re-sends once to the replacement", async () => {
     const { leases, docs, main, worker, scheduler } = setup();
-    const grant = await leases.acquire("artifact-1");
+    const grant = await leases.acquire("artifact-1", "linger");
 
     if (grant.kind !== "granted") throw new Error("expected a grant");
     grant.release();
@@ -462,7 +508,7 @@ describe("constraint 2 — a worker that dies mid-demote", () => {
 
   it("re-sends with the SAME generation, so a worker that saw both settles once", async () => {
     const { leases, worker, docs, scheduler } = setup();
-    const grant = await leases.acquire("artifact-1");
+    const grant = await leases.acquire("artifact-1", "linger");
 
     if (grant.kind !== "granted") throw new Error("expected a grant");
     grant.release();
@@ -491,7 +537,7 @@ describe("constraint 2 — a worker that dies mid-demote", () => {
 describe("constraint 3 — re-acquire before the ack wins locally", () => {
   it("cancels the pending drop, does no round trip, and ignores the stale ack", async () => {
     const { leases, docs, budget, worker, pair, scheduler } = setup();
-    const first = await leases.acquire("artifact-1");
+    const first = await leases.acquire("artifact-1", "linger");
 
     if (first.kind !== "granted") throw new Error("expected a grant");
     first.release();
@@ -501,7 +547,7 @@ describe("constraint 3 — re-acquire before the ack wins locally", () => {
     expect(worker.demotes).toHaveLength(1);
 
     const callsBefore = countCalls(pair, "body/materialize");
-    const second = await leases.acquire("artifact-1");
+    const second = await leases.acquire("artifact-1", "linger");
 
     // Same document, handed straight back.
     expect(grantedKey(second)).toBe("artifact-1");
@@ -527,7 +573,7 @@ describe("constraint 3 — re-acquire before the ack wins locally", () => {
 
   it("demotes again on the next release, under a fresh generation", async () => {
     const { leases, worker, docs, scheduler } = setup();
-    const first = await leases.acquire("artifact-1");
+    const first = await leases.acquire("artifact-1", "linger");
     if (first.kind !== "granted") throw new Error("expected a grant");
     first.release();
     // The linger sits between the release and the post now; a release is
@@ -535,7 +581,7 @@ describe("constraint 3 — re-acquire before the ack wins locally", () => {
     scheduler.advance(LINGER_MS);
     const staleGeneration = worker.demotes[0]?.generation;
 
-    const second = await leases.acquire("artifact-1");
+    const second = await leases.acquire("artifact-1", "linger");
     if (second.kind !== "granted") throw new Error("expected a grant");
     second.release();
     // The linger sits between the release and the post now; a release is
@@ -555,7 +601,7 @@ describe("constraint 3 — re-acquire before the ack wins locally", () => {
 describe("constraint 4 — the encoded state is transferred, not copied by reference", () => {
   it("hands the demote's bytes over as a transfer", async () => {
     const { leases, pair, worker, scheduler } = setup();
-    const grant = await leases.acquire("artifact-1");
+    const grant = await leases.acquire("artifact-1", "linger");
     if (grant.kind !== "granted") throw new Error("expected a grant");
 
     grant.release();
@@ -602,7 +648,7 @@ describe("constraint 3 (legacy @1 arm) — a room-keyed re-acquire revives the s
       reportAwaitingStalled: IGNORE_STALL_REPORT,
     });
 
-    const first = await leases.acquire("artifact-1");
+    const first = await leases.acquire("artifact-1", "linger");
     expect(grantedKey(first)).toBe("room-1");
     if (first.kind !== "granted") throw new Error("expected a grant");
     first.release();
@@ -614,7 +660,7 @@ describe("constraint 3 (legacy @1 arm) — a room-keyed re-acquire revives the s
 
     // Re-acquired before the ack. Goes through materialize because the entry
     // is keyed by the room, not the artifact.
-    const second = await leases.acquire("artifact-1");
+    const second = await leases.acquire("artifact-1", "linger");
     expect(grantedKey(second)).toBe("room-1");
     // Same disarm, keyed by the room on this arm.
     expect(leases.unacknowledgedDemoteKeys()).not.toContain("room-1");
@@ -658,14 +704,14 @@ describe("constraint 3 (legacy @1 arm) — a room-keyed re-acquire revives the s
 describe("the linger window", () => {
   it("re-acquiring inside the window costs no materialize and no demote", async () => {
     const { leases, worker, docs, scheduler } = setup();
-    const first = await leases.acquire("artifact-1");
+    const first = await leases.acquire("artifact-1", "linger");
     if (first.kind !== "granted") throw new Error("expected a grant");
     expect(worker.materializes).toEqual(["artifact-1"]);
 
     first.release();
     // Inside the window, not past it.
     scheduler.advance(LINGER_MS - 1);
-    const second = await leases.acquire("artifact-1");
+    const second = await leases.acquire("artifact-1", "linger");
 
     if (second.kind !== "granted") throw new Error("expected a revival");
     // THE assertion: still ONE materialize. The doc was never released, so the
@@ -679,7 +725,7 @@ describe("the linger window", () => {
 
   it("holds the doc live for the whole window, then posts at expiry", async () => {
     const { leases, worker, docs, scheduler } = setup();
-    const grant = await leases.acquire("artifact-1");
+    const grant = await leases.acquire("artifact-1", "linger");
     if (grant.kind !== "granted") throw new Error("expected a grant");
 
     grant.release();
@@ -697,7 +743,7 @@ describe("the linger window", () => {
     // The lifecycle fork, arm one: this body's seed named a guid, so its bytes
     // are settled back.
     const { leases, worker, releasedForwardOnly, scheduler } = setup();
-    const grant = await leases.acquire("artifact-1");
+    const grant = await leases.acquire("artifact-1", "linger");
     if (grant.kind !== "granted") throw new Error("expected a grant");
 
     grant.release();
@@ -714,7 +760,7 @@ describe("the linger window", () => {
     // already lost, so waiting it out would hold both sides' state for a full
     // window after everything that could use it is gone.
     const { leases, worker, scheduler } = setup();
-    const grant = await leases.acquire("artifact-1");
+    const grant = await leases.acquire("artifact-1", "linger");
     if (grant.kind !== "granted") throw new Error("expected a grant");
 
     grant.release();
@@ -742,12 +788,12 @@ describe("the linger window — re-arming", () => {
     // declines to arm a new one, and the doc is demoted on the FIRST
     // release's clock - early, by however long the user kept it open.
     const { leases, worker, scheduler } = setup();
-    const first = await leases.acquire("artifact-1");
+    const first = await leases.acquire("artifact-1", "linger");
     if (first.kind !== "granted") throw new Error("expected a grant");
 
     first.release();
     scheduler.advance(LINGER_MS / 2);
-    const second = await leases.acquire("artifact-1");
+    const second = await leases.acquire("artifact-1", "linger");
     if (second.kind !== "granted") throw new Error("expected a revival");
     second.release();
 
@@ -772,7 +818,7 @@ describe("the hot-doc cap", () => {
 
     // Fill to the cap and let every one of them go, so all are evictable.
     for (let index = 0; index < MAX_HOT; index += 1) {
-      const grant = await leases.acquire(`artifact-${String(index)}`);
+      const grant = await leases.acquire(`artifact-${String(index)}`, "linger");
       if (grant.kind !== "granted") throw new Error("expected a grant");
       grant.release();
     }
@@ -783,7 +829,7 @@ describe("the hot-doc cap", () => {
     expect(docs.dropped).toEqual([]);
 
     // One past the cap.
-    const overflow = await leases.acquire("artifact-overflow");
+    const overflow = await leases.acquire("artifact-overflow", "linger");
     if (overflow.kind !== "granted") throw new Error("expected a grant");
 
     // The OLDEST held doc goes, and exactly one of them.
@@ -798,7 +844,7 @@ describe("the hot-doc cap", () => {
     const { leases, worker } = setup();
     const held = [];
     for (let index = 0; index < MAX_HOT + 2; index += 1) {
-      const grant = await leases.acquire(`artifact-${String(index)}`);
+      const grant = await leases.acquire(`artifact-${String(index)}`, "linger");
       if (grant.kind !== "granted") throw new Error("expected a grant");
       held.push(grant);
     }
@@ -878,7 +924,7 @@ describe("the forward-only release", () => {
       released: true,
       reason: null,
     });
-    const grant = await leases.acquire("artifact-1");
+    const grant = await leases.acquire("artifact-1", "linger");
     if (grant.kind !== "granted") throw new Error("expected a grant");
 
     grant.release();
@@ -898,7 +944,7 @@ describe("the forward-only release", () => {
       released: false,
       reason: "pinned",
     });
-    const grant = await leases.acquire("artifact-1");
+    const grant = await leases.acquire("artifact-1", "linger");
     if (grant.kind !== "granted") throw new Error("expected a grant");
 
     grant.release();
@@ -971,7 +1017,7 @@ describe("the forward-only release — generation fencing", () => {
 
     // Lifecycle 1: acquire, release, linger out. The release is posted and
     // deliberately left unanswered.
-    const first = await leases.acquire("artifact-1");
+    const first = await leases.acquire("artifact-1", "linger");
     if (first.kind !== "granted") throw new Error("expected a grant");
     first.release();
     scheduler.advance(LINGER_MS);
@@ -981,7 +1027,7 @@ describe("the forward-only release — generation fencing", () => {
 
     // Lifecycle 2: the doc is live again under a NEWER generation, and its own
     // release is posted. `demotingGeneration` is now the second cycle's.
-    const second = await leases.acquire("artifact-1");
+    const second = await leases.acquire("artifact-1", "linger");
     if (second.kind !== "granted") throw new Error("expected a grant");
     second.release();
     scheduler.advance(LINGER_MS);
@@ -1014,7 +1060,7 @@ describe("a demote that fails on a LIVE worker", () => {
     // `resendUnacknowledgedDemotes` (which only runs after a respawn) never
     // covers them.
     const { leases, docs, worker, scheduler } = setup();
-    const grant = await leases.acquire("artifact-1");
+    const grant = await leases.acquire("artifact-1", "linger");
     if (grant.kind !== "granted") throw new Error("expected a grant");
     grant.release();
     scheduler.advance(LINGER_MS);
@@ -1055,7 +1101,7 @@ describe("a demote that fails on a LIVE worker", () => {
     // lease, so this is a claim about the composition rather than about the
     // timer.
     const { leases, docs, worker, scheduler } = setup();
-    const first = await leases.acquire("artifact-1");
+    const first = await leases.acquire("artifact-1", "linger");
     if (first.kind !== "granted") throw new Error("expected a grant");
     first.release();
     scheduler.advance(LINGER_MS);
@@ -1063,7 +1109,7 @@ describe("a demote that fails on a LIVE worker", () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    const second = await leases.acquire("artifact-1");
+    const second = await leases.acquire("artifact-1", "linger");
     if (second.kind !== "granted") throw new Error("expected a re-grant");
 
     scheduler.advance(LINGER_MS);
@@ -1140,7 +1186,7 @@ describe("an awaiting body reassigned to another byteless room", () => {
 
   it("releases the room the worker actually retained, not the one the acquire asked about", async () => {
     const { leases, releases } = movedAwaitingSetup(["room-1", "room-2"]);
-    const grant = await leases.acquire("artifact-1");
+    const grant = await leases.acquire("artifact-1", "linger");
     if (grant.kind !== "awaiting-seed") {
       throw new Error("expected an awaiting-seed grant");
     }
@@ -1164,7 +1210,7 @@ describe("an awaiting body reassigned to another byteless room", () => {
     // simply released whatever the last materialize returned, and it pins that
     // an ordinary byteless retry is not treated as a move.
     const { leases, releases } = movedAwaitingSetup(["room-1", "room-1"]);
-    const grant = await leases.acquire("artifact-1");
+    const grant = await leases.acquire("artifact-1", "linger");
     if (grant.kind !== "awaiting-seed") {
       throw new Error("expected an awaiting-seed grant");
     }

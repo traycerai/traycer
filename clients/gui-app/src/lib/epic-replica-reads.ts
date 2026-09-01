@@ -38,6 +38,7 @@
  */
 import type * as Y from "yjs";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
+import type { ArtifactBodyRetention } from "@/stores/epics/open-epic/runtime/worker/artifact-body-lease-bridge";
 
 /**
  * A materialized artifact body, held for as long as the caller needs it.
@@ -78,6 +79,13 @@ export class ArtifactBodyUnavailableError extends Error {
 export async function holdArtifactBody(
   handle: OpenEpicStoreHandle,
   artifactId: string,
+  /**
+   * What this hold's release does with the body. Callers that read once and
+   * move on (a bulk export) pass `"immediate"`, so the loop's sequential
+   * RETENTION is real rather than only its sequential materialization; a
+   * surface a human may return to passes `"linger"`.
+   */
+  retention: ArtifactBodyRetention,
 ): Promise<ArtifactBodyHold> {
   const state = handle.store.getState();
   let release: (() => void) | null = null;
@@ -91,7 +99,7 @@ export async function holdArtifactBody(
     // was on its way. `resident` rejects for the one grant that owes nothing,
     // so an artifact this client genuinely cannot be served still fails fast
     // rather than parking the caller.
-    const lease = state.acquireResidentArtifactBodyLease(artifactId);
+    const lease = state.acquireResidentArtifactBodyLease(artifactId, retention);
     release = lease.release;
     await lease.resident;
     const fragment = state.getArtifactFragment(artifactId);

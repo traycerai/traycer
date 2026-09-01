@@ -177,7 +177,7 @@ describe("startAwaitingRetry - the rejection arm unlatches retrying", () => {
       AWAITING_SEED, // the second retry, once unlatched
     ]);
 
-    const grant = await leases.acquire(ARTIFACT_ID);
+    const grant = await leases.acquire(ARTIFACT_ID, "linger");
     if (grant.kind !== "awaiting-seed") {
       throw new Error(`expected an awaiting-seed grant, got ${grant.kind}`);
     }
@@ -201,7 +201,7 @@ describe("startAwaitingRetry - the rejection arm unlatches retrying", () => {
   it("with no pending push, reports the stall through reportAwaitingStalled", async () => {
     const { leases, worker, stalled } = setup([AWAITING_SEED, REJECT]);
 
-    const grant = await leases.acquire(ARTIFACT_ID);
+    const grant = await leases.acquire(ARTIFACT_ID, "linger");
     if (grant.kind !== "awaiting-seed") {
       throw new Error(`expected an awaiting-seed grant, got ${grant.kind}`);
     }

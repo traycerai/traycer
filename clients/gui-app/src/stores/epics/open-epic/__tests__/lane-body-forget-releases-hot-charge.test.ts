@@ -139,7 +139,7 @@ describe("forget() - the binding-epoch drop path", () => {
   it("releases the hot charge it was given at installation", async () => {
     const { leases, log } = setup();
 
-    const grant = await leases.acquire(ARTIFACT_ID);
+    const grant = await leases.acquire(ARTIFACT_ID, "linger");
     if (grant.kind !== "granted") {
       throw new Error(`expected a granted lease, got ${grant.kind}`);
     }

@@ -78,16 +78,23 @@ export function createRetryingMessenger<Registry extends VersionedRpcRegistry>(
   const runWithRetries = async <Response>(
     authority: HostRequestAuthority,
     method: string,
-    attemptCall: () => Promise<Response>,
+    attemptCall: (replayMustBeKeyed: boolean) => Promise<Response>,
   ): Promise<Response> => {
+    // Carried across attempts, and it only ever LATCHES on. Once any attempt
+    // has failed on ground that only a negotiated key made safe, every later
+    // attempt in this episode is a replay of a call that may already have
+    // committed - including one whose own immediate predecessor happened to
+    // fail pre-dispatch. Recomputing it per attempt would forget that.
+    let replayMustBeKeyed = false;
     for (let attempt = 0; attempt < policy.maxRetries; attempt += 1) {
       throwIfAuthorityAborted(authority, method);
       try {
-        return await attemptCall();
+        return await attemptCall(replayMustBeKeyed);
       } catch (cause) {
         if (!(cause instanceof RetryableTransportError)) {
           throw cause;
         }
+        replayMustBeKeyed = replayMustBeKeyed || cause.replaySafetyFromKey;
         await waitForRetryDelay(
           authority,
           method,
@@ -103,9 +110,11 @@ export function createRetryingMessenger<Registry extends VersionedRpcRegistry>(
       }
     }
     // Final attempt: out of the retry budget, so let whatever it throws -
-    // retryable or not - propagate to the caller unchanged.
+    // retryable or not - propagate to the caller unchanged. Still carries the
+    // requirement: being the last attempt does not make an unkeyed replay any
+    // safer.
     throwIfAuthorityAborted(authority, method);
-    return attemptCall();
+    return attemptCall(replayMustBeKeyed);
   };
 
   return {
@@ -114,8 +123,8 @@ export function createRetryingMessenger<Registry extends VersionedRpcRegistry>(
       params: RequestOfMethod<Registry, Method>,
       options: HostRequestOptions,
     ): Promise<ResponseOfMethod<Registry, Method>> {
-      return runWithRetries(options.authority, method, () =>
-        inner.request(method, params, options),
+      return runWithRetries(options.authority, method, (replayMustBeKeyed) =>
+        inner.request(method, params, { ...options, replayMustBeKeyed }),
       );
     },
     requestWithResponseTimeout<Method extends keyof Registry & string>(
@@ -124,13 +133,11 @@ export function createRetryingMessenger<Registry extends VersionedRpcRegistry>(
       responseTimeoutMs: number,
       options: HostRequestOptions,
     ): Promise<ResponseOfMethod<Registry, Method>> {
-      return runWithRetries(options.authority, method, () =>
-        inner.requestWithResponseTimeout(
-          method,
-          params,
-          responseTimeoutMs,
-          options,
-        ),
+      return runWithRetries(options.authority, method, (replayMustBeKeyed) =>
+        inner.requestWithResponseTimeout(method, params, responseTimeoutMs, {
+          ...options,
+          replayMustBeKeyed,
+        }),
       );
     },
   };

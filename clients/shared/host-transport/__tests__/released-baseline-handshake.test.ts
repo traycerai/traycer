@@ -333,7 +333,7 @@ describe("host-v1.1.7 permission-mode downgrade protection", () => {
         workspace: null,
         profileSelection: { kind: "ambient" },
       },
-      { idempotencyKey: null, authority: authority },
+      { idempotencyKey: null, authority: authority, replayMustBeKeyed: false },
     );
     await flush();
     const stub = sockets[0];
@@ -379,7 +379,7 @@ describe("host-v1.1.7 permission-mode downgrade protection", () => {
         fastMode: false,
         permissionMode: "full_access",
       },
-      { idempotencyKey: null, authority: authority },
+      { idempotencyKey: null, authority: authority, replayMustBeKeyed: false },
     );
     await flush();
     const stub = sockets[0];
@@ -436,7 +436,11 @@ describe.skipIf(baselines.length === 0)(
         const pending = client.request(
           "host.status",
           {},
-          { idempotencyKey: null, authority: authorityForContext(ctx) },
+          {
+            idempotencyKey: null,
+            authority: authorityForContext(ctx),
+            replayMustBeKeyed: false,
+          },
         );
         await flush();
         expect(sockets).toHaveLength(1);
@@ -542,7 +546,11 @@ describe.skipIf(baselines.length === 0)(
           {
             label: "x",
           },
-          { idempotencyKey: null, authority: authorityForContext(ctx) },
+          {
+            idempotencyKey: null,
+            authority: authorityForContext(ctx),
+            replayMustBeKeyed: false,
+          },
         );
         await flush();
         expect(sockets).toHaveLength(1);
@@ -612,7 +620,11 @@ describe.skipIf(baselines.length === 0)(
         const pending = client.request(
           "synthetic.baselineUnsupported",
           {},
-          { idempotencyKey: null, authority: authorityForContext(ctx) },
+          {
+            idempotencyKey: null,
+            authority: authorityForContext(ctx),
+            replayMustBeKeyed: false,
+          },
         );
         await flush();
         expect(sockets).toHaveLength(1);

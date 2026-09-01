@@ -200,6 +200,7 @@ describe("classifyEpicWriteCommandFailure", () => {
     expect(
       classifyEpicWriteCommandFailure(
         new RetryableTransportError({
+          replaySafetyFromKey: false,
           code: "RPC_ERROR",
           message: "dial failed",
           requestId: "request-1",

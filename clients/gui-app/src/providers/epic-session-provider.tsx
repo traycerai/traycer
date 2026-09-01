@@ -1255,19 +1255,42 @@ export function EpicSessionProvider(
       // legacy root replica into a lane-backed session's root doc would seed
       // records beside the typed rows the state lane delivers for those same
       // records, which is a second defect rather than a kinder failure.
-      const destinationCarriesRootWrites = armCarriesRootWrites(
-        nextHandle.store.getState().installedArm,
-      );
-      if (shouldTransferEdits && destinationCarriesRootWrites) {
+      // RE-READ ACROSS EVERY AWAIT, not once before them. The arm is not a
+      // constant of the candidate: a lane probe can resolve, and an in-place
+      // host upgrade re-handshakes an existing session
+      // (`recordNegotiatedHostManifest` runs on every re-attach), so a
+      // candidate that answers `legacy` here can be serving `lanes` by the
+      // time `encodeRootState` resolves. The comment above about narrowing not
+      // surviving an `await` is the same hazard one level up: this verdict does
+      // not survive one either, and unlike a narrowing nothing makes that fail
+      // to compile.
+      //
+      // Both re-reads matter, and for different reasons:
+      //
+      //  - BEFORE the apply, because applying is itself the harm. Merging a
+      //    whole legacy root replica into a lane-backed session's root doc
+      //    seeds records beside the typed rows the state lane delivers for
+      //    those same records - the second defect this function's own comment
+      //    warns against, not a kinder failure.
+      //  - AFTER it, because the arm can move during the apply too, and then
+      //    the bytes landed in a document whose `sendOutbound` routes
+      //    `root-update` to the detached `@1` adapter and drops them. The flag
+      //    is a data-loss guard, so an arm that moved under the apply has to
+      //    answer the conservative `false` - the outgoing handle is retained
+      //    rather than retired, which is recoverable where a discarded handle
+      //    is not.
+      const destinationCarriesRootWrites = (): boolean =>
+        armCarriesRootWrites(nextHandle.store.getState().installedArm);
+      if (shouldTransferEdits && destinationCarriesRootWrites()) {
         try {
           const update = await outgoing.handle.encodeRootState();
           // `true`: LOCAL_ORIGIN, so the union routes through the
           // replacement's normal local-update path and unacknowledged edits
           // survive for recovery.
-          editsTransferredToReplacement = await nextHandle.applyRootUpdate(
-            update,
-            true,
-          );
+          editsTransferredToReplacement =
+            destinationCarriesRootWrites() &&
+            (await nextHandle.applyRootUpdate(update, true)) &&
+            destinationCarriesRootWrites();
         } catch {
           // The honest false. A failed transfer means the edits still live
           // only in the outgoing handle, which is exactly what the retention

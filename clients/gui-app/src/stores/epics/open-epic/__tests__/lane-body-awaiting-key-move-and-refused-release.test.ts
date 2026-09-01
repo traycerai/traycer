@@ -257,7 +257,7 @@ describe("an awaiting body whose doc key MOVES before its seed arrives", () => {
       { kind: "granted", docKey: MOVED_DOC_KEY },
     ]);
 
-    const grant = await leases.acquire(ARTIFACT_ID);
+    const grant = await leases.acquire(ARTIFACT_ID, "linger");
     if (grant.kind !== "awaiting-seed") {
       throw new Error(`expected an awaiting-seed grant, got ${grant.kind}`);
     }
@@ -278,7 +278,7 @@ describe("an awaiting body whose doc key MOVES before its seed arrives", () => {
       { kind: "granted", docKey: MOVED_DOC_KEY },
     ]);
 
-    const grant = await leases.acquire(ARTIFACT_ID);
+    const grant = await leases.acquire(ARTIFACT_ID, "linger");
     if (grant.kind !== "awaiting-seed") {
       throw new Error(`expected an awaiting-seed grant, got ${grant.kind}`);
     }
@@ -310,7 +310,7 @@ describe("an awaiting body whose release the worker REFUSES", () => {
     // is present - so it legitimately declines to drop the demand.
     worker.releaseBehavior.set(DOC_KEY, "pinned");
 
-    const grant = await leases.acquire(ARTIFACT_ID);
+    const grant = await leases.acquire(ARTIFACT_ID, "linger");
     if (grant.kind !== "awaiting-seed") {
       throw new Error(`expected an awaiting-seed grant, got ${grant.kind}`);
     }
@@ -343,7 +343,7 @@ describe("an awaiting body whose release the worker REFUSES", () => {
     ]);
     worker.releaseBehavior.set(DOC_KEY, "reject");
 
-    const grant = await leases.acquire(ARTIFACT_ID);
+    const grant = await leases.acquire(ARTIFACT_ID, "linger");
     if (grant.kind !== "awaiting-seed") {
       throw new Error(`expected an awaiting-seed grant, got ${grant.kind}`);
     }
@@ -375,7 +375,7 @@ describe("an awaiting body whose release the worker REFUSES", () => {
     ]);
     worker.releaseBehavior.set(DOC_KEY, "not-held");
 
-    const grant = await leases.acquire(ARTIFACT_ID);
+    const grant = await leases.acquire(ARTIFACT_ID, "linger");
     if (grant.kind !== "awaiting-seed") {
       throw new Error(`expected an awaiting-seed grant, got ${grant.kind}`);
     }
@@ -402,7 +402,7 @@ describe("an awaiting body whose release the worker REFUSES", () => {
     ]);
     worker.releaseBehavior.set(DOC_KEY, "hang");
 
-    const grant = await leases.acquire(ARTIFACT_ID);
+    const grant = await leases.acquire(ARTIFACT_ID, "linger");
     if (grant.kind !== "awaiting-seed") {
       throw new Error(`expected an awaiting-seed grant, got ${grant.kind}`);
     }
@@ -432,7 +432,7 @@ describe("an awaiting body whose release the worker REFUSES", () => {
     ]);
     worker.releaseBehavior.set(DOC_KEY, "pinned");
 
-    const first = await leases.acquire(ARTIFACT_ID);
+    const first = await leases.acquire(ARTIFACT_ID, "linger");
     if (first.kind !== "awaiting-seed") {
       throw new Error(`expected an awaiting-seed grant, got ${first.kind}`);
     }
@@ -440,7 +440,7 @@ describe("an awaiting body whose release the worker REFUSES", () => {
     await flushMicrotasks();
     expect(worker.releasedKeys).toEqual([DOC_KEY]);
 
-    const second = await leases.acquire(ARTIFACT_ID);
+    const second = await leases.acquire(ARTIFACT_ID, "linger");
     if (second.kind !== "awaiting-seed") {
       throw new Error(`expected an awaiting-seed grant, got ${second.kind}`);
     }

@@ -693,6 +693,11 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
       this.messenger.request(method, params, {
         idempotencyKey: null,
         authority,
+        // Every dispatch this client originates is a caller's FIRST attempt.
+        // The replay requirement is raised one layer down, by
+        // `createRetryingMessenger`, and only for the attempts that follow a
+        // failure whose retryability a negotiated key earned.
+        replayMustBeKeyed: false,
       }),
     );
   }
@@ -704,7 +709,13 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
     idempotencyKey: string | null,
   ): Promise<ResponseOfMethod<Registry, Method>> {
     return this.scheduleRequest(entry, method, params, undefined, (authority) =>
-      this.messenger.request(method, params, { idempotencyKey, authority }),
+      this.messenger.request(method, params, {
+        idempotencyKey,
+        authority,
+        // A key the CALLER supplied, which is not the same as a replay that
+        // requires one - see the sibling above.
+        replayMustBeKeyed: false,
+      }),
     );
   }
 
@@ -730,6 +741,7 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
         {
           idempotencyKey: null,
           authority,
+          replayMustBeKeyed: false,
         },
       ),
     );

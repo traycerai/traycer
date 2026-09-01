@@ -63,15 +63,23 @@ export function useEpicExportArtifacts() {
         readonly markdown: string;
       }> = [];
       for (const artifact of input.artifacts) {
-        const hold = await holdArtifactBody(epicHandle, artifact.id).catch(
-          (cause: unknown) => {
-            // The seam names the artifact by id; the user knows it by title.
-            if (cause instanceof ArtifactBodyUnavailableError) {
-              throw new Error(`“${artifact.title}” is still loading.`);
-            }
-            throw cause;
-          },
-        );
+        const hold = await holdArtifactBody(
+          epicHandle,
+          artifact.id,
+          // NO LINGER. The release below was already ordered before the next
+          // materialize, but the lease bridge answers a last release by arming
+          // the 60s cooldown - a bet that the user is coming back to this
+          // body. An export reads each body once and moves on, so that bet is
+          // known wrong here, and taking it left every already-serialized body
+          // hot behind the one this loop thought was the only resident.
+          "immediate",
+        ).catch((cause: unknown) => {
+          // The seam names the artifact by id; the user knows it by title.
+          if (cause instanceof ArtifactBodyUnavailableError) {
+            throw new Error(`“${artifact.title}” is still loading.`);
+          }
+          throw cause;
+        });
         try {
           serialized.push({
             ...artifact,
@@ -79,7 +87,10 @@ export function useEpicExportArtifacts() {
           });
         } finally {
           // Before the next materialize, so at most one body is resident -
-          // including on the throw path, where the loop is abandoned.
+          // including on the throw path, where the loop is abandoned. The
+          // `"immediate"` retention above is the other half of that claim:
+          // ordering the release early bounds nothing on its own if the
+          // release only arms a cooldown.
           hold.release();
         }
       }
