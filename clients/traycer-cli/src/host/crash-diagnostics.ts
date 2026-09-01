@@ -25,7 +25,19 @@
  * - Exit-status decoding: `code=3221226505` means nothing at a glance;
  *   `0xC0000409 STATUS_STACK_BUFFER_OVERRUN` does. Fatal POSIX signals get
  *   the same treatment (`SIGABRT` = abort, not a shutdown).
+ * - Windows minidumps (`registerWindowsCrashDumpCapture`): the two
+ *   mechanisms above only see what the dying process WRITES, and a fail-fast
+ *   raised from native code writes nothing - `--report-on-fatalerror` hooks
+ *   V8's fatal callback only, and `abort()`/`__fastfail` from an addon or
+ *   the CRT never pass through it. A field host produced eleven 0xC0000409
+ *   exits in a day with an empty stderr capture and no report each time.
+ *   Fail-fast bypasses SEH and the JIT debugger but IS delivered to Windows
+ *   Error Reporting, and WER's per-executable `LocalDumps` policy - which
+ *   honours HKCU, so no elevation - writes a minidump that names the
+ *   faulting module. The supervisor registers it for the host executable at
+ *   every start, into `<data dir>/crash-dumps`.
  */
+import { execFile } from "node:child_process";
 import {
   appendFile,
   mkdir,
@@ -34,7 +46,8 @@ import {
   stat,
   unlink,
 } from "node:fs/promises";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
+import { promisify } from "node:util";
 import type { Environment } from "../runner/environment";
 import { bootstrapLogPath } from "../store/paths";
 
@@ -125,7 +138,12 @@ export const REPORT_SUMMARY_MAX_CHARS = 512;
 const WINDOWS_EXIT_MEANINGS: ReadonlyMap<number, string> = new Map([
   [
     0xc0000409,
-    "STATUS_STACK_BUFFER_OVERRUN (fail-fast abort: V8 fatal/OOM, native stack overflow, or CRT abort)",
+    // Ordered by what an EMPTY stderr capture leaves: a V8 fatal (OOM and
+    // friends) always prints `FATAL ERROR` to stderr before aborting, so no
+    // capture and no diagnostic report means the abort came from native code
+    // or the CRT - std::terminate on a worker thread, an invalid-parameter
+    // fault, a direct __fastfail. Only a WER minidump names the module.
+    "STATUS_STACK_BUFFER_OVERRUN (fail-fast abort: a native module or CRT abort when stderr is empty, else V8 fatal/OOM which prints FATAL ERROR first; see crash-dumps)",
   ],
   [0xc0000005, "STATUS_ACCESS_VIOLATION (native crash)"],
   [0xc0000142, "STATUS_DLL_INIT_FAILED (spawn during session shutdown)"],
@@ -411,6 +429,129 @@ export class StderrLogTee implements StderrTee {
 /** `<childCwd>/crash-reports` - the directory the relative report flag targets. */
 export function crashReportsDirFor(childCwd: string): string {
   return join(childCwd, "crash-reports");
+}
+
+/** `<childCwd>/crash-dumps` - where WER writes the host's minidumps on Windows. */
+export function crashDumpsDirFor(childCwd: string): string {
+  return join(childCwd, "crash-dumps");
+}
+
+/**
+ * How many minidumps WER keeps in the folder before it stops writing new ones
+ * (it does not rotate; it stops). Small on purpose: a crash-looping host
+ * would otherwise fill the disk, and the FIRST dump is the one that names the
+ * module.
+ */
+export const CRASH_DUMP_KEEP_COUNT = 3;
+
+/**
+ * `1` = MiniDumpNormal: thread stacks, the module list, and the exception
+ * record - enough for `!analyze -v` to name the faulting module and frame,
+ * at a few MB. `2` (full memory) would be the host's whole RSS per crash,
+ * measured at 1.5 GB on the host this exists for, and answers a question
+ * nobody has asked yet.
+ */
+export const CRASH_DUMP_TYPE_MINIDUMP = 1;
+
+/** The `reg.exe` seam, so the registration is testable without a registry. */
+export type RegistryWriter = (args: readonly string[]) => Promise<void>;
+
+const execFileAsync = promisify(execFile);
+
+async function regAdd(args: readonly string[]): Promise<void> {
+  await execFileAsync("reg", ["add", ...args], {
+    windowsHide: true,
+    timeout: 5_000,
+  });
+}
+
+export type CrashDumpRegistration =
+  | { readonly registered: true; readonly key: string }
+  | { readonly registered: false; readonly reason: string };
+
+/**
+ * Registers a per-executable WER `LocalDumps` policy for the host under
+ * HKCU, so a fail-fast that leaves no stderr and no diagnostic report still
+ * leaves a minidump. Idempotent (`/f` overwrites), per-user (no elevation),
+ * and never throws: a diagnostics path must not be able to stop the host
+ * from starting. Skipped outside Windows and for anything that is not a
+ * `.exe` - the `make dev-desktop` host runs behind a `.cmd` wrapper under
+ * `node.exe`, and a policy keyed on that would be a policy on every Node
+ * process the user runs.
+ */
+export async function registerWindowsCrashDumpCapture(input: {
+  readonly executable: string;
+  readonly dumpDir: string;
+  readonly platform: NodeJS.Platform;
+  readonly writeRegistry: RegistryWriter;
+}): Promise<CrashDumpRegistration> {
+  if (input.platform !== "win32") {
+    return { registered: false, reason: "not windows" };
+  }
+  // `win32.basename` on purpose, not the host's: the executable is a Windows
+  // path by contract, and the POSIX flavour (CI, a developer's Mac) would
+  // leave the whole `C:\...\traycer-host.exe` in place and key the policy
+  // on it.
+  const exe = win32.basename(input.executable);
+  if (!/\.exe$/i.test(exe)) {
+    return { registered: false, reason: `not a .exe: ${exe}` };
+  }
+  const key = `HKCU\\Software\\Microsoft\\Windows\\Windows Error Reporting\\LocalDumps\\${exe}`;
+  try {
+    // The folder is created here rather than trusted to WER: WER creates a
+    // missing DumpFolder, but only if the parent exists, and the data dir's
+    // existence is not this function's assumption to make.
+    await mkdir(input.dumpDir, { recursive: true });
+    await input.writeRegistry([
+      key,
+      "/v",
+      "DumpFolder",
+      "/t",
+      "REG_EXPAND_SZ",
+      "/d",
+      input.dumpDir,
+      "/f",
+    ]);
+    await input.writeRegistry([
+      key,
+      "/v",
+      "DumpType",
+      "/t",
+      "REG_DWORD",
+      "/d",
+      String(CRASH_DUMP_TYPE_MINIDUMP),
+      "/f",
+    ]);
+    await input.writeRegistry([
+      key,
+      "/v",
+      "DumpCount",
+      "/t",
+      "REG_DWORD",
+      "/d",
+      String(CRASH_DUMP_KEEP_COUNT),
+      "/f",
+    ]);
+    return { registered: true, key };
+  } catch (error) {
+    return {
+      registered: false,
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/** The production registration: real platform, real `reg.exe`. */
+export function registerCrashDumpCaptureForHost(
+  executable: string,
+  dumpDir: string,
+): Promise<CrashDumpRegistration> {
+  return registerWindowsCrashDumpCapture({
+    executable,
+    dumpDir,
+    platform: process.platform,
+    writeRegistry: regAdd,
+  });
 }
 
 /**

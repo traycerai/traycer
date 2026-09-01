@@ -41,11 +41,14 @@ import {
   StderrLogTee,
   type StderrTee,
   type CrashReportMatch,
+  type CrashDumpRegistration,
+  crashDumpsDirFor,
   crashReportsDirFor,
   describeExitCode,
   describeFatalSignal,
   findCrashReportSince,
   prepareCrashReportsDir,
+  registerCrashDumpCaptureForHost,
 } from "../host/crash-diagnostics";
 import { hostHomeDir } from "../store/paths";
 import { consumeHostStartAdoption } from "../host/host-start-adoption";
@@ -422,6 +425,15 @@ export interface RunHostStartDeps extends ResolveHostStartTargetDeps {
   // host data dir: the defaults create/prune/scan real directories and tee
   // real bytes into host.log.
   readonly prepareCrashReportsDir: (dir: string) => Promise<readonly string[]>;
+  /**
+   * WER minidump registration for the host executable (Windows only; a no-op
+   * result elsewhere). Injected for the same reason as the report dir: the
+   * default writes the user's registry.
+   */
+  readonly registerCrashDumpCapture: (
+    executable: string,
+    dumpDir: string,
+  ) => Promise<CrashDumpRegistration>;
   readonly findCrashReport: (
     dir: string,
     sinceMs: number,
@@ -538,6 +550,7 @@ const defaultRunDeps: RunHostStartDeps = {
   writeProbeMarker: writeProbeMarkerAtomically,
   prepareCrashReportsDir: (dir) =>
     prepareCrashReportsDir(dir, MAX_KEPT_CRASH_REPORTS),
+  registerCrashDumpCapture: registerCrashDumpCaptureForHost,
   findCrashReport: findCrashReportSince,
   createStderrTee: (environment) => new StderrLogTee(environment),
   // NOT `unref()`ed, and that is load-bearing. During a backoff the child is
@@ -1342,6 +1355,13 @@ export async function runHostStart(
         crashReportsDirPath = crashReportsDirFor(target.cwd);
         preexistingReportNames = new Set(
           await deps.prepareCrashReportsDir(crashReportsDirPath),
+        );
+        // Beside the report dir, every start: a fail-fast from native code
+        // leaves neither stderr nor a report, and only a WER minidump names
+        // the module (see crash-diagnostics.ts). Never throws.
+        await deps.registerCrashDumpCapture(
+          target.executable,
+          crashDumpsDirFor(target.cwd),
         );
         const hostArgs = [
           ...target.args,

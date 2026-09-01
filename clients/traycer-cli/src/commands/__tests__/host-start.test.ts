@@ -231,6 +231,11 @@ interface Recorded {
   readonly preparedCrashReportDirs: string[];
   /** Names returned by the injected prepareCrashReportsDir (pre-existing set). */
   prepareCrashReportsReturn: readonly string[];
+  /** Every WER minidump registration the supervisor asked for. */
+  readonly crashDumpRegistrations: Array<{
+    executable: string;
+    dumpDir: string;
+  }>;
   readonly findCrashReportCalls: Array<{
     dir: string;
     sinceMs: number;
@@ -303,6 +308,7 @@ function makeRunStubs(
     sequence: [],
     preparedCrashReportDirs: [],
     prepareCrashReportsReturn: [],
+    crashDumpRegistrations: [],
     findCrashReportCalls: [],
     findCrashReportResult: null,
     findCrashReportHangs: false,
@@ -444,6 +450,10 @@ function makeRunStubs(
     prepareCrashReportsDir: async (dir) => {
       recorded.preparedCrashReportDirs.push(dir);
       return recorded.prepareCrashReportsReturn;
+    },
+    registerCrashDumpCapture: async (executable, dumpDir) => {
+      recorded.crashDumpRegistrations.push({ executable, dumpDir });
+      return { registered: false, reason: "injected: no registry in tests" };
     },
     findCrashReport: async (dir, sinceMs, excludeNames) => {
       recorded.findCrashReportCalls.push({
