@@ -656,8 +656,13 @@ export function EpicSessionProvider(
       // lost if this attached afterwards.
       let reprobeHandle: OpenEpicStoreHandle | null = null;
       const detachReprobe = attachPlanRestrictedReprobe(wsStreamClient, () => {
-        planRestrictedSessionRebuildBackoff.request(() => {
-          reprobeHandle?.retryTransport();
+        const deniedHandle = reprobeHandle;
+        if (deniedHandle === null) return;
+        planRestrictedSessionRebuildBackoff.request(deniedHandle, () => {
+          // Capture this exact owner. If its replacement is denied before a
+          // delayed rung fires, the backoff replaces this callback with the
+          // newer handle's rather than calling through a mutable slot.
+          deniedHandle.retryTransport();
         });
       });
       const closeSessionTransport = (
