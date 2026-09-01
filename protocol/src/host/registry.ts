@@ -3033,9 +3033,9 @@ export const providersNativeMutateV10 = defineRpcContract({
   responseSchema: providersNativeMutateResponseSchema,
 });
 
-// ── The per-pack version-manager methods (v8.0's mutation surface) ─────────
+// ── Per-pack version-manager methods + the on-demand discovery refresh ─────
 //
-// Four BRAND-NEW method names, each at `@1.0`, all registered below with
+// BRAND-NEW method names, each at `@1.0`, all registered below with
 // `degrade: { kind: "unsupported" }` - none is in
 // `RELEASED_FLOOR_METHOD_NAMES`, so a host that predates them refuses these
 // calls per-call with upgrade guidance rather than failing the handshake, the
