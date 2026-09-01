@@ -883,6 +883,9 @@ describe("SelectionAuthorityEngineImpl - death aggregation", () => {
     expect(findLease(engine.snapshot().leases, "H1")?.status).toBe(
       "connecting",
     );
+    expect(findLease(engine.snapshot().leases, "H3")?.status).toBe(
+      "connecting",
+    );
 
     engine.ingestEvidence(
       "A",

@@ -361,6 +361,8 @@ export type DialDisposition =
   | "inert-indeterminate"
   /** A live session for this host outranks the failure (invariant 5). */
   | "suppressed-live-session"
+  /** A deterministic plan denial already owns the verdict and reprobe clock. */
+  | "suppressed-plan-restriction"
   /** The host is not in the answered fleet. */
   | "dropped-outside-fleet"
   /** This (incarnation, attemptId) was already ingested. */
@@ -1502,7 +1504,11 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
       return;
     }
     const evidence = this.hostEvidence(hostId);
-    evidence.refusalStreak += 1;
+    const now = this.options.clock.now();
+    const planRestrictionActive =
+      evidence.planRestrictedRefusalObserved &&
+      evidence.planRestrictedUntil !== null &&
+      now < evidence.planRestrictedUntil;
     if (
       report.outcome === "confirmed-refusal" &&
       report.refusalDetail === "plan-restricted"
@@ -1512,14 +1518,21 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
       // still report an ordinary refusal after this one; only proof of life
       // (`onHostProvedAlive`) is strong enough to clear the known denial.
       evidence.planRestrictedRefusalObserved = true;
+      evidence.refusalStreak = 0;
       if (
         evidence.planRestrictedUntil === null ||
-        evidence.planRestrictedUntil <= this.options.clock.now()
+        evidence.planRestrictedUntil <= now
       ) {
-        evidence.planRestrictedUntil =
-          this.options.clock.now() + PLAN_RESTRICTED_REPROBE_MS;
+        evidence.planRestrictedUntil = now + PLAN_RESTRICTED_REPROBE_MS;
       }
+      this.recordDialDisposition(report, "suppressed-plan-restriction");
+      return;
     }
+    if (planRestrictionActive) {
+      this.recordDialDisposition(report, "suppressed-plan-restriction");
+      return;
+    }
+    evidence.refusalStreak += 1;
     this.recordDialDisposition(
       report,
       // Equality, not `>=`: this names the ONE report that crossed, which is
@@ -1603,7 +1616,11 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     // a success that arrives twice is classified `dropped-duplicate-attempt`
     // before its outcome is ever examined. Counting that as a stalled failure
     // would let a replayed SUCCESS raise "dial failures are not advancing".
-    if (report.outcome === "success" || dispositionCounts(disposition)) {
+    if (
+      report.outcome === "success" ||
+      dispositionCounts(disposition) ||
+      disposition === "suppressed-plan-restriction"
+    ) {
       this.dialStalls.delete(hostId);
       return;
     }
