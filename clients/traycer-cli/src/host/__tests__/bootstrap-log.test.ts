@@ -64,7 +64,7 @@ describe("bootstrap-log crash diagnostic fields", () => {
       signal: undefined,
       error: undefined,
       exitMeaning:
-        "0xC0000409 STATUS_STACK_BUFFER_OVERRUN (fail-fast abort: a native module or CRT abort when stderr is empty, else V8 fatal/OOM, which prints FATAL ERROR to stderr first)",
+        "0xC0000409 STATUS_STACK_BUFFER_OVERRUN (fail-fast abort: look for a FATAL ERROR / # Fatal error block in the stderr capture - V8 prints one before aborting, so a capture without it points at a native module or CRT abort)",
       report: "report.2026-01-01.120000.1234.0.001.json",
       stderrTail,
       attemptId: "attempt-uuid",
