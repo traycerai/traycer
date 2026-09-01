@@ -1504,12 +1504,11 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     ) {
       evidence.planRestrictedRefusalObserved = true;
       evidence.refusalStreak = 0;
-      if (
-        evidence.planRestrictedUntil === null ||
-        evidence.planRestrictedUntil <= now
-      ) {
-        evidence.planRestrictedUntil = now + PLAN_RESTRICTED_REPROBE_MS;
-      }
+      // Every non-duplicate refusal is fresh authenticated evidence from the
+      // physical session that just failed. Replace the prior deadline even
+      // while it is active so authority, negative cache and owner rebuild all
+      // describe the latest denial rather than an older identity's window.
+      evidence.planRestrictedUntil = now + PLAN_RESTRICTED_REPROBE_MS;
     }
     if (this.hasLiveSession(hostId)) {
       // Recorded for diagnostics, never accumulated: a live session anywhere

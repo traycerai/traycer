@@ -496,6 +496,7 @@ export function EpicSessionProvider(
     // handed a dead transport; the durable transport's live endpoint + wake
     // re-dial heal a host restart under a stable `hostId` on their own. Tests
     // drive the stream through the override seam and never open a real socket.
+    let reprobeHandle: OpenEpicStoreHandle | null = null;
     const streamClientFactory: EpicStreamClientFactory = (
       factoryEpicId,
       callbacks,
@@ -520,6 +521,7 @@ export function EpicSessionProvider(
             callbacks,
             seedOfferProvider,
           }),
+        () => reprobeHandle?.requestFreshSnapshot(),
       );
       return {
         applyUpdate: (updateBytes) => result.client.applyUpdate(updateBytes),
@@ -543,6 +545,7 @@ export function EpicSessionProvider(
         userId: sessionUserId,
         onAuthError: handleSessionAuthError,
       });
+      reprobeHandle = created;
       // Construction-honest stamp, written exactly once: `streamClientFactory`
       // above captures this run's `targetHostId` into the transport it opens,
       // so the stamp IS the handle's transport binding. Nothing re-stamps a

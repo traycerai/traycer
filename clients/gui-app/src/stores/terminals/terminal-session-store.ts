@@ -189,6 +189,8 @@ export interface TerminalSessionState {
    * stream — the PTY is no longer addressable.
    */
   setViewer: (viewer: TerminalSubscribeViewer) => void;
+  /** Rebuilds the owned transport while preserving this retained PTY handle. */
+  retryTransport: () => void;
   /** Closes the underlying stream client (does NOT call `terminal.kill`). */
   dispose: () => void;
 }
@@ -939,6 +941,19 @@ export function createTerminalSessionStore(
         return clientActionId;
       },
       setViewer,
+      retryTransport: () => {
+        if (disposed) return;
+        const state = get();
+        if (state.status === "exited" || state.status === "reaped") return;
+        resetAckAccounting();
+        streamGeneration += 1;
+        closeStreamClient();
+        set({
+          connectionStatus: "connecting",
+          status: state.snapshotLoaded ? "running" : "creating",
+        });
+        attachStream(state.requestedCols, state.requestedRows);
+      },
       dispose: () => {
         if (disposed) return;
         disposed = true;
