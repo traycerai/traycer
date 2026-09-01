@@ -158,22 +158,24 @@ function BundleFileSectionBody(props: BundleFileSectionBodyProps): ReactNode {
   // binary image - see `gitImageDiffRouting` for the routing decision
   // itself, shared with the single-file diff tile.
   const { routeToImageDiff } = gitImageDiffRouting(props.file);
-  // Same shape as the single-file tile: PDF cards need the host to serve
-  // PDFs on `git.streamFileAsset` (>= 1.1); an old host keeps the exact
-  // pre-PDF behavior (binary placeholder / text diff). Image routing wins a
-  // straddling rename, exactly as in `GitFileDiffPanel`.
+  // Same shape as the single-file tile, including the FAIL-OPEN direction:
+  // `git.streamFileAsset` is a stream method, absent from the unary openAck
+  // manifest this registry records, so its version is `null` for every
+  // host and a fails-closed gate would never open (see `GitFileDiffPanel`).
+  // Only a positively-known pre-1.1 host suppresses the cards; an old
+  // host's stream refusal degrades inside the View dialog. Image routing
+  // wins a straddling rename, exactly as in `GitFileDiffPanel`.
   const gitAssetStreamVersion = useHostMethodSchemaVersion(
     props.node.hostId,
     "git.streamFileAsset",
   );
-  const pdfCardsSupported =
+  const pdfCardsKnownUnsupported =
     gitAssetStreamVersion !== null &&
-    gitAssetStreamVersion.major === 1 &&
-    gitAssetStreamVersion.minor >= 1;
+    (gitAssetStreamVersion.major !== 1 || gitAssetStreamVersion.minor < 1);
   const routeToPdfCards =
     !routeToImageDiff &&
     gitRoutesToPdfDiffCards(props.file) &&
-    pdfCardsSupported;
+    !pdfCardsKnownUnsupported;
   useEffect(() => {
     if (!props.file.isBinary && !routeToImageDiff && !routeToPdfCards) return;
     bundleFindRegistration.registerCoverageState(

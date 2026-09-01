@@ -280,6 +280,18 @@ describe("<BundleFileSection /> PDF routing", () => {
     expect(screen.queryByTestId("bundle-file-diff")).toBeNull();
   });
 
+  it("renders the cards when the stream version is UNKNOWN (fail-open)", () => {
+    // `git.streamFileAsset` is a stream method and is NEVER in the unary
+    // openAck manifest, so `null` is the steady state for every host - a
+    // fails-closed gate here means the cards never render anywhere. This
+    // pins the fail-open direction (the production regression).
+    state.assetStreamVersion = null;
+    renderSection(file({ path: "docs/report.pdf", isBinary: true }));
+
+    expect(screen.getByTestId("pdf-diff-side-new")).toBeTruthy();
+    expect(screen.queryByText("Binary file")).toBeNull();
+  });
+
   it("keeps the pre-PDF placeholder for a binary PDF on a known 1.0 host", () => {
     state.assetStreamVersion = { major: 1, minor: 0 };
     renderSection(file({ path: "docs/report.pdf", isBinary: true }));

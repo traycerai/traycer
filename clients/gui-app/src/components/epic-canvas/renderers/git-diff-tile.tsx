@@ -486,18 +486,23 @@ interface GitFileDiffPanelProps {
 
 function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
   const tabHostClient = useTabHostClient();
-  // PDF cards need the host to serve PDFs on `git.streamFileAsset` (>= 1.1,
-  // the minor that widened the media-type enum). Fails closed to the plain
-  // binary placeholder - the exact pre-PDF behavior - on an old host or
-  // before a handshake completes.
+  // PDF cards want the host to serve PDFs on `git.streamFileAsset` (>= 1.1,
+  // the minor that widened the media-type enum) - but `git.streamFileAsset`
+  // is a STREAM method, and the negotiated-manifest registry records only
+  // the unary openAck manifest, so its version here is `null` for EVERY
+  // host. A fails-closed gate on it can never open (the exact defect that
+  // shipped: the cards never rendered anywhere). Fail OPEN like the
+  // workspace tile instead: only a positively-known pre-1.1 answer
+  // suppresses the cards; otherwise render them and let each side's own
+  // stream negotiation be the authority - an old host's refusal degrades
+  // inside the View dialog to the shared placeholder.
   const gitAssetStreamVersion = useHostMethodSchemaVersion(
     props.node.hostId,
     "git.streamFileAsset",
   );
-  const pdfCardsSupported =
+  const pdfCardsKnownUnsupported =
     gitAssetStreamVersion !== null &&
-    gitAssetStreamVersion.major === 1 &&
-    gitAssetStreamVersion.minor >= 1;
+    (gitAssetStreamVersion.major !== 1 || gitAssetStreamVersion.minor < 1);
   const defaultEditor = useSettingsStore((s) => s.defaultEditor);
   const pdfOpenTarget = usePdfOpenExternallyTarget(props.node.hostId);
   const editorOpen = useEditorOpenForClient(tabHostClient, "file");
@@ -640,7 +645,7 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
 
   // After the image routing (a rename straddling both allowlists stays an
   // image diff), before the generic binary placeholder it upgrades.
-  if (gitRoutesToPdfDiffCards(props.file) && pdfCardsSupported) {
+  if (gitRoutesToPdfDiffCards(props.file) && !pdfCardsKnownUnsupported) {
     const sides = gitImageDiffSides(props.file);
     const revisionKey = gitImageDiffRevisionKey(props.file, props.headSha);
     return (
