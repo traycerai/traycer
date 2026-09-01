@@ -28,6 +28,7 @@ vi.mock("@/hooks/epic/use-epic-sweep-worktree-candidates-query", () => ({
     checkedAt: testState.checkedAt,
     canRefresh: true,
     refresh: testState.refresh,
+    prove: testState.refresh,
   }),
 }));
 
@@ -114,7 +115,7 @@ describe("SweepWorktreesDialog refresh", () => {
     expect(testState.refresh).toHaveBeenCalledOnce();
   });
 
-  it("keeps the cached snapshot visible but non-actionable while rechecking", () => {
+  it("keeps the cached snapshot visible AND selectable while rechecking", () => {
     testState.isPending = true;
 
     render(
@@ -131,13 +132,22 @@ describe("SweepWorktreesDialog refresh", () => {
     expect(screen.getByText("traycer/refresh")).toBeTruthy();
     expect(screen.queryByText("Checking worktrees…")).toBeNull();
     expect(screen.getByTestId("sweep-worktrees-checked-at")).toBeTruthy();
+    // The flow never holds the user: rows stay selectable and Remove stays
+    // live through a refresh, because the click re-proves before acting.
     const checkbox = screen.getByTestId<HTMLButtonElement>(
       "sweep-worktrees-checkbox",
     );
     const confirm = screen.getByTestId<HTMLButtonElement>(
       "sweep-worktrees-confirm",
     );
-    expect(checkbox.disabled).toBe(true);
-    expect(confirm.disabled).toBe(true);
+    expect(checkbox.disabled).toBe(false);
+    expect(confirm.disabled).toBe(false);
+    expect(confirm.textContent).toBe("Remove 1 worktree");
+    // Only the Refresh control itself waits for the in-flight read.
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", {
+        name: "Refresh worktree details",
+      }).disabled,
+    ).toBe(true);
   });
 });

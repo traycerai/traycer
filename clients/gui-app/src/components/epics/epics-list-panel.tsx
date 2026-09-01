@@ -40,10 +40,7 @@ import { Badge } from "@/components/ui/badge";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { DeleteTasksDialog } from "@/components/epics/delete-tasks-dialog";
 import { SweepWorktreesFlow } from "@/components/epics/sweep-worktrees-flow";
-import {
-  namesHostOutsideSurface,
-  unionHostIds,
-} from "@/components/epics/sweep-host-model";
+import { namesHostOutsideSurface } from "@/components/epics/sweep-host-model";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import {
   Tooltip,
@@ -123,7 +120,6 @@ import { worktreePrReferences } from "@/components/worktree/worktree-pr-metadata
 const EMPTY_REPOS: ReadonlyArray<string> = [];
 const EMPTY_WORKSPACES: ReadonlyArray<HistoryWorkspaceRef> = [];
 const EMPTY_ITEMS: ReadonlyArray<HistoryItem> = [];
-const EMPTY_HOST_IDS: ReadonlySet<string> = new Set();
 const EMPTY_WORKTREES: readonly WorktreeHostEntryV12[] = [];
 const EMPTY_WORKTREES_BY_EPIC: ReadonlyMap<
   string,
@@ -409,20 +405,6 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     );
     return item === undefined ? null : historyItemDisplayTitle(item);
   }, [items, sweepEpicIds]);
-  // The badge hint for the host picker, from provenance the list ALREADY
-  // carries: `chatHostIds` names the hosts owning the signed-in user's own
-  // chats in a Task. No RPC is added for it - a `null` (peer predates the
-  // field) simply badges nothing, and the picker still lists every host.
-  const sweepOccupiedHostIds = useMemo(() => {
-    if (sweepEpicIds === null) return EMPTY_HOST_IDS;
-    const selected = new Set(sweepEpicIds);
-    return unionHostIds(
-      items.flatMap((item) =>
-        selected.has(item.epicId) ? [item.chatHostIds] : [],
-      ),
-    );
-  }, [items, sweepEpicIds]);
-
   const selectableItemIds = useMemo(
     () =>
       items
@@ -701,7 +683,6 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
         // client currently addresses, which is what `useHostClientForHostId(null)`
         // follows.
         surfaceHostId={hostId}
-        occupiedHostIds={sweepOccupiedHostIds}
         taskTitle={sweepTaskTitle}
         onOpenChange={(open) => {
           if (!open) setSweepEpicIds(null);
