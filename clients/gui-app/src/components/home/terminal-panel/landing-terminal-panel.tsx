@@ -37,6 +37,8 @@ import {
   useMobileHeaderStore,
 } from "@/stores/layout/mobile-header-store";
 import { useVirtualKeyboardInset } from "@/hooks/ui/use-virtual-keyboard-inset";
+import { useNativeKeyboardOpen } from "@/hooks/ui/use-native-keyboard-open";
+import { isMobileApp } from "@/lib/mobile-app";
 import { MobileTerminalKeyBar } from "@/components/epic-canvas/mobile/mobile-terminal-key-bar";
 import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
 import { requestLandingTerminalClose } from "@/lib/terminals/landing-terminal-close-coordinator";
@@ -1133,6 +1135,10 @@ function LandingTerminalPanelContents(
   // the keyboard inset pads the covered strip (0 wherever the platform
   // resizes the layout itself). Desktop keeps its physical keyboard.
   const keyboardInset = useVirtualKeyboardInset();
+  // Under the installed app's native-resize keyboard mode the measured inset
+  // stays 0 while the keyboard is up; the plugin-fed native state is the live
+  // signal there (drives the key bar's padding, not the overlay geometry).
+  const nativeKeyboardOpen = useNativeKeyboardOpen();
   const keyBarActive = isMobile && props.panelOpen;
   useLandingTerminalShortcuts({
     landingPageId: props.landingPageId,
@@ -1150,7 +1156,10 @@ function LandingTerminalPanelContents(
     overlayActive,
     panelOpen: props.panelOpen,
     panelWidthFraction: props.panelWidthFraction,
-    keyboardInsetPx: keyBarActive ? keyboardInset : 0,
+    // Browser-only, like the epic tile view's padding: the installed app's
+    // shell already subtracts `--keyboard-inset` in its safe-height tokens,
+    // so the measured inset would double the lift there.
+    keyboardInsetPx: keyBarActive && !isMobileApp() ? keyboardInset : 0,
   });
   const handlePanelTransitionEnd = useCallback(
     (event: ReactTransitionEvent<HTMLElement>): void => {
@@ -1279,7 +1288,7 @@ function LandingTerminalPanelContents(
         <LandingTerminalMobileKeyBar
           active={keyBarActive}
           instanceId={props.activeInstanceId}
-          keyboardOpen={keyboardInset > 0}
+          keyboardOpen={keyboardInset > 0 || nativeKeyboardOpen}
         />
       </aside>
     </>

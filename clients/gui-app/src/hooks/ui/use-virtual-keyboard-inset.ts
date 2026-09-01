@@ -3,8 +3,11 @@ import * as React from "react";
 /**
  * Height (CSS px) of the layout viewport currently covered by the on-screen
  * keyboard, or 0 when no keyboard is up (or the browser resizes the layout
- * itself, e.g. Android with `interactive-widget=resizes-content`, or the
- * Capacitor webview in native-resize mode - both leave nothing covered).
+ * itself, e.g. Android with `interactive-widget=resizes-content`, which
+ * leaves nothing covered). The installed iOS app ALSO overlays (`resize:
+ * none`) and measures a real inset here - but its shell handles the lift
+ * through the `--keyboard-inset` safe-height tokens, so consumers gate their
+ * use of this measurement to the browser (`!isMobileApp()`).
  *
  * iOS Safari never resizes the page for the keyboard: it overlays it, so a
  * bar at the bottom of the `h-dvh` app shell disappears behind it. The
