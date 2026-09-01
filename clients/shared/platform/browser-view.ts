@@ -296,7 +296,6 @@ export interface BrowserViewCapturePageResult extends BrowserViewTileKey {
 }
 
 export type {
-  BrowserViewElementAttribute,
   BrowserViewElementBoundingBox,
   BrowserViewElementCapture,
   BrowserViewElementStyle,

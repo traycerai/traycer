@@ -1,6 +1,14 @@
 import { app, shell } from "electron";
 import { randomUUID } from "node:crypto";
-import { open, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import {
+  open,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { arch, platform } from "node:process";
 import { dirname, join } from "node:path";
@@ -670,13 +678,53 @@ export class DesktopSupportService {
       },
     };
     const dir = await mkdtemp(join(tmpdir(), "traycer-diagnostic-bundle-"));
+    // Every save leaves an `mkdtemp` directory behind for the lifetime of the
+    // machine's `/tmp`, each one holding log tails and the browser trace. The
+    // bundle the user is looking at has to survive - it is the deliverable -
+    // so the sweep is of every OTHER one. Reading `/tmp` rather than
+    // remembering the last path is what makes the bound hold across relaunches:
+    // an in-memory field only ever cleans up within one process lifetime, and
+    // every restart used to orphan another bundle.
+    await this.removeOtherDiagnosticBundles(dir);
     const path = join(dir, `${frozen?.reportId ?? "report"}.json`);
-    await writeFile(path, JSON.stringify(bundle, null, 2), "utf8");
+    // Owner-only: this lands in a world-readable `/tmp` and holds whatever the
+    // consent panel's toggles admitted - the desktop and host log tails, and
+    // the browser trace. `mkdtemp` is already `0700`; the file inside it was
+    // taking the umask default.
+    await writeFile(path, JSON.stringify(bundle, null, 2), {
+      encoding: "utf8",
+      mode: 0o600,
+    });
     log.info("[support] diagnostic bundle written", { path });
     // Save-and-reveal is one action, same as `revealLog` - the whole point is
     // the user can immediately see and inspect what a "local file" means.
     shell.showItemInFolder(path);
     return { path };
+  }
+
+  /**
+   * Removes every `traycer-diagnostic-bundle-*` directory in the temp dir
+   * except `keep`, whoever created it and whenever.
+   *
+   * Best-effort throughout: another user may own an entry we cannot remove,
+   * the temp dir may not be listable, and a failed cleanup must never fail
+   * the save it is part of.
+   */
+  private async removeOtherDiagnosticBundles(keep: string): Promise<void> {
+    const root = tmpdir();
+    const entries = await readdir(root).catch(() => []);
+    await Promise.all(
+      entries
+        .filter((entry) => entry.startsWith("traycer-diagnostic-bundle-"))
+        .map((entry) => join(root, entry))
+        .filter((candidate) => candidate !== keep)
+        .map(
+          async (candidate) =>
+            await rm(candidate, { recursive: true, force: true }).catch(
+              () => undefined,
+            ),
+        ),
+    );
   }
 
   /**

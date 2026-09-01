@@ -2389,8 +2389,6 @@ describe("BrowserViewManager annotation session", () => {
         tagName: "BUTTON",
         elementId: "go",
         classNames: ["primary"],
-        outerHtml: "<button>Go</button>",
-        outerHtmlTruncated: false,
         textPreview: "Go",
         ariaRole: "button",
         accessibleName: "Go",

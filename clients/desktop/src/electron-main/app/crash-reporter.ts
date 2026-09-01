@@ -3,6 +3,12 @@ import * as SentryElectron from "@sentry/electron/main";
 import { config } from "../../config";
 import { log } from "./logger";
 import { isSentryEnabled, markSentryEnabled } from "./crash-reporter-state";
+import {
+  desktopSentryBeforeBreadcrumb,
+  desktopSentryBeforeSend,
+  desktopSentryBeforeSendSpan,
+  desktopSentryBeforeSendTransaction,
+} from "./crash-reporter-guest-scope";
 
 export { isSentryEnabled } from "./crash-reporter-state";
 
@@ -46,6 +52,21 @@ export function initCrashReporter(): void {
     tracesSampleRate: sampleRate,
     profilesSampleRate: sampleRate,
     attachStacktrace: true,
+    // Stated, not inherited: the SDK default is already false, but "no PII
+    // off this machine" is the policy every Traycer Sentry init writes down.
+    sendDefaultPii: false,
+    // No renderer minidump uploads at all. `sentryMinidumpIntegration` loads
+    // every pending dump in the crashpad directory and captures each one
+    // under the identity of whichever renderer crashed just now, so a browser
+    // guest's dump - decrypted cookie-jar memory, live DOM, anything typed
+    // into a form - would upload tagged as ours; crashpad's per-dump
+    // annotations say only `renderer`, so telling them apart is not possible.
+    // App-shell JavaScript errors still report through the renderer SDK. See
+    // `crash-reporter-guest-scope.ts`.
+    beforeSend: desktopSentryBeforeSend,
+    beforeBreadcrumb: desktopSentryBeforeBreadcrumb,
+    beforeSendTransaction: desktopSentryBeforeSendTransaction,
+    beforeSendSpan: desktopSentryBeforeSendSpan,
   });
   markSentryEnabled();
   log.info("[crash-reporter] sentry initialized", { environment });
