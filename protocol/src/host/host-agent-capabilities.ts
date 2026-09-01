@@ -52,12 +52,34 @@ export const hostFileReadRequestSchema = z.object({
 });
 export type HostFileReadRequest = z.infer<typeof hostFileReadRequestSchema>;
 
-export const hostFileReadResponseSchema = z.object({
-  path: z.string(),
-  sizeBytes: z.number().int().nonnegative(),
-  content: z.string(),
-  encoding: hostFileEncodingSchema,
-});
+/**
+ * `content` is only meaningful under its `encoding`. A base64 payload that is
+ * not valid base64 is a contract violation, and `Buffer.from(x, "base64")`
+ * on the receiving side silently drops invalid characters rather than
+ * failing — so the check has to live at the wire, where the answer is a
+ * schema error instead of garbage bytes on disk or in a transcript.
+ */
+function contentMatchesEncoding(
+  value: { readonly content: string; readonly encoding: "utf8" | "base64" },
+  ctx: z.RefinementCtx,
+): void {
+  if (value.encoding !== "base64") return;
+  if (z.base64().safeParse(value.content).success) return;
+  ctx.addIssue({
+    code: "custom",
+    path: ["content"],
+    message: 'content must be valid base64 when encoding is "base64"',
+  });
+}
+
+export const hostFileReadResponseSchema = z
+  .object({
+    path: z.string(),
+    sizeBytes: z.number().int().nonnegative(),
+    content: z.string(),
+    encoding: hostFileEncodingSchema,
+  })
+  .superRefine(contentMatchesEncoding);
 export type HostFileReadResponse = z.infer<typeof hostFileReadResponseSchema>;
 
 export const hostFileReadV10 = defineRpcContract({
@@ -67,12 +89,14 @@ export const hostFileReadV10 = defineRpcContract({
   responseSchema: hostFileReadResponseSchema,
 });
 
-export const hostFileWriteRequestSchema = z.object({
-  epicId: z.string().min(1),
-  path: z.string().min(1),
-  content: z.string(),
-  encoding: hostFileEncodingSchema,
-});
+export const hostFileWriteRequestSchema = z
+  .object({
+    epicId: z.string().min(1),
+    path: z.string().min(1),
+    content: z.string(),
+    encoding: hostFileEncodingSchema,
+  })
+  .superRefine(contentMatchesEncoding);
 export type HostFileWriteRequest = z.infer<typeof hostFileWriteRequestSchema>;
 
 export const hostFileWriteResponseSchema = z.object({

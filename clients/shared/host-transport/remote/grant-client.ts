@@ -1,11 +1,13 @@
 import { attachGrantResponseSchema } from "@traycer/protocol/host/attach-grant";
 import type {
   AttachGrant,
+  AttachGrantFailure,
   AttachGrantProvider,
 } from "@traycer/protocol/host-transport/remote/grant";
 
 export type {
   AttachGrant,
+  AttachGrantFailure,
   AttachGrantProvider,
   AttachGrantProvision,
 } from "@traycer/protocol/host-transport/remote/grant";
@@ -57,7 +59,10 @@ export type AttachGrantResult =
   | ({ readonly kind: "network-error" } & AttachGrantFailure);
 
 /**
- * Why a mint failed, split along the line `DialFailureLog` dedups on.
+ * How this client fills the protocol's `AttachGrantFailure` — the shape is
+ * protocol-owned (`@traycer/protocol/host-transport/remote/grant`) because the
+ * session core that consumes it lives there; the SEMANTICS below are this
+ * client's, split along the line `DialFailureLog` dedups on.
  *
  * `detail` is the STABLE classification (the status, the failure class) and
  * doubles as that log's dedup key, so it must stay identical across retries of
@@ -74,10 +79,6 @@ export type AttachGrantResult =
  * to something authn said would be worse than saying nothing. `""` when there
  * is nothing to add beyond `detail`.
  */
-interface AttachGrantFailure {
-  readonly detail: string;
-  readonly context: string;
-}
 
 /**
  * Reads a 401/403 body TEXT looking for the attach-grant entitlement denial

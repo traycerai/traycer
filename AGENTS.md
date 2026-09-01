@@ -61,6 +61,18 @@ See `protocol/README.md`.
 **Shared code** — transport/auth in `clients/shared/`; wire contract in
 `protocol/`. Don't duplicate.
 
+One deliberate exception: the **remote session core** (`RemoteSession`, the
+relay socket, logical streams, the scheduler, Noise channel and mux chunking)
+lives in `protocol/src/host-transport/remote/`, not `clients/shared/`. It is
+runtime-neutral and is driven by two peers — the desktop client dialing a
+host, and a host dialing another host for cross-host agent calls — so it
+cannot depend on anything client-only. What stays in `clients/shared/` is
+the client-specific edge: grant acquisition (`grant-client`, which needs
+fetch + bearer + entitlement), the per-render session cache
+(`active-remote-sessions`), and the thin `RemoteSession` adapter that binds
+those in. Put a change in `protocol/` if both peers need it; in
+`clients/shared/` if only the desktop does.
+
 ## Type safety (ESLint — do not bypass)
 
 ```ts
