@@ -531,7 +531,7 @@ function replaceNestedFocusRoute(
   tab: { readonly epicId: string; readonly tabId: string },
   target: NestedFocusTarget | null,
 ): void {
-  void navigate(
+  navigate(
     applyRouteBookkeeping({
       to: "/epics/$epicId/$tabId",
       params: { epicId: tab.epicId, tabId: tab.tabId },
@@ -545,7 +545,11 @@ function replaceNestedFocusRoute(
       }),
       replace: true,
     }),
-  );
+    // Bookkeeping is best-effort by nature: a rejected commit (a blocked or
+    // superseded navigation) leaves the URL without this focus target, and the
+    // next canvas change re-derives it. Swallow it rather than surfacing an
+    // unhandled rejection for something no caller is awaiting.
+  ).catch(() => undefined);
 }
 
 /**

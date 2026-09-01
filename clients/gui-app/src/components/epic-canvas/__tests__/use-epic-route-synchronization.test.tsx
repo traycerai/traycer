@@ -89,7 +89,10 @@ const testState = vi.hoisted<TestState>(() => ({
   autoOpenTarget: null,
   nestedFocusEnabled: false,
   useRealCanvasStore: false,
-  navigate: vi.fn(),
+  // `useNavigate()` returns a function returning a PROMISE; callers attach
+  // rejection handlers to it. A bare `vi.fn()` answers `undefined` and makes
+  // those call sites throw here for a reason the real API never would.
+  navigate: vi.fn(() => Promise.resolve()),
   canvasActivePaneId: null,
   canvasRoot: null,
   canvasTiles: {},
