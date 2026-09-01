@@ -25,7 +25,7 @@ import {
 import "./index.css";
 import { MobileRunnerHost } from "../mobile-runner-host";
 import { MobileDeviceDescriber } from "../device-describer";
-import { MobileFileSave } from "../file-save";
+import { MobileFileSave, supportsDirectDownload } from "../file-save";
 import { MobileLinkCodeScanner } from "../link-code-scanner";
 import { MobileLinkLoginDeepLinks } from "../link-login-deep-links";
 import {
@@ -190,6 +190,33 @@ function bootstrap(): void {
     ? new MobileLinkLoginDeepLinks(App)
     : null;
   linkLoginDeepLinks?.start();
+  // Everything above stays SYNCHRONOUS, and the deep-link read above stays
+  // first: a QR scanned by the system camera makes the launch URL readable
+  // exactly once, so nothing may await before it. Only the remainder - which
+  // needs a capability the OS has to be asked for - moves behind an await.
+  // `void`, because a bootstrap failure has nowhere to be reported to.
+  void mount({ pushRegistration, linkLoginDeepLinks });
+}
+
+/**
+ * The rest of bootstrap, after the one thing the OS must be asked.
+ *
+ * `supportsDirectDownload()` is a plugin call, so the host cannot be built in
+ * the same tick as the synchronous setup above. The ordering that matters is
+ * unchanged: `pushRegistration.start` still runs after the host exists and
+ * still before the first render, so a cold-start notification tap is captured
+ * before the GUI mounts. What moved is that BOTH now happen one microtask
+ * later than they used to, and on Android after a bounded device probe.
+ */
+async function mount(input: {
+  readonly pushRegistration: MobilePushRegistration | null;
+  readonly linkLoginDeepLinks: MobileLinkLoginDeepLinks | null;
+}): Promise<void> {
+  const { pushRegistration, linkLoginDeepLinks } = input;
+  // Asked once, before the host exists, because `IFileSaveHost.downloadFile`
+  // is read synchronously at render time - a capability that resolved later
+  // would leave a Download control on screen that the shell cannot honour.
+  const directDownloads = await supportsDirectDownload();
   const host = new MobileRunnerHost({
     signInUrl: config.signInUrl,
     authnBaseUrl: config.authnBaseUrl,
@@ -231,7 +258,18 @@ function bootstrap(): void {
     // phone user saves through, and neither plugin has a web implementation
     // worth preferring over the browser save APIs gui-app already falls back
     // to in a tab.
-    fileSave: Capacitor.isNativePlatform() ? new MobileFileSave() : null,
+    fileSave: Capacitor.isNativePlatform()
+      ? new MobileFileSave(directDownloads)
+      : null,
+    // The one place this difference is allowed to be named. WKWebView honours
+    // an image clipboard write; Android's WebView RESOLVES it having written
+    // nothing, because Chromium reaches the Android clipboard for an image
+    // through an embedder-supplied image file provider and that embedder
+    // installs none. Nothing rejects, so gui-app cannot learn this by trying -
+    // it reads the capability instead, and simply does not offer a Copy that
+    // would report a success the clipboard never received. The dev web entry
+    // is a real browser tab, where the write works.
+    canCopyImages: Capacitor.getPlatform() !== "android",
   });
   // After the host exists: registration follows the token store (sign-in,
   // app start while signed in, sign-out) and the host's resume edge (a
