@@ -41,14 +41,11 @@ import {
   StderrLogTee,
   type StderrTee,
   type CrashReportMatch,
-  type CrashDumpRegistration,
-  crashDumpsDirFor,
   crashReportsDirFor,
   describeExitCode,
   describeFatalSignal,
   findCrashReportSince,
   prepareCrashReportsDir,
-  registerCrashDumpCaptureForHost,
 } from "../host/crash-diagnostics";
 import { hostHomeDir } from "../store/paths";
 import { consumeHostStartAdoption } from "../host/host-start-adoption";
@@ -425,15 +422,6 @@ export interface RunHostStartDeps extends ResolveHostStartTargetDeps {
   // host data dir: the defaults create/prune/scan real directories and tee
   // real bytes into host.log.
   readonly prepareCrashReportsDir: (dir: string) => Promise<readonly string[]>;
-  /**
-   * WER minidump registration for the host executable (Windows only; a no-op
-   * result elsewhere). Injected for the same reason as the report dir: the
-   * default writes the user's registry.
-   */
-  readonly registerCrashDumpCapture: (
-    executable: string,
-    dumpDir: string,
-  ) => Promise<CrashDumpRegistration>;
   readonly findCrashReport: (
     dir: string,
     sinceMs: number,
@@ -550,7 +538,6 @@ const defaultRunDeps: RunHostStartDeps = {
   writeProbeMarker: writeProbeMarkerAtomically,
   prepareCrashReportsDir: (dir) =>
     prepareCrashReportsDir(dir, MAX_KEPT_CRASH_REPORTS),
-  registerCrashDumpCapture: registerCrashDumpCaptureForHost,
   findCrashReport: findCrashReportSince,
   createStderrTee: (environment) => new StderrLogTee(environment),
   // NOT `unref()`ed, and that is load-bearing. During a backoff the child is
@@ -1356,39 +1343,6 @@ export async function runHostStart(
         preexistingReportNames = new Set(
           await deps.prepareCrashReportsDir(crashReportsDirPath),
         );
-        // Beside the report dir, every start: a fail-fast from native code
-        // leaves neither stderr nor a report, and only a WER minidump names
-        // the module (see crash-diagnostics.ts). Never throws.
-        //
-        // A DATA dir, not `target.cwd`: the spawn cwd can be an `opts.cwd`
-        // override, while the host is always told `--host-data-dir` under
-        // `hostHomeDir(...)`. And the SHARED root rather than this
-        // environment's slot, because WER's `LocalDumps` key is scoped to the
-        // executable BASENAME and every environment ships the same
-        // `traycer-host.exe`: two signed slots side by side (staging beside
-        // production) would keep rewriting one key with two different
-        // `DumpFolder` values, and whichever started last would silently
-        // redirect the other's dumps into its own data directory - production
-        // crashing while production's own `crash-dumps` stays empty. One key,
-        // one folder. The dump file is named `<exe>.<pid>.dmp`, so the slot it
-        // came from is still recoverable from the supervisor's own record of
-        // the pid it spawned.
-        const dumpRegistration = await deps.registerCrashDumpCapture(
-          target.executable,
-          crashDumpsDirFor(hostHomeDir(undefined)),
-        );
-        // A real failure is worth a line: the exit-code decoding points a
-        // reader at `crash-dumps`, and an empty one with no explanation is
-        // the silence this whole mechanism exists to end. A skip is not.
-        if (dumpRegistration.registered) {
-          logger.debug("Host crash-dump capture registered", {
-            key: dumpRegistration.key,
-          });
-        } else if (!dumpRegistration.skipped) {
-          logger.warn("Host crash-dump capture could not be registered", {
-            reason: dumpRegistration.reason,
-          });
-        }
         const hostArgs = [
           ...target.args,
           "--layer0-attempt-id",

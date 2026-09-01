@@ -25,19 +25,7 @@
  * - Exit-status decoding: `code=3221226505` means nothing at a glance;
  *   `0xC0000409 STATUS_STACK_BUFFER_OVERRUN` does. Fatal POSIX signals get
  *   the same treatment (`SIGABRT` = abort, not a shutdown).
- * - Windows minidumps (`registerWindowsCrashDumpCapture`): the two
- *   mechanisms above only see what the dying process WRITES, and a fail-fast
- *   raised from native code writes nothing - `--report-on-fatalerror` hooks
- *   V8's fatal callback only, and `abort()`/`__fastfail` from an addon or
- *   the CRT never pass through it. A field host produced eleven 0xC0000409
- *   exits in a day with an empty stderr capture and no report each time.
- *   Fail-fast bypasses SEH and the JIT debugger but IS delivered to Windows
- *   Error Reporting, and WER's per-executable `LocalDumps` policy - which
- *   honours HKCU, so no elevation - writes a minidump that names the
- *   faulting module. The supervisor registers it for the host executable at
- *   every start, into `<data dir>/crash-dumps`.
  */
-import { execFile } from "node:child_process";
 import {
   appendFile,
   mkdir,
@@ -46,8 +34,7 @@ import {
   stat,
   unlink,
 } from "node:fs/promises";
-import { join, win32 } from "node:path";
-import { promisify } from "node:util";
+import { join } from "node:path";
 import type { Environment } from "../runner/environment";
 import { bootstrapLogPath } from "../store/paths";
 
@@ -138,12 +125,7 @@ export const REPORT_SUMMARY_MAX_CHARS = 512;
 const WINDOWS_EXIT_MEANINGS: ReadonlyMap<number, string> = new Map([
   [
     0xc0000409,
-    // Ordered by what an EMPTY stderr capture leaves: a V8 fatal (OOM and
-    // friends) always prints `FATAL ERROR` to stderr before aborting, so no
-    // capture and no diagnostic report means the abort came from native code
-    // or the CRT - std::terminate on a worker thread, an invalid-parameter
-    // fault, a direct __fastfail. Only a WER minidump names the module.
-    "STATUS_STACK_BUFFER_OVERRUN (fail-fast abort: a native module or CRT abort when stderr is empty, else V8 fatal/OOM which prints FATAL ERROR first; see crash-dumps)",
+    "STATUS_STACK_BUFFER_OVERRUN (fail-fast abort: a native module or CRT abort when stderr is empty, else V8 fatal/OOM, which prints FATAL ERROR to stderr first)",
   ],
   [0xc0000005, "STATUS_ACCESS_VIOLATION (native crash)"],
   [0xc0000142, "STATUS_DLL_INIT_FAILED (spawn during session shutdown)"],
@@ -429,178 +411,6 @@ export class StderrLogTee implements StderrTee {
 /** `<childCwd>/crash-reports` - the directory the relative report flag targets. */
 export function crashReportsDirFor(childCwd: string): string {
   return join(childCwd, "crash-reports");
-}
-
-/**
- * `<hostRoot>/crash-dumps` - where WER writes the host's minidumps on Windows.
- *
- * Pass the SHARED host root, never an environment's slot. The registration
- * this feeds is keyed on the executable's basename
- * ({@link registerWindowsCrashDumpCapture}), which every environment shares,
- * so a per-slot folder here would give one key two competing values and let
- * the last host to start redirect every other slot's dumps into its own data
- * directory.
- */
-export function crashDumpsDirFor(hostRoot: string): string {
-  return join(hostRoot, "crash-dumps");
-}
-
-/**
- * How many minidumps WER keeps in the folder before it stops writing new ones
- * (it does not rotate; it stops). Small on purpose: a crash-looping host
- * would otherwise fill the disk, and the FIRST dump is the one that names the
- * module.
- */
-export const CRASH_DUMP_KEEP_COUNT = 3;
-
-/**
- * `1` = MiniDumpNormal: thread stacks, the module list, and the exception
- * record - enough for `!analyze -v` to name the faulting module and frame,
- * at a few MB. `2` (full memory) would be the host's whole RSS per crash,
- * measured at 1.5 GB on the host this exists for, and answers a question
- * nobody has asked yet.
- */
-export const CRASH_DUMP_TYPE_MINIDUMP = 1;
-
-/** The `reg.exe` seam, so the registration is testable without a registry. */
-export type RegistryWriter = (args: readonly string[]) => Promise<void>;
-
-const execFileAsync = promisify(execFile);
-
-async function regAdd(args: readonly string[]): Promise<void> {
-  await execFileAsync("reg", ["add", ...args], {
-    windowsHide: true,
-    timeout: 5_000,
-  });
-}
-
-/**
- * `skipped` separates "this host cannot have a policy here" - not Windows, the
- * dev `.cmd` wrapper, or an unelevated start that may not write the machine
- * hive - from "could have and failed". Only the second is worth a warning; the
- * first happens at every start on macOS and Linux, and on every ordinary
- * Windows start too (see {@link registerWindowsCrashDumpCapture}).
- */
-export type CrashDumpRegistration =
-  | { readonly registered: true; readonly key: string }
-  | {
-      readonly registered: false;
-      readonly skipped: true;
-      readonly reason: string;
-    }
-  | {
-      readonly registered: false;
-      readonly skipped: false;
-      readonly reason: string;
-    };
-
-/**
- * Registers a per-executable WER `LocalDumps` policy for the host, so a
- * fail-fast that leaves no stderr and no diagnostic report still leaves a
- * minidump. Idempotent (`/f` overwrites) and never throws: a diagnostics path
- * must not be able to stop the host from starting. Skipped outside Windows and
- * for anything that is not a `.exe` - the `make dev-desktop` host runs behind a
- * `.cmd` wrapper under `node.exe`, and a policy keyed on that would be a policy
- * on every Node process the user runs.
- *
- * **HKLM, and only HKLM.** `LocalDumps` is documented under
- * `HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\Windows Error Reporting`
- * (Collecting User-Mode Dumps); the per-user hive is not part of that
- * contract, and writing there would have been strictly worse than not writing
- * at all - three `reg add` calls succeed, this function reports
- * `registered: true`, and WER never consults the key, so the crash the whole
- * mechanism exists for still produces nothing while the exit-code decoding
- * sends a reader to an empty directory.
- *
- * The cost is that the write needs elevation, which an ordinary `host start`
- * does not have. A denied write is therefore a SKIP, not a failure: it is the
- * expected outcome on a normal user's machine and must not warn at every
- * start. Where it does land - an elevated shell, a service running as
- * LocalSystem, or an install step that adopts this later - the policy is
- * machine-wide and the next fail-fast leaves a dump.
- */
-export async function registerWindowsCrashDumpCapture(input: {
-  readonly executable: string;
-  readonly dumpDir: string;
-  readonly platform: NodeJS.Platform;
-  readonly writeRegistry: RegistryWriter;
-}): Promise<CrashDumpRegistration> {
-  if (input.platform !== "win32") {
-    return { registered: false, skipped: true, reason: "not windows" };
-  }
-  // `win32.basename` on purpose, not the host's: the executable is a Windows
-  // path by contract, and the POSIX flavour (CI, a developer's Mac) would
-  // leave the whole `C:\...\traycer-host.exe` in place and key the policy
-  // on it.
-  const exe = win32.basename(input.executable);
-  if (!/\.exe$/i.test(exe)) {
-    return { registered: false, skipped: true, reason: `not a .exe: ${exe}` };
-  }
-  const key = `HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\LocalDumps\\${exe}`;
-  try {
-    // The folder is created here rather than trusted to WER: WER creates a
-    // missing DumpFolder, but only if the parent exists, and the data dir's
-    // existence is not this function's assumption to make.
-    await mkdir(input.dumpDir, { recursive: true });
-    await input.writeRegistry([
-      key,
-      "/v",
-      "DumpFolder",
-      "/t",
-      "REG_EXPAND_SZ",
-      "/d",
-      input.dumpDir,
-      "/f",
-    ]);
-    await input.writeRegistry([
-      key,
-      "/v",
-      "DumpType",
-      "/t",
-      "REG_DWORD",
-      "/d",
-      String(CRASH_DUMP_TYPE_MINIDUMP),
-      "/f",
-    ]);
-    await input.writeRegistry([
-      key,
-      "/v",
-      "DumpCount",
-      "/t",
-      "REG_DWORD",
-      "/d",
-      String(CRASH_DUMP_KEEP_COUNT),
-      "/f",
-    ]);
-    return { registered: true, key };
-  } catch (error) {
-    // A SKIP, not a failure. The machine hive is the only one WER reads and
-    // an ordinary `host start` is not elevated, so a denied write is the
-    // expected outcome rather than something gone wrong - warning on it would
-    // put a line in every unelevated start's log forever. The reason still
-    // carries the underlying message, so an elevated run that fails for some
-    // other cause is not silent, just quiet.
-    return {
-      registered: false,
-      skipped: true,
-      reason: `HKLM LocalDumps needs an elevated start: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    };
-  }
-}
-
-/** The production registration: real platform, real `reg.exe`. */
-export function registerCrashDumpCaptureForHost(
-  executable: string,
-  dumpDir: string,
-): Promise<CrashDumpRegistration> {
-  return registerWindowsCrashDumpCapture({
-    executable,
-    dumpDir,
-    platform: process.platform,
-    writeRegistry: regAdd,
-  });
 }
 
 /**

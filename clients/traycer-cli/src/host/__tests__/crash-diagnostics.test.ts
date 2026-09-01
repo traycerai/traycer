@@ -64,9 +64,6 @@ const {
   STDERR_TEE_MAX_PENDING_BYTES,
   StderrCaptureBuffer,
   StderrLogTee,
-  CRASH_DUMP_KEEP_COUNT,
-  CRASH_DUMP_TYPE_MINIDUMP,
-  crashDumpsDirFor,
   crashReportsDirFor,
   describeExitCode,
   describeFatalSignal,
@@ -74,7 +71,6 @@ const {
   isFatalSignal,
   prepareCrashReportsDir,
   pruneCrashReports,
-  registerWindowsCrashDumpCapture,
 } = await import("../crash-diagnostics");
 
 const EMPTY_EXCLUDE: ReadonlySet<string> = new Set();
@@ -629,131 +625,5 @@ describe("findCrashReportSince", () => {
   it("documents the spawn-slack constant used by the supervisor", () => {
     // Callers pass childSpawnedAtMs - CRASH_REPORT_SPAWN_SLACK_MS.
     expect(CRASH_REPORT_SPAWN_SLACK_MS).toBe(2_000);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Windows minidump registration
-// ---------------------------------------------------------------------------
-
-describe("registerWindowsCrashDumpCapture", () => {
-  // The MACHINE hive, spelled out here rather than imported, so a change of
-  // hive has to be a deliberate edit in two places. WER reads `LocalDumps`
-  // from HKLM only; a per-user key would let all three writes succeed while
-  // no dump is ever produced.
-  const LOCAL_DUMPS =
-    "HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\LocalDumps";
-
-  function recordingWriter(): {
-    readonly writes: string[][];
-    readonly write: (args: readonly string[]) => Promise<void>;
-  } {
-    const writes: string[][] = [];
-    return {
-      writes,
-      write: async (args) => {
-        writes.push([...args]);
-      },
-    };
-  }
-
-  it("writes DumpFolder, a minidump DumpType and a bounded DumpCount under the exe's HKLM LocalDumps key", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "crash-dumps-"));
-    const dumpDir = crashDumpsDirFor(dir);
-    const { writes, write } = recordingWriter();
-
-    const result = await registerWindowsCrashDumpCapture({
-      executable: "C:\\Users\\me\\.traycer\\host\\traycer-host.exe",
-      dumpDir,
-      platform: "win32",
-      writeRegistry: write,
-    });
-
-    expect(result).toEqual({
-      registered: true,
-      key: `${LOCAL_DUMPS}\\traycer-host.exe`,
-    });
-    expect(writes).toHaveLength(3);
-    const byValue = new Map(writes.map((args) => [args[2], args]));
-    expect(byValue.get("DumpFolder")).toEqual([
-      `${LOCAL_DUMPS}\\traycer-host.exe`,
-      "/v",
-      "DumpFolder",
-      "/t",
-      "REG_EXPAND_SZ",
-      "/d",
-      dumpDir,
-      "/f",
-    ]);
-    expect(byValue.get("DumpType")?.slice(3)).toEqual([
-      "/t",
-      "REG_DWORD",
-      "/d",
-      String(CRASH_DUMP_TYPE_MINIDUMP),
-      "/f",
-    ]);
-    expect(byValue.get("DumpCount")?.slice(3)).toEqual([
-      "/t",
-      "REG_DWORD",
-      "/d",
-      String(CRASH_DUMP_KEEP_COUNT),
-      "/f",
-    ]);
-    // The folder exists before WER is ever pointed at it.
-    await expect(stat(dumpDir)).resolves.toBeDefined();
-    await rm(dir, { recursive: true, force: true });
-  });
-
-  it("is a no-op off Windows and for a non-.exe host (the dev .cmd wrapper runs under node.exe)", async () => {
-    const { writes, write } = recordingWriter();
-
-    await expect(
-      registerWindowsCrashDumpCapture({
-        executable: "/opt/traycer/host/traycer-host",
-        dumpDir: "/tmp/never-created",
-        platform: "darwin",
-        writeRegistry: write,
-      }),
-    ).resolves.toEqual({
-      registered: false,
-      skipped: true,
-      reason: "not windows",
-    });
-    await expect(
-      registerWindowsCrashDumpCapture({
-        executable: "C:\\dev\\traycer-host.cmd",
-        dumpDir: "C:\\dev\\crash-dumps",
-        platform: "win32",
-        writeRegistry: write,
-      }),
-    ).resolves.toEqual({
-      registered: false,
-      skipped: true,
-      reason: "not a .exe: traycer-host.cmd",
-    });
-    expect(writes).toEqual([]);
-  });
-
-  it("never throws, and reports a denied machine-hive write as a SKIP rather than a failure", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "crash-dumps-"));
-    const result = await registerWindowsCrashDumpCapture({
-      executable: "traycer-host.exe",
-      dumpDir: crashDumpsDirFor(dir),
-      platform: "win32",
-      writeRegistry: async () => {
-        throw new Error("reg.exe: access denied");
-      },
-    });
-    // `skipped` is the load-bearing half: HKLM needs elevation and an
-    // ordinary `host start` does not have it, so this is the NORMAL outcome
-    // on a user's machine. Reporting it as a failure would put a warning in
-    // every unelevated start's log forever - which is why the caller only
-    // warns on `skipped: false`. The cause still travels in the reason.
-    expect(result).toEqual({
-      registered: false,
-      skipped: true,
-      reason: "HKLM LocalDumps needs an elevated start: reg.exe: access denied",
-    });
-    await rm(dir, { recursive: true, force: true });
   });
 });

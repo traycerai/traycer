@@ -24,7 +24,6 @@ import type { ILogger } from "../../logger";
 import type { Layer0FrameRead } from "../../host/lifecycle-probe";
 import {
   CRASH_REPORT_SPAWN_SLACK_MS,
-  crashDumpsDirFor,
   STDERR_END_WAIT_TIMEOUT_MS,
   STDERR_HEAD_MAX_BYTES,
   STDERR_TAIL_MAX_BYTES,
@@ -232,11 +231,6 @@ interface Recorded {
   readonly preparedCrashReportDirs: string[];
   /** Names returned by the injected prepareCrashReportsDir (pre-existing set). */
   prepareCrashReportsReturn: readonly string[];
-  /** Every WER minidump registration the supervisor asked for. */
-  readonly crashDumpRegistrations: Array<{
-    executable: string;
-    dumpDir: string;
-  }>;
   readonly findCrashReportCalls: Array<{
     dir: string;
     sinceMs: number;
@@ -309,7 +303,6 @@ function makeRunStubs(
     sequence: [],
     preparedCrashReportDirs: [],
     prepareCrashReportsReturn: [],
-    crashDumpRegistrations: [],
     findCrashReportCalls: [],
     findCrashReportResult: null,
     findCrashReportHangs: false,
@@ -452,14 +445,6 @@ function makeRunStubs(
       recorded.preparedCrashReportDirs.push(dir);
       return recorded.prepareCrashReportsReturn;
     },
-    registerCrashDumpCapture: async (executable, dumpDir) => {
-      recorded.crashDumpRegistrations.push({ executable, dumpDir });
-      return {
-        registered: false,
-        skipped: true,
-        reason: "injected: no registry in tests",
-      };
-    },
     findCrashReport: async (dir, sinceMs, excludeNames) => {
       recorded.findCrashReportCalls.push({
         dir,
@@ -581,36 +566,6 @@ describe("runHostStart - incumbent host guard", () => {
     await runUntilExit(invoke, recorded);
 
     expect(recorded.spawnCalls).toHaveLength(1);
-  });
-
-  // WER's `LocalDumps` policy is keyed on the executable's BASENAME, and every
-  // environment ships the same `traycer-host.exe`. A per-slot dump folder
-  // would therefore give one registry key two competing values: whichever
-  // signed host started last would redirect the other slot's dumps into its
-  // own data directory, and a production crash would leave production's
-  // advertised `crash-dumps` empty. The folder has to be exactly as coarse as
-  // the key it is written under - which is what a NON-production environment
-  // is the only way to observe, since production and the shared root are the
-  // same directory.
-  it("registers the WER dump folder at the shared host root, not the environment's slot", async () => {
-    const exec = "/opt/traycer/host/install/traycer-host";
-    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
-
-    const invoke = () =>
-      runHostStart(
-        { environment: "dev", cwd: null },
-        withChildExit(deps, child, 0, null),
-      );
-    await runUntilExit(invoke, recorded);
-
-    expect(recorded.crashDumpRegistrations).toHaveLength(1);
-    const [registration] = recorded.crashDumpRegistrations;
-    expect(registration.executable).toBe(exec);
-    expect(registration.dumpDir).toBe(crashDumpsDirFor(hostHomeDir(undefined)));
-    // The slot dir is what the host itself is told (`--host-data-dir`), so
-    // this asserts a real divergence rather than restating the line above.
-    expect(hostHomeDir("dev")).not.toBe(hostHomeDir(undefined));
-    expect(registration.dumpDir).not.toBe(crashDumpsDirFor(hostHomeDir("dev")));
   });
 
   // A live incumbent settles what this invocation should do regardless of
