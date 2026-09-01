@@ -36,7 +36,9 @@ import type { HistoryItem } from "@/components/home/data/home-page.data";
 import type { HistoryFacets } from "@/hooks/home/use-history-query";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useHistorySearchStore } from "@/stores/home/history-search-store";
+import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { DEFAULT_HISTORY_SEARCH } from "@/lib/history-search";
+import type { JsonContent } from "@traycer/protocol/common/registry";
 import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
 import { setDesktopEpicOwnershipBridge } from "@/lib/windows/desktop-epic-ownership";
 import type { DesktopWindowsBridge } from "@/lib/windows/types";
@@ -175,6 +177,13 @@ const testState = vi.hoisted(() => ({
   pendingSetPinnedEpicIds: new Set<string>(),
   refetch: vi.fn(),
   fetchNextPage: vi.fn(),
+  openLandingDraftFromHistory: vi.fn(),
+}));
+
+vi.mock("@/lib/commands/actions/open-landing-draft-from-history", () => ({
+  openLandingDraftFromHistory: (navigate: unknown, draftId: string): void => {
+    testState.openLandingDraftFromHistory(navigate, draftId);
+  },
 }));
 
 vi.mock("@/hooks/home/use-history-query", () => ({
@@ -373,7 +382,9 @@ describe("<EpicsListPanel />", () => {
     testState.pendingSetPinnedEpicIds = new Set();
     testState.refetch.mockReset();
     testState.fetchNextPage.mockReset();
+    testState.openLandingDraftFromHistory.mockReset();
     testState.activityByEpicId.clear();
+    useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
     queryClient.clear();
     // This fixture renders the panel without the application root bridge. The
     // bridge releases the controller's hydration gate in production, so make
@@ -435,6 +446,7 @@ describe("<EpicsListPanel />", () => {
     setDesktopEpicOwnershipBridge(null);
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useHistorySearchStore.setState({ search: DEFAULT_HISTORY_SEARCH });
+    useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   });
 
   it("opens landing history rows through the canonical epic tab route", async () => {
@@ -1561,4 +1573,175 @@ describe("<EpicsListPanel />", () => {
     expect(event.defaultPrevented).toBe(false);
     expect(document.activeElement).toBe(input);
   });
+
+  it("keeps the epic list when the drafts facet is off", async () => {
+    seedRetainedLandingDraft("abandoned prompt");
+    renderPanel("embedded", "/");
+
+    expect(await screen.findByText("Open from landing")).not.toBeNull();
+    expect(screen.queryByTestId("history-drafts-list")).toBeNull();
+  });
+
+  it("exposes start-task drafts in the filter popover and lists retained drafts when selected", async () => {
+    seedRetainedLandingDraft("abandoned prompt");
+    renderPanel("embedded", "/");
+
+    fireEvent.click(await screen.findByRole("button", { name: /filter/i }));
+    fireEvent.click(await screen.findByRole("checkbox", { name: /drafts/i }));
+
+    await waitFor(() => {
+      expect(useHistorySearchStore.getState().search.drafts).toEqual([
+        "landing",
+      ]);
+    });
+    expect(await screen.findByTestId("history-drafts-list")).not.toBeNull();
+    expect(screen.getByText("abandoned prompt")).not.toBeNull();
+    expect(screen.queryByText("Open from landing")).toBeNull();
+  });
+
+  it("opens a retained draft through openLandingDraftFromHistory", async () => {
+    const draftId = seedRetainedLandingDraft("abandoned prompt");
+    useHistorySearchStore.setState({
+      search: { ...DEFAULT_HISTORY_SEARCH, drafts: ["landing"] },
+    });
+    renderPanel("embedded", "/");
+
+    fireEvent.click(await screen.findByTestId("history-drafts-row-open"));
+
+    expect(testState.openLandingDraftFromHistory).toHaveBeenCalledTimes(1);
+    expect(testState.openLandingDraftFromHistory.mock.calls[0][1]).toBe(
+      draftId,
+    );
+  });
+
+  it("asks for confirmation before deleting a retained draft", async () => {
+    const draftId = seedRetainedLandingDraft("abandoned prompt");
+    useHistorySearchStore.setState({
+      search: { ...DEFAULT_HISTORY_SEARCH, drafts: ["landing"] },
+    });
+    renderPanel("embedded", "/");
+
+    expect(await screen.findByText("abandoned prompt")).not.toBeNull();
+    fireEvent.click(screen.getByTestId("history-drafts-row-delete"));
+
+    expect(
+      await screen.findByTestId("history-drafts-delete-dialog"),
+    ).not.toBeNull();
+    expect(screen.getByText('Delete "abandoned prompt"?')).not.toBeNull();
+    expect(
+      screen.getByText(/removes the start-task draft on every device/i),
+    ).not.toBeNull();
+    expect(
+      useLandingDraftStore
+        .getState()
+        .drafts.some((draft) => draft.id === draftId),
+    ).toBe(true);
+
+    fireEvent.click(screen.getByTestId("history-drafts-delete-cancel"));
+    await waitFor(() => {
+      expect(screen.queryByTestId("history-drafts-delete-dialog")).toBeNull();
+    });
+    expect(
+      useLandingDraftStore
+        .getState()
+        .drafts.some((draft) => draft.id === draftId),
+    ).toBe(true);
+
+    fireEvent.click(screen.getByTestId("history-drafts-row-delete"));
+    fireEvent.click(await screen.findByTestId("history-drafts-delete-confirm"));
+
+    await waitFor(() => {
+      expect(
+        useLandingDraftStore
+          .getState()
+          .drafts.some((draft) => draft.id === draftId),
+      ).toBe(false);
+    });
+    expect(screen.queryByText("abandoned prompt")).toBeNull();
+  });
+
+  it("warns that an open draft will be deleted on every device", async () => {
+    const draftId = seedRetainedLandingDraft("live tab");
+    useLandingDraftStore.getState().openDraft(draftId);
+    useHistorySearchStore.setState({
+      search: { ...DEFAULT_HISTORY_SEARCH, drafts: ["landing"] },
+    });
+    renderPanel("embedded", "/");
+
+    fireEvent.click(await screen.findByTestId("history-drafts-row-delete"));
+    expect(
+      await screen.findByText(/this draft is currently open/i),
+    ).not.toBeNull();
+    expect(screen.getByText(/every device/i)).not.toBeNull();
+  });
+
+  it("cycles draft rows with the arrow keys and returns to the query", async () => {
+    const alphaId = seedRetainedLandingDraft("alpha draft");
+    const betaId = seedRetainedLandingDraft("beta draft");
+    // Both seeds land in the same millisecond, and the comparator's tiebreak
+    // for equal `lastTouchedAt` is the uuid - which is random, so the row
+    // order this case is about was a coin flip. Stamp it.
+    const stampedAt = new Map([
+      [alphaId, 1],
+      [betaId, 2],
+    ]);
+    useLandingDraftStore.setState((state) => ({
+      drafts: state.drafts.map((draft) => {
+        const lastTouchedAt = stampedAt.get(draft.id);
+        return lastTouchedAt === undefined
+          ? draft
+          : { ...draft, lastTouchedAt };
+      }),
+    }));
+    useHistorySearchStore.setState({
+      search: { ...DEFAULT_HISTORY_SEARCH, drafts: ["landing"] },
+    });
+
+    renderPanel("page", "/");
+    const input = await screen.findByRole("searchbox", {
+      name: "Search drafts",
+    });
+    // Most-recent first: beta was seeded after alpha.
+    const first = screen.getByRole("button", {
+      name: "Open draft beta draft",
+    });
+    const second = screen.getByRole("button", {
+      name: "Open draft alpha draft",
+    });
+    input.focus();
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(first);
+
+    fireEvent.keyDown(first, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(second);
+
+    fireEvent.keyDown(second, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(second);
+
+    fireEvent.keyDown(second, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(first);
+
+    fireEvent.keyDown(first, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(input);
+  });
+
+  it("hides the drafts facet in the destination picker", async () => {
+    renderPanel("picker", "/");
+
+    fireEvent.click(await screen.findByRole("button", { name: /filter/i }));
+    expect(await screen.findByTestId("epics-filter-popover")).not.toBeNull();
+    expect(screen.queryByRole("checkbox", { name: /drafts/i })).toBeNull();
+  });
 });
+
+function seedRetainedLandingDraft(text: string): string {
+  const content: JsonContent = {
+    type: "doc",
+    content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+  };
+  const id = useLandingDraftStore.getState().createDraft(null);
+  useLandingDraftStore.getState().setDraftContent(id, content, null);
+  useLandingDraftStore.getState().closeDraft(id);
+  return id;
+}

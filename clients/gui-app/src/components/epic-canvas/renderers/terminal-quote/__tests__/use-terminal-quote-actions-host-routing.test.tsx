@@ -33,7 +33,8 @@ const messengerRef = vi.hoisted(() => ({
   value: null as MockHostMessenger<HostRpcRegistry> | null,
 }));
 
-vi.mock("@/lib/host/runtime", () => ({
+vi.mock("@/lib/host/runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
   // The SPINE and the app-wide client are separate exports since redesign
   // P2.1; this stub stands in for both, which is what `useHostClientFor` and
   // `useHostClientForHostId` each reach for.

@@ -126,6 +126,7 @@ function mountSubmit(args: {
       workspaceBlocked: false,
       imagesUnsupported: false,
       attachmentPreparationPending: false,
+      draftReadOnly: false,
       onSubmitMessage: args.onSubmitMessage,
       onSideChat: null,
     }),

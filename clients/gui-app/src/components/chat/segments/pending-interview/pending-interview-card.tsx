@@ -63,6 +63,8 @@ interface PendingInterviewCardProps {
    * pending either way.
    */
   onFork: ((mode: ChatForkMode) => void) | null;
+  readonly epicId?: string | null;
+  readonly hostId?: string | null;
 }
 
 export function PendingInterviewCard(props: PendingInterviewCardProps) {
@@ -96,6 +98,8 @@ export function PendingInterviewCard(props: PendingInterviewCardProps) {
   } = useInterviewCard({
     chatId: props.chatId,
     blockId: props.blockId,
+    epicId: props.epicId,
+    hostId: props.hostId,
     questions: props.questions,
     isActive: props.isActive,
     isBusy: props.isBusy,

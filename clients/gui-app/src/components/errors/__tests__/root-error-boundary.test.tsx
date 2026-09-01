@@ -8,6 +8,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { router } from "@/router";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
+import type { RendererCrashTelemetryInput } from "@traycer-clients/shared/platform/runner-host";
 
 function Boom(): never {
   throw new Error("boom from a provider");
@@ -47,6 +48,28 @@ describe("<RootErrorBoundary />", () => {
 
     expect(screen.getByTestId("app-error-screen")).toBeTruthy();
     expect(consoleError).toHaveBeenCalled();
+  });
+
+  it("persists the component stack and build identity through the crash sink", () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const persist = vi.fn(
+      (_input: RendererCrashTelemetryInput): Promise<void> => Promise.resolve(),
+    );
+
+    render(
+      <RootErrorBoundary router={router} crashTelemetry={{ persist }}>
+        <Boom />
+      </RootErrorBoundary>,
+    );
+
+    expect(persist).toHaveBeenCalledOnce();
+    const telemetry = persist.mock.calls[0][0];
+    expect(telemetry.appVersion).toBeNull();
+    expect(telemetry.buildRevision).toBeNull();
+    expect(telemetry.componentStack).toContain("Boom");
+    expect(telemetry.correlationId).not.toBe("");
+    expect(telemetry.fingerprint).toMatch(/^fp:v1:/);
+    expect(Number.isFinite(telemetry.timestamp)).toBe(true);
   });
 
   it("navigates home when Return to Home is clicked", () => {

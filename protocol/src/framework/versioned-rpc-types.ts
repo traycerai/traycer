@@ -73,6 +73,15 @@ export const RPC_ERROR_CODES = [
   // must never be reported as "still syncing". Same additive degrade story
   // as E_INVALID_ARGUMENT.
   "E_FORK_BOUNDARY_NOT_PUBLISHED",
+  // `worktree.setAutoCleanupPolicy` was called with an `expectedRevision` the
+  // host no longer holds - another surface changed this host's automatic
+  // cleanup policy first. A precondition failure on the CALLER's stale read,
+  // not a server fault, and never a blind retry: the loser of the race would
+  // be re-enabling scheduled DELETION under a threshold the user has since
+  // moved. Clients re-read the policy and re-present it. Same additive degrade
+  // story as E_INVALID_ARGUMENT - the code carries the whole meaning, so no
+  // typed details channel is widened for it.
+  "AUTO_CLEANUP_POLICY_REVISION_CONFLICT",
 ] as const;
 
 export type RpcErrorCode = (typeof RPC_ERROR_CODES)[number];

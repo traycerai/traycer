@@ -71,6 +71,7 @@ import {
 import {
   formatHostNotificationPresentation,
   parseKnownHostNotificationPayloadForKind,
+  type HostNotificationChatStoppedPayload,
   type HostNotificationKnownPayload,
   type HostNotificationOutcome,
   type HostNotificationSeverity,
@@ -1574,24 +1575,8 @@ function navigationPayloadFromKnown(
   known: HostNotificationKnownPayload,
 ): NotificationPayload | null {
   switch (known.kind) {
-    case "chat": {
-      // A final, unqualified Done describes the current end-state, so it
-      // always opens at the end of the transcript. Failures and qualified
-      // Done rows retain their occurrence anchor.
-      const includeTranscriptAnchor =
-        known.outcome === "errored" || known.backgroundWorkRunning === true;
-      const scrollToEnd =
-        known.outcome === "completed" && known.backgroundWorkRunning !== true;
-      return {
-        kind: "chat",
-        epicId: known.epicId,
-        chatId: known.chatId ?? undefined,
-        ...(known.hostId === undefined ? {} : { hostId: known.hostId }),
-        messageId: includeTranscriptAnchor ? known.messageId : undefined,
-        eventId: includeTranscriptAnchor ? known.eventId : undefined,
-        ...(scrollToEnd ? { scrollToEnd: true as const } : {}),
-      };
-    }
+    case "chat":
+      return navigationPayloadForChatStopped(known);
     case "agent_stalled":
       return { kind: "chat", epicId: known.epicId, chatId: known.chatId };
     case "workspace_operation_failed":
@@ -1637,7 +1622,44 @@ function navigationPayloadFromKnown(
     // designed degradation rather than a guessed destination.
     case "worktree_deletion":
       return navigationPayloadForWorktreeDeletion(known);
+    // An automatic run DOES have something to focus: its own history entry,
+    // which survives the worktrees it removed. The run id is a hint either way -
+    // retention GC bounds history, so a row read months later may name a run
+    // that is gone, and landing on the history list is then the right answer
+    // rather than a dead end.
+    case "worktree_auto_cleanup":
+      return {
+        kind: "hostSurface",
+        surface: "worktreeSettings",
+        view: "cleanupHistory",
+        // History is host-local, so the destination is only well defined with
+        // the host named: Settings administers one host at a time and the
+        // reader may well be looking at another one.
+        hostId: known.hostId,
+        focus: { resourceId: known.runId },
+      };
   }
+}
+
+function navigationPayloadForChatStopped(
+  known: HostNotificationChatStoppedPayload,
+): NotificationPayload {
+  // A final, unqualified Done describes the current end-state, so it always
+  // opens at the end of the transcript. Failures and qualified Done rows
+  // retain their occurrence anchor.
+  const includeTranscriptAnchor =
+    known.outcome === "errored" || known.backgroundWorkRunning === true;
+  const scrollToEnd =
+    known.outcome === "completed" && known.backgroundWorkRunning !== true;
+  return {
+    kind: "chat",
+    epicId: known.epicId,
+    chatId: known.chatId ?? undefined,
+    ...(known.hostId === undefined ? {} : { hostId: known.hostId }),
+    messageId: includeTranscriptAnchor ? known.messageId : undefined,
+    eventId: includeTranscriptAnchor ? known.eventId : undefined,
+    ...(scrollToEnd ? { scrollToEnd: true as const } : {}),
+  };
 }
 
 function navigationPayloadForWorktreeDeletion(known: {

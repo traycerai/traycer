@@ -123,6 +123,9 @@ import {
   type WorktreeDeleteProgressSummary,
 } from "@/components/settings/panels/use-worktree-delete-run";
 import { WorktreeDeleteProgressModal } from "@/components/settings/panels/worktree-delete-progress-modal";
+import { WorktreeAutoCleanupSection } from "@/components/settings/panels/worktree-auto-cleanup-section";
+import { WorktreeCleanupHistory } from "@/components/settings/panels/worktree-cleanup-history";
+import { useWorktreeCleanupViewStore } from "@/stores/settings/worktree-cleanup-view-store";
 import { WorktreeListRenderProfiler } from "@/components/settings/panels/worktree-list-render-profiler";
 import { useWorktreeActivityEnrichment } from "@/components/settings/panels/worktrees-enrichment";
 import { useWorktreeListing } from "@/components/settings/panels/worktrees-listing-query";
@@ -236,6 +239,20 @@ function useObservedHeight(): {
  */
 export function WorktreesSettingsPanel(): ReactNode {
   const scope = useHostScope();
+  // The panel has two views. The inventory is the default; cleanup history is
+  // reached from the automatic-cleanup card, or arrived at directly from an
+  // automatic-cleanup notification (which also carries the host, so the run it
+  // names and the host being administered agree).
+  const cleanupView = useWorktreeCleanupViewStore((state) => state.view);
+  const openCleanupHistory = useWorktreeCleanupViewStore(
+    (state) => state.openHistory,
+  );
+  const closeCleanupHistory = useWorktreeCleanupViewStore(
+    (state) => state.closeHistory,
+  );
+  const showCleanupHistory = useCallback(() => {
+    openCleanupHistory(null);
+  }, [openCleanupHistory]);
   // One-shot `worktree.deleteByPath` stream transport: it survives the panel
   // unmounting (a backgrounded delete keeps its socket) but wires no proactive
   // reconnect and no auth revalidation, so an OS wake / host respawn does not
@@ -257,14 +274,29 @@ export function WorktreesSettingsPanel(): ReactNode {
           compact ? "gap-2.5" : "gap-3",
         )}
       >
-        <div className="min-h-0 flex-1 overflow-hidden rounded-lg border border-border/60 bg-card/40">
-          <WorktreesBody
-            client={scope.client}
-            openStreamTransport={openStreamTransport}
-            hostId={scope.hostId}
-            scope={scope}
-          />
-        </div>
+        {cleanupView === "cleanupHistory" ? (
+          <div className="min-h-0 flex-1 overflow-hidden rounded-lg border border-border/60 bg-card/40">
+            <WorktreeCleanupHistory
+              scope={scope}
+              onBack={closeCleanupHistory}
+            />
+          </div>
+        ) : (
+          <>
+            <WorktreeAutoCleanupSection
+              scope={scope}
+              onOpenHistory={showCleanupHistory}
+            />
+            <div className="min-h-0 flex-1 overflow-hidden rounded-lg border border-border/60 bg-card/40">
+              <WorktreesBody
+                client={scope.client}
+                openStreamTransport={openStreamTransport}
+                hostId={scope.hostId}
+                scope={scope}
+              />
+            </div>
+          </>
+        )}
       </div>
     </SettingsPanelShell>
   );

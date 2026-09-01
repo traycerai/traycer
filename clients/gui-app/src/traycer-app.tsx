@@ -46,6 +46,7 @@ import { KeybindingProvider } from "@/providers/keybinding-provider";
 import { NotificationsSessionProvider } from "@/providers/notifications-session-provider";
 import { ChatRecordsStreamMount } from "@/providers/chat-records-stream-mount";
 import { WorktreeChangedStreamMount } from "@/providers/worktree-changed-stream-mount";
+import { LandingDraftMirrorMount } from "@/hooks/drafts/use-landing-draft-mirror";
 import { ProvidersChangedStreamMount } from "@/providers/providers-changed-stream-mount";
 import { RateLimitQueueProvider } from "@/providers/rate-limit-queue-provider";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
@@ -217,7 +218,10 @@ export function TraycerApp(props: TraycerAppProps): ReactNode {
                         onConfigureShell={configureShell}
                         onOpenSettings={openSettings}
                       >
-                        <RootErrorBoundary router={router}>
+                        <RootErrorBoundary
+                          router={router}
+                          crashTelemetry={props.runnerHost.crashTelemetry}
+                        >
                           <TraycerAuthenticatedRuntime router={router} />
                         </RootErrorBoundary>
                       </HostReadinessControllerProvider>
@@ -277,6 +281,7 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
                                 <WorktreeChangedStreamMount />
                                 <ProvidersChangedStreamMount />
                                 <ChatRecordsStreamMount />
+                                <LandingDraftMirrorMount />
                               </HostScopeReady>
                               {/* Above the shell split on purpose: the onboarding tour
                                   renders through `StandaloneShell`, not `AppShell`, so a

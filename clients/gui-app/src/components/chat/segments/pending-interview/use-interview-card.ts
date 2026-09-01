@@ -23,6 +23,10 @@ import {
   useInterviewDraftStore,
 } from "@/stores/composer/interview-draft-store";
 import {
+  bindInterviewDraftHost,
+  unbindInterviewDraftHost,
+} from "@/lib/drafts/draft-mirror-coordinator";
+import {
   draftsFromStoredAnswers,
   draftHasContent,
   draftHasState,
@@ -66,6 +70,8 @@ function digitFromEventKey(key: string): number | null {
 interface UseInterviewCardArgs {
   chatId: string;
   blockId: string;
+  epicId?: string | null;
+  hostId?: string | null;
   questions: ReadonlyArray<InterviewQuestion>;
   // Whether this card's chat tab is the active one in its pane. Gates focus so
   // a pending interview in a background pane never steals focus, and the card
@@ -98,8 +104,17 @@ interface UseInterviewCardArgs {
 // shortcuts - so the components stay purely presentational. Attach
 // `containerRef` to the focusable card element.
 export function useInterviewCard(args: UseInterviewCardArgs) {
-  const { chatId, blockId, questions, isActive, isBusy, onSubmit, onSkip } =
-    args;
+  const {
+    chatId,
+    blockId,
+    questions,
+    isActive,
+    isBusy,
+    onSubmit,
+    onSkip,
+    epicId,
+    hostId,
+  } = args;
   const composerSurfaceId = useId();
   const total = questions.length;
   const paneActivationFocusIntent = usePaneActivationFocusIntent();
@@ -117,6 +132,20 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
   );
   const saveStoredDraft = useInterviewDraftStore((state) => state.saveDraft);
   const clearStoredDraft = useInterviewDraftStore((state) => state.clearDraft);
+  const bindInterviewTarget = useInterviewDraftStore(
+    (state) => state.bindTarget,
+  );
+
+  useEffect(() => {
+    if (hostId === null || hostId === undefined) return;
+    bindInterviewDraftHost(chatId, blockId, hostId);
+    if (epicId !== null && epicId !== undefined) {
+      bindInterviewTarget(chatId, blockId, epicId);
+    }
+    return () => {
+      unbindInterviewDraftHost(chatId, blockId, hostId);
+    };
+  }, [bindInterviewTarget, blockId, chatId, epicId, hostId]);
 
   // The pager INDEX is canonical (persisted with the row); `step` is per-view
   // ephemeral animation direction and never persists.

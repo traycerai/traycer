@@ -42,6 +42,18 @@ describe("listCloudTasksRequestForHistorySearch", () => {
     });
   });
 
+  it("does not send the drafts facet to the cloud task index", () => {
+    const withoutDrafts = parseHistorySearch({ historyQuery: "api" });
+    const withDrafts = parseHistorySearch({
+      historyQuery: "api",
+      historyDrafts: "landing",
+    });
+
+    expect(listCloudTasksRequestForHistorySearch(withDrafts)).toEqual(
+      listCloudTasksRequestForHistorySearch(withoutDrafts),
+    );
+  });
+
   it("requests central last-viewed sorting", () => {
     const search = parseHistorySearch({ historySort: "last-viewed" });
 

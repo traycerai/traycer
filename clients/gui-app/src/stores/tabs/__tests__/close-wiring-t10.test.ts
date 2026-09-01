@@ -185,6 +185,38 @@ describe("T10 Area 1: requestClose routes through the coordinator", () => {
     expect(useLandingDraftStore.getState().drafts).toEqual([]);
   });
 
+  it("closes a non-empty draft tab from the layout but retains it in the store", () => {
+    useLandingDraftStore.getState().createDraftWithId("draft-a", null);
+    useLandingDraftStore.getState().setDraftContent(
+      "draft-a",
+      {
+        type: "doc",
+        content: [
+          { type: "paragraph", content: [{ type: "text", text: "keep" }] },
+        ],
+      },
+      null,
+    );
+    const draftRef: TabRef = { kind: "draft", id: "draft-a" };
+    useTabsStore.setState({
+      version: 2,
+      items: [{ kind: "tab", id: "tab:draft:draft-a", ref: draftRef }],
+      activeItemId: "tab:draft:draft-a",
+      stripOrder: [draftRef],
+      systemTabs: { history: null, settings: null },
+    });
+
+    const draftTab = getHeaderTabs().find((tab) => tab.id === "draft-a");
+    if (draftTab === undefined) throw new Error("expected draft-a");
+    tabRequestClose(draftTab);
+
+    expect(useTabsStore.getState().items).toEqual([]);
+    expect(getHeaderTabs()).toEqual([]);
+    expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
+    expect(useLandingDraftStore.getState().drafts[0].id).toBe("draft-a");
+    expect(useLandingDraftStore.getState().drafts[0].closed).toBe(true);
+  });
+
   it("closes the history system tab through the coordinator", () => {
     const historyRef: TabRef = { kind: "history", id: "history" };
     useTabsStore.setState({

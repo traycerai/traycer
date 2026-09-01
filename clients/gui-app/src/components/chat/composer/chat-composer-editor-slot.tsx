@@ -40,6 +40,7 @@ interface ChatComposerEditorSlotProps {
       ) => ReadonlyArray<PastedComposerImageOutcome>)
     | null;
   readonly isActive: boolean;
+  readonly disabled: boolean;
   readonly onDocumentChange: (
     content: JsonContent,
     selection: { from: number; to: number },
@@ -71,6 +72,7 @@ export function ChatComposerEditorSlot(props: ChatComposerEditorSlotProps) {
     hasPastedImageBytes,
     ingestPastedComposerImages,
     isActive,
+    disabled,
     onDocumentChange,
     onSelectionChange,
     onSubmit,
@@ -102,7 +104,7 @@ export function ChatComposerEditorSlot(props: ChatComposerEditorSlotProps) {
       hasPastedImageBytes={hasPastedImageBytes}
       ingestPastedComposerImages={ingestPastedComposerImages}
       isActive={isActive}
-      disabled={false}
+      disabled={disabled}
       placeholder={placeholder}
       editorClassName="max-h-[3.5lh] min-h-9"
       stabilizeImageAttachmentCaret

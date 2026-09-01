@@ -448,6 +448,9 @@ function buildFakeBridge(
       onChange: () => ({ dispose: () => undefined }),
     },
     platform: {
+      crashTelemetry: {
+        persist: () => Promise.resolve(),
+      },
       recentDocuments: { add: async () => undefined },
       window: {
         flashFrame: async () => undefined,

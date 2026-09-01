@@ -105,6 +105,7 @@ describe("prompt-stash ownership transfer: chat/epic", () => {
           runtimeStore: runtime.store,
           editorRef: editorLanding.editorRef,
         }),
+        hostId: null,
       }),
     );
 
@@ -137,6 +138,7 @@ describe("prompt-stash ownership transfer: chat/epic", () => {
           taskId,
           editorChat.editorRef,
         ),
+        hostId: null,
       }),
     );
 
@@ -204,6 +206,7 @@ describe("prompt-stash ownership transfer: chat/epic", () => {
           taskId,
           editorChat.editorRef,
         ),
+        hostId: null,
       }),
     );
 
@@ -247,6 +250,7 @@ describe("prompt-stash ownership transfer: chat/epic", () => {
           runtimeStore: runtime.store,
           editorRef: editorLanding.editorRef,
         }),
+        hostId: null,
       }),
     );
 
@@ -303,6 +307,7 @@ describe("prompt-stash ownership transfer: chat/epic", () => {
           taskId,
           editorChat.editorRef,
         ),
+        hostId: null,
       }),
     );
 
@@ -347,6 +352,7 @@ describe("prompt-stash ownership transfer: chat/epic", () => {
           runtimeStore: runtime.store,
           editorRef: editorLanding.editorRef,
         }),
+        hostId: null,
       }),
     );
 
@@ -404,6 +410,7 @@ describe("prompt-stash ownership transfer: chat/epic", () => {
           taskA,
           editorA.editorRef,
         ),
+        hostId: null,
       }),
     );
 
@@ -436,6 +443,7 @@ describe("prompt-stash ownership transfer: chat/epic", () => {
           taskB,
           editorB.editorRef,
         ),
+        hostId: null,
       }),
     );
 

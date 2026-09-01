@@ -312,6 +312,15 @@ import {
 import { hostGetRuntimeCapabilitiesV10 } from "@traycer/protocol/host/runtime-capabilities/contracts";
 import { chatForkGetV10 } from "@traycer/protocol/host/chat-fork/contracts";
 import {
+  draftsClaimV10,
+  draftsDeleteV10,
+  draftsListV10,
+  draftsPutBlobV10,
+  draftsReadBlobV10,
+  draftsSubscribeV10,
+  draftsUpsertV10,
+} from "@traycer/protocol/host/drafts/contracts";
+import {
   chatLocateRowV10,
   chatReadAccumulatedFileChangeV10,
 } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
@@ -421,6 +430,15 @@ import {
   epicSubscribeV20,
   epicUpdateArtifactStatusV10,
   epicUpdateTitleV10,
+  epicArtifactVersionsListV10,
+  epicArtifactVersionsGetBlobV10,
+  epicArtifactVersionsRestoreV10,
+  epicDeletedArtifactsListV10,
+  epicDeletedArtifactsReviveV10,
+  epicArtifactVersionSettingsGetV10,
+  epicArtifactVersionSettingsSetEnabledV10,
+  epicArtifactVersionSettingsSetRetentionPolicyV10,
+  epicArtifactVersionSettingsClearHistoryV10,
 } from "@traycer/protocol/host/epic/contracts";
 import {
   epicListTuiAgentsUpgradeV10ToV11,
@@ -643,6 +661,8 @@ import {
   worktreeListAllForHostResponseSchemaV15,
   worktreeListAllForHostRequestSchemaV16,
   worktreeListAllForHostResponseSchemaV16,
+  worktreeListAllForHostRequestSchemaV17,
+  worktreeListAllForHostResponseSchemaV17,
   worktreeImportRequestSchema,
   worktreeImportResponseSchema,
   worktreeListBranchesRequestSchema,
@@ -675,6 +695,16 @@ import {
   worktreeGetBindingResponseSchema,
   LEGACY_HOST_RESOLVED_AT,
 } from "@traycer/protocol/host/worktree-schemas";
+import {
+  worktreeGetAutoCleanupPolicyRequestSchema,
+  worktreeGetAutoCleanupPolicyResponseSchema,
+  worktreeSetAutoCleanupPolicyRequestSchema,
+  worktreeSetAutoCleanupPolicyResponseSchema,
+  worktreeListAutoCleanupRunsRequestSchema,
+  worktreeListAutoCleanupRunsResponseSchema,
+  worktreeGetAutoCleanupRunRequestSchema,
+  worktreeGetAutoCleanupRunResponseSchema,
+} from "@traycer/protocol/host/worktree-auto-cleanup-schemas";
 import {
   snapshotsClearLocalSnapshotsRequestSchema,
   snapshotsClearLocalSnapshotsResponseSchema,
@@ -1400,6 +1430,84 @@ export const worktreeListAllForHostUpgradeV15ToV16 = defineUpgradePath<
       gitUnreadable: false,
     })),
   }),
+});
+
+// v1.7 changes no field. It negotiates the MEANING of `lastActivityAt`: on
+// this minor the host derives it as `max(birthtime, HEAD reflog, durable
+// worktree activity)` - the same authoritative age automatic cleanup applies
+// its inactivity cutoff to - instead of the v1.1 formula that mixed in a
+// binding row's `updatedAt`. Settings and cleanup history would otherwise show
+// two different inactivity ages for one worktree, and no field on the wire
+// distinguishes the two formulas. Shapes are aliased to v1.6, so the released
+// line and this one are the same frozen structure by construction.
+export const worktreeListAllForHostV17 = defineRpcContract({
+  method: "worktree.listAllForHost",
+  schemaVersion: { major: 1, minor: 7 } as const,
+  requestSchema: worktreeListAllForHostRequestSchemaV17,
+  responseSchema: worktreeListAllForHostResponseSchemaV17,
+});
+
+// Identity on both legs: a v1.6 host's rows are already well-formed v1.7 rows.
+// Bridging cannot RECOMPUTE `lastActivityAt` - the older host never derived the
+// authoritative value and the client has none of the inputs - so a v1.6 peer's
+// rows keep the v1.6 meaning. That is the whole reason the semantics ride a
+// negotiated minor rather than a field a client could mistake for authoritative.
+export const worktreeListAllForHostUpgradeV16ToV17 = defineUpgradePath<
+  typeof worktreeListAllForHostV16,
+  typeof worktreeListAllForHostV17
+>({
+  from: worktreeListAllForHostV16.schemaVersion,
+  to: worktreeListAllForHostV17.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+/**
+ * `worktree.getAutoCleanupPolicy@1.0` / `worktree.setAutoCleanupPolicy@1.0` -
+ * the per-host automatic-cleanup setting. Brand-new methods added long after
+ * the released floor was frozen, so both ride the optional-capabilities channel
+ * with `degrade: { kind: "unsupported" }`.
+ *
+ * There is deliberately NO fallback degrade target. A host that lacks these
+ * methods cannot clean up worktrees on a schedule at all, and the only
+ * client-side "fallback" would be the GUI running its own timer - which would
+ * delete worktrees with the renderer's authority, without the host's freshness
+ * proof, and only while a window happens to be open. The correct degradation is
+ * an unavailable control.
+ */
+export const worktreeGetAutoCleanupPolicyV10 = defineRpcContract({
+  method: "worktree.getAutoCleanupPolicy",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: worktreeGetAutoCleanupPolicyRequestSchema,
+  responseSchema: worktreeGetAutoCleanupPolicyResponseSchema,
+});
+
+export const worktreeSetAutoCleanupPolicyV10 = defineRpcContract({
+  method: "worktree.setAutoCleanupPolicy",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: worktreeSetAutoCleanupPolicyRequestSchema,
+  responseSchema: worktreeSetAutoCleanupPolicyResponseSchema,
+});
+
+/**
+ * `worktree.listAutoCleanupRuns@1.0` / `worktree.getAutoCleanupRun@1.0` -
+ * cursor-paged cleanup history and one run's target detail, read from the
+ * selected host's local store. Same optional-capability posture as the policy
+ * pair: an older host has no history to show, and a client must render that as
+ * "unavailable", never as "no cleanups happened".
+ */
+export const worktreeListAutoCleanupRunsV10 = defineRpcContract({
+  method: "worktree.listAutoCleanupRuns",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: worktreeListAutoCleanupRunsRequestSchema,
+  responseSchema: worktreeListAutoCleanupRunsResponseSchema,
+});
+
+export const worktreeGetAutoCleanupRunV10 = defineRpcContract({
+  method: "worktree.getAutoCleanupRun",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: worktreeGetAutoCleanupRunRequestSchema,
+  responseSchema: worktreeGetAutoCleanupRunResponseSchema,
 });
 
 export const worktreeSetRepoScriptsV10 = defineRpcContract({
@@ -6441,6 +6549,123 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
     },
     degrade: { kind: "unsupported" },
   },
+  "epic.artifactVersions.list": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicArtifactVersionsListV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.artifactVersions.getBlob": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicArtifactVersionsGetBlobV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.artifactVersions.restore": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicArtifactVersionsRestoreV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.deletedArtifacts.list": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicDeletedArtifactsListV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.deletedArtifacts.revive": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicDeletedArtifactsReviveV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.artifactVersionSettings.get": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicArtifactVersionSettingsGetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.artifactVersionSettings.setEnabled": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicArtifactVersionSettingsSetEnabledV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.artifactVersionSettings.setRetentionPolicy": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicArtifactVersionSettingsSetRetentionPolicyV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.artifactVersionSettings.clearHistory": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicArtifactVersionSettingsClearHistoryV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
   // Optional (non-floor) cloud-chat READ surface: the host is a byte pipe and
   // the client does every interpretation. See `epic/cloud-chat.ts` for the whole
   // argument; the short version is that the head is opaque to the server AND to
@@ -7333,7 +7558,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "worktree.listAllForHost": {
     1: {
-      latestMinor: 6,
+      latestMinor: 7,
       versions: {
         0: {
           contract: worktreeListAllForHostV10,
@@ -7362,6 +7587,10 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         6: {
           contract: worktreeListAllForHostV16,
           upgradeFromPreviousVersion: worktreeListAllForHostUpgradeV15ToV16,
+        },
+        7: {
+          contract: worktreeListAllForHostV17,
+          upgradeFromPreviousVersion: worktreeListAllForHostUpgradeV16ToV17,
         },
       },
       downgradePathsFromLatest: {},
@@ -7737,6 +7966,64 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: mentionGithubSearchV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // Automatic worktree cleanup: the per-host policy plus its local run history.
+  // All four are optional capabilities - a host that predates them has no
+  // scheduler, and `unsupported` is the ONLY honest degrade. There is no
+  // fallback target on purpose: the client-side alternative would be the GUI
+  // scheduling deletions itself, without the host's freshness proof and only
+  // while a window is open. The controls go unavailable instead.
+  "worktree.getAutoCleanupPolicy": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: worktreeGetAutoCleanupPolicyV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "worktree.setAutoCleanupPolicy": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: worktreeSetAutoCleanupPolicyV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "worktree.listAutoCleanupRuns": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: worktreeListAutoCleanupRunsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "worktree.getAutoCleanupRun": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: worktreeGetAutoCleanupRunV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -8430,6 +8717,93 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
   },
 } as const;
 
+/**
+ * Drafts unary family, split out of the base/tail literals for the same
+ * TS7056 declaration-emit reason as `HOST_RPC_PROVIDERS_REGISTRY_DEFINITION`
+ * and `HOST_RPC_EDITING_REGISTRY_DEFINITION`. Six brand-new optional
+ * methods, none on the released floor.
+ */
+const HOST_RPC_DRAFTS_REGISTRY_DEFINITION = {
+  "drafts.upsert": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: draftsUpsertV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "drafts.delete": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: draftsDeleteV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "drafts.list": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: draftsListV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "drafts.claim": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: draftsClaimV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "drafts.putBlob": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: draftsPutBlobV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "drafts.readBlob": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: draftsReadBlobV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+} as const;
+
 const HOST_RPC_EDITING_REGISTRY_DEFINITION = {
   // Additive, post-v1.0.0 optional method. Older hosts render the same file
   // surfaces read-only; newer hosts provide conflict-safe in-place saves.
@@ -8463,7 +8837,7 @@ const HOST_RPC_EDITING_REGISTRY_DEFINITION = {
   },
 } as const;
 
-// The three literals must not declare the same method. Nothing about the merge
+// The five literals must not declare the same method. Nothing about the merge
 // below would tell you if they did: the spread silently keeps the LAST
 // occurrence, while the intersection claims a method that has two
 // contradictory version lines - so a duplicate would compile, type-check, and
@@ -8489,6 +8863,10 @@ type DuplicateHostRpcMethodNames =
       keyof typeof HOST_RPC_PROVIDERS_REGISTRY_DEFINITION
     >
   | Extract<
+      keyof typeof HOST_RPC_REGISTRY_BASE_DEFINITION,
+      keyof typeof HOST_RPC_DRAFTS_REGISTRY_DEFINITION
+    >
+  | Extract<
       keyof typeof HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION,
       keyof typeof HOST_RPC_PROVIDERS_REGISTRY_DEFINITION
     >
@@ -8499,6 +8877,18 @@ type DuplicateHostRpcMethodNames =
   | Extract<
       keyof typeof HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION,
       keyof typeof HOST_RPC_EDITING_REGISTRY_DEFINITION
+    >
+  | Extract<
+      keyof typeof HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION,
+      keyof typeof HOST_RPC_DRAFTS_REGISTRY_DEFINITION
+    >
+  | Extract<
+      keyof typeof HOST_RPC_PROVIDERS_REGISTRY_DEFINITION,
+      keyof typeof HOST_RPC_DRAFTS_REGISTRY_DEFINITION
+    >
+  | Extract<
+      keyof typeof HOST_RPC_EDITING_REGISTRY_DEFINITION,
+      keyof typeof HOST_RPC_DRAFTS_REGISTRY_DEFINITION
     >;
 
 // `Record<never, never>` is `{}` while the key sets stay disjoint, so this
@@ -8507,6 +8897,7 @@ type HostRpcRegistryDefinition = typeof HOST_RPC_REGISTRY_BASE_DEFINITION &
   typeof HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION &
   typeof HOST_RPC_PROVIDERS_REGISTRY_DEFINITION &
   typeof HOST_RPC_EDITING_REGISTRY_DEFINITION &
+  typeof HOST_RPC_DRAFTS_REGISTRY_DEFINITION &
   Record<AssertNever<DuplicateHostRpcMethodNames>, never>;
 
 const HOST_RPC_REGISTRY_DEFINITION: HostRpcRegistryDefinition = {
@@ -8514,6 +8905,7 @@ const HOST_RPC_REGISTRY_DEFINITION: HostRpcRegistryDefinition = {
   ...HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION,
   ...HOST_RPC_PROVIDERS_REGISTRY_DEFINITION,
   ...HOST_RPC_EDITING_REGISTRY_DEFINITION,
+  ...HOST_RPC_DRAFTS_REGISTRY_DEFINITION,
 };
 
 export const hostRpcRegistry: VersionedRpcRegistry<HostRpcRegistryDefinition> =
@@ -9091,6 +9483,22 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       versions: {
         0: {
           contract: prSubscribeDetailV10,
+        },
+      },
+    },
+  },
+  // Additive, post-v1.0.0 OPTIONAL stream method: live draft change frames.
+  // HOST-SCOPED — one subscription covers every draft this host holds.
+  // A host that predates it never advertises it and the client's
+  // subscription degrades to `unsupported`, whose contract is device-local
+  // drafts (same as the unary `drafts.*` degrade). Never add it to the
+  // unary released floor — that list is fail-closed on the name set.
+  "drafts.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: draftsSubscribeV10,
         },
       },
     },
