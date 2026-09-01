@@ -117,4 +117,50 @@ describe("openOwnedDurableStreamClient plan-restricted reprobe", () => {
     expect(rebuild).toHaveBeenCalledTimes(1);
     owned.close();
   });
+
+  it("retries an owner rebuild that throws synchronously", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(40_000);
+    const controlled = controllableTransport();
+    const rebuild = vi.fn<() => void>().mockImplementationOnce(() => {
+      throw new Error("wiring failed");
+    });
+    const owned = openOwnedDurableStreamClient(
+      () => controlled.transport,
+      "host-a",
+      () => ({ close: vi.fn() }),
+      rebuild,
+    );
+
+    controlled.emitClosed("plan-restricted:41000");
+    vi.advanceTimersByTime(1_000);
+    expect(rebuild).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(999);
+    expect(rebuild).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1);
+    expect(rebuild).toHaveBeenCalledTimes(2);
+
+    owned.close();
+  });
+
+  it("bounds repeated synchronous rebuild failures", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(50_000);
+    const controlled = controllableTransport();
+    const rebuild = vi.fn(() => {
+      throw new Error("still unavailable");
+    });
+    const owned = openOwnedDurableStreamClient(
+      () => controlled.transport,
+      "host-a",
+      () => ({ close: vi.fn() }),
+      rebuild,
+    );
+
+    controlled.emitClosed("plan-restricted:51000");
+    vi.advanceTimersByTime(10_000);
+    expect(rebuild).toHaveBeenCalledTimes(3);
+
+    owned.close();
+  });
 });

@@ -521,7 +521,7 @@ export function EpicSessionProvider(
             callbacks,
             seedOfferProvider,
           }),
-        () => reprobeHandle?.requestFreshSnapshot(),
+        () => reprobeHandle?.retryTransport(),
       );
       return {
         applyUpdate: (updateBytes) => result.client.applyUpdate(updateBytes),

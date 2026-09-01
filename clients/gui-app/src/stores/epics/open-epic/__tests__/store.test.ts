@@ -382,6 +382,35 @@ describe("createOpenEpicStore", () => {
     opened.dispose();
   });
 
+  it("retries only the transport without discarding offline Epic edits", () => {
+    const { factory, handle, handles } = fakeFactory();
+    const opened = createOpenEpicStore({
+      epicId: "epic-a",
+      streamClientFactory: factory,
+      userId: null,
+      onAuthError: null,
+    });
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", new Y.Doc()),
+      emptySnapshot(),
+    );
+    handle().callbacks.onConnectionStatus("reconnecting", null);
+    opened.doc.getMap("epic").set("title", "Buffered title");
+    const docBeforeRetry = opened.doc;
+
+    expect(opened.store.getState().unsyncedQueueSize).toBe(1);
+    opened.retryTransport();
+
+    expect(handles()).toHaveLength(2);
+    expect(handles()[0].closeCount).toBe(1);
+    expect(opened.doc).toBe(docBeforeRetry);
+    expect(opened.doc.getMap("epic").get("title")).toBe("Buffered title");
+    expect(opened.store.getState().unsyncedQueueSize).toBe(1);
+    expect(opened.store.getState().isDirty).toBe(true);
+
+    opened.dispose();
+  });
+
   it("collapses a long offline queue on flush without losing edits or under-reporting its size", () => {
     const { factory, handle } = fakeFactory();
     const opened = createOpenEpicStore({

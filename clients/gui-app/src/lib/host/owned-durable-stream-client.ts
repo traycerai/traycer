@@ -4,6 +4,9 @@ import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport
 import { planRestrictedReprobeAtFromClosedReason } from "@traycer-clients/shared/host-transport/remote/config";
 import { appLogger } from "@/lib/logger";
 
+const REPROBE_RETRY_DELAY_MS = 1_000;
+const MAX_REPROBE_REBUILD_ATTEMPTS = 3;
+
 /**
  * Owns a durable transport for the lifetime of one typed stream client — the
  * single place the "open transport → build typed client → compose close →
@@ -23,25 +26,39 @@ export function openOwnedDurableStreamClient<TClient extends { close(): void }>(
   try {
     const client = build(transport.wsStreamClient);
     let reprobeTimer: number | null = null;
+    let reprobeAttempts = 0;
+    const runPlanRestrictedReprobe = (): void => {
+      reprobeTimer = null;
+      reprobeAttempts += 1;
+      try {
+        onPlanRestrictedReprobe?.();
+      } catch (cause) {
+        appLogger.error(
+          "[stream] durable plan-restricted reprobe failed",
+          {},
+          cause,
+        );
+        // A rebuild can fail after it has closed this owned client. Keep the
+        // recovery trigger in this closure alive for a bounded number of
+        // backed-off attempts; the retained owner callback is disposal-aware
+        // and becomes a no-op once its store is gone.
+        if (reprobeAttempts < MAX_REPROBE_REBUILD_ATTEMPTS) {
+          reprobeTimer = window.setTimeout(
+            runPlanRestrictedReprobe,
+            REPROBE_RETRY_DELAY_MS * reprobeAttempts,
+          );
+        }
+      }
+    };
     const schedulePlanRestrictedReprobe = (): void => {
       const reprobeAt = planRestrictedReprobeAtFromClosedReason(
         transport.wsStreamClient.getClosedReason(),
       );
       if (reprobeAt === null || onPlanRestrictedReprobe === null) return;
       if (reprobeTimer !== null) window.clearTimeout(reprobeTimer);
+      reprobeAttempts = 0;
       reprobeTimer = window.setTimeout(
-        () => {
-          reprobeTimer = null;
-          try {
-            onPlanRestrictedReprobe();
-          } catch (cause) {
-            appLogger.error(
-              "[stream] durable plan-restricted reprobe failed",
-              {},
-              cause,
-            );
-          }
-        },
+        runPlanRestrictedReprobe,
         Math.max(0, reprobeAt - Date.now()),
       );
     };

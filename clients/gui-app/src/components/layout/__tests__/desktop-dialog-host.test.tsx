@@ -501,6 +501,7 @@ function createDirtyEpicHandle(
       set({ isDirty: false, unsyncedQueueSize: 0 });
     },
     requestFreshSnapshot: () => undefined,
+    retryTransport: () => undefined,
     retryMigration: () => undefined,
     applyChatRecords: () => undefined,
     peekChatIngestSeq: () => 0,
@@ -544,6 +545,7 @@ function createDirtyEpicHandle(
     dispose: () => undefined,
     detachTransport: () => undefined,
     requestFreshSnapshot: () => undefined,
+    retryTransport: () => undefined,
     isClean: () => !store.getState().isDirty,
     hotArtifactRoomIdsForTests: () => [],
   };

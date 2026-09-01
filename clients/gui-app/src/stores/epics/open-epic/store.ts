@@ -512,6 +512,8 @@ export interface OpenEpicState {
    * Y.Doc replica without dropping the owning registry/session entry.
    */
   requestFreshSnapshot: () => void;
+  /** Reopens only the transport, preserving the replica and buffered edits. */
+  retryTransport: () => void;
   /**
    * Sends a `retryMigration` client frame so the host re-runs an
    * interrupted major migration without dropping the `epic.subscribe`
@@ -870,6 +872,7 @@ export interface OpenEpicStoreHandle {
    */
   readonly detachTransport: () => void;
   readonly requestFreshSnapshot: () => void;
+  readonly retryTransport: () => void;
   /**
    * True when this renderer has a loaded, locally clean snapshot and can
    * still reach the host. Cloud acknowledgement is intentionally not part of
@@ -4030,6 +4033,24 @@ export function createOpenEpicStore(
             requestFreshSnapshotImpl?.();
           },
 
+          retryTransport: () => {
+            if (disposed || transportDetached) return;
+            transportStatus = "connecting";
+            currentStatus = deriveConnectionStatus(
+              transportStatus,
+              cloudSyncStatus,
+              hasConnectedOnce,
+            );
+            const cycleDurabilityState = resetDurabilityProofForOpenCycle();
+            closeStreamClient();
+            set({
+              ...connectionStateSlice(),
+              snapshotFetchError: null,
+              ...cycleDurabilityState,
+            });
+            openStreamClient();
+          },
+
           retryMigration: () => {
             if (disposed) return;
             // Nothing to retry until at least one migration has surfaced on
@@ -4659,6 +4680,9 @@ export function createOpenEpicStore(
     hotArtifactRoomIdsForTests: () => Array.from(artifactRoomReplicas.keys()),
     requestFreshSnapshot: () => {
       store.getState().requestFreshSnapshot();
+    },
+    retryTransport: () => {
+      store.getState().retryTransport();
     },
     isClean: () => {
       const state = store.getState();
