@@ -158,6 +158,45 @@ function steeredAssistant(
   };
 }
 
+function liveSplitAssistant(
+  turnId: string,
+  queueItemId: string,
+): Extract<Message, { role: "assistant" }> {
+  return {
+    ...steeredAssistant(turnId, queueItemId),
+    messageId: transientLiveAssistantMessageId(turnId),
+    blocks: [
+      {
+        type: "text",
+        blockId: `before-${turnId}`,
+        status: "completed",
+        timestamp: 1,
+        text: "before",
+        providerNotice: null,
+      },
+      {
+        type: "steer",
+        blockId: `steer-${queueItemId}`,
+        status: "completed",
+        timestamp: 2,
+        queueItemId,
+        messageId: `absent-${turnId}`,
+        content: { type: "doc" },
+        mode: "safe_point",
+        sender: null,
+      },
+      {
+        type: "text",
+        blockId: `after-${turnId}`,
+        status: "completed",
+        timestamp: 3,
+        text: "after",
+        providerNotice: null,
+      },
+    ],
+  };
+}
+
 /**
  * The old per-span fixture shape (`fromOrdinal`, `rowIds`, and optionally the
  * records a span used to carry directly, plus its warmth/serve clocks).
@@ -1400,16 +1439,17 @@ describe("transcriptListRows", () => {
     const part1Id = assistantSliceRowId(turnId, 1, true);
     const rows = transcriptListRows({
       window: windowOf({
-        rowCount: 3,
         spans: [],
+        rowCount: 4,
         // STALE / marker-less: the last skeleton the host published before
         // the steer block existed. It still names the turn as one unsplit
-        // row and the steered user as an ordinary top-level row at the last
+        // row and the steered user as an ordinary top-level row at its old
         // ordinal - no entry anywhere for `:part:0` / `:part:1`.
         skeleton: [
           skeletonEntry("prior-user"),
           skeletonEntry(assistantRowId(turnId)),
           skeletonEntry(steeredMessageId),
+          skeletonEntry("later-indexed-row"),
         ],
         skeletonComplete: true,
         invalidated: false,
@@ -1445,6 +1485,66 @@ describe("transcriptListRows", () => {
     // first row, and never merely adjacent to the row before it.
     expect(steerIndex).toBeGreaterThan(part0Index);
     expect(steerIndex).toBeLessThan(part1Index);
+    const laterIndex = rows.findIndex(
+      (row) =>
+        row.kind === "placeholder" && row.entry?.rowId === "later-indexed-row",
+    );
+    expect(part1Index).toBeLessThan(laterIndex);
+  });
+
+  it("merges multiple recovered split turns around surviving indexed rows", () => {
+    const firstTurnId = "turn-first-split";
+    const secondTurnId = "turn-second-split";
+    const firstQueueId = "queue-first-split";
+    const secondQueueId = "queue-second-split";
+    const firstTransientId = transientLiveAssistantMessageId(firstTurnId);
+    const secondTransientId = transientLiveAssistantMessageId(secondTurnId);
+    const firstPart0 = assistantSliceRowId(firstTurnId, 0, true);
+    const firstPart1 = assistantSliceRowId(firstTurnId, 1, true);
+    const secondPart0 = assistantSliceRowId(secondTurnId, 0, true);
+    const secondPart1 = assistantSliceRowId(secondTurnId, 1, true);
+    const firstSteer = queueSteerRowId(firstQueueId);
+    const secondSteer = queueSteerRowId(secondQueueId);
+
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 5,
+        spans: [],
+        skeleton: [
+          skeletonEntry("before-both"),
+          skeletonEntry(assistantRowId(firstTurnId)),
+          skeletonEntry("between-turns"),
+          skeletonEntry(assistantRowId(secondTurnId)),
+          skeletonEntry("after-both"),
+        ],
+        skeletonComplete: true,
+        invalidated: false,
+        liveMessages: [
+          liveSplitAssistant(firstTurnId, firstQueueId),
+          liveSplitAssistant(secondTurnId, secondQueueId),
+        ],
+      }),
+      rendered: [
+        modelWithPersistentMessageId(firstPart0, firstTransientId),
+        modelWithoutPersistentMessageId(firstSteer),
+        modelWithPersistentMessageId(firstPart1, firstTransientId),
+        modelWithPersistentMessageId(secondPart0, secondTransientId),
+        modelWithoutPersistentMessageId(secondSteer),
+        modelWithPersistentMessageId(secondPart1, secondTransientId),
+      ],
+    });
+
+    expect(kinds(rows)).toEqual([
+      "P:0",
+      `H:${firstPart0}`,
+      `H:${firstSteer}`,
+      `H:${firstPart1}`,
+      "P:2",
+      `H:${secondPart0}`,
+      `H:${secondSteer}`,
+      `H:${secondPart1}`,
+      "P:4",
+    ]);
   });
 
   it("holds a split-turn row a fresh span already seated at its pre-split ordinal", () => {

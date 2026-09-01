@@ -91,10 +91,10 @@ import { isTransientLiveAssistantMessageId } from "@/lib/chat/transient-live-ass
  * rows one by one against that skeleton puts the steered user at its old
  * top-level ordinal while the slices - ids the skeleton has never heard of -
  * fall to the tail, and the interjection draws ABOVE the turn it interrupted.
- * So the turn's rows are held for the tail together, in rendered order, and the
- * ordinals the stale skeleton assigned them are suppressed
- * ({@link preSplitSkeletonTurnRows}). Narrow by construction: only a turn whose
- * slices a live record backs, which is the streaming turn.
+ * So the turn's rows are held together at the unsplit turn's former position,
+ * in rendered order, and the ordinals the stale skeleton assigned them are
+ * suppressed ({@link preSplitSkeletonTurnRows}). Narrow by construction: only
+ * a turn whose slices a live record backs, which is the streaming turn.
  *
  * ## A hydrated row the renderer withheld is OMITTED, not placeholder'd
  *
@@ -741,7 +741,8 @@ function seatStaleRows(input: {
 
 /**
  * The rows of a live split turn the skeleton still names in its UNSPLIT shape,
- * held back from seating so they reach the tail together, in rendered order.
+ * held back from one-by-one seating so they can replace the unsplit turn as a
+ * unit, in rendered order.
  *
  * A split is sticky for the whole turn (`assistantSliceRowId`): one steer block
  * renames every slice, and the steered user row moves from a top-level ordinal
@@ -771,7 +772,7 @@ function preSplitSkeletonTurnRows(input: {
   readonly isLiveBacked: (model: ChatMessageModel) => boolean;
   readonly skeletonOrdinals: ReadonlyMap<string, number>;
   readonly suppressedOrdinals: Set<number>;
-}): ReadonlySet<string> {
+}): ReadonlyMap<string, number> {
   const sliceRangeByTurnKey = new Map<
     string,
     { first: number; last: number }
@@ -787,7 +788,7 @@ function preSplitSkeletonTurnRows(input: {
       range.last = index;
     }
   });
-  const held = new Set<string>();
+  const held = new Map<string, number>();
   for (const [turnKey, range] of sliceRangeByTurnKey) {
     const unsplitOrdinal = input.skeletonOrdinals.get(assistantRowId(turnKey));
     if (unsplitOrdinal === undefined) continue;
@@ -804,7 +805,7 @@ function preSplitSkeletonTurnRows(input: {
     if (first === undefined || !input.isLiveBacked(first)) continue;
     input.suppressedOrdinals.add(unsplitOrdinal);
     for (const model of unit) {
-      held.add(model.id);
+      held.set(model.id, unsplitOrdinal);
       const ordinal = input.skeletonOrdinals.get(model.id);
       if (ordinal !== undefined) input.suppressedOrdinals.add(ordinal);
     }
@@ -839,12 +840,12 @@ function seatLiveRecords(input: {
   readonly modelByOrdinal: Map<number, ChatMessageModel>;
   readonly placedRowIds: Set<string>;
   readonly suppressedOrdinals: ReadonlySet<number>;
-  readonly heldForTail: ReadonlySet<string>;
+  readonly heldPreSplitRows: ReadonlyMap<string, number>;
 }): void {
   for (const model of input.rendered) {
     if (!input.isLiveBacked(model)) continue;
     if (input.placedRowIds.has(model.id)) continue;
-    if (input.heldForTail.has(model.id)) continue;
+    if (input.heldPreSplitRows.has(model.id)) continue;
     const ordinal = input.skeletonOrdinals.get(model.id);
     if (ordinal === undefined || ordinal >= input.window.rowCount) continue;
     if (
@@ -969,7 +970,7 @@ export function transcriptListRows(input: {
   // user row at its pre-split ordinal was served under the SAME pre-split
   // index the skeleton is stale against, so it is not newer evidence than the
   // live record that carries the marker.
-  const heldForTail = preSplitSkeletonTurnRows({
+  const heldPreSplitRows = preSplitSkeletonTurnRows({
     rendered,
     isLiveBacked,
     skeletonOrdinals,
@@ -983,12 +984,13 @@ export function transcriptListRows(input: {
       // list keeps the list exactly `rowCount` long; the identity echo is what
       // reports the disagreement.
       if (ordinal >= window.rowCount) return;
-      if (heldForTail.has(rowId)) {
-        // The unit has left this ordinal for the tail. Suppress rather than
-        // place: seating it here would draw the interjection above its own
-        // turn, and `placedRowIds` would then keep it out of the tail unit -
-        // the exact split the hold exists to prevent, reached through the span
-        // tier instead of the skeleton.
+      if (heldPreSplitRows.has(rowId)) {
+        // The unit replaces these individual stale ordinals at the unsplit
+        // turn's position. Suppress rather than place: seating one member here
+        // would draw the interjection apart from its own turn, and
+        // `placedRowIds` would then keep it out of the recovered unit - the
+        // exact split the hold exists to prevent, reached through the span tier
+        // instead of the skeleton.
         suppressedOrdinals.add(ordinal);
         return;
       }
@@ -1042,7 +1044,7 @@ export function transcriptListRows(input: {
     modelByOrdinal,
     placedRowIds,
     suppressedOrdinals,
-    heldForTail,
+    heldPreSplitRows,
   });
 
   // Carried stale bodies fill whatever the fresh spans and live records did
@@ -1097,7 +1099,7 @@ export function transcriptListRows(input: {
     isLiveBacked,
     placedRowIds,
     skeletonOrdinals,
-    heldForTail,
+    heldPreSplitRows,
     rows,
   });
   return rows;
@@ -1123,9 +1125,10 @@ export function transcriptListRows(input: {
  * turn that is streaming right now is the turn a rebase most recently
  * demoted, so the narrow reading of that test is how an active row disappears.
  *
- * A row {@link preSplitSkeletonTurnRows} held for the tail is appended even
- * though the skeleton names it: the ordinal it names is the stale, pre-split
- * one, and it was suppressed for exactly that reason.
+ * A row {@link preSplitSkeletonTurnRows} held as part of a pre-split unit is
+ * inserted at the unsplit turn's former ordinal even though the skeleton names
+ * it: the individual ordinal it names is stale and was suppressed for exactly
+ * that reason. Generic live-tail rows still follow the recovered unit.
  */
 function appendUnplacedRenderedRows(input: {
   readonly window: TranscriptWindow;
@@ -1133,16 +1136,18 @@ function appendUnplacedRenderedRows(input: {
   readonly isLiveBacked: (model: ChatMessageModel) => boolean;
   readonly placedRowIds: ReadonlySet<string>;
   readonly skeletonOrdinals: ReadonlyMap<string, number>;
-  readonly heldForTail: ReadonlySet<string>;
+  readonly heldPreSplitRows: ReadonlyMap<string, number>;
   readonly rows: TranscriptListRow[];
 }): void {
   const { window } = input;
   const isStaleBacked = staleBackingLookup(window);
+  const heldByOrdinal = new Map<number, ChatMessageModel[]>();
+  const unplaced: ChatMessageModel[] = [];
   for (const model of input.rendered) {
     if (input.placedRowIds.has(model.id)) continue;
     if (
       input.skeletonOrdinals.has(model.id) &&
-      !input.heldForTail.has(model.id)
+      !input.heldPreSplitRows.has(model.id)
     ) {
       continue;
     }
@@ -1154,7 +1159,54 @@ function appendUnplacedRenderedRows(input: {
       // from the tail until replacement hydration arrives.
       if (!input.isLiveBacked(model)) continue;
     }
-    input.rows.push({ kind: "hydrated", key: model.id, ordinal: null, model });
+    const heldOrdinal = input.heldPreSplitRows.get(model.id);
+    if (heldOrdinal !== undefined) {
+      const unit = heldByOrdinal.get(heldOrdinal) ?? [];
+      unit.push(model);
+      heldByOrdinal.set(heldOrdinal, unit);
+      continue;
+    }
+    unplaced.push(model);
+  }
+  const heldUnits = [...heldByOrdinal].sort(([left], [right]) => left - right);
+  if (heldUnits.length > 0) {
+    const merged: TranscriptListRow[] = [];
+    let heldIndex = 0;
+    function appendHeldThrough(ordinal: number): void {
+      while (heldIndex < heldUnits.length) {
+        const entry = heldUnits[heldIndex];
+        if (entry[0] > ordinal) break;
+        const unit = entry[1];
+        for (const model of unit) {
+          merged.push({
+            kind: "hydrated" as const,
+            key: model.id,
+            ordinal: null,
+            model,
+          });
+        }
+        heldIndex += 1;
+      }
+    }
+    for (const row of input.rows) {
+      if (row.ordinal !== null) appendHeldThrough(row.ordinal);
+      merged.push(row);
+    }
+    appendHeldThrough(Number.POSITIVE_INFINITY);
+    input.rows.length = merged.length;
+    let mergedIndex = 0;
+    for (const row of merged) {
+      input.rows[mergedIndex] = row;
+      mergedIndex += 1;
+    }
+  }
+  for (const model of unplaced) {
+    input.rows.push({
+      kind: "hydrated" as const,
+      key: model.id,
+      ordinal: null,
+      model,
+    });
   }
 }
 
