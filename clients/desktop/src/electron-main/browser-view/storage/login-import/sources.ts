@@ -364,9 +364,13 @@ export function parseFirefoxProfilesIni(
     if (path !== undefined && path.length > 0) {
       profiles.push({
         // The name becomes the picker's label, which crosses to the renderer.
-        // Without one the LAST segment stands in - never the path itself,
-        // which for `IsRelative=0` is absolute and starts at the home dir.
-        name: section.Name ?? profileDirectoryName(path),
+        // Without one - absent OR a bare `Name=`, which the ini parser reads
+        // as "" - the LAST segment stands in, never the path itself, which
+        // for `IsRelative=0` is absolute and starts at the home dir.
+        name:
+          section.Name !== undefined && section.Name.length > 0
+            ? section.Name
+            : profileDirectoryName(path),
         path,
         isRelative: section.IsRelative !== "0",
       });

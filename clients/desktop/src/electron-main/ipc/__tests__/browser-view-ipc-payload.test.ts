@@ -63,4 +63,49 @@ describe("browserViewIpcPayload.loginImportRun", () => {
     });
     expect(parsed.success).toBe(false);
   });
+
+  it("rejects an unknown extra key", () => {
+    const parsed = browserViewIpcPayload.loginImportRun.safeParse({
+      sourceId: "opaque-id-1",
+      domains: ["example.com"],
+      includeDeviceBound: true,
+      extra: true,
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("rejects a sourceId longer than 128 characters", () => {
+    const parsed = browserViewIpcPayload.loginImportRun.safeParse({
+      sourceId: "x".repeat(129),
+      domains: ["example.com"],
+      includeDeviceBound: true,
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("rejects a domain entry longer than 253 characters", () => {
+    const parsed = browserViewIpcPayload.loginImportRun.safeParse({
+      sourceId: "opaque-id-1",
+      domains: ["a".repeat(254)],
+      includeDeviceBound: true,
+    });
+    expect(parsed.success).toBe(false);
+  });
+});
+
+describe("browserViewIpcPayload.loginImportScan", () => {
+  it("accepts a well-formed request", () => {
+    const parsed = browserViewIpcPayload.loginImportScan.safeParse({
+      sourceId: "opaque-id-1",
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it("rejects an unknown extra key", () => {
+    const parsed = browserViewIpcPayload.loginImportScan.safeParse({
+      sourceId: "opaque-id-1",
+      extra: true,
+    });
+    expect(parsed.success).toBe(false);
+  });
 });

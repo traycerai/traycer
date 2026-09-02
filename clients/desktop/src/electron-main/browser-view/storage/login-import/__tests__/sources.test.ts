@@ -1,6 +1,6 @@
 import { chmod, mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   describeCookieFileSource,
@@ -546,6 +546,24 @@ describe("parseFirefoxProfilesIni", () => {
     ]);
   });
 
+  it("falls back to the last path segment when Name is present but empty", () => {
+    const ini = [
+      "[Profile0]",
+      "Name=",
+      "IsRelative=1",
+      "Path=abcd1234.default-release",
+      "",
+    ].join("\n");
+
+    expect(parseFirefoxProfilesIni(ini)).toEqual([
+      {
+        name: "abcd1234.default-release",
+        path: "abcd1234.default-release",
+        isRelative: true,
+      },
+    ]);
+  });
+
   it("falls back to the last segment of an absolute POSIX path when Name is missing", () => {
     const ini = [
       "[Profile0]",
@@ -639,7 +657,11 @@ describe("normalizePickedFilePath", () => {
   });
 
   it("resolves an absolute path with redundant segments", () => {
-    const messy = join(root, "a", "..", "b", "cookies.txt");
+    // Built with sep.join rather than join(): join() collapses ".." and "."
+    // itself, which would make this test pass even if
+    // normalizePickedFilePath did no normalisation of its own.
+    const messy = [root, "a", "..", "b", ".", "cookies.txt"].join(sep);
+    expect(messy).not.toBe(join(root, "b", "cookies.txt"));
     expect(normalizePickedFilePath(messy)).toBe(join(root, "b", "cookies.txt"));
   });
 });
