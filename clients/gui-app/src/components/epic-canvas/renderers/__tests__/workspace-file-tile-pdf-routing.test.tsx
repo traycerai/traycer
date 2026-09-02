@@ -19,7 +19,7 @@ import {
   screen,
   type RenderResult,
 } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import type {
   FileAssetRequest,
   FileAssetState,
@@ -36,6 +36,8 @@ interface PdfRoutingTestState {
   readFileCalls: number;
   openPaths: Mock;
   triggerOpenExternally: Mock;
+  /** Drives the mocked `PdfPreviewLazy` to call `onUnavailable` from an effect. */
+  viewerUnavailable: boolean;
 }
 
 const state = vi.hoisted((): PdfRoutingTestState => ({
@@ -52,6 +54,7 @@ const state = vi.hoisted((): PdfRoutingTestState => ({
   readFileCalls: 0,
   openPaths: vi.fn(),
   triggerOpenExternally: vi.fn(),
+  viewerUnavailable: false,
 }));
 
 vi.mock("@/hooks/assets/use-file-asset", () => ({
@@ -209,13 +212,27 @@ vi.mock("@/components/epic-canvas/image-preview/image-preview", () => ({
 // test id, so "the viewer mounted" is asserted through the same accessible
 // contract a screen reader (or Testing Library's role queries) would see.
 vi.mock("@/components/epic-canvas/pdf-preview/pdf-preview-lazy", () => ({
-  PdfPreviewLazy: (props: { readonly url: string }) => (
-    <div
-      role="toolbar"
-      aria-label="PDF preview controls"
-      data-url={props.url}
-    />
-  ),
+  // The real string, not a re-export via `vi.importActual` - that would drag
+  // pdf.js (worker URL, viewer CSS) into this routing test's jsdom, the same
+  // reason the whole module is mocked below.
+  PDF_VIEWER_UNAVAILABLE_REASON:
+    "The PDF viewer could not be loaded on this device.",
+  PdfPreviewLazy: (props: {
+    readonly url: string;
+    readonly onUnavailable: () => void;
+  }) => {
+    const { onUnavailable } = props;
+    useEffect(() => {
+      if (state.viewerUnavailable) onUnavailable();
+    }, [onUnavailable]);
+    return (
+      <div
+        role="toolbar"
+        aria-label="PDF preview controls"
+        data-url={props.url}
+      />
+    );
+  },
 }));
 
 import { WorkspaceFileTile } from "../workspace-file-tile";
@@ -250,6 +267,7 @@ describe("workspace file tile PDF routing", () => {
     state.assetRequests.length = 0;
     state.assetStreamVersion = { major: 1, minor: 1 };
     state.readFileCalls = 0;
+    state.viewerUnavailable = false;
   });
 
   afterEach(() => {
@@ -312,21 +330,43 @@ describe("workspace file tile PDF routing", () => {
       status: "fallback",
       url: null,
       meta: null,
-      reason: "This PDF is too large to preview (20 MiB limit).",
+      reason: "This PDF is too large to preview.",
       totalBytes: null,
       servedFromCache: false,
     };
     renderTile(nodeFor("docs/report.pdf"));
 
-    expect(
-      screen.getByText("This PDF is too large to preview (20 MiB limit)."),
-    ).toBeTruthy();
+    expect(screen.getByText("This PDF is too large to preview.")).toBeTruthy();
     expect(
       screen.queryByRole("toolbar", { name: "PDF preview controls" }),
     ).toBeNull();
     // No viewer toolbar without a viewer - the fallback keeps the shared
     // path bar so Open Externally stays reachable.
     expect(screen.getByTestId("workspace-file-toolbar")).toBeTruthy();
+  });
+
+  it("swaps to the shared placeholder when the viewer reports itself unavailable", () => {
+    state.viewerUnavailable = true;
+    renderTile(nodeFor("docs/report.pdf"));
+
+    // The bytes are fine (asset status stays "ready") - only the viewer
+    // could not load or start, so the tile falls back to the same fallback
+    // layout a stream fallback uses, with the viewer-specific copy.
+    expect(
+      screen.getByText("The PDF viewer could not be loaded on this device."),
+    ).toBeTruthy();
+    expect(screen.getByTestId("workspace-file-toolbar")).toBeTruthy();
+    // The fallback layout's own Open Externally affordance lives on
+    // `BinaryPlaceholder` (workspace-file-tile.tsx passes `openExternally:
+    // null` to the toolbar here), so the button's text is that component's
+    // plain "Open Externally" copy, not the toolbar icon button's
+    // "Open externally" aria-label.
+    expect(
+      screen.getByRole("button", { name: "Open Externally" }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("toolbar", { name: "PDF preview controls" }),
+    ).toBeNull();
   });
 
   it("keeps image routing untouched by the PDF branch", () => {

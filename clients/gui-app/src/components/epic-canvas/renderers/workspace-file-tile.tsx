@@ -73,7 +73,10 @@ import {
   isSvgAssetPath,
 } from "@/lib/assets/image-extension-allowlist";
 import { useFileAsset } from "@/hooks/assets/use-file-asset";
-import { PdfPreviewLazy } from "@/components/epic-canvas/pdf-preview/pdf-preview-lazy";
+import {
+  PDF_VIEWER_UNAVAILABLE_REASON,
+  PdfPreviewLazy,
+} from "@/components/epic-canvas/pdf-preview/pdf-preview-lazy";
 import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
 import {
   DEFAULT_ANIMATION_MS,
@@ -353,6 +356,14 @@ function WorkspacePdfFileTile(props: {
     filePath: node.filePath,
   });
   const handleRenderFailure = assetState.reportDecodeFailure;
+  // The viewer itself could not load or start on this device (old engine) -
+  // distinct from a decode failure: the bytes are fine, so the blob stays
+  // cached and Open Externally remains the way to read the file.
+  const [viewerUnavailable, setViewerUnavailable] = useState(false);
+  const handleViewerUnavailable = useCallback(
+    () => setViewerUnavailable(true),
+    [],
+  );
   // PDFs open with the OS default application when the host speaks
   // editor.openPaths >= 1.1; older hosts keep the default-editor behavior.
   const openTarget = usePdfOpenExternallyTarget(node.hostId);
@@ -373,7 +384,7 @@ function WorkspacePdfFileTile(props: {
     }
   }, [revealTarget, props.viewTabId, node.id]);
 
-  if (assetState.status === "fallback") {
+  if (assetState.status === "fallback" || viewerUnavailable) {
     return (
       <div className="flex h-full min-h-0 flex-col bg-canvas text-canvas-foreground">
         <WorkspaceMediaFileToolbar
@@ -385,7 +396,11 @@ function WorkspacePdfFileTile(props: {
           <BinaryPlaceholder
             fileName={node.name}
             sizeBytes={assetState.totalBytes}
-            reason={assetState.reason}
+            reason={
+              viewerUnavailable
+                ? PDF_VIEWER_UNAVAILABLE_REASON
+                : assetState.reason
+            }
             onOpenExternally={handleOpenExternally}
             openExternallyOpening={openExternallyOpening}
             compact={false}
@@ -412,6 +427,7 @@ function WorkspacePdfFileTile(props: {
             />
           }
           onRenderFailure={handleRenderFailure}
+          onUnavailable={handleViewerUnavailable}
         />
       </div>
     );

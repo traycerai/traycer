@@ -32,26 +32,13 @@ import "pdfjs-dist/web/pdf_viewer.css";
 // leak that skews the text/annotation layers (see the file's comment).
 import "./pdf-preview.css";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-import {
-  ChevronDown,
-  ChevronLeft,
-  ChevronRight,
-  ChevronUp,
-  ListTree,
-  Minus,
-  Plus,
-  RotateCw,
-  Scan,
-  Search,
-  X,
-} from "lucide-react";
+import { ChevronDown, ChevronUp, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { StartTruncatedText } from "@/components/ui/start-truncated-text";
-import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { appLogger } from "@/lib/logger";
 import { PdfOutlinePanel, type PdfOutlineEntry } from "./pdf-outline-panel";
+import { PdfPreviewToolbar } from "./pdf-preview-toolbar";
 
 // Same-origin worker chunk emitted by Vite - `script-src 'self'` already
 // covers it. Assigned at module scope so a second mount never races the
@@ -450,197 +437,44 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
   }, [zoomBy]);
 
   const hasOutline = outline.length > 0;
+  const handleZoomIn = useCallback(() => zoomBy(ZOOM_STEP), [zoomBy]);
+  const handleZoomOut = useCallback(() => zoomBy(1 / ZOOM_STEP), [zoomBy]);
+  const toggleOutline = useCallback(
+    () => setOutlineOpen((value) => !value),
+    [],
+  );
+  const toggleSearch = useCallback(() => {
+    if (searchOpen) {
+      closeSearch();
+    } else {
+      setSearchOpen(true);
+    }
+  }, [closeSearch, searchOpen]);
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col">
-      <div
-        role="toolbar"
-        aria-label="PDF preview controls"
-        className="relative z-10 flex h-8 shrink-0 items-center justify-between gap-2 border-b border-canvas-border/70 px-2"
-      >
-        <div className="flex min-w-0 flex-1 items-center gap-1">
-          {hasOutline ? (
-            <TooltipWrapper
-              label="Document outline"
-              side="top"
-              sideOffset={undefined}
-              align={undefined}
-            >
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                aria-pressed={outlineOpen}
-                onClick={() => setOutlineOpen((value) => !value)}
-                aria-label="Document outline"
-              >
-                <ListTree className="size-4" />
-              </Button>
-            </TooltipWrapper>
-          ) : null}
-          {props.compact ? null : (
-            <StartTruncatedText className="min-w-0 flex-1 text-ui-xs text-muted-foreground">
-              {props.fileName}
-            </StartTruncatedText>
-          )}
-        </div>
-        <div className="flex shrink-0 items-center gap-1">
-          <TooltipWrapper
-            label="Previous page"
-            side="top"
-            sideOffset={undefined}
-            align={undefined}
-          >
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              disabled={!documentReady || pageNumber <= 1}
-              onClick={() => goToPage(pageNumber - 1)}
-              aria-label="Previous page"
-            >
-              <ChevronLeft className="size-4" />
-            </Button>
-          </TooltipWrapper>
-          <div className="flex items-center gap-1 text-ui-xs text-muted-foreground">
-            <Input
-              // Empty until pagesinit - a "1" next to "/ 0" reads as a
-              // contradictory state, not a loading one.
-              value={documentReady ? pageInput : ""}
-              disabled={!documentReady}
-              onChange={(event) => setPageInput(event.target.value)}
-              onBlur={handlePageInputCommit}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") handlePageInputCommit();
-              }}
-              inputMode="numeric"
-              aria-label="Page number"
-              className="h-6 w-10 px-1 text-center text-ui-xs"
-            />
-            <span className="whitespace-nowrap">
-              / {pageCount > 0 ? pageCount : "\u2013"}
-            </span>
-          </div>
-          <TooltipWrapper
-            label="Next page"
-            side="top"
-            sideOffset={undefined}
-            align={undefined}
-          >
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              disabled={!documentReady || pageNumber >= pageCount}
-              onClick={() => goToPage(pageNumber + 1)}
-              aria-label="Next page"
-            >
-              <ChevronRight className="size-4" />
-            </Button>
-          </TooltipWrapper>
-          <div className="mx-0.5 h-4 w-px bg-border" aria-hidden="true" />
-          <TooltipWrapper
-            label="Zoom out"
-            side="top"
-            sideOffset={undefined}
-            align={undefined}
-          >
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              disabled={!documentReady}
-              onClick={() => zoomBy(1 / ZOOM_STEP)}
-              aria-label="Zoom out"
-            >
-              <Minus className="size-4" />
-            </Button>
-          </TooltipWrapper>
-          <span
-            className="min-w-9 whitespace-nowrap text-center text-ui-xs tabular-nums text-muted-foreground"
-            aria-label="Zoom level"
-          >
-            {scalePercent === null ? "\u2013" : `${scalePercent}%`}
-          </span>
-          <TooltipWrapper
-            label="Zoom in"
-            side="top"
-            sideOffset={undefined}
-            align={undefined}
-          >
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              disabled={!documentReady}
-              onClick={() => zoomBy(ZOOM_STEP)}
-              aria-label="Zoom in"
-            >
-              <Plus className="size-4" />
-            </Button>
-          </TooltipWrapper>
-          <TooltipWrapper
-            label="Fit to width"
-            side="top"
-            sideOffset={undefined}
-            align={undefined}
-          >
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              disabled={!documentReady}
-              onClick={handleFitWidth}
-              aria-label="Fit to width"
-            >
-              <Scan className="size-4" />
-            </Button>
-          </TooltipWrapper>
-          <TooltipWrapper
-            label="Rotate 90°"
-            side="top"
-            sideOffset={undefined}
-            align={undefined}
-          >
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              disabled={!documentReady}
-              onClick={handleRotate}
-              aria-label="Rotate"
-            >
-              <RotateCw className="size-4" />
-            </Button>
-          </TooltipWrapper>
-          <div className="mx-0.5 h-4 w-px bg-border" aria-hidden="true" />
-          <TooltipWrapper
-            label="Search document"
-            side="top"
-            sideOffset={undefined}
-            align={undefined}
-          >
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              disabled={!documentReady}
-              aria-pressed={searchOpen}
-              onClick={() => {
-                if (searchOpen) {
-                  closeSearch();
-                } else {
-                  setSearchOpen(true);
-                }
-              }}
-              aria-label="Search document"
-            >
-              <Search className="size-4" />
-            </Button>
-          </TooltipWrapper>
-          {props.toolbarActions}
-        </div>
-      </div>
+      <PdfPreviewToolbar
+        fileName={props.fileName}
+        compact={props.compact}
+        toolbarActions={props.toolbarActions}
+        documentReady={documentReady}
+        pageNumber={pageNumber}
+        pageCount={pageCount}
+        pageInput={pageInput}
+        onPageInputChange={setPageInput}
+        onPageInputCommit={handlePageInputCommit}
+        onGoToPage={goToPage}
+        scalePercent={scalePercent}
+        onZoomIn={handleZoomIn}
+        onZoomOut={handleZoomOut}
+        onFitWidth={handleFitWidth}
+        onRotate={handleRotate}
+        hasOutline={hasOutline}
+        outlineOpen={outlineOpen}
+        onToggleOutline={toggleOutline}
+        searchOpen={searchOpen}
+        onToggleSearch={toggleSearch}
+      />
       {searchOpen ? (
         <div className="flex h-8 shrink-0 items-center gap-1 border-b border-canvas-border/70 px-2">
           <Input
