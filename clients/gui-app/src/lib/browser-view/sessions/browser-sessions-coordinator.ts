@@ -79,13 +79,67 @@ interface BrowserSessionsCoordinatorRuntime {
    */
   readonly desktopWindowId: string | null;
   /**
-   * Router-bound nested-focus commit supplied by the active React consumer.
-   * The coordinator is shared outside React, so server-pushed foreground tabs
-   * must receive this seam through the swappable runtime instead of reaching
-   * for a module-global router.
+   * The retained Epic surface this consumer can present a host-opened tab in.
+   * Null for app-global consumers (for example the command palette) which can
+   * use the coordinator but do not own a canvas destination.
+   */
+  readonly presentation: BrowserSessionsPresentation | null;
+  /**
+   * Router-bound nested-focus commit supplied by this React consumer. The
+   * coordinator is shared outside React, so server-pushed foreground tabs use
+   * the callback paired with the selected presenter instead of reaching for a
+   * module-global router.
    */
   readonly navigateNested: NavigateNestedFocus;
   readonly openTransport: (hostId: string) => DurableStreamTransport;
+}
+
+interface BrowserSessionsPresentation {
+  readonly viewTabId: string;
+  readonly visible: boolean;
+  readonly focused: boolean;
+}
+
+interface BrowserSessionsPresenter {
+  readonly viewTabId: string;
+  readonly navigateNested: NavigateNestedFocus;
+}
+
+/**
+ * Resource ownership and presentation ownership are deliberately separate.
+ * The first coordinator consumer owns the stream/browserView until release,
+ * but a host push belongs in the currently focused retained Epic surface.
+ * Falling back focused -> visible -> retained preserves hidden-Epic surfacing
+ * when no surface is currently presented without letting insertion order pick
+ * a background duplicate while a focused one exists.
+ */
+function selectBrowserSessionsPresenters(
+  runtimes: ReadonlyMap<symbol, BrowserSessionsCoordinatorRuntime>,
+): readonly BrowserSessionsPresenter[] {
+  const byViewTabId = new Map<
+    string,
+    { readonly presenter: BrowserSessionsPresenter; readonly priority: number }
+  >();
+  for (const candidate of runtimes.values()) {
+    const presentation = candidate.presentation;
+    if (presentation === null) continue;
+    const presenter = {
+      viewTabId: presentation.viewTabId,
+      navigateNested: candidate.navigateNested,
+    };
+    const priority = presentation.focused
+      ? 0
+      : presentation.visible
+        ? 1
+        : 2;
+    const previous = byViewTabId.get(presentation.viewTabId);
+    if (previous === undefined || priority < previous.priority) {
+      byViewTabId.set(presentation.viewTabId, { presenter, priority });
+    }
+  }
+  return [...byViewTabId.values()]
+    .sort((left, right) => left.priority - right.priority)
+    .map(({ presenter }) => presenter);
 }
 
 /**
@@ -721,10 +775,11 @@ function createBrowserSessionsCoordinator(args: {
         pendingPreviews,
         browserView,
         electronTabs,
-        // Unlike `browserView`, navigation does not own stream resources and
-        // therefore must follow the currently active consumer without forcing
-        // a reconnect when that consumer or its router callback changes.
-        navigateNested: runtime.navigateNested,
+        // Unlike `browserView`, presentation does not own stream resources.
+        // Resolve it from every CURRENT consumer for each frame so a retained
+        // background surface that acquired the coordinator first cannot steal
+        // a popup from the focused duplicate.
+        presenters: selectBrowserSessionsPresenters(runtimes),
         sendClientFrame: (response) => {
           if (
             actionChannel !== channel ||
@@ -913,7 +968,7 @@ function handleBrowserSessionsFrame(args: {
   readonly pendingPreviews: PendingRequests<BrowserTabPreview>;
   readonly browserView: BrowserViewBridge | null;
   readonly electronTabs: ElectronTabs;
-  readonly navigateNested: NavigateNestedFocus;
+  readonly presenters: readonly BrowserSessionsPresenter[];
   readonly sendClientFrame: (frame: BrowserSessionsClientFrame) => void;
 }): void {
   const frame = args.frame;
@@ -943,7 +998,7 @@ function handleBrowserSessionsFrame(args: {
         pendingOpens: args.pendingOpens,
         pendingPreviews: args.pendingPreviews,
         browserView: args.browserView,
-        navigateNested: args.navigateNested,
+        presenters: args.presenters,
         sendClientFrame: args.sendClientFrame,
       });
   }
@@ -994,7 +1049,7 @@ function handleBrowserSessionsSubsystemFrame(args: {
   readonly pendingOpens: PendingRequests<BrowserTabIdentity>;
   readonly pendingPreviews: PendingRequests<BrowserTabPreview>;
   readonly browserView: BrowserViewBridge | null;
-  readonly navigateNested: NavigateNestedFocus;
+  readonly presenters: readonly BrowserSessionsPresenter[];
   readonly sendClientFrame: (frame: BrowserSessionsClientFrame) => void;
 }): void {
   const frame = args.frame;
@@ -1028,14 +1083,21 @@ function handleBrowserSessionsSubsystemFrame(args: {
       });
       return;
     case "tabOpened":
-      surfaceHostOpenedTab({
-        epicId: args.epicId,
-        hostId: args.hostId,
-        sessionId: frame.sessionId,
-        tabId: frame.tabId,
-        source: frame.source,
-        navigateNested: args.navigateNested,
-      });
+      for (const presenter of args.presenters) {
+        if (
+          surfaceHostOpenedTab({
+            epicId: args.epicId,
+            viewTabId: presenter.viewTabId,
+            hostId: args.hostId,
+            sessionId: frame.sessionId,
+            tabId: frame.tabId,
+            source: frame.source,
+            navigateNested: presenter.navigateNested,
+          })
+        ) {
+          break;
+        }
+      }
       return;
     case "capturePrimaryProfile":
       handlePrimaryProfileCaptureFrame({

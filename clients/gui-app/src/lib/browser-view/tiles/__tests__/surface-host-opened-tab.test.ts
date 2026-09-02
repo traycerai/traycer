@@ -86,6 +86,7 @@ function surface(overrides: {
 }): void {
   surfaceHostOpenedTab({
     epicId: EPIC,
+    viewTabId: VIEW_TAB_ID,
     hostId: HOST,
     sessionId: SESSION,
     tabId: overrides.tabId ?? "tab-new",
@@ -148,6 +149,17 @@ describe("hostOpenedTabSuppressReason", () => {
       }),
     ).toBeNull();
   });
+
+  it("keeps an epic visible while another duplicated view remains visible", () => {
+    const duplicateViewTabId = "view-duplicate";
+    setEpicSurfaceVisibility(EPIC, duplicateViewTabId, true);
+    setEpicSurfaceVisibility(EPIC, VIEW_TAB_ID, false);
+
+    expect(isEpicSurfaceVisible(EPIC)).toBe(true);
+
+    setEpicSurfaceVisibility(EPIC, duplicateViewTabId, false);
+    expect(isEpicSurfaceVisible(EPIC)).toBe(false);
+  });
 });
 
 describe("surfaceHostOpenedTab", () => {
@@ -161,7 +173,7 @@ describe("surfaceHostOpenedTab", () => {
       activeTabId: null,
     });
     dismissPip(EPIC);
-    setEpicSurfaceVisibility(EPIC, true);
+    setEpicSurfaceVisibility(EPIC, VIEW_TAB_ID, true);
     useSettingsStore.setState({
       agentTabSurfacing: "off",
       tilePlacement: DEFAULT_TILE_PLACEMENT_SETTINGS,
@@ -213,6 +225,48 @@ describe("surfaceHostOpenedTab", () => {
       tabId: "tab-new",
     });
     expect(tileCount()).toBe(2);
+  });
+
+  it("targets the presenting view when legacy active and recent pointers name another view", () => {
+    const presentingPaneId = seedCanvasWithTile(
+      makeBrowserSessionTileRef({
+        hostId: HOST,
+        sessionId: SESSION,
+        tabId: "tab-source",
+      }),
+    );
+    const otherViewTabId = "view-legacy-active";
+    const otherCanvas = createSingleTileCanvas(CHAT_SEED);
+    useEpicCanvasStore.setState((state) => ({
+      tabsById: {
+        ...state.tabsById,
+        [otherViewTabId]: {
+          tabId: otherViewTabId,
+          epicId: EPIC,
+          name: "Legacy active",
+        },
+      },
+      canvasByTabId: {
+        ...state.canvasByTabId,
+        [otherViewTabId]: otherCanvas,
+      },
+      openTabOrder: [VIEW_TAB_ID, otherViewTabId],
+      activeTabId: otherViewTabId,
+      mostRecentTabIdByEpicId: { [EPIC]: otherViewTabId },
+    }));
+
+    surface({ source: "page" });
+
+    expect(navigateNested).toHaveBeenCalledWith(
+      EPIC,
+      VIEW_TAB_ID,
+      expect.any(Function),
+    );
+    expect(canvas().activePaneId).toBe(presentingPaneId);
+    expect(tileCount()).toBe(2);
+    expect(
+      useEpicCanvasStore.getState().canvasByTabId[otherViewTabId],
+    ).toBe(otherCanvas);
   });
 
   it("never mints a header tab for an epic the user has not opened", () => {
@@ -312,13 +366,13 @@ describe("surfaceHostOpenedTab", () => {
     expect(tileCount()).toBe(1);
 
     dismissPip(EPIC);
-    setEpicSurfaceVisibility(EPIC, false);
+    setEpicSurfaceVisibility(EPIC, VIEW_TAB_ID, false);
     expect(isEpicSurfaceVisible(EPIC)).toBe(false);
     surface({ source: "agent" });
     expect(tileCount()).toBe(1);
     expect(getPipSnapshot(EPIC).pendingTarget).toBeNull();
 
-    setEpicSurfaceVisibility(EPIC, true);
+    setEpicSurfaceVisibility(EPIC, VIEW_TAB_ID, true);
     surface({ source: "agent" });
     expect(getPipSnapshot(EPIC).pendingTarget).toMatchObject({
       tabId: "tab-new",
@@ -340,7 +394,7 @@ describe("surfaceHostOpenedTab", () => {
     );
     // Both pip suppression conditions hold - and neither applies, because the
     // effective placement is a TAB in the session's own pane.
-    setEpicSurfaceVisibility(EPIC, false);
+    setEpicSurfaceVisibility(EPIC, VIEW_TAB_ID, false);
     convertBrowserTabToPip({
       epicId: EPIC,
       hostId: HOST,

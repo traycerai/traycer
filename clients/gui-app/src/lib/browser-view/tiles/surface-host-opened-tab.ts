@@ -82,20 +82,33 @@ function effectiveBrowserPlacement(input: {
  * Per-window registry of which epic surfaces are currently visible. Epic
  * surfaces stay mounted (retained) while their route is inactive, so mount
  * state alone cannot answer visibility; `EpicSurface` reports its
- * `activity.visible` here instead.
+ * `activity.visible` here instead. The view id is part of the key because
+ * duplicated header views of one Epic have independent visibility lifetimes.
  */
-const visibleEpicSurfaces = new Set<string>();
+const visibleEpicSurfaces = new Map<string, Set<string>>();
 
 export function setEpicSurfaceVisibility(
   epicId: string,
+  viewTabId: string,
   visible: boolean,
 ): void {
-  if (visible) visibleEpicSurfaces.add(epicId);
-  else visibleEpicSurfaces.delete(epicId);
+  const visibleViews = visibleEpicSurfaces.get(epicId);
+  if (visible) {
+    if (visibleViews === undefined) {
+      const created = new Set<string>([viewTabId]);
+      visibleEpicSurfaces.set(epicId, created);
+    } else {
+      visibleViews.add(viewTabId);
+    }
+    return;
+  }
+  if (visibleViews === undefined) return;
+  visibleViews.delete(viewTabId);
+  if (visibleViews.size === 0) visibleEpicSurfaces.delete(epicId);
 }
 
 export function isEpicSurfaceVisible(epicId: string): boolean {
-  return visibleEpicSurfaces.has(epicId);
+  return (visibleEpicSurfaces.get(epicId)?.size ?? 0) > 0;
 }
 
 /** A manual (user-initiated) conversion must never be stomped by the agent. */
@@ -141,6 +154,7 @@ function trackAgentTabSurfaced(
 
 export interface HostOpenedTabSurfacing {
   readonly epicId: string;
+  readonly viewTabId: string;
   readonly hostId: string;
   readonly sessionId: string;
   readonly tabId: string;
@@ -148,14 +162,26 @@ export interface HostOpenedTabSurfacing {
   readonly navigateNested: NavigateNestedFocus;
 }
 
-export function surfaceHostOpenedTab(input: HostOpenedTabSurfacing): void {
+/**
+ * Returns false only when the selected view no longer exists for this Epic.
+ * Suppression is a handled outcome, so the coordinator does not retry another
+ * presenter and accidentally duplicate an intentional no-op.
+ */
+export function surfaceHostOpenedTab(input: HostOpenedTabSurfacing): boolean {
   const settings = useSettingsStore.getState();
   const store = useEpicCanvasStore.getState();
-  // Deliberately the NON-creating lookup: a host push must not mint (and
-  // activate) a header tab for an epic the user never opened.
-  const viewTabId = store.resolveTabIdForEpic(input.epicId);
-  const canvas =
-    viewTabId === null ? undefined : store.canvasByTabId[viewTabId];
+  const viewTab = store.tabsById[input.viewTabId];
+  // The presenter was selected from a retained React consumer, but closing a
+  // header tab and releasing that consumer are separate commits. Revalidate
+  // its exact identity at command time so a frame in that gap cannot mutate a
+  // preserved, closed canvas or a recycled id from another Epic.
+  if (
+    viewTab?.epicId !== input.epicId ||
+    !store.openTabOrder.includes(input.viewTabId)
+  ) {
+    return false;
+  }
+  const canvas = store.canvasByTabId[input.viewTabId];
   const groupedPaneId =
     canvas === undefined
       ? null
@@ -173,7 +199,7 @@ export function surfaceHostOpenedTab(input: HostOpenedTabSurfacing): void {
     manualPipActive: isManualPipActive(input.epicId),
   });
   if (input.source === "agent") trackAgentTabSurfaced(browserPlacement, reason);
-  if (reason !== null) return;
+  if (reason !== null) return true;
 
   openTileWithNavigation(
     {
@@ -182,7 +208,10 @@ export function surfaceHostOpenedTab(input: HostOpenedTabSurfacing): void {
         sessionId: input.sessionId,
         tabId: input.tabId,
       }),
-      target: { epicId: input.epicId },
+      // The coordinator selected the presenting retained surface. Never
+      // re-resolve this through the legacy active/MRU compatibility fields:
+      // two top-level views of one Epic have independent canvases.
+      target: { tabId: input.viewTabId },
       // Always `explicit`: the wire carries no disposition (a headless runtime
       // cannot detect one, and Electron's real in-page disposition travels on
       // `browserViewOpenTileRequest` instead - A5/B6), so a host push is a
@@ -203,4 +232,5 @@ export function surfaceHostOpenedTab(input: HostOpenedTabSurfacing): void {
     input.navigateNested,
     { createTab: false, pipOrigin: "agent" },
   );
+  return true;
 }
