@@ -45,6 +45,7 @@ import {
 } from "@traycer-clients/shared/host-lifecycle";
 import {
   ProcessRunError,
+  ProcessSpawnError,
   runCommand,
   type RunOptions,
   type RunResult,
@@ -1438,7 +1439,12 @@ async function retireCompetingRegistration(
       // evicted, but nothing failed either.
       if (!isBenignBootoutFailure(cause)) {
         bootoutFailed = true;
-        bootoutIndeterminate = true;
+        // Indeterminate only if `launchctl` may have RUN. A spawn failure
+        // (`ProcessSpawnError`: the binary could not be started at all) is
+        // the one failure that proves the request never reached launchd, so
+        // the registration is provably untouched and the record decorator
+        // must not invalidate for it.
+        bootoutIndeterminate = !(cause instanceof ProcessSpawnError);
         // Deliberately does NOT claim the competing host is still running.
         // With `--wait` the likeliest way here is the timeout, and the
         // timeout kills `launchctl` - the waiter - not the job: launchd

@@ -173,6 +173,7 @@ async function installService(
   // default verifies mutation authority first - is post-registration and must
   // reach a lease-holding caller as such (`didServiceRegistrationCommit`).
   let created = false;
+  let createFailure: unknown = null;
   try {
     await run(
       "schtasks",
@@ -186,7 +187,40 @@ async function installService(
     );
     created = true;
   } catch (cause) {
-    if (isServiceMutationAuthorityError(cause)) throw cause;
+    createFailure = cause;
+  }
+  // Staging cleanup runs whether `/Create` succeeded or not, and it runs
+  // BEFORE the `/Create` failure is classified, because the two outcomes are
+  // ranked: an authority loss observed here outranks a `/Create` failure.
+  //
+  // Removing the staging directory is best effort - a leftover temp dir
+  // changes nothing about the task - so an ordinary filesystem failure is
+  // logged and swallowed. That is what lets a `/Create` failure stay the
+  // error the operator sees, and after a successful `/Create` it is what lets
+  // a committed registration go on to its `/Run` verification.
+  //
+  // An authority loss is different: it is NOT about this directory. The
+  // default cleanup verifies mutation authority before touching anything, and
+  // a revoked lease must reach the lease-holding caller whatever step observed
+  // it - deliberately even when `/Create` also failed, since "may not mutate
+  // at all" is the more fundamental fact of the two. After `/Create` succeeded
+  // it is post-registration, and every post-registration throw is marked
+  // (`didServiceRegistrationCommit`), by reference so the error keeps its
+  // identity. Thrown from here rather than from a `finally` so the ranking is
+  // explicit in the control flow instead of relying on a `finally` throw
+  // replacing an in-flight one.
+  const cleanupAuthorityLoss = await removeStagedTaskDefinition(
+    staged.tmpDir,
+    taskName,
+    options.label.environment,
+  );
+  if (cleanupAuthorityLoss !== null) {
+    throw created
+      ? markRegistrationCommitted(cleanupAuthorityLoss)
+      : cleanupAuthorityLoss;
+  }
+  if (createFailure !== null) {
+    if (isServiceMutationAuthorityError(createFailure)) throw createFailure;
     // Roll the launcher back: `stageTaskDefinition` wrote the persistent
     // VBS before /Create ran, and a launcher without a task is an orphan
     // that outlives the failed install (only a later uninstall would
@@ -198,43 +232,38 @@ async function installService(
     );
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
-      message: `schtasks /Create failed for ${taskName}: ${describeCause(cause)}`,
-      details: { task: taskName, cause: describeCause(cause) },
+      message: `schtasks /Create failed for ${taskName}: ${describeCause(createFailure)}`,
+      details: { task: taskName, cause: describeCause(createFailure) },
       exitCode: 1,
     });
-  } finally {
-    try {
-      await taskInstallDeps.removeStagedTaskDefinition(staged.tmpDir);
-    } catch (cause) {
-      // Removing the staging directory is best effort - a leftover temp dir
-      // changes nothing about the task - so an ordinary filesystem failure
-      // here is logged and swallowed. That is what lets the `/Create` error
-      // the try block raised stay the error the operator sees (a throw from
-      // `finally` would replace it), and after a successful `/Create` it is
-      // what lets a committed registration go on to its `/Run` verification.
-      //
-      // An authority loss is different: it is NOT about this directory. The
-      // default cleanup verifies mutation authority before touching anything,
-      // and a revoked lease must reach the lease-holding caller whatever step
-      // observed it - deliberately even when it replaces a `/Create` failure,
-      // since "may not mutate at all" is the more fundamental fact of the
-      // two. After `/Create` succeeded it is post-registration, and every
-      // post-registration throw is marked (`didServiceRegistrationCommit`),
-      // by reference so the error keeps its identity.
-      if (!isServiceMutationAuthorityError(cause)) {
-        createCliLogger(options.label.environment).debug(
-          "Failed to remove the staged task definition; leaving it behind",
-          { task: taskName, cause: describeCause(cause) },
-        );
-      } else {
-        throw created ? markRegistrationCommitted(cause) : cause;
-      }
-    }
   }
   // Registration is also the recovery launch. Verify this exact `/Run` so
   // callers never baseline after it and mistake IgnoreNew's suppressed second
   // run for a failed repair.
   await runTaskAndVerifyStart(options.label, run);
+}
+
+/**
+ * Remove the staging directory, returning the ONE failure that outranks
+ * whatever the caller is in the middle of: a mutation-authority loss.
+ * Every other failure is best effort and swallowed here - see the caller.
+ */
+async function removeStagedTaskDefinition(
+  tmpDir: string,
+  taskName: string,
+  environment: ServiceLabel["environment"],
+): Promise<unknown | null> {
+  try {
+    await taskInstallDeps.removeStagedTaskDefinition(tmpDir);
+    return null;
+  } catch (cause) {
+    if (isServiceMutationAuthorityError(cause)) return cause;
+    createCliLogger(environment).debug(
+      "Failed to remove the staged task definition; leaving it behind",
+      { task: taskName, cause: describeCause(cause) },
+    );
+    return null;
+  }
 }
 
 async function uninstallService(
