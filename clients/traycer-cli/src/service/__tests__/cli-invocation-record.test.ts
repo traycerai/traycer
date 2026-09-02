@@ -37,6 +37,7 @@ import {
   cliInvocationRecordStaleMarkerPath,
   cliInvocationRecordStagingPath,
   cliInvocationRecordTransactionMarkerPath,
+  cliInvocationTransactionMarkerDigest,
   type CliInvocationLifecycle,
   isCliInvocationTransactionMarkerBasename,
   parseCliInvocationLifecycle,
@@ -1375,6 +1376,51 @@ describe("lifecycle generation", () => {
     expect(await transactionMarkerNames()).toEqual([]);
     expect(await leftoverLifecycleTemps()).toEqual([]);
   });
+
+  it("names the abandoned legacy exact marker's digest in the committed lifecycle", async () => {
+    const exactPath = cliInvocationRecordTransactionMarkerPath(hostHome);
+    const exactRaw = serializeCliInvocationTransactionMarker({
+      schemaVersion: 1,
+      kind: "transaction",
+      owner: {
+        pid: 2147483646,
+        token: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+        processStartIdentity: null,
+        startedAtMs: 1,
+      },
+      stagingFile: `${CLI_INVOCATION_RECORD_STAGING_FILENAME_PREFIX}aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee`,
+      operation: "install",
+      serviceLabel: LABEL,
+      startedAt: "2020-01-01T00:00:00.000Z",
+    });
+    await writeFile(exactPath, exactRaw, { mode: 0o600 });
+    await runServiceRegistrationWithInvocationRecord({
+      environment: "production",
+      hostHomeDir: hostHome,
+      waitMs: 2_000,
+      pollIntervalMs: 20,
+      serviceLabel: LABEL,
+      cli: npmCli(),
+      register: async () => undefined,
+    });
+    expect(await readFile(exactPath, "utf8")).toBe(exactRaw);
+    expect((await readLifecycle())?.supersededLegacyMarkerDigest).toBe(
+      cliInvocationTransactionMarkerDigest(Buffer.from(exactRaw, "utf8")),
+    );
+  });
+
+  it("leaves the lifecycle's legacy-marker digest null when no legacy marker is present", async () => {
+    await runServiceRegistrationWithInvocationRecord({
+      environment: "production",
+      hostHomeDir: hostHome,
+      waitMs: 2_000,
+      pollIntervalMs: 20,
+      serviceLabel: LABEL,
+      cli: npmCli(),
+      register: async () => undefined,
+    });
+    expect((await readLifecycle())?.supersededLegacyMarkerDigest).toBeNull();
+  });
 });
 
 describe("cross-process transaction ownership", () => {
@@ -1780,6 +1826,82 @@ describe("cross-process transaction ownership", () => {
     await writeFile(path, raw, { mode: 0o600 });
     return { path, raw };
   }
+
+  it("abandons a unique owner whose identity is indeterminate once it ages past the window", async () => {
+    const token = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    const staleTime = new Date(
+      Date.now() - CLI_INVOCATION_TXN_ABANDON_AFTER_MS - 5_000,
+    );
+    const raw = serializeCliInvocationTransactionMarker({
+      schemaVersion: 1,
+      kind: "transaction",
+      owner: {
+        pid: process.pid,
+        token,
+        processStartIdentity: null,
+        startedAtMs: staleTime.getTime(),
+      },
+      stagingFile: `${CLI_INVOCATION_RECORD_STAGING_FILENAME_PREFIX}${token}`,
+      operation: "install",
+      serviceLabel: LABEL,
+      startedAt: staleTime.toISOString(),
+    });
+    const path = cliInvocationRecordOwnedTransactionPath(hostHome, token);
+    await writeFile(path, raw, { mode: 0o600 });
+    await utimes(path, staleTime, staleTime);
+    await runServiceRegistrationWithInvocationRecord({
+      environment: "production",
+      hostHomeDir: hostHome,
+      waitMs: 2_000,
+      pollIntervalMs: 20,
+      serviceLabel: LABEL,
+      cli: npmCli(),
+      register: async () => undefined,
+    });
+    expect(await exists(cliInvocationRecordPath(hostHome))).toBe(true);
+    expect(await exists(path)).toBe(false);
+    expect(await transactionMarkerNames()).toEqual([]);
+  });
+
+  it("keeps a fresh unique owner with indeterminate identity live and rejects a contender as busy", async () => {
+    const token = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    const raw = serializeCliInvocationTransactionMarker({
+      schemaVersion: 1,
+      kind: "transaction",
+      owner: {
+        pid: process.pid,
+        token,
+        processStartIdentity: null,
+        startedAtMs: Date.now(),
+      },
+      stagingFile: `${CLI_INVOCATION_RECORD_STAGING_FILENAME_PREFIX}${token}`,
+      operation: "install",
+      serviceLabel: LABEL,
+      startedAt: new Date().toISOString(),
+    });
+    const path = cliInvocationRecordOwnedTransactionPath(hostHome, token);
+    await writeFile(path, raw, { mode: 0o600 });
+    let osMutated = false;
+    await expect(
+      runServiceRegistrationWithInvocationRecord({
+        environment: "production",
+        hostHomeDir: hostHome,
+        waitMs: 0,
+        pollIntervalMs: 20,
+        serviceLabel: LABEL,
+        cli: npmCli(),
+        register: async () => {
+          osMutated = true;
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      details: { phase: "txn-busy" },
+    });
+    expect(osMutated).toBe(false);
+    expect(await exists(path)).toBe(true);
+    expect(await readFile(path, "utf8")).toBe(raw);
+  });
 
   it("does not let a paused reclaimer delete a unique owner acquired from the same abandoned marker", async () => {
     if (process.platform === "win32") return;

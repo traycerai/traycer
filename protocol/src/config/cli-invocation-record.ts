@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import * as nodePath from "node:path";
 import {
   isProcessStartIdentity,
@@ -447,6 +448,30 @@ export interface CliInvocationLifecycle {
   readonly event: CliInvocationLifecycleEvent;
   readonly serviceLabel: string;
   readonly at: string;
+  /**
+   * Causal evidence for discharging a legacy exact `cli-invocation.txn`:
+   * the {@link cliInvocationTransactionMarkerDigest} of the abandoned legacy
+   * marker the confirming transaction observed when it acquired, or `null`
+   * when none was present (and for lifecycles written by a CLI predating the
+   * field). A host matching this digest against the marker it is looking at
+   * knows the marker predates the lifecycle without consulting any clock;
+   * {@link cliInvocationLifecycleSupersedesLegacyExactMarker} falls back to
+   * the timestamp rule only when the evidence is absent.
+   */
+  readonly supersededLegacyMarkerDigest: string | null;
+}
+
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+
+/**
+ * Identity of a transaction marker's BYTES, shared so the CLI (which writes
+ * the digest into a lifecycle) and the host (which computes it from the file
+ * it read) cannot disagree on the hashing.
+ */
+export function cliInvocationTransactionMarkerDigest(
+  bytes: Uint8Array,
+): string {
+  return createHash("sha256").update(bytes).digest("hex");
 }
 
 export function serializeCliInvocationLifecycle(
@@ -460,6 +485,7 @@ export function serializeCliInvocationLifecycle(
       event: record.event,
       serviceLabel: record.serviceLabel,
       at: record.at,
+      supersededLegacyMarkerDigest: record.supersededLegacyMarkerDigest,
     },
     null,
     2,
@@ -485,6 +511,13 @@ export function parseCliInvocationLifecycle(
   }
   if (typeof value.at !== "string") return null;
   if (Number.isNaN(Date.parse(value.at))) return null;
+  const digest =
+    "supersededLegacyMarkerDigest" in value
+      ? value.supersededLegacyMarkerDigest
+      : null;
+  if (digest !== null && digest !== undefined) {
+    if (typeof digest !== "string" || !SHA256_HEX.test(digest)) return null;
+  }
   return {
     schemaVersion: CLI_INVOCATION_RECORD_SCHEMA_VERSION,
     kind: "lifecycle",
@@ -492,6 +525,7 @@ export function parseCliInvocationLifecycle(
     event: value.event,
     serviceLabel: value.serviceLabel,
     at: value.at,
+    supersededLegacyMarkerDigest: typeof digest === "string" ? digest : null,
   };
 }
 
@@ -559,6 +593,40 @@ export function cliInvocationLifecycleNewerThanLegacyExactMarker(
     return false;
   }
   return lifecycleAt > markerStart;
+}
+
+/**
+ * Whether a lifecycle discharges a legacy exact marker, by CAUSAL evidence
+ * first and by timestamp only as the fallback.
+ *
+ * The digest match is what makes the rule clock-independent: the CLI writes
+ * the digest of the abandoned legacy marker it observed at acquire time into
+ * the lifecycle it commits, so a lifecycle naming this marker's bytes was
+ * written by a transaction that completed after the marker existed - true
+ * regardless of what the wall clock did in between. The timestamp comparison
+ * remains only for lifecycles written by a CLI predating the field, or for a
+ * marker the confirming transaction never saw.
+ *
+ * `digest` is the {@link cliInvocationTransactionMarkerDigest} of the marker
+ * file's bytes as the caller read them.
+ */
+export function cliInvocationLifecycleSupersedesLegacyExactMarker(
+  marker: {
+    readonly parsed: CliInvocationTransactionMarker;
+    readonly digest: string;
+  },
+  lifecycle: CliInvocationLifecycle,
+): boolean {
+  if (
+    lifecycle.supersededLegacyMarkerDigest !== null &&
+    lifecycle.supersededLegacyMarkerDigest === marker.digest
+  ) {
+    return true;
+  }
+  return cliInvocationLifecycleNewerThanLegacyExactMarker(
+    marker.parsed,
+    lifecycle,
+  );
 }
 
 /**

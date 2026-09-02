@@ -33,6 +33,7 @@ import {
   cliInvocationStateDir,
   cliInvocationStateDirIdentitiesMatch,
   cliInvocationTransactionAbandonedByAge,
+  cliInvocationTransactionMarkerDigest,
   cliInvocationTransactionMarkerMatchesBasename,
   electCliInvocationTransactionOwnerBasename,
   isCliInvocationTransactionMarkerBasename,
@@ -688,6 +689,13 @@ interface HeldTransaction {
   readonly stateDirIdentity: CliInvocationStateDirIdentity;
   readonly serviceLabel: string;
   readonly operation: CliInvocationTransactionOperation;
+  /**
+   * Digest of the abandoned legacy exact `cli-invocation.txn` this owner
+   * observed when it won the election, or `null`. Written into the lifecycle
+   * this transaction commits, so the host can discharge that marker by
+   * matching bytes rather than by comparing clocks.
+   */
+  readonly legacyMarkerDigest: string | null;
 }
 
 interface ObservedContender {
@@ -747,11 +755,27 @@ async function acquireTransaction(input: {
       continue;
     } else {
       const heldPath = held.txnPath;
-      const confirmed = (
-        await observeTransactionMarkers(input.hostHomeDir)
-      ).filter((entry) => !entry.abandoned);
+      const all = await observeTransactionMarkers(input.hostHomeDir);
+      const confirmed = all.filter((entry) => !entry.abandoned);
       if (confirmed.length === 1 && confirmed[0]?.path === heldPath) {
-        return held;
+        // The legacy exact marker is never unlinked by anyone, so an
+        // abandoned one is residue this transaction is about to supersede.
+        // Its bytes are what the lifecycle will name as superseded; a LIVE
+        // legacy marker never reaches this branch (it is an `other`).
+        const legacy = all.find(
+          (entry) =>
+            entry.basename === CLI_INVOCATION_RECORD_TXN_FILENAME &&
+            entry.abandoned,
+        );
+        return {
+          ...held,
+          legacyMarkerDigest:
+            legacy === undefined
+              ? null
+              : cliInvocationTransactionMarkerDigest(
+                  Buffer.from(legacy.raw, "utf8"),
+                ),
+        };
       }
       if (!confirmed.some((entry) => entry.path === heldPath)) {
         held = null;
@@ -836,6 +860,7 @@ async function createUniqueContender(input: {
       stateDirIdentity: input.stateDirIdentity,
       serviceLabel: input.serviceLabel,
       operation: input.operation,
+      legacyMarkerDigest: null,
     };
   }
 }
@@ -925,7 +950,21 @@ async function isAbandonedContender(
     startedAtMs: marker.owner.startedAtMs,
     startIdentity: marker.owner.processStartIdentity,
   });
-  return verdict === "dead" || verdict === "alive-different";
+  if (verdict === "dead" || verdict === "alive-different") return true;
+  if (verdict === "alive-same") return false;
+  // `indeterminate`: the pid is alive but the marker carries no start identity
+  // to compare it against (the owner could not obtain one), or the probe could
+  // not read the process's. A dead owner whose pid was reused looks exactly
+  // like this, and without the age window it would hold the election for as
+  // long as the unrelated process keeps the pid - every later install and
+  // uninstall timing out on it. The host applies the same window to the same
+  // verdict; a parsed owner that is positively alive is still never aged out.
+  return cliInvocationTransactionAbandonedByAge(
+    Number.isFinite(Date.parse(marker.startedAt))
+      ? Math.max(Date.parse(marker.startedAt), mtimeMs)
+      : mtimeMs,
+    Date.now(),
+  );
 }
 
 async function cleanupAbandonedContenders(
@@ -1028,6 +1067,7 @@ async function writeConfirmedLifecycle(
         event,
         serviceLabel,
         at: new Date().toISOString(),
+        supersededLegacyMarkerDigest: held.legacyMarkerDigest,
       }),
     );
     await rename(temporary, held.lifecyclePath);

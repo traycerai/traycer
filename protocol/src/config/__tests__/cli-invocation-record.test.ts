@@ -3,6 +3,7 @@
  * and the host reader must share: filenames relative to the host runtime
  * home, schemaVersion 1 parse, platform mapping, and bounds.
  */
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -30,7 +31,9 @@ import {
   cliInvocationStaleMarkerRemovableBy,
   cliInvocationTransactionAbandonedByAge,
   cliInvocationTransactionMarkerBasenamesFrom,
+  cliInvocationTransactionMarkerDigest,
   cliInvocationLifecycleNewerThanLegacyExactMarker,
+  cliInvocationLifecycleSupersedesLegacyExactMarker,
   cliInvocationStateDirIdentitiesMatch,
   cliInvocationStateDirIdentityFromStats,
   cliInvocationTransactionMarkerMatchesBasename,
@@ -404,6 +407,7 @@ const LIFECYCLE_SAMPLE = {
   event: "uninstalled" as const,
   serviceLabel: "ai.traycer.host",
   at: "2026-09-01T00:00:00.000Z",
+  supersededLegacyMarkerDigest: null as string | null,
 };
 
 describe("cliInvocationLifecycleNewerThanLegacyExactMarker", () => {
@@ -505,6 +509,105 @@ describe("parseCliInvocationLifecycle", () => {
     expect(
       parseCliInvocationLifecycle({ ...LIFECYCLE_SAMPLE, event: "stale" }),
     ).toBeNull();
+  });
+
+  it("parses a legacy body without the digest field as null", () => {
+    const legacyBody = {
+      schemaVersion: LIFECYCLE_SAMPLE.schemaVersion,
+      kind: LIFECYCLE_SAMPLE.kind,
+      generation: LIFECYCLE_SAMPLE.generation,
+      event: LIFECYCLE_SAMPLE.event,
+      serviceLabel: LIFECYCLE_SAMPLE.serviceLabel,
+      at: LIFECYCLE_SAMPLE.at,
+    };
+    expect(parseCliInvocationLifecycle(legacyBody)).toEqual(LIFECYCLE_SAMPLE);
+  });
+
+  it("rejects a non-hex or wrong-length digest", () => {
+    expect(
+      parseCliInvocationLifecycle({
+        ...LIFECYCLE_SAMPLE,
+        supersededLegacyMarkerDigest: "not-hex",
+      }),
+    ).toBeNull();
+    expect(
+      parseCliInvocationLifecycle({
+        ...LIFECYCLE_SAMPLE,
+        supersededLegacyMarkerDigest: "a".repeat(63),
+      }),
+    ).toBeNull();
+  });
+
+  it("round-trips a real digest", () => {
+    const digest = cliInvocationTransactionMarkerDigest(
+      Buffer.from(serializeCliInvocationTransactionMarker(TXN_SAMPLE), "utf8"),
+    );
+    const withDigest = {
+      ...LIFECYCLE_SAMPLE,
+      supersededLegacyMarkerDigest: digest,
+    };
+    expect(
+      parseCliInvocationLifecycle(
+        JSON.parse(serializeCliInvocationLifecycle(withDigest)),
+      ),
+    ).toEqual(withDigest);
+  });
+});
+
+describe("cliInvocationTransactionMarkerDigest", () => {
+  it("equals a plain sha256 hex digest of the same bytes", () => {
+    const bytes = Buffer.from(
+      serializeCliInvocationTransactionMarker(TXN_SAMPLE),
+      "utf8",
+    );
+    expect(cliInvocationTransactionMarkerDigest(bytes)).toBe(
+      createHash("sha256").update(bytes).digest("hex"),
+    );
+  });
+});
+
+describe("cliInvocationLifecycleSupersedesLegacyExactMarker", () => {
+  const digest = cliInvocationTransactionMarkerDigest(
+    Buffer.from(serializeCliInvocationTransactionMarker(TXN_SAMPLE), "utf8"),
+  );
+
+  it("returns true on a digest match even when `at` is earlier than the marker's startedAt (clock step)", () => {
+    expect(
+      cliInvocationLifecycleSupersedesLegacyExactMarker(
+        { parsed: TXN_SAMPLE, digest },
+        {
+          ...LIFECYCLE_SAMPLE,
+          at: "2020-01-01T00:00:00.000Z",
+          supersededLegacyMarkerDigest: digest,
+        },
+      ),
+    ).toBe(true);
+  });
+
+  it("returns false when the digest differs and `at` is earlier than the marker", () => {
+    expect(
+      cliInvocationLifecycleSupersedesLegacyExactMarker(
+        { parsed: TXN_SAMPLE, digest },
+        {
+          ...LIFECYCLE_SAMPLE,
+          at: "2020-01-01T00:00:00.000Z",
+          supersededLegacyMarkerDigest: "f".repeat(64),
+        },
+      ),
+    ).toBe(false);
+  });
+
+  it("falls back to the timestamp rule when the field is null and `at` is later", () => {
+    expect(
+      cliInvocationLifecycleSupersedesLegacyExactMarker(
+        { parsed: TXN_SAMPLE, digest },
+        {
+          ...LIFECYCLE_SAMPLE,
+          at: "2026-09-01T00:00:00.001Z",
+          supersededLegacyMarkerDigest: null,
+        },
+      ),
+    ).toBe(true);
   });
 });
 

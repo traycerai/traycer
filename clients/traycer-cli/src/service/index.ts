@@ -434,6 +434,17 @@ export function withStopIntent(
   };
 }
 
+/**
+ * Decorator order is load-bearing: the invocation-record decorator is the
+ * OUTER one. Its uninstall first validates the state directory and acquires
+ * the record transaction, and either can fail before the OS backend is ever
+ * called. Were the stop-intent decorator outside it, that failure would
+ * happen with a stop intent already published - and `retireIntentIfHostSurvived`
+ * deliberately keeps the intent when the host cannot be reached, so a
+ * supervisor would sit silenced for the intent's lifetime with no uninstall
+ * having occurred. Inside the transaction, the intent is announced only once
+ * the backend uninstall is actually about to run.
+ */
 export function createServiceController(): ServiceController {
   const platform = osPlatform();
   const logger = createCliLogger(config.environment);
@@ -445,20 +456,20 @@ export function createServiceController(): ServiceController {
     logger.debug("Service controller selected macOS backend", {
       environment: config.environment,
     });
-    return withStopIntent(withCliInvocationRecord(createMacosController(null)));
+    return withCliInvocationRecord(withStopIntent(createMacosController(null)));
   }
   if (platform === "linux") {
     logger.debug("Service controller selected Linux backend", {
       environment: config.environment,
     });
-    return withStopIntent(withCliInvocationRecord(createLinuxController(null)));
+    return withCliInvocationRecord(withStopIntent(createLinuxController(null)));
   }
   if (platform === "win32") {
     logger.debug("Service controller selected Windows backend", {
       environment: config.environment,
     });
-    return withStopIntent(
-      withCliInvocationRecord(createWindowsController(null)),
+    return withCliInvocationRecord(
+      withStopIntent(createWindowsController(null)),
     );
   }
   logger.error(

@@ -7,11 +7,17 @@ const mocks = vi.hoisted(() => ({
   hostHomes: [] as string[],
   callRegister: true,
   callUninstall: true,
+  // When true, the mocked transaction wrapper throws BEFORE calling
+  // `opts.uninstall()` at all - simulating a failed txn acquire - so tests
+  // can assert nothing downstream (the stop intent) ran.
+  throwBeforeUninstall: false,
   // Shared ordering trace: the transaction wrapper pushes "txn-open" before
   // calling the OS callback and "txn-commit" after it resolves, while the OS
-  // callback itself (supplied per-test) pushes its own "os-*" marker. This
-  // proves the OS mutation runs INSIDE the transaction, not merely that it
-  // ran at all.
+  // callback itself (supplied per-test) pushes its own "os-*" marker, and the
+  // stop-intent decorator pushes "stop-intent" when it writes the intent.
+  // This proves the OS mutation runs INSIDE the transaction, not merely that
+  // it ran at all, and that the transaction is entered before the intent is
+  // written.
   order: [] as string[],
 }));
 
@@ -35,13 +41,19 @@ vi.mock("../cli-invocation-record", () => ({
   }) => {
     mocks.uninstalls.push(opts.serviceLabel);
     mocks.order.push("txn-open");
+    if (mocks.throwBeforeUninstall) {
+      throw new Error("txn-acquire-failed");
+    }
     if (mocks.callUninstall) await opts.uninstall();
     mocks.order.push("txn-commit");
   },
 }));
 
 vi.mock("../../host/stop-intent", () => ({
-  writeStopIntent: async () => true,
+  writeStopIntent: async () => {
+    mocks.order.push("stop-intent");
+    return true;
+  },
   clearStopIntent: async () => undefined,
 }));
 
@@ -49,7 +61,7 @@ vi.mock("../../host/incumbent-check", () => ({
   findLiveIncumbentHost: async () => null,
 }));
 
-const { withCliInvocationRecord, createServiceController } =
+const { withCliInvocationRecord, withStopIntent, createServiceController } =
   await import("../index");
 
 const label: ServiceLabel = {
@@ -87,6 +99,7 @@ beforeEach(() => {
   mocks.hostHomes.length = 0;
   mocks.callRegister = true;
   mocks.callUninstall = true;
+  mocks.throwBeforeUninstall = false;
   mocks.order.length = 0;
 });
 
@@ -155,6 +168,44 @@ describe("withCliInvocationRecord", () => {
     const status = vi.fn();
     const controller = withCliInvocationRecord(baseController({ status }));
     expect(controller.status).toBe(status);
+  });
+});
+
+describe("invocation-record decorator nesting order", () => {
+  it("enters the invocation-record transaction before the stop intent is written on uninstall", async () => {
+    const controller = withCliInvocationRecord(
+      withStopIntent(
+        baseController({
+          uninstall: async () => {
+            mocks.order.push("os-uninstall");
+          },
+        }),
+      ),
+    );
+    await controller.uninstall({ label });
+    expect(mocks.order).toEqual([
+      "txn-open",
+      "stop-intent",
+      "os-uninstall",
+      "txn-commit",
+    ]);
+  });
+
+  it("never writes the stop intent when the transaction fails before uninstall runs", async () => {
+    mocks.throwBeforeUninstall = true;
+    const controller = withCliInvocationRecord(
+      withStopIntent(
+        baseController({
+          uninstall: async () => {
+            mocks.order.push("os-uninstall");
+          },
+        }),
+      ),
+    );
+    await expect(controller.uninstall({ label })).rejects.toThrow(
+      "txn-acquire-failed",
+    );
+    expect(mocks.order).toEqual(["txn-open"]);
   });
 });
 
