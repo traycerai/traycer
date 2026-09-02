@@ -287,6 +287,7 @@ describe("chat find projection", () => {
             "Choose one of these next steps.",
             "",
             "- [] : Hidden button prompt",
+            "- [] : Another hidden button prompt",
             "</TRAYCER_NEXT_STEPS>",
           ].join("\n"),
           isStreaming: false,
@@ -305,8 +306,39 @@ describe("chat find projection", () => {
     expect(joined).toContain("Visible assistant answer.");
     expect(joined).toContain("Choose one of these next steps.");
     expect(joined).not.toContain("Hidden button prompt");
+    expect(joined).not.toContain("Another hidden button prompt");
     expect(joined).not.toContain("Show more");
     expect(joined).not.toContain("Copy reply");
+  });
+
+  it("indexes an inert single-option prompt after the choice guard suppresses its control", () => {
+    const assistant: ChatMessageModel = {
+      ...makeMessage(3, "assistant"),
+      segments: [
+        {
+          id: "assistant-single-next-step",
+          kind: "text",
+          markdown: [
+            "<TRAYCER_NEXT_STEPS>",
+            "Login is required.",
+            "",
+            "- [] Open https://app.example.com/login and sign in",
+            "</TRAYCER_NEXT_STEPS>",
+          ].join("\n"),
+          isStreaming: false,
+        },
+      ],
+    };
+
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set())[0];
+
+    expect(row.units.map((unit) => unit.unitId)).toEqual([
+      chatFindSegmentUnitId("assistant-single-next-step"),
+    ]);
+    expect(rowSearchText(row)).toContain("Login is required.");
+    expect(rowSearchText(row)).toContain(
+      "Open https://app.example.com/login and sign in",
+    );
   });
 
   // Find indexes what the DOM paints. `UserMessageBody` renders a chip through
