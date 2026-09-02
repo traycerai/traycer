@@ -257,13 +257,15 @@ export function PdfPreviewToolbar(props: PdfPreviewToolbarProps): ReactNode {
  * narrow tiers never drift - they render from the same props.
  */
 function PdfPreviewOverflowMenu(props: PdfPreviewToolbarProps): ReactNode {
-  // Radix returns focus to the trigger when the menu closes. Picking Search
-  // opens a row whose input takes focus in the same commit; letting the
-  // trigger reclaim it would leave the user with an open search box they
-  // cannot type into.
+  // Picking Search opens a row whose input takes focus in the same commit.
+  // Two Radix behaviors would steal it back: the close-time return of focus
+  // to the trigger (prevented below), and - verified live - a MODAL menu's
+  // focus trap, which stays armed through the close animation and yanks
+  // focus back into the menu, leaving it on <body> once the menu unmounts.
+  // Non-modal: no trap, and a toolbar menu needs no pointer lockdown.
   const keepFocusAwayRef = useRef(false);
   return (
-    <DropdownMenu>
+    <DropdownMenu modal={false}>
       <TooltipWrapper
         label="More actions"
         side="top"
