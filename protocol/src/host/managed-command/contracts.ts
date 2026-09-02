@@ -25,6 +25,7 @@
  */
 import { defineRpcContract } from "@traycer/protocol/framework/index";
 import {
+  managedCommandConfigureRequestSchema,
   managedCommandControlRequestSchema,
   managedCommandControlResponseSchema,
   managedCommandDeleteRequestSchema,
@@ -60,6 +61,20 @@ export const managedCommandDeleteV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: managedCommandDeleteRequestSchema,
   responseSchema: managedCommandDeleteResponseSchema,
+});
+
+/**
+ * Sets whether the command relaunches after a host restart. Live: the running
+ * process is never touched. The "no update" rule above still stands - this
+ * edits lifecycle policy, not what the command is - and it exists because the
+ * person watching a host relaunch a shell they never asked for needs a switch
+ * the agent's transcript cannot give them.
+ */
+export const managedCommandConfigureV10 = defineRpcContract({
+  method: "managedCommand.configure",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: managedCommandConfigureRequestSchema,
+  responseSchema: managedCommandControlResponseSchema,
 });
 
 /**

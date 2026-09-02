@@ -303,6 +303,7 @@ import {
   diagnosticsLogsTailV10,
 } from "@traycer/protocol/host/diagnostics/contracts";
 import {
+  managedCommandConfigureV10,
   managedCommandDeleteV10,
   managedCommandDeliverHeldV10,
   managedCommandStartV10,
@@ -7043,6 +7044,24 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: managedCommandDeleteV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // The one human-editable setting: relaunch after a host restart. Same
+  // channel as the lifecycle three; a host too old to have the flag lacks the
+  // method, and its commands read `relaunchOnHostRestart: false` by default -
+  // which is what such a host does (it never declined a respawn, it never
+  // offered the choice).
+  "managedCommand.configure": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: managedCommandConfigureV10,
           upgradeFromPreviousVersion: null,
         },
       },

@@ -4,14 +4,16 @@ import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unar
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 /**
- * The human capability set (`UI.md` §2): watch plus lifecycle, nothing more.
- * Start only where there is nothing running, stop where there is, and delete
- * behind a confirmation that names what dies with it.
+ * The human capability set (`UI.md` §2): watch plus lifecycle, plus the one
+ * setting a person edits - relaunch after a host restart. Start only where
+ * there is nothing running, stop where there is, and delete behind a
+ * confirmation that names what dies with it.
  */
 
 const startMutate = vi.fn();
 const stopMutate = vi.fn();
 const deleteMutate = vi.fn();
+const configureMutate = vi.fn();
 
 vi.mock(
   "@/hooks/managed-command/use-managed-command-lifecycle-mutations",
@@ -19,6 +21,10 @@ vi.mock(
     useManagedCommandStart: () => ({ mutate: startMutate, isPending: false }),
     useManagedCommandStop: () => ({ mutate: stopMutate, isPending: false }),
     useManagedCommandDelete: () => ({ mutate: deleteMutate, isPending: false }),
+    useManagedCommandConfigure: () => ({
+      mutate: configureMutate,
+      isPending: false,
+    }),
     useManagedCommandStopAllIsPending: () => false,
   }),
 );
@@ -34,6 +40,7 @@ const RUNNING: ManagedCommand = {
   cadence: { debounceMs: 500, maxWaitMs: 15_000, throttleMs: 5_000 },
   status: { state: "running", pid: 4410, startedAtMs: 10 },
   chatId: "chat-1",
+  relaunchOnHostRestart: false,
   createdAtMs: 10,
   updatedAtMs: 10,
 };
@@ -60,6 +67,7 @@ beforeEach(() => {
   startMutate.mockClear();
   stopMutate.mockClear();
   deleteMutate.mockClear();
+  configureMutate.mockClear();
 });
 
 afterEach(() => {
@@ -91,6 +99,43 @@ describe("managed-command lifecycle actions", () => {
       epicId: "epic-1",
       commandId: "cmd-1",
     });
+  });
+
+  it("offers the relaunch switch in both states, sending the opposite of what the row shows", () => {
+    // Off is the default and the common case: the switch reads as off and a
+    // press asks the host to turn it on.
+    renderActions(RUNNING);
+    const off = screen.getByRole("button", {
+      name: "Stays down after a host restart",
+    });
+    expect(off.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(off);
+    expect(configureMutate).toHaveBeenCalledWith({
+      hostId: "host-1",
+      epicId: "epic-1",
+      commandId: "cmd-1",
+      relaunchOnHostRestart: true,
+    });
+    cleanup();
+
+    // On reads as pressed, and a press turns it off - the case the switch
+    // exists for: a shell the host keeps relaunching that nobody wants back.
+    configureMutate.mockClear();
+    renderActions({ ...EXITED, relaunchOnHostRestart: true });
+    const on = screen.getByRole("button", {
+      name: "Relaunches after a host restart",
+    });
+    expect(on.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(on);
+    expect(configureMutate).toHaveBeenCalledWith({
+      hostId: "host-1",
+      epicId: "epic-1",
+      commandId: "cmd-1",
+      relaunchOnHostRestart: false,
+    });
+    // A toggle, not a lifecycle act: nothing was started or stopped by it.
+    expect(startMutate).not.toHaveBeenCalled();
+    expect(stopMutate).not.toHaveBeenCalled();
   });
 
   it("names the output history before deleting, and only deletes on confirm", () => {

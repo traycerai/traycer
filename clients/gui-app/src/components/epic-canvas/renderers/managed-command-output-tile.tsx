@@ -63,6 +63,7 @@ import {
 import {
   MANAGED_COMMAND_OUTPUT_WINDOW_TITLE,
   managedCommandStatusLabel,
+  relaunchOnHostRestartLabel,
 } from "@/lib/managed-commands/managed-command-copy";
 import {
   isShellOutputBanner,
@@ -918,6 +919,11 @@ function ManagedCommandOutputDetails(props: {
               </span>
             </DetailRow>
           )}
+          <DetailRow label="Host restart">
+            <span data-testid="managed-command-output-details-relaunch">
+              {relaunchOnHostRestartLabel(command.relaunchOnHostRestart)}
+            </span>
+          </DetailRow>
           <DetailRow label="Started by">
             <ManagedCommandChatBacklink
               epicId={props.epicId}

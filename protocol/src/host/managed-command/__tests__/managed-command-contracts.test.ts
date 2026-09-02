@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import {
+  hostRpcRegistry,
+  hostStreamRpcRegistry,
+} from "@traycer/protocol/host/registry";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
+import { managedCommandSchema } from "@traycer/protocol/host/managed-command/unary-schemas";
 import {
   MANAGED_COMMAND_MAX_WINDOW_LINES,
   managedCommandSubscribeOutputClientFrameSchema,
@@ -140,5 +144,43 @@ describe("managedCommand stream registry membership", () => {
       "managedCommand.subscribeOutput",
     );
     expect(RELEASED_FLOOR_METHOD_NAMES).not.toContain("managedCommand.start");
+    expect(RELEASED_FLOOR_METHOD_NAMES).not.toContain(
+      "managedCommand.configure",
+    );
+  });
+
+  it("installs configure at 1.0 on the same unsupported-degrade channel as the lifecycle three", () => {
+    const line = hostRpcRegistry["managedCommand.configure"];
+    expect(line.degrade).toEqual({ kind: "unsupported" });
+    expect(line[1].latestMinor).toBe(0);
+    expect(line[1].versions[0].contract.method).toBe(
+      "managedCommand.configure",
+    );
+    expect(
+      line[1].versions[0].contract.requestSchema.parse({
+        epicId: "epic-1",
+        commandId: "cmd-1",
+        relaunchOnHostRestart: true,
+      }),
+    ).toEqual({
+      epicId: "epic-1",
+      commandId: "cmd-1",
+      relaunchOnHostRestart: true,
+    });
+  });
+
+  it("defaults relaunchOnHostRestart to false on a command an older host sends without it", () => {
+    // Which is also what such a host does: it never offered the choice, and
+    // a command it left interrupted at boot stays interrupted.
+    const parsed = managedCommandSchema.parse({
+      id: "cmd-1",
+      monitoring: false,
+      description: "deploy watcher",
+      status: { state: "stopped", stoppedAtMs: 1 },
+      chatId: "chat-1",
+      createdAtMs: 1,
+      updatedAtMs: 1,
+    });
+    expect(parsed.relaunchOnHostRestart).toBe(false);
   });
 });

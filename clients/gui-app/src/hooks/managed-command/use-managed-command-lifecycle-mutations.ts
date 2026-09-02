@@ -228,6 +228,51 @@ export function useManagedCommandStopAll(
   });
 }
 
+export interface ManagedCommandConfigureVariables extends ManagedCommandLifecycleVariables {
+  readonly relaunchOnHostRestart: boolean;
+}
+
+/**
+ * The one setting a person edits on a command: whether a host restart brings
+ * it back. Pinned to the command's own host like the lifecycle three, and for
+ * the same reason - the row lives on one machine. Not routed through
+ * {@link useManagedCommandLifecycleMutation} only because its variables carry
+ * the value being set, which that helper's shared shape does not.
+ */
+export function useManagedCommandConfigure(): UseMutationResult<
+  ResponseOfMethod<HostRpcRegistry, "managedCommand.configure">,
+  HostRpcError,
+  ManagedCommandConfigureVariables
+> {
+  const defaultClient = useHostClient();
+  const directory = useHostDirectory();
+
+  return useMutation(
+    withHostMutationLifecycleBoundary("managedCommand.configure", {
+      mutationKey: managedCommandMutationKeys.configure(),
+      mutationFn: (variables: ManagedCommandConfigureVariables) =>
+        withHostRpcErrorBoundary("managedCommand.configure", () => {
+          const client = transientClientForEntry(
+            defaultClient,
+            directory.findById(variables.hostId),
+          );
+          if (client === null) {
+            return Promise.reject(
+              hostClientUnavailableError("managedCommand.configure"),
+            );
+          }
+          return client.request("managedCommand.configure", {
+            epicId: variables.epicId,
+            commandId: variables.commandId,
+            relaunchOnHostRestart: variables.relaunchOnHostRestart,
+          });
+        }),
+      onError: (error: HostRpcError) =>
+        toastFromHostError(error, "Couldn't change it."),
+    }),
+  );
+}
+
 export function useManagedCommandDelete(): UseMutationResult<
   ResponseOfMethod<HostRpcRegistry, "managedCommand.delete">,
   HostRpcError,

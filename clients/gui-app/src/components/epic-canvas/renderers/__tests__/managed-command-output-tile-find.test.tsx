@@ -48,6 +48,7 @@ vi.mock(
     useManagedCommandStart: () => ({ mutate: vi.fn(), isPending: false }),
     useManagedCommandStop: () => ({ mutate: vi.fn(), isPending: false }),
     useManagedCommandDelete: () => ({ mutate: vi.fn(), isPending: false }),
+    useManagedCommandConfigure: () => ({ mutate: vi.fn(), isPending: false }),
     useManagedCommandStopAllIsPending: () => false,
   }),
 );
@@ -95,6 +96,7 @@ const COMMAND: ManagedCommand = {
   cadence: { debounceMs: 500, maxWaitMs: 15_000, throttleMs: 5_000 },
   status: { state: "running", pid: 4410, startedAtMs: 10 },
   chatId: "chat-1",
+  relaunchOnHostRestart: false,
   createdAtMs: 10,
   updatedAtMs: 10,
 };

@@ -580,6 +580,14 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // A toggle: two quick presses are on-then-off, and the second must not
+  // coalesce into the first or the human ends up with the opposite of what
+  // the switch shows. Same fifo guarantees as the lifecycle three.
+  "managedCommand.configure": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Deliver takes `fifo` for a reason the other three do not have, and NOT the
   // one about distinct params. The coordinator keys queues by
   // [hostId, userId, method, params], so two Delivers naming different subsets

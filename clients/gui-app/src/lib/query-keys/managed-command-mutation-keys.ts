@@ -6,6 +6,7 @@ export const managedCommandMutationKeys = {
   // batch disable every other chat's button.
   stopAll: (chatId: string) => ["managedCommand.stopAll", chatId] as const,
   delete: () => ["managedCommand.delete"] as const,
+  configure: () => ["managedCommand.configure"] as const,
   // Chat-scoped for the same reason `stopAll` is, and for a sharper one: a
   // Deliver with no ids named releases EVERY hold the chat owns, so two
   // in-flight Delivers for one chat are the same action twice. The shared

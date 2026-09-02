@@ -97,6 +97,14 @@ export const managedCommandSchema = z.object({
   cadence: managedCommandCadenceSchema.nullable().default(null),
   status: managedCommandStatusSchema,
   /**
+   * Whether a host restart brings this command back. Off, the host records
+   * a command it finds running at boot as `interrupted` and leaves it for
+   * Start; on, it respawns it - bounded by a loop breaker that parks a
+   * command whose relaunch keeps taking the host down. Defaulted `false` for
+   * a host too old to send it, which is also what such a host DOES.
+   */
+  relaunchOnHostRestart: z.boolean().default(false),
+  /**
    * The chat that created the command - the row's backlink. This is the
    * creating agent's id, which for a chat-hosted agent IS its chat id; the same
    * equivalence the delivery path relies on to route a digest back.
@@ -136,6 +144,22 @@ export type ManagedCommandControlResponse = z.infer<
 export const managedCommandDeleteRequestSchema =
   managedCommandControlRequestSchema;
 export type ManagedCommandDeleteRequest = ManagedCommandControlRequest;
+
+/**
+ * The one setting a human edits on a command: whether it comes back after a
+ * host restart. Everything else about a command is still the agent's to
+ * author (see `contracts.ts`); this is lifecycle policy, and the person whose
+ * host keeps relaunching a shell they did not ask for is the one who needs the
+ * switch. Answers with the command's post-change state, like start and stop.
+ */
+export const managedCommandConfigureRequestSchema = z.object({
+  epicId: z.string(),
+  commandId: z.string(),
+  relaunchOnHostRestart: z.boolean(),
+});
+export type ManagedCommandConfigureRequest = z.infer<
+  typeof managedCommandConfigureRequestSchema
+>;
 
 /**
  * Delete has no post-state to report: the row, the process and the entire
