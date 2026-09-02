@@ -63,6 +63,25 @@ export interface PendingCertificateError {
   readonly observedAt: number;
 }
 
+/**
+ * A host whose registry-published Noise static key no longer matches the one
+ * this client pinned on first sight (browser-security-hardening H11).
+ *
+ * The host has ALREADY been refused in main by the time this is emitted -
+ * nothing a surface does re-admits it - so this exists to say so rather than
+ * to ask. `remedy` carries the one honest recovery there is: delete the pin
+ * record at `pinLocation`. Structured-clone-safe by construction; the typed
+ * `HostKeyPinMismatchError` does not cross the boundary.
+ */
+export interface HostKeyPinMismatch {
+  readonly hostId: string;
+  readonly pinnedKey: string;
+  readonly offeredKey: string;
+  readonly pinLocation: string;
+  readonly remedy: string;
+  readonly observedAt: number;
+}
+
 export interface DisplaySnapshot {
   readonly id: number;
   readonly bounds: { x: number; y: number; width: number; height: number };

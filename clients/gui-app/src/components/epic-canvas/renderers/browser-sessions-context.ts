@@ -1,7 +1,6 @@
 import { createContext, useContext } from "react";
 import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 
-export type { BrowserSessionsLifecycle } from "@/lib/browser-view/sessions/browser-sessions-stream";
 export type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 
 export const BrowserSessionsContext =

@@ -45,6 +45,9 @@ import { z } from "zod";
 // in `raw`, and re-publish it unchanged - the mechanism `COMPATIBILITY.md`
 // names as reclassifying this class of addition from breaking to additive.
 // (Renumbered from 1.2 when main's interview-settlement bump took that minor.)
+// 1.3 also drops `outerHtml` and the raw `attributes` map from the browser
+// annotation record (root cause H: page content in collaborator-readable chat
+// persistence); both fields are unreleased, so this takes no bump of its own.
 export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 3 } as const;
 
 export type ChatSyncSchemaVersion = typeof CHAT_SYNC_SCHEMA_VERSION;

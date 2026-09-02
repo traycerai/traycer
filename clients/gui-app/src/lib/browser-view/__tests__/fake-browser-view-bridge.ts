@@ -1,7 +1,7 @@
 import type {
-  BrowserPrimaryProfileDelta,
-  BrowserStoreKeyUnwrapResult,
-  BrowserStoreKeyWrapResult,
+  BrowserSessionsStreamEventEnvelope,
+  BrowserSessionsStreamKey,
+  BrowserSessionsStreamSend,
   BrowserViewBridge,
   BrowserViewCapturePageResult,
   BrowserViewCertificateErrorChange,
@@ -17,6 +17,8 @@ import type {
   BrowserViewOverlayOcclusionResult,
   BrowserViewOverlayRelease,
   BrowserViewOverlayReleaseResult,
+  BrowserViewAttachSurface,
+  BrowserViewDetachSurface,
   BrowserViewSnapshotInvalidatedChange,
   BrowserViewTileCommandEvent,
   BrowserViewTileKey,
@@ -38,6 +40,23 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
    * there to catch it.
    */
   private nextSetSaveLoginsResult: (() => Promise<boolean>) | null = null;
+
+  readonly occludeCalls: BrowserViewOverlayOcclusion[] = [];
+  /** Forces the `matchedCount` main reports, so a miss can be simulated. */
+  matchedCountOverride: number | null = null;
+  readonly releaseCalls: BrowserViewOverlayRelease[] = [];
+  readonly paintAckCalls: string[] = [];
+  private readonly occludedTiles: BrowserViewTileKey[] = [];
+  private readonly snapshotInvalidationHandlers = new Set<
+    (change: BrowserViewSnapshotInvalidatedChange) => void
+  >();
+
+  readonly openSessionsStreamCalls: BrowserSessionsStreamKey[] = [];
+  readonly closeSessionsStreamCalls: BrowserSessionsStreamKey[] = [];
+  readonly sendSessionsFrameCalls: BrowserSessionsStreamSend[] = [];
+  private sessionsStreamEventHandler:
+    | ((envelope: BrowserSessionsStreamEventEnvelope) => void)
+    | null = null;
 
   constructor(input?: { readonly saveLogins?: boolean }) {
     this.saveLoginsValue = input?.saveLogins ?? true;
@@ -109,21 +128,28 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
   occludeForOverlay(
     input: BrowserViewOverlayOcclusion,
   ): Promise<BrowserViewOverlayOcclusionResult> {
+    this.occludeCalls.push(input);
+    this.occludedTiles.push(...input.tiles);
     return Promise.resolve({
+      // The overlay id, so a suite can tell WHICH overlay's replacement frame
+      // a tile is showing rather than only that one arrived.
       snapshots: input.tiles.map((tile) => ({
         ...tile,
-        dataUrl: null,
+        dataUrl: `data:image/png;base64,${input.overlayId}`,
         stale: false,
       })),
       restoredTiles: [],
-      matchedCount: input.tiles.length,
+      matchedCount: this.matchedCountOverride ?? input.tiles.length,
     });
   }
 
   releaseOverlay(
-    _input: BrowserViewOverlayRelease,
+    input: BrowserViewOverlayRelease,
   ): Promise<BrowserViewOverlayReleaseResult> {
-    return Promise.resolve({ restoredTiles: [] });
+    this.releaseCalls.push(input);
+    // Whatever this bridge parked, exactly as main restores the tiles it
+    // occluded rather than an arbitrary set.
+    return Promise.resolve({ restoredTiles: [...this.occludedTiles] });
   }
 
   getSaveLogins(): Promise<boolean> {
@@ -155,25 +181,12 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
     this.nextSetSaveLoginsResult = result;
   }
 
-  wrapStoreKey(rawKey: string): Promise<BrowserStoreKeyWrapResult> {
-    return Promise.resolve({ ok: true, wrappedKey: rawKey });
+  forgetLogins(): Promise<boolean> {
+    return Promise.resolve(true);
   }
 
-  unwrapStoreKey(wrappedKey: string): Promise<BrowserStoreKeyUnwrapResult> {
-    return Promise.resolve({ ok: true, rawKey: wrappedKey });
-  }
-
-  forgetLogins(): Promise<void> {
-    return Promise.resolve();
-  }
-
-  onPrimaryProfileDelta(
-    _handler: (delta: BrowserPrimaryProfileDelta) => void,
-  ): { dispose: () => void } {
-    return { dispose: () => undefined };
-  }
-
-  overlayPaintAck(_overlayId: string): Promise<void> {
+  overlayPaintAck(overlayId: string): Promise<void> {
+    this.paintAckCalls.push(overlayId);
     return Promise.resolve();
   }
 
@@ -181,16 +194,41 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
     return Promise.resolve();
   }
 
-  evictSite(): Promise<void> {
+  openSessionsStream(input: BrowserSessionsStreamKey): Promise<void> {
+    this.openSessionsStreamCalls.push(input);
     return Promise.resolve();
   }
 
-  capturePrimaryProfile() {
-    return Promise.resolve({
-      status: "unavailable" as const,
-      storageState: null,
-      reason: "test",
-    });
+  closeSessionsStream(key: BrowserSessionsStreamKey): Promise<void> {
+    this.closeSessionsStreamCalls.push(key);
+    return Promise.resolve();
+  }
+
+  sendSessionsFrame(input: BrowserSessionsStreamSend): Promise<void> {
+    this.sendSessionsFrameCalls.push(input);
+    return Promise.resolve();
+  }
+
+  onSessionsStreamEvent(
+    handler: (envelope: BrowserSessionsStreamEventEnvelope) => void,
+  ): { dispose: () => void } {
+    this.sessionsStreamEventHandler = handler;
+    return {
+      dispose: () => {
+        if (this.sessionsStreamEventHandler === handler) {
+          this.sessionsStreamEventHandler = null;
+        }
+      },
+    };
+  }
+
+  /** Drives whatever suite is holding the coordinator's subscription. */
+  emitSessionsStreamEvent(envelope: BrowserSessionsStreamEventEnvelope): void {
+    this.sessionsStreamEventHandler?.(envelope);
+  }
+
+  clearSavedLoginSite(): Promise<boolean> {
+    return Promise.resolve(true);
   }
 
   onFindChange(_handler: (change: BrowserViewFindChange) => void): {
@@ -236,11 +274,23 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
   }
 
   onSnapshotInvalidated(
-    _handler: (change: BrowserViewSnapshotInvalidatedChange) => void,
+    handler: (change: BrowserViewSnapshotInvalidatedChange) => void,
   ): {
     dispose: () => void;
   } {
-    return { dispose: () => undefined };
+    this.snapshotInvalidationHandlers.add(handler);
+    return {
+      dispose: () => {
+        this.snapshotInvalidationHandlers.delete(handler);
+      },
+    };
+  }
+
+  /** Drives whatever suite is holding the overlay coordinator's subscription. */
+  emitSnapshotInvalidated(change: BrowserViewSnapshotInvalidatedChange): void {
+    this.snapshotInvalidationHandlers.forEach((handler) => {
+      handler(change);
+    });
   }
 
   onAnnotationEvent() {
@@ -251,41 +301,21 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
     return { dispose: () => undefined };
   }
 
-  ensureTab() {
-    return Promise.resolve({
-      hostId: "host-test",
-      sessionId: "session-test",
-      tabId: "tab-test",
-      registrationId: "registration-test",
-    });
-  }
+  /** Attaches and detaches in ONE list: their ORDER is what main enforces. */
+  readonly surfaceCalls: string[] = [];
 
-  acceptTab(): Promise<void> {
+  attachSurface(input: BrowserViewAttachSurface): Promise<void> {
+    this.surfaceCalls.push(`attach:${input.bindingId}`);
     return Promise.resolve();
   }
 
-  attachSurface(): Promise<void> {
+  detachSurface(input: BrowserViewDetachSurface): Promise<void> {
+    this.surfaceCalls.push(`detach:${input.bindingId}`);
     return Promise.resolve();
-  }
-
-  detachSurface(): Promise<void> {
-    return Promise.resolve();
-  }
-
-  releaseTab(): Promise<boolean> {
-    return Promise.resolve(true);
   }
 
   controlElectronTab(): Promise<void> {
     return Promise.resolve();
-  }
-
-  dispatchElectronTabCdp() {
-    return Promise.resolve({
-      kind: "cdpGetFrameTree" as const,
-      ok: true as const,
-      frames: [],
-    });
   }
 
   startPipCapture(): Promise<void> {

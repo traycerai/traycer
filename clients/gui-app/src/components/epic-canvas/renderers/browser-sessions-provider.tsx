@@ -6,7 +6,6 @@ import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-cli
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
 import { useRunnerHost } from "@/providers/use-runner-host";
-import { useWindowsBridge } from "@/providers/windows-bridge-context";
 import { useBrowserSessions } from "./use-browser-sessions";
 import {
   BrowserSessionsContext,
@@ -39,14 +38,12 @@ export function BrowserSessionsHostProvider(props: {
   const runnerHost = useRunnerHost();
   const browserView = runnerHost.browserView;
   const localHostId = useReactiveLocalHostId();
-  const desktopWindowId = useWindowsBridge()?.windowId ?? null;
   const { state: sessions, coordinatorKey } = useBrowserSessions({
     hostId: props.hostId,
     hostClient: props.hostClient,
     epicId: props.epicId,
     browserView,
     localHostId,
-    desktopWindowId,
   });
   return (
     <BrowserSessionsCoordinatorKeyContext.Provider value={coordinatorKey}>
