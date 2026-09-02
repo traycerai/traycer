@@ -96,10 +96,18 @@ import type { CliInvocation } from "./cli-binary";
 // Uninstall contends for the same unique-marker election, so it cannot
 // delete an in-flight install's sidecars. It removes the live record only
 // after the OS uninstall resolves and only when that record carries its own
-// label. The removal is strict: a record that survives is marked stale so it
-// cannot be preferred, and the uninstall is reported as failed. A throw from
-// the OS uninstall retains the live record and releases only this owner's
-// unique txn.
+// label. The removal is strict: a record that survives (or cannot be read)
+// is marked stale so it cannot be preferred, and the uninstall is reported
+// as failed. A throw from the OS uninstall is handled like a throw from the
+// OS registration: the backend may have deleted the service before the step
+// that threw, so the own-label record is marked stale and removed and the
+// host re-reads the OS definition.
+//
+// Authority reads distinguish an UNREADABLE file (a lock, a permission
+// error) from an absent one and fail closed on it: an unreadable marker
+// still blocks the election (aged out by the usual window), an unreadable
+// record cannot be confirmed removed, an unreadable stale marker cannot be
+// reported cleared.
 //
 // Unparseable txn files use the shared
 // `CLI_INVOCATION_TXN_ABANDON_AFTER_MS` age window, the same bound the
@@ -477,7 +485,18 @@ export async function runServiceUninstallWithInvocationRecord(
   try {
     await options.uninstall();
   } catch (cause) {
-    await releaseOwnedTransaction(held);
+    // Same reasoning as the registration path: the backend may have removed
+    // the service before the step that threw (`schtasks /Delete` runs before
+    // the authority check and the launcher removal), so the live record may
+    // describe a service that no longer exists. It is marked stale and
+    // removed after its label matched; the host re-reads the OS definition,
+    // which is the truth whether or not the deletion happened.
+    logger.debug("OS uninstall threw; marking the cached invocation stale", {
+      environment: options.environment,
+      label: options.serviceLabel,
+      errorName: errorFromUnknown(cause).name,
+    });
+    await markStaleAndUnpreferLive(held);
     throw cause;
   }
   const matching = await liveRecordMatchesLabel(
@@ -508,15 +527,23 @@ export async function runServiceUninstallWithInvocationRecord(
   // (durable, bypasses it) and the uninstall is reported as failed rather
   // than clean. `absent` unlinks nothing: whatever is at the name is not a
   // record of this label, and the host's reader does not prefer it either.
-  try {
-    if (matching === "matching") {
+  // `unreadable` is the same failure as a refused unlink: a record whose
+  // label could not even be checked cannot be confirmed removed.
+  let removalFailure: unknown = null;
+  if (matching === "unreadable") {
+    removalFailure = new Error("CLI invocation record could not be read");
+  } else if (matching === "matching") {
+    try {
       await rm(held.livePath, { force: true });
+    } catch (cause) {
+      removalFailure = cause;
     }
-  } catch (cause) {
+  }
+  if (removalFailure !== null) {
     logger.debug("CLI invocation record could not be removed after uninstall", {
       environment: options.environment,
       label: options.serviceLabel,
-      errorName: errorFromUnknown(cause).name,
+      errorName: errorFromUnknown(removalFailure).name,
     });
     await markStaleKeepLive(held);
     throw cliError({
@@ -871,26 +898,63 @@ function openFlagsForAuthorityRead(): number {
 }
 
 /**
- * Read an authority file inside the state dir. A symlink is skip-not-live:
- * we do not follow it and we do not treat it as a live contender.
+ * What a read of an authority file inside the state dir found.
+ *
+ * Four outcomes rather than "content or null", because the callers cannot
+ * all treat "could not read" the same way:
+ *
+ *   - `absent`: nothing at the name (or the directory itself is gone);
+ *   - `not-a-file`: a symlink (refused by `O_NOFOLLOW`), a directory, a FIFO.
+ *     No writer of ours creates one (`wx` never yields a link), and the
+ *     host's reader skips the same entries, so it is skip-not-live: never a
+ *     contender, never a bypass, nothing to clear;
+ *   - `unreadable`: a regular file is there and could not be opened or read
+ *     (`EACCES`, `EBUSY`, `EPERM`, `EIO` - a sharing or antivirus lock on
+ *     Windows is the realistic case). Collapsing this into `absent` let a
+ *     second CLI confirm itself as sole contender while the first, whose live
+ *     marker was momentarily locked, was already mutating the OS. It is
+ *     therefore FAIL-CLOSED wherever it matters: a marker that cannot be read
+ *     still blocks, a record that cannot be read cannot be confirmed removed,
+ *     a stale marker that cannot be read cannot be reported cleared.
  */
-async function readAuthorityUtf8(
-  path: string,
-): Promise<{ readonly raw: string; readonly mtimeMs: number } | null> {
+type AuthorityRead =
+  | { readonly kind: "ok"; readonly raw: string; readonly mtimeMs: number }
+  | { readonly kind: "absent" }
+  | { readonly kind: "not-a-file" }
+  | { readonly kind: "unreadable"; readonly mtimeMs: number | null };
+
+async function readAuthorityFile(path: string): Promise<AuthorityRead> {
   let handle: FileHandle;
   try {
     handle = await open(path, openFlagsForAuthorityRead());
-  } catch {
-    return null;
+  } catch (cause) {
+    const code = isErrnoException(cause) ? cause.code : undefined;
+    if (code === "ENOENT" || code === "ENOTDIR") return { kind: "absent" };
+    // `O_NOFOLLOW` refuses a symlink with ELOOP (Linux, macOS); a directory
+    // opened read-only succeeds and is caught by `isFile` below.
+    if (code === "ELOOP") return { kind: "not-a-file" };
+    return { kind: "unreadable", mtimeMs: await lstatMtimeMs(path) };
   }
   try {
     const info = await handle.stat();
-    if (!info.isFile()) return null;
-    return { raw: await handle.readFile("utf8"), mtimeMs: info.mtimeMs };
+    if (!info.isFile()) return { kind: "not-a-file" };
+    return {
+      kind: "ok",
+      raw: await handle.readFile("utf8"),
+      mtimeMs: info.mtimeMs,
+    };
   } catch {
-    return null;
+    return { kind: "unreadable", mtimeMs: await lstatMtimeMs(path) };
   } finally {
     await handle.close().catch(() => undefined);
+  }
+}
+
+async function lstatMtimeMs(path: string): Promise<number | null> {
+  try {
+    return (await lstat(path)).mtimeMs;
+  } catch {
+    return null;
   }
 }
 
@@ -907,10 +971,28 @@ async function observeTransactionMarkers(
   const observed = await Promise.all(
     names.filter(isCliInvocationTransactionMarkerBasename).map(async (name) => {
       const path = join(stateDir, name);
-      const read = await readAuthorityUtf8(path);
+      const read = await readAuthorityFile(path);
       // Skip-not-live: a planted symlink (O_NOFOLLOW/ELOOP) is not a
       // contender. A genuine marker is created with wx and is never a link.
-      if (read === null) return null;
+      if (read.kind === "absent" || read.kind === "not-a-file") return null;
+      if (read.kind === "unreadable") {
+        // A marker that IS there and cannot be read blocks like a live one:
+        // its owner may be mid-mutation right now. It is aged out by the
+        // same window an unparseable payload gets, and its empty `raw`
+        // means no compare-then-unlink can ever match it, so nothing here
+        // removes a file whose contents it never saw.
+        const mtimeMs = read.mtimeMs ?? Date.now();
+        return {
+          basename: name,
+          path,
+          mtimeMs,
+          raw: "",
+          abandoned: cliInvocationTransactionAbandonedByAge(
+            mtimeMs,
+            Date.now(),
+          ),
+        };
+      }
       return {
         basename: name,
         path,
@@ -988,15 +1070,9 @@ async function unlinkIfUnchanged(
   if (basename(path) === CLI_INVOCATION_RECORD_TXN_FILENAME) {
     return false;
   }
-  const read = await readAuthorityUtf8(path);
-  if (read === null) {
-    try {
-      await lstat(path);
-      return false;
-    } catch {
-      return true;
-    }
-  }
+  const read = await readAuthorityFile(path);
+  if (read.kind === "absent") return true;
+  if (read.kind !== "ok") return false;
   if (read.raw !== expectedRaw) return false;
   await removeBestEffort(path);
   return true;
@@ -1160,8 +1236,9 @@ type StaleMarkerRemoval = "removed" | "absent" | "foreign" | "failed";
 async function removeStaleMarkerIfOwn(
   held: HeldTransaction,
 ): Promise<StaleMarkerRemoval> {
-  const read = await readAuthorityUtf8(held.stalePath);
-  if (read === null) return "absent";
+  const read = await readAuthorityFile(held.stalePath);
+  if (read.kind === "unreadable") return "failed";
+  if (read.kind !== "ok") return "absent";
   let parsed: unknown;
   try {
     parsed = JSON.parse(read.raw);
@@ -1189,12 +1266,18 @@ async function sleep(ms: number): Promise<void> {
   });
 }
 
+/**
+ * `unreadable` is kept apart from `absent` because the two want opposite
+ * things from an uninstall: an absent record needs no removal, an unreadable
+ * one cannot be confirmed removed and must be marked stale instead.
+ */
 async function liveRecordMatchesLabel(
   livePath: string,
   serviceLabel: string,
-): Promise<"matching" | "absent" | "foreign"> {
-  const read = await readAuthorityUtf8(livePath);
-  if (read === null) return "absent";
+): Promise<"matching" | "absent" | "foreign" | "unreadable"> {
+  const read = await readAuthorityFile(livePath);
+  if (read.kind === "unreadable") return "unreadable";
+  if (read.kind !== "ok") return "absent";
   const raw = read.raw;
   let parsed: unknown;
   try {

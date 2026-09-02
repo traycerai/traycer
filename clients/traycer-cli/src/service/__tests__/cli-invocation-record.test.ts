@@ -12,8 +12,9 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { mkdtemp, rm } from "node:fs/promises";
+import { constants } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import {
   afterEach,
   beforeAll,
@@ -78,6 +79,14 @@ const mocks = vi.hoisted(() => ({
   // uninstall.
   failNextRm: false,
   failRmPath: null as string | null,
+  // Fails the NEXT `open` call whose target basename equals
+  // `failOpenForBasename`, but ONLY on a read-shaped open (flags without
+  // `O_CREAT` - `openFlagsForAuthorityRead`). A create-shaped open
+  // (`openFlagsForExclusiveCreate`, which always carries `O_CREAT`) is left
+  // alone, so a marker/record/stale WRITE through the same basename still
+  // succeeds while a READ of it is what fails.
+  failOpenForBasename: null as string | null,
+  failOpenCode: "EBUSY",
 }));
 
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -103,8 +112,20 @@ vi.mock("node:fs/promises", async (importOriginal) => {
       return actual.writeFile(...args);
     },
     open: async (...args: Parameters<typeof actual.open>) => {
-      const handle = await actual.open(...args);
       const target = String(args[0]);
+      const flags = args[1];
+      const isReadOpen =
+        typeof flags === "number" && (flags & constants.O_CREAT) === 0;
+      if (
+        mocks.failOpenForBasename !== null &&
+        basename(target) === mocks.failOpenForBasename &&
+        isReadOpen
+      ) {
+        throw Object.assign(new Error("SIMULATED_OPEN_FAILURE"), {
+          code: mocks.failOpenCode,
+        });
+      }
+      const handle = await actual.open(...args);
       const originalWrite = handle.writeFile.bind(handle);
       handle.writeFile = (async (data, options) => {
         mocks.writeFileCallCount += 1;
@@ -219,6 +240,8 @@ beforeEach(async () => {
   mocks.writeFileCallCount = 0;
   mocks.failNextRm = false;
   mocks.failRmPath = null;
+  mocks.failOpenForBasename = null;
+  mocks.failOpenCode = "EBUSY";
 });
 
 afterEach(async () => {
@@ -910,7 +933,7 @@ describe("runServiceUninstallWithInvocationRecord", () => {
     );
   });
 
-  it("retains the live record when uninstall throws", async () => {
+  it("on uninstall throw, marks stale, removes a matching-label live record, and releases the txn", async () => {
     await runServiceRegistrationWithInvocationRecord({
       environment: "production",
       hostHomeDir: hostHome,
@@ -920,6 +943,7 @@ describe("runServiceUninstallWithInvocationRecord", () => {
       cli: npmCli(),
       register: async () => undefined,
     });
+    expect(await exists(cliInvocationRecordPath(hostHome))).toBe(true);
     await expect(
       runServiceUninstallWithInvocationRecord({
         environment: "production",
@@ -932,7 +956,60 @@ describe("runServiceUninstallWithInvocationRecord", () => {
         },
       }),
     ).rejects.toThrow("indeterminate");
-    expect(await exists(cliInvocationRecordPath(hostHome))).toBe(true);
+    // The backend may have removed the service before the step that threw,
+    // so the live record - matching this label - may now describe a
+    // service that no longer exists. It is removed, and a stale marker
+    // carrying our label sends the host to the OS definition instead.
+    expect(await exists(cliInvocationRecordPath(hostHome))).toBe(false);
+    const stale = parseCliInvocationStaleMarker(
+      JSON.parse(
+        await readFile(cliInvocationRecordStaleMarkerPath(hostHome), "utf8"),
+      ),
+    );
+    expect(stale?.serviceLabel).toBe(LABEL);
+    expect(await transactionMarkerNames()).toEqual([]);
+  });
+
+  it("on uninstall throw, retains a live record for a DIFFERENT label while still writing the stale marker", async () => {
+    const foreign = {
+      schemaVersion: 1,
+      command: process.execPath,
+      args: [scriptPath],
+      source: {
+        kind: "service-registration",
+        platform: "linux",
+        serviceLabel: "ai.traycer.host.dev.other",
+      },
+      recoveredAt: "2026-09-01T00:00:00.000Z",
+    };
+    await writeFile(
+      cliInvocationRecordPath(hostHome),
+      `${JSON.stringify(foreign, null, 2)}\n`,
+      { mode: 0o600 },
+    );
+    await expect(
+      runServiceUninstallWithInvocationRecord({
+        environment: "production",
+        hostHomeDir: hostHome,
+        waitMs: 2_000,
+        pollIntervalMs: 20,
+        serviceLabel: LABEL,
+        uninstall: async () => {
+          throw new Error("indeterminate");
+        },
+      }),
+    ).rejects.toThrow("indeterminate");
+    const live = parseCliInvocationRecord(
+      JSON.parse(await readFile(cliInvocationRecordPath(hostHome), "utf8")),
+    );
+    expect(live?.source.serviceLabel).toBe("ai.traycer.host.dev.other");
+    const stale = parseCliInvocationStaleMarker(
+      JSON.parse(
+        await readFile(cliInvocationRecordStaleMarkerPath(hostHome), "utf8"),
+      ),
+    );
+    expect(stale?.serviceLabel).toBe(LABEL);
+    expect(await transactionMarkerNames()).toEqual([]);
   });
 
   it("retains a live record whose serviceLabel does not match", async () => {
@@ -1124,6 +1201,155 @@ describe("runServiceUninstallWithInvocationRecord", () => {
     expect(await readFile(cliInvocationRecordPath(hostHome), "utf8")).toBe(
       "not-json-garbage\n",
     );
+  });
+});
+
+describe("readAuthorityFile unreadable handling", () => {
+  it("blocks a new registration when a live unique transaction marker cannot be read (EBUSY)", async () => {
+    const token = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    const raw = serializeCliInvocationTransactionMarker({
+      schemaVersion: 1,
+      kind: "transaction",
+      owner: {
+        pid: 2147483646,
+        token,
+        processStartIdentity: null,
+        startedAtMs: Date.now(),
+      },
+      stagingFile: `${CLI_INVOCATION_RECORD_STAGING_FILENAME_PREFIX}${token}`,
+      operation: "install",
+      serviceLabel: LABEL,
+      startedAt: new Date().toISOString(),
+    });
+    const path = cliInvocationRecordOwnedTransactionPath(hostHome, token);
+    await writeFile(path, raw, { mode: 0o600 });
+    mocks.failOpenForBasename = basename(path);
+    let osMutated = false;
+    await expect(
+      runServiceRegistrationWithInvocationRecord({
+        environment: "production",
+        hostHomeDir: hostHome,
+        waitMs: 0,
+        pollIntervalMs: 20,
+        serviceLabel: LABEL,
+        cli: npmCli(),
+        register: async () => {
+          osMutated = true;
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      details: { phase: "txn-busy" },
+    });
+    expect(osMutated).toBe(false);
+    // An unreadable existing marker BLOCKS; it is not treated as absent.
+    expect(await exists(path)).toBe(true);
+  });
+
+  it("ages out an unreadable transaction marker but does not unlink it (cannot confirm bytes)", async () => {
+    const token = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    const raw = serializeCliInvocationTransactionMarker({
+      schemaVersion: 1,
+      kind: "transaction",
+      owner: {
+        pid: 2147483646,
+        token,
+        processStartIdentity: null,
+        startedAtMs: 1,
+      },
+      stagingFile: `${CLI_INVOCATION_RECORD_STAGING_FILENAME_PREFIX}${token}`,
+      operation: "install",
+      serviceLabel: LABEL,
+      startedAt: "2020-01-01T00:00:00.000Z",
+    });
+    const path = cliInvocationRecordOwnedTransactionPath(hostHome, token);
+    await writeFile(path, raw, { mode: 0o600 });
+    const staleTime = new Date(
+      Date.now() - CLI_INVOCATION_TXN_ABANDON_AFTER_MS - 5_000,
+    );
+    await utimes(path, staleTime, staleTime);
+    mocks.failOpenForBasename = basename(path);
+    await runServiceRegistrationWithInvocationRecord({
+      environment: "production",
+      hostHomeDir: hostHome,
+      waitMs: 2_000,
+      pollIntervalMs: 20,
+      serviceLabel: LABEL,
+      cli: npmCli(),
+      register: async () => undefined,
+    });
+    expect(await exists(cliInvocationRecordPath(hostHome))).toBe(true);
+    // Aged out, so registration proceeded around it - but compare-then-unlink
+    // never saw its bytes, so it is left on disk rather than unlinked.
+    expect(await exists(path)).toBe(true);
+  });
+
+  it("rejects uninstall with record-remove when the live record cannot be read (EBUSY)", async () => {
+    await runServiceRegistrationWithInvocationRecord({
+      environment: "production",
+      hostHomeDir: hostHome,
+      waitMs: 2_000,
+      pollIntervalMs: 20,
+      serviceLabel: LABEL,
+      cli: npmCli(),
+      register: async () => undefined,
+    });
+    mocks.failOpenForBasename = basename(cliInvocationRecordPath(hostHome));
+    let uninstalled = false;
+    await expect(
+      runServiceUninstallWithInvocationRecord({
+        environment: "production",
+        hostHomeDir: hostHome,
+        waitMs: 2_000,
+        pollIntervalMs: 20,
+        serviceLabel: LABEL,
+        uninstall: async () => {
+          uninstalled = true;
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_UNINSTALL_FAILED,
+      details: { phase: "record-remove" },
+    });
+    expect(uninstalled).toBe(true);
+    const stale = parseCliInvocationStaleMarker(
+      JSON.parse(
+        await readFile(cliInvocationRecordStaleMarkerPath(hostHome), "utf8"),
+      ),
+    );
+    expect(stale?.serviceLabel).toBe(LABEL);
+    expect(await exists(cliInvocationRecordPath(hostHome))).toBe(true);
+    expect(await transactionMarkerNames()).toEqual([]);
+  });
+
+  it("commits the registration but reports stale-clear failure when the stale marker cannot be read (EBUSY)", async () => {
+    await writeFile(
+      cliInvocationRecordStaleMarkerPath(hostHome),
+      serializeCliInvocationStaleMarker({ serviceLabel: LABEL }),
+      { mode: 0o600 },
+    );
+    mocks.failOpenForBasename = basename(
+      cliInvocationRecordStaleMarkerPath(hostHome),
+    );
+    await expect(
+      runServiceRegistrationWithInvocationRecord({
+        environment: "production",
+        hostHomeDir: hostHome,
+        waitMs: 2_000,
+        pollIntervalMs: 20,
+        serviceLabel: LABEL,
+        cli: npmCli(),
+        register: async () => undefined,
+      }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      details: { phase: "stale-clear", outcome: "failed" },
+    });
+    // The registration and record commit completed; only the strict clear
+    // of the (now-unreadable) earlier stale marker failed.
+    expect(await exists(cliInvocationRecordPath(hostHome))).toBe(true);
+    expect(await exists(cliInvocationLifecyclePath(hostHome))).toBe(true);
+    expect(await transactionMarkerNames()).toEqual([]);
   });
 });
 
