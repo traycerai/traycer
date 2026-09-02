@@ -178,7 +178,9 @@ function BrowsersPanelBodyLive(props: {
     ],
   );
   const isUnavailable =
-    sessions.lifecycle === "failed" || sessions.lifecycle === "closed";
+    sessions.lifecycle === "failed" ||
+    sessions.lifecycle === "closed" ||
+    sessions.lifecycle === "unsupported";
   const isLoading =
     (sessions.lifecycle === "connecting" ||
       sessions.lifecycle === "reconnecting") &&
@@ -197,7 +199,7 @@ function BrowsersPanelBodyLive(props: {
       {isUnavailable ? (
         <BrowsersPanelUnavailableState
           message={sessions.errorMessage}
-          onRetry={sessions.retry}
+          onRetry={sessions.lifecycle === "unsupported" ? null : sessions.retry}
         />
       ) : null}
       {isEmpty ? (
@@ -260,9 +262,14 @@ export function BrowsersPanelNoResultsState() {
   );
 }
 
+/**
+ * `onRetry` is `null` when retrying cannot change the answer - a host with no
+ * browser support at all. The message then carries the remedy (update the
+ * host), and offering a Retry would only promise what the phone cannot do.
+ */
 export function BrowsersPanelUnavailableState(props: {
   readonly message: string | null;
-  readonly onRetry: () => void;
+  readonly onRetry: (() => void) | null;
 }) {
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col items-center justify-center gap-3 px-4 py-8 text-center text-muted-foreground">
@@ -273,10 +280,17 @@ export function BrowsersPanelUnavailableState(props: {
           <p className="text-ui-xs text-muted-foreground">{props.message}</p>
         )}
       </div>
-      <Button type="button" variant="outline" size="sm" onClick={props.onRetry}>
-        <RotateCcw className="size-3.5" aria-hidden />
-        Retry
-      </Button>
+      {props.onRetry === null ? null : (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={props.onRetry}
+        >
+          <RotateCcw className="size-3.5" aria-hidden />
+          Retry
+        </Button>
+      )}
     </div>
   );
 }

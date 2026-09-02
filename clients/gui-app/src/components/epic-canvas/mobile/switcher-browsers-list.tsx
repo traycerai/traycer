@@ -191,7 +191,9 @@ function SwitcherBrowsersBody(props: {
   const sessions = useBrowserSessionsContext();
   const { tabs, filteredTabs } = props;
   const isUnavailable =
-    sessions.lifecycle === "failed" || sessions.lifecycle === "closed";
+    sessions.lifecycle === "failed" ||
+    sessions.lifecycle === "closed" ||
+    sessions.lifecycle === "unsupported";
   const isLoading =
     (sessions.lifecycle === "connecting" ||
       sessions.lifecycle === "reconnecting") &&
@@ -209,7 +211,7 @@ function SwitcherBrowsersBody(props: {
       {isUnavailable ? (
         <BrowsersPanelUnavailableState
           message={sessions.errorMessage}
-          onRetry={sessions.retry}
+          onRetry={sessions.lifecycle === "unsupported" ? null : sessions.retry}
         />
       ) : null}
       {isEmpty ? (

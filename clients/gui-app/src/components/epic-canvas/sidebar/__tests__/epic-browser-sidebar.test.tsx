@@ -34,6 +34,7 @@ import {
 import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import { findPaneById } from "@/stores/epics/canvas/tile-tree";
 import { BROWSER_TAB_AGENT_ACTIVITY_MS } from "@/lib/browser-view/browser-tab-display";
+import { BROWSERS_UNSUPPORTED_MESSAGE } from "@traycer-clients/shared/platform/browser-view";
 import { dismissPip } from "@/lib/browser-view/pip/pip-store";
 import { usePanelHeaderSearchStore } from "@/stores/epics/panel-header-search-store";
 import { usePanelHeaderMenuStore } from "@/stores/epics/panel-header-menu-store";
@@ -746,6 +747,22 @@ describe("BrowsersPanelBody", () => {
     expect(screen.queryByText("No browsers yet.")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(retry).toHaveBeenCalledOnce();
+  });
+
+  it("drops the retry and names the host update when the host has no browsers", () => {
+    sessionsState.value = {
+      ...sessionsState.value,
+      lifecycle: "unsupported",
+      items: [],
+      errorMessage: BROWSERS_UNSUPPORTED_MESSAGE,
+    };
+
+    render(wrapper(<BrowsersPanelBody epicId="epic-1" tabId="view-tab-1" />));
+
+    expect(screen.getByText("Browsers unavailable.")).toBeTruthy();
+    expect(screen.getByText(BROWSERS_UNSUPPORTED_MESSAGE)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.queryByText("No browsers yet.")).toBeNull();
   });
 
   it("shows drivenBy attribution via real tooltip and opens the driving chat", async () => {

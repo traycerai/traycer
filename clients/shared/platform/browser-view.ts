@@ -2,6 +2,7 @@ import type {
   StreamCloseReason,
   StreamConnectionStatus,
 } from "../host-transport/i-stream-session";
+import { isMethodIncompatibleClose } from "../host-transport/i-stream-session";
 import type {
   BrowserScreencastServerFrame,
   BrowserSessionsUxClientFrame,
@@ -297,7 +298,17 @@ export type BrowserSessionsLifecycle =
   | "live"
   | "reconnecting"
   | "closed"
-  | "failed";
+  | "failed"
+  /**
+   * The host has no `browser.sessions` at all (a release before browsers
+   * existed). Distinct from `failed` because it is a statement about the
+   * host's capability, not about this attempt: no retry can change it, and
+   * the only remedy is updating the host.
+   */
+  | "unsupported";
+
+export const BROWSERS_UNSUPPORTED_MESSAGE =
+  "This host doesn't support browsers. Update Traycer Host to use browser tabs here.";
 
 /**
  * The lifecycle a stream's connection status reads as, and the message that
@@ -311,6 +322,7 @@ export function browserSessionsLifecycle(
   status: StreamConnectionStatus,
   reason: StreamCloseReason | null,
 ): BrowserSessionsLifecycle {
+  if (isMethodIncompatibleClose(reason)) return "unsupported";
   if (reason?.kind === "fatalError") return "failed";
   if (status === "open") return "live";
   if (status === "reconnecting") return "reconnecting";
@@ -322,10 +334,24 @@ export function browserSessionsError(
   status: StreamConnectionStatus,
   reason: StreamCloseReason | null,
 ): string | null {
+  if (isMethodIncompatibleClose(reason)) return BROWSERS_UNSUPPORTED_MESSAGE;
   if (reason?.kind === "fatalError") return reason.details.reason;
   if (status === "reconnecting") return "Reconnecting browser sessions.";
   if (status === "closed") return "Browser sessions stream closed.";
   return null;
+}
+
+/**
+ * Why an action that needs a live stream is refused right now. One string
+ * for every surface that opens a tab, so a host without browsers is told the
+ * same thing from the "+" button, the empty state and the command palette.
+ */
+export function browserSessionsRefusal(
+  lifecycle: BrowserSessionsLifecycle | null,
+): string {
+  return lifecycle === "unsupported"
+    ? BROWSERS_UNSUPPORTED_MESSAGE
+    : "Browsers are not connected yet.";
 }
 
 /**

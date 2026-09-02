@@ -1,4 +1,5 @@
 import { toast } from "sonner";
+import { browserSessionsRefusal } from "@traycer-clients/shared/platform/browser-view";
 import { useBrowserSessionsForHost } from "@/components/epic-canvas/renderers/use-browser-sessions";
 import {
   browserTabHostname,
@@ -156,7 +157,7 @@ export function useBrowserOpenerItems(
     keywords: ["new", "browser", "web", "page", hostLabel],
     run: () => {
       if (sessions.lifecycle !== "live" || sessions.hostId === null) {
-        toast.error("Browsers are not connected yet.");
+        toast.error(browserSessionsRefusal(sessions.lifecycle));
         return;
       }
       const hostId = sessions.hostId;
