@@ -5,6 +5,7 @@ import type {
 } from "../ws-stream-factory";
 import type { WebSocketCloseEvent, WebSocketErrorEvent } from "../ws-factory";
 import type { TimerHandle, IntervalHandle } from "../timer-handle";
+import { assertRelayAttachUrlSecure } from "@traycer/protocol/host-transport/relay-attach-url";
 import { createRelayPathEstimator } from "@traycer/protocol/host-transport/relay-liveness";
 import {
   RELAY_DIAL_TIMEOUT_MS,
@@ -149,6 +150,10 @@ export class RelaySocket {
   constructor(options: RelaySocketOptions) {
     this.handlers = options.handlers;
     this.lastInboundAt = Date.now();
+    // Before the URL is built, let alone dialed: the grant goes into the query
+    // string on the next line. `beginConnectGuarded` catches a synchronous
+    // throw out of this constructor and re-arms the backoff loop.
+    assertRelayAttachUrlSecure(options.attachBaseUrl);
     const dialUrl = withGrantQuery(options.attachBaseUrl, options.grantJws);
     // Not a host method, and not classifiable as one: this is the single
     // durable leg that MULTIPLEXES every unary call and every stream for a

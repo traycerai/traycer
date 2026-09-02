@@ -1,7 +1,11 @@
 import type { BrowserWindowConstructorOptions } from "electron";
 import { RunnerHostEvent } from "../../../ipc-contracts/ipc-channels";
 import { log } from "../../app/logger";
-import { safelyOpenExternal } from "../../app/security";
+import {
+  installGuestNavigationGuard,
+  isAllowedGuestNavigationUrl,
+  traceRefusedGuestNavigation,
+} from "../browser-guest-navigation";
 import {
   toTileKey,
   type BrowserViewEntry,
@@ -29,10 +33,6 @@ interface BrowserViewPopupsOptions {
  * Decision #22: real popups keep their opener as a native window, while
  * `target=_blank` and tab dispositions become Traycer tiles carrying
  * Chromium's disposition (`background-tab` -> background, else foreground).
- * Non-http(s) targets are not tiles at all: they leave to the OS through
- * `safelyOpenExternal`'s scheme allowlist, and no tile request is sent. The
- * one exception is `about:blank` - a page opening a blank tab it will
- * navigate itself, which stays in the session (see {@link isTileTarget}).
  */
 export class BrowserViewPopups {
   private readonly createPopupWindowOptions: (
@@ -60,19 +60,22 @@ export class BrowserViewPopups {
   ): BrowserViewWindowOpenResult {
     const surface = entry.surface;
     if (surface === null) return { action: "deny" };
+    // The third door the guest scheme gate has to cover: a guest CAN open
+    // windows, and both outcomes below carry the target onward - one into a
+    // new tile, one into a real popup on the opener's jar. Resolved against
+    // the opener first, because `window.open("/x")` is relative and a scheme
+    // check on the raw string would be checking the wrong string.
+    const target = normalizeOpenedUrl(details.url, entry.currentUrl);
+    if (!isAllowedGuestNavigationUrl(target)) {
+      traceRefusedGuestNavigation(target, "window-open");
+      return { action: "deny" };
+    }
     // Electron exposes featureless scripted window.open the same as _blank
     // tab opens, so the available guardrail is non-empty popup features.
     if (windowOpenShouldCreateTile(details)) {
-      const url = normalizeOpenedUrl(details.url, entry.currentUrl);
-      // A4: only web URLs become tiles. mailto:/custom schemes go to the OS
-      // through the existing allowlist, which rejects the opaque ones.
-      if (!isTileTarget(url)) {
-        void safelyOpenExternal(url);
-        return { action: "deny" };
-      }
       this.send(surface.windowId, RunnerHostEvent.browserViewOpenTileRequest, {
         ...toTileKey(surface),
-        url,
+        url: target,
         disposition:
           details.disposition === "background-tab"
             ? "background"
@@ -99,6 +102,16 @@ export class BrowserViewPopups {
       window.close();
       return;
     }
+    // A popup shares the opener's jar, so it needs the opener's navigation
+    // policy: without this, `window.open()` then `location = "file:///..."`
+    // walks straight around every gate the guest itself has. Its own
+    // `window.open` is denied outright rather than gated - a popup of a popup
+    // has no tile to become and no opener UX to preserve.
+    installGuestNavigationGuard(window.webContents);
+    window.webContents.setWindowOpenHandler((details) => {
+      traceRefusedGuestNavigation(details.url, "popup-window-open");
+      return { action: "deny" };
+    });
     this.registerPopupWebContents(window.webContents);
     this.openWindows.add(window);
     window.on("closed", () => {
@@ -130,25 +143,6 @@ function windowOpenShouldCreateTile(
   if (details.features.trim().length > 0) return false;
   if (details.frameName === "_blank") return true;
   return false;
-}
-
-/**
- * `about:blank` is a page opening its own blank tab before navigating it - a
- * tile target, not an OS handoff. `safelyOpenExternal` rejects the `about:`
- * scheme, so classifying it as external would leave the user with no popup
- * AND no tile.
- */
-function isTileTarget(url: string): boolean {
-  return url === "about:blank" || isWebUrl(url);
-}
-
-function isWebUrl(url: string): boolean {
-  try {
-    const protocol = new URL(url).protocol;
-    return protocol === "http:" || protocol === "https:";
-  } catch {
-    return false;
-  }
 }
 
 function normalizeOpenedUrl(url: string, baseUrl: string): string {

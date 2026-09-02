@@ -8,14 +8,14 @@ import {
   useBrowserSaveLogins,
   type BrowserSaveLoginsController,
 } from "@/lib/browser-view/use-browser-save-logins";
-import {
-  clearSavedLoginSite,
-  forgetAllBrowserLogins,
-} from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import { useBrowserSavedLoginSitesQuery } from "@/hooks/browser/use-browser-saved-login-sites-query";
+import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
+import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
 import { useHostBinding } from "@/lib/host";
 import { formatRelativeTimestamp, useSampledNow } from "@/lib/relative-time";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
+import { appLogger } from "@/lib/logger";
+import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
 import type {
   BrowserSavedLoginSite,
   BrowserSavedLoginSitesResponse,
@@ -119,7 +119,13 @@ function BrowserSavedLoginsGroup(): ReactNode {
   if (browserView === null || hostBinding === null || enabled === null) {
     return null;
   }
-  return <BrowserSavedLoginsRows saveLogins={saveLogins} enabled={enabled} />;
+  return (
+    <BrowserSavedLoginsRows
+      browserView={browserView}
+      saveLogins={saveLogins}
+      enabled={enabled}
+    />
+  );
 }
 
 /**
@@ -128,6 +134,7 @@ function BrowserSavedLoginsGroup(): ReactNode {
  * called conditionally.
  */
 function BrowserSavedLoginsRows(props: {
+  readonly browserView: BrowserViewBridge;
   readonly saveLogins: BrowserSaveLoginsController;
   readonly enabled: boolean;
 }): ReactNode {
@@ -145,8 +152,9 @@ function BrowserSavedLoginsRows(props: {
         saveLogins={props.saveLogins}
         enabled={props.enabled}
       />
-      <ForgetAllLoginsRow />
+      <ForgetAllLoginsRow browserView={props.browserView} />
       <SavedLoginSitesRow
+        browserView={props.browserView}
         data={sites.data ?? null}
         onCleared={() => {
           void sites.refetch();
@@ -206,51 +214,61 @@ function SavedLoginsToggleRow(props: {
 }
 
 /**
- * The destructive one, moved here from the tile shield (ticket 08's temporary
- * home). It speaks for every host the user has a live browser stream to, which
- * is what "all" means and why it is not tile-scoped - and when there is no such
- * stream the frame reaches nobody, so the confirm stays open instead of closing
- * on work that never happened.
+ * Both destructive actions are main's: it raises the native dialog, does the
+ * work, and answers whether the user confirmed. This renderer only reports
+ * that answer, so a rejected IPC has to read as "not confirmed" rather than
+ * escape a click handler as an unhandled rejection.
  */
-function ForgetAllLoginsRow(): ReactNode {
-  const [confirming, setConfirming] = useState(false);
+async function confirmedByMain(
+  request: Promise<boolean>,
+  failureMessage: string,
+): Promise<boolean> {
+  return request.catch((cause: unknown) => {
+    appLogger.warn(failureMessage, {
+      cause: cause instanceof Error ? cause.message : String(cause),
+    });
+    return false;
+  });
+}
+
+/**
+ * The destructive one, moved here from the tile shield (ticket 08's temporary
+ * home). It speaks for this machine AND for every host the user has a live
+ * browser stream to, which is what "all" means and why it is not tile-scoped.
+ *
+ * It always completes, unlike the per-site Clear. This machine's own jar and
+ * forget ledger are emptied whether or not a host is listening, and the ledger
+ * is what carries the forget to hosts that were not (universal-sign-in decision
+ * 6) - so there is no "nothing happened" case left to hold the dialog open for.
+ */
+function ForgetAllLoginsRow(props: {
+  readonly browserView: BrowserViewBridge;
+}): ReactNode {
   return (
-    <>
-      <SettingsRow
-        label="Forget all browser logins"
-        description="Deletes every saved cookie and login - on this machine and on the host that stores them. Open browser tabs reload signed out and agent sessions using them are suspended."
-        control={
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="text-destructive hover:text-destructive"
-            onClick={() => {
-              setConfirming(true);
-            }}
-          >
-            Forget all browser logins…
-          </Button>
-        }
-      />
-      <ConfirmDestructiveDialog
-        open={confirming}
-        onOpenChange={setConfirming}
-        title="Forget all browser logins?"
-        description="Traycer deletes every saved cookie and login - on this machine and on the host that stores them. Open browser tabs reload signed out, and agent sessions using them are suspended. This cannot be undone."
-        cascadeSummary={null}
-        actionLabel="Forget logins"
-        isPending={false}
-        blockedReason={null}
-        onConfirm={() => {
-          // Same refusal as the per-site Clear: with no live browser stream
-          // nothing went out, so the dialog stays where it is rather than
-          // closing on a promise the app did not keep.
-          if (!forgetAllBrowserLogins()) return;
-          setConfirming(false);
-        }}
-      />
-    </>
+    <SettingsRow
+      label="Forget all browser logins"
+      description="Deletes every saved cookie and login - on this machine and on the host that stores them. Open browser tabs reload signed out and agent sessions using them are suspended."
+      control={
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="text-destructive hover:text-destructive"
+          onClick={() => {
+            // No renderer dialog: the main process raises a native one and is
+            // the authority on the answer (browser security review, root cause
+            // C). A second confirmation here would ask twice and, worse, would
+            // read as the gate while the real one lives elsewhere.
+            void confirmedByMain(
+              props.browserView.forgetLogins(),
+              "[browser] clearing the browser partition failed",
+            );
+          }}
+        >
+          Forget all browser logins…
+        </Button>
+      }
+    />
   );
 }
 
@@ -265,6 +283,7 @@ function ForgetAllLoginsRow(): ReactNode {
  * claiming an empty jar.
  */
 function SavedLoginSitesRow(props: {
+  readonly browserView: BrowserViewBridge;
   readonly data: BrowserSavedLoginSitesResponse | null;
   readonly onCleared: () => void;
 }): ReactNode {
@@ -297,7 +316,9 @@ function SavedLoginSitesRow(props: {
         <div className="flex w-full min-w-0 max-w-[min(48vw,26rem)] flex-col gap-1.5 text-ui-sm">
           {data.kind === "sealed" ? (
             <p className="text-muted-foreground">
-              Connect this desktop to unlock saved logins.
+              Connect this desktop to unlock saved logins. If this machine has
+              no system keyring, Traycer will not encrypt them here, so they
+              stay locked and nothing new is saved.
             </p>
           ) : (
             <SavedLoginSiteList
@@ -305,11 +326,19 @@ function SavedLoginSitesRow(props: {
                 (site) => !activeCleared.includes(site.domain),
               )}
               onClear={(domain) => {
-                if (!clearSavedLoginSite(domain)) return;
-                // The pruned list, not the raw one: a domain the host has
-                // since dropped never comes back into it.
-                setCleared([...activeCleared, domain]);
-                props.onCleared();
+                // Awaited, because main raises a native dialog and a cancelled
+                // one must not hide the row: the answer is the confirmation,
+                // not the request (H10).
+                void confirmedByMain(
+                  props.browserView.clearSavedLoginSite(domain),
+                  "[browser] clearing one saved login failed",
+                ).then((confirmed) => {
+                  if (!confirmed) return;
+                  // The pruned list, not the raw one: a domain the host has
+                  // since dropped never comes back into it.
+                  setCleared([...activeCleared, domain]);
+                  props.onCleared();
+                });
               }}
             />
           )}
@@ -326,35 +355,97 @@ function SavedLoginSiteList(props: {
   // The shared 60s clock, not `Date.now()`: reading the wall clock during a
   // render is impure, and the sampled one repaints these labels on its tick.
   const now = useSampledNow();
+  // THIS machine's host id, read once for the whole list: every row compares
+  // its contributor against the same answer. `useReactiveLocalHostId` rather
+  // than the local directory entry, because the entry goes null while the
+  // local host restarts and a row must not start claiming a remote capture
+  // for the length of that gap.
+  const localHostId = useReactiveLocalHostId();
   if (props.sites.length === 0) {
     return <p className="text-muted-foreground">No saved logins yet.</p>;
   }
   return (
     <ul className="flex w-full min-w-0 flex-col gap-1">
       {props.sites.map((site) => (
-        <li
+        <SavedLoginSiteRow
           key={site.domain}
-          className="flex min-w-0 items-center gap-2 text-ui-sm"
-        >
-          <span className="min-w-0 flex-1 truncate font-mono text-foreground">
-            {site.domain}
-          </span>
-          <span className="shrink-0 text-muted-foreground">
-            {formatRelativeTimestamp(site.lastSeen, now)}
-          </span>
-          <Button
-            type="button"
-            variant="ghost"
-            size="xs"
-            aria-label={`Clear saved logins for ${site.domain}`}
-            onClick={() => {
-              props.onClear(site.domain);
-            }}
-          >
-            Clear
-          </Button>
-        </li>
+          site={site}
+          localHostId={localHostId}
+          now={now}
+          onClear={props.onClear}
+        />
       ))}
     </ul>
+  );
+}
+
+/**
+ * One site, plus the provenance line when another machine is what signed in
+ * (universal-sign-in decision 9).
+ *
+ * Its own component because resolving a host's display name is a hook, and a
+ * row is where the host id lives. Attribution is deliberately silent for the
+ * local machine: a login this desktop's own host captured is one the user made
+ * here, and naming their own machine on every row would be noise around the
+ * lines that actually say "this came from somewhere else".
+ *
+ * The copy says "includes a sign-in from", not "captured on", because the
+ * marker behind it is STICKY: it records that a headless context on that host
+ * once contributed new cookie information for the domain, and it survives the
+ * user signing into the same site here afterwards. Anything tighter (a "where
+ * this login came from", a "captured at") would be a claim about recency and
+ * origin that the store does not make.
+ */
+function SavedLoginSiteRow(props: {
+  readonly site: BrowserSavedLoginSite;
+  readonly localHostId: string | null;
+  readonly now: number;
+  readonly onClear: (domain: string) => void;
+}): ReactNode {
+  const contributedByHostId = props.site.contributedByHostId;
+  // `typeof`, not `!== null`, and the difference is load-bearing. The
+  // same-minor RPC path returns the host's payload UNPARSED - the schema's
+  // `.default(null)` only runs when a version gap forces a decode - so against
+  // a host that predates the field this is `undefined` at runtime however the
+  // type reads. A null check would let that through and render a dangling
+  // "Includes a sign-in from " on every row of every older host's list.
+  const remoteHostId =
+    typeof contributedByHostId === "string" &&
+    contributedByHostId !== props.localHostId
+      ? contributedByHostId
+      : null;
+  // The directory is the app's host-naming machinery: its `label` is the
+  // account registry's display name for a remote host and the machine's own
+  // for this one. `null` (a host this client cannot currently list) falls back
+  // to the canonical id rather than inventing a name for it.
+  const entry = useHostDirectoryEntry(remoteHostId);
+  const hostName = entry === null ? remoteHostId : entry.label;
+  return (
+    <li className="flex min-w-0 flex-col gap-0.5">
+      <div className="flex min-w-0 items-center gap-2 text-ui-sm">
+        <span className="min-w-0 flex-1 truncate font-mono text-foreground">
+          {props.site.domain}
+        </span>
+        <span className="shrink-0 text-muted-foreground">
+          {formatRelativeTimestamp(props.site.lastSeen, props.now)}
+        </span>
+        <Button
+          type="button"
+          variant="ghost"
+          size="xs"
+          aria-label={`Clear saved logins for ${props.site.domain}`}
+          onClick={() => {
+            props.onClear(props.site.domain);
+          }}
+        >
+          Clear
+        </Button>
+      </div>
+      {hostName === null ? null : (
+        <span className="min-w-0 truncate text-ui-xs text-muted-foreground">
+          Includes a sign-in from {hostName}
+        </span>
+      )}
+    </li>
   );
 }

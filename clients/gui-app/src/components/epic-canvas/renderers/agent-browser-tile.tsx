@@ -39,7 +39,7 @@ import type {
 import type {
   ElectronTabBinding,
   ElectronTabSurfaceLease,
-} from "@/lib/browser-view/sessions/electron-tabs";
+} from "@/lib/browser-view/sessions/electron-tab-directory";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import type { TileOpenTarget } from "@/lib/canvas/tile-open/intent";
 import { cn } from "@/lib/utils";

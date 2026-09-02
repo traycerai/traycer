@@ -200,10 +200,10 @@ const INITIAL_FORM_STATE: ReportIssueFormState = {
   allowContact: false,
   includeDesktopLog: true,
   includeHostLog: true,
-  // Full D8 symmetry: browser diagnostics follows the same bug/idea/other
-  // default split as the other two log toggles, and the same touched-by-user
-  // tracking (ticket 03 fix round).
-  includeBrowserDiagnostics: true,
+  // Default OFF, unlike the other two log toggles: `browser-trace.jsonl`
+  // records the agent's cell source and every page it drove, so it is opt-in
+  // per report rather than opted-out. Touched-by-user tracking is unchanged.
+  includeBrowserDiagnostics: false,
   includeDiagnostics: true,
 };
 
@@ -735,7 +735,6 @@ export function ReportIssueDialog(
         type: nextType,
         includeDesktopLog: logsOn,
         includeHostLog: logsOn,
-        includeBrowserDiagnostics: logsOn,
       };
     });
   }
@@ -1188,7 +1187,6 @@ function CaptureScreenBody({
             setForm((prev) => ({ ...prev, includeHostLog: checked }));
           }}
           onToggleBrowserDiagnostics={(checked) => {
-            onLogsTouched();
             setForm((prev) => ({
               ...prev,
               includeBrowserDiagnostics: checked,

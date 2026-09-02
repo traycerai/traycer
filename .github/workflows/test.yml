@@ -107,7 +107,7 @@ jobs:
           bun-version: "1.3.12"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: "24"
+          node-version: "24.20.0"
       - name: Cache bun global install cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
@@ -231,7 +231,7 @@ jobs:
           bun-version: "1.3.12"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: "24"
+          node-version: "24.20.0"
       # The standard runner starts immediately. A larger runner queued for
       # more than three minutes, while cache restore on this runner took 3m27
       # plus a 32s install versus 3m51 for the uncached install below.
@@ -266,7 +266,7 @@ jobs:
           bun-version: "1.3.12"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: "24"
+          node-version: "24.20.0"
       - name: Cache bun global install cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:

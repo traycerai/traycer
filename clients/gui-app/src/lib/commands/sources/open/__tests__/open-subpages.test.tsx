@@ -5,7 +5,7 @@ import type {
   WorktreeIntent,
 } from "@traycer/protocol/host/worktree-schemas";
 import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
-import type { BrowserSessionsLifecycle } from "@/components/epic-canvas/renderers/browser-sessions-context";
+import type { BrowserSessionsLifecycle } from "@traycer-clients/shared/platform/browser-view";
 import type { CommandContext, CommandItem } from "@/lib/commands/types";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
 import type { OpenTileIntoTargetGroupArgs } from "@/lib/commands/actions/open-into-target";

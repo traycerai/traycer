@@ -1,8 +1,10 @@
 import { useEffect } from "react";
 import { useStore } from "zustand";
 import { createStore } from "zustand/vanilla";
-import type { BrowserViewNativeTabKey } from "@traycer-clients/shared/platform/browser-view";
-import type { BrowserSessionsLifecycle } from "../sessions/browser-sessions-stream";
+import type {
+  BrowserSessionsLifecycle,
+  BrowserViewNativeTabKey,
+} from "@traycer-clients/shared/platform/browser-view";
 import {
   isBrowserTileVisible,
   subscribeVisibleBrowserTiles,
