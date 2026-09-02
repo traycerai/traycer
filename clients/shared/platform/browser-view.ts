@@ -444,6 +444,16 @@ export interface BrowserViewBridge {
   ): {
     dispose: () => void;
   };
+  /**
+   * Ticket 04 exit-edge handshake: fires once for a tile that WAS parked,
+   * when the un-parked native view's first composited frame lands - the
+   * renderer's cue to drop the stand-in it kept mounted since occlusion. A
+   * tile released without ever parking never reaches here; it restores
+   * through `restoredTiles` on the occlude/release return value instead.
+   */
+  onOverlayTileRestored(handler: (tile: BrowserViewTileKey) => void): {
+    dispose: () => void;
+  };
   onAnnotationEvent(
     handler: (change: BrowserAnnotationSessionIpcEvent) => void,
   ): {

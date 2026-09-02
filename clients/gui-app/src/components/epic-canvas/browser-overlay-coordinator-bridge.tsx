@@ -1,9 +1,11 @@
 import { use, useEffect } from "react";
 import {
   clearBrowserViewSnapshot,
-  collectBrowserOverlaySurfaces,
+  listBrowserOverlayElements,
+  listBrowserOverlaySurfaces,
   listBrowserOverlayTiles,
   markBrowserViewSnapshotStale,
+  resolveBrowserOverlayMotionTargets,
   resolveBrowserOverlayOcclusionTargets,
   setBrowserViewSnapshot,
   subscribeBrowserOverlayLayout,
@@ -105,10 +107,20 @@ function BrowserOverlayCoordinator(props: {
     };
 
     const runScan = (): void => {
-      const targets = resolveBrowserOverlayOcclusionTargets(
-        collectBrowserOverlaySurfaces(document.body),
-        listBrowserOverlayTiles(),
-      );
+      const tiles = listBrowserOverlayTiles();
+      // Invariant 8: motion is a second freeze input to this same state
+      // machine, not a parallel one - a moving tile's synthetic owner runs
+      // through the exact per-owner occlude/release/ack path below, so it
+      // gets the capturePage stand-in, paint-ack and exit handshake for
+      // free. It never touches `resolveBrowserOverlayOcclusionTargets`
+      // (there is no overlay rect to intersect for a motion owner).
+      const targets = [
+        ...resolveBrowserOverlayOcclusionTargets(
+          listBrowserOverlaySurfaces(),
+          tiles,
+        ),
+        ...resolveBrowserOverlayMotionTargets(tiles),
+      ];
       const nextTargetsByOverlayId = new Map(
         targets.map((target) => [target.overlayId, target]),
       );
@@ -173,24 +185,47 @@ function BrowserOverlayCoordinator(props: {
       });
     };
 
-    const unsubscribeLayout = subscribeBrowserOverlayLayout(scheduleScan);
     const invalidationSubscription = browserView.onSnapshotInvalidated(
       markBrowserViewSnapshotStale,
     );
-    const mutationObserver = new MutationObserver(scheduleScan);
-    mutationObserver.observe(document.body, {
-      subtree: true,
-      childList: true,
-      attributes: true,
-      attributeFilter: [
-        "class",
-        "data-browser-overlay",
-        "data-browser-overlay-ignore",
-        "data-state",
-        "hidden",
-        "style",
-      ],
+    // Invariant 4 (ticket 04): a tile that WAS parked cannot answer
+    // `restoredTiles` synchronously - its stand-in stays mounted until this
+    // fires, on the un-parked view's first composited frame.
+    const restoreSubscription = browserView.onOverlayTileRestored((tile) => {
+      applyRestoredTiles([tile]);
     });
+    // Registration reports mount/unmount; it cannot report the predicate's
+    // own inputs (`class`, `data-state`, `hidden`, `style`) moving on an
+    // already-registered element without a React render (a Radix fade-out,
+    // a `hidden` toggle). So the observer stays, re-targeted to exactly the
+    // currently-registered elements on every layout change instead of the
+    // whole `document.body` subtree the old scan needed to find overlays at
+    // all.
+    const mutationObserver = new MutationObserver(scheduleScan);
+    const observeRegisteredElements = (): void => {
+      mutationObserver.disconnect();
+      listBrowserOverlayElements().forEach((element) => {
+        mutationObserver.observe(element, {
+          attributes: true,
+          attributeFilter: ["class", "data-state", "hidden", "style"],
+          // Descendant growth (e.g. sonner's inner `<ol>` mounting once a
+          // toast exists) must trigger a rescan too - a handful of
+          // registered elements, not `document.body`, so subtree is cheap
+          // here.
+          childList: true,
+          subtree: true,
+        });
+      });
+    };
+    // The layout channel also fires on every tile rect move (a drag), which
+    // re-observes a handful of already-registered elements each time - cheap
+    // (disconnect/observe do no DOM work of their own), so no separate
+    // registration-only channel is worth the extra plumbing.
+    const unsubscribeLayout = subscribeBrowserOverlayLayout(() => {
+      observeRegisteredElements();
+      scheduleScan();
+    });
+    observeRegisteredElements();
     window.addEventListener("resize", scheduleScan, { passive: true });
     window.addEventListener("scroll", scheduleScan, true);
     scheduleScan();
@@ -200,6 +235,7 @@ function BrowserOverlayCoordinator(props: {
       if (frameId !== null) window.cancelAnimationFrame(frameId);
       unsubscribeLayout();
       invalidationSubscription.dispose();
+      restoreSubscription.dispose();
       mutationObserver.disconnect();
       window.removeEventListener("resize", scheduleScan);
       window.removeEventListener("scroll", scheduleScan, true);

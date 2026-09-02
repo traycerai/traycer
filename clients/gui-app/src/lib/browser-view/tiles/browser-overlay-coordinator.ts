@@ -6,10 +6,6 @@ import { browserViewTileKeyId } from "./browser-view-keys";
 
 export const BROWSER_VIEW_SURFACE_ATTRIBUTE = "data-browser-view-surface";
 
-const BROWSER_OVERLAY_ATTRIBUTE = "data-browser-overlay";
-const BROWSER_OVERLAY_ID_ATTRIBUTE = "data-browser-overlay-id";
-const BROWSER_OVERLAY_IGNORE_ATTRIBUTE = "data-browser-overlay-ignore";
-
 /** A CSS-pixel rect in viewport coordinates, as `DOMRect` reports them. */
 export interface BrowserOverlayRect {
   readonly left: number;
@@ -22,7 +18,6 @@ export interface BrowserOverlayRect {
 
 interface BrowserOverlaySurface {
   readonly id: string;
-  readonly kind: string;
   readonly rect: BrowserOverlayRect;
 }
 
@@ -30,6 +25,7 @@ interface BrowserOverlayTile {
   readonly key: BrowserViewTileKey;
   readonly keyId: string;
   readonly rect: BrowserOverlayRect;
+  readonly moving: boolean;
 }
 
 interface BrowserOverlayOcclusionTarget {
@@ -47,30 +43,21 @@ interface BrowserOverlayTileRegistration {
   readonly key: BrowserViewTileKey;
   readonly keyId: string;
   rect: BrowserOverlayRect;
+  moving: boolean;
 }
 
-const overlayIdsByElement = new WeakMap<Element, string>();
+interface BrowserOverlayRegistration {
+  readonly id: string;
+  readonly element: HTMLElement;
+}
+
 let nextOverlayId = 1;
 
 const tilesByKeyId = new Map<string, BrowserOverlayTileRegistration>();
+const overlaysById = new Map<string, BrowserOverlayRegistration>();
 const snapshotsByKeyId = new Map<string, BrowserViewSnapshotState>();
 const layoutListeners = new Set<() => void>();
 const snapshotListenersByKeyId = new Map<string, Set<() => void>>();
-const BROWSER_OVERLAY_SELECTORS = [
-  `[${BROWSER_OVERLAY_ATTRIBUTE}]`,
-  '[data-slot="dialog-content"]',
-  '[data-slot="sheet-content"]',
-  '[data-slot="dropdown-menu-content"]',
-  '[data-slot="dropdown-menu-sub-content"]',
-  '[data-slot="context-menu-content"]',
-  '[data-slot="context-menu-sub-content"]',
-  '[data-slot="popover-content"]',
-  '[data-slot="hover-card-content"]',
-  '[data-slot="select-content"]',
-  '[data-slot="tooltip-content"]',
-  "[data-sonner-toaster]",
-  '[role="dialog"]',
-].join(",");
 
 export function rectFromDomRect(rect: DOMRectReadOnly): BrowserOverlayRect {
   return {
@@ -92,6 +79,7 @@ export function registerBrowserOverlayTile(input: {
     key: input.key,
     keyId,
     rect: input.rect,
+    moving: false,
   });
   emitLayoutChange();
   return () => {
@@ -119,7 +107,27 @@ export function listBrowserOverlayTiles(): readonly BrowserOverlayTile[] {
     key: entry.key,
     keyId: entry.keyId,
     rect: entry.rect,
+    moving: entry.moving,
   }));
+}
+
+/**
+ * Invariant 8: motion (canvas scroll / pane animation / resize) is a second
+ * freeze input on the SAME tile, reported by the bounds-bridge rAF loop
+ * (`useBrowserViewBoundsBridge`) - never a new listener here. Level-triggered
+ * like the rect itself: idempotent, and a no-op re-report emits nothing so a
+ * steady-state moving tile does not re-trigger the bridge's scan every frame.
+ */
+export function setBrowserOverlayTileMotion(
+  key: BrowserViewTileKey,
+  moving: boolean,
+): void {
+  const keyId = browserViewTileKeyId(key);
+  const entry = tilesByKeyId.get(keyId);
+  if (entry === undefined) return;
+  if (entry.moving === moving) return;
+  entry.moving = moving;
+  emitLayoutChange();
 }
 
 export function subscribeBrowserOverlayLayout(
@@ -179,29 +187,73 @@ export function subscribeBrowserViewSnapshot(
   };
 }
 
-export function collectBrowserOverlaySurfaces(
-  root: ParentNode,
-): readonly BrowserOverlaySurface[] {
-  const elements = Array.from(
-    root.querySelectorAll<HTMLElement>(BROWSER_OVERLAY_SELECTORS),
-  );
-  return Array.from(new Set(elements)).flatMap(
-    (element): BrowserOverlaySurface[] => {
-      if (element.hasAttribute(BROWSER_OVERLAY_IGNORE_ATTRIBUTE)) return [];
-      if (element.closest(`[${BROWSER_OVERLAY_IGNORE_ATTRIBUTE}]`) !== null) {
-        return [];
-      }
-      if (!isElementVisible(element)) return [];
-      const rect = rectFromDomRect(element.getBoundingClientRect());
+/**
+ * Registers `element` as a live occlusion surface for as long as the caller
+ * holds the returned deregister thunk - mounting any wrapped overlay
+ * primitive registers a rect, unmount deregisters it. This is the entire
+ * discovery mechanism: no CSS-selector scan, no ignore-attribute escape
+ * hatch. Not registering IS the escape hatch.
+ */
+export function registerBrowserOverlay(input: {
+  readonly element: HTMLElement;
+}): () => void {
+  const id = `browser-overlay-${nextOverlayId}`;
+  nextOverlayId += 1;
+  overlaysById.set(id, { id, element: input.element });
+  emitLayoutChange();
+  return () => {
+    overlaysById.delete(id);
+    emitLayoutChange();
+  };
+}
+
+/**
+ * The currently painted overlay surfaces, rect read live off each
+ * registered element rather than pushed on every frame. Visibility is the
+ * paint-signal predicate (`isElementVisible`) applied to registered
+ * elements only - never a DOM-wide scan.
+ *
+ * A disconnected element (left the document without its owner calling the
+ * deregister thunk) is dropped here rather than surfacing as a stale
+ * surface forever - but only from THIS list, not from the registry itself.
+ * Retention-on-disconnect is a plain safety net, not a requirement of any
+ * specific primitive: Radix's `SelectContent`, for instance, swaps
+ * `SelectContentImpl` for `SelectContentFragment` (and back) across
+ * open/close and re-fires the ref each time, so the ref callback itself
+ * deregisters the old element and registers the new one - the registry
+ * never actually holds a stale element across that swap. What retention
+ * guards against is the general case: any element that goes transiently
+ * disconnected (parked in a detached `DocumentFragment`, moved during a
+ * portal reparent, etc.) without its owner's ref callback re-firing.
+ * Deleting the registration there would drop it for good the moment it
+ * reconnects.
+ */
+export function listBrowserOverlaySurfaces(): readonly BrowserOverlaySurface[] {
+  return Array.from(overlaysById.values()).flatMap(
+    (registration): BrowserOverlaySurface[] => {
+      if (!registration.element.isConnected) return [];
+      if (!isElementVisible(registration.element)) return [];
+      const rect = rectFromDomRect(
+        registration.element.getBoundingClientRect(),
+      );
       if (rect.width <= 0 || rect.height <= 0) return [];
-      return [
-        {
-          id: resolveOverlayElementId(element),
-          kind: readOverlayKind(element),
-          rect,
-        },
-      ];
+      return [{ id: registration.id, rect }];
     },
+  );
+}
+
+/**
+ * The raw registered elements, connected or not - what the bridge's
+ * `MutationObserver` needs to watch. Observing a disconnected node is not
+ * wasted: `MutationObserver.observe` tracks the node reference itself, so a
+ * transiently-disconnected element's state change is still what tells the
+ * bridge to rescan once it reconnects (see `listBrowserOverlaySurfaces` for
+ * why the registry never deletes on disconnect).
+ */
+export function listBrowserOverlayElements(): readonly HTMLElement[] {
+  return Array.from(
+    overlaysById.values(),
+    (registration) => registration.element,
   );
 }
 
@@ -224,7 +276,32 @@ export function resolveBrowserOverlayOcclusionTargets(
   });
 }
 
-function rectsIntersect(
+const MOTION_OWNER_PREFIX = "browser-overlay-motion:";
+
+/**
+ * A moving tile's freeze target - a synthetic owner keyed to the tile
+ * itself, not to any overlay rect. It never goes through
+ * `resolveBrowserOverlayOcclusionTargets` (there is no overlay rect to
+ * intersect): the state machine's question is still "is this tile frozen",
+ * now answered by "some registered rect intersects it OR it is in motion".
+ * The overlayId is stable per tile (not per motion episode) so the bridge's
+ * `activeSignaturesByOverlayId` latch composes across scans exactly like an
+ * overlay owner does, and a tile that is both moving and overlay-covered
+ * gets two independent owners - releasing one leaves the other parked.
+ */
+export function resolveBrowserOverlayMotionTargets(
+  tiles: readonly BrowserOverlayTile[],
+): readonly BrowserOverlayOcclusionTarget[] {
+  return tiles
+    .filter((tile) => tile.moving)
+    .map((tile) => ({
+      overlayId: `${MOTION_OWNER_PREFIX}${tile.keyId}`,
+      tiles: [tile.key],
+      signature: "moving",
+    }));
+}
+
+export function rectsIntersect(
   first: BrowserOverlayRect,
   second: BrowserOverlayRect,
 ): boolean {
@@ -234,28 +311,6 @@ function rectsIntersect(
     first.top < second.bottom &&
     first.bottom > second.top
   );
-}
-
-function resolveOverlayElementId(element: HTMLElement): string {
-  const explicitId = element.getAttribute(BROWSER_OVERLAY_ID_ATTRIBUTE);
-  if (explicitId !== null && explicitId.length > 0) return explicitId;
-  const existingId = overlayIdsByElement.get(element);
-  if (existingId !== undefined) return existingId;
-  const generatedId = `browser-overlay-${nextOverlayId}`;
-  nextOverlayId += 1;
-  overlayIdsByElement.set(element, generatedId);
-  return generatedId;
-}
-
-function readOverlayKind(element: HTMLElement): string {
-  const explicitKind = element.getAttribute(BROWSER_OVERLAY_ATTRIBUTE);
-  if (explicitKind !== null && explicitKind.length > 0) return explicitKind;
-  const slot = element.getAttribute("data-slot");
-  if (slot !== null && slot.length > 0) return slot;
-  if (element.hasAttribute("data-sonner-toaster")) return "toast";
-  const role = element.getAttribute("role");
-  if (role !== null && role.length > 0) return role;
-  return "overlay";
 }
 
 function isElementVisible(element: HTMLElement): boolean {

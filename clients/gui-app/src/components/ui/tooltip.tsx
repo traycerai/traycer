@@ -10,6 +10,8 @@ import {
   subscribeToSafeAreaInsets,
 } from "@/lib/safe-area-insets";
 import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
+import { useComposedRefs } from "radix-ui/internal";
+import { useRegisterBrowserOverlay } from "@/lib/browser-view/tiles/use-register-browser-overlay";
 
 /**
  * Whether a `TooltipProvider` is already above us. Radix owns the provider's
@@ -63,6 +65,7 @@ function TooltipTrigger({
 }
 
 function TooltipContent({
+  ref,
   className,
   sideOffset = 0,
   collisionPadding,
@@ -73,6 +76,8 @@ function TooltipContent({
   // is display:none and can never receive the pointerleave that would close
   // this, so un-present the portal with the region.
   const concealed = usePortalConcealed();
+  const registerOverlayRef = useRegisterBrowserOverlay<HTMLDivElement>();
+  const composedRef = useComposedRefs(ref, registerOverlayRef);
   // Subscribed rather than read, and read above the early return so the hook
   // order does not depend on concealment. Radix takes the padding as a plain
   // value, so a tooltip mounted in portrait would hold portrait geometry
@@ -86,8 +91,8 @@ function TooltipContent({
   return (
     <TooltipPrimitive.Portal>
       <TooltipPrimitive.Content
+        ref={composedRef}
         data-slot="tooltip-content"
-        data-browser-overlay="tooltip"
         sideOffset={sideOffset}
         // The safe-area insets are the DEFAULT collision padding, because the
         // guarantee has to hold for tooltips nobody thought about. Radix

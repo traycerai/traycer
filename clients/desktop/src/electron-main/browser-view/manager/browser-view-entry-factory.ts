@@ -192,6 +192,7 @@ export class BrowserViewEntryFactory {
       overlaySnapshotStale: false,
       overlayAwaitingPaintAck: false,
       overlayParked: false,
+      overlayRestoreToken: null,
       visible: null,
       lastLoggedVisible: null,
       rendererResetPending: false,

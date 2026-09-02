@@ -436,6 +436,12 @@ export const RunnerHostEvent = {
   browserViewTileCommand: "runnerHost:event:browserView:tileCommand",
   browserViewSnapshotInvalidated:
     "runnerHost:event:browserView:snapshotInvalidated",
+  // Ticket 04 exit-edge handshake: fired once the un-parked native view's
+  // first composited frame lands, telling the renderer it may now drop the
+  // stand-in it kept mounted since occlusion. Only for tiles that were
+  // actually parked; a tile released without ever parking keeps answering
+  // through `restoredTiles` on the occlude/release return value.
+  browserViewOverlayRestored: "runnerHost:event:browserView:overlayRestored",
   browserViewAnnotationEvent: "runnerHost:event:browserView:annotation",
   browserViewAnnotationAttached:
     "runnerHost:event:browserView:annotationAttached",
