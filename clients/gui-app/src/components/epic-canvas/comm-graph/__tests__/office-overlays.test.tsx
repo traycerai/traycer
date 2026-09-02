@@ -130,6 +130,11 @@ describe("OfficeLegend", () => {
     for (const section of ["People", "Desks", "Room"]) {
       expect(card.textContent).toContain(section);
     }
+    // Idle wandering is the floor's most eye-catching motion and the easiest
+    // to misread as work, so the key names every place a character goes.
+    expect(card.textContent).toContain(
+      "Cafeteria, water cooler, window and corridor trips, desk stretches",
+    );
     for (const meaning of [
       "waiting for a reply",
       "needs you",
@@ -142,6 +147,7 @@ describe("OfficeLegend", () => {
       "one per root agent",
       "one per host",
       "the time being shown",
+      "break room; agents chat at the cooler and tables",
       "Envelope: reply",
       "Envelope: notice",
     ]) {

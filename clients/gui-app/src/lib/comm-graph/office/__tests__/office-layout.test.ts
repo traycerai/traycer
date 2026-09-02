@@ -75,6 +75,22 @@ function within(bounds: OfficeTileRect, tile: OfficeTilePos): boolean {
   );
 }
 
+/** Every tile of a rectangle's own wall ring, in a stable order. */
+function wallRingTiles(bounds: OfficeTileRect): ReadonlyArray<OfficeTilePos> {
+  const right = bounds.col + bounds.cols - 1;
+  const bottom = bounds.row + bounds.rows - 1;
+  const tiles: OfficeTilePos[] = [];
+  for (let col = bounds.col; col <= right; col += 1) {
+    tiles.push({ col, row: bounds.row });
+    tiles.push({ col, row: bottom });
+  }
+  for (let row = bounds.row + 1; row < bottom; row += 1) {
+    tiles.push({ col: bounds.col, row });
+    tiles.push({ col: right, row });
+  }
+  return tiles;
+}
+
 function partitionTiles(layout: OfficeLayout): ReadonlyArray<OfficeTilePos> {
   return layout.props
     .filter((prop) => prop.sprite.name === "partition")
@@ -647,5 +663,145 @@ describe("layoutOffice floors", () => {
     expect(reversed.desks).toEqual(forward.desks);
     expect(reversed.floors).toEqual(forward.floors);
     expect(reversed.walkable).toEqual(forward.walkable);
+  });
+
+  it("walls a cafeteria into every storey's top-right corner", () => {
+    const layout = layoutOffice(TWO_HOSTS);
+
+    expect(layout.floors.length).toBeGreaterThan(1);
+    for (const floor of layout.floors) {
+      const bounds = floor.cafeteria;
+      if (bounds === null) throw new Error("expected a cafeteria");
+      // Hard against the outer wall on the right, and starting on the first
+      // interior row - the corner, not merely somewhere on the right.
+      expect(bounds.col + bounds.cols).toBe(layout.cols - 1);
+      expect(bounds.row).toBe(floor.bounds.row + 2);
+      expect(bounds.row + bounds.rows).toBeLessThan(
+        floor.bounds.row + floor.bounds.rows - 1,
+      );
+
+      // Exactly one way in: a break room with two holes in its wall is a
+      // corridor, and one with none is a picture of a break room.
+      const openings = wallRingTiles(bounds).filter(
+        (tile) => layout.walkable[tile.row][tile.col],
+      );
+      expect(openings).toHaveLength(1);
+      // ...and it opens onto a tile the rest of the floor can stand on.
+      const outside = { col: openings[0].col, row: openings[0].row + 1 };
+      expect(layout.walkable[outside.row][outside.col]).toBe(true);
+    }
+  });
+
+  it("moves the coffee machine and the cooler inside the cafeteria", () => {
+    const layout = layoutOffice(SINGLE_HOST);
+    const bounds = layout.floors[0].cafeteria;
+    if (bounds === null) throw new Error("expected a cafeteria");
+
+    // The machine used to stand in the open corner. Nothing outside the break
+    // room should still be a break-room fixture, or the errand system would be
+    // sending people to two different coffees.
+    const fixtures = layout.props.filter((prop) =>
+      ["coffee-machine", "water-cooler", "vending", "cafe-table"].includes(
+        prop.sprite.name,
+      ),
+    );
+    expect(fixtures.length).toBe(5);
+    for (const prop of fixtures) {
+      expect(within(bounds, prop.tile), prop.sprite.name).toBe(true);
+    }
+    // The board hangs on the room's own wall FACE, the row under its cap, the
+    // way a cabin's sign does.
+    const board = layout.props.filter(
+      (prop) => prop.sprite.name === "menu-board",
+    );
+    expect(board).toHaveLength(1);
+    expect(board[0].tile.row).toBe(bounds.row + 1);
+  });
+
+  it("keeps every errand spot walkable and reachable from every desk", () => {
+    const agents = [
+      agent({ id: "root-a", createdAt: 1 }),
+      agent({ id: "a1", parentId: "root-a", createdAt: 2 }),
+      agent({ id: "a2", parentId: "root-a", createdAt: 3 }),
+      agent({ id: "root-b", createdAt: 4 }),
+      agent({ id: "b1", parentId: "root-b", createdAt: 5 }),
+    ];
+    const layout = layoutOffice(agents);
+    const floor = layout.floors[0];
+    expect(floor.errandSpots.length).toBeGreaterThan(4);
+
+    const reserved = new Set<string>([
+      `${floor.doorTile.col},${floor.doorTile.row}`,
+      `${floor.lobbyTile.col},${floor.lobbyTile.row}`,
+      ...floor.receptionQueueTiles.map((tile) => `${tile.col},${tile.row}`),
+    ]);
+    const seen = new Set<string>();
+    for (const spot of floor.errandSpots) {
+      const key = `${spot.tile.col},${spot.tile.row}`;
+      // A spot standing in a wall, on a desk, or in the queue somebody else is
+      // waiting in is a character the viewer sees stuck in furniture.
+      expect(layout.walkable[spot.tile.row][spot.tile.col], key).toBe(true);
+      expect(reserved.has(key), key).toBe(false);
+      expect(seen.has(key), key).toBe(false);
+      seen.add(key);
+      for (const desk of layout.desks.values()) {
+        expect(
+          findOfficePath(layout, desk.chairTile, spot.tile),
+          `${desk.agentId} cannot reach ${key}`,
+        ).not.toBeNull();
+      }
+    }
+  });
+
+  it("offers a spread of things to walk to, tables included", () => {
+    const layout = layoutOffice(SINGLE_HOST);
+    const floor = layout.floors[0];
+    const kinds = new Set(floor.errandSpots.map((spot) => spot.kind));
+
+    for (const kind of [
+      "coffee",
+      "cooler",
+      "cafe",
+      "vending",
+      "whiteboard",
+      "window",
+      "plant",
+      "corridor",
+    ]) {
+      expect(kinds.has(kind as never), kind).toBe(true);
+    }
+
+    // Two tables, two seats each, and the seats of one table are neighbours so
+    // the pair sitting at them can be seen to be together.
+    const seats = floor.errandSpots.filter((spot) => spot.kind === "cafe");
+    expect(seats).toHaveLength(4);
+    expect(seats[0].tile.row).toBe(seats[1].tile.row);
+    expect(seats[1].tile.col - seats[0].tile.col).toBe(1);
+
+    // The two cooler spots face each other rather than both facing the cooler:
+    // that is what a conversation looks like from above.
+    const cooler = floor.errandSpots.filter((spot) => spot.kind === "cooler");
+    expect(cooler).toHaveLength(2);
+    expect(cooler.map((spot) => spot.facing)).toEqual(["right", "left"]);
+    expect(cooler[1].tile.col - cooler[0].tile.col).toBe(1);
+  });
+
+  it("falls back to corner fittings on a floor with no room for a cafeteria", () => {
+    const layout = layoutOffice([]);
+    const floor = layout.floors[0];
+
+    // The empty building is six by eight; a ten-tile break room would seal it.
+    expect(floor.cafeteria).toBeNull();
+    expect(
+      layout.props.some((prop) => prop.sprite.name === "coffee-machine"),
+    ).toBe(true);
+    expect(
+      layout.props.some((prop) => prop.sprite.name === "water-cooler"),
+    ).toBe(true);
+    // ...and there is still somewhere to walk to, so the floor is not dead.
+    expect(floor.errandSpots.length).toBeGreaterThan(0);
+    for (const spot of floor.errandSpots) {
+      expect(layout.walkable[spot.tile.row][spot.tile.col]).toBe(true);
+    }
   });
 });

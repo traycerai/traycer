@@ -35,11 +35,14 @@
 import type {
   OfficeAgentInput,
   OfficeDesk,
+  OfficeErrandSpot,
+  OfficeFacing,
   OfficeFloor,
   OfficeLayout,
   OfficeProp,
   OfficeRoom,
   OfficeTilePos,
+  OfficeTileRect,
 } from "@/lib/comm-graph/office/office-types";
 
 /** Slot footprint: desk + plant space across, desk / chair / aisle down. */
@@ -112,6 +115,55 @@ const MAX_RECEPTION_QUEUE_TILES = 6;
 const CLOCK_COL_OFFSET = 2;
 /** The stairwell is two tiles square, in the lobby's right-hand corner. */
 const STAIRS_TILES = 2;
+
+/**
+ * The cafeteria: a walled break room in the storey's top-right corner, holding
+ * everything an idle agent has a reason to walk to. Its footprint is RESERVED
+ * out of the floor's width (see `buildFloors`) rather than fitted into whatever
+ * gap the cabins happen to leave, because a break room that sometimes exists is
+ * a break room the errand system cannot rely on.
+ *
+ * Interior columns run `col + 1` to `col + 8` and interior rows `row + 2` to
+ * `row + 5`, laid out as:
+ *
+ * ```
+ *   row + 1   wall face: the menu board, over the coffee machine
+ *   row + 2   coffee machine .. water cooler .. vending machine
+ *   row + 3   the aisle they are used from, and where two agents chat
+ *   row + 4   two round tables
+ *   row + 5   the seats under them, and the way to the door
+ * ```
+ */
+const CAFETERIA_COLS = 10;
+const CAFETERIA_ROWS = 7;
+/** Left wall, three fixtures two apart, and the door's column clear of the stairs. */
+const CAFETERIA_COFFEE_COL_OFFSET = 1;
+const CAFETERIA_COOLER_COL_OFFSET = 3;
+const CAFETERIA_VENDING_COL_OFFSET = 5;
+const CAFETERIA_DOOR_COL_OFFSET = 7;
+const CAFETERIA_TABLE_COL_OFFSETS: ReadonlyArray<number> = [1, 5];
+/** Rows inside the room, measured from its own top-left. */
+const CAFETERIA_FIXTURE_ROW = 2;
+const CAFETERIA_AISLE_ROW = 3;
+const CAFETERIA_TABLE_ROW = 4;
+const CAFETERIA_SEAT_ROW = 5;
+/**
+ * Below this the storey is all cabin and corridor: dropping a ten-tile room into
+ * it would seal the routes the cabins open onto. Such a floor keeps the older
+ * corner fittings instead and reports `cafeteria: null`.
+ */
+const CAFETERIA_MIN_INTERIOR_COLS = 14;
+const CAFETERIA_MIN_FLOOR_ROWS = CAFETERIA_ROWS + 4;
+/** Fallback fittings, when there is no room for a cafeteria. */
+const CORNER_COFFEE_COL_OFFSET = 3;
+const CORNER_COOLER_COL_OFFSET = 5;
+
+/** A table is two tiles wide, and each of its tiles seats one agent. */
+const CAFE_TABLE_WIDTH_TILES = 2;
+/** How many corridor spots one floor offers, and how wide the sample is. */
+const MAX_CORRIDOR_SPOTS = 4;
+/** More than three windows to stand at reads as a floor with nothing else to do. */
+const MAX_WINDOW_SPOTS = 3;
 
 interface Forest {
   /** Agents with no parent on this floor, in `(createdAt, id)` order. */
@@ -333,10 +385,13 @@ function buildFloors(
       contentRight = Math.max(contentRight, cabin.col + cabin.cols - 1);
       contentBottom = Math.max(contentBottom, cabin.row + cabin.rows - 1);
     }
+    // The cafeteria's width is reserved here rather than claimed later: it
+    // stands to the RIGHT of every cabin band, and a room fitted into leftover
+    // space would move whenever a family grew.
     const localCols =
       cabins.length === 0
         ? EMPTY_ROOM_COLS
-        : contentRight + BUILDING_RIGHT_MARGIN_TILES;
+        : contentRight + BUILDING_RIGHT_MARGIN_TILES + CAFETERIA_COLS;
     const localRows =
       cabins.length === 0
         ? EMPTY_ROOM_ROWS
@@ -480,18 +535,425 @@ function placeStairwell(args: {
   return { col, row };
 }
 
-export function layoutOffice(
-  agents: ReadonlyArray<OfficeAgentInput>,
-): OfficeLayout {
-  const builds = buildFloors(agents);
-  const last = builds[builds.length - 1];
-  let cols = 0;
-  for (const build of builds) cols = Math.max(cols, build.localCols);
-  const rows = last.originRow + last.localRows;
-  const doorCol = Math.floor((cols - 1) / 2);
+// ---- Fitting out a storey -------------------------------------------- //
 
-  const desks = new Map<string, OfficeDesk>();
-  const rooms: OfficeRoom[] = [];
+/**
+ * The mutable half of the plan, threaded through every fitting-out pass. Props
+ * and walkability move together: nearly everything placed on a floor is a thing
+ * you cannot walk through, and keeping the two in one value is what stops a
+ * prop from being drawn over a tile agents still route across.
+ */
+interface PlanContext {
+  readonly cols: number;
+  readonly rows: number;
+  readonly props: OfficeProp[];
+  readonly walkable: boolean[][];
+}
+
+/** Deterministic expansion order, matching the path finder's. */
+const FLOOD_OFFSETS: ReadonlyArray<OfficeTilePos> = [
+  { col: 0, row: -1 },
+  { col: 0, row: 1 },
+  { col: -1, row: 0 },
+  { col: 1, row: 0 },
+];
+
+function tileKey(tile: OfficeTilePos): string {
+  return `${tile.col},${tile.row}`;
+}
+
+function withinRect(bounds: OfficeTileRect, tile: OfficeTilePos): boolean {
+  return (
+    tile.col >= bounds.col &&
+    tile.col < bounds.col + bounds.cols &&
+    tile.row >= bounds.row &&
+    tile.row < bounds.row + bounds.rows
+  );
+}
+
+function blockPlanTile(context: PlanContext, tile: OfficeTilePos): void {
+  if (tile.row < 0 || tile.row >= context.rows) return;
+  if (tile.col < 0 || tile.col >= context.cols) return;
+  context.walkable[tile.row][tile.col] = false;
+}
+
+function addBlockingProp(context: PlanContext, prop: OfficeProp): void {
+  context.props.push(prop);
+  blockPlanTile(context, prop.tile);
+}
+
+/**
+ * Every tile a walker can get to from `start`. One flood per storey answers the
+ * question every errand spot has to pass - a spot behind a wall is a spot the
+ * scene would send someone to and never see them arrive.
+ */
+function reachableFrom(
+  context: PlanContext,
+  start: OfficeTilePos,
+): ReadonlySet<string> {
+  const seen = new Set<string>();
+  if (start.row < 0 || start.row >= context.rows) return seen;
+  if (start.col < 0 || start.col >= context.cols) return seen;
+  if (!context.walkable[start.row][start.col]) return seen;
+  const queue: OfficeTilePos[] = [start];
+  seen.add(tileKey(start));
+  let head = 0;
+  while (head < queue.length) {
+    const tile = queue[head];
+    head += 1;
+    for (const offset of FLOOD_OFFSETS) {
+      const next: OfficeTilePos = {
+        col: tile.col + offset.col,
+        row: tile.row + offset.row,
+      };
+      if (next.row < 0 || next.row >= context.rows) continue;
+      if (next.col < 0 || next.col >= context.cols) continue;
+      if (!context.walkable[next.row][next.col]) continue;
+      const key = tileKey(next);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      queue.push(next);
+    }
+  }
+  return seen;
+}
+
+interface CafeteriaPlan {
+  readonly bounds: OfficeTileRect;
+  readonly doorTile: OfficeTilePos;
+  readonly coffeeTile: OfficeTilePos;
+  readonly coolerTile: OfficeTilePos;
+  readonly vendingTile: OfficeTilePos;
+  /** Left tile of each two-tile table. */
+  readonly tableTiles: ReadonlyArray<OfficeTilePos>;
+}
+
+/** The corner fittings a floor too small for a cafeteria keeps instead. */
+interface CornerFittings {
+  readonly coffeeTile: OfficeTilePos;
+  readonly coolerTile: OfficeTilePos | null;
+}
+
+function planCafeteria(
+  context: PlanContext,
+  build: FloorBuild,
+): CafeteriaPlan | null {
+  if (context.cols - 2 < CAFETERIA_MIN_INTERIOR_COLS) return null;
+  if (build.localRows < CAFETERIA_MIN_FLOOR_ROWS) return null;
+  const col = context.cols - 1 - CAFETERIA_COLS;
+  const row = build.originRow + BUILDING_TOP_WALL_ROWS;
+  if (col <= BUILDING_FIRST_CONTENT_COL) return null;
+  return {
+    bounds: { col, row, cols: CAFETERIA_COLS, rows: CAFETERIA_ROWS },
+    // In the BOTTOM wall, right of both tables and one column clear of the
+    // stairwell, so the way out is never the way past somebody eating.
+    doorTile: {
+      col: col + CAFETERIA_DOOR_COL_OFFSET,
+      row: row + CAFETERIA_ROWS - 1,
+    },
+    coffeeTile: {
+      col: col + CAFETERIA_COFFEE_COL_OFFSET,
+      row: row + CAFETERIA_FIXTURE_ROW,
+    },
+    coolerTile: {
+      col: col + CAFETERIA_COOLER_COL_OFFSET,
+      row: row + CAFETERIA_FIXTURE_ROW,
+    },
+    vendingTile: {
+      col: col + CAFETERIA_VENDING_COL_OFFSET,
+      row: row + CAFETERIA_FIXTURE_ROW,
+    },
+    tableTiles: CAFETERIA_TABLE_COL_OFFSETS.map((offset) => ({
+      col: col + offset,
+      row: row + CAFETERIA_TABLE_ROW,
+    })),
+  };
+}
+
+/**
+ * The break room's own wall ring, its door, and everything standing inside it.
+ * The ring mirrors a cabin's - cap, wall face, sides, one walkable door - so the
+ * scene can paint it with the same two sprites.
+ */
+function buildCafeteria(context: PlanContext, plan: CafeteriaPlan): void {
+  const { col, row, cols, rows } = plan.bounds;
+  const right = col + cols - 1;
+  const bottom = row + rows - 1;
+  for (let scanCol = col; scanCol <= right; scanCol += 1) {
+    for (let top = row; top < row + CABIN_TOP_WALL_ROWS; top += 1) {
+      blockPlanTile(context, { col: scanCol, row: top });
+    }
+    blockPlanTile(context, { col: scanCol, row: bottom });
+  }
+  for (
+    let scanRow = row + CABIN_TOP_WALL_ROWS;
+    scanRow < bottom;
+    scanRow += 1
+  ) {
+    blockPlanTile(context, { col, row: scanRow });
+    blockPlanTile(context, { col: right, row: scanRow });
+  }
+  context.walkable[plan.doorTile.row][plan.doorTile.col] = true;
+  // On the wall face over the coffee machine, exactly where a cabin hangs its
+  // sign - the board is what says which of the three fixtures is the coffee.
+  addBlockingProp(context, {
+    sprite: { name: "menu-board" },
+    tile: { col: col + CAFETERIA_COFFEE_COL_OFFSET, row: row + 1 },
+  });
+  addBlockingProp(context, {
+    sprite: { name: "coffee-machine" },
+    tile: plan.coffeeTile,
+  });
+  addBlockingProp(context, {
+    sprite: { name: "water-cooler" },
+    tile: plan.coolerTile,
+  });
+  addBlockingProp(context, {
+    sprite: { name: "vending" },
+    tile: plan.vendingTile,
+  });
+  for (const tile of plan.tableTiles) {
+    context.props.push({ sprite: { name: "cafe-table" }, tile });
+    for (let offset = 0; offset < CAFE_TABLE_WIDTH_TILES; offset += 1) {
+      blockPlanTile(context, { col: tile.col + offset, row: tile.row });
+    }
+  }
+}
+
+/**
+ * What a floor with no room for a cafeteria gets: the machine in the corner it
+ * always stood in, and the cooler two columns along so the pair still has an
+ * aisle tile each to be used from.
+ */
+function buildCornerFittings(
+  context: PlanContext,
+  build: FloorBuild,
+): CornerFittings {
+  const row = build.originRow + BUILDING_TOP_WALL_ROWS;
+  const coffeeTile: OfficeTilePos = {
+    col: context.cols - CORNER_COFFEE_COL_OFFSET,
+    row,
+  };
+  addBlockingProp(context, {
+    sprite: { name: "coffee-machine" },
+    tile: coffeeTile,
+  });
+  const coolerCol = context.cols - CORNER_COOLER_COL_OFFSET;
+  if (coolerCol <= 0) return { coffeeTile, coolerTile: null };
+  const coolerTile: OfficeTilePos = { col: coolerCol, row };
+  addBlockingProp(context, {
+    sprite: { name: "water-cooler" },
+    tile: coolerTile,
+  });
+  return { coffeeTile, coolerTile };
+}
+
+// ---- Errand spots ----------------------------------------------------- //
+
+interface SpotBuilder {
+  readonly context: PlanContext;
+  readonly spots: OfficeErrandSpot[];
+  readonly used: Set<string>;
+  /** Tiles the floor already owes to something else: the door, the lobby, the queue. */
+  readonly blocked: ReadonlySet<string>;
+  readonly reachable: ReadonlySet<string>;
+}
+
+interface ErrandSpotRequest {
+  readonly context: PlanContext;
+  readonly build: FloorBuild;
+  readonly lobbyTile: OfficeTilePos;
+  readonly blocked: ReadonlySet<string>;
+  readonly cafeteria: CafeteriaPlan | null;
+  readonly corner: CornerFittings | null;
+  readonly rooms: ReadonlyArray<OfficeRoom>;
+}
+
+/**
+ * Records one spot, or refuses it. Every refusal is a case that would otherwise
+ * become a character standing in a wall, on a desk, or in the queue somebody
+ * else is waiting in.
+ */
+function addSpot(
+  builder: SpotBuilder,
+  kind: OfficeErrandSpot["kind"],
+  tile: OfficeTilePos,
+  facing: OfficeFacing,
+): boolean {
+  const { context } = builder;
+  if (tile.row < 0 || tile.row >= context.rows) return false;
+  if (tile.col < 0 || tile.col >= context.cols) return false;
+  if (!context.walkable[tile.row][tile.col]) return false;
+  const key = tileKey(tile);
+  if (builder.used.has(key)) return false;
+  if (builder.blocked.has(key)) return false;
+  if (!builder.reachable.has(key)) return false;
+  builder.used.add(key);
+  builder.spots.push({ kind, tile, facing });
+  return true;
+}
+
+function addCafeteriaSpots(builder: SpotBuilder, plan: CafeteriaPlan): void {
+  const aisleRow = plan.bounds.row + CAFETERIA_AISLE_ROW;
+  addSpot(builder, "coffee", { col: plan.coffeeTile.col, row: aisleRow }, "up");
+  // TWO cooler spots, side by side and turned toward each other: a water cooler
+  // is where two people talk, and a single spot can only ever hold a monologue.
+  addSpot(
+    builder,
+    "cooler",
+    { col: plan.coolerTile.col, row: aisleRow },
+    "right",
+  );
+  addSpot(
+    builder,
+    "cooler",
+    { col: plan.coolerTile.col + 1, row: aisleRow },
+    "left",
+  );
+  addSpot(
+    builder,
+    "vending",
+    { col: plan.vendingTile.col, row: aisleRow },
+    "up",
+  );
+  for (const table of plan.tableTiles) {
+    for (let offset = 0; offset < CAFE_TABLE_WIDTH_TILES; offset += 1) {
+      addSpot(
+        builder,
+        "cafe",
+        {
+          col: table.col + offset,
+          row: plan.bounds.row + CAFETERIA_SEAT_ROW,
+        },
+        "up",
+      );
+    }
+  }
+}
+
+function addCornerSpots(builder: SpotBuilder, corner: CornerFittings): void {
+  addSpot(
+    builder,
+    "coffee",
+    { col: corner.coffeeTile.col, row: corner.coffeeTile.row + 1 },
+    "up",
+  );
+  const cooler = corner.coolerTile;
+  if (cooler === null) return;
+  addSpot(builder, "cooler", { col: cooler.col, row: cooler.row + 1 }, "right");
+  addSpot(
+    builder,
+    "cooler",
+    { col: cooler.col + 1, row: cooler.row + 1 },
+    "left",
+  );
+}
+
+/** The aisle under the storey's own wall face, where its fittings hang. */
+function addWallSpots(builder: SpotBuilder, build: FloorBuild): void {
+  const faceRow = build.originRow + 1;
+  const aisleRow = build.originRow + BUILDING_TOP_WALL_ROWS;
+  for (const prop of builder.context.props) {
+    if (prop.tile.row !== faceRow) continue;
+    if (prop.sprite.name !== "whiteboard") continue;
+    addSpot(builder, "whiteboard", { col: prop.tile.col, row: aisleRow }, "up");
+  }
+  let windows = 0;
+  for (const prop of builder.context.props) {
+    if (windows >= MAX_WINDOW_SPOTS) break;
+    if (prop.tile.row !== faceRow) continue;
+    if (prop.sprite.name !== "window") continue;
+    const added = addSpot(
+      builder,
+      "window",
+      { col: prop.tile.col, row: aisleRow },
+      "up",
+    );
+    if (added) windows += 1;
+  }
+}
+
+/** One spot per cabin plant: the tile directly under it, on the chair row. */
+function addPlantSpots(builder: SpotBuilder, build: FloorBuild): void {
+  const top = build.originRow;
+  const bottom = top + build.localRows - 1;
+  for (const prop of builder.context.props) {
+    if (prop.sprite.name !== "plant") continue;
+    if (prop.tile.row < top || prop.tile.row > bottom) continue;
+    addSpot(
+      builder,
+      "plant",
+      { col: prop.tile.col, row: prop.tile.row + 1 },
+      "up",
+    );
+  }
+}
+
+/**
+ * A handful of places to simply stand, sampled evenly across the floor's
+ * columns. Column-major order is what makes "evenly spaced index" mean "spread
+ * left to right" rather than "four tiles of the same corridor".
+ */
+function addCorridorSpots(
+  builder: SpotBuilder,
+  request: ErrandSpotRequest,
+): void {
+  const { context, build } = request;
+  const firstRow = build.originRow + BUILDING_TOP_WALL_ROWS + 1;
+  const lobbyRow = request.lobbyTile.row;
+  const candidates: OfficeTilePos[] = [];
+  for (let col = 1; col < context.cols - 1; col += 1) {
+    for (let row = firstRow; row < lobbyRow; row += 1) {
+      if (!context.walkable[row][col]) continue;
+      const tile: OfficeTilePos = { col, row };
+      const key = tileKey(tile);
+      if (builder.used.has(key) || builder.blocked.has(key)) continue;
+      if (!builder.reachable.has(key)) continue;
+      if (request.rooms.some((room) => withinRect(room.bounds, tile))) continue;
+      const cafeteria = request.cafeteria;
+      if (cafeteria !== null && withinRect(cafeteria.bounds, tile)) continue;
+      candidates.push(tile);
+    }
+  }
+  if (candidates.length === 0) return;
+  const wanted = Math.min(MAX_CORRIDOR_SPOTS, candidates.length);
+  const span = candidates.length - 1;
+  for (let index = 0; index < wanted; index += 1) {
+    const pick = wanted === 1 ? 0 : Math.floor((index * span) / (wanted - 1));
+    addSpot(builder, "corridor", candidates[pick], "down");
+  }
+}
+
+function errandSpotsFor(
+  request: ErrandSpotRequest,
+): ReadonlyArray<OfficeErrandSpot> {
+  const builder: SpotBuilder = {
+    context: request.context,
+    spots: [],
+    used: new Set<string>(),
+    blocked: request.blocked,
+    // Reachability is asked from the LOBBY rather than from each desk: the
+    // corridor that reaches every chair is the same one that reaches the lobby,
+    // so one flood answers for the whole storey.
+    reachable: reachableFrom(request.context, request.lobbyTile),
+  };
+  const cafeteria = request.cafeteria;
+  const corner = request.corner;
+  if (cafeteria !== null) addCafeteriaSpots(builder, cafeteria);
+  else if (corner !== null) addCornerSpots(builder, corner);
+  addWallSpots(builder, request.build);
+  addPlantSpots(builder, request.build);
+  addCorridorSpots(builder, request);
+  return builder.spots;
+}
+
+// ---- Assembly --------------------------------------------------------- //
+
+function collectCabins(
+  builds: ReadonlyArray<FloorBuild>,
+  desks: Map<string, OfficeDesk>,
+  rooms: OfficeRoom[],
+): void {
   for (const build of builds) {
     for (const cabin of build.cabins) {
       const cabinRow = cabin.row + build.originRow;
@@ -525,9 +987,12 @@ export function layoutOffice(
       });
     }
   }
+}
 
-  const walkable = blankWalkableGrid(cols, rows, builds);
-  for (const room of rooms) blockCabinWalls(walkable, room);
+function blockDeskTiles(
+  walkable: boolean[][],
+  desks: ReadonlyMap<string, OfficeDesk>,
+): void {
   for (const desk of desks.values()) {
     for (let offset = 0; offset < DESK_WIDTH_TILES; offset += 1) {
       walkable[desk.deskTile.row][desk.deskTile.col + offset] = false;
@@ -536,107 +1001,15 @@ export function layoutOffice(
     // finder is what grants an exception, by always allowing its own goal.
     walkable[desk.chairTile.row][desk.chairTile.col] = false;
   }
+}
 
-  const props: OfficeProp[] = [];
-  const blockTile = (tile: OfficeTilePos): void => {
-    if (tile.row < 0 || tile.row >= rows) return;
-    if (tile.col < 0 || tile.col >= cols) return;
-    walkable[tile.row][tile.col] = false;
-  };
-  const addBlockingProp = (prop: OfficeProp): void => {
-    props.push(prop);
-    blockTile(prop.tile);
-  };
-
-  const floors: OfficeFloor[] = [];
-  const multiFloor = builds.length > 1;
-  for (const build of builds) {
-    const wallFaceRow = build.originRow + 1;
-    const bottomRow = build.originRow + build.localRows - 1;
-    const doorTile: OfficeTilePos = { col: doorCol, row: bottomRow };
-    const lobbyTile: OfficeTilePos = { col: doorCol, row: bottomRow - 1 };
-    walkable[doorTile.row][doorTile.col] = true;
-
-    // The building's own fittings hang on the OUTER wall, clear of every cabin.
-    addBlockingProp({
-      sprite: { name: "whiteboard" },
-      tile: { col: BUILDING_FIRST_CONTENT_COL, row: wallFaceRow },
-    });
-    const clockTile: OfficeTilePos = {
-      col: BUILDING_FIRST_CONTENT_COL + CLOCK_COL_OFFSET,
-      row: wallFaceRow,
-    };
-    addBlockingProp({ sprite: { name: "clock" }, tile: clockTile });
-    for (
-      let col = BUILDING_FIRST_CONTENT_COL + WINDOW_SPACING_TILES;
-      col <= cols - 3;
-      col += WINDOW_SPACING_TILES
-    ) {
-      addBlockingProp({
-        sprite: { name: "window" },
-        tile: { col, row: wallFaceRow },
-      });
-    }
-    addBlockingProp({
-      sprite: { name: "coffee-machine" },
-      tile: { col: cols - 3, row: build.originRow + 2 },
-    });
-
-    // Reception stands on the lobby row, one clear tile short of the door so
-    // nobody has to squeeze past the counter to get out.
-    const counterCol = Math.max(
-      1,
-      doorCol - RECEPTION_DOOR_GAP_TILES - RECEPTION_WIDTH_TILES,
-    );
-    const receptionTile: OfficeTilePos = {
-      col: counterCol,
-      row: lobbyTile.row,
-    };
-    props.push({ sprite: { name: "reception" }, tile: receptionTile });
-    for (let offset = 0; offset < RECEPTION_WIDTH_TILES; offset += 1) {
-      blockTile({ col: counterCol + offset, row: lobbyTile.row });
-    }
-
-    // Decorative only: nobody walks between floors, so the stairwell is a
-    // reminder that the building has more than one - never a route. It is
-    // FLOOR rather than furniture, so it carries no prop entry: the scene
-    // paints it with the floor layer, from this top-left tile.
-    const stairsTile = multiFloor
-      ? placeStairwell({
-          cols,
-          lobbyRow: lobbyTile.row,
-          originRow: build.originRow,
-          blockTile,
-        })
-      : null;
-
-    floors.push({
-      hostId: build.hostId,
-      bounds: {
-        col: 0,
-        row: build.originRow,
-        cols,
-        rows: build.localRows,
-      },
-      doorTile,
-      lobbyTile,
-      receptionTile,
-      receptionQueueTiles: receptionQueueTiles(
-        walkable,
-        receptionTile,
-        doorTile,
-        lobbyTile,
-      ),
-      clockTile,
-      stairsTile,
-    });
-    // The rug is the one prop a character may stand on - it marks the lobby.
-    props.push({ sprite: { name: "rug" }, tile: lobbyTile });
-  }
-
+function addManagerPlants(
+  context: PlanContext,
+  desks: ReadonlyMap<string, OfficeDesk>,
+): void {
   for (const desk of desks.values()) {
     if (!desk.manager) continue;
-    addBlockingProp({
+    addBlockingProp(context, {
       sprite: { name: "plant" },
       tile: {
         col: desk.deskTile.col + PLANT_COL_OFFSET,
@@ -644,10 +1017,19 @@ export function layoutOffice(
       },
     });
   }
-  // A partition reads the grandchildren as their own pod. It goes in the aisle
-  // column to the LEFT of the pod head's desk - always either the previous
-  // slot's spare column or the cabin's own aisle - and only where that tile is
-  // still free, so a divider can never take a desk, a chair or a plant.
+}
+
+/**
+ * A partition reads the grandchildren as their own pod. It goes in the aisle
+ * column to the LEFT of the pod head's desk - always either the previous slot's
+ * spare column or the cabin's own aisle - and only where that tile is still
+ * free, so a divider can never take a desk, a chair or a plant.
+ */
+function addPodPartitions(
+  context: PlanContext,
+  builds: ReadonlyArray<FloorBuild>,
+  desks: ReadonlyMap<string, OfficeDesk>,
+): void {
   for (const build of builds) {
     for (const cabin of build.cabins) {
       cabin.members.forEach((member, index) => {
@@ -661,11 +1043,154 @@ export function layoutOffice(
           col: desk.deskTile.col - 1,
           row: desk.deskTile.row,
         };
-        if (tile.col < 0 || !walkable[tile.row][tile.col]) return;
-        addBlockingProp({ sprite: { name: "partition" }, tile });
+        if (tile.col < 0 || !context.walkable[tile.row][tile.col]) return;
+        addBlockingProp(context, { sprite: { name: "partition" }, tile });
       });
     }
   }
+}
+
+interface FloorFitRequest {
+  readonly context: PlanContext;
+  readonly build: FloorBuild;
+  readonly doorCol: number;
+  readonly multiFloor: boolean;
+  readonly rooms: ReadonlyArray<OfficeRoom>;
+}
+
+/** The building's own fittings hang on the OUTER wall, clear of every cabin. */
+function addWallFittings(
+  context: PlanContext,
+  wallFaceRow: number,
+): OfficeTilePos {
+  addBlockingProp(context, {
+    sprite: { name: "whiteboard" },
+    tile: { col: BUILDING_FIRST_CONTENT_COL, row: wallFaceRow },
+  });
+  const clockTile: OfficeTilePos = {
+    col: BUILDING_FIRST_CONTENT_COL + CLOCK_COL_OFFSET,
+    row: wallFaceRow,
+  };
+  addBlockingProp(context, { sprite: { name: "clock" }, tile: clockTile });
+  for (
+    let col = BUILDING_FIRST_CONTENT_COL + WINDOW_SPACING_TILES;
+    col <= context.cols - 3;
+    col += WINDOW_SPACING_TILES
+  ) {
+    addBlockingProp(context, {
+      sprite: { name: "window" },
+      tile: { col, row: wallFaceRow },
+    });
+  }
+  return clockTile;
+}
+
+function fitFloor(request: FloorFitRequest): OfficeFloor {
+  const { build, context, doorCol } = request;
+  const bottomRow = build.originRow + build.localRows - 1;
+  const doorTile: OfficeTilePos = { col: doorCol, row: bottomRow };
+  const lobbyTile: OfficeTilePos = { col: doorCol, row: bottomRow - 1 };
+  context.walkable[doorTile.row][doorTile.col] = true;
+
+  const clockTile = addWallFittings(context, build.originRow + 1);
+  const cafeteria = planCafeteria(context, build);
+  const corner =
+    cafeteria === null ? buildCornerFittings(context, build) : null;
+  if (cafeteria !== null) buildCafeteria(context, cafeteria);
+
+  // Reception stands on the lobby row, one clear tile short of the door so
+  // nobody has to squeeze past the counter to get out.
+  const counterCol = Math.max(
+    1,
+    doorCol - RECEPTION_DOOR_GAP_TILES - RECEPTION_WIDTH_TILES,
+  );
+  const receptionTile: OfficeTilePos = { col: counterCol, row: lobbyTile.row };
+  context.props.push({ sprite: { name: "reception" }, tile: receptionTile });
+  for (let offset = 0; offset < RECEPTION_WIDTH_TILES; offset += 1) {
+    blockPlanTile(context, { col: counterCol + offset, row: lobbyTile.row });
+  }
+  const queueTiles = receptionQueueTiles(
+    context.walkable,
+    receptionTile,
+    doorTile,
+    lobbyTile,
+  );
+
+  // Decorative only: nobody walks between floors, so the stairwell is a
+  // reminder that the building has more than one - never a route. It is FLOOR
+  // rather than furniture, so it carries no prop entry: the scene paints it
+  // with the floor layer, from this top-left tile.
+  const stairsTile = request.multiFloor
+    ? placeStairwell({
+        cols: context.cols,
+        lobbyRow: lobbyTile.row,
+        originRow: build.originRow,
+        blockTile: (tile) => blockPlanTile(context, tile),
+      })
+    : null;
+  // The rug is the one prop a character may stand on - it marks the lobby.
+  context.props.push({ sprite: { name: "rug" }, tile: lobbyTile });
+
+  const blocked = new Set<string>([
+    tileKey(doorTile),
+    tileKey(lobbyTile),
+    ...queueTiles.map(tileKey),
+  ]);
+  return {
+    hostId: build.hostId,
+    bounds: {
+      col: 0,
+      row: build.originRow,
+      cols: context.cols,
+      rows: build.localRows,
+    },
+    doorTile,
+    lobbyTile,
+    receptionTile,
+    receptionQueueTiles: queueTiles,
+    clockTile,
+    stairsTile,
+    errandSpots: errandSpotsFor({
+      context,
+      build,
+      lobbyTile,
+      blocked,
+      cafeteria,
+      corner,
+      rooms: request.rooms,
+    }),
+    cafeteria: cafeteria === null ? null : cafeteria.bounds,
+  };
+}
+
+export function layoutOffice(
+  agents: ReadonlyArray<OfficeAgentInput>,
+): OfficeLayout {
+  const builds = buildFloors(agents);
+  const last = builds[builds.length - 1];
+  let cols = 0;
+  for (const build of builds) cols = Math.max(cols, build.localCols);
+  const rows = last.originRow + last.localRows;
+  const doorCol = Math.floor((cols - 1) / 2);
+
+  const desks = new Map<string, OfficeDesk>();
+  const rooms: OfficeRoom[] = [];
+  collectCabins(builds, desks, rooms);
+
+  const walkable = blankWalkableGrid(cols, rows, builds);
+  for (const room of rooms) blockCabinWalls(walkable, room);
+  blockDeskTiles(walkable, desks);
+
+  const context: PlanContext = { cols, rows, props: [], walkable };
+  // Before the storeys are fitted out, so a cabin's own furniture is already
+  // standing when the errand spots are picked over the finished grid.
+  addManagerPlants(context, desks);
+  addPodPartitions(context, builds, desks);
+
+  const multiFloor = builds.length > 1;
+  const floors = builds.map((build) =>
+    fitFloor({ context, build, doorCol, multiFloor, rooms }),
+  );
 
   return {
     cols,
@@ -677,7 +1202,7 @@ export function layoutOffice(
     // knows about one door keeps working on a single-host epic.
     doorTile: floors[0].doorTile,
     lobbyTile: floors[0].lobbyTile,
-    props,
+    props: context.props,
     walkable,
   };
 }

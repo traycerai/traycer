@@ -97,6 +97,14 @@ export type OfficeSpriteName =
   | "reception"
   /** Stairwell between floors, two tiles square. */
   | "stairs"
+  /** Water cooler in the cafeteria; an idle errand spot. */
+  | "water-cooler"
+  /** Round cafeteria table, two tiles wide; seats are the walkable tiles beside it. */
+  | "cafe-table"
+  /** Vending machine in the cafeteria. */
+  | "vending"
+  /** Menu board on the cafeteria's wall, two tiles wide; the renderer draws no text on it. */
+  | "menu-board"
   | "chair"
   | "plant"
   | "floor-a"
@@ -215,6 +223,36 @@ export interface OfficeFloor {
   readonly clockTile: OfficeTilePos;
   /** Top-left of the two-by-two stairwell, or `null` on a single-floor building. */
   readonly stairsTile: OfficeTilePos | null;
+  /**
+   * Where an idle agent may wander to on this floor. Each spot is a WALKABLE
+   * tile beside the thing it names, with the facing that looks at it. The
+   * scene picks among them deterministically; spots are never desks, doors,
+   * or queue tiles.
+   */
+  readonly errandSpots: ReadonlyArray<OfficeErrandSpot>;
+  /**
+   * The floor's cafeteria: a walled break room holding the coffee machine,
+   * water cooler, vending machine, menu board and tables. Outer bounds
+   * including its walls; `null` only when the floor is too small to hold one.
+   */
+  readonly cafeteria: OfficeTileRect | null;
+}
+
+export type OfficeErrandKind =
+  | "coffee"
+  | "cooler"
+  /** A seat at a cafeteria table. */
+  | "cafe"
+  | "vending"
+  | "whiteboard"
+  | "window"
+  | "plant"
+  | "corridor";
+
+export interface OfficeErrandSpot {
+  readonly kind: OfficeErrandKind;
+  readonly tile: OfficeTilePos;
+  readonly facing: OfficeFacing;
 }
 
 /**

@@ -380,6 +380,123 @@ export const COFFEE_MACHINE_MAP: SpriteMap = [
   "..OOOOOOOOOOOO..",
 ];
 
+/**
+ * The cafeteria's water cooler: a `sky` bottle over a metal column, the tap
+ * recessed into the column's face, and one cup standing beside it on the floor.
+ *
+ * The cup is what makes the fixture read as a cooler rather than as a tall blue
+ * cabinet at 1x, so it is part of the art rather than a second prop the layout
+ * would have to find a tile for.
+ */
+export const WATER_COOLER_MAP: SpriteMap = [
+  "...OOOOOOOO.....",
+  "...OqqqqqqO.....",
+  "...OqqqqqqO.....",
+  "...OqbqqqqO.....",
+  "...OqbqqqqO.....",
+  "...OqqqqqqO.....",
+  "...OqqqqqqO.....",
+  "....OqqqqO......",
+  ".....OqqO.......",
+  "..OOOOOOOOOO....",
+  "..ObbbbbbbbO....",
+  "..OmmmmmmmmO....",
+  "..OmmmmmmmmO....",
+  "..OmMMMMMMmO....",
+  "..OmMOOOOMmO....",
+  "..OmMObbOMmO....",
+  "..OmMObbOMmO....",
+  "..OmMOOOOMmO....",
+  "..OmMMMMMMmO....",
+  "..OmmmmmmmmO....",
+  "..OmmmmmmmmO.OOO",
+  "..OMMMMMMMMO.ObO",
+  "..OMMMMMMMMO.ObO",
+  "..OOOOOOOOOO.OOO",
+];
+
+/**
+ * A round cafeteria table seen from above, two tiles wide, with a cup set at
+ * each of the two seats. The pedestal is drawn under the top rather than legs at
+ * the corners: a round table's legs would read as noise at this size, and the
+ * seats are floor tiles beside it rather than furniture of their own.
+ */
+export const CAFE_TABLE_MAP: SpriteMap = [
+  "................................",
+  "........OOOOOOOOOOOOOOOO........",
+  ".....OOOwwwwwwwwwwwwwwwwOOO.....",
+  "...OOwwwwwwwwwwwwwwwwwwwwwwOO...",
+  "..OwwwwwwwwwwwwwwwwwwwwwwwwwwO..",
+  ".OwwwwwObbOwwwwwwwwwwObbOwwwwwO.",
+  ".OwwwwwObbOwwwwwwwwwwObbOwwwwwO.",
+  ".OwwwwwOOOOwwwwwwwwwwOOOOwwwwwO.",
+  ".OwwwwwwwwwwwwwwwwwwwwwwwwwwwwO.",
+  "..OWWWWWWWWWWWWWWWWWWWWWWWWWWO..",
+  "...OOWWWWWWWWWWWWWWWWWWWWWWOO...",
+  ".....OOOWWWWWWWWWWWWWWWWOOO.....",
+  "........OOOOOOOOOOOOOOOO........",
+  "..............OWWO..............",
+  "..............OWWO..............",
+  "............OOOOOOOO............",
+];
+
+/**
+ * The vending machine: a lit glass front over four shelves of stock, with the
+ * delivery slot dark at the bottom. The stock rows take four different palette
+ * colors because a single-colored grid reads as a bookshelf.
+ */
+export const VENDING_MAP: SpriteMap = [
+  "OOOOOOOOOOOOOOOO",
+  "OMMMMMMMMMMMMMMO",
+  "OMOOOOOOOOOOOOMO",
+  "OMOvccccccccvOMO",
+  "OMOvyyyyyyyyvOMO",
+  "OMOvOOOOOOOOvOMO",
+  "OMOvccccccccvOMO",
+  "OMOvnnnnnnnnvOMO",
+  "OMOvOOOOOOOOvOMO",
+  "OMOvccccccccvOMO",
+  "OMOvggggggggvOMO",
+  "OMOvOOOOOOOOvOMO",
+  "OMOvccccccccvOMO",
+  "OMOvqqqqqqqqvOMO",
+  "OMOvOOOOOOOOvOMO",
+  "OMOvccccccccvOMO",
+  "OMOOOOOOOOOOOOMO",
+  "OMMMMMMMMMMMMMMO",
+  "OMOOOOOOOOOOOOMO",
+  "OMOddddddddddOMO",
+  "OMOddddddddddOMO",
+  "OMOOOOOOOOOOOOMO",
+  "OMMMMMMMMMMMMMMO",
+  "OOOOOOOOOOOOOOOO",
+];
+
+/**
+ * The cafeteria's menu board, two tiles wide, mounted on the break room's wall
+ * face the way a cabin's sign is. Unlike the sign it carries its OWN content -
+ * three chalk lines and a cup glyph - because nothing is ever drawn over it: the
+ * renderer has no cafeteria name to write.
+ */
+export const MENU_BOARD_MAP: SpriteMap = [
+  "OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO",
+  "OwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwO",
+  "OwOOOOOOOOOOOOOOOOOOOOOOOOOOOOwO",
+  "OwOBBBBBBBBBBBBBBBBBBBBBBBBBBOwO",
+  "OwOBbbbbbbbbBBBBBBBBBBBBBBBBBOwO",
+  "OwOBBBBBBBBBBBBBBBBBBBBBBBBBBOwO",
+  "OwOBbbbbbbbbbbbBBBBBBBBBBBBBBOwO",
+  "OwOBBBBBBBBBBBBBBBBBBBBBBBBBBOwO",
+  "OwOBbbbbbbBBBBBBBBBBBBBBBBBBBOwO",
+  "OwOBBBBBBBBBBBBBBBBBBBBBBBBBBOwO",
+  "OwOBBBBBBBBBBBBBBBBBBOOOOOBBBOwO",
+  "OwOBBBBBBBBBBBBBBBBBBObbbOOBBOwO",
+  "OwOBBBBBBBBBBBBBBBBBBObbbOOBBOwO",
+  "OwOBBBBBBBBBBBBBBBBBBOOOOOBBBOwO",
+  "OwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwO",
+  "OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO",
+];
+
 export const WHITEBOARD_MAP: SpriteMap = [
   "OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO",
   "ObbbbbbbbbbbbbbbbbbbbbbbbbbbbbbO",

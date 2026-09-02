@@ -36,7 +36,11 @@ const SECTIONS: ReadonlyArray<LegendSection> = [
       { signal: "…", meaning: "waiting for a reply" },
       { signal: "!", meaning: "needs you" },
       { signal: "At reception", meaning: "queued for you" },
-      { signal: "By the coffee machine", meaning: "idle a while" },
+      {
+        signal:
+          "Cafeteria, water cooler, window and corridor trips, desk stretches",
+        meaning: "idle",
+      },
       { signal: "Ghosted", meaning: "archived" },
     ],
   },
@@ -59,6 +63,10 @@ const SECTIONS: ReadonlyArray<LegendSection> = [
       { signal: "Glass partition", meaning: "a sub-team" },
       { signal: "Floor", meaning: "one per host" },
       { signal: "Wall clock", meaning: "the time being shown" },
+      {
+        signal: "Cafeteria",
+        meaning: "break room; agents chat at the cooler and tables",
+      },
     ],
   },
 ];

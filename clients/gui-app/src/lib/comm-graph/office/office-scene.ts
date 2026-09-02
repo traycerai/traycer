@@ -52,6 +52,7 @@ import {
   type OfficeDesk,
   type OfficeDrawable,
   type OfficeEnvelopeHitRegion,
+  type OfficeErrandKind,
   type OfficeFacing,
   type OfficeFloor,
   type OfficeFrame,
@@ -61,10 +62,12 @@ import {
   type OfficePoint,
   type OfficeProp,
   type OfficeRect,
+  type OfficeRoom,
   type OfficeSceneInput,
   type OfficeSpriteName,
   type OfficeSpriteRef,
   type OfficeTilePos,
+  type OfficeTileRect,
 } from "@/lib/comm-graph/office/office-types";
 
 export type OfficeLayoutFn = (
@@ -78,6 +81,13 @@ const WALK_TILES_PER_SECOND = 3;
  * envelope arrives at an empty chair.
  */
 const ARRIVAL_TILES_PER_SECOND = 8;
+/**
+ * A message is waiting: whoever it is to or from RUNS. This is what replaced
+ * snapping an agent into its chair the instant a pulse touched it - a character
+ * teleporting mid-stride reads as a rendering glitch, while the same character
+ * sprinting back reads as the office noticing.
+ */
+const HURRY_TILES_PER_SECOND = 14;
 /**
  * Below this step length playback is running fast enough that a walk-in would
  * still be in progress when the next row is drawn, so arrivals are announced
@@ -130,22 +140,70 @@ const LOGO_Y_OFFSET = 1;
 /** Slack around an envelope's box, so a moving 10x8 target stays clickable. */
 const ENVELOPE_HIT_PADDING = 2;
 /**
- * Coffee breaks. Only a LIVE floor takes them, and only after a long enough
- * stretch of nothing that the stillness itself is the point - the stagger is
- * what keeps a quiet epic from standing up in unison.
+ * Errands. Only a LIVE floor runs them - playback makes every agent idle
+ * between its own rows, so a break during it would fire constantly - and only
+ * after a stretch of nothing long enough that the stillness is the point. The
+ * stagger is what keeps a quiet epic from standing up in unison.
+ *
+ * The threshold is DELIBERATELY short. An office where nobody moves for half a
+ * minute reads as a screenshot, and the whole reason this exists is that agents
+ * between turns looked dead.
  */
-const IDLE_WANDER_MS = 25_000;
-const WANDER_STAGGER_SPREAD_MS = 15_000;
-const WANDER_WAIT_MS = 4_000;
-/** More than two at the machine at once reads as an evacuation, not a break. */
-const MAX_WANDERING_AGENTS = 2;
-/** Deterministic search for the tile a character stands on to use the machine. */
-const WANDER_STAND_OFFSETS: ReadonlyArray<OfficeTilePos> = [
-  { col: -1, row: 0 },
-  { col: 1, row: 0 },
-  { col: 0, row: 1 },
-  { col: 0, row: -1 },
+const IDLE_ERRAND_MS = 5_000;
+const ERRAND_STAGGER_SPREAD_MS = 4_000;
+/** Seated time owed after an errand, so nobody bounces straight back out. */
+const ERRAND_COOLDOWN_MS = 10_000;
+const ERRAND_LINGER_MIN_MS = 3_000;
+const ERRAND_LINGER_SPREAD_MS = 5_000;
+/** A visit is a shorter beat: two people talking, not one person standing. */
+const VISIT_LINGER_MIN_MS = 3_000;
+const VISIT_LINGER_SPREAD_MS = 2_000;
+/** A corridor spot is half a stroll: stand, then move on to a second one. */
+const STROLL_PAUSE_MS = 2_000;
+/**
+ * Half the idle floor may be away at once. A fixed cap reads as an evacuation
+ * on a small floor and as nothing at all on a large one.
+ */
+const AWAY_FRACTION = 0.5;
+/** How often two agents in one conversation swap who is talking. */
+const CHAT_ALTERNATE_MS = 900;
+/**
+ * How often a seated idle agent does something small at its own desk, and the
+ * spread over which that gap varies per agent. Errands move two people at a
+ * time; this is what the other thirty are doing meanwhile.
+ */
+const FILLER_GAP_MIN_MS = 6_000;
+const FILLER_GAP_SPREAD_MS = 6_000;
+const FILLER_LOOK_MS = 1_500;
+const FILLER_LOOK_STEP_MS = 500;
+const FILLER_STRETCH_MS = 1_200;
+const FILLER_SPIN_STEP_MS = 120;
+const FILLER_SPIN_TURNS = 2;
+const FILLER_NAP_MS = 4_000;
+/** A nap is a statement about a long silence, not about a lull between turns. */
+const FILLER_NAP_MIN_IDLE_MS = 30_000;
+const FILLER_SPIN_FACINGS: ReadonlyArray<OfficeFacing> = [
+  "down",
+  "left",
+  "up",
+  "right",
 ];
+/**
+ * How badly the errand kinds are wanted. The cafeteria outweighs the rest
+ * because it is where two agents can end up in the same place; standing at a
+ * window is scenery, and a floor of scenery is the problem this solves.
+ */
+const ERRAND_WEIGHTS: Readonly<Record<OfficeErrandTargetKind, number>> = {
+  coffee: 3,
+  cafe: 3,
+  cooler: 2,
+  vending: 2,
+  corridor: 2,
+  window: 2,
+  visit: 2,
+  whiteboard: 1,
+  plant: 1,
+};
 const IDLE_MONITOR_ALPHA = 0.6;
 const ARCHIVED_ALPHA = 0.45;
 const DESK_WIDTH_TILES = 2;
@@ -244,26 +302,62 @@ interface TransientBubble {
  * can be true at a time.
  *
  * - `arriving` - walking in from its floor's door to take a seat.
- * - `coffee-out` / `coffee-wait` / `coffee-return` - a break at the machine.
+ * - `errand-out` / `errand-wait` / `errand-return` - a break somewhere on the
+ *   floor: the cafeteria, a window, a colleague's desk.
  * - `queue-out` / `queue-stand` - waiting at reception for a person.
  * - `leaving` - archived; walking to the door to disappear.
  * - `returning` - walking back to its own chair from anything else.
  *
- * A break keeps its own return state rather than folding into `returning`,
+ * An errand keeps its own return state rather than folding into `returning`,
  * because the cap on how many people are away at once has to count the walk
- * back: release the slot at the machine and the next bored agent stands up
- * while the last one is still crossing the floor.
+ * back: release the slot the moment the linger ends and the next bored agent
+ * stands up while the last one is still crossing the floor.
  */
 type OfficeErrand =
   | "none"
   | "arriving"
-  | "coffee-out"
-  | "coffee-wait"
-  | "coffee-return"
+  | "errand-out"
+  | "errand-wait"
+  | "errand-return"
   | "queue-out"
   | "queue-stand"
   | "leaving"
   | "returning";
+
+/**
+ * `visit` is the one errand with no tile in the floor plan: it is paid to a
+ * COLLEAGUE, whose desk moves whenever the agent set does. The layout could not
+ * carry it without turning the plan into a function of who is idle, so the
+ * scene derives it and the other kinds are read straight off the floor.
+ */
+type OfficeErrandTargetKind = OfficeErrandKind | "visit";
+
+interface OfficeErrandTarget {
+  readonly kind: OfficeErrandTargetKind;
+  readonly tile: OfficeTilePos;
+  readonly facing: OfficeFacing;
+  /** The colleague a `visit` is paid to; `null` for every other kind. */
+  readonly partnerId: string | null;
+}
+
+/**
+ * Something small a seated idle agent does at its own desk. Errands move two
+ * people at a time and the rest of the floor would sit perfectly still without
+ * these - which is the exact complaint that started all of this.
+ */
+type OfficeFillerKind = "look" | "stretch" | "spin" | "nap";
+
+interface OfficeFiller {
+  readonly kind: OfficeFillerKind;
+  elapsedMs: number;
+  readonly durationMs: number;
+}
+
+/** An envelope that landed while its receiver was away from its chair. */
+interface PendingItem {
+  readonly bubble: OfficeSpriteName;
+  readonly sparkle: boolean;
+}
 
 interface OfficeCharacter {
   readonly agentId: string;
@@ -280,10 +374,27 @@ interface OfficeCharacter {
   bubble: TransientBubble | null;
   sparkleMs: number;
   errand: OfficeErrand;
-  /** Scene time left standing at the machine, while `errand` is `coffee-wait`. */
+  /** Scene time left standing at the spot, while `errand` is `errand-wait`. */
   waitMs: number;
   /** The reception slot this character was assigned, while it holds one. */
   queueTile: OfficeTilePos | null;
+  /** Where this errand is headed. Held for the whole errand, return included. */
+  errandTarget: OfficeErrandTarget | null;
+  /** Tile of the last errand's destination; never chosen twice running. */
+  lastErrandKey: string | null;
+  /** Legs of the current errand; a stroll takes two corridor spots, not one. */
+  errandLegs: number;
+  /** Seated time still owed before another errand may start. */
+  cooldownMs: number;
+  filler: OfficeFiller | null;
+  /** Scene time until the next desk filler, once the current one is over. */
+  nextFillerMs: number;
+  /** How many fillers this character has run; part of the next one's seed. */
+  fillerCount: number;
+  /** Envelopes that landed while this character was out of its chair. */
+  pending: PendingItem[];
+  /** Running for the chair because a message is waiting. Cleared on sitting. */
+  hurrying: boolean;
 }
 
 interface OfficeEnvelope {
@@ -333,8 +444,70 @@ function phaseOffsetMs(agentId: string): number {
  * Derived from the id for the same reason the typing phase is: a floor where
  * everyone stands at once is an animation, not an office.
  */
-function wanderStaggerMs(agentId: string): number {
-  return hashAgentId(agentId) % WANDER_STAGGER_SPREAD_MS;
+function errandStaggerMs(agentId: string): number {
+  return hashAgentId(agentId) % ERRAND_STAGGER_SPREAD_MS;
+}
+
+/**
+ * Folds a second number into an agent's hash. Every per-agent CHOICE - which
+ * spot, how long to linger, which filler comes next - is drawn from one of
+ * these rather than from a random source, so the same tick sequence replays
+ * frame for frame. Two seeds that differ by one must not land on neighbouring
+ * values either, or a per-second reseed would walk an agent along the spot list
+ * instead of moving it around the floor.
+ */
+function mixSeed(seed: number, salt: number): number {
+  let hash = (seed ^ Math.imul(salt + 0x9e3779b9, 0x85ebca6b)) >>> 0;
+  hash = Math.imul(hash ^ (hash >>> 15), 0x2c1b3c6d) >>> 0;
+  return (hash ^ (hash >>> 13)) >>> 0;
+}
+
+function tileKeyOf(tile: OfficeTilePos): string {
+  return `${tile.col},${tile.row}`;
+}
+
+function areAdjacent(left: OfficeTilePos, right: OfficeTilePos): boolean {
+  return Math.abs(left.col - right.col) + Math.abs(left.row - right.row) === 1;
+}
+
+function withinTileRect(bounds: OfficeTileRect, tile: OfficeTilePos): boolean {
+  return (
+    tile.col >= bounds.col &&
+    tile.col < bounds.col + bounds.cols &&
+    tile.row >= bounds.row &&
+    tile.row < bounds.row + bounds.rows
+  );
+}
+
+/** How long a filler of this kind runs, once started. */
+function fillerDurationMs(kind: OfficeFillerKind): number {
+  if (kind === "look") return FILLER_LOOK_MS;
+  if (kind === "stretch") return FILLER_STRETCH_MS;
+  if (kind === "nap") return FILLER_NAP_MS;
+  return FILLER_SPIN_STEP_MS * FILLER_SPIN_FACINGS.length * FILLER_SPIN_TURNS;
+}
+
+/** Which way a character is turned partway through a filler, and how it sits. */
+function fillerPoseOf(filler: OfficeFiller): {
+  readonly pose: OfficeCharacterPose;
+  readonly facing: OfficeFacing;
+} {
+  const elapsed = filler.elapsedMs;
+  if (filler.kind === "nap") return { pose: "sit", facing: "up" };
+  if (filler.kind === "stretch") return { pose: "stand", facing: "down" };
+  if (filler.kind === "spin") {
+    const step = Math.floor(elapsed / FILLER_SPIN_STEP_MS);
+    return {
+      pose: "stand",
+      facing: FILLER_SPIN_FACINGS[step % FILLER_SPIN_FACINGS.length],
+    };
+  }
+  // Looking around: left, then right, then back to the screen.
+  if (elapsed < FILLER_LOOK_STEP_MS) return { pose: "stand", facing: "left" };
+  if (elapsed < FILLER_LOOK_STEP_MS * 2) {
+    return { pose: "stand", facing: "right" };
+  }
+  return { pose: "stand", facing: "up" };
 }
 
 /**
@@ -438,12 +611,15 @@ function pulseSenderId(pulse: CommGraphPulse | null): string | null {
   return pulse.kind === "edge" ? pulse.fromAgentId : pulse.senderAgentId;
 }
 
-function seatedCharacter(agentId: string, desk: OfficeDesk): OfficeCharacter {
+/**
+ * The fields every character starts with however it arrives, so a walk-in and a
+ * silently seated agent cannot drift apart as fields are added.
+ */
+function blankCharacter(agentId: string): OfficeCharacter {
   return {
     agentId,
-    col: desk.chairTile.col,
-    row: desk.chairTile.row,
-    // Seated means facing the screen, which is up the floor and away from us.
+    col: 0,
+    row: 0,
     facing: "up",
     seated: true,
     path: [],
@@ -455,6 +631,29 @@ function seatedCharacter(agentId: string, desk: OfficeDesk): OfficeCharacter {
     errand: "none",
     waitMs: 0,
     queueTile: null,
+    errandTarget: null,
+    lastErrandKey: null,
+    errandLegs: 0,
+    cooldownMs: 0,
+    filler: null,
+    // Staggered from the id, so a room of idle agents does not stretch in unison
+    // on the very first frame they are all still.
+    nextFillerMs:
+      FILLER_GAP_MIN_MS + (hashAgentId(agentId) % FILLER_GAP_SPREAD_MS),
+    fillerCount: 0,
+    pending: [],
+    hurrying: false,
+  };
+}
+
+function seatedCharacter(agentId: string, desk: OfficeDesk): OfficeCharacter {
+  return {
+    ...blankCharacter(agentId),
+    col: desk.chairTile.col,
+    row: desk.chairTile.row,
+    // Seated means facing the screen, which is up the floor and away from us.
+    facing: "up",
+    seated: true,
   };
 }
 
@@ -491,14 +690,11 @@ export class OfficeScene {
   private readonly returningIds = new Set<string>();
   /** Agents needing a person, in the order they were first seen needing one. */
   private queueOrder: string[] = [];
-  /** Where a character stands to use each floor's machine; `null` if unreachable. */
-  private coffeeStandByFloor: ReadonlyArray<OfficeTilePos | null> = [];
 
   /** `layoutOffice` in production; injected so tests can pin a floor plan. */
   constructor(layoutOf: OfficeLayoutFn) {
     this.layoutOf = layoutOf;
     this.currentLayout = layoutOf([]);
-    this.recomputeCoffeeStands();
   }
 
   layout(): OfficeLayout {
@@ -524,7 +720,6 @@ export class OfficeScene {
     if (layoutChanged) {
       this.agentSignature = signature;
       this.currentLayout = this.layoutOf(input.agents);
-      this.recomputeCoffeeStands();
       // Before reconciling, so a newly spawned walker is not immediately
       // re-pathed to the destination it was just given.
       this.rehomeCharacters();
@@ -532,11 +727,11 @@ export class OfficeScene {
     this.applyArchivalTransitions(input, firstSync);
     this.reconcileCharacters(input, firstSync);
     this.returningIds.clear();
-    // A break ends on the sync that ends it, not on the tick after: playback
+    // An errand ends on the sync that ends it, not on the tick after: playback
     // starting or an agent picking work back up are both seen here first.
     for (const character of this.characters.values()) {
-      if (!this.onCoffeeBreak(character)) continue;
-      if (!this.wanderMustEnd(character.agentId)) continue;
+      if (!this.onCancellableErrand(character)) continue;
+      if (!this.errandMustEnd(character.agentId)) continue;
       this.returnToDesk(character);
     }
     this.updateReceptionQueue();
@@ -555,7 +750,7 @@ export class OfficeScene {
     for (const character of this.characters.values()) {
       this.advanceCharacter(character, dtMs);
     }
-    this.updateWanderStarts();
+    this.updateErrandStarts();
     this.advanceEnvelopes(dtMs);
   }
 
@@ -754,20 +949,12 @@ export class OfficeScene {
       return seatedCharacter(agentId, desk);
     }
     return {
-      agentId,
+      ...blankCharacter(agentId),
       col: door.col,
       row: door.row,
-      facing: "up",
       seated: false,
       path,
-      pathIndex: 0,
-      walkPhaseMs: 0,
-      idleMs: 0,
-      bubble: null,
-      sparkleMs: 0,
       errand: "arriving",
-      waitMs: 0,
-      queueTile: null,
     };
   }
 
@@ -831,39 +1018,34 @@ export class OfficeScene {
     return true;
   }
 
-  /** Back to its own chair, from a break, a queue or a moved desk. */
+  /** Back to its own chair, from an errand, a queue or a moved desk. */
   private returnToDesk(character: OfficeCharacter): void {
     const desk = this.currentLayout.desks.get(character.agentId);
     if (desk === undefined) {
       character.errand = "none";
       character.waitMs = 0;
       character.queueTile = null;
+      character.errandTarget = null;
       return;
     }
-    const fromBreak = this.onCoffeeErrand(character);
+    const fromErrand = this.onErrand(character);
     character.queueTile = null;
     character.waitMs = 0;
+    character.filler = null;
     if (this.walkTo(character, desk.chairTile)) {
-      character.errand = fromBreak ? "coffee-return" : "returning";
+      character.errand = fromErrand ? "errand-return" : "returning";
       return;
     }
     // No route, or motion is reduced: sitting down IS the return.
-    character.facing = "up";
-    character.seated = true;
-    character.errand = "none";
+    this.settleInChair(character, fromErrand);
   }
 
-  /** Seats a character at once, wherever it was and whatever it was doing. */
-  private seatNow(agentId: string): void {
-    const character = this.characters.get(agentId);
-    if (character === undefined) return;
-    // A departing character is on its way out; dragging it back would undo an
-    // archival the data has already stated.
-    if (character.errand === "leaving") return;
-    const desk = this.currentLayout.desks.get(agentId);
-    if (desk === undefined) return;
-    character.col = desk.chairTile.col;
-    character.row = desk.chairTile.row;
+  /**
+   * Everything that has to be true the instant a character is back in its seat,
+   * wherever it came from: the errand released, the cooldown started, and any
+   * message that landed while it was away finally acknowledged.
+   */
+  private settleInChair(character: OfficeCharacter, fromErrand: boolean): void {
     character.facing = "up";
     character.seated = true;
     character.path = [];
@@ -873,6 +1055,12 @@ export class OfficeScene {
     character.errand = "none";
     character.waitMs = 0;
     character.queueTile = null;
+    character.errandTarget = null;
+    character.errandLegs = 0;
+    // Arrived: the hurry is over because the thing it was for has happened.
+    character.hurrying = false;
+    if (fromErrand) character.cooldownMs = ERRAND_COOLDOWN_MS;
+    this.flushPending(character);
   }
 
   private startLeaving(character: OfficeCharacter): void {
@@ -893,6 +1081,7 @@ export class OfficeScene {
     character.errand = "leaving";
     character.queueTile = null;
     character.waitMs = 0;
+    character.hurrying = false;
   }
 
   private depart(agentId: string): void {
@@ -987,6 +1176,9 @@ export class OfficeScene {
       character.errand = "queue-stand";
       character.queueTile = slot;
       character.waitMs = 0;
+      character.errandTarget = null;
+      character.filler = null;
+      character.hurrying = false;
     };
     if (this.reducedMotion) {
       standing();
@@ -1010,6 +1202,9 @@ export class OfficeScene {
     character.errand = "queue-out";
     character.queueTile = slot;
     character.waitMs = 0;
+    character.errandTarget = null;
+    character.filler = null;
+    character.hurrying = false;
   }
 
   // ---- Pulses and envelopes ------------------------------------------ //
@@ -1033,12 +1228,12 @@ export class OfficeScene {
     }
     if (!this.characters.has(pulse.fromAgentId)) return;
     if (!this.characters.has(pulse.toAgentId)) return;
-    // Sending is done sitting down: an agent caught mid-walk takes its seat
-    // before the envelope leaves, so the flight starts from a body.
-    this.seatNow(pulse.fromAgentId);
-    // ...and so does receiving - except on a `created` edge, where the walk in
-    // from the door IS what the row is showing.
-    if (pulse.pulseKind !== "created") this.seatNow(pulse.toAgentId);
+    // The DESK sends and the desk receives, so an agent caught mid-floor does
+    // not have to be anywhere for the flight to be correct. What it does is
+    // HURRY: cancel whatever it was doing and run for its chair. Snapping it
+    // there instead - which this replaced - read as the sprite teleporting.
+    this.startHurry(pulse.fromAgentId);
+    this.startHurry(pulse.toAgentId);
     if (this.reducedMotion) {
       this.deliver(pulse.toAgentId, pulse.pulseKind);
       return;
@@ -1058,19 +1253,78 @@ export class OfficeScene {
     while (this.envelopes.length > MAX_LIVE_ENVELOPES) this.envelopes.shift();
   }
 
+  /**
+   * The envelope has landed on the receiver's DESK. If its owner is in the
+   * chair, that is an acknowledgement now; if not, the message sits on the desk
+   * as one more item on the pile and is acknowledged the moment they sit.
+   *
+   * Which is what a message actually is - waiting work, not a thing that can
+   * only exist while someone is looking at it.
+   */
   private deliver(agentId: string, pulseKind: CommGraphPulseKind): void {
-    // The acknowledgement belongs over a seated head; a walk-in that is still
-    // crossing the floor is cut short rather than bubbled at from a corridor.
-    if (pulseKind !== "created") this.seatNow(agentId);
-    this.showBubble(
-      agentId,
-      pulseKind === "notice" ? "bubble-notice" : "bubble-hello",
-      BUBBLE_HELLO_MS,
-    );
-    if (pulseKind !== "created") return;
     const character = this.characters.get(agentId);
     if (character === undefined) return;
-    character.sparkleMs = SPARKLE_MS;
+    const item: PendingItem = {
+      bubble: pulseKind === "notice" ? "bubble-notice" : "bubble-hello",
+      sparkle: pulseKind === "created",
+    };
+    if (!character.seated) {
+      character.pending.push(item);
+      return;
+    }
+    character.bubble = { sprite: item.bubble, remainingMs: BUBBLE_HELLO_MS };
+    if (item.sparkle) character.sparkleMs = SPARKLE_MS;
+  }
+
+  /** The pile clears in one go when its owner is back; the newest is the one seen. */
+  private flushPending(character: OfficeCharacter): void {
+    const item = character.pending.at(-1);
+    if (item === undefined) return;
+    character.pending = [];
+    character.bubble = { sprite: item.bubble, remainingMs: BUBBLE_HELLO_MS };
+    if (item.sparkle) character.sparkleMs = SPARKLE_MS;
+  }
+
+  /**
+   * An agent with a message in the air, or one waiting on its desk, is in a
+   * hurry: whatever it was doing is over and it is running for its chair.
+   *
+   * A character at reception is the one exception. It is standing there because
+   * a PERSON is needed, which no envelope resolves; pulling it out of the queue
+   * to collect a message would drop its place in line.
+   */
+  private startHurry(agentId: string): void {
+    const character = this.characters.get(agentId);
+    if (character === undefined) return;
+    if (character.errand === "leaving") return;
+    if (this.inReceptionQueue(character)) return;
+    character.filler = null;
+    if (character.seated) return;
+    // A LATCH, not a window: the hurry lasts until the chair is reached, not
+    // until the envelope lands. Dropping back to a stroll partway across the
+    // floor - which is what tying it to the flight did - reads as a stutter.
+    character.hurrying = true;
+    // Already headed for the chair: a re-path would only restart the walk.
+    if (character.errand === "arriving") return;
+    if (character.errand === "returning") return;
+    if (character.errand === "errand-return") return;
+    this.returnToDesk(character);
+  }
+
+  /**
+   * Whether this agent is running for its chair: latched while it walks, and
+   * true for a seated one that still has a message in the air or on the desk,
+   * which is what keeps it from wandering off in the middle of a delivery.
+   */
+  private isHurrying(agentId: string): boolean {
+    const character = this.characters.get(agentId);
+    if (character !== undefined && character.hurrying) return true;
+    if (character !== undefined && character.pending.length > 0) return true;
+    for (const envelope of this.envelopes) {
+      if (envelope.fromAgentId === agentId) return true;
+      if (envelope.toAgentId === agentId) return true;
+    }
+    return false;
   }
 
   private showBubble(
@@ -1109,14 +1363,21 @@ export class OfficeScene {
       character.sparkleMs = Math.max(0, character.sparkleMs - dtMs);
     }
     if (
-      this.onCoffeeBreak(character) &&
-      this.wanderMustEnd(character.agentId)
+      this.onCancellableErrand(character) &&
+      this.errandMustEnd(character.agentId)
     ) {
       this.returnToDesk(character);
     }
-    if (character.errand === "coffee-wait") {
+    // A message on the way outranks anything an idle agent had planned.
+    if (
+      this.onCancellableErrand(character) &&
+      this.isHurrying(character.agentId)
+    ) {
+      this.returnToDesk(character);
+    }
+    if (character.errand === "errand-wait") {
       character.waitMs -= dtMs;
-      if (character.waitMs <= 0) this.returnToDesk(character);
+      if (character.waitMs <= 0) this.finishLinger(character);
       return;
     }
     // Waiting at reception ends when the status does, which only a sync sees.
@@ -1125,104 +1386,268 @@ export class OfficeScene {
       this.advanceWalk(character, dtMs);
       return;
     }
+    if (character.cooldownMs > 0) {
+      character.cooldownMs = Math.max(0, character.cooldownMs - dtMs);
+    }
     if (this.statusOf(character.agentId) === "idle") character.idleMs += dtMs;
     else character.idleMs = 0;
+    this.advanceFiller(character, dtMs);
   }
 
-  // ---- Coffee breaks -------------------------------------------------- //
+  // ---- Desk fillers --------------------------------------------------- //
 
-  /** At the machine, or on the way to it - a break that can still be cut short. */
-  private onCoffeeBreak(character: OfficeCharacter): boolean {
+  /**
+   * The small things a seated idle agent does between errands. Only ONE cap is
+   * needed here, unlike errands: a filler moves nobody across the floor, so a
+   * room where everyone stretches at once is a room that looks alive rather
+   * than a room being evacuated.
+   */
+  private advanceFiller(character: OfficeCharacter, dtMs: number): void {
+    if (this.playing || this.reducedMotion) {
+      character.filler = null;
+      return;
+    }
+    if (this.statusOf(character.agentId) !== "idle") {
+      character.filler = null;
+      return;
+    }
+    if (this.isHurrying(character.agentId)) {
+      character.filler = null;
+      return;
+    }
+    const active = character.filler;
+    if (active !== null) {
+      active.elapsedMs += dtMs;
+      if (active.elapsedMs < active.durationMs) return;
+      character.filler = null;
+      character.fillerCount += 1;
+      character.nextFillerMs = this.fillerGapMs(character);
+      return;
+    }
+    character.nextFillerMs -= dtMs;
+    if (character.nextFillerMs > 0) return;
+    character.filler = this.pickFiller(character);
+  }
+
+  private fillerGapMs(character: OfficeCharacter): number {
+    const seed = mixSeed(hashAgentId(character.agentId), character.fillerCount);
+    return FILLER_GAP_MIN_MS + (seed % FILLER_GAP_SPREAD_MS);
+  }
+
+  private pickFiller(character: OfficeCharacter): OfficeFiller {
+    const kinds: OfficeFillerKind[] = ["look", "stretch", "spin"];
+    // A doze is a statement about a long silence. Offering it after four
+    // seconds of quiet would make the floor look asleep between every turn.
+    if (character.idleMs >= FILLER_NAP_MIN_IDLE_MS) kinds.push("nap");
+    const seed = mixSeed(
+      hashAgentId(character.agentId),
+      character.fillerCount + 1,
+    );
+    const kind = kinds[seed % kinds.length];
+    return { kind, elapsedMs: 0, durationMs: fillerDurationMs(kind) };
+  }
+
+  // ---- Errands -------------------------------------------------------- //
+
+  /** On the way to a spot, or standing at one - a break that can still be cut short. */
+  private onCancellableErrand(character: OfficeCharacter): boolean {
     return (
-      character.errand === "coffee-out" || character.errand === "coffee-wait"
+      character.errand === "errand-out" || character.errand === "errand-wait"
     );
   }
 
   /** ...plus the walk back, which is still time spent away from the desk. */
-  private onCoffeeErrand(character: OfficeCharacter): boolean {
+  private onErrand(character: OfficeCharacter): boolean {
     return (
-      this.onCoffeeBreak(character) || character.errand === "coffee-return"
+      this.onCancellableErrand(character) ||
+      character.errand === "errand-return"
     );
-  }
-
-  private recomputeCoffeeStands(): void {
-    const layout = this.currentLayout;
-    const stands: Array<OfficeTilePos | null> = [];
-    for (const floor of layout.floors) {
-      stands.push(this.coffeeStandOn(floor));
-    }
-    this.coffeeStandByFloor = stands;
-  }
-
-  private coffeeStandOn(floor: OfficeFloor): OfficeTilePos | null {
-    const layout = this.currentLayout;
-    const top = floor.bounds.row;
-    const bottom = top + floor.bounds.rows - 1;
-    const machine = layout.props.find(
-      (prop) =>
-        prop.sprite.name === "coffee-machine" &&
-        prop.tile.row >= top &&
-        prop.tile.row <= bottom,
-    );
-    if (machine === undefined) return null;
-    for (const offset of WANDER_STAND_OFFSETS) {
-      const col = machine.tile.col + offset.col;
-      const row = machine.tile.row + offset.row;
-      if (col < 0 || row < 0 || col >= layout.cols || row >= layout.rows) {
-        continue;
-      }
-      if (!layout.walkable[row][col]) continue;
-      return { col, row };
-    }
-    return null;
   }
 
   /**
-   * A break belongs to a LIVE floor and to an agent that is still idle, still
+   * An errand belongs to a LIVE floor and to an agent that is still idle, still
    * on it, and still nothing is happening to it. Playback makes every agent
-   * idle between its own rows, so a break during it would fire constantly.
+   * idle between its own rows, so an errand during it would fire constantly.
    */
-  private wanderMustEnd(agentId: string): boolean {
+  private errandMustEnd(agentId: string): boolean {
     if (this.playing) return true;
     if (!this.visibleAgentIds.has(agentId)) return true;
+    if (this.archivedIds.has(agentId)) return true;
     return this.statusOf(agentId) !== "idle";
   }
 
-  private updateWanderStarts(): void {
+  /**
+   * How many may be away at once: half of whoever is idle, and never fewer than
+   * one. A floor of two should still see somebody get up.
+   */
+  private awayCap(): number {
+    let idle = 0;
+    for (const agentId of this.characters.keys()) {
+      if (this.errandMustEnd(agentId)) continue;
+      idle += 1;
+    }
+    return Math.max(1, Math.ceil(idle * AWAY_FRACTION));
+  }
+
+  /** Spots somebody is already using, or walking to, or walking back from. */
+  private claimedSpotKeys(): Set<string> {
+    const claimed = new Set<string>();
+    for (const character of this.characters.values()) {
+      const target = character.errandTarget;
+      if (target === null) continue;
+      claimed.add(tileKeyOf(target.tile));
+    }
+    return claimed;
+  }
+
+  private updateErrandStarts(): void {
     if (this.playing || this.reducedMotion) return;
+    const cap = this.awayCap();
     let active = 0;
     for (const character of this.characters.values()) {
-      if (this.onCoffeeErrand(character)) active += 1;
+      if (this.onErrand(character)) active += 1;
     }
+    if (active >= cap) return;
+    const claimed = this.claimedSpotKeys();
     // Canonical order, so WHICH of a dozen equally bored agents gets up is a
     // fact about their ids rather than about map insertion order.
-    const candidates = Array.from(this.characters.values()).sort(
-      (left, right) => {
-        if (left.agentId === right.agentId) return 0;
-        return left.agentId < right.agentId ? -1 : 1;
-      },
-    );
-    for (const character of candidates) {
-      if (active >= MAX_WANDERING_AGENTS) return;
-      if (character.errand !== "none") continue;
-      if (!character.seated) continue;
-      if (this.wanderMustEnd(character.agentId)) continue;
-      const threshold = IDLE_WANDER_MS + wanderStaggerMs(character.agentId);
-      if (character.idleMs < threshold) continue;
-      const target =
-        this.coffeeStandByFloor[this.floorIndexOfAgent(character.agentId)];
+    for (const character of this.orderedByAgentId()) {
+      if (active >= cap) return;
+      if (!this.mayStartErrand(character)) continue;
+      const target = this.pickErrandTarget(character, claimed);
       if (target === null) continue;
-      if (this.startWander(character, target)) active += 1;
+      if (!this.startErrand(character, target)) continue;
+      claimed.add(tileKeyOf(target.tile));
+      active += 1;
     }
   }
 
-  private startWander(
+  private mayStartErrand(character: OfficeCharacter): boolean {
+    if (character.errand !== "none") return false;
+    if (!character.seated) return false;
+    if (character.cooldownMs > 0) return false;
+    if (this.errandMustEnd(character.agentId)) return false;
+    if (this.isHurrying(character.agentId)) return false;
+    const threshold = IDLE_ERRAND_MS + errandStaggerMs(character.agentId);
+    return character.idleMs >= threshold;
+  }
+
+  /**
+   * Where this agent goes next. The seed folds the clock in at one-second
+   * resolution so the same agent does not walk the same loop forever, and the
+   * last destination is excluded outright - twice to the same window reads as
+   * the animation being stuck rather than as a habit.
+   */
+  private pickErrandTarget(
     character: OfficeCharacter,
-    target: OfficeTilePos,
+    claimed: ReadonlySet<string>,
+  ): OfficeErrandTarget | null {
+    const seed = mixSeed(
+      hashAgentId(character.agentId),
+      Math.floor(this.nowMs / 1000),
+    );
+    const options = this.errandOptionsFor(character, claimed, seed);
+    return this.weightedPick(options, seed);
+  }
+
+  private errandOptionsFor(
+    character: OfficeCharacter,
+    claimed: ReadonlySet<string>,
+    seed: number,
+  ): ReadonlyArray<OfficeErrandTarget> {
+    const floor = this.floorOfAgent(character.agentId);
+    const options: OfficeErrandTarget[] = [];
+    for (const spot of floor.errandSpots) {
+      const key = tileKeyOf(spot.tile);
+      if (claimed.has(key)) continue;
+      if (key === character.lastErrandKey) continue;
+      options.push({
+        kind: spot.kind,
+        tile: spot.tile,
+        facing: spot.facing,
+        partnerId: null,
+      });
+    }
+    const visit = this.visitTargetFor(character, claimed, seed);
+    if (visit !== null) options.push(visit);
+    return options;
+  }
+
+  /** Weighted by kind; an empty list is a floor with nowhere to go. */
+  private weightedPick(
+    options: ReadonlyArray<OfficeErrandTarget>,
+    seed: number,
+  ): OfficeErrandTarget | null {
+    let total = 0;
+    for (const option of options) total += ERRAND_WEIGHTS[option.kind];
+    if (total === 0) return null;
+    let roll = seed % total;
+    for (const option of options) {
+      roll -= ERRAND_WEIGHTS[option.kind];
+      if (roll < 0) return option;
+    }
+    return options[options.length - 1];
+  }
+
+  /**
+   * A call on somebody in the SAME cabin: the aisle tile under their desk,
+   * facing them. Same cabin because a visit is meant to read as two people who
+   * work together talking, and because the aisle under a desk in another room
+   * is a corridor the visitor has no business standing in.
+   *
+   * The colleague has to be at their desk and either idle or working - there is
+   * no point calling on somebody who is themselves out, and an agent that needs
+   * a person has a queue to stand in.
+   */
+  private visitTargetFor(
+    character: OfficeCharacter,
+    claimed: ReadonlySet<string>,
+    seed: number,
+  ): OfficeErrandTarget | null {
+    const room = this.roomOfAgent(character.agentId);
+    if (room === null) return null;
+    const layout = this.currentLayout;
+    const hosts: OfficeErrandTarget[] = [];
+    for (const desk of this.visibleDesks()) {
+      if (desk.agentId === character.agentId) continue;
+      if (!withinTileRect(room.bounds, desk.deskTile)) continue;
+      const colleague = this.characters.get(desk.agentId);
+      if (colleague === undefined || !colleague.seated) continue;
+      const status = this.statusOf(desk.agentId);
+      if (status !== "idle" && status !== "working") continue;
+      const tile: OfficeTilePos = {
+        col: desk.chairTile.col,
+        row: desk.chairTile.row + 1,
+      };
+      if (tile.row >= layout.rows) continue;
+      if (!layout.walkable[tile.row][tile.col]) continue;
+      const key = tileKeyOf(tile);
+      if (claimed.has(key) || key === character.lastErrandKey) continue;
+      hosts.push({
+        kind: "visit",
+        tile,
+        facing: "up",
+        partnerId: desk.agentId,
+      });
+    }
+    if (hosts.length === 0) return null;
+    hosts.sort((left, right) =>
+      left.partnerId === right.partnerId ||
+      left.partnerId === null ||
+      right.partnerId === null
+        ? 0
+        : left.partnerId.localeCompare(right.partnerId),
+    );
+    return hosts[seed % hosts.length];
+  }
+
+  private startErrand(
+    character: OfficeCharacter,
+    target: OfficeErrandTarget,
   ): boolean {
     const start = this.startTileOf(character);
-    const path = findOfficePath(this.currentLayout, start, target);
-    // No route means no break: a character must never be teleported out of its
+    const path = findOfficePath(this.currentLayout, start, target.tile);
+    // No route means no errand: a character must never be teleported out of its
     // chair for something as incidental as a coffee.
     if (path === null || path.length === 0) return false;
     character.col = start.col;
@@ -1232,17 +1657,170 @@ export class OfficeScene {
     character.pathIndex = 0;
     character.walkPhaseMs = 0;
     character.idleMs = 0;
-    character.errand = "coffee-out";
+    character.errand = "errand-out";
+    character.errandTarget = target;
+    character.errandLegs = 0;
+    character.lastErrandKey = tileKeyOf(target.tile);
     character.waitMs = 0;
+    character.filler = null;
     return true;
+  }
+
+  /** How long this character stands where it has arrived. */
+  private lingerMsFor(
+    character: OfficeCharacter,
+    target: OfficeErrandTarget,
+  ): number {
+    if (target.kind === "corridor" && character.errandLegs === 0) {
+      return STROLL_PAUSE_MS;
+    }
+    const seed = mixSeed(
+      hashAgentId(character.agentId),
+      character.errandLegs + Math.floor(this.nowMs / 1000),
+    );
+    if (target.kind === "visit") {
+      return VISIT_LINGER_MIN_MS + (seed % VISIT_LINGER_SPREAD_MS);
+    }
+    return ERRAND_LINGER_MIN_MS + (seed % ERRAND_LINGER_SPREAD_MS);
+  }
+
+  /**
+   * The linger is over. A corridor spot is only ever HALF the errand: standing
+   * in one corridor and turning round is not a stroll, so the first leg picks a
+   * second corridor spot and the walk home starts from there.
+   */
+  private finishLinger(character: OfficeCharacter): void {
+    const target = character.errandTarget;
+    if (target === null || target.kind !== "corridor") {
+      this.returnToDesk(character);
+      return;
+    }
+    if (character.errandLegs > 0) {
+      this.returnToDesk(character);
+      return;
+    }
+    const next = this.nextStrollSpot(character);
+    if (next === null) {
+      this.returnToDesk(character);
+      return;
+    }
+    const legs = character.errandLegs + 1;
+    if (!this.startErrand(character, next)) {
+      this.returnToDesk(character);
+      return;
+    }
+    character.errandLegs = legs;
+  }
+
+  private nextStrollSpot(
+    character: OfficeCharacter,
+  ): OfficeErrandTarget | null {
+    const claimed = this.claimedSpotKeys();
+    const here = character.errandTarget;
+    if (here !== null) claimed.delete(tileKeyOf(here.tile));
+    const floor = this.floorOfAgent(character.agentId);
+    const options: OfficeErrandTarget[] = [];
+    for (const spot of floor.errandSpots) {
+      if (spot.kind !== "corridor") continue;
+      const key = tileKeyOf(spot.tile);
+      if (claimed.has(key) || key === character.lastErrandKey) continue;
+      options.push({
+        kind: spot.kind,
+        tile: spot.tile,
+        facing: spot.facing,
+        partnerId: null,
+      });
+    }
+    if (options.length === 0) return null;
+    const seed = mixSeed(hashAgentId(character.agentId), character.errandLegs);
+    return options[seed % options.length];
+  }
+
+  // ---- Conversations -------------------------------------------------- //
+
+  /**
+   * Who this character is talking to, if anyone. Two agents lingering on
+   * NEIGHBOURING spots of the same kind are together - which is exactly what
+   * the two cooler spots and each table's two seats were laid out to produce -
+   * and a visitor is together with the colleague it called on.
+   */
+  private chatPartnerOf(character: OfficeCharacter): OfficeCharacter | null {
+    const target = character.errandTarget;
+    if (target !== null && character.errand === "errand-wait") {
+      if (target.kind === "visit") {
+        return this.seatedPartner(target.partnerId);
+      }
+      if (target.kind === "cooler" || target.kind === "cafe") {
+        return this.neighbourAt(character, target);
+      }
+    }
+    // The other half of a visit: this character is the one being called on.
+    if (!character.seated) return null;
+    let visitor: OfficeCharacter | null = null;
+    for (const other of this.characters.values()) {
+      if (other.errand !== "errand-wait") continue;
+      const theirs = other.errandTarget;
+      if (theirs === null || theirs.kind !== "visit") continue;
+      if (theirs.partnerId !== character.agentId) continue;
+      // Lowest id wins, so two callers at once is still one conversation and
+      // still the SAME one on every machine.
+      if (visitor === null || other.agentId < visitor.agentId) visitor = other;
+    }
+    return visitor;
+  }
+
+  private seatedPartner(agentId: string | null): OfficeCharacter | null {
+    if (agentId === null) return null;
+    const partner = this.characters.get(agentId);
+    if (partner === undefined || !partner.seated) return null;
+    return partner;
+  }
+
+  private neighbourAt(
+    character: OfficeCharacter,
+    target: OfficeErrandTarget,
+  ): OfficeCharacter | null {
+    for (const other of this.orderedByAgentId()) {
+      if (other.agentId === character.agentId) continue;
+      if (other.errand !== "errand-wait") continue;
+      const theirs = other.errandTarget;
+      if (theirs === null || theirs.kind !== target.kind) continue;
+      if (!areAdjacent(theirs.tile, target.tile)) continue;
+      return other;
+    }
+    return null;
+  }
+
+  /**
+   * Whose turn it is to talk. One bubble at a time, swapping on a shared clock:
+   * two bubbles at once reads as two people waiting rather than as two people
+   * in a conversation.
+   */
+  private chatBubbleFor(character: OfficeCharacter): OfficeSpriteName | null {
+    const partner = this.chatPartnerOf(character);
+    if (partner === null) return null;
+    const speaksFirst = character.agentId < partner.agentId;
+    const onBeat = Math.floor(this.nowMs / CHAT_ALTERNATE_MS) % 2 === 0;
+    return speaksFirst === onBeat ? "bubble-awaiting" : null;
+  }
+
+  // ---- Walking -------------------------------------------------------- //
+
+  /**
+   * A walk in from the door outruns a stroll, and a walk with a message waiting
+   * outruns both. The arrival speed exists because a newcomer's first message
+   * lands within a step; the hurry speed exists because that message can arrive
+   * for anyone, at any point on the floor.
+   */
+  private walkSpeedOf(character: OfficeCharacter): number {
+    if (this.isHurrying(character.agentId)) return HURRY_TILES_PER_SECOND;
+    if (character.errand === "arriving") return ARRIVAL_TILES_PER_SECOND;
+    return WALK_TILES_PER_SECOND;
   }
 
   private advanceWalk(character: OfficeCharacter, dtMs: number): void {
     character.walkPhaseMs += dtMs;
-    const speed =
-      character.errand === "arriving"
-        ? ARRIVAL_TILES_PER_SECOND
-        : WALK_TILES_PER_SECOND;
+    const speed = this.walkSpeedOf(character);
     let budget = (dtMs / 1000) * speed;
     while (budget > 0 && character.pathIndex < character.path.length) {
       const target = character.path[character.pathIndex];
@@ -1271,11 +1849,16 @@ export class OfficeScene {
       this.depart(character.agentId);
       return;
     }
-    if (character.errand === "coffee-out") {
-      // Arrived at the machine: standing, facing it, for a fixed beat.
-      character.errand = "coffee-wait";
-      character.waitMs = WANDER_WAIT_MS;
-      character.facing = "up";
+    if (character.errand === "errand-out") {
+      // Arrived: standing where the spot says to stand, turned the way it says
+      // to face, for as long as this agent's own seeded linger runs.
+      const target = character.errandTarget;
+      character.errand = "errand-wait";
+      character.waitMs =
+        target === null
+          ? ERRAND_LINGER_MIN_MS
+          : this.lingerMsFor(character, target);
+      character.facing = target === null ? "up" : target.facing;
       character.path = [];
       character.pathIndex = 0;
       character.walkPhaseMs = 0;
@@ -1289,24 +1872,32 @@ export class OfficeScene {
       character.walkPhaseMs = 0;
       return;
     }
-    character.seated = true;
-    character.facing = "up";
-    character.path = [];
-    character.pathIndex = 0;
-    character.idleMs = 0;
-    character.errand = "none";
-    character.waitMs = 0;
-    character.queueTile = null;
+    this.settleInChair(character, character.errand === "errand-return");
   }
 
   private statusOf(agentId: string): OfficeAgentStatus {
     return this.statusById.get(agentId) ?? "idle";
   }
 
+  /**
+   * How a character is drawn this frame. Pose and facing come back together
+   * because a desk filler changes BOTH - the seated sprite ignores facing
+   * entirely, so "look left" is only visible on a standing body, and a filler
+   * that set facing alone would animate nothing at all.
+   */
+  private renderStateOf(character: OfficeCharacter): {
+    readonly pose: OfficeCharacterPose;
+    readonly facing: OfficeFacing;
+  } {
+    const filler = character.filler;
+    if (filler !== null && character.seated) return fillerPoseOf(filler);
+    return { pose: this.poseFor(character), facing: character.facing };
+  }
+
   private poseFor(character: OfficeCharacter): OfficeCharacterPose {
     if (!character.seated) {
-      // On foot but with nothing left to walk: standing at the machine or in
-      // the queue.
+      // On foot but with nothing left to walk: standing at a spot or in the
+      // queue.
       if (character.pathIndex >= character.path.length) return "stand";
       return Math.floor(character.walkPhaseMs / WALK_FRAME_MS) % 2 === 0
         ? "walk1"
@@ -1371,6 +1962,39 @@ export class OfficeScene {
       for (let scanRow = row + 2; scanRow < bottom; scanRow += 1) {
         wallAt(col, scanRow);
         wallAt(right, scanRow);
+      }
+    }
+    // The cafeteria's ring is drawn with the cabins' own two sprites. Its door
+    // is not carried in the plan and does not need to be: a wall tile the grid
+    // still says is walkable IS the door, by construction.
+    for (const floorPlan of layout.floors) {
+      const cafeteria = floorPlan.cafeteria;
+      if (cafeteria === null) continue;
+      const { col, row, cols, rows } = cafeteria;
+      const right = col + cols - 1;
+      const bottom = row + rows - 1;
+      const ringAt = (wallCol: number, wallRow: number): void => {
+        const open = layout.walkable[wallRow][wallCol];
+        floor.push({
+          kind: "sprite",
+          sprite: { name: open ? "door" : "wall" },
+          x: wallCol * OFFICE_TILE,
+          y: wallRow * OFFICE_TILE,
+        });
+      };
+      for (let scanCol = col; scanCol <= right; scanCol += 1) {
+        floor.push({
+          kind: "sprite",
+          sprite: { name: "wall-top" },
+          x: scanCol * OFFICE_TILE,
+          y: row * OFFICE_TILE,
+        });
+        ringAt(scanCol, row + 1);
+        ringAt(scanCol, bottom);
+      }
+      for (let scanRow = row + 2; scanRow < bottom; scanRow += 1) {
+        ringAt(col, scanRow);
+        ringAt(right, scanRow);
       }
     }
     // A stairwell is a hole in the FLOOR, not a thing standing on it, so it is
@@ -1617,7 +2241,11 @@ export class OfficeScene {
   }
 
   private envelopeStackFor(agentId: string): OfficeEnvelopeStack | null {
-    const open = this.openRequestsByReceiver.get(agentId) ?? 0;
+    const character = this.characters.get(agentId);
+    // A message that landed while its owner was away is on the desk in exactly
+    // the sense the pile already draws: waiting, unanswered, in front of them.
+    const waiting = character === undefined ? 0 : character.pending.length;
+    const open = (this.openRequestsByReceiver.get(agentId) ?? 0) + waiting;
     if (open <= 0) return null;
     const index = Math.min(open, ENVELOPE_STACKS.length) - 1;
     return ENVELOPE_STACKS[index];
@@ -1675,12 +2303,13 @@ export class OfficeScene {
       const archived = this.archivedIds.has(character.agentId);
       const x = character.col * OFFICE_TILE;
       const y = character.row * OFFICE_TILE + CHARACTER_Y_OFFSET;
+      const render = this.renderStateOf(character);
       actors.push({
         kind: "sprite",
         sprite: {
           name: "character",
-          facing: character.facing,
-          pose: this.poseFor(character),
+          facing: render.facing,
+          pose: render.pose,
           appearance: agent.appearance,
         },
         x,
@@ -1775,9 +2404,23 @@ export class OfficeScene {
       return "bubble-attention";
     }
     if (status === "awaiting") return "bubble-awaiting";
+    // Standing at the board is thinking out loud; talking to somebody is the
+    // same bubble, alternating so only one of the pair holds it at a time.
+    const target = character.errandTarget;
+    if (
+      character.errand === "errand-wait" &&
+      target !== null &&
+      target.kind === "whiteboard"
+    ) {
+      return "bubble-awaiting";
+    }
+    const chat = this.chatBubbleFor(character);
+    if (chat !== null) return chat;
     // Dozing is a statement about a LIVE floor going quiet. During playback
     // every agent is idle between its own rows, so it would fire constantly.
     if (status !== "idle" || this.playing) return null;
+    const filler = character.filler;
+    if (filler !== null && filler.kind === "nap") return "bubble-sleep";
     if (character.idleMs > IDLE_SLEEP_MS) return "bubble-sleep";
     return null;
   }
@@ -1826,6 +2469,28 @@ export class OfficeScene {
       desks.push(desk);
     }
     return desks;
+  }
+
+  /**
+   * Canonical order by id. Every decision that has to break a tie between two
+   * equally eligible agents reads this, so WHO gets up, WHO speaks first and
+   * WHO is visited are facts about their ids rather than about insertion order.
+   */
+  private orderedByAgentId(): ReadonlyArray<OfficeCharacter> {
+    return Array.from(this.characters.values()).sort((left, right) => {
+      if (left.agentId === right.agentId) return 0;
+      return left.agentId < right.agentId ? -1 : 1;
+    });
+  }
+
+  /** The cabin an agent's desk stands in, or `null` for a desk-less record. */
+  private roomOfAgent(agentId: string): OfficeRoom | null {
+    const desk = this.currentLayout.desks.get(agentId);
+    if (desk === undefined) return null;
+    for (const room of this.currentLayout.rooms) {
+      if (withinTileRect(room.bounds, desk.deskTile)) return room;
+    }
+    return null;
   }
 
   /** Baseline order: a character lower on the floor overlaps one above it. */

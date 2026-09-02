@@ -44,6 +44,10 @@ const ALL_SPRITE_NAMES: Readonly<Record<OfficeSpriteName, true>> = {
   box: true,
   reception: true,
   stairs: true,
+  "water-cooler": true,
+  "cafe-table": true,
+  vending: true,
+  "menu-board": true,
   chair: true,
   plant: true,
   "floor-a": true,
@@ -190,10 +194,43 @@ describe("sprite maps", () => {
         ["box", 16, 16],
         ["reception", 32, 16],
         ["stairs", 32, 32],
+        ["water-cooler", 16, 24],
+        ["cafe-table", 32, 16],
+        ["vending", 16, 24],
+        ["menu-board", 32, 16],
       ];
     for (const [name, width, height] of expected) {
       expect(officeSpriteSize({ name }), name).toEqual({ width, height });
     }
+  });
+
+  it("stands the cafeteria's two floor fixtures a full tile above their tile", () => {
+    // The scene lifts a prop by its overhang so its FOOT lands on its tile. The
+    // cooler and the vending machine are the two cafeteria fixtures that stand
+    // on the floor rather than hanging on a wall, so both are authored at the
+    // coffee machine's height - a shorter one would float.
+    for (const name of ["water-cooler", "vending"] as const) {
+      expect(officeSpriteSize({ name }), name).toEqual(
+        officeSpriteSize({ name: "coffee-machine" }),
+      );
+    }
+  });
+
+  it("gives the cafeteria table a cup at each of its two seats", () => {
+    // Two cups is what says "two people sat here" at 1x; the scene emits exactly
+    // two `cafe` seat spots per table, so one cup would contradict the sim.
+    const table = mapNamed("cafe-table");
+    const cupRow = table[5];
+    const cups = cupRow.split("O").filter((run) => run === "bb");
+    expect(cups).toHaveLength(2);
+  });
+
+  it("writes the menu board's own content rather than leaving a field for a label", () => {
+    // Unlike the cabin sign, nothing is drawn over this board: there is no
+    // cafeteria name. A flat field would render as a blank slab on the wall.
+    const board = mapNamed("menu-board").join("");
+    expect(board).toContain("b");
+    expect(board).toContain("B");
   });
 
   it("covers the whole desk with the dust sheet", () => {
