@@ -119,6 +119,33 @@
   }
 }
 
+/* A graph find result keeps its static ring after this finite attention cue.
+   Box-shadow is intentionally the only animated property: timeline playback
+   may be pulsing the same node's opacity at the same time. */
+@keyframes comm-graph-search-match {
+  0%,
+  100% {
+    box-shadow: 0 0 0 2px
+      color-mix(in srgb, var(--color-primary) 60%, transparent);
+  }
+  35%,
+  70% {
+    box-shadow:
+      0 0 0 4px color-mix(in srgb, var(--color-primary) 85%, transparent),
+      0 0 18px color-mix(in srgb, var(--color-primary) 55%, transparent);
+  }
+}
+
+.comm-graph-search-match {
+  animation: comm-graph-search-match 900ms ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .comm-graph-search-match {
+    animation: none;
+  }
+}
+
 .prompt-stash-count-flash {
   animation: prompt-stash-count-flash 700ms ease-out both;
 }
