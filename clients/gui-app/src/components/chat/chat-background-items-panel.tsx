@@ -441,18 +441,26 @@ function backgroundHeaderSummary(input: {
  * One shell whose last output a committed Stop fence is holding back.
  *
  * Rendered without the running rows' drag handle or elapsed timer: what this
- * row is about is a hold that will not clear itself, not a process making
- * progress, and a live timer beside the word "Held" reads as a contradiction.
- * What it has instead is a door onto the output, so a person can see what is
- * being held before deciding to take it.
+ * row is about is a hold, not a process making progress, and a live timer
+ * beside the word "Held" reads as a contradiction. What it has instead is a
+ * door onto the output, so a person can see what is being held before
+ * deciding to take it.
+ *
+ * The hold clears on its own the next time the chat wakes (any message or
+ * resume), or when the shell prints again; Deliver is the way to hand it over
+ * NOW, without sending anything. The tooltip says so, because "Held" alone
+ * told nobody what would happen next.
  *
  * It carries the stop slot anyway, because held does NOT imply finished. The
  * host filters holds by nothing, and a running shell keeps its hold until it
  * next prints - so a watcher that went quiet before a Stop is held and alive at
- * once. This row is the only place that shell appears, so dropping the stop
- * here would be the panel's one lost capability. `ManagedCommandStopAction`
- * self-gates on the live status, so a genuinely finished shell renders no
- * button and the common case is unchanged.
+ * once. That is also why the glyph follows the LIVE state: a held shell that
+ * is still running shows the same monitor/play glyph as a running row, and
+ * only a shell that has actually stopped shows the pause glyph. This row is
+ * the only place that shell appears, so dropping the stop here would be the
+ * panel's one lost capability. `ManagedCommandStopAction` self-gates on the
+ * live status, so a genuinely finished shell renders no button and the common
+ * case is unchanged.
  */
 function HeldManagedCommandRow(props: {
   readonly held: HeldManagedCommandUpdate;
@@ -471,7 +479,7 @@ function HeldManagedCommandRow(props: {
         style={{ paddingLeft: `${BASE_PAD_LEFT}px` }}
       >
         <TooltipWrapper
-          label={`${held.description} — output held after Stop`}
+          label={`${held.description} — output that arrived as you stopped this chat is held back. It reaches the agent with your next message, or right now with Deliver.`}
           side="top"
           sideOffset={undefined}
           align={undefined}
@@ -485,10 +493,18 @@ function HeldManagedCommandRow(props: {
             }}
             className="flex min-w-0 flex-1 items-center gap-2 rounded-md py-1 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           >
-            <PauseCircle
-              aria-hidden
-              className="size-3.5 shrink-0 text-foreground/40"
-            />
+            {command !== null && command.status.state === "running" ? (
+              <ManagedCommandMonitorIcon
+                monitoring={command.monitoring}
+                decorative
+                className="size-3.5 shrink-0 text-foreground/40"
+              />
+            ) : (
+              <PauseCircle
+                aria-hidden
+                className="size-3.5 shrink-0 text-foreground/40"
+              />
+            )}
             <span className="block min-w-0 flex-1 truncate text-ui-xs text-foreground/85">
               {held.description}
             </span>
@@ -987,7 +1003,7 @@ export function BackgroundItemsPanel(props: {
         <div className="flex shrink-0 items-center gap-1 pr-1.5">
           {heldManagedCommands.length > 0 ? (
             <TooltipWrapper
-              label="Deliver the output held back by Stop"
+              label="Wake the agent now with the output Stop held back. Otherwise it arrives with your next message."
               side="top"
               sideOffset={undefined}
               align={undefined}
