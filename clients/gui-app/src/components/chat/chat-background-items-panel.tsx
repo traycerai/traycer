@@ -479,7 +479,7 @@ function HeldManagedCommandRow(props: {
         style={{ paddingLeft: `${BASE_PAD_LEFT}px` }}
       >
         <TooltipWrapper
-          label={`${held.description} — output that arrived as you stopped this chat is held back. It reaches the agent with your next message, or right now with Deliver.`}
+          label={`${held.description} — output that arrived as you stopped this chat is held back. It reaches the agent when the chat next wakes (a message or a resume), or right now with Deliver.`}
           side="top"
           sideOffset={undefined}
           align={undefined}
@@ -1003,7 +1003,7 @@ export function BackgroundItemsPanel(props: {
         <div className="flex shrink-0 items-center gap-1 pr-1.5">
           {heldManagedCommands.length > 0 ? (
             <TooltipWrapper
-              label="Wake the agent now with the output Stop held back. Otherwise it arrives with your next message."
+              label="Wake the agent now with the output Stop held back. Otherwise it arrives when the chat next wakes (a message or a resume)."
               side="top"
               sideOffset={undefined}
               align={undefined}
