@@ -1498,10 +1498,12 @@ describe("ArtifactLinkPopover", () => {
     fireEvent.mouseUp(anchor, { metaKey: true, button: 0 });
     fireEvent.click(anchor, { metaKey: true });
     expect(editor.state.selection.from).toBe(before);
-    expect(openLink).toHaveBeenCalledWith({
-      kind: "external",
-      url: "https://example.com",
-    });
+    // The activating event travels with the link so the seam can read
+    // `meta` (forces the OS browser) and `button` (middle = background).
+    expect(openLink).toHaveBeenCalledWith(
+      { kind: "external", url: "https://example.com" },
+      expect.objectContaining({ metaKey: true, button: 0 }),
+    );
 
     rerender(
       <>
@@ -1543,10 +1545,10 @@ describe("ArtifactLinkPopover", () => {
 
     expect(editor.state.selection.from).toBe(before);
     expect(openLink).toHaveBeenCalledTimes(1);
-    expect(openLink).toHaveBeenCalledWith({
-      kind: "external",
-      url: "https://example.com",
-    });
+    expect(openLink).toHaveBeenCalledWith(
+      { kind: "external", url: "https://example.com" },
+      expect.objectContaining({ button: 0 }),
+    );
     expect(screen.queryByRole("dialog", { name: "Link preview" })).toBeNull();
   });
 
@@ -1610,10 +1612,10 @@ describe("ArtifactLinkPopover", () => {
     fireEvent.click(second);
 
     expect(openLink).toHaveBeenCalledTimes(1);
-    expect(openLink).toHaveBeenCalledWith({
-      kind: "external",
-      url: "https://traycer.ai",
-    });
+    expect(openLink).toHaveBeenCalledWith(
+      { kind: "external", url: "https://traycer.ai" },
+      expect.anything(),
+    );
     expect(screen.queryByRole("dialog", { name: "Link preview" })).toBeNull();
     expect(screen.queryByRole("dialog", { name: "Edit link" })).toBeNull();
     expect(onOpenChange).toHaveBeenCalledWith(false);
@@ -1638,10 +1640,10 @@ describe("ArtifactLinkPopover", () => {
     fireEvent.mouseUp(second, { button: 0 });
     fireEvent.click(second);
 
-    expect(openLink).toHaveBeenCalledWith({
-      kind: "external",
-      url: "https://traycer.ai",
-    });
+    expect(openLink).toHaveBeenCalledWith(
+      { kind: "external", url: "https://traycer.ai" },
+      expect.anything(),
+    );
     expect(editor.view.dom.querySelector("a")?.dataset.linkHref).toBe(
       "https://changed.example",
     );
@@ -1678,12 +1680,10 @@ describe("ArtifactLinkPopover", () => {
     fireEvent.mouseUp(anchor, { button: 0 });
     fireEvent.click(anchor);
 
-    expect(openLink).toHaveBeenCalledWith({
-      kind: "file",
-      path: "/repo/src/app.ts",
-      line: 12,
-      col: 3,
-    });
+    expect(openLink).toHaveBeenCalledWith(
+      { kind: "file", path: "/repo/src/app.ts", line: 12, col: 3 },
+      expect.anything(),
+    );
     expect(screen.queryByRole("dialog", { name: "Link preview" })).toBeNull();
   });
 
@@ -1706,10 +1706,10 @@ describe("ArtifactLinkPopover", () => {
     expect(anchor.hasAttribute("href")).toBe(false);
 
     expect(fireEvent.keyDown(anchor, { key: "Enter" })).toBe(false);
-    expect(openLink).toHaveBeenCalledWith({
-      kind: "external",
-      url: "https://example.com",
-    });
+    expect(openLink).toHaveBeenCalledWith(
+      { kind: "external", url: "https://example.com" },
+      expect.anything(),
+    );
     expect(editor.getText()).toBe(before);
     fireEvent.keyDown(anchor, { key: " " });
     expect(openLink).toHaveBeenCalledTimes(1);
@@ -1942,12 +1942,10 @@ describe("ArtifactLinkPopover", () => {
     if (fileAnchor === null) throw new Error("Expected file anchor");
     expect(fileAnchor.getAttribute("href")).toBeNull();
     expect(fireEvent.click(fileAnchor)).toBe(false);
-    expect(file.openLink).toHaveBeenCalledWith({
-      kind: "file",
-      path: "/repo/src/app.ts",
-      line: 12,
-      col: 3,
-    });
+    expect(file.openLink).toHaveBeenCalledWith(
+      { kind: "file", path: "/repo/src/app.ts", line: 12, col: 3 },
+      expect.anything(),
+    );
     cleanup();
 
     const unsafeEditor = makeLinkedEditor("javascript:alert(1)");
