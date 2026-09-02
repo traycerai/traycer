@@ -56,7 +56,8 @@ import { isDefaultCommGraphView } from "@/stores/epics/canvas/tile-schema/comm-g
 import { CommGraphAgentDetailSurface } from "@/components/epic-canvas/comm-graph/comm-graph-agent-detail-surface";
 import { CommGraphThreadPanel } from "@/components/epic-canvas/comm-graph/comm-graph-thread-panel";
 import { OFFICE_ENVELOPE_TINTS } from "@/components/epic-canvas/comm-graph/office/office-envelope-tints";
-import { OfficeHoverCard } from "@/components/epic-canvas/comm-graph/office/office-hover-card";
+import { OfficeAgentHover } from "@/components/epic-canvas/comm-graph/office/office-agent-hover";
+import { OfficeHoverSupplement } from "@/components/epic-canvas/comm-graph/office/office-hover-supplement";
 import { OfficeLegend } from "@/components/epic-canvas/comm-graph/office/office-legend";
 import { officeHarnessLogo } from "@/components/epic-canvas/comm-graph/office/office-logo-cache";
 import { createCommGraphFindAdapter } from "@/components/epic-canvas/comm-graph/comm-graph-find-adapter";
@@ -150,8 +151,8 @@ type OfficeSelectedDetail =
  */
 interface OfficeHoverTarget {
   readonly agentId: string;
-  readonly left: number;
-  readonly top: number;
+  /** The character's box in container screen pixels; the trigger's geometry. */
+  readonly rect: OfficeRect;
 }
 
 /** An in-flight camera move, in screen space. */
@@ -1371,10 +1372,12 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
           ? null
           : {
               agentId: region.agentId,
-              left:
-                (region.rect.x + region.rect.width / 2) * camera.zoom +
-                camera.x,
-              top: region.rect.y * camera.zoom + camera.y,
+              rect: {
+                x: region.rect.x * camera.zoom + camera.x,
+                y: region.rect.y * camera.zoom + camera.y,
+                width: region.rect.width * camera.zoom,
+                height: region.rect.height * camera.zoom,
+              },
             },
       );
       // An envelope is clickable too, so it earns the same cursor even where
@@ -1553,14 +1556,19 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         />
         {modeToggle}
         {hoverCard === null || hoveredAgent === null ? null : (
-          <OfficeHoverCard
+          <OfficeAgentHover
+            epicId={epicId}
+            agentId={hoveredAgent.id}
             name={hoveredAgent.name}
-            harnessId={hoveredAgent.harnessId}
-            model={hoveredAgent.model}
-            modelTier={officeModelTier(hoveredAgent.model)}
-            status={statusById.get(hoveredAgent.id) ?? "idle"}
-            left={hoverCard.left}
-            top={hoverCard.top}
+            screenRect={hoverCard.rect}
+            extraContent={
+              <OfficeHoverSupplement
+                status={statusById.get(hoveredAgent.id) ?? "idle"}
+                modelTier={officeModelTier(hoveredAgent.model)}
+              />
+            }
+            onSelect={setSelectedAgentId}
+            onLeave={handlePointerLeave}
           />
         )}
         <OfficeLegend />

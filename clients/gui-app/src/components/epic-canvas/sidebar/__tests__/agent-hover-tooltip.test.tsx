@@ -52,6 +52,7 @@ function renderHover(overrides: {
         ownerHostUnreachable={overrides.ownerHostUnreachable}
         ownerKind={overrides.ownerKind}
         roleClaims={overrides.roleClaims}
+        extraContent={null}
         side={overrides.side}
       />
     </TooltipProvider>,
@@ -181,6 +182,7 @@ describe("AgentHoverTooltip", () => {
           ownerHostUnreachable={false}
           ownerKind={null}
           roleClaims={[CLAIM]}
+          extraContent={null}
           side="top"
         />
       </TooltipProvider>,

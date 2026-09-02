@@ -76,6 +76,16 @@ export interface AgentHoverTooltipProps {
    * space below it is where the transport bar is.
    */
   readonly side: "top" | "right" | "bottom" | "left";
+  /**
+   * Extra lines to append under the card, for a surface that knows something
+   * about the agent the shared selectors do not - the office floor's posture
+   * ("Working", "At reception") and the size class its desk is drawn at.
+   *
+   * Appended rather than substituted: everything ABOVE it is still the one
+   * shared description, so a surface can add to what an agent says about
+   * itself without being able to contradict it.
+   */
+  readonly extraContent: ReactNode | null;
 }
 
 /** `null` when there are no claims - an empty roles card is worse than none. */
@@ -94,11 +104,19 @@ export function AgentHoverTooltip(props: AgentHoverTooltipProps): ReactNode {
     nodeId,
     nodeName,
     ownerHostUnreachable,
+    extraContent,
     ownerKind,
     roleClaims,
     side,
   } = props;
   const roleContent = agentRoleHoverContent(nodeName, roleClaims);
+  const supplemental =
+    roleContent === null && extraContent === null ? null : (
+      <>
+        {roleContent}
+        {extraContent}
+      </>
+    );
 
   if (hostId !== null && ownerKind !== null && !ownerHostUnreachable) {
     return (
@@ -109,7 +127,7 @@ export function AgentHoverTooltip(props: AgentHoverTooltipProps): ReactNode {
         epicId={epicId}
         ownerId={nodeId}
         ownerKind={ownerKind}
-        supplementalContent={roleContent}
+        supplementalContent={supplemental}
         side={side}
       />
     );
@@ -120,7 +138,7 @@ export function AgentHoverTooltip(props: AgentHoverTooltipProps): ReactNode {
   // this for selection mode; the shared component gives it everywhere).
   return (
     <TooltipWrapper
-      label={roleContent ?? nodeName}
+      label={supplemental ?? nodeName}
       side={side}
       sideOffset={6}
       align="start"

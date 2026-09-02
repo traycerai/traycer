@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import { OfficeHoverCard } from "@/components/epic-canvas/comm-graph/office/office-hover-card";
+import { OfficeHoverSupplement } from "@/components/epic-canvas/comm-graph/office/office-hover-supplement";
 import { OfficeLegend } from "@/components/epic-canvas/comm-graph/office/office-legend";
 
 afterEach(() => {
@@ -13,96 +13,51 @@ afterEach(() => {
  * produces a frame and therefore never produces a hit region to hover. What
  * they SAY is the part that can go wrong silently, and it is asserted directly.
  */
-describe("OfficeHoverCard", () => {
-  it("names the agent, its harness and model, and what it is doing", () => {
-    render(
-      <OfficeHoverCard
-        name="Reviewer"
-        harnessId="claude"
-        model="opus"
-        modelTier="large"
-        status="working"
-        left={100}
-        top={40}
-      />,
-    );
+/**
+ * The office no longer draws its own agent card: the hover is
+ * `AgentHoverTooltip`, the same component the sidebar and the graph use. What
+ * is left here is the FLOOR's own addition under it - the posture it drew and
+ * the size class it drew the desk at. Harness and model are deliberately
+ * absent: the shared card resolves those from the host, and a second-hand copy
+ * beside it is how the two would come to disagree.
+ */
+describe("OfficeHoverSupplement", () => {
+  it("names the posture and the model size the desk was drawn at", () => {
+    render(<OfficeHoverSupplement status="working" modelTier="large" />);
 
-    expect(screen.getByText("Reviewer")).toBeDefined();
-    expect(screen.getByText("claude · opus · large")).toBeDefined();
-    expect(screen.getByText("Working")).toBeDefined();
-  });
-
-  it("omits the detail line for a chat that has no run settings yet", () => {
-    render(
-      <OfficeHoverCard
-        name="Orchestrator"
-        harnessId={null}
-        model={null}
-        modelTier="medium"
-        status="idle"
-        left={0}
-        top={0}
-      />,
-    );
-
-    // A line reading only a separator would be worse than no line at all.
-    expect(screen.queryByText("·")).toBeNull();
-    expect(screen.getByText("Idle")).toBeDefined();
-  });
-
-  it("still names the harness when the record carries no model", () => {
-    render(
-      <OfficeHoverCard
-        name="Runner"
-        harnessId="codex"
-        model={null}
-        modelTier="medium"
-        status="awaiting"
-        left={0}
-        top={0}
-      />,
-    );
-
-    expect(screen.getByText("codex")).toBeDefined();
-    expect(screen.getByText("Waiting for reply")).toBeDefined();
+    expect(
+      screen.getByTestId("comm-graph-office-hover-supplement").textContent,
+    ).toBe("Working · large model");
   });
 
   it("gives every status a word rather than leaking the internal name", () => {
-    render(
-      <OfficeHoverCard
-        name="Ghost"
-        harnessId={null}
-        model={null}
-        modelTier="medium"
-        status="archived"
-        left={0}
-        top={0}
-      />,
-    );
-
-    expect(screen.getByText("Archived")).toBeDefined();
+    for (const [status, word] of [
+      ["failure", "Crashed"],
+      ["attention", "Needs attention"],
+      ["awaiting", "Waiting for reply"],
+      ["background", "In background"],
+      ["idle", "Idle"],
+      ["archived", "Archived"],
+    ] as const) {
+      cleanup();
+      render(<OfficeHoverSupplement status={status} modelTier="medium" />);
+      expect(
+        screen.getByTestId("comm-graph-office-hover-supplement").textContent,
+      ).toContain(word);
+    }
   });
 
-  it("cannot take the pointer it is following", () => {
-    render(
-      <OfficeHoverCard
-        name="Reviewer"
-        harnessId={null}
-        model={null}
-        modelTier="medium"
-        status="idle"
-        left={0}
-        top={0}
-      />,
-    );
+  it("does not repeat the harness or the model the shared card resolves", () => {
+    render(<OfficeHoverSupplement status="idle" modelTier="small" />);
 
-    // Becoming the pointer's target would make hovering a character flicker
-    // between the character and the card describing it.
-    expect(
-      screen
-        .getByTestId("comm-graph-office-hover-card")
-        .className.includes("pointer-events-none"),
-    ).toBe(true);
+    const text = screen.getByTestId(
+      "comm-graph-office-hover-supplement",
+    ).textContent;
+    // The office reads a chat's model from the epic doc, which the host's own
+    // run settings supersede; printing it here would put a stale value beside
+    // the authoritative one.
+    expect(text).not.toContain("claude");
+    expect(text).not.toContain("opus");
   });
 });
 
