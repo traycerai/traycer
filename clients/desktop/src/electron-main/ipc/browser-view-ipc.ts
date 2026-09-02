@@ -61,6 +61,7 @@ import {
   captureBrowserOriginLocalStorage,
   captureBrowserPrimaryProfile,
   clearBrowserSite,
+  clearBrowserSiteLocalStorage,
 } from "../browser-view/storage/browser-storage-state";
 import {
   applyBrowserObservedProfile,
@@ -1046,6 +1047,19 @@ export function registerBrowserViewIpc(
         action,
         LOGIN_IMPORT_JAR_BARRIER_TIMEOUT_MS,
       ),
+    // The localStorage half of a site clear, on the durable jar the import
+    // writes, followed by the same coordinator prune the site clear does -
+    // without it the next capture ships the origins just emptied back to
+    // the host. The durable jar only: the import refuses when saving is
+    // off, and with it on the durable jar IS the jar the tiles are on.
+    clearSiteLocalStorage: async (site) => {
+      await clearBrowserSiteLocalStorage(
+        site,
+        ensureBrowserViewSessionForPartition(BROWSER_VIEW_PARTITION),
+        rememberedClearSiteOrigins,
+      );
+      primaryProfileSnapshots.forgetOriginsUnder(site);
+    },
   });
 
   bridge.handleInvoke(
@@ -1106,7 +1120,12 @@ export function registerBrowserViewIpc(
       const written = await loginImport.import(
         parsed.success
           ? parsed.data
-          : { sourceId: "", domains: [], includeDeviceBound: false },
+          : {
+              sourceId: "",
+              scanId: "",
+              domains: [],
+              includeDeviceBound: false,
+            },
       );
       if (written.status === "blocked") return written;
       // The push is main's, exactly like forget-all's frames: a renderer may

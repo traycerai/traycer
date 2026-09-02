@@ -41,6 +41,7 @@ describe("browserViewIpcPayload.loginImportRun", () => {
   it("accepts a well-formed request with includeDeviceBound present", () => {
     const parsed = browserViewIpcPayload.loginImportRun.safeParse({
       sourceId: "opaque-id-1",
+      scanId: "scan-1",
       domains: ["example.com"],
       includeDeviceBound: true,
     });
@@ -50,6 +51,7 @@ describe("browserViewIpcPayload.loginImportRun", () => {
   it("rejects a payload missing includeDeviceBound", () => {
     const parsed = browserViewIpcPayload.loginImportRun.safeParse({
       sourceId: "opaque-id-1",
+      scanId: "scan-1",
       domains: ["example.com"],
     });
     expect(parsed.success).toBe(false);
@@ -58,6 +60,7 @@ describe("browserViewIpcPayload.loginImportRun", () => {
   it("rejects includeDeviceBound of the wrong type", () => {
     const parsed = browserViewIpcPayload.loginImportRun.safeParse({
       sourceId: "opaque-id-1",
+      scanId: "scan-1",
       domains: ["example.com"],
       includeDeviceBound: "true",
     });
@@ -67,6 +70,7 @@ describe("browserViewIpcPayload.loginImportRun", () => {
   it("rejects an unknown extra key", () => {
     const parsed = browserViewIpcPayload.loginImportRun.safeParse({
       sourceId: "opaque-id-1",
+      scanId: "scan-1",
       domains: ["example.com"],
       includeDeviceBound: true,
       extra: true,
@@ -77,6 +81,7 @@ describe("browserViewIpcPayload.loginImportRun", () => {
   it("rejects a sourceId longer than 128 characters", () => {
     const parsed = browserViewIpcPayload.loginImportRun.safeParse({
       sourceId: "x".repeat(129),
+      scanId: "scan-1",
       domains: ["example.com"],
       includeDeviceBound: true,
     });
@@ -86,7 +91,27 @@ describe("browserViewIpcPayload.loginImportRun", () => {
   it("rejects a domain entry longer than 253 characters", () => {
     const parsed = browserViewIpcPayload.loginImportRun.safeParse({
       sourceId: "opaque-id-1",
+      scanId: "scan-1",
       domains: ["a".repeat(254)],
+      includeDeviceBound: true,
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("rejects a payload missing scanId", () => {
+    const parsed = browserViewIpcPayload.loginImportRun.safeParse({
+      sourceId: "opaque-id-1",
+      domains: ["example.com"],
+      includeDeviceBound: true,
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("rejects a scanId longer than 128 characters", () => {
+    const parsed = browserViewIpcPayload.loginImportRun.safeParse({
+      sourceId: "opaque-id-1",
+      scanId: "x".repeat(129),
+      domains: ["example.com"],
       includeDeviceBound: true,
     });
     expect(parsed.success).toBe(false);

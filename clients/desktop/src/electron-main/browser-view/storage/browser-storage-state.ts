@@ -651,19 +651,43 @@ export async function clearBrowserSite(
 ): Promise<void> {
   try {
     await removeBrowserSiteCookies(domain, browserSession.cookies);
-    for (const origin of rememberedOrigins()) {
-      if (!originInScope(origin, domain)) continue;
-      await browserSession.clearStorageData({
-        origin,
-        storages: ["localstorage"],
-      });
-    }
+    await clearBrowserSiteLocalStorage(
+      domain,
+      browserSession,
+      rememberedOrigins,
+    );
   } finally {
     // Cookie removals are held in memory until the store is flushed; without
     // this, a quit right after the clear could resurrect the site's logins.
     // In the `finally` because a clear that aborted part-way is exactly when
     // the removals it did issue most need to be durable.
     await browserSession.cookies.flushStore();
+  }
+}
+
+/** The localStorage half of a site clear: `clearStorageData`, nothing wider. */
+export interface BrowserSiteStorageClearer {
+  clearStorageData(options: ClearStorageDataOptions): Promise<void>;
+}
+
+/**
+ * The localStorage half of {@link clearBrowserSite}, on its own so the login
+ * import can run it per site between its cookie writes: every remembered
+ * origin in the site's scope is emptied, and nothing else, since localStorage
+ * is not enumerable and those origins are the only ones a clear can name. The
+ * coordinator's `forgetOriginsUnder` is still the caller's to follow with.
+ */
+export async function clearBrowserSiteLocalStorage(
+  domain: string,
+  browserSession: BrowserSiteStorageClearer,
+  rememberedOrigins: () => readonly string[],
+): Promise<void> {
+  for (const origin of rememberedOrigins()) {
+    if (!originInScope(origin, domain)) continue;
+    await browserSession.clearStorageData({
+      origin,
+      storages: ["localstorage"],
+    });
   }
 }
 
@@ -675,7 +699,7 @@ export interface BrowserSiteCookieRemover {
 
 /**
  * The cookie half of {@link clearBrowserSite}, on its own so the login import
- * can replace one site's cookies without touching its localStorage. Answers
+ * can replace one site's cookies key by key rather than as a slice. Answers
  * how many cookies it removed. Flushing is the caller's: both callers batch
  * several removals before one `flushStore`.
  */

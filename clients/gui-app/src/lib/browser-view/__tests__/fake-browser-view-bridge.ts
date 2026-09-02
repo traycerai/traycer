@@ -246,6 +246,7 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
   scanLoginImportSource(sourceId: string): Promise<LoginImportScan> {
     return Promise.resolve({
       sourceId,
+      scanId: `scan-${sourceId}`,
       sites: [],
       excluded: [],
       protectedCookieCount: 0,

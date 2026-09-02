@@ -317,6 +317,13 @@ export interface LoginImportExcludedSite {
  */
 export interface LoginImportScan {
   readonly sourceId: string;
+  /**
+   * This scan's own opaque token, which the import request must quote. Two
+   * Settings windows can scan the same source, and each import is checked
+   * against the scan ITS window rendered - the site list and the keystore
+   * promise the user saw - never against whichever scan came last.
+   */
+  readonly scanId: string;
   readonly sites: readonly LoginImportSite[];
   readonly excluded: readonly LoginImportExcludedSite[];
   /** Windows App-Bound-Encryption rows (`v20`), which no app can decrypt. */
@@ -339,6 +346,13 @@ export interface LoginImportScan {
 export interface LoginImportRequest {
   readonly sourceId: string;
   /**
+   * The `scanId` of the scan this request's domains were chosen from. An
+   * import honours only that scan's site list; a token the desktop no longer
+   * holds (a failed re-scan, a retired source, a scan that fell out of the
+   * retained set) answers `unreadable`, and the dialog's Try again re-scans.
+   */
+  readonly scanId: string;
+  /**
    * Registrable domains from the scan's `sites` - and, only with
    * `includeDeviceBound`, from its `excluded`; anything else is ignored.
    */
@@ -358,7 +372,10 @@ export type LoginImportResult =
       readonly importedSites: number;
       readonly importedCookies: number;
       /**
-       * Chosen sites the jar already held cookies for, now replaced.
+       * Chosen sites the jar already held cookies for, now replaced: the
+       * cookies the source did not carry are gone, and so is the site's
+       * localStorage, which belonged to whichever account was signed in
+       * before.
        */
       readonly replacedSites: number;
       /**
@@ -677,11 +694,12 @@ export interface BrowserViewBridge {
   pickLoginImportFile(): Promise<LoginImportSource | null>;
   scanLoginImportSource(sourceId: string): Promise<LoginImportScan>;
   /**
-   * Only domains the LAST successful scan of that source listed under `sites`
+   * Only domains the scan the request quotes (`scanId`) listed under `sites`
    * are honoured (its `excluded` Google sites too, only with
-   * `includeDeviceBound`); anything else is dropped in main, and a source
-   * with no scan on record is refused. The user chooses from what they were
-   * shown.
+   * `includeDeviceBound`); anything else is dropped in main, and a token the
+   * desktop no longer holds, or one taken of another source, is refused as
+   * `unreadable`. The user chooses from what THIS window was shown, not from
+   * a later scan another window took of the same source.
    *
    * The push to the hosts is main's, like every other jar action: the write
    * runs with the delta observer muted, so nothing would reach a host on its

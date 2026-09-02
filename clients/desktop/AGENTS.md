@@ -124,9 +124,11 @@ failures.
   which one); every failure is a RESULT VALUE with a closed reason, because
   a rejected invoke's message reaches the WARN log and Sentry and a cookie,
   a profile path, or a keychain's answer must never travel that way (the
-  service logs an errno code and a stage, nothing else); and the jar write
-  runs under the `BrowserJarSerializer`'s whole-jar barrier (the one
-  forget-all takes, so a forget confirmed mid-import waits for it; the
+  service logs an errno code and a stage, nothing else); and the import runs
+  under the `BrowserJarSerializer`'s whole-jar barrier FROM THE KEYSTORE
+  PROMPT ON (the one forget-all takes, so a forget confirmed while the
+  prompt is up or the write is running waits for it, instead of clearing
+  the jar, reporting done, and having the import write the logins back; the
   import passes its own 10-minute budget, and reads the barrier's abort
   signal between rows so an import the barrier gives up on STOPS before the
   queued work is admitted) and, inside that, under
@@ -135,16 +137,26 @@ failures.
   otherwise reach the host as `removedKeys` and evict the site from every
   live session. That mute also skips the observer's `onLocalCookieWrite`,
   so the import hands the desktop ownership of the keys it wrote by hand
-  (`releaseHeadlessOriginCookieKeys`) - still inside the barrier, after the
-  mute lifts, or a merge queued behind the barrier could observe an older
-  value back over the import the moment the gate opens. The Import click
-  may open only a keystore the Choose step announced for some chosen site;
-  a source that gained an encrypted row since the scan answers
-  `source-changed` and drops the scan. A site is written BEFORE anything of
-  it is
-  removed: the source's cookies go in first, and only a site with at least
-  one written cookie has what the source did not carry removed after, so a
-  source whose every row Electron rejects leaves the jar's slice as it was.
+  (`releaseHeadlessOriginCookieKeys`) - in a `finally`, so an import a row
+  or the barrier's abort ended still releases every key it DID write, and
+  still inside the barrier, after the mute lifts, or a merge queued behind
+  the barrier could observe an older value back over the import the moment
+  the gate opens. A scan answers with its own opaque `scanId` and the
+  import must quote it: two Settings windows scanning one source each keep
+  their scan (up to a small retained set), and each import is checked
+  against the list ITS window rendered. The Import click may open only a
+  keystore that scan announced for some chosen site; a source that gained
+  an encrypted row since answers `source-changed` and drops that scan. A
+  site is written BEFORE anything of it is removed: the source's cookies go
+  in first, and only a site with at least one written cookie has what the
+  source did not CARRY removed after - keyed by the source's rows, not by
+  what was written, so a row that fails to decrypt or to set leaves the
+  jar's cookie at that key alone - so a source whose every row Electron
+  rejects leaves the jar's slice as it was. A written site's localStorage
+  goes too (`clearBrowserSiteLocalStorage` plus the coordinator's prune,
+  the same pair the site clear runs): the source carries cookies only, and
+  a site that keeps account state in localStorage would otherwise run the
+  previous identity on the imported cookies.
   A decrypted value exists only between the `readValue` inside that write
   loop and the `cookies.set` it feeds, never in a list; an imported SESSION
   cookie is given a bounded expiry, since a `persist:` partition drops one

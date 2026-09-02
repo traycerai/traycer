@@ -25,6 +25,7 @@ import {
 import type { ChromiumImportBrowser } from "../chromium-browsers";
 import {
   LoginImportService,
+  RETAINED_SCAN_LIMIT,
   type LoginImportJarCookies,
   type LoginImportJarSession,
   type LoginImportOutcome,
@@ -407,6 +408,8 @@ interface ServiceHarness {
     >;
     readonly windowsDpapi: Mock<LoginImportSecretProviders["windowsDpapi"]>;
   };
+  /** Every site `clearSiteLocalStorage` was called with, in call order. */
+  readonly clearedSites: string[];
 }
 
 // A per-suite temp dir rather than a bogus path: every test that never
@@ -438,6 +441,7 @@ function buildHarness(
     linuxSecretService,
     windowsDpapi,
   };
+  const clearedSites: string[] = [];
   const deps: LoginImportServiceDependencies = {
     platform: "darwin",
     homeDir: "/unused-home",
@@ -447,6 +451,10 @@ function buildHarness(
     getDurableSession: () => session,
     serializeJarWrite: async (action) => action(new AbortController().signal),
     suppressDeltas: async (action) => action(),
+    clearSiteLocalStorage: (site: string) => {
+      clearedSites.push(site);
+      return Promise.resolve();
+    },
     releaseHostOwnedKeys: async () => undefined,
     settleWindowMs: 5,
     sleep: () => Promise.resolve(),
@@ -458,6 +466,7 @@ function buildHarness(
     service: new LoginImportService(deps),
     session,
     secrets: { macosKeychain, linuxSecretService, windowsDpapi },
+    clearedSites,
   };
 }
 
@@ -726,6 +735,7 @@ describe("import - saved logins off", () => {
     // proves the ordering.
     const result = await service.import({
       sourceId: "never-registered",
+      scanId: "unused-scan-id",
       domains: ["example.com"],
       includeDeviceBound: false,
     });
@@ -745,6 +755,7 @@ describe("import - source and scan bookkeeping", () => {
 
     const result = await service.import({
       sourceId: "stale-id-from-an-old-list",
+      scanId: "unused-scan-id",
       domains: ["example.com"],
       includeDeviceBound: false,
     });
@@ -772,6 +783,7 @@ describe("import - source and scan bookkeeping", () => {
 
     const result = await service.import({
       sourceId,
+      scanId: "unused-scan-id",
       domains: ["never-scanned.com"],
       includeDeviceBound: false,
     });
@@ -811,6 +823,7 @@ describe("import - source and scan bookkeeping", () => {
 
     const result = await service.import({
       sourceId,
+      scanId: scan.scanId,
       domains: ["relist-site.com"],
       includeDeviceBound: false,
     });
@@ -842,7 +855,7 @@ describe("import - source and scan bookkeeping", () => {
       { platform: "darwin", homeDir, snapshotRoot: await makeTempDir("snap-") },
       session,
     );
-    const { sourceId } = await scanChromeSource(service);
+    const { sourceId, scan } = await scanChromeSource(service);
 
     // The profile's jar is gone by the time anyone re-lists (the browser was
     // uninstalled, the profile deleted): the id is not handed out again and
@@ -853,6 +866,7 @@ describe("import - source and scan bookkeeping", () => {
 
     const result = await service.import({
       sourceId,
+      scanId: scan.scanId,
       domains: ["gone-site.com"],
       includeDeviceBound: false,
     });
@@ -889,10 +903,11 @@ describe("import - per-domain replace", () => {
       { platform: "darwin", homeDir, snapshotRoot: await makeTempDir("snap-") },
       session,
     );
-    const { sourceId } = await scanChromeSource(service);
+    const { sourceId, scan } = await scanChromeSource(service);
 
     const result = await service.import({
       sourceId,
+      scanId: scan.scanId,
       domains: ["domain-a.com"],
       includeDeviceBound: false,
     });
@@ -959,10 +974,11 @@ describe("import - a domain with only invalid cookies is not cleared", () => {
       },
       session,
     );
-    const { sourceId } = await scanChromeSource(service);
+    const { sourceId, scan } = await scanChromeSource(service);
 
     const result = await service.import({
       sourceId,
+      scanId: scan.scanId,
       domains: ["broken-site.com", "good-site.com"],
       includeDeviceBound: false,
     });
@@ -1005,10 +1021,11 @@ describe("import - Google domains only with includeDeviceBound", () => {
       { platform: "darwin", homeDir, snapshotRoot: await makeTempDir("snap-") },
       session,
     );
-    const { sourceId } = await scanChromeSource(service);
+    const { sourceId, scan } = await scanChromeSource(service);
 
     const result = await service.import({
       sourceId,
+      scanId: scan.scanId,
       domains: ["google.com", "normal-site.com"],
       includeDeviceBound: false,
     });
@@ -1039,10 +1056,11 @@ describe("import - Google domains only with includeDeviceBound", () => {
       { platform: "darwin", homeDir, snapshotRoot: await makeTempDir("snap-") },
       session,
     );
-    const { sourceId } = await scanChromeSource(service);
+    const { sourceId, scan } = await scanChromeSource(service);
 
     const result = await service.import({
       sourceId,
+      scanId: scan.scanId,
       domains: ["google.com", "normal-site.com"],
       includeDeviceBound: true,
     });
@@ -1066,7 +1084,7 @@ describe("import - Google domains only with includeDeviceBound", () => {
       { platform: "darwin", homeDir, snapshotRoot: await makeTempDir("snap-") },
       session,
     );
-    const { sourceId } = await scanChromeSource(service);
+    const { sourceId, scan } = await scanChromeSource(service);
 
     // A brand-new domain lands in the live jar after the scan ran.
     appendChromiumCookieRow(
@@ -1076,6 +1094,7 @@ describe("import - Google domains only with includeDeviceBound", () => {
 
     const result = await service.import({
       sourceId,
+      scanId: scan.scanId,
       domains: ["google.com", "unscanned.com"],
       includeDeviceBound: true,
     });
@@ -1114,10 +1133,11 @@ describe("import - a cookies.set rejection is counted, not fatal", () => {
       { platform: "darwin", homeDir, snapshotRoot: await makeTempDir("snap-") },
       session,
     );
-    const { sourceId } = await scanChromeSource(service);
+    const { sourceId, scan } = await scanChromeSource(service);
 
     const result = await service.import({
       sourceId,
+      scanId: scan.scanId,
       domains: ["reject-site.com"],
       includeDeviceBound: false,
     });
@@ -1167,10 +1187,11 @@ describe("import - a site whose every write is rejected is left untouched", () =
       { platform: "darwin", homeDir, snapshotRoot: await makeTempDir("snap-") },
       session,
     );
-    const { sourceId } = await scanChromeSource(service);
+    const { sourceId, scan } = await scanChromeSource(service);
 
     const result = await service.import({
       sourceId,
+      scanId: scan.scanId,
       domains: ["reject-site.com"],
       includeDeviceBound: false,
     });
@@ -1216,10 +1237,11 @@ describe("import - a same-name cookie under another scope is re-written after th
       { platform: "darwin", homeDir, snapshotRoot: await makeTempDir("snap-") },
       session,
     );
-    const { sourceId } = await scanChromeSource(service);
+    const { sourceId, scan } = await scanChromeSource(service);
 
     const result = await service.import({
       sourceId,
+      scanId: scan.scanId,
       domains: ["example.com"],
       includeDeviceBound: false,
     });
@@ -1301,10 +1323,11 @@ describe("import - the settle window still runs when the write loop throws", () 
       },
       session,
     );
-    const { sourceId } = await scanChromeSource(service);
+    const { sourceId, scan } = await scanChromeSource(service);
 
     const pending = service.import({
       sourceId,
+      scanId: scan.scanId,
       domains: ["throw-site.com"],
       includeDeviceBound: false,
     });
@@ -1375,10 +1398,11 @@ describe("import - the jar write runs inside serializeJarWrite, and suppressDelt
       },
       session,
     );
-    const { sourceId } = await scanChromeSource(service);
+    const { sourceId, scan } = await scanChromeSource(service);
 
     const result = await service.import({
       sourceId,
+      scanId: scan.scanId,
       domains: ["nested-site.com"],
       includeDeviceBound: false,
     });
@@ -1447,10 +1471,11 @@ describe("import - releases host ownership of exactly the keys it wrote", () => 
       },
       session,
     );
-    const { sourceId } = await scanChromeSource(service);
+    const { sourceId, scan } = await scanChromeSource(service);
 
     const result = await service.import({
       sourceId,
+      scanId: scan.scanId,
       domains: ["release-site.com"],
       includeDeviceBound: false,
     });
@@ -1475,6 +1500,7 @@ describe("import - releases host ownership of exactly the keys it wrote", () => 
 
     const result = await service.import({
       sourceId: "never-registered",
+      scanId: "unused-scan-id",
       domains: ["example.com"],
       includeDeviceBound: false,
     });
@@ -1534,10 +1560,11 @@ describe("import - stops writing when the barrier's signal is aborted", () => {
       },
       session,
     );
-    const { sourceId } = await scanChromeSource(service);
+    const { sourceId, scan } = await scanChromeSource(service);
 
     const result = await service.import({
       sourceId,
+      scanId: scan.scanId,
       domains: ["abort-site-a.com", "abort-site-b.com"],
       includeDeviceBound: false,
     });
@@ -1606,10 +1633,11 @@ describe("import - releases host ownership inside the barrier, after the mute li
       },
       session,
     );
-    const { sourceId } = await scanChromeSource(service);
+    const { sourceId, scan } = await scanChromeSource(service);
 
     const result = await service.import({
       sourceId,
+      scanId: scan.scanId,
       domains: ["inside-barrier.com"],
       includeDeviceBound: false,
     });
@@ -1663,9 +1691,10 @@ describe("import - keystore outcomes", () => {
       },
       session,
     );
-    const { sourceId } = await scanChromeSource(service);
+    const { sourceId, scan } = await scanChromeSource(service);
     const outcome = await service.import({
       sourceId,
+      scanId: scan.scanId,
       domains: ["locked-site.com"],
       includeDeviceBound: false,
     });
@@ -1727,10 +1756,11 @@ describe("import - the keystore is touched only for a selected encrypted row", (
       { platform: "darwin", homeDir, snapshotRoot: await makeTempDir("snap-") },
       session,
     );
-    const { sourceId } = await scanChromeSource(service);
+    const { sourceId, scan } = await scanChromeSource(service);
 
     const result = await service.import({
       sourceId,
+      scanId: scan.scanId,
       domains: ["plain-only.com"],
       includeDeviceBound: false,
     });
@@ -1777,6 +1807,7 @@ describe("import - a domain outside the last scan is dropped", () => {
 
     const result = await service.import({
       sourceId,
+      scanId: scan.scanId,
       domains: ["steady.com", "late.com"],
       includeDeviceBound: false,
     });
@@ -1825,6 +1856,7 @@ describe("import - every requested domain is outside the last scan", () => {
 
     const result = await service.import({
       sourceId,
+      scanId: scan.scanId,
       domains: ["not-in-the-scan.com"],
       includeDeviceBound: false,
     });
@@ -1886,6 +1918,7 @@ describe("import - failures never throw, and the log is shape-limited", () => {
     try {
       result = await service.import({
         sourceId: "any-id",
+        scanId: "unused-scan-id",
         domains: ["example.com"],
         includeDeviceBound: false,
       });
@@ -1933,6 +1966,7 @@ describe("import - failures never throw, and the log is shape-limited", () => {
 
     expect(result).toEqual({
       sourceId,
+      scanId: expect.stringMatching(/^[0-9a-f]{32}$/),
       sites: [],
       excluded: [],
       protectedCookieCount: 0,
@@ -2007,10 +2041,11 @@ describe("import - suppression wraps the whole write including the trailing slee
       },
       session,
     );
-    const { sourceId } = await scanChromeSource(service);
+    const { sourceId, scan } = await scanChromeSource(service);
 
     const pending = service.import({
       sourceId,
+      scanId: scan.scanId,
       domains: ["ordered-site.com"],
       includeDeviceBound: false,
     });
@@ -2076,18 +2111,20 @@ describe("import - operations are serialized", () => {
       },
       session,
     );
-    const { sourceId } = await scanChromeSource(service);
+    const { sourceId, scan } = await scanChromeSource(service);
 
     // Both calls target the SAME source and domain; the two writes are
     // distinguished purely by ordering (this is the same service instance,
     // so both share the internal `queue`).
     const pendingA = service.import({
       sourceId,
+      scanId: scan.scanId,
       domains: ["serial-site.com"],
       includeDeviceBound: false,
     });
     const pendingB = service.import({
       sourceId,
+      scanId: scan.scanId,
       domains: ["serial-site.com"],
       includeDeviceBound: false,
     });
@@ -2181,6 +2218,7 @@ describe("import - source-changed: a chosen site gained an encrypted row needing
 
     const firstResult = await service.import({
       sourceId,
+      scanId: scan.scanId,
       domains: ["linux-site.com"],
       includeDeviceBound: false,
     });
@@ -2195,6 +2233,7 @@ describe("import - source-changed: a chosen site gained an encrypted row needing
     // unreadable, the "no scan on record" path.
     const secondResult = await service.import({
       sourceId,
+      scanId: scan.scanId,
       domains: ["linux-site.com"],
       includeDeviceBound: false,
     });
@@ -2211,6 +2250,7 @@ describe("import - source-changed: a chosen site gained an encrypted row needing
 
     const thirdResult = await service.import({
       sourceId,
+      scanId: rescan.scanId,
       domains: ["linux-site.com"],
       includeDeviceBound: false,
     });
@@ -2275,6 +2315,7 @@ describe("import - source-changed: not raised when a chosen site already needed 
 
     const result = await service.import({
       sourceId,
+      scanId: scan.scanId,
       domains: ["darwin-encrypted.com", "darwin-plain.com"],
       includeDeviceBound: false,
     });
@@ -2284,5 +2325,380 @@ describe("import - source-changed: not raised when a chosen site already needed 
     }
     expect(result.importedSites).toBe(2);
     expect(macosKeychain).toHaveBeenCalledTimes(1);
+  });
+});
+
+// =================================================================================
+// 16. An import quotes the scan its window rendered
+// =================================================================================
+
+describe("import - quotes the scan its window rendered", () => {
+  it("honours the earlier of two scans, refuses an unknown scanId, and refuses the scan's token against a different sourceId", async () => {
+    const homeDir = await makeTempDir("login-import-quote-scan-");
+    await createDarwinChromeSource(
+      homeDir,
+      [
+        domainCookieRow(".quote-site.com", "sid", {
+          kind: "plain",
+          value: "v",
+        }),
+      ],
+      23,
+    );
+    const session = new FakeLoginImportSession([]);
+    const { service } = buildHarness(
+      { platform: "darwin", homeDir, snapshotRoot: await makeTempDir("snap-") },
+      session,
+    );
+    const sourceId = await chromeSourceId(service);
+
+    const first = await service.scan(sourceId);
+    const second = await service.scan(sourceId);
+    expect(first.scanId).not.toBe(second.scanId);
+
+    // The earlier scan is still retained: quoting it still succeeds.
+    const result = await service.import({
+      sourceId,
+      scanId: first.scanId,
+      domains: ["quote-site.com"],
+      includeDeviceBound: false,
+    });
+    expect(result.status).toBe("imported");
+
+    // An unknown scanId names no scan on record.
+    const unknownScanResult = await service.import({
+      sourceId,
+      scanId: "0".repeat(32),
+      domains: ["quote-site.com"],
+      includeDeviceBound: false,
+    });
+    expect(unknownScanResult).toEqual({
+      status: "blocked",
+      reason: "unreadable",
+    });
+
+    // A second, distinct registered source: first's scanId names a scan of
+    // the FIRST source, so quoting it against this one is refused too.
+    const fileSourceDir = await makeTempDir("login-import-quote-scan-file-");
+    const filePath = join(fileSourceDir, "cookies.txt");
+    await writeFile(
+      filePath,
+      "other-site.com\tFALSE\t/\tFALSE\t0\tsid\tabc123",
+    );
+    const fileSource = await service.registerFile(filePath);
+
+    const wrongSourceResult = await service.import({
+      sourceId: fileSource.id,
+      scanId: first.scanId,
+      domains: ["other-site.com"],
+      includeDeviceBound: false,
+    });
+    expect(wrongSourceResult).toEqual({
+      status: "blocked",
+      reason: "unreadable",
+    });
+  });
+});
+
+// =================================================================================
+// 17. Only RETAINED_SCAN_LIMIT scans are kept, oldest first
+// =================================================================================
+
+describe("import - keeps at most RETAINED_SCAN_LIMIT scans, oldest first", () => {
+  it("evicts the oldest scan once more than RETAINED_SCAN_LIMIT have been taken", async () => {
+    const homeDir = await makeTempDir("login-import-scan-limit-");
+    await createDarwinChromeSource(
+      homeDir,
+      [
+        domainCookieRow(".limit-site.com", "sid", {
+          kind: "plain",
+          value: "v",
+        }),
+      ],
+      23,
+    );
+    const session = new FakeLoginImportSession([]);
+    const { service } = buildHarness(
+      { platform: "darwin", homeDir, snapshotRoot: await makeTempDir("snap-") },
+      session,
+    );
+    const sourceId = await chromeSourceId(service);
+
+    const scans: LoginImportScan[] = [];
+    for (let count = 0; count < RETAINED_SCAN_LIMIT + 1; count += 1) {
+      scans.push(await service.scan(sourceId));
+    }
+    const first = scans[0];
+    const second = scans[1];
+    if (first === undefined || second === undefined) {
+      throw new Error("expected at least two scans");
+    }
+
+    const firstResult = await service.import({
+      sourceId,
+      scanId: first.scanId,
+      domains: ["limit-site.com"],
+      includeDeviceBound: false,
+    });
+    expect(firstResult).toEqual({ status: "blocked", reason: "unreadable" });
+
+    const secondResult = await service.import({
+      sourceId,
+      scanId: second.scanId,
+      domains: ["limit-site.com"],
+      includeDeviceBound: false,
+    });
+    expect(secondResult.status).toBe("imported");
+  });
+});
+
+// =================================================================================
+// 18. releaseHostOwnedKeys releases exactly the keys written before an abort
+// =================================================================================
+
+describe("import - releases ownership of the keys written before the barrier aborts", () => {
+  it("releases exactly the keys written before the barrier's signal aborts, and only once", async () => {
+    const homeDir = await makeTempDir("login-import-release-abort-");
+    await createDarwinChromeSource(
+      homeDir,
+      [
+        domainCookieRow(".abort-release-a.com", "sid", {
+          kind: "plain",
+          value: "a",
+        }),
+        domainCookieRow(".abort-release-b.com", "sid", {
+          kind: "plain",
+          value: "b",
+        }),
+      ],
+      23,
+    );
+    const session = new FakeLoginImportSession([]);
+    const controller = new AbortController();
+    const originalSet = session.cookies.set;
+    let setCallCount = 0;
+    session.cookies.set = (details: CookiesSetDetails): Promise<void> => {
+      setCallCount += 1;
+      const result = originalSet(details);
+      // Aborts after the first successful write, mimicking the barrier
+      // expiring mid-import.
+      if (setCallCount === 1) controller.abort();
+      return result;
+    };
+    const releaseHostOwnedKeys = vi.fn(
+      async (_keys: readonly BrowserCookieKey[]): Promise<void> => undefined,
+    );
+    const { service } = buildHarness(
+      {
+        platform: "darwin",
+        homeDir,
+        snapshotRoot: await makeTempDir("snap-"),
+        serializeJarWrite: async <T>(
+          action: (signal: AbortSignal) => Promise<T>,
+        ): Promise<T> => action(controller.signal),
+        releaseHostOwnedKeys,
+      },
+      session,
+    );
+    const { sourceId, scan } = await scanChromeSource(service);
+
+    const result = await service.import({
+      sourceId,
+      scanId: scan.scanId,
+      domains: ["abort-release-a.com", "abort-release-b.com"],
+      includeDeviceBound: false,
+    });
+
+    expect(result).toEqual({ status: "blocked", reason: "unreadable" });
+    expect(releaseHostOwnedKeys).toHaveBeenCalledTimes(1);
+    const releasedKeys = releaseHostOwnedKeys.mock.calls[0]?.[0];
+    expect(releasedKeys).toEqual([
+      { domain: ".abort-release-a.com", name: "sid", path: "/" },
+    ]);
+  });
+});
+
+// =================================================================================
+// 19. The barrier is taken before the keystore prompt
+// =================================================================================
+
+describe("import - takes the barrier before the keystore prompt", () => {
+  it("consults the keychain from inside the barrier, and denies without touching the jar or releasing keys", async () => {
+    const homeDir = await makeTempDir("login-import-barrier-before-keystore-");
+    await createDarwinChromeSource(
+      homeDir,
+      [
+        domainCookieRow(".barrier-keystore.com", "auth", {
+          kind: "encrypted",
+          bytes: encryptCbc(
+            "v10",
+            "macos-keychain-secret",
+            CHROMIUM_PBKDF2_ITERATIONS.darwin,
+            "secret-value",
+          ),
+        }),
+      ],
+      23,
+    );
+    const session = new FakeLoginImportSession([]);
+    const barrierState = { insideBarrier: false };
+    const keychainCalls: boolean[] = [];
+    const releaseHostOwnedKeys = vi.fn(async (): Promise<void> => undefined);
+    const { service } = buildHarness(
+      {
+        platform: "darwin",
+        homeDir,
+        snapshotRoot: await makeTempDir("snap-"),
+        serializeJarWrite: async <T>(
+          action: (signal: AbortSignal) => Promise<T>,
+        ): Promise<T> => {
+          barrierState.insideBarrier = true;
+          try {
+            return await action(new AbortController().signal);
+          } finally {
+            barrierState.insideBarrier = false;
+          }
+        },
+        secrets: {
+          macosKeychain: () => {
+            keychainCalls.push(barrierState.insideBarrier);
+            return Promise.resolve({ ok: false, reason: "denied" });
+          },
+          linuxSecretService: alwaysUnavailable(),
+          windowsDpapi: () => Promise.resolve(null),
+        },
+        releaseHostOwnedKeys,
+      },
+      session,
+    );
+    const { sourceId, scan } = await scanChromeSource(service);
+
+    const result = await service.import({
+      sourceId,
+      scanId: scan.scanId,
+      domains: ["barrier-keystore.com"],
+      includeDeviceBound: false,
+    });
+
+    expect(keychainCalls).toEqual([true]);
+    expect(result).toEqual({ status: "blocked", reason: "keychain-denied" });
+    expect(session.setCalls).toEqual([]);
+    expect(releaseHostOwnedKeys).not.toHaveBeenCalled();
+  });
+});
+
+// =================================================================================
+// 20. A jar cookie at a carried key survives a write that could not land
+// =================================================================================
+
+describe("import - keeps the jar's cookie at a key the source carries but could not write", () => {
+  it("keeps the old cookie at the rejected key, writes the other row, and removes only the uncarried key", async () => {
+    const homeDir = await makeTempDir("login-import-carried-key-");
+    await createDarwinChromeSource(
+      homeDir,
+      [
+        domainCookieRow(".carried-key.com", "sid", {
+          kind: "plain",
+          value: "new-sid-value",
+        }),
+        domainCookieRow(".carried-key.com", "fresh", {
+          kind: "plain",
+          value: "fresh-value",
+        }),
+      ],
+      23,
+    );
+    const session = new FakeLoginImportSession([
+      cookieFixture("sid", ".carried-key.com"),
+      cookieFixture("legacy", ".carried-key.com"),
+    ]);
+    session.rejectSet("sid");
+    const { service } = buildHarness(
+      { platform: "darwin", homeDir, snapshotRoot: await makeTempDir("snap-") },
+      session,
+    );
+    const { sourceId, scan } = await scanChromeSource(service);
+
+    const result = await service.import({
+      sourceId,
+      scanId: scan.scanId,
+      domains: ["carried-key.com"],
+      includeDeviceBound: false,
+    });
+
+    expect(result).toEqual({
+      status: "imported",
+      importedSites: 1,
+      importedCookies: 1,
+      replacedSites: 1,
+      skippedInvalid: 1,
+    });
+    const cookies = session.cookiesUnderDomain("carried-key.com");
+    expect(cookies.map((cookie) => cookie.name).sort()).toEqual([
+      "fresh",
+      "sid",
+    ]);
+    const sidCookie = cookies.find((cookie) => cookie.name === "sid");
+    // The OLD value survives: the source carried a row for this key, but the
+    // write that would have replaced it was rejected.
+    expect(sidCookie?.value).toBe("sid-value");
+  });
+});
+
+// =================================================================================
+// 21. clearSiteLocalStorage runs once per written site, never for an unwritten one
+// =================================================================================
+
+describe("import - clears a written site's localStorage and leaves an unwritten site's", () => {
+  it("clears localStorage only for the site that actually wrote a cookie", async () => {
+    const homeDir = await makeTempDir("login-import-clear-storage-");
+    await createDarwinChromeSource(
+      homeDir,
+      [
+        domainCookieRow(".written-site.com", "good", {
+          kind: "plain",
+          value: "a",
+        }),
+        domainCookieRow(".unwritten-site.com", "bad", {
+          kind: "plain",
+          value: "b",
+        }),
+      ],
+      23,
+    );
+    const session = new FakeLoginImportSession([]);
+    session.rejectSet("bad");
+    const { service, clearedSites } = buildHarness(
+      { platform: "darwin", homeDir, snapshotRoot: await makeTempDir("snap-") },
+      session,
+    );
+    const { sourceId, scan } = await scanChromeSource(service);
+
+    const result = await service.import({
+      sourceId,
+      scanId: scan.scanId,
+      domains: ["written-site.com", "unwritten-site.com"],
+      includeDeviceBound: false,
+    });
+
+    expect(result.status).toBe("imported");
+    expect(clearedSites).toEqual(["written-site.com"]);
+  });
+
+  it("clears no site's localStorage when the import is blocked before the write", async () => {
+    const { service, clearedSites } = buildHarness(
+      { readSaveLogins: () => false },
+      new FakeLoginImportSession([]),
+    );
+
+    const result = await service.import({
+      sourceId: "never-registered",
+      scanId: "unused-scan-id",
+      domains: ["example.com"],
+      includeDeviceBound: false,
+    });
+
+    expect(result).toEqual({ status: "blocked", reason: "saved-logins-off" });
+    expect(clearedSites).toEqual([]);
   });
 });

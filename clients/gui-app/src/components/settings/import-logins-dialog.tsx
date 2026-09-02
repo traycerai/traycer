@@ -128,6 +128,7 @@ export function ImportLoginsDialog(props: {
             importRun.mutate(
               {
                 sourceId: source.id,
+                scanId: choice.scanId,
                 domains: choice.domains,
                 includeDeviceBound: choice.includeDeviceBound,
               },
@@ -359,8 +360,14 @@ function ChooseStep(props: {
   );
 }
 
-/** What the Import button hands up: the ticked domains and the Google opt-in. */
+/**
+ * What the Import button hands up: the ticked domains, the Google opt-in, and
+ * the token of the scan they were ticked from - so the desktop checks the
+ * request against the list THIS window showed, not a later scan of the same
+ * source another window took.
+ */
 interface ImportChoice {
+  readonly scanId: string;
   readonly domains: readonly string[];
   readonly includeDeviceBound: boolean;
 }
@@ -553,6 +560,7 @@ function SiteChecklist(props: {
           disabled={props.pending || selected.length === 0}
           onClick={() => {
             props.onImport({
+              scanId: props.scan.scanId,
               domains: selected.map((site) => site.domain),
               includeDeviceBound,
             });

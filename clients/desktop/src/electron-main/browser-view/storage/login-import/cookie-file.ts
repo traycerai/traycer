@@ -96,7 +96,35 @@ const cookieEditorCookieSchema = z.object({
   // `no_restriction`, `unspecified`); some exports carry null.
   sameSite: z.string().nullable().default(null),
   session: z.boolean().default(false),
+  // The extension serialises Chrome's own `cookies.Cookie`, whose
+  // `partitionKey` is `{ topLevelSite, hasCrossSiteAncestor }` and is present
+  // only on a CHIPS cookie; some exports flatten it to the top-level site.
+  // Read, not stripped: a partitioned record must be flagged so the scan
+  // counts it and the import leaves it out, since writing it to the
+  // unpartitioned jar would widen a cookie one top-level site could read to
+  // every site. Taken as `unknown` rather than a shape, so a value this
+  // reader does not understand marks ITS row partitioned (left out) instead
+  // of making the whole export unreadable.
+  partitionKey: z.unknown().optional(),
 });
+
+/**
+ * Chrome's `getAll` leaves `partitionKey` off an unpartitioned cookie, and
+ * sets `{ topLevelSite }` on a CHIPS one; a flattened export writes the site
+ * as a string. Anything else is a shape this reader cannot vouch for, and the
+ * safe reading of "maybe partitioned" is partitioned.
+ */
+function cookieEditorPartitioned(key: unknown): boolean {
+  if (key === undefined || key === null) return false;
+  if (typeof key === "string") return key.length > 0;
+  if (typeof key === "object" && !Array.isArray(key)) {
+    if (!("topLevelSite" in key)) return false;
+    const topLevelSite: unknown = key.topLevelSite;
+    if (topLevelSite === undefined || topLevelSite === null) return false;
+    return typeof topLevelSite !== "string" || topLevelSite.length > 0;
+  }
+  return true;
+}
 
 function cookieEditorSameSite(value: string | null): ImportCookieSameSite {
   const lower = value === null ? "" : value.toLowerCase();
@@ -147,7 +175,7 @@ function parseJsonCookieFile(text: string): CookieFileParse {
         secure: cookie.secure,
         httpOnly: cookie.httpOnly,
         sameSite: cookieEditorSameSite(cookie.sameSite),
-        partitioned: false,
+        partitioned: cookieEditorPartitioned(cookie.partitionKey),
         secret: { kind: "plain", value: cookie.value },
       })),
     };

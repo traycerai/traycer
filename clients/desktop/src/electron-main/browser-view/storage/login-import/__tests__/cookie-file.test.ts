@@ -150,6 +150,59 @@ describe("parseCookieFile: Cookie-Editor JSON", () => {
     expect(session?.sameSite).toBe("Lax");
     expect(session?.expires).toBe(-1);
   });
+
+  it("flags Cookie-Editor rows that carry a partition key", () => {
+    const text = JSON.stringify([
+      {
+        domain: "example.com",
+        name: "object-top-level-site",
+        value: "v1",
+        path: "/",
+        partitionKey: { topLevelSite: "https://example.com" },
+      },
+      {
+        domain: "example.com",
+        name: "string-partition-key",
+        value: "v2",
+        path: "/",
+        partitionKey: "https://example.com",
+      },
+      {
+        domain: "example.com",
+        name: "object-null-top-level-site",
+        value: "v3",
+        path: "/",
+        partitionKey: { topLevelSite: null },
+      },
+      {
+        domain: "example.com",
+        name: "null-partition-key",
+        value: "v4",
+        path: "/",
+        partitionKey: null,
+      },
+      {
+        domain: "example.com",
+        name: "missing-partition-key",
+        value: "v5",
+        path: "/",
+      },
+    ]);
+
+    const result = parseCookieFile(text);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const partitionedByName = new Map(
+      result.rows.map((row) => [row.name, row.partitioned]),
+    );
+
+    expect(partitionedByName.get("object-top-level-site")).toBe(true);
+    expect(partitionedByName.get("string-partition-key")).toBe(true);
+    expect(partitionedByName.get("object-null-top-level-site")).toBe(false);
+    expect(partitionedByName.get("null-partition-key")).toBe(false);
+    expect(partitionedByName.get("missing-partition-key")).toBe(false);
+  });
 });
 
 describe("parseCookieFile: Playwright storage state", () => {

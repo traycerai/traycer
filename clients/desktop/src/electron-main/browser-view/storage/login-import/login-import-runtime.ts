@@ -32,14 +32,22 @@ export interface LoginImportJarCoordination {
   readonly serializeJarWrite: <T>(
     action: (signal: AbortSignal) => Promise<T>,
   ) => Promise<T>;
+  /**
+   * The localStorage half of a site clear on the durable jar, plus the
+   * capture coordinator's prune for the site - what the IPC layer's own
+   * site clear does after its cookie half, borrowed so a site the import
+   * writes does not keep the previous account's localStorage.
+   */
+  readonly clearSiteLocalStorage: (site: string) => Promise<void>;
 }
 
 /**
  * How long the import may hold the whole-jar barrier. Far above what a large
  * profile needs (thousands of `cookies.set` calls take seconds, plus the
- * settle window), because expiry is not a soft limit here: the serializer
- * aborts the write and admits the queued jar work, and the import answers
- * `blocked` for a jar it only partly wrote.
+ * settle window) AND the keystore prompt, which is taken inside the barrier
+ * and can hold the user for a couple of minutes - because expiry is not a
+ * soft limit here: the serializer aborts the write and admits the queued jar
+ * work, and the import answers `blocked` for a jar it only partly wrote.
  */
 export const LOGIN_IMPORT_JAR_BARRIER_TIMEOUT_MS = 10 * 60_000;
 
@@ -58,6 +66,7 @@ export function createLoginImportService(
     getDurableSession: () =>
       ensureBrowserViewSessionForPartition(BROWSER_VIEW_PARTITION),
     serializeJarWrite: jar.serializeJarWrite,
+    clearSiteLocalStorage: jar.clearSiteLocalStorage,
     suppressDeltas: suppressAllBrowserPrimaryProfileDeltas,
     // What the change observer does for an ordinary local write, done by
     // hand because the observer is muted for this one: the applier's

@@ -1,5 +1,5 @@
 import type { Cookie, CookiesGetFilter, CookiesSetDetails } from "electron";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { z } from "zod";
 import type { BrowserCookieKey } from "@traycer/protocol/host/browser/contracts";
@@ -134,6 +134,17 @@ export interface LoginImportServiceDependencies extends LoginImportDiscoveryEnvi
   ) => Promise<T>;
   readonly suppressDeltas: <T>(action: () => Promise<T>) => Promise<T>;
   /**
+   * Empties the durable jar's localStorage for every origin under a site
+   * that this process remembers (the capture coordinator's memory, the only
+   * record of which origins hold any), and forgets those origins, so the
+   * capture that follows the import does not ship them back. The source
+   * carries cookies alone, so the slice a written site ends with is the
+   * source's: its cookies, and no localStorage from whichever account was
+   * signed in before - a site that keeps account state there would
+   * otherwise pair the old identity with the imported cookies.
+   */
+  readonly clearSiteLocalStorage: (site: string) => Promise<void>;
+  /**
    * Hands the desktop ownership of the keys the import wrote. Ordinarily the
    * change observer does this on any local write (`onLocalCookieWrite`), but
    * the import writes under `suppressDeltas`, where the observer returns
@@ -216,6 +227,14 @@ interface WriteOutcome {
   readonly writtenKeys: BrowserCookieKey[];
 }
 
+/** What the barrier hands back: the tallies, or the keystore's refusal. */
+type ImportWrite =
+  | { readonly ok: true; readonly outcome: WriteOutcome }
+  | {
+      readonly ok: false;
+      readonly reason: "keychain-denied" | "keyring-unavailable";
+    };
+
 const localStateKeySchema = z.object({
   os_crypt: z.object({ encrypted_key: z.string() }),
 });
@@ -229,6 +248,7 @@ interface SiteTally {
 
 /** What one successful scan listed, as the sets an import is checked against. */
 interface ScannedSites {
+  readonly sourceId: string;
   readonly sites: ReadonlySet<string>;
   /** The Google rows, importable only with `includeDeviceBound`. */
   readonly excluded: ReadonlySet<string>;
@@ -258,16 +278,33 @@ function keyNeedsOf(candidates: readonly ImportCandidate[]): KeyNeeds {
   return { needsV10, needsV11 };
 }
 
+/**
+ * How many successful scans the service keeps at once. Each Settings window
+ * holds one live scan per Choose step, so a handful is every window there
+ * could be; the oldest goes when the set is full, and an import quoting it
+ * answers `unreadable`, which the dialog's Try again re-scans out of.
+ */
+export const RETAINED_SCAN_LIMIT = 16;
+
+/** A scan token: random, opaque, and no function of the source or the jar. */
+function mintScanId(): string {
+  return randomBytes(16).toString("hex");
+}
+
 export class LoginImportService {
   private readonly sources = new Map<string, DiscoveredLoginImportSource>();
   /**
-   * The sites each source's LAST successful scan listed, keyed by source id.
-   * An import honours only domains in these sets: the renderer chooses from
-   * what it was shown, never from the jar at large, and a site that appears
-   * in the file between scan and import is not imported unseen. The
+   * What each retained successful scan listed, keyed by the scan's own token
+   * and in insertion order. An import quotes the token of the scan its window
+   * rendered and honours only domains in THAT scan's sets: the renderer
+   * chooses from what it was shown, never from the jar at large or from a
+   * later scan another window took of the same source - which could carry a
+   * keystore promise this window's Choose step never made. A site that
+   * appears in the file between scan and import is not imported unseen. The
    * `excluded` (Google) set is honoured only with the request's explicit
-   * opt-in. Dropped on a failed scan, and with its source when a re-listing
-   * no longer finds it; a re-listing that still finds it keeps it.
+   * opt-in. A scan is dropped with its source when a re-listing no longer
+   * finds it, when an import finds the source changed under it, and when it
+   * is the oldest of `RETAINED_SCAN_LIMIT`.
    */
   private readonly scanned = new Map<string, ScannedSites>();
   /**
@@ -303,7 +340,7 @@ export class LoginImportService {
       for (const id of [...this.sources.keys()]) {
         if (live.has(id)) continue;
         this.sources.delete(id);
-        this.scanned.delete(id);
+        this.dropScansOf(id);
       }
       return listed;
     });
@@ -316,14 +353,24 @@ export class LoginImportService {
 
   async scan(sourceId: string): Promise<LoginImportScan> {
     return this.serialized(async () => {
-      this.scanned.delete(sourceId);
+      const scanId = mintScanId();
       try {
         const source = this.sources.get(sourceId);
-        if (source === undefined) return blockedScan(sourceId, "unreadable");
+        if (source === undefined) {
+          return blockedScan(sourceId, scanId, "unreadable");
+        }
         const read = await this.readSource(source.location);
-        if (!read.ok) return blockedScan(sourceId, read.blocked);
-        const scan = this.buildScan(sourceId, read);
-        this.scanned.set(sourceId, {
+        if (!read.ok) return blockedScan(sourceId, scanId, read.blocked);
+        const scan = this.buildScan(sourceId, scanId, read);
+        // Another window's scan of the same source stays: it is still the
+        // list that window is choosing from. Only the oldest overall goes.
+        while (this.scanned.size >= RETAINED_SCAN_LIMIT) {
+          const oldest = this.scanned.keys().next();
+          if (oldest.done) break;
+          this.scanned.delete(oldest.value);
+        }
+        this.scanned.set(scanId, {
+          sourceId,
           sites: new Set(scan.sites.map((site) => site.domain)),
           excluded: new Set(scan.excluded.map((site) => site.domain)),
           unlockBySite: new Map(
@@ -336,9 +383,15 @@ export class LoginImportService {
         return scan;
       } catch (error) {
         this.warn("scan", error);
-        return blockedScan(sourceId, "unreadable");
+        return blockedScan(sourceId, scanId, "unreadable");
       }
     });
+  }
+
+  private dropScansOf(sourceId: string): void {
+    for (const [scanId, scan] of [...this.scanned]) {
+      if (scan.sourceId === sourceId) this.scanned.delete(scanId);
+    }
   }
 
   async import(request: LoginImportRequest): Promise<LoginImportOutcome> {
@@ -361,10 +414,15 @@ export class LoginImportService {
       return { status: "blocked", reason: "saved-logins-off" };
     }
     const source = this.sources.get(request.sourceId);
-    // No scan on record means the renderer is asking for sites nobody was
-    // shown; the dialog's Try again re-scans, which is the way back in.
-    const allowed = this.scanned.get(request.sourceId);
-    if (source === undefined || allowed === undefined) {
+    // No scan on record under this token - or one taken of another source -
+    // means the renderer is asking for sites nobody was shown; the dialog's
+    // Try again re-scans, which is the way back in.
+    const allowed = this.scanned.get(request.scanId);
+    if (
+      source === undefined ||
+      allowed === undefined ||
+      allowed.sourceId !== request.sourceId
+    ) {
       return { status: "blocked", reason: "unreadable" };
     }
     // The renderer can name only what its scan listed. A Google domain is
@@ -410,11 +468,9 @@ export class LoginImportService {
       needed !== "windows-dpapi" &&
       ![...chosen].some((site) => allowed.unlockBySite.get(site) === needed)
     ) {
-      this.scanned.delete(request.sourceId);
+      this.scanned.delete(request.scanId);
       return { status: "blocked", reason: "source-changed" };
     }
-    const keys = await this.resolveKeys(read, candidates);
-    if (!keys.ok) return { status: "blocked", reason: keys.reason };
 
     // Grouped as ROWS, still ciphertext: a value is decrypted inside the
     // write loop, immediately before its `cookies.set`, and is unreferenced
@@ -429,11 +485,21 @@ export class LoginImportService {
     }
 
     const session = this.deps.getDurableSession();
-    // Under the serializer's barrier and, inside it, with the observer muted:
-    // the barrier orders this write against every other jar mutation, and
-    // the mute is what keeps the per-site removals from reaching the hosts.
-    const written = await this.deps.serializeJarWrite(async (signal) => {
-      const outcome = await this.deps.suppressDeltas(async () => {
+    // Under the serializer's barrier from the keystore prompt on, and inside
+    // it, with the observer muted for the write: the barrier orders this
+    // import against every other jar mutation, and the mute is what keeps
+    // the per-site removals from reaching the hosts. The prompt is INSIDE
+    // the barrier because it can hold the user for minutes, and a forget-all
+    // confirmed from another window while it is up must queue behind the
+    // import rather than clear the jar, report done, and then have this
+    // import write the logins back over an empty jar.
+    const written = await this.deps.serializeJarWrite(
+      async (signal): Promise<ImportWrite> => {
+        const keys = await this.resolveKeys(read, candidates);
+        if (!keys.ok) return { ok: false, reason: keys.reason };
+        // A prompt the user sat on past the budget: the barrier has moved on,
+        // so not one row is written, and no mute or settle window is spent.
+        throwIfBarrierExpired(signal);
         const tally: WriteOutcome = {
           importedSites: 0,
           importedCookies: 0,
@@ -442,52 +508,65 @@ export class LoginImportService {
           writtenKeys: [],
         };
         try {
-          for (const [site, siteRows] of bySite) {
-            await this.writeSite(
-              site,
-              siteRows,
-              read,
-              keys,
-              nowSeconds,
-              session,
-              signal,
-              tally,
-            );
-          }
+          await this.deps.suppressDeltas(async () => {
+            try {
+              for (const [site, siteRows] of bySite) {
+                await this.writeSite(
+                  site,
+                  siteRows,
+                  read,
+                  keys,
+                  nowSeconds,
+                  session,
+                  signal,
+                  tally,
+                );
+              }
+            } finally {
+              // On the failure path too: a removal Chromium reports on the
+              // listener pipe after `remove()` resolved is what the settle
+              // window absorbs, and a throw mid-site must not let the
+              // observer wake before it has passed. The outer catch answers
+              // `blocked` and no capture follows, so a removal that escaped
+              // here would reach the host as `removedKeys` with nothing to
+              // reconcile it.
+              try {
+                await session.cookies.flushStore();
+              } finally {
+                await this.deps.sleep(this.deps.settleWindowMs);
+              }
+            }
+          });
         } finally {
-          // On the failure path too: a removal Chromium reports on the
-          // listener pipe after `remove()` resolved is what the settle window
-          // absorbs, and a throw mid-site must not let the observer wake
-          // before it has passed. The outer catch answers `blocked` and no
-          // capture follows, so a removal that escaped here would reach the
-          // host as `removedKeys` with nothing to reconcile it.
-          try {
-            await session.cookies.flushStore();
-          } finally {
-            await this.deps.sleep(this.deps.settleWindowMs);
-          }
+          // Whatever ended the write - the last site, a throw from a row,
+          // the barrier's abort - every key it DID write becomes the
+          // desktop's here, after the mute has lifted. On the ordinary path
+          // that is still inside the barrier, so nothing queued behind it (a
+          // host's observation of an OLDER value for one of these keys) can
+          // run before the keys are the desktop's; on the abort path the
+          // gate is already open and this runs late, which still beats a
+          // key left host-owned for good: that would be the one the import
+          // answered `blocked` for and never captured, so the host's next
+          // observation would put the old value back over it.
+          await this.deps.releaseHostOwnedKeys(tally.writtenKeys);
         }
-        return tally;
-      });
-      // Still inside the barrier, so nothing queued behind it - a host's
-      // observation of an OLDER value for one of these keys - can run before
-      // the keys are the desktop's. Then the caller pushes the jar.
-      await this.deps.releaseHostOwnedKeys(outcome.writtenKeys);
-      return outcome;
-    });
+        return { ok: true, outcome: tally };
+      },
+    );
+    if (!written.ok) return { status: "blocked", reason: written.reason };
     log.info("[browser-view] imported browser logins", {
       browser: source.browser,
-      sites: written.importedSites,
-      cookies: written.importedCookies,
-      replaced: written.replacedSites,
-      skipped: written.skippedInvalid,
+      sites: written.outcome.importedSites,
+      cookies: written.outcome.importedCookies,
+      replaced: written.outcome.replacedSites,
+      skipped: written.outcome.skippedInvalid,
     });
     return {
       status: "imported",
-      importedSites: written.importedSites,
-      importedCookies: written.importedCookies,
-      replacedSites: written.replacedSites,
-      skippedInvalid: written.skippedInvalid,
+      importedSites: written.outcome.importedSites,
+      importedCookies: written.outcome.importedCookies,
+      replacedSites: written.outcome.replacedSites,
+      skippedInvalid: written.outcome.skippedInvalid,
     };
   }
 
@@ -500,13 +579,21 @@ export class LoginImportService {
    * 2. Nothing written means nothing touched: the slice the jar already held
    *    stays as it was, so a source whose every row Electron rejects (a
    *    hand-edited file with an invalid value) cannot sign the user out.
-   * 3. Otherwise REMOVE what the source did not carry - the jar's cookies for
-   *    the site whose key no written row re-set - so the slice is the
-   *    source's, not a union of two sign-ins.
+   * 3. Otherwise REMOVE what the source did not CARRY - the jar's cookies for
+   *    the site whose key no source row names - so the slice is the
+   *    source's, not a union of two sign-ins. Carried, not written: a row
+   *    the source has for that key but that could not be decrypted,
+   *    normalised or set leaves the jar's cookie at that key alone, since
+   *    the source did hold a replacement and removing the working one would
+   *    turn one malformed row into a sign-out.
    * 4. Electron removes by `{url, name}`, which also catches a just-written
    *    cookie of the same NAME under a different scope or path. Any written
    *    row whose name a removal named is written once more, decrypted again
    *    rather than held.
+   * 5. The site's localStorage goes with the cookies the source did not
+   *    carry: it belongs to whichever account was signed in before, and a
+   *    site that keeps account state there would otherwise run the old
+   *    identity on the imported cookies.
    */
   private async writeSite(
     site: string,
@@ -520,7 +607,18 @@ export class LoginImportService {
   ): Promise<void> {
     throwIfBarrierExpired(signal);
     const previous = await listBrowserSiteCookies(site, session.cookies);
-    const writtenKeyIds = new Set<string>();
+    // Every key the source holds for this site, from the rows' metadata,
+    // which is the same scope the write derives its key from - so a row that
+    // fails on the way in still marks its key as carried.
+    const carriedKeyIds = new Set(
+      siteRows.map((candidate) =>
+        cookieKeyId({
+          domain: candidate.scope.domain,
+          name: candidate.row.name,
+          path: candidate.scope.path,
+        }),
+      ),
+    );
     const writtenRows: ImportCandidate[] = [];
     for (const candidate of siteRows) {
       throwIfBarrierExpired(signal);
@@ -535,7 +633,6 @@ export class LoginImportService {
         outcome.skippedInvalid += 1;
         continue;
       }
-      writtenKeyIds.add(cookieKeyId(key));
       outcome.writtenKeys.push(key);
       writtenRows.push(candidate);
     }
@@ -545,13 +642,15 @@ export class LoginImportService {
     if (previous.length > 0) outcome.replacedSites += 1;
 
     const stale = previous.filter(
-      (cookie) => !writtenKeyIds.has(storageCookieKeyId(cookie)),
+      (cookie) => !carriedKeyIds.has(storageCookieKeyId(cookie)),
     );
     const removedNames = new Set(stale.map((cookie) => cookie.name));
     for (const cookie of stale) {
       throwIfBarrierExpired(signal);
       await removeBrowserCookie(cookie, session.cookies);
     }
+    throwIfBarrierExpired(signal);
+    await this.deps.clearSiteLocalStorage(site);
     for (const candidate of writtenRows) {
       if (!removedNames.has(candidate.row.name)) continue;
       throwIfBarrierExpired(signal);
@@ -605,6 +704,7 @@ export class LoginImportService {
 
   private buildScan(
     sourceId: string,
+    scanId: string,
     read: SourceRead & { ok: true },
   ): LoginImportScan {
     const nowSeconds = Math.floor(this.deps.now() / 1000);
@@ -646,6 +746,7 @@ export class LoginImportService {
     }
     return {
       sourceId,
+      scanId,
       sites: [...sites]
         .map(([domain, tally]) => ({
           domain,
@@ -908,10 +1009,12 @@ function blockedFor(reason: SqliteSnapshotFailure): LoginImportBlocked {
 
 function blockedScan(
   sourceId: string,
+  scanId: string,
   blocked: LoginImportBlocked,
 ): LoginImportScan {
   return {
     sourceId,
+    scanId,
     sites: [],
     excluded: [],
     protectedCookieCount: 0,

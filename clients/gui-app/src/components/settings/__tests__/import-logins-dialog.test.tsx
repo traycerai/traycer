@@ -79,6 +79,7 @@ function source(overrides: Partial<LoginImportSource>): LoginImportSource {
 function scan(overrides: Partial<LoginImportScan>): LoginImportScan {
   return {
     sourceId: "source-1",
+    scanId: "scan-1",
     sites: [],
     excluded: [],
     protectedCookieCount: 0,
@@ -480,6 +481,7 @@ describe("<ImportLoginsDialog /> import", () => {
     });
     expect(bridge.importCalls[0]).toEqual({
       sourceId: "source-1",
+      scanId: "scan-1",
       domains: ["example.com"],
       includeDeviceBound: false,
     });
@@ -519,6 +521,7 @@ describe("<ImportLoginsDialog /> import", () => {
     });
     expect(bridge.importCalls[0]).toEqual({
       sourceId: "source-1",
+      scanId: "scan-1",
       domains: ["example.com", "google.com"],
       includeDeviceBound: true,
     });
@@ -565,6 +568,7 @@ describe("<ImportLoginsDialog /> import", () => {
     });
     expect(bridge.importCalls[0]).toEqual({
       sourceId: "source-1",
+      scanId: "scan-1",
       domains: ["example.com"],
       includeDeviceBound: false,
     });

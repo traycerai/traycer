@@ -580,6 +580,7 @@ function buildFakeBridge(
       pickLoginImportFile: async () => null,
       scanLoginImportSource: async (sourceId) => ({
         sourceId,
+        scanId: "scan-1",
         sites: [],
         excluded: [],
         protectedCookieCount: 0,

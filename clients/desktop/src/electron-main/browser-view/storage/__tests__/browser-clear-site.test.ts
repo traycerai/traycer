@@ -10,6 +10,7 @@ import {
   BrowserPrimaryProfileSnapshotCoordinator,
   browserStorageCookies,
   clearBrowserSite,
+  clearBrowserSiteLocalStorage,
   type BrowserPrimaryProfileOriginSnapshot,
   type BrowserSiteClearSession,
 } from "../browser-storage-state";
@@ -162,6 +163,23 @@ describe("clearBrowserSite", () => {
     await clearBrowserSite("example.com", session, noOrigins);
 
     expect(session.flushes).toBe(1);
+  });
+});
+
+describe("clearBrowserSiteLocalStorage", () => {
+  it("clears localStorage for the remembered origins in scope, and no others", async () => {
+    const session = new FakeClearSiteSession(SITE_JAR);
+
+    await clearBrowserSiteLocalStorage("example.com", session, () => [
+      "https://app.example.com",
+      "https://example.com",
+      "https://other.org",
+    ]);
+
+    expect(session.clearedStorage).toEqual([
+      { origin: "https://app.example.com", storages: ["localstorage"] },
+      { origin: "https://example.com", storages: ["localstorage"] },
+    ]);
   });
 });
 
