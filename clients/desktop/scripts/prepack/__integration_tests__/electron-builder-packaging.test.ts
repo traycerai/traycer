@@ -92,7 +92,42 @@ const CLI_ARCH_DIR = path.join(
 // `afterAll` (plus a stale-backup recovery in `beforeAll` for a previous run
 // that died between the two).
 const CLI_ARCH_DIR_BACKUP = `${CLI_ARCH_DIR}.packaging-test-backup`;
+// The OTHER macOS arch. The release job stages `darwin-arm64` and
+// `darwin-x64` side by side before one `electron-builder --mac` packs both
+// apps, and an arch-blind `resources/cli` -> `cli` mapping shipped the x86_64
+// SEA inside the arm64 bundle (traycerai/traycer#1528). Staging a decoy here
+// reproduces that release-job layout so the pack below proves the `${arch}`
+// scoped mapping keeps the foreign arch out.
+const FOREIGN_ARCH = process.arch === "arm64" ? "x64" : "arm64";
+const CLI_FOREIGN_ARCH_DIR = path.join(
+  DESKTOP_ROOT,
+  "resources",
+  "cli",
+  `darwin-${FOREIGN_ARCH}`,
+);
+const CLI_FOREIGN_ARCH_DIR_BACKUP = `${CLI_FOREIGN_ARCH_DIR}.packaging-test-backup`;
 const PACKAGING_TEST_VERSION = "0.0.0-electron-builder-packaging-test";
+const FOREIGN_ARCH_DECOY_MARKER = "decoy-foreign-arch-cli-must-not-ship";
+
+function stageFakeCli(
+  archDir: string,
+  binaryBody: string,
+  version: string,
+): void {
+  mkdirSync(archDir, { recursive: true });
+  const cliBinaryPath = path.join(archDir, "traycer");
+  writeFileSync(cliBinaryPath, binaryBody, "utf8");
+  chmodSync(cliBinaryPath, 0o755);
+  writeFileSync(
+    path.join(archDir, "version.json"),
+    JSON.stringify({ version }),
+    "utf8",
+  );
+}
+
+function packagedCliDir(appPath: string): string {
+  return path.join(appPath, "Contents", "Resources", "cli");
+}
 
 function findPackagedApp(): string | null {
   if (!existsSync(RELEASE_DIR)) return null;
@@ -118,17 +153,23 @@ describe.skipIf(process.platform !== "darwin")(
         rmSync(CLI_ARCH_DIR, { recursive: true, force: true });
         renameSync(CLI_ARCH_DIR_BACKUP, CLI_ARCH_DIR);
       }
+      if (existsSync(CLI_FOREIGN_ARCH_DIR_BACKUP)) {
+        rmSync(CLI_FOREIGN_ARCH_DIR, { recursive: true, force: true });
+        renameSync(CLI_FOREIGN_ARCH_DIR_BACKUP, CLI_FOREIGN_ARCH_DIR);
+      }
       if (existsSync(CLI_ARCH_DIR)) {
         renameSync(CLI_ARCH_DIR, CLI_ARCH_DIR_BACKUP);
       }
-      mkdirSync(CLI_ARCH_DIR, { recursive: true });
-      const cliBinaryPath = path.join(CLI_ARCH_DIR, "traycer");
-      writeFileSync(cliBinaryPath, "#!/bin/sh\nexit 0\n", "utf8");
-      chmodSync(cliBinaryPath, 0o755);
-      writeFileSync(
-        path.join(CLI_ARCH_DIR, "version.json"),
-        JSON.stringify({ version: PACKAGING_TEST_VERSION }),
-        "utf8",
+      if (existsSync(CLI_FOREIGN_ARCH_DIR)) {
+        renameSync(CLI_FOREIGN_ARCH_DIR, CLI_FOREIGN_ARCH_DIR_BACKUP);
+      }
+      stageFakeCli(CLI_ARCH_DIR, "#!/bin/sh\nexit 0\n", PACKAGING_TEST_VERSION);
+      // Distinct bytes so the assertion below can tell "the foreign dir is
+      // absent" apart from "the target dir was copied under both names".
+      stageFakeCli(
+        CLI_FOREIGN_ARCH_DIR,
+        `#!/bin/sh\n# ${FOREIGN_ARCH_DECOY_MARKER}\nexit 1\n`,
+        `${PACKAGING_TEST_VERSION}-${FOREIGN_ARCH}`,
       );
 
       // Mirrors release-desktop.yml: stamp production BEFORE build:app (the
@@ -173,6 +214,39 @@ describe.skipIf(process.platform !== "darwin")(
       if (existsSync(CLI_ARCH_DIR_BACKUP)) {
         renameSync(CLI_ARCH_DIR_BACKUP, CLI_ARCH_DIR);
       }
+      rmSync(CLI_FOREIGN_ARCH_DIR, { recursive: true, force: true });
+      if (existsSync(CLI_FOREIGN_ARCH_DIR_BACKUP)) {
+        renameSync(CLI_FOREIGN_ARCH_DIR_BACKUP, CLI_FOREIGN_ARCH_DIR);
+      }
+    });
+
+    it(`ships only the ${process.arch} CLI under Resources/cli - the staged darwin-${FOREIGN_ARCH} sibling never enters the bundle (traycerai/traycer#1528)`, () => {
+      if (packagedAppPath === null) {
+        throw new Error(
+          "packagedAppPath was not set - packaging must have failed",
+        );
+      }
+      const cliDir = packagedCliDir(packagedAppPath);
+      expect(existsSync(cliDir)).toBe(true);
+      // Exactly one arch dir, and it is the one electron-builder packed. Any
+      // other entry (the foreign arch, a stray README, a flat binary) is a
+      // regression back to the arch-blind mapping.
+      expect(readdirSync(cliDir).sort()).toEqual([`darwin-${process.arch}`]);
+
+      const targetDir = path.join(cliDir, `darwin-${process.arch}`);
+      const shippedBinary = path.join(targetDir, "traycer");
+      expect(existsSync(shippedBinary)).toBe(true);
+      expect(statSync(shippedBinary).mode & 0o111).not.toBe(0);
+      expect(readFileSync(shippedBinary, "utf8")).not.toContain(
+        FOREIGN_ARCH_DECOY_MARKER,
+      );
+      expect(
+        JSON.parse(readFileSync(path.join(targetDir, "version.json"), "utf8")),
+      ).toEqual({ version: PACKAGING_TEST_VERSION });
+
+      expect(existsSync(path.join(cliDir, `darwin-${FOREIGN_ARCH}`))).toBe(
+        false,
+      );
     });
 
     it("packages without error and restores src/config.ts to dev afterwards", () => {

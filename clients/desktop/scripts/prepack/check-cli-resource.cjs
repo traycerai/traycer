@@ -12,10 +12,12 @@
  * `traycer-win32-x64.exe`, ...). The desktop release workflows rename and
  * place each binary into a matching `resources/cli/<platform>-<arch>/`
  * directory so the renderer can resolve the binary for the current
- * `process.platform`/`process.arch` at runtime. The legacy flat layout
- * (`resources/cli/<traycer>`) stays accepted so local dev flows
- * (`make install-desktop`) that stage a single SEA binary continue to
- * work.
+ * `process.platform`/`process.arch` at runtime. `package.json` maps ONLY
+ * `resources/cli/<platform>-${arch}/` into the bundle (electron-builder's
+ * per-arch file macro, so an arm64 app never carries the x64 SEA - see
+ * traycerai/traycer#1528). A binary dropped flat at `resources/cli/<traycer>`
+ * is therefore never packaged, and this precheck refuses it rather than
+ * reporting a green that ships no CLI.
  *
  * Pass `--platform <darwin|linux|win32>` and `--arch <arm64|x64|...>`
  * (each can be repeated) to require specific platform/arch binaries
@@ -168,9 +170,11 @@ if (platforms.length > 0 && archs.length > 0) {
   process.exit(0);
 }
 
-// Host-mode: at minimum the current host needs a usable binary. We check
-// the arch-scoped layout first (NP-7), then fall back to the legacy flat
-// layout (`make install-desktop` produces this).
+// Host-mode: at minimum the current host needs a usable binary in the
+// arch-scoped layout (`make install-desktop` and the release workflows both
+// stage it there). The flat layout is deliberately NOT accepted: the
+// packager's `${arch}`-scoped mapping never copies it, so a green here
+// would ship an app with no CLI.
 const hostBinary = cliBinaryName(process.platform);
 const archScoped = join(
   CLI_DIR,
@@ -185,14 +189,14 @@ if (isExecutable(archScoped)) {
   process.exit(0);
 }
 if (isExecutable(flat)) {
-  console.log(
-    `[desktop] CLI resource precheck ok - flat-layout binary present at ${flat} (legacy dev layout).`,
+  fail(
+    `Found a flat-layout CLI binary at ${flat}, which electron-builder no longer packages.\n` +
+      `         Move it to the arch-scoped layout: ${archScoped}`,
   );
-  process.exit(0);
 }
 
-// Neither layout had an executable binary for this host - surface what
-// the directory does contain so the failure is debuggable.
+// No executable binary for this host - surface what the directory does
+// contain so the failure is debuggable.
 let listing = "(empty)";
 try {
   const entries = readdirSync(CLI_DIR, { withFileTypes: true })
@@ -205,8 +209,6 @@ try {
 
 fail(
   `No executable CLI binary found for ${process.platform}-${process.arch}.\n` +
-    `         Looked at:\n` +
-    `           - ${archScoped}\n` +
-    `           - ${flat}\n` +
+    `         Looked at: ${archScoped}\n` +
     `         Directory contents: ${listing}`,
 );
