@@ -12,6 +12,7 @@ import type {
   ProviderManagedVersions,
 } from "@traycer/protocol/host/provider-schemas";
 import { chatPublicationDefinitiveReason } from "@/lib/chats/chat-publication-definitive";
+import { PROVIDER_PACK_DISCOVERY_CHECK_TIMEOUT_MS } from "@/lib/host-rpc-policy/provider-pack-discovery-check-timeout";
 import { RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS } from "@/lib/rate-limits/rate-limit-timing";
 
 const SECOND_MS = 1_000;
@@ -1540,6 +1541,25 @@ export const HOST_METHOD_POLL_TABLE = {
   "providers.setPackPolicy": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // The on-demand "Check for updates" in the same popover. `fifo` for a
+  // different reason than the four above - it writes no durable state - but the
+  // same consequence: each press is answered with its own outcome, so two rapid
+  // taps must not coalesce into one answer. `poll: null` because this method IS
+  // the poll; a cadence here would be a second discovery ticker living in the
+  // client.
+  //
+  // `joinResponseTimeoutMs` here is a PERMISSION, not a budget. It buys nothing
+  // on its own: the host client rejects a `requestWithResponseTimeout` whose
+  // value is not exactly this number, and the extended budget only ever applies
+  // because `useProvidersRefreshPackDiscovery` passes the same constant through
+  // `useHostMutationWithResponseTimeout`. Under a plain `useHostMutation` the
+  // call would run on the transport default and this line would be inert - the
+  // gap `providers.refreshProfileStatus` above still has.
+  "providers.refreshPackDiscovery": {
+    mode: "fifo",
+    joinResponseTimeoutMs: PROVIDER_PACK_DISCOVERY_CHECK_TIMEOUT_MS,
     poll: null,
   },
   "worktree.listBindingsForEpic": { ...LATEST_SCHEDULING, poll: null },
