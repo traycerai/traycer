@@ -167,7 +167,13 @@ failures.
   the validated site count) before anything is read: a compromised renderer
   can list, scan and import every site a profile holds, and a plaintext
   import raises no other prompt; a declined dialog answers `cancelled` and
-  the Choose step stays.
+  the Choose step stays. The saved-logins pref is re-read INSIDE the
+  import's barrier before the first write, and the pref flip itself takes
+  the same barrier (the pref only, not the tab recreation after it), so a
+  window turning saving off while the import sits on the confirmation or
+  the prompt cannot have the durable jar written where nothing reads it.
+  The site's localStorage is cleared LAST, after the cookie recovery, so a
+  clear that fails leaves the cookie slice whole.
   A decrypted value exists only between the `readValue` inside that write
   loop and the `cookies.set` it feeds, never in a list; an imported SESSION
   cookie is given a bounded expiry, since a `persist:` partition drops one
@@ -180,7 +186,13 @@ failures.
   Because that suppression means no delta reaches a host on its own, the
   import handler pushes the jar itself — `capturePrimaryProfileOnEveryHost()`
   on the sessions registry, beside `forgetLoginsOnEveryHost()` and for the
-  same reason: a jar frame is main's to send, never a renderer's.
+  same reason: a jar frame is main's to send, never a renderer's. That
+  capture is tri-state per stream (`acked` / `unacked` / `not-sent`), and
+  `not-sent` is decided AFTER the asynchronous jar read: a frame the stream
+  could not send (it closed underneath the read) or that quotes a standing
+  id the host has since re-issued never left, so the registry tries the
+  host's sibling stream; only a frame that left and drew no ack is
+  `unacked`.
 - Never build `Tray` from `nativeImage.createEmpty()` (invisible tray).
 - No Electron-native SQLite / `better-sqlite3` rebuilds in this shell — host owns
   app-assets DB.

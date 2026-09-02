@@ -696,18 +696,32 @@ export interface BrowserSiteStorageClearer {
  * origin in the site's scope is emptied, and nothing else, since localStorage
  * is not enumerable and those origins are the only ones a clear can name. The
  * coordinator's `forgetOriginsUnder` is still the caller's to follow with.
+ *
+ * Re-enumerated until nothing new turns up: each `clearStorageData` is an
+ * await, and a tile can land on another origin of the site while one is out.
+ * An origin named only after the first listing would otherwise keep its live
+ * localStorage - `forgetOriginsUnder` discards the READ of it, not the
+ * storage - for the next observation to capture back. Each origin is cleared
+ * once, so the loop ends when the listing stops growing.
  */
 export async function clearBrowserSiteLocalStorage(
   domain: string,
   browserSession: BrowserSiteStorageClearer,
   rememberedOrigins: () => readonly string[],
 ): Promise<void> {
-  for (const origin of rememberedOrigins()) {
-    if (!originInScope(origin, domain)) continue;
-    await browserSession.clearStorageData({
-      origin,
-      storages: ["localstorage"],
-    });
+  const cleared = new Set<string>();
+  for (;;) {
+    const pending = rememberedOrigins().filter(
+      (origin) => originInScope(origin, domain) && !cleared.has(origin),
+    );
+    if (pending.length === 0) return;
+    for (const origin of pending) {
+      cleared.add(origin);
+      await browserSession.clearStorageData({
+        origin,
+        storages: ["localstorage"],
+      });
+    }
   }
 }
 

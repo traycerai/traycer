@@ -181,6 +181,45 @@ describe("clearBrowserSiteLocalStorage", () => {
       { origin: "https://example.com", storages: ["localstorage"] },
     ]);
   });
+
+  it("clears an origin that was observed while an earlier clear was still out", async () => {
+    const session = new FakeClearSiteSession(SITE_JAR);
+    const origins: string[] = ["https://example.com"];
+    const rememberedOrigins = (): readonly string[] => origins;
+    const originalClearStorageData = session.clearStorageData.bind(session);
+    session.clearStorageData = (
+      options: ClearStorageDataOptions,
+    ): Promise<void> => {
+      if (options.origin === "https://example.com") {
+        // Simulates another tile landing on a fresh origin of the site while
+        // this clear is still out: one in scope, one not.
+        origins.push("https://app.example.com", "https://other.org");
+      }
+      return originalClearStorageData(options);
+    };
+
+    await clearBrowserSiteLocalStorage(
+      "example.com",
+      session,
+      rememberedOrigins,
+    );
+
+    expect(
+      session.clearedStorage.filter(
+        (options) => options.origin === "https://example.com",
+      ),
+    ).toHaveLength(1);
+    expect(
+      session.clearedStorage.filter(
+        (options) => options.origin === "https://app.example.com",
+      ),
+    ).toHaveLength(1);
+    expect(
+      session.clearedStorage.some(
+        (options) => options.origin === "https://other.org",
+      ),
+    ).toBe(false);
+  });
 });
 
 /**

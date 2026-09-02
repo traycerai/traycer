@@ -254,7 +254,10 @@ type ImportWrite =
   | { readonly ok: true; readonly outcome: WriteOutcome }
   | {
       readonly ok: false;
-      readonly reason: "keychain-denied" | "keyring-unavailable";
+      readonly reason:
+        | "keychain-denied"
+        | "keyring-unavailable"
+        | "saved-logins-off";
     };
 
 const localStateKeySchema = z.object({
@@ -534,6 +537,14 @@ export class LoginImportService {
         // A prompt the user sat on past the budget: the barrier has moved on,
         // so not one row is written, and no mute or settle window is spent.
         throwIfBarrierExpired(signal);
+        // The pref again, inside the barrier the toggle itself takes: a
+        // window that turned saving off while this import sat on the
+        // confirmation or the prompt has moved the tiles to the ephemeral
+        // jar, and a write to the durable one now would land where nothing
+        // reads it and be captured by nobody.
+        if (!this.deps.readSaveLogins()) {
+          return { ok: false, reason: "saved-logins-off" };
+        }
         const tally: WriteOutcome = {
           importedSites: 0,
           importedCookies: 0,
@@ -623,9 +634,10 @@ export class LoginImportService {
    * 4. Electron removes by `{url, name}`, which also catches a just-written
    *    cookie of the same NAME under a different scope or path - and a kept
    *    cookie of that name from step 3. Any written row whose name a removal
-   *    named is written once more, decrypted again rather than held; any
-   *    kept cookie it named is put back from the listing taken before the
-   *    first write.
+   *    named is written once more, decrypted again rather than held; a
+   *    re-write refused is no longer written, and then, like any kept cookie
+   *    a removal named, the jar's prior cookie at that key is put back from
+   *    the listing taken before the first write.
    * 5. The site's localStorage goes with the cookies the source did not
    *    carry: it belongs to whichever account was signed in before, and a
    *    site that keeps account state there would otherwise run the old
@@ -687,26 +699,10 @@ export class LoginImportService {
       throwIfBarrierExpired(signal);
       await removeBrowserCookie(cookie, session.cookies);
     }
-    throwIfBarrierExpired(signal);
-    await this.deps.clearSiteLocalStorage(site);
-    // The jar's cookies at a carried key the source could NOT write are kept
-    // (step 3) - but a same-name removal above reaches them too, so each one
-    // a removal named is put back as it was, from the listing taken before
-    // any write. Written rows are re-written from the source below.
-    for (const cookie of previous) {
-      const id = storageCookieKeyId(cookie);
-      if (!carriedKeyIds.has(id) || writtenKeyIds.has(id)) continue;
-      if (!removedNames.has(cookie.name)) continue;
-      throwIfBarrierExpired(signal);
-      try {
-        await session.cookies.set(
-          toElectronCookieSetDetails(toCookieSetDetails(cookie)),
-        );
-      } catch {
-        // The jar held it a moment ago and refuses it now; nothing else to
-        // put in its place, and the count already carries the failed row.
-      }
-    }
+    // Written rows a same-name removal reached are written once more. One
+    // refused now is no longer written: its key leaves `writtenKeyIds`, so
+    // the restore below treats it like any other carried key the source
+    // could not write and puts the jar's prior cookie back.
     for (const candidate of writtenRows) {
       if (!removedNames.has(candidate.row.name)) continue;
       throwIfBarrierExpired(signal);
@@ -721,8 +717,38 @@ export class LoginImportService {
         // Accepted a moment ago and refused now: counted as it stands.
         outcome.importedCookies -= 1;
         outcome.skippedInvalid += 1;
+        writtenKeyIds.delete(
+          cookieKeyId({
+            domain: candidate.scope.domain,
+            name: candidate.row.name,
+            path: candidate.scope.path,
+          }),
+        );
       }
     }
+    // The jar's cookies at a carried key the source could NOT write - on the
+    // first attempt or on the re-write just above - are kept (step 3), but a
+    // same-name removal reaches them too, so each one a removal named is put
+    // back as it was, from the listing taken before any write.
+    for (const cookie of previous) {
+      const id = storageCookieKeyId(cookie);
+      if (!carriedKeyIds.has(id) || writtenKeyIds.has(id)) continue;
+      if (!removedNames.has(cookie.name)) continue;
+      throwIfBarrierExpired(signal);
+      try {
+        await session.cookies.set(
+          toElectronCookieSetDetails(toCookieSetDetails(cookie)),
+        );
+      } catch {
+        // The jar held it a moment ago and refuses it now; nothing else to
+        // put in its place, and the count already carries the failed row.
+      }
+    }
+    // LAST, once the cookie slice is whole again: a clear that fails throws
+    // out of a site whose cookies are already the source's, not one whose
+    // same-name removals have not been put back yet.
+    throwIfBarrierExpired(signal);
+    await this.deps.clearSiteLocalStorage(site);
   }
 
   /**

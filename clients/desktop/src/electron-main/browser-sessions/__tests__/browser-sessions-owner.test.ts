@@ -764,6 +764,112 @@ describe("the browser.sessions jar plane lives in main", () => {
     expect(second.framesOfKind("primaryProfileCaptured")).toHaveLength(0);
   });
 
+  it("a capture whose stream closed during the jar read is not-sent, and the sibling stream is tried", async () => {
+    const first = await openLiveStream(harness, registry, "window-1");
+    // A second window on the SAME host, exactly as the other sibling tests set
+    // up - the once-per-host rule only tries this sibling when the first
+    // stream sent nothing at all.
+    const second = await openLiveStream(harness, registry, "window-2");
+    for (const session of [first, second]) {
+      session.emit(
+        {
+          kind: "capturePrimaryProfile",
+          hasBinaryPayload: false,
+          requestId: "standing-1",
+          standing: true,
+        },
+        null,
+      );
+    }
+
+    harness.jar.deferCaptures = true;
+    const pushed = registry.capturePrimaryProfileOnEveryHost();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // The first stream's jar read is in flight.
+    expect(harness.jar.captures).toBe(1);
+
+    // The stream closes while that read is still outstanding.
+    first.emitStatus("closed");
+    harness.jar.resolvePendingCapture();
+    for (let tick = 0; tick < 8; tick += 1) {
+      await Promise.resolve();
+    }
+
+    // Nothing left on the closed stream - the read finished after the
+    // connection was no longer open to answer on.
+    expect(first.framesOfKind("primaryProfileCaptured")).toHaveLength(0);
+
+    // The once-per-host rule tries the healthy sibling next.
+    expect(harness.jar.captures).toBe(2);
+    harness.jar.resolvePendingCapture();
+    for (let tick = 0; tick < 8; tick += 1) {
+      await Promise.resolve();
+    }
+
+    expect(second.framesOfKind("primaryProfileCaptured")).toHaveLength(1);
+    second.emit(
+      {
+        kind: "primaryProfileCaptureAck",
+        hasBinaryPayload: false,
+        requestId: "standing-1",
+      },
+      null,
+    );
+
+    // The host is counted once, through the sibling that actually answered.
+    expect(await pushed).toBe(1);
+  });
+
+  it("a capture whose standing id was re-issued during the jar read is not-sent", async () => {
+    const session = await openLiveStream(harness, registry, "window-1");
+    session.emit(
+      {
+        kind: "capturePrimaryProfile",
+        hasBinaryPayload: false,
+        requestId: "standing-1",
+        standing: true,
+      },
+      null,
+    );
+
+    harness.jar.deferCaptures = true;
+    const pushed = registry.capturePrimaryProfileOnEveryHost();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(harness.jar.captures).toBe(1);
+
+    // The host re-issues a fresh standing id while this read is still in
+    // flight - e.g. it reconnected and re-sent its handshake.
+    session.emit(
+      {
+        kind: "capturePrimaryProfile",
+        hasBinaryPayload: false,
+        requestId: "standing-2",
+        standing: true,
+      },
+      null,
+    );
+
+    harness.jar.resolvePendingCapture();
+    for (let tick = 0; tick < 8; tick += 1) {
+      await Promise.resolve();
+    }
+
+    // Nothing leaves: a frame quoting "standing-1" would be refused by a host
+    // whose standing id is now "standing-2", so the read's answer is dropped
+    // once the id is seen to have moved, and no frame names either id.
+    expect(session.framesOfKind("primaryProfileCaptured")).toHaveLength(0);
+
+    // Not-sent, so no host is counted, and there is no sibling stream on
+    // this host to try instead.
+    expect(await pushed).toBe(0);
+  });
+
   it("runs overlapping captures on one stream one at a time, the later one after the first's ack", async () => {
     const session = await openLiveStream(harness, registry, "window-1");
     session.emit(

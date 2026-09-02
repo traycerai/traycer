@@ -747,7 +747,19 @@ class BrowserSessionsStream {
     // the jar read.
     if (requestId === null) return "not-sent";
     const acked = this.awaitCaptureAck(requestId);
-    await this.answerCaptureRequest(requestId);
+    // The jar read is asynchronous, and the stream can close - or the host
+    // can re-issue its standing id - while it runs. A frame that could not
+    // be sent, or that would quote an id the host no longer holds, never
+    // LEFT: the registry must be free to try this host's healthy sibling
+    // stream, which `unacked` would forbid.
+    const sent = await this.answerCaptureRequest(
+      requestId,
+      () => this.standingCaptureRequestId === requestId,
+    );
+    if (!sent) {
+      this.cancelCaptureAckWaiter(requestId);
+      return "not-sent";
+    }
     return (await acked) ? "acked" : "unacked";
   }
 
@@ -784,6 +796,26 @@ class BrowserSessionsStream {
   private sendClientFrame(frame: BrowserSessionsClientFrame): void {
     if (this.disposed) return;
     this.client?.sendClientFrame(frame);
+  }
+
+  /**
+   * `sendClientFrame` that says whether the frame LEFT. The client drops a
+   * frame silently unless its stream is open, and a caller that counts what
+   * a host took - the whole-jar capture - must not mistake a drop for a send.
+   */
+  private sendClientFrameIfOpen(frame: BrowserSessionsClientFrame): boolean {
+    if (this.disposed || this.connectionStatus !== "open") return false;
+    if (this.client === null) return false;
+    this.client.sendClientFrame(frame);
+    return true;
+  }
+
+  /** Releases an ack waiter for a frame that never left, as unacked. */
+  private cancelCaptureAckWaiter(requestId: string): void {
+    const settle = this.captureAckWaiters.get(requestId);
+    if (settle === undefined) return;
+    this.captureAckWaiters.delete(requestId);
+    settle(false);
   }
 
   private emit(event: BrowserSessionsStreamEventEnvelope["event"]): void {
@@ -866,7 +898,9 @@ class BrowserSessionsStream {
           this.standingCaptureRequestId = frame.requestId;
           return;
         }
-        void this.answerCaptureRequest(frame.requestId);
+        // A one-off request the host is waiting on: answered whatever the
+        // standing id does meanwhile.
+        void this.answerCaptureRequest(frame.requestId, () => true);
         return;
       case "primaryProfileCaptureAck":
         this.resolveCaptureAckWaiter(frame.requestId);
@@ -1005,12 +1039,20 @@ class BrowserSessionsStream {
    * The one code path that answers "what is in the primary profile right now".
    * Both callers use it: a host-issued `capturePrimaryProfile`, and the final
    * capture before a desktop route disappears. It always sends exactly one
-   * `primaryProfileCaptured` and never rejects.
+   * `primaryProfileCaptured` and never rejects. Answers whether that frame
+   * left: the read is asynchronous, and a stream that closed underneath it
+   * drops the frame silently - and `stillWanted`, read once the jar has been
+   * read, says whether the request is still the host's to answer (a standing
+   * id the host re-issued meanwhile is not), in which case nothing is sent.
    */
-  private async answerCaptureRequest(requestId: string): Promise<void> {
+  private async answerCaptureRequest(
+    requestId: string,
+    stillWanted: () => boolean,
+  ): Promise<boolean> {
+    let frame: BrowserSessionsClientFrame;
     try {
       const result = await this.deps.jar.capturePrimaryProfile();
-      this.sendClientFrame(
+      frame =
         result.status === "captured"
           ? {
               kind: "primaryProfileCaptured",
@@ -1027,18 +1069,19 @@ class BrowserSessionsStream {
               storageState: null,
               status: "unavailable",
               reason: result.reason,
-            },
-      );
+            };
     } catch (error: unknown) {
-      this.sendClientFrame({
+      frame = {
         kind: "primaryProfileCaptured",
         hasBinaryPayload: false,
         requestId,
         storageState: null,
         status: "failed",
         reason: error instanceof Error ? error.message : String(error),
-      });
+      };
     }
+    if (!stillWanted()) return false;
+    return this.sendClientFrameIfOpen(frame);
   }
 
   /**

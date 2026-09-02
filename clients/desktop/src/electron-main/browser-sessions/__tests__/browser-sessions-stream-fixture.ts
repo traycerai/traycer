@@ -13,6 +13,7 @@ import type {
   BrowserSessionsJarPort,
   BrowserSessionsRegistryDeps,
 } from "../browser-sessions-owner";
+import type { BrowserPrimaryProfileCaptureResult } from "../../browser-view/storage/browser-storage-state";
 import { FakeStreamClient } from "@traycer-clients/shared/host-transport/__testing__/fake-stream-client";
 export {
   FakeStreamClient,
@@ -43,11 +44,21 @@ export interface JarRecorder {
   emitLedgerChange: () => void;
   emitDelta: (delta: BrowserPrimaryProfileDelta) => void;
   readonly port: BrowserSessionsJarPort;
+  /**
+   * When true, `capturePrimaryProfile` returns a promise that only settles
+   * once a suite calls {@link resolvePendingCapture} - a way to pin what a
+   * stream does with a jar read that is still in flight when the connection
+   * changes underneath it.
+   */
+  deferCaptures: boolean;
+  /** Resolves the OLDEST still-pending deferred capture, in call order. */
+  resolvePendingCapture: () => void;
 }
 
 export function createJarRecorder(): JarRecorder {
   const ledgerListeners = new Set<() => void>();
   const deltaListeners = new Set<(delta: BrowserPrimaryProfileDelta) => void>();
+  const pendingCaptures: Array<() => void> = [];
   const recorder: JarRecorder = {
     observed: [],
     acks: [],
@@ -56,6 +67,14 @@ export function createJarRecorder(): JarRecorder {
     unwrapped: [],
     attested: [],
     captures: 0,
+    deferCaptures: false,
+    resolvePendingCapture: () => {
+      const resolve = pendingCaptures.shift();
+      if (resolve === undefined) {
+        throw new Error("no pending capture to resolve");
+      }
+      resolve();
+    },
     ledger: { forgetAllAt: null, domains: [], revision: 0 },
     emitLedgerChange: () => {
       for (const listener of ledgerListeners) listener();
@@ -66,10 +85,16 @@ export function createJarRecorder(): JarRecorder {
     port: {
       capturePrimaryProfile: () => {
         recorder.captures += 1;
-        return Promise.resolve({
+        const result: BrowserPrimaryProfileCaptureResult = {
           status: "captured",
           storageState: { cookies: [], origins: [] },
           reason: null,
+        };
+        if (!recorder.deferCaptures) return Promise.resolve(result);
+        return new Promise<BrowserPrimaryProfileCaptureResult>((resolve) => {
+          pendingCaptures.push(() => {
+            resolve(result);
+          });
         });
       },
       applyObservedProfile: (input) => {

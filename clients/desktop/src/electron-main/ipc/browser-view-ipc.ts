@@ -963,7 +963,17 @@ export function registerBrowserViewIpc(
     RunnerHostInvoke.browserViewSaveLoginsSet,
     async (_event, payload): Promise<boolean> => {
       const enabled = browserViewIpcPayload.saveLogins.parse(payload);
-      const settled = await setBrowserSavedLoginsEnabled(enabled);
+      // The pref flip takes the whole-jar barrier: the login import writes
+      // the durable jar only while saving is ON and re-reads the pref inside
+      // its own barrier, so a toggle can no longer slip between that read and
+      // the write. The pref only - the tab recreation below runs outside, as
+      // it must not queue jar work behind a gate it is itself holding. A
+      // toggle confirmed while an import holds the barrier waits its budget
+      // and then fails, and is retried after.
+      const settled = await jarSerializer.runOnEveryDomain(
+        () => setBrowserSavedLoginsEnabled(enabled),
+        BARRIER_ACTION_TIMEOUT_MS,
+      );
       // Open the target jar first, so the recreated guests attach to an
       // already-hardened session.
       ensureBrowserViewSession(PRIMARY_PROFILE_REQUEST);
