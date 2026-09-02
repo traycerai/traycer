@@ -684,6 +684,122 @@ describe("category affinity", () => {
 });
 
 // ---------------------------------------------------------------------------
+// 6a. Empty panes beat a new split
+// ---------------------------------------------------------------------------
+
+describe("empty panes", () => {
+  const BLANK_A: EpicCanvasTileRef = {
+    id: "blank-a",
+    instanceId: "inst-blank-a",
+    type: "blank",
+    name: "New tab",
+    hostId: TEST_HOST_ID,
+  };
+
+  const SPLIT_CONTENT: TilePlacementSettings = {
+    default: "per-category",
+    content: "split",
+    conversation: "split",
+    browser: "split",
+  };
+
+  /** p1 (active) holds a spec; p2 was opened and never filled. */
+  const EMPTY_PANE_CANVAS = canvasOf({
+    root: group("g1", "horizontal", [
+      pane("p1", [SPEC_A.instanceId]),
+      pane("p2", []),
+    ]),
+    activePaneId: "p1",
+    tiles: [SPEC_A],
+  });
+
+  it("fills an empty pane instead of splitting again", () => {
+    expect(
+      resolve({
+        intent: { ...BASE_INTENT, node: SPEC_B },
+        settings: SPLIT_CONTENT,
+        canvas: EMPTY_PANE_CANVAS,
+        singleTileViewport: false,
+      }),
+    ).toEqual({
+      kind: "open-in-pane",
+      tabId: TAB_ID,
+      paneId: "p2",
+      mode: "permanent",
+      index: null,
+    });
+  });
+
+  it("prefers the ACTIVE empty pane over another empty one", () => {
+    const canvas = canvasOf({
+      root: group("g1", "horizontal", [
+        pane("p1", []),
+        pane("p2", []),
+        pane("p3", [SPEC_A.instanceId]),
+      ]),
+      activePaneId: "p2",
+      tiles: [SPEC_A],
+    });
+    expect(
+      resolve({
+        intent: { ...BASE_INTENT, node: SPEC_B },
+        settings: SPLIT_CONTENT,
+        canvas,
+        singleTileViewport: false,
+      }),
+    ).toEqual({
+      kind: "open-in-pane",
+      tabId: TAB_ID,
+      paneId: "p2",
+      mode: "permanent",
+      index: null,
+    });
+  });
+
+  it("counts a pane showing a blank tile as empty", () => {
+    const canvas = canvasOf({
+      root: group("g1", "horizontal", [
+        pane("p1", [SPEC_A.instanceId]),
+        pane("p2", [BLANK_A.instanceId]),
+      ]),
+      activePaneId: "p1",
+      tiles: [SPEC_A, BLANK_A],
+    });
+    expect(
+      resolve({
+        intent: { ...BASE_INTENT, node: SPEC_B },
+        settings: SPLIT_CONTENT,
+        canvas,
+        singleTileViewport: false,
+      }),
+    ).toEqual({
+      kind: "open-in-pane",
+      tabId: TAB_ID,
+      paneId: "p2",
+      mode: "permanent",
+      index: null,
+    });
+  });
+
+  it("still splits when every pane is occupied", () => {
+    expect(
+      resolve({
+        intent: { ...BASE_INTENT, node: BROWSER_A },
+        settings: SPLIT_CONTENT,
+        canvas: SINGLE_PANE_CANVAS,
+        singleTileViewport: false,
+      }),
+    ).toEqual({
+      kind: "split",
+      tabId: TAB_ID,
+      paneId: "p1",
+      edge: "right",
+      mode: "permanent",
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // tileCategoryOf (C2)
 // ---------------------------------------------------------------------------
 

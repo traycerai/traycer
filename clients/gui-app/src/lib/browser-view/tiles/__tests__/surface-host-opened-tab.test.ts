@@ -30,6 +30,15 @@ const HOST = "host-1";
 const SESSION = "session-a";
 const VIEW_TAB_ID = "view-host-opened";
 
+/** A seed that is neither empty nor a browser tile, so a split really splits. */
+const CHAT_SEED: EpicCanvasTileRef = {
+  id: "chat-seed",
+  instanceId: "inst-chat-seed",
+  type: "chat",
+  name: "Chat",
+  hostId: HOST,
+};
+
 function seedCanvasWithTile(tile: EpicCanvasTileRef): string {
   const canvas = createSingleTileCanvas(tile);
   const pane = collectPanes(canvas.root).at(0);
@@ -153,7 +162,7 @@ describe("surfaceHostOpenedTab", () => {
   });
 
   it("surfaces a page open even while surfacing is off", () => {
-    seedCanvasWithTile(makeBlankTileRef());
+    seedCanvasWithTile(CHAT_SEED);
     surface({ source: "page" });
     expect(tileCount()).toBe(2);
   });
@@ -181,9 +190,22 @@ describe("surfaceHostOpenedTab", () => {
     expect(tileCount()).toBe(2);
   });
 
-  it("splits right into a seeded canvas when no pane hosts the session", () => {
+  it("fills a pane showing a blank tile instead of splitting", () => {
     useSettingsStore.setState({ agentTabSurfacing: "surface" });
     const paneId = seedCanvasWithTile(makeBlankTileRef());
+
+    surface({ source: "agent" });
+
+    // The pane opener is a split someone already made, so the browser tab
+    // replaces the blank rather than adding a second pane beside it.
+    expect(panes()).toHaveLength(1);
+    expect(panes()[0]?.id).toBe(paneId);
+    expect(tileCount()).toBe(1);
+  });
+
+  it("splits right into a seeded canvas when no pane hosts the session", () => {
+    useSettingsStore.setState({ agentTabSurfacing: "surface" });
+    const paneId = seedCanvasWithTile(CHAT_SEED);
 
     surface({ source: "agent" });
 

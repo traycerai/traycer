@@ -5,6 +5,7 @@
  * table-testable and the executor stays a dumb dispatcher.
  */
 import { findPaneTabForRef } from "@/stores/epics/canvas/actions";
+import { TILE_KIND_BLANK } from "@/stores/epics/canvas/tile-kinds";
 import { collectPanes, findPaneById } from "@/stores/epics/canvas/tile-tree";
 import type { TilePane } from "@/stores/epics/canvas/tile-tree";
 import type { EpicCanvasState } from "@/stores/epics/canvas/types";
@@ -104,6 +105,27 @@ function affinityPaneId(
   return bestId;
 }
 
+/**
+ * A pane with nothing to show: no tabs at all (a fresh pane opener), or the
+ * blank "New tab" placeholder on top. Same tie-breaking as
+ * {@link affinityPaneId} - the active pane wins outright, else the first one
+ * found.
+ */
+function emptyPaneId(canvas: EpicCanvasState): string | null {
+  let firstId: string | null = null;
+  for (const pane of collectPanes(canvas.root)) {
+    const active = pane.activeTabId;
+    const onTop =
+      active === null ? undefined : canvas.tilesByInstanceId[active];
+    if (pane.tabInstanceIds.length > 0 && onTop?.type !== TILE_KIND_BLANK) {
+      continue;
+    }
+    if (pane.id === canvas.activePaneId) return pane.id;
+    firstId ??= pane.id;
+  }
+  return firstId;
+}
+
 /** The pane an unanchored open lands in: the active one, else the first. */
 function anchorPaneId(canvas: EpicCanvasState): string | null {
   if (canvas.root === null) return null;
@@ -184,7 +206,9 @@ function resolveConfiguredPlan(args: {
   // 6. Split: group into the category's pane when there is one, else split
   // right of the anchor.
   if (placement === "split") {
-    const grouped = affinityPaneId(canvas, category);
+    // An empty pane is a split someone already made: fill it rather than
+    // stacking another one beside it.
+    const grouped = emptyPaneId(canvas) ?? affinityPaneId(canvas, category);
     if (grouped !== null) {
       return {
         kind: "open-in-pane",
