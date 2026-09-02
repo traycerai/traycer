@@ -9,23 +9,18 @@
  * step with pdf.js - the next API it starts requiring fails the very same
  * way, with no code change here.
  *
- * A successful load is memoized. A failed one is forgotten, so the next
- * PDF opened retries: remembering it would turn one network blip into "no
- * PDF previews until restart" on a desktop, while an engine that genuinely
- * cannot run the chunk fails fast again from the browser's cache (and in
- * the mobile app the chunk is a local asset - nothing is re-downloaded).
+ * One memoized promise, success or failure, so concurrent tiles share a
+ * single import. Retrying a failure is not ours to offer: the browser's
+ * module map records a failed fetch or evaluation for the document's
+ * lifetime and rejects every later `import()` of that URL without
+ * refetching (verified live - only a reload starts over), which also means
+ * an engine that cannot run the chunk fails instantly on every later PDF.
  */
 type PdfPreviewModule = typeof import("./pdf-preview");
 
 let loaded: Promise<PdfPreviewModule> | null = null;
 
 export function loadPdfPreview(): Promise<PdfPreviewModule> {
-  if (loaded === null) {
-    const attempt = import("./pdf-preview");
-    loaded = attempt;
-    void attempt.catch(() => {
-      if (loaded === attempt) loaded = null;
-    });
-  }
+  loaded ??= import("./pdf-preview");
   return loaded;
 }
