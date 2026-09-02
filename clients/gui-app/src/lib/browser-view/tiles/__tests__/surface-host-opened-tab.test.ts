@@ -199,7 +199,7 @@ describe("surfaceHostOpenedTab", () => {
     );
     expect(lastNavigationTarget).toEqual({
       paneId,
-      tileInstanceId: expect.any(String),
+      tileInstanceId: expect.any(String) as string,
     });
     const targetInstanceId = lastNavigationTarget?.tileInstanceId;
     if (targetInstanceId === undefined) {
