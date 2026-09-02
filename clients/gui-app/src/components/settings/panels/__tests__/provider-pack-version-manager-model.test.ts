@@ -11,6 +11,8 @@ import {
   formatSharedWithProvidersLine,
   installErrorReasonLabel,
   installPackVersionRefusalMessage,
+  packDiscoveryCheckOutcomeNotice,
+  refreshPackDiscoveryRefusalMessage,
   removeResultUserMessage,
   unusableReasonLabel,
   updateBannerDownloadEligibility,
@@ -617,6 +619,35 @@ describe("labels and helpers", () => {
     expect(
       packVersionUseRefusalMessage("host-ineligible").toLowerCase(),
     ).not.toMatch(/withdrawn|right now/);
+  });
+
+  it("maps every discovery-check outcome to its exact kind and copy", () => {
+    expect(packDiscoveryCheckOutcomeNotice("moved")).toEqual({
+      kind: "info",
+      message: "Checked the registry.",
+    });
+    expect(packDiscoveryCheckOutcomeNotice("unchanged")).toEqual({
+      kind: "info",
+      message: "No changes found.",
+    });
+    expect(packDiscoveryCheckOutcomeNotice("unreachable")).toEqual({
+      kind: "error",
+      message: "Couldn't reach the registry. Try again later.",
+    });
+    expect(packDiscoveryCheckOutcomeNotice("unusable")).toEqual({
+      kind: "error",
+      message:
+        "The registry's answer couldn't be trusted. This pack's update knowledge was cleared until the next successful check.",
+    });
+  });
+
+  it("maps every discovery-check refusal code to its exact copy", () => {
+    expect(refreshPackDiscoveryRefusalMessage("discovery-unavailable")).toBe(
+      "Update checks aren't available on this host right now.",
+    );
+    expect(refreshPackDiscoveryRefusalMessage("pack-disabled")).toBe(
+      "Enable this provider to check for updates.",
+    );
   });
 
   it("denies banner download when the durable update version has no available row", () => {
