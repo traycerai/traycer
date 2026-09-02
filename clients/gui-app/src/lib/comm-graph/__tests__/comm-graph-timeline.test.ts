@@ -68,6 +68,7 @@ function agent(id: string, createdAt: number): CommGraphAgentNode {
     hostId: "host-a",
     parentId: null,
     harnessId: null,
+    model: null,
     archived: false,
     createdAt,
   };

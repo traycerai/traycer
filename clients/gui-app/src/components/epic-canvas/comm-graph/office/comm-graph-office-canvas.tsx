@@ -42,10 +42,19 @@ import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-
 import { selectNotificationIndicatorState } from "@/stores/notifications/notification-indicator-state";
 import { useCommGraphSpeed } from "@/stores/epics/comm-graph-timeline-store";
 import type { CommGraphCanvasProps } from "@/components/epic-canvas/comm-graph/comm-graph-canvas";
-import type { CommGraphAgentNode } from "@/lib/comm-graph/comm-graph-model";
+import {
+  aggregateCommGraphEdges,
+  type CommGraphAgentNode,
+} from "@/lib/comm-graph/comm-graph-model";
+import { useCommGraphOpenAgentById } from "@/components/epic-canvas/comm-graph/use-comm-graph-open-agent-by-id";
 import type { CommGraphTileViewState } from "@/stores/epics/canvas/types";
 import { isDefaultCommGraphView } from "@/stores/epics/canvas/tile-schema/comm-graph-tile";
 import { CommGraphAgentDetailSurface } from "@/components/epic-canvas/comm-graph/comm-graph-agent-detail-surface";
+import { CommGraphThreadPanel } from "@/components/epic-canvas/comm-graph/comm-graph-thread-panel";
+import { OFFICE_ENVELOPE_TINTS } from "@/components/epic-canvas/comm-graph/office/office-envelope-tints";
+import { OfficeHoverCard } from "@/components/epic-canvas/comm-graph/office/office-hover-card";
+import { OfficeLegend } from "@/components/epic-canvas/comm-graph/office/office-legend";
+import { officeHarnessLogo } from "@/components/epic-canvas/comm-graph/office/office-logo-cache";
 import { createCommGraphFindAdapter } from "@/components/epic-canvas/comm-graph/comm-graph-find-adapter";
 import { useRegisterTileFindAdapter } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
 import { BASE_STEP_MS } from "@/components/epic-canvas/comm-graph/use-comm-graph-transport";
@@ -62,6 +71,7 @@ import {
 } from "@/lib/comm-graph/office/office-scene";
 import { officeAgentStatuses } from "@/lib/comm-graph/office/office-status";
 import {
+  OFFICE_LOGO_SIZE,
   OFFICE_TILE,
   type OfficeAgentInput,
   type OfficeDrawable,
@@ -73,7 +83,6 @@ import {
   type OfficeSize,
   type OfficeTheme,
 } from "@/lib/comm-graph/office/office-types";
-import type { CommGraphPulseKind } from "@/lib/comm-graph/comm-graph-timeline";
 
 /**
  * Screen pixels per sprite pixel. The floor is drawn at integer-ish scales so
@@ -98,18 +107,6 @@ const LABEL_FONT_PX = 10;
 const HOVER_LABEL_FONT_PX = 11;
 const MONOSPACE_STACK = "ui-monospace, SFMono-Regular, Menlo, monospace";
 
-/**
- * Envelope tints per pulse kind. Fixed hex rather than theme tokens: an
- * envelope is a colored object in a scene, and the four kinds have to stay
- * distinguishable from each other on both floors.
- */
-const ENVELOPE_TINTS: Readonly<Record<CommGraphPulseKind, string>> = {
-  request: "#3b82f6",
-  reply: "#22c55e",
-  notice: "#ef4444",
-  created: "#f59e0b",
-};
-
 interface OfficeCamera {
   x: number;
   y: number;
@@ -119,6 +116,25 @@ interface OfficeCamera {
 interface ScreenSize {
   readonly width: number;
   readonly height: number;
+}
+
+/** The label tones the scene emits, named once for the colour lookup. */
+type OfficeLabelTone = Extract<OfficeDrawable, { kind: "label" }>["tone"];
+
+/** Which detail surface the floor has open, if any. */
+type OfficeSelectedDetail =
+  | { readonly kind: "agent"; readonly agentId: string }
+  | { readonly kind: "pair"; readonly edgeId: string };
+
+/**
+ * The hovered character and where its card should sit, in container-relative
+ * screen pixels. Recomputed on pointer move rather than per frame: the camera
+ * does not move under a stationary pointer, and a drag clears the hover.
+ */
+interface OfficeHoverTarget {
+  readonly agentId: string;
+  readonly left: number;
+  readonly top: number;
 }
 
 /** An in-flight camera move, in screen space. */
@@ -438,11 +454,55 @@ interface DrawFrameArgs {
   readonly viewport: ScreenSize;
   readonly dpr: number;
   readonly theme: OfficeTheme;
-  readonly hoveredName: string | null;
-  readonly hoveredRegion: OfficeHitRegion | null;
   /** Agents the tile's Find session currently matches; empty when idle. */
   readonly searchMatchIds: ReadonlySet<string>;
   readonly nameById: ReadonlyMap<string, string>;
+}
+
+/**
+ * A harness logo on a desk nameplate, CENTER anchored.
+ *
+ * The chip behind it is load-bearing, not decoration: the plate sits on wood,
+ * and a brand mark drawn straight onto it can lose its own outline against a
+ * grain of a similar value. Drawn whether or not the logo has rasterized yet,
+ * so the plate does not visibly pop when an async decode lands.
+ */
+function drawHarnessLogo(
+  ctx: CanvasRenderingContext2D,
+  drawable: Extract<OfficeDrawable, { kind: "logo" }>,
+  theme: OfficeTheme,
+  chipColor: string,
+): void {
+  const half = OFFICE_LOGO_SIZE / 2;
+  const chipHalf = half + 1;
+  ctx.save();
+  ctx.globalAlpha = drawable.alpha ?? 1;
+  ctx.fillStyle = chipColor;
+  ctx.beginPath();
+  if (typeof ctx.roundRect === "function") {
+    ctx.roundRect(
+      drawable.x - chipHalf,
+      drawable.y - chipHalf,
+      chipHalf * 2,
+      chipHalf * 2,
+      2,
+    );
+  } else {
+    ctx.rect(
+      drawable.x - chipHalf,
+      drawable.y - chipHalf,
+      chipHalf * 2,
+      chipHalf * 2,
+    );
+  }
+  ctx.fill();
+  // `null` while the logo rasterizes - the chip alone is the placeholder, and
+  // the next frame after the decode picks the mark up with no invalidation.
+  const logo = officeHarnessLogo(drawable.harnessId, theme);
+  if (logo !== null) {
+    ctx.drawImage(logo, drawable.x - half, drawable.y - half);
+  }
+  ctx.restore();
 }
 
 function drawEnvelope(
@@ -470,7 +530,7 @@ function drawEnvelope(
   // An envelope is anchored at its CENTER; sprites draw from their top-left.
   drawOfficeSprite(
     ctx,
-    { name: "envelope", tint: ENVELOPE_TINTS[drawable.pulseKind] },
+    { name: "envelope", tint: OFFICE_ENVELOPE_TINTS[drawable.pulseKind] },
     { x: drawable.x - size.width / 2, y: drawable.y - size.height / 2 },
     theme,
   );
@@ -508,19 +568,14 @@ function drawAnchoredSprite(
 }
 
 function drawOfficeFrame(args: DrawFrameArgs): void {
-  const {
-    camera,
-    ctx,
-    dpr,
-    frame,
-    hoveredName,
-    hoveredRegion,
-    nameById,
-    searchMatchIds,
-    theme,
-    viewport,
-  } = args;
+  const { camera, ctx, dpr, frame, nameById, searchMatchIds, theme, viewport } =
+    args;
   const palette = officePalette(theme);
+  const labelColors: Readonly<Record<OfficeLabelTone, string>> = {
+    default: palette.text,
+    muted: palette.textMuted,
+    bright: palette.bright,
+  };
 
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.imageSmoothingEnabled = false;
@@ -561,6 +616,10 @@ function drawOfficeFrame(args: DrawFrameArgs): void {
         drawEnvelope(ctx, drawable, theme, palette.shadow);
         continue;
       }
+      if (drawable.kind === "logo") {
+        drawHarnessLogo(ctx, drawable, theme, palette.wallDark);
+        continue;
+      }
       drawAnchoredSprite(ctx, drawable, layer.anchor, theme);
     }
   }
@@ -576,7 +635,10 @@ function drawOfficeFrame(args: DrawFrameArgs): void {
       screenX: label.x * camera.zoom + camera.x,
       screenY: label.y * camera.zoom + camera.y,
       fontPx: LABEL_FONT_PX,
-      color: label.tone === "muted" ? palette.textMuted : palette.text,
+      // `bright` is the cabin sign's tone: that sign is `palette.ink`, dark in
+      // both themes, so the room's own name needs a colour picked against the
+      // SIGN rather than against the floor the other labels sit on.
+      color: labelColors[label.tone],
       alpha: 1,
     });
   }
@@ -609,19 +671,6 @@ function drawOfficeFrame(args: DrawFrameArgs): void {
         alpha: 1,
       });
     }
-  }
-  if (hoveredName !== null && hoveredRegion !== null) {
-    drawScreenLabel(ctx, {
-      text: hoveredName,
-      screenX:
-        (hoveredRegion.rect.x + hoveredRegion.rect.width / 2) * camera.zoom +
-        camera.x,
-      screenY:
-        hoveredRegion.rect.y * camera.zoom + camera.y - HOVER_LABEL_FONT_PX / 2,
-      fontPx: HOVER_LABEL_FONT_PX,
-      color: palette.text,
-      alpha: 1,
-    });
   }
 }
 
@@ -681,13 +730,25 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   // A pan asked for outside the frame loop. Handlers and the Find adapter have
   // no frame clock, so they name the destination and the loop starts it.
   const dragRef = useRef<DragState | null>(null);
-  const hoveredAgentIdRef = useRef<string | null>(null);
   const wasPlayingRef = useRef(playing);
   const autoPannedKeyRef = useRef<string | null>(null);
   const persistTimerRef = useRef<number | null>(null);
-  // The one detail surface this mode has: clicking a character opens its
-  // activity beside the floor, and `null` closes it.
-  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  // ONE detail surface at a time, the same rule the node graph follows:
+  // opening a character replaces an open thread and vice versa, so the floor
+  // never has two competing explanations beside it.
+  const [selectedDetail, setSelectedDetail] =
+    useState<OfficeSelectedDetail | null>(null);
+  const selectedAgentId =
+    selectedDetail?.kind === "agent" ? selectedDetail.agentId : null;
+  const selectedEdgeId =
+    selectedDetail?.kind === "pair" ? selectedDetail.edgeId : null;
+  const setSelectedAgentId = useCallback((agentId: string | null) => {
+    setSelectedDetail(agentId === null ? null : { kind: "agent", agentId });
+  }, []);
+  // What the pointer is over, in container-relative screen pixels. State
+  // rather than a ref because the card is React, and it only moves when the
+  // hover target changes - not every frame.
+  const [hoverCard, setHoverCard] = useState<OfficeHoverTarget | null>(null);
 
   const { resolvedTheme } = useResolvedTheme();
   const speed = useCommGraphSpeed(epicId);
@@ -721,6 +782,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         name: agent.name,
         kind: agent.kind,
         harnessId: agent.harnessId,
+        model: agent.model,
         parentId: agent.parentId,
         archived: agent.archived,
         createdAt: agent.createdAt,
@@ -994,7 +1056,6 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       requestPlaybackPan(frame.focus, viewport);
       advanceCamera(now, viewport);
 
-      const hoveredId = hoveredAgentIdRef.current;
       drawOfficeFrame({
         ctx,
         frame,
@@ -1002,14 +1063,6 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         viewport,
         dpr: window.devicePixelRatio || 1,
         theme: resolvedTheme,
-        hoveredName:
-          hoveredId === null ? null : (nameById.get(hoveredId) ?? null),
-        hoveredRegion:
-          hoveredId === null
-            ? null
-            : (frame.hitRegions.find(
-                (region) => region.agentId === hoveredId,
-              ) ?? null),
         searchMatchIds: runtime.getSearchMatchIds(),
         nameById,
       });
@@ -1085,14 +1138,33 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         return;
       }
       const point = toSpritePoint(event.clientX, event.clientY);
+      const overEnvelope =
+        point !== null && readScene().hitTestEnvelope(point) !== null;
       const region =
         point === null ? null : hitRegionFor(runtime.getHitRegions(), point);
-      hoveredAgentIdRef.current = region === null ? null : region.agentId;
+      const camera = runtime.getCamera();
+      setHoverCard(
+        region === null
+          ? null
+          : {
+              agentId: region.agentId,
+              left:
+                (region.rect.x + region.rect.width / 2) * camera.zoom +
+                camera.x,
+              top: region.rect.y * camera.zoom + camera.y,
+            },
+      );
+      // An envelope is clickable too, so it earns the same cursor even where
+      // it is flying over open floor with no desk under it.
       event.currentTarget.style.cursor =
-        region === null ? "default" : "pointer";
+        region === null && !overEnvelope ? "default" : "pointer";
     },
-    [runtime, toSpritePoint],
+    [readScene, runtime, toSpritePoint],
   );
+
+  const handlePointerLeave = useCallback(() => {
+    setHoverCard(null);
+  }, []);
 
   const handlePointerUp = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -1108,7 +1180,15 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       }
       const point = toSpritePoint(event.clientX, event.clientY);
       if (point === null) return;
-      const agentId = readScene().hitTest(point);
+      // Envelopes first: a message in flight over a desk is drawn on top of
+      // it, so it has to be the thing a click on those pixels resolves to.
+      const scene = readScene();
+      const edgeId = scene.hitTestEnvelope(point);
+      if (edgeId !== null) {
+        setSelectedDetail({ kind: "pair", edgeId });
+        return;
+      }
+      const agentId = scene.hitTest(point);
       if (agentId !== null) setSelectedAgentId(agentId);
     },
     [persistView, readScene, setSelectedAgentId, toSpritePoint],
@@ -1138,6 +1218,24 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     () => agents.filter((agent) => agentIds.has(agent.id)),
     [agentIds, agents],
   );
+
+  // The same aggregation the node graph draws its edges from. The office draws
+  // no edges, but an envelope click opens a PAIR thread, and that thread is
+  // this pair's folded history - resolved here so both modes open the identical
+  // panel on the identical rows.
+  const aggregated = useMemo(
+    () => aggregateCommGraphEdges(events, agentIds),
+    [agentIds, events],
+  );
+  const selectedEdge =
+    selectedEdgeId === null
+      ? null
+      : (aggregated.find((edge) => edge.id === selectedEdgeId) ?? null);
+
+  const hoveredAgent =
+    hoverCard === null
+      ? null
+      : (agents.find((agent) => agent.id === hoverCard.agentId) ?? null);
 
   // The tile's Find surface, on the same adapter contract the node graph
   // registers. It is registered by whichever renderer is mounted, so search is
@@ -1196,14 +1294,12 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
           },
         },
       }),
-    [runtime, tileInstanceId],
+    [runtime, setSelectedAgentId, tileInstanceId],
   );
   useRegisterTileFindAdapter(findAdapter);
 
-  const closePanel = useCallback(
-    () => setSelectedAgentId(null),
-    [setSelectedAgentId],
-  );
+  const openAgentById = useCommGraphOpenAgentById(agents, onOpenAgent);
+  const closePanel = useCallback(() => setSelectedDetail(null), []);
 
   return (
     <div className="flex h-full min-h-0 w-full min-w-0">
@@ -1215,6 +1311,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
+        onPointerLeave={handlePointerLeave}
       >
         <canvas
           ref={canvasRef}
@@ -1226,6 +1323,17 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
           aria-label="Office view of the communication graph"
         />
         {modeToggle}
+        {hoverCard === null || hoveredAgent === null ? null : (
+          <OfficeHoverCard
+            name={hoveredAgent.name}
+            harnessId={hoveredAgent.harnessId}
+            model={hoveredAgent.model}
+            status={statusById.get(hoveredAgent.id) ?? "idle"}
+            left={hoverCard.left}
+            top={hoverCard.top}
+          />
+        )}
+        <OfficeLegend />
         {/*
           The keyboard and assistive-tech route to every character on the floor,
           and the only handle a test has on a canvas. Same select handler as the
@@ -1283,6 +1391,24 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
           </Button>
         </div>
       </div>
+      {selectedEdge === null ? null : (
+        <CommGraphThreadPanel
+          key={selectedEdge.id}
+          edge={selectedEdge}
+          epicId={epicId}
+          agentNames={nameById}
+          initialHistoryCaughtUp={initialHistoryCaughtUp}
+          canOpenAgentForEvent={canOpenAgentForEvent}
+          canJump={canJump}
+          onJump={onJump}
+          canJumpToSender={canJumpToSender}
+          onJumpToSender={onJumpToSender}
+          canJumpToCreated={canJumpToCreated}
+          onJumpToCreated={onJumpToCreated}
+          onOpenAgentId={openAgentById}
+          onClose={closePanel}
+        />
+      )}
       <CommGraphAgentDetailSurface
         agentId={selectedAgentId}
         agents={agents}

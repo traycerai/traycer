@@ -31,7 +31,20 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CommGraphOfficeCanvas } from "@/components/epic-canvas/comm-graph/office/comm-graph-office-canvas";
-import type { CommGraphAgentNode } from "@/lib/comm-graph/comm-graph-model";
+import {
+  commGraphPairId,
+  type CommGraphAgentNode,
+} from "@/lib/comm-graph/comm-graph-model";
+import type { CommGraphEvent } from "@/lib/comm-graph/comm-graph-events";
+import type { CommGraphPulse } from "@/lib/comm-graph/comm-graph-timeline";
+import { layoutOffice } from "@/lib/comm-graph/office/office-layout";
+import { OfficeScene } from "@/lib/comm-graph/office/office-scene";
+import { agentAppearance } from "@/lib/comm-graph/office/office-appearance";
+import type {
+  OfficeAgentInput,
+  OfficeRect,
+  OfficeSceneInput,
+} from "@/lib/comm-graph/office/office-types";
 import type { CommGraphTileViewState } from "@/stores/epics/canvas/types";
 import type { TileFindAdapter } from "@/stores/tile-find";
 
@@ -50,6 +63,7 @@ function agent(id: string, name: string): CommGraphAgentNode {
     hostId: "host-1",
     parentId: null,
     harnessId: null,
+    model: null,
     archived: false,
     createdAt: 1,
   };
@@ -58,19 +72,34 @@ function agent(id: string, name: string): CommGraphAgentNode {
 const ORCHESTRATOR = agent("agent-1", "Orchestrator");
 const REVIEWER = agent("agent-2", "Reviewer");
 
-function renderOffice(visibleIds: ReadonlySet<string>) {
-  return render(
+interface OfficeRenderOptions {
+  readonly events: ReadonlyArray<CommGraphEvent>;
+  readonly pulse: CommGraphPulse | null;
+  readonly pulseKey: string | null;
+}
+
+const STATIC_OFFICE: OfficeRenderOptions = {
+  events: [],
+  pulse: null,
+  pulseKey: null,
+};
+
+function officeElement(
+  visibleIds: ReadonlySet<string>,
+  options: OfficeRenderOptions,
+) {
+  return (
     <CommGraphOfficeCanvas
       epicId="epic-1"
       tileInstanceId="comm-graph-instance-1"
       agents={[ORCHESTRATOR, REVIEWER]}
       agentIds={visibleIds}
-      events={[]}
+      events={options.events}
       hosts={[]}
       initialHistoryCaughtUp={false}
       playing={false}
-      pulse={null}
-      pulseKey={null}
+      pulse={options.pulse}
+      pulseKey={options.pulseKey}
       modeToggle={null}
       view={OFFICE_VIEW}
       onViewChange={vi.fn()}
@@ -82,8 +111,92 @@ function renderOffice(visibleIds: ReadonlySet<string>) {
       canJumpToCreated={() => false}
       onJumpToCreated={vi.fn()}
       onOpenAgent={vi.fn()}
-    />,
+    />
   );
+}
+
+function renderOffice(visibleIds: ReadonlySet<string>) {
+  return render(officeElement(visibleIds, STATIC_OFFICE));
+}
+
+const PAIR_EDGE_ID = commGraphPairId(ORCHESTRATOR.id, REVIEWER.id);
+
+const REQUEST_EVENT: CommGraphEvent = {
+  id: 1,
+  timestamp: 10,
+  hostId: "host-1",
+  kind: "a2a_message",
+  senderAgentId: ORCHESTRATOR.id,
+  receiverAgentId: REVIEWER.id,
+  responseId: "r1",
+  inReplyTo: null,
+  expectReply: false,
+  messageText: "take a look",
+  noticeReason: null,
+  originKind: null,
+  originChatId: null,
+  originRefId: null,
+};
+
+const REQUEST_PULSE: CommGraphPulse = {
+  kind: "edge",
+  edgeId: PAIR_EDGE_ID,
+  pulseKind: "request",
+  fromAgentId: ORCHESTRATOR.id,
+  toAgentId: REVIEWER.id,
+};
+
+const IN_FLIGHT: OfficeRenderOptions = {
+  events: [REQUEST_EVENT],
+  pulse: REQUEST_PULSE,
+  pulseKey: "row-1",
+};
+
+function officeAgentInput(agent: CommGraphAgentNode): OfficeAgentInput {
+  return {
+    id: agent.id,
+    name: agent.name,
+    kind: agent.kind,
+    harnessId: agent.harnessId,
+    model: agent.model,
+    parentId: agent.parentId,
+    archived: agent.archived,
+    createdAt: agent.createdAt,
+    appearance: agentAppearance(agent.id, agent.kind, agent.harnessId),
+  };
+}
+
+/**
+ * Where the envelope for {@link IN_FLIGHT} sits, from a scene built the same
+ * way the canvas builds its own and fed the same two syncs.
+ *
+ * Reading the component's own scene is not possible and re-deriving the
+ * geometry by hand would be a second implementation of it. The scene is pure
+ * and deterministic by construction - same agents, same input, same box - so a
+ * parallel instance answers the identical question, and if that ever stopped
+ * being true this test failing is the correct outcome.
+ */
+function envelopeRect(visibleIds: ReadonlySet<string>): OfficeRect {
+  const scene = new OfficeScene(layoutOffice);
+  const agents = [ORCHESTRATOR, REVIEWER].map(officeAgentInput);
+  const base: OfficeSceneInput = {
+    agents,
+    visibleAgentIds: visibleIds,
+    statusById: new Map(),
+    pulse: null,
+    pulseKey: null,
+    stepMs: 700,
+    playing: false,
+    reducedMotion: false,
+  };
+  // The first sync MATERIALIZES the floor and never replays its row, so the
+  // envelope only exists after a second sync carrying a new key - exactly the
+  // sequence the canvas performs across the two renders below.
+  scene.sync(base);
+  scene.sync({ ...base, pulse: REQUEST_PULSE, pulseKey: "row-1" });
+  const regions = scene.frame().envelopeHitRegions;
+  if (regions.length === 0) throw new Error("No envelope was in flight");
+  return regions[0].rect;
 }
 
 function latestFindAdapter(): TileFindAdapter {
@@ -196,6 +309,30 @@ describe("CommGraphOfficeCanvas", () => {
     });
 
     expect(screen.getByTestId("comm-graph-agent-panel")).toBeDefined();
+  });
+
+  it("opens the pair thread when an envelope in flight is clicked", () => {
+    const both = new Set([ORCHESTRATOR.id, REVIEWER.id]);
+    const view = render(officeElement(both, STATIC_OFFICE));
+    // A first render with no pulse, then the row: the scene deliberately does
+    // not replay the row its very first sync arrives on.
+    view.rerender(officeElement(both, IN_FLIGHT));
+    const rect = envelopeRect(both);
+    const surface = screen.getByTestId("comm-graph-office-canvas");
+
+    // The camera is untouched here (jsdom starts no frame loop), so sprite
+    // pixels and client pixels coincide and the centre of the box is the click.
+    const point = {
+      clientX: rect.x + rect.width / 2,
+      clientY: rect.y + rect.height / 2,
+    };
+    fireEvent.pointerDown(surface, { pointerId: 1, ...point });
+    fireEvent.pointerUp(surface, { pointerId: 1, ...point });
+
+    expect(screen.getByTestId("comm-graph-thread-panel")).toBeDefined();
+    // The message in flight is the pair's, so the panel is the PAIR's history -
+    // not either endpoint's own activity.
+    expect(screen.queryByTestId("comm-graph-agent-panel")).toBeNull();
   });
 
   it("carries a zoom control set the pointer gestures are not the only route to", () => {

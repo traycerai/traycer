@@ -5,19 +5,41 @@
  * across restarts, so nothing here is stored: an appearance is a pure function
  * of the agent id (plus its kind, which salts the hash) and its harness.
  */
-import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/foundation";
+import type { GuiHarnessId } from "@traycer/protocol/persistence/epic/foundation";
 import type { CommGraphAgentKind } from "@/lib/comm-graph/comm-graph-model";
 import type { OfficeAppearance } from "@/lib/comm-graph/office/office-types";
 
 /**
- * Brand tint per terminal harness. Drives the envelope color of a message that
- * agent sends and the accent stripe on its desk.
+ * Brand tint per harness. Drives the envelope color of a message that agent
+ * sends and the accent stripe on its desk.
+ *
+ * Every harness the app can run needs an entry, so the record is keyed by the
+ * whole enum rather than by the subset that happens to be on a floor: a missing
+ * key would resolve to `undefined` and paint an agent's envelopes with nothing
+ * at all. A brand whose own mark is near-black is deliberately lightened here -
+ * the accent is drawn on a dark floor and an unreadable tint is not a brand.
  */
-export const HARNESS_ACCENT: Readonly<Record<TuiHarnessId, string>> = {
+export const HARNESS_ACCENT: Readonly<Record<GuiHarnessId, string>> = {
   claude: "#d97757",
   codex: "#10a37f",
   opencode: "#f5a524",
+  traycer: "#3b82f6",
   cursor: "#7c7cff",
+  grok: "#6b7280",
+  qwen: "#6f42c1",
+  kiro: "#a855f7",
+  droid: "#f97316",
+  kimi: "#1f6feb",
+  copilot: "#8957e5",
+  kilocode: "#22c55e",
+  openrouter: "#6366f1",
+  amp: "#e11d48",
+  devin: "#0ea5e9",
+  pi: "#14b8a6",
+  hermes: "#eab308",
+  omp: "#ef4444",
+  huggingface: "#facc15",
+  reasonix: "#0891b2",
 };
 
 /** A chat has no harness, so it carries the app's own accent instead. */
@@ -107,7 +129,7 @@ function pickColor(list: ReadonlyArray<string>, seed: number): string {
 export function agentAppearance(
   agentId: string,
   kind: CommGraphAgentKind,
-  harnessId: TuiHarnessId | null,
+  harnessId: GuiHarnessId | null,
 ): OfficeAppearance {
   const seed = hashAgentId(`${kind}:${agentId}`);
   return {

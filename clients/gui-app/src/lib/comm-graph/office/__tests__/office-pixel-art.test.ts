@@ -10,7 +10,53 @@ import {
   OFFICE_SPRITE_LETTERS,
   type RasterizedSprite,
 } from "@/lib/comm-graph/office/office-pixel-art";
-import type { OfficeAppearance } from "@/lib/comm-graph/office/office-types";
+import type {
+  OfficeAppearance,
+  OfficeSpriteName,
+} from "@/lib/comm-graph/office/office-types";
+
+/**
+ * Every sprite the union names. Written as a record rather than an array so the
+ * compiler rejects a name added to `OfficeSpriteName` and forgotten here - which
+ * is the failure this file exists to catch, since the map registry is a
+ * hand-maintained list and an unregistered map is simply never asserted on.
+ */
+const ALL_SPRITE_NAMES: Readonly<Record<OfficeSpriteName, true>> = {
+  character: true,
+  desk: true,
+  "monitor-on": true,
+  "monitor-on-b": true,
+  "monitor-off": true,
+  nameplate: true,
+  partition: true,
+  sign: true,
+  chair: true,
+  plant: true,
+  "floor-a": true,
+  "floor-b": true,
+  rug: true,
+  wall: true,
+  "wall-top": true,
+  door: true,
+  window: true,
+  whiteboard: true,
+  "coffee-machine": true,
+  envelope: true,
+  "bubble-awaiting": true,
+  "bubble-attention": true,
+  "bubble-notice": true,
+  "bubble-hello": true,
+  "bubble-sleep": true,
+  sparkle: true,
+};
+
+function mapNamed(name: OfficeSpriteName): ReadonlyArray<string> {
+  const entry = officeSpriteMaps().find((candidate) => candidate.name === name);
+  if (entry === undefined) {
+    throw new Error(`no authored map for ${name}`);
+  }
+  return entry.map;
+}
 
 const APPEARANCE: OfficeAppearance = {
   skin: "#e8b894",
@@ -40,6 +86,18 @@ afterEach(() => {
 });
 
 describe("sprite maps", () => {
+  it("author a map for every sprite name but `character`", () => {
+    // `character` is composed from head / torso / hair parts instead of one
+    // map, so it is the only name without an entry of its own.
+    const authored = new Set<string>(
+      officeSpriteMaps().map((entry) => entry.name),
+    );
+    const missing = Object.keys(ALL_SPRITE_NAMES).filter(
+      (name) => name !== "character" && !authored.has(name),
+    );
+    expect(missing).toEqual([]);
+  });
+
   it("are rectangular and match the size declared for their sprite", () => {
     for (const entry of officeSpriteMaps()) {
       const size = officeSpriteSize({ name: entry.name });
@@ -79,6 +137,31 @@ describe("sprite maps", () => {
       for (const letter of OFFICE_SPRITE_LETTERS) {
         expect(colors.get(letter), `${theme}/${letter}`).toBeDefined();
       }
+    }
+  });
+
+  it("alternates the two lit monitor frames without moving the chassis", () => {
+    // The scene swaps these two frames while an agent works. Differing screen
+    // rows are what reads as scrolling code; a differing BEZEL would read as
+    // the whole monitor twitching, which is why the frame rows are pinned.
+    const frameA = mapNamed("monitor-on");
+    const frameB = mapNamed("monitor-on-b");
+    const chassisRows = [0, 1, 9, 10, 11];
+    for (const row of chassisRows) {
+      expect(frameB[row], `row ${row}`).toEqual(frameA[row]);
+    }
+    const screenRows = [2, 3, 4, 5, 6, 7, 8];
+    expect(screenRows.map((row) => frameB[row]).join("")).not.toEqual(
+      screenRows.map((row) => frameA[row]).join(""),
+    );
+  });
+
+  it("keeps the sign's field flat so a label can be drawn over it", () => {
+    // The cabin name is drawn across rows 3-12; any pattern inside the frame
+    // would fight the text at this size.
+    const sign = mapNamed("sign");
+    for (let row = 3; row <= 12; row += 1) {
+      expect(sign[row].slice(3, 29), `row ${row}`).toEqual("B".repeat(26));
     }
   });
 

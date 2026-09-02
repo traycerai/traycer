@@ -44,14 +44,17 @@ import {
   type OfficeCharacterPose,
   type OfficeDesk,
   type OfficeDrawable,
+  type OfficeEnvelopeHitRegion,
   type OfficeFacing,
   type OfficeFrame,
   type OfficeHitRegion,
   type OfficeLayout,
   type OfficePoint,
   type OfficeProp,
+  type OfficeRect,
   type OfficeSceneInput,
   type OfficeSpriteName,
+  type OfficeSpriteRef,
   type OfficeTilePos,
 } from "@/lib/comm-graph/office/office-types";
 
@@ -89,6 +92,41 @@ const CHARACTER_Y_OFFSET = -4;
 const BUBBLE_GAP = 2;
 const LABEL_GAP = 8;
 const MAX_LABEL_CHARS = 14;
+/** A cabin's sign is two tiles wide, so its name gets less room than a desk's. */
+const MAX_ROOM_LABEL_CHARS = 12;
+/** Baseline of the cabin name, measured down from the sign sprite's own top. */
+const SIGN_LABEL_BASELINE = 11;
+const SIGN_WIDTH_TILES = 2;
+/**
+ * A lit screen is never still: two frames alternate while an agent is in a
+ * turn, and far more slowly while it is only working in the background.
+ */
+const MONITOR_WORKING_FRAME_MS = 260;
+const MONITOR_BACKGROUND_FRAME_MS = 700;
+/** The plate on the desk's right half, and the logo standing on top of it. */
+const NAMEPLATE_X_OFFSET = 18;
+const NAMEPLATE_Y_OFFSET = 4;
+const LOGO_X_OFFSET = 24;
+const LOGO_Y_OFFSET = 1;
+/** Slack around an envelope's box, so a moving 10x8 target stays clickable. */
+const ENVELOPE_HIT_PADDING = 2;
+/**
+ * Coffee breaks. Only a LIVE floor takes them, and only after a long enough
+ * stretch of nothing that the stillness itself is the point - the stagger is
+ * what keeps a quiet epic from standing up in unison.
+ */
+const IDLE_WANDER_MS = 25_000;
+const WANDER_STAGGER_SPREAD_MS = 15_000;
+const WANDER_WAIT_MS = 4_000;
+/** More than two at the machine at once reads as an evacuation, not a break. */
+const MAX_WANDERING_AGENTS = 2;
+/** Deterministic search for the tile a character stands on to use the machine. */
+const WANDER_STAND_OFFSETS: ReadonlyArray<OfficeTilePos> = [
+  { col: -1, row: 0 },
+  { col: 1, row: 0 },
+  { col: 0, row: 1 },
+  { col: 0, row: -1 },
+];
 /**
  * Sits the monitor on the desk's back edge, aligned to where the desk sprite
  * draws its keyboard rather than to the desk's own centre - the screen belongs
@@ -109,6 +147,12 @@ interface TransientBubble {
   remainingMs: number;
 }
 
+/**
+ * A coffee break, as a state: `outbound` walking to the machine, `waiting`
+ * standing at it, `return` walking back. `none` is everyone else.
+ */
+type OfficeWander = "none" | "outbound" | "waiting" | "return";
+
 interface OfficeCharacter {
   readonly agentId: string;
   /** Tile coordinates, fractional while walking. */
@@ -123,12 +167,17 @@ interface OfficeCharacter {
   idleMs: number;
   bubble: TransientBubble | null;
   sparkleMs: number;
+  wander: OfficeWander;
+  /** Scene time left standing at the machine, while `wander` is `waiting`. */
+  wanderWaitMs: number;
 }
 
 interface OfficeEnvelope {
   readonly fromAgentId: string;
   readonly toAgentId: string;
   readonly pulseKind: CommGraphPulseKind;
+  /** The pair edge the message belongs to, carried through to the drawable. */
+  readonly edgeId: string;
   elapsedMs: number;
   readonly durationMs: number;
 }
@@ -166,6 +215,15 @@ function phaseOffsetMs(agentId: string): number {
 }
 
 /**
+ * How much longer than the threshold THIS agent sits still before getting up.
+ * Derived from the id for the same reason the typing phase is: a floor where
+ * everyone stands at once is an animation, not an office.
+ */
+function wanderStaggerMs(agentId: string): number {
+  return hashAgentId(agentId) % WANDER_STAGGER_SPREAD_MS;
+}
+
+/**
  * Everything the floor plan depends on. Names, harnesses and archive flags are
  * deliberately absent: a rename must not restack the office.
  */
@@ -187,11 +245,14 @@ function agentSetSignature(agents: ReadonlyArray<OfficeAgentInput>): string {
  * Lifting by the overhang puts the sprite's FOOT on its tile, which is where
  * a standing object actually stands; a one-tile prop is unaffected.
  */
-function propDrawY(prop: OfficeProp): number {
+function spriteFootY(sprite: OfficeSpriteRef, tileRow: number): number {
   return (
-    prop.tile.row * OFFICE_TILE -
-    (officeSpriteSize(prop.sprite).height - OFFICE_TILE)
+    tileRow * OFFICE_TILE - (officeSpriteSize(sprite).height - OFFICE_TILE)
   );
+}
+
+function propDrawY(prop: OfficeProp): number {
+  return spriteFootY(prop.sprite, prop.tile.row);
 }
 
 function facingFor(dCol: number, dRow: number): OfficeFacing | null {
@@ -202,9 +263,42 @@ function facingFor(dCol: number, dRow: number): OfficeFacing | null {
   return null;
 }
 
-function truncateLabel(name: string): string {
-  if (name.length <= MAX_LABEL_CHARS) return name;
-  return `${name.slice(0, MAX_LABEL_CHARS - 1)}…`;
+function truncate(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars - 1)}…`;
+}
+
+/**
+ * An in-flight envelope's clickable box: its sprite, padded, so a target that
+ * is both small and moving can still be hit.
+ */
+function envelopeHitRegionsOf(
+  overlay: ReadonlyArray<OfficeDrawable>,
+): ReadonlyArray<OfficeEnvelopeHitRegion> {
+  const size = officeSpriteSize({ name: "envelope" });
+  const regions: OfficeEnvelopeHitRegion[] = [];
+  for (const drawable of overlay) {
+    if (drawable.kind !== "envelope") continue;
+    regions.push({
+      edgeId: drawable.edgeId,
+      rect: {
+        x: drawable.x - size.width / 2 - ENVELOPE_HIT_PADDING,
+        y: drawable.y - size.height / 2 - ENVELOPE_HIT_PADDING,
+        width: size.width + ENVELOPE_HIT_PADDING * 2,
+        height: size.height + ENVELOPE_HIT_PADDING * 2,
+      },
+    });
+  }
+  return regions;
+}
+
+function containsPoint(rect: OfficeRect, point: OfficePoint): boolean {
+  return (
+    point.x >= rect.x &&
+    point.x < rect.x + rect.width &&
+    point.y >= rect.y &&
+    point.y < rect.y + rect.height
+  );
 }
 
 function isCreatedPulseFor(
@@ -235,6 +329,8 @@ function seatedCharacter(agentId: string, desk: OfficeDesk): OfficeCharacter {
     idleMs: 0,
     bubble: null,
     sparkleMs: 0,
+    wander: "none",
+    wanderWaitMs: 0,
   };
 }
 
@@ -257,11 +353,14 @@ export class OfficeScene {
   private stepMs = 0;
   private nowMs = 0;
   private synced = false;
+  /** Where a character stands to use the coffee machine; `null` if unreachable. */
+  private coffeeStandTile: OfficeTilePos | null = null;
 
   /** `layoutOffice` in production; injected so tests can pin a floor plan. */
   constructor(layoutOf: OfficeLayoutFn) {
     this.layoutOf = layoutOf;
     this.currentLayout = layoutOf([]);
+    this.recomputeCoffeeStandTile();
   }
 
   layout(): OfficeLayout {
@@ -284,11 +383,19 @@ export class OfficeScene {
     if (layoutChanged) {
       this.agentSignature = signature;
       this.currentLayout = this.layoutOf(input.agents);
+      this.recomputeCoffeeStandTile();
       // Before reconciling, so a newly spawned walker is not immediately
       // re-pathed to the destination it was just given.
       this.rehomeCharacters();
     }
     this.reconcileCharacters(input, firstSync);
+    // A break ends on the sync that ends it, not on the tick after: playback
+    // starting or an agent picking work back up are both seen here first.
+    for (const character of this.characters.values()) {
+      if (character.wander === "none") continue;
+      if (!this.wanderMustEnd(character.agentId)) continue;
+      this.returnFromWander(character);
+    }
 
     if (input.pulseKey !== this.lastPulseKey) {
       this.lastPulseKey = input.pulseKey;
@@ -304,10 +411,12 @@ export class OfficeScene {
     for (const character of this.characters.values()) {
       this.advanceCharacter(character, dtMs);
     }
+    this.updateWanderStarts();
     this.advanceEnvelopes(dtMs);
   }
 
   frame(): OfficeFrame {
+    const overlay = this.buildOverlay();
     return {
       size: {
         width: this.currentLayout.cols * OFFICE_TILE,
@@ -316,8 +425,9 @@ export class OfficeScene {
       floor: this.buildFloor(),
       props: this.buildProps(),
       actors: this.buildActors(),
-      overlay: this.buildOverlay(),
+      overlay,
       hitRegions: this.buildHitRegions(),
+      envelopeHitRegions: envelopeHitRegionsOf(overlay),
       focus: this.focusPoint(),
     };
   }
@@ -349,6 +459,20 @@ export class OfficeScene {
       ) {
         return desk.agentId;
       }
+    }
+    return null;
+  }
+
+  /**
+   * The pair edge of the envelope under the point, topmost first - a message
+   * is a more specific target than the floor it happens to be flying over, so
+   * the canvas asks this BEFORE `hitTest`.
+   */
+  hitTestEnvelope(point: OfficePoint): string | null {
+    const regions = envelopeHitRegionsOf(this.buildOverlay());
+    for (let index = regions.length - 1; index >= 0; index -= 1) {
+      const region = regions[index];
+      if (containsPoint(region.rect, point)) return region.edgeId;
     }
     return null;
   }
@@ -411,6 +535,8 @@ export class OfficeScene {
       idleMs: 0,
       bubble: null,
       sparkleMs: 0,
+      wander: "none",
+      wanderWaitMs: 0,
     };
   }
 
@@ -441,7 +567,10 @@ export class OfficeScene {
     return { col: Math.round(character.col), row: Math.round(character.row) };
   }
 
+  /** Any deliberate re-route ends a break; `returnFromWander` re-opens one. */
   private walkTo(character: OfficeCharacter, goal: OfficeTilePos): void {
+    character.wander = "none";
+    character.wanderWaitMs = 0;
     const start = {
       col: Math.round(character.col),
       row: Math.round(character.row),
@@ -497,6 +626,7 @@ export class OfficeScene {
       fromAgentId: pulse.fromAgentId,
       toAgentId: pulse.toAgentId,
       pulseKind: pulse.pulseKind,
+      edgeId: pulse.edgeId,
       elapsedMs: 0,
       durationMs: clamp(
         this.stepMs * ENVELOPE_STEP_FRACTION,
@@ -554,12 +684,117 @@ export class OfficeScene {
     if (character.sparkleMs > 0) {
       character.sparkleMs = Math.max(0, character.sparkleMs - dtMs);
     }
+    if (character.wander !== "none" && this.wanderMustEnd(character.agentId)) {
+      this.returnFromWander(character);
+    }
+    if (character.wander === "waiting") {
+      character.wanderWaitMs -= dtMs;
+      if (character.wanderWaitMs <= 0) this.returnFromWander(character);
+      return;
+    }
     if (!character.seated) {
       this.advanceWalk(character, dtMs);
       return;
     }
     if (this.statusOf(character.agentId) === "idle") character.idleMs += dtMs;
     else character.idleMs = 0;
+  }
+
+  // ---- Coffee breaks -------------------------------------------------- //
+
+  private recomputeCoffeeStandTile(): void {
+    const layout = this.currentLayout;
+    this.coffeeStandTile = null;
+    const machine = layout.props.find(
+      (prop) => prop.sprite.name === "coffee-machine",
+    );
+    if (machine === undefined) return;
+    for (const offset of WANDER_STAND_OFFSETS) {
+      const col = machine.tile.col + offset.col;
+      const row = machine.tile.row + offset.row;
+      if (col < 0 || row < 0 || col >= layout.cols || row >= layout.rows) {
+        continue;
+      }
+      if (!layout.walkable[row][col]) continue;
+      this.coffeeStandTile = { col, row };
+      return;
+    }
+  }
+
+  /**
+   * A break belongs to a LIVE floor and to an agent that is still idle, still
+   * on it, and still nothing is happening to it. Playback makes every agent
+   * idle between its own rows, so a break during it would fire constantly.
+   */
+  private wanderMustEnd(agentId: string): boolean {
+    if (this.playing) return true;
+    if (!this.visibleAgentIds.has(agentId)) return true;
+    return this.statusOf(agentId) !== "idle";
+  }
+
+  private updateWanderStarts(): void {
+    if (this.playing || this.reducedMotion) return;
+    const target = this.coffeeStandTile;
+    if (target === null) return;
+    let active = 0;
+    for (const character of this.characters.values()) {
+      if (character.wander !== "none") active += 1;
+    }
+    // Canonical order, so WHICH of a dozen equally bored agents gets up is a
+    // fact about their ids rather than about map insertion order.
+    const candidates = Array.from(this.characters.values()).sort(
+      (left, right) => {
+        if (left.agentId === right.agentId) return 0;
+        return left.agentId < right.agentId ? -1 : 1;
+      },
+    );
+    for (const character of candidates) {
+      if (active >= MAX_WANDERING_AGENTS) return;
+      if (character.wander !== "none") continue;
+      if (!character.seated) continue;
+      if (this.wanderMustEnd(character.agentId)) continue;
+      const threshold = IDLE_WANDER_MS + wanderStaggerMs(character.agentId);
+      if (character.idleMs < threshold) continue;
+      if (this.startWander(character, target)) active += 1;
+    }
+  }
+
+  private startWander(
+    character: OfficeCharacter,
+    target: OfficeTilePos,
+  ): boolean {
+    const start = {
+      col: Math.round(character.col),
+      row: Math.round(character.row),
+    };
+    const path = findOfficePath(this.currentLayout, start, target);
+    // No route means no break: a character must never be teleported out of its
+    // chair for something as incidental as a coffee.
+    if (path === null || path.length === 0) return false;
+    character.col = start.col;
+    character.row = start.row;
+    character.seated = false;
+    character.path = path;
+    character.pathIndex = 0;
+    character.walkPhaseMs = 0;
+    character.idleMs = 0;
+    character.wander = "outbound";
+    character.wanderWaitMs = 0;
+    return true;
+  }
+
+  private returnFromWander(character: OfficeCharacter): void {
+    if (character.wander === "return") return;
+    const desk = this.currentLayout.desks.get(character.agentId);
+    if (desk === undefined) {
+      character.wander = "none";
+      character.wanderWaitMs = 0;
+      return;
+    }
+    this.walkTo(character, desk.chairTile);
+    // `walkTo` seats instantly when motion is reduced or no route exists, and
+    // that IS the return in those cases - there is nothing left to walk.
+    if (!character.seated) character.wander = "return";
   }
 
   private advanceWalk(character: OfficeCharacter, dtMs: number): void {
@@ -587,11 +822,23 @@ export class OfficeScene {
       budget = 0;
     }
     if (character.pathIndex < character.path.length) return;
+    if (character.wander === "outbound") {
+      // Arrived at the machine: standing, facing it, for a fixed beat.
+      character.wander = "waiting";
+      character.wanderWaitMs = WANDER_WAIT_MS;
+      character.facing = "up";
+      character.path = [];
+      character.pathIndex = 0;
+      character.walkPhaseMs = 0;
+      return;
+    }
     character.seated = true;
     character.facing = "up";
     character.path = [];
     character.pathIndex = 0;
     character.idleMs = 0;
+    character.wander = "none";
+    character.wanderWaitMs = 0;
   }
 
   private statusOf(agentId: string): OfficeAgentStatus {
@@ -600,6 +847,8 @@ export class OfficeScene {
 
   private poseFor(character: OfficeCharacter): OfficeCharacterPose {
     if (!character.seated) {
+      // On foot but with nothing left to walk: standing at the machine.
+      if (character.pathIndex >= character.path.length) return "stand";
       return Math.floor(character.walkPhaseMs / WALK_FRAME_MS) % 2 === 0
         ? "walk1"
         : "walk2";
@@ -632,6 +881,37 @@ export class OfficeScene {
           x: col * OFFICE_TILE,
           y: row * OFFICE_TILE,
         });
+      }
+    }
+    // Cabin walls sit ON the floor tiles and UNDER the lobby rug: they are the
+    // building's inner structure, not furniture standing on it.
+    for (const room of layout.rooms) {
+      const { col, row, cols, rows } = room.bounds;
+      const right = col + cols - 1;
+      const bottom = row + rows - 1;
+      const wallAt = (wallCol: number, wallRow: number): void => {
+        const isDoor =
+          wallRow === room.doorTile.row && wallCol === room.doorTile.col;
+        floor.push({
+          kind: "sprite",
+          sprite: { name: isDoor ? "door" : "wall" },
+          x: wallCol * OFFICE_TILE,
+          y: wallRow * OFFICE_TILE,
+        });
+      };
+      for (let scanCol = col; scanCol <= right; scanCol += 1) {
+        floor.push({
+          kind: "sprite",
+          sprite: { name: "wall-top" },
+          x: scanCol * OFFICE_TILE,
+          y: row * OFFICE_TILE,
+        });
+        wallAt(scanCol, row + 1);
+        wallAt(scanCol, bottom);
+      }
+      for (let scanRow = row + 2; scanRow < bottom; scanRow += 1) {
+        wallAt(col, scanRow);
+        wallAt(right, scanRow);
       }
     }
     for (const prop of layout.props) {
@@ -696,6 +976,62 @@ export class OfficeScene {
         },
         sortY: desk.chairTile.row * OFFICE_TILE,
       });
+      // The plate and its logo share the desk's sort key for the same reason
+      // the monitor does: they are ON the desk, drawn above its own top edge.
+      const plateX = deskX + NAMEPLATE_X_OFFSET;
+      const plateY = deskY + NAMEPLATE_Y_OFFSET;
+      sorted.push({
+        drawable: {
+          kind: "sprite",
+          sprite: { name: "nameplate" },
+          x: plateX,
+          y: plateY,
+        },
+        sortY: deskY,
+      });
+      const agent = this.agentById.get(desk.agentId);
+      // The scene places the logo and never sees the icon; a record that
+      // carries no harness simply has an empty plate.
+      if (agent !== undefined && agent.harnessId !== null) {
+        sorted.push({
+          drawable: {
+            kind: "logo",
+            harnessId: agent.harnessId,
+            x: deskX + LOGO_X_OFFSET,
+            y: deskY + LOGO_Y_OFFSET,
+            alpha:
+              this.statusOf(desk.agentId) === "archived"
+                ? ARCHIVED_ALPHA
+                : undefined,
+          },
+          sortY: deskY,
+        });
+      }
+    }
+    for (const room of this.currentLayout.rooms) {
+      const signX = room.signTile.col * OFFICE_TILE;
+      const signY = spriteFootY({ name: "sign" }, room.signTile.row);
+      sorted.push({
+        drawable: {
+          kind: "sprite",
+          sprite: { name: "sign" },
+          x: signX,
+          y: signY,
+        },
+        sortY: room.signTile.row * OFFICE_TILE,
+      });
+      sorted.push({
+        drawable: {
+          kind: "label",
+          text: truncate(room.name, MAX_ROOM_LABEL_CHARS),
+          x: signX + (SIGN_WIDTH_TILES * OFFICE_TILE) / 2,
+          y: signY + SIGN_LABEL_BASELINE,
+          // The sign's field is dark in both themes, so the name is written on
+          // it rather than in the floor's own text colour.
+          tone: "bright",
+        },
+        sortY: room.signTile.row * OFFICE_TILE,
+      });
     }
     for (const prop of this.currentLayout.props) {
       if (prop.sprite.name === "rug") continue;
@@ -718,7 +1054,23 @@ export class OfficeScene {
   }
 
   private monitorSpriteFor(agentId: string): OfficeSpriteName {
-    return this.statusOf(agentId) === "archived" ? "monitor-off" : "monitor-on";
+    const status = this.statusOf(agentId);
+    if (status === "archived") return "monitor-off";
+    if (status === "working") {
+      return this.screenFrame(agentId, MONITOR_WORKING_FRAME_MS);
+    }
+    if (status === "background") {
+      return this.screenFrame(agentId, MONITOR_BACKGROUND_FRAME_MS);
+    }
+    return "monitor-on";
+  }
+
+  /** Shares the typing phase offset, so a screen and its typist agree. */
+  private screenFrame(agentId: string, frameMs: number): OfficeSpriteName {
+    const phase = this.nowMs + phaseOffsetMs(agentId);
+    return Math.floor(phase / frameMs) % 2 === 0
+      ? "monitor-on"
+      : "monitor-on-b";
   }
 
   private monitorAlphaFor(agentId: string): number | undefined {
@@ -752,7 +1104,7 @@ export class OfficeScene {
       });
       actors.push({
         kind: "label",
-        text: truncateLabel(agent.name),
+        text: truncate(agent.name, MAX_LABEL_CHARS),
         x: x + OFFICE_CHARACTER_WIDTH / 2,
         y: y + OFFICE_CHARACTER_HEIGHT + LABEL_GAP,
         tone: archived ? "muted" : "default",
@@ -804,6 +1156,7 @@ export class OfficeScene {
           ENVELOPE_ARC_LIFT * 4 * progress * (1 - progress),
         pulseKind: envelope.pulseKind,
         progress,
+        edgeId: envelope.edgeId,
       });
     }
     return overlay;

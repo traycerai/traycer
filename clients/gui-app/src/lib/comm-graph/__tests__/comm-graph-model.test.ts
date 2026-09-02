@@ -330,6 +330,7 @@ describe("layoutCommGraphNodes", () => {
       hostId: "host-a",
       parentId,
       harnessId: null,
+      model: null,
       archived: false,
       createdAt,
     };

@@ -10,17 +10,18 @@ import type { SpriteMap } from "@/lib/comm-graph/office/office-sprite-maps";
 // ---- Desk and screen ------------------------------------------------- //
 //
 // Two tiles wide, with the keyboard over the LEFT tile because the chair sits
-// below that tile. The mug on the right half is what keeps a bare desk from
-// reading as an unoccupied slab.
+// below that tile. The mug beside the keyboard is what keeps a bare desk from
+// reading as an unoccupied slab; it stays on the LEFT half because the right
+// half carries the nameplate and the harness logo drawn over it.
 
 export const DESK_MAP: SpriteMap = [
   "OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO",
   "OwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwO",
   "OwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwO",
   "OwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwO",
-  "OwwwwwwwwwwwwwwwwwwwwwwOOOwwwwwO",
-  "OwwwwwwwwwwwwwwwwwwwwwwObOwwwwwO",
-  "OwwwwwwwwwwwwwwwwwwwwwwOOOwwwwwO",
+  "OwwwOOOwwwwwwwwwwwwwwwwwwwwwwwwO",
+  "OwwwObOwwwwwwwwwwwwwwwwwwwwwwwwO",
+  "OwwwOOOwwwwwwwwwwwwwwwwwwwwwwwwO",
   "OwwOOOOOOOOOOOOOOOOwwwwwwwwwwwwO",
   "OwwOmmmmmmmmmmmmmmOwwwwwwwwwwwwO",
   "OwwOmMmMmMmMmMmMmMOwwwwwwwwwwwwO",
@@ -43,6 +44,26 @@ export const MONITOR_ON_MAP: SpriteMap = [
   "OMccccccccccccMO",
   "OMbbbbbbbbbbccMO",
   "OMccccccccccccMO",
+  "OMMMMMMMMMMMMMMO",
+  ".....OMMMMO.....",
+  "...OMMMMMMMMO...",
+];
+
+/**
+ * The second lit frame. The code lines sit on the rows `MONITOR_ON_MAP` leaves
+ * blank and carry different lengths, so alternating the two frames reads as
+ * text scrolling up rather than as a screen blinking.
+ */
+export const MONITOR_ON_B_MAP: SpriteMap = [
+  "OOOOOOOOOOOOOOOO",
+  "OMMMMMMMMMMMMMMO",
+  "OMbbbbbbccccccMO",
+  "OMccccccccccccMO",
+  "OMbbbbbbbbbbccMO",
+  "OMccccccccccccMO",
+  "OMbbbbbcccccccMO",
+  "OMccccccccccccMO",
+  "OMbbbbbbbbbcccMO",
   "OMMMMMMMMMMMMMMO",
   ".....OMMMMO.....",
   "...OMMMMMMMMO...",
@@ -85,6 +106,77 @@ export const CHAIR_MAP: SpriteMap = [
   "..OO..OOOO..OO..",
   "..OO..OOOO..OO..",
   "................",
+];
+
+// ---- Desk plate, divider and wall sign -------------------------------- //
+
+/**
+ * The plate that stands on the desk's right half. Deliberately featureless: the
+ * renderer draws a 12x12 harness logo over its top edge, so anything engraved
+ * on the face would read as noise behind the logo. What survives the overlay is
+ * the BASE - the dark bevel and the wood shadow on the last two rows - which is
+ * all the plate has to contribute for the logo to look like it is standing on
+ * something.
+ */
+export const NAMEPLATE_MAP: SpriteMap = [
+  ".OOOOOOOOOO.",
+  "OmmmmmmmmmmO",
+  "OmmmmmmmmmmO",
+  "OMMMMMMMMMMO",
+  ".OWWWWWWWWO.",
+  "..OOOOOOOO..",
+];
+
+/**
+ * A frosted divider between two desk clusters in one cabin, seen top-down: a
+ * 4px glass band with a metal foot. The glass is two tones split down the
+ * middle rather than one flat fill, which is what makes a 4px band read as a
+ * pane catching light instead of as a painted stripe.
+ */
+export const PARTITION_MAP: SpriteMap = [
+  ".....OOOOOO.....",
+  ".....OvvVVO.....",
+  ".....OvvVVO.....",
+  ".....OvvVVO.....",
+  ".....OvvVVO.....",
+  ".....OvvVVO.....",
+  ".....OvvVVO.....",
+  ".....OvvVVO.....",
+  ".....OvvVVO.....",
+  ".....OvvVVO.....",
+  ".....OvvVVO.....",
+  ".....OvvVVO.....",
+  "....OMmmmmMO....",
+  "...OMmmmmmmMO...",
+  "...OMMMMMMMMO...",
+  "...OOOOOOOOOO...",
+];
+
+/**
+ * The cabin's wall sign, two tiles wide. The field is one flat ink slab with a
+ * metal frame, because the renderer draws the cabin's name across it as a
+ * label: any pattern inside the frame would fight the text at this size.
+ *
+ * The field is DARK in both themes, so a label drawn on it takes a light color
+ * of its own rather than the palette's theme-following `text`.
+ */
+export const SIGN_MAP: SpriteMap = [
+  "OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO",
+  "OmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmO",
+  "OmOOOOOOOOOOOOOOOOOOOOOOOOOOOOmO",
+  "OmOBBBBBBBBBBBBBBBBBBBBBBBBBBOmO",
+  "OmOBBBBBBBBBBBBBBBBBBBBBBBBBBOmO",
+  "OmOBBBBBBBBBBBBBBBBBBBBBBBBBBOmO",
+  "OmOBBBBBBBBBBBBBBBBBBBBBBBBBBOmO",
+  "OmOBBBBBBBBBBBBBBBBBBBBBBBBBBOmO",
+  "OmOBBBBBBBBBBBBBBBBBBBBBBBBBBOmO",
+  "OmOBBBBBBBBBBBBBBBBBBBBBBBBBBOmO",
+  "OmOBBBBBBBBBBBBBBBBBBBBBBBBBBOmO",
+  "OmOBBBBBBBBBBBBBBBBBBBBBBBBBBOmO",
+  "OmOBBBBBBBBBBBBBBBBBBBBBBBBBBOmO",
+  "OmOOOOOOOOOOOOOOOOOOOOOOOOOOOOmO",
+  "OmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmO",
+  "OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO",
 ];
 
 // ---- Fixtures -------------------------------------------------------- //

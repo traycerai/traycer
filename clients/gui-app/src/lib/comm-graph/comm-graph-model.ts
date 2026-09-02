@@ -11,7 +11,7 @@
  * only has to pass a prefix (`events.filter(e => e.timestamp <= t)`) to get the
  * graph as of `t`; nothing here reads "now".
  */
-import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
+import type { GuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import type { CommGraphEvent } from "@/lib/comm-graph/comm-graph-events";
 
 export type CommGraphAgentKind = "chat" | "terminal-agent";
@@ -40,8 +40,20 @@ export interface CommGraphAgentNode {
    * happened.
    */
   readonly parentId: string | null;
-  /** TUI harness brand, for the node icon. `null` for GUI chats. */
-  readonly harnessId: TuiHarnessId | null;
+  /**
+   * The harness running this agent - a terminal agent's own brand, or a GUI
+   * chat's persisted run setting. `null` when the record carries none, which
+   * for a chat means it has never been given run settings.
+   *
+   * Widened past the terminal-only set deliberately: this is a fact about the
+   * agent, not about the surface it happens to run on, and the office draws it
+   * for both kinds. The node graph's icon does NOT read this - it resolves
+   * through `EpicNodeTabIcon` by node id - so populating it for chats changes
+   * nothing there.
+   */
+  readonly harnessId: GuiHarnessId | null;
+  /** The model slug the record carries, when it has one. Shown on hover only. */
+  readonly model: string | null;
   /** Archived agents are ALWAYS shown, styled muted - the graph is historical. */
   readonly archived: boolean;
   readonly createdAt: number;

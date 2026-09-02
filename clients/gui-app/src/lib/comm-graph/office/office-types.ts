@@ -16,7 +16,7 @@
  * is `OFFICE_TILE` px square. The canvas applies the camera (pan + zoom) on top
  * and never leaks screen pixels back into the scene.
  */
-import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/foundation";
+import type { GuiHarnessId } from "@traycer/protocol/persistence/epic/foundation";
 import type { CommGraphAgentKind } from "@/lib/comm-graph/comm-graph-model";
 import type {
   CommGraphPulse,
@@ -65,7 +65,15 @@ export type OfficeSpriteName =
   | "character"
   | "desk"
   | "monitor-on"
+  /** Second frame of a lit screen; the scene alternates it with `monitor-on` while the agent works. */
+  | "monitor-on-b"
   | "monitor-off"
+  /** Small plate on the desk's right half; the renderer draws the harness logo on it. */
+  | "nameplate"
+  /** Thin glass divider between desk clusters inside one cabin. */
+  | "partition"
+  /** Wall-mounted sign, two tiles wide; the cabin's name is drawn over it as a label. */
+  | "sign"
   | "chair"
   | "plant"
   | "floor-a"
@@ -119,6 +127,14 @@ export interface OfficeRect {
   readonly height: number;
 }
 
+/** A rectangle in whole tiles. */
+export interface OfficeTileRect {
+  readonly col: number;
+  readonly row: number;
+  readonly cols: number;
+  readonly rows: number;
+}
+
 // ---- Layout ---------------------------------------------------------- //
 
 export interface OfficeDesk {
@@ -137,6 +153,22 @@ export interface OfficeProp {
 }
 
 /**
+ * One walled cabin per root agent (an agent with no parent on the floor). Its
+ * whole subtree sits inside, so nesting reads as "who is in whose room".
+ */
+export interface OfficeRoom {
+  readonly rootAgentId: string;
+  /** The root agent's name, drawn on the wall sign. */
+  readonly name: string;
+  /** Outer bounds INCLUDING the cabin's own walls, in tiles. */
+  readonly bounds: OfficeTileRect;
+  /** Walkable gap in the cabin's bottom wall, opening onto the corridor. */
+  readonly doorTile: OfficeTilePos;
+  /** Left tile of the two-tile sign on the cabin's top wall. */
+  readonly signTile: OfficeTilePos;
+}
+
+/**
  * The floor plan for one epic. Pure function of the agent set, recomputed when
  * the set changes and never persisted: a desk is a function of who exists, not
  * a stored coordinate.
@@ -146,7 +178,9 @@ export interface OfficeLayout {
   readonly rows: number;
   /** One desk per agent in the input set, keyed by agent id. */
   readonly desks: ReadonlyMap<string, OfficeDesk>;
-  /** Where characters enter and leave. Always a walkable tile on the boundary wall. */
+  /** One cabin per root agent, in layout order. Empty when there are no agents. */
+  readonly rooms: ReadonlyArray<OfficeRoom>;
+  /** The building entrance: where characters enter and leave. Always a walkable tile on the outer wall. */
   readonly doorTile: OfficeTilePos;
   /** Where a character stands after walking in, before its desk exists. */
   readonly lobbyTile: OfficeTilePos;
@@ -162,7 +196,10 @@ export interface OfficeAgentInput {
   readonly id: string;
   readonly name: string;
   readonly kind: CommGraphAgentKind;
-  readonly harnessId: TuiHarnessId | null;
+  /** The harness running this agent; `null` for a record that carries none. */
+  readonly harnessId: GuiHarnessId | null;
+  /** The model slug, when the record carries one. Shown on hover, never on the floor. */
+  readonly model: string | null;
   readonly parentId: string | null;
   readonly archived: boolean;
   readonly createdAt: number;
@@ -226,7 +263,8 @@ export type OfficeDrawable =
       /** Anchor: horizontally centered on `x`, baseline above `y`. */
       readonly x: number;
       readonly y: number;
-      readonly tone: "default" | "muted";
+      /** `bright` is for text over a surface that is dark in both themes, such as a wall sign. */
+      readonly tone: "default" | "muted" | "bright";
     }
   | {
       readonly kind: "envelope";
@@ -235,12 +273,35 @@ export type OfficeDrawable =
       readonly pulseKind: CommGraphPulseKind;
       /** 0..1 progress along the flight, for the shadow and arc. */
       readonly progress: number;
+      /** The pair edge this message belongs to (`commGraphPairId`), so a click can open its thread. */
+      readonly edgeId: string;
+    }
+  | {
+      /**
+       * A harness logo, drawn by the renderer from the app's own icon set at
+       * 12x12 sprite pixels, CENTER anchored. The scene places it; the scene
+       * never sees the icon.
+       */
+      readonly kind: "logo";
+      readonly harnessId: GuiHarnessId;
+      readonly x: number;
+      readonly y: number;
+      readonly alpha?: number;
     };
 
 export interface OfficeHitRegion {
   readonly agentId: string;
   readonly rect: OfficeRect;
 }
+
+/** An in-flight envelope's clickable box, resolving to its pair edge. */
+export interface OfficeEnvelopeHitRegion {
+  readonly edgeId: string;
+  readonly rect: OfficeRect;
+}
+
+/** The logo sprite's side, in sprite pixels. */
+export const OFFICE_LOGO_SIZE = 12;
 
 /**
  * One rendered frame. Layers are drawn in order; `actors` is already sorted by
@@ -253,6 +314,8 @@ export interface OfficeFrame {
   readonly actors: ReadonlyArray<OfficeDrawable>;
   readonly overlay: ReadonlyArray<OfficeDrawable>;
   readonly hitRegions: ReadonlyArray<OfficeHitRegion>;
+  /** In-flight envelopes, in draw order; checked BEFORE `hitRegions` so a message over a desk wins. */
+  readonly envelopeHitRegions: ReadonlyArray<OfficeEnvelopeHitRegion>;
   /**
    * Where the camera should look while playback is following the action: the
    * sender of the pulsing row, or `null` when nothing is in flight.

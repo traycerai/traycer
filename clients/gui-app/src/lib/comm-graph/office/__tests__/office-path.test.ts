@@ -23,6 +23,7 @@ function agent(id: string, createdAt: number): OfficeAgentInput {
     name: id,
     kind: "chat",
     harnessId: null,
+    model: null,
     parentId: null,
     archived: false,
     createdAt,
@@ -40,6 +41,7 @@ function sealedLayout(): OfficeLayout {
     cols: 3,
     rows: 3,
     desks: new Map(),
+    rooms: [],
     doorTile: { col: 0, row: 0 },
     lobbyTile: { col: 0, row: 0 },
     props: [],
@@ -85,6 +87,28 @@ describe("findOfficePath", () => {
     for (const tile of path) {
       expect(deskTiles.has(`${tile.col},${tile.row}`)).toBe(false);
     }
+  });
+
+  it("enters a cabin only through that cabin's own door", () => {
+    const room = layout.rooms.find(
+      (candidate) => candidate.rootAgentId === "fourth",
+    );
+    const desk = layout.desks.get("fourth");
+    if (room === undefined || desk === undefined) {
+      throw new Error("expected a cabin with a desk");
+    }
+
+    const path = findOfficePath(layout, layout.lobbyTile, desk.chairTile);
+    if (path === null) throw new Error("expected a route into the cabin");
+
+    // The walls are load-bearing for the fiction: a character that could cut
+    // through one would make the nesting meaningless.
+    expect(
+      path.some(
+        (tile) =>
+          tile.col === room.doorTile.col && tile.row === room.doorTile.row,
+      ),
+    ).toBe(true);
   });
 
   it("returns an empty route when the walker is already there", () => {

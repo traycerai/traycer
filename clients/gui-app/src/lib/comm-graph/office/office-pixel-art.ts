@@ -35,9 +35,13 @@ import {
   FLOOR_A_MAP,
   FLOOR_B_MAP,
   MONITOR_OFF_MAP,
+  MONITOR_ON_B_MAP,
   MONITOR_ON_MAP,
+  NAMEPLATE_MAP,
+  PARTITION_MAP,
   PLANT_MAP,
   RUG_MAP,
+  SIGN_MAP,
   SPARKLE_MAP,
   WALL_MAP,
   WALL_TOP_MAP,
@@ -81,6 +85,9 @@ export interface OfficePalette {
   readonly metalDark: string;
   readonly screenLit: string;
   readonly screenDark: string;
+  /** Frosted partition glass; the two tones split one pane down the middle. */
+  readonly glassLight: string;
+  readonly glassDark: string;
   readonly leafLight: string;
   readonly leafDark: string;
   readonly rugBase: string;
@@ -112,6 +119,8 @@ const DARK_PALETTE: OfficePalette = {
   metalDark: "#545c66",
   screenLit: "#2f6f8f",
   screenDark: "#1d2228",
+  glassLight: "#6b8494",
+  glassDark: "#4e626f",
   leafLight: "#4f8f5f",
   leafDark: "#376a45",
   rugBase: "#3a3140",
@@ -140,6 +149,8 @@ const LIGHT_PALETTE: OfficePalette = {
   metalDark: "#8d959e",
   screenLit: "#7fd6ff",
   screenDark: "#c3cad1",
+  glassLight: "#dfeef5",
+  glassDark: "#bcd6e2",
   leafLight: "#6fae72",
   leafDark: "#4a8455",
   rugBase: "#d8c8b4",
@@ -170,6 +181,8 @@ const PALETTE_LETTERS: ReadonlyMap<string, keyof OfficePalette> = new Map([
   ["M", "metalDark"],
   ["c", "screenLit"],
   ["d", "screenDark"],
+  ["v", "glassLight"],
+  ["V", "glassDark"],
   ["g", "leafLight"],
   ["G", "leafDark"],
   ["f", "floorBase"],
@@ -211,7 +224,11 @@ const SPRITE_SIZES: Readonly<Record<OfficeSpriteName, OfficeSize>> = {
   character: { width: 16, height: 20 },
   desk: { width: 32, height: 16 },
   "monitor-on": { width: 16, height: 12 },
+  "monitor-on-b": { width: 16, height: 12 },
   "monitor-off": { width: 16, height: 12 },
+  nameplate: { width: 12, height: 6 },
+  partition: { width: 16, height: 16 },
+  sign: { width: 32, height: 16 },
   chair: { width: 16, height: 16 },
   plant: { width: 16, height: 24 },
   "floor-a": { width: 16, height: 16 },
@@ -236,7 +253,11 @@ const PROP_MAPS: Readonly<Record<OfficeSpriteName, SpriteMap>> = {
   character: [],
   desk: DESK_MAP,
   "monitor-on": MONITOR_ON_MAP,
+  "monitor-on-b": MONITOR_ON_B_MAP,
   "monitor-off": MONITOR_OFF_MAP,
+  nameplate: NAMEPLATE_MAP,
+  partition: PARTITION_MAP,
+  sign: SIGN_MAP,
   chair: CHAIR_MAP,
   plant: PLANT_MAP,
   "floor-a": FLOOR_A_MAP,
@@ -261,7 +282,11 @@ const PROP_MAPS: Readonly<Record<OfficeSpriteName, SpriteMap>> = {
 const PROP_SPRITE_NAMES: ReadonlyArray<OfficeSpriteName> = [
   "desk",
   "monitor-on",
+  "monitor-on-b",
   "monitor-off",
+  "nameplate",
+  "partition",
+  "sign",
   "chair",
   "plant",
   "floor-a",

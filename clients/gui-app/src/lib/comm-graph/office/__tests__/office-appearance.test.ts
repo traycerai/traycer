@@ -1,3 +1,4 @@
+import { guiHarnessIdSchema } from "@traycer/protocol/persistence/epic/foundation";
 import { describe, expect, it } from "vitest";
 import {
   agentAppearance,
@@ -44,6 +45,26 @@ describe("agentAppearance", () => {
 
   it("falls back to the app accent for a chat, which has no harness", () => {
     expect(agentAppearance("a", "chat", null).accent).toBe(OFFICE_CHAT_ACCENT);
+  });
+
+  it("gives every harness the app can run a parsable accent", () => {
+    // A missing entry resolves to `undefined` and paints that agent's
+    // envelopes with nothing at all, which reads as a rendering bug rather
+    // than as a harness nobody assigned a color to.
+    for (const harnessId of guiHarnessIdSchema.options) {
+      const accent = agentAppearance("a", "terminal-agent", harnessId).accent;
+      expect(accent, harnessId).toBe(HARNESS_ACCENT[harnessId]);
+      expect(accent, harnessId).toMatch(/^#[0-9a-f]{6}$/);
+    }
+  });
+
+  it("keeps the accents distinct enough to tell two harnesses apart", () => {
+    // Two harnesses sharing a tint makes the envelope color say nothing. Only
+    // `traycer` may collide, with the chat accent: the same product.
+    const accents = guiHarnessIdSchema.options
+      .filter((harnessId) => harnessId !== "traycer")
+      .map((harnessId) => HARNESS_ACCENT[harnessId]);
+    expect(new Set(accents).size).toBe(accents.length);
   });
 
   it("distributes across every curated list", () => {

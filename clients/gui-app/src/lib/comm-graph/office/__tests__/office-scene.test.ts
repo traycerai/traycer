@@ -34,6 +34,7 @@ function agent(
     name: overrides.id,
     kind: "chat",
     harnessId: null,
+    model: null,
     parentId: null,
     archived: false,
     createdAt: 0,
@@ -142,6 +143,75 @@ function seatedRect(agentId: string): OfficeRect {
   };
 }
 
+type OfficeSpriteDrawable = Extract<OfficeDrawable, { kind: "sprite" }>;
+type OfficeLabelDrawable = Extract<OfficeDrawable, { kind: "label" }>;
+type OfficeLogoDrawable = Extract<OfficeDrawable, { kind: "logo" }>;
+
+function sprites(
+  drawables: ReadonlyArray<OfficeDrawable>,
+  name: OfficeSpriteName,
+): ReadonlyArray<OfficeSpriteDrawable> {
+  const found: OfficeSpriteDrawable[] = [];
+  for (const drawable of drawables) {
+    if (drawable.kind === "sprite" && drawable.sprite.name === name) {
+      found.push(drawable);
+    }
+  }
+  return found;
+}
+
+function labels(
+  drawables: ReadonlyArray<OfficeDrawable>,
+): ReadonlyArray<OfficeLabelDrawable> {
+  const found: OfficeLabelDrawable[] = [];
+  for (const drawable of drawables) {
+    if (drawable.kind === "label") found.push(drawable);
+  }
+  return found;
+}
+
+function logos(
+  drawables: ReadonlyArray<OfficeDrawable>,
+): ReadonlyArray<OfficeLogoDrawable> {
+  const found: OfficeLogoDrawable[] = [];
+  for (const drawable of drawables) {
+    if (drawable.kind === "logo") found.push(drawable);
+  }
+  return found;
+}
+
+const IDLE_CREW: ReadonlyArray<OfficeAgentInput> = [
+  agent({ id: "alpha", createdAt: 1 }),
+  agent({ id: "beta", createdAt: 2 }),
+  agent({ id: "gamma", createdAt: 3 }),
+  agent({ id: "delta", createdAt: 4 }),
+];
+const CREW_IDS: ReadonlySet<string> = new Set(
+  IDLE_CREW.map((person) => person.id),
+);
+
+function crewSeatedRect(agentId: string): OfficeRect {
+  const desk = layoutOffice(IDLE_CREW).desks.get(agentId);
+  if (desk === undefined) throw new Error(`no desk for ${agentId}`);
+  return {
+    x: desk.chairTile.col * OFFICE_TILE,
+    y: desk.chairTile.row * OFFICE_TILE - 4,
+    width: OFFICE_CHARACTER_WIDTH,
+    height: OFFICE_CHARACTER_HEIGHT,
+  };
+}
+
+function crewAway(frame: OfficeFrame): ReadonlyArray<string> {
+  const away: string[] = [];
+  for (const region of frame.hitRegions) {
+    if (region.rect.height !== OFFICE_CHARACTER_HEIGHT) continue;
+    const seated = crewSeatedRect(region.agentId);
+    if (region.rect.x === seated.x && region.rect.y === seated.y) continue;
+    away.push(region.agentId);
+  }
+  return away;
+}
+
 describe("OfficeScene", () => {
   it("seats everyone already on the floor at the first sync", () => {
     const scene = new OfficeScene(layoutOffice);
@@ -173,8 +243,9 @@ describe("OfficeScene", () => {
     expect(entering.x).toBe(door.col * OFFICE_TILE);
     expect(entering.y).toBe(door.row * OFFICE_TILE - 4);
 
-    // Three tiles a second over a short route; two seconds is comfortably past.
-    for (let step = 0; step < 20; step += 1) scene.tick(100);
+    // Three tiles a second, from the entrance through its cabin's own door;
+    // six seconds is comfortably past the longest route on this floor.
+    for (let step = 0; step < 60; step += 1) scene.tick(100);
     expect(characterRect(scene.frame(), "beta")).toEqual(seatedRect("beta"));
   });
 
@@ -390,6 +461,257 @@ describe("OfficeScene", () => {
     expect(rug.x + size.width / 2).toBe(
       layout.lobbyTile.col * OFFICE_TILE + OFFICE_TILE / 2,
     );
+  });
+
+  it("walls every cabin and writes its name across the sign", () => {
+    const family = [
+      agent({ id: "alpha", name: "an extremely long room name", createdAt: 1 }),
+      agent({ id: "beta", parentId: "alpha", createdAt: 2 }),
+    ];
+    const scene = new OfficeScene(layoutOffice);
+    scene.sync(sceneInput({ agents: family, visibleAgentIds: BOTH }));
+
+    const frame = scene.frame();
+    const room = scene.layout().rooms[0];
+    expect(room).toBeDefined();
+
+    // The cabin's structure belongs to the floor, under everything that stands
+    // on it - and its corners must actually be capped.
+    const wallTops = sprites(frame.floor, "wall-top");
+    expect(
+      wallTops.some(
+        (drawable) =>
+          drawable.x === room.bounds.col * OFFICE_TILE &&
+          drawable.y === room.bounds.row * OFFICE_TILE,
+      ),
+    ).toBe(true);
+    // A cabin door is drawn as a door, not as more wall.
+    const doors = sprites(frame.floor, "door");
+    expect(
+      doors.some(
+        (drawable) =>
+          drawable.x === room.doorTile.col * OFFICE_TILE &&
+          drawable.y === room.doorTile.row * OFFICE_TILE,
+      ),
+    ).toBe(true);
+
+    const sign = sprites(frame.props, "sign")[0];
+    expect(sign).toBeDefined();
+    expect(sign.x).toBe(room.signTile.col * OFFICE_TILE);
+
+    const roomLabel = labels(frame.props)[0];
+    expect(roomLabel).toBeDefined();
+    // Centred on the sign, sitting on its face, and short enough to fit it.
+    expect(roomLabel.x).toBe(
+      sign.x + officeSpriteSize({ name: "sign" }).width / 2,
+    );
+    expect(roomLabel.y).toBeGreaterThan(sign.y);
+    expect(roomLabel.y).toBeLessThan(
+      sign.y + officeSpriteSize({ name: "sign" }).height,
+    );
+    expect(roomLabel.tone).toBe("bright");
+    expect(roomLabel.text.length).toBeLessThanOrEqual(12);
+    expect(roomLabel.text.endsWith("…")).toBe(true);
+  });
+
+  it("plates every desk and badges only the agents that carry a harness", () => {
+    const badged = agent({ id: "alpha", createdAt: 1, harnessId: "traycer" });
+    const scene = new OfficeScene(layoutOffice);
+    scene.sync(sceneInput({ agents: [badged, BETA], visibleAgentIds: BOTH }));
+
+    const frame = scene.frame();
+    expect(sprites(frame.props, "nameplate")).toHaveLength(2);
+
+    const badges = logos(frame.props);
+    expect(badges).toHaveLength(1);
+    expect(badges[0].harnessId).toBe("traycer");
+    expect(badges[0].alpha).toBeUndefined();
+
+    // The plate is on the desk it belongs to, and the badge is on the plate.
+    const desk = scene.layout().desks.get("alpha");
+    if (desk === undefined) throw new Error("expected a desk");
+    const deskX = desk.deskTile.col * OFFICE_TILE;
+    const plate = sprites(frame.props, "nameplate").find(
+      (drawable) => drawable.x >= deskX && drawable.x < deskX + 2 * OFFICE_TILE,
+    );
+    if (plate === undefined) throw new Error("expected a plate on the desk");
+    const plateSize = officeSpriteSize({ name: "nameplate" });
+    expect(badges[0].x).toBe(plate.x + plateSize.width / 2);
+  });
+
+  it("ghosts an archived agent's badge", () => {
+    const badged = agent({
+      id: "alpha",
+      createdAt: 1,
+      harnessId: "traycer",
+      archived: true,
+    });
+    const scene = new OfficeScene(layoutOffice);
+    scene.sync(
+      sceneInput({
+        agents: [badged, BETA],
+        visibleAgentIds: BOTH,
+        statusById: new Map<string, OfficeAgentStatus>([["alpha", "archived"]]),
+      }),
+    );
+
+    expect(logos(scene.frame().props)[0].alpha).toBe(0.45);
+  });
+
+  it("alternates the screen while an agent works and holds it while it does not", () => {
+    const scene = new OfficeScene(layoutOffice);
+    scene.sync(
+      sceneInput({
+        agents: AGENTS,
+        visibleAgentIds: BOTH,
+        statusById: new Map<string, OfficeAgentStatus>([
+          ["alpha", "working"],
+          ["beta", "idle"],
+        ]),
+      }),
+    );
+
+    const screensAt = (): ReadonlyArray<OfficeSpriteName> => {
+      const frame = scene.frame();
+      const lit: OfficeSpriteName[] = [];
+      for (const drawable of frame.props) {
+        if (drawable.kind !== "sprite") continue;
+        if (!drawable.sprite.name.startsWith("monitor-on")) continue;
+        lit.push(drawable.sprite.name);
+      }
+      return lit;
+    };
+
+    const before = screensAt();
+    // One full frame of the working cadence, whatever the per-agent phase
+    // offset happens to be, always lands on the OTHER frame.
+    scene.tick(260);
+    const after = screensAt();
+
+    expect(before).toHaveLength(2);
+    expect(after).toHaveLength(2);
+    // Exactly one of the two desks animates: the one that is in a turn.
+    const changed = before.filter((name, index) => name !== after[index]);
+    expect(changed).toHaveLength(1);
+    expect(new Set([...before, ...after])).toEqual(
+      new Set<OfficeSpriteName>(["monitor-on", "monitor-on-b"]),
+    );
+  });
+
+  it("hands an in-flight envelope its edge and a box to click", () => {
+    const scene = new OfficeScene(layoutOffice);
+    scene.sync(sceneInput({ agents: AGENTS, visibleAgentIds: BOTH }));
+    scene.sync(
+      sceneInput({
+        agents: AGENTS,
+        visibleAgentIds: BOTH,
+        pulse: REQUEST_PULSE,
+        pulseKey: "row-1",
+      }),
+    );
+    scene.tick(300);
+
+    const frame = scene.frame();
+    const flying = envelopes(frame)[0];
+    expect(flying.edgeId).toBe("alpha<->beta");
+    expect(frame.envelopeHitRegions).toHaveLength(1);
+
+    const region = frame.envelopeHitRegions[0];
+    expect(region.edgeId).toBe("alpha<->beta");
+    // The box is centred on the envelope, which is what makes a moving target
+    // clickable at all.
+    expect(region.rect.x + region.rect.width / 2).toBe(flying.x);
+    expect(region.rect.y + region.rect.height / 2).toBe(flying.y);
+    const size = officeSpriteSize({ name: "envelope" });
+    expect(region.rect.width).toBeGreaterThan(size.width);
+    expect(region.rect.height).toBeGreaterThan(size.height);
+
+    expect(scene.hitTestEnvelope({ x: flying.x, y: flying.y })).toBe(
+      "alpha<->beta",
+    );
+    expect(
+      scene.hitTestEnvelope({
+        x: flying.x + region.rect.width,
+        y: flying.y + region.rect.height,
+      }),
+    ).toBeNull();
+
+    // Once it lands there is nothing left to click.
+    scene.tick(400);
+    expect(scene.frame().envelopeHitRegions).toHaveLength(0);
+    expect(scene.hitTestEnvelope({ x: flying.x, y: flying.y })).toBeNull();
+  });
+
+  it("sends a long-idle agent for a coffee, but not before it has been idle", () => {
+    const scene = new OfficeScene(layoutOffice);
+    scene.sync(sceneInput({ agents: IDLE_CREW, visibleAgentIds: CREW_IDS }));
+
+    let firstBreakMs: number | null = null;
+    let mostAtOnce = 0;
+    let elapsedMs = 0;
+    while (elapsedMs < 60_000) {
+      scene.tick(100);
+      elapsedMs += 100;
+      const away = crewAway(scene.frame());
+      if (away.length > 0 && firstBreakMs === null) firstBreakMs = elapsedMs;
+      mostAtOnce = Math.max(mostAtOnce, away.length);
+    }
+
+    // Stillness is the whole trigger, so a break that starts early would be
+    // reporting something the floor has not earned yet.
+    expect(firstBreakMs).not.toBeNull();
+    expect(firstBreakMs).toBeGreaterThanOrEqual(25_000);
+    // ...and a floor where everyone stands up reads as an evacuation. Four
+    // agents all cross the threshold here, so the cap is what holds it at two
+    // rather than the stagger happening to space them out.
+    expect(mostAtOnce).toBe(2);
+  });
+
+  it("never breaks during playback", () => {
+    const scene = new OfficeScene(layoutOffice);
+    scene.sync(
+      sceneInput({
+        agents: IDLE_CREW,
+        visibleAgentIds: CREW_IDS,
+        playing: true,
+      }),
+    );
+
+    // Playback makes every agent idle between its own rows, so a break here
+    // would fire constantly and mean nothing.
+    for (let step = 0; step < 600; step += 1) {
+      scene.tick(100);
+      expect(crewAway(scene.frame())).toEqual([]);
+    }
+  });
+
+  it("sends a wanderer straight back when its status changes", () => {
+    const scene = new OfficeScene(layoutOffice);
+    const idle = sceneInput({
+      agents: IDLE_CREW,
+      visibleAgentIds: CREW_IDS,
+    });
+    scene.sync(idle);
+
+    let away: ReadonlyArray<string> = [];
+    for (let step = 0; step < 600 && away.length === 0; step += 1) {
+      scene.tick(100);
+      away = crewAway(scene.frame());
+    }
+    expect(away.length).toBeGreaterThan(0);
+
+    const busy = away[0];
+    scene.sync(
+      sceneInput({
+        agents: IDLE_CREW,
+        visibleAgentIds: CREW_IDS,
+        statusById: new Map<string, OfficeAgentStatus>([[busy, "working"]]),
+      }),
+    );
+    // The walk back is a walk, not a teleport, so give it the tiles it needs.
+    for (let step = 0; step < 200; step += 1) scene.tick(100);
+
+    expect(crewAway(scene.frame())).not.toContain(busy);
   });
 
   it("produces identical frames from an identical sync/tick sequence", () => {
