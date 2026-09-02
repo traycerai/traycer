@@ -203,26 +203,20 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
   const modifier = useTabLeaderModifierForIndex(index);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const liveEpicTitle = useRegisteredEpicTitle(
-    tab.kind === "epic" ? tab.epicId : null,
-  );
-  const titleGenerationPending = useRegisteredEpicTitleGenerating(
-    tab.kind === "epic" ? tab.epicId : null,
-  );
-  const activityStatus = useEpicActivityStatus(
-    tab.kind === "epic" ? tab.epicId : null,
-  );
-  const permissionRole = useRegisteredEpicPermissionRole(
-    tab.kind === "epic" ? tab.epicId : null,
-  );
+  // Every registry read below is keyed by the epic, or by nothing for the
+  // other tab kinds; resolve that once rather than per hook.
+  const registeredEpicId = tab.kind === "epic" ? tab.epicId : null;
+  const liveEpicTitle = useRegisteredEpicTitle(registeredEpicId);
+  const titleGenerationPending =
+    useRegisteredEpicTitleGenerating(registeredEpicId);
+  const activityStatus = useEpicActivityStatus(registeredEpicId);
+  const permissionRole = useRegisteredEpicPermissionRole(registeredEpicId);
   // A cloud-homed epic's rename is a CLOUD write sent over the local-host
   // connection, which does not carry the renderer's verdict - so the role
   // alone is not admission once the session is `unverified`. A local-homed
   // epic renames on this machine's own disk and stays editable. Same rule
   // and exemption as the History rows and the mobile header.
-  const localHome = useRegisteredEpicLocalHome(
-    tab.kind === "epic" ? tab.epicId : null,
-  );
+  const localHome = useRegisteredEpicLocalHome(registeredEpicId);
   const cloudAuthorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
