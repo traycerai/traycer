@@ -741,7 +741,12 @@ async function acquireTransaction(input: {
   readonly pollIntervalMs: number;
   readonly stateDirIdentity: CliInvocationStateDirIdentity;
 }): Promise<HeldTransaction> {
-  const deadline = Date.now() + input.waitMs;
+  // Monotonic, deliberately: this bounds how long a CLI waits behind another
+  // live transaction, and a wall clock stepped backwards mid-wait would keep
+  // a 30-second deadline in the future for as long as the step was. Marker
+  // AGES stay on wall time because they are compared against timestamps
+  // another process persisted.
+  const deadline = performance.now() + input.waitMs;
   let held: HeldTransaction | null = null;
   for (;;) {
     const observed = await observeTransactionMarkers(input.hostHomeDir);
@@ -808,7 +813,7 @@ async function acquireTransaction(input: {
         held = null;
       }
     }
-    if (Date.now() >= deadline) {
+    if (performance.now() >= deadline) {
       if (held !== null) {
         await unlinkIfUnchanged(held.txnPath, held.rawMarker);
       }
@@ -1194,7 +1199,24 @@ async function markStaleAndUnpreferLive(held: HeldTransaction): Promise<void> {
     (await liveRecordMatchesLabel(held.livePath, held.serviceLabel)) ===
     "matching"
   ) {
-    await removeBestEffort(held.livePath);
+    // Identity re-check as the LAST thing before the unlink, after the label
+    // compare, so the window between "this is our record" and "remove it" is
+    // one syscall wide. A swap that lands inside it redirects the unlink to
+    // a sibling environment's record, which is that environment's CACHE of
+    // its OS definition: the cost is one OS re-read there, never a change in
+    // what executes. Stated exactly in the protocol header.
+    try {
+      await assertStateDirUnchanged(
+        held.hostHomeDir,
+        held.stateDirIdentity,
+        held.serviceLabel,
+        held.operation,
+      );
+      await removeBestEffort(held.livePath);
+    } catch {
+      // The directory moved: leave the record where it is. The stale marker
+      // (or the retained transaction marker) already bypasses it.
+    }
   }
   await removeBestEffort(held.stagingPath);
   if (staleWritten) {
