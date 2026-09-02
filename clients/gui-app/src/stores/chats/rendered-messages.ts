@@ -16,7 +16,6 @@ import type {
   ChatQueuedPromptItem,
   ChatRunStatus,
 } from "@traycer/protocol/host/agent/gui/subscribe";
-import { chatImportedMetadataSchema } from "@traycer/protocol/persistence/epic/chat-events";
 import { steeredMessageIdsFromEvents } from "@traycer/protocol/persistence/chat-transcript/steer-lifecycle";
 // The ONE comparator. The host numbers rows with it to build the windowed
 // transcript's skeleton, and this is where those ordinals get drawn - so a
@@ -25,6 +24,7 @@ import { steeredMessageIdsFromEvents } from "@traycer/protocol/persistence/chat-
 import {
   compareCanonicalRowOrder,
   forkedChatLinkRowSource,
+  importedChatMarkerRowSource,
   notificationAnchorRowSource,
 } from "@traycer/protocol/persistence/chat-transcript/row-order";
 // Identity of the assistant turn a record contributes to (records sharing a key
@@ -44,6 +44,7 @@ import {
   assistantTurnNeedsTrailingRow,
   chatTranscriptEventRowId,
   forkedChatLinkRowId,
+  importedChatMarkerRowId,
   nestedSteeredMessageIds,
   planAssistantTurnRows,
   queueSteerRowId,
@@ -1517,18 +1518,19 @@ function pinImportedChatMarkers(
 /**
  * Project a `chat.imported` event into the transcript's provenance row.
  *
- * Parsed through the schema rather than read field by field: the metadata bag
- * is untyped on the wire, and a half-written one should produce no row at all
- * rather than a row that says "Imported from undefined".
+ * Filtered and identified THROUGH the projection's own helpers: the host
+ * numbers this row's ordinal from `importedChatMarkerRowSource`, and a row that
+ * existed here but not there is exactly what the windowed transcript used to
+ * lose - an event no row needs is never served on reopen (spec
+ * `session-import.md` §8e).
  */
 function buildImportedChatMarkerMessages(
   events: ReadonlyArray<ChatEvent>,
 ): ReadonlyArray<ChatMessageModel> {
   return events.flatMap((event) => {
-    if (event.type !== "chat.imported") return [];
-    const parsed = chatImportedMetadataSchema.safeParse(event.metadata);
-    if (!parsed.success) return [];
-    const id = `imported-chat-marker:${event.eventId}`;
+    const source = importedChatMarkerRowSource(event);
+    if (source === null) return [];
+    const id = importedChatMarkerRowId(event.eventId);
     return [
       {
         id,
@@ -1538,9 +1540,9 @@ function buildImportedChatMarkerMessages(
           {
             id: `${id}:marker`,
             kind: "imported-chat-marker",
-            sourceProvider: parsed.data.sourceProvider,
-            importedAt: parsed.data.importedAt,
-            sourceCwd: parsed.data.sourceCwd,
+            sourceProvider: source.sourceProvider,
+            importedAt: source.importedAt,
+            sourceCwd: source.sourceCwd,
           },
         ],
         structuredContent: null,
