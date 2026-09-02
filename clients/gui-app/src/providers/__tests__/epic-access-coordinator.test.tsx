@@ -25,7 +25,6 @@ import {
   markEpicCreatedThisSession,
 } from "@/lib/epics/session-created-epics";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
-import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
   openStoreForTest,
   type OpenedStoreForTest,
@@ -40,6 +39,12 @@ import { useTabsStore } from "@/stores/tabs/store";
 import { flattenLayoutRefs } from "@/stores/tabs/layout";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import type { TabRef } from "@/stores/tabs/types";
+import {
+  createEpicSessionFixture,
+  type EpicSessionFixture,
+} from "./epic-session-fixture";
+
+let accessFixture: EpicSessionFixture | null = null;
 
 const { toastInfo } = vi.hoisted(() => ({ toastInfo: vi.fn() }));
 vi.mock("sonner", () => ({ toast: { info: toastInfo } }));
@@ -58,26 +63,17 @@ const TEST_SETTINGS: ChatRunSettings = {
 // HOST clearing, not host scoping itself, so any single consistent id works.
 const TEST_HOST_ID = "host-1";
 
-const fakeFactory: EpicStreamClientFactory = () => ({
-  applyUpdate: () => {},
-  awareness: () => {},
-  applyArtifactRoomUpdate: () => {},
-  artifactRoomAwareness: () => {},
-  retryMigration: () => {},
-  close: () => {},
-});
-
 function registerSession(epicId: string): OpenedStoreForTest {
+  if (accessFixture === null) {
+    throw new Error("expected the access-coordinator fixture");
+  }
   const handle = openStoreForTest({
     epicId: epicId,
     userId: null,
     // The factories go to the COMPOSITION now: the store stopped
     // constructing a runtime, so a `streamClientFactory` has nowhere
     // else to go.
-    factories: {
-      streamClientFactory: fakeFactory,
-      laneSelection: null,
-    },
+    factories: accessFixture.factories,
     writeCommand: null,
   });
   __getOpenEpicRegistryForTests().acquire(epicId, () => handle);
@@ -208,6 +204,7 @@ describe("EpicAccessCoordinator", () => {
     __getOpenEpicRegistryForTests().disposeAll();
     clearSessionCreatedEpics();
     toastInfo.mockClear();
+    accessFixture = createEpicSessionFixture("legacy");
   });
 
   afterEach(() => {
@@ -218,6 +215,8 @@ describe("EpicAccessCoordinator", () => {
     useTabsStore.setState(useTabsStore.getInitialState(), true);
     useComposerRunSettingsStore.getState().resetForTests();
     clearSessionCreatedEpics();
+    accessFixture?.dispose();
+    accessFixture = null;
     vi.restoreAllMocks();
   });
 
@@ -782,7 +781,7 @@ describe("EpicAccessCoordinator", () => {
   it("does not grace a replica that holds unsynced work (isDirty)", async () => {
     markEpicCreatedThisSession("epic-1", "host-x");
     const handle = registerSession("epic-1");
-    // Explicit, not incidental: a freshly built handle from `fakeFactory`
+    // Explicit, not incidental: a freshly built handle from the legacy fixture
     // starts clean, so this is what actually exercises the guard rather than
     // some setup side effect.
     handle.store.setState({ isDirty: true, unsyncedQueueSize: 0 });
