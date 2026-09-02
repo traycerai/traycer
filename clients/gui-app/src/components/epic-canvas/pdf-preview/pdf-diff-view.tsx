@@ -12,6 +12,7 @@
  */
 import { useCallback, useMemo, type ReactNode } from "react";
 import { useDraggable } from "@dnd-kit/core";
+import type { GitFileStatus } from "@traycer/protocol/host";
 import { ExternalLink, FileTextIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
@@ -35,6 +36,8 @@ export interface PdfDiffViewProps {
   readonly runningDir: string;
   readonly filePath: string;
   readonly previousPath: string | null;
+  /** Git's own verdict from `GitChangedFile.status` - see `statusSummary`. */
+  readonly status: GitFileStatus;
   /** From `gitImageDiffSides`; `null` = the side does not exist. */
   readonly oldStage: "staged" | "unstaged" | null;
   readonly newStage: "staged" | "unstaged" | null;
@@ -42,13 +45,36 @@ export interface PdfDiffViewProps {
   readonly sizeBytes: number | null;
 }
 
-function statusLabel(props: PdfDiffViewProps): string {
-  if (props.oldStage === null) return "Added";
-  if (props.newStage === null) return "Deleted";
-  if (props.previousPath !== null && props.previousPath !== props.filePath) {
-    return "Renamed";
+interface PdfDiffStatusSummary {
+  readonly label: string;
+  /** The other path this change names, or `null` when it names none. */
+  readonly sourcePath: string | null;
+}
+
+/**
+ * What the block says this change IS.
+ *
+ * Presence of a side comes first because it is the strongest fact the diff
+ * surface has, and it is what decides whether there is anything to open.
+ * Beyond that, git's OWN status decides - not a path comparison: a COPY
+ * carries a `previousPath` and two live sides exactly like a rename, so
+ * inferring from the paths alone labels it "Renamed" and tells the reader
+ * the source moved when it is still sitting there.
+ */
+function statusSummary(props: PdfDiffViewProps): PdfDiffStatusSummary {
+  if (props.oldStage === null) return { label: "Added", sourcePath: null };
+  if (props.newStage === null) return { label: "Deleted", sourcePath: null };
+  const distinctSource =
+    props.previousPath !== null && props.previousPath !== props.filePath
+      ? props.previousPath
+      : null;
+  if (props.status === "copied") {
+    return { label: "Copied", sourcePath: distinctSource };
   }
-  return "Modified";
+  if (distinctSource !== null) {
+    return { label: "Renamed", sourcePath: distinctSource };
+  }
+  return { label: "Modified", sourcePath: null };
 }
 
 export function PdfDiffView(props: PdfDiffViewProps): ReactNode {
@@ -112,7 +138,7 @@ export function PdfDiffView(props: PdfDiffViewProps): ReactNode {
     props.viewTabId,
   ]);
 
-  const label = statusLabel(props);
+  const status = statusSummary(props);
   const sizeSuffix =
     props.newStage !== null && props.sizeBytes !== null
       ? ` · ${formatByteSize(props.sizeBytes)}`
@@ -128,13 +154,13 @@ export function PdfDiffView(props: PdfDiffViewProps): ReactNode {
         <StartTruncatedText className="max-w-full text-ui-sm">
           {displayPath}
         </StartTruncatedText>
-        {label === "Renamed" && props.previousPath !== null ? (
+        {status.sourcePath !== null ? (
           <StartTruncatedText className="max-w-full text-ui-xs text-muted-foreground">
-            {`from ${props.previousPath}`}
+            {`from ${status.sourcePath}`}
           </StartTruncatedText>
         ) : null}
         <span className="text-ui-xs text-muted-foreground">
-          {label}
+          {status.label}
           {sizeSuffix}
         </span>
         {openRef !== null ? (

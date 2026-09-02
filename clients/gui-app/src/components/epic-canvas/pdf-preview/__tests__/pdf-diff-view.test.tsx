@@ -7,6 +7,7 @@
  */
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import type { GitFileStatus } from "@traycer/protocol/host";
 
 const state = vi.hoisted(
   (): {
@@ -42,6 +43,7 @@ import { PdfDiffView } from "../pdf-diff-view";
 function renderView(overrides: {
   readonly filePath?: string;
   readonly previousPath?: string | null;
+  readonly status?: GitFileStatus;
   readonly oldStage?: "staged" | "unstaged" | null;
   readonly newStage?: "staged" | "unstaged" | null;
   readonly sizeBytes?: number | null;
@@ -53,6 +55,7 @@ function renderView(overrides: {
       runningDir="/work/repo"
       filePath={overrides.filePath ?? "docs/report.pdf"}
       previousPath={overrides.previousPath ?? null}
+      status={overrides.status ?? "modified"}
       oldStage={
         overrides.oldStage === undefined ? "unstaged" : overrides.oldStage
       }
@@ -113,10 +116,21 @@ describe("PdfDiffView", () => {
   });
 
   it("shows the old path for a rename", () => {
-    renderView({ previousPath: "docs/old-report.pdf" });
+    renderView({ previousPath: "docs/old-report.pdf", status: "renamed" });
 
     expect(screen.getByText("Renamed · 2.0 KiB")).toBeTruthy();
     expect(screen.getByText("from docs/old-report.pdf")).toBeTruthy();
+  });
+
+  // A copy is shaped exactly like a rename here - two live sides and a
+  // distinct `previousPath` - so inferring the label from the paths called
+  // it "Renamed" and told the reader a file that is still on disk had moved.
+  // Git's own status is the only thing that separates the two.
+  it("labels a copied PDF Copied, keeping its source path", () => {
+    renderView({ previousPath: "docs/template.pdf", status: "copied" });
+
+    expect(screen.getByText("Copied · 2.0 KiB")).toBeTruthy();
+    expect(screen.getByText("from docs/template.pdf")).toBeTruthy();
   });
 
   it("headlines the deleted (old) path when only the old side exists", () => {

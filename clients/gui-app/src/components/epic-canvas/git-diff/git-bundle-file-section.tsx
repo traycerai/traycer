@@ -218,6 +218,7 @@ function BundleFileSectionBody(props: BundleFileSectionBodyProps): ReactNode {
         runningDir={props.node.diff.runningDir}
         filePath={props.file.path}
         previousPath={props.file.previousPath}
+        status={props.file.status}
         oldStage={sides.oldStage}
         newStage={sides.newStage}
         sizeBytes={props.file.sizeBytes}

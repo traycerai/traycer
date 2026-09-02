@@ -26,6 +26,7 @@ import { useSnapshotResolveCumulativeDiffs } from "@/hooks/snapshots/use-snapsho
 import {
   accumulatedSummarySetComplete,
   hostAccumulatedChangeRows,
+  type AccumulatedChangeRow,
 } from "@/lib/chat/accumulated-change-rows";
 import {
   isWindowedTranscript,
@@ -326,7 +327,12 @@ function SnapshotDiffTileResolved(props: {
     });
   }, [node.diff, node.id, settledCapture, updatePayload, viewTabId]);
 
-  const pdfFilePath = snapshotTilePdfPath(node.diff, segmentHashes);
+  const pdfFilePath = snapshotTilePdfPath({
+    diff: node.diff,
+    segmentHashes,
+    hostRows,
+    hostRowsComplete,
+  });
   const tileIsPdf = pdfFilePath !== null;
 
   const segmentQuery = useSnapshotDiffQuery({
@@ -569,14 +575,32 @@ function SnapshotDiffFindRegistration(props: {
  * into the generic source-unavailable banner instead of the PDF copy - and
  * an ASCII one would download and render source the tile must not show as
  * a diff. Bundles decide per row (`SnapshotBundleDiffTileContent`).
+ *
+ * EXISTENCE is the one thing path alone cannot answer. A cumulative tile
+ * reads the LIVE accumulated set, where a path can leave (reverted, or
+ * edited back to its original) after the tile was opened; every other kind
+ * of file then falls to the source-unavailable banner. Short-circuiting on
+ * extension would exempt PDFs from that and keep presenting a row that is
+ * gone as one whose diff is merely not shown. Absence only counts once the
+ * set is COMPLETE - in a delivered prefix it means "not arrived yet"
+ * (`hostRowsComplete`) - and falling through costs no fetch, because a path
+ * with no row has nothing fetchable in the first place.
  */
-function snapshotTilePdfPath(
-  diff: SnapshotDiffTilePayload,
-  segmentHashes: { readonly filePath: string } | null,
-): string | null {
+function snapshotTilePdfPath(args: {
+  readonly diff: SnapshotDiffTilePayload;
+  readonly segmentHashes: { readonly filePath: string } | null;
+  readonly hostRows: ReadonlyArray<AccumulatedChangeRow>;
+  readonly hostRowsComplete: boolean;
+}): string | null {
+  const { diff } = args;
   if (diff.kind === "snapshot-cumulative-bundle") return null;
-  const filePath = segmentHashes?.filePath ?? diff.filePath;
-  return isPdfAssetPath(filePath) ? filePath : null;
+  const filePath = args.segmentHashes?.filePath ?? diff.filePath;
+  if (!isPdfAssetPath(filePath)) return null;
+  if (diff.kind === "snapshot-cumulative" && args.hostRowsComplete) {
+    const present = args.hostRows.some((row) => row.filePath === filePath);
+    if (!present) return null;
+  }
+  return filePath;
 }
 
 function snapshotDiffMetadataUnits(args: {

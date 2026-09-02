@@ -648,6 +648,7 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
           runningDir={props.node.diff.runningDir}
           filePath={props.file.path}
           previousPath={props.file.previousPath}
+          status={props.file.status}
           oldStage={sides.oldStage}
           newStage={sides.newStage}
           sizeBytes={props.file.sizeBytes}
@@ -755,15 +756,25 @@ function useGitImageDiffRouting(file: GitChangedFile): {
 } {
   const { routeToImageDiff, isSvg } = gitImageDiffRouting(file);
   const [viewAsSource, setViewAsSource] = useState(false);
-  const showImageDiff = routeToImageDiff && !(isSvg && viewAsSource);
-  const svgToggle = isSvg ? (
-    <DiffTabHeaderPortal>
-      <SvgViewToggleButton
-        switchTo={showImageDiff ? "source" : "image"}
-        onClick={() => setViewAsSource((current) => !current)}
-      />
-    </DiffTabHeaderPortal>
-  ) : null;
+  // Only offer Source where a source view actually exists. The text diff is
+  // never fetched for a file git calls binary (`queryEnabled` below), so on
+  // a binary row picking Source dropped the tile onto the bare binary
+  // placeholder: a dead end for a binary `.svg`, and worse for a rename
+  // straddling the allowlists (`old.svg -> new.pdf` with a NUL byte), where
+  // it also gave up the side-by-side view that names the PDF side. Gating
+  // the toggle keeps such a row on the view that can render it.
+  const sourceViewAvailable = !file.isBinary;
+  const showImageDiff =
+    routeToImageDiff && !(isSvg && sourceViewAvailable && viewAsSource);
+  const svgToggle =
+    isSvg && sourceViewAvailable ? (
+      <DiffTabHeaderPortal>
+        <SvgViewToggleButton
+          switchTo={showImageDiff ? "source" : "image"}
+          onClick={() => setViewAsSource((current) => !current)}
+        />
+      </DiffTabHeaderPortal>
+    ) : null;
   return { routeToImageDiff, showImageDiff, svgToggle };
 }
 

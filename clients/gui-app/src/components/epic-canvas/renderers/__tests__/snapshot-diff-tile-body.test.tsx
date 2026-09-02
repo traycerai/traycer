@@ -222,6 +222,23 @@ function cumulativeChange(
   };
 }
 
+/**
+ * A row for a file the snapshot could not capture - what a binary PDF's
+ * accumulated change actually looks like: it is IN the set (the agent did
+ * change it), with no before/after to show.
+ */
+function binaryCumulativeChange(filePath: string): ChatAccumulatedFileChange {
+  return {
+    filePath,
+    operation: "edit",
+    diffSource: "none",
+    beforeContent: null,
+    afterContent: null,
+    reason: "binary",
+    undoable: true,
+  };
+}
+
 function renderSnapshotTile(node: SnapshotDiffTileRef): void {
   // The tile is a Query consumer on every path now: hash-backed tiles fetch by
   // content hash and cumulative ones fetch by accumulated-change digest (D7).
@@ -472,6 +489,9 @@ describe("<SnapshotDiffTileBody />", () => {
   // a binary PDF's blobs were never captured, so letting it run would only
   // waste a fetch for a reason the client already knows from the extension.
   it("renders the PDF copy and short-circuits the cumulative resolver for a PDF filePath", () => {
+    state.handle?.store.setState({
+      accumulatedFileChanges: [binaryCumulativeChange("docs/report.pdf")],
+    });
     const node = makeSnapshotCumulativeDiffTile({
       hostId: "host-1",
       chatId: "chat-1",
@@ -487,6 +507,33 @@ describe("<SnapshotDiffTileBody />", () => {
     expect(state.cumulativeResolveCalls).toHaveBeenCalledWith(
       expect.objectContaining({ enabled: false }),
     );
+  });
+
+  // Extension decides the RENDERING; it must not decide EXISTENCE. A
+  // cumulative tile reads the live accumulated set, so a path reverted out
+  // of it after the tile was opened is gone - and every other file type says
+  // so. Short-circuiting on `.pdf` alone exempted PDFs from that and left a
+  // dead row claiming its diff was merely not shown (and indexed its stale
+  // path into Find). Falling through costs no fetch: a path with no row has
+  // nothing fetchable.
+  it("falls through to source-unavailable for a cumulative PDF reverted out of a complete set", () => {
+    state.handle?.store.setState({
+      accumulatedFileChanges: [
+        cumulativeChange("src/a.ts", "const a = 1;\n", "const a = 2;\n"),
+      ],
+    });
+    const node = makeSnapshotCumulativeDiffTile({
+      hostId: "host-1",
+      chatId: "chat-1",
+      filePath: "docs/report.pdf",
+    });
+
+    renderSnapshotTile(node);
+
+    expect(
+      screen.getByTestId(`snapshot-diff-unavailable-${node.id}`),
+    ).toBeTruthy();
+    expect(screen.queryByText(PDF_FILE_DIFF_COPY)).toBeNull();
   });
 
   // The PDF branch is terminal like every other branch, but it must still

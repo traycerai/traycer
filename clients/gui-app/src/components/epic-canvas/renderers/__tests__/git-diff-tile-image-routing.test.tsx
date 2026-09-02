@@ -733,6 +733,36 @@ describe("<GitDiffTile /> image routing", () => {
     expect(screen.queryByTestId("pdf-diff-block")).toBeNull();
   });
 
+  it("offers no source toggle for a BINARY svg -> pdf rename, keeping the side-by-side view", () => {
+    // The same straddling rename as above, but git calls it binary (a PDF
+    // with a NUL byte - the ordinary case). The text diff is never fetched
+    // for a binary row, so a Source toggle here could only drop the tile
+    // onto the bare binary placeholder, losing the one view that names both
+    // sides. The toggle is therefore not offered at all.
+    const changed = changedFile({
+      path: "assets/new.pdf",
+      previousPath: "assets/old.svg",
+      status: "renamed",
+      isBinary: true,
+    });
+
+    renderTile(changed);
+
+    // An image side at all means the side-by-side surface, not the
+    // tile-level binary fallback (which renders neither side).
+    expect(screen.getAllByTestId("image-preview-side")).toHaveLength(1);
+    expect(screen.getByText("PDF diffs aren't previewed.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "View source" })).toBeNull();
+    expect(state.editableCalls.at(-1)?.queryEnabled).toBe(false);
+  });
+
+  it("offers no source toggle for a binary .svg, whose text diff is never fetched", () => {
+    renderTile(changedFile({ path: "assets/icon.svg", isBinary: true }));
+
+    expect(screen.getAllByTestId("image-preview-side")).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: "View source" })).toBeNull();
+  });
+
   it("routes an ASCII-authored .pdf row to the compact PDF block and skips the text diff query", () => {
     const changed = changedFile({
       path: "docs/report.pdf",
