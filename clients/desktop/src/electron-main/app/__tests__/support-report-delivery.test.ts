@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, statSync, utimesSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -1391,10 +1391,14 @@ describe("DesktopSupportService.saveDiagnosticBundle", () => {
     expect(raw).not.toContain("secret-screen.png");
     expect(raw).not.toContain("image/png");
   });
-  it("writes the bundle owner-only and erases the previous one", async () => {
+  it("writes the bundle owner-only and keeps a bundle saved moments ago", async () => {
     // The bundle lands in a shared `/tmp` holding the desktop and host log
     // tails and the browser trace, and every save used to leave its own
     // directory behind for the lifetime of the machine's `/tmp`.
+    //
+    // The sweep is age-bounded, though: a bundle is REVEALED to the user so
+    // they can attach it to a ticket, so saving a second one must not pull the
+    // first out from under an open file manager window.
     const service = buildService(null);
     await service.freezeEvidence(KEY, null);
 
@@ -1403,8 +1407,7 @@ describe("DesktopSupportService.saveDiagnosticBundle", () => {
 
     const second = await service.saveDiagnosticBundle(FORM, KEY);
     expect(second.path).not.toBe(first.path);
-    expect(existsSync(first.path)).toBe(false);
-    expect(existsSync(dirname(first.path))).toBe(false);
+    expect(existsSync(first.path)).toBe(true);
     expect(existsSync(second.path)).toBe(true);
   });
 
@@ -1414,6 +1417,10 @@ describe("DesktopSupportService.saveDiagnosticBundle", () => {
     // orphaned another bundle in `/tmp` forever.
     const orphan = await mkdtemp(join(tmpdir(), "traycer-diagnostic-bundle-"));
     await writeFile(join(orphan, "report.json"), "{}", "utf8");
+    // Aged past the retention window, which is what makes it an ORPHAN rather
+    // than a bundle the user is still holding on to.
+    const stale = new Date(Date.now() - 25 * 60 * 60_000);
+    utimesSync(orphan, stale, stale);
 
     const service = buildService(null);
     await service.freezeEvidence(KEY, null);

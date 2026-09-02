@@ -727,7 +727,14 @@ describe("BrowserCookieChangeObserver witnessed-removal hardening", () => {
     // the evidence ticket 07's live pass needs to decide whether boot cleanup
     // ever announces itself outside `expired`/`evicted` - the one open
     // question keeping this window alive.
+    // The DOMAIN is browsing history and this log lands in the support bundle,
+    // so it stays on the debug line; the INFO line carries the counted reason
+    // and nothing that names a site.
     expect(log.info).toHaveBeenCalledWith(
+      "[browser-view] withheld cookie removals from a delta",
+      { reason: "grace-window", cause: "explicit", removals: 4 },
+    );
+    expect(log.debug).toHaveBeenCalledWith(
       "[browser-view] withheld cookie removals from a delta",
       {
         domain: "github.com",
@@ -764,6 +771,10 @@ describe("BrowserCookieChangeObserver witnessed-removal hardening", () => {
     expect(deltas[0]?.removedKeys).toEqual([]);
     expect(deltas[0]?.cookies.map((cookie) => cookie.name)).toEqual(["prefs"]);
     expect(log.info).toHaveBeenCalledWith(
+      "[browser-view] withheld cookie removals from a delta",
+      { reason: "housekeeping-cause", cause: "evicted", removals: 1 },
+    );
+    expect(log.debug).toHaveBeenCalledWith(
       "[browser-view] withheld cookie removals from a delta",
       {
         domain: "github.com",

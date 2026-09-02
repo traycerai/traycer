@@ -560,11 +560,20 @@ function traceSuppressedRemovals(
   }
   const message = "[browser-view] withheld cookie removals from a delta";
   for (const { reason, cause, removals } of tallies.values()) {
+    // The DOMAIN is browsing history, and this file's log lands in the support
+    // bundle: `SENSITIVE_KEY_PATTERN` does not match `domain` and
+    // `redactSensitiveText` scrubs credentials rather than host names, so an
+    // INFO line naming it persists which sites the user visited. It stays on
+    // the debug line, where a forensic pass reads it, and the INFO line
+    // carries only the counted reason.
     const fields = sanitizeLogFields({ domain, reason, cause, removals });
     // Called rather than extracted: `log` is electron-log's own object and its
     // methods are not free functions.
     if (reason === "session-cookie") log.debug(message, fields);
-    else log.info(message, fields);
+    else {
+      log.debug(message, fields);
+      log.info(message, sanitizeLogFields({ reason, cause, removals }));
+    }
   }
 }
 

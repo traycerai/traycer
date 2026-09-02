@@ -5,6 +5,7 @@ import {
   mkdir,
   mkdtemp,
   readdir,
+  stat,
   readFile,
   rm,
   writeFile,
@@ -48,6 +49,13 @@ import {
   REPORT_LOG_TAIL_MAX_BYTES,
   reportImageMediaTypeForMimeType,
 } from "@traycer-clients/shared/support/image-attachment-guards";
+
+/**
+ * How long a saved diagnostic bundle survives a later save. Long enough that a
+ * user who saved one, opened the file manager, and then saved another still
+ * has the first: the bundle is revealed for them to attach somewhere.
+ */
+const DIAGNOSTIC_BUNDLE_RETENTION_MS = 60 * 60_000;
 
 const LOG_TAIL_LINES = 500;
 // Per attachment. Two logs stay well inside Sentry's envelope limits, and the
@@ -703,27 +711,38 @@ export class DesktopSupportService {
   }
 
   /**
-   * Removes every `traycer-diagnostic-bundle-*` directory in the temp dir
-   * except `keep`, whoever created it and whenever.
+   * Removes `traycer-diagnostic-bundle-*` directories in the temp dir, except
+   * `keep` and any written within {@link DIAGNOSTIC_BUNDLE_RETENTION_MS}.
    *
-   * Best-effort throughout: another user may own an entry we cannot remove,
-   * the temp dir may not be listable, and a failed cleanup must never fail
-   * the save it is part of.
+   * The age threshold is what makes this a sweep rather than a delete: a bundle
+   * is REVEALED to the user so they can attach it to an email or a ticket, so
+   * saving a second one while the first is still in an open file manager
+   * window must not pull it out from under them.
+   *
+   * Best-effort throughout: another user may own an entry we cannot remove or
+   * stat, the temp dir may not be listable, and a failed cleanup must never
+   * fail the save it is part of.
    */
   private async removeOtherDiagnosticBundles(keep: string): Promise<void> {
     const root = tmpdir();
     const entries = await readdir(root).catch(() => []);
+    const cutoff = Date.now() - DIAGNOSTIC_BUNDLE_RETENTION_MS;
     await Promise.all(
       entries
         .filter((entry) => entry.startsWith("traycer-diagnostic-bundle-"))
         .map((entry) => join(root, entry))
         .filter((candidate) => candidate !== keep)
-        .map(
-          async (candidate) =>
-            await rm(candidate, { recursive: true, force: true }).catch(
-              () => undefined,
-            ),
-        ),
+        .map(async (candidate) => {
+          // A candidate we cannot stat is left alone: removing it would be
+          // acting on an age nothing established.
+          const modifiedAt = await stat(candidate)
+            .then((stats) => stats.mtimeMs)
+            .catch(() => null);
+          if (modifiedAt === null || modifiedAt > cutoff) return;
+          await rm(candidate, { recursive: true, force: true }).catch(
+            () => undefined,
+          );
+        }),
     );
   }
 
