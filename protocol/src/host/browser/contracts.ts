@@ -922,22 +922,28 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
       // Electron placement is a same-machine optimization, and this field is
       // the sole locality signal it is gated on.
       coLocatedHostId: z.string().nullable(),
-      // There was a `desktopWindowId` here. It is gone: the host's last
-      // reader was retired (lifecycle hand-over now happens only through
-      // `detachBrowserSessionsSubscriber`), and with the jar plane in the
-      // desktop's main process the window a stream belongs to is a fact that
-      // process already holds - it never needed to travel.
+      // The desktop window this stream belongs to, or null off Electron.
       //
-      // The contract's intent for what replaced that reader: native routes
-      // are elected per scope AND window, so one subscriber is one window's
-      // route. Main opens a `browser.sessions` stream per window per key and
-      // never dedupes across windows, which is what makes the subscriber
-      // identity a window identity here. `BrowserTabInfo.boundWindowId` is
-      // the other half of that intent - it names the route a tab is bound to,
-      // so a tile renders "open in your other window" from a fact rather than
-      // from timing. A host that needs to name that route with the DESKTOP's
-      // own window id, rather than with the subscriber id it already has, is
-      // the one thing that would bring this field back.
+      // Native routes are elected per scope AND window: a scope holds one
+      // route per window rather than a single route with the other windows
+      // standing by, so a user-initiated open or `attachTab` lands in the
+      // window that asked. This is the window the host names a route by, and
+      // it is what comes back on `BrowserTabInfo.boundWindowId` as the route
+      // holding a tab's binding - which is how a tile in the other window
+      // renders "open in your other window" from a fact instead of from how
+      // long a binding has taken to arrive.
+      //
+      // `.default(null)` for an older GUI, and null is not a missing value
+      // here: every null-window subscriber shares ONE route bucket, which is
+      // exactly the single-route behavior that predates per-window election.
+      //
+      // This field existed before, and was removed in #1667 once its last
+      // reader (the same-window lifecycle hand-over, now done through
+      // `detachBrowserSessionsSubscriber`) was retired. Per-window route
+      // election is a NEW reader, decided after that removal, and the window
+      // a stream belongs to has to travel again for it: main holds that fact
+      // for its own bookkeeping, but the host is the one electing routes.
+      desktopWindowId: z.string().nullable().default(null),
     })
     .strict(),
   z

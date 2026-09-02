@@ -1102,6 +1102,10 @@ class BrowserSessionsStream {
       kind: "electronTabLifecycleReady",
       hasBinaryPayload: false,
       coLocatedHostId: localHostId,
+      // Which window this subscriber speaks for. Streams are keyed by window
+      // and never deduped across them, so this is the route identity the host
+      // elects per scope and echoes back on `BrowserTabInfo.boundWindowId`.
+      desktopWindowId: this.windowId,
     });
     this.pushForgetLedger("attach");
   }

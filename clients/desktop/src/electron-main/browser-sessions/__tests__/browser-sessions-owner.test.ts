@@ -787,11 +787,12 @@ describe("the browser.sessions jar plane lives in main", () => {
       "electronTabLifecycleReady",
       "primaryProfileForgetLedger",
     ]);
-    // Locality is the whole of what readiness declares now: the window a
-    // stream belongs to never leaves this process (H02 retired the host's
-    // last reader for it).
+    // Readiness declares two things: locality, and which window this stream
+    // speaks for. The window travels again because native routes are elected
+    // per scope AND window - one stream per window, so the id main keys the
+    // stream by is the route identity the host elects.
     expect(session.sentFrames[0]?.coLocatedHostId).toBe("host-1");
-    expect(session.sentFrames[0]).not.toHaveProperty("desktopWindowId");
+    expect(session.sentFrames[0]?.desktopWindowId).toBe("window-1");
     expect(session.sentFrames[1]?.revision).toBe(7);
   });
 
