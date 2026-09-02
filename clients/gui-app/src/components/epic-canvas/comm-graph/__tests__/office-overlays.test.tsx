@@ -103,6 +103,7 @@ describe("OfficeLegend", () => {
       "one per host",
       "the time being shown",
       "break room; agents chat at the cooler and tables",
+      "ping-pong and arcade for idle agents",
       "Envelope: reply",
       "Envelope: notice",
     ]) {

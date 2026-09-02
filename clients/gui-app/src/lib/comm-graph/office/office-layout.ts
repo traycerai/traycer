@@ -34,6 +34,7 @@
  */
 import type {
   OfficeAgentInput,
+  OfficeAreaSign,
   OfficeDesk,
   OfficeErrandSpot,
   OfficeFacing,
@@ -41,6 +42,7 @@ import type {
   OfficeLayout,
   OfficeProp,
   OfficeRoom,
+  OfficeSpriteName,
   OfficeTilePos,
   OfficeTileRect,
 } from "@/lib/comm-graph/office/office-types";
@@ -183,6 +185,51 @@ const SOFA_WIDTH_TILES = 2;
 const BIN_COL_OFFSET = 3;
 /** The bin's throwing line: the cabin aisle two rows under it, looking up. */
 const BIN_SPOT_ROW_OFFSET = 2;
+
+/**
+ * The game room: a second walled room the same size as the cafeteria, holding
+ * the ping-pong table, the arcade cabinet and a sofa.
+ *
+ * It goes DIRECTLY BELOW the break room where the storey is deep enough to
+ * carry both, and BESIDE it where it is not - a tall thin building and a wide
+ * flat one are both fine, but a room that only sometimes exists is a room the
+ * errand engine cannot rely on. Which of the two happens is decided once, in
+ * `buildFloors`, and carried on the storey so the reservation and the placement
+ * can never disagree.
+ *
+ * ```
+ *   row + 1   wall face: the room's own name sign
+ *   row + 2   arcade cabinet .. .. .. .. sofa
+ *   row + 3   the aisle they are used from
+ *   row + 4   the ping-pong table, centred, with an end spot either side
+ *   row + 5   the way to the door
+ * ```
+ */
+const GAME_ROOM_COLS = CAFETERIA_COLS;
+const GAME_ROOM_ROWS = CAFETERIA_ROWS;
+/** One corridor tile between the two rooms, whichever way they are stacked. */
+const ROOM_GAP_TILES = 1;
+const GAME_ARCADE_COL_OFFSET = 1;
+const GAME_SOFA_COL_OFFSET = 6;
+const GAME_TABLE_COL_OFFSET = 4;
+const GAME_FIXTURE_ROW = 2;
+const GAME_AISLE_ROW = 3;
+const GAME_TABLE_ROW = 4;
+const GAME_DOOR_COL_OFFSET = 7;
+/** The table is two tiles wide, and its ends are the tiles either side of it. */
+const PINGPONG_TABLE_WIDTH_TILES = 2;
+/**
+ * Storey depth that fits the game room UNDER the break room: both rooms, the
+ * corridor between them, and one more below for the lower room's door to open
+ * onto. Short of it the pair goes side by side instead, which costs width.
+ */
+const STACKED_ROOMS_MIN_FLOOR_ROWS =
+  BUILDING_TOP_WALL_ROWS + CAFETERIA_ROWS + ROOM_GAP_TILES + GAME_ROOM_ROWS + 2;
+/** The building width the side-by-side arrangement needs, both outer walls in. */
+const SIDE_BY_SIDE_MIN_BUILDING_COLS =
+  CAFETERIA_MIN_BUILDING_COLS + GAME_ROOM_COLS + ROOM_GAP_TILES;
+/** Left tile of a room's own two-tile name sign, clear of the menu board. */
+const AREA_SIGN_COL_OFFSET = 4;
 /** How many corridor spots one floor offers, and how wide the sample is. */
 const MAX_CORRIDOR_SPOTS = 4;
 /** More than three windows to stand at reads as a floor with nothing else to do. */
@@ -221,6 +268,13 @@ interface FloorBuild {
   readonly localRows: number;
   /** Row this storey's `wall-top` cap lands on in the finished plan. */
   readonly originRow: number;
+  /**
+   * Whether the game room goes under the break room rather than beside it.
+   * Decided with the storey's size, and carried rather than recomputed: the
+   * width reservation and the placement read the same answer or the room lands
+   * outside the wall that was widened for it.
+   */
+  readonly gameBelow: boolean;
 }
 
 function compareByCreation(
@@ -415,19 +469,30 @@ function buildFloors(
     // epic is exactly where an empty floor reads as broken, so the storey is
     // widened and deepened to fit a cafeteria whatever the cabins came to.
     // Only the EMPTY-epic room opts out - it has no floor to furnish.
-    const localCols =
-      cabins.length === 0
-        ? EMPTY_ROOM_COLS
-        : Math.max(
-            contentRight + BUILDING_RIGHT_MARGIN_TILES + CAFETERIA_COLS,
-            CAFETERIA_MIN_BUILDING_COLS,
-          );
     const localRows =
       cabins.length === 0
         ? EMPTY_ROOM_ROWS
         : Math.max(
             contentBottom + BUILDING_BOTTOM_MARGIN_TILES,
             CAFETERIA_MIN_FLOOR_ROWS,
+          );
+    // A storey the cabins already made deep enough carries the game room under
+    // the break room for nothing. A shallow one pays for it in width instead -
+    // deepening the building to stack them would leave a one-agent epic with a
+    // storey of empty corridor, which is worse than a wide one.
+    const gameBelow =
+      cabins.length > 0 && localRows >= STACKED_ROOMS_MIN_FLOOR_ROWS;
+    const roomsWidth = gameBelow
+      ? CAFETERIA_COLS
+      : CAFETERIA_COLS + ROOM_GAP_TILES + GAME_ROOM_COLS;
+    const localCols =
+      cabins.length === 0
+        ? EMPTY_ROOM_COLS
+        : Math.max(
+            contentRight + BUILDING_RIGHT_MARGIN_TILES + roomsWidth,
+            gameBelow
+              ? CAFETERIA_MIN_BUILDING_COLS
+              : SIDE_BY_SIDE_MIN_BUILDING_COLS,
           );
     builds.push({
       hostId: group.hostId,
@@ -436,6 +501,7 @@ function buildFloors(
       localCols,
       localRows,
       originRow,
+      gameBelow,
     });
     // The storey below reuses this one's bottom wall as its own cap, so the
     // two buildings read as one block rather than as a seam of dead rows.
@@ -720,13 +786,75 @@ function planCafeteria(
   };
 }
 
+interface GameRoomPlan {
+  readonly bounds: OfficeTileRect;
+  readonly doorTile: OfficeTilePos;
+  readonly arcadeTile: OfficeTilePos;
+  /** Left tile of the two-tile ping-pong table. */
+  readonly tableTile: OfficeTilePos;
+  readonly sofaTile: OfficeTilePos;
+}
+
 /**
- * The break room's own wall ring, its door, and everything standing inside it.
- * The ring mirrors a cabin's - cap, wall face, sides, one walkable door - so the
- * scene can paint it with the same two sprites.
+ * Where the game room lands, given the break room it shares the storey with.
+ * `null` only where there is no break room to place it against - the empty-epic
+ * room, which has no floor to furnish.
  */
-function buildCafeteria(context: PlanContext, plan: CafeteriaPlan): void {
-  const { col, row, cols, rows } = plan.bounds;
+function planGameRoom(
+  build: FloorBuild,
+  cafeteria: CafeteriaPlan | null,
+): GameRoomPlan | null {
+  if (cafeteria === null) return null;
+  const { col, row } = cafeteria.bounds;
+  const bounds: OfficeTileRect = build.gameBelow
+    ? {
+        col,
+        row: row + CAFETERIA_ROWS + ROOM_GAP_TILES,
+        cols: GAME_ROOM_COLS,
+        rows: GAME_ROOM_ROWS,
+      }
+    : {
+        col: col - GAME_ROOM_COLS - ROOM_GAP_TILES,
+        row,
+        cols: GAME_ROOM_COLS,
+        rows: GAME_ROOM_ROWS,
+      };
+  if (bounds.col <= BUILDING_FIRST_CONTENT_COL) return null;
+  if (bounds.row + bounds.rows > build.originRow + build.localRows - 1) {
+    return null;
+  }
+  return {
+    bounds,
+    doorTile: {
+      col: bounds.col + GAME_DOOR_COL_OFFSET,
+      row: bounds.row + GAME_ROOM_ROWS - 1,
+    },
+    arcadeTile: {
+      col: bounds.col + GAME_ARCADE_COL_OFFSET,
+      row: bounds.row + GAME_FIXTURE_ROW,
+    },
+    tableTile: {
+      col: bounds.col + GAME_TABLE_COL_OFFSET,
+      row: bounds.row + GAME_TABLE_ROW,
+    },
+    sofaTile: {
+      col: bounds.col + GAME_SOFA_COL_OFFSET,
+      row: bounds.row + GAME_FIXTURE_ROW,
+    },
+  };
+}
+
+/**
+ * A walled room's own ring and its door, shared by the break room and the game
+ * room. Mirrors a cabin's - cap, wall face, sides, one walkable door - so the
+ * scene can paint either with the same two sprites.
+ */
+function buildRoomShell(
+  context: PlanContext,
+  bounds: OfficeTileRect,
+  doorTile: OfficeTilePos,
+): void {
+  const { col, row, cols, rows } = bounds;
   const right = col + cols - 1;
   const bottom = row + rows - 1;
   for (let scanCol = col; scanCol <= right; scanCol += 1) {
@@ -743,7 +871,44 @@ function buildCafeteria(context: PlanContext, plan: CafeteriaPlan): void {
     blockPlanTile(context, { col, row: scanRow });
     blockPlanTile(context, { col: right, row: scanRow });
   }
-  context.walkable[plan.doorTile.row][plan.doorTile.col] = true;
+  context.walkable[doorTile.row][doorTile.col] = true;
+}
+
+/** A two-tile-wide piece of furniture: drawn from its left tile, blocked across. */
+function addWideProp(
+  context: PlanContext,
+  sprite: OfficeSpriteName,
+  tile: OfficeTilePos,
+  widthTiles: number,
+): void {
+  context.props.push({ sprite: { name: sprite }, tile });
+  for (let offset = 0; offset < widthTiles; offset += 1) {
+    blockPlanTile(context, { col: tile.col + offset, row: tile.row });
+  }
+}
+
+/** The table, the cabinet and the sofa, inside the ring the room already has. */
+function buildGameRoom(context: PlanContext, plan: GameRoomPlan): void {
+  buildRoomShell(context, plan.bounds, plan.doorTile);
+  addBlockingProp(context, {
+    sprite: { name: "arcade" },
+    tile: plan.arcadeTile,
+  });
+  addWideProp(
+    context,
+    "pingpong-table",
+    plan.tableTile,
+    PINGPONG_TABLE_WIDTH_TILES,
+  );
+  addWideProp(context, "sofa", plan.sofaTile, SOFA_WIDTH_TILES);
+}
+
+/**
+ * The break room's own fittings, inside the ring it shares with the game room.
+ */
+function buildCafeteria(context: PlanContext, plan: CafeteriaPlan): void {
+  const { col, row } = plan.bounds;
+  buildRoomShell(context, plan.bounds, plan.doorTile);
   // On the wall face over the coffee machine, exactly where a cabin hangs its
   // sign - the board is what says which of the three fixtures is the coffee.
   addBlockingProp(context, {
@@ -763,20 +928,11 @@ function buildCafeteria(context: PlanContext, plan: CafeteriaPlan): void {
     tile: plan.vendingTile,
   });
   for (const tile of plan.tableTiles) {
-    context.props.push({ sprite: { name: "cafe-table" }, tile });
-    for (let offset = 0; offset < CAFE_TABLE_WIDTH_TILES; offset += 1) {
-      blockPlanTile(context, { col: tile.col + offset, row: tile.row });
-    }
+    addWideProp(context, "cafe-table", tile, CAFE_TABLE_WIDTH_TILES);
   }
   // Two tiles wide like a table, and blocked across both: a sofa is furniture
   // you sit ON from the front, never a tile the room routes through.
-  context.props.push({ sprite: { name: "sofa" }, tile: plan.sofaTile });
-  for (let offset = 0; offset < SOFA_WIDTH_TILES; offset += 1) {
-    blockPlanTile(context, {
-      col: plan.sofaTile.col + offset,
-      row: plan.sofaTile.row,
-    });
-  }
+  addWideProp(context, "sofa", plan.sofaTile, SOFA_WIDTH_TILES);
 }
 
 /**
@@ -824,6 +980,7 @@ interface ErrandSpotRequest {
   readonly lobbyTile: OfficeTilePos;
   readonly blocked: ReadonlySet<string>;
   readonly cafeteria: CafeteriaPlan | null;
+  readonly gameRoom: GameRoomPlan | null;
   readonly corner: CornerFittings | null;
   readonly rooms: ReadonlyArray<OfficeRoom>;
   readonly stairsTile: OfficeTilePos | null;
@@ -892,6 +1049,35 @@ function addCafeteriaSpots(builder: SpotBuilder, plan: CafeteriaPlan): void {
   // One seat per sofa tile, on the aisle in front of it. The facing looks AT
   // the sofa, as every spot's does; the scene turns whoever sits down back
   // toward the room, which is the way a person on a sofa actually faces.
+  for (let offset = 0; offset < SOFA_WIDTH_TILES; offset += 1) {
+    addSpot(
+      builder,
+      "sofa",
+      { col: plan.sofaTile.col + offset, row: aisleRow },
+      "up",
+    );
+  }
+}
+
+/**
+ * The game room's own spots: an end of the table each side, the aisle in front
+ * of the cabinet, and a seat in front of each half of the sofa.
+ *
+ * The two table ends face EACH OTHER rather than the table, because a rally is
+ * the only errand that is two people rather than one - the same reason the
+ * cooler has a facing pair.
+ */
+function addGameRoomSpots(builder: SpotBuilder, plan: GameRoomPlan): void {
+  const table = plan.tableTile;
+  addSpot(builder, "pingpong", { col: table.col - 1, row: table.row }, "right");
+  addSpot(
+    builder,
+    "pingpong",
+    { col: table.col + PINGPONG_TABLE_WIDTH_TILES, row: table.row },
+    "left",
+  );
+  const aisleRow = plan.bounds.row + GAME_AISLE_ROW;
+  addSpot(builder, "arcade", { col: plan.arcadeTile.col, row: aisleRow }, "up");
   for (let offset = 0; offset < SOFA_WIDTH_TILES; offset += 1) {
     addSpot(
       builder,
@@ -1050,6 +1236,8 @@ function addCorridorSpots(
       if (request.rooms.some((room) => withinRect(room.bounds, tile))) continue;
       const cafeteria = request.cafeteria;
       if (cafeteria !== null && withinRect(cafeteria.bounds, tile)) continue;
+      const gameRoom = request.gameRoom;
+      if (gameRoom !== null && withinRect(gameRoom.bounds, tile)) continue;
       candidates.push(tile);
     }
   }
@@ -1079,6 +1267,8 @@ function errandSpotsFor(
   const corner = request.corner;
   if (cafeteria !== null) addCafeteriaSpots(builder, cafeteria);
   else if (corner !== null) addCornerSpots(builder, corner);
+  const gameRoom = request.gameRoom;
+  if (gameRoom !== null) addGameRoomSpots(builder, gameRoom);
   addWallSpots(builder, request.build);
   addPlantSpots(builder, request.build);
   addBinSpots(builder, request.build);
@@ -1269,6 +1459,8 @@ function fitFloor(request: FloorFitRequest): OfficeFloor {
   const corner =
     cafeteria === null ? buildCornerFittings(context, build) : null;
   if (cafeteria !== null) buildCafeteria(context, cafeteria);
+  const gameRoom = planGameRoom(build, cafeteria);
+  if (gameRoom !== null) buildGameRoom(context, gameRoom);
 
   // Reception stands on the lobby row, one clear tile short of the door so
   // nobody has to squeeze past the counter to get out.
@@ -1328,16 +1520,47 @@ function fitFloor(request: FloorFitRequest): OfficeFloor {
       lobbyTile,
       blocked,
       cafeteria,
+      gameRoom,
       corner,
       rooms: request.rooms,
       stairsTile,
     }),
     cafeteria: cafeteria === null ? null : cafeteria.bounds,
-    // Placed by a later lane. The fields are carried now so every floor has
-    // the same shape whether or not anything has filled them in yet.
-    gameRoom: null,
-    areaSigns: [],
+    gameRoom: gameRoom === null ? null : gameRoom.bounds,
+    areaSigns: areaSignsFor(cafeteria, gameRoom),
   };
+}
+
+/**
+ * A name plate on each walled amenity's wall face, mounted exactly where a
+ * cabin hangs its own sign. Two tiles along from the room's left wall, which is
+ * left of both doors and clear of the menu board the break room already hangs
+ * over its coffee machine.
+ */
+function areaSignsFor(
+  cafeteria: CafeteriaPlan | null,
+  gameRoom: GameRoomPlan | null,
+): ReadonlyArray<OfficeAreaSign> {
+  const signs: OfficeAreaSign[] = [];
+  if (cafeteria !== null) {
+    signs.push({
+      name: "Cafeteria",
+      signTile: {
+        col: cafeteria.bounds.col + AREA_SIGN_COL_OFFSET,
+        row: cafeteria.bounds.row + 1,
+      },
+    });
+  }
+  if (gameRoom !== null) {
+    signs.push({
+      name: "Game room",
+      signTile: {
+        col: gameRoom.bounds.col + AREA_SIGN_COL_OFFSET,
+        row: gameRoom.bounds.row + 1,
+      },
+    });
+  }
+  return signs;
 }
 
 export function layoutOffice(

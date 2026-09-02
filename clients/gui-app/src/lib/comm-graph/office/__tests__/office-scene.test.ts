@@ -19,6 +19,7 @@ import {
   type OfficeSpriteName,
   type OfficeSpriteRef,
   type OfficeTilePos,
+  type OfficeTileRect,
 } from "@/lib/comm-graph/office/office-types";
 
 const APPEARANCE: OfficeAppearance = {
@@ -282,27 +283,35 @@ function chatPairAt(scene: OfficeScene): ReadonlyArray<string> | null {
 }
 
 /**
- * Every cafeteria doorway on the plan. The door is not carried as a field: it
- * is the one tile of the room's wall ring the grid still says is walkable,
- * which is exactly what the scene paints it from.
+ * Every amenity doorway on the plan - the break room's and the game room's. The
+ * door is not carried as a field: it is the one tile of the room's wall ring the
+ * grid still says is walkable, which is exactly what the scene paints it from.
  */
 function cafeteriaDoorKeys(layout: OfficeLayout): ReadonlyArray<string> {
   const keys: string[] = [];
   for (const entry of layout.floors) {
-    const room = entry.cafeteria;
-    if (room === null) continue;
-    const right = room.col + room.cols - 1;
-    const bottom = room.row + room.rows - 1;
-    for (let row = room.row; row <= bottom; row += 1) {
-      for (let col = room.col; col <= right; col += 1) {
-        const onRing =
-          row === room.row ||
-          row === bottom ||
-          col === room.col ||
-          col === right;
-        if (!onRing || !layout.walkable[row][col]) continue;
-        keys.push(`${col},${row}`);
-      }
+    for (const room of [entry.cafeteria, entry.gameRoom]) {
+      if (room === null) continue;
+      keys.push(...walkableRingKeys(layout, room));
+    }
+  }
+  return keys;
+}
+
+/** The walkable tiles on a walled room's own wall ring - its doorways. */
+function walkableRingKeys(
+  layout: OfficeLayout,
+  room: OfficeTileRect,
+): ReadonlyArray<string> {
+  const keys: string[] = [];
+  const right = room.col + room.cols - 1;
+  const bottom = room.row + room.rows - 1;
+  for (let row = room.row; row <= bottom; row += 1) {
+    for (let col = room.col; col <= right; col += 1) {
+      const onRing =
+        row === room.row || row === bottom || col === room.col || col === right;
+      if (!onRing || !layout.walkable[row][col]) continue;
+      keys.push(`${col},${row}`);
     }
   }
   return keys;
@@ -664,12 +673,17 @@ describe("OfficeScene", () => {
       ),
     ).toBe(true);
 
-    const sign = sprites(frame.props, "sign")[0];
-    expect(sign).toBeDefined();
-    expect(sign.x).toBe(room.signTile.col * OFFICE_TILE);
+    // The cabin's OWN sign, not merely the first one drawn: the break room and
+    // the game room carry signs of their own, and they sort above a cabin's.
+    const sign = sprites(frame.props, "sign").find(
+      (drawable) => drawable.x === room.signTile.col * OFFICE_TILE,
+    );
+    if (sign === undefined) throw new Error("no sign on the cabin");
 
-    const roomLabel = labels(frame.props)[0];
-    expect(roomLabel).toBeDefined();
+    const roomLabel = labels(frame.props).find((drawable) =>
+      drawable.text.startsWith("an extre"),
+    );
+    if (roomLabel === undefined) throw new Error("no label on the cabin sign");
     // Centred on the sign, sitting on its face, and short enough to fit it.
     expect(roomLabel.x).toBe(
       sign.x + officeSpriteSize({ name: "sign" }).width / 2,
@@ -681,6 +695,34 @@ describe("OfficeScene", () => {
     expect(roomLabel.tone).toBe("bright");
     expect(roomLabel.text.length).toBeLessThanOrEqual(12);
     expect(roomLabel.text.endsWith("…")).toBe(true);
+  });
+
+  it("signs the break room and the game room the way it signs a cabin", () => {
+    const scene = new OfficeScene(layoutOffice);
+    scene.sync(sceneInput({ agents: AGENTS, visibleAgentIds: BOTH }));
+
+    const frame = scene.frame();
+    const signs = sprites(frame.props, "sign");
+    const written = labels(frame.props);
+    for (const area of scene.layout().floors[0].areaSigns) {
+      const signX = area.signTile.col * OFFICE_TILE;
+      const plate = signs.find((drawable) => drawable.x === signX);
+      if (plate === undefined) throw new Error(`no sign for ${area.name}`);
+      const label = written.find((drawable) => drawable.text === area.name);
+      if (label === undefined) throw new Error(`no label for ${area.name}`);
+      // Centred on its own sign, on the sign's face, and bright - the same
+      // three things a cabin's name is, because it is the same fitting.
+      expect(label.x).toBe(
+        signX + officeSpriteSize({ name: "sign" }).width / 2,
+      );
+      expect(label.y).toBeGreaterThan(plate.y);
+      expect(label.y).toBeLessThan(
+        plate.y + officeSpriteSize({ name: "sign" }).height,
+      );
+      expect(label.tone).toBe("bright");
+    }
+    expect(written.some((label) => label.text === "Cafeteria")).toBe(true);
+    expect(written.some((label) => label.text === "Game room")).toBe(true);
   });
 
   it("plates every desk and badges only the agents that carry a harness", () => {
@@ -1025,23 +1067,31 @@ describe("OfficeScene", () => {
     const scene = new OfficeScene(layoutOffice);
     scene.sync(sceneInput({ agents: crowd, visibleAgentIds: ids }));
 
+    let previous = new Map<string, string>();
     for (let step = 0; step < 2_000; step += 1) {
       scene.tick(100);
       const occupied = new Map<string, string>();
+      const here = new Map<string, string>();
       for (const region of scene.frame().hitRegions) {
         if (region.rect.height !== OFFICE_CHARACTER_HEIGHT) continue;
         const desk = scene.layout().desks.get(region.agentId);
         if (desk === undefined) continue;
-        // Two people in the same chair is impossible; two people on the same
-        // errand spot is what the claim exists to prevent.
-        if (region.rect.x === desk.chairTile.col * OFFICE_TILE) continue;
         const key = `${region.rect.x},${region.rect.y}`;
+        here.set(region.agentId, key);
+        // Two people in the same chair is impossible; two people on the same
+        // errand SPOT is what the claim exists to prevent. Two people crossing
+        // the same corridor tile on the same tick is neither - a floor where
+        // everybody is out has walkers passing each other constantly, and they
+        // are told apart from standers by having moved since the last frame.
+        if (region.rect.x === desk.chairTile.col * OFFICE_TILE) continue;
+        if (previous.get(region.agentId) !== key) continue;
         const holder = occupied.get(key);
         expect(holder, `${holder} and ${region.agentId} share ${key}`).toBe(
           undefined,
         );
         occupied.set(key, region.agentId);
       }
+      previous = here;
     }
   });
 
@@ -1101,6 +1151,182 @@ describe("OfficeScene", () => {
     expect(quiet).toBeGreaterThanOrEqual(20);
   });
 
+  it("holds an end of the table open, then rallies once both are taken", () => {
+    const scene = new OfficeScene(onlyKinds(["pingpong"]));
+    scene.sync(sceneInput({ agents: IDLE_CREW, visibleAgentIds: CREW_IDS }));
+
+    const ends = scene
+      .layout()
+      .floors[0].errandSpots.filter((spot) => spot.kind === "pingpong");
+    expect(ends).toHaveLength(2);
+    const rects = ends.map((end) => ({
+      x: end.tile.col * OFFICE_TILE,
+      y: end.tile.row * OFFICE_TILE - 4,
+    }));
+
+    let waitedAlone = false;
+    let rallied = false;
+    let ballMoved = false;
+    let previousBall: OfficeSpriteDrawable | null = null;
+    for (let step = 0; step < 900 && !ballMoved; step += 1) {
+      scene.tick(100);
+      const frame = scene.frame();
+      const taken = rects.filter((rect) =>
+        frame.hitRegions.some(
+          (region) =>
+            region.rect.height === OFFICE_CHARACTER_HEIGHT &&
+            region.rect.x === rect.x &&
+            region.rect.y === rect.y,
+        ),
+      );
+      const balls = paperBalls(frame);
+      if (taken.length === 1) {
+        // Alone at the table: asking for a game, and no ball in play.
+        if (
+          hasBubbleAt(frame, "bubble-awaiting", {
+            x: taken[0].x + 8,
+            y: taken[0].y,
+          })
+        ) {
+          waitedAlone = true;
+        }
+        expect(balls).toHaveLength(0);
+      }
+      if (taken.length === 2 && balls.length === 1) {
+        rallied = true;
+        // The ball is between the two ends, and it is moving.
+        expect(balls[0].x).toBeGreaterThanOrEqual(
+          Math.min(rects[0].x, rects[1].x),
+        );
+        expect(balls[0].x).toBeLessThanOrEqual(
+          Math.max(rects[0].x, rects[1].x) + OFFICE_CHARACTER_WIDTH,
+        );
+        if (previousBall !== null && previousBall.x !== balls[0].x) {
+          ballMoved = true;
+        }
+        previousBall = balls[0];
+      }
+    }
+
+    expect(waitedAlone).toBe(true);
+    expect(rallied).toBe(true);
+    // One ball, shuttling: a rally drawn as a still ball is two people staring
+    // at a table.
+    expect(ballMoved).toBe(true);
+  });
+
+  it("answers a waiting player rather than leaving the table to the odds", () => {
+    // A FULL floor, every kind of spot available. The table is two spots out of
+    // twenty-odd, so a rally happening here is not the weights being generous -
+    // it is the open end outranking them while somebody is stood at the other.
+    const crowd = [1, 2, 3, 4, 5, 6].map((index) =>
+      agent({ id: `agent-${index}`, createdAt: index }),
+    );
+    const ids = new Set(crowd.map((person) => person.id));
+    const scene = new OfficeScene(layoutOffice);
+    scene.sync(sceneInput({ agents: crowd, visibleAgentIds: ids }));
+
+    const ends = scene
+      .layout()
+      .floors[0].errandSpots.filter((spot) => spot.kind === "pingpong");
+    expect(ends).toHaveLength(2);
+    const rects = ends.map((end) => ({
+      x: end.tile.col * OFFICE_TILE,
+      y: end.tile.row * OFFICE_TILE - 4,
+    }));
+
+    let ralliedTicks = 0;
+    let rallies = 0;
+    let playing = false;
+    for (let step = 0; step < 2_400; step += 1) {
+      scene.tick(100);
+      const frame = scene.frame();
+      const taken = rects.filter((rect) =>
+        frame.hitRegions.some(
+          (region) =>
+            region.rect.height === OFFICE_CHARACTER_HEIGHT &&
+            region.rect.x === rect.x &&
+            region.rect.y === rect.y,
+        ),
+      ).length;
+      if (taken === 2) ralliedTicks += 1;
+      if (taken === 2 && !playing) rallies += 1;
+      playing = taken === 2;
+    }
+
+    expect(rallies).toBeGreaterThan(0);
+    // TIME IN PLAY is the measure, not games started: two agents will
+    // occasionally roll the table at the same moment on their own, so a test
+    // that only asked whether a rally ever happened would pass with the bias
+    // deleted. Over four minutes this floor plays ~386 ticks with the open end
+    // outranking the draw and ~224 without it, so the threshold sits between
+    // the two rather than at a number that merely looked round.
+    expect(ralliedTicks).toBeGreaterThan(300);
+  });
+
+  it("gives up on the table when nobody takes the other end", () => {
+    // One agent on the floor, so there is nobody to play against.
+    const alone = [agent({ id: "alpha", createdAt: 1 })];
+    const scene = new OfficeScene(onlyKinds(["pingpong"]));
+    scene.sync(
+      sceneInput({ agents: alone, visibleAgentIds: new Set(["alpha"]) }),
+    );
+
+    const ends = scene
+      .layout()
+      .floors[0].errandSpots.filter((spot) => spot.kind === "pingpong");
+    const keys = new Set(ends.map((end) => `${end.tile.col},${end.tile.row}`));
+
+    let atTable = 0;
+    let longestRun = 0;
+    let run = 0;
+    for (let step = 0; step < 400; step += 1) {
+      scene.tick(100);
+      const rect = characterRect(scene.frame(), "alpha");
+      const key = `${rect.x / OFFICE_TILE},${(rect.y + 4) / OFFICE_TILE}`;
+      if (keys.has(key)) {
+        atTable += 1;
+        run += 1;
+        longestRun = Math.max(longestRun, run);
+      } else {
+        run = 0;
+      }
+      expect(paperBalls(scene.frame())).toHaveLength(0);
+    }
+
+    expect(atTable).toBeGreaterThan(0);
+    // Six seconds of waiting is sixty ticks; anything much past that is a
+    // character stuck at a table forever, which is what the cap prevents.
+    expect(longestRun).toBeLessThanOrEqual(75);
+  });
+
+  it("plays the arcade and flashes its screen while somebody is on it", () => {
+    const scene = new OfficeScene(onlyKinds(["arcade"]));
+    scene.sync(sceneInput({ agents: IDLE_CREW, visibleAgentIds: CREW_IDS }));
+
+    const cabinet = scene
+      .layout()
+      .props.find((prop) => prop.sprite.name === "arcade");
+    if (cabinet === undefined) throw new Error("no arcade");
+    const onScreen = {
+      x: cabinet.tile.col * OFFICE_TILE + OFFICE_TILE / 2,
+      y: cabinet.tile.row * OFFICE_TILE + OFFICE_TILE / 2,
+    };
+
+    let flashes = 0;
+    let lit = false;
+    for (let step = 0; step < 600; step += 1) {
+      scene.tick(100);
+      const here = sprites(scene.frame().overlay, "sparkle").some(
+        (sparkle) => sparkle.x === onScreen.x && sparkle.y === onScreen.y,
+      );
+      // Count the rising edge: the screen flashes, it does not simply stay on.
+      if (here && !lit) flashes += 1;
+      lit = here;
+    }
+    expect(flashes).toBeGreaterThan(1);
+  });
+
   it("waters a cabin plant with a can and sparkles it at the end", () => {
     const scene = new OfficeScene(onlyKinds(["water-plant"]));
     scene.sync(sceneInput({ agents: IDLE_CREW, visibleAgentIds: CREW_IDS }));
@@ -1132,10 +1358,11 @@ describe("OfficeScene", () => {
     const scene = new OfficeScene(onlyKinds(["sofa"]));
     scene.sync(sceneInput({ agents: IDLE_CREW, visibleAgentIds: CREW_IDS }));
 
+    // One sofa in the break room and one in the game room, two seats each.
     const seats = scene
       .layout()
       .floors[0].errandSpots.filter((spot) => spot.kind === "sofa");
-    expect(seats).toHaveLength(2);
+    expect(seats).toHaveLength(4);
 
     let sat = false;
     let dozed = false;

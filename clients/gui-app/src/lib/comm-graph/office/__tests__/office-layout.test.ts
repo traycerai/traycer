@@ -822,7 +822,16 @@ describe("layoutOffice floors", () => {
     const room = floor.cafeteria;
     if (room === null) throw new Error("no cafeteria");
 
-    const sofas = layout.props.filter((prop) => prop.sprite.name === "sofa");
+    // One in here and one in the game room, so the break room's is the one
+    // inside these bounds rather than simply the only one on the floor.
+    const sofas = layout.props.filter(
+      (prop) =>
+        prop.sprite.name === "sofa" &&
+        prop.tile.col > room.col &&
+        prop.tile.col < room.col + room.cols - 1 &&
+        prop.tile.row > room.row &&
+        prop.tile.row < room.row + room.rows - 1,
+    );
     expect(sofas).toHaveLength(1);
     const sofa = sofas[0].tile;
     // Inside the room's walls, not standing in one of them.
@@ -832,16 +841,143 @@ describe("layoutOffice floors", () => {
     expect(layout.walkable[sofa.row][sofa.col]).toBe(false);
     expect(layout.walkable[sofa.row][sofa.col + 1]).toBe(false);
 
-    const seats = floor.errandSpots.filter((spot) => spot.kind === "sofa");
+    // Side by side, the game room sits on the SAME rows as the break room, so
+    // its sofa's seats share this one's row - the column is what tells the two
+    // rooms apart.
+    const seats = floor.errandSpots.filter(
+      (spot) =>
+        spot.kind === "sofa" &&
+        spot.tile.row === sofa.row + 1 &&
+        spot.tile.col >= sofa.col &&
+        spot.tile.col <= sofa.col + 1,
+    );
     expect(seats).toHaveLength(2);
     for (const seat of seats) {
       // Directly in front of a sofa tile: a seat anywhere else is a character
       // sitting in mid-air beside the furniture.
-      expect(seat.tile.row).toBe(sofa.row + 1);
       expect(seat.tile.col).toBeGreaterThanOrEqual(sofa.col);
       expect(seat.tile.col).toBeLessThanOrEqual(sofa.col + 1);
       expect(seat.facing).toBe("up");
     }
+    // Every sofa on the floor is seated the same way, break room or game room.
+    const allSeats = floor.errandSpots.filter((spot) => spot.kind === "sofa");
+    const allSofas = layout.props.filter((prop) => prop.sprite.name === "sofa");
+    expect(allSeats).toHaveLength(allSofas.length * 2);
+  });
+
+  it("walls a game room into every storey, with a table, a cabinet and a sofa", () => {
+    const layout = layoutOffice(SINGLE_HOST);
+    const floor = layout.floors[0];
+    const room = floor.gameRoom;
+    const cafeteria = floor.cafeteria;
+    if (room === null || cafeteria === null) throw new Error("no rooms");
+
+    // Same footprint as the break room, and never overlapping it.
+    expect(room.cols).toBe(cafeteria.cols);
+    expect(room.rows).toBe(cafeteria.rows);
+    const apart =
+      room.col + room.cols <= cafeteria.col ||
+      cafeteria.col + cafeteria.cols <= room.col ||
+      room.row + room.rows <= cafeteria.row ||
+      cafeteria.row + cafeteria.rows <= room.row;
+    expect(apart, "the two rooms overlap").toBe(true);
+    // Inside the building, not hanging off its wall.
+    expect(room.col).toBeGreaterThan(0);
+    expect(room.col + room.cols).toBeLessThanOrEqual(layout.cols);
+    expect(room.row + room.rows).toBeLessThan(
+      floor.bounds.row + floor.bounds.rows,
+    );
+
+    for (const name of ["pingpong-table", "arcade", "sofa"]) {
+      const inside = layout.props.filter(
+        (prop) =>
+          prop.sprite.name === name &&
+          prop.tile.col > room.col &&
+          prop.tile.col < room.col + room.cols - 1 &&
+          prop.tile.row > room.row &&
+          prop.tile.row < room.row + room.rows - 1,
+      );
+      expect(inside, name).toHaveLength(1);
+      // Furniture: nothing routes through any of it.
+      expect(layout.walkable[inside[0].tile.row][inside[0].tile.col]).toBe(
+        false,
+      );
+    }
+  });
+
+  it("puts an end spot either side of the table, facing each other", () => {
+    const layout = layoutOffice(SINGLE_HOST);
+    const floor = layout.floors[0];
+    const table = layout.props.find(
+      (prop) => prop.sprite.name === "pingpong-table",
+    );
+    if (table === undefined) throw new Error("no table");
+
+    const ends = floor.errandSpots.filter((spot) => spot.kind === "pingpong");
+    expect(ends).toHaveLength(2);
+    // A rally is two people hitting to each other, so the ends look ACROSS the
+    // table rather than at it - the same arrangement the cooler pair uses.
+    expect(ends.map((spot) => spot.facing)).toEqual(["right", "left"]);
+    expect(ends[0].tile.row).toBe(table.tile.row);
+    expect(ends[1].tile.row).toBe(table.tile.row);
+    expect(ends[0].tile.col).toBe(table.tile.col - 1);
+    expect(ends[1].tile.col).toBe(table.tile.col + 2);
+    for (const end of ends) {
+      expect(layout.walkable[end.tile.row][end.tile.col]).toBe(true);
+    }
+
+    const arcade = floor.errandSpots.filter((spot) => spot.kind === "arcade");
+    expect(arcade).toHaveLength(1);
+    expect(arcade[0].facing).toBe("up");
+  });
+
+  it("names the break room and the game room on their own wall faces", () => {
+    const layout = layoutOffice(SINGLE_HOST);
+    const floor = layout.floors[0];
+    expect(floor.areaSigns.map((sign) => sign.name)).toEqual([
+      "Cafeteria",
+      "Game room",
+    ]);
+
+    const rooms = [floor.cafeteria, floor.gameRoom];
+    const board = layout.props.find(
+      (prop) => prop.sprite.name === "menu-board",
+    );
+    if (board === undefined) throw new Error("no menu board");
+    floor.areaSigns.forEach((sign, index) => {
+      const room = rooms[index];
+      if (room === null) throw new Error(`no room for ${sign.name}`);
+      // On the room's own wall face, the row a cabin hangs its sign on...
+      expect(sign.signTile.row).toBe(room.row + 1);
+      expect(sign.signTile.col).toBeGreaterThan(room.col);
+      // ...two tiles of it, so the far tile is still inside the room.
+      expect(sign.signTile.col + 1).toBeLessThan(room.col + room.cols - 1);
+      // ...and never over the menu board, which is already hanging there.
+      expect(
+        sign.signTile.col === board.tile.col ||
+          sign.signTile.col + 1 === board.tile.col,
+      ).toBe(false);
+    });
+  });
+
+  it("stacks the game room under the break room once the storey is deep", () => {
+    // A tall family: enough cabin bands that the storey carries both rooms one
+    // above the other, which is the arrangement that costs no extra width.
+    const deep = Array.from({ length: 14 }, (_, index) =>
+      agent({ id: `deep-${index}`, createdAt: index }),
+    );
+    const layout = layoutOffice(deep);
+    const floor = layout.floors[0];
+    const room = floor.gameRoom;
+    const cafeteria = floor.cafeteria;
+    if (room === null || cafeteria === null) throw new Error("no rooms");
+
+    expect(floor.bounds.rows).toBeGreaterThanOrEqual(19);
+    expect(room.col).toBe(cafeteria.col);
+    expect(room.row).toBeGreaterThan(cafeteria.row);
+    // A corridor row between them, so the upper room's door has somewhere to
+    // open onto rather than straight into the lower room's cap.
+    expect(room.row).toBe(cafeteria.row + cafeteria.rows + 1);
   });
 
   it("gives every cabin a bin with a throwing line under it", () => {

@@ -67,6 +67,10 @@ const SECTIONS: ReadonlyArray<LegendSection> = [
         signal: "Cafeteria",
         meaning: "break room; agents chat at the cooler and tables",
       },
+      {
+        signal: "Game room",
+        meaning: "ping-pong and arcade for idle agents",
+      },
     ],
   },
 ];
