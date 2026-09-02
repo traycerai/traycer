@@ -46,7 +46,12 @@ import { registrableDomain } from "@traycer/protocol/host/browser/registrable-do
  * Two things it is NOT. It is not a per-action budget: the bound is armed
  * before the wait for the work ahead, so a barrier queued behind another
  * shares the elapsed time with it and a chain of them is bounded in total
- * rather than each getting a fresh 30s to act in. And it is not what orders a
+ * rather than each getting a fresh 30s to act in - and a barrier whose time
+ * runs out while it is still waiting GIVES UP (its caller learns so, its
+ * action never runs) rather than running late under no barrier; a forget-all
+ * confirmed while a login import sits on a minutes-long keystore prompt
+ * fails and is retried after, it does not empty the jar behind the user's
+ * back. And it is not what orders a
  * forget against a host's observations - that is the forget ledger's revision
  * and its ack (`browser-forget-ledger.ts`), which decide on facts and would
  * still hold if this bound fired mid-forget. This only stops a wedged call
@@ -101,7 +106,17 @@ export class BrowserJarSerializer {
    *
    * The gate is published SYNCHRONOUSLY, before the first await, so a
    * `runOnDomain` call made while the barrier is still waiting for the work
-   * ahead of it queues behind the barrier rather than racing it.
+   * ahead of it queues behind the barrier rather than racing it. It is
+   * CHAINED behind the barrier ahead's gate: whatever this barrier's timer
+   * does, its gate cannot open while the one before it still holds the jar.
+   *
+   * A barrier whose time runs out while it is still WAITING gives up: the
+   * caller is answered with the expiry, and the action never starts. The one
+   * outcome worse than a forget-all that failed is one that reported failure
+   * and then emptied the jar minutes later, under no barrier at all. A
+   * barrier whose time runs out while its action is RUNNING aborts the
+   * signal and opens its gate; the action reads the signal between its steps
+   * and stops.
    */
   runOnEveryDomain<T>(
     action: (signal: AbortSignal) => Promise<T>,
@@ -110,9 +125,10 @@ export class BrowserJarSerializer {
     const previousBarrier = this.barrierGate;
     const ahead = [...this.inFlight];
     let openGate = (): void => undefined;
-    this.barrierGate = new Promise<void>((resolve) => {
+    const ownGate = new Promise<void>((resolve) => {
       openGate = resolve;
     });
+    this.barrierGate = previousBarrier.then(() => ownGate);
     // Aborted the moment the barrier expires, BEFORE the gate opens: an
     // action that is still running when its time is up (a long login import)
     // must stop mutating the jar, since the work queued behind it is about to
@@ -125,12 +141,7 @@ export class BrowserJarSerializer {
       // can.
       let expire = (): void => undefined;
       const expired = new Promise<never>((_resolve, reject) => {
-        expire = (): void =>
-          reject(
-            new Error(
-              `The whole-jar barrier did not settle within ${timeoutMs}ms; the jar gate was forced open.`,
-            ),
-          );
+        expire = (): void => reject(barrierExpiredError(timeoutMs));
       });
       const timer = setTimeout(() => {
         // The action first, then the gate: queued per-domain work must not
@@ -141,15 +152,21 @@ export class BrowserJarSerializer {
         expire();
       }, timeoutMs);
       timer.unref();
+      const run = (async (): Promise<T> => {
+        await previousBarrier;
+        await Promise.all(ahead);
+        // Expired during the wait: the caller has its answer and the gate is
+        // given up, so nothing may start now - least of all a forget-all the
+        // user was just told did not happen.
+        if (controller.signal.aborted) throw barrierExpiredError(timeoutMs);
+        return await action(controller.signal);
+      })();
+      // The race answers the caller once. A `run` that settles after that -
+      // the cancel above, or an action rejecting past its expiry - has nobody
+      // left to answer, and must not surface as an unhandled rejection.
+      void run.catch(ignore);
       try {
-        return await Promise.race([
-          (async (): Promise<T> => {
-            await previousBarrier;
-            await Promise.all(ahead);
-            return await action(controller.signal);
-          })(),
-          expired,
-        ]);
+        return await Promise.race([run, expired]);
       } finally {
         // Clearing before `openGate` is what keeps `expired` from rejecting
         // after the race has already settled.
@@ -158,6 +175,12 @@ export class BrowserJarSerializer {
       }
     })();
   }
+}
+
+function barrierExpiredError(timeoutMs: number): Error {
+  return new Error(
+    `The whole-jar barrier did not settle within ${timeoutMs}ms; the jar gate was forced open.`,
+  );
 }
 
 function ignore(): void {

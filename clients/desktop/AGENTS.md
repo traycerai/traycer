@@ -127,11 +127,14 @@ failures.
   service logs an errno code and a stage, nothing else); and the import runs
   under the `BrowserJarSerializer`'s whole-jar barrier FROM THE KEYSTORE
   PROMPT ON (the one forget-all takes, so a forget confirmed while the
-  prompt is up or the write is running waits for it, instead of clearing
-  the jar, reporting done, and having the import write the logins back; the
-  import passes its own 10-minute budget, and reads the barrier's abort
-  signal between rows so an import the barrier gives up on STOPS before the
-  queued work is admitted) and, inside that, under
+  prompt is up or the write is running queues behind it instead of clearing
+  the jar, reporting done, and having the import write the logins back - and
+  a queued barrier whose own budget runs out while it waits GIVES UP, its
+  action never runs, so that forget fails and is retried after the import
+  rather than emptying the jar late under no barrier; the import passes its
+  own 10-minute budget, and reads the barrier's abort signal between rows so
+  an import the barrier gives up on STOPS before the queued work is
+  admitted) and, inside that, under
   `suppressAllBrowserPrimaryProfileDeltas` plus one coalescing window -
   held through the failure path too - because the per-site removals would
   otherwise reach the host as `removedKeys` and evict the site from every

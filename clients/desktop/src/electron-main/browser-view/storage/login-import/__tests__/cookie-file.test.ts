@@ -187,6 +187,34 @@ describe("parseCookieFile: Cookie-Editor JSON", () => {
         value: "v5",
         path: "/",
       },
+      {
+        domain: "example.com",
+        name: "empty-object-partition-key",
+        value: "v6",
+        path: "/",
+        partitionKey: {},
+      },
+      {
+        domain: "example.com",
+        name: "empty-string-partition-key",
+        value: "v7",
+        path: "/",
+        partitionKey: "",
+      },
+      {
+        domain: "example.com",
+        name: "object-empty-top-level-site",
+        value: "v8",
+        path: "/",
+        partitionKey: { topLevelSite: "" },
+      },
+      {
+        domain: "example.com",
+        name: "numeric-partition-key",
+        value: "v9",
+        path: "/",
+        partitionKey: 42,
+      },
     ]);
 
     const result = parseCookieFile(text);
@@ -199,9 +227,15 @@ describe("parseCookieFile: Cookie-Editor JSON", () => {
 
     expect(partitionedByName.get("object-top-level-site")).toBe(true);
     expect(partitionedByName.get("string-partition-key")).toBe(true);
-    expect(partitionedByName.get("object-null-top-level-site")).toBe(false);
+    // Fail closed: an object present but not carrying a usable site string is
+    // read as "maybe partitioned" rather than "not partitioned".
+    expect(partitionedByName.get("object-null-top-level-site")).toBe(true);
     expect(partitionedByName.get("null-partition-key")).toBe(false);
     expect(partitionedByName.get("missing-partition-key")).toBe(false);
+    expect(partitionedByName.get("empty-object-partition-key")).toBe(true);
+    expect(partitionedByName.get("empty-string-partition-key")).toBe(false);
+    expect(partitionedByName.get("object-empty-top-level-site")).toBe(false);
+    expect(partitionedByName.get("numeric-partition-key")).toBe(true);
   });
 });
 

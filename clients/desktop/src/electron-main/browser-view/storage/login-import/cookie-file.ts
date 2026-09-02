@@ -111,16 +111,18 @@ const cookieEditorCookieSchema = z.object({
 /**
  * Chrome's `getAll` leaves `partitionKey` off an unpartitioned cookie, and
  * sets `{ topLevelSite }` on a CHIPS one; a flattened export writes the site
- * as a string. Anything else is a shape this reader cannot vouch for, and the
- * safe reading of "maybe partitioned" is partitioned.
+ * as a string. Absent or `null` is the only unpartitioned reading; a present
+ * key whose site is empty is the one other shape a writer could use for
+ * "none". Anything else present - an object without a string site, a number,
+ * an array - is a shape this reader cannot vouch for, and the safe reading of
+ * "maybe partitioned" is partitioned: the row is counted and left out rather
+ * than written to a jar every site can read.
  */
 function cookieEditorPartitioned(key: unknown): boolean {
   if (key === undefined || key === null) return false;
   if (typeof key === "string") return key.length > 0;
-  if (typeof key === "object" && !Array.isArray(key)) {
-    if (!("topLevelSite" in key)) return false;
+  if (typeof key === "object" && !Array.isArray(key) && "topLevelSite" in key) {
     const topLevelSite: unknown = key.topLevelSite;
-    if (topLevelSite === undefined || topLevelSite === null) return false;
     return typeof topLevelSite !== "string" || topLevelSite.length > 0;
   }
   return true;
