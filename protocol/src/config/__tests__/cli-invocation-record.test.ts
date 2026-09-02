@@ -598,6 +598,25 @@ describe("cliInvocationLifecycleSupersedesLegacyExactMarker", () => {
     ).toBe(false);
   });
 
+  it("returns false when the digest differs even though `at` is LATER than the marker", () => {
+    // A non-null digest is evidence AGAINST supersession when it names a
+    // different marker incarnation, not absence of evidence - so it must
+    // not fall back to the timestamp rule even when the timestamp alone
+    // would say "later, therefore superseded". Falling back here would let
+    // a backward clock step on an older CLI discharge a transaction that
+    // started after this lifecycle was written.
+    expect(
+      cliInvocationLifecycleSupersedesLegacyExactMarker(
+        { parsed: TXN_SAMPLE, digest },
+        {
+          ...LIFECYCLE_SAMPLE,
+          at: "2026-09-01T00:00:00.001Z",
+          supersededLegacyMarkerDigest: "f".repeat(64),
+        },
+      ),
+    ).toBe(false);
+  });
+
   it("falls back to the timestamp rule when the field is null and `at` is later", () => {
     expect(
       cliInvocationLifecycleSupersedesLegacyExactMarker(

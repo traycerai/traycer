@@ -610,8 +610,17 @@ export function cliInvocationLifecycleNewerThanLegacyExactMarker(
  * the lifecycle it commits, so a lifecycle naming this marker's bytes was
  * written by a transaction that completed after the marker existed - true
  * regardless of what the wall clock did in between. The timestamp comparison
- * remains only for lifecycles written by a CLI predating the field, or for a
- * marker the confirming transaction never saw.
+ * remains only for lifecycles that carry NO digest evidence: one written by a
+ * CLI predating the field, or by a transaction that saw no legacy marker at
+ * acquire time.
+ *
+ * A digest that names a DIFFERENT marker is evidence against, not absence
+ * of evidence: the confirming transaction saw another incarnation of this
+ * file, so the marker read now was written after it acquired - by an older
+ * CLI rewriting the exact path - and a lifecycle cannot discharge a
+ * transaction that started after it. Falling back to timestamps there would
+ * let a backward clock step discharge that later transaction and drop its
+ * record bypass.
  *
  * `digest` is the {@link cliInvocationTransactionMarkerDigest} of the marker
  * file's bytes as the caller read them.
@@ -623,11 +632,8 @@ export function cliInvocationLifecycleSupersedesLegacyExactMarker(
   },
   lifecycle: CliInvocationLifecycle,
 ): boolean {
-  if (
-    lifecycle.supersededLegacyMarkerDigest !== null &&
-    lifecycle.supersededLegacyMarkerDigest === marker.digest
-  ) {
-    return true;
+  if (lifecycle.supersededLegacyMarkerDigest !== null) {
+    return lifecycle.supersededLegacyMarkerDigest === marker.digest;
   }
   return cliInvocationLifecycleNewerThanLegacyExactMarker(
     marker.parsed,

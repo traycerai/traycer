@@ -900,6 +900,115 @@ describe("runServiceRegistrationWithInvocationRecord", () => {
     expect(linkStat.isSymbolicLink()).toBe(true);
     expect(await readFile(sentinel, "utf8")).toBe("sentinel\n");
   });
+
+  if (process.platform !== "win32") {
+    it("when the state directory identity changes after the record and lifecycle are committed, fails the final stale-clear check without touching either", async () => {
+      // Registration performs five `assertStateDirUnchanged` checks with no
+      // contention: acquiring the transaction, before staging, before the
+      // commit rename, before the lifecycle write, and this one - the final
+      // check that gates clearing an earlier stale marker. Swapping on the
+      // 5th call means the record and lifecycle have already committed for
+      // real (through the untouched directory) before the identity check
+      // that is under test ever runs.
+      let assertCalls = 0;
+      const original = cliInvocationStateDir(hostHome);
+      const movedAside = join(hostHome, "original-state-post-lifecycle");
+      __setCliInvocationStateDirPauseBeforeWriteForTest(async () => {
+        assertCalls += 1;
+        if (assertCalls !== 5) return;
+        await renameFile(original, movedAside);
+        await mkdir(original, { recursive: true, mode: 0o700 });
+        await chmod(original, 0o700);
+      });
+      const recordBasename = basename(cliInvocationRecordPath(hostHome));
+      const lifecycleBasename = basename(cliInvocationLifecyclePath(hostHome));
+      const staleBasename = basename(
+        cliInvocationRecordStaleMarkerPath(hostHome),
+      );
+      let osMutated = false;
+      let caught: unknown = null;
+      try {
+        await runServiceRegistrationWithInvocationRecord({
+          environment: "production",
+          hostHomeDir: hostHome,
+          waitMs: 2_000,
+          pollIntervalMs: 20,
+          serviceLabel: LABEL,
+          cli: npmCli(),
+          register: async () => {
+            osMutated = true;
+          },
+        });
+      } catch (error) {
+        caught = error;
+      }
+      expect(assertCalls).toBe(5);
+      expect(osMutated).toBe(true);
+      expect(caught).toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+        details: {
+          label: LABEL,
+          phase: "stale-clear",
+          outcome: "unsafe-state-dir",
+          registrationCommitted: true,
+        },
+      });
+      expect(didServiceRegistrationCommit(caught)).toBe(true);
+      // The record and lifecycle generation were committed for real, through
+      // the directory this transaction validated - which is now at
+      // `movedAside`, not at the live path (the swapped-in directory is a
+      // fresh, empty one the production code never wrote through, since the
+      // final check failed before any further write was attempted).
+      expect(await exists(join(movedAside, recordBasename))).toBe(true);
+      expect(await exists(join(movedAside, lifecycleBasename))).toBe(true);
+      const committedRecord = parseCliInvocationRecord(
+        JSON.parse(await readFile(join(movedAside, recordBasename), "utf8")),
+      );
+      expect(committedRecord?.source.serviceLabel).toBe(LABEL);
+      const committedLifecycle = parseCliInvocationLifecycle(
+        JSON.parse(await readFile(join(movedAside, lifecycleBasename), "utf8")),
+      );
+      expect(committedLifecycle?.event).toBe("registered");
+      // Retained, not released: the transaction marker this run created
+      // lives inside `movedAside` (it moved with the directory), and
+      // nothing in the "stale-clear" catch block attempts a write or an
+      // unlink - there is no `markStale*` call on this path, unlike every
+      // other failure branch in this function. `unlinkIfUnchanged` is
+      // therefore never called with `held.txnPath`, which is a fixed
+      // pathname that - after the swap - resolves into the fresh, empty
+      // directory rather than `movedAside`, so a release attempt could not
+      // have reached this marker even if one had been made.
+      const movedMarkers = (await readdir(movedAside)).filter(
+        isCliInvocationTransactionMarkerBasename,
+      );
+      expect(movedMarkers).toHaveLength(1);
+      const markerName = movedMarkers[0];
+      if (markerName === undefined) {
+        throw new Error("expected the retained transaction marker");
+      }
+      const marker = parseCliInvocationTransactionMarker(
+        JSON.parse(await readFile(join(movedAside, markerName), "utf8")),
+      );
+      expect(marker?.operation).toBe("install");
+      expect(marker?.serviceLabel).toBe(LABEL);
+      // "No stale marker was written" is observable at both locations, but
+      // for different reasons: `movedAside` because the catch block makes
+      // no marker writes at all on this path, and the fresh `original`
+      // because it is a directory the code never wrote through in the
+      // first place - any stale-marker attempt would itself have re-run
+      // `assertStateDirUnchanged` and failed the same way. Both are
+      // asserted since the swap makes the second one somewhat trivial by
+      // construction, not because it is uninformative: it confirms the
+      // fresh directory was never touched either.
+      expect(await exists(join(movedAside, staleBasename))).toBe(false);
+      expect(
+        (await readdir(original)).filter(
+          isCliInvocationTransactionMarkerBasename,
+        ),
+      ).toEqual([]);
+      expect(await exists(join(original, staleBasename))).toBe(false);
+    });
+  }
 });
 
 describe("runServiceUninstallWithInvocationRecord", () => {
@@ -1203,6 +1312,119 @@ describe("runServiceUninstallWithInvocationRecord", () => {
       "not-json-garbage\n",
     );
   });
+
+  if (process.platform !== "win32") {
+    it("when the state directory identity changes after a confirmed OS uninstall, fails the post-uninstall check, retains the transaction marker, and leaves the live record in place", async () => {
+      await runServiceRegistrationWithInvocationRecord({
+        environment: "production",
+        hostHomeDir: hostHome,
+        waitMs: 2_000,
+        pollIntervalMs: 20,
+        serviceLabel: LABEL,
+        cli: npmCli(),
+        register: async () => undefined,
+      });
+      // Uninstall performs two `assertStateDirUnchanged` checks with no
+      // contention before the point under test: acquiring the transaction,
+      // then this one - right after `options.uninstall()` resolved and the
+      // live record was confirmed to match this label, and before the
+      // record is removed. Swapping on the 2nd call means the (still-live)
+      // record and the freshly acquired transaction marker are already on
+      // disk, through the untouched directory, before the identity check
+      // under test ever runs.
+      let assertCalls = 0;
+      const original = cliInvocationStateDir(hostHome);
+      const movedAside = join(hostHome, "original-state-post-uninstall");
+      __setCliInvocationStateDirPauseBeforeWriteForTest(async () => {
+        assertCalls += 1;
+        if (assertCalls !== 2) return;
+        await renameFile(original, movedAside);
+        await mkdir(original, { recursive: true, mode: 0o700 });
+        await chmod(original, 0o700);
+      });
+      const recordBasename = basename(cliInvocationRecordPath(hostHome));
+      const staleBasename = basename(
+        cliInvocationRecordStaleMarkerPath(hostHome),
+      );
+      let uninstalled = false;
+      let caught: unknown = null;
+      try {
+        await runServiceUninstallWithInvocationRecord({
+          environment: "production",
+          hostHomeDir: hostHome,
+          waitMs: 2_000,
+          pollIntervalMs: 20,
+          serviceLabel: LABEL,
+          uninstall: async () => {
+            uninstalled = true;
+          },
+        });
+      } catch (error) {
+        caught = error;
+      }
+      expect(assertCalls).toBe(3);
+      expect(uninstalled).toBe(true);
+      // The catch block in `runServiceUninstallWithInvocationRecord` rethrows
+      // `cause` unmodified - the state-dir-unsafe `CliError` this check
+      // itself throws, not a re-wrapped one, so it carries `causeCode: null`
+      // (an identity mismatch, not an errno) and `phase:
+      // "invocation-state-dir"` rather than the registration path's
+      // "stale-clear" wrapper.
+      expect(caught).toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_UNINSTALL_FAILED,
+        details: {
+          label: LABEL,
+          phase: "invocation-state-dir",
+          causeCode: null,
+        },
+      });
+      // `markStaleAndUnpreferLive` ran on the way out: its own
+      // `writeStaleMarker` re-runs `assertStateDirUnchanged` against the
+      // same (still-swapped) identity and fails the same way, so it never
+      // gets far enough to write the stale-marker temp file, and returns
+      // `false`. Because it returned `false`, the `if (staleWritten)` guard
+      // around `unlinkIfUnchanged(held.txnPath, held.rawMarker)` is never
+      // entered - the retained transaction marker is that bypass, not a
+      // deliberate skip keyed on the identity check.
+      const movedMarkers = (await readdir(movedAside)).filter(
+        isCliInvocationTransactionMarkerBasename,
+      );
+      expect(movedMarkers).toHaveLength(1);
+      const markerName = movedMarkers[0];
+      if (markerName === undefined) {
+        throw new Error("expected the retained transaction marker");
+      }
+      const marker = parseCliInvocationTransactionMarker(
+        JSON.parse(await readFile(join(movedAside, markerName), "utf8")),
+      );
+      expect(marker?.operation).toBe("uninstall");
+      expect(marker?.serviceLabel).toBe(LABEL);
+      // `liveRecordMatchesLabel(held.livePath, ...)` inside
+      // `markStaleAndUnpreferLive` reads through the fixed `livePath`
+      // pathname, which after the swap resolves into the fresh, empty
+      // directory rather than `movedAside` - so it reads "absent", the
+      // removal branch is skipped, and the actual live record (inside
+      // `movedAside`) is never touched. "Live record still exists" is this:
+      // the compare-then-unlink never had the record in its sights once the
+      // path stopped resolving to it.
+      expect(await exists(join(movedAside, recordBasename))).toBe(true);
+      const stillLive = parseCliInvocationRecord(
+        JSON.parse(await readFile(join(movedAside, recordBasename), "utf8")),
+      );
+      expect(stillLive?.source.serviceLabel).toBe(LABEL);
+      // No stale marker anywhere: `writeStaleMarker` fails its own identity
+      // re-check before ever creating the temp file, so nothing is written
+      // to `movedAside`; and the fresh `original` is a directory production
+      // code never wrote through for the same reason.
+      expect(await exists(join(movedAside, staleBasename))).toBe(false);
+      expect(await exists(join(original, staleBasename))).toBe(false);
+      expect(
+        (await readdir(original)).filter(
+          isCliInvocationTransactionMarkerBasename,
+        ),
+      ).toEqual([]);
+    });
+  }
 });
 
 describe("readAuthorityFile unreadable handling", () => {

@@ -462,12 +462,40 @@ export async function runServiceRegistrationWithInvocationRecord(
       exitCode: 1,
     });
   }
-  await assertStateDirUnchanged(
-    options.hostHomeDir,
-    stateDirIdentity,
-    options.serviceLabel,
-    "install",
-  );
+  try {
+    await assertStateDirUnchanged(
+      options.hostHomeDir,
+      stateDirIdentity,
+      options.serviceLabel,
+      "install",
+    );
+  } catch (cause) {
+    // Post-registration like the two throws above it: the service manager has
+    // the registration and the record and generation are committed, so the
+    // adoption lease must still be honoured. Nothing is marked here - the
+    // directory this transaction validated is no longer the one at the path,
+    // and a marker written into whatever replaced it would bypass nothing of
+    // ours. The retained transaction marker is what outlives this process.
+    logger.debug(
+      "CLI invocation state directory changed after the lifecycle write",
+      {
+        environment: options.environment,
+        label: options.serviceLabel,
+        errorName: errorFromUnknown(cause).name,
+      },
+    );
+    throw cliError({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      message: `service '${options.serviceLabel}' was registered and its CLI invocation record committed, but the record directory changed before an earlier stale marker could be cleared; the host re-reads the OS registration until a later service command clears it`,
+      details: {
+        label: options.serviceLabel,
+        phase: "stale-clear",
+        outcome: "unsafe-state-dir",
+        registrationCommitted: true,
+      },
+      exitCode: 1,
+    });
+  }
   // Clear an earlier commit failure's stale marker BEFORE releasing, and
   // report a marker that survives: the record just committed is authoritative,
   // and a stale marker beside it keeps every host read on the OS definition
@@ -545,12 +573,31 @@ export async function runServiceUninstallWithInvocationRecord(
     await releaseOwnedTransaction(held);
     return;
   }
-  await assertStateDirUnchanged(
-    options.hostHomeDir,
-    stateDirIdentity,
-    options.serviceLabel,
-    "uninstall",
-  );
+  try {
+    await assertStateDirUnchanged(
+      options.hostHomeDir,
+      stateDirIdentity,
+      options.serviceLabel,
+      "uninstall",
+    );
+  } catch (cause) {
+    // The service is gone and the record of this label still describes it,
+    // which is the OS-throw case above with the same remedy: unprefer and
+    // remove it as far as the moved directory allows. Where the identity
+    // re-check refuses every write, the retained transaction marker is the
+    // bypass that outlives this process, and the failure is reported rather
+    // than a removed service read as a clean uninstall.
+    logger.debug(
+      "CLI invocation state directory changed after OS uninstall; marking the cached invocation stale",
+      {
+        environment: options.environment,
+        label: options.serviceLabel,
+        errorName: errorFromUnknown(cause).name,
+      },
+    );
+    await markStaleAndUnpreferLive(held);
+    throw cause;
+  }
   // Strict, not best-effort: `matching` above is the compare half of
   // compare-then-unlink, and this is the unlink. A record that survives its
   // own uninstall - a sharing violation on Windows is the realistic case -
