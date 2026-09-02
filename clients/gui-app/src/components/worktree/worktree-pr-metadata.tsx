@@ -248,7 +248,7 @@ function WorktreePrAnchor(props: {
       return;
     }
     event.preventDefault();
-    openLink(props.reference.url, "github", event);
+    void openLink(props.reference.url, "github", event);
   };
   return (
     <a

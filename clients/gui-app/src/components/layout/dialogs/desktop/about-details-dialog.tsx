@@ -238,7 +238,9 @@ function SupportLinks(props: SupportLinksProps): ReactNode {
           type="button"
           variant="outline"
           size="sm"
-          onClick={() => openLink(entry.url, "docs", null)}
+          onClick={() => {
+            void openLink(entry.url, "docs", null);
+          }}
         >
           <ExternalLink />
           {entry.label}

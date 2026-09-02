@@ -5,6 +5,7 @@ import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { EPIC_NODE_LABELS } from "@/lib/artifacts/node-display";
 import { useArtifactById, useOpenEpicId } from "@/lib/epic-selectors";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 function nonEmpty(value: string | null | undefined): string | null {
   return value !== null && value !== undefined && value.length > 0
@@ -50,21 +51,20 @@ export function useArtifactRowDisplay(input: {
     if (live === null || input.artifactId === null) {
       return;
     }
-    openTile({
-      node: {
-        id: input.artifactId,
-        instanceId: uuidv4(),
-        type: displayKind,
-        name: title,
-        hostId: activeHostId,
-      },
-      target: { epicId },
-      gesture: "explicit",
-      modifiers: null,
-      placement: null,
-      dedupe: true,
-      source: "direct_ui",
-    });
+    openTile(
+      tileIntent(
+        {
+          id: input.artifactId,
+          instanceId: uuidv4(),
+          type: displayKind,
+          name: title,
+          hostId: activeHostId,
+        },
+        { epicId },
+        "explicit",
+        "direct_ui",
+      ),
+    );
   };
 
   return { displayKind, title, isDeleted, canOpen, openArtifact };

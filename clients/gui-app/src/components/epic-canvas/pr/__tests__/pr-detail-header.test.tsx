@@ -13,7 +13,7 @@ import { PrDetailHeader } from "@/components/epic-canvas/pr/pr-detail-header";
  * natively.
  */
 
-const openLink = vi.hoisted(() => vi.fn());
+const openLink = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 vi.mock("@/lib/links/open-link", () => ({ useOpenLink: () => openLink }));
 
 function buildPrDetailCore(overrides: Partial<PrDetailCore>): PrDetailCore {

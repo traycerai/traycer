@@ -226,14 +226,13 @@ describe("browser.screencast@1.0 control frames", () => {
 });
 
 describe("browser.sessions@1.0 epic-scoped open + tab-shaped session info", () => {
-  it("parses tabOpened as a one-way tab lifecycle event carrying source + disposition", () => {
+  it("parses tabOpened as a one-way tab lifecycle event carrying source", () => {
     const opened = {
       kind: "tabOpened",
       hasBinaryPayload: false,
       sessionId: "session-1",
       tabId: "tab-2",
       source: "agent",
-      disposition: "foreground",
     };
     expect(browserSessionsServerFrameSchema.safeParse(opened).success).toBe(
       true,
@@ -242,10 +241,10 @@ describe("browser.sessions@1.0 epic-scoped open + tab-shaped session info", () =
       browserSessionsServerFrameSchema.safeParse({
         ...opened,
         source: "page",
-        disposition: "background",
       }).success,
     ).toBe(true);
-    // Both discriminating fields are required and closed.
+    // `source` is required, and the frame is closed - the retired
+    // `disposition` field is now an unknown key, not an optional one.
     expect(
       browserSessionsServerFrameSchema.safeParse({
         kind: "tabOpened",
@@ -257,7 +256,7 @@ describe("browser.sessions@1.0 epic-scoped open + tab-shaped session info", () =
     expect(
       browserSessionsServerFrameSchema.safeParse({
         ...opened,
-        disposition: "pip",
+        disposition: "foreground",
       }).success,
     ).toBe(false);
   });

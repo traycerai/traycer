@@ -41,6 +41,7 @@ import {
   classifyHref,
   type ClassifiedHref,
 } from "@/markdown/links/classify-href";
+import type { LinkClickEvent } from "@/lib/links/open-link";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { cn } from "@/lib/utils";
 import { isSingleTextblockLinkRange } from "./artifact-link-selection";
@@ -56,11 +57,28 @@ export type OpenableArtifactLink = Extract<
   { readonly kind: "external" | "file" }
 >;
 
+/** A keyboard or card activation, which carries no mouse button (R7). */
+const PLAIN_ACTIVATION: LinkClickEvent = {
+  altKey: false,
+  ctrlKey: false,
+  metaKey: false,
+  shiftKey: false,
+  button: 0,
+};
+
 export interface ArtifactLinkPopoverProps {
   readonly editor: Editor;
   readonly editable: boolean;
   readonly scrollContainer: HTMLElement | null;
-  readonly openLink: (link: OpenableArtifactLink) => void;
+  /**
+   * The activating event travels with the link: `ctrl`/`meta` forces the OS
+   * browser and `alt` inverts the configured mode, and both are decided by
+   * the link seam, not here (A3, R7).
+   */
+  readonly openLink: (
+    link: OpenableArtifactLink,
+    event: LinkClickEvent,
+  ) => void;
   readonly onOpenChange: (open: boolean) => void;
 }
 
@@ -825,11 +843,11 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
   }, []);
 
   const routeHref = useCallback(
-    (rawHref: string): "default" | "handled" => {
+    (rawHref: string, event: LinkClickEvent): "default" | "handled" => {
       const classified = classifyHref(rawHref);
       if (classified.kind === "default") return "default";
       if (classified.kind === "external" || classified.kind === "file") {
-        openLink(classified);
+        openLink(classified, event);
       }
       return "handled";
     },
@@ -925,7 +943,7 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
       // (unrecognized scheme) is deliberately suppressed instead: clicks
       // neither navigate nor move the caret, and the link stays reachable
       // for editing through the hover card.
-      const result = routeHref(rawHref);
+      const result = routeHref(rawHref, event);
       if (result === "default") {
         const normalizedHref = rawHref.trim();
         if (
@@ -996,7 +1014,12 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
         anchorPosition(editor, anchor),
       );
       if (rawHref === null) return;
-      if (routeHref(rawHref) === "default") return;
+      if (
+        routeHref(rawHref, { ...PLAIN_ACTIVATION, ...modifiersOf(event) }) ===
+        "default"
+      ) {
+        return;
+      }
       event.preventDefault();
       event.stopPropagation();
       return;
@@ -1438,7 +1461,7 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
           href={href}
           onCopy={() => copy(href.trim())}
           onEdit={beginEditing}
-          onOpen={() => routeHref(href)}
+          onOpen={() => routeHref(href, PLAIN_ACTIVATION)}
         />
       ) : (
         <form
@@ -1509,4 +1532,14 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
     </div>,
     paneContainer ?? document.body,
   );
+}
+
+/** The modifier half of a keyboard activation - no button, no mouse. */
+function modifiersOf(event: KeyboardEvent): Omit<LinkClickEvent, "button"> {
+  return {
+    altKey: event.altKey,
+    ctrlKey: event.ctrlKey,
+    metaKey: event.metaKey,
+    shiftKey: event.shiftKey,
+  };
 }

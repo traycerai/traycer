@@ -2,10 +2,9 @@
  * Docs: see ./README.md
  *
  * Canonical opener action: place a tile ref into the palette's bound target
- * group as a fresh instance (no dedup), via `openTile` with the bound pane as
- * the intent's explicit placement (decisions C1, C6, C7). Both the "open"
- * command source's leaves and any future manual UI route through here per the
- * palette → manual-UI parity rule.
+ * group via `openTile` with the bound pane as the intent's explicit placement
+ * (decisions C1, C6, C7). Both the "open" command source's leaves and any
+ * future manual UI route through here per the palette → manual-UI parity rule.
  *
  * Routes through the nested-focus navigation boundary (see the
  * "Nested Focus Opener Boundary" decision) so the open both mutates the
@@ -23,6 +22,7 @@
  */
 import {
   commitWithoutNavigation,
+  MANUAL_TILE_OPEN,
   openTileWithNavigation,
 } from "@/lib/canvas/tile-open/open-tile";
 import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
@@ -34,6 +34,15 @@ export interface OpenTileIntoTargetGroupArgs {
   /** Bound canvas tile group id (the opener target). */
   readonly groupId: string | null;
   readonly ref: EpicCanvasTileRef;
+  /**
+   * `false` mints a fresh, non-deduped instance - right when two views of the
+   * same content are useful (a diff open twice). `true` for a SINGLETON tile
+   * whose content `id` is derived from what it shows (the per-epic
+   * communication graph): two tabs would share that id, so per-tile state
+   * keyed on it - the comm graph's persisted viewport - would be written by
+   * both.
+   */
+  readonly dedupe: boolean;
   /**
    * Nested-focus navigation seam from the caller's `CommandContext.router`.
    * `undefined` when the router adapter carries no navigation seam (e.g. a
@@ -50,14 +59,14 @@ export function openTileIntoTargetGroup(
     {
       node: args.ref,
       target: { tabId: args.tabId },
-      // The opener's own pane IS the placement, and a second view of the same
-      // content is the whole point of this action, so dedupe is off (C6, C7).
+      // The opener's own pane IS the placement (C6, C7).
       gesture: "explicit",
       modifiers: null,
       placement: { kind: "tab", paneId: args.groupId, index: null },
-      dedupe: false,
+      dedupe: args.dedupe,
       source: "command_palette",
     },
     args.navigateNestedFocus ?? commitWithoutNavigation,
+    MANUAL_TILE_OPEN,
   );
 }

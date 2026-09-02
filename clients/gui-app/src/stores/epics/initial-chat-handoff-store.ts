@@ -136,12 +136,12 @@ function isStringOrNull(value: unknown): boolean {
  * A persisted handoff, identified by the fields this store's own logic
  * BRANCHES on - the scope triple, `chatId`, and the status union.
  *
- * The payload fields (`content`, `settings`, `worktreeIntent`, `placement`)
- * are deliberately not re-validated: v1 wrote them from this same interface at
- * these same types, and the only thing v2 changed is the map key. Checking the
- * discriminators is what keeps a truncated or hand-edited blob from
- * rehydrating into a record whose `status` no transition matches, which would
- * strand it as unconsumable.
+ * `content`, `settings` and `worktreeIntent` are deliberately not
+ * re-validated: every version wrote them from this same interface at these
+ * same types. `placement` is the exception and is re-read by
+ * {@link readPersistedPlacement}. Checking the discriminators is what keeps a
+ * truncated or hand-edited blob from rehydrating into a record whose `status`
+ * no transition matches, which would strand it as unconsumable.
  */
 function isPersistedHandoff(value: unknown): value is InitialChatHandoff {
   if (!isRecord(value)) return false;
@@ -150,6 +150,37 @@ function isPersistedHandoff(value: unknown): value is InitialChatHandoff {
   if (!isStringOrNull(value.hostId)) return false;
   if (!isStringOrNull(value.chatId)) return false;
   return typeof value.status === "string" && HANDOFF_STATUSES.has(value.status);
+}
+
+/**
+ * v2 -> v3: the tile-opening refactor replaced the persisted
+ * `ConversationTilePlacement` (`{ kind: "active-tile" | "target-group" |
+ * "split" }`, no pane id) with {@link ExplicitTilePlacement}. A blob written
+ * by the previous release would otherwise rehydrate into a field the resolver
+ * reads as an explicit placement and cannot honour, so an unrecognized shape
+ * falls back to `null` - the conversation placement setting then decides,
+ * which is what every caller but the PaneOpener passes anyway.
+ */
+function readPersistedPlacement(value: unknown): ExplicitTilePlacement | null {
+  if (!isRecord(value)) return null;
+  if (typeof value.paneId !== "string") return null;
+  if (value.kind === "tab") {
+    return {
+      kind: "tab",
+      paneId: value.paneId,
+      index: typeof value.index === "number" ? value.index : null,
+    };
+  }
+  if (
+    value.kind === "split" &&
+    (value.edge === "left" ||
+      value.edge === "right" ||
+      value.edge === "top" ||
+      value.edge === "bottom")
+  ) {
+    return { kind: "split", paneId: value.paneId, edge: value.edge };
+  }
+  return null;
 }
 
 /**
@@ -178,7 +209,11 @@ export function migrateInitialChatHandoffState(
   for (const value of Object.values(persisted.handoffs)) {
     if (!isPersistedHandoff(value)) continue;
     const key = initialChatHandoffKey(value);
-    handoffs[key] = { ...value, key };
+    handoffs[key] = {
+      ...value,
+      key,
+      placement: readPersistedPlacement(value.placement),
+    };
   }
   return { handoffs };
 }
@@ -298,10 +333,11 @@ export const useInitialChatHandoffStore = create<InitialChatHandoffStore>()(
     }),
     {
       ...basePersistOptions(persistKey(STORE_KEYS.initialChatHandoff)),
-      // v2 dropped the `hostId` segment from every persisted map key; see
-      // `initialChatHandoffKey` for why, and `migrateInitialChatHandoffState`
-      // for what happens to a v1 blob.
-      version: 2,
+      // v2 dropped the `hostId` segment from every persisted map key (see
+      // `initialChatHandoffKey` for why); v3 re-reads `placement`, whose shape
+      // the tile-opening refactor changed. `migrateInitialChatHandoffState`
+      // handles both, and is idempotent for a blob already at either.
+      version: 3,
       storage: createJSONStorage(() => localStorage),
       migrate: (persisted) => migrateInitialChatHandoffState(persisted),
     },

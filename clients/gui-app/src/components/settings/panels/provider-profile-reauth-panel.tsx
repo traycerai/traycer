@@ -176,7 +176,9 @@ export function ProviderProfileReauthPanel({
         identityChanged={identityChanged}
         emailRevealed={emailRevealed}
         setEmailRevealed={setEmailRevealed}
-        onOpenExternalLink={(url) => openLink(url, "auth", null)}
+        onOpenExternalLink={(url) => {
+          void openLink(url, "auth", null);
+        }}
         onCancel={cancel}
         onRetry={start}
         onSignInAgain={signInAgain}

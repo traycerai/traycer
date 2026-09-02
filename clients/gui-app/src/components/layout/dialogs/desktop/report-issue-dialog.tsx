@@ -679,17 +679,17 @@ export function ReportIssueDialog(
         buildRequest(previewTitle),
       );
       const url = buildGitHubIssueUrl(finalDraft);
-      // A GitHub issue draft is a `docs`-class page, so it always leaves for
-      // the OS browser (A2). The handoff is fire-and-forget - the seam owns the
-      // failure toast - so this mutation's retry toast now covers the
-      // rebuild, which is the step that can fail with the report still in
-      // hand. The analytics event was always about the user asking to open,
-      // not about the browser actually launching.
-      openLink(url, "docs", null);
+      // The event is about the user ASKING to open, so it is tracked before
+      // the handoff and regardless of its outcome.
       Analytics.getInstance().track(
         AnalyticsEvent.ReportIssuePublicOpenAttempted,
         null,
       );
+      // A GitHub issue draft is a `docs`-class page, so it always leaves for
+      // the OS browser (A2). AWAITED, and the rejection is left to propagate:
+      // `onError` is what keeps the preview screen and its retry toast, so a
+      // failed OS handoff must never advance to the confirmation (L1).
+      await openLink(url, "docs", null);
     },
     onSuccess: () => {
       toast.success("Opened in your browser");

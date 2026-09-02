@@ -35,7 +35,11 @@ import {
 } from "@/components/epic-canvas/dnd/dnd";
 import { computeTabDropIndex } from "@/components/epic-canvas/dnd/tab-strip-drop-preview";
 import type { ExplicitTilePlacement } from "@/lib/canvas/tile-open/intent";
-import { openTileWithNavigation } from "@/lib/canvas/tile-open/open-tile";
+import {
+  MANUAL_TILE_OPEN,
+  openTileWithNavigation,
+} from "@/lib/canvas/tile-open/open-tile";
+import { findOpenTileInTab } from "@/stores/epics/canvas/canvas-selectors";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { findPaneById } from "@/stores/epics/canvas/tile-tree";
 import {
@@ -450,6 +454,7 @@ function commitArtifactTabDrop(
  */
 function placeResolvedCanvasTile(
   resolved: {
+    readonly epicId: string;
     readonly tile:
       | EpicNodeRef
       | GitDiffTileRef
@@ -460,7 +465,7 @@ function placeResolvedCanvasTile(
   },
   navigateNested: NavigateNestedFocus,
 ): boolean {
-  const { tile, target, preview } = resolved;
+  const { epicId, tile, target, preview } = resolved;
   if (
     preview.kind === "left-panel-rail" ||
     preview.kind === "left-panel-rail-list" ||
@@ -471,10 +476,38 @@ function placeResolvedCanvasTile(
   // A drop position IS the placement decision, so it travels as the intent's
   // explicit placement (C7) - center lands as a tab at the drop index, an
   // edge splits. Everything else (focus, route, analytics) is the resolver's.
+  //
+  // A ref ALREADY OPEN in this canvas moves to the drop target instead of
+  // opening: dedupe would otherwise resolve to focus-existing and ignore the
+  // position the user dropped at. This is the same resolution the pre-intent
+  // `insertNodeOnTabStrip` / `splitPaneAtEdge` did for a `node` source, only
+  // spelled at the call site now that placement travels in the intent.
   const openDroppedTile = (
     viewTabId: string,
     placement: ExplicitTilePlacement | null,
   ): boolean => {
+    if (placement !== null) {
+      const existing = findOpenTileInTab(viewTabId, tile);
+      if (existing !== null) {
+        const canvasStore = useEpicCanvasStore.getState();
+        navigateNested(epicId, viewTabId, () =>
+          placement.kind === "tab"
+            ? canvasStore.prepareMoveActiveTabOnTabStripFocusTarget(viewTabId, {
+                sourcePaneId: existing.paneId,
+                tabId: existing.instanceId,
+                targetPaneId: placement.paneId,
+                targetIndex: placement.index ?? 0,
+              })
+            : canvasStore.prepareSplitPaneWithTabFocusTarget(viewTabId, {
+                sourcePaneId: existing.paneId,
+                tabId: existing.instanceId,
+                targetPaneId: placement.paneId,
+                position: placement.edge,
+              }),
+        );
+        return true;
+      }
+    }
     openTileWithNavigation(
       {
         node: tile,
@@ -486,6 +519,7 @@ function placeResolvedCanvasTile(
         source: "direct_ui",
       },
       navigateNested,
+      MANUAL_TILE_OPEN,
     );
     return true;
   };
@@ -554,6 +588,7 @@ export function commitResolvedCanvasDrop(
   if (tile !== null) {
     return placeResolvedCanvasTile(
       {
+        epicId: drop.source.epicId,
         tile,
         target: drop.target,
         preview: drop.preview,

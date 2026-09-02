@@ -40,6 +40,7 @@ import {
 import { usePresentPrOwners } from "@/hooks/pr/use-present-pr-owners";
 import { displayTitle } from "@/lib/display-title";
 import { cn } from "@/lib/utils";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 const DELETED_OWNER_LABEL: Record<PrOwnerRef["ownerKind"], string> = {
   chat: "Removed chat",
@@ -83,21 +84,20 @@ function usePrOwnerResolution(args: {
   const { ownerId, ownerKind } = args.owner;
   const openOwner = useCallback((): void => {
     if (label === null || hostId === null) return;
-    openTile({
-      node: {
-        id: ownerId,
-        instanceId: uuidv4(),
-        type: ownerKind,
-        name: label,
-        hostId,
-      },
-      target: { epicId },
-      gesture: "explicit",
-      modifiers: null,
-      placement: null,
-      dedupe: true,
-      source: "direct_ui",
-    });
+    openTile(
+      tileIntent(
+        {
+          id: ownerId,
+          instanceId: uuidv4(),
+          type: ownerKind,
+          name: label,
+          hostId,
+        },
+        { epicId },
+        "explicit",
+        "direct_ui",
+      ),
+    );
   }, [epicId, hostId, label, openTile, ownerId, ownerKind]);
 
   return { label, hostId, Icon: EPIC_NODE_ICONS[ownerKind], openOwner };

@@ -359,7 +359,7 @@ function CliBinaryMissingNotice({
             // semantics only.
             // oxlint-disable-next-line react-doctor/no-prevent-default -- `openLink` owns the open, not renderer navigation.
             event.preventDefault();
-            openLink(installGuideUrl, "docs", null);
+            void openLink(installGuideUrl, "docs", null);
           }}
           className="mt-1 inline-flex text-ui-xs font-medium text-primary transition-colors hover:text-primary/80 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 rounded"
         >

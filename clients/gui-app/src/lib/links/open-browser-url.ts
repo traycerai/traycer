@@ -1,7 +1,11 @@
 import { useCallback } from "react";
 import { toast } from "sonner";
 import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
-import { useMaybeBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
+import {
+  useMaybeBrowserSessionsSnapshot,
+  type BrowserSessionsSnapshot,
+  type BrowserSessionsState,
+} from "@/components/epic-canvas/renderers/browser-sessions-context";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { electronTabBinding } from "@/lib/browser-view/sessions/electron-tab-directory";
 import { ignoreError } from "@/lib/browser-view/ignore-error";
@@ -12,14 +16,15 @@ import type {
   TileOpenModifiers,
   TileOpenTarget,
 } from "@/lib/canvas/tile-open/intent";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
 
 export interface OpenBrowserUrlInput {
   readonly url: string;
   readonly modifiers: TileOpenModifiers;
   readonly epicId: string;
-  /** The canvas tab the click came from, or `null` off a canvas. */
-  readonly viewTabId: string | null;
+  /** The canvas tab the click came from. */
+  readonly viewTabId: string;
 }
 
 interface MatchedTab {
@@ -42,17 +47,23 @@ interface MatchedTab {
  * working.
  */
 export function useOpenBrowserUrl(): (input: OpenBrowserUrlInput) => void {
-  const sessions = useMaybeBrowserSessionsContext();
+  // Read at CLICK time, not subscribed: this hook is mounted by every link
+  // surface in the app and the sessions context is a fresh object per stream
+  // frame (C8).
+  const snapshot = useMaybeBrowserSessionsSnapshot();
   const { openTile } = useEpicTileNavigation();
   const openExternalLink = useOpenExternalLink();
 
   return useCallback(
     (input: OpenBrowserUrlInput): void => {
+      const sessions = sessionsOf(snapshot);
       const failed = (reason: string): void => {
         toast.error(reason, {
           action: {
             label: "Open in browser",
-            onClick: () => openExternalLink(input.url),
+            onClick: () => {
+              void openExternalLink(input.url);
+            },
           },
         });
       };
@@ -66,17 +77,16 @@ export function useOpenBrowserUrl(): (input: OpenBrowserUrlInput) => void {
         return;
       }
 
-      const target: TileOpenTarget =
-        input.viewTabId === null
-          ? { epicId: input.epicId }
-          : { tabId: input.viewTabId };
       const open = (tab: { sessionId: string; tabId: string }): void => {
         openTile(
           browserTileIntent({
             hostId,
             sessionId: tab.sessionId,
             tabId: tab.tabId,
-            target,
+            // Resolved HERE rather than before the `openTab` await: the header
+            // tab can close while the open is in flight, and opening into a
+            // closed tab id mutates a canvas with no route (R8).
+            target: currentTarget(input),
             modifiers: input.modifiers,
           }),
         );
@@ -104,8 +114,32 @@ export function useOpenBrowserUrl(): (input: OpenBrowserUrlInput) => void {
           );
         });
     },
-    [openExternalLink, openTile, sessions],
+    [openExternalLink, openTile, snapshot],
   );
+}
+
+/**
+ * Deref through a plain function, not inline: React Compiler reads a
+ * `.current` access inside a `useCallback` as a ref dependency and then
+ * refuses to preserve the manual memo. Passing the ref object to a function
+ * keeps the callback's dependency the (stable) snapshot itself, which is the
+ * whole point of reading sessions at click time (C8).
+ */
+function sessionsOf(
+  snapshot: BrowserSessionsSnapshot | null,
+): BrowserSessionsState | null {
+  return snapshot?.current ?? null;
+}
+
+/**
+ * The click's own canvas tab while it still exists, else the epic - which lets
+ * the resolver pick (or create) a live tab instead.
+ */
+function currentTarget(input: OpenBrowserUrlInput): TileOpenTarget {
+  const tabs = useEpicCanvasStore.getState().tabsById;
+  return tabs[input.viewTabId] === undefined
+    ? { epicId: input.epicId }
+    : { tabId: input.viewTabId };
 }
 
 function browserTileIntent(args: {

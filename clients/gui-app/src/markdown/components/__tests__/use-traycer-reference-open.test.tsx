@@ -5,7 +5,10 @@ import { useTraycerReferenceOpenHandler } from "@/markdown/components/use-trayce
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
-import { openTileWithNavigation } from "@/lib/canvas/tile-open/open-tile";
+import {
+  MANUAL_TILE_OPEN,
+  openTileWithNavigation,
+} from "@/lib/canvas/tile-open/open-tile";
 import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
 
 const testState = vi.hoisted(() => ({
@@ -53,7 +56,11 @@ describe("useTraycerReferenceOpenHandler", () => {
     // recorded intent is the thing under test.
     testState.openTile.mockImplementation(
       (intent: TileOpenIntent): NestedFocusTarget | null =>
-        openTileWithNavigation(intent, (_epicId, _tabId, prepare) => prepare()),
+        openTileWithNavigation(
+          intent,
+          (_epicId, _tabId, prepare) => prepare(),
+          MANUAL_TILE_OPEN,
+        ),
     );
     testState.openTile.mockClear();
   });

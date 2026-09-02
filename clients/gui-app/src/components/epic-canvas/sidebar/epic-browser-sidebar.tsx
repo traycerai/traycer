@@ -35,6 +35,7 @@ import { useEpicChatRecords } from "@/lib/epic-selectors";
 import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import { makeOpenableNodeRef } from "@/stores/epics/canvas/types";
 import { usePanelHeaderSearchQuery } from "@/stores/epics/panel-header-search-store";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 /**
  * The browsers panel's header cluster lives in
@@ -95,15 +96,16 @@ function BrowsersPanelBodyLive(props: {
         sessionId: session.sessionId,
         tabId: tab.tabId,
       });
-      openTile({
-        node: tile,
-        target: { tabId: props.tabId },
-        gesture: "single",
-        modifiers: null,
-        placement: null,
-        dedupe: true,
-        source: "direct_ui",
-      });
+      openTile(
+        tileIntent(
+          tile,
+          { tabId: props.tabId },
+          // No double-click gesture exists on these rows, so `single` would
+          // leave nothing that pins the tile: the next preview would evict it.
+          "explicit",
+          "direct_ui",
+        ),
+      );
     },
     [openTile, props.tabId],
   );
@@ -119,15 +121,16 @@ function BrowsersPanelBodyLive(props: {
         name: chat.title,
         hostId,
       });
-      openTile({
-        node: chatTile,
-        target: { tabId: props.tabId },
-        gesture: "single",
-        modifiers: null,
-        placement: null,
-        dedupe: true,
-        source: "direct_ui",
-      });
+      openTile(
+        tileIntent(
+          chatTile,
+          { tabId: props.tabId },
+          // No double-click gesture exists on these rows, so `single` would
+          // leave nothing that pins the tile: the next preview would evict it.
+          "explicit",
+          "direct_ui",
+        ),
+      );
     },
     [chatById, openTile, props.tabId],
   );

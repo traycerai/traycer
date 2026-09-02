@@ -30,7 +30,10 @@ import { requestArtifactEditorFocus } from "@/lib/artifacts/pending-editor-focus
 import { openProjectedSidebarNodeInTabWhenAvailable } from "@/components/epic-canvas/sidebar/open-projected-sidebar-node";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
-import { modifiersFromMouseEvent } from "@/lib/canvas/tile-open/intent";
+import {
+  modifiersFromMouseEvent,
+  tileIntent,
+} from "@/lib/canvas/tile-open/intent";
 import { useEpicExportArtifacts } from "@/hooks/epic/use-epic-export-artifacts-mutation";
 import { cn } from "@/lib/utils";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
@@ -901,15 +904,7 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
           nodeId: projectedNodeId,
           fallbackHostId: activeHostId,
           openNode: (nodeRef) => {
-            openTile({
-              node: nodeRef,
-              target: { tabId },
-              gesture: "explicit",
-              modifiers: null,
-              placement: null,
-              dedupe: true,
-              source: "direct_ui",
-            });
+            openTile(tileIntent(nodeRef, { tabId }, "explicit", "direct_ui"));
           },
           onBeforeOpen,
           onOpened: () => {

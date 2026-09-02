@@ -10,6 +10,7 @@ import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { displayTitle } from "@/lib/display-title";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 interface UseTerminalQuoteActionsArgs {
   readonly epicId: string;
@@ -53,21 +54,20 @@ export function useTerminalQuoteActions(
       const chats = handle.store.getState().chats;
       if (!Object.hasOwn(chats.byId, chatId)) return;
       const chat = chats.byId[chatId];
-      openTile({
-        node: {
-          id: chat.id,
-          instanceId: uuidv4(),
-          type: "chat",
-          name: displayTitle(chat.title, "agent"),
-          hostId: chat.hostId ?? tabHostId,
-        },
-        target: { tabId: viewTabId },
-        gesture: "explicit",
-        modifiers: null,
-        placement: null,
-        dedupe: true,
-        source: "direct_ui",
-      });
+      openTile(
+        tileIntent(
+          {
+            id: chat.id,
+            instanceId: uuidv4(),
+            type: "chat",
+            name: displayTitle(chat.title, "agent"),
+            hostId: chat.hostId ?? tabHostId,
+          },
+          { tabId: viewTabId },
+          "explicit",
+          "direct_ui",
+        ),
+      );
     },
     [handle, openTile, tabHostId, viewTabId],
   );

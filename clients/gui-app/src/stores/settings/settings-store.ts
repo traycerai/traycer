@@ -80,7 +80,7 @@ export const DEFAULT_TILE_PLACEMENT_SETTINGS: TilePlacementSettings = {
   conversation: "tab",
   browser: "split",
 };
-export const DEFAULT_AGENT_TAB_SURFACING: AgentTabSurfacing = "off";
+const DEFAULT_AGENT_TAB_SURFACING: AgentTabSurfacing = "off";
 export type MinimapSide = "left" | "right";
 export type MinimapPlacement = MinimapSide | "hide";
 // Mirrors xterm's `cursorStyle` union; kept as our own type so the settings
@@ -721,24 +721,19 @@ function resolveLinkOpenMode(value: unknown, legacy: unknown): LinkOpenMode {
 }
 
 /**
- * `agentTabSurfacingMode` carried the browser placement inside it: `pip`
- * floated, `tile` split the canvas. Surfacing and placement are separate
- * settings now, so the old value seeds both.
+ * The retired `agentTabSurfacingMode` migrates into `agentTabSurfacing` ONLY
+ * (see `resolvePersistedAgentTabSurfacing`). It described what an
+ * AGENT-opened tab did, and the new browser placement governs every browser
+ * open - so carrying `pip` across would float every link the user clicks,
+ * which is not what the old setting ever said. Both legacy values leave the
+ * browser placement at its default.
  */
-/** The browser placement the retired `agentTabSurfacingMode` carried. */
-function legacyBrowserPlacement(mode: unknown): BrowserTilePlacement | null {
-  if (mode === "pip") return "pip";
-  if (mode === "tile") return "split";
-  return null;
-}
-
 function resolvePersistedTilePlacement(
   persisted: Record<string, unknown>,
 ): TilePlacementSettings {
   const stored: Record<string, unknown> = isRecord(persisted.tilePlacement)
     ? persisted.tilePlacement
     : {};
-  const legacyBrowser = legacyBrowserPlacement(persisted.agentTabSurfacingMode);
   return {
     default: isTilePlacementDefault(stored.default)
       ? stored.default
@@ -751,7 +746,7 @@ function resolvePersistedTilePlacement(
       : DEFAULT_TILE_PLACEMENT_SETTINGS.conversation,
     browser: isBrowserTilePlacement(stored.browser)
       ? stored.browser
-      : (legacyBrowser ?? DEFAULT_TILE_PLACEMENT_SETTINGS.browser),
+      : DEFAULT_TILE_PLACEMENT_SETTINGS.browser,
   };
 }
 

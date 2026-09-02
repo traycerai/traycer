@@ -333,16 +333,6 @@ function insertTabInstance(
 }
 
 /** Insert `instanceId` at `index` (clamped); `null` appends. */
-function insertAtIndex(
-  ids: ReadonlyArray<string>,
-  instanceId: string,
-  index: number | null,
-): ReadonlyArray<string> {
-  const at =
-    index === null ? ids.length : Math.max(0, Math.min(index, ids.length));
-  return [...ids.slice(0, at), instanceId, ...ids.slice(at)];
-}
-
 function selectSyntheticFallback(
   pane: TilePane,
   removedIndex: number,
@@ -688,31 +678,6 @@ export function openTileInBackgroundTab(
 }
 
 /**
- * Opener path for a SINGLETON tile - one whose content `id` is derived rather
- * than per-instance (the comm graph is one per epic).
- *
- * {@link openTileInPane} deliberately bypasses dedup so two views of the same
- * content can sit side by side. That is wrong for a singleton: a second tab
- * would share the content id, so any per-tile state keyed on it (the comm
- * graph's persisted viewport) would be written by both copies. Focus the
- * existing tab wherever it lives, and only open into `paneId` when there is
- * none.
- */
-export function openSingletonTileInPane(
-  state: EpicCanvasState,
-  paneId: string,
-  ref: EpicCanvasTileRef,
-): EpicCanvasState {
-  if (state.root !== null && findPaneTabForRef(state, ref) !== null) {
-    return openTile(state, ref, false, null);
-  }
-  return openTileInPane(state, paneId, ref, {
-    mode: "permanent",
-    index: null,
-  });
-}
-
-/**
  * Open `ref` into an explicit `paneId` as a fresh tab instance, bypassing
  * global dedup. Unlike {@link openTile}, this is the opener's path: it
  * never focuses an already-open tab and never falls back to the active pane.
@@ -755,10 +720,12 @@ export function openTileInPane(
   if (mode === "background") {
     const root = replacePane(state.root, paneId, (pane) => ({
       ...pane,
-      tabInstanceIds: insertAtIndex(
-        pane.tabInstanceIds,
+      // `toSpliced` clamps past the end on its own; the `max` keeps a
+      // negative index off the "count from the end" path.
+      tabInstanceIds: pane.tabInstanceIds.toSpliced(
+        index === null ? pane.tabInstanceIds.length : Math.max(0, index),
+        0,
         node.instanceId,
-        index,
       ),
     }));
     return {

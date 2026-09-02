@@ -125,7 +125,10 @@ function TerminalsPanelBodyLive(props: {
       openTile({
         node: tile,
         target: { tabId },
-        gesture: "single",
+        // Explicit, not `single`: double-click on a terminal row is RENAME, so
+        // no gesture would ever promote a previewed terminal tile and clicking
+        // row A then row B would evict A.
+        gesture: "explicit",
         modifiers: modifiersFromMouseEvent(event),
         placement: null,
         dedupe: true,

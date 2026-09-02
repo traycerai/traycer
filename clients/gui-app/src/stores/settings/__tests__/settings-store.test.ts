@@ -534,21 +534,24 @@ describe("useSettingsStore", () => {
     expect(useSettingsStore.getState().agentTabSurfacing).toBe("off");
   });
 
-  it("migrates the legacy pip surfacing mode to surface + browser pip", async () => {
+  it("migrates the legacy pip surfacing mode to surface, leaving placement alone", async () => {
     await rehydrateFrom({ agentTabSurfacingMode: "pip" });
 
     expect(useSettingsStore.getState().agentTabSurfacing).toBe("surface");
-    expect(useSettingsStore.getState().tilePlacement).toEqual({
-      ...DEFAULT_TILE_PLACEMENT_SETTINGS,
-      browser: "pip",
-    });
+    // The old key described AGENT-opened tabs; the browser placement governs
+    // every browser open, so carrying `pip` across would float every link.
+    expect(useSettingsStore.getState().tilePlacement).toEqual(
+      DEFAULT_TILE_PLACEMENT_SETTINGS,
+    );
   });
 
-  it("migrates the legacy tile surfacing mode to surface + browser split", async () => {
+  it("migrates the legacy tile surfacing mode to surface, leaving placement alone", async () => {
     await rehydrateFrom({ agentTabSurfacingMode: "tile" });
 
     expect(useSettingsStore.getState().agentTabSurfacing).toBe("surface");
-    expect(useSettingsStore.getState().tilePlacement.browser).toBe("split");
+    expect(useSettingsStore.getState().tilePlacement).toEqual(
+      DEFAULT_TILE_PLACEMENT_SETTINGS,
+    );
   });
 
   it("keeps the legacy off surfacing mode off with default placement", async () => {

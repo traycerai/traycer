@@ -13,6 +13,9 @@ export const PIP_CAPTION_FADE_MS = 300;
 
 export type PipStreamHealth = "live" | "stale" | "disconnected";
 
+/** Who asked for a PiP: a user gesture, or the host-push pipeline. */
+export type PipOrigin = "manual" | "agent";
+
 export interface PipTarget extends BrowserViewNativeTabKey {
   readonly selectionId: string;
   /**
@@ -20,7 +23,7 @@ export interface PipTarget extends BrowserViewNativeTabKey {
    * `manual` target (explicit user intent) but freely replaces `agent`
    * targets latest-wins; see `hostOpenedTabSuppressReason`.
    */
-  readonly origin: "manual" | "agent";
+  readonly origin: PipOrigin;
 }
 
 export interface PipCaption {
@@ -65,7 +68,7 @@ export function convertBrowserTabToPip(input: {
   readonly hostId: string;
   readonly sessionId: string;
   readonly tabId: string;
-  readonly origin: "manual" | "agent";
+  readonly origin: PipOrigin;
   readonly onReady: () => void;
   readonly onError: (message: string) => void;
 }): void {

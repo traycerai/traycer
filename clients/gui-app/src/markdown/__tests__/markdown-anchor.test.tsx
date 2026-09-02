@@ -19,6 +19,7 @@ import {
   BrowserSessionsContext,
   type BrowserSessionsState,
 } from "@/components/epic-canvas/renderers/browser-sessions-context";
+import { BrowserSessionsSnapshotProvider } from "@/components/epic-canvas/renderers/browser-sessions-provider";
 import { createSingleTileCanvas } from "@/stores/epics/canvas/actions";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import {
@@ -117,33 +118,35 @@ function renderMarkdownWithBrowserRouting(
       [VIEW_TAB_ID]: canvas,
     },
   });
+  const sessions: BrowserSessionsState = {
+    hostId: SOURCE_TILE.hostId,
+    lifecycle: "live",
+    inventoryReady: true,
+    items: [],
+    errorMessage: null,
+    retry: () => undefined,
+    openTab,
+    closeTab: () => Promise.resolve(),
+  };
   return render(
     <RunnerHostContext.Provider value={host}>
-      <BrowserSessionsContext.Provider
-        value={{
-          hostId: SOURCE_TILE.hostId,
-          lifecycle: "live",
-          inventoryReady: true,
-          items: [],
-          errorMessage: null,
-          retry: () => undefined,
-          openTab,
-          closeTab: () => Promise.resolve(),
-        }}
-      >
-        <LinkTargetProvider epicId="epic-markdown" viewTabId={VIEW_TAB_ID}>
-          <TraycerMarkdown
-            className={null}
-            proseSize="normal"
-            components={null}
-            remarkPlugins={null}
-            rehypePlugins={null}
-            quotable={false}
-            isStreaming={false}
-          >
-            {markdown}
-          </TraycerMarkdown>
-        </LinkTargetProvider>
+      <BrowserSessionsContext.Provider value={sessions}>
+        {/* The click-time reader lives on the snapshot context (C8). */}
+        <BrowserSessionsSnapshotProvider value={sessions}>
+          <LinkTargetProvider epicId="epic-markdown" viewTabId={VIEW_TAB_ID}>
+            <TraycerMarkdown
+              className={null}
+              proseSize="normal"
+              components={null}
+              remarkPlugins={null}
+              rehypePlugins={null}
+              quotable={false}
+              isStreaming={false}
+            >
+              {markdown}
+            </TraycerMarkdown>
+          </LinkTargetProvider>
+        </BrowserSessionsSnapshotProvider>
       </BrowserSessionsContext.Provider>
     </RunnerHostContext.Provider>,
   );

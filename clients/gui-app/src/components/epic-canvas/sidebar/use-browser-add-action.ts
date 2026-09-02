@@ -8,6 +8,7 @@ import {
   DEFAULT_BROWSER_TILE_URL,
   makeBrowserSessionTileRef,
 } from "@/stores/epics/canvas/tile-schema/browser-tile";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 /** The host that answered, and the tab it opened there. */
 interface OpenedBrowserTab {
@@ -60,15 +61,14 @@ export function useAddBrowserAction(
       return { hostId, sessionId: opened.sessionId, tabId: opened.tabId };
     },
     onSuccess: (opened) => {
-      openTile({
-        node: makeBrowserSessionTileRef(opened),
-        target: { tabId },
-        gesture: "explicit",
-        modifiers: null,
-        placement: null,
-        dedupe: true,
-        source: "direct_ui",
-      });
+      openTile(
+        tileIntent(
+          makeBrowserSessionTileRef(opened),
+          { tabId },
+          "explicit",
+          "direct_ui",
+        ),
+      );
       onOpened?.();
     },
     onError: (cause) => {

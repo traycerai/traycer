@@ -109,7 +109,7 @@ export function MarkdownAnchor({
 
       linkPolicy?.supersedePendingFileLink();
       if (runnerHost !== null) {
-        openLink(classified.url, "markdown", event);
+        void openLink(classified.url, "markdown", event);
       }
     },
     [navigableHref, linkPolicy, openLink, reportIssueAvailable, runnerHost],

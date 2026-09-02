@@ -41,7 +41,10 @@ import type {
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
-import type { TileOpenGesture } from "@/lib/canvas/tile-open/intent";
+import {
+  tileIntent,
+  type TileOpenGesture,
+} from "@/lib/canvas/tile-open/intent";
 import { epicNodeRefForNodeId } from "@/lib/epic-selectors";
 import {
   highlightSegmentsFromByteRanges,
@@ -265,15 +268,7 @@ export function ArtifactSearchBox(props: ArtifactSearchBoxProps) {
         return;
       }
       setStaleArtifactId(null);
-      openTile({
-        node: ref,
-        target: { tabId },
-        gesture,
-        modifiers: null,
-        placement: null,
-        dedupe: true,
-        source: "direct_ui",
-      });
+      openTile(tileIntent(ref, { tabId }, gesture, "direct_ui"));
     },
     [handle, activeHostId, openTile, tabId],
   );

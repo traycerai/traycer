@@ -60,6 +60,29 @@ export interface TileOpenIntent {
   readonly source: AnalyticsSource;
 }
 
+/**
+ * The common intent: no event modifiers, no caller-chosen placement, dedupe on.
+ * Most opens are this - a literal spelling out three constants is noise. A site
+ * that carries a real click, a drop position or the PaneOpener's second view
+ * writes the object literal instead.
+ */
+export function tileIntent(
+  node: EpicCanvasTileRef,
+  target: TileOpenTarget,
+  gesture: TileOpenGesture,
+  source: AnalyticsSource,
+): TileOpenIntent {
+  return {
+    node,
+    target,
+    gesture,
+    modifiers: null,
+    placement: null,
+    dedupe: true,
+    source,
+  };
+}
+
 export type TileOpenMode = "preview" | "permanent" | "background";
 
 /**
@@ -80,10 +103,18 @@ export interface PaneTileOpenOptions {
  */
 export type TileOpenPlan =
   | {
+      /**
+       * `promote` clears the pane's preview slot: a permanent re-open of the
+       * tile that currently holds it pins the tile, exactly as the old
+       * `openTile(preview: false)` dedupe hit did. `false` for a preview
+       * gesture and for a hit that is not the pane's preview - promoting
+       * there would pin a tile this gesture never touched.
+       */
       readonly kind: "focus-existing";
       readonly tabId: string;
       readonly paneId: string;
       readonly instanceId: string;
+      readonly promote: boolean;
     }
   | {
       readonly kind: "open-in-pane";
@@ -99,21 +130,14 @@ export type TileOpenPlan =
       readonly edge: EdgeDropPosition;
       readonly mode: "preview" | "permanent";
     }
-  | { readonly kind: "pip"; readonly tabId: string };
-
-// ---------------------------------------------------------------------------
-// Settings slice
-// ---------------------------------------------------------------------------
-
-/**
- * The settings store owns the persisted shape, the defaults and the migration
- * (ticket 01); re-exported here so the resolver and its suite take one import.
- */
-export type {
-  BrowserTilePlacement,
-  TilePlacement,
-  TilePlacementSettings,
-} from "@/stores/settings/settings-store";
+  | { readonly kind: "pip"; readonly tabId: string }
+  /**
+   * Nothing to do: a background open (host push, middle-click) whose tile is
+   * already on the canvas. `openTileInBackgroundTab` was idempotent by
+   * construction - it never moved focus - so re-registration must not steal
+   * the active tab the way a `focus-existing` plan would.
+   */
+  | { readonly kind: "noop" };
 
 /**
  * The placement category of a tile kind (C2). A `Record` over `TileKindId`

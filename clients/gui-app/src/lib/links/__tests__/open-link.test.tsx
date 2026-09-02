@@ -10,6 +10,7 @@ import type { BrowserSessionsState } from "@/components/epic-canvas/renderers/br
 import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 import { LinkTargetContext } from "@/lib/links/link-target-context";
 import { useOpenLink, type LinkClickEvent } from "@/lib/links/open-link";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { isBrowserSessionTileRef } from "@/stores/epics/canvas/types";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
@@ -35,10 +36,13 @@ const harness = vi.hoisted<{
 
 vi.mock("sonner", () => ({ toast: { error: toastError } }));
 vi.mock("@/components/epic-canvas/renderers/browser-sessions-context", () => ({
-  useMaybeBrowserSessionsContext: () => harness.sessions,
+  useMaybeBrowserSessionsSnapshot: () => ({ current: harness.sessions }),
 }));
 vi.mock("@/lib/links/open-external-link", () => ({
-  useOpenExternalLink: () => (url: string) => harness.bridged.push(url),
+  useOpenExternalLink: () => (url: string) => {
+    harness.bridged.push(url);
+    return Promise.resolve();
+  },
 }));
 vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   useEpicTileNavigation: () => ({
@@ -116,10 +120,22 @@ function renderOpenLink() {
   return renderHook(() => useOpenLink(), { wrapper }).result;
 }
 
+function openViewTab(): void {
+  useEpicCanvasStore.setState({
+    tabsById: {
+      [VIEW_TAB_ID]: { tabId: VIEW_TAB_ID, epicId: EPIC_ID, name: "Links" },
+    },
+    openTabOrder: [VIEW_TAB_ID],
+    activeTabId: VIEW_TAB_ID,
+    canvasByTabId: {},
+  });
+}
+
 beforeEach(() => {
   harness.sessions = liveSessions([]);
   harness.bridged = [];
   harness.intents = [];
+  openViewTab();
   useSettingsStore.setState({
     linkOpen: {
       default: "in-app",
@@ -141,7 +157,7 @@ describe("useOpenLink", () => {
   it("opens a configured in-app link as a browser tile", async () => {
     const { current: openLink } = renderOpenLink();
 
-    openLink(DOCS_URL, "markdown", null);
+    void openLink(DOCS_URL, "markdown", null);
 
     await waitFor(() => expect(harness.intents).toHaveLength(1));
     expect(openTab).toHaveBeenCalledWith(null, DOCS_URL);
@@ -161,7 +177,7 @@ describe("useOpenLink", () => {
     (kind) => {
       const { current: openLink } = renderOpenLink();
 
-      openLink(DOCS_URL, kind, null);
+      void openLink(DOCS_URL, kind, null);
 
       expect(harness.bridged).toEqual([DOCS_URL]);
       expect(openTab).not.toHaveBeenCalled();
@@ -172,7 +188,7 @@ describe("useOpenLink", () => {
   it("sends a non-http(s) link out whatever the kind", () => {
     const { current: openLink } = renderOpenLink();
 
-    openLink("mailto:someone@example.test", "markdown", null);
+    void openLink("mailto:someone@example.test", "markdown", null);
 
     expect(harness.bridged).toEqual(["mailto:someone@example.test"]);
     expect(openTab).not.toHaveBeenCalled();
@@ -184,7 +200,7 @@ describe("useOpenLink", () => {
   ])("%s-click forces external", (_name, event) => {
     const { current: openLink } = renderOpenLink();
 
-    openLink(DOCS_URL, "markdown", event);
+    void openLink(DOCS_URL, "markdown", event);
 
     expect(harness.bridged).toEqual([DOCS_URL]);
     expect(openTab).not.toHaveBeenCalled();
@@ -203,12 +219,12 @@ describe("useOpenLink", () => {
     const { current: openLink } = renderOpenLink();
 
     // Configured external + alt -> in-app.
-    openLink(DOCS_URL, "markdown", click({ altKey: true }));
+    void openLink(DOCS_URL, "markdown", click({ altKey: true }));
     await waitFor(() => expect(openTab).toHaveBeenCalledWith(null, DOCS_URL));
     expect(harness.bridged).toEqual([]);
 
     // Configured in-app + alt -> external.
-    openLink(
+    void openLink(
       "https://example.test/terminal",
       "terminal",
       click({ altKey: true }),
@@ -217,13 +233,49 @@ describe("useOpenLink", () => {
     expect(openTab).toHaveBeenCalledTimes(1);
   });
 
+  it("consumes alt at the link layer instead of passing it to placement", async () => {
+    useSettingsStore.setState({
+      linkOpen: {
+        default: "per-kind",
+        markdown: "external",
+        terminal: "in-app",
+        github: "in-app",
+        image: "in-app",
+      },
+    });
+    const { current: openLink } = renderOpenLink();
+
+    void openLink(DOCS_URL, "markdown", click({ altKey: true }));
+
+    await waitFor(() => expect(harness.intents).toHaveLength(1));
+    // `alt` already inverted external -> in-app (A3); leaking it into the
+    // intent would ALSO invert tab<->split in the resolver (C4).
+    expect(harness.intents[0].modifiers).toEqual({
+      shift: false,
+      alt: false,
+      middle: false,
+    });
+  });
+
+  it("opens externally on a surface with no link target at all (A5a)", () => {
+    const { result } = renderHook(() => useOpenLink());
+
+    void result.current(DOCS_URL, "markdown", null);
+
+    expect(harness.bridged).toEqual([DOCS_URL]);
+    expect(openTab).not.toHaveBeenCalled();
+    expect(harness.intents).toEqual([]);
+    // Nothing was attempted, so nothing failed: this is not the A5 toast.
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
   it("focuses a tab already showing the same page instead of opening one", async () => {
     harness.sessions = liveSessions([
       session([tab({ tabId: "tab-open", url: "https://example.test/docs/" })]),
     ]);
     const { current: openLink } = renderOpenLink();
 
-    openLink("https://example.test/docs#section", "markdown", null);
+    void openLink("https://example.test/docs#section", "markdown", null);
 
     await waitFor(() => expect(harness.intents).toHaveLength(1));
     expect(openTab).not.toHaveBeenCalled();
@@ -239,7 +291,7 @@ describe("useOpenLink", () => {
     harness.sessions = liveSessions([session([tab({ tabId: "tab-open" })])]);
     const { current: openLink } = renderOpenLink();
 
-    openLink(DOCS_URL, "markdown", click({ button: 1 }));
+    void openLink(DOCS_URL, "markdown", click({ button: 1 }));
 
     await waitFor(() => expect(openTab).toHaveBeenCalledWith(null, DOCS_URL));
     expect(harness.intents[0].modifiers).toEqual({
@@ -252,13 +304,38 @@ describe("useOpenLink", () => {
   it("records dev-server origins from terminal links only", () => {
     const { current: openLink } = renderOpenLink();
 
-    openLink("http://localhost:5173/ready", "terminal", null);
-    openLink("http://localhost:5173/again", "terminal", null);
-    openLink("http://localhost:5174/docs", "markdown", null);
+    void openLink("http://localhost:5173/ready", "terminal", null);
+    void openLink("http://localhost:5173/again", "terminal", null);
+    void openLink("http://localhost:5174/docs", "markdown", null);
 
     expect(useSettingsStore.getState().browserDevOrigins).toEqual([
       "http://localhost:5173",
     ]);
+  });
+
+  it("falls back to the epic when the view tab closed mid-open (R8)", async () => {
+    const settles: Array<(tab: { sessionId: string; tabId: string }) => void> =
+      [];
+    openTab.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          settles.push(resolve);
+        }),
+    );
+    const { current: openLink } = renderOpenLink();
+
+    void openLink(DOCS_URL, "markdown", null);
+    await waitFor(() => expect(settles).toHaveLength(1));
+    // The header tab goes away while the host is still opening the tab.
+    useEpicCanvasStore.setState({
+      tabsById: {},
+      openTabOrder: [],
+      activeTabId: null,
+    });
+    settles[0]({ sessionId: "session-opened", tabId: "tab-opened" });
+
+    await waitFor(() => expect(harness.intents).toHaveLength(1));
+    expect(harness.intents[0].target).toEqual({ epicId: EPIC_ID });
   });
 
   it("offers the OS browser on a refusal instead of taking it", async () => {
@@ -267,7 +344,7 @@ describe("useOpenLink", () => {
     );
     const { current: openLink } = renderOpenLink();
 
-    openLink(DOCS_URL, "markdown", null);
+    void openLink(DOCS_URL, "markdown", null);
 
     await waitFor(() => expect(toastError).toHaveBeenCalled());
     expect(harness.bridged).toEqual([]);
@@ -283,7 +360,7 @@ describe("useOpenLink", () => {
     harness.sessions = null;
     const { current: openLink } = renderOpenLink();
 
-    openLink(DOCS_URL, "markdown", null);
+    void openLink(DOCS_URL, "markdown", null);
 
     expect(toastError).toHaveBeenCalled();
     expect(harness.bridged).toEqual([]);

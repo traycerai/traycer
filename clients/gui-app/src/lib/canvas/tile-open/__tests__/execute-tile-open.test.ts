@@ -8,7 +8,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { convertBrowserTabToPip } from "@/lib/browser-view/pip/pip-store";
 import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import {
+  trackOpenedCanvasTile,
+  useEpicCanvasStore,
+} from "@/stores/epics/canvas/store";
 import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import {
   SPEC_A,
@@ -20,6 +23,14 @@ import { executeTileOpen } from "../execute-tile-open";
 vi.mock("@/lib/browser-view/pip/pip-store", () => ({
   convertBrowserTabToPip: vi.fn(),
 }));
+
+// The real store, minus the analytics call - `focus-existing` must not count
+// as an open (R9), and only a spy can prove a call that did NOT happen.
+vi.mock("@/stores/epics/canvas/store", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/stores/epics/canvas/store")>();
+  return { ...actual, trackOpenedCanvasTile: vi.fn() };
+});
 
 const EPIC_ID = "epic-exec";
 const TAB_ID = "view-tab-exec";
@@ -46,8 +57,9 @@ function installPrepareSpies() {
     openPreviewInTab: vi.fn(() => FOCUS),
     openInBackgroundTab: vi.fn(() => null),
     openInPane: vi.fn(() => FOCUS),
-    splitWithNode: vi.fn(() => FOCUS),
+    splitWithNode: vi.fn((): NestedFocusTarget | null => FOCUS),
     restorePreview: vi.fn(),
+    promotePreview: vi.fn(),
   };
   useEpicCanvasStore.setState({
     prepareSetActiveTileTabFocusTarget: spies.setActiveTileTab,
@@ -58,6 +70,7 @@ function installPrepareSpies() {
     prepareOpenTileInPaneFocusTargetFromSource: spies.openInPane,
     prepareSplitPaneWithNodeFocusTarget: spies.splitWithNode,
     restorePreviewInTab: spies.restorePreview,
+    promotePreviewInTab: spies.promotePreview,
   });
   return spies;
 }
@@ -74,6 +87,7 @@ function run(plan: TileOpenPlan): NestedFocusTarget | null {
     store: useEpicCanvasStore.getState(),
     navigateNested,
     epicId: EPIC_ID,
+    pipOrigin: "manual",
   });
 }
 
@@ -81,6 +95,7 @@ beforeEach(() => {
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   navigateNested.mockClear();
   vi.mocked(convertBrowserTabToPip).mockClear();
+  vi.mocked(trackOpenedCanvasTile).mockClear();
 });
 
 describe("executeTileOpen", () => {
@@ -93,6 +108,7 @@ describe("executeTileOpen", () => {
         tabId: TAB_ID,
         paneId: "pane-1",
         instanceId: "inst-1",
+        promote: false,
       }),
     ).toEqual(FOCUS);
     expect(spies.setActiveTileTab).toHaveBeenCalledWith(
@@ -100,11 +116,42 @@ describe("executeTileOpen", () => {
       "pane-1",
       "inst-1",
     );
+    expect(spies.promotePreview).not.toHaveBeenCalled();
+    // R9: focusing an open tile is not an open.
+    expect(trackOpenedCanvasTile).not.toHaveBeenCalled();
     expect(navigateNested).toHaveBeenCalledWith(
       EPIC_ID,
       TAB_ID,
       expect.any(Function),
     );
+  });
+
+  // R1: a permanent re-open of the pane's preview pins it.
+  it("clears the pane's preview slot for a promoting focus", () => {
+    const spies = installPrepareSpies();
+
+    expect(
+      run({
+        kind: "focus-existing",
+        tabId: TAB_ID,
+        paneId: "pane-1",
+        instanceId: "inst-1",
+        promote: true,
+      }),
+    ).toEqual(FOCUS);
+    expect(spies.promotePreview).toHaveBeenCalledWith(TAB_ID, "pane-1");
+    expect(trackOpenedCanvasTile).not.toHaveBeenCalled();
+  });
+
+  // C1: a background open of an already-open tile touches nothing.
+  it("does nothing at all for a noop plan", () => {
+    const spies = installPrepareSpies();
+
+    expect(run({ kind: "noop" })).toBeNull();
+    expect(spies.setActiveTileTab).not.toHaveBeenCalled();
+    expect(spies.openInPane).not.toHaveBeenCalled();
+    expect(navigateNested).not.toHaveBeenCalled();
+    expect(trackOpenedCanvasTile).not.toHaveBeenCalled();
   });
 
   it("opens into an explicit pane with the plan's mode and index", () => {
@@ -198,6 +245,29 @@ describe("executeTileOpen", () => {
     );
   });
 
+  // C3: `insertPaneAtEdge` refuses past MAX_TREE_DEPTH and the prepare returns
+  // null; the tile still has to land somewhere.
+  it("falls back to a tab in the anchor pane when the split is refused", () => {
+    const spies = installPrepareSpies();
+    spies.splitWithNode.mockReturnValue(null);
+
+    expect(
+      run({
+        kind: "split",
+        tabId: TAB_ID,
+        paneId: "pane-3",
+        edge: "right",
+        mode: "preview",
+      }),
+    ).toEqual(FOCUS);
+    expect(spies.openInPane).toHaveBeenCalledWith(TAB_ID, "pane-3", SPEC_A, {
+      mode: "preview",
+      index: null,
+      source: SOURCE,
+    });
+    expect(spies.restorePreview).not.toHaveBeenCalled();
+  });
+
   it("converts to PiP without touching the canvas or the route", () => {
     const spies = installPrepareSpies();
 
@@ -226,6 +296,7 @@ describe("executeTileOpen", () => {
         store: useEpicCanvasStore.getState(),
         navigateNested,
         epicId: EPIC_ID,
+        pipOrigin: "manual",
       }),
     ).toBeNull();
     expect(convertBrowserTabToPip).not.toHaveBeenCalled();
@@ -248,6 +319,7 @@ describe("executeTileOpen", () => {
         store: useEpicCanvasStore.getState(),
         navigateNested,
         epicId: null,
+        pipOrigin: "manual",
       }),
     ).toEqual(FOCUS);
     expect(spies.openInPane).toHaveBeenCalledTimes(1);

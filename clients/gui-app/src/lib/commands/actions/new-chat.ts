@@ -29,7 +29,10 @@ import { appLogger } from "@/lib/logger";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
 import type { ExplicitTilePlacement } from "@/lib/canvas/tile-open/intent";
-import { openTileWithNavigation } from "@/lib/canvas/tile-open/open-tile";
+import {
+  MANUAL_TILE_OPEN,
+  openTileWithNavigation,
+} from "@/lib/canvas/tile-open/open-tile";
 import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 import type { AnalyticsSource } from "@/lib/analytics";
 
@@ -332,6 +335,7 @@ function openProjectedChat(
       source: intent.source,
     },
     navigateNestedFocus,
+    MANUAL_TILE_OPEN,
   );
   // A pane can disappear while host creation is in flight. The open is then
   // abandoned exactly as it was before analytics existed - no fallback pane,

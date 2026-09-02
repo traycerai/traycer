@@ -1267,7 +1267,7 @@ function OnboardingFooterLinks() {
   const openFooterLink = useCallback(
     (event: MouseEvent<HTMLAnchorElement>, url: string) => {
       event.preventDefault();
-      openLink(url, "docs", null);
+      void openLink(url, "docs", null);
     },
     [openLink],
   );

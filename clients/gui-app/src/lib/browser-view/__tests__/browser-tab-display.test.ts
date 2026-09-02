@@ -296,4 +296,20 @@ describe("browser address helpers", () => {
     expect(normalizeBrowserAddressInput("about:blank")).toBe("about:blank");
     expect(normalizeBrowserAddressInput("   ")).toBe("about:blank");
   });
+
+  it("leaves an explicit scheme alone, local host names included (C7)", () => {
+    // The scheme test runs BEFORE the local-address heuristic; the other order
+    // prefixed a second scheme onto these.
+    expect(normalizeBrowserAddressInput("https://app.localhost:3000")).toBe(
+      "https://app.localhost:3000",
+    );
+    expect(normalizeBrowserAddressInput("http://127.0.0.1:8080/api")).toBe(
+      "http://127.0.0.1:8080/api",
+    );
+    // A colon followed by digits is a PORT, not a scheme, so these still get
+    // one.
+    expect(normalizeBrowserAddressInput("app.localhost:3000")).toBe(
+      "http://app.localhost:3000",
+    );
+  });
 });

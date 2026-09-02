@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { makeManagedCommandOutputTileRef } from "@/stores/epics/canvas/tile-schema/managed-command-output-tile";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 export type OpenManagedCommandOutput = (args: {
   readonly commandId: string;
@@ -28,19 +29,18 @@ export function useOpenManagedCommandOutput(
   const { openTile } = useEpicTileNavigation();
   return useCallback(
     (args) => {
-      openTile({
-        node: makeManagedCommandOutputTileRef({
-          commandId: args.commandId,
-          hostId: args.hostId,
-        }),
-        // `single` is what makes it a preview tab - see the note above.
-        gesture: "single",
-        target: { epicId },
-        modifiers: null,
-        placement: null,
-        dedupe: true,
-        source: "direct_ui",
-      });
+      openTile(
+        tileIntent(
+          makeManagedCommandOutputTileRef({
+            commandId: args.commandId,
+            hostId: args.hostId,
+          }),
+          { epicId },
+          // `single` is what makes it a preview tab - see the note above.
+          "single",
+          "direct_ui",
+        ),
+      );
     },
     [epicId, openTile],
   );

@@ -7,6 +7,7 @@ import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { DEFAULT_EPIC_NODE_NAMES } from "@/lib/artifacts/node-display";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 export interface SwitcherCreateArtifact {
   readonly create: (type: EpicArtifactKind) => void;
@@ -48,15 +49,9 @@ export function useSwitcherCreateArtifact(
               nodeId: result.artifactId,
               fallbackHostId: activeHostId,
               openNode: (nodeRef) => {
-                openTile({
-                  node: nodeRef,
-                  target: { tabId },
-                  gesture: "explicit",
-                  modifiers: null,
-                  placement: null,
-                  dedupe: true,
-                  source: "direct_ui",
-                });
+                openTile(
+                  tileIntent(nodeRef, { tabId }, "explicit", "direct_ui"),
+                );
               },
               onBeforeOpen: null,
               // The artifact tile is not embed-originated, so the sheet's

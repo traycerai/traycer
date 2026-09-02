@@ -36,7 +36,11 @@ export function PlanRestrictedUpgradeAction(): ReactNode {
       variant="outline"
       size="sm"
       onClick={() => {
-        openLink(resolvePlatformBaseUrl(runnerHost.signInUrl), "account", null);
+        void openLink(
+          resolvePlatformBaseUrl(runnerHost.signInUrl),
+          "account",
+          null,
+        );
       }}
       data-testid="host-scope-plan-upgrade"
     >

@@ -27,6 +27,7 @@ import {
 import { parseNestedFocusTargetFromSearch } from "@/lib/epic-nested-focus-route";
 import {
   commitWithoutNavigation,
+  MANUAL_TILE_OPEN,
   openTileWithNavigation,
 } from "@/lib/canvas/tile-open/open-tile";
 import { hasRestoredTabs } from "@/lib/has-restored-tabs";
@@ -57,6 +58,7 @@ import {
 import type { TabRef } from "@/stores/tabs/types";
 import { isRouteBookkeepingState } from "@/lib/tab-navigation/route-bookkeeping";
 import { normalizeEpicFocusSearch } from "@/routes/epic-route-search";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 export {
   completeEpicMigrationIntent,
@@ -1031,16 +1033,14 @@ export class TabNavigationController {
       // navigation envelope being built here, so the open must not issue a
       // route write of its own.
       return openTileWithNavigation(
-        {
-          node: preparation.node,
-          target: { tabId },
-          gesture: preparation.gesture,
-          modifiers: null,
-          placement: null,
-          dedupe: true,
-          source: "direct_ui",
-        },
+        tileIntent(
+          preparation.node,
+          { tabId },
+          preparation.gesture,
+          "direct_ui",
+        ),
         commitWithoutNavigation,
+        MANUAL_TILE_OPEN,
       );
     }
     return canvas.prepareSetActiveTileTabFocusTarget(

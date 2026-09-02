@@ -149,6 +149,7 @@ import {
 } from "@/lib/tab-navigation";
 import {
   commitWithoutNavigation,
+  MANUAL_TILE_OPEN,
   openTileWithNavigation,
 } from "@/lib/canvas/tile-open/open-tile";
 import { cn } from "@/lib/utils";
@@ -164,6 +165,7 @@ import type {
   EpicViewTab,
 } from "@/stores/epics/canvas/types";
 import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 type ResourceSortOption = "memory" | "cpu" | "name" | "tab";
 type NavigateFn = UseNavigateResult<string>;
@@ -4481,16 +4483,9 @@ function prepareResourceTarget(
     // `commitWithoutNavigation`: the caller already wrapped this in its own
     // `navigateNested`, so the open must not issue a second route write.
     return openTileWithNavigation(
-      {
-        node: preparation.node,
-        target: { tabId },
-        gesture: preparation.gesture,
-        modifiers: null,
-        placement: null,
-        dedupe: true,
-        source: "direct_ui",
-      },
+      tileIntent(preparation.node, { tabId }, preparation.gesture, "direct_ui"),
       commitWithoutNavigation,
+      MANUAL_TILE_OPEN,
     );
   }
   return canvas.prepareSetActiveTileTabFocusTarget(

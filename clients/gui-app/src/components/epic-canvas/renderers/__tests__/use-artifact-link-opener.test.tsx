@@ -7,6 +7,7 @@ import type { FetchResolveArtifactByPathArgs } from "@/lib/host/resolve-artifact
 import type { ProjectedSidebarNodeOpenArgs } from "@/components/epic-canvas/sidebar/open-projected-sidebar-node";
 import type { MarkdownFileLink } from "@/markdown/links/markdown-link-context";
 import type { ResolveArtifactByPathResult } from "@traycer/protocol/host/epic/unary-schemas";
+import type { LinkClickEvent } from "@/lib/links/open-link";
 import { useArtifactLinkOpener } from "../use-artifact-link-opener";
 
 const mocks = vi.hoisted(() => {
@@ -31,7 +32,9 @@ const mocks = vi.hoisted(() => {
     listBindingsForClient: vi.fn(() => worktreeQuery),
     runPolicy,
     buildPolicy: vi.fn(() => runPolicy),
-    openLink: vi.fn<(url: string, kind: string, event: null) => void>(),
+    openLink: vi.fn<
+      (url: string, kind: string, event: LinkClickEvent | null) => Promise<void>
+    >(() => Promise.resolve()),
     toast: vi.fn(),
     folderChain: vi.fn<(artifactId: string) => readonly string[] | null>(() => [
       "root-artifact",
@@ -143,6 +146,15 @@ vi.mock("@/stores/epics/canvas/workspace-file-reveal-store", () => ({
     mocks.setWorkspaceFileRevealTarget(tabId, contentId, line, col);
   },
 }));
+/** A plain primary click - the modifier-free default for these cases. */
+const CLICK: LinkClickEvent = {
+  altKey: false,
+  ctrlKey: false,
+  metaKey: false,
+  shiftKey: false,
+  button: 0,
+};
+
 vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => mocks.openLink,
 }));
@@ -253,7 +265,7 @@ describe("useArtifactLinkOpener", () => {
       col: null,
     };
 
-    result.current.openLink(link);
+    result.current.openLink(link, CLICK);
 
     expect(mocks.runPolicy).not.toHaveBeenCalled();
     expect(mocks.toast).toHaveBeenCalledWith(
@@ -264,7 +276,7 @@ describe("useArtifactLinkOpener", () => {
       rows: [{ runningDir: "/tab/repo", disabledReason: null }],
     };
     rerender();
-    result.current.openLink(link);
+    result.current.openLink(link, CLICK);
 
     expect(mocks.runPolicy).toHaveBeenCalledTimes(1);
   });
@@ -296,10 +308,10 @@ describe("useArtifactLinkOpener", () => {
       col: null,
     };
 
-    result.current.openLink(link);
+    result.current.openLink(link, CLICK);
     mocks.worktreeQuery.data = undefined;
     rerender();
-    result.current.openLink(link);
+    result.current.openLink(link, CLICK);
 
     expect(cancel).toHaveBeenCalledTimes(1);
     expect(state.firstLifecycle?.isCurrent(1)).toBe(false);
@@ -318,12 +330,15 @@ describe("useArtifactLinkOpener", () => {
       { wrapper: QueryWrapper },
     );
 
-    result.current.openLink({
-      kind: "file",
-      path: "src/index.ts",
-      line: null,
-      col: null,
-    });
+    result.current.openLink(
+      {
+        kind: "file",
+        path: "src/index.ts",
+        line: null,
+        col: null,
+      },
+      CLICK,
+    );
 
     expect(mocks.runPolicy).not.toHaveBeenCalled();
     expect(mocks.toast).toHaveBeenCalledWith("Couldn't open link");
@@ -340,15 +355,18 @@ describe("useArtifactLinkOpener", () => {
       { wrapper: QueryWrapper },
     );
 
-    result.current.openLink({
-      kind: "external",
-      url: "https://example.com",
-    });
+    result.current.openLink(
+      {
+        kind: "external",
+        url: "https://example.com",
+      },
+      CLICK,
+    );
 
     expect(mocks.openLink).toHaveBeenCalledWith(
       "https://example.com",
       "markdown",
-      null,
+      CLICK,
     );
   });
 
@@ -386,22 +404,28 @@ describe("useArtifactLinkOpener", () => {
       { wrapper: QueryWrapper },
     );
 
-    result.current.openLink({
-      kind: "file",
-      path: "/artifact/index.md",
-      line: null,
-      col: null,
-    });
-    result.current.openLink({
-      kind: "external",
-      url: "https://example.com",
-    });
+    result.current.openLink(
+      {
+        kind: "file",
+        path: "/artifact/index.md",
+        line: null,
+        col: null,
+      },
+      CLICK,
+    );
+    result.current.openLink(
+      {
+        kind: "external",
+        url: "https://example.com",
+      },
+      CLICK,
+    );
 
     expect(cancel).toHaveBeenCalledTimes(1);
     expect(mocks.openLink).toHaveBeenCalledWith(
       "https://example.com",
       "markdown",
-      null,
+      CLICK,
     );
   });
 
@@ -420,12 +444,15 @@ describe("useArtifactLinkOpener", () => {
       { wrapper: QueryWrapper },
     );
 
-    result.current.openLink({
-      kind: "file",
-      path: "/artifact/index.md",
-      line: null,
-      col: null,
-    });
+    result.current.openLink(
+      {
+        kind: "file",
+        path: "/artifact/index.md",
+        line: null,
+        col: null,
+      },
+      CLICK,
+    );
 
     expect(mocks.toast).toHaveBeenCalledWith("Couldn't open link");
   });
@@ -442,12 +469,15 @@ describe("useArtifactLinkOpener", () => {
       { wrapper: QueryWrapper },
     );
 
-    result.current.openLink({
-      kind: "file",
-      path: "/Users/me/.traycer/epics/epic-1/artifacts/some-spec/README.md",
-      line: null,
-      col: null,
-    });
+    result.current.openLink(
+      {
+        kind: "file",
+        path: "/Users/me/.traycer/epics/epic-1/artifacts/some-spec/README.md",
+        line: null,
+        col: null,
+      },
+      CLICK,
+    );
 
     expect(mocks.runPolicy).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -468,12 +498,15 @@ describe("useArtifactLinkOpener", () => {
       { wrapper: QueryWrapper },
     );
 
-    result.current.openLink({
-      kind: "file",
-      path: "epics/epic-2/artifacts/spec/index.md",
-      line: null,
-      col: null,
-    });
+    result.current.openLink(
+      {
+        kind: "file",
+        path: "epics/epic-2/artifacts/spec/index.md",
+        line: null,
+        col: null,
+      },
+      CLICK,
+    );
 
     expect(mocks.runPolicy).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -510,12 +543,15 @@ describe("useArtifactLinkOpener", () => {
       { wrapper: QueryWrapper },
     );
 
-    result.current.openLink({
-      kind: "file",
-      path: "01-sub-ticket/",
-      line: null,
-      col: null,
-    });
+    result.current.openLink(
+      {
+        kind: "file",
+        path: "01-sub-ticket/",
+        line: null,
+        col: null,
+      },
+      CLICK,
+    );
     await flush();
 
     expect(mocks.resolveArtifactByPath).toHaveBeenCalledWith(
@@ -577,12 +613,15 @@ describe("useArtifactLinkOpener", () => {
       { wrapper: QueryWrapper },
     );
 
-    result.current.openLink({
-      kind: "file",
-      path: "./01-child/",
-      line: null,
-      col: null,
-    });
+    result.current.openLink(
+      {
+        kind: "file",
+        path: "./01-child/",
+        line: null,
+        col: null,
+      },
+      CLICK,
+    );
     await flush();
 
     // The own-directory artifact wins even though a same-named workspace file
@@ -625,12 +664,15 @@ describe("useArtifactLinkOpener", () => {
       { wrapper: QueryWrapper },
     );
 
-    result.current.openLink({
-      kind: "file",
-      path: "./01-child/",
-      line: null,
-      col: null,
-    });
+    result.current.openLink(
+      {
+        kind: "file",
+        path: "./01-child/",
+        line: null,
+        col: null,
+      },
+      CLICK,
+    );
     await flush();
 
     expect(
@@ -654,12 +696,15 @@ describe("useArtifactLinkOpener", () => {
       { wrapper: QueryWrapper },
     );
 
-    result.current.openLink({
-      kind: "file",
-      path: "index.md",
-      line: null,
-      col: null,
-    });
+    result.current.openLink(
+      {
+        kind: "file",
+        path: "index.md",
+        line: null,
+        col: null,
+      },
+      CLICK,
+    );
     await flush();
 
     expect(mocks.toast).toHaveBeenCalledWith("Couldn't open link");
@@ -693,18 +738,24 @@ describe("useArtifactLinkOpener", () => {
       { wrapper: QueryWrapper },
     );
 
-    result.current.openLink({
-      kind: "file",
-      path: "index.md",
-      line: null,
-      col: null,
-    });
-    result.current.openLink({
-      kind: "file",
-      path: "index.md",
-      line: null,
-      col: null,
-    });
+    result.current.openLink(
+      {
+        kind: "file",
+        path: "index.md",
+        line: null,
+        col: null,
+      },
+      CLICK,
+    );
+    result.current.openLink(
+      {
+        kind: "file",
+        path: "index.md",
+        line: null,
+        col: null,
+      },
+      CLICK,
+    );
     rejectFirst(new Error("transport error"));
     await flush();
 
@@ -741,12 +792,15 @@ describe("useArtifactLinkOpener", () => {
       { wrapper: QueryWrapper },
     );
 
-    result.current.openLink({
-      kind: "file",
-      path: "../src/main.ts",
-      line: null,
-      col: null,
-    });
+    result.current.openLink(
+      {
+        kind: "file",
+        path: "../src/main.ts",
+        line: null,
+        col: null,
+      },
+      CLICK,
+    );
     await flush();
 
     // Not rewritten into an artifact-folder reference: the real file wins the
@@ -781,12 +835,15 @@ describe("useArtifactLinkOpener", () => {
       { wrapper: QueryWrapper },
     );
 
-    result.current.openLink({
-      kind: "file",
-      path: "index.md",
-      line: null,
-      col: null,
-    });
+    result.current.openLink(
+      {
+        kind: "file",
+        path: "index.md",
+        line: null,
+        col: null,
+      },
+      CLICK,
+    );
     await flush();
 
     expect(mocks.resolveArtifactByPath).toHaveBeenCalledWith(
@@ -815,12 +872,15 @@ describe("useArtifactLinkOpener", () => {
       { wrapper: QueryWrapper },
     );
 
-    result.current.openLink({
-      kind: "file",
-      path: "./index.md",
-      line: null,
-      col: null,
-    });
+    result.current.openLink(
+      {
+        kind: "file",
+        path: "./index.md",
+        line: null,
+        col: null,
+      },
+      CLICK,
+    );
     await flush();
 
     expect(mocks.resolveArtifactByPath).not.toHaveBeenCalled();
@@ -840,12 +900,15 @@ describe("useArtifactLinkOpener", () => {
       { wrapper: QueryWrapper },
     );
 
-    result.current.openLink({
-      kind: "file",
-      path: "../../escaped/index.md",
-      line: null,
-      col: null,
-    });
+    result.current.openLink(
+      {
+        kind: "file",
+        path: "../../escaped/index.md",
+        line: null,
+        col: null,
+      },
+      CLICK,
+    );
     await flush();
 
     // resolveArtifactRelativeLinkPath (real) returns null for this walk, so

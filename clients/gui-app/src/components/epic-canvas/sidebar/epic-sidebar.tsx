@@ -228,6 +228,7 @@ import {
   BrowsersPanelActions,
   BrowsersPanelBody,
 } from "@/components/epic-canvas/sidebar/epic-browser-sidebar";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 const CHATS_PANEL_SKELETON = <ChatsPanelSkeleton />;
 const ARTIFACTS_PANEL_SKELETON = <ArtifactsPanelSkeleton />;
 const COMMENTS_PANEL_SKELETON = <CommentsPanelSkeleton />;
@@ -1868,15 +1869,14 @@ function TreePanelActions(props: TreePanelActionsProps) {
         nodeId,
         fallbackHostId: activeHostId,
         openNode: (nodeRef) => {
-          openTile({
-            node: nodeRef,
-            target: { tabId: props.tabId },
-            gesture: "explicit",
-            modifiers: null,
-            placement: null,
-            dedupe: true,
-            source: "direct_ui",
-          });
+          openTile(
+            tileIntent(
+              nodeRef,
+              { tabId: props.tabId },
+              "explicit",
+              "direct_ui",
+            ),
+          );
         },
         onBeforeOpen,
         onOpened: () => {

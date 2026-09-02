@@ -448,7 +448,8 @@ describe("TextSegment next steps rendering", () => {
           hostId: "host-1",
         }) as EpicCanvasTileRef,
         target: { epicId: "epic-1" },
-        gesture: "single",
+        // The chip is a button, so it pins the tile (R6).
+        gesture: "explicit",
       }),
     );
     expect(screen.queryByText(KNOWN_ROLE_CLAIM_ID)).toBeNull();
@@ -481,7 +482,8 @@ describe("TextSegment next steps rendering", () => {
           ownerUserId: "user-owner",
         }) as EpicCanvasTileRef,
         target: { epicId: "epic-1" },
-        gesture: "single",
+        // The chip is a button, so it pins the tile (R6).
+        gesture: "explicit",
       }),
     );
   });

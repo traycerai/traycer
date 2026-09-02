@@ -22,7 +22,7 @@ import {
   PR_STATE_PILL_CLASS,
   PR_STATE_TINT_CLASS,
 } from "@/components/worktree/worktree-pr-state-palette";
-import { useOpenLink } from "@/lib/links/open-link";
+import { useLinkOpenInFlight } from "@/lib/links/use-link-open-in-flight";
 import { formatPrActorName } from "@/lib/pr/pr-detail-projection";
 import { useRelativeTimestamp } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
@@ -247,16 +247,17 @@ function PrDetailStalenessLabel(props: {
 function PrDetailGitHubLink(props: {
   readonly prUrl: string | null;
 }): ReactNode {
-  const openLink = useOpenLink();
+  // In-flight guarded (R10): two quick clicks must not open two OS tabs.
+  const { open } = useLinkOpenInFlight();
   const prUrl = props.prUrl;
   const handleClick = useCallback(
     (event: MouseEvent<HTMLAnchorElement>): void => {
       event.stopPropagation();
       if (prUrl === null) return;
       event.preventDefault();
-      openLink(prUrl, "github", event);
+      open(prUrl, "github", event);
     },
-    [openLink, prUrl],
+    [open, prUrl],
   );
 
   if (props.prUrl === null) {

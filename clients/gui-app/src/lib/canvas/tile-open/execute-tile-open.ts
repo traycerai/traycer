@@ -10,7 +10,10 @@
  */
 import { toast } from "sonner";
 import type { AnalyticsSource } from "@/lib/analytics";
-import { convertBrowserTabToPip } from "@/lib/browser-view/pip/pip-store";
+import {
+  convertBrowserTabToPip,
+  type PipOrigin,
+} from "@/lib/browser-view/pip/pip-store";
 import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
 import {
@@ -37,11 +40,18 @@ export interface ExecuteTileOpenArgs {
    * fallback), and `pip` becomes a no-op.
    */
   readonly epicId: string | null;
+  /**
+   * Who a `pip` plan floats on behalf of. `manual` is the user's own gesture;
+   * `agent` is a host push, and it MATTERS - `isManualPipActive` refuses to
+   * replace a `manual` float, so mislabelling one wedges every later agent
+   * float (L4).
+   */
+  readonly pipOrigin: PipOrigin;
 }
 
 /**
- * `<kind>Opened` analytics for the two prepare* paths with no `FromSource`
- * variant of their own. Identity of the tab's canvas IS the "did anything
+ * `<kind>Opened` analytics for the split path, which has no `FromSource`
+ * variant of its own. Identity of the tab's canvas IS the "did anything
  * happen" signal every `FromSource` wrapper already uses.
  */
 function trackIfCanvasChanged(
@@ -63,20 +73,22 @@ export function executeTileOpen(
 ): NestedFocusTarget | null {
   const { epicId, navigateNested, node, plan, source, store } = args;
 
+  if (plan.kind === "noop") return null;
+
   if (plan.kind === "pip") {
-    // ponytail: origin is always "manual" - the plan carries no gesture, and
-    // the only agent-origin caller (ticket 09) does its own suppression pass
-    // before it ever reaches a plan. Thread the gesture through if that stops
-    // being true.
     if (epicId === null || !isBrowserSessionTileRef(node)) return null;
     convertBrowserTabToPip({
       epicId,
       hostId: node.hostId,
       sessionId: node.sessionId,
       tabId: node.tabId,
-      origin: "manual",
+      origin: args.pipOrigin,
       onReady: () => {},
       onError: (message) => {
+        // Silent for a host push by design: a failed auto-PiP leaves the tab
+        // reachable in the sidebar instead of toasting about background
+        // automation.
+        if (args.pipOrigin === "agent") return;
         toast.error(message);
       },
     });
@@ -90,15 +102,19 @@ export function executeTileOpen(
     epicId === null ? prepare() : navigateNested(epicId, tabId, prepare);
 
   if (plan.kind === "focus-existing") {
-    return trackIfCanvasChanged(tabId, node, source, () =>
-      commit(() =>
-        store.prepareSetActiveTileTabFocusTarget(
-          tabId,
-          plan.paneId,
-          plan.instanceId,
-        ),
+    // No `<kind>Opened` here: nothing entered the canvas, and counting a
+    // focus as an open inflates every open metric (R9).
+    const target = commit(() =>
+      store.prepareSetActiveTileTabFocusTarget(
+        tabId,
+        plan.paneId,
+        plan.instanceId,
       ),
     );
+    // Preview membership is not part of `NestedFocusTarget`, so the promotion
+    // needs no route write of its own (same as the preview split below).
+    if (plan.promote) store.promotePreviewInTab(tabId, plan.paneId);
+    return target;
   }
 
   if (plan.kind === "split") {
@@ -112,16 +128,25 @@ export function executeTileOpen(
         ),
       ),
     );
+    if (target === null) {
+      // The split was refused (`MAX_TREE_DEPTH`, or a pane that has since
+      // gone). Land the tile as a tab in the pane we would have split rather
+      // than dropping the open on the floor.
+      return commit(() =>
+        store.prepareOpenTileInPaneFocusTargetFromSource(
+          tabId,
+          plan.paneId,
+          node,
+          { mode: plan.mode, index: null, source },
+        ),
+      );
+    }
     // `splitPaneAtEdge` always lands the node as a permanent tab, so a preview
     // split claims the fresh pane's (still empty) preview slot afterwards.
     // Preview membership is not part of `NestedFocusTarget`, so this needs no
     // route write of its own.
-    const splitInstanceId = target === null ? undefined : target.tileInstanceId;
-    if (
-      plan.mode === "preview" &&
-      target !== null &&
-      splitInstanceId !== undefined
-    ) {
+    const splitInstanceId = target.tileInstanceId;
+    if (plan.mode === "preview" && splitInstanceId !== undefined) {
       store.restorePreviewInTab(tabId, target.paneId, splitInstanceId);
     }
     return target;

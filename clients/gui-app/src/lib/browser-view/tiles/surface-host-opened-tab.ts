@@ -3,18 +3,18 @@
  * inside one spawning a popup (decisions A4, B5, B6, C9, C10; plan §5.3).
  *
  * The `tabOpened` frame arrives on the browser-sessions coordinator, which is
- * module-global and outside React, so this file owns the store-level `openTile`
- * the coordinator hands in. Everything about WHERE the tile lands is the
+ * module-global and outside React, so this file opens through the non-React
+ * `openTileWithNavigation` seam. Everything about WHERE the tile lands is the
  * resolver's; what stays here is the part the resolver cannot see: the
  * `agentTabSurfacing` gate and the PiP suppression rules (C9).
  */
+import type { BrowserTabOpenedSource } from "@traycer/protocol/host/browser/contracts";
 import { isMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
-import { executeTileOpen } from "@/lib/canvas/tile-open/execute-tile-open";
-import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
-import { commitWithoutNavigation } from "@/lib/canvas/tile-open/open-tile";
-import { resolveTileOpen } from "@/lib/canvas/tile-open/resolve-tile-open";
-import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
+import {
+  commitWithoutNavigation,
+  openTileWithNavigation,
+} from "@/lib/canvas/tile-open/open-tile";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
@@ -28,10 +28,7 @@ import {
   type AgentTabSurfacing,
   type BrowserTilePlacement,
 } from "@/stores/settings/settings-store";
-import { convertBrowserTabToPip, getPipSnapshot } from "../pip/pip-store";
-
-export type HostOpenedTabSource = "agent" | "page";
-export type HostOpenedTabDisposition = "foreground" | "background";
+import { getPipSnapshot } from "../pip/pip-store";
 
 export type HostTabSuppressReason =
   | "mode-off"
@@ -48,9 +45,12 @@ export type HostTabSuppressReason =
  *   (a floating overlay nobody can see arms nothing).
  * - every other placement always lands a tile, even in a hidden epic: layout
  *   mutations are fine where an overlay would be invisible.
+ *
+ * `browserPlacement` is the EFFECTIVE placement, not the raw setting (R4) -
+ * see {@link effectiveBrowserPlacement}.
  */
 export function hostOpenedTabSuppressReason(input: {
-  readonly source: HostOpenedTabSource;
+  readonly source: BrowserTabOpenedSource;
   readonly surfacing: AgentTabSurfacing;
   readonly browserPlacement: BrowserTilePlacement;
   readonly epicVisible: boolean;
@@ -61,6 +61,22 @@ export function hostOpenedTabSuppressReason(input: {
   if (input.manualPipActive) return "manual-pip-active";
   if (!input.epicVisible) return "pip-epic-hidden";
   return null;
+}
+
+/**
+ * What the resolver will DO with this push, as far as the pip gate cares. Only
+ * a float can be suppressed, and two things upstream of the setting turn a
+ * `pip` setting into a plain tab: an explicit grouped pane (C7) and the
+ * single-tile viewport (C10). Gating on the raw setting instead dropped those
+ * tabs entirely (R4).
+ */
+function effectiveBrowserPlacement(input: {
+  readonly configured: BrowserTilePlacement;
+  readonly grouped: boolean;
+}): BrowserTilePlacement {
+  if (input.configured !== "pip") return input.configured;
+  if (input.grouped) return "tab";
+  return isMobileViewport() ? "tab" : "pip";
 }
 
 /**
@@ -103,85 +119,14 @@ function findPaneIdHostingSessionTile(
   sessionId: string,
 ): string | null {
   if (canvas.root === null) return null;
-  const paneIdByInstanceId = new Map<string, string>();
   for (const pane of collectPanes(canvas.root)) {
     for (const instanceId of pane.tabInstanceIds) {
-      paneIdByInstanceId.set(instanceId, pane.id);
+      const tile = canvas.tilesByInstanceId[instanceId];
+      if (tile === undefined || !isBrowserSessionTileRef(tile)) continue;
+      if (tile.sessionId === sessionId) return pane.id;
     }
-  }
-  for (const tile of Object.values(canvas.tilesByInstanceId)) {
-    if (tile === undefined) continue;
-    if (!isBrowserSessionTileRef(tile) || tile.sessionId !== sessionId) {
-      continue;
-    }
-    const paneId = paneIdByInstanceId.get(tile.instanceId);
-    if (paneId !== undefined) return paneId;
   }
   return null;
-}
-
-/**
- * The `openTile` a host push runs through, for callers with no React context
- * (the browser-sessions coordinator).
- *
- * ponytail: `openTileWithNavigation` almost covers this, and two differences
- * keep it from being a straight call.
- * (1) The header tab is resolved with the NON-creating lookup, so a background
- * host push cannot mint (and activate) a tab for an epic nobody opened.
- * (2) A `pip` plan is an AGENT-origin conversion here, where `executeTileOpen`
- * hard-codes `manual` - and a `manual` PiP is exactly what
- * `isManualPipActive` refuses to replace, so getting it wrong wedges every
- * later agent float. Thread a pip origin through the plan and this collapses
- * into `openTileWithNavigation(intent, commitWithoutNavigation)`.
- *
- * The route is deliberately not written: the live router is created inside
- * `<TraycerApp>` and exported nowhere, so a module-global caller has none.
- * That matches what the agent path already did (mutate the store and stop);
- * every surface that DOES have a router keeps committing through
- * `navigateNested`.
- */
-export function openHostPushedTile(intent: TileOpenIntent): void {
-  const store = useEpicCanvasStore.getState();
-  // Deliberately the NON-creating lookup: a background host push must not mint
-  // (and activate) a header tab for an epic the user never opened.
-  const tabId =
-    "tabId" in intent.target
-      ? intent.target.tabId
-      : store.resolveTabIdForEpic(intent.target.epicId);
-  if (tabId === null) return;
-  const plan = resolveTileOpen({
-    intent,
-    settings: useSettingsStore.getState().tilePlacement,
-    canvas: store.canvasByTabId[tabId] ?? createEmptyCanvas(),
-    resolveTargetTabForEpic: () => tabId,
-    singleTileViewport: isMobileViewport(),
-  });
-  const epicId = store.tabsById[tabId]?.epicId ?? null;
-
-  if (plan.kind === "pip") {
-    if (epicId === null || !isBrowserSessionTileRef(intent.node)) return;
-    // Silent on failure by design: a failed auto-PiP leaves the tab reachable
-    // via the sidebar instead of toasting about background automation.
-    convertBrowserTabToPip({
-      epicId,
-      hostId: intent.node.hostId,
-      sessionId: intent.node.sessionId,
-      tabId: intent.node.tabId,
-      origin: "agent",
-      onReady: () => {},
-      onError: () => {},
-    });
-    return;
-  }
-
-  executeTileOpen({
-    plan,
-    node: intent.node,
-    source: intent.source,
-    store,
-    navigateNested: commitWithoutNavigation,
-    epicId,
-  });
 }
 
 function trackAgentTabSurfaced(
@@ -200,17 +145,26 @@ export interface HostOpenedTabSurfacing {
   readonly hostId: string;
   readonly sessionId: string;
   readonly tabId: string;
-  readonly source: HostOpenedTabSource;
-  readonly disposition: HostOpenedTabDisposition;
-  readonly openTile: (intent: TileOpenIntent) => void;
+  readonly source: BrowserTabOpenedSource;
 }
 
 export function surfaceHostOpenedTab(input: HostOpenedTabSurfacing): void {
   const settings = useSettingsStore.getState();
-  const browserPlacement = tilePlacementForCategory(
-    settings.tilePlacement,
-    "browser",
-  );
+  const store = useEpicCanvasStore.getState();
+  // Deliberately the NON-creating lookup: a host push must not mint (and
+  // activate) a header tab for an epic the user never opened.
+  const viewTabId = store.resolveTabIdForEpic(input.epicId);
+  const canvas =
+    viewTabId === null ? undefined : store.canvasByTabId[viewTabId];
+  const groupedPaneId =
+    canvas === undefined
+      ? null
+      : findPaneIdHostingSessionTile(canvas, input.sessionId);
+
+  const browserPlacement = effectiveBrowserPlacement({
+    configured: tilePlacementForCategory(settings.tilePlacement, "browser"),
+    grouped: groupedPaneId !== null,
+  });
   const reason = hostOpenedTabSuppressReason({
     source: input.source,
     surfacing: settings.agentTabSurfacing,
@@ -221,34 +175,37 @@ export function surfaceHostOpenedTab(input: HostOpenedTabSurfacing): void {
   if (input.source === "agent") trackAgentTabSurfaced(browserPlacement, reason);
   if (reason !== null) return;
 
-  const store = useEpicCanvasStore.getState();
-  const viewTabId = store.resolveTabIdForEpic(input.epicId);
-  const canvas =
-    viewTabId === null ? undefined : store.canvasByTabId[viewTabId];
-  const groupedPaneId =
-    canvas === undefined
-      ? null
-      : findPaneIdHostingSessionTile(canvas, input.sessionId);
-
-  input.openTile({
-    node: makeBrowserSessionTileRef({
-      hostId: input.hostId,
-      sessionId: input.sessionId,
-      tabId: input.tabId,
-    }),
-    target: { epicId: input.epicId },
-    // A background open is `host`: no focus steal, no new geometry (C4).
-    gesture: input.disposition === "background" ? "host" : "explicit",
-    modifiers: null,
-    placement:
-      groupedPaneId === null
-        ? null
-        : { kind: "tab", paneId: groupedPaneId, index: null },
-    dedupe: true,
-    // ponytail: `AnalyticsSource` has no host-push member and `analytics.ts` is
-    // out of this ticket's blast radius; `trackOpenedCanvasTile` emits nothing
-    // for `browser-session` tiles anyway, so this value is inert today. Add a
-    // real source when the analytics schema is next opened.
-    source: "direct_ui",
-  });
+  openTileWithNavigation(
+    {
+      node: makeBrowserSessionTileRef({
+        hostId: input.hostId,
+        sessionId: input.sessionId,
+        tabId: input.tabId,
+      }),
+      target: { epicId: input.epicId },
+      // Always `explicit`: the wire carries no disposition (a headless runtime
+      // cannot detect one, and Electron's real in-page disposition travels on
+      // `browserViewOpenTileRequest` instead - A5/B6), so a host push is a
+      // deliberate open, not a background one.
+      gesture: "explicit",
+      modifiers: null,
+      placement:
+        groupedPaneId === null
+          ? null
+          : { kind: "tab", paneId: groupedPaneId, index: null },
+      dedupe: true,
+      // ponytail: `AnalyticsSource` has no host-push member and `analytics.ts` is
+      // out of this ticket's blast radius; `trackOpenedCanvasTile` emits nothing
+      // for `browser-session` tiles anyway, so this value is inert today. Add a
+      // real source when the analytics schema is next opened.
+      source: "direct_ui",
+    },
+    // The route is deliberately not written: the live router is created inside
+    // `<TraycerApp>` and exported nowhere, so a module-global caller has none.
+    // That matches what the agent path already did (mutate the store and stop);
+    // every surface that DOES have a router keeps committing through
+    // `navigateNested`.
+    commitWithoutNavigation,
+    { createTab: false, pipOrigin: "agent" },
+  );
 }

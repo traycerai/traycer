@@ -62,7 +62,7 @@ function WorktreePrStateIcon(props: {
       // than a bubbled handler.
       event.stopPropagation();
       event.preventDefault();
-      openLink(url, "github", event);
+      void openLink(url, "github", event);
     },
     [openLink, url],
   );
@@ -73,7 +73,15 @@ function WorktreePrStateIcon(props: {
       // the enclosing row.
       event.stopPropagation();
       event.preventDefault();
-      openLink(url, "github", null);
+      // Keyboard activation carries modifiers too (ctrl+Enter forces the OS
+      // browser); only the mouse button is missing (R7).
+      void openLink(url, "github", {
+        altKey: event.altKey,
+        ctrlKey: event.ctrlKey,
+        metaKey: event.metaKey,
+        shiftKey: event.shiftKey,
+        button: 0,
+      });
     },
     [openLink, url],
   );

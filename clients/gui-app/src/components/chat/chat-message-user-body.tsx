@@ -102,6 +102,7 @@ import { useWorkspaceMentionRoots } from "@/hooks/composer/use-workspace-mention
 import { useEpicAttachmentBytesPresence } from "@/lib/attachments/use-attachment-blob-src";
 import { useChatAttachmentByteReader } from "@/lib/attachments/use-chat-image-fetcher";
 import { useRunnerHost } from "@/providers/use-runner-host";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 const NOOP: () => void = () => undefined;
 
@@ -262,21 +263,20 @@ function AgentMessageDisplayView({
 
   const openSenderTab = useCallback(() => {
     if (openTarget === null) return;
-    openTile({
-      node: {
-        id: agentSenderInfo.agentId,
-        instanceId: uuidv4(),
-        type: openTarget.type,
-        name: senderName,
-        hostId: openTarget.hostId,
-      },
-      target: { epicId },
-      gesture: "explicit",
-      modifiers: null,
-      placement: null,
-      dedupe: true,
-      source: "direct_ui",
-    });
+    openTile(
+      tileIntent(
+        {
+          id: agentSenderInfo.agentId,
+          instanceId: uuidv4(),
+          type: openTarget.type,
+          name: senderName,
+          hostId: openTarget.hostId,
+        },
+        { epicId },
+        "explicit",
+        "direct_ui",
+      ),
+    );
   }, [agentSenderInfo.agentId, epicId, openTarget, senderName, openTile]);
 
   const header = (

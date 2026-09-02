@@ -1,12 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import type { BrowserTabOpenedSource } from "@traycer/protocol/host/browser/contracts";
 import {
   hostOpenedTabSuppressReason,
   isEpicSurfaceVisible,
-  openHostPushedTile,
   setEpicSurfaceVisibility,
   surfaceHostOpenedTab,
-  type HostOpenedTabDisposition,
-  type HostOpenedTabSource,
 } from "../surface-host-opened-tab";
 import {
   convertBrowserTabToPip,
@@ -14,12 +12,14 @@ import {
   getPipSnapshot,
 } from "../../pip/pip-store";
 import { createSingleTileCanvas } from "@/stores/epics/canvas/actions";
-import { collectPanes } from "@/stores/epics/canvas/tile-tree";
+import { collectPanes, type TilePane } from "@/stores/epics/canvas/tile-tree";
 import { makeBlankTileRef } from "@/stores/epics/canvas/tile-schema/blank-tile";
 import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
-import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
+import type {
+  EpicCanvasState,
+  EpicCanvasTileRef,
+} from "@/stores/epics/canvas/types";
 import {
   DEFAULT_TILE_PLACEMENT_SETTINGS,
   useSettingsStore,
@@ -45,17 +45,32 @@ function seedCanvasWithTile(tile: EpicCanvasTileRef): string {
   return pane.id;
 }
 
+function canvas(): EpicCanvasState {
+  const state = useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID];
+  if (state === undefined) throw new Error("expected a canvas");
+  return state;
+}
+
+function panes(): readonly TilePane[] {
+  const root = canvas().root;
+  if (root === null) throw new Error("expected a root");
+  return collectPanes(root);
+}
+
+function tileCount(): number {
+  return Object.keys(canvas().tilesByInstanceId).length;
+}
+
 function surface(overrides: {
-  readonly source: HostOpenedTabSource;
-  readonly disposition: HostOpenedTabDisposition;
-  readonly openTile: (intent: TileOpenIntent) => void;
+  readonly source: BrowserTabOpenedSource;
+  readonly tabId?: string;
 }): void {
   surfaceHostOpenedTab({
     epicId: EPIC,
     hostId: HOST,
     sessionId: SESSION,
-    tabId: "tab-new",
-    ...overrides,
+    tabId: overrides.tabId ?? "tab-new",
+    source: overrides.source,
   });
 }
 
@@ -132,34 +147,20 @@ describe("surfaceHostOpenedTab", () => {
   });
 
   it("no-ops for an agent open while surfacing is off", () => {
-    const openTile = vi.fn<(intent: TileOpenIntent) => void>();
-    surface({ source: "agent", disposition: "foreground", openTile });
-    expect(openTile).not.toHaveBeenCalled();
+    seedCanvasWithTile(makeBlankTileRef());
+    surface({ source: "agent" });
+    expect(tileCount()).toBe(1);
   });
 
   it("surfaces a page open even while surfacing is off", () => {
-    const openTile = vi.fn<(intent: TileOpenIntent) => void>();
-    surface({ source: "page", disposition: "foreground", openTile });
-    expect(openTile).toHaveBeenCalledTimes(1);
-    expect(openTile.mock.calls[0]?.[0]).toMatchObject({
-      target: { epicId: EPIC },
-      gesture: "explicit",
-      modifiers: null,
-      placement: null,
-      dedupe: true,
-      node: { type: "browser-session", sessionId: SESSION, tabId: "tab-new" },
-    });
+    seedCanvasWithTile(makeBlankTileRef());
+    surface({ source: "page" });
+    expect(tileCount()).toBe(2);
   });
 
-  it("opens an agent foreground tab as an explicit gesture and a background one as a host push", () => {
-    useSettingsStore.setState({ agentTabSurfacing: "surface" });
-    const openTile = vi.fn<(intent: TileOpenIntent) => void>();
-    surface({ source: "agent", disposition: "foreground", openTile });
-    surface({ source: "agent", disposition: "background", openTile });
-    expect(openTile.mock.calls.map((call) => call[0].gesture)).toEqual([
-      "explicit",
-      "host",
-    ]);
+  it("never mints a header tab for an epic the user has not opened", () => {
+    surface({ source: "page" });
+    expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]);
   });
 
   it("places into the pane already hosting the session", () => {
@@ -171,20 +172,54 @@ describe("surfaceHostOpenedTab", () => {
         tabId: "tab-source",
       }),
     );
-    const openTile = vi.fn<(intent: TileOpenIntent) => void>();
-    surface({ source: "page", disposition: "foreground", openTile });
-    expect(openTile.mock.calls[0]?.[0].placement).toEqual({
-      kind: "tab",
-      paneId,
-      index: null,
-    });
+
+    surface({ source: "agent" });
+
+    // Grouped beside its sibling rather than splitting off a browser pane.
+    expect(panes()).toHaveLength(1);
+    expect(panes()[0]?.id).toBe(paneId);
+    expect(tileCount()).toBe(2);
   });
 
-  it("leaves placement to the setting when no pane hosts the session", () => {
+  it("splits right into a seeded canvas when no pane hosts the session", () => {
+    useSettingsStore.setState({ agentTabSurfacing: "surface" });
+    const paneId = seedCanvasWithTile(makeBlankTileRef());
+
+    surface({ source: "agent" });
+
+    // Browser category default is `split` (C3), so the tab lands in a NEW
+    // pane to the right, and that pane becomes the active one.
+    const after = panes();
+    expect(after).toHaveLength(2);
+    expect(after[0]?.id).toBe(paneId);
+    expect(canvas().activePaneId).toBe(after[1]?.id);
+    expect(after[1]?.tabInstanceIds).toHaveLength(1);
+  });
+
+  it("floats a pip placement on the AGENT's behalf, replacing an earlier agent float", () => {
+    useSettingsStore.setState({
+      agentTabSurfacing: "surface",
+      tilePlacement: { ...DEFAULT_TILE_PLACEMENT_SETTINGS, browser: "pip" },
+    });
     seedCanvasWithTile(makeBlankTileRef());
-    const openTile = vi.fn<(intent: TileOpenIntent) => void>();
-    surface({ source: "page", disposition: "foreground", openTile });
-    expect(openTile.mock.calls[0]?.[0].placement).toBeNull();
+    convertBrowserTabToPip({
+      epicId: EPIC,
+      hostId: HOST,
+      sessionId: SESSION,
+      tabId: "tab-earlier",
+      origin: "agent",
+      onReady: () => {},
+      onError: () => {},
+    });
+
+    surface({ source: "agent", tabId: "tab-pip" });
+
+    // An `agent` float is replaced latest-wins; a `manual` one never is.
+    expect(getPipSnapshot(EPIC).pendingTarget).toMatchObject({
+      sessionId: SESSION,
+      tabId: "tab-pip",
+      origin: "agent",
+    });
   });
 
   it("suppresses a pip placement behind a manual PiP or a hidden epic", () => {
@@ -192,6 +227,7 @@ describe("surfaceHostOpenedTab", () => {
       agentTabSurfacing: "surface",
       tilePlacement: { ...DEFAULT_TILE_PLACEMENT_SETTINGS, browser: "pip" },
     });
+    seedCanvasWithTile(makeBlankTileRef());
     convertBrowserTabToPip({
       epicId: EPIC,
       hostId: HOST,
@@ -201,76 +237,30 @@ describe("surfaceHostOpenedTab", () => {
       onReady: () => {},
       onError: () => {},
     });
-    const openTile = vi.fn<(intent: TileOpenIntent) => void>();
-    surface({ source: "agent", disposition: "foreground", openTile });
-    expect(openTile).not.toHaveBeenCalled();
+
+    surface({ source: "agent" });
+    expect(tileCount()).toBe(1);
 
     dismissPip(EPIC);
     setEpicSurfaceVisibility(EPIC, false);
     expect(isEpicSurfaceVisible(EPIC)).toBe(false);
-    surface({ source: "agent", disposition: "foreground", openTile });
-    expect(openTile).not.toHaveBeenCalled();
+    surface({ source: "agent" });
+    expect(tileCount()).toBe(1);
+    expect(getPipSnapshot(EPIC).pendingTarget).toBeNull();
 
     setEpicSurfaceVisibility(EPIC, true);
-    surface({ source: "agent", disposition: "foreground", openTile });
-    expect(openTile).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("openHostPushedTile", () => {
-  beforeEach(() => {
-    useEpicCanvasStore.setState({
-      canvasByTabId: {},
-      tabsById: {},
-      openTabOrder: [],
-      activeTabId: null,
-    });
-    dismissPip(EPIC);
-    setEpicSurfaceVisibility(EPIC, true);
-    useSettingsStore.setState({
-      agentTabSurfacing: "surface",
-      tilePlacement: DEFAULT_TILE_PLACEMENT_SETTINGS,
-    });
-  });
-
-  function hostIntent(
-    tabId: string,
-    placement: TileOpenIntent["placement"],
-  ): TileOpenIntent {
-    return {
-      node: makeBrowserSessionTileRef({
-        hostId: HOST,
-        sessionId: SESSION,
-        tabId,
-      }),
-      target: { epicId: EPIC },
-      gesture: "explicit",
-      modifiers: null,
-      placement,
-      dedupe: true,
-      source: "direct_ui",
-    };
-  }
-
-  it("never mints a header tab for an epic the user has not opened", () => {
-    openHostPushedTile(hostIntent("tab-orphan", null));
-    expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]);
-  });
-
-  it("converts a pip plan with an agent origin, not a manual one", () => {
-    useSettingsStore.setState({
-      tilePlacement: { ...DEFAULT_TILE_PLACEMENT_SETTINGS, browser: "pip" },
-    });
-    seedCanvasWithTile(makeBlankTileRef());
-    openHostPushedTile(hostIntent("tab-pip", null));
+    surface({ source: "agent" });
     expect(getPipSnapshot(EPIC).pendingTarget).toMatchObject({
-      sessionId: SESSION,
-      tabId: "tab-pip",
+      tabId: "tab-new",
       origin: "agent",
     });
   });
 
-  it("groups an explicit tab placement into the session's pane", () => {
+  it("lands a tab, not a suppressed float, when a pane already hosts the session (R4)", () => {
+    useSettingsStore.setState({
+      agentTabSurfacing: "surface",
+      tilePlacement: { ...DEFAULT_TILE_PLACEMENT_SETTINGS, browser: "pip" },
+    });
     const paneId = seedCanvasWithTile(
       makeBrowserSessionTileRef({
         hostId: HOST,
@@ -278,14 +268,23 @@ describe("openHostPushedTile", () => {
         tabId: "tab-source",
       }),
     );
-    openHostPushedTile(
-      hostIntent("tab-second", { kind: "tab", paneId, index: null }),
-    );
-    const canvas = useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID];
-    if (canvas === undefined || canvas.root === null) {
-      throw new Error("expected canvas");
-    }
-    expect(collectPanes(canvas.root)).toHaveLength(1);
-    expect(Object.values(canvas.tilesByInstanceId)).toHaveLength(2);
+    // Both pip suppression conditions hold - and neither applies, because the
+    // effective placement is a TAB in the session's own pane.
+    setEpicSurfaceVisibility(EPIC, false);
+    convertBrowserTabToPip({
+      epicId: EPIC,
+      hostId: HOST,
+      sessionId: "other-session",
+      tabId: "other-tab",
+      origin: "manual",
+      onReady: () => {},
+      onError: () => {},
+    });
+
+    surface({ source: "agent" });
+
+    expect(panes()).toHaveLength(1);
+    expect(panes()[0]?.id).toBe(paneId);
+    expect(tileCount()).toBe(2);
   });
 });

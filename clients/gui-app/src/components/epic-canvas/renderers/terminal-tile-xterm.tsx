@@ -404,7 +404,7 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
     entry.live.onContainerResize = (cols, rows) =>
       onContainerResizeRef.current(cols, rows);
     entry.live.openLink = (uri, event) => {
-      openLinkRef.current(uri, "terminal", event);
+      void openLinkRef.current(uri, "terminal", event);
     };
     const getFindTargetId = () => findTargetIdRef.current;
     const onSearchResults = (result: ISearchResultChangeEvent): void => {

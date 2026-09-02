@@ -13,10 +13,7 @@ import type {
 import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import { appLogger } from "@/lib/logger";
-import {
-  openHostPushedTile,
-  surfaceHostOpenedTab,
-} from "@/lib/browser-view/tiles/surface-host-opened-tab";
+import { surfaceHostOpenedTab } from "@/lib/browser-view/tiles/surface-host-opened-tab";
 import {
   browserSessionsLifecycle,
   browserSessionsReducer,
@@ -920,27 +917,6 @@ function forgetLocalLogins(browserView: BrowserViewBridge | null): void {
   });
 }
 
-/**
- * Extracted for the same reason as {@link forgetLocalLogins}: inlined into the
- * frame switch it puts {@link handleBrowserSessionsSubsystemFrame} over the
- * complexity budget.
- */
-function handleTabOpenedFrame(
-  frame: Extract<BrowserSessionsSubsystemFrame, { kind: "tabOpened" }>,
-  epicId: string,
-  hostId: string,
-): void {
-  surfaceHostOpenedTab({
-    epicId,
-    hostId,
-    sessionId: frame.sessionId,
-    tabId: frame.tabId,
-    source: frame.source,
-    disposition: frame.disposition,
-    openTile: openHostPushedTile,
-  });
-}
-
 function handleBrowserSessionsSubsystemFrame(args: {
   readonly frame: BrowserSessionsSubsystemFrame;
   readonly epicId: string;
@@ -981,7 +957,13 @@ function handleBrowserSessionsSubsystemFrame(args: {
       });
       return;
     case "tabOpened":
-      handleTabOpenedFrame(frame, args.epicId, args.hostId);
+      surfaceHostOpenedTab({
+        epicId: args.epicId,
+        hostId: args.hostId,
+        sessionId: frame.sessionId,
+        tabId: frame.tabId,
+        source: frame.source,
+      });
       return;
     case "capturePrimaryProfile":
       handlePrimaryProfileCaptureFrame({

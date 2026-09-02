@@ -83,7 +83,11 @@ export function MobileNavDrawer(): ReactNode {
   };
   const handleManageSubscription = () => {
     close();
-    openLink(resolvePlatformBaseUrl(runnerHost.signInUrl), "account", null);
+    void openLink(
+      resolvePlatformBaseUrl(runnerHost.signInUrl),
+      "account",
+      null,
+    );
     Analytics.getInstance().track(AnalyticsEvent.SubscriptionManagementOpened, {
       source: "direct_ui",
     });

@@ -280,6 +280,7 @@ import type { ChatSurfaceNode } from "./chat-tile-types";
 import { ChatTileLoading, ChatTileError } from "./chat-tile-runtime-gate";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
 import { chatTileCatalogActivity } from "./chat-tile-surface-activity";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 const EMPTY_WORKSPACE_PATH_SET: ReadonlySet<string> = new Set();
 const EMPTY_BACKGROUND_STOP_TASK_IDS: ReadonlySet<string> = new Set();
@@ -1096,25 +1097,23 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
         });
         return {
           onClick: () =>
-            openTile({
-              node: tile,
-              target: { tabId: view.viewTabId },
-              gesture: "single",
-              modifiers: null,
-              placement: null,
-              dedupe: true,
-              source: "direct_ui",
-            }),
+            openTile(
+              tileIntent(
+                tile,
+                { tabId: view.viewTabId },
+                "single",
+                "direct_ui",
+              ),
+            ),
           onDoubleClick: () =>
-            openTile({
-              node: tile,
-              target: { tabId: view.viewTabId },
-              gesture: "double",
-              modifiers: null,
-              placement: null,
-              dedupe: true,
-              source: "direct_ui",
-            }),
+            openTile(
+              tileIntent(
+                tile,
+                { tabId: view.viewTabId },
+                "double",
+                "direct_ui",
+              ),
+            ),
         };
       },
       cumulative: (filePath) => {
@@ -1125,25 +1124,23 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
         });
         return {
           onClick: () =>
-            openTile({
-              node: tile,
-              target: { tabId: view.viewTabId },
-              gesture: "single",
-              modifiers: null,
-              placement: null,
-              dedupe: true,
-              source: "direct_ui",
-            }),
+            openTile(
+              tileIntent(
+                tile,
+                { tabId: view.viewTabId },
+                "single",
+                "direct_ui",
+              ),
+            ),
           onDoubleClick: () =>
-            openTile({
-              node: tile,
-              target: { tabId: view.viewTabId },
-              gesture: "double",
-              modifiers: null,
-              placement: null,
-              dedupe: true,
-              source: "direct_ui",
-            }),
+            openTile(
+              tileIntent(
+                tile,
+                { tabId: view.viewTabId },
+                "double",
+                "direct_ui",
+              ),
+            ),
         };
       },
       cumulativeBundle: (filePaths) => {
@@ -1153,15 +1150,14 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
           filePaths,
         });
         return () =>
-          openTile({
-            node: tile,
-            target: { tabId: view.viewTabId },
-            gesture: "explicit",
-            modifiers: null,
-            placement: null,
-            dedupe: true,
-            source: "direct_ui",
-          });
+          openTile(
+            tileIntent(
+              tile,
+              { tabId: view.viewTabId },
+              "explicit",
+              "direct_ui",
+            ),
+          );
       },
       hash: (request) => {
         const tile = makeSnapshotHashDiffTile({
@@ -1174,25 +1170,23 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
         });
         return {
           onClick: () =>
-            openTile({
-              node: tile,
-              target: { tabId: view.viewTabId },
-              gesture: "single",
-              modifiers: null,
-              placement: null,
-              dedupe: true,
-              source: "direct_ui",
-            }),
+            openTile(
+              tileIntent(
+                tile,
+                { tabId: view.viewTabId },
+                "single",
+                "direct_ui",
+              ),
+            ),
           onDoubleClick: () =>
-            openTile({
-              node: tile,
-              target: { tabId: view.viewTabId },
-              gesture: "double",
-              modifiers: null,
-              placement: null,
-              dedupe: true,
-              source: "direct_ui",
-            }),
+            openTile(
+              tileIntent(
+                tile,
+                { tabId: view.viewTabId },
+                "double",
+                "direct_ui",
+              ),
+            ),
         };
       },
     }),

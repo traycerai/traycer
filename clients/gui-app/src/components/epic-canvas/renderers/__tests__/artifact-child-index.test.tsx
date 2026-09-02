@@ -3,7 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { nestedFocusBoundaryMock } from "@/__tests__/nested-focus-boundary-mock";
 import { ArtifactChildIndex } from "@/components/epic-canvas/renderers/artifact-child-index";
 import { readEpicCanvasDragSourceData } from "@/components/epic-canvas/dnd/dnd";
-import { openTileWithNavigation } from "@/lib/canvas/tile-open/open-tile";
+import {
+  MANUAL_TILE_OPEN,
+  openTileWithNavigation,
+} from "@/lib/canvas/tile-open/open-tile";
 import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
@@ -109,7 +112,11 @@ describe("<ArtifactChildIndex />", () => {
     nestedFocusBoundaryMock.navigateNested.mockClear();
     navigation.openTile.mockImplementation(
       (intent: TileOpenIntent): NestedFocusTarget | null =>
-        openTileWithNavigation(intent, nestedFocusBoundaryMock.navigateNested),
+        openTileWithNavigation(
+          intent,
+          nestedFocusBoundaryMock.navigateNested,
+          MANUAL_TILE_OPEN,
+        ),
     );
     projection.childIdsByParent = {};
     projection.nodesById = {};

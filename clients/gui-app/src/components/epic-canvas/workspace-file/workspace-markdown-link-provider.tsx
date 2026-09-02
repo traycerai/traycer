@@ -5,6 +5,7 @@ import {
   type MarkdownLinkPolicy,
 } from "@/markdown/links/markdown-link-context";
 import { useMemo, type ReactNode } from "react";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 interface WorkspaceMarkdownLinkProviderProps {
   readonly tabId: string;
@@ -42,15 +43,9 @@ export function WorkspaceMarkdownLinkProvider(
         if (ref === null) return false;
         // A markdown link click is a single-click gesture (C4/C11); the
         // anchor hands over the link, not the mouse event, so no modifiers.
-        openTile({
-          node: ref,
-          target: { tabId: props.tabId },
-          gesture: "single",
-          modifiers: null,
-          placement: null,
-          dedupe: true,
-          source: "direct_ui",
-        });
+        openTile(
+          tileIntent(ref, { tabId: props.tabId }, "single", "direct_ui"),
+        );
         return true;
       },
     }),

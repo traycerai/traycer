@@ -23,6 +23,7 @@ import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
 import { useWorktreeOwnerMetadata } from "@/hooks/worktree/use-worktree-owner-metadata-query";
 import { useBareKeyClaimer } from "@/lib/keybindings/use-bare-key-claimer";
 import { useCompactRelativeTime } from "@/lib/relative-time";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 // The git probes this forces are disk-bound and the `gh` PR probe is a network
 // call, so the spinner gets a longer leash than the Settings toolbar's 10s -
@@ -87,22 +88,21 @@ export function WorktreeOwnerMetadataTooltip(props: {
     ) {
       return;
     }
-    openTile({
-      node: makePrDetailTile({
-        hostId: props.hostId,
-        githubHost: reference.githubHost,
-        owner: reference.owner,
-        repo: reference.repo,
-        prNumber: reference.prNumber,
-        name: `${reference.repo} #${reference.prNumber}`,
-      }),
-      target: { epicId: props.epicId },
-      gesture: "explicit",
-      modifiers: null,
-      placement: null,
-      dedupe: true,
-      source: "direct_ui",
-    });
+    openTile(
+      tileIntent(
+        makePrDetailTile({
+          hostId: props.hostId,
+          githubHost: reference.githubHost,
+          owner: reference.owner,
+          repo: reference.repo,
+          prNumber: reference.prNumber,
+          name: `${reference.repo} #${reference.prNumber}`,
+        }),
+        { epicId: props.epicId },
+        "explicit",
+        "direct_ui",
+      ),
+    );
   };
   const metadata = useWorktreeOwnerMetadata({
     client,

@@ -52,6 +52,7 @@ import { ImageGenerationCard } from "./image-generation-card";
 import { ManagedCommandRestartSegment } from "./managed-command-restart-segment";
 import { ManagedCommandStartSegment } from "./managed-command-start-segment";
 import { isTraycerBrowserReplToolName } from "@traycer/protocol/host/agent/gui/browser-tools";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 interface ToolSegmentProps {
   id: string;
@@ -687,21 +688,20 @@ function A2ASendToolSegment(
   const openTarget = receiverOpenTarget(receiverNode, activeHostId);
   const openReceiverTab = () => {
     if (openTarget === null || receiverNode === null) return;
-    openTile({
-      node: {
-        id: receiverNode.id,
-        instanceId: uuidv4(),
-        type: openTarget.type,
-        name: receiverName,
-        hostId: openTarget.hostId,
-      },
-      target: { epicId },
-      gesture: "explicit",
-      modifiers: null,
-      placement: null,
-      dedupe: true,
-      source: "direct_ui",
-    });
+    openTile(
+      tileIntent(
+        {
+          id: receiverNode.id,
+          instanceId: uuidv4(),
+          type: openTarget.type,
+          name: receiverName,
+          hostId: openTarget.hostId,
+        },
+        { epicId },
+        "explicit",
+        "direct_ui",
+      ),
+    );
   };
 
   const receiver = (

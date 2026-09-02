@@ -107,6 +107,7 @@ import {
   useFileTreeStore,
 } from "@/stores/file-tree/file-tree-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 const WORKSPACE_FILE_LIST_METHOD = "workspace.subscribeFileList";
 
@@ -568,15 +569,7 @@ function FileTreeBodyForResolvedHost(
       const ref = workspaceFileRefForTreePath(treePath);
       if (ref === null) return;
       onLatchHost();
-      openTile({
-        node: ref,
-        target: { tabId: props.tabId },
-        gesture,
-        modifiers: null,
-        placement: null,
-        dedupe: true,
-        source: "direct_ui",
-      });
+      openTile(tileIntent(ref, { tabId: props.tabId }, gesture, "direct_ui"));
     };
     // Preview is right on a touch viewport too, even though the double-click
     // that promotes it there has no touch equivalent: that viewport shows ONE

@@ -263,7 +263,9 @@ function BrowserOpenExternalButton(props: { readonly url: string }) {
         size="icon-xs"
         aria-label="Open in default browser"
         className="pointer-events-none text-muted-foreground opacity-0 transition-[color,opacity] duration-150 group-hover/address:pointer-events-auto group-hover/address:opacity-100 group-focus-within/address:pointer-events-auto group-focus-within/address:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100 motion-reduce:transition-none"
-        onClick={() => openLink(props.url, "app", null)}
+        onClick={() => {
+          void openLink(props.url, "app", null);
+        }}
       >
         <ExternalLink aria-hidden />
       </InputGroupButton>

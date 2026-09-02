@@ -968,7 +968,7 @@ describe("OpenCodeRateLimitView", () => {
     expect(openLinkMock).toHaveBeenCalledWith(
       "https://opencode.ai/auth",
       "account",
-      null,
+      expect.objectContaining({ type: "click" }),
     );
   });
 });

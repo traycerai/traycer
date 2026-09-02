@@ -20,7 +20,8 @@ import { useWorktreeListBindingsForEpicForClient } from "@/hooks/worktree/use-wo
 import { useArtifactFolderChain } from "@/lib/epic-selectors";
 import { fetchResolveArtifactByPath } from "@/lib/host/resolve-artifact-by-path";
 import { fetchWorkspaceFileExists } from "@/lib/host/probe-workspace-file-exists";
-import { useOpenLink } from "@/lib/links/open-link";
+import type { LinkClickEvent } from "@/lib/links/open-link";
+import { useLinkOpenInFlight } from "@/lib/links/use-link-open-in-flight";
 import { isAbsolutePath } from "@/lib/path/cross-platform-path";
 import { isBrowsable } from "@/lib/worktree/worktree-row-browsable";
 import { artifactEpicIdFromLinkPath } from "@/markdown/links/artifact-link-path";
@@ -29,7 +30,10 @@ import { resolveArtifactRelativeLinkPath } from "@/markdown/links/resolve-artifa
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 
 export interface ArtifactLinkOpener {
-  readonly openLink: (link: OpenableArtifactLink) => void;
+  readonly openLink: (
+    link: OpenableArtifactLink,
+    event: LinkClickEvent,
+  ) => void;
 }
 
 /**
@@ -186,7 +190,9 @@ export function useArtifactLinkOpener(args: {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const epicHandle = useOpenEpicHandle();
-  const openUrl = useOpenLink();
+  // In-flight guarded: `openUrl` fires a fresh bridge request per call, so a
+  // double click would otherwise open the OS browser twice (R10).
+  const { open: openUrl } = useLinkOpenInFlight();
   const pendingProjectedOpenCancelRef = useRef<(() => void) | null>(null);
   const disposedRef = useRef(false);
   const clickTokenRef = useRef(0);
@@ -241,12 +247,13 @@ export function useArtifactLinkOpener(args: {
   );
 
   const openLink = useCallback(
-    (link: OpenableArtifactLink): void => {
+    (link: OpenableArtifactLink, event: LinkClickEvent): void => {
       if (link.kind === "external") {
         supersedePending();
         // An artifact document's external link is markdown egress like any
-        // other (A1): the `markdown` setting decides in-app vs the OS browser.
-        openUrl(link.url, "markdown", null);
+        // other (A1): the `markdown` setting decides in-app vs the OS browser,
+        // and the click's modifiers override it (A3, R7).
+        openUrl(link.url, "markdown", event);
         return;
       }
       if (openFile === null || chatDeps === null) {

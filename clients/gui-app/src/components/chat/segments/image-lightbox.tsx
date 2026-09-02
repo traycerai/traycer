@@ -8,7 +8,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { useOpenSavedFile } from "@/hooks/files/use-open-saved-file";
-import { useOpenLink } from "@/lib/links/open-link";
+import { useLinkOpenInFlight } from "@/lib/links/use-link-open-in-flight";
 import { imageMutationKeys } from "@/lib/query-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import { cn } from "@/lib/utils";
@@ -43,7 +43,7 @@ const UntrustedSvgLightbox = lazy(() =>
 );
 
 export function ImageLightbox(props: ImageLightboxProps): ReactNode {
-  const openLink = useOpenLink();
+  const openInBrowser = useLinkOpenInFlight();
   const contentRef = useRef<HTMLDivElement>(null);
   const fileSave = useFileSaveHost();
   const openSaved = useOpenSavedFile();
@@ -86,7 +86,12 @@ export function ImageLightbox(props: ImageLightboxProps): ReactNode {
       remote={
         remoteUrl === null
           ? null
-          : { onOpen: (event) => openLink(remoteUrl, "image", event) }
+          : {
+              pending: openInBrowser.pending,
+              onOpen: (event) => {
+                openInBrowser.open(remoteUrl, "image", event);
+              },
+            }
       }
       onCopy={() => imageAction.mutate("copy")}
       onShare={() => imageAction.mutate("share")}

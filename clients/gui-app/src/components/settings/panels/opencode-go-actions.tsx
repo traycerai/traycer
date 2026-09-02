@@ -30,7 +30,9 @@ export function OpenCodeGoManageLink(): ReactNode {
       variant="link"
       size="xs"
       className="h-auto w-fit p-0"
-      onClick={() => openLink(OPENCODE_GO_MANAGE_URL, "account", null)}
+      onClick={(event) => {
+        void openLink(OPENCODE_GO_MANAGE_URL, "account", event);
+      }}
     >
       Manage Go
     </Button>

@@ -31,6 +31,7 @@ import {
   findOpenArtifactInTab,
   useEpicCanvasStore,
 } from "@/stores/epics/canvas/store";
+import { findPaneById } from "@/stores/epics/canvas/tile-tree";
 import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import { BROWSER_TAB_AGENT_ACTIVITY_MS } from "@/lib/browser-view/browser-tab-display";
 import { dismissPip } from "@/lib/browser-view/pip/pip-store";
@@ -834,6 +835,13 @@ describe("BrowsersPanelBody", () => {
       tabId: "tab-live",
       id: expected.id,
     });
+    // Pinned, not previewed: no double-click gesture exists on these rows, so
+    // a `single` gesture would leave the tile evictable by the next row click.
+    const pane = findPaneById(
+      useEpicCanvasStore.getState().canvasByTabId["view-tab-1"]?.root ?? null,
+      open.paneId,
+    );
+    expect(pane?.previewTabId).toBeNull();
   });
 
   it("row click focuses an existing pointer tile instead of opening a duplicate", () => {

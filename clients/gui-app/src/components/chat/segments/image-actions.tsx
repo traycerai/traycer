@@ -8,6 +8,8 @@ import type { LinkClickEvent } from "@/lib/links/open-link";
 
 /** Remote images swap Download for Open-in-browser; local blobs pass null. */
 export interface ImageRemoteOpen {
+  /** True while the OS handoff is in flight - the control disables (R12). */
+  readonly pending: boolean;
   readonly onOpen: (event: LinkClickEvent) => void;
 }
 
@@ -41,8 +43,8 @@ export function ImageActions(props: {
     saveOrOpen = (
       <ImageActionButton
         label="Open in browser"
-        disabled={props.pendingAction !== null}
-        pending={false}
+        disabled={props.pendingAction !== null || props.remote.pending}
+        pending={props.remote.pending}
         onClick={props.remote.onOpen}
         icon={<ExternalLink className="size-3.5" aria-hidden />}
       />

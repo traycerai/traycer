@@ -151,7 +151,8 @@ function AgentReferenceButton(props: {
       openTile({
         node: buildOpenRef(),
         target: { epicId: props.epicId },
-        gesture: "single",
+        // A chip is a button, like every other agent-opening control here.
+        gesture: "explicit",
         modifiers: modifiersFromMouseEvent(event),
         placement: null,
         dedupe: true,

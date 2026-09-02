@@ -29,7 +29,7 @@ import {
   PR_STATE_PILL_CLASS,
   PR_STATE_TINT_CLASS,
 } from "@/components/worktree/worktree-pr-state-palette";
-import { useOpenLink } from "@/lib/links/open-link";
+import { useLinkOpenInFlight } from "@/lib/links/use-link-open-in-flight";
 import {
   formatPrBaseFromHead,
   formatPrRowTitle,
@@ -486,15 +486,17 @@ function PrNumberAnchor(props: {
   readonly state: PrState;
   readonly children: ReactNode;
 }): ReactNode {
-  const openLink = useOpenLink();
+  // In-flight guarded: a double click on the badge would otherwise fire two
+  // bridge requests and open two OS tabs (R10).
+  const { open } = useLinkOpenInFlight();
   const handleClick = useCallback(
     (event: MouseEvent<HTMLAnchorElement>): void => {
       // The row opens the detail tile; this badge means GitHub.
       event.stopPropagation();
       event.preventDefault();
-      openLink(props.prUrl, "github", event);
+      open(props.prUrl, "github", event);
     },
-    [openLink, props.prUrl],
+    [open, props.prUrl],
   );
   return (
     <a

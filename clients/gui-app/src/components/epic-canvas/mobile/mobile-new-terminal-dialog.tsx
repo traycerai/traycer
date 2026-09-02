@@ -14,6 +14,7 @@ import {
 import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { useTabSurfaceKey } from "@/hooks/host/use-surface-host-pin";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 interface MobileNewTerminalDialogProps {
   readonly epicId: string;
@@ -46,15 +47,14 @@ export function MobileNewTerminalDialog(props: MobileNewTerminalDialogProps) {
   // shell's job.
   const handleLaunch = useCallback(
     (target: TerminalLaunchTarget) => {
-      openTile({
-        node: buildTerminalTileRef(target),
-        target: { tabId },
-        gesture: "explicit",
-        modifiers: null,
-        placement: null,
-        dedupe: true,
-        source: "direct_ui",
-      });
+      openTile(
+        tileIntent(
+          buildTerminalTileRef(target),
+          { tabId },
+          "explicit",
+          "direct_ui",
+        ),
+      );
       onOpenChange(false);
       if (onLaunched !== null) onLaunched();
     },

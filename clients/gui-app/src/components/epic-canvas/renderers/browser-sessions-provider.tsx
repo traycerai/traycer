@@ -2,7 +2,9 @@ import {
   useCallback,
   useEffect,
   useEffectEvent,
+  useLayoutEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
   type ReactNode,
@@ -37,6 +39,7 @@ import { useWindowsBridge } from "@/providers/windows-bridge-context";
 import {
   BrowserSessionsContext,
   BrowserSessionsCoordinatorKeyContext,
+  BrowserSessionsSnapshotContext,
 } from "./browser-sessions-context";
 
 function browserSessionsOwnerIdentityKey(
@@ -86,7 +89,9 @@ export function BrowserSessionsHostProvider(props: {
   return (
     <BrowserSessionsCoordinatorKeyContext.Provider value={coordinatorKey}>
       <BrowserSessionsContext.Provider value={sessions}>
-        {props.children}
+        <BrowserSessionsSnapshotProvider value={sessions}>
+          {props.children}
+        </BrowserSessionsSnapshotProvider>
       </BrowserSessionsContext.Provider>
     </BrowserSessionsCoordinatorKeyContext.Provider>
   );
@@ -237,4 +242,27 @@ function unavailableBrowserSessionsState(
     openTab: unavailable,
     closeTab: unavailable,
   };
+}
+
+/**
+ * Publishes the sessions state through a ref whose identity never changes, so
+ * an event-time reader (`useOpenBrowserUrl`) sees the current value without
+ * re-rendering on every stream frame. Exported for tests that mount
+ * `BrowserSessionsContext.Provider` by hand.
+ */
+export function BrowserSessionsSnapshotProvider(props: {
+  readonly value: BrowserSessionsState | null;
+  readonly children: ReactNode;
+}) {
+  const ref = useRef<BrowserSessionsState | null>(props.value);
+  // Layout, not passive: the ref has to hold the committed value before the
+  // frame the user can click in, and a passive effect may flush after paint.
+  useLayoutEffect(() => {
+    ref.current = props.value;
+  });
+  return (
+    <BrowserSessionsSnapshotContext.Provider value={ref}>
+      {props.children}
+    </BrowserSessionsSnapshotContext.Provider>
+  );
 }

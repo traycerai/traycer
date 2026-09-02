@@ -79,7 +79,7 @@ export function InstallGuidanceDialog(props: InstallGuidanceDialogProps) {
             size="sm"
             className="h-auto px-0 text-muted-foreground"
             onClick={() => {
-              openLink(guidance.releaseUrl, "docs", null);
+              void openLink(guidance.releaseUrl, "docs", null);
             }}
           >
             View release page

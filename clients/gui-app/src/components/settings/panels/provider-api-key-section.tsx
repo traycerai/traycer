@@ -122,7 +122,7 @@ export function ProviderApiKeySection({
         <button
           type="button"
           onClick={() => {
-            openLink(dashboardUrl, "docs", null);
+            void openLink(dashboardUrl, "docs", null);
           }}
           className="inline-flex w-fit items-center gap-1.5 text-ui-xs font-medium text-primary transition-colors hover:text-primary/80 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 rounded"
         >

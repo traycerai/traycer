@@ -19,13 +19,14 @@ import {
   group,
   pane,
 } from "@/stores/epics/canvas/__tests__/canvas-test-fixtures";
+import type { TilePlacementSettings } from "@/stores/settings/settings-store";
 import {
   tileCategoryOf,
+  tileIntent,
   type TileOpenGesture,
   type TileOpenIntent,
   type TileOpenMode,
   type TileOpenPlan,
-  type TilePlacementSettings,
 } from "../intent";
 import { resolveTileOpen } from "../resolve-tile-open";
 
@@ -94,15 +95,19 @@ const SINGLE_PANE_CANVAS = canvasOf({
   tiles: [SPEC_A],
 });
 
-const BASE_INTENT: TileOpenIntent = {
-  node: SPEC_A,
-  target: { tabId: TAB_ID },
-  gesture: "explicit",
-  modifiers: null,
-  placement: null,
-  dedupe: true,
-  source: "direct_ui",
-};
+/** SPEC_A open as the pane's PREVIEW tab, for the promote rules. */
+const PREVIEWING_SPEC_A_CANVAS = canvasOf({
+  root: { ...pane("p1", [SPEC_A.instanceId]), previewTabId: SPEC_A.instanceId },
+  activePaneId: "p1",
+  tiles: [SPEC_A],
+});
+
+const BASE_INTENT: TileOpenIntent = tileIntent(
+  SPEC_A,
+  { tabId: TAB_ID },
+  "explicit",
+  "direct_ui",
+);
 
 const NO_MODS = { shift: false, alt: false, middle: false } as const;
 
@@ -143,6 +148,21 @@ function resolveDefault(intent: TileOpenIntent): TileOpenPlan {
 // 1. Target tab
 // ---------------------------------------------------------------------------
 
+describe("tileIntent", () => {
+  it("fills the common case: no modifiers, no placement, dedupe on", () => {
+    const intent = tileIntent(SPEC_A, { tabId: TAB_ID }, "single", "deep_link");
+    expect(intent).toEqual({
+      node: SPEC_A,
+      target: { tabId: TAB_ID },
+      gesture: "single",
+      modifiers: null,
+      placement: null,
+      dedupe: true,
+      source: "deep_link",
+    });
+  });
+});
+
 describe("target", () => {
   it("resolves an epic target through resolveTargetTabForEpic", () => {
     const plan = resolveDefault({
@@ -150,7 +170,10 @@ describe("target", () => {
       node: CHAT_B,
       target: { epicId: "epic-1" },
     });
-    expect(plan.tabId).toBe("tab-for-epic-1");
+    expect(plan).toMatchObject({
+      kind: "open-in-pane",
+      tabId: "tab-for-epic-1",
+    });
   });
 });
 
@@ -180,7 +203,71 @@ describe("dedupe", () => {
       tabId: TAB_ID,
       paneId: "p2",
       instanceId: SPEC_A.instanceId,
+      promote: false,
     });
+  });
+
+  // R1: the old `openTile(preview: false)` cleared the pane's preview slot on
+  // a dedupe hit; the plan has to carry that or a double-click stops pinning.
+  it("promotes a permanent hit on the pane's own preview", () => {
+    const plan = resolve({
+      intent: { ...BASE_INTENT, gesture: "double" },
+      settings: DEFAULT_SETTINGS,
+      canvas: PREVIEWING_SPEC_A_CANVAS,
+      singleTileViewport: false,
+    });
+    expect(plan).toEqual({
+      kind: "focus-existing",
+      tabId: TAB_ID,
+      paneId: "p1",
+      instanceId: SPEC_A.instanceId,
+      promote: true,
+    });
+  });
+
+  it("does not promote a preview gesture", () => {
+    const plan = resolve({
+      intent: { ...BASE_INTENT, gesture: "single" },
+      settings: DEFAULT_SETTINGS,
+      canvas: PREVIEWING_SPEC_A_CANVAS,
+      singleTileViewport: false,
+    });
+    expect(plan).toMatchObject({ kind: "focus-existing", promote: false });
+  });
+
+  it("does not promote when another tile holds the preview slot", () => {
+    const canvas = canvasOf({
+      root: {
+        ...pane("p1", [SPEC_A.instanceId, SPEC_B.instanceId]),
+        previewTabId: SPEC_B.instanceId,
+      },
+      activePaneId: "p1",
+      tiles: [SPEC_A, SPEC_B],
+    });
+    expect(
+      resolve({
+        intent: { ...BASE_INTENT, gesture: "double" },
+        settings: DEFAULT_SETTINGS,
+        canvas,
+        singleTileViewport: false,
+      }),
+    ).toMatchObject({ kind: "focus-existing", promote: false });
+  });
+
+  // C1: `openTileInBackgroundTab` was idempotent - a host re-registering an
+  // already-open tile must not steal focus.
+  it("is a no-op when a background open hits an open tile", () => {
+    expect(resolveDefault({ ...BASE_INTENT, gesture: "host" })).toEqual({
+      kind: "noop",
+    });
+    expect(
+      resolveDefault({
+        ...BASE_INTENT,
+        gesture: "single",
+        modifiers: { ...NO_MODS, middle: true },
+        dedupe: false,
+      }),
+    ).not.toEqual({ kind: "noop" });
   });
 
   it("opens a fresh tab when the intent opts out", () => {
@@ -215,13 +302,21 @@ describe("dedupe", () => {
     });
   });
 
-  it("middle-click still dedupes a non-browser node", () => {
-    const plan = resolveDefault({
-      ...BASE_INTENT,
-      gesture: "single",
-      modifiers: { ...NO_MODS, middle: true },
+  // R14: middle = "a fresh background tab", whatever the category.
+  it("middle-click bypasses dedupe for a non-browser node too", () => {
+    expect(
+      resolveDefault({
+        ...BASE_INTENT,
+        gesture: "single",
+        modifiers: { ...NO_MODS, middle: true },
+      }),
+    ).toEqual({
+      kind: "open-in-pane",
+      tabId: TAB_ID,
+      paneId: "p1",
+      mode: "background",
+      index: null,
     });
-    expect(plan.kind).toBe("focus-existing");
   });
 });
 
@@ -525,6 +620,30 @@ describe("category affinity", () => {
       tabId: TAB_ID,
       paneId: "p2",
       mode: "permanent",
+      index: null,
+    });
+  });
+
+  // R5: a background open creates no geometry, but it still belongs beside
+  // its own category rather than in whatever pane is active (C5).
+  it("groups a background open into the category's pane", () => {
+    expect(
+      resolve({
+        intent: {
+          ...BASE_INTENT,
+          node: CHAT_C,
+          gesture: "single",
+          modifiers: { ...NO_MODS, middle: true },
+        },
+        settings: SPLIT_CONVERSATIONS,
+        canvas: AFFINITY_CANVAS,
+        singleTileViewport: false,
+      }),
+    ).toEqual({
+      kind: "open-in-pane",
+      tabId: TAB_ID,
+      paneId: "p3",
+      mode: "background",
       index: null,
     });
   });

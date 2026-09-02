@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 export type SwitcherActivate = (buildRef: () => EpicCanvasTileRef) => void;
 
@@ -38,15 +39,7 @@ export function useSwitcherActivate(
 
   return useCallback(
     (buildRef) => {
-      openTile({
-        node: buildRef(),
-        target: { tabId },
-        gesture: "single",
-        modifiers: null,
-        placement: null,
-        dedupe: true,
-        source: "direct_ui",
-      });
+      openTile(tileIntent(buildRef(), { tabId }, "single", "direct_ui"));
       onClose();
     },
     [onClose, openTile, tabId],

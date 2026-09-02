@@ -584,7 +584,7 @@ export function ProviderMcpTab(props: {
                   instruction: null,
                 });
               }
-              openLink(result.authorizationUrl, "auth", null);
+              void openLink(result.authorizationUrl, "auth", null);
             } else if (result.kind === "pendingInstruction") {
               setAuthAwaitingNames((prev) => new Set(prev).add(serverName));
               const instruction = redactLogText(result.instruction);

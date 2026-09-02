@@ -8,18 +8,20 @@ import { findPaneTabForRef } from "@/stores/epics/canvas/actions";
 import { collectPanes, findPaneById } from "@/stores/epics/canvas/tile-tree";
 import type { TilePane } from "@/stores/epics/canvas/tile-tree";
 import type { EpicCanvasState } from "@/stores/epics/canvas/types";
-import { tilePlacementForCategory } from "@/stores/settings/settings-store";
+import {
+  tilePlacementForCategory,
+  type BrowserTilePlacement,
+  type TilePlacementSettings,
+} from "@/stores/settings/settings-store";
 import {
   tileCategoryOf,
   type ExplicitTilePlacement,
-  type BrowserTilePlacement,
   type TileCategory,
   type TileOpenGesture,
   type TileOpenIntent,
   type TileOpenMode,
   type TileOpenModifiers,
   type TileOpenPlan,
-  type TilePlacementSettings,
 } from "./intent";
 
 const NO_MODIFIERS: TileOpenModifiers = {
@@ -226,23 +228,29 @@ export function resolveTileOpen(input: {
   const modifiers = intent.modifiers ?? NO_MODIFIERS;
   const category = tileCategoryOf(intent.node);
 
-  // 2. Dedupe (C6). A middle-click on a browser node is explicitly asking for
-  // a SECOND tab of that URL, so it never dedupes (B4).
-  const bypassDedupe = modifiers.middle && category === "browser";
-  if (intent.dedupe && !bypassDedupe) {
+  // 2. Mode (C4). Needed before dedupe: a permanent hit on the pane's preview
+  // promotes it.
+  const mode = resolveMode(intent.gesture, modifiers);
+
+  // 3. Dedupe (C6). A middle-click is explicitly asking for a SECOND, fresh
+  // background tab, so it never dedupes (B4, C4).
+  if (intent.dedupe && !modifiers.middle) {
     const existing = findPaneTabForRef(canvas, intent.node);
+    // A background open of an already-open tile changes nothing at all: it
+    // must not pull focus to the existing instance.
+    if (existing !== null && mode === "background") return { kind: "noop" };
     if (existing !== null) {
       return {
         kind: "focus-existing",
         tabId,
         paneId: existing.pane.id,
         instanceId: existing.instanceId,
+        promote:
+          mode !== "preview" &&
+          existing.pane.previewTabId === existing.instanceId,
       };
     }
   }
-
-  // 3. Mode.
-  const mode = resolveMode(intent.gesture, modifiers);
 
   // 4a. Explicit placement wins over the setting (C7).
   if (intent.placement !== null) {
@@ -255,13 +263,14 @@ export function resolveTileOpen(input: {
   }
 
   // A background open never creates geometry: `split` and `pip` carry no
-  // background mode by construction. Grouping still happens for the host
-  // paths, which pass the session's pane as an explicit placement (§5.3).
+  // background mode by construction. Category grouping still applies (C5) -
+  // a middle-clicked link belongs beside the other browser tabs, not in
+  // whatever pane happens to be active.
   if (mode === "background") {
     return {
       kind: "open-in-pane",
       tabId,
-      paneId: anchorPaneId(canvas),
+      paneId: affinityPaneId(canvas, category) ?? anchorPaneId(canvas),
       mode,
       index: null,
     };

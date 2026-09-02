@@ -1,4 +1,5 @@
 import { use, useCallback } from "react";
+import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 
@@ -12,23 +13,34 @@ import { toastFromRunnerError } from "@/lib/runner-error-toast";
  * rendered far from the app root. The mutation's only behaviour beyond the
  * bridge call was the standard runner-error toast, which is right here.
  */
-export function useOpenExternalLink(): (url: string) => void {
+export function useOpenExternalLink(): (url: string) => Promise<void> {
   const runnerHost = use(RunnerHostContext);
   return useCallback(
-    (url: string): void => {
-      if (runnerHost === null) {
-        toastFromRunnerError(
-          new Error("The desktop link opener is unavailable."),
-          "Couldn't open link",
-        );
-        return;
-      }
-      void runnerHost
-        .openExternalLink(url)
-        .catch((error: unknown) =>
-          toastFromRunnerError(error, "Couldn't open link"),
-        );
+    (url: string): Promise<void> => {
+      const done = openThroughBridge(runnerHost, url);
+      // Most callers fire and forget, so an unhandled rejection would be the
+      // NORMAL case. The handler is attached to THIS promise rather than a
+      // derived copy, so a caller that awaits still sees the failure - which
+      // is what keeps the report-issue publish flow on its preview screen
+      // instead of advancing to the confirmation (L1).
+      void done.catch(() => undefined);
+      return done;
     },
     [runnerHost],
   );
+}
+
+async function openThroughBridge(
+  runnerHost: IRunnerHost | null,
+  url: string,
+): Promise<void> {
+  try {
+    if (runnerHost === null) {
+      throw new Error("The desktop link opener is unavailable.");
+    }
+    await runnerHost.openExternalLink(url);
+  } catch (error) {
+    toastFromRunnerError(error, "Couldn't open link");
+    throw error;
+  }
 }

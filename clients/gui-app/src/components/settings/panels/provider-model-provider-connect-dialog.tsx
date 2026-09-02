@@ -328,7 +328,7 @@ export function ProviderModelProviderConnectDialog(props: {
       }
       // Opened for both arms. `code` still needs the provider's page on screen
       // to produce the code the user is about to paste.
-      openLink(result.authorizationUrl, "auth", null);
+      void openLink(result.authorizationUrl, "auth", null);
     },
     [applyResult, openLink, pendingAuthUpsert, pendingKey],
   );
@@ -561,7 +561,7 @@ export function ProviderModelProviderConnectDialog(props: {
         onCodeChange={setCode}
         onSubmitCode={handleSubmitCode}
         onReopen={() => {
-          openLink(attempt.authorizationUrl, "auth", null);
+          void openLink(attempt.authorizationUrl, "auth", null);
         }}
         onCancel={handleCancelAttempt}
         submitting={auth.isPending}

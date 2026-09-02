@@ -7,6 +7,7 @@ import {
   BrowserSessionsContext,
   type BrowserSessionsState,
 } from "@/components/epic-canvas/renderers/browser-sessions-context";
+import { BrowserSessionsSnapshotProvider } from "@/components/epic-canvas/renderers/browser-sessions-provider";
 import { createSingleTileCanvas } from "@/stores/epics/canvas/actions";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import {
@@ -216,38 +217,40 @@ function renderHostWithBrowserRouting(): void {
       [VIEW_TAB_ID]: canvas,
     },
   });
+  const sessions: BrowserSessionsState = {
+    hostId: SOURCE_TILE.hostId,
+    lifecycle: "live",
+    inventoryReady: true,
+    items: [],
+    errorMessage: null,
+    retry: () => undefined,
+    openTab: xtermMocks.openTab,
+    closeTab: () => Promise.resolve(),
+  };
   render(
-    <BrowserSessionsContext.Provider
-      value={{
-        hostId: SOURCE_TILE.hostId,
-        lifecycle: "live",
-        inventoryReady: true,
-        items: [],
-        errorMessage: null,
-        retry: () => undefined,
-        openTab: xtermMocks.openTab,
-        closeTab: () => Promise.resolve(),
-      }}
-    >
-      <LinkTargetProvider epicId="epic-terminal" viewTabId={VIEW_TAB_ID}>
-        <TerminalXtermHost
-          hostId={SOURCE_TILE.hostId}
-          sessionId="test-session"
-          tileKind="terminal"
-          instanceId="test-instance"
-          effectiveCols={80}
-          effectiveRows={24}
-          onUserInput={vi.fn()}
-          onContainerResize={vi.fn()}
-          onWriterReady={vi.fn()}
-          onTerminalReady={null}
-          shouldFocusOnActivePane={false}
-          registerImperativeFocus
-          findTargetId={null}
-          keepAlive={false}
-          chrome="padded"
-        />
-      </LinkTargetProvider>
+    <BrowserSessionsContext.Provider value={sessions}>
+      {/* The click-time reader lives on the snapshot context (C8). */}
+      <BrowserSessionsSnapshotProvider value={sessions}>
+        <LinkTargetProvider epicId="epic-terminal" viewTabId={VIEW_TAB_ID}>
+          <TerminalXtermHost
+            hostId={SOURCE_TILE.hostId}
+            sessionId="test-session"
+            tileKind="terminal"
+            instanceId="test-instance"
+            effectiveCols={80}
+            effectiveRows={24}
+            onUserInput={vi.fn()}
+            onContainerResize={vi.fn()}
+            onWriterReady={vi.fn()}
+            onTerminalReady={null}
+            shouldFocusOnActivePane={false}
+            registerImperativeFocus
+            findTargetId={null}
+            keepAlive={false}
+            chrome="padded"
+          />
+        </LinkTargetProvider>
+      </BrowserSessionsSnapshotProvider>
     </BrowserSessionsContext.Provider>,
   );
 }

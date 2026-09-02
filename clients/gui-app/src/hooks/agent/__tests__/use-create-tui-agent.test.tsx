@@ -8,6 +8,10 @@ import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 const hookMocks = vi.hoisted(() => ({
   request: vi.fn<(method: string, payload: unknown) => Promise<unknown>>(),
   openTile: vi.fn(),
+  /** The epic's nested-focus seam, as `useEpicTileNavigation` receives it. */
+  navigateNested: vi.fn(),
+  /** The seam each `openTileWithNavigation` call was handed. */
+  navigationSeams: [] as unknown[],
   markArtifactPendingCreate: vi.fn(),
   unmarkArtifactPendingCreate: vi.fn(),
 }));
@@ -67,8 +71,26 @@ vi.mock("@/stores/epics/canvas/store", () => ({
     }),
 }));
 
-vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
-  useEpicTileNavigation: () => ({ openTile: hookMocks.openTile }),
+// `useEpicTileNavigation` itself stays REAL, so the test also proves the hook
+// commits through the nested-focus route boundary (T5) rather than mutating
+// the canvas behind it: the executor seam is captured and compared against the
+// epic's own `navigateNestedFocus`.
+vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
+  useEpicNestedFocusNavigation: () => hookMocks.navigateNested,
+}));
+
+vi.mock("@/lib/canvas/tile-open/open-tile", () => ({
+  MANUAL_TILE_OPEN: { createTab: true, pipOrigin: "manual" },
+  commitWithoutNavigation: (
+    _epicId: string,
+    _tabId: string,
+    prepare: () => unknown,
+  ) => prepare(),
+  openTileWithNavigation: (intent: unknown, navigateNested: unknown) => {
+    hookMocks.navigationSeams.push(navigateNested);
+    hookMocks.openTile(intent);
+    return null;
+  },
 }));
 
 vi.mock("sonner", () => ({
@@ -178,6 +200,7 @@ describe("useCreateTuiAgent", () => {
   beforeEach(() => {
     hookMocks.request.mockReset();
     hookMocks.openTile.mockReset();
+    hookMocks.navigationSeams.length = 0;
     hookMocks.markArtifactPendingCreate.mockReset();
     hookMocks.unmarkArtifactPendingCreate.mockReset();
     useTuiForkProfileSupportedMock.mockReset();
@@ -1747,6 +1770,9 @@ describe("useCreateTuiAgent", () => {
         }) as EpicCanvasTileRef,
       }),
     );
+    // ...and the open is COMMITTED through the epic's nested-focus seam, so it
+    // writes the route params instead of only mutating the canvas.
+    expect(hookMocks.navigationSeams).toEqual([hookMocks.navigateNested]);
 
     queryClient.clear();
   });

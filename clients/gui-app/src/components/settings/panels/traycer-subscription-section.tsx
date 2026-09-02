@@ -22,6 +22,7 @@ import {
   TraycerAccountSelect,
   TraycerSubscriptionView,
 } from "@/components/settings/panels/traycer-subscription-views";
+import { ignoreError } from "@/lib/browser-view/ignore-error";
 import { resolvePlatformBaseUrl } from "@/lib/auth/platform-base-url";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import {
@@ -66,11 +67,16 @@ export function TraycerSubscriptionSection() {
         <div className="flex items-center gap-1">
           <button
             type="button"
-            onClick={() => {
-              openLink(manageUrl, "account", null);
-              Analytics.getInstance().track(
-                AnalyticsEvent.SubscriptionManagementOpened,
-                { source: "direct_ui" },
+            onClick={(event) => {
+              // Same as the user menu: the event carries the modifiers (L9),
+              // and the analytics event means "opened", not "asked" (R11).
+              void openLink(manageUrl, "account", event).then(
+                () =>
+                  Analytics.getInstance().track(
+                    AnalyticsEvent.SubscriptionManagementOpened,
+                    { source: "direct_ui" },
+                  ),
+                ignoreError,
               );
             }}
             className="inline-flex w-fit items-center gap-1.5 rounded px-1 text-ui-xs font-medium text-primary transition-colors hover:text-primary/80 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"

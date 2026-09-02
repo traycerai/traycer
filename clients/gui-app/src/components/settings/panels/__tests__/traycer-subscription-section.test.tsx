@@ -172,10 +172,12 @@ describe("TraycerSubscriptionSection", () => {
 
     // `account` is hard-external (A2): billing has no in-app meaning, so the
     // link setting never applies to it.
+    // The click event travels too (L9): `account` never reclassifies today,
+    // but a dropped event would silently kill modifiers if it ever did.
     expect(mocks.openLink).toHaveBeenCalledWith(
       "https://platform.traycer.ai",
       "account",
-      null,
+      expect.objectContaining({ type: "click" }),
     );
   });
 

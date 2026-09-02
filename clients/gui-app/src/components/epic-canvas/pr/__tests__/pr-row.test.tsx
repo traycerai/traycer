@@ -28,7 +28,7 @@ import {
 // card (`pr-owner-hover.tsx`, deliberately not mocked - it must return the row
 // untouched here) imports this module's owner list and noun helper, and a
 // factory that lists only `PrOwnerBadges` hands those back as `undefined`.
-const openLink = vi.hoisted(() => vi.fn());
+const openLink = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 vi.mock("@/lib/links/open-link", () => ({ useOpenLink: () => openLink }));
 
 vi.mock("@/components/epic-canvas/pr/pr-owner-label", async (importActual) => ({

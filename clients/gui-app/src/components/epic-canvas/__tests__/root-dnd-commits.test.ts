@@ -227,6 +227,29 @@ const TERMINAL_TILE = {
 const rawNestedFocus: NavigateNestedFocus = (_epicId, _tabId, prepare) =>
   prepare();
 
+/**
+ * A canvas whose `group-a` already holds `TERMINAL_TILE`, so a drop of the
+ * same ref onto another pane must MOVE the open tab (R2) rather than dedupe
+ * into focus-existing.
+ */
+function seedCanvasWithTerminalTile(): void {
+  testState.canvasStore.canvasByTabId = {
+    [VIEW_TAB_ID]: {
+      root: {
+        kind: "pane",
+        id: "group-a",
+        tabInstanceIds: [TERMINAL_TILE.instanceId],
+        activeTabId: TERMINAL_TILE.instanceId,
+        previewTabId: null,
+        activationHistory: [TERMINAL_TILE.instanceId],
+      },
+      activePaneId: "group-a",
+      tilesByInstanceId: { [TERMINAL_TILE.instanceId]: TERMINAL_TILE },
+      sizesByGroupId: {},
+    },
+  };
+}
+
 function railSource(
   panelId: "artifacts" | "git-diff" | "file-tree",
   origin: "rail" | "panel-section",
@@ -259,6 +282,7 @@ function makeRectElement(
 
 function resetStores(): void {
   window.localStorage.clear();
+  testState.canvasStore.canvasByTabId = {};
   testState.canvasStore.openTileInNewTab = vi.fn(() => null);
   testState.canvasStore.tearOffTabIntoNewHeaderTab = vi.fn(() => null);
   testState.canvasStore.moveOpenTab = vi.fn();
@@ -800,6 +824,82 @@ describe("root dnd commits - tile source commit routing", () => {
     );
 
     expect(testState.canvasStore.openTileInTab).not.toHaveBeenCalled();
+  });
+
+  it("moves an already-open ref to the drop pane instead of focusing it", () => {
+    seedCanvasWithTerminalTile();
+
+    commitResolvedCanvasDrop(
+      {
+        source: {
+          kind: "terminal-tile",
+          epicId: EPIC_ID,
+          viewTabId: VIEW_TAB_ID,
+          tile: TERMINAL_TILE,
+        },
+        target: {
+          kind: "artifact-tab-strip-end",
+          viewTabId: VIEW_TAB_ID,
+          groupId: "group-b",
+          index: 1,
+        },
+        preview: { kind: "artifact-tab-strip", groupId: "group-b", index: 1 },
+      },
+      rawNestedFocus,
+    );
+
+    expect(testState.canvasStore.moveTabOnTabStrip).toHaveBeenCalledWith(
+      VIEW_TAB_ID,
+      {
+        sourcePaneId: "group-a",
+        tabId: TERMINAL_TILE.instanceId,
+        targetPaneId: "group-b",
+        targetIndex: 1,
+      },
+    );
+    expect(
+      testState.canvasStore.prepareOpenTileInPaneFocusTargetFromSource,
+    ).not.toHaveBeenCalled();
+  });
+
+  it("splits with the existing tab when an already-open ref is dropped on a pane edge", () => {
+    seedCanvasWithTerminalTile();
+
+    commitResolvedCanvasDrop(
+      {
+        source: {
+          kind: "terminal-tile",
+          epicId: EPIC_ID,
+          viewTabId: VIEW_TAB_ID,
+          tile: TERMINAL_TILE,
+        },
+        target: {
+          kind: "artifact-tab-group-body",
+          viewTabId: VIEW_TAB_ID,
+          groupId: "group-b",
+          tabCount: 2,
+        },
+        preview: {
+          kind: "artifact-tab-group-body",
+          groupId: "group-b",
+          position: "right",
+        },
+      },
+      rawNestedFocus,
+    );
+
+    expect(testState.canvasStore.splitPaneWithTab).toHaveBeenCalledWith(
+      VIEW_TAB_ID,
+      {
+        sourcePaneId: "group-a",
+        tabId: TERMINAL_TILE.instanceId,
+        targetPaneId: "group-b",
+        position: "right",
+      },
+    );
+    expect(
+      testState.canvasStore.prepareOpenTileInPaneFocusTargetFromSource,
+    ).not.toHaveBeenCalled();
   });
 
   it("opens a dragged terminal tile on an empty canvas", () => {

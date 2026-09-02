@@ -20,6 +20,7 @@ import {
 import {
   LINK_EGRESS_BRIDGE_RESTRICTIONS,
   LINK_EGRESS_DOM_RESTRICTIONS,
+  LINK_EGRESS_HOOK_RESTRICTIONS,
   LINK_EGRESS_RESTRICTIONS,
   TILE_OPEN_RESTRICTIONS,
 } from "../../eslint/traycer-tile-open-boundary-rules.mjs";
@@ -334,6 +335,7 @@ const syntaxExemptions = {
   // Two groups, not one: tests lift the bridge half (they stub
   // `{ openExternalLink: vi.fn() }` and assert on it) and keep the DOM half.
   linkEgressBridge: LINK_EGRESS_BRIDGE_RESTRICTIONS,
+  linkEgressHook: LINK_EGRESS_HOOK_RESTRICTIONS,
   linkEgressDom: LINK_EGRESS_DOM_RESTRICTIONS,
   tileOpen: TILE_OPEN_RESTRICTIONS,
 };
@@ -763,6 +765,8 @@ export default tseslint.config(
       // runner-host test stubs the bridge (`{ openExternalLink: vi.fn() }`);
       // in both, the property name IS the observation the assertion reads, so
       // applying the ban would edit away the mechanism of the test.
+      // `linkEgressHook` too: the bridge hook's OWN test has to import it to
+      // exercise the null-host and rejection paths.
       // `linkEgressDom` is NOT lifted: `window.open` and `target="_blank"`
       // are shipped-surface bans with no test-double reading, and a test that
       // opens one is asserting the app has a door it is not allowed to have.
@@ -780,6 +784,7 @@ export default tseslint.config(
           "selectionAuthority",
           "tileOpen",
           "linkEgressBridge",
+          "linkEgressHook",
         ],
         nestedFocus: null,
         tabNavigation: [
@@ -913,6 +918,19 @@ export default tseslint.config(
     },
   },
   {
+    // The only two files allowed to hold the bridge HOOK: `open-link.ts`
+    // decides in-app vs external, and `open-browser-url.ts` owns the A5
+    // failure toast's explicit "Open in browser" action.
+    files: ["src/lib/links/open-link.ts", "src/lib/links/open-browser-url.ts"],
+    rules: {
+      "no-restricted-syntax": syntaxRestrictions({
+        exempt: ["linkEgressHook"],
+        nestedFocus: [],
+        tabNavigation: null,
+      }),
+    },
+  },
+  {
     // Device-grant and provider-reauth verification URLs. Hard-external by A2
     // (an OAuth grant has no in-app meaning), and this module runs outside
     // React, so the hook form is not available to it.
@@ -948,35 +966,6 @@ export default tseslint.config(
     // Defines every `prepare*FocusTarget` and calls its own actions through
     // `get()`; the store is what the seam is a boundary AROUND.
     files: ["src/stores/epics/canvas/store.ts"],
-    rules: {
-      "no-restricted-syntax": syntaxRestrictions({
-        exempt: ["tileOpen"],
-        nestedFocus: [],
-        tabNavigation: null,
-      }),
-    },
-  },
-  {
-    // PiP -> tile expansion: puts a floating browser tab back into the view
-    // tab it was detached from, with its own find-then-focus-else-open. Not in
-    // ticket 07's migration inventory, and deliberately so - it restores a
-    // placement rather than deciding one, so routing it through the resolver
-    // would let the browser placement setting (default: split) relocate the
-    // tile on the way back.
-    files: ["src/components/epic-canvas/pip/agent-browser-pip.tsx"],
-    rules: {
-      "no-restricted-syntax": syntaxRestrictions({
-        exempt: ["tileOpen"],
-        nestedFocus: [],
-        tabNavigation: null,
-      }),
-    },
-  },
-  {
-    // Resource-monitor closed-tile restore: reopens a tile that was already
-    // placed, behind a tombstone gate, from a plain function with no
-    // `navigateNested` seam of its own.
-    files: ["src/lib/resources/reopen-closed-resource-owner-tile.ts"],
     rules: {
       "no-restricted-syntax": syntaxRestrictions({
         exempt: ["tileOpen"],

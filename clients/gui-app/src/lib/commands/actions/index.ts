@@ -35,7 +35,3 @@ export {
   openTileIntoTargetGroup,
   type OpenTileIntoTargetGroupArgs,
 } from "./open-into-target";
-export {
-  openSingletonTileIntoTargetGroup,
-  type OpenSingletonTileIntoTargetGroupArgs,
-} from "./open-singleton-into-target";

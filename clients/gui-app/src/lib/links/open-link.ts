@@ -23,7 +23,7 @@ export type OpenLink = (
   url: string,
   kind: LinkKind,
   event: LinkClickEvent | null,
-) => void;
+) => Promise<void>;
 
 /**
  * The one way a URL leaves the app (A6). Order (A1-A5):
@@ -37,6 +37,14 @@ export type OpenLink = (
  *
  * Terminal links additionally record their dev-server origin, which is what
  * populates the detected-origins list in settings.
+ *
+ * The returned promise settles with the OS handoff and REJECTS when it fails,
+ * for the one caller that needs to know (the report-issue publish flow keeps
+ * its preview screen on a failed open, L1). The in-app path resolves
+ * immediately - it has already handed off to `openBrowserUrl`, which owns its
+ * own failure toast (A5). Nothing needs to await it: the bridge promise
+ * carries its own rejection handler (see `useOpenExternalLink`), so a plain
+ * `void openLink(...)` is safe.
  */
 export function useOpenLink(): OpenLink {
   const target = useLinkTarget();
@@ -44,7 +52,11 @@ export function useOpenLink(): OpenLink {
   const openExternalLink = useOpenExternalLink();
 
   return useCallback(
-    (url: string, kind: LinkKind, event: LinkClickEvent | null): void => {
+    (
+      url: string,
+      kind: LinkKind,
+      event: LinkClickEvent | null,
+    ): Promise<void> => {
       const trimmed = url.trim();
       const parsed = parseHttpUrl(trimmed);
       if (
@@ -55,13 +67,11 @@ export function useOpenLink(): OpenLink {
         useSettingsStore.getState().addBrowserDevOrigin(parsed.origin);
       }
       if (parsed === null || !isConfigurableLinkKind(kind)) {
-        openExternalLink(trimmed);
-        return;
+        return openExternalLink(trimmed);
       }
       const webUrl = parsed.href;
       if (event?.ctrlKey === true || event?.metaKey === true) {
-        openExternalLink(webUrl);
-        return;
+        return openExternalLink(webUrl);
       }
       const mode = linkOpenModeForKind(
         useSettingsStore.getState().linkOpen,
@@ -71,8 +81,7 @@ export function useOpenLink(): OpenLink {
       const inApp =
         event?.altKey === true ? mode === "external" : mode === "in-app";
       if (!inApp) {
-        openExternalLink(webUrl);
-        return;
+        return openExternalLink(webUrl);
       }
       if (target === null) {
         // No epic behind this surface at all, so there is no canvas an in-app
@@ -80,8 +89,7 @@ export function useOpenLink(): OpenLink {
         // in `useOpenBrowserUrl`): nothing was attempted and nothing failed,
         // the surface simply has no in-app destination. Ticket 08 shrinks this
         // set by mounting `LinkTargetProvider` on the surfaces that do.
-        openExternalLink(webUrl);
-        return;
+        return openExternalLink(webUrl);
       }
       openBrowserUrl({
         url: webUrl,
@@ -89,6 +97,7 @@ export function useOpenLink(): OpenLink {
         epicId: target.epicId,
         viewTabId: target.viewTabId,
       });
+      return Promise.resolve();
     },
     [openBrowserUrl, openExternalLink, target],
   );
@@ -97,7 +106,9 @@ export function useOpenLink(): OpenLink {
 function modifiersOf(event: LinkClickEvent | null): TileOpenModifiers {
   return {
     shift: event?.shiftKey === true,
-    alt: event?.altKey === true,
+    // `alt` was already consumed above to invert in-app/external (A3), so it
+    // must NOT reach the tile intent and invert tab<->split as well.
+    alt: false,
     middle: event?.button === 1,
   };
 }

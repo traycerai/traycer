@@ -56,6 +56,7 @@ import {
   usePrDetailTab,
   usePrDetailViewStore,
 } from "@/stores/epics/pr-detail-view-store";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 const PR_DETAIL_REFRESH_TIMEOUT_MS = 10_000;
 
@@ -245,7 +246,7 @@ function PrDetailLoaded(props: {
 
   const openDetails = useCallback(
     (url: string, event: LinkClickEvent): void => {
-      openLink(url, "github", event);
+      void openLink(url, "github", event);
     },
     [openLink],
   );
@@ -264,21 +265,20 @@ function PrDetailLoaded(props: {
    */
   const revealTarget = useCallback(
     (next: PrQuoteTarget): void => {
-      openTile({
-        node: makeOpenableNodeRef({
-          id: next.id,
-          instanceId: uuidv4(),
-          type: next.kind === "chat" ? "chat" : "terminal-agent",
-          name: next.title,
-          hostId,
-        }),
-        target: { tabId: props.viewTabId },
-        gesture: "explicit",
-        modifiers: null,
-        placement: null,
-        dedupe: true,
-        source: "direct_ui",
-      });
+      openTile(
+        tileIntent(
+          makeOpenableNodeRef({
+            id: next.id,
+            instanceId: uuidv4(),
+            type: next.kind === "chat" ? "chat" : "terminal-agent",
+            name: next.title,
+            hostId,
+          }),
+          { tabId: props.viewTabId },
+          "explicit",
+          "direct_ui",
+        ),
+      );
     },
     [openTile, props.viewTabId, hostId],
   );

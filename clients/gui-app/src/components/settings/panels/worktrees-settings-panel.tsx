@@ -2879,7 +2879,7 @@ function WorktreePrAnchor(props: {
     (event: MouseEvent<HTMLAnchorElement>): void => {
       event.stopPropagation();
       event.preventDefault();
-      openLink(props.href, "github", event);
+      void openLink(props.href, "github", event);
     },
     [openLink, props.href],
   );

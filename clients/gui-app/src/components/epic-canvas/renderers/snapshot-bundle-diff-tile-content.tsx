@@ -36,6 +36,7 @@ import { getBasename, getDirname } from "@/lib/path/cross-platform-path";
 import type { BundleDiffFindFileInput } from "@/stores/tile-find";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 export type SnapshotCumulativeBundleDiffTileRef = Omit<
   SnapshotDiffTileRef,
   "diff"
@@ -206,15 +207,9 @@ function SnapshotBundleFileSection(props: {
       chatId: props.node.diff.chatId,
       filePath: props.entry.filePath,
     });
-    openTile({
-      node: tile,
-      target: { tabId: props.viewTabId },
-      gesture: "explicit",
-      modifiers: null,
-      placement: null,
-      dedupe: true,
-      source: "direct_ui",
-    });
+    openTile(
+      tileIntent(tile, { tabId: props.viewTabId }, "explicit", "direct_ui"),
+    );
   }, [
     openTile,
     props.entry.filePath,

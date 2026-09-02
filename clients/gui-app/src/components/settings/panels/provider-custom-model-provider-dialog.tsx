@@ -204,7 +204,7 @@ export function ProviderCustomModelProviderDialog(props: {
               // dialog's authorization link takes.
               className="underline underline-offset-2 hover:text-foreground"
               onClick={() => {
-                openLink(CUSTOM_PROVIDER_DOCS_URL, "docs", null);
+                void openLink(CUSTOM_PROVIDER_DOCS_URL, "docs", null);
               }}
             >
               provider config docs

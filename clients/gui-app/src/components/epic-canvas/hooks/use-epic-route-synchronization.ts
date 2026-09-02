@@ -14,7 +14,10 @@ import {
 } from "@/stores/epics/canvas/store";
 import { isTileRefRecordLive } from "@/stores/epics/canvas/canvas-selectors";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
-import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import {
+  MANUAL_TILE_OPEN,
+  openTileWithNavigation,
+} from "@/lib/canvas/tile-open/open-tile";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import {
   cloudChatListAuthorizesRecordSweep,
@@ -46,6 +49,7 @@ import { consumeNestedRoutePrimaryEditorFocus } from "@/lib/nested-route-dom-foc
 import { getNestedRouteApplicationDeferralMs } from "@/lib/nested-focus-navigation-intent";
 import { shouldYieldPaneActivationRouteFocus } from "@/components/epic-canvas/pane-activation";
 import { findHostedTileElement } from "@/components/epic-canvas/surface-host/hosted-tile-resolver";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 const PRIMARY_CHAT_COMPOSER_SELECTOR =
   "[data-chat-composer] [data-composer-editor]";
@@ -104,7 +108,6 @@ export function useEpicRouteSynchronization(
   });
   const currentTab = useEpicTab(tabId);
   const renameTab = useEpicCanvasStore((s) => s.renameTab);
-  const { openTile } = useEpicTileNavigation();
   const applyNestedRouteFocus = useEpicCanvasStore(
     (s) => s.applyNestedRouteFocus,
   );
@@ -388,22 +391,44 @@ export function useEpicRouteSynchronization(
     if (activeArtifactId === target.id) {
       return;
     }
-    // Route landing uses the same gesture mapping as a link click (C11).
-    openTile({
-      node: {
-        id: target.id,
-        instanceId: uuidv4(),
-        type: target.type,
-        name: target.name,
-        hostId: target.hostId,
+    // Route landing uses the same gesture mapping as a link click (C11), but
+    // it is the LANDING itself: the focus params it derives belong on the
+    // entry the user already navigated to, so the commit REPLACES rather than
+    // pushing a second entry they would have to press Back through twice.
+    openTileWithNavigation(
+      tileIntent(
+        {
+          id: target.id,
+          instanceId: uuidv4(),
+          type: target.type,
+          name: target.name,
+          hostId: target.hostId,
+        },
+        { tabId },
+        "single",
+        "deep_link",
+      ),
+      (targetEpicId, targetTabId, prepare) => {
+        const focusTarget = prepare();
+        if (focusTarget === null) return null;
+        if (
+          !isCurrentEpicTabRoute(
+            router.state.location.pathname,
+            targetEpicId,
+            targetTabId,
+          )
+        ) {
+          return focusTarget;
+        }
+        replaceNestedFocusRoute(
+          navigate,
+          { epicId: targetEpicId, tabId: targetTabId },
+          focusTarget,
+        );
+        return focusTarget;
       },
-      target: { tabId },
-      gesture: "single",
-      modifiers: null,
-      placement: null,
-      dedupe: true,
-      source: "deep_link",
-    });
+      MANUAL_TILE_OPEN,
+    );
   }, [
     snapshotLoaded,
     records,
@@ -411,7 +436,8 @@ export function useEpicRouteSynchronization(
     focusedAt,
     persistedFocus,
     hasRestoredCanvas,
-    openTile,
+    navigate,
+    router,
     activeArtifactId,
     epicId,
     tabId,
@@ -560,6 +586,21 @@ function replaceNestedFocusRoute(
     // next canvas change re-derives it. Swallow it rather than surfacing an
     // unhandled rejection for something no caller is awaiting.
   ).catch(() => undefined);
+}
+
+/**
+ * Same guard `navigateNestedFocus` applies before writing focus params: a
+ * background epic surface must not yank the router to its own route.
+ */
+function isCurrentEpicTabRoute(
+  pathname: string,
+  epicId: string,
+  tabId: string,
+): boolean {
+  const parts = pathname.split("/");
+  if (parts.length !== 4) return false;
+  const [_root, scope, routeEpicId, routeTabId] = parts;
+  return scope === "epics" && routeEpicId === epicId && routeTabId === tabId;
 }
 
 /**

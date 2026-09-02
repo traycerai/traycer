@@ -34,6 +34,7 @@ import {
 import { type GitBundleDiffTileRef } from "./git-diff-tile-shared";
 import { useEditableGitDiffSurface } from "./git-diff-editing";
 import { GitDiffEditStatusContent } from "./git-diff-edit-status";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 interface BundleFileSectionProps {
   readonly node: GitBundleDiffTileRef;
@@ -65,15 +66,9 @@ export function BundleFileSection(props: BundleFileSectionProps): ReactNode {
       getBasename(props.file.path),
     );
     if (tile === null) return;
-    openTile({
-      node: tile,
-      target: { tabId: props.viewTabId },
-      gesture: "explicit",
-      modifiers: null,
-      placement: null,
-      dedupe: true,
-      source: "direct_ui",
-    });
+    openTile(
+      tileIntent(tile, { tabId: props.viewTabId }, "explicit", "direct_ui"),
+    );
   }, [
     openTile,
     props.file.path,

@@ -351,7 +351,7 @@ function ReleasesPageButton(): ReactNode {
         // prereleases alongside stable, so an `rc` remedy and a `stable` one
         // are the same page - and it is the only download location this
         // repository can vouch for (see `traycerInfo.releasesPage`).
-        openLink(traycerInfo.releasesPage, "docs", null);
+        void openLink(traycerInfo.releasesPage, "docs", null);
       }}
     >
       <span>Get the latest Traycer</span>

@@ -90,7 +90,7 @@ function WslInstallDocsLink(props: {
       className={props.className}
       onClick={(event) => {
         event.preventDefault();
-        openLink(WSL_INSTALL_DOCS_URL, "docs", null);
+        void openLink(WSL_INSTALL_DOCS_URL, "docs", null);
       }}
     >
       {props.children}

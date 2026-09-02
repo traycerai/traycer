@@ -133,7 +133,9 @@ function LinkClickProbe() {
     <button
       type="button"
       data-testid="tile-link"
-      onClick={() => openLink("https://example.test/docs", "markdown", null)}
+      onClick={() => {
+        void openLink("https://example.test/docs", "markdown", null);
+      }}
     >
       link
     </button>

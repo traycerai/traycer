@@ -9,6 +9,7 @@ import {
   setupTerminalTitle,
 } from "@/lib/setup-terminal-tab-descriptor";
 import type { WorktreeBinding } from "@traycer/protocol/host/worktree-schemas";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 /**
  * Registers each worktree SETUP terminal as a real (background) canvas tab the
@@ -80,26 +81,25 @@ export function useRegisterSetupTerminalTabsFromBinding(options: {
       // would alias handles when the same session opens in multiple views.
       // Dedup/convergence with the setup card's "Open terminal" is by
       // content `id`, not instance.
-      openTile({
-        node: {
-          id: sessionId,
-          instanceId: uuidv4(),
-          type: "terminal",
-          name: setupTerminalTitle(entry),
-          titleSource: "manual",
-          hostId,
-          cwd: setupTerminalCwd(entry),
-          origin: "setup",
-        },
-        target: { tabId: viewTabId },
-        // The host pushed this at us; there was no gesture behind it, so it
-        // lands as a background tab and never steals focus (C4).
-        gesture: "host",
-        modifiers: null,
-        placement: null,
-        dedupe: true,
-        source: "direct_ui",
-      });
+      openTile(
+        tileIntent(
+          {
+            id: sessionId,
+            instanceId: uuidv4(),
+            type: "terminal",
+            name: setupTerminalTitle(entry),
+            titleSource: "manual",
+            hostId,
+            cwd: setupTerminalCwd(entry),
+            origin: "setup",
+          },
+          { tabId: viewTabId },
+          // The host pushed this at us; there was no gesture behind it, so it
+          // lands as a background tab and never steals focus (C4).
+          "host",
+          "direct_ui",
+        ),
+      );
     });
   }, [binding, viewTabId, hostId, openTile, registerSetupTerminalOnce]);
 }

@@ -40,31 +40,28 @@ import {
  * given rows of their own, because none of them is configurable.
  */
 
-const LINK_OPEN_DEFAULT_LABELS: Record<LinkOpenSettings["default"], string> = {
-  "in-app": "In Traycer",
-  external: "In default browser",
-  "per-kind": "Per kind",
-};
 const LINK_OPEN_MODE_LABELS: Record<LinkOpenMode, string> = {
   "in-app": "In Traycer",
   external: "In default browser",
 };
-const TILE_PLACEMENT_DEFAULT_LABELS: Record<
-  TilePlacementSettings["default"],
-  string
-> = {
-  tab: "As a tab",
-  split: "In a split",
-  "per-category": "Per category",
+const LINK_OPEN_DEFAULT_LABELS: Record<LinkOpenSettings["default"], string> = {
+  ...LINK_OPEN_MODE_LABELS,
+  "per-kind": "Per kind",
 };
 const TILE_PLACEMENT_LABELS: Record<TilePlacement, string> = {
   tab: "As a tab",
   split: "In a split",
 };
+const TILE_PLACEMENT_DEFAULT_LABELS: Record<
+  TilePlacementSettings["default"],
+  string
+> = {
+  ...TILE_PLACEMENT_LABELS,
+  "per-category": "Per category",
+};
 /** Only the browser category can float - the other two have no PiP host. */
 const BROWSER_TILE_PLACEMENT_LABELS: Record<BrowserTilePlacement, string> = {
-  tab: "As a tab",
-  split: "In a split",
+  ...TILE_PLACEMENT_LABELS,
   pip: "Picture in picture",
 };
 const AGENT_TAB_SURFACING_LABELS: Record<AgentTabSurfacing, string> = {

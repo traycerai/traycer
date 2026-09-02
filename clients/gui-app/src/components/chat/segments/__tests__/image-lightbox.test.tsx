@@ -16,7 +16,7 @@ import { UntrustedSvgLightbox } from "@/components/chat/segments/untrusted-svg-l
 import { sanitizeUntrustedSvg } from "@/lib/images/untrusted-svg";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 
-const openLink = vi.hoisted(() => vi.fn());
+const openLink = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 vi.mock("@/lib/links/open-link", () => ({ useOpenLink: () => openLink }));
 
 const saveBlobToDiskMock = vi.hoisted(() =>

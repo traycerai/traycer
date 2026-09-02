@@ -201,10 +201,14 @@ export function parseHttpUrl(url: string): URL | null {
 export function normalizeBrowserAddressInput(input: string): string {
   const trimmed = input.trim();
   if (trimmed.length === 0) return "about:blank";
+  // Scheme FIRST: `https://app.localhost:3000` already says what it is, and
+  // the local-address heuristic below would otherwise prefix a second scheme
+  // onto it (C7). The negative lookahead is what keeps `localhost:3000` out of
+  // this branch - a colon followed by digits is a port, not a scheme.
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:(?!\d)/.test(trimmed)) return trimmed;
   if (looksLikeLocalHttpAddressWithoutScheme(trimmed)) {
     return `http://${trimmed}`;
   }
-  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed)) return trimmed;
   return `https://${trimmed}`;
 }
 

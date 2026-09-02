@@ -5,6 +5,7 @@ import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import type { EpicTerminalRef } from "@/stores/epics/canvas/types";
 import { recordSetupTerminal } from "@/stores/worktree/setup-terminals";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 /**
  * Ref fields a caller may set on the tile it is opening. Applied on the OPEN
@@ -47,25 +48,24 @@ export function useFocusEpicTerminalSession(
       // route search must become the new focus authority - otherwise route
       // sync re-applies the stale target and the tab opens without ever
       // becoming visible.
-      openTile({
-        node: {
-          id: terminalSessionId,
-          instanceId: uuidv4(),
-          type: "terminal",
-          name: overrides?.name ?? DEFAULT_EPIC_NODE_NAMES.terminal,
-          titleSource: "manual",
-          hostId: activeHostId,
-          cwd,
-          origin: overrides?.origin,
-          originProviderId: overrides?.originProviderId,
-        },
-        target: { tabId: viewTabId },
-        gesture: "explicit",
-        modifiers: null,
-        placement: null,
-        dedupe: true,
-        source: "direct_ui",
-      });
+      openTile(
+        tileIntent(
+          {
+            id: terminalSessionId,
+            instanceId: uuidv4(),
+            type: "terminal",
+            name: overrides?.name ?? DEFAULT_EPIC_NODE_NAMES.terminal,
+            titleSource: "manual",
+            hostId: activeHostId,
+            cwd,
+            origin: overrides?.origin,
+            originProviderId: overrides?.originProviderId,
+          },
+          { tabId: viewTabId },
+          "explicit",
+          "direct_ui",
+        ),
+      );
     },
     [activeHostId, openTile, viewTabId],
   );

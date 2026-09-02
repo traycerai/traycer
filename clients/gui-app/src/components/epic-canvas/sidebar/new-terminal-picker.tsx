@@ -33,6 +33,7 @@ import {
   usePanelHeaderMenuStore,
 } from "@/stores/epics/panel-header-menu-store";
 import { isHostSwitcherListInteraction } from "@/components/settings/host-scope/host-switcher-portal";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 interface NewTerminalPickerProps {
   readonly epicId: string;
@@ -81,15 +82,14 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
 
   const handleLaunch = useCallback(
     (target: TerminalLaunchTarget) => {
-      openTile({
-        node: mintNewEpicTerminalTile({ ...target, epicId }),
-        target: { tabId },
-        gesture: "explicit",
-        modifiers: null,
-        placement: null,
-        dedupe: true,
-        source: "direct_ui",
-      });
+      openTile(
+        tileIntent(
+          mintNewEpicTerminalTile({ ...target, epicId }),
+          { tabId },
+          "explicit",
+          "direct_ui",
+        ),
+      );
       setIsOpen(false);
       if (onLaunched !== null) onLaunched();
     },

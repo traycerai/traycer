@@ -33,6 +33,7 @@ import {
   useLeftPanelSectionCollapsed,
   useMainPanelCollapsed,
 } from "@/stores/epics/left-panel-store";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 /**
  * Pull Requests panel body. Subscribes in foreground mode on the canvas host
@@ -157,18 +158,17 @@ function PrPanelBodyContent(props: {
           tileArgs === null
             ? null
             : () => {
-                openTile({
-                  node: makePrDetailTile({
-                    ...tileArgs,
-                    name: formatPrRowTitle(item),
-                  }),
-                  target: { epicId },
-                  gesture: "explicit",
-                  modifiers: null,
-                  placement: null,
-                  dedupe: true,
-                  source: "direct_ui",
-                });
+                openTile(
+                  tileIntent(
+                    makePrDetailTile({
+                      ...tileArgs,
+                      name: formatPrRowTitle(item),
+                    }),
+                    { epicId },
+                    "explicit",
+                    "direct_ui",
+                  ),
+                );
               },
       };
     },

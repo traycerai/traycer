@@ -352,7 +352,9 @@ export function AddProviderProfileDialog({
             setEmailRevealed={setEmailRevealed}
             linkDisabled={trimmedLabel.length === 0 || flow.busy}
             onLink={linkAccount}
-            onOpenExternalLink={(url) => openLink(url, "auth", null)}
+            onOpenExternalLink={(url) => {
+              void openLink(url, "auth", null);
+            }}
             onCancel={() => close(false)}
             onRetryLogin={linkAccount}
             onRetryFinalize={retryFinalize}

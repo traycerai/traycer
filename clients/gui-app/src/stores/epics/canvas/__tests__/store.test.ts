@@ -69,6 +69,9 @@ import {
   expectCanvasInvariants,
 } from "./canvas-test-fixtures";
 
+/** The analytics source the `*FromSource` openers carry; irrelevant here. */
+const SOURCE = "direct_ui" as const;
+
 // Resolve a pane's tab payloads in strip order via tilesByInstanceId.
 function tabRefsOfPane(
   canvas: EpicCanvasState,
@@ -783,11 +786,11 @@ describe("epic canvas store header tabs", () => {
       firstBlankTarget,
     );
 
-    const fillTarget = store.prepareOpenTileInPaneFocusTarget(
+    const fillTarget = store.prepareOpenTileInPaneFocusTargetFromSource(
       tabId,
       paneId,
       SPEC_C,
-      { mode: "permanent", index: null },
+      { mode: "permanent", index: null, source: SOURCE },
     );
     if (fillTarget === null || fillTarget.tileInstanceId === undefined) {
       throw new Error("expected fill-in-place target");
@@ -797,10 +800,12 @@ describe("epic canvas store header tabs", () => {
       requireCanvas(tabId).tilesByInstanceId[fillTarget.tileInstanceId]?.id,
     ).toBe(SPEC_C.id);
     expect(
-      store.prepareOpenTileInPaneFocusTarget(tabId, "missing-pane", SPEC_A, {
-        mode: "permanent",
-        index: null,
-      }),
+      store.prepareOpenTileInPaneFocusTargetFromSource(
+        tabId,
+        "missing-pane",
+        SPEC_A,
+        { mode: "permanent", index: null, source: SOURCE },
+      ),
     ).toBeNull();
   });
 
@@ -812,11 +817,11 @@ describe("epic canvas store header tabs", () => {
     if (paneId === null) throw new Error("expected pane");
 
     // Preview claims the pane's preview slot...
-    const first = store.prepareOpenTileInPaneFocusTarget(
+    const first = store.prepareOpenTileInPaneFocusTargetFromSource(
       tabId,
       paneId,
       SPEC_B,
-      { mode: "preview", index: null },
+      { mode: "preview", index: null, source: SOURCE },
     );
     const firstInstanceId = first?.tileInstanceId;
     if (firstInstanceId === undefined) throw new Error("expected preview tab");
@@ -825,11 +830,11 @@ describe("epic canvas store header tabs", () => {
     );
 
     // ...and the next preview evicts it, payload and all (one per pane).
-    const second = store.prepareOpenTileInPaneFocusTarget(
+    const second = store.prepareOpenTileInPaneFocusTargetFromSource(
       tabId,
       paneId,
       SPEC_C,
-      { mode: "preview", index: null },
+      { mode: "preview", index: null, source: SOURCE },
     );
     const secondInstanceId = second?.tileInstanceId;
     if (secondInstanceId === undefined) {
@@ -845,9 +850,10 @@ describe("epic canvas store header tabs", () => {
     // Background is membership only: no focus target, active tab untouched.
     const activeBefore = requirePane(afterEvict, paneId).activeTabId;
     expect(
-      store.prepareOpenTileInPaneFocusTarget(tabId, paneId, CHAT_A, {
+      store.prepareOpenTileInPaneFocusTargetFromSource(tabId, paneId, CHAT_A, {
         mode: "background",
         index: 0,
+        source: SOURCE,
       }),
     ).toBeNull();
     const afterBackground = requireCanvas(tabId);

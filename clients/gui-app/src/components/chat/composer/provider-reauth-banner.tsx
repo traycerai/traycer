@@ -657,7 +657,9 @@ function OAuthWaitingRow({
           <Button
             size="sm"
             variant="secondary"
-            onClick={() => openLink(loginUrl, "auth", null)}
+            onClick={() => {
+              void openLink(loginUrl, "auth", null);
+            }}
           >
             <ExternalLink className="size-3.5" />
             Open browser again
