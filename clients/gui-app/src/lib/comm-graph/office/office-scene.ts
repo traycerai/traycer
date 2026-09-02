@@ -2503,6 +2503,37 @@ export class OfficeScene {
     }
   }
 
+  /**
+   * Whether anything on the floor is MOVING right now.
+   *
+   * A renderer that draws sixty identical frames a second is spending a
+   * laptop's battery to redraw a still life, and a floor of seated agents
+   * between turns is exactly that. This is the cheap test for "is another
+   * frame going to differ from this one": something in flight, someone off
+   * their chair, a bubble or sparkle up, or a screen mid-alternation.
+   *
+   * Deliberately CONSERVATIVE. Anything it is unsure about counts as animating,
+   * because a false "no" freezes the floor and a false "yes" costs one frame.
+   */
+  isAnimating(): boolean {
+    if (this.envelopes.length > 0) return true;
+    if (this.paperBalls.length > 0) return true;
+    for (const character of this.characters.values()) {
+      if (!character.seated) return true;
+      if (character.hurrying || character.rallying) return true;
+      if (character.bubble !== null || character.sparkleMs > 0) return true;
+      if (character.filler !== null) return true;
+      // A lit screen alternates its frame while its agent has a turn running,
+      // so a working desk is never a still frame.
+      const status = this.statusOf(character.agentId);
+      if (status === "working" || status === "background") return true;
+      // The attention bubble bobs, so a flagged agent animates even seated.
+      if (status === "attention" || status === "failure") return true;
+      if (this.statusById.get(character.agentId) === "awaiting") return true;
+    }
+    return false;
+  }
+
   private buildFloor(): ReadonlyArray<OfficeDrawable> {
     const layout = this.currentLayout;
     const floor: OfficeDrawable[] = [];

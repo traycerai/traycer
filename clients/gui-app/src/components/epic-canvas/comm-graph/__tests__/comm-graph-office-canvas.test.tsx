@@ -369,6 +369,32 @@ describe("CommGraphOfficeCanvas", () => {
     expect(screen.queryByTestId("comm-graph-agent-panel")).toBeNull();
   });
 
+  it("stays mounted and reachable while its frame loop is paused", () => {
+    // The floor pauses when its tile is not being painted - an unselected
+    // Traycer tab keeps its tiles mounted under `display:none`. What pauses is
+    // the LOOP and nothing else: the tile is not unmounted, its agents stay
+    // reachable, and the surface is still there to come back to. Only the
+    // mounting half is observable here, since jsdom's missing 2d context means
+    // the loop never started in the first place; the pausing half is
+    // `office-frame-gate.test.ts`.
+    vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+    renderOffice(new Set([ORCHESTRATOR.id, REVIEWER.id]));
+
+    fireEvent(document, new Event("visibilitychange"));
+
+    expect(screen.getByTestId("comm-graph-office-canvas")).toBeDefined();
+    for (const agent of [ORCHESTRATOR, REVIEWER]) {
+      expect(
+        screen.getByTestId(`comm-graph-office-agent-${agent.id}`).textContent,
+      ).toBe(agent.name);
+    }
+    // And still openable, not merely present in the tree.
+    fireEvent.click(
+      screen.getByTestId(`comm-graph-office-agent-${REVIEWER.id}`),
+    );
+    expect(screen.getByTestId("comm-graph-agent-panel")).toBeDefined();
+  });
+
   it("carries a zoom control set the pointer gestures are not the only route to", () => {
     renderOffice(new Set([ORCHESTRATOR.id]));
 

@@ -59,6 +59,11 @@ import { OFFICE_ENVELOPE_TINTS } from "@/components/epic-canvas/comm-graph/offic
 import { OfficeAgentHover } from "@/components/epic-canvas/comm-graph/office/office-agent-hover";
 import { OfficeHoverSupplement } from "@/components/epic-canvas/comm-graph/office/office-hover-supplement";
 import { OfficeLegend } from "@/components/epic-canvas/comm-graph/office/office-legend";
+import {
+  isElementVisible,
+  officeCatchUpMs,
+  OfficeFrameGate,
+} from "@/components/epic-canvas/comm-graph/office/office-frame-gate";
 import { officeHarnessLogo } from "@/components/epic-canvas/comm-graph/office/office-logo-cache";
 import { createCommGraphFindAdapter } from "@/components/epic-canvas/comm-graph/comm-graph-find-adapter";
 import { useRegisterTileFindAdapter } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
@@ -117,8 +122,6 @@ const FIT_ZOOM_STEPS: ReadonlyArray<number> = [1, 1.5, 2, 3, 4, 5, 6];
 /** Screen-pixel margin left around the floor when fitting. */
 const FIT_PADDING = 24;
 const ZOOM_BUTTON_FACTOR = 1.25;
-/** A frame longer than this is a tab that was asleep, not a slow frame. */
-const MAX_FRAME_MS = 100;
 const AUTO_PAN_MS = 250;
 /** Pointer travel that turns a click into a drag. */
 const CLICK_SLOP_PX = 4;
@@ -233,6 +236,8 @@ interface OfficeRuntime {
   readonly getSearchMatchIds: () => ReadonlySet<string>;
   readonly setSearchMatchIds: (next: ReadonlySet<string>) => void;
   readonly takePanRequest: () => PanRequest | null;
+  /** Peeks without consuming - `takePanRequest` clears what it returns. */
+  readonly hasPanRequest: () => boolean;
   readonly requestPan: (next: PanRequest | null) => void;
   /** Agents on the floor as of the cursor - what Find searches. */
   readonly getAgents: () => ReadonlyArray<CommGraphAgentNode>;
@@ -301,6 +306,7 @@ function createOfficeRuntime(view: CommGraphTileViewState): OfficeRuntime {
       pendingPan = null;
       return taken;
     },
+    hasPanRequest: () => pendingPan !== null,
     requestPan: (next) => {
       pendingPan = next;
     },
@@ -1371,7 +1377,13 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
 
     let raf = 0;
     let last = performance.now();
+    // Seeded from the DOM rather than assumed: the observer's first callback
+    // is asynchronous, and a tile opened in the foreground should not wait a
+    // frame for it.
+    let canvasIsVisible = isElementVisible(canvas);
     let lastClockSecond = -1;
+    let pausedAt: number | null = null;
+    const gate = new OfficeFrameGate();
 
     // A wall clock only has to be right to the minute, but it must not be
     // right only at mount. Re-syncing the SAME input with a fresh `clockMs`
@@ -1424,19 +1436,14 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
 
     // The frame clock is the only clock here: a pan is REQUESTED without a
     // start time and gets one from whichever frame picks it up, so a request
-    // made while the tab was hidden animates when it comes back rather than
+    // made while the tile was hidden animates when it comes back rather than
     // arriving already finished.
     const advanceCamera = (now: number, viewport: ScreenSize): void => {
       const camera = runtime.getCamera();
       const requested = runtime.takePanRequest();
       if (requested !== null) {
         runtime.setActivePan(
-          panToward({
-            camera,
-            viewport,
-            request: requested,
-            startedAt: now,
-          }),
+          panToward({ camera, viewport, request: requested, startedAt: now }),
         );
       }
       const pan = runtime.getActivePan();
@@ -1450,20 +1457,41 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     };
 
     const step = (now: number): void => {
-      const dt = Math.min(MAX_FRAME_MS, now - last);
+      // The SIM runs in real time; only the DRAWING is capped, and the whole
+      // accumulated slice is what it is ticked with - that is what keeps a
+      // walk taking as long as it would at any frame rate.
+      const elapsed = gate.elapsed(now - last);
       last = now;
+      if (elapsed === null) {
+        raf = requestAnimationFrame(step);
+        return;
+      }
       advanceLiveClock();
       const scene = readScene();
-      scene.tick(dt);
+      scene.tick(elapsed);
+
+      const clockMs = runtime.getSceneInput()?.clockMs ?? 0;
+      const draw = gate.shouldDraw({
+        animating: scene.isAnimating(),
+        minute: Math.floor(clockMs / 60_000),
+        // PEEKED, not taken: consuming the request here would drop the pan on
+        // the floor on exactly the still frames auto-pan exists to move.
+        panning: runtime.getActivePan() !== null || runtime.hasPanRequest(),
+      });
+      if (!draw) {
+        raf = requestAnimationFrame(step);
+        return;
+      }
+
       const frame = scene.frame();
       runtime.setHitRegions(frame.hitRegions);
-
       const camera = runtime.getCamera();
       const viewport = runtime.getViewport();
       applyAutoFit(frame.size, viewport);
       requestPlaybackPan(frame.focus, viewport);
       advanceCamera(now, viewport);
 
+      const hoveredId = runtime.getHoveredAgentId();
       drawOfficeFrame({
         ctx,
         frame,
@@ -1476,31 +1504,54 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         floors: scene.layout().floors,
         hostNameById: runtime.getHostNames(),
         awayAgentIds: awayAgentIdsIn(frame, scene.layout()),
-        hoveredAgentId: runtime.getHoveredAgentId(),
+        hoveredAgentId: hoveredId,
       });
       raf = requestAnimationFrame(step);
     };
 
     const start = (): void => {
       if (raf !== 0) return;
+      if (document.hidden || !canvasIsVisible) return;
+      // Catch the simulation up on a bounded slice of the time spent paused,
+      // so the floor resumes looking alive rather than mid-stride.
+      const catchUp = officeCatchUpMs(
+        pausedAt === null ? 0 : Date.now() - pausedAt,
+      );
+      pausedAt = null;
+      if (catchUp > 0) readScene().tick(catchUp);
       last = performance.now();
+      gate.resume();
       raf = requestAnimationFrame(step);
     };
     const stop = (): void => {
       if (raf === 0) return;
       cancelAnimationFrame(raf);
       raf = 0;
+      pausedAt = Date.now();
     };
-    // A hidden tab has nothing to animate for, and a floor that kept simulating
-    // there would burn a laptop battery behind a window nobody is looking at.
+    // TWO ways to be invisible, and the floor has to answer to both. A hidden
+    // DOCUMENT is the browser's own signal. A hidden TILE is not: an unselected
+    // Traycer tab keeps its tiles mounted under `display:none`, so without the
+    // observer this loop draws sixty frames a second into a canvas nobody can
+    // see. The tile itself stays mounted either way - only the loop pauses.
     const onVisibility = (): void => {
       if (document.hidden) stop();
       else start();
     };
-    if (!document.hidden) start();
+    const observer = new IntersectionObserver((entries) => {
+      canvasIsVisible = entries.some((entry) => entry.isIntersecting);
+      if (canvasIsVisible) start();
+      else stop();
+    });
+    observer.observe(canvas);
+    if (isElementVisible(canvas)) {
+      canvasIsVisible = true;
+      start();
+    }
     document.addEventListener("visibilitychange", onVisibility);
     return () => {
       document.removeEventListener("visibilitychange", onVisibility);
+      observer.disconnect();
       stop();
     };
   }, [nameById, readScene, resolvedTheme, runtime]);
