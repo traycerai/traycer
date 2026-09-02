@@ -115,6 +115,8 @@ import type {
 import { makeCommGraphTileRef } from "@/stores/epics/canvas/tile-schema/comm-graph-tile";
 import { TestEpicSessionWrapper } from "@/components/epic-canvas/__tests__/test-epic-session";
 import { createEpicSessionTestHarness } from "@/components/epic-canvas/__tests__/test-epic-session-harness";
+import { TileFindContext } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
+import type { TileFindAdapter } from "@/stores/tile-find";
 
 const EPIC_ID = "epic-comm-graph";
 const CHAT_ID = "chat-1";
@@ -184,14 +186,41 @@ function seedDoc(doc: Y.Doc): void {
   epic.set("chats", chats);
 }
 
+function seedEmptyDoc(doc: Y.Doc): void {
+  const epic = doc.getMap("epic");
+  epic.set("title", "Epic");
+  epic.set("artifacts", new Y.Map<unknown>());
+  epic.set("tuiAgents", new Y.Map<unknown>());
+  epic.set("chats", new Y.Map<unknown>());
+}
+
 async function renderTile(): Promise<void> {
+  await renderTileWithFindRegistration(undefined);
+}
+
+async function renderTileWithFindRegistration(
+  onRegister: ((adapter: TileFindAdapter) => void) | undefined,
+): Promise<void> {
+  const node = makeCommGraphTileRef(EPIC_ID);
+  const tile = <CommGraphTile node={node} viewTabId={EPIC_ID} />;
   render(
     <QueryClientProvider client={queryClient}>
       <TestEpicSessionWrapper epicId={EPIC_ID}>
-        <CommGraphTile
-          node={makeCommGraphTileRef(EPIC_ID)}
-          viewTabId={EPIC_ID}
-        />
+        {onRegister === undefined ? (
+          tile
+        ) : (
+          <TileFindContext.Provider
+            value={{
+              tileInstanceId: node.instanceId,
+              registerAdapter: (adapter) => {
+                onRegister(adapter);
+                return () => undefined;
+              },
+            }}
+          >
+            {tile}
+          </TileFindContext.Provider>
+        )}
       </TestEpicSessionWrapper>
     </QueryClientProvider>,
   );
@@ -237,6 +266,41 @@ afterEach(() => {
  * message list on click.
  */
 describe("CommGraphTile", () => {
+  it("registers a ready zero-result Find adapter for an empty graph", async () => {
+    harness.teardown();
+    harness.install(seedEmptyDoc, "owner");
+    const registration: { adapter: TileFindAdapter | null } = {
+      adapter: null,
+    };
+
+    await renderTileWithFindRegistration((adapter) => {
+      registration.adapter = adapter;
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("comm-graph-empty")).toBeDefined();
+      expect(registration.adapter).not.toBeNull();
+    });
+    const registeredAdapter = registration.adapter;
+    if (registeredAdapter === null) {
+      throw new Error("empty communication graph did not register Find");
+    }
+    act(() => {
+      void registeredAdapter.search({
+        requestId: 1,
+        query: "agent",
+        matchCase: false,
+      });
+    });
+    expect(registeredAdapter.getSnapshot()).toMatchObject({
+      requestId: 1,
+      status: "ready",
+      current: 0,
+      total: 0,
+      exactHighlight: "none",
+    });
+  });
+
   it("subscribes once per host referenced by the epic's agents", async () => {
     await renderTile();
 
