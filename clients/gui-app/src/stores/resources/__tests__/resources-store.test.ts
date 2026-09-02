@@ -7,6 +7,7 @@ import type {
   OwnerResourceSnapshotWireV15,
   ResourceProcessSnapshotWireV15,
   ResourceOwnerKindWire,
+  RestrictedResourceSnapshotWireV15,
 } from "@traycer/protocol/host/resources/subscribe";
 import type {
   ResourcesProjectionPayload,
@@ -125,6 +126,20 @@ function makeOther(
     pssBytes: null,
     privateBytes: null,
     processes: [makeProcess({ pid: 20, rootPid: 20 })],
+    ...over,
+  };
+}
+
+function makeRestricted(
+  over: Partial<RestrictedResourceSnapshotWireV15>,
+): RestrictedResourceSnapshotWireV15 {
+  return {
+    sampledAt: 1_000,
+    processCount: 1,
+    cpuPercent: 5,
+    rssBytes: 400,
+    pssBytes: null,
+    privateBytes: null,
     ...over,
   };
 }
@@ -301,6 +316,114 @@ describe("createResourcesStore", () => {
     );
     expect(handle.store.getState().hostTree?.cpuPercent).toBe(30);
     expect(handle.store.getState().other?.rssBytes).toBe(500);
+    handle.dispose();
+  });
+
+  it("preserves restricted/owner/process identity across non-null pssBytes and privateBytes readings, and swaps it when they move", () => {
+    const fake = makeFakeClient();
+    const handle = createResourcesStore({
+      scope: { kind: "epic", epicId: "epic-1" },
+      streamClientFactory: fake.factory,
+    });
+    const key = resourceOwnerKey("terminal", "s1", "host-1");
+
+    fake.callbacks().onSnapshot(
+      projection({
+        restricted: makeRestricted({ pssBytes: 5_000, privateBytes: 4_000 }),
+        owners: [
+          makeOwner("terminal", "s1", {
+            pssBytes: 2_000,
+            privateBytes: 1_500,
+            processes: [makeProcess({ pssBytes: 200, privateBytes: 150 })],
+          }),
+        ],
+      }),
+    );
+    const restricted1 = handle.store.getState().restricted;
+    const owner1 = handle.store.getState().owners.get(key);
+    const process1 = owner1?.processes[0];
+
+    // Same tick, identical readings -> every reference is preserved.
+    fake.callbacks().onUpdate(
+      projection({
+        sampledAt: 2_000,
+        restricted: makeRestricted({ pssBytes: 5_000, privateBytes: 4_000 }),
+        owners: [
+          makeOwner("terminal", "s1", {
+            sampledAt: 2_000,
+            pssBytes: 2_000,
+            privateBytes: 1_500,
+            processes: [makeProcess({ pssBytes: 200, privateBytes: 150 })],
+          }),
+        ],
+      }),
+    );
+    expect(handle.store.getState().restricted).toBe(restricted1);
+    expect(handle.store.getState().owners.get(key)).toBe(owner1);
+    expect(handle.store.getState().owners.get(key)?.processes[0]).toBe(
+      process1,
+    );
+
+    // Restricted's pssBytes moves alone -> fresh reference, new value visible,
+    // owner untouched.
+    fake.callbacks().onUpdate(
+      projection({
+        sampledAt: 3_000,
+        restricted: makeRestricted({ pssBytes: 6_000, privateBytes: 4_000 }),
+        owners: [
+          makeOwner("terminal", "s1", {
+            sampledAt: 3_000,
+            pssBytes: 2_000,
+            privateBytes: 1_500,
+            processes: [makeProcess({ pssBytes: 200, privateBytes: 150 })],
+          }),
+        ],
+      }),
+    );
+    const restricted3 = handle.store.getState().restricted;
+    expect(restricted3).not.toBe(restricted1);
+    expect(restricted3?.pssBytes).toBe(6_000);
+    expect(handle.store.getState().owners.get(key)).toBe(owner1);
+
+    // Owner's privateBytes moves alone -> fresh owner reference, restricted
+    // untouched.
+    fake.callbacks().onUpdate(
+      projection({
+        sampledAt: 4_000,
+        restricted: makeRestricted({ pssBytes: 6_000, privateBytes: 4_000 }),
+        owners: [
+          makeOwner("terminal", "s1", {
+            sampledAt: 4_000,
+            pssBytes: 2_000,
+            privateBytes: 1_600,
+            processes: [makeProcess({ pssBytes: 200, privateBytes: 150 })],
+          }),
+        ],
+      }),
+    );
+    const owner4 = handle.store.getState().owners.get(key);
+    expect(owner4).not.toBe(owner1);
+    expect(owner4?.privateBytes).toBe(1_600);
+    expect(handle.store.getState().restricted).toBe(restricted3);
+
+    // Only the nested process's pssBytes moves -> owner reference swaps again.
+    fake.callbacks().onUpdate(
+      projection({
+        sampledAt: 5_000,
+        restricted: makeRestricted({ pssBytes: 6_000, privateBytes: 4_000 }),
+        owners: [
+          makeOwner("terminal", "s1", {
+            sampledAt: 5_000,
+            pssBytes: 2_000,
+            privateBytes: 1_600,
+            processes: [makeProcess({ pssBytes: 300, privateBytes: 150 })],
+          }),
+        ],
+      }),
+    );
+    const owner5 = handle.store.getState().owners.get(key);
+    expect(owner5).not.toBe(owner4);
+    expect(owner5?.processes[0]?.pssBytes).toBe(300);
     handle.dispose();
   });
 
