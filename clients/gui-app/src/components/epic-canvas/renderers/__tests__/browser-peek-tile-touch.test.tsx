@@ -21,6 +21,22 @@ const hookState = vi.hoisted(() => ({
   visible: true,
 }));
 
+// The `tile` control tier: without a runner host carrying a `browserView`,
+// `screencastRoleForShell` reports `viewer` and the tile renders its read-only
+// presentation, which has no overlay button for a finger to land on (H12).
+vi.mock("@/providers/use-runner-host", () => ({
+  useRunnerHostOrNull: () => ({ browserView: {} }),
+}));
+
+// Reachable only once a runner host exists, and a react-query mutation in a
+// tree with no `QueryClientProvider`.
+vi.mock("@/hooks/runner/use-open-external-link-mutation", () => ({
+  useRunnerOpenExternalLink: () => ({
+    isPending: false,
+    mutate: (_url: string) => {},
+  }),
+}));
+
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
   useTabHostId: () => "host-test",
 }));

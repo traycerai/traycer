@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import type { TileController } from "@/components/epic-canvas/renderers/tile-controller";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { Badge } from "@/components/ui/badge";
 import type { BrowserAnnotationSessionController } from "@/hooks/browser/use-browser-annotation-session";
 import { Button } from "@/components/ui/button";
 import {
@@ -147,6 +148,8 @@ export function BrowserTileToolbar(props: {
 export function BrowserTileToolbarCompact(props: {
   readonly controller: TileController;
   readonly loading: boolean;
+  /** A read-only tier says so here: a finger cannot reach a tooltip (H12). */
+  readonly readOnly: boolean;
 }) {
   const url = props.controller.url;
   return (
@@ -158,6 +161,11 @@ export function BrowserTileToolbarCompact(props: {
       <div className="min-w-0 flex-1 truncate px-1 text-ui-sm text-muted-foreground">
         {url === "" ? "New tab" : url}
       </div>
+      {props.readOnly ? (
+        <Badge variant="outline" className="shrink-0">
+          View only
+        </Badge>
+      ) : null}
       {props.loading ? (
         <span role="status" aria-label="Page loading" className="shrink-0">
           <AgentSpinningDots
@@ -230,6 +238,10 @@ function BrowserTileToolbarAddress(props: {
       <InputGroup className="group/address h-7 border-transparent bg-transparent shadow-none transition-[background-color,border-color,box-shadow] hover:border-input hover:bg-input/20 focus-within:bg-input/20 motion-reduce:transition-none dark:bg-transparent">
         <InputGroupInput
           aria-label="Browser address"
+          // The rest of the toolbar already honours `disabled`; the address
+          // field is where a `viewer` (H12) or a clientless tile would
+          // otherwise submit a nav frame nothing can carry.
+          disabled={controller.disabled}
           value={controller.addressValue}
           onChange={(event) => {
             controller.onAddressChange(event.target.value);

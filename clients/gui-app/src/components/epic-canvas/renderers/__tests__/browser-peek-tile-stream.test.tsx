@@ -9,6 +9,8 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   FakeStreamClient,
+  runnerOpenExternalLinkModule,
+  tileRoleRunnerHostModule,
   type FakeStreamSession,
   PEEK_NODE,
   epicNestedFocusNavigationModule,
@@ -25,6 +27,12 @@ const hookState = vi.hoisted(() => ({
   streamClientFactory: null as (() => FakeStreamClient | null) | null,
   visible: true,
 }));
+
+vi.mock("@/providers/use-runner-host", () => tileRoleRunnerHostModule());
+
+vi.mock("@/hooks/runner/use-open-external-link-mutation", () =>
+  runnerOpenExternalLinkModule(),
+);
 
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () =>
   tabHostIdModule(),

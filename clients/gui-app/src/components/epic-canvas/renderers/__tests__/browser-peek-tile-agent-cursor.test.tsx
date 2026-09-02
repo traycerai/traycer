@@ -9,6 +9,8 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   FakeStreamClient,
+  runnerOpenExternalLinkModule,
+  tileRoleRunnerHostModule,
   type FakeStreamSession,
   epicNestedFocusNavigationModule,
   fakeMediaPeerModule,
@@ -36,6 +38,12 @@ import type { AgentCursorPosition } from "@/lib/browser-view/sessions/screencast
  */
 const peers = vi.hoisted(
   () => [] as Array<{ readonly handlers: MediaPeerHandlers; closed: boolean }>,
+);
+
+vi.mock("@/providers/use-runner-host", () => tileRoleRunnerHostModule());
+
+vi.mock("@/hooks/runner/use-open-external-link-mutation", () =>
+  runnerOpenExternalLinkModule(),
 );
 
 vi.mock("@/lib/browser-view/tiles/webrtc-media-registry", (original) =>

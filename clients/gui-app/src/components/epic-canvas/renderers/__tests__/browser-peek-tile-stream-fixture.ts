@@ -174,6 +174,39 @@ export function hostStreamClientForWithAuthModule(hookState: PeekHookState): {
   };
 }
 
+/**
+ * The `tile` control tier. `screencastRoleForShell` reads `browserView` off
+ * the runner host and a bare test tree has no `RunnerHostProvider` at all, so
+ * without this a peek suite renders the read-only `viewer` presentation (H12)
+ * and there is no arm affordance left to drive.
+ */
+export function tileRoleRunnerHostModule(): {
+  useRunnerHostOrNull: () => { browserView: object };
+} {
+  return { useRunnerHostOrNull: () => ({ browserView: {} }) };
+}
+
+/**
+ * The runner bridge behind the toolbar's "open in default browser" affordance,
+ * which only renders once a runner host exists - so it is exactly the suites
+ * that declare the `tile` role above that need it. Stubbed rather than
+ * provided, because the real hook is a react-query mutation and these trees
+ * carry no `QueryClientProvider`.
+ */
+export function runnerOpenExternalLinkModule(): {
+  useRunnerOpenExternalLink: () => {
+    isPending: boolean;
+    mutate: (url: string) => void;
+  };
+} {
+  return {
+    useRunnerOpenExternalLink: () => ({
+      isPending: false,
+      mutate: (_url: string) => {},
+    }),
+  };
+}
+
 export function streamAuthRevalidatorModule(): {
   useStreamAuthRevalidator: () => null;
 } {

@@ -120,6 +120,14 @@ export interface ScreencastSession {
   readonly details: string | null;
   readonly frameSize: ScreencastFrameSize | null;
   readonly navState: BrowserNavState;
+  /**
+   * This subscription is a `"viewer"`, the tier the host refuses every claim
+   * and every input frame from (`viewer-passive`, H07). A tile reading `true`
+   * must render no arm and no input affordance at all: the alternative is a
+   * control that starts a gesture the host will not finish, which reads as a
+   * broken tab (H12).
+   */
+  readonly readOnly: boolean;
   /** Non-null only while this tile is visible AND the host has armed input. */
   readonly armedEpoch: number | null;
   readonly dialog: ScreencastDialog | null;
@@ -947,6 +955,7 @@ export function useScreencastSession(
   return {
     refs,
     ...planeView,
+    readOnly: role === "viewer",
     armedEpoch,
     dialog,
     composing,
