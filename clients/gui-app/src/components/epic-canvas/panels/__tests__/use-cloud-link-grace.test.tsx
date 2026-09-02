@@ -117,12 +117,10 @@ describe("useCloudLinkGrace", () => {
     expect(result.current).toBe("offlineWithUnsavedChanges");
   });
 
-  it("does not let a graced outage carry its quiet verdict into unsaved renderer work", () => {
-    // The grace latches per outage, and a cloud drop can turn into local
-    // divergence without an intervening recovery frame. Both directions are
-    // covered: mid-window (the latch is still false) and after a COMPLETED
-    // window (it is true) - the second is what actually exercises the
-    // render-phase reset, since the first passes either way.
+  it("shows unsaved renderer work immediately without stopping the outage clock", () => {
+    // The excluded state is exempt from the QUIET, not from the CLOCK. Here
+    // the edit lands mid-window: it must show through at once, and the window
+    // must still expire on its original schedule rather than restarting.
     vi.useFakeTimers();
     const { result, rerender } = renderHook(
       (props: { derived: EpicSyncPillState }) =>
@@ -131,23 +129,73 @@ describe("useCloudLinkGrace", () => {
     );
     expect(result.current).toBe("syncing");
 
-    // Mid-window: never quieted, even with a graced outage in flight.
+    act(() => {
+      vi.advanceTimersByTime(CLOUD_LINK_GRACE_MS - 1_000);
+    });
     rerender({ derived: "offlineWithUnsavedChanges" });
     expect(result.current).toBe("offlineWithUnsavedChanges");
 
-    // Now run a window all the way out so the latch is genuinely set.
+    // The host acks; the same outage continues. The remaining 1s of the
+    // ORIGINAL window is all that is left - a restarted clock would need a
+    // further 15s here and would read `syncing` instead.
     rerender({ derived: "reconnecting" });
+    act(() => {
+      vi.advanceTimersByTime(1_000);
+    });
+    rerender({ derived: "reconnecting" });
+    expect(result.current).toBe("reconnecting");
+  });
+
+  it("keeps a sustained outage amber across an edit and its host ack", () => {
+    // The continuous-editing hole: during a sustained outage every keystroke
+    // briefly derives `offlineWithUnsavedChanges`, and the host acks a moment
+    // later. If that round trip counted as a recovery, each edit would buy
+    // another 15s of quiet and an Epic being typed into would never reach
+    // amber at all, however long the outage ran.
+    vi.useFakeTimers();
+    const { result, rerender } = renderHook(
+      (props: { derived: EpicSyncPillState }) =>
+        useCloudLinkGrace(props.derived, "open"),
+      { initialProps: { derived: "reconnecting" as EpicSyncPillState } },
+    );
+
     act(() => {
       vi.advanceTimersByTime(CLOUD_LINK_GRACE_MS);
     });
     rerender({ derived: "reconnecting" });
     expect(result.current).toBe("reconnecting");
 
-    // Passing through the excluded state must CLEAR that latch, not just be
-    // exempt from it. Without the reset the next outage would inherit
-    // `sustained` and skip its window entirely.
-    rerender({ derived: "offlineWithUnsavedChanges" });
-    expect(result.current).toBe("offlineWithUnsavedChanges");
+    // Three edits, each acknowledged. Amber throughout - never `syncing`.
+    for (let edit = 0; edit < 3; edit += 1) {
+      rerender({ derived: "offlineWithUnsavedChanges" });
+      expect(result.current).toBe("offlineWithUnsavedChanges");
+
+      rerender({ derived: "offlineWithHostPending" });
+      expect(result.current).toBe("offlineWithHostPending");
+
+      rerender({ derived: "reconnecting" });
+      expect(result.current).toBe("reconnecting");
+    }
+  });
+
+  it("still treats a real recovery as the end of the outage", () => {
+    // The counterpart to the two above: `synced` is not a cloud-down verdict,
+    // so it DOES clear the latch and a later drop earns a full fresh window.
+    vi.useFakeTimers();
+    const { result, rerender } = renderHook(
+      (props: { derived: EpicSyncPillState }) =>
+        useCloudLinkGrace(props.derived, "open"),
+      { initialProps: { derived: "reconnecting" as EpicSyncPillState } },
+    );
+
+    act(() => {
+      vi.advanceTimersByTime(CLOUD_LINK_GRACE_MS);
+    });
+    rerender({ derived: "reconnecting" });
+    expect(result.current).toBe("reconnecting");
+
+    rerender({ derived: "synced" });
+    expect(result.current).toBe("synced");
 
     rerender({ derived: "reconnecting" });
     expect(result.current).toBe("syncing");

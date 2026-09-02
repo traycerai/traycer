@@ -26,41 +26,71 @@ import type { EpicSyncPillState } from "@/lib/epic-sync-pill-state";
 export const CLOUD_LINK_GRACE_MS = 15_000;
 
 /**
- * The verdicts that describe ONLY the host↔cloud leg AND carry no work this
- * window is the last holder of.
+ * Every verdict that means "the host↔cloud leg is down" while the GUI↔host
+ * transport is open.
  *
- * The line is host ACKNOWLEDGEMENT, not an open transport. An `open` transport
- * proves the socket exists, never that the host received a frame or persisted
- * it - which is why `offlineWithUnsavedChanges` is deliberately absent. That
- * verdict is `deriveEpicSyncPillState`'s divergence arm: renderer-only work
- * still awaiting the host's ack, so closing the window discards it and the
- * amber copy is the only thing saying so. Quieting it for even a second trades
- * the user's data for the pill's calm.
- *
- * The members that remain are all on the other side of that line:
- *
- * - `connecting` / `reconnecting` here mean the CLOUD leg is coming up while
- *   the transport is open - a host-link drop never reaches this hook.
- * - `offlineWithHostPending` is only reachable with `hasRuntimeDivergence`
- *   false, so the host has acked everything this replica knows about; the open
- *   question is the host's own durable flush, which no window kept open can
- *   help with.
- * - `offlineChangesSavedLocally` is the strongest durability claim in the
- *   union, and today unreachable from the deriver.
+ * This is the OUTAGE CLOCK's membership, deliberately wider than the set we
+ * are allowed to go quiet for. One physical outage produces several of these
+ * in sequence - `reconnecting` while idle, `offlineWithUnsavedChanges` the
+ * instant the user types, `offlineWithHostPending` once the host acks - and
+ * they are all the same outage. Treating any of them as recovery restarts the
+ * clock, which is how a continuously-edited Epic could stay quiet through an
+ * outage that never ended.
  */
 const CLOUD_LINK_DOWN_STATES: ReadonlySet<EpicSyncPillState> =
   new Set<EpicSyncPillState>([
     "connecting",
     "reconnecting",
+    "offlineWithUnsavedChanges",
     "offlineWithHostPending",
     "offlineChangesSavedLocally",
   ]);
 
-export function isCloudOnlyOutage(
+/**
+ * The member of {@link CLOUD_LINK_DOWN_STATES} that may never be quieted, no
+ * matter how young the outage is.
+ *
+ * The line is host ACKNOWLEDGEMENT, not an open transport. An `open` transport
+ * proves the socket exists, never that the host received a frame or persisted
+ * it. `offlineWithUnsavedChanges` is `deriveEpicSyncPillState`'s divergence
+ * arm: renderer-only work still awaiting the host's ack, so closing the window
+ * discards it and the amber copy is the only thing saying so. Quieting it for
+ * even a second trades the user's data for the pill's calm.
+ *
+ * The others are on the far side of that line. `offlineWithHostPending` is only
+ * reachable with `hasRuntimeDivergence` false, so the host has acked everything
+ * this replica knows about and the open question is the host's own durable
+ * flush, which no window kept open can help with. `offlineChangesSavedLocally`
+ * is the strongest durability claim in the union. `connecting` / `reconnecting`
+ * here mean the CLOUD leg is coming up while the transport is open.
+ */
+const NEVER_QUIET_STATES: ReadonlySet<EpicSyncPillState> =
+  new Set<EpicSyncPillState>(["offlineWithUnsavedChanges"]);
+
+/**
+ * Whether the cloud leg is down right now - the OUTAGE CLOCK's predicate.
+ *
+ * Deliberately separate from {@link isCloudOnlyOutage}: this one decides
+ * whether the outage is still running, that one decides whether we may be
+ * quiet about it. Collapsing the two is the defect this split exists to
+ * prevent.
+ */
+export function isCloudLinkDown(
   state: EpicSyncPillState,
   hostTransportStatus: StreamConnectionStatus,
 ): boolean {
   return hostTransportStatus === "open" && CLOUD_LINK_DOWN_STATES.has(state);
+}
+
+/** Whether this frame is one the grace may render as the neutral `syncing`. */
+export function isCloudOnlyOutage(
+  state: EpicSyncPillState,
+  hostTransportStatus: StreamConnectionStatus,
+): boolean {
+  return (
+    isCloudLinkDown(state, hostTransportStatus) &&
+    !NEVER_QUIET_STATES.has(state)
+  );
 }
 
 /**
@@ -69,32 +99,44 @@ export function isCloudOnlyOutage(
  *
  * `syncing` is the honest placeholder: its copy is "Saving changes", it makes
  * no durability claim (that is `synced`'s alone), and it is exactly what the
- * ladder derives for pending work with no cloud evidence. The clock runs per
- * OUTAGE: any frame that is not a cloud-only outage resets it in the render
- * phase, so a recovery never paints one stale amber frame and a later drop
- * earns its own full window. Three kinds of frame reset it - a recovery, a
- * host-link drop, and renderer-only work awaiting the host's ack - and the
- * last two are passed straight through, because both are cases where this
- * window may be the only holder of an edit.
+ * ladder derives for pending work with no cloud evidence.
+ *
+ * Two predicates, not one, and the split is the whole point:
+ *
+ * - {@link isCloudLinkDown} runs the CLOCK. It stays true across every verdict
+ *   one outage produces, so the window is measured from when the cloud leg
+ *   actually went down. Only a real recovery, or a host-link drop, resets it -
+ *   in the render phase, so a recovery never paints one stale amber frame.
+ * - {@link isCloudOnlyOutage} decides whether we may be QUIET this frame.
+ *   `offlineWithUnsavedChanges` is excluded, so it shows through immediately
+ *   while the clock underneath it keeps running.
+ *
+ * Collapsing them is a live defect, not a tidiness question: during a sustained
+ * outage every keystroke briefly derives `offlineWithUnsavedChanges`, so a
+ * shared predicate would cancel the timer and clear the latch on each edit, and
+ * the host's ack a moment later would start a fresh 15 s of quiet. A
+ * continuously-edited Epic would then never reach amber, no matter how long the
+ * outage lasted.
  */
 export function useCloudLinkGrace(
   derived: EpicSyncPillState,
   hostTransportStatus: StreamConnectionStatus,
 ): EpicSyncPillState {
-  const inOutage = isCloudOnlyOutage(derived, hostTransportStatus);
+  const linkDown = isCloudLinkDown(derived, hostTransportStatus);
+  const mayQuiet = isCloudOnlyOutage(derived, hostTransportStatus);
   const [sustained, setSustained] = useState(false);
-  if (!inOutage && sustained) {
+  if (!linkDown && sustained) {
     setSustained(false);
   }
   useEffect(() => {
-    if (!inOutage) return undefined;
+    if (!linkDown) return undefined;
     const timer = window.setTimeout(() => {
       setSustained(true);
     }, CLOUD_LINK_GRACE_MS);
     return () => {
       window.clearTimeout(timer);
     };
-  }, [inOutage]);
-  if (!inOutage || sustained) return derived;
+  }, [linkDown]);
+  if (!mayQuiet || sustained) return derived;
   return "syncing";
 }
