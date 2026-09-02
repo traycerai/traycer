@@ -103,6 +103,7 @@ vi.mock(
               hostId: props.hostId,
               lifecycle: "live",
               inventoryReady: true,
+              canMaterializeElectron: false,
               items: [],
               errorMessage: null,
               retry: () => undefined,

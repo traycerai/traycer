@@ -5,6 +5,7 @@ import type {
 import {
   createSessionRegistry,
   type SessionRegistry,
+  type SessionDisposeCause,
 } from "@traycer-clients/shared/replica-runtime";
 import { createRendererRuntimeEnvironment } from "@/stores/epics/open-epic/runtime/runtime-environment";
 import { appLogger } from "@/lib/logger";
@@ -80,6 +81,61 @@ const handleWorkerLiveness = new WeakMap<
   OpenEpicStoreHandle,
   { dead: boolean }
 >();
+
+/**
+ * Why the Epic SESSION owner deliberately ended its durable transport.
+ *
+ * This is deliberately narrower than the shared registry's disposal causes:
+ * staging needs the product-level churn source (prune, tab close, rebuild or
+ * re-point), not the registry mechanism that happened to carry it.
+ */
+export type EpicSessionTransportCloseTrigger =
+  | "prune"
+  | "tab-close"
+  | "retry-rebuild"
+  | "repoint"
+  | "sign-out"
+  | "construction-failed";
+
+const handleTransportCloseAttribution = new WeakMap<
+  OpenEpicStoreHandle,
+  (trigger: EpicSessionTransportCloseTrigger) => void
+>();
+
+/** Binds a provider-owned transport to the registry that decides its fate. */
+export function trackEpicSessionTransportCloseAttribution(
+  handle: OpenEpicStoreHandle,
+  attribute: (trigger: EpicSessionTransportCloseTrigger) => void,
+): void {
+  handleTransportCloseAttribution.set(handle, attribute);
+}
+
+/** Records the next close trigger without widening the store-handle API. */
+export function attributeEpicSessionTransportClose(
+  handle: OpenEpicStoreHandle,
+  trigger: EpicSessionTransportCloseTrigger,
+): void {
+  handleTransportCloseAttribution.get(handle)?.(trigger);
+}
+
+function transportCloseTriggerForCause(
+  cause: SessionDisposeCause,
+): EpicSessionTransportCloseTrigger {
+  switch (cause) {
+    case "idle-expired":
+    case "warm-overflow":
+      return "prune";
+    case "released":
+      return "tab-close";
+    case "scope-mismatch":
+    case "unusable":
+      return "retry-rebuild";
+    case "replaced":
+      return "repoint";
+    case "dispose-all":
+      return "sign-out";
+  }
+}
 
 /** Binds a handle to the liveness cell its own fatal relay writes. */
 export function trackEpicSessionHandleLiveness(
@@ -427,6 +483,17 @@ export class OpenEpicSessionRegistry {
         // Never evict a session holding unsynced edits or unflushed writes.
         isEvictable: (session) => session.handle.isClean(),
         onBeforeDispose: (session, cause) => {
+          // Attribute BEFORE either teardown arm. A dirty outgoing handle is
+          // retained by calling detachTransport below rather than by the
+          // registry's dispose callback, but both routes end the same durable
+          // session transport and must carry the same cause. Provider-side
+          // attribution is first-wins, so a more specific retry override
+          // recorded immediately before a generic `released` discard survives
+          // this fallback mapping.
+          attributeEpicSessionTransportClose(
+            session.handle,
+            transportCloseTriggerForCause(cause),
+          );
           // Same teardown for every route out of the registry, retention
           // included: the entry's subscriptions close over it and call
           // `prune()`/`emit()`, and it is no longer registered for either to be
@@ -586,6 +653,7 @@ export class OpenEpicSessionRegistry {
     // NO retention, stated rather than defaulted - see above for why the dirty
     // test would answer "the only copy" about a document nothing can read.
     entry.session.pendingRetention = null;
+    attributeEpicSessionTransportClose(entry.session.handle, "retry-rebuild");
     this.sessions.discard(epicId, "released");
   }
 
@@ -956,6 +1024,48 @@ export class OpenEpicSessionRegistry {
     retainedBuffers: "discard" | "keep",
     dirtyLiveHandle: RetainedHandleIdentity | null,
   ): void {
+    this.releaseWithTransportTrigger(
+      epicId,
+      retainedBuffers,
+      dirtyLiveHandle,
+      "tab-close",
+    );
+  }
+
+  /** Rebuilds the session without mislabelling the teardown as a tab close. */
+  releaseForRetryRebuild(
+    epicId: string,
+    retainedBuffers: "discard" | "keep",
+    dirtyLiveHandle: RetainedHandleIdentity | null,
+  ): void {
+    this.releaseWithTransportTrigger(
+      epicId,
+      retainedBuffers,
+      dirtyLiveHandle,
+      "retry-rebuild",
+    );
+  }
+
+  /** Applies the auth boundary while preserving its close attribution. */
+  releaseForSignOut(
+    epicId: string,
+    retainedBuffers: "discard" | "keep",
+    dirtyLiveHandle: RetainedHandleIdentity | null,
+  ): void {
+    this.releaseWithTransportTrigger(
+      epicId,
+      retainedBuffers,
+      dirtyLiveHandle,
+      "sign-out",
+    );
+  }
+
+  private releaseWithTransportTrigger(
+    epicId: string,
+    retainedBuffers: "discard" | "keep",
+    dirtyLiveHandle: RetainedHandleIdentity | null,
+    trigger: EpicSessionTransportCloseTrigger,
+  ): void {
     this.sessions.transact(() => {
       if (retainedBuffers === "discard") {
         // Ordered before the early return: a retention must not outlive the tab
@@ -967,6 +1077,10 @@ export class OpenEpicSessionRegistry {
         this.sessions.notify();
         return;
       }
+      // Must precede `discard`: `onBeforeDispose` sees only the shared
+      // `released` cause. The provider stores the first attribution, so its
+      // generic tab-close fallback cannot overwrite this call-site verdict.
+      attributeEpicSessionTransportClose(entry.session.handle, trigger);
       const retainsLiveEdits =
         retainedBuffers === "keep" &&
         dirtyLiveHandle !== null &&

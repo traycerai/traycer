@@ -82,6 +82,7 @@ function liveSessions(
     hostId: HOST_ID,
     lifecycle: "live",
     inventoryReady: true,
+    canMaterializeElectron: false,
     items: [],
     errorMessage: null,
     retry: vi.fn(),

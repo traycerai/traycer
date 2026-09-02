@@ -50,6 +50,7 @@ vi.mock(
       hostId: "host-test",
       lifecycle: "connecting",
       inventoryReady: false,
+      canMaterializeElectron: false,
       items: [],
       errorMessage: null,
       retry: () => undefined,

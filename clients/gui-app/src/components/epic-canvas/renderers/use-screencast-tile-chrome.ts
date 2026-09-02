@@ -94,6 +94,8 @@ export function useScreencastTileChrome(
     profile: args.profile,
     url: liveUrl,
     addressValue,
+    setAddressInput: draft.setAddressInput,
+    focusAddress: draft.focusAddress,
     canGoBack: navState.canGoBack,
     canGoForward: navState.canGoForward,
     zoomPercent: 100,

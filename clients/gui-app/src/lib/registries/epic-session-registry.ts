@@ -22,9 +22,12 @@ import {
 // module imports THAT one, so a map declared here could not be read there
 // without a cycle. The provider's import path is unchanged.
 export {
+  attributeEpicSessionTransportClose,
   isEpicSessionHandleDead,
   trackEpicSessionHandleLiveness,
+  trackEpicSessionTransportCloseAttribution,
 } from "@/stores/epics/open-epic/session-registry";
+export type { EpicSessionTransportCloseTrigger } from "@/stores/epics/open-epic/session-registry";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";

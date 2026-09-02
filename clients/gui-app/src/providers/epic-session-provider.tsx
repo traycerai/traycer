@@ -33,6 +33,7 @@ import { appLogger } from "@/lib/logger";
 import {
   createOpenEpicStore,
   isProjectionPatch,
+  type OpenEpicState,
   type OpenEpicStoreHandle,
 } from "@/stores/epics/open-epic/store";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -61,6 +62,7 @@ import {
   EpicSessionContext,
   EpicSessionHostClientContext,
   EpicSessionPresentationContext,
+  attributeEpicSessionTransportClose,
   getEpicSessionHandleHostId,
   getOpenEpicRegistry,
   handleHostClients,
@@ -68,12 +70,15 @@ import {
   isEpicSessionHandleDead,
   releaseOpenEpicSessionIfUnused,
   trackEpicSessionHandleLiveness,
+  trackEpicSessionTransportCloseAttribution,
+  type EpicSessionTransportCloseTrigger,
 } from "@/lib/registries/epic-session-registry";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { shouldMergeEpicRoomSwap } from "@/lib/epics/epic-room-swap";
 import { armCarriesRootWrites } from "@/stores/epics/open-epic/runtime/epic-adapter-selection";
 import { ESTABLISHING_DEADLINE_MS } from "@/lib/host/bounded-load-budgets";
 import { attachPlanRestrictedReprobe } from "@/lib/host/owned-durable-stream-client";
+import { createPlanRestrictedSessionRebuildBackoff } from "@/lib/host/plan-restricted-session-rebuild-backoff";
 import { openEpicKey } from "@/lib/persist";
 import { adoptLegacyPersistedKey } from "@/lib/persist/zustand-persist-lifecycle";
 import { useImportedUnseenStore } from "@/stores/session-import/imported-unseen-store";
@@ -393,6 +398,24 @@ export function EpicSessionProvider(
     originalHostId: null,
   });
   const targetHostId = requestedHostId ?? effectiveHostId;
+  // One controller per mounted provider, so handle replacement cannot reset
+  // its owner-level backoff when a host repeatedly denies the plan. The reset
+  // effect below cancels it when this provider is reused for a different Epic
+  // or its host/user/ownership scope changes.
+  const [planRestrictedSessionRebuildBackoff] = useState(
+    createPlanRestrictedSessionRebuildBackoff,
+  );
+  useEffect(() => {
+    return () => {
+      planRestrictedSessionRebuildBackoff.cancel();
+    };
+  }, [
+    epicId,
+    ownershipClaimed,
+    planRestrictedSessionRebuildBackoff,
+    sessionUserId,
+    targetHostId,
+  ]);
   const resolvedSessionHostClient = useHostClientForHostId(
     session?.hostId ?? targetHostId,
   );
@@ -480,6 +503,10 @@ export function EpicSessionProvider(
   }, []);
 
   const retryRepoint = useCallback((): void => {
+    // A user-authored Retry supersedes an automatic backed-off retry. Without
+    // cancelling it, the old timer would rebuild the freshly retried session
+    // later with no new failure.
+    planRestrictedSessionRebuildBackoff.cancel();
     // Reaching Retry means the seeded open FAILED at the one job the seed
     // has, so give it up here too. Without this the seed survives a create
     // host that died while `effectiveHostId` never moved - the derivation
@@ -493,17 +520,18 @@ export function EpicSessionProvider(
       setRequestedHostId(null);
     }
     setRetryGeneration((generation) => generation + 1);
-  }, []);
+  }, [planRestrictedSessionRebuildBackoff]);
   const openOnOriginalHost = useCallback((): void => {
     const originalHostId = originalHostIdRef.current;
     if (originalHostId === null) return;
+    planRestrictedSessionRebuildBackoff.cancel();
     // An explicit request replaces the seed and stops being one: the user
     // named this host, so a later derivation move must not silently take it
     // back the way it takes back the create-host seed.
     seededCreateHostRef.current = false;
     setRequestedHostId(originalHostId);
     setRetryGeneration((generation) => generation + 1);
-  }, []);
+  }, [planRestrictedSessionRebuildBackoff]);
 
   // The create-host seed answers ONE question - which host can serve this epic
   // while its cloud record is still being written - and that question is
@@ -637,6 +665,9 @@ export function EpicSessionProvider(
       const transport = openTransport(targetHostId);
       const wsStreamClient = transport.wsStreamClient;
       let transportClosed = false;
+      let pendingTransportCloseTrigger: EpicSessionTransportCloseTrigger | null =
+        null;
+      let detachSessionHealthy: (() => void) | null = null;
       // Filled once the handle exists, because the recovery IS the handle's
       // `retryTransport`. Held in a slot rather than passed in because the
       // subscription has to be live before then: the negative-cache adoption
@@ -645,15 +676,30 @@ export function EpicSessionProvider(
       // lost if this attached afterwards.
       let reprobeHandle: OpenEpicStoreHandle | null = null;
       const detachReprobe = attachPlanRestrictedReprobe(wsStreamClient, () => {
-        reprobeHandle?.retryTransport();
+        const deniedHandle = reprobeHandle;
+        if (deniedHandle === null) return;
+        planRestrictedSessionRebuildBackoff.request(deniedHandle, () => {
+          // Capture this exact owner. If its replacement is denied before a
+          // delayed rung fires, the backoff replaces this callback with the
+          // newer handle's rather than calling through a mutable slot.
+          deniedHandle.retryTransport();
+        });
       });
-      const closeSessionTransport = (): void => {
+      const closeSessionTransport = (
+        fallbackTrigger: EpicSessionTransportCloseTrigger,
+      ): void => {
         if (transportClosed) return;
         transportClosed = true;
         // Before `transport.close()`, so the timer cannot outlive the socket
         // it exists to rebuild.
         detachReprobe();
-        transport.close();
+        detachSessionHealthy?.();
+        detachSessionHealthy = null;
+        // The transport owns ordering: it tears down wake/endpoint wiring
+        // before closing the socket with this attributed reason. Keeping the
+        // `durable-transport-closed` prefix preserves existing log searches.
+        const trigger = pendingTransportCloseTrigger ?? fallbackTrigger;
+        transport.closeWithReason(`durable-transport-closed:${trigger}`);
       };
       // EVERY construction between opening the transport and returning a
       // handle that owns its close. A synchronous throw anywhere in here -
@@ -940,6 +986,17 @@ export function EpicSessionProvider(
           revalidatedForUnauthorized = true;
           handleSessionAuthError();
         });
+        const noteSessionHealth = (state: OpenEpicState): void => {
+          if (!state.snapshotLoaded || state.hostTransportStatus !== "open") {
+            return;
+          }
+          // Only a loaded replica on an open transport proves that a previous
+          // plan denial ended. A construction or a transient `connecting`
+          // projection must not reset the ladder.
+          planRestrictedSessionRebuildBackoff.markHealthy();
+        };
+        detachSessionHealthy = created.store.subscribe(noteSessionHealth);
+        noteSessionHealth(created.store.getState());
 
         // Construction-honest stamp, written exactly once: `streamClientFactory`
         // above captures this run's `targetHostId` into the transport it opens,
@@ -957,11 +1014,11 @@ export function EpicSessionProvider(
           ...created,
           dispose: () => {
             created.dispose();
-            closeSessionTransport();
+            closeSessionTransport("tab-close");
           },
           detachTransport: () => {
             created.detachTransport();
-            closeSessionTransport();
+            closeSessionTransport("repoint");
           },
         };
         // Stamped on the handle that ESCAPES, not on the inner store object:
@@ -980,11 +1037,19 @@ export function EpicSessionProvider(
         // before this line is already recorded on the handle the moment it
         // exists.
         trackEpicSessionHandleLiveness(handle, liveness);
+        trackEpicSessionTransportCloseAttribution(handle, (trigger) => {
+          // The call site with the most specific product intent runs before
+          // the registry's generic disposal mapping. First-wins preserves it
+          // through the later onBeforeDispose callback.
+          if (pendingTransportCloseTrigger === null) {
+            pendingTransportCloseTrigger = trigger;
+          }
+        });
         return handle;
       } catch (error: unknown) {
         // Idempotent, and the handle's own paths are too, so a later
         // `dispose` on a handle that never escaped cannot double-close.
-        closeSessionTransport();
+        closeSessionTransport("construction-failed");
         throw error;
       }
     };
@@ -1049,23 +1114,20 @@ export function EpicSessionProvider(
       // would delete host A's unsynced work because host B rotated.
       if (current !== null) {
         const discarding = current.handle.userId !== sessionUserId;
-        registry.release(
-          epicId,
-          discarding ? "discard" : "keep",
-          // A ROTATION is not a user change: the same person is still at the
-          // keyboard, nothing was shown to them, and the live handle can hold
-          // unsynced edits. Retaining it under the identity it was built for -
-          // the OLD owner key, which is the room those edits belong to - is
-          // what keeps the re-enrollment from destroying work the user was
-          // never asked about. A user change takes `null`: no prior identity's
-          // document may survive it, exactly as `disposeAll` does at sign-out.
-          discarding
-            ? null
-            : {
-                hostStamp: current.hostId,
-                ownerIdentityKey: current.ownerIdentityKey,
-              },
-        );
+        if (discarding) {
+          registry.releaseForSignOut(epicId, "discard", null);
+        } else {
+          registry.releaseForRetryRebuild(epicId, "keep", {
+            // A ROTATION is not a user change: the same person is still at the
+            // keyboard, nothing was shown to them, and the live handle can hold
+            // unsynced edits. Retaining it under the identity it was built for -
+            // the OLD owner key, which is the room those edits belong to - is
+            // what keeps the re-enrollment from destroying work the user was
+            // never asked about.
+            hostStamp: current.hostId,
+            ownerIdentityKey: current.ownerIdentityKey,
+          });
+        }
       }
       // GUARDED, because `createHandle` runs synchronously inside this call and
       // the very first thing it does is construct a Worker. That throws outright
@@ -1169,6 +1231,10 @@ export function EpicSessionProvider(
     // establishes. The successor is deliberately outside the registry until a
     // complete snapshot makes an atomic replacement possible.
     const nextHandle = createHandle();
+    const disposeRepointCandidate = (): void => {
+      attributeEpicSessionTransportClose(nextHandle, "repoint");
+      nextHandle.dispose();
+    };
     presentSession({
       kind: "establishing",
       targetHostId,
@@ -1178,7 +1244,7 @@ export function EpicSessionProvider(
     const disposePending = (): void => {
       if (settled) return;
       settled = true;
-      nextHandle.dispose();
+      disposeRepointCandidate();
     };
     // ONE Epic can be mounted in TWO tabs of the same window (a duplicated
     // tab: `mostRecentTabIdByEpicId`, `duplicateEpicTab`), and every provider
@@ -1197,7 +1263,7 @@ export function EpicSessionProvider(
     // releases one.
     const adoptWinner = (winner: OpenEpicStoreHandle): void => {
       settled = true;
-      nextHandle.dispose();
+      disposeRepointCandidate();
       // Same question the replacement path asks of its own candidate, asked
       // here of a SIBLING's. The winner arrives from `registry.peek`, which -
       // unlike `acquireMounted` - does not retire a dead entry, so adopting it
@@ -1371,7 +1437,7 @@ export function EpicSessionProvider(
         // fully-built candidate - its worker, its stream transport, its socket
         // and its accounting registrations alive for the life of the tab, with
         // nothing left holding a reference that could ever end them.
-        nextHandle.dispose();
+        disposeRepointCandidate();
         return;
       }
       // A SECOND liveness question, and not the one `lifecycle.cancelled`
@@ -1391,7 +1457,7 @@ export function EpicSessionProvider(
       // Disposed and presented as `failed`, which is what every other
       // non-adoptable exit in this function already does.
       if (isEpicSessionHandleDead(nextHandle)) {
-        nextHandle.dispose();
+        disposeRepointCandidate();
         presentSession({
           kind: "failed",
           targetHostId: hostId,
@@ -1432,7 +1498,7 @@ export function EpicSessionProvider(
           adoptWinner(winner);
           return;
         }
-        nextHandle.dispose();
+        disposeRepointCandidate();
         presentSession({
           kind: "failed",
           targetHostId: hostId,
@@ -1497,6 +1563,7 @@ export function EpicSessionProvider(
     ownerIdentityKey,
     ownerIdentityKeyHostId,
     ownershipClaimed,
+    planRestrictedSessionRebuildBackoff,
     presentSession,
     sessionUserId,
     targetHostId,
