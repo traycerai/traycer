@@ -506,16 +506,35 @@ describe("ElectronTabSurface", () => {
     const bridge = state.bridge;
     if (bridge === null) throw new Error("bridge missing");
     state.sessions = liveSessions();
+    // Held open so the tab is still there when the request arrives and gone
+    // only while `openTab` is in flight - which is what makes this a test of
+    // WHEN the target is resolved, not just that a missing tab falls back.
+    const pending: {
+      settle: (tab: { sessionId: string; tabId: string }) => void;
+    } = { settle: () => undefined };
+    state.openTab.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          pending.settle = resolve;
+        }),
+    );
     renderTile(
       createBinding(() => Promise.resolve({ detach: () => Promise.resolve() })),
     );
 
-    // The tab goes away while `openTab` is in flight; targeting it would put
-    // a tile in a canvas with no route (R8).
-    canvasState.tabsById = {};
-
     act(() => {
       bridge.emitOpenTileRequest(popupRequest("foreground"));
+    });
+    await waitFor(() => {
+      expect(state.openTab).toHaveBeenCalledTimes(1);
+    });
+    expect(state.openTile).not.toHaveBeenCalled();
+
+    // The tab goes away mid-flight; targeting it would put a tile in a canvas
+    // with no route (R8).
+    canvasState.tabsById = {};
+    act(() => {
+      pending.settle({ sessionId: "session-1", tabId: "tab-2" });
     });
 
     await waitFor(() => {
