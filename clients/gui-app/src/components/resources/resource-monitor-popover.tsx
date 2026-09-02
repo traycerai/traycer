@@ -179,8 +179,12 @@ import {
   type ResourceMemoryMetric,
   type ResourceMemoryUsage,
 } from "@/lib/resources/memory-metric";
+import {
+  isResourceSortOption,
+  useResourceMonitorStore,
+  type ResourceSortOption,
+} from "@/stores/resources/resource-monitor-store";
 
-type ResourceSortOption = "memory" | "cpu" | "name" | "tab";
 type NavigateFn = UseNavigateResult<string>;
 
 const SORT_LABELS: Record<ResourceSortOption, string> = {
@@ -1234,7 +1238,10 @@ function ResourceMonitorPanel(props: {
   readonly sortMenuOpen: boolean;
   readonly onSortMenuOpenChange: (open: boolean) => void;
 }) {
-  const [sortOption, setSortOption] = useState<ResourceSortOption>("tab");
+  // This panel unmounts on every close, so the ordering is held by the store -
+  // see `resource-monitor-store.ts`.
+  const sortOption = useResourceMonitorStore((state) => state.sortOption);
+  const setSortOption = useResourceMonitorStore((state) => state.setSortOption);
   const searchQuery = props.searchQuery;
   const scope = props.scope;
   const sortMenuOpen = props.sortMenuOpen;
@@ -4852,12 +4859,6 @@ function isOwnerNodeRef(ref: EpicCanvasTileRef): ref is EpicNodeRef {
     ref.type === "terminal" ||
     ref.type === "chat" ||
     ref.type === "terminal-agent"
-  );
-}
-
-function isResourceSortOption(value: string): value is ResourceSortOption {
-  return (
-    value === "memory" || value === "cpu" || value === "name" || value === "tab"
   );
 }
 
