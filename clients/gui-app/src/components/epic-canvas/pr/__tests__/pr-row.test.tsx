@@ -29,9 +29,11 @@ import {
 // untouched here) imports this module's owner list and noun helper, and a
 // factory that lists only `PrOwnerBadges` hands those back as `undefined`.
 const openLink = vi.hoisted(() => vi.fn(() => Promise.resolve()));
+/** The bridge mutation's pending flag, driven per test. */
+const bridge = vi.hoisted(() => ({ isPending: false }));
 vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => openLink,
-  useOpenLinkWithPending: () => ({ isPending: false, openLink }),
+  useOpenLinkWithPending: () => ({ isPending: bridge.isPending, openLink }),
 }));
 
 vi.mock("@/components/epic-canvas/pr/pr-owner-label", async (importActual) => ({
@@ -123,6 +125,7 @@ function renderRow(overrides: Partial<PrLightItem>) {
 }
 
 beforeEach(() => {
+  bridge.isPending = false;
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
 });
 
@@ -173,6 +176,19 @@ describe("PrRow band 1: identity badges", () => {
       "github",
       expect.anything(),
     );
+  });
+
+  it("drops a badge click while an OS handoff is still in flight", () => {
+    // Each call fires a fresh bridge request, so a click landing on one would
+    // open a second OS tab (R10).
+    bridge.isPending = true;
+    renderRow({});
+
+    const badge = screen.getByTestId("pr-row-number");
+    fireEvent.click(badge);
+
+    expect(openLink).not.toHaveBeenCalled();
+    expect(badge.getAttribute("aria-disabled")).toBe("true");
   });
 
   it("carries no target/rel on the badge anchor - the click never navigates natively", () => {

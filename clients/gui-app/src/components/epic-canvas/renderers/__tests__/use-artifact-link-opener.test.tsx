@@ -155,10 +155,12 @@ const CLICK: LinkClickEvent = {
   button: 0,
 };
 
+/** The bridge mutation's pending flag, driven per test. */
+const bridge = vi.hoisted(() => ({ isPending: false }));
 vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => mocks.openLink,
   useOpenLinkWithPending: () => ({
-    isPending: false,
+    isPending: bridge.isPending,
     openLink: mocks.openLink,
   }),
 }));
@@ -190,6 +192,7 @@ function QueryWrapper(props: { readonly children: ReactNode }) {
 }
 
 beforeEach(() => {
+  bridge.isPending = false;
   mocks.worktreeQuery.data = {
     rows: [{ runningDir: "/tab/repo", disabledReason: null }],
   };
@@ -372,6 +375,28 @@ describe("useArtifactLinkOpener", () => {
       "markdown",
       CLICK,
     );
+  });
+
+  it("drops an external link while an OS handoff is still in flight", () => {
+    // Each call fires a fresh bridge request, so a second click landing on an
+    // outstanding handoff would open a second OS tab (R10).
+    bridge.isPending = true;
+    const { result } = renderHook(
+      () =>
+        useArtifactLinkOpener({
+          epicId: "epic-1",
+          artifactId: "artifact-1",
+          viewTabId: "tab-1",
+        }),
+      { wrapper: QueryWrapper },
+    );
+
+    result.current.openLink(
+      { kind: "external", url: "https://example.com" },
+      CLICK,
+    );
+
+    expect(mocks.openLink).not.toHaveBeenCalled();
   });
 
   it("keeps the opener stable across rerenders", () => {

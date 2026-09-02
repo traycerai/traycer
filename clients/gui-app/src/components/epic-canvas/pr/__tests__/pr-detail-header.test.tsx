@@ -14,9 +14,11 @@ import { PrDetailHeader } from "@/components/epic-canvas/pr/pr-detail-header";
  */
 
 const openLink = vi.hoisted(() => vi.fn(() => Promise.resolve()));
+/** The bridge mutation's pending flag, driven per test. */
+const bridge = vi.hoisted(() => ({ isPending: false }));
 vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => openLink,
-  useOpenLinkWithPending: () => ({ isPending: false, openLink }),
+  useOpenLinkWithPending: () => ({ isPending: bridge.isPending, openLink }),
 }));
 
 function buildPrDetailCore(overrides: Partial<PrDetailCore>): PrDetailCore {
@@ -119,6 +121,7 @@ describe("PrDetailHeader staleness", () => {
 describe("PrDetailHeader GitHub link", () => {
   afterEach(() => {
     cleanup();
+    bridge.isPending = false;
     openLink.mockReset();
   });
 
@@ -136,5 +139,18 @@ describe("PrDetailHeader GitHub link", () => {
       "github",
       expect.anything(),
     );
+  });
+
+  it("drops a click while an OS handoff is still in flight", () => {
+    // Each call fires a fresh bridge request, so a click landing on one would
+    // open a second OS tab (R10).
+    bridge.isPending = true;
+    renderHeader(null, 1_000);
+
+    const link = screen.getByRole("link", { name: /GitHub/i });
+    fireEvent.click(link);
+
+    expect(openLink).not.toHaveBeenCalled();
+    expect(link.getAttribute("aria-disabled")).toBe("true");
   });
 });
