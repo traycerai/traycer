@@ -100,6 +100,7 @@ describe("OfficeLegend", () => {
       "harness",
       "unanswered requests",
       "one per root agent",
+      "a sub-team inside its lead's cabin; outline style and floor tint change per level",
       "one per host",
       "the time being shown",
       "break room; agents chat at the cooler and tables",

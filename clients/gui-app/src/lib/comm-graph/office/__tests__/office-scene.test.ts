@@ -725,6 +725,97 @@ describe("OfficeScene", () => {
     expect(written.some((label) => label.text === "Game room")).toBe(true);
   });
 
+  it("tints a pod's floor, outlines it in its own style and plates its name", () => {
+    const family = [
+      agent({ id: "root", createdAt: 1 }),
+      agent({
+        id: "lead",
+        name: "a very long sub-team name",
+        parentId: "root",
+        createdAt: 2,
+      }),
+      agent({ id: "kid-1", parentId: "lead", createdAt: 3 }),
+      agent({ id: "kid-2", parentId: "lead", createdAt: 4 }),
+    ];
+    const scene = new OfficeScene(layoutOffice);
+    scene.sync(
+      sceneInput({
+        agents: family,
+        visibleAgentIds: new Set(family.map((person) => person.id)),
+      }),
+    );
+
+    const frame = scene.frame();
+    const pod = scene.layout().rooms[0].pods[0];
+    expect(pod).toBeDefined();
+
+    // Every interior tile carries a pod floor of the pod's own tint, as a
+    // checker rather than a wash.
+    const tinted = new Map<string, OfficeSpriteName>();
+    for (const drawable of frame.floor) {
+      if (drawable.kind !== "sprite") continue;
+      if (!drawable.sprite.name.startsWith("floor-pod")) continue;
+      tinted.set(
+        `${drawable.x / OFFICE_TILE},${drawable.y / OFFICE_TILE}`,
+        drawable.sprite.name,
+      );
+    }
+    const family_ = pod.tint === "warm" ? "floor-pod-warm-" : "floor-pod-";
+    const seen = new Set<string>();
+    for (
+      let row = pod.bounds.row;
+      row < pod.bounds.row + pod.bounds.rows;
+      row += 1
+    ) {
+      for (
+        let col = pod.bounds.col;
+        col < pod.bounds.col + pod.bounds.cols;
+        col += 1
+      ) {
+        const name = tinted.get(`${col},${row}`);
+        expect(name, `${col},${row}`).toBeDefined();
+        if (name === undefined) continue;
+        expect(name.startsWith(family_), name).toBe(true);
+        seen.add(name);
+      }
+    }
+    expect(seen.size).toBe(2);
+
+    // The outline is drawn in the style the plan chose, and only in that one.
+    const styleArt: Readonly<Record<string, ReadonlyArray<string>>> = {
+      glass: ["partition", "partition-h"],
+      planters: ["planter"],
+      shelves: ["shelf", "shelf-h"],
+    };
+    const wanted = styleArt[pod.style];
+    const outline = frame.props.filter(
+      (drawable) =>
+        drawable.kind === "sprite" && wanted.includes(drawable.sprite.name),
+    );
+    expect(outline.length).toBeGreaterThan(0);
+    for (const other of Object.entries(styleArt)) {
+      if (other[0] === pod.style) continue;
+      for (const name of other[1]) {
+        // A pod wearing two styles at once has no style at all.
+        expect(sprites(frame.props, name as OfficeSpriteName), name).toEqual(
+          [],
+        );
+      }
+    }
+
+    // The plate sits on the ring, with the sub-team's name across it.
+    const plate = sprites(frame.props, "pod-plate");
+    expect(plate).toHaveLength(1);
+    expect(plate[0].x).toBe(pod.plateTile.col * OFFICE_TILE);
+    const label = labels(frame.props).find((drawable) =>
+      drawable.text.startsWith("a very"),
+    );
+    if (label === undefined) throw new Error("no label on the pod plate");
+    expect(label.tone).toBe("bright");
+    expect(label.text.length).toBeLessThanOrEqual(10);
+    expect(label.text.endsWith("…")).toBe(true);
+  });
+
   it("plates every desk and badges only the agents that carry a harness", () => {
     const badged = agent({ id: "alpha", createdAt: 1, harnessId: "traycer" });
     const scene = new OfficeScene(layoutOffice);
@@ -1779,8 +1870,11 @@ describe("OfficeScene", () => {
           continue;
         }
         // Somewhere a character can stand must look like somewhere a character
-        // can stand - a corridor painted as brick reads as a sealed room.
-        expect(painted.get(key), key).toMatch(/^floor-[ab]$/);
+        // can stand - a corridor painted as brick reads as a sealed room. A pod
+        // floor counts: it is the same floor in a sub-team's own tint.
+        expect(painted.get(key), key).toMatch(
+          /^(floor-[ab]|floor-pod-(warm-)?[ab])$/,
+        );
       }
     }
   });

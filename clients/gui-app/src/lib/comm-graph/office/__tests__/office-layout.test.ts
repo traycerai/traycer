@@ -91,12 +91,6 @@ function wallRingTiles(bounds: OfficeTileRect): ReadonlyArray<OfficeTilePos> {
   return tiles;
 }
 
-function partitionTiles(layout: OfficeLayout): ReadonlyArray<OfficeTilePos> {
-  return layout.props
-    .filter((prop) => prop.sprite.name === "partition")
-    .map((prop) => prop.tile);
-}
-
 describe("layoutOffice", () => {
   it("renders a minimal room with a door and no desks when empty", () => {
     const layout = layoutOffice([]);
@@ -149,12 +143,21 @@ describe("layoutOffice", () => {
   it("keeps every slot the same width whether or not it holds a plant", () => {
     const layout = layoutOffice([
       agent({ id: "root", createdAt: 1 }),
-      agent({ id: "child", parentId: "root", createdAt: 2 }),
+      agent({ id: "child-a", parentId: "root", createdAt: 2 }),
+      agent({ id: "child-b", parentId: "root", createdAt: 3 }),
     ]);
 
-    // A manager-only widening would make a desk's column depend on how many
+    // Two siblings side by side sit exactly one slot plus one gap apart. A
+    // manager-only widening would make a desk's column depend on how many
     // managers precede it, so promoting one agent would shuffle the floor.
-    expect(tileOf(layout, "child").col - tileOf(layout, "root").col).toBe(5);
+    const first = tileOf(layout, "child-a");
+    const second = tileOf(layout, "child-b");
+    expect(second.row).toBe(first.row);
+    expect(second.col - first.col).toBe(6);
+    // ...and the lead's own plant does not push its children sideways: they
+    // start at its own column, one band below it.
+    expect(first.col).toBe(tileOf(layout, "root").col);
+    expect(first.row).toBeGreaterThan(tileOf(layout, "root").row);
   });
 
   it("is a pure function of the set, not of the input array's order", () => {
@@ -329,29 +332,179 @@ describe("layoutOffice", () => {
     }
   });
 
-  it("partitions off a sub-cluster but never the cabin's own root", () => {
+  it("nests a pod inside a pod inside the cabin", () => {
     const layout = layoutOffice([
       agent({ id: "root", createdAt: 1 }),
       agent({ id: "lead", parentId: "root", createdAt: 2 }),
-      agent({ id: "lead-kid-1", parentId: "lead", createdAt: 3 }),
-      agent({ id: "lead-kid-2", parentId: "lead", createdAt: 4 }),
-      agent({ id: "solo", parentId: "root", createdAt: 5 }),
-      agent({ id: "solo-kid", parentId: "solo", createdAt: 6 }),
+      agent({ id: "sub", parentId: "lead", createdAt: 3 }),
+      agent({ id: "sub-kid", parentId: "sub", createdAt: 4 }),
     ]);
 
-    // The root also has two children, but a cabin is already its own division -
-    // only a pod INSIDE one earns a divider.
-    const lead = tileOf(layout, "lead");
-    expect(partitionTiles(layout)).toEqual([
-      { col: lead.col - 1, row: lead.row },
+    const room = layout.rooms[0];
+    const pods = new Map(room.pods.map((pod) => [pod.leadAgentId, pod]));
+    // A pod per agent that has children, and none for the leaves or the root -
+    // the cabin is already the root's own region.
+    expect([...pods.keys()].sort()).toEqual(["lead", "sub"]);
+    const lead = pods.get("lead");
+    const sub = pods.get("sub");
+    if (lead === undefined || sub === undefined) throw new Error("no pods");
+
+    expect(lead.depth).toBe(1);
+    expect(sub.depth).toBe(2);
+    // Strictly inside, outline included: the child's ring has to have a tile of
+    // the parent's interior to stand on.
+    expect(sub.bounds.col - 1).toBeGreaterThanOrEqual(lead.bounds.col);
+    expect(sub.bounds.row - 1).toBeGreaterThanOrEqual(lead.bounds.row);
+    expect(sub.bounds.col + sub.bounds.cols).toBeLessThan(
+      lead.bounds.col + lead.bounds.cols,
+    );
+    expect(sub.bounds.row + sub.bounds.rows).toBeLessThan(
+      lead.bounds.row + lead.bounds.rows,
+    );
+    // ...and the outer pod is itself inside the cabin's walls.
+    expect(lead.bounds.col - 1).toBeGreaterThan(room.bounds.col);
+    expect(lead.bounds.row - 1).toBeGreaterThan(room.bounds.row);
+
+    // Each lead's desk is the top-left of its own pod, and every descendant is
+    // inside it.
+    expect(tileOf(layout, "lead")).toEqual({
+      col: lead.bounds.col,
+      row: lead.bounds.row,
+    });
+    expect(tileOf(layout, "sub")).toEqual({
+      col: sub.bounds.col,
+      row: sub.bounds.row,
+    });
+    expect(within(sub.bounds, tileOf(layout, "sub-kid"))).toBe(true);
+  });
+
+  it("seals a pod's outline but leaves it one way in", () => {
+    const layout = layoutOffice([
+      agent({ id: "root", createdAt: 1 }),
+      agent({ id: "lead", parentId: "root", createdAt: 2 }),
+      agent({ id: "kid-1", parentId: "lead", createdAt: 3 }),
+      agent({ id: "kid-2", parentId: "lead", createdAt: 4 }),
     ]);
-    for (const tile of partitionTiles(layout)) {
-      expect(layout.walkable[tile.row][tile.col]).toBe(false);
-      // Never over furniture: a divider takes an aisle tile or nothing.
-      for (const desk of layout.desks.values()) {
-        expect(desk.deskTile).not.toEqual(tile);
-        expect(desk.chairTile).not.toEqual(tile);
+
+    const pod = layout.rooms[0].pods[0];
+    expect(pod).toBeDefined();
+    const { col, row, cols, rows } = pod.bounds;
+    const openings: string[] = [];
+    for (let scanCol = col - 1; scanCol <= col + cols; scanCol += 1) {
+      for (let scanRow = row - 1; scanRow <= row + rows; scanRow += 1) {
+        const onRing =
+          scanCol === col - 1 ||
+          scanCol === col + cols ||
+          scanRow === row - 1 ||
+          scanRow === row + rows;
+        if (!onRing) continue;
+        if (layout.walkable[scanRow][scanCol]) {
+          openings.push(`${scanCol},${scanRow}`);
+        }
       }
+    }
+    // Exactly one gap. A ring with two is a region with no boundary; a ring
+    // with none is a sub-team walled in.
+    expect(openings).toHaveLength(1);
+    // The plate hangs on the ring itself, so its tile is part of the boundary
+    // rather than the way through it.
+    expect(openings[0]).not.toBe(`${pod.plateTile.col},${pod.plateTile.row}`);
+    expect(pod.plateTile.row).toBe(row - 1);
+    expect(pod.plateTile.col).toBe(col - 1);
+    expect(layout.walkable[pod.plateTile.row][pod.plateTile.col]).toBe(false);
+  });
+
+  it("keeps every chair reachable from its cabin door, however deep the tree", () => {
+    // A wide-and-deep shape: pods beside pods, pods inside pods, and leaves at
+    // every level. The failure this catches is a desk drawn behind a ring
+    // nobody can walk through, which is invisible until someone tries to
+    // deliver a message to it.
+    const agents: OfficeAgentInput[] = [agent({ id: "root", createdAt: 1 })];
+    let createdAt = 1;
+    for (let branch = 0; branch < 3; branch += 1) {
+      createdAt += 1;
+      const lead = `lead-${branch}`;
+      agents.push(agent({ id: lead, parentId: "root", createdAt }));
+      for (let child = 0; child < 3; child += 1) {
+        createdAt += 1;
+        const kid = `${lead}-kid-${child}`;
+        agents.push(agent({ id: kid, parentId: lead, createdAt }));
+        if (child !== 0) continue;
+        for (let grand = 0; grand < 2; grand += 1) {
+          createdAt += 1;
+          agents.push(
+            agent({ id: `${kid}-g${grand}`, parentId: kid, createdAt }),
+          );
+        }
+      }
+    }
+    const layout = layoutOffice(agents);
+    const room = layout.rooms[0];
+    expect(Math.max(...room.pods.map((pod) => pod.depth))).toBeGreaterThan(1);
+    // EVERY sub-team keeps its boundary. A pod the door cannot reach inside of
+    // is dropped to plain slots, so a missing one here would mean the packing
+    // had walled somebody in and the fallback had quietly papered over it -
+    // which would still pass the reachability sweep below.
+    const parents = new Set(
+      agents
+        .map((person) => person.parentId)
+        .filter((id): id is string => id !== null),
+    );
+    parents.delete("root");
+    expect(room.pods.map((pod) => pod.leadAgentId).sort()).toEqual(
+      [...parents].sort(),
+    );
+
+    for (const person of agents) {
+      const desk = layout.desks.get(person.id);
+      if (desk === undefined) throw new Error(`no desk for ${person.id}`);
+      expect(
+        findOfficePath(layout, room.doorTile, desk.chairTile),
+        `${person.id} is walled in`,
+      ).not.toBeNull();
+    }
+  });
+
+  it("never repeats a style across the first three pods under one lead", () => {
+    const agents: OfficeAgentInput[] = [agent({ id: "root", createdAt: 1 })];
+    let createdAt = 1;
+    // Four sub-teams under one lead, each with a child of its own so each earns
+    // a pod. Four is past what three styles can keep distinct, which is exactly
+    // why the promise is about the first three.
+    for (let branch = 0; branch < 4; branch += 1) {
+      createdAt += 1;
+      const lead = `lead-${branch}`;
+      agents.push(agent({ id: lead, parentId: "root", createdAt }));
+      createdAt += 1;
+      agents.push(agent({ id: `${lead}-kid`, parentId: lead, createdAt }));
+    }
+    const layout = layoutOffice(agents);
+    const siblings = layout.rooms[0].pods
+      .filter((pod) => pod.depth === 1)
+      .map((pod) => pod.style);
+    expect(siblings).toHaveLength(4);
+    expect(new Set(siblings.slice(0, 3)).size).toBe(3);
+  });
+
+  it("alternates a pod's tint from its parent's at every level", () => {
+    const agents = [
+      agent({ id: "root", createdAt: 1 }),
+      agent({ id: "a", parentId: "root", createdAt: 2 }),
+      agent({ id: "b", parentId: "a", createdAt: 3 }),
+      agent({ id: "c", parentId: "b", createdAt: 4 }),
+      agent({ id: "d", parentId: "c", createdAt: 5 }),
+    ];
+    const layout = layoutOffice(agents);
+    const byDepth = new Map(
+      layout.rooms[0].pods.map((pod) => [pod.depth, pod.tint]),
+    );
+    expect(byDepth.size).toBeGreaterThan(2);
+    for (const [depth, tint] of byDepth) {
+      const parent = byDepth.get(depth - 1);
+      if (parent === undefined) continue;
+      // Nesting is what the tint says. Two tints one inside the other reading
+      // the same is a boundary the eye cannot find.
+      expect(tint, `depth ${depth}`).not.toBe(parent);
     }
   });
 
@@ -368,22 +521,29 @@ describe("layoutOffice", () => {
       agent({ id: "child-a2", parentId: "root-a", createdAt: 5 }),
     ]);
 
-    // Cabins never reorder: the newcomer joins its family's room, and every
-    // other room stays exactly where it was.
+    // Cabins never reorder: the newcomer joins its family's room, and the rooms
+    // are still the same rooms in the same sequence.
     expect(after.rooms.map((room) => room.rootAgentId)).toEqual(
       before.rooms.map((room) => room.rootAgentId),
     );
-    // A cabin ahead of the one that grew is untouched...
-    expect(roomOf(after, "root-b")).toEqual(roomOf(before, "root-b"));
-    expect(after.desks.get("root-b")).toEqual(before.desks.get("root-b"));
-    // ...and one in a later band keeps its own shape; only the band it sits
-    // in slides down, because the band above it got taller.
-    const cBefore = roomOf(before, "root-c").bounds;
-    const cAfter = roomOf(after, "root-c").bounds;
-    expect(cAfter.cols).toBe(cBefore.cols);
-    expect(cAfter.rows).toBe(cBefore.rows);
-    expect(cAfter.col).toBe(cBefore.col);
-    expect(cAfter.row).toBeGreaterThanOrEqual(cBefore.row);
+    // Every OTHER cabin keeps its own shape. It may well slide - a family that
+    // grows makes its own room bigger, and the rooms after it tile along - but
+    // nothing about those rooms is re-planned.
+    for (const id of ["root-b", "root-c"]) {
+      const was = roomOf(before, id).bounds;
+      const now = roomOf(after, id).bounds;
+      expect(now.cols, id).toBe(was.cols);
+      expect(now.rows, id).toBe(was.rows);
+    }
+    // The lead keeps its place at the top-left of its own room, so a family
+    // grows DOWNWARD from the person who started it rather than reshuffling
+    // around the newcomer.
+    const leadBefore = tileOf(before, "root-a");
+    const roomBefore = roomOf(before, "root-a").bounds;
+    const leadAfter = tileOf(after, "root-a");
+    const roomAfter = roomOf(after, "root-a").bounds;
+    expect(leadAfter.col - roomAfter.col).toBe(leadBefore.col - roomBefore.col);
+    expect(leadAfter.row - roomAfter.row).toBe(leadBefore.row - roomBefore.row);
     for (const id of ["root-a", "child-a", "child-a2"]) {
       expect(
         within(roomOf(after, "root-a").bounds, tileOf(after, id)),

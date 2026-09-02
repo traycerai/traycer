@@ -42,6 +42,8 @@ import type {
   OfficeLayout,
   OfficeProp,
   OfficeRoom,
+  OfficePod,
+  OfficePodStyle,
   OfficeSpriteName,
   OfficeTilePos,
   OfficeTileRect,
@@ -70,8 +72,17 @@ const CABIN_WALL_ROWS = CABIN_TOP_WALL_ROWS + 1;
 const CABIN_GAP_TILES = 2;
 /** Left tile of the two-tile sign, measured from the cabin's left wall. */
 const SIGN_COL_OFFSET = 1;
-/** A pod worth separating: an agent that itself created several agents. */
-const SUB_CLUSTER_MIN_CHILDREN = 2;
+/** The outline ring a pod wears, one tile thick on every side. */
+const POD_OUTLINE_TILES = 1;
+/** Free floor after the lead's slot, after each pack row, and after each block. */
+const BLOCK_GAP_TILES = 1;
+/** The aisle down the right of every block's interior, joining its gap rows. */
+const BLOCK_AISLE_COLS = 1;
+const POD_STYLES: ReadonlyArray<OfficePodStyle> = [
+  "glass",
+  "planters",
+  "shelves",
+];
 
 /**
  * Where a band wraps. The floor is looked at as a whole, so the limit grows
@@ -244,11 +255,42 @@ interface Forest {
   >;
 }
 
+/**
+ * One agent's subtree, sized as a rectangle.
+ *
+ * A leaf is one desk slot. An agent with children is a BLOCK: its own slot at
+ * the top-left, its children's blocks packed into rows underneath, and enough
+ * room around them that the whole thing can be walked. A block whose agent has
+ * children becomes a POD when it is placed - drawn with a tinted floor and an
+ * outline, so a sub-team reads as a region without the cabin becoming two rooms.
+ *
+ * Two pieces of slack are what make the packing routable, and neither is
+ * decoration:
+ *
+ * - a GAP ROW after the lead's slot and after every pack row, so the bottom
+ *   edge of any child block always touches free floor;
+ * - an AISLE COLUMN down the right of every block's interior, so those gap rows
+ *   are joined to each other and to the block's own opening.
+ *
+ * Without them a pod that filled its parent's width would seal off everything
+ * below it, and the desks down there would be drawn but unreachable.
+ */
+interface BlockPlan {
+  readonly agent: OfficeAgentInput;
+  readonly children: ReadonlyArray<BlockPlan>;
+  /** How many child blocks sit side by side before the pack wraps. */
+  readonly perRow: number;
+  /** Interior size, excluding the outline this block gets when it is a pod. */
+  readonly cols: number;
+  readonly rows: number;
+  /** An agent with children; a leaf is only ever a desk slot. */
+  readonly isPod: boolean;
+}
+
 interface CabinPlan {
   readonly root: OfficeAgentInput;
-  /** The root first, then its subtree depth-first. One desk slot each. */
-  readonly members: ReadonlyArray<OfficeAgentInput>;
-  readonly perRow: number;
+  /** The root's whole subtree, packed. */
+  readonly block: BlockPlan;
   readonly cols: number;
   readonly rows: number;
 }
@@ -262,7 +304,6 @@ interface PlacedCabin extends CabinPlan {
 /** One host's storey, planned in its own rows before the stack is offset. */
 interface FloorBuild {
   readonly hostId: string | null;
-  readonly forest: Forest;
   readonly cabins: ReadonlyArray<PlacedCabin>;
   readonly localCols: number;
   readonly localRows: number;
@@ -313,20 +354,99 @@ function buildForest(agents: ReadonlyArray<OfficeAgentInput>): Forest {
   return { roots, childrenByParent };
 }
 
-function cabinShape(size: number): {
-  readonly perRow: number;
+/**
+ * A stable, dependency-free spread over agent ids, for the choices the PLAN
+ * makes - which outline a pod wears, which tint it starts on.
+ *
+ * The same FNV-1a the scene uses for its own per-agent variety, and
+ * deliberately a second copy rather than a shared import: the floor plan must
+ * not depend on the simulation, and one of the two changing its mixing is not
+ * a reason for the other to move every desk.
+ */
+function hashAgentId(agentId: string): number {
+  let hash = 2166136261;
+  for (let index = 0; index < agentId.length; index += 1) {
+    hash ^= agentId.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+/** What a child block costs its parent, outline included where it has one. */
+function footprintOf(block: BlockPlan): {
   readonly cols: number;
   readonly rows: number;
 } {
+  const margin = block.isPod ? POD_OUTLINE_TILES * 2 : 0;
+  return { cols: block.cols + margin, rows: block.rows + margin };
+}
+
+/** The child blocks of one pack row, `perRow` at a time. */
+function packRowsOf(
+  children: ReadonlyArray<BlockPlan>,
+  perRow: number,
+): ReadonlyArray<ReadonlyArray<BlockPlan>> {
+  const rows: BlockPlan[][] = [];
+  for (let index = 0; index < children.length; index += perRow) {
+    rows.push(children.slice(index, index + perRow));
+  }
+  return rows;
+}
+
+/**
+ * Sizes one agent's subtree from the bottom up. A leaf is a slot; anything else
+ * is its own slot plus the rectangle its children pack into, grown toward a
+ * square so a large family does not become a corridor.
+ */
+function blockPlanFor(
+  agent: OfficeAgentInput,
+  forest: Forest,
+  claimed: Set<string>,
+): BlockPlan {
+  claimed.add(agent.id);
+  const children: BlockPlan[] = [];
+  for (const child of forest.childrenByParent.get(agent.id) ?? []) {
+    // A reparenting cycle can name a child that is already somebody's: it keeps
+    // the first desk it was given rather than being drawn twice.
+    if (claimed.has(child.id)) continue;
+    children.push(blockPlanFor(child, forest, claimed));
+  }
+  if (children.length === 0) {
+    return {
+      agent,
+      children,
+      perRow: 1,
+      cols: SLOT_COLS,
+      rows: SLOT_ROWS,
+      isPod: false,
+    };
+  }
   const perRow = Math.min(
     CABIN_MAX_SLOTS_PER_ROW,
-    Math.max(CABIN_MIN_SLOTS_PER_ROW, Math.ceil(Math.sqrt(size))),
+    Math.max(CABIN_MIN_SLOTS_PER_ROW, Math.ceil(Math.sqrt(children.length))),
   );
-  const slotRows = Math.ceil(size / perRow);
+  let contentCols = 0;
+  let contentRows = 0;
+  for (const packRow of packRowsOf(children, perRow)) {
+    let rowCols = 0;
+    let rowRows = 0;
+    for (const child of packRow) {
+      const footprint = footprintOf(child);
+      // Every block is followed by a free column, so two siblings' outlines
+      // never touch and there is always a way between them.
+      rowCols += footprint.cols + BLOCK_GAP_TILES;
+      rowRows = Math.max(rowRows, footprint.rows);
+    }
+    contentCols = Math.max(contentCols, rowCols);
+    contentRows += rowRows + BLOCK_GAP_TILES;
+  }
   return {
+    agent,
+    children,
     perRow,
-    cols: perRow * SLOT_COLS + CABIN_AISLE_COLS + CABIN_SIDE_WALL_COLS,
-    rows: slotRows * SLOT_ROWS + CABIN_AISLE_ROWS + CABIN_WALL_ROWS,
+    cols: Math.max(SLOT_COLS, contentCols) + BLOCK_AISLE_COLS,
+    rows: SLOT_ROWS + BLOCK_GAP_TILES + contentRows,
+    isPod: true,
   };
 }
 
@@ -346,22 +466,13 @@ function cabinPlans(
   const plans: CabinPlan[] = [];
   const collect = (root: OfficeAgentInput): void => {
     if (claimed.has(root.id)) return;
-    const members: OfficeAgentInput[] = [];
-    // Explicit stack rather than recursion: lineage depth is user-controlled.
-    const stack: OfficeAgentInput[] = [root];
-    for (;;) {
-      const agent = stack.pop();
-      if (agent === undefined) break;
-      if (claimed.has(agent.id)) continue;
-      claimed.add(agent.id);
-      members.push(agent);
-      const children = forest.childrenByParent.get(agent.id);
-      if (children === undefined) continue;
-      for (let index = children.length - 1; index >= 0; index -= 1) {
-        stack.push(children[index]);
-      }
-    }
-    plans.push({ root, members, ...cabinShape(members.length) });
+    const block = blockPlanFor(root, forest, claimed);
+    plans.push({
+      root,
+      block,
+      cols: block.cols + CABIN_AISLE_COLS + CABIN_SIDE_WALL_COLS,
+      rows: block.rows + CABIN_AISLE_ROWS + CABIN_WALL_ROWS,
+    });
   };
   for (const root of forest.roots) collect(root);
   for (const agent of [...agents].sort(compareByCreation)) collect(agent);
@@ -496,7 +607,6 @@ function buildFloors(
           );
     builds.push({
       hostId: group.hostId,
-      forest,
       cabins,
       localCols,
       localRows,
@@ -1282,6 +1392,109 @@ function errandSpotsFor(
 
 // ---- Assembly --------------------------------------------------------- //
 
+/**
+ * Everything one recursive walk produces: a desk per agent and a pod per agent
+ * that has children.
+ */
+interface PlacedBlocks {
+  readonly desks: Map<string, OfficeDesk>;
+  readonly pods: OfficePod[];
+}
+
+/**
+ * Which outline a lead's child pods wear, and which tint they take.
+ *
+ * STYLE round-robins from a seeded start, so the first three pods under one
+ * lead are always three different outlines - with three styles that is the most
+ * that can be promised, and promising it for the first two only would be
+ * weaker for no gain. It deliberately does NOT exclude the parent's style: with
+ * one excluded there would be two left, and three siblings could not all
+ * differ.
+ *
+ * TINT is what keeps nesting legible instead, alternating every level so a pod
+ * inside a pod never shares its parent's floor.
+ */
+function podStyleAt(
+  leadId: string,
+  depth: number,
+  index: number,
+): OfficePodStyle {
+  const start = hashAgentId(`${leadId}:${depth}`) % POD_STYLES.length;
+  return POD_STYLES[(start + index) % POD_STYLES.length];
+}
+
+function podTintAt(depth: number, rootId: string): "cool" | "warm" {
+  const warmFirst = hashAgentId(rootId) % 2 === 1;
+  const even = depth % 2 === 1;
+  return even === warmFirst ? "warm" : "cool";
+}
+
+interface PlaceBlockRequest {
+  readonly block: BlockPlan;
+  readonly tile: OfficeTilePos;
+  readonly depth: number;
+  readonly rootId: string;
+}
+
+/**
+ * Walks one block into desks and pods. The lead takes the slot at the top-left
+ * of its own interior; its children pack into rows underneath, each pod inset by
+ * its outline so the ring has a tile of its own to sit on.
+ */
+function placeBlock(request: PlaceBlockRequest, out: PlacedBlocks): void {
+  const { block, tile, depth, rootId } = request;
+  out.desks.set(block.agent.id, {
+    agentId: block.agent.id,
+    deskTile: { col: tile.col, row: tile.row },
+    chairTile: { col: tile.col, row: tile.row + 1 },
+    // The cabin's own root, and nobody else: a pod lead heads a region, which
+    // its outline and plate already say. Keyed on the ROOT rather than on the
+    // nesting depth, because a leaf child of the root sits at depth 0 too.
+    manager: block.agent.id === rootId,
+  });
+  let row = tile.row + SLOT_ROWS + BLOCK_GAP_TILES;
+  let podIndex = 0;
+  for (const packRow of packRowsOf(block.children, block.perRow)) {
+    let col = tile.col;
+    let bandRows = 0;
+    for (const child of packRow) {
+      const footprint = footprintOf(child);
+      bandRows = Math.max(bandRows, footprint.rows);
+      if (child.isPod) {
+        const inner: OfficeTilePos = {
+          col: col + POD_OUTLINE_TILES,
+          row: row + POD_OUTLINE_TILES,
+        };
+        out.pods.push({
+          leadAgentId: child.agent.id,
+          name: child.agent.name,
+          depth: depth + 1,
+          bounds: {
+            col: inner.col,
+            row: inner.row,
+            cols: child.cols,
+            rows: child.rows,
+          },
+          // The plate hangs on the ring itself, which is why `bounds` excludes
+          // it: the interior is what the team works in.
+          plateTile: { col, row },
+          style: podStyleAt(block.agent.id, depth, podIndex),
+          tint: podTintAt(depth + 1, rootId),
+        });
+        podIndex += 1;
+        placeBlock(
+          { block: child, tile: inner, depth: depth + 1, rootId },
+          out,
+        );
+      } else {
+        placeBlock({ block: child, tile: { col, row }, depth, rootId }, out);
+      }
+      col += footprint.cols + BLOCK_GAP_TILES;
+    }
+    row += bandRows + BLOCK_GAP_TILES;
+  }
+}
+
 function collectCabins(
   builds: ReadonlyArray<FloorBuild>,
   desks: Map<string, OfficeDesk>,
@@ -1290,25 +1503,23 @@ function collectCabins(
   for (const build of builds) {
     for (const cabin of build.cabins) {
       const cabinRow = cabin.row + build.originRow;
-      const firstSlotCol = cabin.col + CABIN_LEFT_WALL_COLS + CABIN_AISLE_COLS;
-      const firstSlotRow = cabinRow + CABIN_TOP_WALL_ROWS + CABIN_AISLE_ROWS;
-      cabin.members.forEach((member, index) => {
-        const col = firstSlotCol + (index % cabin.perRow) * SLOT_COLS;
-        const row = firstSlotRow + Math.floor(index / cabin.perRow) * SLOT_ROWS;
-        desks.set(member.id, {
-          agentId: member.id,
-          deskTile: { col, row },
-          chairTile: { col, row: row + 1 },
-          // The cabin's root heads its own room; nobody else in it manages.
-          manager: index === 0,
-        });
-      });
+      const placed: PlacedBlocks = { desks, pods: [] };
+      placeBlock(
+        {
+          block: cabin.block,
+          tile: {
+            col: cabin.col + CABIN_LEFT_WALL_COLS + CABIN_AISLE_COLS,
+            row: cabinRow + CABIN_TOP_WALL_ROWS + CABIN_AISLE_ROWS,
+          },
+          depth: 0,
+          rootId: cabin.root.id,
+        },
+        placed,
+      );
       rooms.push({
         rootAgentId: cabin.root.id,
         name: cabin.root.name,
-        // Sub-team pods are a later lane's; a cabin with none is not a cabin
-        // with an unknown number of them.
-        pods: [],
+        pods: placed.pods,
         bounds: {
           col: cabin.col,
           row: cabinRow,
@@ -1382,33 +1593,85 @@ function addCabinBins(
 }
 
 /**
- * A partition reads the grandchildren as their own pod. It goes in the aisle
- * column to the LEFT of the pod head's desk - always either the previous slot's
- * spare column or the cabin's own aisle - and only where that tile is still
- * free, so a divider can never take a desk, a chair or a plant.
+ * A pod's outline: the ring of tiles around its interior, blocked so the region
+ * reads as bounded, with ONE opening in the bottom edge on the interior's own
+ * aisle column - which is the column every gap row inside the pod already runs
+ * into, and the tile below it is the parent's gap row.
+ *
+ * The plate's tile is part of the ring and stays blocked; a plate is furniture
+ * on the boundary, not a way in.
  */
-function addPodPartitions(
+function podOpeningOf(pod: OfficePod): OfficeTilePos {
+  return {
+    col: pod.bounds.col + pod.bounds.cols - BLOCK_AISLE_COLS,
+    row: pod.bounds.row + pod.bounds.rows,
+  };
+}
+
+function blockPodOutlines(
   context: PlanContext,
-  builds: ReadonlyArray<FloorBuild>,
-  desks: ReadonlyMap<string, OfficeDesk>,
+  rooms: ReadonlyArray<OfficeRoom>,
 ): void {
-  for (const build of builds) {
-    for (const cabin of build.cabins) {
-      cabin.members.forEach((member, index) => {
-        if (index === 0) return;
-        const children = build.forest.childrenByParent.get(member.id);
-        if (children === undefined) return;
-        if (children.length < SUB_CLUSTER_MIN_CHILDREN) return;
-        const desk = desks.get(member.id);
-        if (desk === undefined) return;
-        const tile: OfficeTilePos = {
-          col: desk.deskTile.col - 1,
-          row: desk.deskTile.row,
-        };
-        if (tile.col < 0 || !context.walkable[tile.row][tile.col]) return;
-        addBlockingProp(context, { sprite: { name: "partition" }, tile });
-      });
+  for (const room of rooms) {
+    for (const pod of room.pods) {
+      const { col, row, cols, rows } = pod.bounds;
+      const left = col - POD_OUTLINE_TILES;
+      const top = row - POD_OUTLINE_TILES;
+      const right = col + cols;
+      const bottom = row + rows;
+      for (let scanCol = left; scanCol <= right; scanCol += 1) {
+        blockPlanTile(context, { col: scanCol, row: top });
+        blockPlanTile(context, { col: scanCol, row: bottom });
+      }
+      for (let scanRow = top; scanRow <= bottom; scanRow += 1) {
+        blockPlanTile(context, { col: left, row: scanRow });
+        blockPlanTile(context, { col: right, row: scanRow });
+      }
+      const opening = podOpeningOf(pod);
+      context.walkable[opening.row][opening.col] = true;
     }
+  }
+}
+
+/**
+ * Blocks every surviving pod's outline, after dropping any pod the cabin door
+ * cannot reach the inside of - such a pod is emitted as plain slots instead, so
+ * its desks stay part of the cabin rather than sitting behind a sealed wall.
+ *
+ * The packing is built not to produce one: every pod's opening sits on the
+ * aisle its own gap rows run into, and the tile beyond it is the parent's gap
+ * row. So this is the check that SAYS so rather than a case anyone has seen -
+ * and it is worth its cost because the alternative failure is invisible on a
+ * small epic and silently strands a whole sub-team on a large one.
+ *
+ * Each round tests on a COPY of the grid: a ring that has to come back off
+ * cannot be un-blocked in place without also un-blocking whatever else shares
+ * those tiles.
+ */
+function resolvePods(context: PlanContext, rooms: OfficeRoom[]): void {
+  for (;;) {
+    const trial: PlanContext = {
+      cols: context.cols,
+      rows: context.rows,
+      props: [],
+      walkable: context.walkable.map((line) => [...line]),
+    };
+    blockPodOutlines(trial, rooms);
+    let dropped = false;
+    for (let index = 0; index < rooms.length; index += 1) {
+      const room = rooms[index];
+      if (room.pods.length === 0) continue;
+      const reachable = reachableFrom(trial, room.doorTile);
+      const kept = room.pods.filter((pod) =>
+        reachable.has(tileKey(podOpeningOf(pod))),
+      );
+      if (kept.length === room.pods.length) continue;
+      rooms[index] = { ...room, pods: kept };
+      dropped = true;
+    }
+    if (dropped) continue;
+    blockPodOutlines(context, rooms);
+    return;
   }
 }
 
@@ -1582,11 +1845,14 @@ export function layoutOffice(
   blockDeskTiles(walkable, desks);
 
   const context: PlanContext = { cols, rows, props: [], walkable };
+  // Outlines first, and with only the walls and the desks standing: a pod is
+  // kept or dropped on whether its cabin can reach INSIDE it, which is a
+  // question about the room's structure rather than about its pot plants.
+  resolvePods(context, rooms);
   // Before the storeys are fitted out, so a cabin's own furniture is already
   // standing when the errand spots are picked over the finished grid.
   addManagerPlants(context, desks);
   addCabinBins(context, desks);
-  addPodPartitions(context, builds, desks);
 
   const multiFloor = builds.length > 1;
   const floors = builds.map((build) =>

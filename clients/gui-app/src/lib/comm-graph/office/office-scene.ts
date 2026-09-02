@@ -61,6 +61,8 @@ import {
   type OfficeHitRegion,
   type OfficeLayout,
   type OfficeModelTier,
+  type OfficePod,
+  type OfficePodStyle,
   type OfficePoint,
   type OfficeProp,
   type OfficeRect,
@@ -102,8 +104,6 @@ const BACKGROUND_FRAME_MS = 400;
 const BUBBLE_BOB_MS = 500;
 const BUBBLE_HELLO_MS = 700;
 const SPARKLE_MS = 400;
-/** Only a floor that has been still this long starts dozing. */
-const IDLE_SLEEP_MS = 20_000;
 const ENVELOPE_STEP_FRACTION = 0.75;
 const ENVELOPE_MIN_MS = 350;
 const ENVELOPE_MAX_MS = 900;
@@ -127,6 +127,38 @@ const LABEL_GAP = 8;
 const MAX_LABEL_CHARS = 14;
 /** A cabin's sign is two tiles wide, so its name gets less room than a desk's. */
 const MAX_ROOM_LABEL_CHARS = 12;
+/** A pod's plate is ONE tile, so its name gets less room again. */
+const MAX_POD_LABEL_CHARS = 10;
+/** Baseline of the pod name, measured down from the plate sprite's own top. */
+const POD_PLATE_LABEL_BASELINE = 11;
+/**
+ * How each pod style draws its outline. The vertical piece takes the corners
+ * too: a corner belongs to the side that carries the run, and a horizontal
+ * piece turned on its end reads as a mistake.
+ */
+interface OfficePodOutlineArt {
+  readonly vertical: OfficeSpriteName;
+  readonly horizontal: OfficeSpriteName;
+}
+
+const POD_OUTLINE_ART: Readonly<Record<OfficePodStyle, OfficePodOutlineArt>> = {
+  glass: { vertical: "partition", horizontal: "partition-h" },
+  // A planter box reads the same from any side, so one sprite serves the ring.
+  planters: { vertical: "planter", horizontal: "planter" },
+  shelves: { vertical: "shelf", horizontal: "shelf-h" },
+};
+
+/**
+ * The tinted floor inside a pod, as a checker. Depth swaps which variant lands
+ * on an even tile, so a pod nested inside another never lines up with its
+ * parent's floor even where the two share a tint.
+ */
+const POD_FLOOR_ART: Readonly<
+  Record<"cool" | "warm", readonly [OfficeSpriteName, OfficeSpriteName]>
+> = {
+  cool: ["floor-pod-a", "floor-pod-b"],
+  warm: ["floor-pod-warm-a", "floor-pod-warm-b"],
+};
 /** Baseline of the cabin name, measured down from the sign sprite's own top. */
 const SIGN_LABEL_BASELINE = 11;
 const SIGN_WIDTH_TILES = 2;
@@ -232,9 +264,6 @@ const FILLER_LOOK_STEP_MS = 500;
 const FILLER_STRETCH_MS = 1_200;
 const FILLER_SPIN_STEP_MS = 120;
 const FILLER_SPIN_TURNS = 2;
-const FILLER_NAP_MS = 4_000;
-/** A nap is a statement about a long silence, not about a lull between turns. */
-const FILLER_NAP_MIN_IDLE_MS = 30_000;
 const FILLER_SPIN_FACINGS: ReadonlyArray<OfficeFacing> = [
   "down",
   "left",
@@ -407,7 +436,7 @@ interface OfficeErrandTarget {
  * people at a time and the rest of the floor would sit perfectly still without
  * these - which is the exact complaint that started all of this.
  */
-type OfficeFillerKind = "look" | "stretch" | "spin" | "nap";
+type OfficeFillerKind = "look" | "stretch" | "spin";
 
 interface OfficeFiller {
   readonly kind: OfficeFillerKind;
@@ -577,7 +606,6 @@ function withinTileRect(bounds: OfficeTileRect, tile: OfficeTilePos): boolean {
 function fillerDurationMs(kind: OfficeFillerKind): number {
   if (kind === "look") return FILLER_LOOK_MS;
   if (kind === "stretch") return FILLER_STRETCH_MS;
-  if (kind === "nap") return FILLER_NAP_MS;
   return FILLER_SPIN_STEP_MS * FILLER_SPIN_FACINGS.length * FILLER_SPIN_TURNS;
 }
 
@@ -587,7 +615,6 @@ function fillerPoseOf(filler: OfficeFiller): {
   readonly facing: OfficeFacing;
 } {
   const elapsed = filler.elapsedMs;
-  if (filler.kind === "nap") return { pose: "sit", facing: "up" };
   if (filler.kind === "stretch") return { pose: "stand", facing: "down" };
   if (filler.kind === "spin") {
     const step = Math.floor(elapsed / FILLER_SPIN_STEP_MS);
@@ -1711,9 +1738,6 @@ export class OfficeScene {
 
   private pickFiller(character: OfficeCharacter): OfficeFiller {
     const kinds: OfficeFillerKind[] = ["look", "stretch", "spin"];
-    // A doze is a statement about a long silence. Offering it after four
-    // seconds of quiet would make the floor look asleep between every turn.
-    if (character.idleMs >= FILLER_NAP_MIN_IDLE_MS) kinds.push("nap");
     const seed = mixSeed(
       hashAgentId(character.agentId),
       character.fillerCount + 1,
@@ -2407,6 +2431,67 @@ export class OfficeScene {
 
   // ---- Frame assembly ------------------------------------------------ //
 
+  /**
+   * A cabin's own walls. They sit ON the floor tiles and UNDER the lobby rug:
+   * the building's inner structure, not furniture standing on it.
+   */
+  private pushCabinWalls(floor: OfficeDrawable[], room: OfficeRoom): void {
+    const { col, row, cols, rows } = room.bounds;
+    const right = col + cols - 1;
+    const bottom = row + rows - 1;
+    const wallAt = (wallCol: number, wallRow: number): void => {
+      const isDoor =
+        wallRow === room.doorTile.row && wallCol === room.doorTile.col;
+      floor.push({
+        kind: "sprite",
+        sprite: { name: isDoor ? "door" : "wall" },
+        x: wallCol * OFFICE_TILE,
+        y: wallRow * OFFICE_TILE,
+      });
+    };
+    for (let scanCol = col; scanCol <= right; scanCol += 1) {
+      floor.push({
+        kind: "sprite",
+        sprite: { name: "wall-top" },
+        x: scanCol * OFFICE_TILE,
+        y: row * OFFICE_TILE,
+      });
+      wallAt(scanCol, row + 1);
+      wallAt(scanCol, bottom);
+    }
+    for (let scanRow = row + 2; scanRow < bottom; scanRow += 1) {
+      wallAt(col, scanRow);
+      wallAt(right, scanRow);
+    }
+  }
+
+  /**
+   * A pod's tinted carpet, on TOP of the cabin's own floor and under
+   * everything that stands on it - a tinted region is a different bit of
+   * carpet, not a thing in the room.
+   *
+   * Deepest LAST, so a nested pod's tint wins over its parent's on the tiles
+   * the two share.
+   */
+  private pushPodFloors(floor: OfficeDrawable[], room: OfficeRoom): void {
+    for (const pod of [...room.pods].sort((a, b) => a.depth - b.depth)) {
+      const [even, odd] = POD_FLOOR_ART[pod.tint];
+      const lastRow = pod.bounds.row + pod.bounds.rows;
+      const lastCol = pod.bounds.col + pod.bounds.cols;
+      for (let row = pod.bounds.row; row < lastRow; row += 1) {
+        for (let col = pod.bounds.col; col < lastCol; col += 1) {
+          const alternate = (col + row + pod.depth) % 2 === 0;
+          floor.push({
+            kind: "sprite",
+            sprite: { name: alternate ? even : odd },
+            x: col * OFFICE_TILE,
+            y: row * OFFICE_TILE,
+          });
+        }
+      }
+    }
+  }
+
   private buildFloor(): ReadonlyArray<OfficeDrawable> {
     const layout = this.currentLayout;
     const floor: OfficeDrawable[] = [];
@@ -2420,37 +2505,8 @@ export class OfficeScene {
         });
       }
     }
-    // Cabin walls sit ON the floor tiles and UNDER the lobby rug: they are the
-    // building's inner structure, not furniture standing on it.
-    for (const room of layout.rooms) {
-      const { col, row, cols, rows } = room.bounds;
-      const right = col + cols - 1;
-      const bottom = row + rows - 1;
-      const wallAt = (wallCol: number, wallRow: number): void => {
-        const isDoor =
-          wallRow === room.doorTile.row && wallCol === room.doorTile.col;
-        floor.push({
-          kind: "sprite",
-          sprite: { name: isDoor ? "door" : "wall" },
-          x: wallCol * OFFICE_TILE,
-          y: wallRow * OFFICE_TILE,
-        });
-      };
-      for (let scanCol = col; scanCol <= right; scanCol += 1) {
-        floor.push({
-          kind: "sprite",
-          sprite: { name: "wall-top" },
-          x: scanCol * OFFICE_TILE,
-          y: row * OFFICE_TILE,
-        });
-        wallAt(scanCol, row + 1);
-        wallAt(scanCol, bottom);
-      }
-      for (let scanRow = row + 2; scanRow < bottom; scanRow += 1) {
-        wallAt(col, scanRow);
-        wallAt(right, scanRow);
-      }
-    }
+    for (const room of layout.rooms) this.pushCabinWalls(floor, room);
+    for (const room of layout.rooms) this.pushPodFloors(floor, room);
     // The amenity rooms' rings are drawn with the cabins' own two sprites.
     // Their doors are not carried in the plan and do not need to be: a wall
     // tile the grid still says is walkable IS the door, by construction.
@@ -2625,6 +2681,7 @@ export class OfficeScene {
     }
     for (const room of this.currentLayout.rooms) {
       this.pushSign(sorted, room.signTile, room.name);
+      for (const pod of room.pods) this.pushPodOutline(sorted, pod);
     }
     // The break room and the game room are named the same way a cabin is: a
     // walled room nobody owns still has to say what it is for.
@@ -2651,6 +2708,104 @@ export class OfficeScene {
     // Stable, so same-row props keep the order they were pushed in.
     sorted.sort((left, right) => left.sortY - right.sortY);
     return sorted.map((entry) => entry.drawable);
+  }
+
+  /**
+   * A pod's boundary: its outline, drawn in the style the plan gave it, and the
+   * plate carrying the sub-team's name.
+   *
+   * The OPENING is the ring tile the grid still says is walkable, exactly as a
+   * room's door is - the scene never has to be told twice where a way in is.
+   * The plate's own tile carries the plate instead of a length of outline,
+   * which is what makes the name look mounted on the boundary rather than
+   * floating beside it.
+   */
+  private pushPodOutline(sorted: SortedProp[], pod: OfficePod): void {
+    const { col, row, cols, rows } = pod.bounds;
+    const left = col - 1;
+    const top = row - 1;
+    const right = col + cols;
+    const bottom = row + rows;
+    for (let scanCol = left; scanCol <= right; scanCol += 1) {
+      for (let scanRow = top; scanRow <= bottom; scanRow += 1) {
+        const name = this.podOutlineSpriteAt(pod, scanCol, scanRow);
+        if (name === null) continue;
+        sorted.push({
+          drawable: {
+            kind: "sprite",
+            sprite: { name },
+            x: scanCol * OFFICE_TILE,
+            y: spriteFootY({ name }, scanRow),
+          },
+          sortY: scanRow * OFFICE_TILE,
+        });
+      }
+    }
+    this.pushPodPlate(sorted, pod);
+  }
+
+  /**
+   * Which piece of a pod's outline stands on one tile, or `null` where none
+   * does: off the ring, on the plate's own tile, or on a tile the grid says is
+   * WALKABLE - which is how the single opening stays open. A corner takes the
+   * vertical piece, so the two runs meet rather than butting end to end.
+   */
+  private podOutlineSpriteAt(
+    pod: OfficePod,
+    col: number,
+    row: number,
+  ): OfficeSpriteName | null {
+    const left = pod.bounds.col - 1;
+    const top = pod.bounds.row - 1;
+    const right = pod.bounds.col + pod.bounds.cols;
+    const bottom = pod.bounds.row + pod.bounds.rows;
+    const onRing =
+      col === left || col === right || row === top || row === bottom;
+    if (!onRing) return null;
+    if (col === pod.plateTile.col && row === pod.plateTile.row) return null;
+    if (this.isWalkableTile(col, row)) return null;
+    const art = POD_OUTLINE_ART[pod.style];
+    // A corner is on a side column too, so this covers it: the two runs meet
+    // at the vertical piece rather than butting end to end.
+    const vertical = col === left || col === right;
+    return vertical ? art.vertical : art.horizontal;
+  }
+
+  /**
+   * The pod's name plate, and its name written across it. On the outline's
+   * corner, so a nested pod's plate cannot land on a tile its parent's outline
+   * already owns.
+   */
+  private pushPodPlate(sorted: SortedProp[], pod: OfficePod): void {
+    const plateX = pod.plateTile.col * OFFICE_TILE;
+    const plateY = spriteFootY({ name: "pod-plate" }, pod.plateTile.row);
+    const sortY = pod.plateTile.row * OFFICE_TILE;
+    sorted.push({
+      drawable: {
+        kind: "sprite",
+        sprite: { name: "pod-plate" },
+        x: plateX,
+        y: plateY,
+      },
+      sortY,
+    });
+    sorted.push({
+      drawable: {
+        kind: "label",
+        text: truncate(pod.name, MAX_POD_LABEL_CHARS),
+        x: plateX + OFFICE_TILE / 2,
+        y: plateY + POD_PLATE_LABEL_BASELINE,
+        tone: "bright",
+      },
+      sortY,
+    });
+  }
+
+  private isWalkableTile(col: number, row: number): boolean {
+    const layout = this.currentLayout;
+    if (row < 0 || row >= layout.rows) return false;
+    if (col < 0 || col >= layout.cols) return false;
+    return layout.walkable[row][col];
   }
 
   /**
@@ -3001,15 +3156,7 @@ export class OfficeScene {
     // Looking in at somebody else's door is the same shape of thought.
     const errandBubble = this.errandBubbleFor(character);
     if (errandBubble !== null) return errandBubble;
-    const chat = this.chatBubbleFor(character);
-    if (chat !== null) return chat;
-    // Dozing is a statement about a LIVE floor going quiet. During playback
-    // every agent is idle between its own rows, so it would fire constantly.
-    if (status !== "idle" || this.playing) return null;
-    const filler = character.filler;
-    if (filler !== null && filler.kind === "nap") return "bubble-sleep";
-    if (character.idleMs > IDLE_SLEEP_MS) return "bubble-sleep";
-    return null;
+    return this.chatBubbleFor(character);
   }
 
   /**

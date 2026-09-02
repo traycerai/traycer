@@ -60,7 +60,11 @@ const SECTIONS: ReadonlyArray<LegendSection> = [
     title: "Room",
     entries: [
       { signal: "Cabin", meaning: "one per root agent" },
-      { signal: "Glass partition", meaning: "a sub-team" },
+      {
+        signal: "Pods",
+        meaning:
+          "a sub-team inside its lead's cabin; outline style and floor tint change per level",
+      },
       { signal: "Floor", meaning: "one per host" },
       { signal: "Wall clock", meaning: "the time being shown" },
       {
