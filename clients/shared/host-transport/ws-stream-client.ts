@@ -1220,11 +1220,20 @@ function schemaVersionEqual(
 function incompatiblePinnedStreamDetails(
   method: string,
   requiredVersion: SchemaVersion,
+  hostVersion: SchemaVersion | undefined,
 ): FatalErrorDetails {
   return {
     code: "INCOMPATIBLE",
     reason: `Stream method '${method}' requires schema @${requiredVersion.major}.${requiredVersion.minor}`,
-    incompatibleMethods: null,
+    incompatibleMethods: [
+      {
+        method,
+        clientCanonical: requiredVersion,
+        hostCanonical: hostVersion ?? null,
+        blocking:
+          hostVersion === undefined ? "host-missing-method" : "no-bridge",
+      },
+    ],
     upgradeGuidance: null,
   };
 }
@@ -2096,6 +2105,7 @@ class StreamSession<
           details: incompatiblePinnedStreamDetails(
             this.config.method,
             requiredVersion,
+            theirVersion,
           ),
         };
 

@@ -99,6 +99,7 @@ import {
 } from "../active-remote-sessions";
 import { RemoteSession, type RemoteSessionOptions } from "../remote-session";
 import { RemoteStreamClient } from "../remote-stream-client";
+import { LogicalStream } from "../logical-stream";
 import {
   RECONNECT_INITIAL_BACKOFF_MS,
   RECONNECT_MAX_BACKOFF_MS,
@@ -1962,6 +1963,7 @@ describe("RemoteStreamClient dynamic subscribe params", () => {
         ...buildSessionOptions(relay, lease, null),
         streamRegistry: hostStreamRpcRegistry,
       });
+      const goFatal = vi.spyOn(LogicalStream.prototype, "goFatal");
       const streamClient = new RemoteStreamClient<
         VersionedRpcRegistry,
         typeof hostStreamRpcRegistry
@@ -1996,6 +1998,16 @@ describe("RemoteStreamClient dynamic subscribe params", () => {
           "closed",
           expect.anything(),
         );
+        expect(goFatal).toHaveBeenCalledWith(
+          expect.objectContaining({
+            code: "INCOMPATIBLE",
+            incompatibleMethods: [
+              expect.objectContaining({
+                method: "worktree.deleteBatchByPath",
+              }),
+            ],
+          }),
+        );
         // Admission failed inside `openSubscription`; no destructive subscribe
         // was ever enqueued on the mux wire.
         expect(relay.subscribeParams).toEqual([]);
@@ -2003,6 +2015,7 @@ describe("RemoteStreamClient dynamic subscribe params", () => {
       } finally {
         batch.close();
         session.close();
+        goFatal.mockRestore();
       }
     },
     TEST_BUDGET_MS,

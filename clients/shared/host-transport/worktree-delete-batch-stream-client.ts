@@ -16,7 +16,7 @@ import type {
   StreamConnectionStatus,
   StreamFrameEnvelope,
 } from "./i-stream-session";
-import { isMethodIncompatibleClose } from "./i-stream-session";
+import { isIncompatibleCloseForMethod } from "./i-stream-session";
 import type { IHostStreamClient } from "./host-stream-client";
 
 export const WORKTREE_DELETE_BATCH_STREAM_METHOD = "worktree.deleteBatchByPath";
@@ -246,7 +246,10 @@ export class WorktreeDeleteBatchStreamClient {
       (this.wsStreamClient.getMethodSupport(
         WORKTREE_DELETE_BATCH_STREAM_METHOD,
       ) === "unsupported" ||
-        isMethodIncompatibleClose(reason))
+        isIncompatibleCloseForMethod(
+          reason,
+          WORKTREE_DELETE_BATCH_STREAM_METHOD,
+        ))
     ) {
       if (this.reportedUnsupported) return;
       this.reportedUnsupported = true;

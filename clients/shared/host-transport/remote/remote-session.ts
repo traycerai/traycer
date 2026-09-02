@@ -2684,7 +2684,11 @@ export class RemoteSession<
         )
       : {
           ok: false as const,
-          details: incompatibleStreamDetails(stream.method),
+          details: incompatibleStreamDetails(
+            stream.method,
+            clientCanonical,
+            hostCanonical,
+          ),
         };
     if (
       !compat.ok ||
@@ -2692,7 +2696,11 @@ export class RemoteSession<
       hostCanonical === undefined
     ) {
       const details: FatalErrorDetails = compat.ok
-        ? incompatibleStreamDetails(stream.method)
+        ? incompatibleStreamDetails(
+            stream.method,
+            clientCanonical,
+            hostCanonical,
+          )
         : compat.details;
       stream.goFatal(details);
       this.subscriptions.delete(stream.streamId);
@@ -4611,11 +4619,27 @@ function planRestrictedFatalDetails(): FatalErrorDetails {
   };
 }
 
-function incompatibleStreamDetails(method: string): FatalErrorDetails {
+function incompatibleStreamDetails(
+  method: string,
+  clientCanonical: SchemaVersion | undefined,
+  hostCanonical: SchemaVersion | undefined,
+): FatalErrorDetails {
   return {
     code: "INCOMPATIBLE",
     reason: `Stream method '${method}' is not compatible with the host`,
-    incompatibleMethods: null,
+    incompatibleMethods: [
+      {
+        method,
+        clientCanonical: clientCanonical ?? null,
+        hostCanonical: hostCanonical ?? null,
+        blocking:
+          clientCanonical === undefined
+            ? "client-missing-method"
+            : hostCanonical === undefined
+              ? "host-missing-method"
+              : "no-bridge",
+      },
+    ],
     upgradeGuidance: null,
   };
 }

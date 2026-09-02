@@ -290,6 +290,40 @@ describe("WorktreeDeleteBatchStreamClient replay safety", () => {
     batch.close();
   });
 
+  it("reports a generic incompatible close as a connection failure", () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory);
+    const onUnsupported = vi.fn();
+    const onConnectionStatus = vi.fn();
+    const batch = new WorktreeDeleteBatchStreamClient({
+      wsStreamClient: client,
+      commandId: COMMAND_ID,
+      source: "settings",
+      targets: [{ worktreePath: "/wt/a", scripts: null, stopOwners: false }],
+      callbacks: {
+        ...NOOP_CALLBACKS,
+        onUnsupported,
+        onConnectionStatus,
+      },
+    });
+    const reason = {
+      kind: "fatalError" as const,
+      details: {
+        code: "INCOMPATIBLE",
+        reason: "protocol version skew",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    };
+
+    completeHandshake(sockets[0]);
+    sockets[0].fireText(reason);
+
+    expect(onUnsupported).not.toHaveBeenCalled();
+    expect(onConnectionStatus).toHaveBeenLastCalledWith("closed", reason);
+    batch.close();
+  });
+
   it("rejects a force-target @1.1 command against a 1.0 host before subscribe", () => {
     const { factory, sockets } = makeFactory();
     const client = makeClient(factory);
@@ -318,6 +352,9 @@ describe("WorktreeDeleteBatchStreamClient replay safety", () => {
     expect(sockets[0].textSent).toHaveLength(2);
     expect(JSON.parse(sockets[0].textSent[1])).toMatchObject({
       kind: "fatalError",
+      details: {
+        incompatibleMethods: [{ method: "worktree.deleteBatchByPath" }],
+      },
     });
     expect(
       sockets[0].textSent.some((raw) => JSON.parse(raw).kind === "subscribe"),
