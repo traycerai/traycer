@@ -12,6 +12,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
+import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 import { appLogger } from "@/lib/logger";
 import { surfaceHostOpenedTab } from "@/lib/browser-view/tiles/surface-host-opened-tab";
 import {
@@ -77,6 +78,13 @@ interface BrowserSessionsCoordinatorRuntime {
    * would be a fourth private copy of the same probe.
    */
   readonly desktopWindowId: string | null;
+  /**
+   * Router-bound nested-focus commit supplied by the active React consumer.
+   * The coordinator is shared outside React, so server-pushed foreground tabs
+   * must receive this seam through the swappable runtime instead of reaching
+   * for a module-global router.
+   */
+  readonly navigateNested: NavigateNestedFocus;
   readonly openTransport: (hostId: string) => DurableStreamTransport;
 }
 
@@ -713,6 +721,10 @@ function createBrowserSessionsCoordinator(args: {
         pendingPreviews,
         browserView,
         electronTabs,
+        // Unlike `browserView`, navigation does not own stream resources and
+        // therefore must follow the currently active consumer without forcing
+        // a reconnect when that consumer or its router callback changes.
+        navigateNested: runtime.navigateNested,
         sendClientFrame: (response) => {
           if (
             actionChannel !== channel ||
@@ -901,6 +913,7 @@ function handleBrowserSessionsFrame(args: {
   readonly pendingPreviews: PendingRequests<BrowserTabPreview>;
   readonly browserView: BrowserViewBridge | null;
   readonly electronTabs: ElectronTabs;
+  readonly navigateNested: NavigateNestedFocus;
   readonly sendClientFrame: (frame: BrowserSessionsClientFrame) => void;
 }): void {
   const frame = args.frame;
@@ -930,6 +943,7 @@ function handleBrowserSessionsFrame(args: {
         pendingOpens: args.pendingOpens,
         pendingPreviews: args.pendingPreviews,
         browserView: args.browserView,
+        navigateNested: args.navigateNested,
         sendClientFrame: args.sendClientFrame,
       });
   }
@@ -980,6 +994,7 @@ function handleBrowserSessionsSubsystemFrame(args: {
   readonly pendingOpens: PendingRequests<BrowserTabIdentity>;
   readonly pendingPreviews: PendingRequests<BrowserTabPreview>;
   readonly browserView: BrowserViewBridge | null;
+  readonly navigateNested: NavigateNestedFocus;
   readonly sendClientFrame: (frame: BrowserSessionsClientFrame) => void;
 }): void {
   const frame = args.frame;
@@ -1019,6 +1034,7 @@ function handleBrowserSessionsSubsystemFrame(args: {
         sessionId: frame.sessionId,
         tabId: frame.tabId,
         source: frame.source,
+        navigateNested: args.navigateNested,
       });
       return;
     case "capturePrimaryProfile":

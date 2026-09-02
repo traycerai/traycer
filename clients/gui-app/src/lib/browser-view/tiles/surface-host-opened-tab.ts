@@ -4,17 +4,16 @@
  *
  * The `tabOpened` frame arrives on the browser-sessions coordinator, which is
  * module-global and outside React, so this file opens through the non-React
- * `openTileWithNavigation` seam. Everything about WHERE the tile lands is the
- * resolver's; what stays here is the part the resolver cannot see: the
- * `agentTabSurfacing` gate and the PiP suppression rules (C9).
+ * `openTileWithNavigation` seam using the active React consumer's injected
+ * router commit. Everything about WHERE the tile lands is the resolver's;
+ * what stays here is the part the resolver cannot see: the `agentTabSurfacing`
+ * gate and the PiP suppression rules (C9).
  */
 import type { BrowserTabOpenedSource } from "@traycer/protocol/host/browser/contracts";
 import { isMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
-import {
-  commitWithoutNavigation,
-  openTileWithNavigation,
-} from "@/lib/canvas/tile-open/open-tile";
+import { openTileWithNavigation } from "@/lib/canvas/tile-open/open-tile";
+import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
@@ -146,6 +145,7 @@ export interface HostOpenedTabSurfacing {
   readonly sessionId: string;
   readonly tabId: string;
   readonly source: BrowserTabOpenedSource;
+  readonly navigateNested: NavigateNestedFocus;
 }
 
 export function surfaceHostOpenedTab(input: HostOpenedTabSurfacing): void {
@@ -200,12 +200,7 @@ export function surfaceHostOpenedTab(input: HostOpenedTabSurfacing): void {
       // real source when the analytics schema is next opened.
       source: "direct_ui",
     },
-    // The route is deliberately not written: the live router is created inside
-    // `<TraycerApp>` and exported nowhere, so a module-global caller has none.
-    // That matches what the agent path already did (mutate the store and stop);
-    // every surface that DOES have a router keeps committing through
-    // `navigateNested`.
-    commitWithoutNavigation,
+    input.navigateNested,
     { createTab: false, pipOrigin: "agent" },
   );
 }

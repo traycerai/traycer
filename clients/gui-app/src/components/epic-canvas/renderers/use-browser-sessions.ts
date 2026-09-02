@@ -10,6 +10,7 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
+import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
@@ -87,6 +88,7 @@ export function useBrowserSessions(
   args: UseBrowserSessionsArgs,
 ): BrowserSessionsHookResult {
   const { hostId, epicId, browserView, localHostId, desktopWindowId } = args;
+  const navigateNested = useEpicNestedFocusNavigation();
   const hostEntry = useHostDirectoryEntry(hostId ?? UNKNOWN_HOST_PLACEHOLDER);
   const transportReady =
     args.hostClient !== null &&
@@ -118,7 +120,13 @@ export function useBrowserSessions(
         consumerId,
         epicId,
         owner: selectedOwner,
-        runtime: { browserView, localHostId, desktopWindowId, openTransport },
+        runtime: {
+          browserView,
+          localHostId,
+          desktopWindowId,
+          navigateNested,
+          openTransport,
+        },
         createIfMissing: transportReady,
       }),
   );
@@ -134,6 +142,7 @@ export function useBrowserSessions(
       browserView,
       localHostId,
       desktopWindowId,
+      navigateNested,
       openTransport,
     });
   }, [
@@ -142,6 +151,7 @@ export function useBrowserSessions(
     coordinatorKey,
     desktopWindowId,
     localHostId,
+    navigateNested,
     openTransport,
   ]);
 

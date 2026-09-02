@@ -1,5 +1,7 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserTabOpenedSource } from "@traycer/protocol/host/browser/contracts";
+import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
+import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
 import {
   hostOpenedTabSuppressReason,
   isEpicSurfaceVisible,
@@ -38,6 +40,14 @@ const CHAT_SEED: EpicCanvasTileRef = {
   name: "Chat",
   hostId: HOST,
 };
+
+let lastNavigationTarget: NestedFocusTarget | null = null;
+const navigateNested = vi.fn<NavigateNestedFocus>(
+  (_epicId, _tabId, prepare) => {
+    lastNavigationTarget = prepare();
+    return lastNavigationTarget;
+  },
+);
 
 function seedCanvasWithTile(tile: EpicCanvasTileRef): string {
   const canvas = createSingleTileCanvas(tile);
@@ -80,6 +90,7 @@ function surface(overrides: {
     sessionId: SESSION,
     tabId: overrides.tabId ?? "tab-new",
     source: overrides.source,
+    navigateNested,
   });
 }
 
@@ -141,6 +152,8 @@ describe("hostOpenedTabSuppressReason", () => {
 
 describe("surfaceHostOpenedTab", () => {
   beforeEach(() => {
+    navigateNested.mockClear();
+    lastNavigationTarget = null;
     useEpicCanvasStore.setState({
       canvasByTabId: {},
       tabsById: {},
@@ -164,6 +177,41 @@ describe("surfaceHostOpenedTab", () => {
   it("surfaces a page open even while surfacing is off", () => {
     seedCanvasWithTile(CHAT_SEED);
     surface({ source: "page" });
+    expect(tileCount()).toBe(2);
+  });
+
+  it("commits a host page open through the nested-focus navigator", () => {
+    const paneId = seedCanvasWithTile(
+      makeBrowserSessionTileRef({
+        hostId: HOST,
+        sessionId: SESSION,
+        tabId: "tab-source",
+      }),
+    );
+
+    surface({ source: "page" });
+
+    expect(navigateNested).toHaveBeenCalledTimes(1);
+    expect(navigateNested).toHaveBeenCalledWith(
+      EPIC,
+      VIEW_TAB_ID,
+      expect.any(Function),
+    );
+    expect(lastNavigationTarget).toEqual({
+      paneId,
+      tileInstanceId: expect.any(String),
+    });
+    const targetInstanceId = lastNavigationTarget?.tileInstanceId;
+    if (targetInstanceId === undefined) {
+      throw new Error("expected a focused popup tile");
+    }
+    expect(canvas().activePaneId).toBe(paneId);
+    expect(panes()[0]?.activeTabId).toBe(targetInstanceId);
+    expect(canvas().tilesByInstanceId[targetInstanceId]).toMatchObject({
+      hostId: HOST,
+      sessionId: SESSION,
+      tabId: "tab-new",
+    });
     expect(tileCount()).toBe(2);
   });
 
