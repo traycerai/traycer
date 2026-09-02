@@ -292,10 +292,10 @@ describe("executeTileOpen", () => {
     installPrepareSpies();
 
     run({ kind: "pip", tabId: TAB_ID });
+    // Asserted rather than optional-chained: a PiP that stopped being
+    // requested at all must not read as "stayed silent".
     expect(convertBrowserTabToPip).toHaveBeenCalledOnce();
-    const manualArgs = vi.mocked(convertBrowserTabToPip).mock.calls[0]?.[0];
-    if (manualArgs === undefined) throw new Error("expected a manual PiP call");
-    manualArgs.onError("boom");
+    vi.mocked(convertBrowserTabToPip).mock.calls[0][0].onError("boom");
     expect(toast.error).toHaveBeenCalledWith("boom");
 
     vi.mocked(toast.error).mockClear();
@@ -310,12 +310,8 @@ describe("executeTileOpen", () => {
       // about background automation is the regression this pins (L4).
       pipOrigin: "agent",
     });
-    // Asserted, not optional-chained: a PiP that stopped being requested at
-    // all would otherwise read as "stayed silent".
     expect(convertBrowserTabToPip).toHaveBeenCalledTimes(2);
-    const agentArgs = vi.mocked(convertBrowserTabToPip).mock.calls[1]?.[0];
-    if (agentArgs === undefined) throw new Error("expected an agent PiP call");
-    agentArgs.onError("boom");
+    vi.mocked(convertBrowserTabToPip).mock.calls[1][0].onError("boom");
     expect(toast.error).not.toHaveBeenCalled();
   });
 
