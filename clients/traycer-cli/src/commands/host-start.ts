@@ -48,6 +48,11 @@ import {
   prepareCrashReportsDir,
 } from "../host/crash-diagnostics";
 import { hostHomeDir } from "../store/paths";
+import {
+  HOST_CRASH_REPORT_TIMEOUT_MS,
+  reportHostCrashToSentry,
+  type HostCrashTelemetry,
+} from "../host/crash-telemetry";
 import { consumeHostStartAdoption } from "../host/host-start-adoption";
 import {
   hasActionableStopIntent,
@@ -457,6 +462,13 @@ export interface RunHostStartDeps extends ResolveHostStartTargetDeps {
   // crash-diagnostics tests), a small number exercises exhaustion without
   // paying for five.
   readonly maxRelaunches: number;
+  // Fleet telemetry for a crash (nonzero exit or fatal signal): the same fact
+  // the `phase=crashed` marker records, sent to Sentry keyed by host id so
+  // silent Windows fast-fails are countable across hosts. Injected so tests
+  // assert the payload without a Sentry client, and so the default's bounded
+  // pid.json read never touches a real host home. Best-effort: the marker is
+  // written first and the relaunch does not wait on the network.
+  readonly reportHostCrash: (telemetry: HostCrashTelemetry) => Promise<void>;
 }
 
 const defaultRunDeps: RunHostStartDeps = {
@@ -567,6 +579,7 @@ const defaultRunDeps: RunHostStartDeps = {
   hasStopIntent: hasActionableStopIntent,
   readStopIntentIdentity,
   maxRelaunches: MAX_CONSECUTIVE_RELAUNCHES,
+  reportHostCrash: reportHostCrashToSentry,
 };
 
 // Long-running entrypoint invoked by the OS service manager. Resolves
@@ -1904,6 +1917,7 @@ export async function runHostStart(
       attemptId,
       supervisorPid,
       bundle: target.executable,
+      hostVersion: target.record.version,
       probeObservation,
       childSpawnedAtMs,
       stderrTee,
@@ -2269,6 +2283,9 @@ async function persistChildExit(input: {
   readonly attemptId: string;
   readonly supervisorPid: number;
   readonly bundle: string;
+  // Version from the install record the child was spawned from; the crash
+  // telemetry tags it so a fleet count can be split by host version.
+  readonly hostVersion: string;
   readonly probeObservation: Promise<ProbeObservation> | null;
   readonly childSpawnedAtMs: number;
   readonly stderrTee: StderrTee;
@@ -2332,7 +2349,7 @@ async function persistChildExit(input: {
         null,
       );
     }
-    return persistTerminalMarker({
+    const outcome = persistTerminalMarker({
       deps,
       logger,
       environment,
@@ -2380,6 +2397,23 @@ async function persistChildExit(input: {
       // sentinel do, and both are already consulted downstream.
       abnormal: true,
     });
+    // Same gate as the "Host crash diagnostics" line above: a decodable fatal
+    // signal is a crash; a forwarded shutdown signal is not, and a bare
+    // SIGKILL cannot be told from an operator's kill here.
+    if (fatalMeaning !== null) {
+      await boundedCrashTelemetry(input, {
+        environment,
+        attemptId,
+        supervisorPid,
+        hostVersion: input.hostVersion,
+        exitCode: null,
+        signal,
+        exitMeaning: fatalMeaning,
+        hasDiagnosticReport: crashReport !== null,
+        uptimeMs: Math.max(0, Date.now() - input.childSpawnedAtMs),
+      });
+    }
+    return outcome;
   }
   if (code === null || code === 0) {
     logger.info("Host child exited cleanly", {
@@ -2438,7 +2472,7 @@ async function persistChildExit(input: {
       null,
     );
   }
-  return persistTerminalMarker({
+  const outcome = persistTerminalMarker({
     deps,
     logger,
     environment,
@@ -2465,6 +2499,42 @@ async function persistChildExit(input: {
     exitCode: code,
     abnormal: true,
   });
+  // After the marker, never before it: the marker is readiness authority and
+  // a telemetry stall must not delay it. Every nonzero exit is reported, not
+  // only the decodable ones - an undecoded code is still a crash to count.
+  await boundedCrashTelemetry(input, {
+    environment,
+    attemptId,
+    supervisorPid,
+    hostVersion: input.hostVersion,
+    exitCode: code,
+    signal: null,
+    exitMeaning: exitMeaning ?? null,
+    hasDiagnosticReport: crashReport !== null,
+    uptimeMs: Math.max(0, Date.now() - input.childSpawnedAtMs),
+  });
+  return outcome;
+}
+
+/**
+ * Crash telemetry bounded by {@link HOST_CRASH_REPORT_TIMEOUT_MS} and never
+ * rejecting, for the same reason as {@link boundedCrashReportScan}: this runs
+ * on the path to `deps.exit` / the relaunch, where a stalled pid.json read or
+ * a throwing injected dependency would otherwise cost the relaunch itself.
+ */
+function boundedCrashTelemetry(
+  input: { readonly deps: RunHostStartDeps },
+  telemetry: HostCrashTelemetry,
+): Promise<void> {
+  return Promise.race([
+    Promise.resolve()
+      .then(() => input.deps.reportHostCrash(telemetry))
+      .catch(() => undefined),
+    new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, HOST_CRASH_REPORT_TIMEOUT_MS);
+      timer.unref?.();
+    }),
+  ]);
 }
 
 /**

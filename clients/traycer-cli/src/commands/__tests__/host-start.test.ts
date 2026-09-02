@@ -37,6 +37,7 @@ import {
 } from "@traycer/protocol/host/lifecycle-constants";
 import type { Environment } from "../../runner/environment";
 import type { StopIntentIdentity } from "../../host/stop-intent";
+import type { HostCrashTelemetry } from "../../host/crash-telemetry";
 import { hostHomeDir } from "../../store/paths";
 import { withDevDesktopSlotAsync as withDevDesktopSlot } from "@traycer-clients/shared/test-fixtures/dev-desktop-slot";
 import type { ProbeMarker } from "@traycer-clients/shared/host-lifecycle";
@@ -241,6 +242,13 @@ interface Recorded {
   findCrashReportHangs: boolean;
   /** When set, findCrashReport rejects (must not skip marker/exit). */
   findCrashReportRejects: boolean;
+  // Fleet crash telemetry (`deps.reportHostCrash`) observations. Injected so
+  // suites never touch a real Sentry client or a real pid.json.
+  readonly crashReports: HostCrashTelemetry[];
+  /** When set, reportHostCrash never resolves (report-timeout path). */
+  reportHostCrashHangs: boolean;
+  /** When set, reportHostCrash rejects (must not skip marker/exit). */
+  reportHostCrashRejects: boolean;
   lastStderrTee: MemoryStderrTee | null;
   readonly stderrTees: MemoryStderrTee[];
   readonly loggerErrors: Array<{
@@ -307,6 +315,9 @@ function makeRunStubs(
     findCrashReportResult: null,
     findCrashReportHangs: false,
     findCrashReportRejects: false,
+    crashReports: [],
+    reportHostCrashHangs: false,
+    reportHostCrashRejects: false,
     lastStderrTee: null,
     stderrTees: [],
     loggerErrors: [],
@@ -460,6 +471,18 @@ function makeRunStubs(
         });
       }
       return recorded.findCrashReportResult;
+    },
+    reportHostCrash: async (telemetry) => {
+      recorded.sequence.push("report-host-crash");
+      if (recorded.reportHostCrashRejects) {
+        throw new Error("injected reportHostCrash failure");
+      }
+      if (recorded.reportHostCrashHangs) {
+        return new Promise<void>(() => {
+          // Never resolves — exercises the report-timeout race.
+        });
+      }
+      recorded.crashReports.push(telemetry);
     },
     createStderrTee: (_environment: Environment): StderrTee => {
       const tee = new MemoryStderrTee();
@@ -1188,6 +1211,26 @@ describe("runHostStart - signal/exit propagation", () => {
     expect(crashed?.fields.report).toBe("report.oom.json");
     expect(String(crashed?.fields.stderrTail)).toContain("FATAL ERROR");
     expect(String(crashed?.fields.stderrTail)).toContain("\\n");
+
+    // Fleet crash telemetry: exactly one report, carrying the decoded exit
+    // status and the INSTALL RECORD's version (not a possibly-different
+    // running host version, which only identity resolution would know).
+    expect(recorded.crashReports).toHaveLength(1);
+    const report = recorded.crashReports[0]!;
+    expect(report.exitCode).toBe(3221226505);
+    expect(report.signal).toBeNull();
+    expect(report.exitMeaning).toContain("0xC0000409");
+    expect(report.hasDiagnosticReport).toBe(true);
+    expect(report.hostVersion).toBe(sampleRecord(exec).version);
+    expect(report.attemptId).toBe(crashed?.fields.attemptId);
+    expect(report.uptimeMs).toBeGreaterThanOrEqual(0);
+    expect(report.environment).toBe("production");
+    // Sent AFTER the terminal marker, never before - the marker is
+    // readiness authority and must not wait on telemetry.
+    const markerIndex = recorded.sequence.indexOf("terminal-marker:crashed");
+    const reportIndex = recorded.sequence.indexOf("report-host-crash");
+    expect(markerIndex).toBeGreaterThanOrEqual(0);
+    expect(reportIndex).toBeGreaterThan(markerIndex);
   });
 
   it("enriches a killed+SIGABRT marker, logs Host crash diagnostics, and leaves SIGTERM bare", async () => {
@@ -1246,6 +1289,13 @@ describe("runHostStart - signal/exit propagation", () => {
       expect(diag).toBeDefined();
       expect(String(diag?.fields.exitMeaning)).toContain("SIGABRT");
       expect(diag?.fields.report).toBe("report.abrt.json");
+      // A decodable fatal signal is reported to the fleet exactly like a
+      // decodable nonzero exit: same call, signal-shaped telemetry.
+      expect(recorded.crashReports).toHaveLength(1);
+      const abrtReport = recorded.crashReports[0]!;
+      expect(abrtReport.signal).toBe("SIGABRT");
+      expect(abrtReport.exitCode).toBeNull();
+      expect(abrtReport.exitMeaning).toContain("SIGABRT");
     }
 
     {
@@ -1270,6 +1320,8 @@ describe("runHostStart - signal/exit propagation", () => {
           (e) => e.message === "Host crash diagnostics",
         ),
       ).toBe(false);
+      // A forwarded SIGTERM is not a crash - no fleet report either.
+      expect(recorded.crashReports).toHaveLength(0);
     }
   });
 
@@ -1467,6 +1519,73 @@ describe("runHostStart - signal/exit propagation", () => {
     expect(exited?.fields.stderrTail).toBeUndefined();
     expect(recorded.findCrashReportCalls).toHaveLength(0);
   });
+
+  it("sends no fleet crash report on a clean exit", async () => {
+    const exec = "/opt/traycer/host/install/traycer-host";
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          withChildExit(deps, child, 0, null),
+        ),
+      recorded,
+    );
+    expect(recorded.exited).toBe(0);
+    expect(recorded.crashReports).toHaveLength(0);
+  });
+
+  it("still writes the crashed marker and exits with the child's code when reportHostCrash rejects", async () => {
+    // The report is best-effort: `boundedCrashTelemetry` swallows a
+    // rejection so a broken injected dependency never costs the marker or
+    // the relaunch that follows it.
+    const exec = "/opt/traycer/host/install/traycer-host";
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    recorded.reportHostCrashRejects = true;
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          withChildExit(deps, child, 7, null),
+        ),
+      recorded,
+    );
+
+    expect(recorded.exited).toBe(7);
+    const crashed = recorded.markers.find((m) => m.phase === "crashed");
+    expect(crashed).toBeDefined();
+    expect(crashed?.fields.exitCode).toBe(7);
+    // The reject means nothing ever landed in the recorder, but the
+    // supervisor still finished the attempt cleanly.
+    expect(recorded.crashReports).toHaveLength(0);
+  });
+
+  it("still writes the crashed marker and exits when reportHostCrash never resolves", async () => {
+    // Bounded by HOST_CRASH_REPORT_TIMEOUT_MS (1.5s), mirroring how the
+    // findCrashReport scan-timeout case above is exercised: real timers, a
+    // generous test timeout, and an assertion that the run actually
+    // completes rather than hanging on the injected dependency.
+    const exec = "/opt/traycer/host/install/traycer-host";
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    recorded.reportHostCrashHangs = true;
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          withChildExit(deps, child, 7, null),
+        ),
+      recorded,
+    );
+
+    expect(recorded.exited).toBe(7);
+    const crashed = recorded.markers.find((m) => m.phase === "crashed");
+    expect(crashed).toBeDefined();
+    expect(crashed?.fields.exitCode).toBe(7);
+    // The hang means the report never actually landed in the recorder.
+    expect(recorded.crashReports).toHaveLength(0);
+  }, 10_000);
 
   it("spawn() throw is translated into HOST_SPAWN_FAILED + exit 66", async () => {
     const exec = "/opt/traycer/host/install/traycer-host";
