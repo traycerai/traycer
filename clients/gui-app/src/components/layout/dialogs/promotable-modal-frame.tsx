@@ -7,6 +7,8 @@ import {
   dialogContentInertToPointer,
   interactionStartedOnOverlay,
 } from "@/components/layout/dialogs/dialog-outside-guard";
+import { useComposedRefs } from "radix-ui/internal";
+import { useRegisterBrowserOverlay } from "@/lib/browser-view/tiles/use-register-browser-overlay";
 
 interface PromotableModalFrameProps {
   readonly icon: ReactNode;
@@ -50,6 +52,8 @@ export function PromotableModalFrame(
 ): ReactNode {
   const overlayRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
+  const registerOverlayRef = useRegisterBrowserOverlay<HTMLDivElement>();
+  const composedContentRef = useComposedRefs(contentRef, registerOverlayRef);
   // Sampled in the overlay's onPointerDown: while a nested layer (the
   // tier-filter/sort dropdown) is open, the dialog Content is pointer-events:none,
   // so the overlay is the hit-target for EVERY click-out - and the dialog's
@@ -89,7 +93,7 @@ export function PromotableModalFrame(
         }}
       />
       <DialogPrimitive.Content
-        ref={contentRef}
+        ref={composedContentRef}
         data-slot="dialog-content"
         aria-describedby={undefined}
         className={cn(FRAME_CONTENT_CLASS, props.contentClassName)}

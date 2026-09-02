@@ -72,6 +72,7 @@ import type {
   DisplayTopology,
   FileSaveInput,
   FileSaveResult,
+  HostKeyPinMismatch,
   InstalledFont,
   PendingCertificateError,
   ProcessMetricsSnapshot,
@@ -90,6 +91,7 @@ export type {
   CertificateTrustScope,
   DisplaySnapshot,
   DisplayTopology,
+  HostKeyPinMismatch,
   PendingCertificateError,
   ProcessMetricsSnapshot,
   TrustedCertificateEntry,
@@ -135,6 +137,7 @@ import type {
   GlobalShortcutStatus,
 } from "../ipc-contracts/global-shortcuts-types";
 import type {
+  DesktopAuthSessionSetResult,
   DesktopAuthSessionSnapshot,
   DesktopRuntimePlatform,
   DesktopTopLevelMenuId,
@@ -460,6 +463,11 @@ export interface DesktopPlatformBridge {
       dispose: () => void;
     };
   };
+  hostKeyPin: {
+    onMismatch(handler: (entry: HostKeyPinMismatch) => void): {
+      dispose: () => void;
+    };
+  };
   display: {
     list(): Promise<DisplayTopology>;
     onTopologyChange(
@@ -622,7 +630,9 @@ export interface DesktopWindowsBridge {
   };
   authSession: {
     get(): Promise<DesktopAuthSessionSnapshot>;
-    set(snapshot: DesktopAuthSessionSnapshot): Promise<void>;
+    set(
+      snapshot: DesktopAuthSessionSnapshot,
+    ): Promise<DesktopAuthSessionSetResult>;
     onChange(handler: (snapshot: DesktopAuthSessionSnapshot) => void): {
       dispose: () => void;
     };

@@ -49,6 +49,11 @@ export function useEditorOpenForClient(
       mutationKey: editorMutationKeys.openPaths(),
       onSuccess: (_response, variables) => {
         if (intent !== "workspace") return;
+        // "system" (editor.openPaths 1.1) is a FILE-open target - PDF
+        // surfaces routing to the OS default app. A workspace root always
+        // opens in a real editor, so this narrow is a type-level formality
+        // that keeps the analytics contract's editor enum honest.
+        if (variables.editorId === "system") return;
         Analytics.getInstance().track(AnalyticsEvent.WorkspaceOpenedInEditor, {
           source: "direct_ui",
           editor: variables.editorId,

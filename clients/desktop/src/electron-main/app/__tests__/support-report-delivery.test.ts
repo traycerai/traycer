@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { existsSync, statSync, utimesSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { REPORT_LOG_TAIL_MAX_BYTES } from "@traycer-clients/shared/support/image-attachment-guards";
 
 interface CapturedAttachment {
@@ -1389,5 +1390,43 @@ describe("DesktopSupportService.saveDiagnosticBundle", () => {
     expect(bundle).not.toHaveProperty("images");
     expect(raw).not.toContain("secret-screen.png");
     expect(raw).not.toContain("image/png");
+  });
+  it("writes the bundle owner-only and keeps a bundle saved moments ago", async () => {
+    // The bundle lands in a shared `/tmp` holding the desktop and host log
+    // tails and the browser trace, and every save used to leave its own
+    // directory behind for the lifetime of the machine's `/tmp`.
+    //
+    // The sweep is age-bounded, though: a bundle is REVEALED to the user so
+    // they can attach it to a ticket, so saving a second one must not pull the
+    // first out from under an open file manager window.
+    const service = buildService(null);
+    await service.freezeEvidence(KEY, null);
+
+    const first = await service.saveDiagnosticBundle(FORM, KEY);
+    expect(statSync(first.path).mode & 0o777).toBe(0o600);
+
+    const second = await service.saveDiagnosticBundle(FORM, KEY);
+    expect(second.path).not.toBe(first.path);
+    expect(existsSync(first.path)).toBe(true);
+    expect(existsSync(second.path)).toBe(true);
+  });
+
+  it("erases a bundle a previous run left behind, not just this run's", async () => {
+    // The bound has to survive a relaunch: an in-memory "last directory"
+    // field only ever cleans up within one process lifetime, so every restart
+    // orphaned another bundle in `/tmp` forever.
+    const orphan = await mkdtemp(join(tmpdir(), "traycer-diagnostic-bundle-"));
+    await writeFile(join(orphan, "report.json"), "{}", "utf8");
+    // Aged past the retention window, which is what makes it an ORPHAN rather
+    // than a bundle the user is still holding on to.
+    const stale = new Date(Date.now() - 25 * 60 * 60_000);
+    utimesSync(orphan, stale, stale);
+
+    const service = buildService(null);
+    await service.freezeEvidence(KEY, null);
+    const saved = await service.saveDiagnosticBundle(FORM, KEY);
+
+    expect(existsSync(orphan)).toBe(false);
+    expect(existsSync(saved.path)).toBe(true);
   });
 });

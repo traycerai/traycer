@@ -1,31 +1,19 @@
-import {
-  type BrowserCdpResult,
-  type BrowserSessionsClientFrame,
-  type BrowserSessionsServerFrame,
+import type {
+  BrowserCdpResult,
+  BrowserSessionsClientFrame,
+  BrowserSessionsServerFrame,
 } from "@traycer/protocol/host/browser/contracts";
 import {
-  type BrowserViewAttachSurface,
+  browserViewNativeTabKeyId,
   type BrowserViewNativeTabCapability,
   type BrowserViewNativeTabKey,
   type BrowserViewNativeTabStatusChange,
-  type BrowserViewBridge,
 } from "@traycer-clients/shared/platform/browser-view";
-import { appLogger } from "@/lib/logger";
-import { compositeKey } from "../tiles/browser-view-keys";
-import { ignoreError } from "../ignore-error";
-import {
-  type ElectronTabSurfaceLease,
-  nativeTabKey,
-  publishElectronTabBinding,
-  removeOwnedElectronTabBinding,
-  removeOwnedElectronTabBindings,
-} from "./electron-tab-directory";
-
-export { useElectronTabBindingOnHost } from "./electron-tab-directory";
-export type {
-  ElectronTabBinding,
-  ElectronTabSurfaceLease,
-} from "./electron-tab-directory";
+import type {
+  BrowserViewElectronTabCdpDispatch,
+  BrowserViewEnsureTab,
+} from "../browser-view/browser-view-port";
+import { describeLogError, log } from "../app/logger";
 
 type CreateElectronTabFrame = Extract<
   BrowserSessionsServerFrame,
@@ -43,31 +31,70 @@ type CdpRequestFrame = Extract<
   BrowserSessionsServerFrame,
   { readonly kind: "cdpRequest" }
 >;
-interface ElectronTabsOptions {
+
+/**
+ * The native surface this lifecycle drives, which is the `BrowserViewManager`
+ * in production. Declared structurally so the suites drive the real frame flow
+ * against a recording double instead of an Electron app.
+ */
+export interface BrowserSessionsTabPort {
+  ensureTab(
+    windowId: string,
+    input: BrowserViewEnsureTab,
+  ): Promise<BrowserViewNativeTabCapability>;
+  acceptTab(input: BrowserViewNativeTabCapability): Promise<void>;
+  releaseTab(input: BrowserViewNativeTabCapability): Promise<boolean>;
+  dispatchElectronTabCdp(
+    input: BrowserViewElectronTabCdpDispatch,
+  ): Promise<BrowserCdpResult>;
+  onNativeTabStatusChange(
+    listener: (change: BrowserViewNativeTabStatusChange) => void,
+  ): () => void;
+}
+
+export interface ElectronTabsOptions {
   readonly hostId: string;
-  readonly native: BrowserViewBridge | null;
+  /** The window this stream belongs to; every native tab is born into it. */
+  readonly windowId: string;
+  readonly tabs: BrowserSessionsTabPort;
+  /**
+   * The live stream incarnation, read at call time rather than captured: a
+   * birth outlives no connection, but the value is minted and dropped by the
+   * stream around this layer. The seed's jar write is priced against it,
+   * exactly as an observed frame is.
+   */
+  readonly connectionId: () => string | null;
   readonly sendFrame: (frame: BrowserSessionsClientFrame) => void;
+  /**
+   * The renderer's half of a native tab: identity only, never the seed. It is
+   * what lets the renderer bind a surface to a tab main created.
+   */
+  readonly onTabBound: (capability: BrowserViewNativeTabCapability) => void;
+  readonly onTabReleased: (capability: BrowserViewNativeTabCapability) => void;
 }
 
 interface ElectronTabBirth {
   readonly create: CreateElectronTabFrame;
-  readonly native: BrowserViewBridge;
   readonly settled: Promise<void>;
   provisioned: BrowserViewNativeTabCapability | null;
   accepted: ElectronTabAcceptedFrame | null;
   cancelled: boolean;
   activated: boolean;
   published: boolean;
-  activeSurface: {
-    readonly token: symbol;
-    readonly input: BrowserViewAttachSurface;
-  } | null;
-  surfaceMutation: Promise<void>;
   lastStatus: BrowserViewNativeTabStatusChange | null;
 }
 
 export interface ElectronTabs {
-  handleFrame(frame: BrowserSessionsServerFrame): boolean;
+  handleFrame(frame: BrowserSessionsServerFrame): void;
+  /**
+   * Is the guest behind `tabId` on screen right now? `null` when this stream
+   * owns no native guest for it, which is the ordinary answer for a tab that
+   * lives on the host's own side.
+   *
+   * The reading is the manager's `viewed`, the same fact `electronTabState`
+   * reports: a tile bound to this guest and visible.
+   */
+  isTabViewed(tabId: string): boolean | null;
   connect(): void;
   disconnect(): void;
   dispose(): void;
@@ -104,18 +131,24 @@ function acceptedProvisioning(
 }
 
 /**
- * Owns Electron births for one durable browser.sessions lifecycle. Native
- * creation settles first; host acceptance authorizes publication.
+ * Owns Electron births for one durable `browser.sessions` lifecycle, in the
+ * MAIN process.
+ *
+ * This is the renderer's `electron-tabs.ts` with the IPC taken out of the
+ * middle: `createElectronTab` - the frame that carries `seedStorageState` - is
+ * consumed here and handed straight to the native manager, so the seed never
+ * exists in a renderer heap and no IPC channel can be asked for one. The
+ * renderer keeps the surface directory, fed by `tabBound` / `tabReleased`,
+ * which carry identity and nothing else.
  */
 export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
-  const owner = Symbol("electron-tabs");
   let disposed = false;
   let connected = true;
   let connectionGeneration = 0;
   const birthByRequestId = new Map<string, ElectronTabBirth>();
   const requestIdByTabKey = new Map<string, string>();
   const releaseByIncarnation = new Map<string, Promise<void>>();
-  let disposeNativeSubscriptions: (() => void) | null = null;
+  let disposeStatusSubscription: (() => void) | null = null;
 
   const isCurrentConnection = (generation: number): boolean =>
     !disposed && connected && generation === connectionGeneration;
@@ -127,26 +160,28 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
     if (!disposed && connected) sendTabState(options, birth, change);
   };
 
+  const nativeKeyFor = (
+    birth: ElectronTabBirth,
+    registrationId: string,
+  ): BrowserViewNativeTabCapability => ({
+    hostId: options.hostId,
+    sessionId: birth.create.sessionId,
+    tabId: birth.create.tabId,
+    registrationId,
+  });
+
   async function releaseBirth(birth: ElectronTabBirth): Promise<void> {
     if (birth.provisioned === null) return;
     const registrationId = birth.provisioned.registrationId;
-    const tabKey = nativeTabKey(
-      options.hostId,
-      birth.create.sessionId,
-      birth.create.tabId,
-    );
-    const incarnationKey = compositeKey(tabKey, registrationId);
+    const capability = nativeKeyFor(birth, registrationId);
+    const tabKey = browserViewNativeTabKeyId(capability);
+    const incarnationKey = `${tabKey}:${registrationId}`;
     const existing = releaseByIncarnation.get(incarnationKey);
     if (existing !== undefined) return existing;
-    const pending = birth.native
-      .releaseTab({
-        hostId: options.hostId,
-        sessionId: birth.create.sessionId,
-        tabId: birth.create.tabId,
-        registrationId,
-      })
+    const pending = options.tabs
+      .releaseTab(capability)
       .then(() => {
-        removeOwnedElectronTabBinding(owner, tabKey, registrationId);
+        options.onTabReleased(capability);
         if (birthByRequestId.get(birth.create.requestId) === birth) {
           birthByRequestId.delete(birth.create.requestId);
         }
@@ -163,71 +198,75 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
     return pending;
   }
 
-  const retireBirth = (birth: ElectronTabBirth): void => {
+  /**
+   * Drops a birth's bookkeeping. `notifyReleased` is explicit because
+   * `rollbackUnacceptedBirth` follows this with `releaseBirth`, which emits
+   * `onTabReleased` itself once the tab is actually released - so notifying
+   * here too sent the same `registrationId` twice on every disconnect,
+   * dispose and stale-provision rollback.
+   */
+  const retireBirth = (
+    birth: ElectronTabBirth,
+    notifyReleased: boolean,
+  ): void => {
     birth.cancelled = true;
-    const tabKey = nativeTabKey(
-      options.hostId,
-      birth.create.sessionId,
-      birth.create.tabId,
-    );
+    const tabKey = browserViewNativeTabKeyId({
+      hostId: options.hostId,
+      sessionId: birth.create.sessionId,
+      tabId: birth.create.tabId,
+    });
     if (birthByRequestId.get(birth.create.requestId) === birth) {
       birthByRequestId.delete(birth.create.requestId);
     }
     if (requestIdByTabKey.get(tabKey) === birth.create.requestId) {
       requestIdByTabKey.delete(tabKey);
     }
-    if (birth.provisioned !== null) {
-      removeOwnedElectronTabBinding(
-        owner,
-        tabKey,
-        birth.provisioned.registrationId,
+    if (notifyReleased && birth.provisioned !== null) {
+      options.onTabReleased(
+        nativeKeyFor(birth, birth.provisioned.registrationId),
       );
     }
   };
 
   function rollbackUnacceptedBirth(birth: ElectronTabBirth): void {
     if (birthStatus(birth) === "accepted") return;
-    retireBirth(birth);
-    void releaseBirth(birth).catch(ignoreError);
+    // `releaseBirth` owns the notification here: it fires after the tab is
+    // genuinely gone, which is what a consumer of `tabReleased` wants.
+    retireBirth(birth, false);
+    void releaseBirth(birth).catch(() => undefined);
   }
 
-  const ensureNativeSubscriptions = (native: BrowserViewBridge): void => {
-    if (disposeNativeSubscriptions !== null) return;
-    const statusSubscription = native.onNativeTabStatusChange((change) => {
-      const birth = findProvisionedBirth(
-        birthByRequestId.values(),
-        change.hostId,
-        change.sessionId,
-        change.tabId,
-      );
-      if (
-        birth === null ||
-        birth.provisioned?.registrationId !== change.registrationId
-      ) {
-        return;
-      }
-      birth.lastStatus = change;
-      sendCurrentTabState(birth, change);
-    });
-    disposeNativeSubscriptions = () => {
-      statusSubscription.dispose();
-    };
+  const ensureStatusSubscription = (): void => {
+    if (disposeStatusSubscription !== null) return;
+    disposeStatusSubscription = options.tabs.onNativeTabStatusChange(
+      (change) => {
+        const birth = findProvisionedBirth(
+          birthByRequestId.values(),
+          options.hostId,
+          change.sessionId,
+          change.tabId,
+        );
+        if (
+          birth === null ||
+          birth.provisioned?.registrationId !== change.registrationId
+        ) {
+          return;
+        }
+        birth.lastStatus = change;
+        sendCurrentTabState(birth, change);
+      },
+    );
   };
 
   const activateAcceptedBirth = (birth: ElectronTabBirth): void => {
     const provisioned = acceptedProvisioning(birth);
     if (birth.activated || provisioned === null) return;
     birth.activated = true;
-    void birth.native
-      .acceptTab({
-        hostId: options.hostId,
-        sessionId: birth.create.sessionId,
-        tabId: birth.create.tabId,
-        registrationId: provisioned.registrationId,
-      })
+    void options.tabs
+      .acceptTab(nativeKeyFor(birth, provisioned.registrationId))
       .catch((cause: unknown) => {
-        appLogger.warn("[browser] electron tab activation failed", {
-          cause: cause instanceof Error ? cause.message : String(cause),
+        log.warn("[browser-sessions] electron tab activation failed", {
+          error: describeLogError(cause),
           sessionId: birth.create.sessionId,
           tabId: birth.create.tabId,
         });
@@ -238,29 +277,7 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
     const provisioned = acceptedProvisioning(birth);
     if (birth.published || provisioned === null) return;
     birth.published = true;
-    const create = birth.create;
-    publishElectronTabBinding(owner, {
-      hostId: options.hostId,
-      sessionId: create.sessionId,
-      tabId: create.tabId,
-      registrationId: provisioned.registrationId,
-      control: (action) =>
-        birth.native.controlElectronTab({
-          hostId: options.hostId,
-          sessionId: create.sessionId,
-          tabId: create.tabId,
-          registrationId: provisioned.registrationId,
-          action,
-        }),
-      bindSurface: (input) =>
-        bindSurface({
-          ...input,
-          hostId: options.hostId,
-          sessionId: create.sessionId,
-          tabId: create.tabId,
-          registrationId: provisioned.registrationId,
-        }),
-    });
+    options.onTabBound(nativeKeyFor(birth, provisioned.registrationId));
   };
 
   const acceptCreate = (frame: CreateElectronTabFrame): Promise<void> => {
@@ -279,7 +296,11 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
       return existing.settled;
     }
 
-    const tabKey = nativeTabKey(options.hostId, frame.sessionId, frame.tabId);
+    const tabKey = browserViewNativeTabKeyId({
+      hostId: options.hostId,
+      sessionId: frame.sessionId,
+      tabId: frame.tabId,
+    });
     const existingRequestId = requestIdByTabKey.get(tabKey);
     if (
       existingRequestId !== undefined &&
@@ -295,33 +316,24 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
         );
         return Promise.resolve();
       }
-      if (previous !== undefined) retireBirth(previous);
+      if (previous !== undefined) retireBirth(previous, true);
     }
-
-    const native = options.native;
-    if (native === null) {
-      sendCreateFailure(
-        options,
-        frame,
-        "native_unavailable",
-        "Electron browser bridge is unavailable.",
-      );
-      return Promise.resolve();
-    }
-    ensureNativeSubscriptions(native);
+    ensureStatusSubscription();
 
     const birth: ElectronTabBirth = {
       create: frame,
-      native,
-      settled: native
-        .ensureTab({
+      settled: options.tabs
+        .ensureTab(options.windowId, {
           hostId: options.hostId,
           sessionId: frame.sessionId,
           tabId: frame.tabId,
           requestedUrl: frame.requestedUrl,
-          // Relayed verbatim: the host owns which jar the guest is born into.
+          // Relayed verbatim: the host owns which jar the guest is born into,
+          // and the seed goes to the one validated write path, which is in
+          // this process either way.
           profile: frame.profile,
           seedStorageState: frame.seedStorageState,
+          connectionId: options.connectionId(),
         })
         .then((provisioned) => {
           if (
@@ -338,8 +350,8 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
               "identity_violation",
               identityMessage(frame),
             );
-            void birth.native.releaseTab(provisioned).catch(ignoreError);
-            retireBirth(birth);
+            void options.tabs.releaseTab(provisioned).catch(() => undefined);
+            retireBirth(birth, true);
             return;
           }
           birth.provisioned = provisioned;
@@ -347,35 +359,33 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
             rollbackUnacceptedBirth(birth);
             return;
           }
-          const settlement = {
+          options.sendFrame({
             kind: "electronTabProvisioned",
             hasBinaryPayload: false,
             requestId: frame.requestId,
             sessionId: frame.sessionId,
             tabId: frame.tabId,
             registrationId: provisioned.registrationId,
-          } as const;
-          options.sendFrame(settlement);
+          });
           activateAcceptedBirth(birth);
           publishAcceptedBirth(birth);
         })
         .catch((cause: unknown) => {
           if (birth.cancelled || !isCurrentConnection(generation)) return;
-          const failure = createFailureFrame(
-            frame,
-            "native_create_failed",
-            cause instanceof Error ? cause.message : String(cause),
+          options.sendFrame(
+            createFailureFrame(
+              frame,
+              "native_create_failed",
+              cause instanceof Error ? cause.message : String(cause),
+            ),
           );
-          options.sendFrame(failure);
-          retireBirth(birth);
+          retireBirth(birth, true);
         }),
       provisioned: null,
       accepted: null,
       cancelled: false,
       activated: false,
       published: false,
-      activeSurface: null,
-      surfaceMutation: Promise.resolve(),
       lastStatus: null,
     };
     birthByRequestId.set(frame.requestId, birth);
@@ -384,116 +394,46 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
   };
 
   const release = async (frame: ReleaseElectronTabFrame): Promise<void> => {
-    const tabKey = nativeTabKey(options.hostId, frame.sessionId, frame.tabId);
+    const tabKey = browserViewNativeTabKeyId({
+      hostId: options.hostId,
+      sessionId: frame.sessionId,
+      tabId: frame.tabId,
+    });
     const createRequestId = requestIdByTabKey.get(tabKey);
     if (createRequestId === undefined) return;
     const birth = birthByRequestId.get(createRequestId);
     if (birth === undefined) return;
     await birth.settled;
     if (birth.provisioned?.registrationId !== frame.registrationId) return;
-
     return releaseBirth(birth);
   };
 
-  const bindSurface = async (
-    input: BrowserViewAttachSurface,
-  ): Promise<ElectronTabSurfaceLease> => {
-    if (input.hostId !== options.hostId) {
-      throw new Error("Electron tab belongs to a different host.");
-    }
-    const tabKey = nativeTabKey(input.hostId, input.sessionId, input.tabId);
-    const requestId = requestIdByTabKey.get(tabKey);
-    const birth =
-      requestId === undefined ? undefined : birthByRequestId.get(requestId);
-    if (
-      !connected ||
-      birth === undefined ||
-      birth.cancelled ||
-      acceptedProvisioning(birth) === null
-    ) {
-      throw new Error("Electron tab is not accepted.");
-    }
-    const token = Symbol(input.bindingId);
-    const attach = birth.surfaceMutation.then(async () => {
-      if (!connected || birth.cancelled) {
-        throw new Error("Electron tab is not accepted.");
-      }
-      const previous = birth.activeSurface;
-      if (previous !== null) {
-        // Keep the old binding recorded until the native detach actually
-        // resolves: a rejected detach leaves the surface attached, so the
-        // failed bind must leave a retry able to detach it again.
-        await birth.native.detachSurface({
-          hostId: previous.input.hostId,
-          sessionId: previous.input.sessionId,
-          tabId: previous.input.tabId,
-          registrationId: previous.input.registrationId,
-          bindingId: previous.input.bindingId,
-        });
-        birth.activeSurface = null;
-      }
-      await birth.native.attachSurface(input);
-      birth.activeSurface = { token, input };
-      if (birth.lastStatus !== null) {
-        sendCurrentTabState(birth, birth.lastStatus);
-      }
-    });
-    birth.surfaceMutation = attach.catch(ignoreError);
-    await attach;
-    let detached = false;
-    return {
-      detach: async () => {
-        if (detached) return;
-        detached = true;
-        const detach = birth.surfaceMutation.then(async () => {
-          if (birth.activeSurface?.token !== token) return;
-          await birth.native.detachSurface({
-            hostId: input.hostId,
-            sessionId: input.sessionId,
-            tabId: input.tabId,
-            registrationId: input.registrationId,
-            bindingId: input.bindingId,
-          });
-          birth.activeSurface = null;
-          if (birth.lastStatus !== null) {
-            sendCurrentTabState(birth, birth.lastStatus);
-          }
-        });
-        birth.surfaceMutation = detach.catch(ignoreError);
-        await detach;
-      },
-    };
-  };
-
-  const handleCdpFrame = (frame: BrowserSessionsServerFrame): boolean => {
-    if (frame.kind !== "cdpRequest") return false;
-    if (!connected || disposed) return true;
-    const request = frame;
+  const handleCdpFrame = (frame: CdpRequestFrame): void => {
+    if (!connected || disposed) return;
     const generation = connectionGeneration;
     const birth = findProvisionedBirthByTabId(
       birthByRequestId.values(),
-      request.tabId,
+      frame.tabId,
     );
     if (
       birth === null ||
-      birth.provisioned?.registrationId !== request.registrationId
+      birth.provisioned?.registrationId !== frame.registrationId
     ) {
-      sendCdpResult(options, request.requestId, {
-        kind: request.command.kind,
+      sendCdpResult(options, frame.requestId, {
+        kind: frame.command.kind,
         ok: false,
         error: {
           kind: "tab_not_found",
-          message: "Electron tab incarnation is not active in this renderer.",
+          message: "Electron tab incarnation is not active on this desktop.",
           code: null,
         },
       });
-      return true;
+      return;
     }
-    void dispatchCdp(request, birth).then((result) => {
+    void dispatchCdp(frame, birth).then((result) => {
       if (!isCurrentConnection(generation)) return;
-      sendCdpResult(options, request.requestId, result);
+      sendCdpResult(options, frame.requestId, result);
     });
-    return true;
   };
 
   async function dispatchCdp(
@@ -501,7 +441,7 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
     birth: ElectronTabBirth,
   ): Promise<BrowserCdpResult> {
     try {
-      return await birth.native.dispatchElectronTabCdp({
+      return await options.tabs.dispatchElectronTabCdp({
         hostId: options.hostId,
         sessionId: birth.create.sessionId,
         tabId: birth.create.tabId,
@@ -539,23 +479,38 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
     publishAcceptedBirth(birth);
   };
 
+  const retireEveryBirth = (): void => {
+    for (const birth of birthByRequestId.values()) {
+      rollbackUnacceptedBirth(birth);
+    }
+  };
+
   return {
     handleFrame: (frame) => {
       switch (frame.kind) {
         case "createElectronTab":
           if (connected && !disposed) void acceptCreate(frame);
-          return true;
+          return;
         case "releaseElectronTab":
           if (connected && !disposed) void release(frame);
-          return true;
+          return;
         case "electronTabAccepted":
           if (connected && !disposed) handleAccepted(frame);
-          return true;
+          return;
         case "cdpRequest":
-          return handleCdpFrame(frame);
+          handleCdpFrame(frame);
+          return;
         default:
-          return false;
+          return;
       }
+    },
+    isTabViewed: (tabId) => {
+      for (const birth of birthByRequestId.values()) {
+        if (birth.create.tabId !== tabId) continue;
+        if (birthStatus(birth) === "retired") continue;
+        return birth.lastStatus?.viewed ?? false;
+      }
+      return null;
     },
     connect: () => {
       if (!disposed) connected = true;
@@ -563,21 +518,15 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
     disconnect: () => {
       connected = false;
       connectionGeneration += 1;
-      for (const birth of birthByRequestId.values()) {
-        rollbackUnacceptedBirth(birth);
-      }
-      removeOwnedElectronTabBindings(owner);
+      retireEveryBirth();
     },
     dispose: () => {
       disposed = true;
       connected = false;
       connectionGeneration += 1;
-      for (const birth of birthByRequestId.values()) {
-        rollbackUnacceptedBirth(birth);
-      }
-      disposeNativeSubscriptions?.();
-      disposeNativeSubscriptions = null;
-      removeOwnedElectronTabBindings(owner);
+      retireEveryBirth();
+      disposeStatusSubscription?.();
+      disposeStatusSubscription = null;
     },
   };
 }
@@ -598,7 +547,11 @@ function sendTabState(
     url: change.url,
     title: change.title,
     status: electronTabStateStatus(change.status),
-    viewed: birth.activeSurface !== null,
+    // The manager's own reading, not an inference: `viewed` is whether a tile
+    // is showing this guest right now, which is a fact of the entry (surface
+    // bound and visible) rather than of a lease object on the far side of an
+    // IPC boundary.
+    viewed: change.viewed,
   });
 }
 
@@ -669,8 +622,9 @@ function findProvisionedBirthByTabId(
       !birth.cancelled &&
       birth.create.tabId === tabId &&
       birth.provisioned !== null
-    )
+    ) {
       return birth;
+    }
   }
   return null;
 }
