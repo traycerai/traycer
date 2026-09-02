@@ -3046,6 +3046,35 @@ describe("BrowserViewManager annotation session", () => {
   });
 });
 
+describe("BrowserViewManager visibility reconcile on window loss", () => {
+  it("reports viewed:false the moment a visible tab's window disappears, and stays silent on the next reconcile", async () => {
+    const harness = createHarness();
+    await attachNativeTab(
+      harness,
+      "window-1",
+      BASE_KEY,
+      "https://example.com/",
+    );
+    const statusesBeforeLoss = harness.nativeTabStatuses.length;
+    expect(harness.nativeTabStatuses.at(-1)?.viewed).toBe(true);
+
+    // The window this tile was parented to is gone (closed/destroyed) -
+    // reconcileVisibility must notice on the very next window-change pass.
+    harness.windows.delete("window-1");
+    harness.emitWindowChange();
+
+    const statusesAfterFirstReconcile = harness.nativeTabStatuses.length;
+    expect(statusesAfterFirstReconcile).toBe(statusesBeforeLoss + 1);
+    expect(harness.nativeTabStatuses.at(-1)?.viewed).toBe(false);
+
+    // A reconcile over an entry that is ALREADY hidden must not re-emit -
+    // this runs on every window-change, and a status per pass would flood
+    // the renderer with no new information.
+    harness.emitWindowChange();
+    expect(harness.nativeTabStatuses.length).toBe(statusesAfterFirstReconcile);
+  });
+});
+
 function reportAttachResult(
   harness: Harness,
   windowId: string,

@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { browserSessionsClientFrameSchema } from "@traycer/protocol/host/browser/contracts";
+import {
+  BROWSER_SESSIONS_UX_CLIENT_FRAME_KINDS,
+  browserSessionsClientFrameSchema,
+} from "@traycer/protocol/host/browser/contracts";
+import { registrableDomain } from "@traycer/protocol/host/browser/registrable-domain";
 import type {
   BrowserAnnotationAttachResultInput,
   BrowserAnnotationSetTargetChatLabelInput,
@@ -145,8 +149,8 @@ const saveLoginsSchema = z.boolean();
  *
  * A host ID, never a directory row: the row carries the host's static Noise
  * key, and accepting one from a renderer would let a compromised renderer aim
- * main's jar stream at a host it controls (H10 ruling 1). Bounded because
- * every field is echoed into a map key and a log line.
+ * main's jar stream at a host it controls. Bounded because every field is
+ * echoed into a map key and a log line.
  */
 const sessionsStreamKeySchema: z.ZodType<BrowserSessionsStreamKey> =
   z.strictObject({
@@ -171,15 +175,31 @@ const sessionsStreamSendSchema = z
   })
   .refine(
     (value): value is BrowserSessionsStreamSend =>
-      value.frame.kind === "openTab" ||
-      value.frame.kind === "closeTab" ||
-      value.frame.kind === "captureTabPreview",
+      UX_CLIENT_FRAME_KINDS.has(value.frame.kind),
     { message: "Only tab requests may be sent from a renderer." },
   );
 
-/** One saved-login row's domain, as Settings names it. */
+/** The protocol's own list, so this gate cannot drift from the type it guards. */
+const UX_CLIENT_FRAME_KINDS: ReadonlySet<string> = new Set(
+  BROWSER_SESSIONS_UX_CLIENT_FRAME_KINDS,
+);
+
+/**
+ * One saved-login row's domain, as Settings names it.
+ *
+ * A REGISTRABLE domain and nothing else. It is interpolated into a native
+ * confirmation dialog and it is the blast radius of the clear that dialog
+ * authorises, so a renderer that could name `x` could write the sentence the
+ * user is answering. Anything that does not collapse to itself - a subdomain, a
+ * url, a sentence - is refused rather than narrowed, because narrowing would
+ * clear a scope the caller did not name.
+ */
 const savedLoginSiteSchema = z.strictObject({
-  domain: nonEmptyStringSchema.max(253),
+  domain: nonEmptyStringSchema
+    .max(253)
+    .refine((domain) => registrableDomain(domain) === domain, {
+      message: "A saved-login site is a registrable domain.",
+    }),
 });
 
 export const browserViewIpcPayload = {

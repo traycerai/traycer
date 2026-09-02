@@ -3,10 +3,11 @@ import type {
   BrowserSessionsClientFrame,
   BrowserSessionsServerFrame,
 } from "@traycer/protocol/host/browser/contracts";
-import type {
-  BrowserViewNativeTabCapability,
-  BrowserViewNativeTabKey,
-  BrowserViewNativeTabStatusChange,
+import {
+  browserViewNativeTabKeyId,
+  type BrowserViewNativeTabCapability,
+  type BrowserViewNativeTabKey,
+  type BrowserViewNativeTabStatusChange,
 } from "@traycer-clients/shared/platform/browser-view";
 import type {
   BrowserViewElectronTabCdpDispatch,
@@ -85,6 +86,15 @@ interface ElectronTabBirth {
 
 export interface ElectronTabs {
   handleFrame(frame: BrowserSessionsServerFrame): void;
+  /**
+   * Is the guest behind `tabId` on screen right now? `null` when this stream
+   * owns no native guest for it, which is the ordinary answer for a tab that
+   * lives on the host's own side.
+   *
+   * The reading is the manager's `viewed`, the same fact `electronTabState`
+   * reports: a tile bound to this guest and visible.
+   */
+  isTabViewed(tabId: string): boolean | null;
   connect(): void;
   disconnect(): void;
   dispose(): void;
@@ -120,13 +130,9 @@ function acceptedProvisioning(
   return birthStatus(birth) === "accepted" ? birth.provisioned : null;
 }
 
-function tabKeyOf(key: BrowserViewNativeTabKey): string {
-  return JSON.stringify([key.hostId, key.sessionId, key.tabId]);
-}
-
 /**
  * Owns Electron births for one durable `browser.sessions` lifecycle, in the
- * MAIN process (H10).
+ * MAIN process.
  *
  * This is the renderer's `electron-tabs.ts` with the IPC taken out of the
  * middle: `createElectronTab` - the frame that carries `seedStorageState` - is
@@ -168,7 +174,7 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
     if (birth.provisioned === null) return;
     const registrationId = birth.provisioned.registrationId;
     const capability = nativeKeyFor(birth, registrationId);
-    const tabKey = tabKeyOf(capability);
+    const tabKey = browserViewNativeTabKeyId(capability);
     const incarnationKey = `${tabKey}:${registrationId}`;
     const existing = releaseByIncarnation.get(incarnationKey);
     if (existing !== undefined) return existing;
@@ -194,7 +200,7 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
 
   const retireBirth = (birth: ElectronTabBirth): void => {
     birth.cancelled = true;
-    const tabKey = tabKeyOf({
+    const tabKey = browserViewNativeTabKeyId({
       hostId: options.hostId,
       sessionId: birth.create.sessionId,
       tabId: birth.create.tabId,
@@ -278,7 +284,7 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
       return existing.settled;
     }
 
-    const tabKey = tabKeyOf({
+    const tabKey = browserViewNativeTabKeyId({
       hostId: options.hostId,
       sessionId: frame.sessionId,
       tabId: frame.tabId,
@@ -376,7 +382,7 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
   };
 
   const release = async (frame: ReleaseElectronTabFrame): Promise<void> => {
-    const tabKey = tabKeyOf({
+    const tabKey = browserViewNativeTabKeyId({
       hostId: options.hostId,
       sessionId: frame.sessionId,
       tabId: frame.tabId,
@@ -485,6 +491,14 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
         default:
           return;
       }
+    },
+    isTabViewed: (tabId) => {
+      for (const birth of birthByRequestId.values()) {
+        if (birth.create.tabId !== tabId) continue;
+        if (birthStatus(birth) === "retired") continue;
+        return birth.lastStatus?.viewed ?? false;
+      }
+      return null;
     },
     connect: () => {
       if (!disposed) connected = true;

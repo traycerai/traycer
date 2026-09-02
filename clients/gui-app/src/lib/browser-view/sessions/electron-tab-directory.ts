@@ -47,8 +47,33 @@ interface ElectronTabDirectoryEntry {
   readonly binding: ElectronTabBinding;
 }
 
+interface ElectronTabSurfaceState {
+  activeSurface: { readonly token: symbol; readonly bindingId: string } | null;
+  mutation: Promise<void>;
+}
+
 const directory = new Map<string, ElectronTabDirectoryEntry>();
 const directoryListeners = new Set<() => void>();
+/**
+ * The attach/detach chain, keyed by TAB rather than held per published
+ * binding: a second `tabBound` for the same tab republishes it without a
+ * removal in between, and two chains for one tab can interleave the old
+ * lease's detach with the new one's attach - which main refuses, leaving the
+ * tile blank. Retired with the binding, so a republish after a removal starts
+ * from a clean surface rather than trying to detach one main no longer has.
+ */
+const surfaceStates = new Map<string, ElectronTabSurfaceState>();
+
+function surfaceStateFor(key: string): ElectronTabSurfaceState {
+  const existing = surfaceStates.get(key);
+  if (existing !== undefined) return existing;
+  const created: ElectronTabSurfaceState = {
+    activeSurface: null,
+    mutation: Promise.resolve(),
+  };
+  surfaceStates.set(key, created);
+  return created;
+}
 
 export function nativeTabKey(
   hostId: string,
@@ -85,73 +110,71 @@ function notifyDirectoryListeners(): void {
 /**
  * Publishes the tile-facing half of one native tab main just bound.
  *
- * The attach/detach chain is serialized PER TAB here, because a rebind is two
- * calls (detach the old surface, then attach the new) and they must not
- * interleave with another rebind of the same tab: main refuses an attach while
- * a different binding id is still live, so an unordered pair leaves the tile
- * blank. The old surface stays recorded until its detach actually resolves, so
- * a failed rebind leaves a retry able to detach it again.
+ * The attach/detach chain is serialized PER TAB (see {@link surfaceStates}),
+ * because a rebind is two calls (detach the old surface, then attach the new)
+ * and they must not interleave with another rebind of the same tab: main
+ * refuses an attach while a different binding id is still live, so an
+ * unordered pair leaves the tile blank. The old surface stays recorded until
+ * its detach actually resolves, so a failed rebind leaves a retry able to
+ * detach it again.
  */
 export function publishElectronTabBinding(
   owner: symbol,
   native: BrowserViewBridge,
   capability: BrowserViewNativeTabCapability,
 ): void {
-  let activeSurface: {
-    readonly token: symbol;
-    readonly bindingId: string;
-  } | null = null;
-  let mutation: Promise<void> = Promise.resolve();
+  const key = nativeTabKey(
+    capability.hostId,
+    capability.sessionId,
+    capability.tabId,
+  );
+  const state = surfaceStateFor(key);
 
   const bindSurface = async (
     input: ElectronTabSurfaceBinding,
   ): Promise<ElectronTabSurfaceLease> => {
     const token = Symbol(input.bindingId);
-    const attach = mutation.then(async () => {
-      const previous = activeSurface;
+    const attach = state.mutation.then(async () => {
+      const previous = state.activeSurface;
       if (previous !== null) {
         await native.detachSurface({
           ...capability,
           bindingId: previous.bindingId,
         });
-        activeSurface = null;
+        state.activeSurface = null;
       }
       await native.attachSurface({ ...capability, ...input });
-      activeSurface = { token, bindingId: input.bindingId };
+      state.activeSurface = { token, bindingId: input.bindingId };
     });
-    mutation = attach.catch(ignoreError);
+    state.mutation = attach.catch(ignoreError);
     await attach;
     let detached = false;
     return {
       detach: async () => {
         if (detached) return;
         detached = true;
-        const detach = mutation.then(async () => {
-          if (activeSurface?.token !== token) return;
+        const detach = state.mutation.then(async () => {
+          if (state.activeSurface?.token !== token) return;
           await native.detachSurface({
             ...capability,
             bindingId: input.bindingId,
           });
-          activeSurface = null;
+          state.activeSurface = null;
         });
-        mutation = detach.catch(ignoreError);
+        state.mutation = detach.catch(ignoreError);
         await detach;
       },
     };
   };
 
-  directory.set(
-    nativeTabKey(capability.hostId, capability.sessionId, capability.tabId),
-    {
-      owner,
-      binding: {
-        ...capability,
-        control: (action) =>
-          native.controlElectronTab({ ...capability, action }),
-        bindSurface,
-      },
+  directory.set(key, {
+    owner,
+    binding: {
+      ...capability,
+      control: (action) => native.controlElectronTab({ ...capability, action }),
+      bindSurface,
     },
-  );
+  });
   notifyDirectoryListeners();
 }
 
@@ -172,6 +195,7 @@ export function removeOwnedElectronTabBinding(
     return;
   }
   directory.delete(key);
+  surfaceStates.delete(key);
   notifyDirectoryListeners();
 }
 
@@ -180,6 +204,7 @@ export function removeOwnedElectronTabBindings(owner: symbol): void {
   for (const [key, entry] of directory) {
     if (entry.owner !== owner) continue;
     directory.delete(key);
+    surfaceStates.delete(key);
     removed = true;
   }
   if (removed) notifyDirectoryListeners();

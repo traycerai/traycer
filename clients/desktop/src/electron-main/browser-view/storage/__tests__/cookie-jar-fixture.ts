@@ -144,12 +144,18 @@ export class FakeCookieJar {
     this.emit(cookie, true);
   }
 
+  /**
+   * Chromium replaces by (name, domain, path) with the domain taken RAW: a
+   * leading dot is the difference between a host-only cookie and a domain
+   * cookie, and a real jar holds both rows at once. Trimming it here collapsed
+   * them into one, which made every ownership and delta test blind to exactly
+   * the pair the production key spells apart.
+   */
   private indexOf(cookie: Cookie): number {
     return this.jar.findIndex(
       (existing) =>
         existing.name === cookie.name &&
-        canonicalDomain(existing.domain ?? "") ===
-          canonicalDomain(cookie.domain ?? "") &&
+        existing.domain === cookie.domain &&
         existing.path === cookie.path,
     );
   }
@@ -157,10 +163,6 @@ export class FakeCookieJar {
   private emit(cookie: Cookie, removed: boolean): void {
     this.listener?.({}, cookie, "explicit", removed);
   }
-}
-
-function canonicalDomain(domain: string): string {
-  return domain.startsWith(".") ? domain.slice(1) : domain;
 }
 
 function toJarCookie(details: CookiesSetDetails): Cookie {

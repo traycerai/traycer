@@ -15,16 +15,14 @@ import {
   useBrowserSaveLogins,
   type BrowserSaveLoginsController,
 } from "@/lib/browser-view/use-browser-save-logins";
-import {
-  clearSavedLoginSite,
-  forgetAllBrowserLogins,
-} from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import { useBrowserSavedLoginSitesQuery } from "@/hooks/browser/use-browser-saved-login-sites-query";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
 import { useHostBinding } from "@/lib/host";
 import { formatRelativeTimestamp, useSampledNow } from "@/lib/relative-time";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
+import { appLogger } from "@/lib/logger";
+import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
 import type {
   BrowserSavedLoginSite,
   BrowserSavedLoginSitesResponse,
@@ -275,7 +273,13 @@ function BrowserSavedLoginsGroup(): ReactNode {
   if (browserView === null || hostBinding === null || enabled === null) {
     return null;
   }
-  return <BrowserSavedLoginsRows saveLogins={saveLogins} enabled={enabled} />;
+  return (
+    <BrowserSavedLoginsRows
+      browserView={browserView}
+      saveLogins={saveLogins}
+      enabled={enabled}
+    />
+  );
 }
 
 /**
@@ -284,6 +288,7 @@ function BrowserSavedLoginsGroup(): ReactNode {
  * called conditionally.
  */
 function BrowserSavedLoginsRows(props: {
+  readonly browserView: BrowserViewBridge;
   readonly saveLogins: BrowserSaveLoginsController;
   readonly enabled: boolean;
 }): ReactNode {
@@ -301,8 +306,9 @@ function BrowserSavedLoginsRows(props: {
         saveLogins={props.saveLogins}
         enabled={props.enabled}
       />
-      <ForgetAllLoginsRow />
+      <ForgetAllLoginsRow browserView={props.browserView} />
       <SavedLoginSitesRow
+        browserView={props.browserView}
         data={sites.data ?? null}
         onCleared={() => {
           void sites.refetch();
@@ -362,6 +368,24 @@ function SavedLoginsToggleRow(props: {
 }
 
 /**
+ * Both destructive actions are main's: it raises the native dialog, does the
+ * work, and answers whether the user confirmed. This renderer only reports
+ * that answer, so a rejected IPC has to read as "not confirmed" rather than
+ * escape a click handler as an unhandled rejection.
+ */
+async function confirmedByMain(
+  request: Promise<boolean>,
+  failureMessage: string,
+): Promise<boolean> {
+  return request.catch((cause: unknown) => {
+    appLogger.warn(failureMessage, {
+      cause: cause instanceof Error ? cause.message : String(cause),
+    });
+    return false;
+  });
+}
+
+/**
  * The destructive one, moved here from the tile shield (ticket 08's temporary
  * home). It speaks for this machine AND for every host the user has a live
  * browser stream to, which is what "all" means and why it is not tile-scoped.
@@ -371,8 +395,9 @@ function SavedLoginsToggleRow(props: {
  * is what carries the forget to hosts that were not (universal-sign-in decision
  * 6) - so there is no "nothing happened" case left to hold the dialog open for.
  */
-function ForgetAllLoginsRow(): ReactNode {
-  const browserView = useRunnerHostOrNull()?.browserView ?? null;
+function ForgetAllLoginsRow(props: {
+  readonly browserView: BrowserViewBridge;
+}): ReactNode {
   return (
     <SettingsRow
       label="Forget all browser logins"
@@ -388,7 +413,10 @@ function ForgetAllLoginsRow(): ReactNode {
             // the authority on the answer (browser security review, root cause
             // C). A second confirmation here would ask twice and, worse, would
             // read as the gate while the real one lives elsewhere.
-            void forgetAllBrowserLogins(browserView);
+            void confirmedByMain(
+              props.browserView.forgetLogins(),
+              "[browser] clearing the browser partition failed",
+            );
           }}
         >
           Forget all browser logins…
@@ -409,10 +437,10 @@ function ForgetAllLoginsRow(): ReactNode {
  * claiming an empty jar.
  */
 function SavedLoginSitesRow(props: {
+  readonly browserView: BrowserViewBridge;
   readonly data: BrowserSavedLoginSitesResponse | null;
   readonly onCleared: () => void;
 }): ReactNode {
-  const browserView = useRunnerHostOrNull()?.browserView ?? null;
   // Optimistic, and only for a frame that actually went out: the host merges
   // asynchronously, so the refetch right behind a clear can still read the
   // pre-merge slice and put the row back for a beat.
@@ -455,15 +483,16 @@ function SavedLoginSitesRow(props: {
                 // Awaited, because main raises a native dialog and a cancelled
                 // one must not hide the row: the answer is the confirmation,
                 // not the request (H10).
-                void clearSavedLoginSite(browserView, domain).then(
-                  (confirmed) => {
-                    if (!confirmed) return;
-                    // The pruned list, not the raw one: a domain the host has
-                    // since dropped never comes back into it.
-                    setCleared([...activeCleared, domain]);
-                    props.onCleared();
-                  },
-                );
+                void confirmedByMain(
+                  props.browserView.clearSavedLoginSite(domain),
+                  "[browser] clearing one saved login failed",
+                ).then((confirmed) => {
+                  if (!confirmed) return;
+                  // The pruned list, not the raw one: a domain the host has
+                  // since dropped never comes back into it.
+                  setCleared([...activeCleared, domain]);
+                  props.onCleared();
+                });
               }}
             />
           )}

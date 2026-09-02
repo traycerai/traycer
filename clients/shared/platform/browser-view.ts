@@ -319,6 +319,26 @@ export interface BrowserSessionsStreamKey {
   readonly identityKey: string;
 }
 
+/**
+ * The one map-key encoding for each of the two identities main and the renderer
+ * both index by. Both sides used to spell them separately - `JSON.stringify` in
+ * main, a joined string in the renderer - which is a silent-collision seam
+ * around a value that decides which live socket or native guest a request
+ * reaches. `JSON.stringify` over the fields in a fixed order is injective for
+ * arbitrary strings, which a separator join is not.
+ */
+export function browserSessionsStreamKeyId(
+  key: BrowserSessionsStreamKey,
+): string {
+  return JSON.stringify([key.epicId, key.hostId, key.identityKey]);
+}
+
+export function browserViewNativeTabKeyId(
+  key: BrowserViewNativeTabKey,
+): string {
+  return JSON.stringify([key.hostId, key.sessionId, key.tabId]);
+}
+
 export interface BrowserSessionsStreamSend {
   readonly key: BrowserSessionsStreamKey;
   readonly frame: BrowserSessionsUxClientFrame;

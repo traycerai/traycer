@@ -61,6 +61,7 @@ describe("host Noise static key TOFU pin", () => {
     installHostKeyPinStore({
       store,
       onMismatch: (error) => mismatches.push(error),
+      onPinWriteFailed: () => undefined,
     });
 
     const admitted = await applyHostKeyPins([item("host-1", "pk-1")]);
@@ -76,6 +77,7 @@ describe("host Noise static key TOFU pin", () => {
     installHostKeyPinStore({
       store: { ...store, pin },
       onMismatch: () => undefined,
+      onPinWriteFailed: () => undefined,
     });
 
     const admitted = await applyHostKeyPins([item("host-1", "pk-1")]);
@@ -90,6 +92,7 @@ describe("host Noise static key TOFU pin", () => {
     installHostKeyPinStore({
       store,
       onMismatch: (error) => mismatches.push(error),
+      onPinWriteFailed: () => undefined,
     });
 
     const admitted = await applyHostKeyPins([
@@ -118,9 +121,44 @@ describe("host Noise static key TOFU pin", () => {
     expect(admitted).toHaveLength(1);
   });
 
+  it("R3-5: still admits a first-sight host when the store's write rejects, and reports the failure instead of a mismatch", async () => {
+    // RULE: applyHostKeyPins must not let a pin WRITE failure fail the whole
+    // registry read - the caller's contract is a `{ kind }` union, and a
+    // read-only userData or ENOSPC must not refuse every host in the answer.
+    // Nothing is pinned, so nothing disagrees: this is a write failure, not a
+    // mismatch.
+    const writeFailures: Array<{
+      readonly hostId: string;
+      readonly cause: unknown;
+    }> = [];
+    const mismatches: HostKeyPinMismatchError[] = [];
+    const rejection = new Error("read-only userData");
+    const store: HostKeyPinStore = {
+      read: () => Promise.resolve(null),
+      pin: () => Promise.reject(rejection),
+      describeLocation: () => PIN_LOCATION,
+    };
+    installHostKeyPinStore({
+      store,
+      onMismatch: (error) => mismatches.push(error),
+      onPinWriteFailed: (hostId, cause) =>
+        writeFailures.push({ hostId, cause }),
+    });
+
+    const admitted = await applyHostKeyPins([item("host-1", "pk-1")]);
+
+    expect(admitted.map((host) => host.hostId)).toEqual(["host-1"]);
+    expect(writeFailures).toEqual([{ hostId: "host-1", cause: rejection }]);
+    expect(mismatches).toEqual([]);
+  });
+
   it("drops a key-changed host from the registry read itself", async () => {
     const { store } = memoryStore({ "host-1": "pk-1" });
-    installHostKeyPinStore({ store, onMismatch: () => undefined });
+    installHostKeyPinStore({
+      store,
+      onMismatch: () => undefined,
+      onPinWriteFailed: () => undefined,
+    });
     vi.stubGlobal("fetch", () =>
       Promise.resolve(
         new Response(

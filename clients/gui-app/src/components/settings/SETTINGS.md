@@ -541,8 +541,7 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
       logins. Nothing is copied in either direction.
     - **Forget all browser logins** (destructive confirm) moved here from the
       tile shield popover, which was ticket 08's temporary home. It calls the
-      module-level `forgetAllBrowserLogins()` on the sessions coordinator and
-      so speaks for EVERY host the user has a live browser stream to; that is
+      bridge's `forgetLogins()` directly and so speaks for EVERY host the user has a live browser stream to; that is
       what "all" means, and it is why the action is not tile-scoped.
       It answers whether any stream took the frame, and the confirm closes only
       then - the same refusal the per-row Clear makes, so a click that reached
@@ -575,7 +574,7 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
       field sends no key at all, and the schema's `.default(null)` only runs on
       the version-gap decode. Per-row **Clear** sends
       the `clearSite { domain }` frame
-      (`clearSavedLoginSite()`) and refetches; the row is hidden optimistically
+      (`browserView.clearSavedLoginSite()`) and refetches; the row is hidden optimistically
       because the host merges asynchronously and the refetch behind the click
       can still read the pre-clear slice. That optimism RELEASES itself: a
       domain is hidden only while the latest response still names it (retired

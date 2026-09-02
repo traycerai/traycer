@@ -72,6 +72,12 @@ export class HostKeyPinMismatchError extends Error {
 interface InstalledPinning {
   readonly store: HostKeyPinStore;
   readonly onMismatch: (error: HostKeyPinMismatchError) => void;
+  /**
+   * A first-sight pin the store could not write. Reported rather than thrown,
+   * because the caller is a registry read whose contract is a `{ kind }` union
+   * and one unwritable pin must not fail every host in the answer.
+   */
+  readonly onPinWriteFailed: (hostId: string, cause: unknown) => void;
 }
 
 let installed: InstalledPinning | null = null;
@@ -86,7 +92,7 @@ export function installHostKeyPinStore(pinning: InstalledPinning): void {
   installed = pinning;
 }
 
-/** Drops the installed store. Test seam, and the sign-out path if one ever needs it. */
+/** Drops the installed store. Test seam. */
 export function clearHostKeyPinStore(): void {
   installed = null;
 }
@@ -110,7 +116,17 @@ export async function applyHostKeyPins(
   for (const host of hosts) {
     const pinned = await pinning.store.read(host.hostId);
     if (pinned === null) {
-      await pinning.store.pin(host.hostId, host.publicKey);
+      // A first-sight pin that cannot be WRITTEN still admits the host. The
+      // caller is a registry read whose contract is a `{ kind }` union, so a
+      // rejection here - a read-only userData, ENOSPC - escaped it as a throw
+      // and failed the whole host list rather than one pin. Admitting is also
+      // the right answer on its own terms: nothing is pinned, so nothing
+      // disagrees, and the pin is retried on the next read.
+      try {
+        await pinning.store.pin(host.hostId, host.publicKey);
+      } catch (cause) {
+        pinning.onPinWriteFailed(host.hostId, cause);
+      }
       admitted.push(host);
       continue;
     }

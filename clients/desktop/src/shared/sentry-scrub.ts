@@ -12,8 +12,9 @@
  * re-attached to a later, unrelated crash.
  *
  * Detection comes from `@traycer/protocol/utils/text/redaction` and nothing
- * else. What lives here is the Sentry-specific policy: which fields to walk,
- * how deep, and what to drop outright.
+ * else, and the deep walk with its depth/array/key bounds from
+ * `@traycer/protocol/utils/text/sentry-scrub`. What lives here is the
+ * desktop's Sentry policy: which fields to walk and what to drop outright.
  *
  * Deliberately does NOT reach into `electron-main/app/support-scrubber.ts`.
  * That module is the support-bundle policy (path pseudonymization, no length
@@ -26,76 +27,12 @@ import {
   redactSensitiveText,
   reduceRequestTargetToPath,
   reduceUrlToOriginAndPath,
-  SENSITIVE_KEY_PATTERN,
 } from "@traycer/protocol/utils/text/redaction";
-
-/**
- * Fails closed at the depth bound: past it the container is replaced outright
- * rather than passed through, because returning it would ship every
- * unredacted string below it. The array/key bounds are what stop one
- * `Sentry.setExtra` of a whole dataset from riding out.
- */
-const MAX_SCRUB_DEPTH = 6;
-const MAX_SCRUB_ARRAY_ITEMS = 100;
-const MAX_SCRUB_OBJECT_KEYS = 100;
-
-function deepScrubSentryValue(value: unknown): unknown {
-  return scrubValueAtDepth(value, 0);
-}
-
-/**
- * The record-typed entry point, so the callers that must hand a
- * `{ [key: string]: unknown }` back to the SDK do not need a cast.
- */
-function deepScrubSentryRecord(record: { [key: string]: unknown }): {
-  [key: string]: unknown;
-} {
-  return scrubRecordAtDepth(record, 0);
-}
-
-function scrubRecordAtDepth(
-  record: { [key: string]: unknown },
-  depth: number,
-): { [key: string]: unknown } {
-  const scrubbed: { [key: string]: unknown } = {};
-  for (const [key, entry] of Object.entries(record).slice(
-    0,
-    MAX_SCRUB_OBJECT_KEYS,
-  )) {
-    scrubbed[key] = SENSITIVE_KEY_PATTERN.test(key)
-      ? "<redacted>"
-      : scrubValueAtDepth(entry, depth + 1);
-  }
-  return scrubbed;
-}
-
-function scrubValueAtDepth(value: unknown, depth: number): unknown {
-  if (value === null || value === undefined) return value;
-  if (typeof value === "string") return redactSensitiveText(value);
-  if (typeof value === "number" || typeof value === "boolean") return value;
-  if (depth >= MAX_SCRUB_DEPTH) return "<depth-limit>";
-  if (value instanceof Error) {
-    return {
-      name: value.name,
-      message: redactSensitiveText(value.message),
-      stack:
-        typeof value.stack === "string"
-          ? redactSensitiveText(value.stack)
-          : null,
-    };
-  }
-  if (Array.isArray(value)) {
-    return value
-      .slice(0, MAX_SCRUB_ARRAY_ITEMS)
-      .map((entry) => scrubValueAtDepth(entry, depth + 1));
-  }
-  if (isRecord(value)) {
-    return scrubRecordAtDepth(value, depth);
-  }
-  // bigints, functions, symbols: hand the SDK's normalizer a redacted string
-  // instead of the live value.
-  return redactSensitiveText(String(value));
-}
+import {
+  deepScrubSentryRecord,
+  deepScrubSentryValue,
+  isPlainRecord,
+} from "@traycer/protocol/utils/text/sentry-scrub";
 
 /** The slice of a Sentry event these hooks read and rewrite. */
 export interface DesktopSentryEvent {
@@ -139,7 +76,10 @@ export function scrubDesktopSentryEventInPlace(
     event.logentry.message = redactSensitiveText(event.logentry.message);
   }
   if (event.logentry?.params !== undefined) {
-    event.logentry.params = deepScrubSentryValue(event.logentry.params);
+    event.logentry.params = deepScrubSentryValue(
+      event.logentry.params,
+      redactSensitiveText,
+    );
   }
   // The dominant funnel: `captureException(error)` renders the thrown error's
   // message here, and `linkedErrorsIntegration` appends one entry per `cause`.
@@ -154,13 +94,13 @@ export function scrubDesktopSentryEventInPlace(
   // policy reads `tags` BEFORE this runs (see `crash-reporter-guest-scope.ts`),
   // so redacting them here cannot reopen that channel.
   if (event.tags !== undefined) {
-    event.tags = deepScrubSentryRecord(event.tags);
+    event.tags = deepScrubSentryRecord(event.tags, redactSensitiveText);
   }
   if (event.extra !== undefined) {
-    event.extra = deepScrubSentryRecord(event.extra);
+    event.extra = deepScrubSentryRecord(event.extra, redactSensitiveText);
   }
   if (event.contexts !== undefined) {
-    event.contexts = deepScrubSentryRecord(event.contexts);
+    event.contexts = deepScrubSentryRecord(event.contexts, redactSensitiveText);
   }
   for (const breadcrumb of event.breadcrumbs ?? []) {
     scrubDesktopBreadcrumbInPlace(breadcrumb);
@@ -180,10 +120,10 @@ function scrubDesktopRequestInPlace(request: DesktopSentryRequest): void {
     request.query_string =
       typeof request.query_string === "string"
         ? redactQueryString(request.query_string)
-        : deepScrubSentryValue(request.query_string);
+        : deepScrubSentryValue(request.query_string, redactSensitiveText);
   }
   if (request.data !== undefined) {
-    request.data = deepScrubSentryValue(request.data);
+    request.data = deepScrubSentryValue(request.data, redactSensitiveText);
   }
 }
 
@@ -195,7 +135,10 @@ export function scrubDesktopBreadcrumbInPlace(
     breadcrumb.message = redactSensitiveText(breadcrumb.message);
   }
   if (breadcrumb.data !== undefined) {
-    breadcrumb.data = deepScrubSentryRecord(breadcrumb.data);
+    breadcrumb.data = deepScrubSentryRecord(
+      breadcrumb.data,
+      redactSensitiveText,
+    );
   }
 }
 
@@ -253,7 +196,7 @@ export function scrubDesktopSentryTransactionInPlace(
     event.transaction = redactSensitiveText(event.transaction);
   }
   const trace = event.contexts?.["trace"];
-  if (isRecord(trace)) {
+  if (isPlainRecord(trace)) {
     reduceSpanAttributesInPlace(trace["data"]);
   }
   for (const span of event.spans ?? []) {
@@ -270,7 +213,7 @@ export function scrubDesktopSentrySpanInPlace(span: DesktopSentrySpan): void {
 }
 
 function reduceSpanAttributesInPlace(data: unknown): void {
-  if (!isRecord(data)) return;
+  if (!isPlainRecord(data)) return;
   delete data[QUERY_SPAN_ATTRIBUTE];
   for (const key of URL_BEARING_SPAN_ATTRIBUTES) {
     const value = data[key];
@@ -278,8 +221,4 @@ function reduceSpanAttributesInPlace(data: unknown): void {
       data[key] = reduceRequestTargetToPath(value);
     }
   }
-}
-
-function isRecord(value: unknown): value is { [key: string]: unknown } {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

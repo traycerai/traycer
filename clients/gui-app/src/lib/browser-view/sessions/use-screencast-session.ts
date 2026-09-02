@@ -211,14 +211,6 @@ export interface ScreencastSessionOptions {
 }
 
 /**
- * Headless `browser.screencast` viewer. This hook owns only what a render
- * reads - the frame image, the lifecycle, the armed epoch and the composing
- * flag - plus the transport that feeds them. Everything with its own state
- * machine (arm epochs, input queues, pointer bookkeeping) lives in
- * `createScreencastController`, which is plain TypeScript and testable without
- * React.
- */
-/**
  * The control tier a shell may subscribe at. `"tile"` only where the shell
  * owns a native browser of its own - which is exactly the desktop, since
  * `browserView` is the shell's own "I have a real BrowserView" capability and
@@ -237,6 +229,14 @@ export function screencastRoleForShell(
   return "tile";
 }
 
+/**
+ * Headless `browser.screencast` viewer. This hook owns only what a render
+ * reads - the frame image, the lifecycle, the armed epoch and the composing
+ * flag - plus the transport that feeds them. Everything with its own state
+ * machine (arm epochs, input queues, pointer bookkeeping) lives in
+ * `createScreencastController`, which is plain TypeScript and testable without
+ * React.
+ */
 export function useScreencastSession(
   options: ScreencastSessionOptions,
 ): ScreencastSession {
@@ -869,7 +869,7 @@ export function useScreencastSession(
 
   useEffect(() => {
     const tile = tileRef.current;
-    if (tile === null || armedEpoch === null) return;
+    if (tile === null || armedEpoch === null || role === "viewer") return;
     const onKeyDown = (event: KeyboardEvent): void => {
       controller.handleTileKeyDown(event);
     };
@@ -887,7 +887,7 @@ export function useScreencastSession(
       tile.removeEventListener("keyup", onKeyUp, true);
       window.removeEventListener("blur", onWindowBlur);
     };
-  }, [armedEpoch, controller]);
+  }, [armedEpoch, controller, role]);
 
   useEffect(() => {
     const button = overlayButtonRef.current;

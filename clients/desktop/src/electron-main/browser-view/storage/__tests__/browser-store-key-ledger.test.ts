@@ -47,6 +47,8 @@ vi.mock("../../../app/logger", () => ({
 
 const USER_A = "user-a";
 const USER_B = "user-b";
+const HOST_A = "host-a";
+const HOST_B = "host-b";
 const RAW_KEY = Buffer.from("0123456789abcdef0123456789abcdef").toString(
   "base64",
 );
@@ -72,7 +74,7 @@ describe("desktop store-key custody", () => {
   });
 
   it("unwraps a blob it wrapped", async () => {
-    const wrapped = wrapStoreKey(RAW_KEY, USER_A);
+    const wrapped = wrapStoreKey(RAW_KEY, USER_A, HOST_A);
     if (wrapped === null) throw new Error("expected a wrap");
 
     expect(unwrapStoreKey(wrapped, USER_A)).toBe(RAW_KEY);
@@ -99,7 +101,7 @@ describe("desktop store-key custody", () => {
     Object.defineProperty(process, "platform", { value: "linux" });
     keystore.backend = "basic_text";
     try {
-      expect(wrapStoreKey(RAW_KEY, USER_A)).toBeNull();
+      expect(wrapStoreKey(RAW_KEY, USER_A, HOST_A)).toBeNull();
       expect(keystore.encrypt).not.toHaveBeenCalled();
     } finally {
       Object.defineProperty(process, "platform", { value: platform });
@@ -107,7 +109,7 @@ describe("desktop store-key custody", () => {
   });
 
   it("keeps the ledger across a restart", async () => {
-    const wrapped = wrapStoreKey(RAW_KEY, USER_A);
+    const wrapped = wrapStoreKey(RAW_KEY, USER_A, HOST_A);
     if (wrapped === null) throw new Error("expected a wrap");
     await flushBrowserStoreKeyLedgerForTests();
     expect(
@@ -122,23 +124,35 @@ describe("desktop store-key custody", () => {
     expect(unwrapStoreKey(wrapped, USER_A)).toBe(RAW_KEY);
   });
 
-  it("bounds the ledger, keeping the newest 64 digests", async () => {
-    // A file-size bound, not a machine count: this desktop wraps once per
-    // (host, user) pair, and evicting a digest a host still holds costs that
-    // host its encrypted slice on the next cold boot.
-    const wrapped = Array.from({ length: 65 }, (_, index) =>
-      wrapStoreKey(`${RAW_KEY}-${index}`, USER_A),
-    );
+  it("bounds the ledger by (user, host) pair, not by blob count - another host's digest survives a busy host filling its own pair", async () => {
+    // The cap is a file-size bound over PAIRS, not a shared FIFO over blobs:
+    // one busy host wrapping 65 times for its own pair must not spend the
+    // room of a DIFFERENT host's single digest - that was the old shared
+    // 64-entry FIFO's bug (64 re-wraps from one host evicted every other
+    // host).
+    const otherHostBlob = wrapStoreKey(`${RAW_KEY}-other-host`, USER_A, HOST_B);
+    if (otherHostBlob === null) throw new Error("expected a wrap");
 
-    const [oldest, ...rest] = wrapped;
-    if (oldest === undefined || oldest === null) {
-      throw new Error("expected a wrap");
+    for (let index = 0; index < 65; index += 1) {
+      const wrapped = wrapStoreKey(`${RAW_KEY}-${index}`, USER_A, HOST_A);
+      if (wrapped === null) throw new Error("expected a wrap");
     }
-    expect(unwrapStoreKey(oldest, USER_A)).toBeNull();
-    for (const blob of rest) {
-      if (blob === null) throw new Error("expected a wrap");
-      expect(unwrapStoreKey(blob, USER_A)).not.toBeNull();
-    }
+    await flushBrowserStoreKeyLedgerForTests();
+
+    expect(unwrapStoreKey(otherHostBlob, USER_A)).not.toBeNull();
+  });
+
+  it("replaces a pair's blob on re-wrap rather than appending - the old blob no longer unwraps", async () => {
+    // Deliberate: a pair only ever holds its newest blob, because the host it
+    // was minted for keeps only the newest too.
+    const first = wrapStoreKey(RAW_KEY, USER_A, HOST_A);
+    if (first === null) throw new Error("expected a wrap");
+    const second = wrapStoreKey(`${RAW_KEY}-replacement`, USER_A, HOST_A);
+    if (second === null) throw new Error("expected a wrap");
+    await flushBrowserStoreKeyLedgerForTests();
+
+    expect(unwrapStoreKey(first, USER_A)).toBeNull();
+    expect(unwrapStoreKey(second, USER_A)).toBe(`${RAW_KEY}-replacement`);
   });
 
   it("refuses this machine's own blob when another account names it", async () => {
@@ -146,7 +160,7 @@ describe("desktop store-key custody", () => {
     // account's host could name another account's blob and this machine would
     // open it - handing a slice of someone else's jar to a host that was never
     // given custody of it.
-    const wrapped = wrapStoreKey(RAW_KEY, USER_A);
+    const wrapped = wrapStoreKey(RAW_KEY, USER_A, HOST_A);
     if (wrapped === null) throw new Error("expected a wrap");
     keystore.decrypt.mockClear();
 

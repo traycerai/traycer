@@ -20,23 +20,17 @@ import {
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import { createRemoteHostTransport } from "@traycer-clients/shared/host-transport/remote/index";
-import { DEFAULT_DIAL_TIMEOUT_MS } from "@traycer-clients/shared/host-transport/transport-config";
+import {
+  DEFAULT_DIAL_TIMEOUT_MS,
+  DEFAULT_INITIAL_BACKOFF_MS,
+  DEFAULT_MAX_BACKOFF_MS,
+  DEFAULT_OPEN_ACK_TIMEOUT_MS,
+  DEFAULT_PING_INTERVAL_MS,
+  DEFAULT_PONG_TIMEOUT_MS,
+} from "@traycer-clients/shared/host-transport/transport-config";
 import { createWhatwgStreamWebSocketFactory } from "@traycer-clients/shared/host-transport/whatwg-stream-ws-factory";
 import { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import { describeLogError, log } from "../app/logger";
-
-/**
- * Dial / handshake / heartbeat timings, the same numbers the renderer's
- * `buildHostStreamClient` uses. Copied rather than imported because that module
- * is a React hook file: main must behave identically on the wire without
- * pulling the renderer's app-wide clock, credential-mint and evidence wiring
- * into the Electron main bundle.
- */
-const OPEN_ACK_TIMEOUT_MS = 10_000;
-const PING_INTERVAL_MS = 25_000;
-const PONG_TIMEOUT_MS = 60_000;
-const INITIAL_BACKOFF_MS = 1_000;
-const MAX_BACKOFF_MS = 30_000;
 
 const streamWebSocketFactory = createWhatwgStreamWebSocketFactory();
 
@@ -48,7 +42,7 @@ export interface BrowserSessionsHostTransport {
 /**
  * The one place main answers "which host is this id, and how do I dial it".
  *
- * The renderer passes an ID and nothing else (H10 ruling 1). The directory row
+ * The renderer passes an ID and nothing else. The directory row
  * carries the host's static Noise key, so accepting a renderer-supplied row
  * would let a compromised renderer point main's jar stream at a host it
  * controls - which is the whole ticket.
@@ -77,6 +71,17 @@ export interface BrowserSessionsHostDirectory {
    * restart rather than waiting for a miss.
    */
   invalidate(hostId: string): void;
+  /**
+   * Drops the whole cached registry, and the cooldown that guards refetching
+   * it, because the identity it was read for has changed.
+   *
+   * The rows are per ACCOUNT - `listRegisteredHosts` answers for the bearer it
+   * was given - but the cache is keyed by host id alone, so a sign-out or an
+   * account switch would otherwise let the next account dial the previous
+   * account's row for the same id. The cooldown goes with it: a fresh identity
+   * is exactly the moment one read is owed rather than deferred.
+   */
+  reset(): void;
 }
 
 export interface BrowserSessionsHostDirectoryDeps {
@@ -199,6 +204,11 @@ export function createBrowserSessionsHostDirectory(
       cachedRemote.delete(hostId);
       forced = true;
     },
+    reset: () => {
+      cachedRemote = new Map();
+      lastRefreshAt = null;
+      forced = true;
+    },
     endpoint: (hostId) => {
       const entry = localEntryFor(hostId) ?? cachedRemote.get(hostId) ?? null;
       if (entry === null) return null;
@@ -293,11 +303,11 @@ export function openBrowserSessionsTransport(
     evidence: NO_TRANSPORT_EVIDENCE,
     webSocketFactory: streamWebSocketFactory,
     dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
-    openAckTimeoutMs: OPEN_ACK_TIMEOUT_MS,
-    pingIntervalMs: PING_INTERVAL_MS,
-    pongTimeoutMs: PONG_TIMEOUT_MS,
-    initialBackoffMs: INITIAL_BACKOFF_MS,
-    maxBackoffMs: MAX_BACKOFF_MS,
+    openAckTimeoutMs: DEFAULT_OPEN_ACK_TIMEOUT_MS,
+    pingIntervalMs: DEFAULT_PING_INTERVAL_MS,
+    pongTimeoutMs: DEFAULT_PONG_TIMEOUT_MS,
+    initialBackoffMs: DEFAULT_INITIAL_BACKOFF_MS,
+    maxBackoffMs: DEFAULT_MAX_BACKOFF_MS,
     clientIdentity,
   });
   return {

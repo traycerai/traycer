@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { desktopSentryBeforeSend } from "../crash-reporter-guest-scope";
 import {
-  desktopSentryBeforeBreadcrumb,
-  desktopSentryBeforeSend,
-  desktopSentryBeforeSendSpan,
-  desktopSentryBeforeSendTransaction,
-} from "../crash-reporter-guest-scope";
+  scrubDesktopBreadcrumbInPlace,
+  scrubDesktopSentrySpanInPlace,
+  scrubDesktopSentryTransactionInPlace,
+} from "../../../shared/sentry-scrub";
 
 /** A minidump event exactly as `sentryMinidumpIntegration` assembles it. */
 function nativeCrashEvent(processTag: string): {
@@ -140,25 +140,24 @@ describe("desktopSentryBeforeSend", () => {
   });
 });
 
-describe("desktopSentryBeforeBreadcrumb", () => {
+describe("scrubDesktopBreadcrumbInPlace", () => {
   it("reduces the URL at record time, before the scope is persisted", () => {
     const breadcrumb = {
       message: "electron.renderer.load-url",
       data: { url: "https://x.test:8443/a/b?sig=s#access_token=t", id: 2 },
     };
-    expect(desktopSentryBeforeBreadcrumb(breadcrumb)).toBe(breadcrumb);
+    scrubDesktopBreadcrumbInPlace(breadcrumb);
     expect(breadcrumb.data.url).toBe("https://x.test:8443/a/b");
   });
 
   it("scrubs the breadcrumb message, which no URL reducer touches", () => {
     const breadcrumb = { message: "auth Bearer abc123.def456-ghi" };
-    expect(desktopSentryBeforeBreadcrumb(breadcrumb).message).toBe(
-      "auth Bearer <redacted>",
-    );
+    scrubDesktopBreadcrumbInPlace(breadcrumb);
+    expect(breadcrumb.message).toBe("auth Bearer <redacted>");
   });
 });
 
-describe("desktopSentryBeforeSendTransaction", () => {
+describe("scrubDesktopSentryTransactionInPlace", () => {
   it("reduces the root span's URL attributes and the transaction name", () => {
     const event = {
       transaction: "GET /v1/pay?token=abc",
@@ -175,7 +174,7 @@ describe("desktopSentryBeforeSendTransaction", () => {
         },
       },
     };
-    expect(desktopSentryBeforeSendTransaction(event)).toBe(event);
+    scrubDesktopSentryTransactionInPlace(event);
     expect(event.transaction).toBe("GET /v1/pay?token=<redacted>");
     expect(event.contexts.trace.data).toEqual({
       "url.full": "https://api.test/v1/pay",
@@ -186,7 +185,7 @@ describe("desktopSentryBeforeSendTransaction", () => {
   });
 });
 
-describe("desktopSentryBeforeSendSpan", () => {
+describe("scrubDesktopSentrySpanInPlace", () => {
   it("reduces the outgoing-fetch URL a child span carries", () => {
     const span = {
       description: "GET https://vendor.test/x?access_token=abc123",
@@ -195,7 +194,7 @@ describe("desktopSentryBeforeSendSpan", () => {
         "url.query": "?access_token=abc123",
       },
     };
-    expect(desktopSentryBeforeSendSpan(span)).toBe(span);
+    scrubDesktopSentrySpanInPlace(span);
     expect(span.description).toBe(
       "GET https://vendor.test/x?access_token=<redacted>",
     );

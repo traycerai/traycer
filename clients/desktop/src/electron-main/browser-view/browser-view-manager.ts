@@ -222,6 +222,9 @@ export class BrowserViewManager {
       geometry: this.geometry,
       annotations: this.annotations,
       notifyHostWindowRendererReset: options.notifyHostWindowRendererReset,
+      emitStatus: (entry) => {
+        this.emitStatus(entry);
+      },
       closeEntry: (entry) => {
         void this.closeEntry(entry);
       },

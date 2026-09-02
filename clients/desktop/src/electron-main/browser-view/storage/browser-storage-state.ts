@@ -16,12 +16,15 @@ import {
   type BrowserStorageOrigin,
   type BrowserStorageState as ProtocolStorageState,
 } from "@traycer/protocol/host/browser/contracts";
-import { cookieDomainInScope } from "@traycer/protocol/host/browser/registrable-domain";
+import {
+  canonicalCookieHost,
+  cookieDomainInScope,
+} from "@traycer/protocol/host/browser/registrable-domain";
 
 /**
  * What a whole-jar read answers. Main-side only: the capture is produced and
- * consumed in this process now (H10), and the storage state never crosses to
- * a renderer.
+ * consumed in this process now, and the storage state never crosses to a
+ * renderer.
  */
 export type BrowserPrimaryProfileCaptureResult =
   | {
@@ -104,8 +107,8 @@ export interface BrowserStorageSession {
  * The slice of Electron's `Session` a site clear needs. It is its own port
  * rather than an extension of the seed/capture one: only this path removes
  * anything. `clearStorageData` is called with an `origin` and nothing else -
- * the whole-partition form of the same call is how "forget all logins" works
- * (ticket 08), and one site's clear must never widen into it.
+ * the whole-partition form of the same call is how "forget all logins" works,
+ * and one site's clear must never widen into it.
  */
 export interface BrowserSiteClearSession {
   readonly cookies: {
@@ -284,8 +287,8 @@ export class BrowserPrimaryProfileSnapshotCoordinator {
   }
 
   /**
-   * Forgets every remembered origin ("forget all browser logins", ticket 08).
-   * Both tiers go: the origins observed this run AND the ones carried over
+   * Forgets every remembered origin ("forget all browser logins"). Both
+   * tiers go: the origins observed this run AND the ones carried over
    * from the seed or demoted out of the LRU - a capture draws on both, so
    * leaving either behind would re-upload the localStorage the user forgot.
    * Observations already in flight are discarded with them: each was read from
@@ -434,8 +437,8 @@ export function browserStorageCookies(
  * {@link toStorageCookie} for a jar that may hold a cookie this shell cannot
  * represent, answering `null` instead of throwing.
  *
- * Still reachable, though narrower since H11 made {@link readCookieDomain}
- * normalise rather than reject: a domain the URL parser cannot place at all
+ * Still reachable, though narrower now that {@link readCookieDomain}
+ * normalises rather than rejects: a domain the URL parser cannot place at all
  * (and a cookie whose name or path this shell refuses) still throws. The
  * delta, the site clear and the removal-key path all want the same thing from
  * such a cookie - skip it and keep going - so they share this one guard rather
@@ -454,7 +457,7 @@ export function safeStorageCookie(cookie: Cookie): DesktopStorageCookie | null {
   }
 }
 
-/** What one universal-sign-in observation did to the jar it was merged into. */
+/** What one host observation did to the jar it was merged into. */
 export interface BrowserObservedCookieMergeResult {
   readonly applied: number;
   /**
@@ -475,13 +478,13 @@ export interface BrowserObservedCookieMergeResult {
 }
 
 /**
- * The ONE way a host's cookies reach the `primary` jar (universal-sign-in
- * ticket 03): what `applyBrowserObservedProfile` let through, merged in.
+ * The ONE way a host's cookies reach the `primary` jar: what
+ * `applyBrowserObservedProfile` let through, merged in.
  *
  * Both host->jar doors arrive here - the observed frame and the
  * `createElectronTab` seed, which used to have a `seedBrowserViewCookies` loop
- * of its own with none of the checks (browser security review, root cause C).
- * Application goes through Chromium's own `cookies.set`, which is what
+ * of its own with none of the checks. Application goes through Chromium's own
+ * `cookies.set`, which is what
  * normalises the attributes away from anything the sender chose.
  *
  * Merge-only: it sets and never removes. The caller has already dropped the
@@ -526,7 +529,7 @@ export async function mergeObservedProfileCookies(
  * wire and the ownership ledger spells it: (name, domain, path), which is what
  * Chromium itself replaces by.
  *
- * The domain is CANONICALISED first (browser-security-hardening H11). A key is
+ * The domain is CANONICALISED first. A key is
  * minted from three sources that do not agree on spelling - the jar read
  * (Chromium's own, always lowercase A-labels), the claim the applier records
  * from the wire (a sender's `.Example.COM.`), and the release the observer
@@ -544,21 +547,16 @@ export function cookieKeyId(key: BrowserCookieKey): string {
 }
 
 /**
- * Lowercased, IDNA-encoded, trailing-root-dot-trimmed host, with any leading
- * dot kept. Falls back to a plain lowercase for a domain the URL parser cannot
- * place - such a cookie is refused everywhere else, and an id still has to be
- * a total function of its key.
+ * The shared canonicaliser plus this caller's own two rules: a leading dot is
+ * kept (it is the host-only/domain-cookie distinction, not a spelling), and a
+ * domain the canonicaliser refuses falls back to a plain lowercase - such a
+ * cookie is refused everywhere else, and an id still has to be a total function
+ * of its key.
  */
 function canonicalKeyDomain(domain: string): string {
   const leadingDot = domain.startsWith(".");
-  let host = leadingDot ? domain.slice(1) : domain;
-  if (host.endsWith(".")) host = host.slice(0, -1);
-  let canonical: string;
-  try {
-    canonical = new URL(`https://${host}/`).hostname;
-  } catch {
-    canonical = host.toLowerCase();
-  }
+  const host = leadingDot ? domain.slice(1) : domain;
+  const canonical = canonicalCookieHost(host) ?? host.toLowerCase();
   return leadingDot ? `.${canonical}` : canonical;
 }
 
@@ -575,8 +573,8 @@ function canonicalKeyDomain(domain: string): string {
  * is simply absent here, so the rule reads it as a key - and a name - the jar
  * does not hold. It is bounded by the same normalisation refusing to capture
  * that cookie in the first place, so such a cookie never crosses to a host
- * either. Case and IDN forms are no longer in that set: H11 made
- * `readCookieDomain` normalise them the way Chromium's own jar does.
+ * either. Case and IDN forms are no longer in that set: `readCookieDomain`
+ * normalises them the way Chromium's own jar does.
  */
 export async function browserJarCookieKeys(
   domain: string,
@@ -588,8 +586,8 @@ export async function browserJarCookieKeys(
 /**
  * One parsed cookie into one jar, through Chromium's own `cookies.set`
  * validation. Both application paths go through here - the tab seed and the
- * universal-sign-in observed merge - so neither can normalise or scope a cookie
- * differently from the other.
+ * observed merge - so neither can normalise or scope a cookie differently
+ * from the other.
  */
 async function setStorageCookie(
   cookie: DesktopStorageCookie,
@@ -611,7 +609,7 @@ function isUnpartitionedCookie(cookie: DesktopStorageCookie): boolean {
 }
 
 /**
- * "Clear cookies for this site" (spec §6.5, decision #13): every cookie the
+ * "Clear cookies for this site" (spec §6.5): every cookie the
  * registrable domain's subtree holds, plus the localStorage of every remembered
  * origin under it, gone from one partition.
  *
@@ -624,8 +622,8 @@ function isUnpartitionedCookie(cookie: DesktopStorageCookie): boolean {
  * The removals fire the jar's own `changed` events, which coalesce into the
  * one delta that tells the host the scope is now empty. Nothing suppresses
  * them: the host-driven evict that once ran this under a per-domain
- * suppression went away with the `primaryProfileEvict` frame
- * (universal-sign-in ticket 08).
+ * suppression went away with the `primaryProfileEvict` frame, which was
+ * retired.
  *
  * `rememberedOrigins` is the capture coordinator's memory: cookies are
  * enumerable from the jar, localStorage is not, so those are the only origins
@@ -701,7 +699,7 @@ function toCookieSetDetails(
     // The CANONICAL domain attribute, not the sender's spelling: Chromium
     // files the row under its own normalisation, so handing it
     // `.Example.COM.` would have the jar read back a key that no longer
-    // matches what the applier claimed (H11). `null` is host-only scope.
+    // matches what the applier claimed. `null` is host-only scope.
     domain: cookie.domain.startsWith(".") ? `.${cookie.canonicalDomain}` : null,
     path: cookie.path,
     expirationDate: cookie.expires < 0 ? undefined : cookie.expires,
@@ -857,9 +855,9 @@ function readNonEmptyString(value: string, field: string): string {
  * Splits a wire cookie domain into the form it was sent in and the host form
  * this shell builds URLs from.
  *
- * The canonical half is NORMALISED rather than merely checked
- * (browser-security-hardening H11). It used to demand the input already be the
- * form the URL parser produces, which rejected three spellings a real jar
+ * The canonical half is NORMALISED rather than merely checked. It used to
+ * demand the input already be the form the URL parser produces, which
+ * rejected three spellings a real jar
  * hands out - `Example.COM`, the FQDN `example.com.`, and any Unicode IDN -
  * and every cookie carrying one was silently dropped on the delta, clear and
  * removal-key paths. The three RFC 6265 wire affordances (leading dot, trailing
@@ -873,18 +871,8 @@ function readCookieDomain(value: string | undefined): BrowserCookieDomain {
     throw new Error("Browser storageState cookie domain must be a string");
   }
   const domain = readNonEmptyString(parsed.data, "cookie domain");
-  let host = domain.startsWith(".") ? domain.slice(1) : domain;
-  if (host.endsWith(".")) host = host.slice(0, -1);
-  if (host.length === 0 || URL_SCOPE_SYNTAX_PATTERN.test(host)) {
-    throw new Error("Browser storageState cookie domain is invalid");
-  }
-  let canonicalDomain: string;
-  try {
-    canonicalDomain = new URL(`https://${host}/`).hostname;
-  } catch {
-    throw new Error("Browser storageState cookie domain is invalid");
-  }
-  if (canonicalDomain.length === 0) {
+  const canonicalDomain = canonicalCookieHost(domain);
+  if (canonicalDomain === null) {
     throw new Error("Browser storageState cookie domain is invalid");
   }
   return { domain, canonicalDomain };
@@ -905,7 +893,6 @@ function readCookiePath(value: string | undefined): string {
   return path;
 }
 
-const URL_SCOPE_SYNTAX_PATTERN = /[@:/\\\s\x00-\x1F\x7F]/u;
 const CONTROL_OR_WHITESPACE_PATTERN = /[\s\x00-\x1F\x7F]/u;
 const LOCAL_STORAGE_SCRIPT = [
   "(() => {",

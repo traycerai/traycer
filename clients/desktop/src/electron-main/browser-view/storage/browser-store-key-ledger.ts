@@ -8,7 +8,7 @@ import {
 } from "../../app/json-file-store";
 
 /**
- * The blobs THIS installation wrapped (browser-security-hardening H03).
+ * The blobs THIS installation wrapped.
  *
  * `safeStorage.decryptString` is an oracle: Chromium's OSCrypt is AES-CBC with
  * a fixed IV and no MAC, so an ok/null answer over an attacker-chosen blob is a
@@ -33,23 +33,20 @@ import {
  * takes. Migrating instead would mean guessing which account each old digest
  * belonged to, which is the one thing the field exists to stop.
  *
- * Bounded at {@link MAX_LEDGER_DIGESTS}, which is a FILE-SIZE bound and
- * nothing else - deliberately not the host's four-blobs-per-user cap. This
- * desktop wraps once per (host, user) pair it ever attaches to, so a cap of
- * four would evict a digest for a blob some host still holds: that blob then
- * reads as foreign, and on a cold boot with no raw key the host's heal
- * discards the encrypted slice and rebuilds it. A digest is unforgeable, so
- * keeping many costs nothing but bytes.
+ * ONE DIGEST PER (user, host) PAIR, and the bound is on the pairs. It was a
+ * shared 64-entry FIFO over blobs, which one busy host could fill on its own:
+ * 64 re-wraps from it evicted every other host's digest, those hosts' blobs
+ * then read as foreign, and a cold boot with no raw key made the host's heal
+ * DISCARD the encrypted slice rather than open it. A pair only ever holds its
+ * newest blob - a re-wrap replaces, because the host it was minted for keeps
+ * only the newest too - so no host can spend another host's room.
  *
- * The cap is per FILE, across every account that has signed in on this
- * machine - one shared eviction window, not one per user. A machine with
- * several accounts and many hosts therefore evicts sooner for all of them; the
- * cost of an eviction is the re-wrap above, so a per-account cap would be more
- * state for a cheaper version of an already cheap outcome.
+ * {@link MAX_LEDGER_PAIRS} is a file-size bound over those pairs and nothing
+ * else. A digest is unforgeable, so keeping many costs nothing but bytes.
  */
 const LEDGER_FILE_NAME = "browser-store-key-ledger.json";
 
-const MAX_LEDGER_DIGESTS = 64;
+const MAX_LEDGER_PAIRS = 64;
 
 /**
  * One blob this desktop wrapped, and WHO it wrapped it for.
@@ -64,6 +61,12 @@ const entrySchema = z.strictObject({
   /** sha256 of the base64 blob, hex. */
   digest: z.string().max(64),
   userId: z.string().max(128),
+  /**
+   * The host this blob was wrapped FOR. It is the eviction key's other half
+   * and takes no part in the unwrap match: a blob is this machine's or it is
+   * not, and which host is presenting it back is not a fact the digest carries.
+   */
+  hostId: z.string().max(128),
 });
 type LedgerEntry = z.infer<typeof entrySchema>;
 
@@ -79,29 +82,22 @@ const EMPTY_RECORD: LedgerRecord = { version: 1, digests: [] };
 let store: StrictJsonFileStore<LedgerRecord> | null = null;
 let digests: readonly LedgerEntry[] = [];
 
-/** The ledger sits beside the saved-logins pref, in the same userData dir. */
-export function browserStoreKeyLedgerPathBeside(
-  savedLoginsPath: string,
-): string {
-  return join(dirname(savedLoginsPath), LEDGER_FILE_NAME);
-}
-
 /**
  * Loaded once at startup rather than lazily, because the check it feeds is
  * synchronous: the store-key IPC answers in one turn, and a ledger still
  * loading would refuse a blob this desktop really did wrap.
  */
 export async function initBrowserStoreKeyLedger(
-  filePath: string,
+  savedLoginsPath: string,
 ): Promise<void> {
   store = createJsonFileStore<LedgerRecord>(
-    filePath,
+    join(dirname(savedLoginsPath), LEDGER_FILE_NAME),
     EMPTY_RECORD,
     (value) => recordSchema.safeParse(value).data ?? EMPTY_RECORD,
   );
   // Clamped on the way in as well as on the way out: the file is editable, and
   // an in-memory list is bounded only by whatever was last read.
-  digests = (await store.load()).digests.slice(-MAX_LEDGER_DIGESTS);
+  digests = (await store.load()).digests.slice(-MAX_LEDGER_PAIRS);
 }
 
 function digestOf(wrappedKeyBase64: string): string {
@@ -109,17 +105,25 @@ function digestOf(wrappedKeyBase64: string): string {
 }
 
 /**
- * Records a blob this desktop just produced. The durable write is not awaited:
- * the wrap answer is synchronous, and a crash between the two costs one
- * host-side re-wrap, never a login.
+ * Records a blob this desktop just produced, REPLACING whatever this (user,
+ * host) pair last held. The durable write is not awaited: the wrap answer is
+ * synchronous, and a crash between the two costs one host-side re-wrap, never
+ * a login.
  */
 export function recordWrappedStoreKey(
   wrappedKeyBase64: string,
   userId: string,
+  hostId: string,
 ): void {
   const digest = digestOf(wrappedKeyBase64);
-  if (matches(digest, userId)) return;
-  digests = [...digests, { digest, userId }].slice(-MAX_LEDGER_DIGESTS);
+  const existing = digests.find(
+    (entry) => entry.userId === userId && entry.hostId === hostId,
+  );
+  if (existing?.digest === digest) return;
+  digests = [
+    ...digests.filter((entry) => entry !== existing),
+    { digest, userId, hostId },
+  ].slice(-MAX_LEDGER_PAIRS);
   const next: LedgerRecord = { version: 1, digests: [...digests] };
   if (store === null) {
     log.warn(

@@ -15,8 +15,8 @@ import {
 } from "./browser-storage-state";
 
 /**
- * The desktop's enforcement of `primaryProfileObserved` (universal-sign-in
- * ticket 03): the first host->jar WRITE direction the contract has, applied to
+ * The desktop's enforcement of `primaryProfileObserved`: the first host->jar
+ * WRITE direction the contract has, applied to
  * the user's master jar and therefore treated as untrusted input from end to
  * end.
  *
@@ -42,8 +42,7 @@ export type BrowserObservedProfileReason =
   | "rate-limited"
   /**
    * The jar already holds a cookie of this NAME in this registrable domain and
-   * no observation put it there, so the desktop's own browsing did (browser
-   * security review, root cause D).
+   * no observation put it there, so the desktop's own browsing did.
    *
    * This is the rule that turns a replace-by-key write channel back into an
    * add-only one. Chromium replaces a cookie by (name, domain, path), so any
@@ -62,8 +61,8 @@ export type BrowserObservedProfileReason =
   | "owned-by-desktop"
   /**
    * The user forgot this site, and the connection that sent the observation
-   * has not yet acked the ledger revision that says so (universal-sign-in
-   * ticket 04). It is the no-resurrection gate, and it replaced the
+   * has not yet acked the ledger revision that says so. It is the
+   * no-resurrection gate, and it replaced the
    * point-in-time `suppressed` check: a clear now bumps the revision before it
    * touches the jar, so every window that check covered is covered by this one
    * - and this one also covers the case a local check never could, an
@@ -96,11 +95,12 @@ export interface BrowserObservedProfile {
    * Which of the two host->jar doors this write came through: a
    * `primaryProfileObserved` frame, or the `createElectronTab` storage seed.
    *
-   * It changes NOTHING about the validation - that is the point of the field
-   * existing rather than a second applier existing (browser security review,
-   * root cause C: "the two doors into the same jar have the same lock"). It is
-   * carried so the trace can tell an investigator which door a refusal or an
-   * apply came off.
+   * It changes nothing about the VALIDATION - that is the point of the field
+   * existing rather than a second applier existing: "the two doors into the
+   * same jar have the same lock". The one thing it decides is the rate
+   * bucket: see the exemption in
+   * {@link applyBrowserObservedProfile}. It is also what lets the trace tell an
+   * investigator which door a refusal or an apply came off.
    */
   readonly source: "observed" | "seed";
   readonly connectionId: string;
@@ -341,23 +341,24 @@ function refill(state: ObservedConnectionState, now: number): number {
  * Both host->jar doors come through here: the `primaryProfileObserved` frame
  * and the `createElectronTab` storage seed, which differ only in the `source`
  * the trace records. The seed used to be an unvalidated `cookies.set` loop
- * straight into `persist:traycer-browser` (browser security review, root cause
- * C); it now declares the tab's own registrable domain as its claim and takes
- * every check below, which is what makes "the two doors into the same jar have
- * the same lock" true rather than aspirational.
+ * straight into `persist:traycer-browser`; it now declares the tab's own
+ * registrable domain as its claim and takes every check below, which is what
+ * makes "the two doors into the same jar have the same lock" true rather than
+ * aspirational.
  *
  * The checks run outermost-first, and the order is what the traced reason
  * reports when a frame trips more than one. The RATE comes first because it is
  * the governor that bounds every cost below it: the work, the serial queue this
  * frame is about to join, and the tally its own rejection would otherwise grow.
  * Then the claimed domain, then the per-frame bound, and only then the queue.
+ * A seed skips the rate and nothing else, for the reason given at the check.
  *
  * The forget-ledger gate sits INSIDE the serialized section, where it is an
  * ordering fact rather than a guess: every local clear bumps the ledger
  * revision before it queues, so a clear of this site can neither begin nor end
  * between the check and the merge it authorises without that merge seeing the
- * bump. It replaced ticket 03's point-in-time clear-in-progress read, which it
- * strictly subsumes - that read only covered the two suppressed clear paths
+ * bump. It replaced a point-in-time clear-in-progress read, which it strictly
+ * subsumes - that read only covered the two suppressed clear paths
  * (the host-driven evict and forget-all) and never the tile/settings clear,
  * which runs unsuppressed by design, while every one of the three bumps the
  * revision.
@@ -366,7 +367,17 @@ export async function applyBrowserObservedProfile(
   observed: BrowserObservedProfile,
   dependencies: BrowserObservedProfileDependencies,
 ): Promise<BrowserObservedProfileResult> {
-  if (!dependencies.governor.admit(observed.connectionId)) {
+  // The governor prices the host's UNSOLICITED writes - the observed replay,
+  // which arrives in a burst of whatever size the host chose. A seed is neither
+  // unsolicited nor host-paced: it is one tab being born, already bounded by
+  // the tab-create rate and by the per-frame cookie bound below. Charged to the
+  // same bucket, an attach replay landing within a second of a `createElectronTab`
+  // rate-limited the seed instead, and the tab simply opened signed out with
+  // nothing on screen to say why.
+  if (
+    observed.source !== "seed" &&
+    !dependencies.governor.admit(observed.connectionId)
+  ) {
     return dropped(observed.domain, "rate-limited");
   }
   const scope = registrableDomain(observed.domain);

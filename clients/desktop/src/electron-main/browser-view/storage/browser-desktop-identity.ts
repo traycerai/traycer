@@ -25,10 +25,12 @@ import { isKeystoreEncrypting } from "./browser-saved-logins";
  * that returns a signature, never a key. After H10 moves the jar plane into
  * main, even that hop disappears.
  *
- * Minted lazily, on the first challenge, and refused outright when the
- * platform keystore does not actually encrypt - a machine whose keystore is
- * plaintext gets no identity, attests nothing, and leaves the host sealed,
- * which is the same answer the store-key wrap gives for the same cause.
+ * Minted lazily, on the first challenge. A machine whose keystore does not
+ * actually encrypt still gets an identity, with the private half written in the
+ * CLEAR and the attestation declaring `jarEligible: false` - see
+ * {@link attestDesktopIdentity}. The store-key wrap still refuses on such a
+ * machine, and it is that refusal, not the absence of a key, that keeps the
+ * host's encrypted slice sealed.
  */
 const DESKTOP_IDENTITY_FILE_NAME = "browser-desktop-identity.json";
 
@@ -44,6 +46,15 @@ const recordSchema = z.strictObject({
   publicKey: z.string(),
   /** `safeStorage.encryptString(pkcs8 der base64)`, base64. */
   wrappedPrivateKey: z.string(),
+  /**
+   * Was {@link wrappedPrivateKey} actually encrypted by the platform keystore,
+   * or is it the pkcs8 base64 in the clear?
+   *
+   * `.default(true)` reads a record written before this field existed: those
+   * were only ever minted on an encrypting keystore, so `true` is the honest
+   * answer for them rather than a migration guess.
+   */
+  encrypted: z.boolean().default(true),
 });
 type DesktopIdentityRecord = z.infer<typeof recordSchema>;
 
@@ -52,6 +63,15 @@ export type DesktopIdentityAttestation = {
   readonly publicKey: string;
   readonly keystoreId: string;
   readonly signature: string;
+  /**
+   * May this machine hold the host's encrypted primary-profile slice?
+   *
+   * `false` when the private key above is stored in the clear because this
+   * platform's keystore does not encrypt. It is CLIENT-DECLARED and can only
+   * ever downgrade the declarer: the host reads it as an extra condition on the
+   * jar grant, never as one that grants anything.
+   */
+  readonly jarEligible: boolean;
 };
 
 let store: StrictJsonFileStore<DesktopIdentityRecord | null> | null = null;
@@ -83,30 +103,55 @@ function identityStore(): StrictJsonFileStore<DesktopIdentityRecord | null> {
  * cause, so there is no second rule to keep in step.
  */
 function loadOrMintIdentity(): Promise<DesktopIdentityRecord | null> {
-  // A refusal is not memoised: `identity` is only ever set to a mint that got
-  // as far as running, and a null answer clears it so a later challenge on a
-  // machine whose keystore has come back can still mint.
-  identity ??= mintIdentity().then((record) => {
-    if (record === null) identity = null;
-    return record;
-  });
+  // Neither a refusal nor a REJECTION is memoised: a null answer clears the
+  // memo so a later challenge can still mint, and a throw - a userData that
+  // was read-only for one moment - clears it for the same reason. A rejected
+  // promise left in place would refuse this installation an identity for the
+  // rest of the process's life.
+  identity ??= mintIdentity().then(
+    (record) => {
+      if (record === null) identity = null;
+      return record;
+    },
+    (cause: unknown) => {
+      identity = null;
+      throw cause;
+    },
+  );
   return identity;
 }
 
+/**
+ * The keypair, minted on whatever protection this machine can offer.
+ *
+ * An encrypting keystore wraps the private half. A keystore that does not
+ * encrypt - Linux with no secret service, where `safeStorage` falls back to
+ * `basic_text` - gets a DURABLE keypair stored in the clear instead of no
+ * identity at all. That is the H09 amendment (V-9): tying placement to the
+ * wrapped key meant such a machine could not be given a native tab at all,
+ * because the host has nothing to place a session on until something attests.
+ * What the plaintext key buys is exactly placement; the attestation says
+ * `jarEligible: false`, so the host still never hands it the encrypted slice.
+ *
+ * `null` only when the keystore claims it can encrypt and then fails to.
+ */
 async function mintIdentity(): Promise<DesktopIdentityRecord | null> {
-  if (!isKeystoreEncrypting()) {
-    log.warn(
-      "[browser-view] refusing to mint a desktop identity: this machine's keystore does not encrypt",
-    );
-    return null;
-  }
   const existing = await identityStore().load();
   if (existing !== null) return existing;
+  const encrypted = isKeystoreEncrypting();
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
-  const wrappedPrivateKey = wrapPrivateKey(
-    privateKey.export({ format: "der", type: "pkcs8" }).toString("base64"),
-  );
+  const pkcs8Base64 = privateKey
+    .export({ format: "der", type: "pkcs8" })
+    .toString("base64");
+  const wrappedPrivateKey = encrypted
+    ? wrapPrivateKey(pkcs8Base64)
+    : pkcs8Base64;
   if (wrappedPrivateKey === null) return null;
+  if (!encrypted) {
+    log.warn(
+      "[browser-view] minting a desktop identity with its key in the clear: this machine's keystore does not encrypt",
+    );
+  }
   const record: DesktopIdentityRecord = {
     version: 1,
     keystoreId: randomUUID(),
@@ -114,6 +159,7 @@ async function mintIdentity(): Promise<DesktopIdentityRecord | null> {
       .export({ format: "der", type: "spki" })
       .toString("base64"),
     wrappedPrivateKey,
+    encrypted,
   };
   // Durable first: an identity that attested but was never written would be
   // re-minted on the next launch, and the host would refuse the new key over
@@ -138,6 +184,9 @@ function wrapPrivateKey(pkcs8Base64: string): string | null {
  * Answers one `desktopIdentityChallenge`. `null` means this machine has no
  * identity and will not get one - the host then leaves this connection off the
  * jar plane, and everything else about the session keeps working.
+ *
+ * `jarEligible` is the second answer, and the one a machine with a plaintext
+ * key gives: it is placeable, it is not a place to put the user's cookies.
  */
 export async function attestDesktopIdentity(input: {
   readonly hostId: string;
@@ -146,9 +195,11 @@ export async function attestDesktopIdentity(input: {
   const record = await loadOrMintIdentity();
   if (record === null) return null;
   try {
-    const pkcs8Base64 = safeStorage.decryptString(
-      Buffer.from(record.wrappedPrivateKey, "base64"),
-    );
+    const pkcs8Base64 = record.encrypted
+      ? safeStorage.decryptString(
+          Buffer.from(record.wrappedPrivateKey, "base64"),
+        )
+      : record.wrappedPrivateKey;
     const signature = cryptoSign(
       null,
       canonicalDesktopIdentityAttestBytes({
@@ -166,6 +217,7 @@ export async function attestDesktopIdentity(input: {
       publicKey: record.publicKey,
       keystoreId: record.keystoreId,
       signature,
+      jarEligible: record.encrypted,
     };
   } catch (error) {
     log.warn("[browser-view] desktop identity attestation failed", {

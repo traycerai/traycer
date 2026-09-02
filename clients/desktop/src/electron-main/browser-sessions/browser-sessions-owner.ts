@@ -7,7 +7,10 @@ import type {
   BrowserSessionsUxClientFrame,
   BrowserSessionsUxServerFrame,
 } from "@traycer/protocol/host/browser/contracts";
-import { BROWSER_PRIMARY_PROFILE_OBSERVED_MAX_COOKIES } from "@traycer/protocol/host/browser/contracts";
+import {
+  BROWSER_PRIMARY_PROFILE_OBSERVED_MAX_COOKIES,
+  isBrowserSessionsJarServerFrame,
+} from "@traycer/protocol/host/browser/contracts";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { BrowserSessionsStreamClient } from "@traycer-clients/shared/host-transport/browser-sessions-stream-client";
 import type {
@@ -17,6 +20,7 @@ import type {
 import {
   browserSessionsError,
   browserSessionsLifecycle,
+  browserSessionsStreamKeyId,
   type BrowserSessionsLifecycle,
   type BrowserSessionsStreamEventEnvelope,
   type BrowserSessionsStreamKey,
@@ -44,11 +48,22 @@ import type {
 export const FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS = 5_000;
 
 /**
+ * How many `browser.sessions` streams one window may hold.
+ *
+ * The renderer names the stream, and every distinct `identityKey` it names
+ * costs a socket, a relay attach, a desktop identity attestation and a whole
+ * contributed-set replay. A window drives one epic's browser surface at a time
+ * plus whatever is warm behind it, so a dozen is far above any real shape and
+ * still bounds a renderer that loops the key.
+ */
+const MAX_STREAMS_PER_WINDOW = 12;
+
+/**
  * Everything the jar plane needs, in the process that owns the jar.
  *
  * Declared as a port rather than imported module-by-module so the suites drive
- * the REAL frame flow against real storage doubles - the point of H10 is which
- * process these run in, and a test that mocks the frame router instead would
+ * the REAL frame flow against real storage doubles - which process these run
+ * in is the whole point, and a test that mocks the frame router instead would
  * pin nothing about that.
  */
 export interface BrowserSessionsJarPort {
@@ -62,10 +77,11 @@ export interface BrowserSessionsJarPort {
   /**
    * The store key is per USER, so both halves are matched on the account as
    * well as on the blob: this machine's own blob for another account is as
-   * foreign as another machine's (H03 item 7). The id is main's own - the
-   * stream passes what it opened for.
+   * foreign as another machine's. The ids are main's own - the
+   * stream passes what it opened for, and the host it opened to, which is the
+   * wrap ledger's eviction key.
    */
-  wrapStoreKey(rawKey: string, userId: string): string | null;
+  wrapStoreKey(rawKey: string, userId: string, hostId: string): string | null;
   unwrapStoreKey(wrappedKey: string, userId: string): string | null;
   attestDesktopIdentity(input: {
     readonly hostId: string;
@@ -100,8 +116,8 @@ export interface BrowserSessionsRegistryDeps {
   readonly tabs: BrowserSessionsTabPort;
   /**
    * The signed-in user main opens a stream FOR - read here, never taken from
-   * the renderer (H10 ruling 1): it is half of the relay attach grant's
-   * identity, and a renderer that could name it could name someone else's.
+   * the renderer: it is half of the relay attach grant's identity, and a
+   * renderer that could name it could name someone else's.
    * `null` while the desktop is signed out, which opens nothing.
    */
   readonly userId: () => string | null;
@@ -134,8 +150,9 @@ export interface BrowserSessionsRegistryDeps {
   ) => void;
 }
 
+/** One window's view of a stream identity, over the shared encoder. */
 function streamKeyId(windowId: string, key: BrowserSessionsStreamKey): string {
-  return JSON.stringify([windowId, key.epicId, key.hostId, key.identityKey]);
+  return JSON.stringify([windowId, browserSessionsStreamKeyId(key)]);
 }
 
 /**
@@ -160,6 +177,9 @@ export class BrowserSessionsRegistry {
       for (const stream of this.streams.values()) stream.retryLifecycleReady();
     });
     this.stopBearerRotations = deps.subscribeBearerRotation(() => {
+      // BEFORE the streams are told, so a restart that follows resolves
+      // against the new identity's registry rather than the old one's cache.
+      deps.directory.reset();
       for (const stream of this.streams.values()) stream.notifyBearerRotated();
     });
   }
@@ -168,9 +188,42 @@ export class BrowserSessionsRegistry {
     if (this.disposed) return;
     const id = streamKeyId(windowId, key);
     if (this.streams.has(id)) return;
-    const stream = new BrowserSessionsStream(windowId, key, this.deps);
+    if (this.countStreamsForWindow(windowId) >= MAX_STREAMS_PER_WINDOW) {
+      log.warn("[browser-sessions] refused a stream over the per-window cap", {
+        hostId: key.hostId,
+        streams: MAX_STREAMS_PER_WINDOW,
+      });
+      // Reported as `failed`, exactly like a stream that could not reach a
+      // socket: a silent refusal leaves the renderer's session in `connecting`
+      // for the life of the window, with nothing to retry and nothing to show.
+      this.deps.emit(windowId, {
+        key,
+        event: {
+          kind: "status",
+          lifecycle: "failed",
+          errorMessage: "This window has too many browser sessions open.",
+        },
+      });
+      return;
+    }
+    const stream = new BrowserSessionsStream(windowId, key, this.deps, () => {
+      // A stream that will never reach a socket is not holding a place under
+      // the cap: it is dropped from the map by the same edge that reported
+      // `failed` to the renderer, and re-opening it is one invoke away.
+      if (this.streams.get(id) !== stream) return;
+      this.streams.delete(id);
+      stream.dispose();
+    });
     this.streams.set(id, stream);
     stream.start();
+  }
+
+  private countStreamsForWindow(windowId: string): number {
+    let count = 0;
+    for (const stream of this.streams.values()) {
+      if (stream.windowId === windowId) count += 1;
+    }
+    return count;
   }
 
   close(windowId: string, key: BrowserSessionsStreamKey): void {
@@ -192,7 +245,7 @@ export class BrowserSessionsRegistry {
   /**
    * A renderer went away. Its streams go with it, which reproduces today's
    * behaviour exactly - the renderer owning the socket meant a reload dropped
-   * it - and the fresh renderer re-opens (H10 ruling 3).
+   * it - and the fresh renderer re-opens.
    */
   closeWindow(windowId: string): void {
     for (const [id, stream] of [...this.streams]) {
@@ -255,14 +308,6 @@ export class BrowserSessionsRegistry {
     });
   }
 
-  clearSiteOnEveryHost(domain: string): number {
-    return this.sendOncePerHost({
-      kind: "clearSite",
-      hasBinaryPayload: false,
-      domain,
-    });
-  }
-
   dispose(): void {
     this.disposed = true;
     this.stopLocalHostChanges();
@@ -296,6 +341,7 @@ class BrowserSessionsStream {
   readonly hostId: string;
   private readonly key: BrowserSessionsStreamKey;
   private readonly deps: BrowserSessionsRegistryDeps;
+  private readonly onFailedToOpen: () => void;
 
   private transport: BrowserSessionsHostTransport | null = null;
   private client: BrowserSessionsStreamClient | null = null;
@@ -305,13 +351,18 @@ class BrowserSessionsStream {
 
   private disposed = false;
   /**
+   * The live incarnation of `start()`. Bumped by every teardown, so a
+   * resolution that was in flight across one drops instead of attaching.
+   */
+  private generation = 0;
+  /**
    * This stream's socket is not coming back on its own.
    *
    * `WsStreamClient` goes terminal on an `UNAUTHORIZED` when it holds no
-   * revalidator, and the host closes a connection at its bearer's `exp`
-   * (H08), so "terminal" is the ORDINARY end of a stream that has run for one
-   * token lifetime - not an exceptional state. The rotation that follows is
-   * what restarts it.
+   * revalidator, and the host closes a connection at its bearer's `exp`, so
+   * "terminal" is the ORDINARY end of a stream that has run for one token
+   * lifetime - not an exceptional state. The rotation that follows is what
+   * restarts it.
    */
   private terminal = false;
   private connectionStatus: StreamConnectionStatus = "connecting";
@@ -334,7 +385,7 @@ class BrowserSessionsStream {
    */
   private sentForgetLedgerRevision = 0;
   /**
-   * The `requestId` this host issued as its STANDING capture request (H02).
+   * The `requestId` this host issued as its STANDING capture request.
    *
    * It arrives once per connection, when the host completes the store-key
    * handshake, and it means "capture nothing now, keep this id": from that
@@ -361,11 +412,13 @@ class BrowserSessionsStream {
     windowId: string,
     key: BrowserSessionsStreamKey,
     deps: BrowserSessionsRegistryDeps,
+    onFailedToOpen: () => void,
   ) {
     this.windowId = windowId;
     this.hostId = key.hostId;
     this.key = key;
     this.deps = deps;
+    this.onFailedToOpen = onFailedToOpen;
   }
 
   start(): void {
@@ -373,32 +426,51 @@ class BrowserSessionsStream {
     const userId = this.deps.userId();
     if (userId === null) {
       // Signed out: there is no identity to open a stream for. A sign-in
-      // rotates the bearer, and that is what re-drives this.
+      // rotates the bearer, and that is what re-drives this. Deliberately not
+      // a failure - nothing was reported to the renderer to retry.
       return;
     }
     this.openedUserId = userId;
+    // The incarnation this resolve belongs to. A directory read is one await
+    // wide, and a bearer rotation inside it tears this stream down and starts
+    // a second one; without the check both resolutions would `attach()`, and
+    // the first would orphan a live client and leave two subscribers on one
+    // epic.
+    const generation = this.generation;
     void this.deps.directory
       .resolve(this.hostId)
       .then((target) => {
-        if (this.disposed) return;
+        if (this.disposed || generation !== this.generation) return;
         if (target === null) {
-          this.emitStatus("failed", "This host is not in the directory.");
+          this.failToOpen("This host is not in the directory.");
           return;
         }
         const transport = this.deps.openTransport(target, userId);
         if (transport === null) {
-          this.emitStatus("failed", "This host cannot be dialed.");
+          this.failToOpen("This host cannot be dialed.");
           return;
         }
         this.attach(transport);
       })
       .catch((cause: unknown) => {
+        if (this.disposed || generation !== this.generation) return;
         log.warn("[browser-sessions] could not open a stream", {
           hostId: this.hostId,
           error: describeLogError(cause),
         });
-        this.emitStatus("failed", "Browser sessions stream could not open.");
+        this.failToOpen("Browser sessions stream could not open.");
       });
+  }
+
+  /**
+   * A stream that never reached a socket. The renderer is told, and the
+   * registry drops it so it holds no place under the per-window cap - the
+   * renderer's own retry re-opens, which is the same recovery a terminal
+   * socket already had.
+   */
+  private failToOpen(errorMessage: string): void {
+    this.emitStatus("failed", errorMessage);
+    this.onFailedToOpen();
   }
 
   private attach(transport: BrowserSessionsHostTransport): void {
@@ -459,6 +531,22 @@ class BrowserSessionsStream {
   }
 
   sendUxFrame(frame: BrowserSessionsUxClientFrame): void {
+    // A preview is a screenshot of a signed-in page, and `openTab` is one IPC
+    // away, so a renderer that could ask for both could photograph the user's
+    // mail without anything appearing on screen. A preview of a guest THIS
+    // desktop owns is therefore answered only while that guest is on screen.
+    // A tab this stream owns no guest for is the picker's ordinary case (a tab
+    // on the host's own side) and is passed through: the host answers for its
+    // own tabs, and nothing here can see them.
+    if (
+      frame.kind === "captureTabPreview" &&
+      this.electronTabs?.isTabViewed(frame.tabId) === false
+    ) {
+      log.warn("[browser-sessions] refused a preview of an off-screen tab", {
+        hostId: this.hostId,
+      });
+      return;
+    }
     this.sendClientFrame(frame);
   }
 
@@ -490,12 +578,22 @@ class BrowserSessionsStream {
    */
   notifyBearerRotated(): void {
     if (this.disposed) return;
-    if (this.deps.userId() === null) {
-      // Signed out. The jar plane speaks for an account, so main closes its
-      // own streams rather than leaving a socket open on a credential the
-      // user has revoked and waiting for the host to notice.
+    const userId = this.deps.userId();
+    if (userId !== this.openedUserId) {
+      // A DIFFERENT account, sign-out included. The jar plane speaks for one
+      // account throughout - the store-key wrap, the relay grant and the
+      // forget ledger are all priced against `openedUserId` - so pushing the
+      // new credential down the open socket would attest B's identity on a
+      // connection the host still bills to A. Torn down and, when there is
+      // someone to open it for, started again for the new one.
       this.teardown();
       this.openedUserId = null;
+      this.terminal = false;
+      if (userId === null) return;
+      log.info("[browser-sessions] restarting a stream for a new account", {
+        hostId: this.hostId,
+      });
+      this.start();
       return;
     }
     this.transport?.wsStreamClient.notifyBearerRotated();
@@ -532,6 +630,7 @@ class BrowserSessionsStream {
 
   /** Everything `dispose` releases, minus the one-way `disposed` latch. */
   private teardown(): void {
+    this.generation += 1;
     this.retireConnection();
     this.resolveCaptureAckWaiters();
     this.forgetLedgerChanges?.dispose();
@@ -619,6 +718,13 @@ class BrowserSessionsStream {
 
   private handleServerFrame(frame: BrowserSessionsServerFrame): void {
     if (this.disposed) return;
+    // Membership in the protocol's exclusion set decides which half of the
+    // stream a frame is on, so this dispatch and the UX projection below it
+    // cannot drift from the type that separates them.
+    if (!isBrowserSessionsJarServerFrame(frame)) {
+      this.projectUxFrame(frame);
+      return;
+    }
     switch (frame.kind) {
       case "createElectronTab":
       case "electronTabAccepted":
@@ -651,8 +757,6 @@ class BrowserSessionsStream {
       case "primaryProfileForgetLedgerAck":
         this.handleForgetLedgerAck(frame.revision);
         return;
-      default:
-        this.projectUxFrame(frame);
     }
   }
 
@@ -688,8 +792,8 @@ class BrowserSessionsStream {
     this.lifecycleReadySent = true;
     // ONE synchronous burst, and the order in it is the attach ordering
     // guarantee. `electronTabLifecycleReady` is what makes the host CHALLENGE
-    // this stream for a desktop identity (H09); the ledger digest rides
-    // immediately behind it on the same ordered stream, and the store-key
+    // this stream for a desktop identity; the ledger digest rides immediately
+    // behind it on the same ordered stream, and the store-key
     // handshake begins a full attestation round trip after that - so the
     // digest is always RECEIVED before the handshake completes, and therefore
     // before the attach replay it must precede.
@@ -888,7 +992,7 @@ class BrowserSessionsStream {
   private answerStoreKeyWrap(requestId: string, rawKey: string): void {
     const userId = this.openedUserId;
     if (userId === null) return;
-    const wrappedKey = this.deps.jar.wrapStoreKey(rawKey, userId);
+    const wrappedKey = this.deps.jar.wrapStoreKey(rawKey, userId, this.hostId);
     if (wrappedKey === null) {
       log.warn("[browser-sessions] the store-key wrap failed", {
         hostId: this.hostId,
@@ -921,12 +1025,16 @@ class BrowserSessionsStream {
   }
 
   /**
-   * One host challenge, signed HERE (H09 + H10): the prover and the jar-plane
-   * speaker are now the same process, so the signature never crosses an IPC
-   * boundary and there is no attest channel for a renderer to reach. A `null`
-   * answer - this machine's keystore does not encrypt, so it has no identity -
-   * is simply not sent: the host leaves the connection off the jar plane and
-   * every other part of the session keeps working.
+   * One host challenge, signed HERE: the prover and the jar-plane speaker are
+   * now the same process, so the signature never crosses an IPC boundary and
+   * there is no attest channel for a renderer to reach. A `null` answer -
+   * this machine could not mint or open its key at all - is simply not sent:
+   * the host leaves the connection off the jar plane and every other part of
+   * the session keeps working.
+   *
+   * A machine whose keystore does not encrypt DOES attest now, with
+   * `jarEligible: false`, so it can be given native tabs while the host keeps
+   * the encrypted slice to itself.
    */
   private answerIdentityChallenge(requestId: string, nonce: string): void {
     void this.deps.jar
@@ -946,6 +1054,7 @@ class BrowserSessionsStream {
           publicKey: attestation.publicKey,
           keystoreId: attestation.keystoreId,
           signature: attestation.signature,
+          jarEligible: attestation.jarEligible,
         });
       })
       .catch((cause: unknown) => {

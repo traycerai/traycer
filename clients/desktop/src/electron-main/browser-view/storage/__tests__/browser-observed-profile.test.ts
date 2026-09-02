@@ -202,6 +202,53 @@ class ObservedApplyHarness {
       connectionId: "connection-1",
     });
   }
+
+  /**
+   * The `createElectronTab` storage-seed door: same merge path as `apply`,
+   * but declared `source: "seed"` - the one thing that door and the observed
+   * replay door differ on.
+   */
+  applySeed(input: {
+    readonly domain: string;
+    readonly cookies: readonly BrowserStorageCookie[];
+    readonly connectionId: string;
+  }): Promise<BrowserObservedProfileResult> {
+    const observed = {
+      source: "seed" as const,
+      connectionId: input.connectionId,
+      hostId: "host-1",
+      domain: input.domain,
+      cookies: input.cookies,
+    };
+    return applyBrowserObservedProfile(observed, {
+      now: () => Date.now(),
+      isForgottenPendingAck: (gate) =>
+        this.forgottenPendingAck.has(`${gate.connectionId} ${gate.domain}`),
+      isHeadlessOriginKey: (keyId) =>
+        !this.ownershipRuleEnabled || this.headlessOriginKeyIds.has(keyId),
+      claimHeadlessOriginKeys: (keys) => {
+        for (const key of keys) {
+          this.announcedKeys.push(key);
+          this.headlessOriginKeyIds.add(cookieKeyId(key));
+        }
+        return Promise.resolve();
+      },
+      releaseHeadlessOriginKeys: (keys) => {
+        for (const key of keys) {
+          this.releasedKeys.push(key);
+          this.headlessOriginKeyIds.delete(cookieKeyId(key));
+        }
+        return Promise.resolve();
+      },
+      getTargetJar: () => ({
+        session: { cookies: this.gatedJar },
+        durableJar: this.durableJar,
+      }),
+      serializeOnDomain: (domain, action) =>
+        this.serializer.runOnDomain(domain, action),
+      governor: this.governor,
+    });
+  }
 }
 
 beforeEach(() => {
@@ -694,6 +741,36 @@ describe("observed frame rate limiting", () => {
       "[browser-view] refused a host-contributed sign-in",
       expect.objectContaining({ reason: "rate-limited" }),
     );
+  });
+
+  it("V-10: a seed is exempt from the rate governor - only the observed replay door is priced", async () => {
+    const harness = new ObservedApplyHarness();
+    const admit = vi.spyOn(harness.governor, "admit").mockReturnValue(false);
+    const cookies = [
+      observedCookie({ name: "sid", domain: "example.com", expires: -1 }),
+    ];
+
+    // An always-refusing governor still drops the observed-source frame.
+    const observedResult = await harness.apply({
+      domain: "example.com",
+      cookies,
+      connectionId: "connection-1",
+    });
+    expect(observedResult.outcome).toBe("rate-limited");
+
+    admit.mockClear();
+
+    // The SAME input, declared as a seed, is applied instead - and the
+    // governor is not even consulted for it, because a seed is one tab being
+    // born, already bounded by the tab-create rate and the per-frame cookie
+    // bound, not the host's unsolicited replay budget.
+    const seedResult = await harness.applySeed({
+      domain: "example.com",
+      cookies,
+      connectionId: "connection-1",
+    });
+    expect(seedResult.outcome).toBe("applied");
+    expect(admit).not.toHaveBeenCalled();
   });
 });
 

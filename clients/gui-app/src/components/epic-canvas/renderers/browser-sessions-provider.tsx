@@ -141,8 +141,8 @@ function useBrowserSessions(
     args.hostClient,
     hostEntry,
   );
-  // Main mints the relay attach grant for a remote host, so the stream it owns
-  // is opened for a named user rather than for whoever holds the bearer.
+  // Not sent to main, which reads the signed-in user from the desktop auth
+  // session it owns; it only decides whether asking is worth an IPC.
   const userId = args.hostClient?.getRequestContextUserId() ?? null;
   const openTransport = useDurableStreamTransportFactory();
   const owner = useMemo<BrowserSessionsOwner | null>(

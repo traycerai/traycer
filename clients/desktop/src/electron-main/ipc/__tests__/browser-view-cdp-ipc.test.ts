@@ -25,10 +25,45 @@ type InvokeHandler = (
   payload: unknown,
 ) => unknown | Promise<unknown>;
 
+interface AuthSnapshot {
+  readonly status: string;
+  readonly token: string | null;
+  readonly profile: { readonly userId: string } | null;
+  /**
+   * Whether main itself checked the bearer against authn's signing keys. The
+   * renderer hands main the token; only a verified one is a principal.
+   */
+  readonly verified: boolean;
+}
+
+const SIGNED_OUT: AuthSnapshot = {
+  status: "signed-out",
+  token: null,
+  profile: null,
+  verified: false,
+};
+
 const captured = vi.hoisted(() => ({
   dispatchedTabs: [] as DispatchElectronTabCdpCall[],
   ensuredTabs: [] as EnsureTabCall[],
   controlledTabs: [] as ControlElectronTabCall[],
+  /** The account each jar-plane dial was opened for. */
+  transportOpens: [] as string[],
+  /** Transports the registry tore back down. */
+  transportCloses: 0,
+  /** Everyone main told to re-read the auth session. */
+  authChangeListeners: [] as Array<() => void>,
+  authSnapshot: {
+    status: "signed-out",
+    token: null,
+    profile: null,
+    verified: false,
+  } as {
+    readonly status: string;
+    readonly token: string | null;
+    readonly profile: { readonly userId: string } | null;
+    readonly verified: boolean;
+  },
 }));
 
 vi.mock("electron", () => {
@@ -45,6 +80,8 @@ vi.mock("electron", () => {
   return {
     app: {
       getPath: (_key: string): string => "/tmp/traycer-desktop-test",
+      // Read when a jar-plane transport is dialed.
+      getVersion: (): string => "1.0.0",
       relaunch: (): void => undefined,
       exit: (_code: number): void => undefined,
     },
@@ -52,6 +89,9 @@ vi.mock("electron", () => {
     WebContentsView,
     dialog: {
       showSaveDialogSync: () => undefined,
+      // The destructive handlers ask asynchronously; nothing here raises one.
+      showMessageBox: (): Promise<{ readonly response: number }> =>
+        Promise.resolve({ response: 0 }),
       showMessageBoxSync: () => 0,
     },
     session: {
@@ -68,6 +108,35 @@ vi.mock("electron", () => {
     safeStorage: {
       isEncryptionAvailable: () => true,
       getSelectedStorageBackend: () => "unknown",
+    },
+  };
+});
+
+/**
+ * The dial itself, over the registry's own fake stream client - so the stream
+ * really opens, and a torn-down one really closes.
+ */
+vi.mock("../../browser-sessions/browser-sessions-transport", async () => {
+  const { FakeStreamClient, LOCAL_HOST_ENTRY } =
+    await import("../../browser-sessions/__tests__/browser-sessions-stream-fixture");
+  return {
+    createBrowserSessionsHostDirectory: () => ({
+      invalidate: (): void => undefined,
+      reset: (): void => undefined,
+      resolve: () => Promise.resolve(LOCAL_HOST_ENTRY),
+      endpoint: () => ({
+        hostId: LOCAL_HOST_ENTRY.hostId,
+        websocketUrl: LOCAL_HOST_ENTRY.websocketUrl,
+      }),
+    }),
+    openBrowserSessionsTransport: (_target: unknown, userId: string) => {
+      captured.transportOpens.push(userId);
+      return {
+        wsStreamClient: new FakeStreamClient(false),
+        close: (): void => {
+          captured.transportCloses += 1;
+        },
+      };
     },
   };
 });
@@ -202,8 +271,10 @@ function makeBridge() {
       },
     },
     authSession: {
-      get: () => ({ status: "signed-out", token: null, profile: null }),
-      on: vi.fn(),
+      get: () => captured.authSnapshot,
+      on: vi.fn((_event: string, listener: () => void) => {
+        captured.authChangeListeners.push(listener);
+      }),
       off: vi.fn(),
     },
   };
@@ -232,11 +303,44 @@ function findInvokeHandler(
   return handler as InvokeHandler;
 }
 
+/** Drains the microtask queue without ordering anything by a clock. */
+function flushMicrotasks(): Promise<void> {
+  return Promise.resolve().then().then().then().then();
+}
+
+const STREAM_KEY = {
+  epicId: "epic-1",
+  hostId: "host-1",
+  identityKey: "identity-1",
+};
+
+/**
+ * One renderer asking main to hold a jar-plane stream open, driven to the
+ * point where the dial either happened or did not. The directory read is one
+ * await wide, so the queue is drained before the answer is read.
+ */
+async function openSessionsStream(): Promise<void> {
+  const { registerBrowserViewIpc } = await import("../browser-view-ipc");
+  const { RunnerHostInvoke } =
+    await import("../../../ipc-contracts/ipc-channels");
+  const bridge = makeBridge();
+  registerBrowserViewIpc(bridge as never);
+  await findInvokeHandler(bridge, RunnerHostInvoke.browserViewSessionsOpen)(
+    {},
+    STREAM_KEY,
+  );
+  await flushMicrotasks();
+}
+
 describe("native browser tab IPC", () => {
   beforeEach(() => {
     captured.dispatchedTabs = [];
     captured.ensuredTabs = [];
     captured.controlledTabs = [];
+    captured.transportOpens = [];
+    captured.transportCloses = 0;
+    captured.authChangeListeners = [];
+    captured.authSnapshot = SIGNED_OUT;
     vi.clearAllMocks();
   });
 
@@ -333,5 +437,53 @@ describe("native browser tab IPC", () => {
         },
       },
     ]);
+  });
+
+  // The jar plane's principal is a VERIFIED session, not merely a signed-in
+  // one. Main is handed its bearer by the renderer, so a session it has not
+  // checked against authn's signing keys is not a degraded principal - it is
+  // no principal at all, and everything on the plane (the dial, the relay
+  // grant, the store-key wrap, the ledger's per-user match) reads the same
+  // answer.
+  it("opens no jar-plane stream for a signed-in session main has not verified", async () => {
+    captured.authSnapshot = {
+      status: "signed-in",
+      token: "bearer-1",
+      profile: { userId: "user-1" },
+      verified: false,
+    };
+
+    await openSessionsStream();
+
+    expect(captured.transportOpens).toEqual([]);
+  });
+
+  it("tears a live stream down when the session it was opened for stops being verified", async () => {
+    captured.authSnapshot = {
+      status: "signed-in",
+      token: "bearer-1",
+      profile: { userId: "user-1" },
+      verified: true,
+    };
+
+    await openSessionsStream();
+
+    expect(captured.transportOpens).toEqual(["user-1"]);
+
+    // The same edge a sign-out takes: the account this stream speaks for is
+    // read fresh, answers null, and no longer matches the one it was opened
+    // for - so the socket goes rather than carrying a credential main can no
+    // longer vouch for.
+    captured.authSnapshot = {
+      status: "signed-in",
+      token: "bearer-1",
+      profile: { userId: "user-1" },
+      verified: false,
+    };
+    for (const listener of captured.authChangeListeners) listener();
+    await flushMicrotasks();
+
+    expect(captured.transportCloses).toBe(1);
+    expect(captured.transportOpens).toEqual(["user-1"]);
   });
 });

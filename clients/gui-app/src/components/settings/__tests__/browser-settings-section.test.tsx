@@ -71,12 +71,16 @@ const hostDirectory = vi.hoisted(
 const hostBinding = vi.hoisted((): { current: object | null } => ({
   current: null,
 }));
-const forgetAllBrowserLogins = vi.hoisted(() =>
-  vi.fn(() => Promise.resolve(1)),
-);
-const clearSavedLoginSite = vi.hoisted(() =>
-  vi.fn(() => Promise.resolve(true)),
-);
+/**
+ * The bridge itself, not a stand-in for the renderer helper that calls it:
+ * both destructive actions are confirmed AND fanned out in main, and what is
+ * worth pinning is that the surface asks main and believes main's answer.
+ * Booleans, because that is the contract both methods declare.
+ */
+const browserView = vi.hoisted(() => ({
+  forgetLogins: vi.fn(() => Promise.resolve(true)),
+  clearSavedLoginSite: vi.fn((_domain: string) => Promise.resolve(true)),
+}));
 
 function boundHostRuntime(): object {
   return {
@@ -88,7 +92,7 @@ function boundHostRuntime(): object {
 }
 
 vi.mock("@/providers/use-runner-host", () => ({
-  useRunnerHostOrNull: () => ({ browserView: {} }),
+  useRunnerHostOrNull: () => ({ browserView }),
 }));
 
 vi.mock("@/lib/host", () => ({
@@ -117,11 +121,6 @@ vi.mock("@/lib/browser-view/use-browser-save-logins", () => ({
 
 vi.mock("@/hooks/browser/use-browser-saved-login-sites-query", () => ({
   useBrowserSavedLoginSitesQuery: () => ({ data: sites.current, refetch }),
-}));
-
-vi.mock("@/lib/browser-view/sessions/browser-sessions-coordinator", () => ({
-  forgetAllBrowserLogins,
-  clearSavedLoginSite,
 }));
 
 function controller(
@@ -162,8 +161,8 @@ describe("<BrowserSettingsSection /> saved logins", () => {
 
   afterEach(() => {
     cleanup();
-    forgetAllBrowserLogins.mockClear();
-    clearSavedLoginSite.mockClear();
+    browserView.forgetLogins.mockClear();
+    browserView.clearSavedLoginSite.mockClear();
     refetch.mockClear();
   });
 
@@ -223,7 +222,7 @@ describe("<BrowserSettingsSection /> saved logins", () => {
     // security review, root cause C). A second confirmation here would ask
     // twice and, worse, would read as the gate while the real one is
     // elsewhere - so the click goes straight through and no dialog opens.
-    expect(forgetAllBrowserLogins).toHaveBeenCalledTimes(1);
+    expect(browserView.forgetLogins).toHaveBeenCalledTimes(1);
     expect(screen.queryByTestId("confirm-action")).toBeNull();
   });
 
@@ -328,10 +327,7 @@ describe("<BrowserSettingsSection /> saved logins", () => {
       }),
     );
 
-    expect(clearSavedLoginSite).toHaveBeenCalledWith(
-      expect.anything(),
-      "example.com",
-    );
+    expect(browserView.clearSavedLoginSite).toHaveBeenCalledWith("example.com");
 
     await waitFor(() => {
       expect(refetch).toHaveBeenCalledTimes(1);
@@ -343,7 +339,7 @@ describe("<BrowserSettingsSection /> saved logins", () => {
   });
 
   it("leaves the row in place when main declines the confirmation", async () => {
-    clearSavedLoginSite.mockResolvedValueOnce(false);
+    browserView.clearSavedLoginSite.mockResolvedValueOnce(false);
     renderSection(controller({}), {
       kind: "sites",
       sites: [savedSite("example.com"), savedSite("example.org")],
@@ -356,8 +352,33 @@ describe("<BrowserSettingsSection /> saved logins", () => {
     );
 
     await waitFor(() => {
-      expect(clearSavedLoginSite).toHaveBeenCalledWith(
-        expect.anything(),
+      expect(browserView.clearSavedLoginSite).toHaveBeenCalledWith(
+        "example.com",
+      );
+    });
+    expect(refetch).not.toHaveBeenCalled();
+    expect(screen.getByText("example.com")).not.toBeNull();
+  });
+
+  it("leaves the row in place when the confirmation IPC rejects", async () => {
+    // A rejected invoke is not a confirmation, and a click handler is no place
+    // for it to escape from: main told nobody, so the row must stay.
+    browserView.clearSavedLoginSite.mockRejectedValueOnce(
+      new Error("the main process went away"),
+    );
+    renderSection(controller({}), {
+      kind: "sites",
+      sites: [savedSite("example.com"), savedSite("example.org")],
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Clear saved logins for example.com",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(browserView.clearSavedLoginSite).toHaveBeenCalledWith(
         "example.com",
       );
     });

@@ -20,6 +20,8 @@ const userData = { path: "" };
 const keystore = {
   encrypting: true,
   backend: "gnome_libsecret",
+  encrypt: vi.fn((value: string) => Buffer.from(value, "utf8")),
+  decrypt: vi.fn((blob: Buffer) => blob.toString("utf8")),
 };
 
 vi.mock("electron", () => ({
@@ -29,8 +31,8 @@ vi.mock("electron", () => ({
     getSelectedStorageBackend: () => keystore.backend,
     // The real keystore is opaque; a reversible stand-in is enough, and the
     // test never asserts on its bytes - only that the private half stays here.
-    encryptString: (value: string) => Buffer.from(value, "utf8"),
-    decryptString: (blob: Buffer) => blob.toString("utf8"),
+    encryptString: (value: string) => keystore.encrypt(value),
+    decryptString: (blob: Buffer) => keystore.decrypt(blob),
   },
 }));
 
@@ -38,6 +40,31 @@ vi.mock("../../../app/logger", () => ({
   log: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   describeLogError: (error: unknown) => String(error),
 }));
+
+/** R3-7: lets one durable write from the identity store be forced to reject. */
+const writeGate = { failNext: false };
+vi.mock("../../../app/json-file-store", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../app/json-file-store")>();
+  return {
+    ...actual,
+    createJsonFileStore: <T>(
+      ...args: Parameters<typeof actual.createJsonFileStore<T>>
+    ) => {
+      const store = actual.createJsonFileStore<T>(...args);
+      return {
+        ...store,
+        saveStrict: async (value: T): Promise<void> => {
+          if (writeGate.failNext) {
+            writeGate.failNext = false;
+            throw new Error("simulated durable-write failure");
+          }
+          await store.saveStrict(value);
+        },
+      };
+    },
+  };
+});
 
 const HOST_ID = "host-1";
 const NONCE = Buffer.alloc(32, 7).toString("base64");
@@ -47,6 +74,9 @@ describe("this installation's browser identity", () => {
     userData.path = await mkdtemp(join(tmpdir(), "desktop-identity-"));
     keystore.encrypting = true;
     keystore.backend = "gnome_libsecret";
+    keystore.encrypt.mockClear();
+    keystore.decrypt.mockClear();
+    writeGate.failNext = false;
     resetDesktopIdentityForTests();
   });
 
@@ -141,25 +171,84 @@ describe("this installation's browser identity", () => {
     }
   });
 
-  it("refuses to mint an identity on a keystore that does not encrypt", async () => {
+  it("V-9: is jarEligible on an encrypting keystore, with the private half wrapped by safeStorage", async () => {
+    const attestation = await attestDesktopIdentity({
+      hostId: HOST_ID,
+      nonce: NONCE,
+    });
+    if (attestation === null) throw new Error("expected an attestation");
+
+    expect(attestation.jarEligible).toBe(true);
+    expect(keystore.encrypt).toHaveBeenCalled();
+  });
+
+  it("V-9: still attests on a keystore that does not encrypt, with jarEligible: false and no wrap call", async () => {
     // `basic_text` is a Linux-only backend, and the refusal is asked only
-    // there, so the platform has to be the real input.
+    // there, so the platform has to be the real input. Tying placement to the
+    // wrapped key would refuse such a machine a native tab entirely, so it
+    // must still mint and attest - just never claim eligibility for the
+    // encrypted jar slice.
     const platform = process.platform;
     Object.defineProperty(process, "platform", { value: "linux" });
     try {
       keystore.backend = "basic_text";
-      await expect(
-        attestDesktopIdentity({ hostId: HOST_ID, nonce: NONCE }),
-      ).resolves.toBeNull();
+      const attestation = await attestDesktopIdentity({
+        hostId: HOST_ID,
+        nonce: NONCE,
+      });
+      if (attestation === null) throw new Error("expected an attestation");
+
+      expect(attestation.jarEligible).toBe(false);
+      expect(keystore.encrypt).not.toHaveBeenCalled();
+      // Still a valid signature over the same canonical bytes as the
+      // encrypting case - the downgrade is only in `jarEligible`.
+      expect(
+        cryptoVerify(
+          null,
+          canonicalDesktopIdentityAttestBytes({
+            hostId: HOST_ID,
+            nonce: NONCE,
+            publicKey: attestation.publicKey,
+          }),
+          createPublicKey({
+            key: Buffer.from(attestation.publicKey, "base64"),
+            format: "der",
+            type: "spki",
+          }),
+          Buffer.from(attestation.signature, "base64"),
+        ),
+      ).toBe(true);
+
+      // Durable across a restart: the same key comes back, not a fresh one.
+      resetDesktopIdentityForTests();
+      const second = await attestDesktopIdentity({
+        hostId: HOST_ID,
+        nonce: Buffer.alloc(32, 9).toString("base64"),
+      });
+      expect(second?.publicKey).toBe(attestation.publicKey);
+      expect(second?.jarEligible).toBe(false);
     } finally {
       Object.defineProperty(process, "platform", { value: platform });
     }
+  });
 
-    keystore.encrypting = false;
-    resetDesktopIdentityForTests();
+  it("R3-7: clears the mint memo on a rejected durable write, so recovery is not refused forever", async () => {
+    // resetDesktopIdentityForTests() is teardown-only and must not be used
+    // here to paper over the rejection - the pin is that the module clears
+    // its OWN memo when the mint's write rejects.
+    writeGate.failNext = true;
+
     await expect(
       attestDesktopIdentity({ hostId: HOST_ID, nonce: NONCE }),
-    ).resolves.toBeNull();
+    ).rejects.toThrow();
+
+    // The store recovers on the next attempt (writeGate.failNext already
+    // consumed itself). A cached rejection would keep refusing forever.
+    const attestation = await attestDesktopIdentity({
+      hostId: HOST_ID,
+      nonce: NONCE,
+    });
+    expect(attestation).not.toBeNull();
   });
 
   it("keeps the private half wrapped, and never puts it in the attestation", async () => {
@@ -173,9 +262,10 @@ describe("this installation's browser identity", () => {
     );
     const stored = record as { readonly wrappedPrivateKey: string };
     expect(stored.wrappedPrivateKey.length).toBeGreaterThan(0);
-    // The wire shape carries three fields, and the wrapped key is not one of
+    // The wire shape carries four fields, and the wrapped key is not one of
     // them - nor is the PKCS8 the wrap opens.
     expect(Object.keys(attestation).sort()).toEqual([
+      "jarEligible",
       "keystoreId",
       "publicKey",
       "signature",

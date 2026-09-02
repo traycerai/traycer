@@ -16,6 +16,8 @@ import { composeDesktopSignInUrl, DESKTOP_REDIRECT_URI } from "./sign-in-url";
 import {
   scrubDesktopBreadcrumbInPlace,
   scrubDesktopSentryEventInPlace,
+  scrubDesktopSentrySpanInPlace,
+  scrubDesktopSentryTransactionInPlace,
 } from "../shared/sentry-scrub";
 import { config } from "../config";
 
@@ -64,6 +66,17 @@ function bootstrap(): void {
       beforeBreadcrumb: (breadcrumb) => {
         scrubDesktopBreadcrumbInPlace(breadcrumb);
         return breadcrumb;
+      },
+      // Inert until a tracing integration is added - the browser SDK ships
+      // none by default - and registered anyway so that adding one cannot
+      // reopen `url.full`, which no `beforeSend` ever sees.
+      beforeSendTransaction: (event) => {
+        scrubDesktopSentryTransactionInPlace(event);
+        return event;
+      },
+      beforeSendSpan: (span) => {
+        scrubDesktopSentrySpanInPlace(span);
+        return span;
       },
     });
   }

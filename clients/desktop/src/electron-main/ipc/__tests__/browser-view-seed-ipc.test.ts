@@ -55,6 +55,9 @@ vi.mock("electron", () => {
     WebContentsView,
     dialog: {
       showSaveDialogSync: () => undefined,
+      // The destructive handlers ask asynchronously; nothing here raises one.
+      showMessageBox: (): Promise<{ readonly response: number }> =>
+        Promise.resolve({ response: 1 }),
       showMessageBoxSync: () => 1,
     },
     session: { fromPartition: () => ({}) },
@@ -373,6 +376,42 @@ describe("createElectronTab storage seed", () => {
     // let a sender choose which part by ordering it first.
     expect(await seed(cookies, [ORIGIN])).toBeNull();
     expect(fixture.merged).toEqual([]);
+  });
+
+  // The cookie half's verdict decides the localStorage half. A seed whose
+  // every cookie names a key the desktop's own browsing already owns applied
+  // nothing, so installing its localStorage would `clear()` and rewrite the
+  // origin's storage for a site the cookies were just refused for - the user's
+  // own session overwritten through the one door the cookie rule does not
+  // watch. The applier's own outcome is still "applied", so the count is what
+  // decides.
+  it("installs no localStorage when every seeded cookie is one the desktop owns", async () => {
+    fixture.jarKeys = [{ domain: "example.test", name: "sid", path: "/" }];
+
+    const seeded = await seed(
+      [seedCookie("sid", { path: "/app", value: "attacker" })],
+      [ORIGIN],
+    );
+
+    expect(seeded).toBeNull();
+    expect(fixture.merged).toEqual([]);
+    expect(fixture.retained).toEqual([]);
+  });
+
+  it("still installs localStorage when a cookie actually landed", async () => {
+    fixture.jarKeys = [{ domain: "example.test", name: "sid", path: "/" }];
+
+    const seeded = await seed(
+      [
+        seedCookie("sid", { path: "/app", value: "attacker" }),
+        seedCookie("prefs", {}),
+      ],
+      [ORIGIN],
+    );
+
+    expect(fixture.merged).toEqual([{ name: "prefs", domain: "example.test" }]);
+    expect(seeded?.origins).toEqual([ORIGIN]);
+    expect(fixture.retained).toEqual([ORIGIN.origin]);
   });
 
   it("hands back only the tab's own site for the localStorage script", async () => {

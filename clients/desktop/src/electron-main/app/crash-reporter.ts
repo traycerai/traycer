@@ -3,12 +3,12 @@ import * as SentryElectron from "@sentry/electron/main";
 import { config } from "../../config";
 import { log } from "./logger";
 import { isSentryEnabled, markSentryEnabled } from "./crash-reporter-state";
+import { desktopSentryBeforeSend } from "./crash-reporter-guest-scope";
 import {
-  desktopSentryBeforeBreadcrumb,
-  desktopSentryBeforeSend,
-  desktopSentryBeforeSendSpan,
-  desktopSentryBeforeSendTransaction,
-} from "./crash-reporter-guest-scope";
+  scrubDesktopBreadcrumbInPlace,
+  scrubDesktopSentrySpanInPlace,
+  scrubDesktopSentryTransactionInPlace,
+} from "../../shared/sentry-scrub";
 
 export { isSentryEnabled } from "./crash-reporter-state";
 
@@ -64,9 +64,23 @@ export function initCrashReporter(): void {
     // App-shell JavaScript errors still report through the renderer SDK. See
     // `crash-reporter-guest-scope.ts`.
     beforeSend: desktopSentryBeforeSend,
-    beforeBreadcrumb: desktopSentryBeforeBreadcrumb,
-    beforeSendTransaction: desktopSentryBeforeSendTransaction,
-    beforeSendSpan: desktopSentryBeforeSendSpan,
+    // Breadcrumbs are scrubbed at record time, not only at send time: they
+    // are persisted to `scope_v3.json` as they accumulate and a native crash
+    // event is assembled from that persisted scope on the next launch.
+    beforeBreadcrumb: (breadcrumb) => {
+      scrubDesktopBreadcrumbInPlace(breadcrumb);
+      return breadcrumb;
+    },
+    // `beforeSend` never sees a transaction, and child spans travel outside
+    // the transaction event.
+    beforeSendTransaction: (event) => {
+      scrubDesktopSentryTransactionInPlace(event);
+      return event;
+    },
+    beforeSendSpan: (span) => {
+      scrubDesktopSentrySpanInPlace(span);
+      return span;
+    },
   });
   markSentryEnabled();
   log.info("[crash-reporter] sentry initialized", { environment });

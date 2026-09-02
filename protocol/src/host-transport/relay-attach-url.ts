@@ -1,6 +1,5 @@
 /**
- * The scheme gate every relay dial passes, on BOTH legs
- * (browser-security-hardening H11).
+ * The scheme gate every relay dial passes, on BOTH legs.
  *
  * The attach grant rides in the dial URL's query string, and everything after
  * it is Noise ciphertext over that socket - so a `ws:` dial hands the grant to

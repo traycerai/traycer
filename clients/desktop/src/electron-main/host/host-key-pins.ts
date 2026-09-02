@@ -1,7 +1,7 @@
 import { app } from "electron";
 import { join } from "node:path";
 import { z } from "zod";
-import { log } from "../app/logger";
+import { describeLogError, log } from "../app/logger";
 import { createJsonFileStore } from "../app/json-file-store";
 import {
   installHostKeyPinStore,
@@ -58,12 +58,14 @@ function parsePayload(value: unknown): Payload {
 export function installDesktopHostKeyPins(): void {
   const filePath = join(app.getPath("userData"), STORE_FILE_NAME);
   const file = createJsonFileStore<Payload>(filePath, FALLBACK, parsePayload);
-  let pins: Record<string, string> | null = null;
+  // Memoised on the PROMISE, not on its result: two registry reads can be in
+  // flight at once (the renderer's directory poll and main's own jar-stream
+  // resolve), and memoising the settled value let both start a load, both see
+  // an empty map, and the second's write clobber the first's first-sight pin.
+  let pins: Promise<Record<string, string>> | null = null;
 
-  const loaded = async (): Promise<Record<string, string>> => {
-    if (pins === null) {
-      pins = { ...(await file.load()).pins };
-    }
+  const loaded = (): Promise<Record<string, string>> => {
+    pins ??= file.load().then((payload) => ({ ...payload.pins }));
     return pins;
   };
 
@@ -86,6 +88,16 @@ export function installDesktopHostKeyPins(): void {
 
   installHostKeyPinStore({
     store,
+    onPinWriteFailed: (hostId: string, cause: unknown) => {
+      // The host is admitted anyway - nothing is pinned, so nothing disagrees -
+      // and the next registry read tries the write again. What it costs until
+      // then is TOFU protection for this host, which is why it is a warning
+      // rather than a debug line.
+      log.warn("[host-key-pin] could not write a first-sight pin", {
+        hostId,
+        error: describeLogError(cause),
+      });
+    },
     onMismatch: (error: HostKeyPinMismatchError) => {
       // The log is the record; the fan-out is the surfacing. There is no
       // un-pin affordance to point at, so both carry the file path and the two

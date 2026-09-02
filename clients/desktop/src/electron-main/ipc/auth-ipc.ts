@@ -15,7 +15,12 @@ import { validateAuthTokenIdentityAccessOnly } from "@traycer-clients/shared/aut
 import { fetchRegisteredHostsViaHttp } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { updateHostVersionPolicyViaHttp } from "@traycer-clients/shared/host-client/host-version-policy-fetcher";
 import { deregisterHostViaHttp } from "@traycer-clients/shared/host-client/host-deregister-fetcher";
-import type { DesktopAuthSessionSnapshot } from "../../ipc-contracts/window-types";
+import type {
+  DesktopAuthSessionSetResult,
+  DesktopAuthSessionSnapshot,
+} from "../../ipc-contracts/window-types";
+import { createDesktopBearerVerifier } from "../auth/bearer-verifier";
+import { log } from "../app/logger";
 import {
   assertString,
   parseDesktopAuthSession,
@@ -317,10 +322,38 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
     return bridge.authSession.get();
   });
 
+  // Verification happens HERE, at the set, and not at the reads: main derives
+  // the jar plane's bearer and userId from this session, so a shape-only parse
+  // would let any renderer name the account main then speaks for.
+  const bearerVerifier = createDesktopBearerVerifier({
+    authnBaseUrl: bridge.options.authnBaseUrl,
+    fetchImpl: (input, init) => fetch(input, init),
+    now: () => Date.now(),
+  });
+
   bridge.handleInvoke(
     RunnerHostInvoke.authSessionSet,
-    (_event, snapshot: unknown) => {
-      bridge.authSession.set(parseDesktopAuthSession(snapshot));
+    async (_event, snapshot: unknown): Promise<DesktopAuthSessionSetResult> => {
+      const parsed = parseDesktopAuthSession(snapshot);
+      if (parsed.token === null || parsed.profile === null) {
+        // No bearer to verify: signing-in and signed-out are the renderer's
+        // own UX states and carry nothing main can be made to speak for.
+        bridge.authSession.set(parsed);
+        return { outcome: "accepted" };
+      }
+      const reason = await bearerVerifier.verify(
+        parsed.token,
+        parsed.profile.userId,
+      );
+      if (reason !== null) {
+        // The previous session - possibly a verified one - stays exactly as it
+        // was. The reason is a statement about the token, never about who sent
+        // it, so it is the whole of what this line may carry.
+        log.warn("[auth] refused an unverifiable auth session", { reason });
+        return { outcome: "refused", reason };
+      }
+      bridge.authSession.setVerified(parsed);
+      return { outcome: "accepted" };
     },
   );
 

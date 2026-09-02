@@ -18,7 +18,6 @@ import {
   recordForgottenBrowserSite,
   recordHeadlessOriginCookieKeys,
   releaseBrowserForgetLedgerConnection,
-  type BrowserForgetLedgerChange,
 } from "../browser-forget-ledger";
 import { applyBrowserObservedProfile } from "../browser-observed-profile";
 import { BrowserObservedConnectionGovernor } from "../browser-observed-profile";
@@ -261,9 +260,11 @@ describe("forget ledger mutations", () => {
   });
 
   it("notifies once per forget so every host stream can push", async () => {
-    const changes: BrowserForgetLedgerChange[] = [];
-    const subscription = onBrowserForgetLedgerChanged((change) => {
-      changes.push(change);
+    // Each stream now reads its own digest off a bare edge, so the pin is a
+    // call count, not a payload.
+    let notifications = 0;
+    const subscription = onBrowserForgetLedgerChanged(() => {
+      notifications += 1;
     });
 
     await recordForgottenBrowserSite("example.com");
@@ -277,7 +278,7 @@ describe("forget ledger mutations", () => {
       sentRevision: 2,
     });
 
-    expect(changes).toEqual([{ revision: 1 }, { revision: 2 }]);
+    expect(notifications).toBe(2);
     subscription.dispose();
   });
 });
@@ -520,9 +521,8 @@ describe("forget ledger clear reconciliation", () => {
     await recordForgottenBrowserSite("example.com");
 
     expect(browserForgetLedgerPendingClears()).toEqual({
-      forgetAll: false,
-      domains: ["example.com"],
-      revision: 1,
+      forgetAll: null,
+      domains: [{ domain: "example.com", revision: 1 }],
     });
 
     await markBrowserForgetLedgerCleared(1);
@@ -542,8 +542,8 @@ describe("forget ledger clear reconciliation", () => {
     // which is free: emptying a site twice is emptying it. Recording 2 alone
     // is what would lose `first.test` for good.
     expect(browserForgetLedgerPendingClears().domains).toEqual([
-      "first.test",
-      "second.test",
+      { domain: "first.test", revision: 1 },
+      { domain: "second.test", revision: 2 },
     ]);
 
     await markBrowserForgetLedgerCleared(1);
@@ -558,8 +558,8 @@ describe("forget ledger clear reconciliation", () => {
     const pending = browserForgetLedgerPendingClears();
     // Emptying the whole jar again because one site clear crashed would sign
     // the user out of everything they signed back into since.
-    expect(pending.forgetAll).toBe(false);
-    expect(pending.domains).toEqual(["example.com"]);
+    expect(pending.forgetAll).toBeNull();
+    expect(pending.domains).toEqual([{ domain: "example.com", revision: 2 }]);
   });
 
   it("survives a restart with the pending set intact", async () => {
@@ -570,8 +570,67 @@ describe("forget ledger clear reconciliation", () => {
     await initBrowserForgetLedger(path);
 
     expect(browserForgetLedgerPendingClears().domains).toEqual([
-      "crashed.test",
+      { domain: "crashed.test", revision: 1 },
     ]);
+  });
+
+  it("reports each pending domain with its own revision, and drains each on its own mark", async () => {
+    // RULE: browserForgetLedgerPendingClears carries the ENTRY's revision,
+    // not the ledger's top - marking one entry's revision must drain only
+    // that entry, leaving a later one still pending.
+    await recordForgottenBrowserSite("first.test");
+    await recordForgottenBrowserSite("second.test");
+
+    expect(browserForgetLedgerPendingClears().domains).toEqual([
+      { domain: "first.test", revision: 1 },
+      { domain: "second.test", revision: 2 },
+    ]);
+
+    await markBrowserForgetLedgerCleared(1);
+    expect(browserForgetLedgerPendingClears().domains).toEqual([
+      { domain: "second.test", revision: 2 },
+    ]);
+
+    await markBrowserForgetLedgerCleared(2);
+    expect(browserForgetLedgerPendingClears().domains).toEqual([]);
+  });
+
+  it("V-1: carries clearedThrough across the gap a forget-all's own deletes create", async () => {
+    // RULE: recordForgetAllBrowserLogins must set clearedThrough to
+    // revision - 1, not leave it below a gap made by rows it just deleted -
+    // otherwise the CONTIGUOUS drain in markBrowserForgetLedgerCleared can
+    // never advance past that gap, and browserForgetLedgerPendingClears
+    // reports the forget-all as pending forever, even after it is marked
+    // cleared.
+    const path = pathIn("wedge.json");
+    await initBrowserForgetLedger(path);
+
+    // A clear-site is recorded (revision 1) but its local jar clear is never
+    // marked - this models a crash between the ledger write and the clear
+    // finishing.
+    await recordForgottenBrowserSite("a.example");
+
+    // The forget-all (revision 2) deletes the per-domain row above, so if
+    // clearedThrough were left at 0 (below the gap at revision 1), nothing
+    // could ever close it: revision 1's row is gone and can never be marked.
+    const forgetAllRevision = await recordForgetAllBrowserLogins();
+    expect(forgetAllRevision).toBe(2);
+
+    await markBrowserForgetLedgerCleared(forgetAllRevision);
+
+    expect(browserForgetLedgerPendingClears()).toEqual({
+      forgetAll: null,
+      domains: [],
+    });
+
+    // Durable, not just in-memory: a reload must still report nothing
+    // pending - the wedge, if it existed, would resurface as a permanent
+    // forget-all replay on every boot.
+    await initBrowserForgetLedger(path);
+    expect(browserForgetLedgerPendingClears()).toEqual({
+      forgetAll: null,
+      domains: [],
+    });
   });
 });
 

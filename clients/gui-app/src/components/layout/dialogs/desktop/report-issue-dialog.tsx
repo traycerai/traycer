@@ -741,9 +741,6 @@ export function ReportIssueDialog(
         type: nextType,
         includeDesktopLog: logsOn,
         includeHostLog: logsOn,
-        // Never re-armed by a type change: browser diagnostics is opt-in on
-        // every report, so only the user's own toggle turns it on.
-        includeBrowserDiagnostics: false,
       };
     });
   }
@@ -1196,7 +1193,6 @@ function CaptureScreenBody({
             setForm((prev) => ({ ...prev, includeHostLog: checked }));
           }}
           onToggleBrowserDiagnostics={(checked) => {
-            onLogsTouched();
             setForm((prev) => ({
               ...prev,
               includeBrowserDiagnostics: checked,

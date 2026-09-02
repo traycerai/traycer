@@ -7,7 +7,6 @@ import {
   type StrictJsonFileStore,
 } from "../../app/json-file-store";
 import {
-  browserStoreKeyLedgerPathBeside,
   initBrowserStoreKeyLedger,
   isWrappedStoreKeyOurs,
   recordWrappedStoreKey,
@@ -58,7 +57,7 @@ export async function initBrowserSavedLogins(filePath: string): Promise<void> {
   store = createSavedLoginsStore(filePath);
   // The wrap ledger loads with the pref because the check it feeds is
   // synchronous and must be ready before the first host asks to unwrap.
-  await initBrowserStoreKeyLedger(browserStoreKeyLedgerPathBeside(filePath));
+  await initBrowserStoreKeyLedger(filePath);
   saveLogins = (await store.load()).saveLogins;
   log.info("[browser-view] saved browser logins resolved", { saveLogins });
 }
@@ -111,13 +110,15 @@ export function isKeystoreEncrypting(): boolean {
  * the honest state for such a machine.
  *
  * Every blob that leaves here is recorded in the wrap ledger under the account
- * it was wrapped for, because that record is what later lets
+ * AND the host it was wrapped for - the pair is the ledger's eviction key -
+ * because that record is what later lets
  * {@link unwrapStoreKey} tell this desktop's own blobs - for this account -
  * from anything else a host names.
  */
 export function wrapStoreKey(
   rawKeyBase64: string,
   userId: string,
+  hostId: string,
 ): string | null {
   if (!isKeystoreEncrypting()) {
     log.warn(
@@ -127,7 +128,7 @@ export function wrapStoreKey(
   }
   try {
     const wrapped = safeStorage.encryptString(rawKeyBase64).toString("base64");
-    recordWrappedStoreKey(wrapped, userId);
+    recordWrappedStoreKey(wrapped, userId, hostId);
     return wrapped;
   } catch (error) {
     log.warn("[browser-view] store key wrap failed", {

@@ -62,10 +62,10 @@ export interface BrowserSessionsOwner {
 interface BrowserSessionsCoordinatorRuntime {
   readonly browserView: BrowserViewBridge | null;
   /**
-   * The signed-in user this stream is opened for. Main needs it to mint a
-   * relay attach grant for a remote host; on the direct (no-desktop) path it
-   * is unused. `null` until the request context resolves - the coordinator
-   * exists, and restarts when the identity arrives.
+   * The signed-in user this stream is opened for. Not sent to main, which
+   * reads it from the desktop auth session it owns; it only decides whether
+   * asking is worth an IPC. `null` until the request context resolves - the
+   * coordinator exists, and restarts when the identity arrives.
    */
   readonly userId: string | null;
   readonly openTransport: (hostId: string) => DurableStreamTransport;
@@ -190,51 +190,6 @@ export function subscribeToBrowserSessionsCoordinator(
     current.delete(listener);
     if (current.size === 0) browserSessionsCoordinatorListeners.delete(key);
   };
-}
-
-/**
- * "Forget all browser logins" (spec §6.5, ticket 08).
- *
- * One call now, and the whole act is main's: it raises the native dialog,
- * clears this machine's jars, records the forget in the durable ledger, and
- * sends `forgetLogins` to every host it holds a stream to. This renderer
- * neither decides nor sends - it asks (browser security review, root cause C).
- *
- * Answers whether the user confirmed. `false` when there is no desktop bridge
- * at all, for the same reason: nothing was forgotten, so nothing was told.
- */
-export async function forgetAllBrowserLogins(
-  browserView: BrowserViewBridge | null,
-): Promise<boolean> {
-  if (browserView === null) return false;
-  return browserView.forgetLogins().catch((cause: unknown) => {
-    appLogger.warn("[browser] clearing the browser partition failed", {
-      cause: cause instanceof Error ? cause.message : String(cause),
-    });
-    return false;
-  });
-}
-
-/**
- * "Clear" on one row of Settings > Browser (spec section 7.3, ticket 10).
- *
- * Main confirms it and main sends the frames: signing the user out of one site
- * on every connected host is forget-all one domain at a time as far as those
- * hosts are concerned, and a renderer looping the saved-sites list must not be
- * able to do it silently (H05's residual for H10). Answers whether the user
- * confirmed.
- */
-export async function clearSavedLoginSite(
-  browserView: BrowserViewBridge | null,
-  domain: string,
-): Promise<boolean> {
-  if (browserView === null) return false;
-  return browserView.clearSavedLoginSite(domain).catch((cause: unknown) => {
-    appLogger.warn("[browser] clearing one saved login failed", {
-      cause: cause instanceof Error ? cause.message : String(cause),
-    });
-    return false;
-  });
 }
 
 function notifyBrowserSessionsCoordinator(key: string): void {
@@ -653,11 +608,6 @@ function handleBrowserSessionsFrame(args: {
   }
 }
 
-/**
- * Settles one `openTab`, the way {@link handleCloseAck} settles one close.
- * Extracted for the same reason: inlined, it puts the router over the
- * complexity budget.
- */
 function handleOpenTabResult(
   frame: Extract<
     BrowserSessionsUxServerFrame,

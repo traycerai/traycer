@@ -10,7 +10,10 @@ import {
   browserSavedLoginSitesRequestSchema,
   browserSavedLoginSitesResponseSchema,
   browserSavedLoginSitesV10,
+  BROWSER_SESSIONS_JAR_SERVER_FRAME_KINDS,
+  BROWSER_SESSIONS_UX_CLIENT_FRAME_KINDS,
   browserSessionsClientFrameSchema,
+  isBrowserSessionsJarServerFrame,
   browserSessionsOpenRequestSchema,
   canonicalDesktopIdentityAttestBytes,
   browserSessionsServerFrameSchema,
@@ -766,6 +769,7 @@ describe("browser.sessions@1.0 desktop identity attestation", () => {
         publicKey: PUBLIC_KEY,
         keystoreId: "keystore-1",
         signature: SIGNATURE,
+        jarEligible: true,
       }).success,
     ).toBe(true);
   });
@@ -1076,5 +1080,59 @@ describe("browser.sessions@1.0 universal sign-in carry-over (ticket 01)", () => 
   it("publishes bounds both ends validate against", () => {
     expect(BROWSER_PRIMARY_PROFILE_OBSERVED_MAX_COOKIES).toBeGreaterThan(180);
     expect(BROWSER_FORGET_LEDGER_MAX_DOMAINS).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * The two frame-kind sets are exported so main's dispatch, the direct
+ * session's drop and the IPC send-gate can test MEMBERSHIP instead of each
+ * keeping its own copy of the list. That only holds while the sets name kinds
+ * the unions actually declare, which is what these check.
+ */
+describe("browser.sessions@1.0 frame-kind sets", () => {
+  it("names jar server frames the union declares, and only those", () => {
+    for (const kind of BROWSER_SESSIONS_JAR_SERVER_FRAME_KINDS) {
+      expect(
+        browserSessionsServerFrameSchema.options.some(
+          (option) => option.shape.kind.value === kind,
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it("answers the predicate on both sides of that set", () => {
+    expect(
+      isBrowserSessionsJarServerFrame({
+        kind: "primaryProfileCaptureAck",
+        hasBinaryPayload: false,
+        requestId: "request-1",
+      }),
+    ).toBe(true);
+    // A UX kind is on the other side of the same predicate - the projection
+    // that carries it to a renderer is only safe because this answers false.
+    expect(
+      isBrowserSessionsJarServerFrame({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        sessions: [],
+      }),
+    ).toBe(false);
+  });
+
+  it("names UX client frames the union declares, and only those", () => {
+    for (const kind of BROWSER_SESSIONS_UX_CLIENT_FRAME_KINDS) {
+      expect(
+        browserSessionsClientFrameSchema.options.some(
+          (option) => option.shape.kind.value === kind,
+        ),
+      ).toBe(true);
+    }
+    // The two a renderer may never mint: they shred the account's slice on
+    // every connected host, so main produces them behind its own confirmation.
+    const uxKinds: ReadonlySet<string> = new Set(
+      BROWSER_SESSIONS_UX_CLIENT_FRAME_KINDS,
+    );
+    expect(uxKinds.has("forgetLogins")).toBe(false);
+    expect(uxKinds.has("clearSite")).toBe(false);
   });
 });

@@ -2,18 +2,6 @@ import type {
   BrowserSessionInfo,
   BrowserSessionsServerFrame,
 } from "@traycer/protocol/host/browser/contracts";
-import type { BrowserSessionsLifecycle } from "@traycer-clients/shared/platform/browser-view";
-
-/**
- * One home for the lifecycle type AND its two mappers, and it is the IPC
- * payload's: main computes them for every desktop stream now (H10). Re-exported
- * here so the renderer-side reducers next door keep one import path.
- */
-export type { BrowserSessionsLifecycle };
-export {
-  browserSessionsError,
-  browserSessionsLifecycle,
-} from "@traycer-clients/shared/platform/browser-view";
 
 /**
  * Session-list projection shared by the primary-host provider and the remote

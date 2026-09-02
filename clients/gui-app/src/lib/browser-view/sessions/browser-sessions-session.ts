@@ -3,6 +3,7 @@ import type {
   BrowserSessionsUxClientFrame,
   BrowserSessionsUxServerFrame,
 } from "@traycer/protocol/host/browser/contracts";
+import { isBrowserSessionsJarServerFrame } from "@traycer/protocol/host/browser/contracts";
 import { BrowserSessionsStreamClient } from "@traycer-clients/shared/host-transport/browser-sessions-stream-client";
 import type {
   BrowserSessionsLifecycle,
@@ -10,11 +11,11 @@ import type {
   BrowserViewBridge,
   BrowserViewNativeTabCapability,
 } from "@traycer-clients/shared/platform/browser-view";
-import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import {
   browserSessionsError,
   browserSessionsLifecycle,
-} from "@/lib/browser-view/sessions/browser-sessions-stream";
+} from "@traycer-clients/shared/platform/browser-view";
+import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import { appLogger } from "@/lib/logger";
 
 export interface BrowserSessionsSessionCallbacks {
@@ -165,28 +166,16 @@ function openDirectSession(
 function asUxServerFrame(
   frame: BrowserSessionsServerFrame,
 ): BrowserSessionsUxServerFrame | null {
-  switch (frame.kind) {
-    case "createElectronTab":
-    case "electronTabAccepted":
-    case "releaseElectronTab":
-    case "cdpRequest":
-    case "capturePrimaryProfile":
-    case "primaryProfileObserved":
-    case "storeKeyWrapRequest":
-    case "storeKeyUnwrapRequest":
-    case "desktopIdentityChallenge":
-    case "primaryProfileCaptureAck":
-    case "primaryProfileForgetLedgerAck":
-      appLogger.warn("[browser] dropped a jar frame on a shell with no jar", {
-        frameKind: frame.kind,
-      });
-      return null;
-    default:
-      // Narrowed by the switch, which is the same set the protocol's
-      // `BrowserSessionsUxServerFrame` excludes - so an unlisted new jar frame
-      // fails to assign here.
-      return frame;
+  // Membership in the protocol's own exclusion set, not a second copy of it:
+  // the predicate narrows to exactly what `BrowserSessionsUxServerFrame`
+  // excludes, so a new jar frame is dropped here the moment it is listed there.
+  if (isBrowserSessionsJarServerFrame(frame)) {
+    appLogger.warn("[browser] dropped a jar frame on a shell with no jar", {
+      frameKind: frame.kind,
+    });
+    return null;
   }
+  return frame;
 }
 
 function sameStreamKey(

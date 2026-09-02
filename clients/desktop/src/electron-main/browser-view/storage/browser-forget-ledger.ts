@@ -15,9 +15,8 @@ import {
 import { cookieKeyId } from "./browser-storage-state";
 
 /**
- * The durable forget ledger (universal-sign-in decision 6): this machine's
- * record of every login the user asked to be gone, and of how far each host has
- * confirmed it pruned.
+ * The durable forget ledger: this machine's record of every login the user
+ * asked to be gone, and of how far each host has confirmed it pruned.
  *
  * It exists because a forget must reach a host that was not connected when the
  * user performed it. The one-shot `primaryProfileForgotten` fan-out it replaced
@@ -44,8 +43,8 @@ import { cookieKeyId } from "./browser-storage-state";
  * Timestamps here are this machine's clock and are never sent anywhere to be
  * compared: a host reads the digest as instructions, not as times.
  *
- * WHAT ELSE THIS FILE CARRIES. Universal-sign-in ticket 08's ownership rule
- * needs one more durable fact about the same jar - which cookie keys got there
+ * WHAT ELSE THIS FILE CARRIES. The ownership rule needs one more durable fact
+ * about the same jar - which cookie keys got there
  * because a host observed them, and are therefore the only ones a host may
  * overwrite. It lives here rather than in a file of its own because it has the
  * same custody question, the same lifetime, and the same erasure events: a
@@ -53,8 +52,8 @@ import { cookieKeyId } from "./browser-storage-state";
  * Two files would be two answers to "what does this machine remember about the
  * user's logins".
  *
- * KNOWN LIMITATION, accepted under spec decision 11 (single primary desktop is
- * the supported model): this ledger is per machine, and a forget performed here
+ * KNOWN LIMITATION, accepted (single primary desktop is the supported model):
+ * this ledger is per machine, and a forget performed here
  * is never pushed to another desktop of the same user. A second desktop keeps
  * the login in its own jar, re-teaches it to the shared host on ITS next
  * attach, and the host's replay can then hand it back to this one. Two
@@ -131,7 +130,7 @@ const recordSchema = z.strictObject({
   ),
   /**
    * Cookie keys an observed frame put in this jar, newest last - the desktop's
-   * account of what it does NOT own (universal-sign-in ticket 08).
+   * account of what it does NOT own.
    *
    * The rule it serves is add-only: a host may create a key this jar does not
    * hold and may update one that is named here, and may never overwrite
@@ -171,17 +170,11 @@ export interface BrowserForgetLedgerAck {
   readonly connectionId: string;
   readonly revision: number;
   /**
-   * The highest revision this connection was actually sent in a digest
-   * (universal-sign-in ticket 09). See {@link recordForgetLedgerAck} for why
-   * an ack is worth no more than that, and nothing at all before the first
-   * digest.
+   * The highest revision this connection was actually sent in a digest. See
+   * {@link recordForgetLedgerAck} for why an ack is worth no more than that,
+   * and nothing at all before the first digest.
    */
   readonly sentRevision: number;
-}
-
-/** What a ledger mutation tells the renderers to push. */
-export interface BrowserForgetLedgerChange {
-  readonly revision: number;
 }
 
 let store: StrictJsonFileStore<ForgetLedgerRecord> | null = null;
@@ -212,7 +205,7 @@ const completedClears = new Set<number>();
  * truth and no way for the two to drift.
  */
 let headlessOriginKeyIds = new Set<string>();
-const changeListeners = new Set<(change: BrowserForgetLedgerChange) => void>();
+const changeListeners = new Set<() => void>();
 
 export function browserForgetLedgerFilePath(): string {
   return join(app.getPath("userData"), FORGET_LEDGER_FILE_NAME);
@@ -257,7 +250,16 @@ export async function recordForgetAllBrowserLogins(): Promise<number> {
   const revision = ledger.revision + 1;
   mutate({
     revision,
-    clearedThrough: ledger.clearedThrough,
+    // Carried to the revision just below this one, because the rows that made
+    // the gap are deleted on the next line and nothing can ever mark them
+    // cleared again. Left where it was, an older clear-site that failed wedges
+    // the CONTIGUOUS drain in `markBrowserForgetLedgerCleared` for good: this
+    // forget-all completes, its own revision never becomes contiguous, and the
+    // boot reconciler re-forgets every login at every launch forever. Sound
+    // rather than optimistic - emptying the whole jar subsumes every clear
+    // below it, and this forget-all's own revision stays pending until its
+    // clear finishes, so a crash here still re-runs it.
+    clearedThrough: revision - 1,
     forgetAll: { at: Date.now(), revision },
     domains: [],
     ackedByHost: ledger.ackedByHost,
@@ -348,9 +350,12 @@ export async function markBrowserForgetLedgerCleared(
  * normal case) means every forget this machine recorded also completed.
  */
 export function browserForgetLedgerPendingClears(): {
-  readonly forgetAll: boolean;
-  readonly domains: readonly string[];
-  readonly revision: number;
+  /** The forget-all still to re-run, with the revision that recorded it. */
+  readonly forgetAll: { readonly revision: number } | null;
+  readonly domains: readonly {
+    readonly domain: string;
+    readonly revision: number;
+  }[];
 } {
   const cleared = ledger.clearedThrough;
   const forgetAll = ledger.forgetAll;
@@ -359,11 +364,18 @@ export function browserForgetLedgerPendingClears(): {
     // forget-all that already completed must not be re-run because a later
     // single-site clear did not, or one crashed clear-site would empty the
     // whole jar on the next launch.
-    forgetAll: forgetAll !== null && forgetAll.revision > cleared,
+    //
+    // Each entry carries its OWN revision, and that is what the reconciler
+    // marks as it finishes it. Marking the ledger's top instead - which is
+    // whatever the newest forget happened to be - adds a number the drain can
+    // never reach past, and one wedge is permanent.
+    forgetAll:
+      forgetAll !== null && forgetAll.revision > cleared
+        ? { revision: forgetAll.revision }
+        : null,
     domains: ledger.domains
       .filter((entry) => entry.revision > cleared)
-      .map((entry) => entry.domain),
-    revision: ledger.revision,
+      .map((entry) => ({ domain: entry.domain, revision: entry.revision })),
   };
 }
 
@@ -417,8 +429,8 @@ export async function recordForgetLedgerAck(
   // disables the no-resurrection gate (every future entry compares below it)
   // and empties every future digest for that host.
   //
-  // And to what this CONNECTION was actually sent (universal-sign-in ticket
-  // 09), because the ack is otherwise unsolicited: nothing in the frame ties
+  // And to what this CONNECTION was actually sent, because the ack is
+  // otherwise unsolicited: nothing in the frame ties
   // it to a digest, so a host that was told nothing could ack anyway and open
   // the gate on the strength of its own claim. `sentRevision` is 0 until a
   // digest goes out on that connection, so a pre-digest ack clamps to 0 and
@@ -485,8 +497,8 @@ export function isBrowserForgetLedgerPendingAck(input: {
 /**
  * Is this cookie key one an observed frame put in the jar?
  *
- * The whole ownership rule reads out of here (universal-sign-in ticket 08).
- * `false` means the desktop owns the key - either its own browsing wrote it,
+ * The whole ownership rule reads out of here. `false` means the desktop owns
+ * the key - either its own browsing wrote it,
  * or this machine has no record of anyone else having done so - and a host may
  * not overwrite it. It never means "absent from the jar": whether the jar
  * holds the key at all is the applier's question, asked of the jar.
@@ -577,13 +589,14 @@ export async function releaseHeadlessOriginCookieKeys(
 }
 
 /**
- * Every forget mutation, for the renderers that own the host streams: each one
- * pushes its own host's digest. Ack bookkeeping deliberately does NOT notify -
- * it changes what a host is owed, not what any host must be told.
+ * Every forget mutation. Each live stream answers by pushing its own host's
+ * digest, which it reads for itself - so the edge carries no payload. Ack
+ * bookkeeping deliberately does NOT notify: it changes what a host is owed, not
+ * what any host must be told.
  */
-export function onBrowserForgetLedgerChanged(
-  listener: (change: BrowserForgetLedgerChange) => void,
-): { dispose: () => void } {
+export function onBrowserForgetLedgerChanged(listener: () => void): {
+  dispose: () => void;
+} {
   changeListeners.add(listener);
   return {
     dispose: () => {
@@ -607,8 +620,7 @@ function mutate(next: ForgetLedgerRecord): void {
   ledger = next;
   reindexHeadlessOriginKeys();
   if (!bumped) return;
-  const change: BrowserForgetLedgerChange = { revision: next.revision };
-  for (const listener of [...changeListeners]) listener(change);
+  for (const listener of [...changeListeners]) listener();
 }
 
 /**

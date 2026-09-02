@@ -45,7 +45,10 @@ import type {
   TokenRotateResult,
   TokenStoreChange,
 } from "@traycer-clients/shared/platform/runner-host";
-import { DesktopAuthSession } from "../auth/desktop-auth-session";
+import {
+  DesktopAuthSession,
+  type VerifiedDesktopAuthSessionSnapshot,
+} from "../auth/desktop-auth-session";
 import {
   createEmptyPerWindowSnapshot,
   PER_WINDOW_STATE_CAPABILITIES,
@@ -204,12 +207,17 @@ export interface IpcShellQuitState {
 }
 
 type IpcAuthSessionChangeListener = (
-  snapshot: DesktopAuthSessionSnapshot,
+  snapshot: VerifiedDesktopAuthSessionSnapshot,
 ) => void;
 
 export interface IpcDesktopAuthSession {
-  get(): DesktopAuthSessionSnapshot;
+  get(): VerifiedDesktopAuthSessionSnapshot;
   set(snapshot: DesktopAuthSessionSnapshot): void;
+  /**
+   * Adopts a session whose bearer main verified itself. Only the auth IPC,
+   * which runs the verification, calls it.
+   */
+  setVerified(snapshot: DesktopAuthSessionSnapshot): void;
   on(event: "change", listener: IpcAuthSessionChangeListener): void;
   off(event: "change", listener: IpcAuthSessionChangeListener): void;
 }

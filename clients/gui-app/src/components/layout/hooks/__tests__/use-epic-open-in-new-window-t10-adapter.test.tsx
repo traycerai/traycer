@@ -193,7 +193,7 @@ function createControllableWindowsBridge(): ControllableWindowsBridge {
     authSession: {
       get: () =>
         Promise.resolve({ status: "signed-out", token: null, profile: null }),
-      set: () => Promise.resolve(),
+      set: () => Promise.resolve({ outcome: "accepted" as const }),
       onChange: () => ({ dispose: () => undefined }),
     },
   };

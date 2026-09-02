@@ -35,6 +35,11 @@ import type {
 } from "../../../ipc-contracts/window-types";
 import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import { FakeHostController } from "./fake-host-controller";
+import {
+  createSigningKey,
+  jwksResponse,
+  userBearerClaims,
+} from "../../auth/__tests__/jws-fixture";
 
 const featureSettings = vi.hoisted(() => ({ agentRoles: false }));
 const readFeatureSettingsMock = vi.hoisted(() =>
@@ -2563,6 +2568,11 @@ describe("RunnerIpcBridge", () => {
   });
 
   it("fans out desktop-global auth-session commits to every window", async () => {
+    const signingKey = createSigningKey("kid-fanout", "bearer");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jwksResponse([signingKey.publicJwk])),
+    );
     const mod = await import("../register-runner-ipc");
     const registry = new FakeWindowRegistry();
     const windowA = buildWindow();
@@ -2600,23 +2610,30 @@ describe("RunnerIpcBridge", () => {
     windowB.sentMessages.length = 0;
     const signedIn: DesktopAuthSessionSnapshot = {
       status: "signed-in",
-      token: "jwt",
+      token: signingKey.sign(
+        userBearerClaims("test-user", Date.now() + 60_000),
+      ),
       profile: {
         userId: "test-user",
         userName: "Test User",
         email: "test@example.com",
       },
     };
-    await setHandler(sender(101), signedIn);
+    await expect(setHandler(sender(101), signedIn)).resolves.toEqual({
+      outcome: "accepted",
+    });
 
-    expect(await getHandler(sender(202))).toEqual(signedIn);
-    expect(authSession.get()).toEqual(signedIn);
+    // `verified` is main's own finding about the bearer, not a field the
+    // renderer sent - it is what a consumer speaking for the account asserts.
+    const adopted = { ...signedIn, verified: true };
+    expect(await getHandler(sender(202))).toEqual(adopted);
+    expect(authSession.get()).toEqual(adopted);
     // Signing in is an IDENTITY TRANSITION for the selection authority (null
     // -> userId), so every window is also told to re-attach: the transition
     // voids every incarnation, and `reattachRequired` is the mandatory
     // trigger that guarantees a post-transition attach.
     const expectedFanOut = [
-      { channel: RunnerHostEvent.authSessionChange, payload: signedIn },
+      { channel: RunnerHostEvent.authSessionChange, payload: adopted },
       {
         channel: RunnerHostEvent.selectionReattachRequired,
         payload: { revision: 1 },
@@ -2624,6 +2641,92 @@ describe("RunnerIpcBridge", () => {
     ];
     expect(windowA.sentMessages).toEqual(expectedFanOut);
     expect(windowB.sentMessages).toEqual(expectedFanOut);
+    bridge.dispose();
+  });
+
+  it("refuses an auth session whose bearer it cannot verify, keeping the one it holds", async () => {
+    // The finding this arm exists for: main derives the jar plane's bearer and
+    // userId from this session, so a renderer that can overwrite it shape-only
+    // can make main speak for an account it never authenticated.
+    const signingKey = createSigningKey("kid-refusal", "bearer");
+    const attackerKey = createSigningKey("kid-refusal", "bearer");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jwksResponse([signingKey.publicJwk])),
+    );
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    const window = buildWindow();
+    registry.add("window-a", 101, window);
+    const authSession = new DesktopAuthSession();
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership: new EpicWindowOwnership(null),
+      perWindowState: new PerWindowState(null),
+      authSession,
+      quitState: undefined,
+    });
+    bridge.install();
+
+    const setHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.authSessionSet,
+    );
+    if (setHandler === undefined) {
+      throw new Error("authSession set handler missing");
+    }
+
+    const owner: DesktopAuthSessionSnapshot = {
+      status: "signed-in",
+      token: signingKey.sign(userBearerClaims("owner", Date.now() + 60_000)),
+      profile: {
+        userId: "owner",
+        userName: "Owner",
+        email: "owner@example.com",
+      },
+    };
+    await setHandler(sender(101), owner);
+    window.sentMessages.length = 0;
+
+    const forged: DesktopAuthSessionSnapshot = {
+      status: "signed-in",
+      token: attackerKey.sign(
+        userBearerClaims("attacker", Date.now() + 60_000),
+      ),
+      profile: {
+        userId: "attacker",
+        userName: "Attacker",
+        email: "attacker@example.com",
+      },
+    };
+    await expect(setHandler(sender(101), forged)).resolves.toEqual({
+      outcome: "refused",
+      reason: "bad-signature",
+    });
+
+    // An authentic token for ANOTHER account is refused on the same edge.
+    const otherAccount: DesktopAuthSessionSnapshot = {
+      status: "signed-in",
+      token: signingKey.sign(userBearerClaims("owner", Date.now() + 60_000)),
+      profile: {
+        userId: "attacker",
+        userName: "Attacker",
+        email: "attacker@example.com",
+      },
+    };
+    await expect(setHandler(sender(101), otherAccount)).resolves.toEqual({
+      outcome: "refused",
+      reason: "subject-mismatch",
+    });
+
+    expect(authSession.get()).toEqual({ ...owner, verified: true });
+    expect(window.sentMessages).toEqual([]);
     bridge.dispose();
   });
 
@@ -3582,6 +3685,8 @@ describe("RunnerIpcBridge", () => {
             userName: "Test User",
             email: "test@example.com",
           },
+          // Seeded directly onto the store, not through the verifying IPC.
+          verified: false,
         },
       },
       {

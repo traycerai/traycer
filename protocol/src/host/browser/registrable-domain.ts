@@ -4,14 +4,14 @@
  *
  * Two callers depend on this split, and they want different things from it:
  *
- * - **Coalescing** (ticket 06): a burst of cookie changes across
+ * - **Coalescing**: a burst of cookie changes across
  *   `a.example.com`, `www.example.com` and `example.com` must collapse into one
  *   `{ kind: "domain", domain }` capture scope, and both ends of the wire have
  *   to agree on which one. That is why this lives in the protocol package
  *   rather than in either client: the desktop derives the scope, the host
  *   merges against it, and a disagreement would silently split one jar slice
  *   in two.
- * - **Blast radius** (ticket 07's "clear cookies for this site"): the derived
+ * - **Blast radius** ("clear cookies for this site"): the derived
  *   domain is the set of cookies the user is about to destroy, here and in
  *   every other live context for them. Over-coalescing there is not a wasted
  *   window, it is signing the user out of somebody else's site:
@@ -35,7 +35,7 @@ import { getDomain } from "tldts";
  * is stripped, as is one trailing root dot.
  */
 export function registrableDomain(host: string): string | null {
-  const normalized = normalizeHost(host);
+  const normalized = canonicalCookieHost(host);
   if (normalized === null) return null;
   // `allowPrivateDomains` keeps a hosting suffix (`github.io`, `vercel.app`,
   // `s3.amazonaws.com`) a suffix, so one tenant's cookies are never in another
@@ -66,37 +66,68 @@ export function cookieDomainInScope(
   cookieDomain: string,
   scopeDomain: string,
 ): boolean {
-  const host = normalizeHost(cookieDomain);
-  const scope = normalizeHost(scopeDomain);
+  const host = canonicalCookieHost(cookieDomain);
+  const scope = canonicalCookieHost(scopeDomain);
   if (host === null || scope === null) return false;
   return host === scope || host.endsWith(`.${scope}`);
 }
 
 /**
- * Lowercased, dot-trimmed, IDNA-encoded host, or `null` when nothing is left.
+ * Lowercased, dot-trimmed, IDNA-encoded cookie host, or `null` when nothing
+ * usable is left.
+ *
+ * The ONE canonicaliser every cookie-host spelling goes through - the capture's
+ * `readCookieDomain`, the ownership key's `cookieKeyId`, and
+ * {@link registrableDomain} itself. They used to carry three near-copies of it,
+ * and the callers differed only in policy (throw vs `null`, whether a leading
+ * dot survives), which is exactly what stays with them.
  *
  * The punycode step is what makes the two ends of the wire agree on an
- * international domain (browser-security-hardening H11): `tldts` treats
+ * international domain: `tldts` treats
  * `munchen.de` spelled in Unicode and the same name spelled `xn--mnchen-3ya.de`
  * as two different registrable domains, so a capture scope derived from one
- * form rejected every cookie whose jar spelled it the other way. Chromium's
- * jar always holds the A-label form; a wire domain may carry either. Applied
- * only when the host is not already ASCII, so the ordinary case pays nothing.
+ * form rejected every cookie whose jar spelled it the other way. Chromium's jar
+ * always holds the A-label form; a wire domain may carry either.
+ *
+ * Anything carrying URL structure is refused rather than parsed. Handing
+ * `evil.com/../good.com` or `user@good.com` to the URL parser answers with the
+ * host it decided the string meant, and a caller asking "what is this cookie's
+ * host" would take that answer as the sender's claim - so a claim that is not
+ * purely a host is not a claim at all.
  */
-function normalizeHost(value: string): string | null {
-  let host = value.trim().toLowerCase();
-  if (host.startsWith(".")) host = host.slice(1);
-  if (host.endsWith(".")) host = host.slice(0, -1);
-  if (host.startsWith("[") && host.endsWith("]")) host = host.slice(1, -1);
-  if (host.length === 0) return null;
-  if (!ASCII_ONLY_PATTERN.test(host)) {
-    try {
-      host = new URL(`https://${host}/`).hostname;
-    } catch {
-      return null;
-    }
+export function canonicalCookieHost(host: string): string | null {
+  // Deliberately NOT trimmed: whitespace is refused by the syntax gate below
+  // rather than normalised away. A sender that wrote `example.test\n` wrote
+  // something this is not willing to read as `example.test`.
+  let value = host.toLowerCase();
+  if (value.startsWith(".")) value = value.slice(1);
+  if (value.endsWith(".")) value = value.slice(0, -1);
+  if (value.length === 0) return null;
+  // An IPv6 literal is the one legitimate host spelling that contains a
+  // character the syntax gate refuses, so it is recognised WHOLE before the
+  // gate rather than exempted from it, in either of the two spellings a jar
+  // hands out. Two colons at least: one colon is a port, and `bad.cafe:80`
+  // would otherwise read as an address.
+  const literal =
+    value.startsWith("[") && value.endsWith("]") ? value.slice(1, -1) : value;
+  if (IPV6_LITERAL_PATTERN.test(literal) && literal.split(":").length > 2) {
+    return literal;
   }
-  return host.length === 0 ? null : host;
+  if (URL_SYNTAX_PATTERN.test(value)) return null;
+  if (ASCII_ONLY_PATTERN.test(value)) return value;
+  let canonical: string;
+  try {
+    canonical = new URL(`https://${value}/`).hostname;
+  } catch {
+    return null;
+  }
+  return canonical.length === 0 ? null : canonical;
 }
 
 const ASCII_ONLY_PATTERN = /^[\x00-\x7F]*$/u;
+const IPV6_LITERAL_PATTERN = /^[0-9a-f:.]+$/u;
+/**
+ * Userinfo, a port, a path, a query, a fragment, a backslash, whitespace, a
+ * control character: everything that makes a string more than a host.
+ */
+const URL_SYNTAX_PATTERN = /[@:/?#\\\s\x00-\x1F\x7F]/u;

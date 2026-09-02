@@ -403,7 +403,7 @@ function buildFakeBridge(
           token: null,
           profile: null,
         }),
-        set: async () => undefined,
+        set: async () => ({ outcome: "accepted" as const }),
         onChange: (_handler) => ({ dispose: () => undefined }),
       },
     },

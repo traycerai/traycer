@@ -26,6 +26,7 @@ import {
 import { queryClient } from "@/lib/query-client";
 import { EpicSessionLifecycleBridge } from "@/providers/auth-lifecycle-bridge";
 import { AuthSessionExpiredToastBridge } from "@/providers/auth-session-expired-toast-bridge";
+import { HostTrustAlertBridge } from "@/providers/host-trust-alert-bridge";
 import { CommandPaletteProvider } from "@/providers/command-palette-provider";
 import { HostCredentialProvisionProvider } from "@/providers/host-credential-provision-provider";
 import { ComposerRunSettingsPersistLifecycleBridge } from "@/providers/composer-run-settings-persist-lifecycle-bridge";
@@ -260,6 +261,7 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
       <SupportContextRegistryBridge router={props.router} />
       <WindowsBridgeAuthSessionBridge>
         <AuthSessionExpiredToastBridge />
+        <HostTrustAlertBridge />
         <HostCredentialProvisionProvider>
           <EpicSessionLifecycleBridge>
             <ComposerRunSettingsPersistLifecycleBridge>

@@ -191,6 +191,59 @@ describe("host-contributed cookie normalisation", () => {
       expect(written[0]?.domain ?? null).toBe(domainAttribute);
     },
   );
+
+  it("V-18: refuses a partitioned (CHIPS) cookie, never writing it to the unpartitioned jar", async () => {
+    // RULE: isUnpartitionedCookie refuses any cookie with a non-null
+    // partitionKey before it reaches cookies.set - a host that names a
+    // partition must not have that cookie land in the desktop's ordinary,
+    // unpartitioned jar. Its unpartitioned sibling in the same batch must
+    // still be applied.
+    const written: CookiesSetDetails[] = [];
+
+    const result = await mergeObservedProfileCookies(
+      [
+        {
+          name: "partitioned",
+          value: "chips-value",
+          domain: "example.test",
+          path: "/",
+          expires: -1,
+          httpOnly: false,
+          secure: true,
+          sameSite: "Lax",
+          partitionKey: "https://top.test",
+        },
+        {
+          name: "unpartitioned",
+          value: "ordinary-value",
+          domain: "example.test",
+          path: "/",
+          expires: -1,
+          httpOnly: false,
+          secure: true,
+          sameSite: "Lax",
+          partitionKey: null,
+        },
+      ],
+      {
+        cookies: {
+          get: () => Promise.resolve([]),
+          set: (details: CookiesSetDetails) => {
+            written.push(details);
+            return Promise.resolve();
+          },
+          flushStore: () => Promise.resolve(),
+        },
+      },
+    );
+
+    expect(result.applied).toBe(1);
+    expect(result.refused).toEqual([
+      { domain: "example.test", name: "partitioned", path: "/" },
+    ]);
+    expect(written).toHaveLength(1);
+    expect(written[0]?.name).toBe("unpartitioned");
+  });
 });
 
 describe("captureBrowserPrimaryProfile", () => {

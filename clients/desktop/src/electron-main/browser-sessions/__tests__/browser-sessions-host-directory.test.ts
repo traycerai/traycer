@@ -161,6 +161,32 @@ describe("main resolves the browser.sessions host itself", () => {
     expect(listRegisteredHosts).toHaveBeenCalledTimes(2);
   });
 
+  it("drops the whole cache AND the cooldown when the identity changes", async () => {
+    const listRegisteredHosts = vi.fn(() =>
+      Promise.resolve(remoteResponse("host-2")),
+    );
+    const directory = createBrowserSessionsHostDirectory({
+      authnBaseUrl: () => "https://authn.test",
+      relayBaseUrl: "wss://relay.test/attach",
+      localHost: () => null,
+      bearerToken: () => "bearer",
+      listRegisteredHosts,
+      now: () => now,
+    });
+    await directory.resolve("host-2");
+    expect(listRegisteredHosts).toHaveBeenCalledTimes(1);
+
+    // The rows are per ACCOUNT but the cache is keyed by host id alone, so a
+    // sign-out or an account switch would otherwise let the next account dial
+    // the previous account's row for the same id. The cooldown goes with the
+    // rows - the clock has not moved here - because a fresh identity is
+    // exactly the moment one read is owed rather than deferred.
+    directory.reset();
+    await directory.resolve("host-2");
+
+    expect(listRegisteredHosts).toHaveBeenCalledTimes(2);
+  });
+
   it("answers a looped unknown id from cache instead of amplifying it to authn", async () => {
     const listRegisteredHosts = vi.fn(() =>
       Promise.resolve(remoteResponse("host-2")),

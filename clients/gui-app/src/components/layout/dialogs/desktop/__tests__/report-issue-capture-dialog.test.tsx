@@ -913,10 +913,9 @@ describe("Report issue capture dialog (deep interactions)", () => {
       );
       expect(switchState("Include browser diagnostics")).toBe("checked");
 
-      // A later type switch must not clobber the user's own opt-in - proof
-      // `onToggleBrowserDiagnostics` calls `onLogsTouched()` itself, same as
-      // the sibling desktop/host toggles, rather than relying on one of them
-      // having been touched too.
+      // A later type switch must not clobber the user's own opt-in: the
+      // type defaults speak for the desktop/host logs only, and browser
+      // diagnostics is opt-in on every report.
       fireEvent.click(screen.getByRole("radio", { name: "Idea" }));
       expect(switchState("Include browser diagnostics")).toBe("checked");
       fireEvent.click(screen.getByRole("radio", { name: "Bug" }));

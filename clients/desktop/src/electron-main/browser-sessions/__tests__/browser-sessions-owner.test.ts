@@ -3,10 +3,16 @@ import type {
   BrowserSessionsServerFrame,
   BrowserStorageState,
 } from "@traycer/protocol/host/browser/contracts";
-import type { BrowserSessionsStreamEventEnvelope } from "@traycer-clients/shared/platform/browser-view";
+import type {
+  BrowserSessionsStreamEventEnvelope,
+  BrowserViewNativeTabStatusChange,
+} from "@traycer-clients/shared/platform/browser-view";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { log } from "../../app/logger";
 import { BrowserSessionsRegistry } from "../browser-sessions-owner";
 import {
   createRegistryHarness,
+  LOCAL_HOST_ENTRY,
   type FakeStreamSession,
   type RegistryHarness,
 } from "./browser-sessions-stream-fixture";
@@ -83,7 +89,7 @@ async function openLiveStream(
   const session = client.sessions[0];
   if (session === undefined) throw new Error("no stream was subscribed");
   session.emitStatus("open");
-  session.emit(snapshotFrame());
+  session.emit(snapshotFrame(), null);
   return session;
 }
 
@@ -98,11 +104,47 @@ function renderedFrameKinds(
     .map((event) => event.frame.kind);
 }
 
+/** The directory read, plus the attach it schedules behind it. */
+async function settle(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+function lifecycles(
+  emitted: ReadonlyArray<{
+    readonly envelope: BrowserSessionsStreamEventEnvelope;
+  }>,
+): readonly string[] {
+  return emitted
+    .map((entry) => entry.envelope.event)
+    .filter((event) => event.kind === "status")
+    .map((event) => event.lifecycle);
+}
+
+/** One native-manager status report for the guest `createTabFrame` births. */
+function tabStatus(viewed: boolean): BrowserViewNativeTabStatusChange {
+  return {
+    hostId: "host-1",
+    sessionId: "session-1",
+    tabId: "tab-1",
+    registrationId: "registration-1",
+    url: "https://example.com/",
+    title: "Example",
+    status: "ready",
+    reason: null,
+    canGoBack: false,
+    canGoForward: false,
+    zoomPercent: 100,
+    viewed,
+  };
+}
+
 describe("the browser.sessions jar plane lives in main", () => {
   let harness: RegistryHarness;
   let registry: BrowserSessionsRegistry;
 
   beforeEach(() => {
+    vi.mocked(log.warn).mockClear();
     harness = createRegistryHarness();
     registry = new BrowserSessionsRegistry(harness.deps);
   });
@@ -110,12 +152,15 @@ describe("the browser.sessions jar plane lives in main", () => {
   it("answers a capture request in main and shows the renderer nothing", async () => {
     const session = await openLiveStream(harness, registry, "window-1");
 
-    session.emit({
-      kind: "capturePrimaryProfile",
-      hasBinaryPayload: false,
-      requestId: "capture-1",
-      standing: false,
-    });
+    session.emit(
+      {
+        kind: "capturePrimaryProfile",
+        hasBinaryPayload: false,
+        requestId: "capture-1",
+        standing: false,
+      },
+      null,
+    );
     await Promise.resolve();
     await Promise.resolve();
 
@@ -131,12 +176,15 @@ describe("the browser.sessions jar plane lives in main", () => {
   it("keeps a STANDING capture request instead of answering it", async () => {
     const session = await openLiveStream(harness, registry, "window-1");
 
-    session.emit({
-      kind: "capturePrimaryProfile",
-      hasBinaryPayload: false,
-      requestId: "standing-1",
-      standing: true,
-    });
+    session.emit(
+      {
+        kind: "capturePrimaryProfile",
+        hasBinaryPayload: false,
+        requestId: "standing-1",
+        standing: true,
+      },
+      null,
+    );
     await Promise.resolve();
     await Promise.resolve();
 
@@ -155,12 +203,15 @@ describe("the browser.sessions jar plane lives in main", () => {
     expect(harness.jar.captures).toBe(0);
     expect(session.framesOfKind("primaryProfileCaptured")).toHaveLength(0);
 
-    session.emit({
-      kind: "capturePrimaryProfile",
-      hasBinaryPayload: false,
-      requestId: "standing-1",
-      standing: true,
-    });
+    session.emit(
+      {
+        kind: "capturePrimaryProfile",
+        hasBinaryPayload: false,
+        requestId: "standing-1",
+        standing: true,
+      },
+      null,
+    );
     const flushed = registry.captureFinalPrimaryProfiles("window-1");
     await Promise.resolve();
     await Promise.resolve();
@@ -171,22 +222,28 @@ describe("the browser.sessions jar plane lives in main", () => {
     // The standing id, never a client-minted one - the host refuses a capture
     // that answers neither it nor an outstanding request.
     expect(captured[0]?.requestId).toBe("standing-1");
-    session.emit({
-      kind: "primaryProfileCaptureAck",
-      hasBinaryPayload: false,
-      requestId: "standing-1",
-    });
+    session.emit(
+      {
+        kind: "primaryProfileCaptureAck",
+        hasBinaryPayload: false,
+        requestId: "standing-1",
+      },
+      null,
+    );
     await flushed;
   });
 
   it("drops the standing id with the connection, so a reconnect must be re-issued one", async () => {
     const session = await openLiveStream(harness, registry, "window-1");
-    session.emit({
-      kind: "capturePrimaryProfile",
-      hasBinaryPayload: false,
-      requestId: "standing-1",
-      standing: true,
-    });
+    session.emit(
+      {
+        kind: "capturePrimaryProfile",
+        hasBinaryPayload: false,
+        requestId: "standing-1",
+        standing: true,
+      },
+      null,
+    );
 
     session.emitStatus("reconnecting");
     session.emitStatus("open");
@@ -200,7 +257,7 @@ describe("the browser.sessions jar plane lives in main", () => {
   it("hands the createElectronTab seed straight to the native manager, and the renderer only learns a tab exists", async () => {
     const session = await openLiveStream(harness, registry, "window-1");
 
-    session.emit(createTabFrame());
+    session.emit(createTabFrame(), null);
     await Promise.resolve();
     await Promise.resolve();
     await Promise.resolve();
@@ -217,19 +274,22 @@ describe("the browser.sessions jar plane lives in main", () => {
 
   it("publishes a bound tab to the renderer by identity only", async () => {
     const session = await openLiveStream(harness, registry, "window-1");
-    session.emit(createTabFrame());
+    session.emit(createTabFrame(), null);
     await Promise.resolve();
     await Promise.resolve();
     await Promise.resolve();
 
-    session.emit({
-      kind: "electronTabAccepted",
-      hasBinaryPayload: false,
-      requestId: "create-1",
-      sessionId: "session-1",
-      tabId: "tab-1",
-      registrationId: "registration-1",
-    });
+    session.emit(
+      {
+        kind: "electronTabAccepted",
+        hasBinaryPayload: false,
+        requestId: "create-1",
+        sessionId: "session-1",
+        tabId: "tab-1",
+        registrationId: "registration-1",
+      },
+      null,
+    );
     await Promise.resolve();
 
     const bound = harness.emitted
@@ -250,12 +310,15 @@ describe("the browser.sessions jar plane lives in main", () => {
   it("signs a desktop identity challenge in main, with no IPC hop", async () => {
     const session = await openLiveStream(harness, registry, "window-1");
 
-    session.emit({
-      kind: "desktopIdentityChallenge",
-      hasBinaryPayload: false,
-      requestId: "challenge-1",
-      nonce: "bm9uY2U=",
-    });
+    session.emit(
+      {
+        kind: "desktopIdentityChallenge",
+        hasBinaryPayload: false,
+        requestId: "challenge-1",
+        nonce: "bm9uY2U=",
+      },
+      null,
+    );
     await Promise.resolve();
     await Promise.resolve();
 
@@ -273,21 +336,28 @@ describe("the browser.sessions jar plane lives in main", () => {
   it("answers the store-key handshake in main", async () => {
     const session = await openLiveStream(harness, registry, "window-1");
 
-    session.emit({
-      kind: "storeKeyWrapRequest",
-      hasBinaryPayload: false,
-      requestId: "wrap-1",
-      rawKey: "cmF3S2V5",
-    });
-    session.emit({
-      kind: "storeKeyUnwrapRequest",
-      hasBinaryPayload: false,
-      requestId: "unwrap-1",
-      wrappedKey: "d3JhcHBlZEtleQ==",
-    });
+    session.emit(
+      {
+        kind: "storeKeyWrapRequest",
+        hasBinaryPayload: false,
+        requestId: "wrap-1",
+        rawKey: "cmF3S2V5",
+      },
+      null,
+    );
+    session.emit(
+      {
+        kind: "storeKeyUnwrapRequest",
+        hasBinaryPayload: false,
+        requestId: "unwrap-1",
+        wrappedKey: "d3JhcHBlZEtleQ==",
+      },
+      null,
+    );
 
-    // Both halves are priced against the account main opened the stream for.
-    expect(harness.jar.wrapped).toEqual(["user-1:cmF3S2V5"]);
+    // Both halves are priced against the account main opened the stream for,
+    // and the wrap is matched on the host it opened to as well.
+    expect(harness.jar.wrapped).toEqual(["user-1:host-1:cmF3S2V5"]);
     expect(harness.jar.unwrapped).toEqual(["user-1:d3JhcHBlZEtleQ=="]);
     expect(session.framesOfKind("storeKeyWrapped")).toHaveLength(1);
     expect(session.framesOfKind("storeKeyUnwrapped")).toHaveLength(1);
@@ -297,12 +367,15 @@ describe("the browser.sessions jar plane lives in main", () => {
   it("applies an observed sign-in in main with the connection's provenance", async () => {
     const session = await openLiveStream(harness, registry, "window-1");
 
-    session.emit({
-      kind: "primaryProfileObserved",
-      hasBinaryPayload: false,
-      domain: "example.com",
-      cookies: SEED.cookies,
-    });
+    session.emit(
+      {
+        kind: "primaryProfileObserved",
+        hasBinaryPayload: false,
+        domain: "example.com",
+        cookies: SEED.cookies,
+      },
+      null,
+    );
     await Promise.resolve();
 
     expect(harness.jar.observed).toHaveLength(1);
@@ -369,11 +442,14 @@ describe("the browser.sessions jar plane lives in main", () => {
     harness.jar.ledger = { forgetAllAt: null, domains: [], revision: 4 };
     const session = await openLiveStream(harness, registry, "window-1");
 
-    session.emit({
-      kind: "primaryProfileForgetLedgerAck",
-      hasBinaryPayload: false,
-      revision: 4,
-    });
+    session.emit(
+      {
+        kind: "primaryProfileForgetLedgerAck",
+        hasBinaryPayload: false,
+        revision: 4,
+      },
+      null,
+    );
     expect(harness.jar.acks[0]?.sentRevision).toBe(4);
     const firstConnectionId = harness.jar.acks[0]?.connectionId;
 
@@ -382,11 +458,14 @@ describe("the browser.sessions jar plane lives in main", () => {
     session.emitStatus("reconnecting");
     expect(harness.jar.releasedConnectionIds).toEqual([firstConnectionId]);
     session.emitStatus("open");
-    session.emit({
-      kind: "primaryProfileForgetLedgerAck",
-      hasBinaryPayload: false,
-      revision: 4,
-    });
+    session.emit(
+      {
+        kind: "primaryProfileForgetLedgerAck",
+        hasBinaryPayload: false,
+        revision: 4,
+      },
+      null,
+    );
 
     expect(harness.jar.acks[1]?.sentRevision).toBe(0);
     expect(harness.jar.acks[1]?.connectionId).not.toBe(firstConnectionId);
@@ -457,6 +536,10 @@ describe("the browser.sessions jar plane lives in main", () => {
     // refreshes its token on a timer.
     expect(harness.clients).toHaveLength(1);
     expect(session.closed).toBe(false);
+    // The cached registry was read for the PREVIOUS identity, and the rows are
+    // per account, so a fresh bearer drops the whole cache before any restart
+    // could resolve against it.
+    expect(harness.directoryResets.count).toBe(1);
   });
 
   it("closes its streams itself when the user signs out", async () => {
@@ -468,8 +551,12 @@ describe("the browser.sessions jar plane lives in main", () => {
     // The jar plane speaks for an account: leaving the socket open on a
     // revoked credential and waiting for the host to notice is not a state
     // main should hold.
+    await settle();
+
     expect(session.closed).toBe(true);
     expect(harness.closedTransports).toEqual([0]);
+    // Torn down and NOT restarted: there is no identity to open a stream for.
+    expect(harness.clients).toHaveLength(1);
   });
 
   it("restarts a stream the host closed on an expired bearer, on the next rotation", async () => {
@@ -506,12 +593,15 @@ describe("the browser.sessions jar plane lives in main", () => {
     const first = await openLiveStream(harness, registry, "window-1");
     const second = await openLiveStream(harness, registry, "window-2");
     for (const session of [first, second]) {
-      session.emit({
-        kind: "capturePrimaryProfile",
-        hasBinaryPayload: false,
-        requestId: "standing-1",
-        standing: true,
-      });
+      session.emit(
+        {
+          kind: "capturePrimaryProfile",
+          hasBinaryPayload: false,
+          requestId: "standing-1",
+          standing: true,
+        },
+        null,
+      );
     }
 
     let settled = false;
@@ -530,11 +620,14 @@ describe("the browser.sessions jar plane lives in main", () => {
       const captured = session.framesOfKind("primaryProfileCaptured")[0];
       const requestId = captured?.requestId;
       if (typeof requestId !== "string") throw new Error("no capture went out");
-      session.emit({
-        kind: "primaryProfileCaptureAck",
-        hasBinaryPayload: false,
-        requestId,
-      });
+      session.emit(
+        {
+          kind: "primaryProfileCaptureAck",
+          hasBinaryPayload: false,
+          requestId,
+        },
+        null,
+      );
     }
 
     await flushed;
@@ -559,16 +652,6 @@ describe("the browser.sessions jar plane lives in main", () => {
     expect(second.framesOfKind("forgetLogins")).toHaveLength(0);
   });
 
-  it("tells each host once when one saved-login site is cleared", async () => {
-    const session = await openLiveStream(harness, registry, "window-1");
-
-    expect(registry.clearSiteOnEveryHost("example.com")).toBe(1);
-
-    const cleared = session.framesOfKind("clearSite");
-    expect(cleared).toHaveLength(1);
-    expect(cleared[0]?.domain).toBe("example.com");
-  });
-
   it("relays a renderer's tab request onto the stream verbatim", async () => {
     const session = await openLiveStream(harness, registry, "window-1");
 
@@ -583,17 +666,210 @@ describe("the browser.sessions jar plane lives in main", () => {
     expect(session.framesOfKind("openTab")).toHaveLength(1);
   });
 
+  it("refuses a window's streams past the per-window cap, and bounds only that window", async () => {
+    for (let index = 0; index < 13; index += 1) {
+      registry.open("window-1", {
+        ...OPEN_REQUEST,
+        identityKey: `identity-${index}`,
+      });
+    }
+    await settle();
+
+    // Every distinct identity the renderer names costs a socket, a relay
+    // attach, an attestation and a whole contributed-set replay, so a renderer
+    // that loops the key is bounded rather than amplified.
+    expect(harness.clients).toHaveLength(12);
+    expect(vi.mocked(log.warn).mock.calls).toHaveLength(1);
+
+    // The refused one is REPORTED, not dropped in silence: its renderer-side
+    // session would otherwise sit in `connecting` for the life of the window.
+    const refused = harness.emitted.filter(
+      (entry) =>
+        entry.envelope.key.identityKey === "identity-12" &&
+        entry.envelope.event.kind === "status",
+    );
+    expect(lifecycles(refused)).toEqual(["failed"]);
+
+    // The bound is per window, not per process: another window is untouched.
+    registry.open("window-2", OPEN_REQUEST);
+    await settle();
+
+    expect(harness.clients).toHaveLength(13);
+  });
+
+  it("reports a stream that never reached a socket as failed and drops it, so the same key re-opens", async () => {
+    harness.resolveHost = () => Promise.resolve(null);
+    registry.open("window-1", OPEN_REQUEST);
+    await settle();
+
+    expect(lifecycles(harness.emitted)).toContain("failed");
+    expect(harness.clients).toHaveLength(0);
+
+    // Dropped from the registry entirely, so the re-open is not deduped
+    // against a dead entry - the renderer's own retry is the recovery.
+    harness.resolveHost = () => Promise.resolve(LOCAL_HOST_ENTRY);
+    registry.open("window-1", OPEN_REQUEST);
+    await settle();
+
+    expect(harness.clients).toHaveLength(1);
+  });
+
+  it("charges the per-window cap only for streams that reached a socket", async () => {
+    harness.resolveHost = () => Promise.resolve(null);
+    for (let index = 0; index < 12; index += 1) {
+      registry.open("window-1", {
+        ...OPEN_REQUEST,
+        identityKey: `identity-${index}`,
+      });
+    }
+    await settle();
+    expect(harness.clients).toHaveLength(0);
+
+    // A stream that will never reach a socket holds no place under the cap.
+    harness.resolveHost = () => Promise.resolve(LOCAL_HOST_ENTRY);
+    registry.open("window-1", { ...OPEN_REQUEST, identityKey: "identity-12" });
+    await settle();
+
+    expect(harness.clients).toHaveLength(1);
+  });
+
+  it("opens ONE transport when a bearer rotation lands inside the directory read", async () => {
+    const pending: Array<(entry: HostDirectoryEntry | null) => void> = [];
+    harness.resolveHost = () =>
+      new Promise<HostDirectoryEntry | null>((resolve) => {
+        pending.push(resolve);
+      });
+
+    registry.open("window-1", OPEN_REQUEST);
+    await Promise.resolve();
+    expect(pending).toHaveLength(1);
+
+    // The rotation tears this incarnation down and starts a second one while
+    // the first directory read is still in flight.
+    harness.rotateBearer();
+    await Promise.resolve();
+    expect(pending).toHaveLength(2);
+
+    for (const resolve of pending) resolve(LOCAL_HOST_ENTRY);
+    await settle();
+
+    // The read that belongs to the torn-down incarnation must drop rather than
+    // attach: two attaches would orphan a live client and leave two
+    // subscribers on one epic.
+    expect(harness.clients).toHaveLength(1);
+    expect(harness.closedTransports).toEqual([]);
+    const session = harness.clients[0]?.sessions[0];
+    if (session === undefined) throw new Error("no stream was subscribed");
+    session.emitStatus("open");
+    session.emit(snapshotFrame(), null);
+    expect(session.framesOfKind("electronTabLifecycleReady")).toHaveLength(1);
+  });
+
+  it("restarts the stream for a switched-to account and prices its store-key wrap against it", async () => {
+    const first = await openLiveStream(harness, registry, "window-1");
+
+    harness.userId = "user-2";
+    harness.rotateBearer();
+    await settle();
+
+    // The wrap, the relay grant and the forget ledger are all priced against
+    // the account the stream was OPENED for, so a switch cannot be pushed down
+    // the open socket: it is torn down and re-opened for the new account.
+    expect(first.closed).toBe(true);
+    expect(harness.closedTransports).toEqual([0]);
+    expect(harness.clients).toHaveLength(2);
+
+    const second = harness.clients[1]?.sessions[0];
+    if (second === undefined) throw new Error("the stream was not restarted");
+    second.emitStatus("open");
+    second.emit(
+      {
+        kind: "storeKeyWrapRequest",
+        hasBinaryPayload: false,
+        requestId: "wrap-1",
+        rawKey: "cmF3S2V5",
+      },
+      null,
+    );
+
+    expect(harness.jar.wrapped).toEqual(["user-2:host-1:cmF3S2V5"]);
+  });
+
+  it("refuses a preview of a native guest that is off screen, and sends it once it is on screen", async () => {
+    const session = await openLiveStream(harness, registry, "window-1");
+    session.emit(createTabFrame(), null);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    session.emit(
+      {
+        kind: "electronTabAccepted",
+        hasBinaryPayload: false,
+        requestId: "create-1",
+        sessionId: "session-1",
+        tabId: "tab-1",
+        registrationId: "registration-1",
+      },
+      null,
+    );
+    await Promise.resolve();
+
+    harness.tabs.emitStatus(tabStatus(false));
+    registry.send("window-1", OPEN_REQUEST, {
+      kind: "captureTabPreview",
+      hasBinaryPayload: false,
+      requestId: "preview-1",
+      tabId: "tab-1",
+    });
+
+    // A preview is a screenshot of a signed-in page and `openTab` is one IPC
+    // away, so a guest THIS desktop owns is photographed only while it is on
+    // screen - otherwise a renderer could open the user's mail and read it
+    // back with nothing appearing on the display.
+    expect(session.framesOfKind("captureTabPreview")).toHaveLength(0);
+    expect(vi.mocked(log.warn).mock.calls).toHaveLength(1);
+
+    harness.tabs.emitStatus(tabStatus(true));
+    registry.send("window-1", OPEN_REQUEST, {
+      kind: "captureTabPreview",
+      hasBinaryPayload: false,
+      requestId: "preview-2",
+      tabId: "tab-1",
+    });
+
+    expect(session.framesOfKind("captureTabPreview")).toHaveLength(1);
+  });
+
+  it("passes through a preview of a tab it owns no native guest for", async () => {
+    const session = await openLiveStream(harness, registry, "window-1");
+
+    registry.send("window-1", OPEN_REQUEST, {
+      kind: "captureTabPreview",
+      hasBinaryPayload: false,
+      requestId: "preview-1",
+      tabId: "tab-on-the-host",
+    });
+
+    // The picker's ordinary cross-host case: the host answers for its own
+    // tabs, and nothing in this process can see them.
+    expect(session.framesOfKind("captureTabPreview")).toHaveLength(1);
+    expect(vi.mocked(log.warn).mock.calls).toHaveLength(0);
+  });
+
   it("projects the UX frames a renderer renders from", async () => {
     const session = await openLiveStream(harness, registry, "window-1");
 
-    session.emit({
-      kind: "caption",
-      hasBinaryPayload: false,
-      sessionId: "session-1",
-      tabId: "tab-1",
-      burstId: "burst-1",
-      cellTitle: "Signed in",
-    });
+    session.emit(
+      {
+        kind: "caption",
+        hasBinaryPayload: false,
+        sessionId: "session-1",
+        tabId: "tab-1",
+        burstId: "burst-1",
+        cellTitle: "Signed in",
+      },
+      null,
+    );
 
     expect(renderedFrameKinds(harness.emitted)).toEqual([
       "snapshot",

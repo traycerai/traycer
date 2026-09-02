@@ -1,9 +1,6 @@
-import type { SchemaVersion } from "@traycer/protocol/framework/index";
-import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type {
   BrowserForgetLedger,
   BrowserPrimaryProfileDelta,
-  BrowserSessionsServerFrame,
 } from "@traycer/protocol/host/browser/contracts";
 import type {
   BrowserSessionsStreamEventEnvelope,
@@ -16,167 +13,13 @@ import type {
   BrowserSessionsJarPort,
   BrowserSessionsRegistryDeps,
 } from "../browser-sessions-owner";
-import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
-import type {
-  IStreamSession,
-  ServerFrameHandler,
-  StatusChangeHandler,
-  StreamFrameEnvelope,
-} from "@traycer-clients/shared/host-transport/i-stream-session";
+import { FakeStreamClient } from "@traycer-clients/shared/host-transport/__testing__/fake-stream-client";
+export {
+  FakeStreamClient,
+  FakeStreamSession,
+} from "@traycer-clients/shared/host-transport/__testing__/fake-stream-client";
 import type { BrowserSessionsHostTransport } from "../browser-sessions-transport";
 import type { BrowserViewEnsureTab } from "../../browser-view/browser-view-port";
-
-type StreamStatus = "connecting" | "open" | "reconnecting" | "closed";
-
-/**
- * One `browser.sessions` subscription, driven from a test.
- *
- * The REAL `BrowserSessionsStreamClient` sits on top of this, so every frame a
- * test emits is parsed against the protocol schema before main sees it, and
- * every frame main sends is the envelope that would have gone on the wire.
- */
-export class FakeStreamSession implements IStreamSession {
-  readonly sentFrames: StreamFrameEnvelope[] = [];
-  closed = false;
-  private serverHandler: ServerFrameHandler | null = null;
-  private statusHandler: StatusChangeHandler | null = null;
-  private status: StreamStatus = "connecting";
-
-  sendClientFrame(
-    frame: StreamFrameEnvelope,
-    _binaryPayload: Uint8Array | null,
-  ): void {
-    if (this.closed || this.status !== "open") return;
-    this.sentFrames.push(frame);
-  }
-
-  onServerFrame(handler: ServerFrameHandler): void {
-    this.serverHandler = handler;
-  }
-
-  onStatusChange(handler: StatusChangeHandler): void {
-    this.statusHandler = handler;
-  }
-
-  requestReconnect(): void {}
-
-  getNegotiatedSchemaVersion(): SchemaVersion | null {
-    return null;
-  }
-
-  close(): void {
-    this.closed = true;
-  }
-
-  emitStatus(status: StreamStatus): void {
-    this.status = status;
-    this.statusHandler?.(status, null);
-  }
-
-  /** The terminal close a host's bearer-expiry disconnect produces. */
-  emitFatal(reason: string): void {
-    this.status = "closed";
-    this.statusHandler?.("closed", {
-      kind: "fatalError",
-      details: {
-        code: "UNAUTHORIZED",
-        reason,
-        incompatibleMethods: null,
-        upgradeGuidance: null,
-      },
-    });
-  }
-
-  emit(frame: BrowserSessionsServerFrame): void {
-    this.serverHandler?.({ ...frame }, null);
-  }
-
-  framesOfKind(kind: string): readonly StreamFrameEnvelope[] {
-    return this.sentFrames.filter((frame) => frame.kind === kind);
-  }
-}
-
-/**
- * A stream client that answers `subscribe` with a drivable session and
- * declines every other capability. Implemented in full rather than cast into
- * place: the owner is typed against the real transport seam, and a fake that
- * has to lie about its shape is a fake that can drift from it.
- */
-export class FakeStreamClient implements IHostStreamClient<HostStreamRpcRegistry> {
-  readonly instanceId = "fake-stream-client";
-  readonly sessions: FakeStreamSession[] = [];
-  readonly subscribes: Array<{
-    readonly method: string;
-    readonly params: unknown;
-  }> = [];
-  private closed = false;
-
-  subscribe(method: string, params: unknown): FakeStreamSession {
-    const session = new FakeStreamSession();
-    this.sessions.push(session);
-    this.subscribes.push({ method, params });
-    return session;
-  }
-
-  subscribeWithParamsProvider(
-    method: string,
-    paramsProvider: () => unknown,
-  ): FakeStreamSession {
-    return this.subscribe(method, paramsProvider());
-  }
-
-  getMethodSchemaVersion(): SchemaVersion | null {
-    return null;
-  }
-
-  close(): void {
-    this.closed = true;
-  }
-
-  isClosed(): boolean {
-    return this.closed;
-  }
-
-  getClosedReason(): string | null {
-    return null;
-  }
-
-  onClosed(): () => void {
-    return () => undefined;
-  }
-
-  /**
-   * Models what `WsStreamClient` does with a rotated bearer: push a
-   * `credentialUpdate` onto every open session, so an already-connected host
-   * stops holding a stale request context.
-   */
-  notifyBearerRotated(): void {
-    for (const session of this.sessions) {
-      session.sendClientFrame(
-        { kind: "credentialUpdate", hasBinaryPayload: false },
-        null,
-      );
-    }
-  }
-
-  reconnectAll(): void {}
-
-  isReady(): boolean {
-    return true;
-  }
-
-  getMethodSupport(): "unknown" {
-    return "unknown";
-  }
-
-  subscribeMethodSupport(): () => void {
-    return () => undefined;
-  }
-
-  subscribeAvailabilityRecovered(): () => void {
-    return () => undefined;
-  }
-}
 
 export interface JarRecorder {
   readonly observed: Array<{
@@ -238,8 +81,10 @@ export function createJarRecorder(): JarRecorder {
         });
         return Promise.resolve();
       },
-      wrapStoreKey: (rawKey, userId) => {
-        recorder.wrapped.push(`${userId}:${rawKey}`);
+      wrapStoreKey: (rawKey, userId, hostId) => {
+        // Both ids the wrap is matched on, so a suite can tell WHICH account
+        // and host a wrap was priced against.
+        recorder.wrapped.push(`${userId}:${hostId}:${rawKey}`);
         return "d3JhcHBlZA==";
       },
       unwrapStoreKey: (wrappedKey, userId) => {
@@ -252,6 +97,7 @@ export function createJarRecorder(): JarRecorder {
           publicKey: "cHVibGlj",
           keystoreId: "keystore-1",
           signature: "c2ln",
+          jarEligible: true,
         });
       },
       readForgetLedger: () => recorder.ledger,
@@ -361,6 +207,15 @@ export interface RegistryHarness {
   /** The signed-in user main reads for itself; null while signed out. */
   userId: string | null;
   publishLocalHost: (hostId: string) => void;
+  /**
+   * What the directory answers for a host id. Replaceable so a suite can hold
+   * the read open (the resolve is one await wide, and an identity change
+   * inside it is the race worth pinning) or answer `null` for a host that is
+   * not in the account's registry.
+   */
+  resolveHost: (hostId: string) => Promise<HostDirectoryEntry | null>;
+  /** How many times a fresh identity dropped the whole cached registry. */
+  readonly directoryResets: { count: number };
   readonly jar: JarRecorder;
   readonly tabs: TabRecorder;
   readonly clients: FakeStreamClient[];
@@ -380,7 +235,9 @@ export function createRegistryHarness(): RegistryHarness {
   const emitted: RegistryHarness["emitted"] = [];
   const closedTransports: number[] = [];
   const openTransport = (): BrowserSessionsHostTransport => {
-    const client = new FakeStreamClient();
+    // The desktop suites drive the connection themselves - the attach burst,
+    // a rotation, a terminal close - so a subscription must not be born open.
+    const client = new FakeStreamClient(false);
     const index = clients.push(client) - 1;
     return {
       wsStreamClient: client,
@@ -401,6 +258,8 @@ export function createRegistryHarness(): RegistryHarness {
     invalidated,
     localHostId: "host-1",
     userId: "user-1",
+    resolveHost: () => Promise.resolve(LOCAL_HOST_ENTRY),
+    directoryResets: { count: 0 },
     rotateBearer: () => {
       for (const listener of bearerListeners) listener();
     },
@@ -413,7 +272,10 @@ export function createRegistryHarness(): RegistryHarness {
         invalidate: (hostId) => {
           invalidated.push(hostId);
         },
-        resolve: () => Promise.resolve(LOCAL_HOST_ENTRY),
+        reset: () => {
+          harness.directoryResets.count += 1;
+        },
+        resolve: (hostId) => harness.resolveHost(hostId),
         endpoint: () => ({
           hostId: LOCAL_HOST_ENTRY.hostId,
           websocketUrl: LOCAL_HOST_ENTRY.websocketUrl,

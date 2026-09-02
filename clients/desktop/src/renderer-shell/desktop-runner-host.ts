@@ -137,6 +137,7 @@ import type {
   GlobalShortcutStatus,
 } from "../ipc-contracts/global-shortcuts-types";
 import type {
+  DesktopAuthSessionSetResult,
   DesktopAuthSessionSnapshot,
   DesktopRuntimePlatform,
   DesktopTopLevelMenuId,
@@ -629,7 +630,9 @@ export interface DesktopWindowsBridge {
   };
   authSession: {
     get(): Promise<DesktopAuthSessionSnapshot>;
-    set(snapshot: DesktopAuthSessionSnapshot): Promise<void>;
+    set(
+      snapshot: DesktopAuthSessionSnapshot,
+    ): Promise<DesktopAuthSessionSetResult>;
     onChange(handler: (snapshot: DesktopAuthSessionSnapshot) => void): {
       dispose: () => void;
     };

@@ -239,16 +239,15 @@ export type BrowserPrimaryProfileDelta = z.infer<
 >;
 
 /*
- * Wire bounds for the universal-sign-in carry-over path (decision 8). Both
- * ends import these, so the producer clamps against exactly the number the
- * receiver enforces.
+ * Wire bounds for the carry-over path. Both ends import these, so the
+ * producer clamps against exactly the number the receiver enforces.
  *
  * They are exported constants rather than `.max()` on the schemas below, and
  * that is deliberate. A schema bound turns an over-bound frame into a silent
  * parse failure inside the stream transport: the receiver never sees the
  * frame, so it can neither WARN (keyed by `instance=`) nor emit the
- * `over-bound` reject trace these paths are diagnosed by, and this epic's
- * bugs were found by trace forensics. The receiver counts and rejects instead.
+ * `over-bound` reject trace these paths are diagnosed by, and these bugs were
+ * found by trace forensics. The receiver counts and rejects instead.
  *
  * The two frames overflow in OPPOSITE directions, so they get two policies and
  * these must not be unified into one:
@@ -280,8 +279,8 @@ export const BROWSER_PRIMARY_PROFILE_OBSERVED_MAX_COOKIES = 512;
  *
  * It is ONE number because it is a two-sided contract whose ends fail in
  * opposite directions when they disagree. The host paces its replay to stay at
- * or under it; the desktop's rate limiter (universal-sign-in ticket 03) must
- * admit a burst of exactly this size before it begins refusing. A limiter set
+ * or under it; the desktop's rate limiter must admit a burst of exactly this
+ * size before it begins refusing. A limiter set
  * lower silently truncates a legitimate reconnect - the user stays signed out
  * on the very machine that asked for the replay, with nothing on either end
  * saying why - and a host pacing higher reaches the same outcome from the
@@ -289,8 +288,8 @@ export const BROWSER_PRIMARY_PROFILE_OBSERVED_MAX_COOKIES = 512;
  *
  * A host holding more marked domains than this sends the first burst and
  * leaves the rest for the next attach. That is safe precisely because the
- * replay is stateless and idempotent (decision 5): a domain that did not fit
- * is not lost, only later.
+ * replay is stateless and idempotent: a domain that did not fit is not lost,
+ * only later.
  *
  * 64 is far above a realistic replay - a user's agents sign into a handful of
  * sites, not dozens - and far below what would read as a flood to a desktop
@@ -326,8 +325,8 @@ export const BROWSER_FORGET_LEDGER_MAX_DOMAINS = 1_024;
  * {@link BROWSER_PRIMARY_PROFILE_OBSERVED_MAX_COOKIES}, and applies what
  * survives through Chromium's own `cookies.set` validation.
  *
- * COOKIES ONLY - no `origins`/localStorage, and none may be added later
- * (universal-sign-in decision 1). localStorage has no per-key merge: the only
+ * COOKIES ONLY - no `origins`/localStorage, and none may be added later.
+ * localStorage has no per-key merge: the only
  * way to apply it is clear-and-reseed a whole origin, which is a second
  * implicit sign-out channel, and an unapplied `origins` array would just ship
  * every SPA's bearer tokens across the wire for nothing. localStorage
@@ -342,7 +341,7 @@ export const BROWSER_FORGET_LEDGER_MAX_DOMAINS = 1_024;
  * So a cookie carrying `expires` at or before receive time is a removal
  * wearing a write's clothing.
  *
- * EXPIRED-COOKIE REJECTION (ticket 03, reason `expired-cookie`): the applier
+ * EXPIRED-COOKIE REJECTION (reason `expired-cookie`): the applier
  * MUST drop, per cookie, any cookie whose `expires >= 0 && expires <= now`
  * (seconds since epoch, the field's own unit; a NEGATIVE `expires` is the
  * session-cookie sentinel - the capture path writes `-1` - and is always
@@ -356,8 +355,8 @@ export const BROWSER_FORGET_LEDGER_MAX_DOMAINS = 1_024;
  * field could only forge. No ordering field either, by design - there is no
  * sequence number, watermark or issue timestamp to compare, so protection
  * against a host replaying a stale contribution over a fresher jar is
- * entirely the REPLAY ORDERING's obligation (ticket 02), never a check the
- * applier can make from the frame's own contents.
+ * entirely the REPLAY ORDERING's obligation, never a check the applier can
+ * make from the frame's own contents.
  */
 export const browserPrimaryProfileObservedSchema = z
   .object({
@@ -394,7 +393,7 @@ export type BrowserForgetLedgerDomain = z.infer<
  * `primaryProfileForgetLedgerAck`.
  *
  * WHAT `revision` IS FOR, and why this is not simply the whole ledger every
- * time (universal-sign-in ticket 04). The ledger is monotonic and never
+ * time. The ledger is monotonic and never
  * shrinks, so re-asserting all of it on every push would re-clear a site the
  * user has since signed back into - on every later forget action, forever. The
  * desktop therefore records what each host has ACKED and sends only the
@@ -478,11 +477,11 @@ export type ElectronTabCreateFailureCode = z.infer<
 >;
 
 // Reserved evolution room, not yet added:
-// - A `downloadEvent` server frame for file downloads/uploads (deferred,
-//   spec decision #12); the honest unsupported toast stays until then.
+// - A `downloadEvent` server frame for file downloads/uploads (deferred); the
+//   honest unsupported toast stays until then.
 /**
  * The host's verdict on one `captureTabPreview`. Snapshot-only cross-host
- * context (spec decision #10): a still, a url and a title, never a drive
+ * context: a still, a url and a title, never a drive
  * handle. `ok: false` is an ordinary answer carrying `reason` and nothing else
  * - notably a dormant tab, which is reported rather than woken.
  */
@@ -627,8 +626,8 @@ export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
       // opens a second, opportunistic renderer request path during placement.
       kind: z.literal("capturePrimaryProfile"),
       ...requestFrameFields,
-      // A STANDING request (browser-security-hardening H02): capture nothing
-      // now, keep this `requestId`, and use it on the one capture the host
+      // A STANDING request: capture nothing now, keep this `requestId`, and
+      // use it on the one capture the host
       // cannot ask for - the flush the desktop pushes as it quits. Every
       // `primaryProfileCaptured` the host stores is thereby solicited: the
       // ordinary answer matches the outstanding request, the quit flush matches
@@ -640,9 +639,9 @@ export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
-      // Store-key handshake (keychain refactor ticket 05). The host mints the
-      // per-user store key and asks a JAR-AUTHORIZED desktop (one whose
-      // `desktopIdentityAttest` this host enrolled, H09) to wrap it with that
+      // Store-key handshake. The host mints the per-user store key and asks
+      // a JAR-AUTHORIZED desktop (one whose
+      // `desktopIdentityAttest` this host enrolled) to wrap it with that
       // machine's OS keystore; the host keeps the raw bytes in memory only.
       kind: z.literal("storeKeyWrapRequest"),
       ...requestFrameFields,
@@ -662,9 +661,9 @@ export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
-      // "Prove you are a desktop this host hands the cookie jar to"
-      // (browser-security-hardening H09). Issued once per connection, on
-      // receipt of `electronTabLifecycleReady`. The nonce is 32 random bytes the host
+      // "Prove you are a desktop this host hands the cookie jar to". Issued
+      // once per connection, on receipt of `electronTabLifecycleReady`. The
+      // nonce is 32 random bytes the host
       // holds on the challenged subscriber and deletes on the first answer, so
       // a captured signature replays onto nothing and a second connection's
       // answer never settles this one.
@@ -676,8 +675,8 @@ export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
   z
     .object({
       // A sign-in this host witnessed inside a headless session, offered to
-      // the desktops that hold the master jar (universal-sign-in decisions
-      // 1-5). Emitted from headless capture events only - never echoed back
+      // the desktops that hold the master jar. Emitted from headless capture
+      // events only - never echoed back
       // from a desktop's own `primaryProfileDelta`, which is what terminates
       // the loop - and from primary-profile-backed sessions only, so ephemeral
       // ones stay isolated. Replayed for the host's headless-contributed
@@ -695,8 +694,8 @@ export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
     .object({
       // This host has finished pruning everything the desktop's ledger named
       // through `revision` - the stored slice, the headless-contributed
-      // markers, and the live headless contexts (universal-sign-in ticket 04).
-      // Sent only to the desktop whose digest it answers.
+      // markers, and the live headless contexts. Sent only to the desktop
+      // whose digest it answers.
       //
       // It is the HAPPENS-BEFORE the carry-over path has no clock for. A host
       // that has acked revision N pruned everything through N before it sent
@@ -718,8 +717,7 @@ export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
       // no-resurrection gate permanently.
       //
       // This arm replaced `primaryProfileForgotten`, whose one-shot fan-out the
-      // ledger absorbed (decision 6). Do not reintroduce a second forget
-      // channel.
+      // ledger absorbed. Do not reintroduce a second forget channel.
       kind: z.literal("primaryProfileForgetLedgerAck"),
       ...textFrameFields,
       revision: z.number().int().nonnegative(),
@@ -762,13 +760,12 @@ export type BrowserSessionsServerFrame = z.infer<
 >;
 
 /**
- * Domain-separation tag for the desktop identity attestation (H09). Versioned
+ * Domain-separation tag for the desktop identity attestation. Versioned
  * so a future payload shape cannot be confused with this one, and product-tagged
  * so a signature minted here can never be replayed as any other Ed25519
  * signature the same key might one day produce.
  */
-export const DESKTOP_IDENTITY_ATTEST_DOMAIN =
-  "traycer-desktop-identity-attest-v1";
+const DESKTOP_IDENTITY_ATTEST_DOMAIN = "traycer-desktop-identity-attest-v1";
 
 /**
  * The exact bytes `desktopIdentityAttest.signature` commits to.
@@ -823,7 +820,7 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
   z
     .object({
       // Snapshot-only preview of one tab, for a chat pinned to ANOTHER host
-      // that can never drive it (spec decision #10). No `sessionId`: the tab
+      // that can never drive it. No `sessionId`: the tab
       // is resolved by the owning host inside this stream's epic scope, which
       // is the only authorization there is.
       kind: z.literal("captureTabPreview"),
@@ -870,16 +867,15 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
       // The GUI's declared co-located hostId. Null means "I have a native
       // browserView but I am not co-located with any host I can name". The
       // host compares this against its own id and must never elect a
-      // subscriber whose declared id differs as Electron lifecycle owner
-      // (spec decision #3): Electron placement is a same-machine
-      // optimization, and this field is the sole locality signal it is
-      // gated on.
+      // subscriber whose declared id differs as Electron lifecycle owner:
+      // Electron placement is a same-machine optimization, and this field is
+      // the sole locality signal it is gated on.
       coLocatedHostId: z.string().nullable(),
-      // There was a `desktopWindowId` here. It is gone: H02 retired the host's
-      // last reader (lifecycle hand-over now happens only through
+      // There was a `desktopWindowId` here. It is gone: the host's last
+      // reader was retired (lifecycle hand-over now happens only through
       // `detachBrowserSessionsSubscriber`), and with the jar plane in the
-      // desktop's main process (H10) the window a stream belongs to is a fact
-      // that process already holds - it never needed to travel.
+      // desktop's main process the window a stream belongs to is a fact that
+      // process already holds - it never needed to travel.
     })
     .strict(),
   z
@@ -946,6 +942,15 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
       // already requires a socket on the host's own machine.
       keystoreId: z.string().max(64),
       signature: z.base64().max(128),
+      // Whether this desktop's keystore can actually hold the host's store
+      // key. A machine whose OS keystore cannot encrypt (Linux with no secret
+      // service) still mints a durable keypair and attests, so it keeps native
+      // tab placement, and declares `false` so the host never hands it a jar it
+      // could not protect. Client-declared, and safe as one: it can only
+      // downgrade the declarer. REQUIRED rather than defaulted - a desktop
+      // that does not answer it is one whose keystore story this host has no
+      // reason to guess at.
+      jarEligible: z.boolean(),
     })
     .strict(),
   z
@@ -968,13 +973,12 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
-      // "Clear" on one row of Settings > Browser > Sites with saved logins
-      // (keychain refactor ticket 10, decision #13). Unsolicited and
-      // unacknowledged: the host tombstones that registrable domain in the
-      // user's slice and evicts it from its own live headless contexts. It
-      // fans NOTHING back: the host->desktop removal frame was retired by
-      // universal-sign-in ticket 08, which left the desktop's write channel
-      // add-only. No `userId` - the identity is the stream's authenticated
+      // "Clear" on one row of Settings > Browser > Sites with saved logins.
+      // Unsolicited and unacknowledged: the host tombstones that registrable
+      // domain in the user's slice and evicts it from its own live headless
+      // contexts. It fans NOTHING back: the host->desktop removal frame was
+      // retired, which left the desktop's write channel add-only. No
+      // `userId` - the identity is the stream's authenticated
       // user, and the host hears the frame only from a JAR-AUTHORIZED
       // subscriber - see `primaryProfileDelta`. Lifecycle election gates
       // nothing here.
@@ -985,12 +989,11 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
-      // "Forget all browser logins" (keychain refactor ticket 08, decision
-      // #13). Unsolicited and unacknowledged: the host answers by shredding
-      // this user's key and slice. It fans NOTHING back - the desktop that
-      // asked clears its own partition itself and records the forget in its
-      // ledger, and the hosts that were not connected to hear this frame learn
-      // it from that ledger instead (universal-sign-in decision 6). No `userId`
+      // "Forget all browser logins". Unsolicited and unacknowledged: the host
+      // answers by shredding this user's key and slice. It fans NOTHING back
+      // - the desktop that asked clears its own partition itself and records
+      // the forget in its ledger, and the hosts that were not connected to
+      // hear this frame learn it from that ledger instead. No `userId`
       // - the identity is the stream's authenticated user, and the host hears
       // the frame only from a JAR-AUTHORIZED subscriber - see
       // `primaryProfileDelta`. Lifecycle election gates nothing here.
@@ -1000,8 +1003,8 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
-      // The desktop's forget ledger (universal-sign-in decision 6), pushed on
-      // every forget action and once at attach BEFORE any observed replay - so
+      // The desktop's forget ledger, pushed on every forget action and once
+      // at attach BEFORE any observed replay - so
       // a host can never re-offer, in the replay, a login the user forgot while
       // that host was disconnected. Answered with
       // `primaryProfileForgetLedgerAck` once the prune has finished, which is
@@ -1022,8 +1025,7 @@ export type BrowserSessionsClientFrame = z.infer<
 >;
 
 /**
- * The `browser.sessions` server frames a desktop RENDERER may see
- * (browser-security-hardening H10).
+ * The `browser.sessions` server frames a desktop RENDERER may see.
  *
  * The jar plane lives in the desktop main process, so every frame that
  * carries cookies, a storage state, key material or a signing challenge is
@@ -1032,29 +1034,58 @@ export type BrowserSessionsClientFrame = z.infer<
  * is not named in the exclusion below is a type error at the projection
  * instead of a cookie array arriving in a renderer.
  */
-export type BrowserSessionsUxServerFrame = Exclude<
+export const BROWSER_SESSIONS_JAR_SERVER_FRAME_KINDS = [
+  "createElectronTab",
+  "electronTabAccepted",
+  "releaseElectronTab",
+  "cdpRequest",
+  "capturePrimaryProfile",
+  "primaryProfileObserved",
+  "storeKeyWrapRequest",
+  "storeKeyUnwrapRequest",
+  "desktopIdentityChallenge",
+  "primaryProfileCaptureAck",
+  "primaryProfileForgetLedgerAck",
+] as const;
+
+export type BrowserSessionsJarServerFrame = Extract<
   BrowserSessionsServerFrame,
   {
-    readonly kind:
-      | "createElectronTab"
-      | "electronTabAccepted"
-      | "releaseElectronTab"
-      | "cdpRequest"
-      | "capturePrimaryProfile"
-      | "primaryProfileObserved"
-      | "storeKeyWrapRequest"
-      | "storeKeyUnwrapRequest"
-      | "desktopIdentityChallenge"
-      | "primaryProfileCaptureAck"
-      | "primaryProfileForgetLedgerAck";
+    readonly kind: (typeof BROWSER_SESSIONS_JAR_SERVER_FRAME_KINDS)[number];
   }
 >;
 
+export type BrowserSessionsUxServerFrame = Exclude<
+  BrowserSessionsServerFrame,
+  BrowserSessionsJarServerFrame
+>;
+
+/**
+ * The one runtime reading of that set, so the three places that used to spell
+ * the eleven kinds out - this type, main's dispatch switch and the direct
+ * session's drop - each test membership instead of keeping a copy in step.
+ */
+export function isBrowserSessionsJarServerFrame(
+  frame: BrowserSessionsServerFrame,
+): frame is BrowserSessionsJarServerFrame {
+  return JAR_SERVER_FRAME_KINDS.has(frame.kind);
+}
+
+const JAR_SERVER_FRAME_KINDS: ReadonlySet<string> = new Set(
+  BROWSER_SESSIONS_JAR_SERVER_FRAME_KINDS,
+);
+
 /**
  * The second half of the same rule, and the one the exclusion list cannot
- * state: whatever the union is named, nothing renderer-reachable may carry a
- * cookie array, a storage state or key material. A protocol addition that grows
- * one of those fields on a UX frame fails the build here rather than at review.
+ * state: whatever the union is named, no renderer-reachable frame may carry a
+ * cookie array, a storage state or key material as a TOP-LEVEL field. A
+ * protocol addition that grows one of those fields on a UX frame fails the
+ * build here rather than at review.
+ *
+ * Top-level is the whole reach of an `Extract` over a field name, and the same
+ * material nested one object deeper would pass. That half is the desktop's
+ * `renderer-reachable-ipc-invariant` suite, which walks each UX frame's SCHEMA
+ * to any depth.
  */
 type BrowserSessionsUxFrameCarryingJarMaterial = Extract<
   BrowserSessionsUxServerFrame,
@@ -1077,15 +1108,21 @@ void noJarMaterialReachesARenderer;
  * renderer button starts both. They shred every connected host's slice of the
  * user's logins, so they are produced in main behind its own confirmation,
  * triggered by an action invoke rather than by a frame a renderer could mint
- * on its own (H05's per-site residual is exactly this hole one domain at a
- * time). Everything else on this stream - the tab lifecycle, the jar plane,
+ * on its own (a per-site residual left exactly this hole open, one domain at
+ * a time). Everything else on this stream - the tab lifecycle, the jar plane,
  * the forget-ledger digest and the readiness burst - is produced in main from
  * state the renderer does not hold.
  */
+export const BROWSER_SESSIONS_UX_CLIENT_FRAME_KINDS = [
+  "openTab",
+  "closeTab",
+  "captureTabPreview",
+] as const;
+
 export type BrowserSessionsUxClientFrame = Extract<
   BrowserSessionsClientFrame,
   {
-    readonly kind: "openTab" | "closeTab" | "captureTabPreview";
+    readonly kind: (typeof BROWSER_SESSIONS_UX_CLIENT_FRAME_KINDS)[number];
   }
 >;
 
@@ -1107,8 +1144,8 @@ export const browserSavedLoginSiteSchema = z
     lastSeen: z.number(),
     /**
      * Which host contributed this login, when it was a HEADLESS session on the
-     * answering host rather than the user's own desktop jar (universal-sign-in
-     * decision 9). `null` means "nothing to attribute": the desktop's own
+     * answering host rather than the user's own desktop jar. `null` means
+     * "nothing to attribute": the desktop's own
      * browsing put it here, so there is no other machine to name.
      *
      * It is a `hostId` - the canonical host identity, which the GUI resolves to
@@ -1151,7 +1188,7 @@ export type BrowserSavedLoginSitesResponse = z.infer<
 >;
 
 /**
- * Names only, never values (spec section 7.3, decision #26). The host projects
+ * Names only, never values (spec section 7.3). The host projects
  * the registrable domains of the live cookie keys in the caller's own slice;
  * the cookies themselves never leave the host on this path, so a compromised
  * renderer learns which sites the user is signed into and nothing more.
@@ -1258,20 +1295,20 @@ export type BrowserNavState = z.infer<typeof browserNavStateSchema>;
 
 /**
  * WebRTC video-plane signaling, ridden on `browser.screencast@1.0` as new
- * frame kinds (webrtc-display-plane spec, decision 1 + 12: no third stream
- * method, no minor bump - the contract is pre-release).
+ * frame kinds: no third stream method, no minor bump - the contract is
+ * pre-release.
  *
  * The host's capture helper page is the offerer: it owns the
  * `RTCPeerConnection` and only creates it once `getDisplayMedia` has a live
  * track, so it - not the client - knows when negotiation can start. The
  * client is therefore always the answerer. `negotiationId` correlates one
- * offer/answer/candidate round; a fallback-and-retry (decision 5) starts a
- * new one, so late candidates from an abandoned round are ignored rather
- * than mis-applied to the next attempt.
+ * offer/answer/candidate round; a fallback-and-retry starts a new one, so
+ * late candidates from an abandoned round are ignored rather than
+ * mis-applied to the next attempt.
  */
 /**
  * The candidate fields shared by the per-candidate `iceCandidate` trickle
- * frame and the A12 batch riding `sdpAnswer.candidates` - everything but
+ * frame and the batch riding `sdpAnswer.candidates` - everything but
  * `negotiationId`, which only the standalone frame needs (the batch's own
  * frame already carries one for the whole array).
  */
@@ -1286,7 +1323,7 @@ const browserScreencastIceCandidateFields = {
   ...browserScreencastIceCandidateBaseFields,
 } as const;
 
-/** One candidate as it rides `sdpAnswer.candidates` (perf-hardening A12). */
+/** One candidate as it rides `sdpAnswer.candidates`. */
 const browserScreencastBatchedIceCandidateSchema = z
   .object(browserScreencastIceCandidateBaseFields)
   .strict();
@@ -1406,7 +1443,7 @@ export const browserScreencastServerFrameSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
-      // Control-plane RTT probe (ticket 18). Its own frame pair rather than
+      // Control-plane RTT probe. Its own frame pair rather than
       // the `ping`/`pong` above, which neither end can use for this: the
       // stream transport answers a client `ping` before any resolver sees it,
       // and the pong it sends back is credited to the transport's own ping
@@ -1441,9 +1478,9 @@ export const browserScreencastServerFrameSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
-      // How far the host has consumed this arm epoch's input sequence
-      // (ticket 20). Sent only for input that arrived over the MUX, coalesced,
-      // so it exists exactly during the window where the client is waiting to
+      // How far the host has consumed this arm epoch's input sequence. Sent
+      // only for input that arrived over the MUX, coalesced, so it exists
+      // exactly during the window where the client is waiting to
       // promote its pending DataChannel transport: once `lastSeq` covers the
       // last frame the client put on the mux, nothing can reorder against the
       // channel and the client promotes mid-arm.
@@ -1520,7 +1557,7 @@ export const browserScreencastServerFrameSchema = z.discriminatedUnion("kind", [
       ...textFrameFields,
       type: browserScreencastAgentCursorTypeSchema,
       // Normalized [0,1] to the viewport-epoch geometry, unclamped;
-      // epoch minted by the host (ticket 06).
+      // epoch minted by the host.
       epoch: z.number().int().nonnegative(),
       normalizedX: z.number(),
       normalizedY: z.number(),
@@ -1611,7 +1648,7 @@ export const browserScreencastClientFrameSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
-      // A speculative claim raised on hover (ticket 20), so the host has the
+      // A speculative claim raised on hover, so the host has the
       // dispatcher live before the click that needs it. Its own kind rather
       // than a flag on `arm` because the AUTHORIZATION differs: this one is
       // refused (`revoked`, cause `denied`) when another viewer holds control,
@@ -1718,11 +1755,10 @@ export const browserScreencastClientFrameSchema = z.discriminatedUnion("kind", [
       ...textFrameFields,
       negotiationId: z.number().int().nonnegative(),
       sdp: z.string().max(1_048_576),
-      // Perf-hardening A12: local candidates gathered before the answer
-      // shipped, batched here instead of one `iceCandidate` frame each.
-      // `.default([])` - additive, and `browser.screencast` is not in the
-      // released baseline (ticket 18's hazard note covers the future) - so
-      // an older client that sends none still parses.
+      // Local candidates gathered before the answer shipped, batched here
+      // instead of one `iceCandidate` frame each. `.default([])` - additive,
+      // and `browser.screencast` is not in the released baseline - so an
+      // older client that sends none still parses.
       candidates: z
         .array(browserScreencastBatchedIceCandidateSchema)
         .max(256)
@@ -1758,7 +1794,7 @@ export const browserScreencastClientFrameSchema = z.discriminatedUnion("kind", [
       kind: z.literal("videoStats"),
       ...textFrameFields,
       // Receive-side WebRTC getStats + client-observed timing; the trace log
-      // consumes this raw (semantics beyond the shape are ticket 11's scope).
+      // consumes this raw (semantics beyond the shape are out of scope here).
       negotiationId: z.number().int().nonnegative(),
       framesDecoded: z.number().int().nonnegative(),
       framesDropped: z.number().int().nonnegative(),
@@ -1776,16 +1812,16 @@ export const browserScreencastClientFrameSchema = z.discriminatedUnion("kind", [
       // The same measurement's tail, and its two halves - `receiveTime` splits
       // capture-to-paint into "how long the network held the frame" and "how
       // long this client took to decode and composite it", which is the whole
-      // difference between a path problem and a client problem. Additive
-      // (ticket 17): `.default(null)` so an older client's frame still parses.
+      // difference between a path problem and a client problem. Additive:
+      // `.default(null)` so an older client's frame still parses.
       glassToGlassP95Ms: z.number().nonnegative().nullable().default(null),
       networkPlusJitterMs: z.number().nonnegative().nullable().default(null),
       decodeCompositeMs: z.number().nonnegative().nullable().default(null),
       // Round trip of one `ping` sent on the `input-reliable` DataChannel: up
       // the DataChannel, back over the mux as `inputPong`. Deliberately
-      // asymmetric -
-      // that IS the human input path's shape, and the uplink half is the leg
-      // ticket 18 derives its deadlines from. Null until a ping has completed.
+      // asymmetric - that IS the human input path's shape, and the uplink
+      // half is the leg deadlines are derived from. Null until a ping has
+      // completed.
       dataChannelRttMs: z.number().nonnegative().nullable().default(null),
       // getStats() candidate-pair `candidateType` of the active receive
       // path (only observable receiver-side) - the "ICE path taken" metric.

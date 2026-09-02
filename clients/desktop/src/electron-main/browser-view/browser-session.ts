@@ -12,6 +12,7 @@ import type {
   BrowserPrimaryProfileDelta,
 } from "@traycer/protocol/host/browser/contracts";
 import { describeLogError, log } from "../app/logger";
+import { confirmDestructiveInMainSync } from "../app/confirm-destructive";
 import {
   setBrowserCertificateErrorHandler,
   type CertificateErrorReport,
@@ -511,7 +512,12 @@ function handleBrowserViewDownload(
 
   if (
     dangerType !== null &&
-    !confirmDangerousDownload(filename, dangerType, item.getURL())
+    !confirmDestructiveInMainSync({
+      title: "Confirm download",
+      message: `Save ${filename}?`,
+      detail: `${dangerType} files can run code on your machine.\n\nSource: ${item.getURL()}`,
+      confirmLabel: "Save anyway",
+    })
   ) {
     item.cancel();
     emitBrowserDownloadChange(item, webContents, {
@@ -633,24 +639,6 @@ function terminalDownloadState(state: string): BrowserViewDownloadState {
   if (state === "completed") return "completed";
   if (state === "cancelled") return "cancelled";
   return "interrupted";
-}
-
-function confirmDangerousDownload(
-  filename: string,
-  dangerType: string,
-  url: string,
-): boolean {
-  const response = dialog.showMessageBoxSync({
-    type: "warning",
-    buttons: ["Cancel", "Save anyway"],
-    defaultId: 0,
-    cancelId: 0,
-    title: "Confirm download",
-    message: `Save ${filename}?`,
-    detail: `${dangerType} files can run code on your machine.\n\nSource: ${url}`,
-    noLink: true,
-  });
-  return response === 1;
 }
 
 function dangerousDownloadType(filename: string): string | null {

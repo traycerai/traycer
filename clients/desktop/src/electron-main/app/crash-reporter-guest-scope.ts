@@ -33,14 +33,8 @@
  */
 
 import {
-  type DesktopSentryBreadcrumb,
   type DesktopSentryEvent,
-  type DesktopSentrySpan,
-  type DesktopSentryTransaction,
-  scrubDesktopBreadcrumbInPlace,
   scrubDesktopSentryEventInPlace,
-  scrubDesktopSentrySpanInPlace,
-  scrubDesktopSentryTransactionInPlace,
 } from "../../shared/sentry-scrub";
 
 /** The slice of the event hint this module reads. The dump rides here. */
@@ -101,35 +95,4 @@ export function desktopSentryBeforeSend<TEvent extends DesktopSentryEvent>(
   if (shouldDropNativeCrashEvent(event, hint)) return null;
   scrubDesktopSentryEventInPlace(event);
   return event;
-}
-
-/**
- * `beforeBreadcrumb` for the desktop main process. Scrubbing at record time
- * and not only at send time is what matters here: breadcrumbs are persisted
- * to `scope_v3.json` as they accumulate, and a native crash event is
- * assembled from *that persisted scope* on the next launch - so a URL only
- * cleaned in `beforeSend` would already be on disk, and would ride out
- * attached to a crash from a later, unrelated run.
- */
-export function desktopSentryBeforeBreadcrumb<
-  TBreadcrumb extends DesktopSentryBreadcrumb,
->(breadcrumb: TBreadcrumb): TBreadcrumb {
-  scrubDesktopBreadcrumbInPlace(breadcrumb);
-  return breadcrumb;
-}
-
-/** `beforeSendTransaction`: `beforeSend` never sees a transaction. */
-export function desktopSentryBeforeSendTransaction<
-  TEvent extends DesktopSentryTransaction,
->(event: TEvent): TEvent {
-  scrubDesktopSentryTransactionInPlace(event);
-  return event;
-}
-
-/** `beforeSendSpan`: child spans travel outside the transaction event. */
-export function desktopSentryBeforeSendSpan<TSpan extends DesktopSentrySpan>(
-  span: TSpan,
-): TSpan {
-  scrubDesktopSentrySpanInPlace(span);
-  return span;
 }
