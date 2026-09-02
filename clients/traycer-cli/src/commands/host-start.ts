@@ -1920,6 +1920,7 @@ export async function runHostStart(
       hostVersion: target.record.version,
       probeObservation,
       childSpawnedAtMs,
+      childEndedAtMs,
       stderrTee,
       stderrEnded,
       crashReportsDirPath,
@@ -2288,6 +2289,11 @@ async function persistChildExit(input: {
   readonly hostVersion: string;
   readonly probeObservation: Promise<ProbeObservation> | null;
   readonly childSpawnedAtMs: number;
+  // When the child's exit event fired. The telemetry's uptime is spawn to
+  // exit, and everything this function awaits before reporting (probe
+  // finalization, the stderr drain, the report scan) would otherwise be
+  // counted as time the child ran.
+  readonly childEndedAtMs: number;
   readonly stderrTee: StderrTee;
   readonly stderrEnded: Promise<void>;
   readonly crashReportsDirPath: string;
@@ -2399,9 +2405,10 @@ async function persistChildExit(input: {
     });
     // Same gate as the "Host crash diagnostics" line above: a decodable fatal
     // signal is a crash; a forwarded shutdown signal is not, and a bare
-    // SIGKILL cannot be told from an operator's kill here.
+    // SIGKILL cannot be told from an operator's kill here. Not awaited: the
+    // relaunch backoff must start now, not after the reporter's bound.
     if (fatalMeaning !== null) {
-      await boundedCrashTelemetry(input, {
+      void boundedCrashTelemetry(input, {
         environment,
         attemptId,
         supervisorPid,
@@ -2410,7 +2417,7 @@ async function persistChildExit(input: {
         signal,
         exitMeaning: fatalMeaning,
         hasDiagnosticReport: crashReport !== null,
-        uptimeMs: Math.max(0, Date.now() - input.childSpawnedAtMs),
+        uptimeMs: Math.max(0, input.childEndedAtMs - input.childSpawnedAtMs),
       });
     }
     return outcome;
@@ -2500,9 +2507,11 @@ async function persistChildExit(input: {
     abnormal: true,
   });
   // After the marker, never before it: the marker is readiness authority and
-  // a telemetry stall must not delay it. Every nonzero exit is reported, not
-  // only the decodable ones - an undecoded code is still a crash to count.
-  await boundedCrashTelemetry(input, {
+  // a telemetry stall must not delay it. Not awaited either: the relaunch
+  // decision and its backoff start now, and a stalled reporter is bounded
+  // and discarded on its own. Every nonzero exit is reported, not only the
+  // decodable ones - an undecoded code is still a crash to count.
+  void boundedCrashTelemetry(input, {
     environment,
     attemptId,
     supervisorPid,
@@ -2511,16 +2520,18 @@ async function persistChildExit(input: {
     signal: null,
     exitMeaning: exitMeaning ?? null,
     hasDiagnosticReport: crashReport !== null,
-    uptimeMs: Math.max(0, Date.now() - input.childSpawnedAtMs),
+    uptimeMs: Math.max(0, input.childEndedAtMs - input.childSpawnedAtMs),
   });
   return outcome;
 }
 
 /**
  * Crash telemetry bounded by {@link HOST_CRASH_REPORT_TIMEOUT_MS} and never
- * rejecting, for the same reason as {@link boundedCrashReportScan}: this runs
- * on the path to `deps.exit` / the relaunch, where a stalled pid.json read or
- * a throwing injected dependency would otherwise cost the relaunch itself.
+ * rejecting. Callers fire it without awaiting, so the bound is not about the
+ * relaunch's latency (that is already unblocked) but about the pending
+ * promise: a reporter that never settles must not keep a rejection path or a
+ * timer alive per attempt in a supervisor that outlives many attempts, which
+ * is why the timer is unref'd and the race resolves either way.
  */
 function boundedCrashTelemetry(
   input: { readonly deps: RunHostStartDeps },

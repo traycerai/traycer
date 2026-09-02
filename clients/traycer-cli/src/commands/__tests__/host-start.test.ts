@@ -23,6 +23,7 @@ import type { HostInstallRecord } from "../../manifest/host-install";
 import type { ILogger } from "../../logger";
 import type { Layer0FrameRead } from "../../host/lifecycle-probe";
 import {
+  CRASH_REPORT_SCAN_TIMEOUT_MS,
   CRASH_REPORT_SPAWN_SLACK_MS,
   STDERR_END_WAIT_TIMEOUT_MS,
   STDERR_HEAD_MAX_BYTES,
@@ -37,7 +38,10 @@ import {
 } from "@traycer/protocol/host/lifecycle-constants";
 import type { Environment } from "../../runner/environment";
 import type { StopIntentIdentity } from "../../host/stop-intent";
-import type { HostCrashTelemetry } from "../../host/crash-telemetry";
+import {
+  HOST_CRASH_REPORT_TIMEOUT_MS,
+  type HostCrashTelemetry,
+} from "../../host/crash-telemetry";
 import { hostHomeDir } from "../../store/paths";
 import { withDevDesktopSlotAsync as withDevDesktopSlot } from "@traycer-clients/shared/test-fixtures/dev-desktop-slot";
 import type { ProbeMarker } from "@traycer-clients/shared/host-lifecycle";
@@ -1346,6 +1350,13 @@ describe("runHostStart - signal/exit propagation", () => {
     expect(crashed).toBeDefined();
     expect(crashed?.fields.exitCode).toBe(7);
     expect(crashed?.fields.report).toBeUndefined();
+    // The report is built AFTER the 2 s scan bound expired, but its uptime
+    // is spawn-to-exit: the diagnostic wait must not be booked as time the
+    // child ran.
+    expect(recorded.crashReports).toHaveLength(1);
+    expect(recorded.crashReports[0]?.uptimeMs).toBeLessThan(
+      CRASH_REPORT_SCAN_TIMEOUT_MS,
+    );
   }, 10_000);
 
   it("writes the terminal marker and exits when findCrashReport rejects", async () => {
@@ -1561,15 +1572,17 @@ describe("runHostStart - signal/exit propagation", () => {
     expect(recorded.crashReports).toHaveLength(0);
   });
 
-  it("still writes the crashed marker and exits when reportHostCrash never resolves", async () => {
-    // Bounded by HOST_CRASH_REPORT_TIMEOUT_MS (1.5s), mirroring how the
-    // findCrashReport scan-timeout case above is exercised: real timers, a
-    // generous test timeout, and an assertion that the run actually
-    // completes rather than hanging on the injected dependency.
+  it("does not hold the relaunch decision on a reportHostCrash that never resolves", async () => {
+    // The reporter is dispatched WITHOUT awaiting it: the relaunch decision
+    // and its backoff must start the moment the marker is written, not after
+    // HOST_CRASH_REPORT_TIMEOUT_MS. Real timers, so the elapsed-time bound
+    // below is the invariant itself - a run that waited on the reporter's
+    // 1.5 s race would fail it.
     const exec = "/opt/traycer/host/install/traycer-host";
     const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
     recorded.reportHostCrashHangs = true;
 
+    const startedAtMs = Date.now();
     await runUntilExit(
       () =>
         runHostStart(
@@ -1578,13 +1591,18 @@ describe("runHostStart - signal/exit propagation", () => {
         ),
       recorded,
     );
+    const elapsedMs = Date.now() - startedAtMs;
 
     expect(recorded.exited).toBe(7);
     const crashed = recorded.markers.find((m) => m.phase === "crashed");
     expect(crashed).toBeDefined();
     expect(crashed?.fields.exitCode).toBe(7);
-    // The hang means the report never actually landed in the recorder.
+    // Dispatched (after the marker) but never landed: the hang is real.
+    expect(recorded.sequence.indexOf("report-host-crash")).toBeGreaterThan(
+      recorded.sequence.indexOf("terminal-marker:crashed"),
+    );
     expect(recorded.crashReports).toHaveLength(0);
+    expect(elapsedMs).toBeLessThan(HOST_CRASH_REPORT_TIMEOUT_MS);
   }, 10_000);
 
   it("spawn() throw is translated into HOST_SPAWN_FAILED + exit 66", async () => {
