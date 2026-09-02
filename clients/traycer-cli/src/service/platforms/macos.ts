@@ -45,6 +45,7 @@ import {
 } from "@traycer-clients/shared/host-lifecycle";
 import {
   ProcessRunError,
+  ProcessSpawnError,
   runCommand,
   type RunOptions,
   type RunResult,
@@ -62,6 +63,7 @@ import {
   isServiceMutationAuthorityError,
   verifyServiceMutationAuthority,
 } from "../mutation-authority";
+import { markRegistrationCommitted } from "../cli-invocation-record";
 
 // macOS service controller - CLI-owned launchctl. There is intentionally
 // no `SMAppService` path here (Decision 1 of the Tech Plan); the
@@ -463,11 +465,25 @@ async function installService(
       tolerateNonZeroExit: false,
     });
   } catch (cause) {
-    if (isServiceMutationAuthorityError(cause)) throw cause;
+    // Post-registration: `bootstrap` succeeded, so launchd holds a
+    // `RunAtLoad` registration and may already be launching the supervisor.
+    // A caller holding a host-start adoption lease must honour it before
+    // surfacing this (`didServiceRegistrationCommit`), or the child launchd
+    // is bringing up is refused and the registered service is left hostless.
+    // That holds for an authority loss landing here just as much as for a
+    // kickstart failure: the error keeps its authority identity (a hard stop
+    // for the callers that classify it) and is marked by reference.
+    if (isServiceMutationAuthorityError(cause)) {
+      throw markRegistrationCommitted(cause);
+    }
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
       message: `launchctl kickstart failed for ${options.label.id}: ${describeCause(cause)}`,
-      details: { label: options.label.id, cause: describeCause(cause) },
+      details: {
+        label: options.label.id,
+        cause: describeCause(cause),
+        registrationCommitted: true,
+      },
       exitCode: 1,
     });
   }
@@ -1378,6 +1394,10 @@ async function retireCompetingRegistration(
   const logger = createCliLogger(label.environment);
   let bootedOut = false;
   let bootoutFailed = false;
+  // Attempted and not confirmed - distinct from `bootoutFailed`, which is
+  // also set below when NO bootout runs. The record decorator reads this as
+  // "the registration may be gone" (see `CompetingRegistrationRetirement`).
+  let bootoutIndeterminate = false;
   if (ownership === null) {
     // Deliberately no bootout on an unknown owner. The one thing that would
     // make eviction catastrophic here is the CLI label BEING Desktop's
@@ -1419,6 +1439,12 @@ async function retireCompetingRegistration(
       // evicted, but nothing failed either.
       if (!isBenignBootoutFailure(cause)) {
         bootoutFailed = true;
+        // Indeterminate only if `launchctl` may have RUN. A spawn failure
+        // (`ProcessSpawnError`: the binary could not be started at all) is
+        // the one failure that proves the request never reached launchd, so
+        // the registration is provably untouched and the record decorator
+        // must not invalidate for it.
+        bootoutIndeterminate = !(cause instanceof ProcessSpawnError);
         // Deliberately does NOT claim the competing host is still running.
         // With `--wait` the likeliest way here is the timeout, and the
         // timeout kills `launchctl` - the waiter - not the job: launchd
@@ -1524,7 +1550,14 @@ async function retireCompetingRegistration(
   // manifest is already gone, which is now a NORMAL steady state because
   // Desktop's launch repair removes manifests without booting out.
   if (bootoutFailed || manifestRemovalFailed) {
-    return { kind: "retire-failed", bootoutFailed, manifestRemovalFailed };
+    return {
+      kind: "retire-failed",
+      bootoutFailed,
+      manifestRemovalFailed,
+      bootedOut,
+      bootoutIndeterminate,
+      manifestRemoved,
+    };
   }
   if (!bootedOut && !manifestRemoved) {
     return { kind: "nothing-to-retire" };
