@@ -24,6 +24,7 @@ import {
 } from "@/stores/epics/open-epic/store";
 import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import { useCommentThreadsStore } from "@/stores/comments/comment-threads-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 const EPIC_ID = "epic-1";
 const ARTIFACT_ID = "artifact-1";
@@ -103,6 +104,16 @@ let messenger: MockHostMessenger<HostRpcRegistry>;
 let defaultEpicHandle: OpenEpicStoreHandle;
 
 beforeEach(() => {
+  // A cloud-backed room (the default handle below leaves durability unset)
+  // is reachable only under a cloud verdict; the unverified cases set their
+  // own status.
+  useAuthStore
+    .getState()
+    .setSignedIn(
+      { userId: "user-1", userName: "U", email: "u@example.com" },
+      { userId: "user-1", username: "U" },
+      [],
+    );
   respondToListThreads = () => ({ threads: [] });
   queryClient = createAppQueryClient();
   let requestCount = 0;
@@ -163,6 +174,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  useAuthStore.getState().setSignedOut();
   queryClient.clear();
   hostClientRef.current = null;
   defaultEpicHandle.dispose();
@@ -405,6 +417,57 @@ describe("<CommentSidebar /> local durability honesty", () => {
     expect(
       screen.queryByText("Comments need a cloud room, and this epic has none."),
     ).toBeNull();
+  });
+
+  it("withholds a cloud-backed room - and its poll - from a session without a cloud verdict", async () => {
+    // A cloud-homed epic stays mounted after `signed-in` -> `unverified`. The
+    // structural gate still says the room exists, but the poll and every
+    // write would ride the local-host context, which carries no renderer
+    // verdict. The gate closes on the verdict and the poll never fires.
+    if (epicHandle === null) {
+      throw new Error("expected open epic handle");
+    }
+    epicHandle.store.setState({ durabilityStatus: "cloud" });
+    useAuthStore
+      .getState()
+      .setUnverifiedSession(
+        { userId: "user-1", userName: "U", email: "u@example.com" },
+        { userId: "user-1", username: "U" },
+      );
+
+    renderSidebar(epicHandle, null);
+
+    expect(
+      await screen.findByText("Comments need a verified sign-in."),
+    ).not.toBeNull();
+    expect(unavailablePanel()).not.toBeNull();
+    // A settled tick: a poll that WAS going to fire has fired by now.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(listThreadsCalls).toBe(0);
+    expect(screen.queryByText(QUOTED_TEXT)).toBeNull();
+  });
+
+  it("keeps a local-homed room readable without a cloud verdict", async () => {
+    // The exemption: the room is on this disk, and the lane serving it needs
+    // no verdict - the same rule the rename gates apply.
+    if (epicHandle === null) {
+      throw new Error("expected open epic handle");
+    }
+    epicHandle.store.setState({ durabilityStatus: "local" });
+    useAuthStore
+      .getState()
+      .setUnverifiedSession(
+        { userId: "user-1", userName: "U", email: "u@example.com" },
+        { userId: "user-1", username: "U" },
+      );
+
+    renderSidebar(epicHandle, null);
+
+    expect(await screen.findByText(QUOTED_TEXT)).not.toBeNull();
+    expect(listThreadsCalls).toBeGreaterThan(0);
+    expect(unavailablePanel()).toBeNull();
   });
 
   it("keeps comments gated while promotion is in flight", async () => {

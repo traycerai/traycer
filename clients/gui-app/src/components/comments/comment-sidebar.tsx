@@ -385,6 +385,12 @@ function commentRoomUnavailableCopy(
         detail:
           "This epic's cloud room was deleted. Export or recover the preserved local edits manually.",
       };
+    case "unauthorized":
+      return {
+        headline: "Comments need a verified sign-in.",
+        detail:
+          "Traycer couldn't confirm your session with the account service. This epic's comments live in the cloud, so they stay hidden until you're signed in again.",
+      };
   }
 }
 

@@ -1,6 +1,7 @@
 import { useMemo, type ReactNode } from "react";
 import { act, cleanup, renderHook } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import type {
   ChatRunSettings,
   GuiHarnessId,
@@ -579,6 +580,88 @@ function createHandle(epicId: string): OpenedStoreForTest {
 }
 
 describe("useEpicCommentsHaveNoUsableRoom", () => {
+  // The gate has a second question beside the structural one - whether this
+  // session may reach a cloud-backed room - so every structural case below
+  // runs under a session that holds a cloud verdict. The verdict cases are
+  // at the end.
+  beforeEach(() => {
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: "user-gate", userName: "U", email: "u@example.com" },
+        { userId: "user-gate", username: "U" },
+        [],
+      );
+  });
+
+  afterEach(() => {
+    useAuthStore.getState().setSignedOut();
+  });
+
+  const demoteToUnverified = (): void => {
+    useAuthStore
+      .getState()
+      .setUnverifiedSession(
+        { userId: "user-gate", userName: "U", email: "u@example.com" },
+        { userId: "user-gate", username: "U" },
+      );
+  };
+
+  it("gates a cloud-backed room once the session holds no cloud verdict", () => {
+    // The room exists and is reachable - structurally `available` - but the
+    // poll and every write would go through the local-host context, which
+    // carries no renderer verdict. A demotion while the epic stays mounted
+    // must close the gate on the next render.
+    const handle = createHandle("epic-comment-gate-unverified-cloud");
+    handle.store.setState({
+      durabilityStatus: "cloud",
+      durabilityPauseReason: null,
+      retainedDurabilityStatus: null,
+      durabilityLegsNegotiated: true,
+    });
+    const { result } = renderHook(() => useEpicCommentsHaveNoUsableRoom(), {
+      wrapper: openEpicWrapper(handle),
+    });
+    expect(result.current).toBe(false);
+
+    act(() => {
+      demoteToUnverified();
+    });
+    expect(result.current).toBe(true);
+  });
+
+  it("keeps a local-homed room open without a cloud verdict", () => {
+    // The exemption: a local room is on this disk and spends nothing.
+    demoteToUnverified();
+    const handle = createHandle("epic-comment-gate-unverified-local");
+    handle.store.setState({
+      durabilityStatus: "local",
+      durabilityPauseReason: null,
+      retainedDurabilityStatus: null,
+      durabilityLegsNegotiated: true,
+    });
+    const { result } = renderHook(() => useEpicCommentsHaveNoUsableRoom(), {
+      wrapper: openEpicWrapper(handle),
+    });
+    expect(result.current).toBe(false);
+  });
+
+  it("gates a legacy peer's room without a cloud verdict - it has no local homes", () => {
+    demoteToUnverified();
+    const handle = createHandle("epic-comment-gate-unverified-legacy");
+    handle.store.setState({
+      durabilityStatus: null,
+      durabilityPauseReason: null,
+      retainedDurabilityStatus: null,
+      durabilityStatusNegotiated: false,
+      durabilityLegsNegotiated: false,
+    });
+    const { result } = renderHook(() => useEpicCommentsHaveNoUsableRoom(), {
+      wrapper: openEpicWrapper(handle),
+    });
+    expect(result.current).toBe(true);
+  });
+
   it("keeps local-home comments enabled across a subscription cycle's reset", () => {
     // Local artifact rooms now carry a disconnected provider backed by their
     // WAL, so the retained local answer must not disable the comment surface.

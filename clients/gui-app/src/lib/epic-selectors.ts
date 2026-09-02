@@ -28,6 +28,10 @@ import { v4 as uuidv4 } from "uuid";
 import * as Y from "yjs";
 import type { Awareness } from "y-protocols/awareness";
 import { artifactFolderChain } from "@/lib/artifacts/artifact-folder-chain";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
 import type {
@@ -237,7 +241,30 @@ export type EpicCommentRoomAvailability =
   | { readonly kind: "available" }
   | { readonly kind: "checking" }
   | { readonly kind: "promoting" }
-  | { readonly kind: "orphaned" };
+  | { readonly kind: "orphaned" }
+  /**
+   * The room is cloud-backed and the session holds no cloud verdict. An
+   * `unverified` session is admitted to the epic (its document may be on
+   * this disk), but its comment room lives in the cloud-backed artifact room
+   * and every read (`epic.listCommentThreads` poll) and write goes through
+   * the local-host context, which does not carry the renderer's verdict.
+   * A local-homed room (`local` / `promoting`) is exempt. Found in review.
+   */
+  | { readonly kind: "unauthorized" };
+
+/**
+ * Whether a durability status names a LOCAL-HOMED epic - one whose rooms
+ * live on this machine's disk, so reading or writing them spends no cloud
+ * capability. `null` (cloud-backed epics leave the status unset), `offline`
+ * (a cloud mirror) and `paused` are not provably local and read as cloud.
+ * Shared by the comment-room gate, the comment write gate and the registry
+ * accessor `useRegisteredEpicLocalHome` so the exemption cannot drift.
+ */
+export function isLocalHomedDurabilityStatus(
+  status: NonNullable<OpenEpicState["durabilityStatus"]> | null,
+): boolean {
+  return status === "local" || status === "promoting";
+}
 
 function unavailableCommentRoomKind(
   status: NonNullable<OpenEpicState["durabilityStatus"]> | null,
@@ -281,6 +308,12 @@ function currentOrRetainedDurabilityStatement(
 export function useEpicCommentRoomAvailability(): EpicCommentRoomAvailability {
   const status = useEpicDurabilityStatus();
   const pauseReason = useEpicDurabilityPauseReason();
+  // Read reactively: a demotion (`signed-in` -> `unverified`) while the epic
+  // stays mounted must close the gate on the next render, not on the next
+  // subscription cycle.
+  const cloudAuthorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
   // `useMaybeEpicStore`, matching every sibling above: this gate renders in
   // the comments sidebar, which mounts outside an Epic session in its own
   // tests and in any host-scoped surface that has no open epic.
@@ -325,7 +358,18 @@ export function useEpicCommentRoomAvailability(): EpicCommentRoomAvailability {
       durabilityStatement.status,
       durabilityStatement.pauseReason,
     );
-    return unavailable === null ? { kind: "available" } : { kind: unavailable };
+    if (unavailable !== null) return { kind: unavailable };
+    // The structural answer is "there is a room"; whether this session may
+    // reach it is the second question. A local-homed room is on this disk
+    // and needs no verdict; a cloud-backed one (unset status is the cloud
+    // case, `offline` is a cloud mirror) does.
+    if (
+      !cloudAuthorized &&
+      !isLocalHomedDurabilityStatus(durabilityStatement.status)
+    ) {
+      return { kind: "unauthorized" };
+    }
+    return { kind: "available" };
   }
   // No statement this cycle and none ever retained. A peer that never
   // negotiated the durability-status minor cannot produce one at all, so
@@ -334,7 +378,9 @@ export function useEpicCommentRoomAvailability(): EpicCommentRoomAvailability {
   // separate capability and say nothing about whether @1.4/@1.5 peers can
   // still report the status that this branch is waiting for.
   if (!durabilityStatusNegotiated) {
-    return { kind: "available" };
+    // A pre-`@1.4` host has no local homes at all, so its comment room is
+    // cloud-backed by construction: the verdict gate applies unchanged.
+    return cloudAuthorized ? { kind: "available" } : { kind: "unauthorized" };
   }
   // A negotiated peer that has not spoken yet, about an epic nothing has ever
   // said anything about. Withholding the affordance is the only direction
@@ -803,10 +849,10 @@ export function useRegisteredEpicLocalHome(epicId: string | null): boolean {
   );
   return useSyncExternalStore(
     (listener) => handle?.store.subscribe(listener) ?? noopSubscribe,
-    () => {
-      const status = handle?.store.getState().durabilityStatus ?? null;
-      return status === "local" || status === "promoting";
-    },
+    () =>
+      isLocalHomedDurabilityStatus(
+        handle?.store.getState().durabilityStatus ?? null,
+      ),
     () => false,
   );
 }

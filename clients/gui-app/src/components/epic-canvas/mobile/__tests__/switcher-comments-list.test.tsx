@@ -19,6 +19,7 @@ import type { EpicCommentRoomAvailability } from "@/lib/epic-selectors";
 import type { HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { useCommentThreadsStore } from "@/stores/comments/comment-threads-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { EpicCanvasTileRef, TilePane } from "@/stores/epics/canvas/types";
@@ -53,11 +54,18 @@ const artifactKind = { value: "spec" as string | null };
 const commentRoomKind = {
   value: "available" as EpicCommentRoomAvailability["kind"],
 };
-vi.mock("@/lib/epic-selectors", () => ({
-  useEpicArtifact: () =>
-    artifactKind.value === null ? null : { kind: artifactKind.value },
-  useEpicCommentRoomAvailability: () => ({ kind: commentRoomKind.value }),
-}));
+vi.mock("@/lib/epic-selectors", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/epic-selectors")>();
+  return {
+    useEpicArtifact: () =>
+      artifactKind.value === null ? null : { kind: artifactKind.value },
+    useEpicCommentRoomAvailability: () => ({ kind: commentRoomKind.value }),
+    // The comment writes' dispatch-time gate reads the local-home predicate
+    // from this module; a factory that omits it makes every write throw
+    // inside `onMutate` for a reason this suite is not about.
+    isLocalHomedDurabilityStatus: actual.isLocalHomedDurabilityStatus,
+  };
+});
 
 // The Epic SESSION's client, which is what the panel must read threads on.
 const hostClientRef: { current: HostClient<HostRpcRegistry> | null } = {
@@ -157,6 +165,16 @@ let threads: ReadonlyArray<CommentThreadWire> = [];
 let replies: ReplyToCommentThreadRequest[] = [];
 
 beforeEach(() => {
+  // The reply below is a cloud write on a room this suite stubs as
+  // `available`; the write's own dispatch-time gate needs the verdict that
+  // stub presumes.
+  useAuthStore
+    .getState()
+    .setSignedIn(
+      { userId: "user-1", userName: "U", email: "u@example.com" },
+      { userId: "user-1", username: "U" },
+      [],
+    );
   artifactKind.value = "spec";
   threads = [];
   replies = [];
@@ -186,6 +204,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  useAuthStore.getState().setSignedOut();
   cleanup();
   queryClient.clear();
   hostClientRef.current = null;
