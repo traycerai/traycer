@@ -51,10 +51,17 @@ export interface BrowserViewEntry {
   readonly listeners: BrowserViewListenerMap;
   parentWindowId: string | null;
   desiredVisible: boolean;
+  /**
+   * Last rect the renderer measured for this tile, in RENDERER CSS PIXELS -
+   * the space `getBoundingClientRect` reports and page zoom scales. The native
+   * rect is always re-derived from it (`BrowserViewGeometry.applyBounds`), so
+   * a zoom change needs no new measurement.
+   */
   bounds: BrowserViewBounds | null;
   /**
-   * BT-101: last effective rect actually handed to `view.setBounds`. Identical
-   * follow-up updates coalesce to a no-op so a streamed drag burst does not
+   * BT-101: last effective rect, in window DIPs, actually handed to
+   * `view.setBounds`. Identical follow-up
+   * updates coalesce to a no-op so a streamed drag burst does not
    * relayout the guest per frame for unchanged geometry. Invalidated when
    * anything else moves the view directly (PiP offscreen parking).
    */

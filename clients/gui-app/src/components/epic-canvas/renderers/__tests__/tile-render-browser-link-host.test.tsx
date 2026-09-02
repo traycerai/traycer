@@ -112,6 +112,7 @@ function liveSessionsState(hostId: string): BrowserSessionsState {
     hostId,
     lifecycle: "live",
     inventoryReady: true,
+    canMaterializeElectron: false,
     items: [],
     errorMessage: null,
     retry: () => undefined,

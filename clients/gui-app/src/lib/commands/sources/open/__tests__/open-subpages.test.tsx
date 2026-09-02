@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
-import type { PropsWithChildren, ReactNode } from "react";
 import type {
   WorktreeBindingSelectorRowV12,
   WorktreeIntent,
 } from "@traycer/protocol/host/worktree-schemas";
+import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
+import type { BrowserSessionsLifecycle } from "@/components/epic-canvas/renderers/browser-sessions-context";
 import type { CommandContext, CommandItem } from "@/lib/commands/types";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
 import type { OpenTileIntoTargetGroupArgs } from "@/lib/commands/actions/open-into-target";
@@ -23,12 +24,30 @@ const spies = vi.hoisted(() => ({
   refreshHostDirectory: vi.fn(() => Promise.resolve([])),
   toast: vi.fn(),
   openBrowserTab: vi.fn(),
+  retryBrowserSessions: vi.fn(),
+  setBrowserPinSelection: vi.fn(),
+  retryBrowserHosts: vi.fn(),
 }));
 vi.mock("sonner", () => ({ toast: spies.toast }));
 const activeHostIdMock = vi.hoisted<{ current: string | null }>(() => ({
   current: "default-host",
 }));
 const remoteHostAvailableMock = vi.hoisted<{ current: boolean }>(() => ({
+  current: true,
+}));
+const browserHostIdMock = vi.hoisted<{ current: string | null }>(() => ({
+  current: "default-host",
+}));
+const browserPinSelectionMock = vi.hoisted<{ current: string | null }>(() => ({
+  current: null,
+}));
+const browserItemsMock = vi.hoisted<{
+  current: ReadonlyArray<BrowserSessionInfo>;
+}>(() => ({ current: [] }));
+const browserLifecycleMock = vi.hoisted<{
+  current: BrowserSessionsLifecycle;
+}>(() => ({ current: "live" }));
+const browserInventoryReadyMock = vi.hoisted<{ current: boolean }>(() => ({
   current: true,
 }));
 const ACTIVE_ROWS = vi.hoisted<WorktreeBindingSelectorRowV12[]>(() => [
@@ -247,6 +266,63 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
 }));
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: (hostId: string) => ({ mockHostId: hostId }),
+  useHostDirectoryEntryForHostId: (hostId: string | null) =>
+    hostId === null
+      ? null
+      : {
+          hostId,
+          label: hostId === "browser-host" ? "Browser Mac" : "Default Mac",
+          kind: "remote",
+          websocketUrl: `ws://${hostId}.test`,
+          version: null,
+          transportDialability: "dialable",
+        },
+}));
+vi.mock("@/hooks/host/use-surface-host-pin", () => ({
+  useTabSurfaceKey: (_kind: string, tabId: string) => `browsers:${tabId}`,
+  useSurfaceHostPin: () => ({
+    selection: browserPinSelectionMock.current,
+    resolvedHostId: browserHostIdMock.current,
+    setSelection: spies.setBrowserPinSelection,
+  }),
+}));
+vi.mock("@/components/settings/host-scope/use-host-options", () => ({
+  useHostOptions: () => ({
+    hosts: [
+      {
+        hostId: "default-host",
+        name: "Default Mac",
+        isActive: true,
+        connectable: true,
+        settingUp: false,
+        health: { state: "online" },
+      },
+      {
+        hostId: "browser-host",
+        name: "Browser Mac",
+        isActive: false,
+        connectable: true,
+        settingUp: false,
+        health: { state: "online" },
+      },
+    ],
+    activeHostId: "default-host",
+    isLoading: false,
+    listsFailed: false,
+    retryLists: spies.retryBrowserHosts,
+  }),
+}));
+vi.mock("@/components/epic-canvas/renderers/use-browser-sessions", () => ({
+  useBrowserSessionsForHost: (args: { readonly hostId: string | null }) => ({
+    hostId: args.hostId,
+    lifecycle: browserLifecycleMock.current,
+    inventoryReady: browserInventoryReadyMock.current,
+    items: browserItemsMock.current,
+    errorMessage: null,
+    retry: spies.retryBrowserSessions,
+    openTab: spies.openBrowserTab,
+    closeTab: () => Promise.resolve(),
+  }),
 }));
 vi.mock("@/hooks/worktree/use-worktree-list-bindings-for-epic-query", () => ({
   useWorktreeListBindingsForEpic: () => terminalBindingsMock.active,
@@ -398,7 +474,6 @@ vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
 import { useAgentsOpenerItems } from "@/lib/commands/sources/open/agents-subpage";
 import { useTerminalsOpenerItems } from "@/lib/commands/sources/open/terminals-subpage";
 import { useBrowserOpenerItems } from "@/lib/commands/sources/open/browser-subpage";
-import { BrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
 import { useArtifactsOpenerItems } from "@/lib/commands/sources/open/artifacts-subpage";
 import {
   DEFAULT_BROWSER_TILE_URL,
@@ -453,27 +528,11 @@ function renderItems(
     .current;
 }
 
-function renderBrowserItems(): ReadonlyArray<CommandItem> {
-  function Wrapper({ children }: PropsWithChildren): ReactNode {
-    return (
-      <BrowserSessionsContext.Provider
-        value={{
-          hostId: "default-host",
-          lifecycle: "live",
-          inventoryReady: true,
-          items: [],
-          errorMessage: null,
-          retry: () => undefined,
-          openTab: spies.openBrowserTab,
-          closeTab: () => Promise.resolve(),
-        }}
-      >
-        {children}
-      </BrowserSessionsContext.Provider>
-    );
-  }
-  return renderHook(() => useBrowserOpenerItems(CTX), { wrapper: Wrapper })
-    .result.current;
+function renderBrowserItems(
+  items: ReadonlyArray<BrowserSessionInfo>,
+): ReadonlyArray<CommandItem> {
+  browserItemsMock.current = items;
+  return renderHook(() => useBrowserOpenerItems(CTX)).result.current;
 }
 
 function runById(items: ReadonlyArray<CommandItem>, id: string): void {
@@ -501,6 +560,11 @@ afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   activeHostIdMock.current = "default-host";
+  browserHostIdMock.current = "default-host";
+  browserPinSelectionMock.current = null;
+  browserItemsMock.current = [];
+  browserLifecycleMock.current = "live";
+  browserInventoryReadyMock.current = true;
   remoteHostAvailableMock.current = true;
   terminalBindingsMock.active.data.rows = ACTIVE_ROWS;
   terminalBindingsMock.active.data.folderlessCwd = "/work/default-cwd";
@@ -999,15 +1063,99 @@ describe("Terminals opener sub-page", () => {
 });
 
 describe("Browser opener sub-page", () => {
+  it("lists an already-open tab from the Browser surface's host and opens its session pointer", () => {
+    browserHostIdMock.current = "browser-host";
+    browserPinSelectionMock.current = "browser-host";
+    const items = renderBrowserItems([
+      {
+        sessionId: "session-open",
+        epicId: "epic-1",
+        hostId: "browser-host",
+        profile: "primary",
+        lastActivityAt: 1,
+        runtime: { kind: "electron", revision: 0 },
+        tabs: [
+          {
+            tabId: "tab-open",
+            url: "https://example.com/docs",
+            title: "Example docs",
+            originTier: "dev",
+            status: "ready",
+            viewed: false,
+            drivenBy: [],
+          },
+        ],
+      },
+    ]);
+
+    expect(items.map((item) => item.label)).toEqual([
+      "Change host",
+      "New browser",
+      "Example docs",
+    ]);
+    expect(items[0]).toMatchObject({
+      id: "open:browser:host",
+      statusBadge: "Browser Mac",
+    });
+    expect(items[2].statusBadge).toBe("example.com");
+
+    const hostSubpage = items[0].subpage;
+    if (hostSubpage === null) throw new Error("expected host subpage");
+    const hostItems = renderHook(() => hostSubpage.useItems(CTX)).result
+      .current;
+    expect(hostItems.map((item) => [item.label, item.statusBadge])).toEqual([
+      ["Follow active host", "Default Mac"],
+      ["Default Mac", "Active"],
+      ["Browser Mac", "Selected"],
+    ]);
+    runById(hostItems, "open:browser:host:default-host");
+    expect(spies.setBrowserPinSelection).toHaveBeenCalledWith("default-host");
+
+    runById(items, "open:browser:browser-session:session-open:tab-open");
+
+    expect(lastTileOpen().ref).toMatchObject({
+      type: "browser-session",
+      hostId: "browser-host",
+      sessionId: "session-open",
+      tabId: "tab-open",
+    });
+  });
+
+  it("progresses from loading to a recoverable unavailable state", () => {
+    browserLifecycleMock.current = "connecting";
+    browserInventoryReadyMock.current = false;
+    const loading = renderBrowserItems([]);
+    expect(loading[2]).toMatchObject({
+      id: "open:browser:loading",
+      label: "Loading open tabs…",
+      disabled: true,
+    });
+
+    browserLifecycleMock.current = "failed";
+    const failed = renderBrowserItems([]);
+    expect(failed[2]).toMatchObject({
+      id: "open:browser:retry",
+      label: "Retry loading open tabs",
+      statusBadge: "Unavailable",
+    });
+    runById(failed, "open:browser:retry");
+    expect(spies.retryBrowserSessions).toHaveBeenCalledOnce();
+  });
+
   it("opens New browser through the host and places its session pointer", async () => {
     spies.openBrowserTab.mockResolvedValueOnce({
       sessionId: "session-new",
       tabId: "tab-new",
     });
-    const items = renderBrowserItems();
-    expect(items).toHaveLength(1);
-    expect(items[0].id).toBe("open:browser:new");
-    expect(items[0].label).toBe("New browser");
+    const items = renderBrowserItems([]);
+    expect(items).toHaveLength(3);
+    expect(items[1].id).toBe("open:browser:new");
+    expect(items[1].label).toBe("New browser");
+    expect(items[2]).toMatchObject({
+      id: "open:browser:empty",
+      label: "No open tabs",
+      disabled: true,
+    });
 
     act(() => runById(items, "open:browser:new"));
 

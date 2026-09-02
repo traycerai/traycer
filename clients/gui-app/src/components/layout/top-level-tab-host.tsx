@@ -1,6 +1,7 @@
 import {
   Suspense,
   useCallback,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -59,6 +60,7 @@ import {
 import { StableTileSurfaceHost } from "@/components/epic-canvas/surface-host/stable-tile-surface-host";
 import { STABLE_TILE_SURFACE_HOST_ENABLED } from "@/components/epic-canvas/surface-host/stable-tile-surface-host-switch";
 import { renderHostedChatSurfaceBody } from "@/components/epic-canvas/surface-host/hosted-chat-surface-body";
+import { remeasureTileSurfaceGeometry } from "@/components/epic-canvas/surface-host/tile-surface-geometry-coordinator";
 import {
   activateHostedTopLevelSurface,
   refIsFocused,
@@ -135,6 +137,23 @@ export function TopLevelTabHost() {
       },
     ];
   });
+  // Hosted chat bodies (`StableTileSurfaceHost`) are positioned by rects the
+  // geometry coordinator reads inside a ResizeObserver callback, and a
+  // ResizeObserver reports SIZE changes only. A placement change here can move
+  // a surface without resizing it - "Reverse views" swaps the two sides'
+  // `left` offsets while each side keeps its width (`1 - leftRatio` on the
+  // other side is the same width it already had) - so without this the two
+  // hosted bodies stay painted at their pre-swap rects while the tab strips
+  // and sidebars around them have already crossed over. Layout effect, not
+  // effect: the surface styles above are applied in this same commit and the
+  // re-read has to see them before paint. Parent layout effects run after the
+  // children's, so every record's own registration already exists by now.
+  const placementSignature = mounts
+    .map((mount) => surfacePlacementKey(mount.tab, mount.placement))
+    .join("\u001f");
+  useLayoutEffect(() => {
+    remeasureTileSurfaceGeometry();
+  }, [placementSignature]);
 
   return (
     <div
@@ -502,6 +521,21 @@ function splitSidePlacement(
     left: leftWidth,
     width: `${(1 - item.leftRatio) * 100}%`,
   };
+}
+
+function surfacePlacementKey(
+  tab: HeaderTab,
+  placement: SurfacePlacement,
+): string {
+  switch (placement.kind) {
+    case "hidden":
+    case "single":
+      return `${tabRefKey(tab)}:${placement.kind}`;
+    case "left":
+      return `${tabRefKey(tab)}:left:${placement.width}`;
+    case "right":
+      return `${tabRefKey(tab)}:right:${placement.left}:${placement.width}`;
+  }
 }
 
 function surfaceClassName(placement: SurfacePlacement): string {

@@ -96,15 +96,22 @@ function BrowsersPanelBodyLive(props: {
         sessionId: session.sessionId,
         tabId: tab.tabId,
       });
+      openTile(tileIntent(tile, { tabId: props.tabId }, "single", "direct_ui"));
+    },
+    [openTile, props.tabId],
+  );
+
+  const openTabPermanently = useCallback(
+    (session: BrowserSessionInfo, tab: BrowserTabInfo) => {
+      const tile = makeBrowserSessionTileRef({
+        hostId: session.hostId,
+        sessionId: session.sessionId,
+        tabId: tab.tabId,
+      });
+      // `explicit` pins the tile, and the resolver promotes an existing
+      // preview of it rather than opening a second instance.
       openTile(
-        tileIntent(
-          tile,
-          { tabId: props.tabId },
-          // No double-click gesture exists on these rows, so `single` would
-          // leave nothing that pins the tile: the next preview would evict it.
-          "explicit",
-          "direct_ui",
-        ),
+        tileIntent(tile, { tabId: props.tabId }, "explicit", "direct_ui"),
       );
     },
     [openTile, props.tabId],
@@ -182,6 +189,7 @@ function BrowsersPanelBodyLive(props: {
               chatById={chatById}
               duplicateTitles={duplicateTitles}
               onOpenTab={openTab}
+              onOpenTabPermanently={openTabPermanently}
               onOpenDrivingChat={openDrivingChat}
               onCloseTab={sessions.closeTab}
             />

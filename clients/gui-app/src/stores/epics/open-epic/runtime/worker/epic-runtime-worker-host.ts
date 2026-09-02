@@ -416,10 +416,11 @@ export function startEpicRuntimeWorkerHost(
       if (core === null) {
         // No core: the body lane this update was destined for does not exist
         // here. `dropped` rather than `queued` because nothing in this worker
-        // is holding it - the main thread's live doc is, and the edit reaches
-        // the host on the next materialize/demote cycle. The reason names the
-        // state so a caller can tell a teardown drop from a lane refusing a
-        // doc it should have had.
+        // is holding it. The main thread's live doc remains the only proven
+        // holder and latches that fact into its visible dirty state until a
+        // full demote or authoritative replacement retires the doc. The reason
+        // names the state so a caller can tell a teardown drop from a lane
+        // refusing a doc it should have had.
         return {
           value: {
             outcome: {

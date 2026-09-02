@@ -1016,20 +1016,32 @@ export function createArtifactRoomTier(
       // was wrong even where the copy path happens to preserve it.
       const updateBytes = update.byteLength;
       if (session.canSendBodyWrites()) {
-        const outcome = send({ kind: "room-update", artifactRoomId, update });
+        // COPIED, because Yjs owns this update and hands the SAME array to
+        // every observer. A resident worker-backed body has two: this outbound
+        // tier observer and the body return leg that mirrors the edit into
+        // main's live doc. The stream proxy transfers full-span arrays in
+        // place, so sending `update` itself detaches it before the return-leg
+        // observer can even copy it (`Uint8Array.prototype.slice` then throws
+        // on the detached buffer). Each transferring consumer therefore takes
+        // its own copy at the point where non-ownership is known.
+        const outboundUpdate = update.slice();
+        const outcome = send({
+          kind: "room-update",
+          artifactRoomId,
+          update: outboundUpdate,
+        });
         if (outcome.kind === "sent") {
           noteHotGrowth(artifactRoomId, updateBytes);
           return;
         }
         // The session may write and this BODY still could not. Fall through to
-        // the queue rather than treating the refusal as delivery - the bytes
-        // are a user's edit and nothing else is holding them.
+        // the queue rather than treating the refusal as delivery. Main's body
+        // return leg is another holder, but it is not proof that this tier's
+        // host propagation obligation was accepted.
         //
-        // Safe to retain the same view: every refusal returns before the
-        // payload reaches the transport (`lane-terminal`, `no-transport`,
-        // `no-body-lane-for-artifact`, `body-not-seeded` all short-circuit),
-        // so a refused update was never handed to a transfer and cannot have
-        // been detached.
+        // Safe to retain the ORIGINAL view regardless of how far the refused
+        // send got: only `outboundUpdate` was handed to the transferring
+        // consumer above. The Yjs-owned `update` was never transferable input.
       }
       // Queue while reconnecting/closed, or while a raw-open stream is still
       // waiting on its fresh root snapshot/permission role. Snapshots collapse

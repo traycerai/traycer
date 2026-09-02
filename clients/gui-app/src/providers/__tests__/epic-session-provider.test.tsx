@@ -15,6 +15,7 @@ import type {
   ListTasksResponse,
   TaskLight,
 } from "@traycer/protocol/host/epic/unary-schemas";
+import { EPIC_LANE_METHODS } from "@traycer-clients/shared/epic-lanes";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import {
@@ -40,6 +41,9 @@ const authServiceStub = vi.hoisted(() => ({
   revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),
 }));
 const navigateMock = vi.hoisted(() => vi.fn());
+const reprobeCallbacks = vi.hoisted((): { callbacks: Array<() => void> } => ({
+  callbacks: [],
+}));
 // Real (non-null) `useHostBinding()` for the R-1 owner-identity rotation test
 // below - every other test in this file relies on the default `null` (no
 // `HostClient` needed to drive `sessionKey`, which is `activeHostId` +
@@ -153,6 +157,24 @@ vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => navigateMock,
 }));
 
+vi.mock("@/lib/host/owned-durable-stream-client", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/lib/host/owned-durable-stream-client")
+    >();
+  return {
+    ...actual,
+    attachPlanRestrictedReprobe: (
+      wsStreamClient: unknown,
+      onReprobe: (() => void) | null,
+    ) => {
+      void wsStreamClient;
+      if (onReprobe !== null) reprobeCallbacks.callbacks.push(onReprobe);
+      return () => undefined;
+    },
+  };
+});
+
 /**
  * A pass-through spy on `spawnEpicRuntimeWorker`, so a pin can reach the exact
  * `laneUnary` closure the provider hands each worker it spawns. The real spawn
@@ -207,7 +229,10 @@ import {
   fakeDurableStreamTransports,
   resetFakeDurableStreamTransports,
 } from "@/lib/host/test-support/fake-durable-stream-transport";
-import { createInProcessEpicRuntimeWorker } from "@/stores/epics/open-epic/test-support/in-process-epic-runtime-worker";
+import {
+  createInProcessEpicRuntimeWorker,
+  createProxiedInProcessEpicRuntimeWorker,
+} from "@/stores/epics/open-epic/test-support/in-process-epic-runtime-worker";
 import type { RuntimeWorkerLike } from "@/stores/epics/open-epic/runtime/worker/spawn-epic-runtime-worker";
 import {
   RUNTIME_BRIDGE_PROTOCOL_VERSION,
@@ -215,9 +240,24 @@ import {
 } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
 import type { BridgeMessageEventLike } from "@traycer-clients/shared/replica-runtime/worker/bridge-transports";
 import type { EpicStreamClientFactory } from "@/stores/epics/open-epic/runtime/legacy-epic-stream-adapter";
+import { createEpicSessionFixture } from "./epic-session-fixture";
+import {
+  ArtifactAttachmentScopeContext,
+  type ArtifactAttachmentScopeValue,
+} from "@/lib/attachments/artifact-attachment-scope-context";
+import { useEpicImageFetcher } from "@/lib/attachments/use-attachment-blob-src";
+import { readHeldEpicAttachmentBytes } from "@/lib/epic-replica-reads";
+import type { ScopedImageBytesFetcher } from "@/lib/attachments/image-blob-cache";
 
-/** The jsdom setup file's coreless worker, put back in `afterEach`. */
-let previousWorkerFactory: (() => RuntimeWorkerLike) | null = null;
+/**
+ * The jsdom setup file's coreless worker, captured before this suite can
+ * replace it. A `null` override would fall through to the production Worker
+ * constructor, which jsdom cannot run.
+ */
+const setupWorkerFactory = getEpicRuntimeWorkerFactoryOverride();
+
+/** The worker override present at the start of the current test. */
+let workerFactoryBeforeTest: (() => RuntimeWorkerLike) | null = null;
 
 /**
  * Install this test's stream factory, one seam over.
@@ -260,7 +300,6 @@ interface FatalWorkerRig {
 function installWorkerWithFatalOnFirstSpawn(
   factory: EpicStreamClientFactory,
 ): FatalWorkerRig {
-  previousWorkerFactory = getEpicRuntimeWorkerFactoryOverride();
   let spawns = 0;
   let deliverFatal: (() => void) | null = null;
   __setEpicRuntimeWorkerFactoryForTests(() => {
@@ -335,7 +374,6 @@ function installWorkerWithFatalOnFirstSpawn(
  * bridge exists to report a `fatal` through.
  */
 function installWorkerThatThrowsOnSpawn(): { spawnCount(): number } {
-  previousWorkerFactory = getEpicRuntimeWorkerFactoryOverride();
   let spawns = 0;
   __setEpicRuntimeWorkerFactoryForTests(() => {
     spawns += 1;
@@ -345,13 +383,29 @@ function installWorkerThatThrowsOnSpawn(): { spawnCount(): number } {
 }
 
 function installStreamFactory(factory: EpicStreamClientFactory): void {
-  previousWorkerFactory = getEpicRuntimeWorkerFactoryOverride();
   __setEpicRuntimeWorkerFactoryForTests(() =>
     createInProcessEpicRuntimeWorker({
       streamClientFactory: factory,
       laneSelection: null,
     }).createWorker(),
   );
+}
+
+function installManifestDerivedWorker(): void {
+  __setEpicRuntimeWorkerFactoryForTests(() =>
+    createProxiedInProcessEpicRuntimeWorker().createWorker(),
+  );
+}
+
+function ImageFetcherProbe(props: {
+  onFetcher: (fetcher: ScopedImageBytesFetcher) => void;
+}) {
+  const { onFetcher } = props;
+  const fetcher = useEpicImageFetcher();
+  useEffect(() => {
+    onFetcher(fetcher);
+  }, [fetcher, onFetcher]);
+  return null;
 }
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
@@ -723,6 +777,10 @@ async function readRootEdit(
 
 describe("<EpicSessionProvider />", () => {
   beforeEach(() => {
+    // Capture unconditionally: even a test that installs no worker factory is
+    // followed by an `afterEach`, and restoring an uninitialised sentinel there
+    // would erase the jsdom setup file's coreless worker for the next test.
+    workerFactoryBeforeTest = getEpicRuntimeWorkerFactoryOverride();
     window.localStorage.clear();
     hostState.id = "host-a";
     hostState.attached = true;
@@ -739,19 +797,275 @@ describe("<EpicSessionProvider />", () => {
     clearSessionCreatedEpics();
     resetAuth("signed-in", "alice@example.com");
     spawnedRuntimeOptions.laneUnaries.length = 0;
+    reprobeCallbacks.callbacks.length = 0;
   });
 
   afterEach(() => {
     cleanup();
     __getOpenEpicRegistryForTests().disposeAll();
-    // RESTORED, not nulled - see `previousWorkerFactory`.
-    __setEpicRuntimeWorkerFactoryForTests(previousWorkerFactory);
+    // RESTORED, not nulled - see `workerFactoryBeforeTest`.
+    __setEpicRuntimeWorkerFactoryForTests(workerFactoryBeforeTest);
     setDesktopEpicOwnershipBridge(null);
     resetCanvasStore();
     resetAuth("signed-out", null);
     hostBindingRef.value = null;
     resetHostConnectionRegistryForTest();
     clearSessionCreatedEpics();
+    reprobeCallbacks.callbacks.length = 0;
+  });
+
+  it("builds method support for both the legacy and lane fixture arms", () => {
+    const legacy = createEpicSessionFixture("legacy");
+    const lanes = createEpicSessionFixture("lanes");
+    try {
+      // Fixture-construction guard only: no production edit is expected to
+      // redden this assertion. Production manifest -> selection coverage lives
+      // in the public-open pin below, whose worker derives its own factories.
+      expect(legacy.arm).toBe("legacy");
+      expect(lanes.arm).toBe("lanes");
+      expect(
+        legacy.manifest.find((entry) => entry.method === "epic.subscribe")
+          ?.support,
+      ).toBe("supported");
+      for (const method of EPIC_LANE_METHODS) {
+        expect(legacy.support(method)).toBe("unsupported");
+      }
+
+      for (const method of EPIC_LANE_METHODS) {
+        expect(lanes.support(method)).toBe("supported");
+      }
+      expect(
+        lanes.manifest.filter((entry) => entry.support === "supported"),
+      ).toHaveLength(EPIC_LANE_METHODS.length + 1);
+    } finally {
+      lanes.dispose();
+      legacy.dispose();
+    }
+  });
+
+  it("preserves the setup worker after a fixture-only test installs nothing", () => {
+    // This deliberately follows the fixture-construction guard above. That
+    // test never installs a worker factory, but its `afterEach` still runs. The
+    // setup override must survive; `null` would select the production Worker
+    // constructor and make the next jsdom session crash.
+    expect(setupWorkerFactory).not.toBeNull();
+    expect(getEpicRuntimeWorkerFactoryOverride()).toBe(setupWorkerFactory);
+  });
+
+  it("opens a genuinely lane-backed session through the public provider", async () => {
+    const fixture = createEpicSessionFixture("lanes");
+    try {
+      installManifestDerivedWorker();
+      const seenHandles: OpenEpicStoreHandle[] = [];
+      const view = render(
+        <EpicSessionProvider epicId="fixture-epic" tabId="fixture-epic">
+          <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
+        </EpicSessionProvider>,
+      );
+      try {
+        await waitFor(() => {
+          expect(fixture.opens.state).toBe(1);
+          expect(fixture.opens.status).toBe(1);
+        });
+        expect(fixture.opens.legacy).toBe(0);
+        for (const method of EPIC_LANE_METHODS) {
+          expect(fixture.transportSupportReads).toContain(method);
+        }
+        fixture.openLaneStreams(0);
+        fixture.deliverLaneSnapshots(0);
+        await waitFor(() => {
+          const handle = seenHandles.at(-1);
+          expect(handle?.store.getState().installedArm).toBe("lanes");
+          expect(handle?.store.getState().snapshotLoaded).toBe(true);
+          expect(handle?.store.getState().hostTransportStatus).toBe("open");
+        });
+      } finally {
+        view.unmount();
+      }
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  it("rebuilds a clean lane session when its attached reprobe fires", async () => {
+    const fixture = createEpicSessionFixture("lanes");
+    try {
+      installManifestDerivedWorker();
+      const seenHandles: OpenEpicStoreHandle[] = [];
+      const view = render(
+        <EpicSessionProvider epicId="fixture-epic" tabId="fixture-epic">
+          <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
+        </EpicSessionProvider>,
+      );
+      try {
+        await waitFor(() => expect(fixture.opens.state).toBe(1));
+        fixture.openLaneStreams(0);
+        fixture.deliverLaneSnapshots(0);
+        await waitFor(() => {
+          expect(seenHandles.at(-1)?.store.getState().snapshotLoaded).toBe(
+            true,
+          );
+        });
+        const firstHandle = seenHandles.at(-1);
+        const fire = reprobeCallbacks.callbacks.at(0);
+        if (firstHandle === undefined || fire === undefined) {
+          throw new Error("expected a loaded lane handle and reprobe callback");
+        }
+        await act(async () => {
+          fire();
+          await Promise.resolve();
+        });
+        await waitFor(() => expect(fixture.opens.state).toBe(2));
+        expect(fixture.opens.legacy).toBe(0);
+        expect(fixture.stateStreams[0]?.closeCount()).toBe(1);
+        expect(fixture.statusStreams[0]?.closeCount()).toBe(1);
+        expect(seenHandles.at(-1)).not.toBe(firstHandle);
+        fixture.openLaneStreams(1);
+        fixture.deliverLaneSnapshots(1);
+        await waitFor(() => {
+          const replacement = seenHandles.at(-1);
+          expect(replacement).not.toBe(firstHandle);
+          expect(replacement?.store.getState().installedArm).toBe("lanes");
+          expect(replacement?.store.getState().snapshotLoaded).toBe(true);
+        });
+      } finally {
+        view.unmount();
+      }
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  it("reads lane attachments from the host unless bytes were pasted locally", async () => {
+    const fixture = createEpicSessionFixture("lanes");
+    const sourceHash = "c".repeat(64);
+    const sourceTitle = "A2 source root";
+    const sourceBytes = Uint8Array.from([1, 2, 3]);
+    const pastedBytes = Uint8Array.from([9, 8, 7, 6]);
+    fixture.sourceRoot.getMap("epic").set("title", sourceTitle);
+    fixture.sourceRoot
+      .getMap<Uint8Array>("attachments")
+      .set(sourceHash, sourceBytes);
+    expect(
+      fixture.sourceRoot.getMap<Uint8Array>("attachments").get(sourceHash),
+    ).toEqual(sourceBytes);
+    const requests: Array<{
+      readonly method: "epic.fetchArtifactAttachment";
+      readonly params: {
+        readonly epicId: string;
+        readonly artifactId: string;
+        readonly hash: string;
+      };
+      readonly signal: AbortSignal | undefined;
+    }> = [];
+    const requestWithSignal: NonNullable<
+      ArtifactAttachmentScopeValue["client"]
+    >["requestWithSignal"] = (method, params, signal) => {
+      requests.push({ method, params, signal });
+      return Promise.resolve({
+        ok: true,
+        bytesBase64: "AQIDBA==",
+        mediaType: "image/png",
+      });
+    };
+    const scope: ArtifactAttachmentScopeValue = {
+      epicId: "fixture-epic",
+      artifactId: "fixture-artifact",
+      hostId: "host-a",
+      hostVersion: "fixture-version",
+      client: { requestWithSignal },
+    };
+    try {
+      installManifestDerivedWorker();
+      const seenHandles: OpenEpicStoreHandle[] = [];
+      const seenFetchers: ScopedImageBytesFetcher[] = [];
+      const view = render(
+        <EpicSessionProvider epicId="fixture-epic" tabId="fixture-epic">
+          <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
+          <ArtifactAttachmentScopeContext.Provider value={scope}>
+            <ImageFetcherProbe
+              onFetcher={(fetcher) => seenFetchers.push(fetcher)}
+            />
+          </ArtifactAttachmentScopeContext.Provider>
+        </EpicSessionProvider>,
+      );
+      try {
+        await waitFor(() => expect(fixture.opens.state).toBe(1));
+        fixture.openLaneStreams(0);
+        fixture.deliverLaneSnapshots(0);
+        await waitFor(() => {
+          expect(seenHandles.at(-1)?.store.getState().installedArm).toBe(
+            "lanes",
+          );
+          expect(seenHandles.at(-1)?.store.getState().snapshotLoaded).toBe(
+            true,
+          );
+          // Positive boundary control: the projected title came from this
+          // fixture's source root, so the attachment absence below is not a
+          // fresh, unrelated replica that never consumed that source.
+          expect(seenHandles.at(-1)?.store.getState().epic.title).toBe(
+            sourceTitle,
+          );
+          expect(seenFetchers.length).toBeGreaterThan(0);
+        });
+        const handle = seenHandles.at(-1);
+        const fetcher = seenFetchers.at(-1);
+        if (handle === undefined || fetcher === undefined) {
+          throw new Error("expected a loaded lane handle and image fetcher");
+        }
+        // The SOURCE root has the bytes, but lane state does not seed that
+        // root map into the worker's local replica.
+        await expect(
+          readHeldEpicAttachmentBytes(handle, sourceHash),
+        ).resolves.toBe(null);
+
+        const donor = new Y.Doc();
+        try {
+          donor.getMap<Uint8Array>("attachments").set(sourceHash, pastedBytes);
+          await handle.applyRootUpdate(Y.encodeStateAsUpdate(donor), true);
+        } finally {
+          donor.destroy();
+        }
+        const heldPastedBytes = await readHeldEpicAttachmentBytes(
+          handle,
+          sourceHash,
+        );
+        if (heldPastedBytes === null) {
+          throw new Error("expected locally pasted attachment bytes");
+        }
+        // Bridge/Yjs reads can return an equivalent Uint8Array with a distinct
+        // realm/prototype; numeric arrays pin the bytes without brittle realm
+        // identity in Vitest's deep-equality matcher.
+        expect(Array.from(heldPastedBytes)).toEqual(Array.from(pastedBytes));
+
+        const resolved = await fetcher.fetch(
+          sourceHash,
+          new AbortController().signal,
+        );
+        // The fetcher's decoded bytes can cross the same realm boundary.
+        expect(Array.from(resolved.bytes)).toEqual([1, 2, 3, 4]);
+        expect(resolved.mediaType).toBe("image/png");
+        expect(
+          requests.map((request) => ({
+            method: request.method,
+            params: request.params,
+          })),
+        ).toEqual([
+          {
+            method: "epic.fetchArtifactAttachment",
+            params: {
+              epicId: "fixture-epic",
+              artifactId: "fixture-artifact",
+              hash: sourceHash,
+            },
+          },
+        ]);
+      } finally {
+        view.unmount();
+      }
+    } finally {
+      fixture.dispose();
+    }
   });
 
   it("shares one resolved host client with every session consumer", async () => {
@@ -1132,53 +1446,12 @@ describe("<EpicSessionProvider />", () => {
   });
 
   it("addresses a re-point candidate's lane unary to the host it was CONSTRUCTED against, not the still-mounted session's host", async () => {
-    const streams: ControlledEpicStream[] = [];
-    const seenHandles: OpenEpicStoreHandle[] = [];
-    installStreamFactory((_epicId, callbacks) => {
-      const stream: ControlledEpicStream = { closeCount: 0, callbacks };
-      streams.push(stream);
-      return {
-        applyUpdate: () => undefined,
-        awareness: () => undefined,
-        applyArtifactRoomUpdate: () => undefined,
-        artifactRoomAwareness: () => undefined,
-        retryMigration: () => undefined,
-        close: () => {
-          stream.closeCount += 1;
-        },
-      };
-    });
-
-    const view = render(
-      <EpicSessionProvider epicId="epic-session-test" tabId="epic-session-test">
-        <HandleProbe
-          onHandle={(handle) => {
-            seenHandles.push(handle);
-          }}
-        />
-      </EpicSessionProvider>,
-    );
-
-    await waitFor(() => {
-      expect(seenHandles).toHaveLength(1);
-    });
-    act(() => {
-      deliverSnapshot(streams[0], "room-a");
-    });
-
-    const hostAClient = sessionHostClients.byHostId.get("host-a");
-    if (hostAClient === undefined) {
-      throw new Error("expected a resolved host-a client");
-    }
-    hostAClient.request.mockResolvedValue({ context: null });
-
-    act(() => {
-      hostState.id = "host-b";
-      view.rerender(
-        <EpicSessionProvider
-          epicId="epic-session-test"
-          tabId="epic-session-test"
-        >
+    const fixture = createEpicSessionFixture("lanes");
+    try {
+      installManifestDerivedWorker();
+      const seenHandles: OpenEpicStoreHandle[] = [];
+      const view = render(
+        <EpicSessionProvider epicId="fixture-epic" tabId="fixture-epic">
           <HandleProbe
             onHandle={(handle) => {
               seenHandles.push(handle);
@@ -1186,60 +1459,102 @@ describe("<EpicSessionProvider />", () => {
           />
         </EpicSessionProvider>,
       );
-    });
+      try {
+        await waitFor(() => expect(fixture.opens.state).toBe(1));
+        fixture.openLaneStreams(0);
+        fixture.deliverLaneSnapshots(0);
+        await waitFor(() => {
+          expect(seenHandles.at(-1)?.store.getState().installedArm).toBe(
+            "lanes",
+          );
+          expect(seenHandles.at(-1)?.store.getState().snapshotLoaded).toBe(
+            true,
+          );
+        });
 
-    await waitFor(() => {
-      expect(streams).toHaveLength(2);
-    });
-    // The candidate must still be ESTABLISHING - its snapshot is deliberately
-    // never delivered, because that is the window the defect lives in: once
-    // the replacement commits, `session.hostId` becomes B and the bug is
-    // unobservable.
-    expect(streams[1].closeCount).toBe(0);
-    expect(__getOpenEpicRegistryForTests().size()).toBe(1);
-    if (spawnedRuntimeOptions.laneUnaries.length !== 2) {
-      throw new Error(
-        `expected exactly 2 spawned workers (the mounted handle and the re-point candidate), got ${spawnedRuntimeOptions.laneUnaries.length}`,
-      );
+        const hostAClient = sessionHostClients.byHostId.get("host-a");
+        if (hostAClient === undefined) {
+          throw new Error("expected a resolved host-a client");
+        }
+        hostAClient.request.mockResolvedValue({ context: null });
+        resolveSessionHostClient("host-b");
+        const hostBClient = sessionHostClients.byHostId.get("host-b");
+        if (hostBClient === undefined) {
+          throw new Error("expected a resolved host-b client");
+        }
+        hostBClient.request.mockResolvedValue({ context: null });
+
+        act(() => {
+          hostState.id = "host-b";
+          view.rerender(
+            <EpicSessionProvider epicId="fixture-epic" tabId="fixture-epic">
+              <HandleProbe
+                onHandle={(handle) => {
+                  seenHandles.push(handle);
+                }}
+              />
+            </EpicSessionProvider>,
+          );
+        });
+
+        await waitFor(() => expect(fixture.opens.state).toBe(2));
+        // The candidate must still be ESTABLISHING - its snapshot is
+        // deliberately never delivered, because that is the window the
+        // defect lives in: once the replacement commits, the bug is
+        // unobservable.
+        expect(fixture.stateStreams[1]?.closeCount()).toBe(0);
+        expect(fixture.opens.legacy).toBe(0);
+        expect(__getOpenEpicRegistryForTests().size()).toBe(1);
+        if (spawnedRuntimeOptions.laneUnaries.length !== 2) {
+          throw new Error(
+            `expected exactly 2 spawned workers (the mounted handle and the re-point candidate), got ${spawnedRuntimeOptions.laneUnaries.length}`,
+          );
+        }
+
+        // Lane installation performs its own workspace-context refresh. Clear
+        // those legitimate initialization calls so the assertions below
+        // describe only the two captured unaries invoked by this test.
+        hostAClient.request.mockClear();
+        hostBClient.request.mockClear();
+
+        // THE REDDENING ONE - the candidate's unary must go to B.
+        await spawnedRuntimeOptions.laneUnaries[1]({
+          kind: "workspace-context",
+        });
+        expect(hostBClient.request).toHaveBeenCalledWith(
+          "epic.getWorkspaceContext",
+          { epicId: "fixture-epic" },
+        );
+        // ...and not to A - today it goes to A instead, since `getCommandRequester`
+        // resolves from `session?.hostId ?? targetHostId`, and `session` is still
+        // A while the candidate is establishing.
+        expect(hostAClient.request).not.toHaveBeenCalledWith(
+          "epic.getWorkspaceContext",
+          { epicId: "fixture-epic" },
+        );
+
+        // CONTROL - must be green both before and after the fix. The naive fix
+        // ("bind every handle to `targetHostId`") would make the still-mounted A
+        // handle's own unary address B too, which this catches.
+        hostAClient.request.mockClear();
+        hostBClient.request.mockClear();
+        await spawnedRuntimeOptions.laneUnaries[0]({
+          kind: "workspace-context",
+        });
+        expect(hostAClient.request).toHaveBeenCalledWith(
+          "epic.getWorkspaceContext",
+          { epicId: "fixture-epic" },
+        );
+        expect(hostBClient.request).not.toHaveBeenCalledWith(
+          "epic.getWorkspaceContext",
+          { epicId: "fixture-epic" },
+        );
+      } finally {
+        view.unmount();
+      }
+    } finally {
+      fixture.dispose();
     }
-
-    // The provider resolves BOTH hosts during this window - the mounted
-    // session's ("host-a") and the re-point target's ("host-b") - so the render
-    // path has already created the stub this asserts on. Calling the resolver
-    // here is get-or-create against the same cache the mocked hook reads
-    // (`:96-105`), which hands back that very object rather than a second one;
-    // a fresh stub per call would make the assertion below unreachable. The
-    // call is kept rather than replaced by a bare `get` so the test does not
-    // depend on WHICH render resolved it first.
-    resolveSessionHostClient("host-b");
-    const hostBClient = sessionHostClients.byHostId.get("host-b");
-    if (hostBClient === undefined) {
-      throw new Error("expected a resolved host-b client");
-    }
-    hostBClient.request.mockResolvedValue({ context: null });
-
-    // THE REDDENING ONE - the candidate's unary must go to B.
-    await spawnedRuntimeOptions.laneUnaries[1]({ kind: "workspace-context" });
-    expect(hostBClient.request).toHaveBeenCalledWith(
-      "epic.getWorkspaceContext",
-      { epicId: "epic-session-test" },
-    );
-    // ...and not to A - today it goes to A instead, since `getCommandRequester`
-    // resolves from `session?.hostId ?? targetHostId`, and `session` is still
-    // A while the candidate is establishing.
-    expect(hostAClient.request).not.toHaveBeenCalledWith(
-      "epic.getWorkspaceContext",
-      { epicId: "epic-session-test" },
-    );
-
-    // CONTROL - must be green both before and after the fix. The naive fix
-    // ("bind every handle to `targetHostId`") would make the still-mounted A
-    // handle's own unary address B too, which this catches.
-    await spawnedRuntimeOptions.laneUnaries[0]({ kind: "workspace-context" });
-    expect(hostAClient.request).toHaveBeenCalledWith(
-      "epic.getWorkspaceContext",
-      { epicId: "epic-session-test" },
-    );
   });
 
   it("uses a plain swap when the replacement reports a different room", async () => {

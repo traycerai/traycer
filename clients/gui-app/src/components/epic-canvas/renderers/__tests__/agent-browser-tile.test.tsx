@@ -10,6 +10,10 @@ import type {
 import type { TileController } from "@/components/epic-canvas/renderers/tile-controller";
 import type { BrowserSessionsState } from "@/components/epic-canvas/renderers/browser-sessions-context";
 import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
+import type {
+  BrowserViewTileCommand,
+  BrowserViewTileCommandEvent,
+} from "@traycer-clients/shared/platform/browser-view";
 
 const state = vi.hoisted(() => ({
   visible: true,
@@ -17,6 +21,12 @@ const state = vi.hoisted(() => ({
   chromeInputs: [] as Array<Record<string, unknown>>,
   sessions: null as BrowserSessionsState | null,
   openTile: vi.fn<(intent: TileOpenIntent) => void>(),
+  closeTab: vi.fn((_sessionId: string, _tabId: string) => Promise.resolve()),
+  openTab: vi.fn((sessionId: string | null, _url: string) =>
+    Promise.resolve({ sessionId: sessionId ?? "session-1", tabId: "tab-2" }),
+  ),
+  closeCanvasTile: vi.fn(),
+  focusAddress: vi.fn(),
 }));
 
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
@@ -59,7 +69,7 @@ vi.mock("@/components/epic-canvas/renderers/browser-start-page", () => ({
 vi.mock(
   "@/components/epic-canvas/renderers/use-close-canvas-tile-with-nested-focus",
   () => ({
-    useCloseCanvasTileWithNestedFocus: () => vi.fn(),
+    useCloseCanvasTileWithNestedFocus: () => state.closeCanvasTile,
   }),
 );
 vi.mock("@/stores/epics/canvas/store", () => ({
@@ -101,6 +111,8 @@ const CHROME_CONTROLLER: TileController = {
   profile: "primary",
   url: "https://example.com/",
   addressValue: "https://example.com/",
+  setAddressInput: () => undefined,
+  focusAddress: state.focusAddress,
   canGoBack: false,
   canGoForward: false,
   zoomPercent: 100,
@@ -167,6 +179,28 @@ class TestBridge {
     this.openTileHandler?.(change);
   }
 
+  private tileCommandHandler:
+    | ((event: BrowserViewTileCommandEvent) => void)
+    | null = null;
+
+  onTileCommand(handler: (event: BrowserViewTileCommandEvent) => void): {
+    dispose: () => void;
+  } {
+    this.tileCommandHandler = handler;
+    return { dispose: () => (this.tileCommandHandler = null) };
+  }
+
+  /** A browser-scoped chord main claimed from the focused guest page. */
+  emitTileCommand(command: BrowserViewTileCommand): void {
+    this.tileCommandHandler?.({
+      viewTabId: "view-1",
+      paneId: "pane-1",
+      tileInstanceId: "tile-1",
+      pageSessionId: "browser-session:session-1:tab-1",
+      command,
+    });
+  }
+
   onFindChange(): { dispose: () => void } {
     return { dispose: () => {} };
   }
@@ -215,11 +249,12 @@ function liveSessions(): BrowserSessionsState {
     hostId: "host-1",
     lifecycle: "live",
     inventoryReady: true,
+    canMaterializeElectron: true,
     items: [],
     errorMessage: null,
     retry: () => {},
-    openTab: () => Promise.resolve({ sessionId: "session-1", tabId: "tab-2" }),
-    closeTab: () => Promise.resolve(),
+    openTab: state.openTab,
+    closeTab: state.closeTab,
   };
 }
 
@@ -241,8 +276,8 @@ describe("ElectronTabSurface", () => {
     state.visible = true;
     state.bridge = new TestBridge();
     state.chromeInputs = [];
-    state.sessions = null;
-    state.openTile.mockReset();
+    state.sessions = liveSessions();
+    vi.clearAllMocks();
   });
 
   afterEach(() => {
@@ -410,5 +445,73 @@ describe("ElectronTabSurface", () => {
       });
     });
     expect(screen.getByText("native guest crashed")).toBeTruthy();
+  });
+});
+
+/**
+ * Browser-scoped reserved chords. Main claims these from the focused guest and
+ * names the command; the app renderer's own keybindings are NOT involved -
+ * that half is pinned in `browser-view-chords.test.ts`, which proves a
+ * browser-scoped chord is never replayed as a keystroke.
+ */
+describe("ElectronTabSurface browser-scoped chords", () => {
+  beforeEach(() => {
+    state.visible = true;
+    state.bridge = new TestBridge();
+    state.chromeInputs = [];
+    state.sessions = liveSessions();
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("closes THIS tile's browser tab on Cmd+W, then retires the tile", async () => {
+    renderTile(
+      createBinding(
+        vi.fn(() => Promise.resolve({ detach: () => Promise.resolve() })),
+      ),
+    );
+    const bridge = state.bridge;
+    expect(bridge).not.toBeNull();
+
+    act(() => bridge?.emitTileCommand("closeTab"));
+
+    expect(state.closeTab).toHaveBeenCalledExactlyOnceWith(
+      "session-1",
+      "tab-1",
+    );
+    await waitFor(() => {
+      expect(state.closeCanvasTile).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("opens a new tab in the same session on Cmd+T", () => {
+    renderTile(
+      createBinding(
+        vi.fn(() => Promise.resolve({ detach: () => Promise.resolve() })),
+      ),
+    );
+
+    act(() => state.bridge?.emitTileCommand("newTab"));
+
+    expect(state.openTab).toHaveBeenCalledOnce();
+    expect(state.openTab.mock.calls.at(0)?.at(0)).toBe("session-1");
+    expect(state.closeTab).not.toHaveBeenCalled();
+  });
+
+  it("asks the address field for the caret on Cmd+L", () => {
+    renderTile(
+      createBinding(
+        vi.fn(() => Promise.resolve({ detach: () => Promise.resolve() })),
+      ),
+    );
+
+    act(() => state.bridge?.emitTileCommand("focusAddressBar"));
+
+    // What `focusAddress` actually does to the DOM is pinned in
+    // `use-address-draft.test.ts`, which owns the field.
+    expect(state.focusAddress).toHaveBeenCalledOnce();
   });
 });
