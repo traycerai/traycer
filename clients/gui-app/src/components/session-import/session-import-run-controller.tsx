@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   SessionImportRunClient,
+  type SessionImportRunCallbacks,
   type SessionImportRunCompletePayload,
   type SessionImportRunProgressPayload,
   type SessionImportRunStartedPayload,
@@ -31,6 +32,12 @@ import {
  * entry and the reopened wizard with nothing to show but a stale snapshot.
  * Here it stays attached for the life of the window, and the store it feeds is
  * what every import surface reads.
+ *
+ * It also asks the host, whenever a stream client connects, whether a run is
+ * already going. A window opened while the host is still importing - a
+ * reload, a second window - would otherwise show an idle wizard over a live
+ * run, and its Import button would attach to that run instead of starting the
+ * user's own selection.
  */
 export function SessionImportRunController(): null {
   const queryClient = useQueryClient();
@@ -50,6 +57,58 @@ export function SessionImportRunController(): null {
     }
   }, []);
 
+  // The frames every subscription feeds the store from, whether it started
+  // the run or found one going. `hostIdAtStart` is captured by the caller: the
+  // run outlives this binding, and by the time it completes the app may be
+  // pointed at a different host.
+  const runCallbacks = useCallback(
+    (hostIdAtStart: string | null): SessionImportRunCallbacks => ({
+      onStarted: (payload: SessionImportRunStartedPayload) => {
+        useSessionImportRunStore.getState().applyStarted({
+          runId: payload.runId,
+          total: payload.total,
+          attached: payload.attached,
+        });
+      },
+      onProgress: (payload: SessionImportRunProgressPayload) => {
+        const entry = progressEntryFrom(payload);
+        useSessionImportRunStore.getState().applyProgress(entry);
+        // The task list's unread dot: each landed task is unseen until its
+        // epic is first opened.
+        if (entry.outcome.kind === "imported") {
+          useImportedUnseenStore
+            .getState()
+            .markImported(entry.outcome.epicId, entry.harness);
+        }
+      },
+      onComplete: (payload: SessionImportRunCompletePayload) => {
+        useSessionImportRunStore.getState().applyComplete({
+          runId: payload.runId,
+          counts: payload.counts,
+        });
+        // Imported sessions are real epics and chats; the task list and the
+        // Settings entry's `lastCompleted` are both stale the instant the
+        // run lands.
+        if (hostIdAtStart !== null) {
+          void queryClient.invalidateQueries({
+            queryKey: sessionImportQueryKeys.status(hostIdAtStart),
+          });
+          void queryClient.invalidateQueries({
+            queryKey: hostQueryKeys.scope(hostIdAtStart),
+          });
+        }
+        closeClient();
+      },
+      onConnectionStatus: (_status, reason) => {
+        if (reason === null) return;
+        if (clientRef.current === null) return;
+        useSessionImportRunStore.getState().applyError();
+        closeClient();
+      },
+    }),
+    [closeClient, queryClient],
+  );
+
   const start = useCallback(
     (request: SessionImportRunRequest) => {
       if (wsStreamClient === null) return;
@@ -58,62 +117,51 @@ export function SessionImportRunController(): null {
       if (clientRef.current !== null) return;
       if (request.selections.length === 0) return;
 
-      // Captured at start: the run outlives this binding, and by the time it
-      // completes the app may be pointed at a different host.
-      const hostIdAtStart = streamHostId;
       useSessionImportRunStore.getState().markStarting(request.titles);
-
       clientRef.current = new SessionImportRunClient({
         wsStreamClient,
         selections: request.selections,
-        callbacks: {
-          onStarted: (payload: SessionImportRunStartedPayload) => {
-            useSessionImportRunStore.getState().applyStarted({
-              runId: payload.runId,
-              total: payload.total,
-              attached: payload.attached,
-            });
-          },
-          onProgress: (payload: SessionImportRunProgressPayload) => {
-            const entry = progressEntryFrom(payload);
-            useSessionImportRunStore.getState().applyProgress(entry);
-            // The task list's unread dot: each landed task is unseen until its
-            // epic is first opened.
-            if (entry.outcome.kind === "imported") {
-              useImportedUnseenStore
-                .getState()
-                .markImported(entry.outcome.epicId, entry.harness);
-            }
-          },
-          onComplete: (payload: SessionImportRunCompletePayload) => {
-            useSessionImportRunStore.getState().applyComplete({
-              runId: payload.runId,
-              counts: payload.counts,
-            });
-            // Imported sessions are real epics and chats; the task list and the
-            // Settings entry's `lastCompleted` are both stale the instant the
-            // run lands.
-            if (hostIdAtStart !== null) {
-              void queryClient.invalidateQueries({
-                queryKey: sessionImportQueryKeys.status(hostIdAtStart),
-              });
-              void queryClient.invalidateQueries({
-                queryKey: hostQueryKeys.scope(hostIdAtStart),
-              });
-            }
-            closeClient();
-          },
-          onConnectionStatus: (_status, reason) => {
-            if (reason === null) return;
-            if (clientRef.current === null) return;
-            useSessionImportRunStore.getState().applyError();
-            closeClient();
-          },
-        },
+        callbacks: runCallbacks(streamHostId),
       });
     },
-    [closeClient, queryClient, streamHostId, wsStreamClient],
+    [runCallbacks, streamHostId, wsStreamClient],
   );
+
+  // Subscribing with no selections is the host's "attach to whatever is
+  // running" form: a run in flight replays from the start, and an idle host
+  // answers with an empty run instead. The store is touched only in the first
+  // case - the probe closes on the empty answer before its `complete` frame
+  // could read as "nothing was imported".
+  useEffect(() => {
+    if (wsStreamClient === null) return;
+    if (clientRef.current !== null) return;
+    if (useSessionImportRunStore.getState().status !== "idle") return;
+
+    const callbacks = runCallbacks(streamHostId);
+    let attached = false;
+    const probe = new SessionImportRunClient({
+      wsStreamClient,
+      selections: [],
+      callbacks: {
+        ...callbacks,
+        onStarted: (payload) => {
+          if (!payload.attached) {
+            closeClient();
+            return;
+          }
+          attached = true;
+          callbacks.onStarted(payload);
+        },
+      },
+    });
+    clientRef.current = probe;
+    return () => {
+      // A probe still waiting for its answer when the client is replaced is
+      // asking a connection that is gone; one that attached is the run's
+      // subscription now and stays.
+      if (!attached && clientRef.current === probe) closeClient();
+    };
+  }, [closeClient, runCallbacks, streamHostId, wsStreamClient]);
 
   useEffect(() => {
     setSessionImportStartHandle({ start });

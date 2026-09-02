@@ -29,6 +29,7 @@ import {
   type OnboardingAgentGuideState,
 } from "@/components/onboarding/onboarding-diorama";
 import { OnboardingThemePicker } from "@/components/onboarding/onboarding-theme-picker";
+import { useSessionImportScan } from "@/components/session-import/use-session-import-scan";
 import { useAgentSelectionGuideGlobalOnboardingDraftQuery } from "@/hooks/agent/use-agent-selection-guide-global-onboarding-draft-query";
 import { useAgentSelectionGuideSetGlobalMutation } from "@/hooks/agent/use-agent-selection-guide-set-global-mutation";
 import { useSessionImportAvailable } from "@/hooks/session-import/use-session-import-available";
@@ -41,6 +42,7 @@ import {
   useOnboardingStore,
 } from "@/stores/onboarding/onboarding-store";
 import { useOnboardingTourOpenStore } from "@/stores/onboarding/onboarding-tour-open-store";
+import { useSessionImportRunStore } from "@/stores/session-import/session-import-run-store";
 import { cn } from "@/lib/utils";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
@@ -426,13 +428,6 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
   const agentGuideInitializedRef = useRef(false);
   const agentGuideAutoDefaultRef = useRef(false);
   const agentGuideLastDefaultRef = useRef("");
-  // The live wizard's submit, handed over while the session-import act is on
-  // screen. A ref rather than state: it changes on every render of a streaming
-  // scan, and nothing renders off it - Continue only reads it when pressed.
-  const sessionImportSubmitRef = useRef<(() => void) | null>(null);
-  const registerSessionImportSubmit = useCallback((submit: () => void) => {
-    sessionImportSubmitRef.current = submit;
-  }, []);
   const navigate = useNavigate();
   const router = useRouter();
   const { replay } = props;
@@ -444,6 +439,16 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
   const acts = useMemo(
     () => onboardingActsFor(sessionImportAvailable),
     [sessionImportAvailable],
+  );
+  // The session scan starts with the tour, not with its last act: reading
+  // every session on the machine takes a while, and the acts before the import
+  // one are exactly that while. It pauses while a run owns the wizard, and the
+  // wizard retiring a finished run on mount is what brings it back.
+  const sessionImportRunIdle = useSessionImportRunStore(
+    (state) => state.status === "idle",
+  );
+  const sessionImportScan = useSessionImportScan(
+    sessionImportAvailable && sessionImportRunIdle,
   );
   // Read the raw step and clamp here: negotiation can retire an act while the
   // user is already past its new end, and the clamp is what keeps the page on
@@ -638,11 +643,6 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
 
   const advance = useCallback((): void => {
     if (advanceDisabled) return;
-    // The session-import act has one forward control, and it does both jobs:
-    // start the import for whatever is ticked (nothing ticked is a no-op), then
-    // move on. The run is owned by the app-wide controller, so it outlives this
-    // act and keeps going while the user finishes the tour.
-    if (act.addon === "session-import") sessionImportSubmitRef.current?.();
     const advancePastCurrent = (): void => {
       if (isLastAct) {
         finish("completed");
@@ -788,9 +788,7 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
                   {/* Session import has no mock-up to preview: this window holds
                       the real wizard, reading the user's real machine. */}
                   {act.addon === "session-import" ? (
-                    <OnboardingSessionImportStage
-                      registerSubmit={registerSessionImportSubmit}
-                    />
+                    <OnboardingSessionImportStage scan={sessionImportScan} />
                   ) : (
                     <OnboardingDiorama
                       actId={act.id}
