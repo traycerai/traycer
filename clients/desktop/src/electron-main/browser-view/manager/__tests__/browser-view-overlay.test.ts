@@ -4,6 +4,7 @@ import type { BrowserSessionProfile } from "../../browser-session";
 import type {
   BrowserViewCapturedImage,
   BrowserViewCropRect,
+  BrowserViewFrameImage,
   BrowserViewWindow,
   ManagedBrowserView,
 } from "../../browser-view-port";
@@ -17,7 +18,7 @@ import {
 } from "../browser-view-overlay";
 import { NativeBrowserViewLifecycle } from "../native-browser-view-lifecycle";
 import { browserViewSurfaceKey as entryKeyId } from "../browser-view-entry-registry";
-import type { EncodedTileFrame, TileFrameImage } from "../tile-frame-cache";
+import type { EncodedTileFrame } from "../tile-frame-cache";
 
 vi.mock("../../../app/logger", () => ({
   log: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
@@ -340,11 +341,17 @@ function makeWindow(): BrowserViewWindow {
 
 /** A non-empty composited frame, structurally: `handleFrame` resolves any
  * pending `awaitNextFrame` wait before it ever touches `resize`/`toJPEG`, so
- * this stands in for a real `NativeImage` without needing real JPEG bytes. */
-const FRAME_IMAGE: TileFrameImage = {
+ * this stands in for a real `NativeImage` without needing real JPEG bytes.
+ * Typed as the WIDER `BrowserViewFrameImage` the frame subscription hands out
+ * (a `NativeImage` in production); the frame cache only ever reads the
+ * narrower `TileFrameImage` subset of it. */
+const FRAME_IMAGE: BrowserViewFrameImage = {
   isEmpty: () => false,
   getSize: () => ({ width: 10, height: 10 }),
   toJPEG: () => new Uint8Array(),
+  toPNG: () => new Uint8Array(),
+  toDataURL: () => "data:image/png;base64,",
+  crop: () => FRAME_IMAGE,
   resize: () => FRAME_IMAGE,
 };
 
