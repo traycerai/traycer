@@ -579,6 +579,7 @@ import {
   resourcesSubscribeV12,
   resourcesSubscribeV13,
   resourcesSubscribeV14,
+  resourcesSubscribeV15,
   resourcesKillV10,
   resourcesListLocalServersV10,
 } from "@traycer/protocol/host/resources/subscribe";
@@ -9084,7 +9085,7 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   },
   "resources.subscribe": {
     1: {
-      latestMinor: 4,
+      latestMinor: 5,
       versions: {
         0: {
           contract: resourcesSubscribeV10,
@@ -9104,6 +9105,11 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         // for every minor before this one.
         4: {
           contract: resourcesSubscribeV14,
+        },
+        // @1.5 lets a mounted stream remain on the background cadence while
+        // only a visible resource monitor asks for interactive refresh.
+        5: {
+          contract: resourcesSubscribeV15,
         },
       },
     },
