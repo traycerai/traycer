@@ -5,6 +5,7 @@ import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { modifiersFromMouseEvent } from "@/lib/canvas/tile-open/intent";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { onMiddleClick } from "@/lib/dom/on-middle-click";
 interface ForkedChatLinkSegmentProps {
   readonly viewTabId: string;
   readonly sourceChatId: string;
@@ -54,6 +55,7 @@ export function ForkedChatLinkSegment(props: ForkedChatLinkSegmentProps) {
           className="inline-flex min-w-0 items-center gap-1.5 text-primary underline underline-offset-4 transition-colors hover:text-primary/80 focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
           aria-label={`Open source conversation ${sourceChatTitle}`}
           onClick={openSourceConversation}
+          onAuxClick={onMiddleClick(openSourceConversation)}
         >
           <GitBranch
             className="size-3.5 shrink-0 text-muted-foreground"

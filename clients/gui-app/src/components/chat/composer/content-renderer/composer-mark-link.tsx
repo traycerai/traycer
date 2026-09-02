@@ -1,5 +1,5 @@
 import type { MouseEvent, ReactNode } from "react";
-import { onMiddleClick } from "@/lib/links/anchor-aux-click";
+import { onMiddleClick } from "@/lib/dom/on-middle-click";
 import { useOpenLink } from "@/lib/links/open-link";
 
 /**

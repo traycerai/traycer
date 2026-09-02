@@ -23,7 +23,7 @@
 import { useCallback, useMemo, useSyncExternalStore } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
-import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
+import { tileIntent, type TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 import { useHostDirectory } from "@/lib/host";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useRemoteSessionsPollReadiness } from "@/hooks/host/use-remote-sessions-poll-readiness";
@@ -98,15 +98,12 @@ function openAgentIntent(
   epicId: string,
   agent: CommGraphAgentNode,
 ): TileOpenIntent {
-  return {
-    node: openableRefForAgent(agent),
-    target: { epicId },
-    gesture: "explicit",
-    modifiers: null,
-    placement: null,
-    dedupe: true,
-    source: "direct_ui",
-  };
+  return tileIntent(
+    openableRefForAgent(agent),
+    { epicId },
+    "explicit",
+    "direct_ui",
+  );
 }
 
 export function useCommGraphJump(

@@ -14,6 +14,7 @@ import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import type { LinkClickEvent } from "@/lib/links/open-link";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { cn } from "@/lib/utils";
+import { onMiddleClick } from "@/lib/dom/on-middle-click";
 
 /**
  * The Commits tab: the PR's commits as a list of rows that open on GitHub.
@@ -126,6 +127,7 @@ function PrCommitRow(props: {
         type="button"
         disabled={url === null}
         onClick={openCommit}
+        onAuxClick={onMiddleClick(openCommit)}
         aria-label={
           url === null ? headline : `Open commit ${shortOid} on GitHub`
         }

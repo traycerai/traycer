@@ -41,6 +41,7 @@ import type {
   ElectronTabSurfaceLease,
 } from "@/lib/browser-view/sessions/electron-tabs";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import type { TileOpenTarget } from "@/lib/canvas/tile-open/intent";
 import { cn } from "@/lib/utils";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -245,7 +246,10 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
               sessionId: opened.sessionId,
               tabId: opened.tabId,
             }),
-            target: { tabId: props.viewTabId },
+            // Resolved after the await, not before: the view tab can close
+            // while `openTab` is in flight, and opening into a closed tab id
+            // mutates a canvas with no route (R8).
+            target: currentPopupTarget(props.viewTabId, epicId),
             gesture: disposition === "background" ? "host" : "explicit",
             modifiers: null,
             placement: { kind: "tab", paneId: props.paneId, index: null },
@@ -263,6 +267,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     },
     [
       browserSessions,
+      epicId,
       openTile,
       props.node.hostId,
       props.node.sessionId,
@@ -682,4 +687,18 @@ function isStaleSettleBeforeEcho(
   status: BrowserViewStatus,
 ): boolean {
   return current !== null && status === "ready" && !current.echoSeen;
+}
+
+/**
+ * The popup's own canvas tab while it still exists, else the epic - which
+ * lets the resolver pick (or create) a live tab instead of writing a tile
+ * into a tab that closed while `openTab` was in flight (R8).
+ */
+function currentPopupTarget(
+  viewTabId: string,
+  epicId: string | null,
+): TileOpenTarget {
+  const tabs = useEpicCanvasStore.getState().tabsById;
+  if (tabs[viewTabId] !== undefined) return { tabId: viewTabId };
+  return epicId === null ? { tabId: viewTabId } : { epicId };
 }

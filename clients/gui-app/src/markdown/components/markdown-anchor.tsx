@@ -1,12 +1,11 @@
 import { use, useCallback, type MouseEvent, type ReactNode } from "react";
 import { toast } from "sonner";
 import { createReportIssueContext } from "@/lib/report-issue-context";
-import { RunnerHostContext } from "@/providers/runner-host-context";
 import { useOpenLink } from "@/lib/links/open-link";
 import { classifyHref } from "@/markdown/links/classify-href";
 import { MarkdownLinkContext } from "@/markdown/links/markdown-link-context";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
-import { onMiddleClick } from "@/lib/links/anchor-aux-click";
+import { onMiddleClick } from "@/lib/dom/on-middle-click";
 
 const MARKDOWN_LINK_REPORT_CONTEXT = createReportIssueContext({
   title: "Markdown link could not be opened",
@@ -45,7 +44,6 @@ export function MarkdownAnchor({
   className,
   children,
 }: MarkdownAnchorProps) {
-  const runnerHost = use(RunnerHostContext);
   const linkPolicy = use(MarkdownLinkContext);
   const openLink = useOpenLink();
 
@@ -109,11 +107,13 @@ export function MarkdownAnchor({
       }
 
       linkPolicy?.supersedePendingFileLink();
-      if (runnerHost !== null) {
-        void openLink(classified.url, "markdown", event);
-      }
+      // Unconditional: the handler has already prevented the native
+      // navigation, so gating on a RunnerHost would make the link a no-op on
+      // a surface without one. `openLink` picks its own fallback (and toasts
+      // when the bridge is missing).
+      void openLink(classified.url, "markdown", event);
     },
-    [navigableHref, linkPolicy, openLink, reportIssueAvailable, runnerHost],
+    [navigableHref, linkPolicy, openLink, reportIssueAvailable],
   );
 
   // Native `title` ON PURPOSE - see the eslint exemption for this file. This

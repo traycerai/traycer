@@ -52,6 +52,7 @@ import {
 import { useOnboardingTourOpenStore } from "@/stores/onboarding/onboarding-tour-open-store";
 import { cn } from "@/lib/utils";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import { onMiddleClick } from "@/lib/dom/on-middle-click";
 
 const ACT_EASE = [0.32, 0.72, 0, 1] as const;
 const ONBOARDING_FOOTER_LINKS = [
@@ -1267,7 +1268,7 @@ function OnboardingFooterLinks() {
   const openFooterLink = useCallback(
     (event: MouseEvent<HTMLAnchorElement>, url: string) => {
       event.preventDefault();
-      void openLink(url, "docs", null);
+      void openLink(url, "docs", event);
     },
     [openLink],
   );
@@ -1280,6 +1281,9 @@ function OnboardingFooterLinks() {
             <a
               href={link.url}
               onClick={(event) => openFooterLink(event, link.url)}
+              onAuxClick={onMiddleClick((event) =>
+                openFooterLink(event, link.url),
+              )}
               className="transition-colors hover:text-white/80"
             >
               {link.label}

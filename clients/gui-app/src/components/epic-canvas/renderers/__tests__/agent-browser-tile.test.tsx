@@ -72,12 +72,18 @@ vi.mock(
     useCloseCanvasTileWithNestedFocus: () => state.closeCanvasTile,
   }),
 );
+const canvasState = vi.hoisted(() => ({
+  tabsById: {} as Record<string, unknown>,
+  updateBrowserTileViewportPresetInTab: vi.fn(),
+}));
+// `getState` too, not just the hook: the popup path reads the live tab set at
+// open time to see whether its own view tab is still there.
 vi.mock("@/stores/epics/canvas/store", () => ({
-  useEpicCanvasStore: (selector: (value: Record<string, unknown>) => unknown) =>
-    selector({
-      tabsById: { "view-1": { epicId: "epic-1" } },
-      updateBrowserTileViewportPresetInTab: vi.fn(),
-    }),
+  useEpicCanvasStore: Object.assign(
+    (selector: (value: Record<string, unknown>) => unknown) =>
+      selector(canvasState),
+    { getState: () => canvasState },
+  ),
 }));
 vi.mock("@/components/epic-canvas/renderers/use-electron-tile-chrome", () => ({
   useElectronTabChrome: (input: Record<string, unknown>) => {
@@ -277,6 +283,7 @@ describe("ElectronTabSurface", () => {
     state.bridge = new TestBridge();
     state.chromeInputs = [];
     state.sessions = liveSessions();
+    canvasState.tabsById = { "view-1": { epicId: "epic-1" } };
     vi.clearAllMocks();
   });
 
@@ -378,6 +385,30 @@ describe("ElectronTabSurface", () => {
     });
   });
 
+  it("falls back to the epic when the view tab closed mid-open", async () => {
+    const bridge = state.bridge;
+    if (bridge === null) throw new Error("bridge missing");
+    state.sessions = liveSessions();
+    renderTile(
+      createBinding(() => Promise.resolve({ detach: () => Promise.resolve() })),
+    );
+
+    // The tab goes away while `openTab` is in flight; targeting it would put
+    // a tile in a canvas with no route (R8).
+    canvasState.tabsById = {};
+
+    act(() => {
+      bridge.emitOpenTileRequest(popupRequest("foreground"));
+    });
+
+    await waitFor(() => {
+      expect(state.openTile).toHaveBeenCalledTimes(1);
+    });
+    expect(state.openTile.mock.calls[0]?.[0].target).toEqual({
+      epicId: "epic-1",
+    });
+  });
+
   it("opens a background popup as a host push, leaving the current tab active", async () => {
     const bridge = state.bridge;
     if (bridge === null) throw new Error("bridge missing");
@@ -460,6 +491,7 @@ describe("ElectronTabSurface browser-scoped chords", () => {
     state.bridge = new TestBridge();
     state.chromeInputs = [];
     state.sessions = liveSessions();
+    canvasState.tabsById = { "view-1": { epicId: "epic-1" } };
     vi.clearAllMocks();
   });
 

@@ -1018,6 +1018,40 @@ describe("useEpicRouteSynchronization", () => {
     });
   });
 
+  it("does not yank the router when the surface is a background epic", async () => {
+    testState.nestedFocusEnabled = true;
+    // The user is looking at ANOTHER epic tab; a focus write here would pull
+    // the router away from it.
+    testState.routerPathname = "/epics/other-epic/other-tab";
+    renderHook(
+      (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
+      {
+        initialProps: {
+          ...THREAD_FOCUS_INTENT,
+          focusThreadId: undefined,
+        },
+      },
+    );
+
+    await waitFor(() => {
+      expect(tileNavigationMocks.navigationSeams).toHaveLength(1);
+    });
+    testState.navigate.mockClear();
+
+    const focusTarget = tileNavigationMocks.navigationSeams[0](
+      EPIC_ID,
+      TAB_ID,
+      () => ({ paneId: "pane-1", tileInstanceId: "tile-1" }),
+    );
+
+    // The focus still commits into the canvas - only the URL write is gated.
+    expect(focusTarget).toEqual({
+      paneId: "pane-1",
+      tileInstanceId: "tile-1",
+    });
+    expect(testState.navigate).not.toHaveBeenCalled();
+  });
+
   it("does not reuse auto-open dedupe keys across epics", async () => {
     const hook = renderHook(
       (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),

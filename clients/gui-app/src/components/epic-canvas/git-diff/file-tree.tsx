@@ -34,6 +34,7 @@ import type { GitDiffSectionCollapseController } from "./git-diff-section";
 import { GitFileSectionStack } from "./git-file-section-stack";
 import type { GitFileSectionBodyRenderProps } from "./git-file-section-stack";
 import { useGitPierreFileTreeModel } from "./use-git-pierre-file-tree-model";
+import { onMiddleClick } from "@/lib/dom/on-middle-click";
 
 export interface FileTreeProps {
   readonly epicId: string;
@@ -284,6 +285,7 @@ function GitTreeSectionBody(props: GitTreeSectionBodyProps): ReactNode {
         className="h-full min-h-0"
         model={model}
         onClick={previewFileFromTreeRow}
+        onAuxClick={onMiddleClick(previewFileFromTreeRow)}
         onDoubleClick={pinFileFromTreeRow}
         style={gitTreeStyle(
           model.getItemHeight(),

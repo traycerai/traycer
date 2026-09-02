@@ -44,7 +44,7 @@ import {
 import { useRelativeTimestamp } from "@/lib/relative-time";
 import { useIsActiveTile } from "@/stores/epics/canvas/store";
 import { cn } from "@/lib/utils";
-import { onMiddleClick } from "@/lib/links/anchor-aux-click";
+import { onMiddleClick } from "@/lib/dom/on-middle-click";
 
 /**
  * Every badge on row 1 speaks the hover card's dialect: borderless tint,
@@ -489,7 +489,7 @@ function PrNumberAnchor(props: {
 }): ReactNode {
   // In-flight guarded: a double click on the badge would otherwise fire two
   // bridge requests and open two OS tabs (R10).
-  const { open } = useLinkOpenInFlight();
+  const { open, pending } = useLinkOpenInFlight();
   const handleClick = useCallback(
     (event: MouseEvent<HTMLAnchorElement>): void => {
       // The row opens the detail tile; this badge means GitHub.
@@ -503,6 +503,9 @@ function PrNumberAnchor(props: {
     <a
       href={props.prUrl}
       aria-label={props.ariaLabel}
+      // The guard drops activation while a handoff is in flight, so the
+      // anchor must not keep announcing itself as actionable.
+      aria-disabled={pending}
       className={props.className}
       data-testid="pr-row-number"
       data-pr-state={props.state}

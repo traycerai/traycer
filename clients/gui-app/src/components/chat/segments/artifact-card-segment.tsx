@@ -25,6 +25,7 @@ import { OpenFullDiffControl } from "./open-full-diff-control";
 import { SnapshotHashInlineDiff } from "./snapshot-hash-inline-diff";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { onMiddleClick } from "@/lib/dom/on-middle-click";
 interface ArtifactCardSegmentProps {
   readonly operation: ArtifactOperationAction;
   readonly artifactKind: EpicArtifactKind;
@@ -354,6 +355,7 @@ function ArtifactSummaryControl(props: {
       <button
         type="button"
         onClick={props.onOpen}
+        onAuxClick={onMiddleClick(props.onOpen)}
         aria-label={`Open ${props.openTitle}`}
         className={className}
       >

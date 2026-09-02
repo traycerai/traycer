@@ -50,6 +50,7 @@ import { getNestedRouteApplicationDeferralMs } from "@/lib/nested-focus-navigati
 import { shouldYieldPaneActivationRouteFocus } from "@/components/epic-canvas/pane-activation";
 import { findHostedTileElement } from "@/components/epic-canvas/surface-host/hosted-tile-resolver";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
+import { isCurrentEpicTabRoute } from "@/lib/epic-nested-focus-navigation";
 
 const PRIMARY_CHAT_COMPOSER_SELECTOR =
   "[data-chat-composer] [data-composer-editor]";
@@ -586,21 +587,6 @@ function replaceNestedFocusRoute(
     // next canvas change re-derives it. Swallow it rather than surfacing an
     // unhandled rejection for something no caller is awaiting.
   ).catch(() => undefined);
-}
-
-/**
- * Same guard `navigateNestedFocus` applies before writing focus params: a
- * background epic surface must not yank the router to its own route.
- */
-function isCurrentEpicTabRoute(
-  pathname: string,
-  epicId: string,
-  tabId: string,
-): boolean {
-  const parts = pathname.split("/");
-  if (parts.length !== 4) return false;
-  const [_root, scope, routeEpicId, routeTabId] = parts;
-  return scope === "epics" && routeEpicId === epicId && routeTabId === tabId;
 }
 
 /**

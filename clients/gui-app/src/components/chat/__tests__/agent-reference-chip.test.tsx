@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 
-const navigation = vi.hoisted(() => ({ openTile: vi.fn() }));
+const navigation = vi.hoisted(() => ({
+  openTile: vi.fn<(intent: TileOpenIntent) => void>(),
+}));
 const openRef = vi.hoisted(() => ({
   value: { id: "agent-1", instanceId: "inst-1", type: "chat" },
 }));
@@ -30,6 +32,7 @@ vi.mock("@/lib/epic-selectors", () => ({
 }));
 
 import { AgentReferenceChip } from "@/components/chat/agent-reference-chip";
+import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 
 afterEach(() => {
   cleanup();
@@ -52,5 +55,37 @@ describe("agent reference chip", () => {
         dedupe: true,
       }),
     );
+  });
+
+  it("opens a middle-click in the background, which only auxclick carries", () => {
+    render(<AgentReferenceChip agentId="agent-1" display="text" />);
+
+    // The browser dispatches `auxclick` for the middle button and no `click`,
+    // so an onClick-only chip would never see `modifiers.middle`.
+    fireEvent(
+      screen.getByRole("button"),
+      new MouseEvent("auxclick", {
+        bubbles: true,
+        cancelable: true,
+        button: 1,
+      }),
+    );
+
+    expect(navigation.openTile.mock.calls[0]?.[0].modifiers?.middle).toBe(true);
+  });
+
+  it("leaves a right-click to the context menu", () => {
+    render(<AgentReferenceChip agentId="agent-1" display="text" />);
+
+    fireEvent(
+      screen.getByRole("button"),
+      new MouseEvent("auxclick", {
+        bubbles: true,
+        cancelable: true,
+        button: 2,
+      }),
+    );
+
+    expect(navigation.openTile).not.toHaveBeenCalled();
   });
 });

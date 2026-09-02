@@ -1,13 +1,13 @@
 import type { MouseEvent } from "react";
 
 /**
- * A middle-button activation arrives as `auxclick`, never `click`, so an
- * anchor that routes through `openLink` from `onClick` alone misses it twice:
- * the seam never runs, and the anchor's own default is never prevented (A3).
- * Wrap the same handler for `onAuxClick`.
+ * A middle-button activation arrives as `auxclick`, never `click`, so a
+ * control wired only through `onClick` misses it twice: the seam never runs
+ * (`openLink` / `openTile` never see `middle`), and an anchor's own default
+ * is never prevented (A3, C4).
  *
  * The right button lands here too and stays the browser's - it belongs to the
- * context menu, not to a link open.
+ * context menu, not to an open.
  */
 export function onMiddleClick<E extends Element>(
   handler: (event: MouseEvent<E>) => void,

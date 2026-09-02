@@ -5,6 +5,7 @@
  * therefore commits no route.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
 import { convertBrowserTabToPip } from "@/lib/browser-view/pip/pip-store";
 import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
@@ -23,6 +24,7 @@ import { executeTileOpen } from "../execute-tile-open";
 vi.mock("@/lib/browser-view/pip/pip-store", () => ({
   convertBrowserTabToPip: vi.fn(),
 }));
+vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
 // The real store, minus the analytics call - `focus-existing` must not count
 // as an open (R9), and only a spy can prove a call that did NOT happen.
@@ -96,6 +98,7 @@ beforeEach(() => {
   navigateNested.mockClear();
   vi.mocked(convertBrowserTabToPip).mockClear();
   vi.mocked(trackOpenedCanvasTile).mockClear();
+  vi.mocked(toast.error).mockClear();
 });
 
 describe("executeTileOpen", () => {
@@ -283,6 +286,29 @@ describe("executeTileOpen", () => {
     );
     expect(navigateNested).not.toHaveBeenCalled();
     expect(spies.openInPane).not.toHaveBeenCalled();
+  });
+
+  it("toasts a manual PiP failure and stays silent for an agent push", () => {
+    installPrepareSpies();
+
+    run({ kind: "pip", tabId: TAB_ID });
+    vi.mocked(convertBrowserTabToPip).mock.calls[0]?.[0].onError("boom");
+    expect(toast.error).toHaveBeenCalledWith("boom");
+
+    vi.mocked(toast.error).mockClear();
+    executeTileOpen({
+      plan: { kind: "pip", tabId: TAB_ID },
+      node: BROWSER_A,
+      source: SOURCE,
+      store: useEpicCanvasStore.getState(),
+      navigateNested,
+      epicId: EPIC_ID,
+      // A failed auto-PiP leaves the tab reachable in the sidebar; toasting
+      // about background automation is the regression this pins (L4).
+      pipOrigin: "agent",
+    });
+    vi.mocked(convertBrowserTabToPip).mock.calls[1]?.[0].onError("boom");
+    expect(toast.error).not.toHaveBeenCalled();
   });
 
   it("ignores a PiP plan for a node that is not a browser tab", () => {

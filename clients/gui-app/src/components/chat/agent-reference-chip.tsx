@@ -15,6 +15,7 @@ import {
   type EpicTreeRecord,
 } from "@/lib/epic-selectors";
 import { cn } from "@/lib/utils";
+import { onMiddleClick } from "@/lib/dom/on-middle-click";
 
 type AgentTreeRecord = EpicTreeRecord & {
   readonly type: "chat" | "terminal-agent";
@@ -166,6 +167,7 @@ function AgentReferenceButton(props: {
     <button
       type="button"
       onClick={openAgent}
+      onAuxClick={onMiddleClick(openAgent)}
       className={cn(
         "mx-[1px] inline-flex max-w-[min(26rem,80vw)] items-center gap-1 rounded-md border border-primary/25 bg-primary/10 px-1.5 py-0.5 align-baseline",
         "text-ui-sm font-medium text-primary transition-colors hover:bg-primary/15 hover:text-primary focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",

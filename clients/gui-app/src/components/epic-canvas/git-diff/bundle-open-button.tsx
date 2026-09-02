@@ -20,6 +20,7 @@ import { useDraggable } from "@dnd-kit/core";
 import { FileDiff } from "lucide-react";
 import type { MouseEvent, ReactNode } from "react";
 import { useCallback, useMemo } from "react";
+import { onMiddleClick } from "@/lib/dom/on-middle-click";
 
 export interface BundleOpenButtonProps {
   readonly epicId: string;
@@ -83,6 +84,7 @@ export function BundleOpenButton(props: BundleOpenButtonProps): ReactNode {
       aria-label={`Open ${gitBundleGroupLabel(props.group)}`}
       disabled={props.disabled}
       onClick={openBundle}
+      onAuxClick={onMiddleClick(openBundle)}
       className="text-muted-foreground hover:text-foreground"
     >
       <FileDiff className="size-4" />

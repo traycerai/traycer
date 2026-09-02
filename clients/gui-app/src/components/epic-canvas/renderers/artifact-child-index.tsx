@@ -23,6 +23,7 @@ import {
 } from "@/stores/epics/canvas/types";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { appLogger } from "@/lib/logger";
+import { onMiddleClick } from "@/lib/dom/on-middle-click";
 
 interface ArtifactChildIndexProps {
   readonly epicId: string;
@@ -150,6 +151,7 @@ function ChildIndexRow(props: {
       {...(isDraggable ? dragListeners : undefined)}
       type="button"
       onClick={open}
+      onAuxClick={onMiddleClick(open)}
       data-testid={`artifact-child-index-row-${childId}`}
       className={cn(
         "group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-muted/50",

@@ -24,6 +24,20 @@ describe("samePageKey", () => {
     },
   );
 
+  it("keeps credentials in the key - two users are two pages", () => {
+    // `URL.origin` drops the user-info, so keying on it alone would hand
+    // alice's tab to bob.
+    expect(samePageKey("https://alice@example.test/docs")).not.toBe(
+      samePageKey("https://bob@example.test/docs"),
+    );
+    expect(samePageKey("https://alice@example.test/docs")).not.toBe(
+      samePageKey("https://example.test/docs"),
+    );
+    expect(samePageKey("https://alice:pw@example.test/docs")).toBe(
+      "https://alice:pw@example.test/docs",
+    );
+  });
+
   it("separates pages that differ anywhere but the hash", () => {
     expect(samePageKey("https://example.test/a")).not.toBe(
       samePageKey("https://example.test/b"),

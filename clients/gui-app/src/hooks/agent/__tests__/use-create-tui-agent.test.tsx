@@ -11,7 +11,7 @@ const hookMocks = vi.hoisted(() => ({
   /** The epic's nested-focus seam, as `useEpicTileNavigation` receives it. */
   navigateNested: vi.fn(),
   /** The seam each `openTileWithNavigation` call was handed. */
-  navigationSeams: [] as unknown[],
+  navigationSeams: new Array<NavigateNestedFocus>(),
   markArtifactPendingCreate: vi.fn(),
   unmarkArtifactPendingCreate: vi.fn(),
 }));
@@ -86,7 +86,10 @@ vi.mock("@/lib/canvas/tile-open/open-tile", () => ({
     _tabId: string,
     prepare: () => unknown,
   ) => prepare(),
-  openTileWithNavigation: (intent: unknown, navigateNested: unknown) => {
+  openTileWithNavigation: (
+    intent: TileOpenIntent,
+    navigateNested: NavigateNestedFocus,
+  ) => {
     hookMocks.navigationSeams.push(navigateNested);
     hookMocks.openTile(intent);
     return null;
@@ -118,6 +121,8 @@ import {
 import { TuiForkProfileRejectedError } from "@/lib/tui-fork-profile-rejection";
 import { peekPreparedTerminalAgentLaunch } from "@/stores/terminals/prepared-terminal-agent-launch-store";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
+import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
+import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 
 const EPIC_ID = "epic-1";
 const TAB_ID = "tab-1";

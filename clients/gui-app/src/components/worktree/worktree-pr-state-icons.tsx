@@ -13,7 +13,7 @@ import {
   PR_STATE_ICON,
   PR_STATE_TINT_CLASS,
 } from "@/components/worktree/worktree-pr-state-palette";
-import { onMiddleClick } from "@/lib/links/anchor-aux-click";
+import { onMiddleClick } from "@/lib/dom/on-middle-click";
 
 /**
  * Icon-only PR references for a sidebar chat row's second line: one glyph +

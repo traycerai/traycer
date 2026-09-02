@@ -5,6 +5,7 @@ import type { PrLightItem } from "@traycer/protocol/host/pr-schemas";
 import { SwitcherPanelEmbed } from "@/components/epic-canvas/mobile/switcher-panel-embed";
 import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
 import { usePrPresenceStore } from "@/stores/epics/pr-presence-store";
+import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 
 const EPIC_ID = "epic-pr-embed";
 const TAB_ID = "tab-pr-embed";
@@ -34,7 +35,7 @@ vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
 const tileNavigationMocks = vi.hoisted(() => ({
   // Typed so assertions can read the recorded call without `any` leaking
   // through `mock.calls`.
-  openTile: vi.fn<(intent: { readonly node: unknown }) => void>(),
+  openTile: vi.fn<(intent: TileOpenIntent) => void>(),
 }));
 vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   useEpicTileNavigation: () => tileNavigationMocks,

@@ -308,6 +308,11 @@ describe("browser address helpers", () => {
     );
     // A colon followed by digits is a PORT, not a scheme, so these still get
     // one.
+    // A path does not make it remote: guessing https here would fail against
+    // a plain HTTP dev server.
+    expect(normalizeBrowserAddressInput("app.localhost/path")).toBe(
+      "http://app.localhost/path",
+    );
     expect(normalizeBrowserAddressInput("app.localhost:3000")).toBe(
       "http://app.localhost:3000",
     );

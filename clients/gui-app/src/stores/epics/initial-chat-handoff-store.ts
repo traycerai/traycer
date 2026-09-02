@@ -5,6 +5,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 import type { ExplicitTilePlacement } from "@/lib/canvas/tile-open/intent";
+import type { EdgeDropPosition } from "@/stores/epics/canvas/tile-tree";
 
 export type InitialChatHandoffStatus =
   | "pending"
@@ -171,16 +172,24 @@ function readPersistedPlacement(value: unknown): ExplicitTilePlacement | null {
       index: typeof value.index === "number" ? value.index : null,
     };
   }
-  if (
-    value.kind === "split" &&
-    (value.edge === "left" ||
-      value.edge === "right" ||
-      value.edge === "top" ||
-      value.edge === "bottom")
-  ) {
+  if (value.kind === "split" && isEdgeDropPosition(value.edge)) {
     return { kind: "split", paneId: value.paneId, edge: value.edge };
   }
   return null;
+}
+
+// A total record rather than a literal list: adding an `EdgeDropPosition`
+// fails the build here instead of silently reading a persisted placement
+// carrying it back as `null`.
+const PERSISTED_EDGES: Record<EdgeDropPosition, true> = {
+  left: true,
+  right: true,
+  top: true,
+  bottom: true,
+};
+
+function isEdgeDropPosition(value: unknown): value is EdgeDropPosition {
+  return typeof value === "string" && Object.hasOwn(PERSISTED_EDGES, value);
 }
 
 /**

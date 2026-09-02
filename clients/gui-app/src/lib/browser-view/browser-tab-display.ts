@@ -214,12 +214,16 @@ export function normalizeBrowserAddressInput(input: string): string {
 
 function looksLikeLocalHttpAddressWithoutScheme(value: string): boolean {
   const lower = value.toLowerCase();
+  // Test the hostname, not the whole string: `app.localhost/path` is as local
+  // as `app.localhost`, and guessing https for it fails against a plain HTTP
+  // dev server.
+  const authority = lower.split(/[/?#]/, 1)[0] ?? "";
+  const hostname = authority.replace(/:\d+$/, "");
   return (
     lower === "localhost" ||
     lower.startsWith("localhost:") ||
     lower.startsWith("localhost/") ||
-    lower.endsWith(".localhost") ||
-    lower.includes(".localhost:") ||
+    hostname.endsWith(".localhost") ||
     lower.startsWith("127.") ||
     lower.startsWith("0.0.0.0") ||
     lower.startsWith("[::1]") ||
