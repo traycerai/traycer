@@ -20,6 +20,7 @@ describe("OfficeHoverCard", () => {
         name="Reviewer"
         harnessId="claude"
         model="opus"
+        modelTier="large"
         status="working"
         left={100}
         top={40}
@@ -27,7 +28,7 @@ describe("OfficeHoverCard", () => {
     );
 
     expect(screen.getByText("Reviewer")).toBeDefined();
-    expect(screen.getByText("claude · opus")).toBeDefined();
+    expect(screen.getByText("claude · opus · large")).toBeDefined();
     expect(screen.getByText("Working")).toBeDefined();
   });
 
@@ -37,6 +38,7 @@ describe("OfficeHoverCard", () => {
         name="Orchestrator"
         harnessId={null}
         model={null}
+        modelTier="medium"
         status="idle"
         left={0}
         top={0}
@@ -54,6 +56,7 @@ describe("OfficeHoverCard", () => {
         name="Runner"
         harnessId="codex"
         model={null}
+        modelTier="medium"
         status="awaiting"
         left={0}
         top={0}
@@ -70,6 +73,7 @@ describe("OfficeHoverCard", () => {
         name="Ghost"
         harnessId={null}
         model={null}
+        modelTier="medium"
         status="archived"
         left={0}
         top={0}
@@ -85,6 +89,7 @@ describe("OfficeHoverCard", () => {
         name="Reviewer"
         harnessId={null}
         model={null}
+        modelTier="medium"
         status="idle"
         left={0}
         top={0}
@@ -119,12 +124,29 @@ describe("OfficeLegend", () => {
     fireEvent.click(screen.getByTestId("comm-graph-office-legend-toggle"));
 
     const card = screen.getByTestId("comm-graph-office-legend-card");
-    expect(card.textContent).toContain("working");
-    expect(card.textContent).toContain("waiting for a reply");
-    expect(card.textContent).toContain("needs you");
-    expect(card.textContent).toContain("archived");
-    expect(card.textContent).toContain("Envelope: reply");
-    expect(card.textContent).toContain("Envelope: notice");
+    // Grouped by where you look, and complete: a key that documents only the
+    // newest additions leaves the reader unable to tell which of the things in
+    // front of them it covers.
+    for (const section of ["People", "Desks", "Room"]) {
+      expect(card.textContent).toContain(section);
+    }
+    for (const meaning of [
+      "waiting for a reply",
+      "needs you",
+      "queued for you",
+      "archived",
+      "a turn failed",
+      "model size",
+      "harness",
+      "unanswered requests",
+      "one per root agent",
+      "one per host",
+      "the time being shown",
+      "Envelope: reply",
+      "Envelope: notice",
+    ]) {
+      expect(card.textContent).toContain(meaning);
+    }
   });
 
   it("closes again on a second press", () => {

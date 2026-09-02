@@ -30,6 +30,20 @@ const ALL_SPRITE_NAMES: Readonly<Record<OfficeSpriteName, true>> = {
   nameplate: true,
   partition: true,
   sign: true,
+  "monitor-small-on": true,
+  "monitor-small-off": true,
+  "monitor-wide-on": true,
+  "monitor-wide-on-b": true,
+  "monitor-wide-off": true,
+  "monitor-crash": true,
+  "envelope-stack-1": true,
+  "envelope-stack-2": true,
+  "envelope-stack-3": true,
+  clock: true,
+  "dust-sheet": true,
+  box: true,
+  reception: true,
+  stairs: true,
   chair: true,
   plant: true,
   "floor-a": true,
@@ -154,6 +168,83 @@ describe("sprite maps", () => {
     expect(screenRows.map((row) => frameB[row]).join("")).not.toEqual(
       screenRows.map((row) => frameA[row]).join(""),
     );
+  });
+
+  it("declares the sizes the scene positions the new fixtures by", () => {
+    // The rectangularity test above only proves a map AGREES with its declared
+    // size; both can be wrong together. These are the numbers the scene's
+    // offsets are computed against, so they are pinned independently.
+    const expected: ReadonlyArray<readonly [OfficeSpriteName, number, number]> =
+      [
+        ["monitor-small-on", 12, 9],
+        ["monitor-small-off", 12, 9],
+        ["monitor-wide-on", 24, 12],
+        ["monitor-wide-on-b", 24, 12],
+        ["monitor-wide-off", 24, 12],
+        ["monitor-crash", 16, 12],
+        ["envelope-stack-1", 10, 6],
+        ["envelope-stack-2", 10, 8],
+        ["envelope-stack-3", 10, 10],
+        ["clock", 12, 12],
+        ["dust-sheet", 32, 16],
+        ["box", 16, 16],
+        ["reception", 32, 16],
+        ["stairs", 32, 32],
+      ];
+    for (const [name, width, height] of expected) {
+      expect(officeSpriteSize({ name }), name).toEqual({ width, height });
+    }
+  });
+
+  it("covers the whole desk with the dust sheet", () => {
+    // The scene draws the sheet at the desk's TOP-LEFT and expects the desk to
+    // stop being readable. A sheet smaller than the desk, or one with a hole in
+    // it, would leave the archived desk showing through.
+    expect(officeSpriteSize({ name: "dust-sheet" })).toEqual(
+      officeSpriteSize({ name: "desk" }),
+    );
+    expect(mapNamed("dust-sheet").join("")).not.toContain(".");
+  });
+
+  it("alternates the two lit wide frames without moving the chassis", () => {
+    // Same contract as the single monitor's two frames: the bezel and the stand
+    // are pinned so only the code lines move.
+    const frameA = mapNamed("monitor-wide-on");
+    const frameB = mapNamed("monitor-wide-on-b");
+    const chassisRows = [0, 1, 9, 10, 11];
+    for (const row of chassisRows) {
+      expect(frameB[row], `row ${row}`).toEqual(frameA[row]);
+    }
+    const screenRows = [2, 3, 4, 5, 6, 7, 8];
+    expect(screenRows.map((row) => frameB[row]).join("")).not.toEqual(
+      screenRows.map((row) => frameA[row]).join(""),
+    );
+  });
+
+  it("grows the envelope stack strictly upward", () => {
+    // The scene swaps between the three bottom-anchored, so a stack that did
+    // not get taller would read as the pile never changing.
+    const heights = (
+      ["envelope-stack-1", "envelope-stack-2", "envelope-stack-3"] as const
+    ).map((name) => mapNamed(name).length);
+    expect(heights[1]).toBeGreaterThan(heights[0]);
+    expect(heights[2]).toBeGreaterThan(heights[1]);
+  });
+
+  it("floods the crashed screen with `notice` and nothing lit", () => {
+    // A crash has to be legible from the color alone, before the face is read.
+    const crash = mapNamed("monitor-crash").join("");
+    expect(crash).toContain("n");
+    expect(crash).not.toContain("c");
+  });
+
+  it("leaves the clock's centre clear for the hands", () => {
+    // The renderer draws the hands over this face from a `clock` drawable; a
+    // baked hub would fight them.
+    const clock = mapNamed("clock");
+    for (let row = 4; row <= 7; row += 1) {
+      expect(clock[row].slice(4, 8), `row ${row}`).toEqual("....");
+    }
   });
 
   it("keeps the sign's field flat so a label can be drawn over it", () => {

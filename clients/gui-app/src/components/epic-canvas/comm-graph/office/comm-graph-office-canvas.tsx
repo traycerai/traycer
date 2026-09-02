@@ -40,13 +40,17 @@ import { NotificationIndicatorsContext } from "@/components/notifications/notifi
 import { attentionTone } from "@/components/notifications/notification-indicator-tones";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
 import { selectNotificationIndicatorState } from "@/stores/notifications/notification-indicator-state";
-import { useCommGraphSpeed } from "@/stores/epics/comm-graph-timeline-store";
+import {
+  useCommGraphCursor,
+  useCommGraphSpeed,
+} from "@/stores/epics/comm-graph-timeline-store";
 import type { CommGraphCanvasProps } from "@/components/epic-canvas/comm-graph/comm-graph-canvas";
 import {
   aggregateCommGraphEdges,
   type CommGraphAgentNode,
 } from "@/lib/comm-graph/comm-graph-model";
 import { useCommGraphOpenAgentById } from "@/components/epic-canvas/comm-graph/use-comm-graph-open-agent-by-id";
+import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import type { CommGraphTileViewState } from "@/stores/epics/canvas/types";
 import { isDefaultCommGraphView } from "@/stores/epics/canvas/tile-schema/comm-graph-tile";
 import { CommGraphAgentDetailSurface } from "@/components/epic-canvas/comm-graph/comm-graph-agent-detail-surface";
@@ -69,12 +73,20 @@ import {
   ENVELOPE_ARC_LIFT,
   OfficeScene,
 } from "@/lib/comm-graph/office/office-scene";
-import { officeAgentStatuses } from "@/lib/comm-graph/office/office-status";
+import {
+  officeAgentStatuses,
+  officeOpenRequestCounts,
+} from "@/lib/comm-graph/office/office-status";
+import { officeModelTier } from "@/lib/comm-graph/office/office-model-tier";
+import { officeClockAngles } from "@/lib/comm-graph/office/office-clock";
+import { officeFloorName } from "@/lib/comm-graph/office/office-floor-name";
+import { officeFlagKind } from "@/components/epic-canvas/comm-graph/office/office-flag-kind";
 import {
   OFFICE_LOGO_SIZE,
   OFFICE_TILE,
   type OfficeAgentInput,
   type OfficeDrawable,
+  type OfficeFloor,
   type OfficeFrame,
   type OfficeHitRegion,
   type OfficePoint,
@@ -106,6 +118,9 @@ const VIEW_PERSIST_DEBOUNCE_MS = 150;
 const LABEL_FONT_PX = 10;
 const HOVER_LABEL_FONT_PX = 11;
 const MONOSPACE_STACK = "ui-monospace, SFMono-Regular, Menlo, monospace";
+const CLOCK_HOUR_HAND = 3;
+const CLOCK_MINUTE_HAND = 4;
+const CLOCK_HUB_RADIUS = 1.5;
 const DARK_LABEL_BACKING = "rgba(0, 0, 0, 0.85)";
 const LIGHT_LABEL_BACKING = "rgba(255, 255, 255, 0.85)";
 
@@ -222,6 +237,14 @@ interface OfficeRuntime {
    * fighting it. A find gesture counts - it is the user aiming the camera.
    */
   readonly takeManualControl: () => void;
+  /**
+   * The last input the scene was synced with, so the frame loop can re-sync a
+   * fresh wall clock without React. `null` until the first sync.
+   */
+  readonly getSceneInput: () => OfficeSceneInput | null;
+  readonly setSceneInput: (next: OfficeSceneInput) => void;
+  readonly getHostNames: () => ReadonlyMap<string, string>;
+  readonly setHostNames: (next: ReadonlyMap<string, string>) => void;
 }
 
 function createOfficeRuntime(view: CommGraphTileViewState): OfficeRuntime {
@@ -240,6 +263,8 @@ function createOfficeRuntime(view: CommGraphTileViewState): OfficeRuntime {
   let activePan: CameraPan | null = null;
   let autoPanEnabled = true;
   let autoFitEnabled = isDefaultCommGraphView(view);
+  let sceneInput: OfficeSceneInput | null = null;
+  let hostNames: ReadonlyMap<string, string> = new Map();
   return {
     getCamera: () => camera,
     getViewport: () => viewport,
@@ -281,6 +306,14 @@ function createOfficeRuntime(view: CommGraphTileViewState): OfficeRuntime {
       autoPanEnabled = true;
     },
     isAutoFitEnabled: () => autoFitEnabled,
+    getSceneInput: () => sceneInput,
+    setSceneInput: (next) => {
+      sceneInput = next;
+    },
+    getHostNames: () => hostNames,
+    setHostNames: (next) => {
+      hostNames = next;
+    },
     takeManualControl: () => {
       autoPanEnabled = false;
       autoFitEnabled = false;
@@ -462,6 +495,9 @@ interface DrawFrameArgs {
   /** Agents the tile's Find session currently matches; empty when idle. */
   readonly searchMatchIds: ReadonlySet<string>;
   readonly nameById: ReadonlyMap<string, string>;
+  /** One per host. A single-floor building names nothing - there is no choice to explain. */
+  readonly floors: ReadonlyArray<OfficeFloor>;
+  readonly hostNameById: ReadonlyMap<string, string>;
 }
 
 /**
@@ -507,6 +543,42 @@ function drawHarnessLogo(
   if (logo !== null) {
     ctx.drawImage(logo, drawable.x - half, drawable.y - half);
   }
+  ctx.restore();
+}
+
+/**
+ * Hands over a clock face, in LOCAL time.
+ *
+ * Drawn rather than sprited because a sprite would need one frame per minute.
+ * Twelve-hour geometry: the hour hand carries the minutes too, so it sits
+ * between hours rather than jumping across them.
+ */
+function drawClockHands(
+  ctx: CanvasRenderingContext2D,
+  drawable: Extract<OfficeDrawable, { kind: "clock" }>,
+  inkColor: string,
+): void {
+  const angles = officeClockAngles(drawable.timeMs);
+  ctx.save();
+  ctx.strokeStyle = inkColor;
+  ctx.fillStyle = inkColor;
+  ctx.lineWidth = 1;
+  for (const hand of [
+    { angle: angles.hour, length: CLOCK_HOUR_HAND },
+    { angle: angles.minute, length: CLOCK_MINUTE_HAND },
+  ]) {
+    ctx.beginPath();
+    ctx.moveTo(drawable.x, drawable.y);
+    // Twelve o'clock is UP, which is negative y, and angles run clockwise.
+    ctx.lineTo(
+      drawable.x + Math.sin(hand.angle) * hand.length,
+      drawable.y - Math.cos(hand.angle) * hand.length,
+    );
+    ctx.stroke();
+  }
+  ctx.beginPath();
+  ctx.arc(drawable.x, drawable.y, CLOCK_HUB_RADIUS, 0, Math.PI * 2);
+  ctx.fill();
   ctx.restore();
 }
 
@@ -572,9 +644,52 @@ function drawAnchoredSprite(
   ctx.restore();
 }
 
+/**
+ * A floor's name over its stairwell. Only drawn when the building has more
+ * than one floor: with a single host the building IS the epic, and a sign over
+ * it would label the obvious.
+ */
+function drawFloorSigns(args: {
+  readonly ctx: CanvasRenderingContext2D;
+  readonly camera: OfficeCamera;
+  readonly floors: ReadonlyArray<OfficeFloor>;
+  readonly hostNameById: ReadonlyMap<string, string>;
+  readonly color: string;
+  readonly backing: string;
+}): void {
+  const { backing, camera, color, ctx, floors, hostNameById } = args;
+  if (floors.length <= 1) return;
+  for (const floor of floors) {
+    const anchor = floor.stairsTile ?? {
+      col: floor.bounds.col,
+      row: floor.bounds.row,
+    };
+    drawScreenLabel(ctx, {
+      text: officeFloorName(floor.hostId, hostNameById),
+      screenX:
+        (anchor.col * OFFICE_TILE + OFFICE_TILE) * camera.zoom + camera.x,
+      screenY: anchor.row * OFFICE_TILE * camera.zoom + camera.y - 2,
+      fontPx: LABEL_FONT_PX,
+      color,
+      backing,
+      alpha: 1,
+    });
+  }
+}
+
 function drawOfficeFrame(args: DrawFrameArgs): void {
-  const { camera, ctx, dpr, frame, nameById, searchMatchIds, theme, viewport } =
-    args;
+  const {
+    camera,
+    ctx,
+    dpr,
+    floors,
+    frame,
+    hostNameById,
+    nameById,
+    searchMatchIds,
+    theme,
+    viewport,
+  } = args;
   const palette = officePalette(theme);
   const labelColors: Readonly<Record<OfficeLabelTone, string>> = {
     default: palette.text,
@@ -611,6 +726,9 @@ function drawOfficeFrame(args: DrawFrameArgs): void {
   // Labels are collected rather than drawn inline: they belong to screen space,
   // and switching the transform per label would cost more than one pass.
   const labels: Array<Extract<OfficeDrawable, { kind: "label" }>> = [];
+  // Collected so the hands land ON TOP of the face sprite regardless of which
+  // layer the scene emitted the clock in.
+  const clocks: Array<Extract<OfficeDrawable, { kind: "clock" }>> = [];
   const layers: ReadonlyArray<{
     readonly drawables: ReadonlyArray<OfficeDrawable>;
     readonly anchor: SpriteAnchor;
@@ -636,9 +754,15 @@ function drawOfficeFrame(args: DrawFrameArgs): void {
         drawHarnessLogo(ctx, drawable, theme, palette.wallDark);
         continue;
       }
+      if (drawable.kind === "clock") {
+        clocks.push(drawable);
+        continue;
+      }
       drawAnchoredSprite(ctx, drawable, layer.anchor, theme);
     }
   }
+
+  for (const clock of clocks) drawClockHands(ctx, clock, palette.ink);
 
   // Back to screen space for text: a name magnified by the camera would be a
   // blur at zoom 4 and unreadable at zoom 0.5. The palette owns these colors
@@ -662,6 +786,14 @@ function drawOfficeFrame(args: DrawFrameArgs): void {
   // A find match is named AND outlined. The name is the thing the query was
   // typed against, so showing it is what makes a match checkable; the outline
   // is what finds it on a crowded floor where a name tag alone reads as noise.
+  drawFloorSigns({
+    ctx,
+    camera,
+    floors,
+    hostNameById,
+    color: palette.text,
+    backing: labelBackings.default,
+  });
   if (searchMatchIds.size > 0) {
     for (const region of frame.hitRegions) {
       if (!searchMatchIds.has(region.agentId)) continue;
@@ -770,6 +902,9 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
 
   const { resolvedTheme } = useResolvedTheme();
   const speed = useCommGraphSpeed(epicId);
+  // The cursor's capture time decides which agents read as archived AS OF the
+  // floor being shown, and what the wall clock says during replay.
+  const cursorMs = useCommGraphCursor(epicId)?.timestamp ?? null;
   const activityTiers = useEpicAgentActivityTiers();
   const reducedMotion = usePrefersReducedMotion();
 
@@ -799,6 +934,9 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         id: agent.id,
         name: agent.name,
         kind: agent.kind,
+        hostId: agent.hostId,
+        archivedAt: agent.archivedAt,
+        modelTier: officeModelTier(agent.model),
         harnessId: agent.harnessId,
         model: agent.model,
         parentId: agent.parentId,
@@ -814,26 +952,34 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   // per character: a floor can hold dozens, and each would otherwise be its own
   // subscription re-running on every unrelated notification.
   const indicators = useContext(NotificationIndicatorsContext);
-  const attentionIdList = useAppLocalNotificationsStore(
+  // ONE subscription for both signals. They are read from the same indicator
+  // state and split by the SAME rule `attentionTone` applies internally, so a
+  // crashed screen and a "!" bubble can never disagree about one agent.
+  const flaggedIdList = useAppLocalNotificationsStore(
     useShallow((state): ReadonlyArray<string> =>
-      agents.flatMap((agent) =>
-        attentionTone(
-          selectNotificationIndicatorState(
-            state,
-            { epicId, chatId: agent.id },
-            agent.hostId,
-            indicators,
-          ),
-        ) === null
-          ? []
-          : [agent.id],
-      ),
+      agents.flatMap((agent) => {
+        const indicatorState = selectNotificationIndicatorState(
+          state,
+          { epicId, chatId: agent.id },
+          agent.hostId,
+          indicators,
+        );
+        if (attentionTone(indicatorState) === null) return [];
+        return [`${officeFlagKind(indicatorState)}:${agent.id}`];
+      }),
     ),
   );
-  const attentionAgentIds = useMemo(
-    () => new Set(attentionIdList),
-    [attentionIdList],
-  );
+  const { attentionAgentIds, failureAgentIds } = useMemo(() => {
+    const attention = new Set<string>();
+    const failure = new Set<string>();
+    for (const entry of flaggedIdList) {
+      const separator = entry.indexOf(":");
+      const agentId = entry.slice(separator + 1);
+      if (entry.startsWith("failure:")) failure.add(agentId);
+      else attention.add(agentId);
+    }
+    return { attentionAgentIds: attention, failureAgentIds: failure };
+  }, [flaggedIdList]);
 
   const statusById = useMemo(
     () =>
@@ -843,8 +989,21 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         visibleAgentIds: agentIds,
         activityTiers,
         attentionAgentIds,
+        failureAgentIds,
       }),
-    [activityTiers, agentIds, attentionAgentIds, events, officeAgents],
+    [
+      activityTiers,
+      agentIds,
+      attentionAgentIds,
+      events,
+      failureAgentIds,
+      officeAgents,
+    ],
+  );
+
+  const openRequestsByReceiver = useMemo(
+    () => officeOpenRequestCounts(events, agentIds),
+    [agentIds, events],
   );
 
   const sceneInput = useMemo<OfficeSceneInput>(
@@ -857,6 +1016,13 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       // Envelope flights are sized to fit inside one playback step, so a faster
       // transport shortens the flight instead of queueing them up behind it.
       stepMs: BASE_STEP_MS / speed,
+      cursorMs,
+      // A PLACEHOLDER while live: reading a clock during render is impure, so
+      // the sync effect below stamps the real time and the frame loop advances
+      // it once a second. During replay the cursor's own time is the answer
+      // and never ticks.
+      clockMs: cursorMs ?? 0,
+      openRequestsByReceiver,
       playing,
       reducedMotion,
     }),
@@ -865,6 +1031,8 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       officeAgents,
       playing,
       pulse,
+      cursorMs,
+      openRequestsByReceiver,
       pulseKey,
       reducedMotion,
       speed,
@@ -872,9 +1040,28 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     ],
   );
 
+  // Host display names for the floor signs. One Query for the whole directory
+  // rather than a hook per floor - the count is data, and hooks are not.
+  const hostDirectory = useHostDirectoryList();
+  const hostNameById = useMemo(() => {
+    const names = new Map<string, string>();
+    for (const entry of hostDirectory.data ?? []) {
+      names.set(entry.hostId, entry.label);
+    }
+    return names;
+  }, [hostDirectory.data]);
   useEffect(() => {
-    readScene().sync(sceneInput);
-  }, [readScene, sceneInput]);
+    runtime.setHostNames(hostNameById);
+  }, [hostNameById, runtime]);
+
+  useEffect(() => {
+    const stamped =
+      sceneInput.cursorMs === null
+        ? { ...sceneInput, clockMs: Date.now() }
+        : sceneInput;
+    runtime.setSceneInput(stamped);
+    readScene().sync(stamped);
+  }, [readScene, runtime, sceneInput]);
 
   // Pressing Play is an explicit request to follow the action again. Pause
   // leaves the current choice alone; only the next false -> true transition
@@ -997,6 +1184,21 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
 
     let raf = 0;
     let last = performance.now();
+    let lastClockSecond = -1;
+
+    // A wall clock only has to be right to the minute, but it must not be
+    // right only at mount. Re-syncing the SAME input with a fresh `clockMs`
+    // is what advances it: `sync` is idempotent and guarded by the pulse key,
+    // so re-supplying a row replays nothing.
+    const advanceLiveClock = (): void => {
+      const input = runtime.getSceneInput();
+      if (input === null || input.cursorMs !== null) return;
+      const now = Date.now();
+      const second = Math.floor(now / 1000);
+      if (second === lastClockSecond) return;
+      lastClockSecond = second;
+      readScene().sync({ ...input, clockMs: now });
+    };
 
     // Re-fit an unframed tile whenever the floor's size changes - agents
     // arriving after the first frame is the normal case, and the room they
@@ -1063,6 +1265,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     const step = (now: number): void => {
       const dt = Math.min(MAX_FRAME_MS, now - last);
       last = now;
+      advanceLiveClock();
       const scene = readScene();
       scene.tick(dt);
       const frame = scene.frame();
@@ -1083,6 +1286,8 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         theme: resolvedTheme,
         searchMatchIds: runtime.getSearchMatchIds(),
         nameById,
+        floors: scene.layout().floors,
+        hostNameById: runtime.getHostNames(),
       });
       raf = requestAnimationFrame(step);
     };
@@ -1352,6 +1557,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
             name={hoveredAgent.name}
             harnessId={hoveredAgent.harnessId}
             model={hoveredAgent.model}
+            modelTier={officeModelTier(hoveredAgent.model)}
             status={statusById.get(hoveredAgent.id) ?? "idle"}
             left={hoverCard.left}
             top={hoverCard.top}

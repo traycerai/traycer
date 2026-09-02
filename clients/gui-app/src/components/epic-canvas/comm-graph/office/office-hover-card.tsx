@@ -12,11 +12,15 @@
  */
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { cn } from "@/lib/utils";
-import type { OfficeAgentStatus } from "@/lib/comm-graph/office/office-types";
+import type {
+  OfficeAgentStatus,
+  OfficeModelTier,
+} from "@/lib/comm-graph/office/office-types";
 import type { GuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 
 /** One word per status, in the vocabulary the rest of the app already uses. */
 const STATUS_LABELS: Readonly<Record<OfficeAgentStatus, string>> = {
+  failure: "Crashed",
   attention: "Needs attention",
   awaiting: "Waiting for reply",
   working: "Working",
@@ -29,6 +33,7 @@ export interface OfficeHoverCardProps {
   readonly name: string;
   readonly harnessId: GuiHarnessId | null;
   readonly model: string | null;
+  readonly modelTier: OfficeModelTier;
   readonly status: OfficeAgentStatus;
   /** Container-relative screen position of the hovered character's top centre. */
   readonly left: number;
@@ -43,14 +48,18 @@ export interface OfficeHoverCardProps {
 function detailLine(
   harnessId: GuiHarnessId | null,
   model: string | null,
+  modelTier: OfficeModelTier,
 ): string | null {
-  if (harnessId !== null && model !== null) return `${harnessId} · ${model}`;
-  return harnessId ?? model;
+  // The tier rides with the MODEL, never alone: it is a reading OF that name,
+  // and printing it beside nothing would look like a fact of its own.
+  const named = model === null ? null : `${model} · ${modelTier}`;
+  if (harnessId !== null && named !== null) return `${harnessId} · ${named}`;
+  return harnessId ?? named;
 }
 
 export function OfficeHoverCard(props: OfficeHoverCardProps) {
-  const { harnessId, left, model, name, status, top } = props;
-  const detail = detailLine(harnessId, model);
+  const { harnessId, left, model, modelTier, name, status, top } = props;
+  const detail = detailLine(harnessId, model, modelTier);
   return (
     <div
       // Anchored to the character's top centre and lifted clear of it, so the

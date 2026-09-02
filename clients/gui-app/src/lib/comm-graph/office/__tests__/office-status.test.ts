@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { AgentActivityTier } from "@/lib/agent-activity";
 import type { CommGraphEvent } from "@/lib/comm-graph/comm-graph-events";
-import { officeAgentStatuses } from "@/lib/comm-graph/office/office-status";
+import {
+  officeAgentStatuses,
+  officeOpenRequestCounts,
+} from "@/lib/comm-graph/office/office-status";
 
 function event(
   overrides: Partial<CommGraphEvent> & {
@@ -32,6 +35,7 @@ const ARCHIVED_ALPHA = { id: "alpha", archived: true };
 
 const NO_TIERS: ReadonlyMap<string, AgentActivityTier> = new Map();
 const NO_ATTENTION: ReadonlySet<string> = new Set<string>();
+const NO_FAILURE: ReadonlySet<string> = new Set<string>();
 const BOTH_VISIBLE: ReadonlySet<string> = new Set(["alpha", "beta"]);
 
 describe("officeAgentStatuses", () => {
@@ -42,6 +46,7 @@ describe("officeAgentStatuses", () => {
       visibleAgentIds: BOTH_VISIBLE,
       activityTiers: NO_TIERS,
       attentionAgentIds: NO_ATTENTION,
+      failureAgentIds: NO_FAILURE,
     });
 
     expect(statuses.get("alpha")).toBe("idle");
@@ -55,6 +60,7 @@ describe("officeAgentStatuses", () => {
       visibleAgentIds: BOTH_VISIBLE,
       activityTiers: NO_TIERS,
       attentionAgentIds: NO_ATTENTION,
+      failureAgentIds: NO_FAILURE,
     });
 
     expect(statuses.get("alpha")).toBe("awaiting");
@@ -78,6 +84,7 @@ describe("officeAgentStatuses", () => {
       visibleAgentIds: BOTH_VISIBLE,
       activityTiers: NO_TIERS,
       attentionAgentIds: NO_ATTENTION,
+      failureAgentIds: NO_FAILURE,
     });
 
     expect(statuses.get("alpha")).toBe("idle");
@@ -100,9 +107,39 @@ describe("officeAgentStatuses", () => {
       visibleAgentIds: BOTH_VISIBLE,
       activityTiers: NO_TIERS,
       attentionAgentIds: NO_ATTENTION,
+      failureAgentIds: NO_FAILURE,
     });
 
     expect(statuses.get("alpha")).toBe("awaiting");
+  });
+
+  it("puts a failure above every other reading, attention included", () => {
+    const statuses = officeAgentStatuses({
+      agents: [ARCHIVED_ALPHA],
+      events: [event({ id: 1, timestamp: 10, expectReply: true })],
+      visibleAgentIds: BOTH_VISIBLE,
+      activityTiers: new Map<string, AgentActivityTier>([["alpha", "turn"]]),
+      attentionAgentIds: new Set(["alpha"]),
+      failureAgentIds: new Set(["alpha"]),
+    });
+
+    // Every other reading is simultaneously true here; a crashed agent is
+    // still the one thing worth walking over to.
+    expect(statuses.get("alpha")).toBe("failure");
+  });
+
+  it("has nothing to say about a failure on an agent off the floor", () => {
+    const statuses = officeAgentStatuses({
+      agents: [ALPHA, BETA],
+      events: [],
+      visibleAgentIds: new Set(["beta"]),
+      activityTiers: NO_TIERS,
+      attentionAgentIds: NO_ATTENTION,
+      failureAgentIds: new Set(["alpha"]),
+    });
+
+    expect(statuses.has("alpha")).toBe(false);
+    expect(statuses.get("beta")).toBe("idle");
   });
 
   it("puts attention above every other reading", () => {
@@ -112,6 +149,7 @@ describe("officeAgentStatuses", () => {
       visibleAgentIds: BOTH_VISIBLE,
       activityTiers: new Map<string, AgentActivityTier>([["alpha", "turn"]]),
       attentionAgentIds: new Set(["alpha"]),
+      failureAgentIds: NO_FAILURE,
     });
 
     expect(statuses.get("alpha")).toBe("attention");
@@ -124,6 +162,7 @@ describe("officeAgentStatuses", () => {
       visibleAgentIds: BOTH_VISIBLE,
       activityTiers: new Map<string, AgentActivityTier>([["alpha", "turn"]]),
       attentionAgentIds: NO_ATTENTION,
+      failureAgentIds: NO_FAILURE,
     });
 
     expect(statuses.get("alpha")).toBe("awaiting");
@@ -139,6 +178,7 @@ describe("officeAgentStatuses", () => {
         ["beta", "background"],
       ]),
       attentionAgentIds: NO_ATTENTION,
+      failureAgentIds: NO_FAILURE,
     });
 
     expect(statuses.get("alpha")).toBe("working");
@@ -152,6 +192,7 @@ describe("officeAgentStatuses", () => {
       visibleAgentIds: BOTH_VISIBLE,
       activityTiers: NO_TIERS,
       attentionAgentIds: NO_ATTENTION,
+      failureAgentIds: NO_FAILURE,
     });
     expect(quiet.get("alpha")).toBe("archived");
 
@@ -163,6 +204,7 @@ describe("officeAgentStatuses", () => {
         ["alpha", "background"],
       ]),
       attentionAgentIds: NO_ATTENTION,
+      failureAgentIds: NO_FAILURE,
     });
     expect(background.get("alpha")).toBe("archived");
 
@@ -174,6 +216,7 @@ describe("officeAgentStatuses", () => {
       visibleAgentIds: BOTH_VISIBLE,
       activityTiers: new Map<string, AgentActivityTier>([["alpha", "turn"]]),
       attentionAgentIds: NO_ATTENTION,
+      failureAgentIds: NO_FAILURE,
     });
     expect(working.get("alpha")).toBe("working");
   });
@@ -185,10 +228,77 @@ describe("officeAgentStatuses", () => {
       visibleAgentIds: new Set(["beta"]),
       activityTiers: new Map<string, AgentActivityTier>([["alpha", "turn"]]),
       attentionAgentIds: new Set(["alpha"]),
+      failureAgentIds: NO_FAILURE,
     });
 
     expect(statuses.has("alpha")).toBe(false);
     // The open request's sender is off the floor, so nobody inherits its wait.
     expect(statuses.get("beta")).toBe("idle");
+  });
+});
+
+describe("officeOpenRequestCounts", () => {
+  it("counts nothing when no request is waiting on an answer", () => {
+    const counts = officeOpenRequestCounts(
+      [event({ id: 1, timestamp: 10 })],
+      BOTH_VISIBLE,
+    );
+
+    expect(counts.size).toBe(0);
+  });
+
+  it("piles every unanswered request on its RECEIVER's desk", () => {
+    const counts = officeOpenRequestCounts(
+      [
+        event({ id: 1, timestamp: 10, expectReply: true }),
+        event({
+          id: 2,
+          timestamp: 11,
+          responseId: "thread-2",
+          expectReply: true,
+        }),
+        event({
+          id: 3,
+          timestamp: 12,
+          responseId: "thread-3",
+          senderAgentId: "beta",
+          receiverAgentId: "alpha",
+          expectReply: true,
+        }),
+      ],
+      BOTH_VISIBLE,
+    );
+
+    // The sender is the one AWAITING; the pile belongs to whoever owes the
+    // answer, which is the other end of the same open request.
+    expect(counts.get("beta")).toBe(2);
+    expect(counts.get("alpha")).toBe(1);
+  });
+
+  it("drops a request once its thread is answered", () => {
+    const counts = officeOpenRequestCounts(
+      [
+        event({ id: 1, timestamp: 10, expectReply: true }),
+        event({
+          id: 2,
+          timestamp: 11,
+          senderAgentId: "beta",
+          receiverAgentId: "alpha",
+          inReplyTo: "thread-1",
+        }),
+      ],
+      BOTH_VISIBLE,
+    );
+
+    expect(counts.size).toBe(0);
+  });
+
+  it("keeps a pile off a desk that is not on the floor", () => {
+    const counts = officeOpenRequestCounts(
+      [event({ id: 1, timestamp: 10, expectReply: true })],
+      new Set(["alpha"]),
+    );
+
+    expect(counts.has("beta")).toBe(false);
   });
 });

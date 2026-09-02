@@ -18,14 +18,56 @@ interface LegendEntry {
   readonly meaning: string;
 }
 
-const POSTURE_ENTRIES: ReadonlyArray<LegendEntry> = [
-  { signal: "Typing", meaning: "working" },
-  { signal: "Dim screen", meaning: "idle" },
-  { signal: "…", meaning: "waiting for a reply" },
-  { signal: "!", meaning: "needs you" },
-  { signal: "Ghosted", meaning: "archived" },
+interface LegendSection {
+  readonly title: string;
+  readonly entries: ReadonlyArray<LegendEntry>;
+}
+
+/**
+ * Every representation the floor uses, grouped by WHERE you look for it.
+ * A key that documents only the newest additions is worse than none: the
+ * reader cannot tell which of the things they are looking at are in it.
+ */
+const SECTIONS: ReadonlyArray<LegendSection> = [
+  {
+    title: "People",
+    entries: [
+      { signal: "Typing", meaning: "working" },
+      { signal: "…", meaning: "waiting for a reply" },
+      { signal: "!", meaning: "needs you" },
+      { signal: "At reception", meaning: "queued for you" },
+      { signal: "By the coffee machine", meaning: "idle a while" },
+      { signal: "Ghosted", meaning: "archived" },
+    ],
+  },
+  {
+    title: "Desks",
+    entries: [
+      { signal: "Lit screen", meaning: "working" },
+      { signal: "Dim screen", meaning: "idle" },
+      { signal: "Cracked screen", meaning: "a turn failed" },
+      { signal: "Screen size", meaning: "model size" },
+      { signal: "Nameplate logo", meaning: "harness" },
+      { signal: "Envelope pile", meaning: "unanswered requests" },
+      { signal: "Dust sheet, boxes", meaning: "archived" },
+    ],
+  },
+  {
+    title: "Room",
+    entries: [
+      { signal: "Cabin", meaning: "one per root agent" },
+      { signal: "Glass partition", meaning: "a sub-team" },
+      { signal: "Floor", meaning: "one per host" },
+      { signal: "Wall clock", meaning: "the time being shown" },
+    ],
+  },
 ];
 
+/**
+ * The four envelope colours. A swatch rather than a colour name: the name
+ * would only be checkable against the floor by eye anyway, and these come from
+ * the same constants the renderer tints with.
+ */
 const ENVELOPE_ENTRIES: ReadonlyArray<{
   readonly tint: string;
   readonly meaning: string;
@@ -43,20 +85,33 @@ export function OfficeLegend() {
       {!open ? null : (
         <div
           className={cn(
-            "max-w-64 rounded-md border border-border bg-popover p-2",
+            "max-h-80 max-w-64 overflow-y-auto rounded-md border border-border",
+            "bg-popover p-2",
             "text-popover-foreground shadow-md",
           )}
           data-testid="comm-graph-office-legend-card"
         >
-          <ul className="flex flex-col gap-0.5 text-ui-xs">
-            {POSTURE_ENTRIES.map((entry) => (
-              <li key={entry.signal} className="flex items-baseline gap-1.5">
-                <span className="font-medium">{entry.signal}</span>
-                <span className="text-muted-foreground">{entry.meaning}</span>
-              </li>
-            ))}
-          </ul>
-          <ul className="mt-1.5 flex flex-col gap-0.5 border-t border-border pt-1.5 text-ui-xs">
+          {SECTIONS.map((section) => (
+            <div key={section.title} className="mb-1.5 last:mb-0">
+              <p className="text-ui-xs font-medium text-muted-foreground">
+                {section.title}
+              </p>
+              <ul className="flex flex-col gap-0.5 text-ui-xs">
+                {section.entries.map((entry) => (
+                  <li
+                    key={entry.signal}
+                    className="flex items-baseline gap-1.5"
+                  >
+                    <span className="font-medium">{entry.signal}</span>
+                    <span className="text-muted-foreground">
+                      {entry.meaning}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+          <ul className="flex flex-col gap-0.5 border-t border-border pt-1.5 text-ui-xs">
             {ENVELOPE_ENTRIES.map((entry) => (
               <li key={entry.meaning} className="flex items-center gap-1.5">
                 {/* The swatch IS the legend entry - naming the colour in words

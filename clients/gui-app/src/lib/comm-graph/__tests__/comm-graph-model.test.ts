@@ -331,6 +331,7 @@ describe("layoutCommGraphNodes", () => {
       parentId,
       harnessId: null,
       model: null,
+      archivedAt: null,
       archived: false,
       createdAt,
     };

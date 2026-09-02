@@ -47,6 +47,7 @@ export function useCommGraphAgents(): CommGraphAgents {
       harnessId: chat.settings?.harnessId ?? null,
       model: chat.settings?.model ?? null,
       archived: chat.archivedAt !== null,
+      archivedAt: chat.archivedAt,
       createdAt: chat.createdAt,
     }));
     const agentNodes = terminalAgents.map<CommGraphAgentNode>((agent) => ({
@@ -58,6 +59,7 @@ export function useCommGraphAgents(): CommGraphAgents {
       harnessId: agent.harnessId,
       model: agent.model,
       archived: agent.archivedAt !== null,
+      archivedAt: agent.archivedAt,
       createdAt: agent.createdAt,
     }));
     return [...chatNodes, ...agentNodes];

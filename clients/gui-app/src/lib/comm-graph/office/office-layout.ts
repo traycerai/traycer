@@ -8,6 +8,13 @@
  * the set is walked as families, so a lineage reads left to right along a row
  * and a creator sits at the head of the people it created.
  *
+ * HOSTS ARE FLOORS. The set is first split by `hostId`, and each group gets its
+ * own storey of the same building: its own wall ring, its own cabins, its own
+ * lobby, door, reception and clock. Storeys stack downward sharing one wall row
+ * between them, and `walkable` never joins two of them - messaging is
+ * host-local, so an agent has nowhere to walk to on another floor. A
+ * single-host epic therefore renders exactly the building it always did.
+ *
  * NESTING IS WALLS. Every root agent gets its own walled CABIN and its whole
  * subtree sits inside it, so "who is in whose room" is readable at a glance
  * rather than inferred from adjacency. A cabin has a `wall-top` cap, the wall
@@ -28,6 +35,7 @@
 import type {
   OfficeAgentInput,
   OfficeDesk,
+  OfficeFloor,
   OfficeLayout,
   OfficeProp,
   OfficeRoom,
@@ -76,10 +84,17 @@ const BUILDING_FIRST_CONTENT_ROW = 3;
 /** Aisle + wall to the right of the last cabin, as a count past its last index. */
 const BUILDING_RIGHT_MARGIN_TILES = 3;
 /**
- * Corridor + wall below the lowest band. The corridor is not decoration: a
- * cabin in the last band opens its door onto it, and the lobby stands there.
+ * Corridor + lobby + wall below the lowest band. The corridor is not
+ * decoration: a cabin in the last band opens its door onto it.
+ *
+ * The lobby gets a row of its OWN, below that corridor, because the reception
+ * counter stands on it - two tiles of furniture across the only walkable row
+ * at the bottom of the building would cut the floor in half, and every walk
+ * from a desk to reception would tour the whole storey to get around it.
  */
-const BUILDING_BOTTOM_MARGIN_TILES = 3;
+const BUILDING_BOTTOM_MARGIN_TILES = 4;
+/** The cap and the wall face under it, at the top of every storey. */
+const BUILDING_TOP_WALL_ROWS = 2;
 
 /** An epic with no agents still renders a room; the canvas is never blank. */
 const EMPTY_ROOM_COLS = 8;
@@ -87,6 +102,16 @@ const EMPTY_ROOM_ROWS = 6;
 const WINDOW_SPACING_TILES = 4;
 const DESK_WIDTH_TILES = 2;
 const PLANT_COL_OFFSET = 2;
+
+/** The counter is two tiles wide and keeps one clear tile beside the door. */
+const RECEPTION_WIDTH_TILES = 2;
+const RECEPTION_DOOR_GAP_TILES = 1;
+/** More than six waiting reads as a crowd, not a queue. */
+const MAX_RECEPTION_QUEUE_TILES = 6;
+/** The clock hangs on the wall face, clear of the two-tile whiteboard. */
+const CLOCK_COL_OFFSET = 2;
+/** The stairwell is two tiles square, in the lobby's right-hand corner. */
+const STAIRS_TILES = 2;
 
 interface Forest {
   /** Agents with no parent on this floor, in `(createdAt, id)` order. */
@@ -107,9 +132,20 @@ interface CabinPlan {
 }
 
 interface PlacedCabin extends CabinPlan {
-  /** Top-left tile of the cabin's outer wall. */
+  /** Top-left tile of the cabin's outer wall, in this storey's own rows. */
   readonly col: number;
   readonly row: number;
+}
+
+/** One host's storey, planned in its own rows before the stack is offset. */
+interface FloorBuild {
+  readonly hostId: string | null;
+  readonly forest: Forest;
+  readonly cabins: ReadonlyArray<PlacedCabin>;
+  readonly localCols: number;
+  readonly localRows: number;
+  /** Row this storey's `wall-top` cap lands on in the finished plan. */
+  readonly originRow: number;
 }
 
 function compareByCreation(
@@ -237,13 +273,111 @@ function placeCabins(
   return placed;
 }
 
-function blankWalkableGrid(cols: number, rows: number): boolean[][] {
+/**
+ * Agents split into storeys, one per host, in host-id order with the
+ * hostless group last.
+ *
+ * `null` is its OWN group rather than being folded into some arbitrary host:
+ * a record that predates host binding is not evidence that it lived on the
+ * alphabetically-first machine.
+ */
+function groupByHost(agents: ReadonlyArray<OfficeAgentInput>): ReadonlyArray<{
+  readonly hostId: string | null;
+  readonly agents: ReadonlyArray<OfficeAgentInput>;
+}> {
+  const byHost = new Map<string, OfficeAgentInput[]>();
+  const hostless: OfficeAgentInput[] = [];
+  for (const agent of agents) {
+    const hostId = agent.hostId;
+    if (hostId === null) {
+      hostless.push(agent);
+      continue;
+    }
+    const group = byHost.get(hostId);
+    if (group === undefined) byHost.set(hostId, [agent]);
+    else group.push(agent);
+  }
+  const groups: Array<{
+    readonly hostId: string | null;
+    readonly agents: ReadonlyArray<OfficeAgentInput>;
+  }> = [];
+  for (const hostId of Array.from(byHost.keys()).sort()) {
+    const group = byHost.get(hostId);
+    if (group === undefined) continue;
+    groups.push({ hostId, agents: group });
+  }
+  if (hostless.length > 0) groups.push({ hostId: null, agents: hostless });
+  return groups;
+}
+
+/** Plans every storey in its own rows, then stacks them sharing a wall row. */
+function buildFloors(
+  agents: ReadonlyArray<OfficeAgentInput>,
+): ReadonlyArray<FloorBuild> {
+  const groups = groupByHost(agents);
+  const shapes =
+    groups.length === 0
+      ? [{ hostId: null, agents: [] as ReadonlyArray<OfficeAgentInput> }]
+      : groups;
+  const builds: FloorBuild[] = [];
+  let originRow = 0;
+  for (const group of shapes) {
+    const forest = buildForest(group.agents);
+    const cabins = placeCabins(
+      cabinPlans(forest, group.agents),
+      group.agents.length,
+    );
+    let contentRight = 0;
+    let contentBottom = 0;
+    for (const cabin of cabins) {
+      contentRight = Math.max(contentRight, cabin.col + cabin.cols - 1);
+      contentBottom = Math.max(contentBottom, cabin.row + cabin.rows - 1);
+    }
+    const localCols =
+      cabins.length === 0
+        ? EMPTY_ROOM_COLS
+        : contentRight + BUILDING_RIGHT_MARGIN_TILES;
+    const localRows =
+      cabins.length === 0
+        ? EMPTY_ROOM_ROWS
+        : contentBottom + BUILDING_BOTTOM_MARGIN_TILES;
+    builds.push({
+      hostId: group.hostId,
+      forest,
+      cabins,
+      localCols,
+      localRows,
+      originRow,
+    });
+    // The storey below reuses this one's bottom wall as its own cap, so the
+    // two buildings read as one block rather than as a seam of dead rows.
+    originRow += localRows - 1;
+  }
+  return builds;
+}
+
+/**
+ * Walls everywhere a storey has one, and nowhere else. Two storeys meet on a
+ * SHARED row, which is a wall in both readings - that shared row plus the wall
+ * face under it is what makes `walkable` unable to join two floors.
+ */
+function blankWalkableGrid(
+  cols: number,
+  rows: number,
+  floors: ReadonlyArray<FloorBuild>,
+): boolean[][] {
+  const wallRows = new Set<number>();
+  for (const floor of floors) {
+    for (let offset = 0; offset < BUILDING_TOP_WALL_ROWS; offset += 1) {
+      wallRows.add(floor.originRow + offset);
+    }
+    wallRows.add(floor.originRow + floor.localRows - 1);
+  }
   const grid: boolean[][] = [];
   for (let row = 0; row < rows; row += 1) {
     const line: boolean[] = [];
     for (let col = 0; col < cols; col += 1) {
-      const isWall =
-        row <= 1 || row === rows - 1 || col === 0 || col === cols - 1;
+      const isWall = wallRows.has(row) || col === 0 || col === cols - 1;
       line.push(!isWall);
     }
     grid.push(line);
@@ -273,69 +407,127 @@ function blockCabinWalls(walkable: boolean[][], room: OfficeRoom): void {
   walkable[room.doorTile.row][room.doorTile.col] = true;
 }
 
+/**
+ * Standing room at the counter, nearest first.
+ *
+ * The BELL is at the counter's right end, so the queue forms on that side and
+ * only spreads left once the right has run out - somebody waiting for
+ * attention stands where the attention is.
+ *
+ * Only tiles that are actually walkable survive, so a floor whose cabins come
+ * down close to the lobby simply offers fewer places to wait rather than
+ * queueing people into a wall.
+ */
+function receptionQueueTiles(
+  walkable: ReadonlyArray<ReadonlyArray<boolean>>,
+  counter: OfficeTilePos,
+  doorTile: OfficeTilePos,
+  lobbyTile: OfficeTilePos,
+): ReadonlyArray<OfficeTilePos> {
+  const counterCol = counter.col;
+  const lobbyRow = counter.row;
+  const bellCol = counterCol + RECEPTION_WIDTH_TILES - 1;
+  const candidates: OfficeTilePos[] = [
+    { col: bellCol, row: lobbyRow - 1 },
+    { col: bellCol + 1, row: lobbyRow },
+    { col: bellCol + 1, row: lobbyRow - 1 },
+    { col: counterCol, row: lobbyRow - 1 },
+  ];
+  for (let spread = 2; spread <= MAX_RECEPTION_QUEUE_TILES; spread += 1) {
+    candidates.push({ col: bellCol + spread, row: lobbyRow });
+    candidates.push({ col: counterCol - (spread - 1), row: lobbyRow });
+    candidates.push({ col: bellCol + spread, row: lobbyRow - 1 });
+    candidates.push({ col: counterCol - (spread - 1), row: lobbyRow - 1 });
+  }
+  const tiles: OfficeTilePos[] = [];
+  for (const tile of candidates) {
+    if (tiles.length >= MAX_RECEPTION_QUEUE_TILES) break;
+    if (tile.row < 0 || tile.row >= walkable.length) continue;
+    if (tile.col < 0 || tile.col >= walkable[tile.row].length) continue;
+    if (!walkable[tile.row][tile.col]) continue;
+    if (tile.col === doorTile.col && tile.row === doorTile.row) continue;
+    if (tile.col === lobbyTile.col && tile.row === lobbyTile.row) continue;
+    if (
+      tiles.some((chosen) => chosen.col === tile.col && chosen.row === tile.row)
+    ) {
+      continue;
+    }
+    tiles.push(tile);
+  }
+  return tiles;
+}
+
+/**
+ * The stairwell's top-left tile, or `null` where this floor has no room for
+ * one. Blocks the two-by-two footprint as a side effect: a stairwell is not
+ * walkable, and it is what keeps `walkable` from joining two floors.
+ */
+function placeStairwell(args: {
+  readonly cols: number;
+  readonly lobbyRow: number;
+  readonly originRow: number;
+  readonly blockTile: (tile: OfficeTilePos) => void;
+}): OfficeTilePos | null {
+  const { blockTile, cols, lobbyRow, originRow } = args;
+  const col = cols - 1 - STAIRS_TILES;
+  const row = lobbyRow - (STAIRS_TILES - 1);
+  if (col <= 0 || row <= originRow + 1) return null;
+  for (let dCol = 0; dCol < STAIRS_TILES; dCol += 1) {
+    for (let dRow = 0; dRow < STAIRS_TILES; dRow += 1) {
+      blockTile({ col: col + dCol, row: row + dRow });
+    }
+  }
+  return { col, row };
+}
+
 export function layoutOffice(
   agents: ReadonlyArray<OfficeAgentInput>,
 ): OfficeLayout {
-  const forest = buildForest(agents);
-  const cabins = placeCabins(cabinPlans(forest, agents), agents.length);
-
-  let contentRight = 0;
-  let contentBottom = 0;
-  for (const cabin of cabins) {
-    contentRight = Math.max(contentRight, cabin.col + cabin.cols - 1);
-    contentBottom = Math.max(contentBottom, cabin.row + cabin.rows - 1);
-  }
-  const cols =
-    cabins.length === 0
-      ? EMPTY_ROOM_COLS
-      : contentRight + BUILDING_RIGHT_MARGIN_TILES;
-  const rows =
-    cabins.length === 0
-      ? EMPTY_ROOM_ROWS
-      : contentBottom + BUILDING_BOTTOM_MARGIN_TILES;
-
-  const doorTile: OfficeTilePos = {
-    col: Math.floor((cols - 1) / 2),
-    row: rows - 1,
-  };
-  const lobbyTile: OfficeTilePos = { col: doorTile.col, row: rows - 2 };
+  const builds = buildFloors(agents);
+  const last = builds[builds.length - 1];
+  let cols = 0;
+  for (const build of builds) cols = Math.max(cols, build.localCols);
+  const rows = last.originRow + last.localRows;
+  const doorCol = Math.floor((cols - 1) / 2);
 
   const desks = new Map<string, OfficeDesk>();
   const rooms: OfficeRoom[] = [];
-  for (const cabin of cabins) {
-    const firstSlotCol = cabin.col + CABIN_LEFT_WALL_COLS + CABIN_AISLE_COLS;
-    const firstSlotRow = cabin.row + CABIN_TOP_WALL_ROWS + CABIN_AISLE_ROWS;
-    cabin.members.forEach((member, index) => {
-      const col = firstSlotCol + (index % cabin.perRow) * SLOT_COLS;
-      const row = firstSlotRow + Math.floor(index / cabin.perRow) * SLOT_ROWS;
-      desks.set(member.id, {
-        agentId: member.id,
-        deskTile: { col, row },
-        chairTile: { col, row: row + 1 },
-        // The cabin's root heads its own room; nobody else in it manages.
-        manager: index === 0,
+  for (const build of builds) {
+    for (const cabin of build.cabins) {
+      const cabinRow = cabin.row + build.originRow;
+      const firstSlotCol = cabin.col + CABIN_LEFT_WALL_COLS + CABIN_AISLE_COLS;
+      const firstSlotRow = cabinRow + CABIN_TOP_WALL_ROWS + CABIN_AISLE_ROWS;
+      cabin.members.forEach((member, index) => {
+        const col = firstSlotCol + (index % cabin.perRow) * SLOT_COLS;
+        const row = firstSlotRow + Math.floor(index / cabin.perRow) * SLOT_ROWS;
+        desks.set(member.id, {
+          agentId: member.id,
+          deskTile: { col, row },
+          chairTile: { col, row: row + 1 },
+          // The cabin's root heads its own room; nobody else in it manages.
+          manager: index === 0,
+        });
       });
-    });
-    rooms.push({
-      rootAgentId: cabin.root.id,
-      name: cabin.root.name,
-      bounds: {
-        col: cabin.col,
-        row: cabin.row,
-        cols: cabin.cols,
-        rows: cabin.rows,
-      },
-      doorTile: {
-        col: cabin.col + Math.floor((cabin.cols - 1) / 2),
-        row: cabin.row + cabin.rows - 1,
-      },
-      signTile: { col: cabin.col + SIGN_COL_OFFSET, row: cabin.row + 1 },
-    });
+      rooms.push({
+        rootAgentId: cabin.root.id,
+        name: cabin.root.name,
+        bounds: {
+          col: cabin.col,
+          row: cabinRow,
+          cols: cabin.cols,
+          rows: cabin.rows,
+        },
+        doorTile: {
+          col: cabin.col + Math.floor((cabin.cols - 1) / 2),
+          row: cabinRow + cabin.rows - 1,
+        },
+        signTile: { col: cabin.col + SIGN_COL_OFFSET, row: cabinRow + 1 },
+      });
+    }
   }
 
-  const walkable = blankWalkableGrid(cols, rows);
+  const walkable = blankWalkableGrid(cols, rows, builds);
   for (const room of rooms) blockCabinWalls(walkable, room);
-  walkable[doorTile.row][doorTile.col] = true;
   for (const desk of desks.values()) {
     for (let offset = 0; offset < DESK_WIDTH_TILES; offset += 1) {
       walkable[desk.deskTile.row][desk.deskTile.col + offset] = false;
@@ -346,26 +538,102 @@ export function layoutOffice(
   }
 
   const props: OfficeProp[] = [];
+  const blockTile = (tile: OfficeTilePos): void => {
+    if (tile.row < 0 || tile.row >= rows) return;
+    if (tile.col < 0 || tile.col >= cols) return;
+    walkable[tile.row][tile.col] = false;
+  };
   const addBlockingProp = (prop: OfficeProp): void => {
     props.push(prop);
-    walkable[prop.tile.row][prop.tile.col] = false;
+    blockTile(prop.tile);
   };
-  // The building's own fittings hang on the OUTER wall, clear of every cabin.
-  addBlockingProp({
-    sprite: { name: "whiteboard" },
-    tile: { col: BUILDING_FIRST_CONTENT_COL, row: 1 },
-  });
-  for (
-    let col = BUILDING_FIRST_CONTENT_COL + WINDOW_SPACING_TILES;
-    col <= cols - 3;
-    col += WINDOW_SPACING_TILES
-  ) {
-    addBlockingProp({ sprite: { name: "window" }, tile: { col, row: 1 } });
+
+  const floors: OfficeFloor[] = [];
+  const multiFloor = builds.length > 1;
+  for (const build of builds) {
+    const wallFaceRow = build.originRow + 1;
+    const bottomRow = build.originRow + build.localRows - 1;
+    const doorTile: OfficeTilePos = { col: doorCol, row: bottomRow };
+    const lobbyTile: OfficeTilePos = { col: doorCol, row: bottomRow - 1 };
+    walkable[doorTile.row][doorTile.col] = true;
+
+    // The building's own fittings hang on the OUTER wall, clear of every cabin.
+    addBlockingProp({
+      sprite: { name: "whiteboard" },
+      tile: { col: BUILDING_FIRST_CONTENT_COL, row: wallFaceRow },
+    });
+    const clockTile: OfficeTilePos = {
+      col: BUILDING_FIRST_CONTENT_COL + CLOCK_COL_OFFSET,
+      row: wallFaceRow,
+    };
+    addBlockingProp({ sprite: { name: "clock" }, tile: clockTile });
+    for (
+      let col = BUILDING_FIRST_CONTENT_COL + WINDOW_SPACING_TILES;
+      col <= cols - 3;
+      col += WINDOW_SPACING_TILES
+    ) {
+      addBlockingProp({
+        sprite: { name: "window" },
+        tile: { col, row: wallFaceRow },
+      });
+    }
+    addBlockingProp({
+      sprite: { name: "coffee-machine" },
+      tile: { col: cols - 3, row: build.originRow + 2 },
+    });
+
+    // Reception stands on the lobby row, one clear tile short of the door so
+    // nobody has to squeeze past the counter to get out.
+    const counterCol = Math.max(
+      1,
+      doorCol - RECEPTION_DOOR_GAP_TILES - RECEPTION_WIDTH_TILES,
+    );
+    const receptionTile: OfficeTilePos = {
+      col: counterCol,
+      row: lobbyTile.row,
+    };
+    props.push({ sprite: { name: "reception" }, tile: receptionTile });
+    for (let offset = 0; offset < RECEPTION_WIDTH_TILES; offset += 1) {
+      blockTile({ col: counterCol + offset, row: lobbyTile.row });
+    }
+
+    // Decorative only: nobody walks between floors, so the stairwell is a
+    // reminder that the building has more than one - never a route. It is
+    // FLOOR rather than furniture, so it carries no prop entry: the scene
+    // paints it with the floor layer, from this top-left tile.
+    const stairsTile = multiFloor
+      ? placeStairwell({
+          cols,
+          lobbyRow: lobbyTile.row,
+          originRow: build.originRow,
+          blockTile,
+        })
+      : null;
+
+    floors.push({
+      hostId: build.hostId,
+      bounds: {
+        col: 0,
+        row: build.originRow,
+        cols,
+        rows: build.localRows,
+      },
+      doorTile,
+      lobbyTile,
+      receptionTile,
+      receptionQueueTiles: receptionQueueTiles(
+        walkable,
+        receptionTile,
+        doorTile,
+        lobbyTile,
+      ),
+      clockTile,
+      stairsTile,
+    });
+    // The rug is the one prop a character may stand on - it marks the lobby.
+    props.push({ sprite: { name: "rug" }, tile: lobbyTile });
   }
-  addBlockingProp({
-    sprite: { name: "coffee-machine" },
-    tile: { col: cols - 3, row: 2 },
-  });
+
   for (const desk of desks.values()) {
     if (!desk.manager) continue;
     addBlockingProp({
@@ -380,24 +648,36 @@ export function layoutOffice(
   // column to the LEFT of the pod head's desk - always either the previous
   // slot's spare column or the cabin's own aisle - and only where that tile is
   // still free, so a divider can never take a desk, a chair or a plant.
-  for (const cabin of cabins) {
-    cabin.members.forEach((member, index) => {
-      if (index === 0) return;
-      const children = forest.childrenByParent.get(member.id);
-      if (children === undefined) return;
-      if (children.length < SUB_CLUSTER_MIN_CHILDREN) return;
-      const desk = desks.get(member.id);
-      if (desk === undefined) return;
-      const tile: OfficeTilePos = {
-        col: desk.deskTile.col - 1,
-        row: desk.deskTile.row,
-      };
-      if (tile.col < 0 || !walkable[tile.row][tile.col]) return;
-      addBlockingProp({ sprite: { name: "partition" }, tile });
-    });
+  for (const build of builds) {
+    for (const cabin of build.cabins) {
+      cabin.members.forEach((member, index) => {
+        if (index === 0) return;
+        const children = build.forest.childrenByParent.get(member.id);
+        if (children === undefined) return;
+        if (children.length < SUB_CLUSTER_MIN_CHILDREN) return;
+        const desk = desks.get(member.id);
+        if (desk === undefined) return;
+        const tile: OfficeTilePos = {
+          col: desk.deskTile.col - 1,
+          row: desk.deskTile.row,
+        };
+        if (tile.col < 0 || !walkable[tile.row][tile.col]) return;
+        addBlockingProp({ sprite: { name: "partition" }, tile });
+      });
+    }
   }
-  // The rug is the one prop a character may stand on - it marks the lobby.
-  props.push({ sprite: { name: "rug" }, tile: lobbyTile });
 
-  return { cols, rows, desks, rooms, doorTile, lobbyTile, props, walkable };
+  return {
+    cols,
+    rows,
+    desks,
+    rooms,
+    floors,
+    // The FIRST storey's entrance is the building's, so everything that only
+    // knows about one door keeps working on a single-host epic.
+    doorTile: floors[0].doorTile,
+    lobbyTile: floors[0].lobbyTile,
+    props,
+    walkable,
+  };
 }

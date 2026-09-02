@@ -6,6 +6,13 @@ vi.mock("@/components/epic-canvas/tile-find/tile-find-adapter-context", () => ({
   useRegisterTileFindAdapter: registerFindAdapterMock,
 }));
 
+// The floor signs resolve host display names through the host directory, which
+// is a Query like every other host read - so this suite needs the provider and
+// an inert binding, the same pair the other comm-graph suites install.
+vi.mock("@/lib/host", () => ({
+  useHostBinding: () => null,
+}));
+
 vi.mock("@/providers/use-resolved-theme", () => ({
   useResolvedTheme: () => ({
     resolvedTheme: "light" as const,
@@ -29,7 +36,9 @@ import {
   render,
   screen,
 } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ReactNode } from "react";
 import { CommGraphOfficeCanvas } from "@/components/epic-canvas/comm-graph/office/comm-graph-office-canvas";
 import {
   commGraphPairId,
@@ -40,6 +49,7 @@ import type { CommGraphPulse } from "@/lib/comm-graph/comm-graph-timeline";
 import { layoutOffice } from "@/lib/comm-graph/office/office-layout";
 import { OfficeScene } from "@/lib/comm-graph/office/office-scene";
 import { agentAppearance } from "@/lib/comm-graph/office/office-appearance";
+import { officeModelTier } from "@/lib/comm-graph/office/office-model-tier";
 import type {
   OfficeAgentInput,
   OfficeRect,
@@ -65,6 +75,7 @@ function agent(id: string, name: string): CommGraphAgentNode {
     harnessId: null,
     model: null,
     archived: false,
+    archivedAt: null,
     createdAt: 1,
   };
 }
@@ -116,7 +127,19 @@ function officeElement(
 }
 
 function renderOffice(visibleIds: ReadonlySet<string>) {
-  return render(officeElement(visibleIds, STATIC_OFFICE));
+  return render(withQueryClient(officeElement(visibleIds, STATIC_OFFICE)));
+}
+
+function withQueryClient(children: ReactNode) {
+  return (
+    <QueryClientProvider
+      client={
+        new QueryClient({ defaultOptions: { queries: { retry: false } } })
+      }
+    >
+      {children}
+    </QueryClientProvider>
+  );
 }
 
 const PAIR_EDGE_ID = commGraphPairId(ORCHESTRATOR.id, REVIEWER.id);
@@ -157,6 +180,9 @@ function officeAgentInput(agent: CommGraphAgentNode): OfficeAgentInput {
     id: agent.id,
     name: agent.name,
     kind: agent.kind,
+    hostId: agent.hostId,
+    archivedAt: agent.archivedAt,
+    modelTier: officeModelTier(agent.model),
     harnessId: agent.harnessId,
     model: agent.model,
     parentId: agent.parentId,
@@ -186,6 +212,9 @@ function envelopeRect(visibleIds: ReadonlySet<string>): OfficeRect {
     pulse: null,
     pulseKey: null,
     stepMs: 700,
+    cursorMs: null,
+    clockMs: 0,
+    openRequestsByReceiver: new Map(),
     playing: false,
     reducedMotion: false,
   };
@@ -313,10 +342,10 @@ describe("CommGraphOfficeCanvas", () => {
 
   it("opens the pair thread when an envelope in flight is clicked", () => {
     const both = new Set([ORCHESTRATOR.id, REVIEWER.id]);
-    const view = render(officeElement(both, STATIC_OFFICE));
+    const view = render(withQueryClient(officeElement(both, STATIC_OFFICE)));
     // A first render with no pulse, then the row: the scene deliberately does
     // not replay the row its very first sync arrives on.
-    view.rerender(officeElement(both, IN_FLIGHT));
+    view.rerender(withQueryClient(officeElement(both, IN_FLIGHT)));
     const rect = envelopeRect(both);
     // The gestures live on the CANVAS, not on the wrapper - the wrapper is the
     // parent of the overlay controls, and taking pointer capture there stole

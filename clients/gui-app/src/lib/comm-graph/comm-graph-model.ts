@@ -56,6 +56,15 @@ export interface CommGraphAgentNode {
   readonly model: string | null;
   /** Archived agents are ALWAYS shown, styled muted - the graph is historical. */
   readonly archived: boolean;
+  /**
+   * WHEN the record was archived, or `null` while live.
+   *
+   * Carried alongside the boolean rather than replacing it: the graph asks
+   * "is this archived?" and the office asks "was it archived AS OF the
+   * cursor?", and a timeline that can be scrubbed back before the archival
+   * cannot answer the second from the first.
+   */
+  readonly archivedAt: number | null;
   readonly createdAt: number;
 }
 

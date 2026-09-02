@@ -58,6 +58,7 @@ const AGENT: CommGraphAgentNode = {
   harnessId: null,
   model: null,
   archived: false,
+  archivedAt: null,
   createdAt: 1,
 };
 

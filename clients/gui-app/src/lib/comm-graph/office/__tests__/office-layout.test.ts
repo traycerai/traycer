@@ -4,6 +4,7 @@ import { findOfficePath } from "@/lib/comm-graph/office/office-path";
 import type {
   OfficeAgentInput,
   OfficeAppearance,
+  OfficeFloor,
   OfficeLayout,
   OfficeRoom,
   OfficeTilePos,
@@ -25,6 +26,9 @@ function agent(
   return {
     name: overrides.id,
     kind: "chat",
+    hostId: null,
+    archivedAt: null,
+    modelTier: "medium",
     harnessId: null,
     model: null,
     parentId: null,
@@ -33,6 +37,15 @@ function agent(
     appearance: APPEARANCE,
     ...overrides,
   };
+}
+
+function floorOfRow(layout: OfficeLayout, row: number): OfficeFloor {
+  const found = layout.floors.find(
+    (floor) =>
+      row >= floor.bounds.row && row < floor.bounds.row + floor.bounds.rows,
+  );
+  if (found === undefined) throw new Error(`no floor at row ${row}`);
+  return found;
 }
 
 function deskColumns(layout: OfficeLayout): ReadonlyArray<string> {
@@ -283,16 +296,18 @@ describe("layoutOffice", () => {
     // A cabin nobody can reach is a cabin nobody can be seated in, so this is
     // the invariant the corridor row under the lowest band exists for.
     for (const room of layout.rooms) {
+      const floor = floorOfRow(layout, room.bounds.row);
       expect(
-        findOfficePath(layout, layout.lobbyTile, room.doorTile),
+        findOfficePath(layout, floor.lobbyTile, room.doorTile),
         `${room.rootAgentId} door unreachable`,
       ).not.toBeNull();
     }
     for (const person of agents) {
       const desk = layout.desks.get(person.id);
       if (desk === undefined) throw new Error(`no desk for ${person.id}`);
+      const floor = floorOfRow(layout, desk.deskTile.row);
       expect(
-        findOfficePath(layout, layout.doorTile, desk.chairTile),
+        findOfficePath(layout, floor.doorTile, desk.chairTile),
         `${person.id} chair unreachable`,
       ).not.toBeNull();
     }
@@ -423,5 +438,214 @@ describe("layoutOffice", () => {
 
     expect(layout.rooms).toHaveLength(1);
     expect(layout.rooms[0].name).toBe("Planner");
+  });
+});
+
+const SINGLE_HOST: ReadonlyArray<OfficeAgentInput> = [
+  agent({ id: "root-a", hostId: "host-a", createdAt: 1 }),
+  agent({ id: "child-a", hostId: "host-a", parentId: "root-a", createdAt: 2 }),
+];
+const TWO_HOSTS: ReadonlyArray<OfficeAgentInput> = [
+  ...SINGLE_HOST,
+  agent({ id: "root-b", hostId: "host-b", createdAt: 3 }),
+  agent({ id: "child-b", hostId: "host-b", parentId: "root-b", createdAt: 4 }),
+];
+
+describe("layoutOffice floors", () => {
+  it("gives a single-host epic exactly one floor and the building's own door", () => {
+    const layout = layoutOffice(SINGLE_HOST);
+
+    expect(layout.floors).toHaveLength(1);
+    expect(layout.floors[0].hostId).toBe("host-a");
+    expect(layout.floors[0].doorTile).toEqual(layout.doorTile);
+    expect(layout.floors[0].lobbyTile).toEqual(layout.lobbyTile);
+    // Nothing to climb to, so nothing to climb.
+    expect(layout.floors[0].stairsTile).toBeNull();
+  });
+
+  it("keeps a single host's geometry exactly where it always was", () => {
+    const hostless = layoutOffice([
+      agent({ id: "root-a", createdAt: 1 }),
+      agent({ id: "child-a", parentId: "root-a", createdAt: 2 }),
+    ]);
+    const hosted = layoutOffice(SINGLE_HOST);
+
+    // One group is one storey, whether or not that group happens to name a
+    // host: grouping must not move a desk.
+    expect(hosted.cols).toBe(hostless.cols);
+    expect(hosted.rows).toBe(hostless.rows);
+    expect(hosted.desks).toEqual(hostless.desks);
+    expect(hosted.doorTile).toEqual(hostless.doorTile);
+  });
+
+  it("stacks one floor per host, in host-id order with the hostless last", () => {
+    const layout = layoutOffice([
+      ...TWO_HOSTS,
+      agent({ id: "legacy", createdAt: 5 }),
+    ]);
+
+    expect(layout.floors.map((floor) => floor.hostId)).toEqual([
+      "host-a",
+      "host-b",
+      null,
+    ]);
+    // Each storey sits below the last, sharing exactly one wall row with it.
+    for (let index = 1; index < layout.floors.length; index += 1) {
+      const above = layout.floors[index - 1];
+      expect(layout.floors[index].bounds.row).toBe(
+        above.bounds.row + above.bounds.rows - 1,
+      );
+    }
+    // ...and the building is exactly as tall as the stack.
+    const last = layout.floors[layout.floors.length - 1];
+    expect(layout.rows).toBe(last.bounds.row + last.bounds.rows);
+    expect(layout.doorTile).toEqual(layout.floors[0].doorTile);
+  });
+
+  it("never lets a walk cross between two floors", () => {
+    const layout = layoutOffice(TWO_HOSTS);
+    expect(layout.floors).toHaveLength(2);
+
+    const deskA = layout.desks.get("root-a");
+    const deskB = layout.desks.get("root-b");
+    if (deskA === undefined || deskB === undefined) {
+      throw new Error("expected a desk on each floor");
+    }
+    // Messaging is host-local, so there is nothing to walk between - and a
+    // route that existed would let a character stroll out of its own epic
+    // half.
+    expect(findOfficePath(layout, deskA.chairTile, deskB.chairTile)).toBeNull();
+    expect(
+      findOfficePath(layout, layout.floors[0].lobbyTile, deskB.chairTile),
+    ).toBeNull();
+    expect(
+      findOfficePath(layout, layout.floors[1].lobbyTile, deskA.chairTile),
+    ).toBeNull();
+  });
+
+  it("routes each floor's own lobby to every cabin on that floor", () => {
+    const layout = layoutOffice(TWO_HOSTS);
+
+    for (const room of layout.rooms) {
+      const floor = floorOfRow(layout, room.bounds.row);
+      expect(
+        findOfficePath(layout, floor.lobbyTile, room.doorTile),
+        `${room.rootAgentId} door unreachable`,
+      ).not.toBeNull();
+    }
+    for (const desk of layout.desks.values()) {
+      const floor = floorOfRow(layout, desk.deskTile.row);
+      expect(
+        findOfficePath(layout, floor.doorTile, desk.chairTile),
+        `${desk.agentId} chair unreachable`,
+      ).not.toBeNull();
+    }
+  });
+
+  it("fits every floor with a reception, a queue, a clock and stairs", () => {
+    const layout = layoutOffice(TWO_HOSTS);
+
+    for (const floor of layout.floors) {
+      // The counter stands on the lobby row, left of the door and clear of it.
+      expect(floor.receptionTile.row).toBe(floor.lobbyTile.row);
+      expect(floor.receptionTile.col + 1).toBeLessThan(floor.doorTile.col);
+      expect(
+        layout.walkable[floor.receptionTile.row][floor.receptionTile.col],
+      ).toBe(false);
+      expect(
+        layout.walkable[floor.receptionTile.row][floor.receptionTile.col + 1],
+      ).toBe(false);
+
+      // The queue is somewhere a person can actually stand, and never in the
+      // doorway or on the lobby tile itself.
+      expect(floor.receptionQueueTiles.length).toBeGreaterThan(0);
+      expect(floor.receptionQueueTiles.length).toBeLessThanOrEqual(6);
+      for (const tile of floor.receptionQueueTiles) {
+        expect(
+          layout.walkable[tile.row][tile.col],
+          `${tile.col},${tile.row}`,
+        ).toBe(true);
+        expect(tile).not.toEqual(floor.doorTile);
+        expect(tile).not.toEqual(floor.lobbyTile);
+      }
+
+      // The clock hangs on this storey's own wall face, right of the
+      // whiteboard, and takes a tile nobody can stand on.
+      expect(floor.clockTile.row).toBe(floor.bounds.row + 1);
+      expect(floor.clockTile.col).toBeGreaterThan(2);
+      expect(layout.walkable[floor.clockTile.row][floor.clockTile.col]).toBe(
+        false,
+      );
+
+      const stairs = floor.stairsTile;
+      if (stairs === null)
+        throw new Error("expected stairs on a stacked floor");
+      // Two tiles square, decorative, and off-limits in every one of them.
+      for (let dCol = 0; dCol < 2; dCol += 1) {
+        for (let dRow = 0; dRow < 2; dRow += 1) {
+          expect(layout.walkable[stairs.row + dRow][stairs.col + dCol]).toBe(
+            false,
+          );
+        }
+      }
+    }
+    // One clock and one counter per storey, never a shared pair.
+    const clocks = layout.props.filter((prop) => prop.sprite.name === "clock");
+    const desks = layout.props.filter(
+      (prop) => prop.sprite.name === "reception",
+    );
+    expect(clocks).toHaveLength(layout.floors.length);
+    expect(desks).toHaveLength(layout.floors.length);
+    // The stairwell is FLOOR, not furniture: the scene paints it, so the plan
+    // carries no prop for it.
+    expect(layout.props.some((prop) => prop.sprite.name === "stairs")).toBe(
+      false,
+    );
+  });
+
+  it("queues on the bell's side of the counter first", () => {
+    const layout = layoutOffice(SINGLE_HOST);
+    const floor = layout.floors[0];
+
+    // The bell is at the counter's right end, so the nearest slot is the one
+    // beside it rather than the one at the far end.
+    const nearest = floor.receptionQueueTiles[0];
+    expect(nearest.col).toBeGreaterThanOrEqual(floor.receptionTile.col + 1);
+  });
+
+  it("splits a family across floors when its members live on two hosts", () => {
+    const layout = layoutOffice([
+      agent({ id: "root", hostId: "host-a", createdAt: 1 }),
+      agent({
+        id: "remote-child",
+        hostId: "host-b",
+        parentId: "root",
+        createdAt: 2,
+      }),
+    ]);
+
+    // A child on another machine cannot sit inside its creator's cabin, so it
+    // opens its own room on its own storey.
+    expect(layout.floors).toHaveLength(2);
+    expect(layout.rooms.map((room) => room.rootAgentId)).toEqual([
+      "root",
+      "remote-child",
+    ]);
+    const deskA = layout.desks.get("root");
+    const deskB = layout.desks.get("remote-child");
+    if (deskA === undefined || deskB === undefined) {
+      throw new Error("expected both desks");
+    }
+    expect(floorOfRow(layout, deskA.deskTile.row).hostId).toBe("host-a");
+    expect(floorOfRow(layout, deskB.deskTile.row).hostId).toBe("host-b");
+  });
+
+  it("is a pure function of the set on a stacked building too", () => {
+    const forward = layoutOffice(TWO_HOSTS);
+    const reversed = layoutOffice([...TWO_HOSTS].reverse());
+
+    expect(reversed.desks).toEqual(forward.desks);
+    expect(reversed.floors).toEqual(forward.floors);
+    expect(reversed.walkable).toEqual(forward.walkable);
   });
 });

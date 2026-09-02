@@ -22,6 +22,30 @@ export interface OfficeAgentStatusInput {
   readonly visibleAgentIds: ReadonlySet<string>;
   readonly activityTiers: ReadonlyMap<string, AgentActivityTier>;
   readonly attentionAgentIds: ReadonlySet<string>;
+  /** Agents carrying an unread failure notification. */
+  readonly failureAgentIds: ReadonlySet<string>;
+}
+
+/**
+ * How many unanswered requests are sitting on each RECEIVER's desk, which is
+ * the pile of envelopes the office draws there.
+ *
+ * The mirror image of `awaitingSenderIds`: the same open-request set read from
+ * the other end. Only receivers on the floor are counted - a pile belongs to a
+ * desk, and an id this epic does not project has none.
+ */
+export function officeOpenRequestCounts(
+  events: ReadonlyArray<CommGraphEvent>,
+  visibleAgentIds: ReadonlySet<string>,
+): ReadonlyMap<string, number> {
+  const counts = new Map<string, number>();
+  for (const request of openCommGraphRequests(events)) {
+    const receiver = request.receiverAgentId;
+    if (receiver === null) continue;
+    if (!visibleAgentIds.has(receiver)) continue;
+    counts.set(receiver, (counts.get(receiver) ?? 0) + 1);
+  }
+  return counts;
 }
 
 /**
@@ -45,26 +69,37 @@ function awaitingSenderIds(
   return awaiting;
 }
 
+/** Everything `statusFor` folds, as one argument - the lint caps parameters. */
+interface OfficeStatusSources {
+  readonly awaiting: ReadonlySet<string>;
+  readonly activityTiers: ReadonlyMap<string, AgentActivityTier>;
+  readonly attentionAgentIds: ReadonlySet<string>;
+  readonly failureAgentIds: ReadonlySet<string>;
+}
+
 /**
- * Precedence, highest first: `attention`, `awaiting`, `working`, `archived`,
- * `background`, `idle`.
+ * Precedence, highest first: `failure`, `attention`, `awaiting`, `working`,
+ * `archived`, `background`, `idle`.
+ *
+ * `failure` tops the list because it is the one reading that says the agent
+ * cannot continue on its own. Everything below it describes work in some state
+ * of progress; a crashed screen says there is none.
  *
  * `archived` sits in the MIDDLE rather than at the bottom on purpose. It
  * outranks `background` and `idle` because a ghosted desk is the more
- * informative reading of a quiet archived agent. It loses to the three above it
+ * informative reading of a quiet archived agent. It loses to the ones above it
  * because those describe the record actually saying something is happening -
  * an archived agent should not be mid-turn, but if the data says it is, the
  * floor shows what the data says instead of hiding it behind the archive flag.
  */
 function statusFor(
   agent: { readonly id: string; readonly archived: boolean },
-  awaiting: ReadonlySet<string>,
-  activityTiers: ReadonlyMap<string, AgentActivityTier>,
-  attentionAgentIds: ReadonlySet<string>,
+  sources: OfficeStatusSources,
 ): OfficeAgentStatus {
-  if (attentionAgentIds.has(agent.id)) return "attention";
-  if (awaiting.has(agent.id)) return "awaiting";
-  const tier = activityTiers.get(agent.id);
+  if (sources.failureAgentIds.has(agent.id)) return "failure";
+  if (sources.attentionAgentIds.has(agent.id)) return "attention";
+  if (sources.awaiting.has(agent.id)) return "awaiting";
+  const tier = sources.activityTiers.get(agent.id);
   if (tier === "turn") return "working";
   if (agent.archived) return "archived";
   if (tier === "background") return "background";
@@ -75,14 +110,16 @@ function statusFor(
 export function officeAgentStatuses(
   args: OfficeAgentStatusInput,
 ): ReadonlyMap<string, OfficeAgentStatus> {
-  const awaiting = awaitingSenderIds(args.events, args.visibleAgentIds);
+  const sources: OfficeStatusSources = {
+    awaiting: awaitingSenderIds(args.events, args.visibleAgentIds),
+    activityTiers: args.activityTiers,
+    attentionAgentIds: args.attentionAgentIds,
+    failureAgentIds: args.failureAgentIds,
+  };
   const statuses = new Map<string, OfficeAgentStatus>();
   for (const agent of args.agents) {
     if (!args.visibleAgentIds.has(agent.id)) continue;
-    statuses.set(
-      agent.id,
-      statusFor(agent, awaiting, args.activityTiers, args.attentionAgentIds),
-    );
+    statuses.set(agent.id, statusFor(agent, sources));
   }
   return statuses;
 }

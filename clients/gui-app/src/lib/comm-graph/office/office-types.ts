@@ -74,6 +74,29 @@ export type OfficeSpriteName =
   | "partition"
   /** Wall-mounted sign, two tiles wide; the cabin's name is drawn over it as a label. */
   | "sign"
+  /** Laptop-sized screen for a small model tier; lit and dark variants. */
+  | "monitor-small-on"
+  | "monitor-small-off"
+  /** Dual wide screens for a large model tier; `-b` is the second lit frame. */
+  | "monitor-wide-on"
+  | "monitor-wide-on-b"
+  | "monitor-wide-off"
+  /** A crashed screen: red with a sad face. Drawn at the tier's monitor size by the renderer scaling nothing - one 16×12 map, used for every tier. */
+  | "monitor-crash"
+  /** Unanswered requests piling on the receiver's desk; three heights. */
+  | "envelope-stack-1"
+  | "envelope-stack-2"
+  | "envelope-stack-3"
+  /** Wall clock face without hands; the renderer draws the hands from a `clock` drawable. */
+  | "clock"
+  /** Dust sheet over an archived agent's desk, desk-sized. */
+  | "dust-sheet"
+  /** Moving box beside an archived desk. */
+  | "box"
+  /** Reception counter in the lobby, two tiles wide. */
+  | "reception"
+  /** Stairwell between floors, two tiles square. */
+  | "stairs"
   | "chair"
   | "plant"
   | "floor-a"
@@ -169,6 +192,32 @@ export interface OfficeRoom {
 }
 
 /**
+ * One building floor per host. A single-host epic has exactly one floor and
+ * draws no stairwell or floor sign; several hosts stack floors vertically,
+ * each with its own lobby, door and reception. Agents never cross floors:
+ * messaging is host-local, so there is nothing to walk between.
+ */
+export interface OfficeFloor {
+  /** `null` groups agents whose record predates host binding. */
+  readonly hostId: string | null;
+  /** Shown on the floor sign; the renderer resolves a host name, the layout only carries the id. */
+  readonly bounds: OfficeTileRect;
+  readonly doorTile: OfficeTilePos;
+  readonly lobbyTile: OfficeTilePos;
+  /** Left tile of the two-tile reception counter in this floor's lobby. */
+  readonly receptionTile: OfficeTilePos;
+  /**
+   * Standing spots in front of reception, nearest first. Agents that need a
+   * person queue here in arrival order.
+   */
+  readonly receptionQueueTiles: ReadonlyArray<OfficeTilePos>;
+  /** Wall tile carrying this floor's clock. */
+  readonly clockTile: OfficeTilePos;
+  /** Top-left of the two-by-two stairwell, or `null` on a single-floor building. */
+  readonly stairsTile: OfficeTilePos | null;
+}
+
+/**
  * The floor plan for one epic. Pure function of the agent set, recomputed when
  * the set changes and never persisted: a desk is a function of who exists, not
  * a stored coordinate.
@@ -180,6 +229,8 @@ export interface OfficeLayout {
   readonly desks: ReadonlyMap<string, OfficeDesk>;
   /** One cabin per root agent, in layout order. Empty when there are no agents. */
   readonly rooms: ReadonlyArray<OfficeRoom>;
+  /** One per host, in host-id order; never empty (an empty epic has one floor). */
+  readonly floors: ReadonlyArray<OfficeFloor>;
   /** The building entrance: where characters enter and leave. Always a walkable tile on the outer wall. */
   readonly doorTile: OfficeTilePos;
   /** Where a character stands after walking in, before its desk exists. */
@@ -192,10 +243,21 @@ export interface OfficeLayout {
 
 // ---- Scene inputs --------------------------------------------------- //
 
+/**
+ * Coarse size class of the agent's model, derived client-side from the model
+ * name. Decides the desk's screen: laptop, single monitor, or dual wide.
+ */
+export type OfficeModelTier = "small" | "medium" | "large";
+
 export interface OfficeAgentInput {
   readonly id: string;
   readonly name: string;
   readonly kind: CommGraphAgentKind;
+  /** Host the agent lives on; `null` for a record that predates host binding. Floors group by it. */
+  readonly hostId: string | null;
+  /** When the record was archived, or `null` while live. Compared against the time cursor. */
+  readonly archivedAt: number | null;
+  readonly modelTier: OfficeModelTier;
   /** The harness running this agent; `null` for a record that carries none. */
   readonly harnessId: GuiHarnessId | null;
   /** The model slug, when the record carries one. Shown on hover, never on the floor. */
@@ -209,7 +271,8 @@ export interface OfficeAgentInput {
 /**
  * What the character is doing, in precedence order (highest first):
  *
- * - `attention` - a person is needed (failure / interview / approval pending).
+ * - `failure` - an unread failure notification; the screen has crashed.
+ * - `attention` - a person is needed (interview / approval pending).
  * - `awaiting` - sent an `expectReply` request that has no reply yet.
  * - `working` - in an active turn.
  * - `archived` - archived record; seated but ghosted, monitor off. Outranks
@@ -219,6 +282,7 @@ export interface OfficeAgentInput {
  * - `idle` - seated, nothing to do.
  */
 export type OfficeAgentStatus =
+  | "failure"
   | "attention"
   | "awaiting"
   | "working"
@@ -241,6 +305,19 @@ export interface OfficeSceneInput {
   readonly pulseKey: string | null;
   /** Milliseconds one playback step lasts at the current speed; envelopes fit inside it. */
   readonly stepMs: number;
+  /**
+   * The cursor row's capture time, or `null` while live. Decides which agents
+   * count as archived AS OF the floor being shown; live compares against now.
+   */
+  readonly cursorMs: number | null;
+  /** What the wall clock shows: the cursor time during replay, local time while live. */
+  readonly clockMs: number;
+  /**
+   * Unanswered `expectReply` requests per RECEIVER, as of the cursor. Drawn as
+   * an envelope pile on that agent's desk. Derived from the same event array
+   * the graph reads; absent agents count as zero.
+   */
+  readonly openRequestsByReceiver: ReadonlyMap<string, number>;
   readonly playing: boolean;
   /** `prefers-reduced-motion`: no walking, no flight; state changes apply instantly. */
   readonly reducedMotion: boolean;
@@ -265,6 +342,13 @@ export type OfficeDrawable =
       readonly y: number;
       /** `bright` is for text over a surface that is dark in both themes, such as a wall sign. */
       readonly tone: "default" | "muted" | "bright";
+    }
+  | {
+      /** Hands over a `clock` face sprite. CENTER anchored on the face. */
+      readonly kind: "clock";
+      readonly x: number;
+      readonly y: number;
+      readonly timeMs: number;
     }
   | {
       readonly kind: "envelope";
