@@ -155,4 +155,31 @@ describe("desktop host key pins", () => {
       "host-2": "pk-2",
     });
   });
+
+  it("R3-10: two concurrent first-sight pins for the SAME host pin exactly one key and refuse the other", async () => {
+    // RULE: the enrolment race this pin exists to make one-shot must not be
+    // winnable twice. Before the fix both reads saw an unpinned host and the
+    // later `pin` overwrote the earlier key, so a raced impostor was trusted.
+    const surfaced: HostKeyPinMismatch[] = [];
+    setHostKeyPinMismatchEmitter((entry) => surfaced.push(entry));
+    let releaseLoad: () => void = () => undefined;
+    storeState.loadGate = new Promise<void>((resolve) => {
+      releaseLoad = resolve;
+    });
+
+    const first = applyHostKeyPins([item("pk-REAL")]);
+    const second = applyHostKeyPins([item("pk-IMPOSTER")]);
+    releaseLoad();
+    const admitted = (await Promise.all([first, second])).flat();
+
+    expect(admitted).toHaveLength(1);
+    const winner = admitted[0];
+    if (winner === undefined) throw new Error("expected one admitted host");
+    expect(storeState.payload.pins).toEqual({ "host-1": winner.publicKey });
+    expect(surfaced).toHaveLength(1);
+    const refusal = surfaced[0];
+    if (refusal === undefined) throw new Error("expected one refusal");
+    expect(refusal.pinnedKey).toBe(winner.publicKey);
+    expect(refusal.offeredKey).not.toBe(winner.publicKey);
+  });
 });

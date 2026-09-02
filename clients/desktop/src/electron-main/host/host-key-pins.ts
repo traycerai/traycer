@@ -75,6 +75,14 @@ export function installDesktopHostKeyPins(): void {
     },
     async pin(hostId, publicKey) {
       const current = await loaded();
+      // The whole read-and-first-write is SYNCHRONOUS from here to the
+      // `saveStrict` below, which is what makes first sight atomic: the map is
+      // the source of truth, every concurrent pin awaits the same memoised
+      // load, and the loser therefore resumes after the winner has already
+      // written its key into the map. Answering with the incumbent rather than
+      // overwriting it is what turns the enrolment race into a refusal.
+      const incumbent = current[hostId];
+      if (incumbent !== undefined) return incumbent;
       // Mutated BEFORE the write and rolled back after a failed one, rather
       // than snapshotted: the map is shared by every in-flight pin, and a
       // snapshot taken here would drop a concurrent first-sight pin that
@@ -97,6 +105,7 @@ export function installDesktopHostKeyPins(): void {
       log.info("[host-key-pin] pinned a host's static key on first sight", {
         hostId,
       });
+      return publicKey;
     },
     describeLocation() {
       return filePath;

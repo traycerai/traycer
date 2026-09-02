@@ -41,8 +41,12 @@ function memoryStore(seed: Record<string, string>): {
     store: {
       read: (hostId) => Promise.resolve(pins[hostId] ?? null),
       pin: (hostId, publicKey) => {
+        // First sight only, and answers with whoever holds the pin now - the
+        // contract `applyHostKeyPins` refuses a race loser on.
+        const incumbent = pins[hostId];
+        if (incumbent !== undefined) return Promise.resolve(incumbent);
         pins[hostId] = publicKey;
-        return Promise.resolve();
+        return Promise.resolve(publicKey);
       },
       describeLocation: () => PIN_LOCATION,
     },
@@ -150,6 +154,39 @@ describe("host Noise static key TOFU pin", () => {
     expect(admitted.map((host) => host.hostId)).toEqual(["host-1"]);
     expect(writeFailures).toEqual([{ hostId: "host-1", cause: rejection }]);
     expect(mismatches).toEqual([]);
+  });
+
+  it("R3-10: one of two concurrent first-sight pins for the same host wins and the other is refused, not reported as a write failure", async () => {
+    // RULE: first sight is atomic per host. Both calls read an unpinned host,
+    // so the decision cannot live between `read` and `pin` - it has to be the
+    // store's own read-and-first-write, and the loser is a MISMATCH (a key
+    // disagrees with what is pinned) rather than a write failure (nothing is
+    // pinned, so nothing disagrees, and the host is admitted).
+    const mismatches: HostKeyPinMismatchError[] = [];
+    const writeFailures: string[] = [];
+    const { store, pins } = memoryStore({});
+    installHostKeyPinStore({
+      store,
+      onMismatch: (error) => mismatches.push(error),
+      onPinWriteFailed: (hostId) => writeFailures.push(hostId),
+    });
+
+    const [first, second] = await Promise.all([
+      applyHostKeyPins([item("host-1", "pk-REAL")]),
+      applyHostKeyPins([item("host-1", "pk-IMPOSTER")]),
+    ]);
+
+    const admitted = [...first, ...second];
+    expect(admitted).toHaveLength(1);
+    const winner = admitted[0];
+    if (winner === undefined) throw new Error("expected one admitted host");
+    expect(pins["host-1"]).toBe(winner.publicKey);
+    expect(mismatches).toHaveLength(1);
+    const refusal = mismatches[0];
+    if (refusal === undefined) throw new Error("expected one refusal");
+    expect(refusal.pinnedKey).toBe(winner.publicKey);
+    expect(refusal.offeredKey).not.toBe(winner.publicKey);
+    expect(writeFailures).toEqual([]);
   });
 
   it("drops a key-changed host from the registry read itself", async () => {

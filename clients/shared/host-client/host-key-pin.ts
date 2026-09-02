@@ -28,8 +28,20 @@ import type { HostListItem } from "@traycer/protocol/host/host-status";
 export interface HostKeyPinStore {
   /** The key pinned for `hostId`, or `null` when this host has never been seen. */
   read(hostId: string): Promise<string | null>;
-  /** Records `publicKey` as `hostId`'s pin. First sight only. */
-  pin(hostId: string, publicKey: string): Promise<void>;
+  /**
+   * Records `publicKey` as `hostId`'s pin on FIRST SIGHT, and answers with the
+   * key that is pinned once it returns - which is `publicKey` only when this
+   * call is the one that established it.
+   *
+   * Read-and-first-write in one store operation, rather than a `read` here and
+   * a `pin` there, because two registry reads run concurrently (the renderer's
+   * directory poll and main's own jar-stream resolve). Split in two, both see
+   * an unpinned host and both write, and the second key silently replaces the
+   * first - which is precisely the enrolment race this pin exists to make
+   * one-shot. A store that loses the race returns the winner's key and the
+   * caller refuses the host.
+   */
+  pin(hostId: string, publicKey: string): Promise<string>;
   /**
    * Where the pins live, for the recovery instruction. There is no UI for
    * un-pinning a host and this deliberately does not invent one: a key change
@@ -134,10 +146,28 @@ export async function applyHostKeyPins(
       // and failed the whole host list rather than one pin. Admitting is also
       // the right answer on its own terms: nothing is pinned, so nothing
       // disagrees, and the pin is retried on the next read.
+      let effective: string;
       try {
-        await pinning.store.pin(host.hostId, host.publicKey);
+        effective = await pinning.store.pin(host.hostId, host.publicKey);
       } catch (cause) {
         pinning.onPinWriteFailed(host.hostId, cause);
+        admitted.push(host);
+        continue;
+      }
+      if (effective !== host.publicKey) {
+        // Another first-sight pin for this same host won the race and pinned a
+        // DIFFERENT key. That is a mismatch, not a write failure: a write
+        // failure admits (nothing is pinned, so nothing disagrees) and this
+        // host does disagree with what is now pinned.
+        pinning.onMismatch(
+          new HostKeyPinMismatchError({
+            hostId: host.hostId,
+            pinnedKey: effective,
+            offeredKey: host.publicKey,
+            pinLocation: pinning.store.describeLocation(),
+          }),
+        );
+        continue;
       }
       admitted.push(host);
       continue;
