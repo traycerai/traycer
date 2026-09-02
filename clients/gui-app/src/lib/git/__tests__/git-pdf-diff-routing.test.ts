@@ -23,12 +23,29 @@ describe("gitRoutesToPdfDiffCards", () => {
     expect(gitRoutesToPdfDiffCards(file({}))).toBe(true);
   });
 
-  it("routes when only the previous path is a PDF (rename away from PDF)", () => {
+  it("routes when only the previous path is a PDF and the new side is binary", () => {
+    // `old.pdf -> new.bin`: nothing to read on either side, so the cards'
+    // old-side preview beats the binary placeholder.
     expect(
       gitRoutesToPdfDiffCards(
         file({ path: "docs/report.bin", previousPath: "docs/report.pdf" }),
       ),
     ).toBe(true);
+  });
+
+  it("keeps the text diff when a PDF was renamed into a readable file", () => {
+    // `old.pdf -> new.txt` with `isBinary: false` has a real source diff on
+    // the surviving side; a summary card about a file that is no longer a PDF
+    // would discard it.
+    expect(
+      gitRoutesToPdfDiffCards(
+        file({
+          path: "docs/report.txt",
+          previousPath: "docs/report.pdf",
+          isBinary: false,
+        }),
+      ),
+    ).toBe(false);
   });
 
   it("routes a conflicted PDF even when isBinary was left false (numstat gap)", () => {
