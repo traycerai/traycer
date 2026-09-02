@@ -12,10 +12,17 @@ import {
   CURRENT_PHASE_VERSION,
 } from "@traycer-clients/shared/epic/epic-version";
 import type { HostRpcRegistry } from "@/lib/host";
+import { readNegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
 import { queryKeys } from "@/lib/query-keys";
 import { getCloudEpicTasksClient } from "@/lib/cloud-epic-tasks-query/client-registry";
+import { negotiatedListTasksServesLocalFirst } from "@/lib/cloud-epic-tasks-query/local-first-admission";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
 import { beginLocalFirstRevalidationEpisode } from "@/lib/cloud-epic-tasks-query/local-first-revalidation-coordinator";
 import { CloudEpicTasksRequestContextTimeoutError } from "@/lib/cloud-epic-tasks-query/request-context-timeout-error";
+import { CloudEpicTasksVerdictWithdrawnError } from "@/lib/cloud-epic-tasks-query/verdict-withdrawn-error";
 import { admitCloudEpicTasksFirstPage } from "@/lib/cloud-epic-tasks-query/cache";
 import type { HistorySearchState } from "@/lib/history-search";
 import { dedupSortWorkspaces } from "@/components/home/data/home-page.data";
@@ -369,6 +376,9 @@ function dispatchScopedPageWithCurrentRequestContext(
       ),
     );
   }
+  if (!cloudLegAdmittedAtDispatch(client, options)) {
+    return Promise.reject(new CloudEpicTasksVerdictWithdrawnError());
+  }
   const request = buildListTasksRequest(options.request, options.cursor);
   if (options.localFirstPhase === undefined) {
     return client.requestWithSignal(
@@ -395,6 +405,34 @@ function hasMatchingRequestContext(
   expectedUserId: string,
 ): boolean {
   return client.getRequestContextUserId() === expectedUserId;
+}
+
+/**
+ * The verdict half of the admission, re-read at the POST-WAIT dispatch
+ * boundary rather than trusted from the render that started the fetch.
+ *
+ * `wait` may resume after an arbitrary interval: a signed-in first page
+ * waiting out a reconnect for its host client's request context can see the
+ * session demoted to `unverified` before the same-user context arrives, and
+ * the request-context check above is about the USER, not the verdict. On a
+ * pre-`epic.listTasks@1.6` host the local-first directive is stripped and
+ * the continuation is the ordinary cloud-backed list call - so without this
+ * the render and manual-refetch gates were bypassed by the one path that
+ * waits. Same shape as those gates: the live verdict admits everything; an
+ * initial leg is still admitted when the live negotiated version says the
+ * host serves it local-first; a cursor page (no directive) needs the verdict.
+ */
+function cloudLegAdmittedAtDispatch(
+  client: HostClient<HostRpcRegistry>,
+  options: FetchCloudEpicTasksScopedPageOptions,
+): boolean {
+  if (authorizesCloudCapability(useAuthStore.getState().status)) return true;
+  if (options.localFirstPhase === undefined) return false;
+  const hostId = client.getActiveHostId();
+  if (hostId === null) return false;
+  return negotiatedListTasksServesLocalFirst(
+    readNegotiatedMethodVersion(hostId, "epic.listTasks"),
+  );
 }
 
 function createAbortError(): Error {

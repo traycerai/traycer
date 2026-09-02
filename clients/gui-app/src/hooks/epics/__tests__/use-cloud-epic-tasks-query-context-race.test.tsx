@@ -6,7 +6,10 @@ import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 // without this every rendered hook survives into the next case, still
 // subscribed to the auth store and the mocked client - and every assertion
 // below counts calls on those shared mocks.
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  resetNegotiatedManifests();
+});
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type {
   ListTaskLight,
@@ -24,6 +27,11 @@ import {
   useCloudEpicTasksPagesStore,
 } from "@/stores/epics/cloud-epic-tasks-pages-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { CloudEpicTasksVerdictWithdrawnError } from "@/lib/cloud-epic-tasks-query/verdict-withdrawn-error";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 
 const HOST_ID = "host-test";
 const USER_A = "user-a";
@@ -332,6 +340,87 @@ describe("useCloudEpicTasksQuery request-context race", () => {
     expect(result.current.tasks.map((entry) => entry.epic?.light?.id)).toEqual([
       "a-first-epic",
     ]);
+  });
+
+  it("re-reads the cloud verdict when a request-context wait resumes, not only when it began", async () => {
+    // A signed-in first page waits for its host client's request context
+    // during a reconnect; the session is demoted to `unverified` before the
+    // same-user context arrives. The render-time hook mock above says the
+    // host serves the initial leg local-first (1.6), but the DISPATCH-time
+    // gate reads the live registry, which here says 1.5 - so the resumed
+    // continuation would be the ordinary cloud-backed list call on the
+    // retained bearer, and must be refused.
+    resetNegotiatedManifests();
+    recordNegotiatedHostManifest(HOST_ID, {
+      "epic.listTasks": { major: 1, minor: 5 },
+    });
+    fixture.request.mockResolvedValue({ tasks: [], hasMore: false });
+
+    // The control first: the same wait, resumed while the verdict still
+    // holds, dispatches - so the refusal below is the demotion's doing.
+    fixture.requestContextUserId = USER_B;
+    const control = renderHook(
+      () => useCloudEpicTasksQuery(LIST_CLOUD_TASKS_REQUEST, { enabled: true }),
+      { wrapper: makeWrapper(createAppQueryClient()) },
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(fixture.onChange).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      fixture.requestContextUserId = USER_A;
+      for (const listener of fixture.requestContextListeners) listener();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(fixture.request).toHaveBeenCalledTimes(1);
+    control.unmount();
+    fixture.onChange.mockClear();
+    fixture.requestContextListeners.clear();
+
+    fixture.requestContextUserId = USER_B;
+    const queryClient = createAppQueryClient();
+    renderHook(
+      () => useCloudEpicTasksQuery(LIST_CLOUD_TASKS_REQUEST, { enabled: true }),
+      { wrapper: makeWrapper(queryClient) },
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(fixture.onChange).toHaveBeenCalledTimes(1);
+
+    // Demoted while waiting; then the same-user context arrives.
+    act(() => {
+      useAuthStore.setState({
+        status: "unverified",
+        profile: {
+          userId: USER_A,
+          userName: "User A",
+          email: "a@example.com",
+        },
+        contextMetadata: { userId: USER_A, username: "user-a" },
+        shareableTeams: [],
+        subscriptionStatus: null,
+      });
+    });
+    await act(async () => {
+      fixture.requestContextUserId = USER_A;
+      for (const listener of fixture.requestContextListeners) listener();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(fixture.request).toHaveBeenCalledTimes(1);
+    // The refusal is TERMINAL for the production client (no retry that would
+    // re-ask and be refused again), so the query settles on it rather than
+    // sitting in a retry delay with no error yet.
+    await waitFor(() => {
+      expect(
+        queryClient.getQueryState(
+          cloudEpicTasksQueryKey(HOST_ID, USER_A, LIST_CLOUD_TASKS_REQUEST),
+        )?.error,
+      ).toBeInstanceOf(CloudEpicTasksVerdictWithdrawnError);
+    });
+    expect(fixture.request).toHaveBeenCalledTimes(1);
   });
 
   it("bounds an initial request-context wait at the discovery deadline", async () => {

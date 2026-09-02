@@ -21,10 +21,8 @@ import {
   type AuthStatus,
 } from "@/stores/auth/auth-store";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
-import {
-  readNegotiatedMethodVersion,
-  useHostNegotiatedMethodVersion,
-} from "@/hooks/host/use-host-negotiated-method-version";
+import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
+import { readNegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
 import { negotiatedListTasksServesLocalFirst } from "@/lib/cloud-epic-tasks-query/local-first-admission";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import {

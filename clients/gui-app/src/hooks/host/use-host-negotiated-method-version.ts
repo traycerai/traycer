@@ -1,44 +1,16 @@
 import { useCallback, useRef, useSyncExternalStore } from "react";
-import type { SchemaVersion } from "@traycer/protocol/framework/index";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import {
-  getNegotiatedHostMethodVersion,
-  getNegotiatedHostMethods,
-  subscribeNegotiatedManifests,
-} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { subscribeNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { HostRpcRegistry } from "@/lib/host";
+import {
+  readNegotiatedMethodVersion,
+  type NegotiatedMethodVersion,
+} from "@/lib/host/read-negotiated-method-version";
 
-/**
- * The three states a negotiated-version read can be in, for ONE host.
- *
- * - `null` - no client/bound host, no handshake has completed yet, or the
- *   method is present but its canonical version was not recorded. Nothing is
- *   known about whether the method meets a version gate.
- * - `false` - the host completed a handshake and did not advertise the method.
- * - a `{ major, minor }` version - the host advertised it at that version.
- */
-export type NegotiatedMethodVersion = SchemaVersion | false | null;
-
-/**
- * The registry read, in the three states above. The registry's own version
- * getter returns `null` for both "unknown" and "absent"; composing it with the
- * stable method set separates known absence. A name-only legacy record leaves
- * a present method's version unknown, which remains `null`, and every consumer
- * here shares this one composition rather than re-deriving it.
- *
- * Exported for DISPATCH-time reads: a callback a surface holds across a
- * re-negotiation (History's `refetch`) must re-derive the gate from the live
- * registry rather than trust the version its render captured.
- */
-export function readNegotiatedMethodVersion(
-  hostId: string,
-  method: string,
-): NegotiatedMethodVersion {
-  const methods = getNegotiatedHostMethods(hostId);
-  if (methods === null) return null;
-  if (!methods.has(method)) return false;
-  return getNegotiatedHostMethodVersion(hostId, method);
-}
+// The three-state read itself lives in `lib/host/read-negotiated-method-version`
+// (it is also a dispatch-time read for non-hook code); the hooks below are its
+// subscribing counterparts.
+export type { NegotiatedMethodVersion };
 
 /**
  * The version `method` negotiated on the host currently addressed by `client`.

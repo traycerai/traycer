@@ -94,9 +94,17 @@ export function useLocalStoreRebindMutation(): LocalStoreRebindMutationResult {
         if (context.hostId !== null) {
           resetCloudEpicTasksPagesForHost(context.hostId);
         }
-        void queryClient.invalidateQueries({
-          queryKey: hostQueryKeys.scope(context.hostId),
-        });
+        // Invalidation refetches ACTIVE queries only. An inactive one - a
+        // History filter scope the user left, its last-known fallback, a task
+        // context nothing is rendering - is merely marked stale, and History's
+        // first pages mount with `refetchOnMount: false`, so revisiting such a
+        // scope kept serving the abandoned store's page indefinitely. Inactive
+        // host-scoped data is therefore REMOVED: nothing is looking at it, so
+        // there is no flash, and its next observer fetches from the rebound
+        // store. Active queries refetch in place through the invalidation.
+        const scope = hostQueryKeys.scope(context.hostId);
+        queryClient.removeQueries({ queryKey: scope, type: "inactive" });
+        void queryClient.invalidateQueries({ queryKey: scope });
       },
       // A refusal is a successful response arm with its own inline surface. A
       // rejected RPC - host gone, method unavailable - has none, and without

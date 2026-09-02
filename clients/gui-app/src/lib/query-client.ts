@@ -16,6 +16,7 @@ import {
   type AppLogValue,
 } from "@/lib/logger";
 import { CloudEpicTasksRequestContextTimeoutError } from "@/lib/cloud-epic-tasks-query/request-context-timeout-error";
+import { CloudEpicTasksVerdictWithdrawnError } from "@/lib/cloud-epic-tasks-query/verdict-withdrawn-error";
 import { installConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 
 const SAFE_QUERY_KEY_MARKERS = new Set([
@@ -65,9 +66,14 @@ export function createAppQueryClient(): QueryClient {
         // the transport layer (`createRetryingMessenger`); retrying it again here
         // multiplies the dial-timeout cost (transport attempts × query attempts).
         // Let it surface immediately; everything else keeps the single retry.
+        // The History fetcher's two admission refusals are terminal for the
+        // same reason as each other: a retry would start another full
+        // request-context wait, or re-ask a store that will refuse the
+        // withdrawn verdict again.
         retry: (failureCount, error) =>
           !(error instanceof RetryableTransportError) &&
           !(error instanceof CloudEpicTasksRequestContextTimeoutError) &&
+          !(error instanceof CloudEpicTasksVerdictWithdrawnError) &&
           failureCount < 1,
         refetchOnWindowFocus: false,
         refetchOnReconnect: false,
