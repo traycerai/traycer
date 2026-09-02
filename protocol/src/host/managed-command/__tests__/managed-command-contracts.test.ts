@@ -4,11 +4,22 @@ import {
   hostStreamRpcRegistry,
 } from "@traycer/protocol/host/registry";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
-import { managedCommandSchema } from "@traycer/protocol/host/managed-command/unary-schemas";
+import {
+  managedCommandSchema,
+  managedCommandSchemaPreRelaunch,
+  managedCommandWithoutRelaunchFlag,
+} from "@traycer/protocol/host/managed-command/unary-schemas";
+import {
+  managedCommandStartUpgradeV10ToV11,
+  managedCommandStartV10,
+  managedCommandStartV11,
+  managedCommandStopUpgradeV10ToV11,
+} from "@traycer/protocol/host/managed-command/contracts";
 import {
   MANAGED_COMMAND_MAX_WINDOW_LINES,
   managedCommandSubscribeOutputClientFrameSchema,
   managedCommandSubscribeOutputServerFrameSchema,
+  managedCommandSubscribeOutputServerFrameSchemaV10,
 } from "@traycer/protocol/host/managed-command/subscribe";
 
 /**
@@ -120,11 +131,17 @@ describe("managedCommand.subscribeOutput@1.0 frames", () => {
 });
 
 describe("managedCommand stream registry membership", () => {
-  it("installs the output stream at 1.0", () => {
+  it("installs the output stream at 1.1, with 1.0 pinned to the shipped headers", () => {
     const line = hostStreamRpcRegistry["managedCommand.subscribeOutput"];
-    expect(line[1].latestMinor).toBe(0);
+    expect(line[1].latestMinor).toBe(1);
     expect(line[1].versions[0].contract.method).toBe(
       "managedCommand.subscribeOutput",
+    );
+    expect(line[1].versions[0].contract.serverFrameSchema).toBe(
+      managedCommandSubscribeOutputServerFrameSchemaV10,
+    );
+    expect(line[1].versions[1].contract.serverFrameSchema).toBe(
+      managedCommandSubscribeOutputServerFrameSchema,
     );
   });
 
@@ -167,6 +184,70 @@ describe("managedCommand stream registry membership", () => {
       commandId: "cmd-1",
       relaunchOnHostRestart: true,
     });
+  });
+
+  it("opens start/stop at 1.1 for the relaunch flag and keeps 1.0 on the shipped response", () => {
+    // cli-v1.2.0 shipped `start@1.0` / `stop@1.0` returning the command
+    // without `relaunchOnHostRestart`; the released gate treats growth of a
+    // shipped host→client shape as breaking, so the flag rides `1.1`.
+    for (const method of [
+      "managedCommand.start",
+      "managedCommand.stop",
+    ] as const) {
+      const line = hostRpcRegistry[method];
+      expect(line[1].latestMinor).toBe(1);
+      expect(line[1].versions[1].upgradeFromPreviousVersion).not.toBeNull();
+    }
+    const live = { ...RUNNING_COMMAND, relaunchOnHostRestart: true };
+    // The pinned 1.0 response is what a 1.0 peer's frozen schema describes:
+    // the host's within-major projection parses through it, dropping the key.
+    expect(
+      managedCommandStartV10.responseSchema.parse({ command: live }).command,
+    ).not.toHaveProperty("relaunchOnHostRestart");
+    expect(
+      managedCommandStartV11.responseSchema.parse({ command: live }).command
+        .relaunchOnHostRestart,
+    ).toBe(true);
+    // A 1.0 response upgrades by filling the default - a host that never
+    // offered the choice never relaunched.
+    const shippedResponse = managedCommandStartV10.responseSchema.parse({
+      command: RUNNING_COMMAND,
+    });
+    for (const bridge of [
+      managedCommandStartUpgradeV10ToV11,
+      managedCommandStopUpgradeV10ToV11,
+    ]) {
+      expect(
+        bridge.upgradeResponse(shippedResponse).command.relaunchOnHostRestart,
+      ).toBe(false);
+      expect(
+        bridge.upgradeRequest({ epicId: "epic-1", commandId: "cmd-1" }),
+      ).toEqual({ epicId: "epic-1", commandId: "cmd-1" });
+    }
+  });
+
+  it("keeps the pre-relaunch literal equal to the live shape minus the flag", () => {
+    // The pre-image is hand-written so a future live addition cannot leak
+    // onto the shipped lines; this pins that it drifts in NO other way.
+    expect(Object.keys(managedCommandSchemaPreRelaunch.shape).sort()).toEqual(
+      Object.keys(managedCommandSchema.shape)
+        .filter((key) => key !== "relaunchOnHostRestart")
+        .sort(),
+    );
+    const live = managedCommandSchema.parse({
+      ...RUNNING_COMMAND,
+      relaunchOnHostRestart: true,
+    });
+    const stripped = managedCommandWithoutRelaunchFlag(live);
+    expect(stripped).not.toHaveProperty("relaunchOnHostRestart");
+    expect(managedCommandSchemaPreRelaunch.parse(stripped)).toEqual(stripped);
+    // And the 1.0 output-stream headers bind the pre-image, not the live shape.
+    const header = managedCommandSubscribeOutputServerFrameSchemaV10.parse({
+      kind: "status",
+      hasBinaryPayload: false,
+      command: live,
+    });
+    expect(header).not.toHaveProperty("command.relaunchOnHostRestart");
   });
 
   it("defaults relaunchOnHostRestart to false on a command an older host sends without it", () => {

@@ -117,6 +117,45 @@ export const managedCommandSchema = z.object({
 export type ManagedCommand = z.infer<typeof managedCommandSchema>;
 
 /**
+ * The command shape as it SHIPPED (cli-v1.2.0): everything above except
+ * `relaunchOnHostRestart`. A hand-written literal, not `.omit()` over the live
+ * schema, so a future addition to the live shape cannot leak onto the released
+ * lines that bind this - `managedCommand.start@1.0`, `stop@1.0`,
+ * `subscribeOutput@1.0` and `chat.subscribe@1.6` - which the compat gate
+ * checks against the shipped peer. The live schema carries the flag on the
+ * lines opened after the release (`@1.1` of each, `chat.subscribe@1.7`+).
+ */
+export const managedCommandSchemaPreRelaunch = z.object({
+  id: z.string(),
+  monitoring: z.boolean(),
+  description: z.string(),
+  command: z.string().nullable().default(null),
+  cwd: z.string().nullable().default(null),
+  cadence: managedCommandCadenceSchema.nullable().default(null),
+  status: managedCommandStatusSchema,
+  chatId: z.string(),
+  createdAtMs: z.number(),
+  updatedAtMs: z.number(),
+});
+export type ManagedCommandPreRelaunch = z.infer<
+  typeof managedCommandSchemaPreRelaunch
+>;
+
+/**
+ * The live command as a peer on a pre-relaunch line receives it. The host
+ * serializes frames as-is - no per-version schema step - so a stream resolver
+ * serving a `1.0` output subscriber, or the chat projection serving a `1.6`
+ * peer, drops the key here rather than relying on the peer's parse to strip
+ * a field its contract does not name.
+ */
+export function managedCommandWithoutRelaunchFlag(
+  command: ManagedCommand,
+): ManagedCommandPreRelaunch {
+  const { relaunchOnHostRestart: _relaunchOnHostRestart, ...rest } = command;
+  return rest;
+}
+
+/**
  * Every id-addressed control names its epic. Scoping is not advisory: a command
  * in another epic is answered exactly as an id that never existed, so the
  * surface cannot be used to probe for commands the caller may not see.
@@ -139,6 +178,14 @@ export const managedCommandControlResponseSchema = z.object({
 });
 export type ManagedCommandControlResponse = z.infer<
   typeof managedCommandControlResponseSchema
+>;
+
+/** The `@1.0` response: the shipped command shape, without the relaunch flag. */
+export const managedCommandControlResponseSchemaV10 = z.object({
+  command: managedCommandSchemaPreRelaunch,
+});
+export type ManagedCommandControlResponseV10 = z.infer<
+  typeof managedCommandControlResponseSchemaV10
 >;
 
 export const managedCommandDeleteRequestSchema =
