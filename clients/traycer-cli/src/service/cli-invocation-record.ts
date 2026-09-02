@@ -52,7 +52,12 @@ import {
   type CliInvocationTransactionOperation,
 } from "@traycer/protocol/config/cli-invocation-record";
 import { createCliLogger, errorFromUnknown } from "../logger";
-import { CLI_ERROR_CODES, cliError, isErrnoException } from "../runner/errors";
+import {
+  CLI_ERROR_CODES,
+  CliError,
+  cliError,
+  isErrnoException,
+} from "../runner/errors";
 import type { Environment } from "../runner/environment";
 import {
   currentProcessIdentityToken,
@@ -143,6 +148,23 @@ const NODE_FAMILY_BASENAMES: ReadonlySet<string> = new Set([
   "bun",
   "bun.exe",
 ]);
+
+/**
+ * Did the OS registration inside `runServiceRegistrationWithInvocationRecord`
+ * succeed before this error was thrown?
+ *
+ * The record commit, the lifecycle write and the stale-marker clear all run
+ * AFTER the service manager has accepted the registration and started
+ * launching the supervisor. A caller holding a host-start adoption lease must
+ * therefore treat such an error differently from an OS failure: the
+ * supervisor is already coming up and will present the lease, so the lease
+ * has to be honoured (waited for) before the error is surfaced, or a
+ * successfully registered service is left without its host.
+ */
+export function didServiceRegistrationCommit(error: unknown): boolean {
+  if (!(error instanceof CliError)) return false;
+  return error.details?.registrationCommitted === true;
+}
 
 export interface ServiceRegistrationRecordOptions {
   readonly environment: Environment;
@@ -393,7 +415,11 @@ export async function runServiceRegistrationWithInvocationRecord(
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
       message: `service '${options.serviceLabel}' was registered, but the CLI invocation record could not be committed; the previous cached invocation was marked stale so it cannot be preferred`,
-      details: { label: options.serviceLabel, phase: "commit" },
+      details: {
+        label: options.serviceLabel,
+        phase: "commit",
+        registrationCommitted: true,
+      },
       exitCode: 1,
     });
   }
@@ -428,7 +454,11 @@ export async function runServiceRegistrationWithInvocationRecord(
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
       message: `service '${options.serviceLabel}' was registered, but the lifecycle generation could not be written; the cached invocation was marked stale so the host re-reads the OS registration`,
-      details: { label: options.serviceLabel, phase: "lifecycle" },
+      details: {
+        label: options.serviceLabel,
+        phase: "lifecycle",
+        registrationCommitted: true,
+      },
       exitCode: 1,
     });
   }
@@ -453,6 +483,7 @@ export async function runServiceRegistrationWithInvocationRecord(
         label: options.serviceLabel,
         phase: "stale-clear",
         outcome: staleOutcome,
+        registrationCommitted: true,
       },
       exitCode: 1,
     });
@@ -617,6 +648,12 @@ async function buildValidatedRegistrationRecord(input: {
   if (input.cli.args.length > CLI_INVOCATION_RECORD_MAX_ARGS) {
     throw invalidInvocation(input.serviceLabel, "too many leading arguments");
   }
+  if (isNodeFamilyCommand(command) && input.cli.args.length !== 1) {
+    throw invalidInvocation(
+      input.serviceLabel,
+      "npm-style interpreter registrations take exactly one absolute script argument",
+    );
+  }
   const args: string[] = [];
   for (const [index, arg] of input.cli.args.entries()) {
     if (
@@ -634,12 +671,13 @@ async function buildValidatedRegistrationRecord(input: {
         "a file-like leading argument is not a regular file",
       );
     }
-    // The FIRST argument, not the first absolute one after any flags. The
-    // record is a closed shape and `<interpreter> <absolute script>` is the
-    // only interpreter form any emitter writes; a vector whose script this
-    // CLI would have to guess at (`node --enable-source-maps /x.js`) is
-    // declined rather than re-interpreted, because a wrong guess here is a
-    // wrong program handed to `spawn` on every later maintenance call.
+    // EXACTLY one argument for an interpreter, and it is the absolute script.
+    // The record is a closed shape and `<interpreter> <absolute script>` is
+    // the only interpreter form any emitter writes; a vector whose script
+    // this CLI would have to guess at (`node --enable-source-maps /x.js`,
+    // `node --eval payload`) is declined rather than re-interpreted, because
+    // a wrong guess here is a wrong program handed to `spawn` on every later
+    // maintenance call. The host's structural check applies the same rule.
     if (index === 0 && isNodeFamilyCommand(command) && !isAbsolute(arg)) {
       throw invalidInvocation(
         input.serviceLabel,
@@ -935,9 +973,11 @@ async function readAuthorityFile(path: string): Promise<AuthorityRead> {
   } catch (cause) {
     const code = isErrnoException(cause) ? cause.code : undefined;
     if (code === "ENOENT" || code === "ENOTDIR") return { kind: "absent" };
-    // `O_NOFOLLOW` refuses a symlink with ELOOP (Linux, macOS); a directory
-    // opened read-only succeeds and is caught by `isFile` below.
-    if (code === "ELOOP") return { kind: "not-a-file" };
+    // `O_NOFOLLOW` refuses a symlink with ELOOP (Linux, macOS). A directory
+    // opened read-only succeeds on POSIX and is caught by `isFile` below, but
+    // Windows refuses the open itself with EISDIR, so that code is the same
+    // "not a marker" answer rather than an unreadable one that would block.
+    if (code === "ELOOP" || code === "EISDIR") return { kind: "not-a-file" };
     return { kind: "unreadable", mtimeMs: await lstatMtimeMs(path) };
   }
   try {

@@ -47,6 +47,7 @@ import {
   serializeCliInvocationRecord,
   serializeCliInvocationStaleMarker,
   serializeCliInvocationTransactionMarker,
+  type CliInvocationLifecycle,
   type CliInvocationRecord,
   type CliInvocationTransactionMarker,
 } from "../cli-invocation-record";
@@ -400,14 +401,14 @@ describe("cliInvocationTransactionMarkerMatchesBasename", () => {
   });
 });
 
-const LIFECYCLE_SAMPLE = {
-  schemaVersion: 1 as const,
-  kind: "lifecycle" as const,
+const LIFECYCLE_SAMPLE: CliInvocationLifecycle = {
+  schemaVersion: 1,
+  kind: "lifecycle",
   generation: TXN_TOKEN,
-  event: "uninstalled" as const,
+  event: "uninstalled",
   serviceLabel: "ai.traycer.host",
   at: "2026-09-01T00:00:00.000Z",
-  supersededLegacyMarkerDigest: null as string | null,
+  supersededLegacyMarkerDigest: null,
 };
 
 describe("cliInvocationLifecycleNewerThanLegacyExactMarker", () => {

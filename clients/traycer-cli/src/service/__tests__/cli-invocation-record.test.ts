@@ -48,7 +48,7 @@ import {
   serializeCliInvocationStaleMarker,
   serializeCliInvocationTransactionMarker,
 } from "@traycer/protocol/config/cli-invocation-record";
-import { CLI_ERROR_CODES } from "../../runner/errors";
+import { CLI_ERROR_CODES, cliError } from "../../runner/errors";
 import { currentProcessIdentityToken } from "../../store/process-identity";
 
 beforeAll(() => {
@@ -200,6 +200,7 @@ vi.mock("../../logger", async (importOriginal) => {
 const {
   runServiceRegistrationWithInvocationRecord,
   runServiceUninstallWithInvocationRecord,
+  didServiceRegistrationCommit,
   __setCliInvocationStateDirPauseAfterGateForTest,
   __setCliInvocationStateDirPauseBeforeWriteForTest,
   __setCliInvocationPauseAfterExclusiveCreateForTest,
@@ -1284,6 +1285,45 @@ describe("readAuthorityFile unreadable handling", () => {
     expect(await exists(path)).toBe(true);
   });
 
+  it("skips a marker-named entry whose open fails with EISDIR (not-a-file, not live)", async () => {
+    const token = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    const raw = serializeCliInvocationTransactionMarker({
+      schemaVersion: 1,
+      kind: "transaction",
+      owner: {
+        pid: 2147483646,
+        token,
+        processStartIdentity: null,
+        startedAtMs: Date.now(),
+      },
+      stagingFile: `${CLI_INVOCATION_RECORD_STAGING_FILENAME_PREFIX}${token}`,
+      operation: "install",
+      serviceLabel: LABEL,
+      startedAt: new Date().toISOString(),
+    });
+    const path = cliInvocationRecordOwnedTransactionPath(hostHome, token);
+    await writeFile(path, raw, { mode: 0o600 });
+    mocks.failOpenForBasename = basename(path);
+    mocks.failOpenCode = "EISDIR";
+    let osMutated = false;
+    // Unlike EBUSY (which blocks as an unreadable-but-live marker), an
+    // EISDIR-classified entry is `not-a-file` - skip-not-live - so a new
+    // registration proceeds around it rather than reporting `txn-busy`.
+    await runServiceRegistrationWithInvocationRecord({
+      environment: "production",
+      hostHomeDir: hostHome,
+      waitMs: 2_000,
+      pollIntervalMs: 20,
+      serviceLabel: LABEL,
+      cli: npmCli(),
+      register: async () => {
+        osMutated = true;
+      },
+    });
+    expect(osMutated).toBe(true);
+    expect(await exists(cliInvocationRecordPath(hostHome))).toBe(true);
+  });
+
   it("rejects uninstall with record-remove when the live record cannot be read (EBUSY)", async () => {
     await runServiceRegistrationWithInvocationRecord({
       environment: "production",
@@ -1358,6 +1398,71 @@ async function readLifecycle(): Promise<CliInvocationLifecycle | null> {
     JSON.parse(await readFile(cliInvocationLifecyclePath(hostHome), "utf8")),
   );
 }
+
+describe("didServiceRegistrationCommit", () => {
+  it("is true for the post-registration commit-phase rejection", () => {
+    const error = cliError({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      message: "commit failed",
+      details: { label: LABEL, phase: "commit", registrationCommitted: true },
+      exitCode: 1,
+    });
+    expect(didServiceRegistrationCommit(error)).toBe(true);
+  });
+
+  it("is true for the post-registration lifecycle-phase rejection", () => {
+    const error = cliError({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      message: "lifecycle failed",
+      details: {
+        label: LABEL,
+        phase: "lifecycle",
+        registrationCommitted: true,
+      },
+      exitCode: 1,
+    });
+    expect(didServiceRegistrationCommit(error)).toBe(true);
+  });
+
+  it("is true for the post-registration stale-clear (foreign) rejection", () => {
+    const error = cliError({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      message: "stale-clear failed",
+      details: {
+        label: LABEL,
+        phase: "stale-clear",
+        outcome: "foreign",
+        registrationCommitted: true,
+      },
+      exitCode: 1,
+    });
+    expect(didServiceRegistrationCommit(error)).toBe(true);
+  });
+
+  it("is false for the pre-registration stage-phase rejection", () => {
+    const error = cliError({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      message: "stage failed",
+      details: { label: LABEL, phase: "stage" },
+      exitCode: 1,
+    });
+    expect(didServiceRegistrationCommit(error)).toBe(false);
+  });
+
+  it("is false for the pre-registration txn-acquire-phase rejection", () => {
+    const error = cliError({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      message: "txn-acquire failed",
+      details: { label: LABEL, phase: "txn-acquire" },
+      exitCode: 1,
+    });
+    expect(didServiceRegistrationCommit(error)).toBe(false);
+  });
+
+  it("is false for a plain Error", () => {
+    expect(didServiceRegistrationCommit(new Error("boom"))).toBe(false);
+  });
+});
 
 describe("lifecycle generation", () => {
   it("writes a unique generation before releasing the txn on register and uninstall", async () => {
@@ -2439,6 +2544,52 @@ describe("invocation validation", () => {
       }),
     ).rejects.toMatchObject({
       code: CLI_ERROR_CODES.SERVICE_CLI_PATH_UNRESOLVED,
+    });
+    expect(osMutated).toBe(false);
+    expect(await exists(cliInvocationRecordPath(hostHome))).toBe(false);
+    expect(await exists(cliInvocationRecordStagingPath(hostHome))).toBe(false);
+  });
+
+  it("refuses an npm-style interpreter registration with no script argument", async () => {
+    let osMutated = false;
+    await expect(
+      runServiceRegistrationWithInvocationRecord({
+        environment: "production",
+        hostHomeDir: hostHome,
+        waitMs: 2_000,
+        pollIntervalMs: 20,
+        serviceLabel: LABEL,
+        cli: { command: process.execPath, args: [] },
+        register: async () => {
+          osMutated = true;
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_CLI_PATH_UNRESOLVED,
+      message: expect.stringContaining("exactly one absolute script argument"),
+    });
+    expect(osMutated).toBe(false);
+    expect(await exists(cliInvocationRecordPath(hostHome))).toBe(false);
+    expect(await exists(cliInvocationRecordStagingPath(hostHome))).toBe(false);
+  });
+
+  it("refuses an npm-style interpreter registration with a trailing extra argument", async () => {
+    let osMutated = false;
+    await expect(
+      runServiceRegistrationWithInvocationRecord({
+        environment: "production",
+        hostHomeDir: hostHome,
+        waitMs: 2_000,
+        pollIntervalMs: 20,
+        serviceLabel: LABEL,
+        cli: { command: process.execPath, args: [scriptPath, "--flag"] },
+        register: async () => {
+          osMutated = true;
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_CLI_PATH_UNRESOLVED,
+      message: expect.stringContaining("exactly one absolute script argument"),
     });
     expect(osMutated).toBe(false);
     expect(await exists(cliInvocationRecordPath(hostHome))).toBe(false);
