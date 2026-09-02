@@ -52,7 +52,7 @@ export function useOpenBrowserUrl(): (input: OpenBrowserUrlInput) => void {
   // frame (C8).
   const snapshot = useMaybeBrowserSessionsSnapshot();
   const { openTile } = useEpicTileNavigation();
-  const openExternalLink = useOpenExternalLink();
+  const { mutateAsync: openExternal } = useOpenExternalLink();
 
   return useCallback(
     (input: OpenBrowserUrlInput): void => {
@@ -62,7 +62,7 @@ export function useOpenBrowserUrl(): (input: OpenBrowserUrlInput) => void {
           action: {
             label: "Open in browser",
             onClick: () => {
-              void openExternalLink(input.url);
+              void openExternal(input.url).catch(ignoreError);
             },
           },
         });
@@ -113,7 +113,7 @@ export function useOpenBrowserUrl(): (input: OpenBrowserUrlInput) => void {
           );
         });
     },
-    [openExternalLink, openTile, snapshot],
+    [openExternal, openTile, snapshot],
   );
 }
 

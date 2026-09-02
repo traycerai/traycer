@@ -43,20 +43,49 @@ export type OpenLink = (
  * its preview screen on a failed open, L1). The in-app path resolves
  * immediately - it has already handed off to `openBrowserUrl`, which owns its
  * own failure toast (A5). Nothing needs to await it: the bridge promise
- * carries its own rejection handler (see `useOpenExternalLink`), so a plain
- * `void openLink(...)` is safe.
+ * carries its own rejection handler (see {@link useOpenLinkWithPending}), so a
+ * plain `void openLink(...)` is safe.
  */
 export function useOpenLink(): OpenLink {
+  return useOpenLinkWithPending().openLink;
+}
+
+export interface OpenLinkWithPending {
+  readonly openLink: OpenLink;
+  /**
+   * True while an OS handoff started through THIS hook is outstanding - the
+   * bridge mutation's own `isPending`. Drives `disabled` / `aria-disabled` on
+   * the surfaces where a second click would open the browser twice (R10).
+   */
+  readonly isPending: boolean;
+}
+
+/**
+ * {@link useOpenLink} plus the bridge mutation's pending flag, for the few
+ * surfaces that render a pending state. Everything else takes the function
+ * alone.
+ */
+export function useOpenLinkWithPending(): OpenLinkWithPending {
   const target = useLinkTarget();
   const openBrowserUrl = useOpenBrowserUrl();
-  const openExternalLink = useOpenExternalLink();
+  const { isPending, mutateAsync } = useOpenExternalLink();
 
-  return useCallback(
+  const openLink = useCallback(
     (
       url: string,
       kind: LinkKind,
       event: LinkClickEvent | null,
     ): Promise<void> => {
+      // Most callers fire and forget, so an unhandled rejection would be the
+      // NORMAL case. The handler is attached to THIS promise rather than a
+      // derived copy, so a caller that awaits still sees the failure - which
+      // is what keeps the report-issue publish flow on its preview screen
+      // instead of advancing to the confirmation (L1).
+      const openExternalLink = (href: string): Promise<void> => {
+        const done = mutateAsync(href);
+        void done.catch(() => undefined);
+        return done;
+      };
       const trimmed = url.trim();
       const parsed = parseHttpUrl(trimmed);
       if (
@@ -99,8 +128,10 @@ export function useOpenLink(): OpenLink {
       });
       return Promise.resolve();
     },
-    [openBrowserUrl, openExternalLink, target],
+    [mutateAsync, openBrowserUrl, target],
   );
+
+  return { isPending, openLink };
 }
 
 function modifiersOf(event: LinkClickEvent | null): TileOpenModifiers {

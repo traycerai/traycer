@@ -11,7 +11,10 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 
 const openLink = vi.hoisted(() => vi.fn());
-vi.mock("@/lib/links/open-link", () => ({ useOpenLink: () => openLink }));
+vi.mock("@/lib/links/open-link", () => ({
+  useOpenLink: () => openLink,
+  useOpenLinkWithPending: () => ({ isPending: false, openLink }),
+}));
 
 /**
  * The Files tab keeps the GitHub-sourced file list; the DIFF is a tile the

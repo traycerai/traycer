@@ -17,7 +17,10 @@ import { sanitizeUntrustedSvg } from "@/lib/images/untrusted-svg";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 
 const openLink = vi.hoisted(() => vi.fn(() => Promise.resolve()));
-vi.mock("@/lib/links/open-link", () => ({ useOpenLink: () => openLink }));
+vi.mock("@/lib/links/open-link", () => ({
+  useOpenLink: () => openLink,
+  useOpenLinkWithPending: () => ({ isPending: false, openLink }),
+}));
 
 const saveBlobToDiskMock = vi.hoisted(() =>
   vi.fn<

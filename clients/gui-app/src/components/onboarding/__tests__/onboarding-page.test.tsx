@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanup,
   fireEvent,
-  render,
+  render as renderUi,
+  type RenderResult,
   screen,
   waitFor,
 } from "@testing-library/react";
@@ -143,6 +144,16 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
 
 // Import after mocks are registered.
 import { OnboardingPage } from "@/components/onboarding/onboarding-page";
+import type { ReactNode } from "react";
+import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
+
+/**
+ * Every link surface below reaches the external-link bridge mutation, which
+ * needs a `QueryClientProvider` above it.
+ */
+function render(ui: ReactNode): RenderResult {
+  return renderUi(ui, { wrapper: WithTestQueryClient });
+}
 
 function renderPage(args: { readonly replay: boolean }) {
   return render(
@@ -252,7 +263,7 @@ describe("OnboardingPage", () => {
     expect(screen.getByText("v0.0.0")).not.toBeNull();
   });
 
-  it("wires onboarding footer links to the website destinations", () => {
+  it("wires onboarding footer links to the website destinations", async () => {
     const host = createRunnerHost();
     render(
       <RunnerHostContext.Provider value={host}>
@@ -276,9 +287,12 @@ describe("OnboardingPage", () => {
       fireEvent.click(link);
     });
 
-    expect(host.openedExternalLinks).toEqual(
-      expectedLinks.map(([, url]) => url),
-    );
+    // The bridge is a mutation now, so each handoff lands a microtask later.
+    await waitFor(() => {
+      expect(host.openedExternalLinks).toEqual(
+        expectedLinks.map(([, url]) => url),
+      );
+    });
   });
 
   it("advances through every act while keeping the Figma continue label", async () => {

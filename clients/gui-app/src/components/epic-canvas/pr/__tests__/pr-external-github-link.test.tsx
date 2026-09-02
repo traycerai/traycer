@@ -4,10 +4,15 @@ import { PrExternalGitHubLink } from "@/components/epic-canvas/pr/pr-external-gi
 
 const HREF = "https://github.com/acme/widgets/pull/7";
 
-// The seam returns a promise the in-flight guard chains on; a bare `vi.fn()`
-// answers `undefined` and takes the component down inside the handler.
+// The seam returns a promise the caller voids; a bare `vi.fn()` answers
+// `undefined` and takes the component down inside the handler.
 const openLink = vi.hoisted(() => vi.fn(() => Promise.resolve()));
-vi.mock("@/lib/links/open-link", () => ({ useOpenLink: () => openLink }));
+/** The bridge mutation's pending flag, driven per test. */
+const bridge = vi.hoisted(() => ({ isPending: false }));
+vi.mock("@/lib/links/open-link", () => ({
+  useOpenLink: () => openLink,
+  useOpenLinkWithPending: () => ({ isPending: bridge.isPending, openLink }),
+}));
 
 function renderLink(): void {
   render(
@@ -23,6 +28,7 @@ function renderLink(): void {
 
 afterEach(() => {
   cleanup();
+  bridge.isPending = false;
   openLink.mockReset();
   openLink.mockImplementation(() => Promise.resolve());
 });
@@ -72,24 +78,16 @@ describe("PrExternalGitHubLink", () => {
     expect(link.getAttribute("href")).toBe(HREF);
   });
 
-  it("drops a rapid second click while the first OS handoff is in flight", () => {
-    let settle = (): void => undefined;
-    openLink.mockImplementation(
-      () =>
-        new Promise<void>((resolve) => {
-          settle = resolve;
-        }),
-    );
+  it("drops a click while an OS handoff is still in flight", () => {
+    // Each call fires a fresh bridge request, so a click landing on top of one
+    // would open a second OS tab (R10).
+    bridge.isPending = true;
     renderLink();
 
     const link = screen.getByTestId("pr-external-github-link");
     fireEvent.click(link);
-    fireEvent.click(link);
 
-    // Each call fires a fresh bridge request, so an unguarded double click
-    // opens two OS tabs (R10).
-    expect(openLink).toHaveBeenCalledTimes(1);
+    expect(openLink).not.toHaveBeenCalled();
     expect(link.getAttribute("aria-disabled")).toBe("true");
-    settle();
   });
 });

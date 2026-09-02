@@ -1,46 +1,30 @@
-import { use, useCallback } from "react";
-import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
+import { use } from "react";
+import { useMutation, type UseMutationResult } from "@tanstack/react-query";
 import { RunnerHostContext } from "@/providers/runner-host-context";
+import { runnerMutationKeys } from "@/lib/query-keys/runner-mutation-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 
 /**
  * The desktop bridge - the only door out of the app (A2, A5, A6).
  *
- * Deliberately a plain hook and not a react-query mutation (the
- * `useRunnerOpenExternalLink` this replaced): a mutation needs a
- * `QueryClientProvider` above it, and this hook is called from every link
- * surface there is (markdown anchors, terminal links), including surfaces
- * rendered far from the app root. The mutation's only behaviour beyond the
- * bridge call was the standard runner-error toast, which is right here.
+ * A RunnerHost request, so it is a TanStack Query mutation like every other
+ * one (gui-app AGENTS.md, "Backend calls -> TanStack Query"): the key lives in
+ * `runnerMutationKeys`, the failure toast is `onError`, and `isPending` is
+ * what a link surface disables on while an OS handoff is outstanding - the job
+ * the hand-rolled `useLinkOpenInFlight` guard used to do.
  */
-export function useOpenExternalLink(): (url: string) => Promise<void> {
+export function useOpenExternalLink(): UseMutationResult<void, Error, string> {
   const runnerHost = use(RunnerHostContext);
-  return useCallback(
-    (url: string): Promise<void> => {
-      const done = openThroughBridge(runnerHost, url);
-      // Most callers fire and forget, so an unhandled rejection would be the
-      // NORMAL case. The handler is attached to THIS promise rather than a
-      // derived copy, so a caller that awaits still sees the failure - which
-      // is what keeps the report-issue publish flow on its preview screen
-      // instead of advancing to the confirmation (L1).
-      void done.catch(() => undefined);
-      return done;
+  return useMutation<void, Error, string>({
+    mutationKey: runnerMutationKeys.openExternalLink(),
+    mutationFn: async (url: string): Promise<void> => {
+      if (runnerHost === null) {
+        throw new Error("The desktop link opener is unavailable.");
+      }
+      await runnerHost.openExternalLink(url);
     },
-    [runnerHost],
-  );
-}
-
-async function openThroughBridge(
-  runnerHost: IRunnerHost | null,
-  url: string,
-): Promise<void> {
-  try {
-    if (runnerHost === null) {
-      throw new Error("The desktop link opener is unavailable.");
-    }
-    await runnerHost.openExternalLink(url);
-  } catch (error) {
-    toastFromRunnerError(error, "Couldn't open link");
-    throw error;
-  }
+    onError: (error) => {
+      toastFromRunnerError(error, "Couldn't open link");
+    },
+  });
 }

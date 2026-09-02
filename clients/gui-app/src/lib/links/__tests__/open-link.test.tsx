@@ -48,10 +48,13 @@ vi.mock("@/components/epic-canvas/renderers/browser-sessions-context", () => ({
   useMaybeBrowserSessionsSnapshot: () => ({ current: harness.sessions }),
 }));
 vi.mock("@/lib/links/open-external-link", () => ({
-  useOpenExternalLink: () => (url: string) => {
-    harness.bridged.push(url);
-    return Promise.resolve();
-  },
+  useOpenExternalLink: () => ({
+    isPending: false,
+    mutateAsync: (url: string) => {
+      harness.bridged.push(url);
+      return Promise.resolve();
+    },
+  }),
 }));
 vi.mock("@/lib/browser-view/sessions/electron-tab-directory", () => ({
   electronTabBinding: (_hostId: string, _sessionId: string, tabId: string) =>

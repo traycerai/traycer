@@ -29,7 +29,10 @@ import {
 // untouched here) imports this module's owner list and noun helper, and a
 // factory that lists only `PrOwnerBadges` hands those back as `undefined`.
 const openLink = vi.hoisted(() => vi.fn(() => Promise.resolve()));
-vi.mock("@/lib/links/open-link", () => ({ useOpenLink: () => openLink }));
+vi.mock("@/lib/links/open-link", () => ({
+  useOpenLink: () => openLink,
+  useOpenLinkWithPending: () => ({ isPending: false, openLink }),
+}));
 
 vi.mock("@/components/epic-canvas/pr/pr-owner-label", async (importActual) => ({
   ...(await importActual<

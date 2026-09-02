@@ -71,7 +71,10 @@ vi.mock("@/providers/use-runner-host", () => ({
 // this suite has no provider for; the terminal's own `useRunnerHost` mock
 // above covers its file-drop wiring only.
 vi.mock("@/lib/links/open-external-link", () => ({
-  useOpenExternalLink: () => xtermMocks.openExternalLink,
+  useOpenExternalLink: () => ({
+    isPending: false,
+    mutateAsync: xtermMocks.openExternalLink,
+  }),
 }));
 
 vi.mock("@/lib/terminal-theme", () => ({

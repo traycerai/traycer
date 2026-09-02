@@ -29,7 +29,7 @@ import {
   PR_STATE_PILL_CLASS,
   PR_STATE_TINT_CLASS,
 } from "@/components/worktree/worktree-pr-state-palette";
-import { useLinkOpenInFlight } from "@/lib/links/use-link-open-in-flight";
+import { useOpenLinkWithPending } from "@/lib/links/open-link";
 import {
   formatPrBaseFromHead,
   formatPrRowTitle,
@@ -489,15 +489,16 @@ function PrNumberAnchor(props: {
 }): ReactNode {
   // In-flight guarded: a double click on the badge would otherwise fire two
   // bridge requests and open two OS tabs (R10).
-  const { open, pending } = useLinkOpenInFlight();
+  const { isPending, openLink } = useOpenLinkWithPending();
   const handleClick = useCallback(
     (event: MouseEvent<HTMLAnchorElement>): void => {
       // The row opens the detail tile; this badge means GitHub.
       event.stopPropagation();
       event.preventDefault();
-      open(props.prUrl, "github", event);
+      if (isPending) return;
+      void openLink(props.prUrl, "github", event);
     },
-    [open, props.prUrl],
+    [isPending, openLink, props.prUrl],
   );
   return (
     <a
@@ -505,7 +506,7 @@ function PrNumberAnchor(props: {
       aria-label={props.ariaLabel}
       // The guard drops activation while a handoff is in flight, so the
       // anchor must not keep announcing itself as actionable.
-      aria-disabled={pending}
+      aria-disabled={isPending}
       className={props.className}
       data-testid="pr-row-number"
       data-pr-state={props.state}

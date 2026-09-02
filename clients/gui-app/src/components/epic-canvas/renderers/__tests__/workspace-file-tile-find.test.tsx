@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanup,
   fireEvent,
-  render,
+  render as renderUi,
   screen,
   waitFor,
   type RenderResult,
@@ -94,6 +94,16 @@ vi.mock("@/providers/use-resolved-theme", () => ({
 
 import { WorkspaceFileTile } from "../workspace-file-tile";
 import { TabHostProvider } from "../../tab-host-provider";
+import type { ReactNode } from "react";
+import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
+
+/**
+ * Every link surface below reaches the external-link bridge mutation, which
+ * needs a `QueryClientProvider` above it.
+ */
+function render(ui: ReactNode): RenderResult {
+  return renderUi(ui, { wrapper: WithTestQueryClient });
+}
 
 const CODE_NODE: WorkspaceFileRef = {
   id: "workspace-file:host-A:/work/repo:src/index.ts",

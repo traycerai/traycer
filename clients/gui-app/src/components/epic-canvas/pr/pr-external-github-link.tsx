@@ -1,11 +1,11 @@
 import { useCallback, type MouseEvent, type ReactNode } from "react";
-import { useLinkOpenInFlight } from "@/lib/links/use-link-open-in-flight";
+import { useOpenLinkWithPending } from "@/lib/links/open-link";
 import { onMiddleClick } from "@/lib/dom/on-middle-click";
 
 /**
  * Every external GitHub anchor on the PR surfaces, in one place.
  *
- * Routed through {@link useLinkOpenInFlight} rather than left as a bare
+ * Routed through {@link useOpenLinkWithPending} rather than left as a bare
  * `target="_blank"` link: a plain anchor opens a second, unmanaged browser
  * surface instead of honouring the user's `github` link setting (A1). The
  * `href` stays for anchor semantics (copy link, hover preview, middle-click
@@ -22,21 +22,21 @@ export function PrExternalGitHubLink(props: {
   readonly testId: string | undefined;
   readonly children: ReactNode;
 }): ReactNode {
-  const openLink = useLinkOpenInFlight();
+  const { isPending, openLink } = useOpenLinkWithPending();
   const { href } = props;
-  const { open } = openLink;
   const handleClick = useCallback(
     (event: MouseEvent<HTMLAnchorElement>): void => {
       event.preventDefault();
-      open(href, "github", event);
+      if (isPending) return;
+      void openLink(href, "github", event);
     },
-    [href, open],
+    [href, isPending, openLink],
   );
 
   return (
     <a
       href={href}
-      aria-disabled={openLink.pending}
+      aria-disabled={isPending}
       className={props.className}
       data-testid={props.testId}
       onClick={handleClick}

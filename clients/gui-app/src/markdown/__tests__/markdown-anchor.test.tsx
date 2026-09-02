@@ -2,7 +2,8 @@ import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-ru
 import {
   cleanup,
   fireEvent,
-  render,
+  render as renderUi,
+  type RenderResult,
   screen,
   waitFor,
 } from "@testing-library/react";
@@ -28,6 +29,15 @@ import {
 } from "@/stores/epics/canvas/types";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
+import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
+
+/**
+ * Every link surface below reaches the external-link bridge mutation, which
+ * needs a `QueryClientProvider` above it.
+ */
+function render(ui: ReactNode): RenderResult {
+  return renderUi(ui, { wrapper: WithTestQueryClient });
+}
 
 const VIEW_TAB_ID = "markdown-view-tab";
 const SOURCE_TILE: EpicCanvasTileRef = {
@@ -154,13 +164,16 @@ function renderMarkdownWithBrowserRouting(
 }
 
 describe("MarkdownAnchor", () => {
-  it("routes web-safe links through the runner host", () => {
+  it("routes web-safe links through the runner host", async () => {
     const host = createRunnerHost();
     renderMarkdown("[Docs](https://example.com/docs)", host);
 
     fireEvent.click(screen.getByRole("link", { name: "Docs" }));
 
-    expect(host.openedExternalLinks).toEqual(["https://example.com/docs"]);
+    // The bridge is a mutation now, so the handoff lands a microtask later.
+    await waitFor(() => {
+      expect(host.openedExternalLinks).toEqual(["https://example.com/docs"]);
+    });
   });
 
   it("opens markdown http links through the host and places its session pointer", async () => {
