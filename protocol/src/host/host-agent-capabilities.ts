@@ -183,6 +183,8 @@ export const hostFileCopyProgressSchema = z.object({
 });
 export type HostFileCopyProgress = z.infer<typeof hostFileCopyProgressSchema>;
 
+export const HOST_FILE_TRANSFER_UNREADABLE_MESSAGE_MAX_LENGTH = 1024;
+
 export const hostFileCopyFailureOperationSchema = z.enum([
   "enumerate",
   "stat",
@@ -265,6 +267,21 @@ const hostFileCopyTerminalStatusFields = {
 } as const;
 
 /**
+ * A failed job's reason is job-level and distinct from per-entry manifest
+ * failures. `failureCount: 0` is coherent: no entry failed, but the job stopped
+ * because of this reason. The message is bounded because it reaches agent
+ * context through status.
+ */
+const hostFileCopyFailureReasonSchema = z.object({
+  operation: hostFileCopyFailureOperationSchema,
+  message: z.string().max(HOST_FILE_TRANSFER_UNREADABLE_MESSAGE_MAX_LENGTH),
+});
+
+const hostFileCopyNoFailureReasonField = {
+  reason: z.never().optional(),
+} as const;
+
+/**
  * `unknown-job` is the honest post-restart answer: jobs and their registry
  * are intentionally in-memory, so the host cannot distinguish a job that
  * died in flight from an expired or invalid id. Callers interpret it as
@@ -277,25 +294,31 @@ export const hostFileCopyStatusResponseSchema = z.discriminatedUnion("state", [
   z.object({
     state: z.literal("queued"),
     ...hostFileCopyActiveStatusFields,
+    ...hostFileCopyNoFailureReasonField,
   }),
   z.object({
     state: z.literal("running"),
     ...hostFileCopyActiveStatusFields,
+    ...hostFileCopyNoFailureReasonField,
   }),
   z.object({
     state: z.literal("completed"),
     ...hostFileCopyTerminalStatusFields,
+    ...hostFileCopyNoFailureReasonField,
   }),
   z.object({
     state: z.literal("failed"),
     ...hostFileCopyTerminalStatusFields,
+    reason: hostFileCopyFailureReasonSchema,
   }),
   z.object({
     state: z.literal("cancelled"),
     ...hostFileCopyTerminalStatusFields,
+    ...hostFileCopyNoFailureReasonField,
   }),
   z.object({
     state: z.literal("unknown-job"),
+    ...hostFileCopyNoFailureReasonField,
   }),
 ]);
 export type HostFileCopyStatusResponse = z.infer<
@@ -350,8 +373,6 @@ const hostFileTransferEntryMetadataFields = {
 
 const hostFileTransferUnreadableOperationSchema =
   hostFileCopyFailureOperationSchema.extract(["stat", "readlink", "readdir"]);
-
-export const HOST_FILE_TRANSFER_UNREADABLE_MESSAGE_MAX_LENGTH = 1024;
 
 /**
  * The source walk computes symlink safety against the transferred tree's

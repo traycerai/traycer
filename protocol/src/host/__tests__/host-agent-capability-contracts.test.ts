@@ -231,9 +231,8 @@ describe("host-agent capability contracts", () => {
     ).toBe(false);
   });
 
-  it("strips byte-carrying fields from the terminal manifest", () => {
-    const parsed = hostFileCopyStatusV10.responseSchema.parse({
-      state: "completed",
+  it("keeps failed-job reasons bounded and out of other terminal states", () => {
+    const terminalFields = {
       progress: { filesCompleted: 1, bytesTransferred: 3 },
       manifest: {
         summary: {
@@ -259,13 +258,52 @@ describe("host-agent capability contracts", () => {
         bytesBase64: "YWJj",
         content: "MUST-NOT-SURVIVE",
       },
+    };
+    const parsed = hostFileCopyStatusV10.responseSchema.parse({
+      state: "failed",
+      ...terminalFields,
+      reason: {
+        operation: "enumerate",
+        message: "source host unreachable",
+        bytesBase64: "YWJj",
+        content: "MUST-NOT-SURVIVE",
+      },
     });
 
-    if (parsed.state !== "completed") {
-      throw new Error("expected completed copy status");
+    if (parsed.state !== "failed") {
+      throw new Error("expected failed copy status");
     }
     expect(parsed.manifest.failures[0]?.operation).toBe("stat");
     expect(parsed.manifest).not.toHaveProperty("bytesBase64");
     expect(parsed.manifest).not.toHaveProperty("content");
+    expect(parsed.reason).toEqual({
+      operation: "enumerate",
+      message: "source host unreachable",
+    });
+    expect(parsed.reason).not.toHaveProperty("bytesBase64");
+    expect(parsed.reason).not.toHaveProperty("content");
+
+    expect(
+      hostFileCopyStatusV10.responseSchema.safeParse({
+        state: "failed",
+        ...terminalFields,
+        reason: {
+          operation: "enumerate",
+          message: "x".repeat(
+            HOST_FILE_TRANSFER_UNREADABLE_MESSAGE_MAX_LENGTH + 1,
+          ),
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      hostFileCopyStatusV10.responseSchema.safeParse({
+        state: "completed",
+        ...terminalFields,
+        reason: {
+          operation: "enumerate",
+          message: "must not be accepted",
+        },
+      }).success,
+    ).toBe(false);
   });
 });
