@@ -35,6 +35,7 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { SegmentCopyButton } from "@/components/chat/segments/segment-copy-button";
 import { ManagedCommandChatBacklink } from "@/components/managed-commands/managed-command-chat-backlink";
 import { ManagedCommandLifecycleActions } from "@/components/managed-commands/managed-command-lifecycle-actions";
+import { useManagedCommandRelaunchOnHostRestart } from "@/hooks/managed-command/use-managed-command-lifecycle-mutations";
 import { ManagedCommandStatusDot } from "@/components/managed-commands/managed-command-status-dot";
 import {
   useHostReachability,
@@ -853,6 +854,13 @@ function ManagedCommandOutputDetails(props: {
 }) {
   const { command } = props;
   const pid = command.status.state === "running" ? command.status.pid : null;
+  // The same derived value the switch beside this popover shows: a configure
+  // write that already answered beats a streamed record that has not caught
+  // up, so the row and the switch cannot disagree during that gap.
+  const relaunchOnHostRestart = useManagedCommandRelaunchOnHostRestart(
+    { hostId: props.hostId, commandId: command.id },
+    command,
+  );
   return (
     <Popover>
       <TooltipWrapper
@@ -921,7 +929,7 @@ function ManagedCommandOutputDetails(props: {
           )}
           <DetailRow label="Host restart">
             <span data-testid="managed-command-output-details-relaunch">
-              {relaunchOnHostRestartLabel(command.relaunchOnHostRestart)}
+              {relaunchOnHostRestartLabel(relaunchOnHostRestart)}
             </span>
           </DetailRow>
           <DetailRow label="Started by">

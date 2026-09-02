@@ -179,6 +179,16 @@ describe("useManagedCommandConfigure", () => {
     expect(header.result.current.data?.command.relaunchOnHostRestart).toBe(
       false,
     );
+
+    // Both answers carry the SAME `updatedAtMs` (the mock host stamps every
+    // write identically, as two presses in one millisecond would). The
+    // effective value must be the later-submitted write's - off - not the
+    // first's; a strict timestamp comparison alone kept "on" here.
+    const effective = renderHook(
+      () => useManagedCommandRelaunchOnHostRestart(target, COMMAND),
+      { wrapper },
+    );
+    expect(effective.result.current).toBe(false);
   });
 
   it("reports pending to every surface of the command, and to no other command", async () => {

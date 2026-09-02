@@ -301,23 +301,36 @@ export function useManagedCommandRelaunchOnHostRestart(
       ),
       status: "success",
     },
-    select: (mutation) => mutation.state.data,
+    select: (mutation) => ({
+      data: mutation.state.data,
+      // Monotonic per mutation cache, assigned at `mutate()`: press order.
+      // Not `submittedAt` - two presses in one millisecond stamp the same
+      // clock value, which is exactly the collision this has to break.
+      order: mutation.mutationId,
+    }),
   });
-  let newest: ManagedCommand | null = null;
-  for (const data of settled) {
-    const parsed = managedCommandControlResponseSchema.safeParse(data);
+  // Newest by the host's `updatedAtMs`, and among writes that landed in the
+  // same millisecond - two quick presses can - by press order, which is the
+  // order the scope delivered them to the host in. Without the tie-break the
+  // first of an on-then-off pair would keep winning.
+  let newest: { command: ManagedCommand; order: number } | null = null;
+  for (const entry of settled) {
+    const parsed = managedCommandControlResponseSchema.safeParse(entry.data);
     if (!parsed.success) continue;
+    const candidate = { command: parsed.data.command, order: entry.order };
     if (
       newest === null ||
-      parsed.data.command.updatedAtMs > newest.updatedAtMs
+      candidate.command.updatedAtMs > newest.command.updatedAtMs ||
+      (candidate.command.updatedAtMs === newest.command.updatedAtMs &&
+        candidate.order > newest.order)
     ) {
-      newest = parsed.data.command;
+      newest = candidate;
     }
   }
-  if (newest === null || newest.updatedAtMs < streamed.updatedAtMs) {
+  if (newest === null || newest.command.updatedAtMs < streamed.updatedAtMs) {
     return streamed.relaunchOnHostRestart;
   }
-  return newest.relaunchOnHostRestart;
+  return newest.command.relaunchOnHostRestart;
 }
 
 /**
