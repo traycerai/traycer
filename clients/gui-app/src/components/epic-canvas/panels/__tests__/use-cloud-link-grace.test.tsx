@@ -4,6 +4,7 @@ import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transp
 import type { EpicSyncPillState } from "@/lib/epic-sync-pill-state";
 import {
   CLOUD_LINK_GRACE_MS,
+  isCloudLinkDown,
   isCloudOnlyOutage,
   useCloudLinkGrace,
 } from "@/components/epic-canvas/panels/use-cloud-link-grace";
@@ -11,8 +12,17 @@ import {
 const CLOUD_ONLY_OUTAGE_STATES: readonly EpicSyncPillState[] = [
   "connecting",
   "reconnecting",
-  "offlineWithHostPending",
   "offlineChangesSavedLocally",
+];
+
+/**
+ * Cloud-down verdicts whose own copy is the only thing telling the user to
+ * protect their work - "Keep this window open" and "keep it running". They run
+ * the outage clock like any other cloud-down state, and are never quieted.
+ */
+const NEVER_QUIET_STATES: readonly EpicSyncPillState[] = [
+  "offlineWithUnsavedChanges",
+  "offlineWithHostPending",
 ];
 
 describe("isCloudOnlyOutage", () => {
@@ -45,12 +55,16 @@ describe("isCloudOnlyOutage", () => {
     },
   );
 
-  it("reads false for offlineWithUnsavedChanges even with the transport open", () => {
-    // The one state that LOOKS cloud-only and is not: it is the deriver's
-    // divergence arm, so the work is renderer-only and awaiting the host's
-    // ack. An open transport does not make it durable anywhere.
-    expect(isCloudOnlyOutage("offlineWithUnsavedChanges", "open")).toBe(false);
-  });
+  it.each(NEVER_QUIET_STATES)(
+    "reads false for %s even with the transport open - cloud-down, but never quiet",
+    (state) => {
+      expect(isCloudOnlyOutage(state, "open")).toBe(false);
+      // Still a cloud-down verdict: it runs the outage clock, it just may not
+      // be rendered as `syncing`. Losing this distinction is what let an edit
+      // mid-outage restart the window.
+      expect(isCloudLinkDown(state, "open")).toBe(true);
+    },
+  );
 });
 
 describe("useCloudLinkGrace", () => {
@@ -236,19 +250,19 @@ describe("useCloudLinkGrace", () => {
     rerender({ derived: "synced" });
     expect(result.current).toBe("synced");
 
-    rerender({ derived: "offlineWithHostPending" });
+    rerender({ derived: "reconnecting" });
     expect(result.current).toBe("syncing");
 
     act(() => {
       vi.advanceTimersByTime(CLOUD_LINK_GRACE_MS - 1);
     });
-    rerender({ derived: "offlineWithHostPending" });
+    rerender({ derived: "reconnecting" });
     expect(result.current).toBe("syncing");
 
     act(() => {
       vi.advanceTimersByTime(1);
     });
-    rerender({ derived: "offlineWithHostPending" });
-    expect(result.current).toBe("offlineWithHostPending");
+    rerender({ derived: "reconnecting" });
+    expect(result.current).toBe("reconnecting");
   });
 });

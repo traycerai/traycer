@@ -658,15 +658,14 @@ describe("<EpicConnectionPill />", () => {
     ).toBe(false);
   });
 
-  it("shows host-pending offline work without claiming it is durable", async () => {
-    // Cloud-only outage: held back for the grace before it may read amber.
+  it("shows host-pending offline work immediately, without claiming it is durable", async () => {
+    // Cloud-down, but never quieted: the aria-label and tooltip below say
+    // "keep it running", which is an instruction about the DEVICE. The host
+    // has acked this replica's work, so the window is not its last holder -
+    // but the host's own durable flush is unknown, and a 15s quiet window is
+    // exactly when a shutdown would interrupt it.
     vi.useFakeTimers();
     renderPill("offlineWithHostPending");
-    expect(screen.queryByText("Offline — changes pending")).toBeNull();
-
-    act(() => {
-      vi.advanceTimersByTime(15_000);
-    });
     vi.useRealTimers();
 
     expect(screen.getByText("Offline — changes pending")).not.toBeNull();

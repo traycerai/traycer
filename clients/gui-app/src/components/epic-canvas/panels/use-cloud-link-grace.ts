@@ -47,25 +47,37 @@ const CLOUD_LINK_DOWN_STATES: ReadonlySet<EpicSyncPillState> =
   ]);
 
 /**
- * The member of {@link CLOUD_LINK_DOWN_STATES} that may never be quieted, no
+ * The members of {@link CLOUD_LINK_DOWN_STATES} that may never be quieted, no
  * matter how young the outage is.
  *
- * The line is host ACKNOWLEDGEMENT, not an open transport. An `open` transport
- * proves the socket exists, never that the host received a frame or persisted
- * it. `offlineWithUnsavedChanges` is `deriveEpicSyncPillState`'s divergence
- * arm: renderer-only work still awaiting the host's ack, so closing the window
- * discards it and the amber copy is the only thing saying so. Quieting it for
- * even a second trades the user's data for the pill's calm.
+ * The test is not "how bad does this look" but "is this verdict's copy the only
+ * thing telling the user to do, or not do, something that protects their work".
+ * Both members fail it, in different ways, and their indicators say so in
+ * plain words:
  *
- * The others are on the far side of that line. `offlineWithHostPending` is only
- * reachable with `hasRuntimeDivergence` false, so the host has acked everything
- * this replica knows about and the open question is the host's own durable
- * flush, which no window kept open can help with. `offlineChangesSavedLocally`
- * is the strongest durability claim in the union. `connecting` / `reconnecting`
- * here mean the CLOUD leg is coming up while the transport is open.
+ * - `offlineWithUnsavedChanges` - "Keep this window open." It is
+ *   `deriveEpicSyncPillState`'s divergence arm: renderer-only work still
+ *   awaiting the host's ack. An `open` transport proves the socket exists,
+ *   never that the host received a frame, so closing the window discards it.
+ * - `offlineWithHostPending` - "This device is still processing pending
+ *   changes; keep it running." The host has acked everything this replica
+ *   knows about, so the WINDOW is not the last holder - but the durability of
+ *   the host's own flush is unknown, and the instruction is about the DEVICE.
+ *   Quieting it invites the one shutdown that can interrupt persistence.
+ *
+ * What is left graceable is the flap this hook exists for: `connecting` /
+ * `reconnecting` mean the CLOUD leg is coming up while the transport is open
+ * and nothing anywhere is outstanding - an idle Epic during a backend
+ * crash-loop derives exactly that, since a clean aggregate dirty bit sends the
+ * ladder to `linkComingUpState` rather than to `offlineWithHostPending`.
+ * `offlineChangesSavedLocally` is the strongest durability claim in the union
+ * and is today unreachable from the deriver.
  */
 const NEVER_QUIET_STATES: ReadonlySet<EpicSyncPillState> =
-  new Set<EpicSyncPillState>(["offlineWithUnsavedChanges"]);
+  new Set<EpicSyncPillState>([
+    "offlineWithUnsavedChanges",
+    "offlineWithHostPending",
+  ]);
 
 /**
  * Whether the cloud leg is down right now - the OUTAGE CLOCK's predicate.
