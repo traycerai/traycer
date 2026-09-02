@@ -3620,6 +3620,7 @@ describe("<ChatTile />", () => {
       cadence: null,
       status: { state: "running", pid: 42, startedAtMs: 1 },
       chatId: CHAT_ARTIFACT.id,
+      relaunchOnHostRestart: false,
       createdAtMs: 1,
       updatedAtMs: 1,
     };

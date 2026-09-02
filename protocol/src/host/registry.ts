@@ -303,11 +303,17 @@ import {
   diagnosticsLogsTailV10,
 } from "@traycer/protocol/host/diagnostics/contracts";
 import {
+  managedCommandConfigureV10,
   managedCommandDeleteV10,
   managedCommandDeliverHeldV10,
+  managedCommandStartUpgradeV10ToV11,
   managedCommandStartV10,
+  managedCommandStartV11,
+  managedCommandStopUpgradeV10ToV11,
   managedCommandStopV10,
+  managedCommandStopV11,
   managedCommandSubscribeOutputV10,
+  managedCommandSubscribeOutputV11,
 } from "@traycer/protocol/host/managed-command/contracts";
 import { hostGetRuntimeCapabilitiesV10 } from "@traycer/protocol/host/runtime-capabilities/contracts";
 import { chatForkGetV10 } from "@traycer/protocol/host/chat-fork/contracts";
@@ -7040,14 +7046,21 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   // The human lifecycle controls for monitors and shells. Brand-new v1.0
   // methods on the same `degrade: unsupported` channel as `resources.kill`
   // above: a host without the managed-command subsystem simply lacks them.
+  // `1.1` on start/stop returns the command with `relaunchOnHostRestart`;
+  // the shipped `1.0` stays pinned to the pre-relaunch command shape (see
+  // `managedCommandSchemaPreRelaunch`).
   "managedCommand.start": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: managedCommandStartV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: managedCommandStartV11,
+          upgradeFromPreviousVersion: managedCommandStartUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -7056,11 +7069,15 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   "managedCommand.stop": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: managedCommandStopV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: managedCommandStopV11,
+          upgradeFromPreviousVersion: managedCommandStopUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -7073,6 +7090,25 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: managedCommandDeleteV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // The one human-editable setting: relaunch after a host restart. Same
+  // channel as the lifecycle three; a host too old to have the flag lacks the
+  // method, so the GUI hides the switch (`useHostSupportsMethod`), and its
+  // commands read `relaunchOnHostRestart: true` by default - which is what
+  // such a host does (it respawns every survivor; it never offered the
+  // choice).
+  "managedCommand.configure": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: managedCommandConfigureV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -8936,10 +8972,15 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // `host/managed-command/subscribe.ts` for what a global panel would re-add).
   "managedCommand.subscribeOutput": {
     1: {
-      latestMinor: 0,
+      // `1.1` adds `relaunchOnHostRestart` to the snapshot/status headers;
+      // `1.0` is pinned to the shipped pre-relaunch command shape.
+      latestMinor: 1,
       versions: {
         0: {
           contract: managedCommandSubscribeOutputV10,
+        },
+        1: {
+          contract: managedCommandSubscribeOutputV11,
         },
       },
     },
