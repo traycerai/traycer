@@ -113,10 +113,13 @@ function BrowserOverlayCoordinator(props: {
         targets.map((target) => [target.overlayId, target]),
       );
 
-      activeSignaturesByOverlayId.forEach((_signature, overlayId) => {
-        if (!nextTargetsByOverlayId.has(overlayId)) releaseOverlay(overlayId);
-      });
-
+      // Occlude before release: main-process release is synchronous while
+      // occlude is async, so releasing first can un-park a tile that another
+      // overlay in this same scan still covers for the duration of that
+      // overlay's occludeForOverlay round trip. A tile must stay parked
+      // across an ownership handoff between overlays, never revealed in
+      // between - so occlusion for the still-active overlays goes out before
+      // any release for the ones that dropped out.
       targets.forEach((target) => {
         if (
           activeSignaturesByOverlayId.get(target.overlayId) === target.signature
@@ -164,6 +167,10 @@ function BrowserOverlayCoordinator(props: {
             ignoreError(error);
           });
       });
+
+      activeSignaturesByOverlayId.forEach((_signature, overlayId) => {
+        if (!nextTargetsByOverlayId.has(overlayId)) releaseOverlay(overlayId);
+      });
     };
 
     const unsubscribeLayout = subscribeBrowserOverlayLayout(scheduleScan);
@@ -176,7 +183,6 @@ function BrowserOverlayCoordinator(props: {
       childList: true,
       attributes: true,
       attributeFilter: [
-        "aria-hidden",
         "class",
         "data-browser-overlay",
         "data-browser-overlay-ignore",

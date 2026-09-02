@@ -260,7 +260,6 @@ function readOverlayKind(element: HTMLElement): string {
 
 function isElementVisible(element: HTMLElement): boolean {
   if (element.hidden) return false;
-  if (element.getAttribute("aria-hidden") === "true") return false;
   if (element.getAttribute("data-state") === "closed") return false;
   const style = window.getComputedStyle(element);
   if (style.display === "none" || style.visibility === "hidden") return false;

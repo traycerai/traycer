@@ -8,6 +8,15 @@ import {
   getBrowserViewSnapshot,
   registerBrowserOverlayTile,
 } from "@/lib/browser-view/tiles/browser-overlay-coordinator";
+import { Dialog, DialogContent } from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { SurfacePresentationBoundary } from "@/components/layout/surface-presentation-boundary";
 import type {
   BrowserViewOverlayOcclusion,
   BrowserViewOverlayOcclusionResult,
@@ -609,6 +618,128 @@ describe("<BrowserOverlayCoordinator />", () => {
     });
 
     overlay.remove();
+  });
+
+  it("keeps a dialog occluded across a real Radix Select's aria-hidden churn", async () => {
+    // The regression: Radix's hideOthers (fired by any Select/Popover/
+    // DropdownMenu opening) sets aria-hidden="true" on every OTHER body
+    // child while it's open - including a settings dialog that is itself a
+    // direct body child via DialogPortal. The old `isElementVisible` treated
+    // aria-hidden as "not painted", so the dialog dropped out of the next
+    // scan's targets and got released while it still visibly covered the
+    // tile. A bare-div overlay stand-in never exercises this: nothing calls
+    // hideOthers on it, so this needs real Radix mount/unmount behavior.
+    const bridge = new FakeBrowserViewBridge();
+    registerTestBrowserOverlayTile({
+      key: BASE_KEY,
+      rect: rect(0, 0, 300, 300),
+    });
+
+    // Controlled `open`, driven by rerender rather than a simulated click:
+    // Radix's own dismissable-layer close (from a real outside click) would
+    // race a second, test-owned click handler toggling the same state,
+    // double-flipping it back open. A controlled prop still mounts/unmounts
+    // the real `SelectContent` - and runs its real `hideOthers` effect - on
+    // each transition, which is the behavior under test.
+    function Harness(props: {
+      readonly selectOpen: boolean;
+    }): React.JSX.Element {
+      return (
+        <SurfacePresentationBoundary visible focused>
+          <Dialog open>
+            <DialogContent>
+              <Select
+                open={props.selectOpen}
+                onOpenChange={() => undefined}
+                value="a"
+                onValueChange={() => undefined}
+              >
+                <SelectTrigger aria-label="Pick">
+                  <SelectValue placeholder="Pick" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="a">A</SelectItem>
+                </SelectContent>
+              </Select>
+            </DialogContent>
+          </Dialog>
+        </SurfacePresentationBoundary>
+      );
+    }
+
+    const runnerHost = Object.assign(
+      new MockRunnerHost({
+        signInUrl: "https://example.com",
+        authnBaseUrl: "https://auth.example.com",
+        localHost: null,
+        hosts: [],
+        workspaceFolderPickerPaths: undefined,
+        hasLocalHost: undefined,
+        traycerCli: undefined,
+      }),
+      { browserView: bridge },
+    );
+    const view = render(
+      <RunnerHostProvider runnerHost={runnerHost}>
+        <BrowserOverlayCoordinatorBridge />
+        <Harness selectOpen={false} />
+      </RunnerHostProvider>,
+    );
+
+    const dialogContent = document.querySelector<HTMLElement>(
+      '[data-slot="dialog-content"]',
+    );
+    if (dialogContent === null) throw new Error("dialog content not mounted");
+    setElementRect(dialogContent, rect(0, 0, 200, 200));
+
+    await waitFor(() => {
+      expect(bridge.occludeCalls).toHaveLength(1);
+    });
+    const dialogOverlayId = bridge.occludeCalls[0].overlayId;
+
+    // Open the Select: real Radix hideOthers churn, not a stubbed attribute.
+    act(() => {
+      view.rerender(
+        <RunnerHostProvider runnerHost={runnerHost}>
+          <BrowserOverlayCoordinatorBridge />
+          <Harness selectOpen />
+        </RunnerHostProvider>,
+      );
+    });
+    await waitFor(() => {
+      expect(dialogContent.getAttribute("aria-hidden")).toBe("true");
+    });
+
+    await act(async () => {
+      window.dispatchEvent(new Event("resize"));
+      await Promise.resolve();
+    });
+    expect(
+      bridge.releaseCalls.some((call) => call.overlayId === dialogOverlayId),
+    ).toBe(false);
+
+    // Close the Select again; the dialog is still open and still covers the
+    // tile, so the scan that follows must not release it either - this is
+    // the scan that catches a release-before-occlude ordering regression too.
+    act(() => {
+      view.rerender(
+        <RunnerHostProvider runnerHost={runnerHost}>
+          <BrowserOverlayCoordinatorBridge />
+          <Harness selectOpen={false} />
+        </RunnerHostProvider>,
+      );
+    });
+    await waitFor(() => {
+      expect(dialogContent.hasAttribute("aria-hidden")).toBe(false);
+    });
+
+    await act(async () => {
+      window.dispatchEvent(new Event("resize"));
+      await Promise.resolve();
+    });
+    expect(
+      bridge.releaseCalls.some((call) => call.overlayId === dialogOverlayId),
+    ).toBe(false);
   });
 });
 
