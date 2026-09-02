@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import type {
   HostNotificationEntry,
   HostNotificationsCloudFeedRow,
@@ -264,6 +265,27 @@ function applyHostSnapshot(
   });
 }
 
+/** A session holding a cloud verdict - what `feedMode === "cloud"` presumes. */
+function signInForActions(): void {
+  useAuthStore
+    .getState()
+    .setSignedIn(
+      { userId: "user-actions", userName: "U", email: "u@example.com" },
+      { userId: "user-actions", username: "U" },
+      [],
+    );
+}
+
+/** The same session after authn withdrew its verdict, rows still rendered. */
+function demoteToUnverified(): void {
+  useAuthStore
+    .getState()
+    .setUnverifiedSession(
+      { userId: "user-actions", userName: "U", email: "u@example.com" },
+      { userId: "user-actions", username: "U" },
+    );
+}
+
 function bindHostClient(): void {
   const hostClient: StubHostClient = {
     request: hostRequestMock,
@@ -344,6 +366,9 @@ describe("useMergedNotificationsActions markAllAsRead composition", () => {
     hostRequestMock.mockImplementation(defaultHostRequest);
     hostBindingState.current = null;
     notificationFeedMode.value = "local";
+    // The cloud-feed mutations re-read the live verdict at dispatch; a
+    // `cloud` feed mode below stands for a session that holds one.
+    signInForActions();
     vi.mocked(toastFromHostError).mockClear();
     vi.mocked(toast.error).mockClear();
     __resetNotificationsStoreForTests();
@@ -362,6 +387,7 @@ describe("useMergedNotificationsActions markAllAsRead composition", () => {
     cleanup();
     hostBindingState.current = null;
     notificationFeedMode.value = "local";
+    useAuthStore.getState().setSignedOut();
     __resetHostNotificationsStoreForTests();
     useCloudNotificationsStore.getState().reset();
     __resetAppLocalNotificationsStoreForTests();
@@ -454,6 +480,9 @@ describe("useMergedNotificationsActions indicator invalidation", () => {
     hostRequestMock.mockImplementation(defaultHostRequest);
     hostBindingState.current = null;
     notificationFeedMode.value = "local";
+    // The cloud-feed mutations re-read the live verdict at dispatch; a
+    // `cloud` feed mode below stands for a session that holds one.
+    signInForActions();
     vi.mocked(toastFromHostError).mockClear();
     vi.mocked(toast.error).mockClear();
     __resetNotificationsStoreForTests();
@@ -470,6 +499,7 @@ describe("useMergedNotificationsActions indicator invalidation", () => {
     cleanup();
     hostBindingState.current = null;
     notificationFeedMode.value = "local";
+    useAuthStore.getState().setSignedOut();
     __resetHostNotificationsStoreForTests();
     useCloudNotificationsStore.getState().reset();
     __resetAppLocalNotificationsStoreForTests();
@@ -732,6 +762,57 @@ describe("useMergedNotificationsActions indicator invalidation", () => {
       expect(calls[0]?.[1]).toEqual({ entryId: "entry-a" });
       expect(calls[1]?.[1]).toEqual(calls[0]?.[1]);
     });
+  });
+
+  it("does not dispatch cloud-feed writes after the session is demoted to unverified", async () => {
+    // The provider closes the cloud lanes in an EFFECT, so for the
+    // commit/effect window after a demotion the popover still holds cloud
+    // rows and their callbacks - and the retained local-host connection
+    // carries no renderer verdict. Every cloud write re-reads the store at
+    // dispatch instead of trusting its rendered closure.
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-a", 1, null), cloudDone("entry-b", 2, null)],
+      summary: { totalCount: 2, unreadCount: 2, attentionCount: 0 },
+      version: 10,
+    });
+    useCloudNotificationsStore.getState().setConnectionState("connected");
+    const { result } = renderHook(
+      () => ({
+        actions: useMergedNotificationsActions(),
+        row: useMergedNotificationRow(cloudNotificationFeedId("entry-a")),
+      }),
+      { wrapper: createWrapper() },
+    );
+    const captured = result.current.row;
+    if (captured === null) throw new Error("expected cloud row");
+
+    // The demotion lands between the render and the click: the closure the
+    // click reaches was built under `cloud` feed mode.
+    demoteToUnverified();
+    act(() => {
+      result.current.actions.markAsRead(captured);
+      result.current.actions.markAllAsRead();
+      result.current.actions.clear(captured);
+      result.current.actions.clearAll();
+    });
+    // Settle any mutation that WOULD have been dispatched.
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const cloudCalls = hostRequestMock.mock.calls.filter((call) =>
+      String(call[0]).startsWith("host.notifications.cloudFeed."),
+    );
+    expect(cloudCalls).toEqual([]);
+    // Not even marked read locally: an optimistic read the write never sent
+    // would be a lie the next snapshot reverts.
+    expect(
+      useCloudNotificationsStore.getState().rows[
+        cloudNotificationFeedId("entry-a")
+      ]?.entry.readAt,
+    ).toBeNull();
   });
 
   it("captures clear-all at the observed version while a newer entry survives", async () => {

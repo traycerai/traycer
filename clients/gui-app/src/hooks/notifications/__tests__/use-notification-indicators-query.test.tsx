@@ -198,7 +198,11 @@ function createHarness(
     createRequestContextFixture({ origin: "renderer", bearerToken: "token" }),
   );
   hostClientRef.current = spine.createRequester(mockLocalHostEntry);
+  // A session holding a cloud verdict: the cloud-feed mark-read this harness
+  // drives re-reads the live verdict at dispatch, so the presumed `cloud`
+  // feed mode has to be backed by the status that authorizes it.
   useAuthStore.setState({
+    status: "signed-in",
     contextMetadata: { userId: "user-a", username: "user-a" },
   });
   return {

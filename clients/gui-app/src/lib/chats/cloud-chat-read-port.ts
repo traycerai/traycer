@@ -1,5 +1,5 @@
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
-import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { CloudChatReadPort } from "@traycer-clients/shared/cloud-chat/cloud-chat-reader";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 
@@ -23,19 +23,45 @@ import type { HostRpcRegistry } from "@traycer/protocol/host/index";
  * The host is a byte pipe here and nothing more - it does not parse the head,
  * so it cannot gate on it and cannot verify a part against it. Both jobs sit
  * with the party that does the parsing.
+ *
+ * ## The verdict is re-read per request
+ *
+ * `mayReadCloud` is consulted before EVERY call, not once at construction.
+ * The reader is a pipeline - one head, then a fan-out of part reads for every
+ * uncached shard - and a session demoted to `unverified` after the head
+ * resolves would otherwise keep issuing part reads through the retained
+ * local-host credential: the query's render-time `enabled` gate stops the
+ * NEXT read, not the one in flight, and the host connection carries no
+ * renderer verdict of its own. A refusal here is a plain RPC error the
+ * pipeline propagates unchanged, so the read fails where it was already
+ * failing for a transport error. Found in review.
  */
 export function createHostCloudChatReadPort(
-  client: HostRequester<HostRpcRegistry>,
+  client: Pick<HostRequester<HostRpcRegistry>, "request">,
+  mayReadCloud: () => boolean,
 ): CloudChatReadPort {
+  const refuse = (method: string): HostRpcError =>
+    new HostRpcError({
+      code: "RPC_ERROR",
+      message:
+        "This session no longer holds a cloud verdict, so the cloud chat read was not sent.",
+      requestId: "client-pre-flight",
+      method,
+      fatalDetails: null,
+    });
   return {
     resolveHead: (identity) =>
-      client.request("epic.resolveCloudChatHead", identity),
+      mayReadCloud()
+        ? client.request("epic.resolveCloudChatHead", identity)
+        : Promise.reject(refuse("epic.resolveCloudChatHead")),
     readPart: (request) =>
-      client.request("epic.readCloudChatPart", {
-        ...request.identity,
-        sha256: request.sha256,
-        declaredByteLength: request.declaredByteLength,
-      }),
+      mayReadCloud()
+        ? client.request("epic.readCloudChatPart", {
+            ...request.identity,
+            sha256: request.sha256,
+            declaredByteLength: request.declaredByteLength,
+          })
+        : Promise.reject(refuse("epic.readCloudChatPart")),
   };
 }
 

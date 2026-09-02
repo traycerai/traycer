@@ -11,6 +11,10 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 
 import { useEpicMentionEntries } from "@/hooks/composer/use-epic-mention-entries";
 import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
+import {
   browserSessionsCoordinatorsForEpic,
   subscribeToBrowserSessionsCoordinators,
   type BrowserSessionsCoordinatorEntry,
@@ -373,12 +377,22 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     [active, requestContext, step],
   );
 
+  // The `epic.mention*` lane is the REMOTE one: it reads the account-wide
+  // mention index through the host, and the host connection carries no
+  // renderer verdict. An `unverified` session is admitted to the composer
+  // (its own epic is on this disk), but must not spend that index through the
+  // retained credential - so the request list is empty without a verdict,
+  // while the local suggestions merged below (open handles, the cached task
+  // list, browser tabs) keep serving. Found in review.
+  const cloudAuthorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
   const epicRequests = useMemo<ReadonlyArray<MentionEpicRequest>>(
     () =>
-      active
+      active && cloudAuthorized
         ? mentionProviderRegistry.epicRequests(step, debouncedRequestContext)
         : EMPTY_EPIC_REQUESTS,
-    [active, debouncedRequestContext, step],
+    [active, cloudAuthorized, debouncedRequestContext, step],
   );
 
   const {
@@ -527,11 +541,21 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       githubPending: github.checking,
     });
 
+  // The manual refresh re-reads the verdict at click time: the request list
+  // above is a rendered fact, and a demotion between the render and the
+  // click would otherwise refetch the queries it still holds.
+  const refetchEpicMentionsIfAuthorized = useCallback(
+    (): Promise<void> =>
+      authorizesCloudCapability(useAuthStore.getState().status)
+        ? refetchEpicMentions()
+        : Promise.resolve(),
+    [refetchEpicMentions],
+  );
   const stepChrome = useMentionStepChrome({
     active,
     step,
     githubChrome: github.chrome,
-    artifactRefetch: refetchEpicMentions,
+    artifactRefetch: refetchEpicMentionsIfAuthorized,
     artifactFetching: epicFetching,
     hostId: readiness.hostId,
     epicId: epicIdOrEmpty,

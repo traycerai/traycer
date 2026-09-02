@@ -1,7 +1,8 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
@@ -75,10 +76,23 @@ vi.mock("@/lib/host", async (importOriginal) => {
   return { ...actual, useHostClient: () => liveHostClient };
 });
 
+beforeEach(() => {
+  // The panel is a cloud surface and only mounts for a session holding a
+  // cloud verdict; every case here is about the account scope of such one.
+  useAuthStore
+    .getState()
+    .setSignedIn(
+      { userId: "user-usage", userName: "U", email: "u@example.com" },
+      { userId: "user-usage", username: "U" },
+      [],
+    );
+});
+
 afterEach(() => {
   cleanup();
   resetNegotiatedManifests();
   activeHostIdHolder.current = ACTIVE_HOST_ID;
+  useAuthStore.getState().setSignedOut();
 });
 
 const ZERO_PROVENANCE_SPLIT: UsageSummaryResponse["summary"]["totals"]["provenanceSplit"] =

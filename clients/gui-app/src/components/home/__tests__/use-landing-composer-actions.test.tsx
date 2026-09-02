@@ -4,6 +4,10 @@ import { useHostClient } from "@/lib/host";
 import { epicDisplayTitle } from "@/lib/display-title";
 import { createEpicName } from "@/lib/epic-name";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useInitialChatHandoffStore } from "@/stores/epics/initial-chat-handoff-store";
@@ -228,6 +232,15 @@ describe("useLandingComposerActions", () => {
     __resetTabNavigationControllerForTesting();
     draftRuntimeRegistry.resetForTesting();
     window.localStorage.clear();
+    // Creation is admitted for a session holding a cloud verdict; the
+    // unverified admission has its own case below.
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: "user-landing", userName: "U", email: "u@example.com" },
+        { userId: "user-landing", username: "U" },
+        [],
+      );
     landingMocks.request.mockReset();
     landingMocks.createTerminalAgent.mockReset();
     landingMocks.navigate.mockReset();
@@ -279,6 +292,8 @@ describe("useLandingComposerActions", () => {
     __resetTabNavigationControllerForTesting();
     draftRuntimeRegistry.resetForTesting();
     cleanup();
+    useAuthStore.getState().setSignedOut();
+    resetNegotiatedManifests();
     useInitialChatHandoffStore.getState().resetForTests();
     useComposerRunSettingsStore.getState().resetForTests();
     useWorkspaceFoldersStore.setState({ byHost: {} });
@@ -508,6 +523,60 @@ describe("useLandingComposerActions", () => {
         })
       ],
     ).toBeDefined();
+    queryClient.clear();
+  });
+
+  it("refuses an unverified session's create on a host without the local-first line, and admits it on one with it", async () => {
+    // `epic.create@1.0` cannot say whether this host creates locally or sends
+    // the create to the cloud on the retained credential; the host's
+    // `epic.listTasks` line can, and it is negotiated.
+    setSingleWorkspace();
+    useAuthStore
+      .getState()
+      .setUnverifiedSession(
+        { userId: "user-landing", userName: "U", email: "u@example.com" },
+        { userId: "user-landing", username: "U" },
+      );
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
+
+    // No manifest recorded for the host: fails closed.
+    let refusal: { readonly message: string } | null = null;
+    act(() => {
+      refusal = result.current.submit({
+        draftId: null,
+        editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
+        toolbar: defaultToolbar(),
+      });
+    });
+    expect(refusal).not.toBeNull();
+    expect(landingMocks.request).not.toHaveBeenCalled();
+
+    // The host advertises the local-first line: the same session is admitted.
+    recordNegotiatedHostManifest(TEST_HOST_ID, {
+      "epic.listTasks": { major: 1, minor: 6 },
+    });
+    let admitted: { readonly message: string } | null = { message: "unset" };
+    act(() => {
+      admitted = result.current.submit({
+        draftId: null,
+        editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
+        toolbar: defaultToolbar(),
+      });
+    });
+    expect(admitted).toBeNull();
+    await waitFor(() => {
+      expect(landingMocks.request).toHaveBeenCalled();
+    });
     queryClient.clear();
   });
 

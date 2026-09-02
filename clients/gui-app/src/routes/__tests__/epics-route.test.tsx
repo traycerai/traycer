@@ -14,6 +14,10 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { bindAuthInvalidation } from "@/router";
 import { requireSignedIn } from "@/lib/router-auth";
 import type { AppRouterContext } from "@/router";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { getCloudEpicTasksClient } from "@/lib/cloud-epic-tasks-query/client-registry";
 import { parseHistorySearch } from "@/lib/history-search";
 import type { HistorySearchState } from "@/lib/history-search";
@@ -145,6 +149,10 @@ describe("/epics route guard", () => {
  * fake context is enough without standing up the full router.
  */
 describe("/epics loader prefetch admission", () => {
+  afterEach(() => {
+    resetNegotiatedManifests();
+  });
+
   interface FakeHostClient {
     getActiveHostId(): string | null;
     getRequestContextUserId(): string | null;
@@ -192,6 +200,11 @@ describe("/epics loader prefetch admission", () => {
 
   it("prefetches the History first page for an unverified session with a matching request-context user", () => {
     const hostId = "host-epics-unverified";
+    // The host advertises the local-first line, so the prefetched leg is a
+    // disk read this session is admitted to.
+    recordNegotiatedHostManifest(hostId, {
+      "epic.listTasks": { major: 1, minor: 6 },
+    });
     const result = invokeEpicsIndexLoader({
       authStatus: "unverified",
       contextMetadataUserId: "user-1",
@@ -200,6 +213,49 @@ describe("/epics loader prefetch admission", () => {
     });
     expect(result.prefetchCalls).toBe(1);
     expect(getCloudEpicTasksClient(hostId)).not.toBeNull();
+  });
+
+  it("does not prefetch for an unverified session on a host below epic.listTasks@1.6", () => {
+    // A pre-1.6 host strips `localFirstPhase` and runs the released
+    // cloud-backed list on the retained credential; the hook's own gate
+    // refuses that, and the loader's prefetch is the same leg issued earlier.
+    const hostId = "host-epics-unverified-legacy";
+    recordNegotiatedHostManifest(hostId, {
+      "epic.listTasks": { major: 1, minor: 5 },
+    });
+    const result = invokeEpicsIndexLoader({
+      authStatus: "unverified",
+      contextMetadataUserId: "user-1",
+      hostId,
+      requestContextUserId: "user-1",
+    });
+    expect(result.prefetchCalls).toBe(0);
+  });
+
+  it("does not prefetch for an unverified session before the host's manifest has arrived", () => {
+    const result = invokeEpicsIndexLoader({
+      authStatus: "unverified",
+      contextMetadataUserId: "user-1",
+      hostId: "host-epics-unverified-no-manifest",
+      requestContextUserId: "user-1",
+    });
+    expect(result.prefetchCalls).toBe(0);
+  });
+
+  it("still prefetches for a signed-in session on a host below epic.listTasks@1.6", () => {
+    // Non-vacuity for the gate: an authorized session may spend the
+    // capability whatever the peer's minor is.
+    const hostId = "host-epics-signed-in-legacy";
+    recordNegotiatedHostManifest(hostId, {
+      "epic.listTasks": { major: 1, minor: 5 },
+    });
+    const result = invokeEpicsIndexLoader({
+      authStatus: "signed-in",
+      contextMetadataUserId: "user-1",
+      hostId,
+      requestContextUserId: "user-1",
+    });
+    expect(result.prefetchCalls).toBe(1);
   });
 
   it("does not prefetch for a signed-out session", () => {

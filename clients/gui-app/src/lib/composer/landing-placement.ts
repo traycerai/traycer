@@ -3,7 +3,13 @@ import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/hos
 import { hostUnavailability } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type { HostRpcRegistry } from "@/lib/host";
 import { hasReadyRemoteSession } from "@traycer-clients/shared/host-transport/remote/index";
+import type { SchemaVersion } from "@traycer/protocol/framework/index";
 import { dialableHostEndpointFor } from "@/lib/host/transport-key";
+import { negotiatedListTasksServesLocalFirst } from "@/lib/cloud-epic-tasks-query/local-first-admission";
+import {
+  authorizesCloudCapability,
+  type AuthStatus,
+} from "@/stores/auth/auth-store";
 
 /**
  * Display name for a host the composer is about to talk about. The generic
@@ -57,6 +63,39 @@ export type LandingPlacement =
       readonly client: HostClient<HostRpcRegistry>;
     }
   | { readonly kind: "refused"; readonly message: string };
+
+/**
+ * Whether a session WITHOUT a cloud verdict may create on the placement host.
+ *
+ * `admitsLocalPlane` lets an `unverified` session onto the landing workspace,
+ * and the composer there is live. `epic.create` negotiates only `@1.0`, whose
+ * released contract is the cloud create - so nothing on the wire tells a
+ * local-first host from an older one that would send the create to the cloud
+ * on the retained credential, spending the capability the verdict withheld.
+ * The host's `epic.listTasks` line answers instead: the release that serves
+ * the local-first initial leg (`@1.6`) is the release whose create is
+ * local-first, and that version IS negotiated. A `null` version (no handshake
+ * yet) refuses too, with copy that says why; the chip re-resolves when the
+ * manifest lands.
+ *
+ * Applied AFTER `resolveLandingPlacement` says `ready`, on the same host id
+ * that placement named, so the version consulted is the target's own. A
+ * `signed-in` session is never refused here. Found in review.
+ */
+export function refuseCreateWithoutCloudVerdict(input: {
+  readonly status: AuthStatus;
+  readonly negotiatedListTasks: SchemaVersion | null;
+  readonly hostLabel: string;
+}): LandingPlacement | null {
+  if (authorizesCloudCapability(input.status)) return null;
+  if (negotiatedListTasksServesLocalFirst(input.negotiatedListTasks)) {
+    return null;
+  }
+  return {
+    kind: "refused",
+    message: `Traycer couldn't confirm your sign-in, and ${input.hostLabel} can't create epics on this device without it. Sign in again, or update the device and try again.`,
+  };
+}
 
 /**
  * Selection model §54's submit-time re-validation, as a pure function.

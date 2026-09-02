@@ -13,7 +13,7 @@ import { APP_HEADER_HEIGHT_CLASS } from "@/components/layout/header/app-header-h
 import { NotificationsBell } from "@/components/notifications/notifications-bell";
 import { cn } from "@/lib/utils";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
-import { useAuthStore } from "@/stores/auth/auth-store";
+import { admitsLocalPlane, useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useTitleBarDraggingSuppressed } from "@/stores/layout/title-bar-drag-store";
 
@@ -162,9 +162,18 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
 
 // Hiding the bell when signed-out keeps the notifications-store +
 // runner-host subscriptions from mounting for a signed-out session.
+//
+// `admitsLocalPlane`, not `status === "signed-in"`: the notification centre
+// is a LOCAL-plane surface with cloud lanes inside it. For an `unverified`
+// session the session provider deliberately keeps the host-notification and
+// agent-activity lanes running and withholds only the cloud-backed ones
+// behind its own verdict gate - and on a desktop-width header this bell is
+// the ONLY entry point to those lanes, so gating it on the cloud verdict left
+// locally served failures, approvals and agent activity accumulating with no
+// way to see or act on them. Found in review.
 export function HeaderNotificationsBell() {
-  const isSignedIn = useAuthStore((state) => state.status === "signed-in");
-  if (!isSignedIn) {
+  const admitted = useAuthStore((state) => admitsLocalPlane(state.status));
+  if (!admitted) {
     return null;
   }
   return <NotificationsBell />;

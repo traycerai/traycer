@@ -39,6 +39,7 @@ import { getHostBindingSnapshot } from "@/lib/host/runtime";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { RootLandingPage } from "@/components/layout/root-landing-page";
 import { HeaderNotificationsBell } from "@/components/layout/header/app-header";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { requireSignedIn } from "@/lib/router-auth";
 import { bindAuthInvalidation, type AppRouterContext } from "@/router";
 import { AUTH_ERROR_SESSION_EXPIRED } from "@/lib/auth/auth-service";
@@ -536,11 +537,15 @@ function mountHarness(opts: {
       <div data-testid="admission-sentinel">
         <RootLandingPage />
       </div>
-      {/* Positive control: a genuinely cloud-dependent surface, through the
-          IDENTICAL `useAuthStore` wiring, still gated on `status ===
-          "signed-in"` (see `app-header.tsx`). */}
-      <div data-testid="cloud-control-slot">
-        <HeaderNotificationsBell />
+      {/* Admission gate #3 (app-header.tsx#HeaderNotificationsBell): the
+          desktop bell is a LOCAL-plane surface gated on `admitsLocalPlane`,
+          through the IDENTICAL `useAuthStore` wiring - it renders for the
+          admitted `unverified` session. The cloud control for this file is
+          the fetch-boundary ledger (`hostsRequests`), not a component. */}
+      <div data-testid="local-control-slot">
+        <TooltipProvider>
+          <HeaderNotificationsBell />
+        </TooltipProvider>
       </div>
       <RouterProvider router={router} />
     </Wrapper>,
@@ -654,20 +659,18 @@ describe("renderer local admission — cross-seam (real AuthService × real useA
     //   - `queryByText("Welcome to Traycer")` is an ABSENCE check, so an
     //     unmounted tree satisfies it VACUOUSLY - it passes while proving
     //     nothing, and would have gone on passing forever.
-    //   - `getByTestId("cloud-control-slot")` THROWS on an element that is
+    //   - `getByTestId("local-control-slot")` THROWS on an element that is
     //     merely not mounted yet, failing for the one reason it is not about.
     //
-    // The gate waits on the slot EXISTING; the emptiness check stays separate
-    // below, because folding them into one `waitFor` on `childElementCount
-    // === 0` would be satisfied at the instant the bell has not rendered its
-    // contents either - the vacuous version of this control.
+    // The gate waits on the slot EXISTING; the bell check stays separate
+    // below, so the two failure reasons stay distinguishable.
     await vi.waitFor(
       () => {
         // Plain null checks, not jest-dom: this repo does not register those
         // matchers, so `toBeInTheDocument()` would throw here rather than
         // assert.
         expect(screen.queryByTestId("runtime-fallback")).toBeNull();
-        expect(screen.queryByTestId("cloud-control-slot")).not.toBeNull();
+        expect(screen.queryByTestId("local-control-slot")).not.toBeNull();
       },
       { timeout: 5000, interval: 50 },
     );
@@ -678,11 +681,17 @@ describe("renderer local admission — cross-seam (real AuthService × real useA
     // content and a positive control in the identical tree.
     expect(screen.queryByText("Welcome to Traycer")).toBeNull();
 
-    // Positive control, identical wiring: a surface that really does read
-    // `status === "signed-in"` (app-header.tsx#HeaderNotificationsBell)
-    // stays dark under `unverified`. Without this, the local content below
-    // would only prove something upstream was stubbed permissively.
-    expect(screen.getByTestId("cloud-control-slot").childElementCount).toBe(0);
+    // Admission gate #3 (app-header.tsx#HeaderNotificationsBell), identical
+    // wiring: the desktop bell reads `admitsLocalPlane` and RENDERS under
+    // `unverified` - it is the only desktop entry point to the local
+    // notification lanes the session provider keeps running for this
+    // cohort. A positive assertion, so an upstream stub that mounted
+    // nothing could not satisfy it.
+    expect(
+      screen
+        .getByTestId("local-control-slot")
+        .querySelector('[data-testid="notifications-bell"]'),
+    ).not.toBeNull();
 
     // Admission gate #2 (router-auth.ts#requireSignedIn): a real navigation
     // to a real requireSignedIn-guarded route succeeds without a validated

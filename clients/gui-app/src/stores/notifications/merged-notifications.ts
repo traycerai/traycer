@@ -4,6 +4,10 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
+import {
   Analytics,
   AnalyticsEvent,
   analyticsCountBucket,
@@ -702,6 +706,22 @@ export function useNotificationCenterHostState(): NotificationCenterHostState {
   };
 }
 
+/**
+ * The LIVE cloud verdict, read at dispatch time.
+ *
+ * `feedMode === "cloud"` is a rendered fact: the session provider closes and
+ * resets the cloud lanes in an effect when a signed-in session is demoted to
+ * `unverified`, so for the commit/effect window in between the popover (or
+ * its clear confirmation) still holds actionable cloud rows and callbacks.
+ * The retained local-host connection carries no renderer verdict, so a cloud
+ * write dispatched in that window goes out on the still-valid bearer after
+ * authorization was withdrawn. Every cloud-feed mutation below re-reads the
+ * store here instead of trusting its closure. Found in review.
+ */
+function cloudAuthorizedNow(): boolean {
+  return authorizesCloudCapability(useAuthStore.getState().status);
+}
+
 export function useMergedNotificationsActions(): MergedNotificationsActions {
   const feedMode = useNotificationFeedMode();
   // Bound to the host that OWNS the notification streams, not the app-wide
@@ -1147,6 +1167,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         }
         if (parsed.source === "cloud") {
           if (feedMode !== "cloud" || typeof target === "string") return;
+          if (!cloudAuthorizedNow()) return;
           useCloudNotificationsStore
             .getState()
             .markReadLocally(target.sourceId, Date.now());
@@ -1190,6 +1211,9 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
           if (client !== null && notificationHostId !== null) {
             markHostAllRead.mutate({ beforeUpdatedAt: Date.now() });
           }
+          // The cloud leg, and only it, is gated on the live verdict: the
+          // lanes above are local state and the host plane.
+          if (!cloudAuthorizedNow()) return;
           if (cloudConnectionState !== "connected" || cloudVersion === null) {
             return;
           }
@@ -1213,6 +1237,9 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
             // every renderable row.
             for (const entryId of fallbackEntryIds) {
               if (!isCurrentCloudMutation(fallbackContext)) return;
+              // Re-read per entry: this loop outlives the click by one
+              // round-trip per row, which is longer than a demotion takes.
+              if (!cloudAuthorizedNow()) return;
               try {
                 await cloudMarkRead.mutateAsync({ entryId });
               } catch {
@@ -1261,6 +1288,12 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         // serializes per entry the way `markAllAsRead` does.
         requestCloudEntityRead(originHostId, entity, {
           markRead: async (entryId) => {
+            // Thrown rather than skipped: the driver records a resolved
+            // `markRead` as done, and a withdrawn verdict is not done - it is
+            // a retry once the session is verified again.
+            if (!cloudAuthorizedNow()) {
+              throw new Error("cloud capability withdrawn");
+            }
             const result = await cloudMarkRead.mutateAsync({ entryId });
             // `unavailable` is a refusal, not a transport failure - the
             // mutation resolves, so the driver has to be told explicitly or it
@@ -1275,6 +1308,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       },
       clear: (row) => {
         if (row.source !== "cloud" || feedMode !== "cloud") return;
+        if (!cloudAuthorizedNow()) return;
         cloudClear.mutate({ entryId: row.sourceId });
       },
       clearAll: () => {
@@ -1314,6 +1348,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
           clearHostAll.mutate({ beforeUpdatedAt: Date.now() });
         }
         if (feedMode !== "cloud" || cloudVersion === null) return;
+        if (!cloudAuthorizedNow()) return;
         // Send the version of the snapshot the user is LOOKING AT, not
         // whatever the cloud head has reached by the time this lands. The
         // fan-out then covers exactly the rows on screen, and an entry that

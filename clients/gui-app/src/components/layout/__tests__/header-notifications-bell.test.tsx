@@ -83,6 +83,27 @@ describe("HeaderNotificationsBell auth gate", () => {
     expect(screen.queryByTestId("notifications-bell")).toBeNull();
   });
 
+  it("renders the bell for an unverified session - the local lanes need their only desktop entry point", () => {
+    // The session provider keeps the host-notification and agent-activity
+    // lanes running under `unverified` and withholds only the cloud lanes;
+    // gating the bell on the cloud verdict left those lanes with no way in.
+    useAuthStore
+      .getState()
+      .setUnverifiedSession(
+        { userId: "test-user", userName: "U", email: "u@example.com" },
+        { userId: "test-user", username: "U" },
+      );
+    const runnerHost = createRunnerHost();
+    render(
+      <RunnerHostProvider runnerHost={runnerHost}>
+        <TooltipProvider>
+          <HeaderNotificationsBell />
+        </TooltipProvider>
+      </RunnerHostProvider>,
+    );
+    expect(screen.getByTestId("notifications-bell")).not.toBeNull();
+  });
+
   it("renders the bell once the user transitions to signed-in", () => {
     const runnerHost = createRunnerHost();
     render(

@@ -322,7 +322,12 @@ export function useCloudChatRead(
     try {
       return await readCloudChat({
         identity,
-        port: createHostCloudChatReadPort(client),
+        // The verdict is re-read by the port before every head and part
+        // request: `enabled` below stops the next read, not the fan-out of
+        // part reads already running when a session is demoted.
+        port: createHostCloudChatReadPort(client, () =>
+          authorizesCloudCapability(useAuthStore.getState().status),
+        ),
         // Resolved per read, not captured at module load: sign-out DROPS the
         // store (an already-opened `Cache` handle survives its own deletion, and
         // the no-Cache-API fallback is not in `CacheStorage` at all), so a

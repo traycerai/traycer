@@ -1,7 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { getNegotiatedHostMethodVersion } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import {
   cloudEpicTasksFirstPageQueryOptions,
   listCloudTasksRequestForHistorySearch,
+  negotiatedListTasksServesLocalFirst,
   registerCloudEpicTasksClient,
 } from "@/lib/cloud-epic-tasks-query";
 import {
@@ -9,7 +11,10 @@ import {
   parseHistorySearch,
 } from "@/lib/history-search";
 import { requireSignedIn } from "@/lib/router-auth";
-import { admitsLocalPlane } from "@/stores/auth/auth-store";
+import {
+  admitsLocalPlane,
+  authorizesCloudCapability,
+} from "@/stores/auth/auth-store";
 import { EpicsIndexRoute } from "../epics-index-route-components";
 
 export const Route = createFileRoute("/epics/")({
@@ -35,6 +40,21 @@ export const Route = createFileRoute("/epics/")({
     // `resolveCloudTasksUserId`), so admitting it here spends nothing the
     // component would not spend a moment later.
     if (!admitsLocalPlane(auth.status)) return { historyNowMs };
+    // ...but only if the host will actually serve it locally. The hook applies
+    // this same version gate before ITS leg, and the prefetch is that leg
+    // issued earlier: a pre-`@1.6` host strips `localFirstPhase` and runs the
+    // released cloud-backed list on the retained credential, so without the
+    // gate a route navigation spent cloud capability the verdict withheld. A
+    // manifest that has not arrived yet answers `null` and skips - the
+    // component fetches the moment the host says `1.6`. Found in review.
+    if (
+      !authorizesCloudCapability(auth.status) &&
+      !negotiatedListTasksServesLocalFirst(
+        getNegotiatedHostMethodVersion(hostId, "epic.listTasks"),
+      )
+    ) {
+      return { historyNowMs };
+    }
     const userId = auth.contextMetadata?.userId ?? null;
     if (userId === null) return { historyNowMs };
     if (client.getRequestContextUserId() !== userId) return { historyNowMs };

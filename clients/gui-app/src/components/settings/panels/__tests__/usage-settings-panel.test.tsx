@@ -7,7 +7,7 @@ import {
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
@@ -19,15 +19,33 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { UsageSettingsPanelForClient } from "@/components/settings/panels/usage-settings-panel";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 type UsageSummaryResponse = ResponseOfMethod<
   HostRpcRegistry,
   "host.usage.summary"
 >;
 
+/** How many `host.usage.summary` requests reached the mock host. */
+const usageRequests = { count: 0 };
+
+beforeEach(() => {
+  // The panel is a cloud surface: it only mounts for a session that holds a
+  // cloud verdict. Every case below presumes one unless it says otherwise.
+  useAuthStore
+    .getState()
+    .setSignedIn(
+      { userId: "user-usage", userName: "U", email: "u@example.com" },
+      { userId: "user-usage", username: "U" },
+      [],
+    );
+});
+
 afterEach(() => {
   cleanup();
   resetNegotiatedManifests();
+  useAuthStore.getState().setSignedOut();
+  usageRequests.count = 0;
 });
 
 const ZERO_PROVENANCE_SPLIT: UsageSummaryResponse["summary"]["totals"]["provenanceSplit"] =
@@ -120,6 +138,7 @@ function renderPanel(usageSummary: UsageSummaryResponse | undefined): {
       requestId: () => "req-1",
       handlers: {
         "host.usage.summary": () => {
+          usageRequests.count += 1;
           if (usageSummary === undefined) {
             throw new Error("host.usage.summary not configured for this test");
           }
@@ -145,6 +164,31 @@ function renderPanel(usageSummary: UsageSummaryResponse | undefined): {
 }
 
 describe("<UsageSettingsPanel />", () => {
+  it("withholds the dashboard - and its request - from a session without a cloud verdict", async () => {
+    // `host.usage.summary` is served by whichever reader the HOST picks, and
+    // the client has no local-only selector to ask for, so an `unverified`
+    // session would read account-wide usage through the retained credential.
+    // The whole panel is withheld, which also covers Retry and window changes.
+    useAuthStore
+      .getState()
+      .setUnverifiedSession(
+        { userId: "user-usage", userName: "U", email: "u@example.com" },
+        { userId: "user-usage", username: "U" },
+      );
+    recordNegotiatedHostMethods(mockLocalHostEntry.hostId, [
+      "host.usage.summary",
+    ]);
+    renderPanel(makeUsageSummaryResponse());
+
+    expect(screen.getByTestId("usage-unverified-notice")).not.toBeNull();
+    expect(screen.queryByTestId("usage-unsupported-notice")).toBeNull();
+    // A settled tick: a request that WAS going to be issued has been by now.
+    await waitFor(() => {
+      expect(screen.getByTestId("usage-unverified-notice")).not.toBeNull();
+    });
+    expect(usageRequests.count).toBe(0);
+  });
+
   it("hides the surface entirely - renders the capability notice, never the panel body - on a host that hasn't negotiated host.usage.summary", () => {
     // No `recordNegotiatedHostMethods` call: the negotiated-manifest registry
     // fails closed to "unknown", which this hook collapses to "unsupported".
