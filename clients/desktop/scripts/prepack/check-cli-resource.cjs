@@ -182,13 +182,31 @@ const archScoped = join(
   hostBinary,
 );
 const flat = join(CLI_DIR, hostBinary);
+const flatPresent = isExecutable(flat);
 if (isExecutable(archScoped)) {
+  // A flat binary alongside the arch-scoped one does not make the pack
+  // wrong - the flat path sits outside the `from` root of every mapping in
+  // `package.json`, so it cannot reach the bundle and the app still ships
+  // the correct CLI. Refusing here would fail a build whose output is
+  // perfectly good. It IS worth saying out loud though: someone who staged
+  // the flat copy expecting it to ship, next to an arch dir left over from
+  // an older build, would otherwise ship the stale arch-scoped binary and
+  // never learn which one they packaged (host mode has no version check to
+  // catch that - only the release matrix mode above validates version.json).
+  if (flatPresent) {
+    console.warn(
+      `[desktop] warning: a flat-layout CLI binary is also staged at ${flat}.\n` +
+        `          electron-builder no longer copies it - the packaged app gets\n` +
+        `          ${archScoped}\n` +
+        `          Delete the flat binary so a stale copy cannot be mistaken for the one that ships.`,
+    );
+  }
   console.log(
     `[desktop] CLI resource precheck ok - arch-scoped binary present at ${archScoped}.`,
   );
   process.exit(0);
 }
-if (isExecutable(flat)) {
+if (flatPresent) {
   fail(
     `Found a flat-layout CLI binary at ${flat}, which electron-builder no longer packages.\n` +
       `         Move it to the arch-scoped layout: ${archScoped}`,
