@@ -34,13 +34,18 @@ const CLAIM: RoleClaim = {
   claimedAt: 1,
 };
 
-function renderHover(overrides: {
+interface HoverOverrides {
   readonly hostId: string | null;
   readonly ownerKind: "chat" | "terminal-agent" | null;
   readonly ownerHostUnreachable: boolean;
   readonly roleClaims: readonly RoleClaim[];
   readonly side: "top" | "right" | "bottom" | "left";
-}) {
+  readonly extraContent: React.ReactNode | null;
+}
+
+const NO_EXTRA: Pick<HoverOverrides, "extraContent"> = { extraContent: null };
+
+function renderHover(overrides: HoverOverrides) {
   render(
     <TooltipProvider>
       <AgentHoverTooltip
@@ -52,7 +57,7 @@ function renderHover(overrides: {
         ownerHostUnreachable={overrides.ownerHostUnreachable}
         ownerKind={overrides.ownerKind}
         roleClaims={overrides.roleClaims}
-        extraContent={null}
+        extraContent={overrides.extraContent}
         side={overrides.side}
       />
     </TooltipProvider>,
@@ -77,6 +82,7 @@ describe("AgentHoverTooltip", () => {
       ownerKind: "chat",
       roleClaims: [CLAIM],
       side: "top",
+      ...NO_EXTRA,
     });
 
     expect(
@@ -102,6 +108,7 @@ describe("AgentHoverTooltip", () => {
       ownerKind: "chat",
       roleClaims: [CLAIM],
       side: "top",
+      ...NO_EXTRA,
     });
 
     expect(screen.queryByTestId("worktree-owner-tooltip")).toBeNull();
@@ -121,6 +128,7 @@ describe("AgentHoverTooltip", () => {
       ownerKind: "chat",
       roleClaims: [],
       side: "top",
+      ...NO_EXTRA,
     });
 
     const trigger = screen.getByRole("button", { name: "Reviewer" });
@@ -135,6 +143,7 @@ describe("AgentHoverTooltip", () => {
       ownerKind: null,
       roleClaims: [CLAIM],
       side: "top",
+      ...NO_EXTRA,
     });
 
     expect(screen.queryByTestId("worktree-owner-tooltip")).toBeNull();
@@ -157,11 +166,70 @@ describe("AgentHoverTooltip", () => {
       ownerKind: null,
       roleClaims: [],
       side: "top",
+      ...NO_EXTRA,
     });
 
     expect(screen.queryByTestId("worktree-owner-tooltip")).toBeNull();
     const trigger = screen.getByRole("button", { name: "Reviewer" });
     await userEvent.hover(trigger);
+    expect(screen.queryByTestId("agent-role-hover-content")).toBeNull();
+  });
+
+  it("puts the caller's own content under the role content", () => {
+    // The office adds a line of its own beneath the shared card. Both have to
+    // survive: the floor's posture line replacing the roles would be a
+    // regression the surfaces could not see in each other.
+    renderHover({
+      hostId: "host-a",
+      ownerHostUnreachable: false,
+      ownerKind: "chat",
+      roleClaims: [CLAIM],
+      side: "top",
+      extraContent: (
+        <span data-testid="caller-extra">Working · large model</span>
+      ),
+    });
+
+    const supplemental = screen.getByTestId("worktree-supplemental");
+    expect(supplemental.textContent).toContain("Edge owner");
+    expect(supplemental.textContent).toContain("Working · large model");
+    // Under, not over: the shared card's own content comes first.
+    const roles = supplemental.textContent.indexOf("Edge owner");
+    const own = supplemental.textContent.indexOf("Working");
+    expect(roles).toBeLessThan(own);
+  });
+
+  it("still names the agent when the caller passes no extra content", async () => {
+    // `ReactNode` includes `undefined`, so an omitted `extraContent` is not
+    // `null`. Testing only for `null` built an empty fragment, and a non-null
+    // supplemental is what displaces the name label - so the card lost its
+    // title and put nothing in its place.
+    render(
+      <TooltipProvider>
+        <AgentHoverTooltip
+          trigger={<button type="button">Reviewer of everything</button>}
+          epicId="epic-1"
+          nodeId="agent-1"
+          nodeName="Reviewer of everything"
+          hostId="host-a"
+          ownerHostUnreachable
+          ownerKind="chat"
+          roleClaims={[]}
+          // EXPLICITLY undefined, which is what the prop's `ReactNode` admits
+          // and what a caller that has nothing to add passes.
+          extraContent={undefined}
+          side="top"
+        />
+      </TooltipProvider>,
+    );
+
+    const trigger = screen.getByRole("button", {
+      name: "Reviewer of everything",
+    });
+    await userEvent.hover(trigger);
+
+    const labels = await screen.findAllByText("Reviewer of everything");
+    expect(labels).not.toHaveLength(0);
     expect(screen.queryByTestId("agent-role-hover-content")).toBeNull();
   });
 
@@ -201,6 +269,7 @@ describe("AgentHoverTooltip", () => {
       ownerKind: "chat",
       roleClaims: [CLAIM],
       side: "right",
+      ...NO_EXTRA,
     });
 
     expect(

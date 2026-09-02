@@ -78,27 +78,41 @@ function readFiniteNumber(value: unknown, fallback: number): number {
 }
 
 /**
- * Anything that is not the literal `"graph"` reads as the office floor. That
- * covers a tile persisted before the mode existed as well as a value from a
- * future build, and both degrade to the product default rather than to a blank
+ * What a PERSISTED tile falls back to when its view is unreadable.
+ *
+ * The mode deliberately differs from {@link DEFAULT_COMM_GRAPH_VIEW}: a tile
+ * saved before the office existed rendered the node graph, so reopening it on
+ * the floor would change what a person already had open. Only a tile created
+ * NOW starts on the floor.
+ */
+const PERSISTED_COMM_GRAPH_VIEW: CommGraphTileViewState = {
+  ...DEFAULT_COMM_GRAPH_VIEW,
+  mode: "graph",
+};
+
+/**
+ * Anything that is not the literal `"office"` reads as the node graph. That
+ * covers a tile persisted before the mode existed - which rendered the graph,
+ * and must keep rendering it - as well as a value from a future build, which
+ * degrades to the rendering that has always existed rather than to a blank
  * canvas.
  */
 function readCommGraphViewMode(value: unknown): CommGraphTileViewState["mode"] {
-  return value === "graph" ? "graph" : "office";
+  return value === "office" ? "office" : "graph";
 }
 
 export function parseCommGraphTileViewState(
   value: unknown,
 ): CommGraphTileViewState {
-  if (!isRecord(value)) return DEFAULT_COMM_GRAPH_VIEW;
-  const zoom = readFiniteNumber(value.zoom, DEFAULT_COMM_GRAPH_VIEW.zoom);
+  if (!isRecord(value)) return PERSISTED_COMM_GRAPH_VIEW;
+  const zoom = readFiniteNumber(value.zoom, PERSISTED_COMM_GRAPH_VIEW.zoom);
   return {
-    x: readFiniteNumber(value.x, DEFAULT_COMM_GRAPH_VIEW.x),
-    y: readFiniteNumber(value.y, DEFAULT_COMM_GRAPH_VIEW.y),
+    x: readFiniteNumber(value.x, PERSISTED_COMM_GRAPH_VIEW.x),
+    y: readFiniteNumber(value.y, PERSISTED_COMM_GRAPH_VIEW.y),
     // A persisted zoom of 0 (or negative) would render an invisible canvas the
     // user cannot recover from, so it degrades to the default rather than
     // failing the whole tile.
-    zoom: zoom > 0 ? zoom : DEFAULT_COMM_GRAPH_VIEW.zoom,
+    zoom: zoom > 0 ? zoom : PERSISTED_COMM_GRAPH_VIEW.zoom,
     mode: readCommGraphViewMode(value.mode),
   };
 }

@@ -108,11 +108,18 @@ export class OfficeFrameGate {
   }
 
   /**
-   * Primes the accumulator so the first frame after a resume draws
-   * immediately - coming back to a tab should not cost an extra frame's wait.
+   * Primes the gate so the first frame after a resume draws immediately.
+   *
+   * BOTH rules have to stand aside, not just the rate cap. The canvas a
+   * resumed tile comes back to holds whatever was last painted into it, which
+   * on a still floor is a frame from before the pause - and the idle skip,
+   * seeing the same minute it last drew, would leave that stale image up until
+   * something happened to move. Forgetting the drawn minute is what guarantees
+   * the first frame back is painted.
    */
   resume(): void {
     this.sinceLastFrame = OFFICE_FRAME_INTERVAL_MS;
+    this.lastDrawnMinute = -1;
   }
 }
 

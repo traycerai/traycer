@@ -17,27 +17,28 @@ afterEach(() => {
  */
 describe("officeHarnessLogo", () => {
   it("returns null and stays silent where nothing can be rasterized", () => {
-    expect(() => officeHarnessLogo("claude", "light")).not.toThrow();
-    expect(officeHarnessLogo("claude", "light")).toBeNull();
+    expect(() => officeHarnessLogo("claude")).not.toThrow();
+    expect(officeHarnessLogo("claude")).toBeNull();
   });
 
   it("survives being called every frame for every harness on the floor", () => {
     expect(() => {
       for (let frame = 0; frame < 3; frame += 1) {
-        officeHarnessLogo("claude", "dark");
-        officeHarnessLogo("codex", "dark");
-        officeHarnessLogo("cursor", "light");
+        officeHarnessLogo("claude");
+        officeHarnessLogo("codex");
+        officeHarnessLogo("cursor");
       }
     }).not.toThrow();
   });
 
-  it("keys the cache by theme, so a theme flip is not a stale logo", () => {
-    officeHarnessLogo("claude", "light");
-    // Distinct keys, so neither answer can be served for the other theme. Both
-    // are null here; what is under test is that the second call is a MISS and
-    // starts its own work rather than reading the first theme's slot.
-    expect(officeHarnessLogo("claude", "dark")).toBeNull();
+  it("serves one raster per harness and forgets it all on a clear", () => {
+    // The theme is NOT part of the key: the mark is recolored to the harness
+    // accent, which is the same colour in both themes, so a per-theme entry
+    // only ever held a second identical raster. Asking repeatedly is a hit
+    // that starts no further work; clearing puts it back to a cold miss.
+    officeHarnessLogo("claude");
+    expect(officeHarnessLogo("claude")).toBeNull();
     clearOfficeLogoCache();
-    expect(officeHarnessLogo("claude", "light")).toBeNull();
+    expect(officeHarnessLogo("claude")).toBeNull();
   });
 });

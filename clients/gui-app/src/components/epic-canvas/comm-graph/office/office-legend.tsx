@@ -107,7 +107,11 @@ export function OfficeLegend() {
       {!open ? null : (
         <div
           className={cn(
-            "max-h-80 max-w-64 overflow-y-auto rounded-md border border-border",
+            // Capped against the TILE and the viewport, never a fixed width:
+            // the key floats over a floor that is itself resizable, and a
+            // 16rem card is wider than the tile on a split canvas.
+            "max-h-80 max-w-[min(100%,30vw)] overflow-y-auto",
+            "rounded-md border border-border",
             "bg-popover p-2",
             "text-popover-foreground shadow-md",
           )}

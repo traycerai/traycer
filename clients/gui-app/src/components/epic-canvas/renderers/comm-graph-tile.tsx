@@ -100,6 +100,9 @@ export function CommGraphTile(props: CommGraphTileProps) {
 
   const handleModeChange = useCallback(
     (mode: CommGraphTileViewState["mode"]) => {
+      // Pressing the mode you are already in is not a mode change, and the
+      // reset below would throw away a framing the person chose by hand.
+      if (mode === node.view.mode) return;
       // The viewport is RESET, not carried over: the two modes measure it in
       // different units (flow units against sprite pixels), so a framing chosen
       // in one is meaningless in the other and would land the incoming mode
@@ -107,7 +110,7 @@ export function CommGraphTile(props: CommGraphTileProps) {
       // each renderer reads as "fit yourself".
       updateView(viewTabId, node.id, { ...DEFAULT_COMM_GRAPH_VIEW, mode });
     },
-    [node.id, updateView, viewTabId],
+    [node.id, node.view.mode, updateView, viewTabId],
   );
 
   if (agents.length === 0) {

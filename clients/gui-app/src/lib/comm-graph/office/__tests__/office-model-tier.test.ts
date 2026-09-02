@@ -20,6 +20,26 @@ const CASES: ReadonlyArray<TierCase> = [
   { model: "some-model-max", tier: "large", why: "qualifier" },
   { model: "some-model-ultra", tier: "large", why: "qualifier" },
   { model: "claude-sonnet-4.5", tier: "large", why: "sonnet at the cutoff" },
+  {
+    model: "claude-sonnet-4-5",
+    tier: "large",
+    why: "a dash is the same version as a dot",
+  },
+  {
+    model: "claude-sonnet-4-5-20250929",
+    tier: "large",
+    why: "dashed version ahead of a release stamp",
+  },
+  {
+    model: "claude-sonnet-4-20250514",
+    tier: "medium",
+    why: "the stamp is not a minor version",
+  },
+  {
+    model: "claude-3-5-sonnet-20241022",
+    tier: "medium",
+    why: "the version precedes the family name, and a stamp follows it",
+  },
   { model: "claude-sonnet-5", tier: "large", why: "sonnet past the cutoff" },
   {
     model: "claude-sonnet-3.5",
@@ -55,10 +75,32 @@ describe("officeModelTier", () => {
     });
   }
 
+  /**
+   * Names deliberately absent from the table above. Asking the table's own
+   * inputs what the tiers are proves nothing - the answers were asserted one
+   * by one already - so the closed set is checked against names the heuristic
+   * has no rule for, which is where an unexpected answer could come from.
+   */
   it("never answers anything outside the three tiers", () => {
-    const tiers = new Set(CASES.map((entry) => officeModelTier(entry.model)));
-    for (const tier of tiers) {
-      expect(["small", "medium", "large"]).toContain(tier);
+    const strangers: ReadonlyArray<string> = [
+      "MINI",
+      "mini",
+      "sonnet-sonnet-sonnet",
+      "gpt",
+      "-",
+      "//",
+      "opus-mini-max-nano-ultra",
+      "model.with.dots",
+      "model_with_underscores",
+      "9999",
+      "sonnet-99.99",
+      "  spaced out  ",
+      "🙂",
+    ];
+    for (const stranger of strangers) {
+      expect(["small", "medium", "large"], stranger).toContain(
+        officeModelTier(stranger),
+      );
     }
   });
 });

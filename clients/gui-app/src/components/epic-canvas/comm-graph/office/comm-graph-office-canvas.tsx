@@ -540,7 +540,6 @@ interface DrawFrameArgs {
 function drawHarnessLogo(
   ctx: CanvasRenderingContext2D,
   drawable: Extract<OfficeDrawable, { kind: "logo" }>,
-  theme: OfficeTheme,
   chipColor: string,
 ): void {
   const half = OFFICE_LOGO_SIZE / 2;
@@ -568,7 +567,7 @@ function drawHarnessLogo(
   ctx.fill();
   // `null` while the logo rasterizes - the chip alone is the placeholder, and
   // the next frame after the decode picks the mark up with no invalidation.
-  const logo = officeHarnessLogo(drawable.harnessId, theme);
+  const logo = officeHarnessLogo(drawable.harnessId);
   if (logo !== null) {
     ctx.drawImage(logo, drawable.x - half, drawable.y - half);
   }
@@ -948,7 +947,7 @@ function drawOfficeFrame(args: DrawFrameArgs): void {
         continue;
       }
       if (drawable.kind === "logo") {
-        drawHarnessLogo(ctx, drawable, theme, palette.wallDark);
+        drawHarnessLogo(ctx, drawable, palette.wallDark);
         continue;
       }
       if (drawable.kind === "clock") {
@@ -1073,6 +1072,8 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   // A pan asked for outside the frame loop. Handlers and the Find adapter have
   // no frame clock, so they name the destination and the loop starts it.
   const dragRef = useRef<DragState | null>(null);
+  /** The ratio the bitmap was last sized at, so a change to it is detectable. */
+  const appliedDprRef = useRef<number>(1);
   const wasPlayingRef = useRef(playing);
   const autoPannedKeyRef = useRef<string | null>(null);
   const persistTimerRef = useRef<number | null>(null);
@@ -1339,26 +1340,36 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
 
   // Sizing the bitmap is the ONLY place device pixels appear outside the draw:
   // everything else works in CSS pixels and lets the transform scale it.
-  useEffect(() => {
+  const applyCanvasSize = useCallback((): void => {
     const container = containerRef.current;
     const canvas = canvasRef.current;
     if (container === null || canvas === null) return;
-    const applySize = (): void => {
-      const rect = container.getBoundingClientRect();
-      const dpr = window.devicePixelRatio || 1;
-      runtime.setViewport({ width: rect.width, height: rect.height });
-      const width = Math.max(1, Math.round(rect.width * dpr));
-      const height = Math.max(1, Math.round(rect.height * dpr));
-      if (canvas.width !== width) canvas.width = width;
-      if (canvas.height !== height) canvas.height = height;
-    };
-    applySize();
-    const observer = new ResizeObserver(applySize);
+    const rect = container.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    appliedDprRef.current = dpr;
+    runtime.setViewport({ width: rect.width, height: rect.height });
+    const width = Math.max(1, Math.round(rect.width * dpr));
+    const height = Math.max(1, Math.round(rect.height * dpr));
+    if (canvas.width !== width) canvas.width = width;
+    if (canvas.height !== height) canvas.height = height;
+  }, [runtime]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (container === null) return;
+    applyCanvasSize();
+    const observer = new ResizeObserver(applyCanvasSize);
     observer.observe(container);
+    // A DEVICE PIXEL RATIO change is invisible to the observer: dragging the
+    // window from a 1x display to a 2x one leaves every CSS dimension exactly
+    // as it was, so nothing resizes and the bitmap stays at half the density
+    // the screen now has - a permanently blurry floor.
+    window.addEventListener("resize", applyCanvasSize);
     return () => {
       observer.disconnect();
+      window.removeEventListener("resize", applyCanvasSize);
     };
-  }, [runtime]);
+  }, [applyCanvasSize]);
 
   // Mirrored into the runtime rather than read from props inside the frame
   // loop: the loop is created once and must see the latest values without
@@ -1396,7 +1407,12 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       const second = Math.floor(now / 1000);
       if (second === lastClockSecond) return;
       lastClockSecond = second;
-      readScene().sync({ ...input, clockMs: now });
+      const stamped = { ...input, clockMs: now };
+      readScene().sync(stamped);
+      // Stored back, not merely synced: the idle skip reads the clock off the
+      // runtime to decide whether the minute turned over, and a stamp only the
+      // scene knows about leaves it comparing the mount-time value forever.
+      runtime.setSceneInput(stamped);
     };
 
     // Re-fit an unframed tile whenever the floor's size changes - agents
@@ -1485,6 +1501,25 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
 
       const frame = scene.frame();
       runtime.setHitRegions(frame.hitRegions);
+      // A DPR change does not resize anything in CSS pixels, so no resize
+      // event is guaranteed to arrive - a browser zoom on a secondary display
+      // moves it silently. The compare is two property reads a frame.
+      if ((window.devicePixelRatio || 1) !== appliedDprRef.current) {
+        applyCanvasSize();
+      }
+      // The hover card's rect was measured on the last pointermove, and the
+      // character it points at can leave without the pointer moving at all:
+      // the cursor scrubs to a time before that agent existed, or the agent
+      // simply walks off to the cafeteria. Holding the card open would leave
+      // it anchored to empty floor.
+      const hovered = runtime.getHoveredAgentId();
+      if (
+        hovered !== null &&
+        !frame.hitRegions.some((region) => region.agentId === hovered)
+      ) {
+        runtime.setHoveredAgentId(null);
+        setHoverCard(null);
+      }
       const camera = runtime.getCamera();
       const viewport = runtime.getViewport();
       applyAutoFit(frame.size, viewport);
@@ -1497,7 +1532,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         frame,
         camera,
         viewport,
-        dpr: window.devicePixelRatio || 1,
+        dpr: appliedDprRef.current,
         theme: resolvedTheme,
         searchMatchIds: runtime.getSearchMatchIds(),
         nameById,
@@ -1554,7 +1589,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       observer.disconnect();
       stop();
     };
-  }, [nameById, readScene, resolvedTheme, runtime]);
+  }, [applyCanvasSize, nameById, readScene, resolvedTheme, runtime]);
 
   const toSpritePoint = useCallback(
     (clientX: number, clientY: number): OfficePoint | null => {
@@ -1572,7 +1607,9 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
 
   const handlePointerDown = useCallback(
     (event: ReactPointerEvent<HTMLCanvasElement>) => {
-      runtime.takeManualControl();
+      // Manual control is claimed when the drag actually MOVES, not here. A
+      // plain click on an agent is not a statement about the camera, and
+      // taking control on every press disabled auto-fit for the session.
       const camera = runtime.getCamera();
       dragRef.current = {
         pointerId: event.pointerId,
@@ -1595,6 +1632,9 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         const dy = event.clientY - drag.originY;
         if (Math.abs(dx) > CLICK_SLOP_PX || Math.abs(dy) > CLICK_SLOP_PX) {
           drag.moved = true;
+          // The gesture has become a pan, which IS a statement about where the
+          // camera should be - so the automatic framing steps aside now.
+          runtime.takeManualControl();
         }
         runtime.getCamera().x = drag.cameraX + dx;
         runtime.getCamera().y = drag.cameraY + dy;
@@ -1630,10 +1670,31 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     [readScene, runtime, toSpritePoint],
   );
 
-  const handlePointerLeave = useCallback(() => {
+  const clearHover = useCallback(() => {
     runtime.setHoveredAgentId(null);
     setHoverCard(null);
   }, [runtime]);
+
+  const handlePointerLeave = useCallback(
+    (event: ReactPointerEvent<HTMLCanvasElement>) => {
+      // The hover card's trigger is a transparent element laid OVER the canvas,
+      // so opening it moves the pointer from the canvas onto the trigger
+      // without the pointer having moved at all. That fires `pointerleave`
+      // here, and clearing the hover on it closed the card the instant it
+      // opened. A leave into our own container is not leaving the floor.
+      const related = event.relatedTarget;
+      const container = containerRef.current;
+      if (
+        container !== null &&
+        related instanceof Node &&
+        container.contains(related)
+      ) {
+        return;
+      }
+      clearHover();
+    },
+    [clearHover],
+  );
 
   const handlePointerUp = useCallback(
     (event: ReactPointerEvent<HTMLCanvasElement>) => {
@@ -1702,10 +1763,13 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       ? null
       : (aggregated.find((edge) => edge.id === selectedEdgeId) ?? null);
 
+  // Resolved against the VISIBLE set, not every agent the epic ever had: the
+  // floor is drawn as of the cursor, and finding a card's subject among agents
+  // that are not on it is how the card outlives the character it describes.
   const hoveredAgent =
     hoverCard === null
       ? null
-      : (agents.find((agent) => agent.id === hoverCard.agentId) ?? null);
+      : (visibleAgents.find((agent) => agent.id === hoverCard.agentId) ?? null);
 
   // The tile's Find surface, on the same adapter contract the node graph
   // registers. It is registered by whichever renderer is mounted, so search is
@@ -1811,7 +1875,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
               />
             }
             onSelect={setSelectedAgentId}
-            onLeave={handlePointerLeave}
+            onLeave={clearHover}
           />
         )}
         <OfficeLegend />

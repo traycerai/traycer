@@ -25,10 +25,7 @@ import { createRoot } from "react-dom/client";
 import type { GuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { HARNESS_ACCENT } from "@/lib/comm-graph/office/office-appearance";
-import {
-  OFFICE_LOGO_SIZE,
-  type OfficeTheme,
-} from "@/lib/comm-graph/office/office-types";
+import { OFFICE_LOGO_SIZE } from "@/lib/comm-graph/office/office-types";
 
 /**
  * A logo's slot in the cache. `null` means "asked for, still rasterizing or
@@ -38,11 +35,12 @@ import {
  */
 type LogoSlot = HTMLCanvasElement | null;
 
-const logoCache = new Map<string, LogoSlot>();
-
-function cacheKey(harnessId: GuiHarnessId, theme: OfficeTheme): string {
-  return `${harnessId}:${theme}`;
-}
+/**
+ * Keyed by harness ALONE. The mark is recolored to the harness accent, which
+ * is one colour per harness in both themes, so a theme segment in the key only
+ * ever bought a second identical raster.
+ */
+const logoCache = new Map<GuiHarnessId, LogoSlot>();
 
 /**
  * A 2d context, or `null` where the platform has no canvas. jsdom throws
@@ -93,8 +91,7 @@ function renderLogoMarkup(harnessId: GuiHarnessId): string | null {
   }
 }
 
-function rasterizeLogo(harnessId: GuiHarnessId, theme: OfficeTheme): void {
-  const key = cacheKey(harnessId, theme);
+function rasterizeLogo(harnessId: GuiHarnessId): void {
   const markup = renderLogoMarkup(harnessId);
   if (markup === null) return;
   if (
@@ -118,7 +115,7 @@ function rasterizeLogo(harnessId: GuiHarnessId, theme: OfficeTheme): void {
     // once here rather than resampled on every frame it is drawn.
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(image, 0, 0, OFFICE_LOGO_SIZE, OFFICE_LOGO_SIZE);
-    logoCache.set(key, canvas);
+    logoCache.set(harnessId, canvas);
   };
   image.onerror = () => {
     URL.revokeObjectURL(url);
@@ -132,14 +129,12 @@ function rasterizeLogo(harnessId: GuiHarnessId, theme: OfficeTheme): void {
  */
 export function officeHarnessLogo(
   harnessId: GuiHarnessId,
-  theme: OfficeTheme,
 ): HTMLCanvasElement | null {
-  const key = cacheKey(harnessId, theme);
-  if (logoCache.has(key)) return logoCache.get(key) ?? null;
+  if (logoCache.has(harnessId)) return logoCache.get(harnessId) ?? null;
   // Claim the slot BEFORE the async work, so a floor with ten agents on one
   // harness starts one rasterization rather than ten.
-  logoCache.set(key, null);
-  rasterizeLogo(harnessId, theme);
+  logoCache.set(harnessId, null);
+  rasterizeLogo(harnessId);
   return null;
 }
 

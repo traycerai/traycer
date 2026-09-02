@@ -2126,8 +2126,8 @@ function podStyleAt(
 
 function podTintAt(depth: number, rootId: string): "cool" | "warm" {
   const warmFirst = hashAgentId(rootId) % 2 === 1;
-  const even = depth % 2 === 1;
-  return even === warmFirst ? "warm" : "cool";
+  const oddDepth = depth % 2 === 1;
+  return oddDepth === warmFirst ? "warm" : "cool";
 }
 
 interface PlaceBlockRequest {

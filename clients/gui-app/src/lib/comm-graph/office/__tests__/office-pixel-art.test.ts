@@ -5,8 +5,11 @@ import {
   officePalette,
   officeSpriteColors,
   officeSpriteMaps,
+  officeSpriteCacheSize,
   officeSpriteSize,
+  officeSpriteSurface,
   rasterizeSpriteMap,
+  OFFICE_SPRITE_CACHE_LIMIT,
   OFFICE_SPRITE_LETTERS,
   type RasterizedSprite,
 } from "@/lib/comm-graph/office/office-pixel-art";
@@ -185,21 +188,29 @@ describe("sprite maps", () => {
     }
   });
 
-  it("alternates the two lit monitor frames without moving the chassis", () => {
-    // The scene swaps these two frames while an agent works. Differing screen
-    // rows are what reads as scrolling code; a differing BEZEL would read as
-    // the whole monitor twitching, which is why the frame rows are pinned.
-    const frameA = mapNamed("monitor-on");
-    const frameB = mapNamed("monitor-on-b");
-    const chassisRows = [0, 1, 9, 10, 11];
-    for (const row of chassisRows) {
-      expect(frameB[row], `row ${row}`).toEqual(frameA[row]);
-    }
-    const screenRows = [2, 3, 4, 5, 6, 7, 8];
-    expect(screenRows.map((row) => frameB[row]).join("")).not.toEqual(
-      screenRows.map((row) => frameA[row]).join(""),
-    );
-  });
+  // The scene swaps a monitor's two lit frames while an agent works. Differing
+  // screen rows are what reads as scrolling code; a differing BEZEL would read
+  // as the whole monitor twitching, which is why the chassis rows are pinned.
+  // One contract, so one test - the wide monitor obeys it for the same reason
+  // the standard one does.
+  it.each([
+    ["monitor-on", "monitor-on-b"],
+    ["monitor-wide-on", "monitor-wide-on-b"],
+  ] as const)(
+    "alternates %s and %s without moving the chassis",
+    (nameA, nameB) => {
+      const frameA = mapNamed(nameA);
+      const frameB = mapNamed(nameB);
+      const chassisRows = [0, 1, 9, 10, 11];
+      for (const row of chassisRows) {
+        expect(frameB[row], `row ${row}`).toEqual(frameA[row]);
+      }
+      const screenRows = [2, 3, 4, 5, 6, 7, 8];
+      expect(screenRows.map((row) => frameB[row]).join("")).not.toEqual(
+        screenRows.map((row) => frameA[row]).join(""),
+      );
+    },
+  );
 
   it("declares the sizes the scene positions the new fixtures by", () => {
     // The rectangularity test above only proves a map AGREES with its declared
@@ -268,21 +279,6 @@ describe("sprite maps", () => {
       officeSpriteSize({ name: "desk" }),
     );
     expect(mapNamed("dust-sheet").join("")).not.toContain(".");
-  });
-
-  it("alternates the two lit wide frames without moving the chassis", () => {
-    // Same contract as the single monitor's two frames: the bezel and the stand
-    // are pinned so only the code lines move.
-    const frameA = mapNamed("monitor-wide-on");
-    const frameB = mapNamed("monitor-wide-on-b");
-    const chassisRows = [0, 1, 9, 10, 11];
-    for (const row of chassisRows) {
-      expect(frameB[row], `row ${row}`).toEqual(frameA[row]);
-    }
-    const screenRows = [2, 3, 4, 5, 6, 7, 8];
-    expect(screenRows.map((row) => frameB[row]).join("")).not.toEqual(
-      screenRows.map((row) => frameA[row]).join(""),
-    );
   });
 
   it("grows the envelope stack strictly upward", () => {
@@ -380,46 +376,178 @@ describe("officePalette", () => {
   });
 });
 
-describe("drawOfficeSprite", () => {
-  it("is a silent no-op when the host has no 2D context", () => {
-    // The suite stubs `getContext` to null, which is exactly the jsdom case the
-    // guard exists for. Borrow a typed context from a temporary stub so the
-    // call is made the way a real caller makes it.
-    const original = Object.getOwnPropertyDescriptor(
-      HTMLCanvasElement.prototype,
-      "getContext",
-    );
-    Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
-      configurable: true,
-      value: () => ({ drawImage: () => undefined }),
-    });
-    const ctx = document.createElement("canvas").getContext("2d");
-    if (original !== undefined) {
-      Object.defineProperty(
-        HTMLCanvasElement.prototype,
-        "getContext",
-        original,
-      );
-    }
-    expect(ctx).not.toBeNull();
-    if (ctx === null) {
+/**
+ * Installs a `getContext` stub and returns its undo.
+ *
+ * The undo REMOVES the property when there was no own descriptor to put back,
+ * rather than redefining it as `undefined`: a host with no `getContext` at all
+ * would otherwise be left with a permanent stub, and every later suite in the
+ * file would run against it.
+ */
+function stubGetContext(factory: () => unknown): () => void {
+  const original = Object.getOwnPropertyDescriptor(
+    HTMLCanvasElement.prototype,
+    "getContext",
+  );
+  Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
+    configurable: true,
+    value: factory,
+  });
+  return () => {
+    if (original === undefined) {
+      Reflect.deleteProperty(HTMLCanvasElement.prototype, "getContext");
       return;
     }
+    Object.defineProperty(HTMLCanvasElement.prototype, "getContext", original);
+  };
+}
 
-    expect(() => {
-      drawOfficeSprite(
-        ctx,
-        { name: "character", facing: "down", pose: "stand" },
-        { x: 0, y: 0 },
+/** A context that records blits and can also back a rasterized surface. */
+function recordingContext(drawn: { count: number }): unknown {
+  return {
+    drawImage: () => {
+      drawn.count += 1;
+    },
+    createImageData: (width: number, height: number) => ({
+      data: new Uint8ClampedArray(width * height * 4),
+    }),
+    putImageData: () => undefined,
+  };
+}
+
+describe("drawOfficeSprite", () => {
+  it("draws nothing when the host cannot rasterize a surface", () => {
+    // The suite's own `getContext` returns null, which is the jsdom case the
+    // guard exists for: the sprite has no surface to blit, so the call must
+    // leave the caller's context untouched rather than blitting nothing.
+    clearOfficeSpriteCache();
+    const drawn = { count: 0 };
+    const restore = stubGetContext(() => recordingContext(drawn));
+    const ctx = document.createElement("canvas").getContext("2d");
+    restore();
+    expect(ctx).not.toBeNull();
+    if (ctx === null) return;
+
+    drawOfficeSprite(ctx, { name: "desk" }, { x: 16, y: 16 }, "light");
+
+    expect(drawn.count).toBe(0);
+  });
+
+  it("blits once per sprite once a surface can be rasterized", () => {
+    clearOfficeSpriteCache();
+    const drawn = { count: 0 };
+    const restore = stubGetContext(() => recordingContext(drawn));
+    try {
+      const ctx = document.createElement("canvas").getContext("2d");
+      expect(ctx).not.toBeNull();
+      if (ctx === null) return;
+
+      expect(() => {
+        drawOfficeSprite(
+          ctx,
+          { name: "character", facing: "down", pose: "stand" },
+          { x: 0, y: 0 },
+          "dark",
+        );
+        drawOfficeSprite(ctx, { name: "desk" }, { x: 16, y: 16 }, "light");
+        drawOfficeSprite(
+          ctx,
+          { name: "envelope", tint: "#d97757" },
+          { x: 4, y: 4 },
+          "dark",
+        );
+      }).not.toThrow();
+
+      // One blit each, and no per-pixel work on the way: three distinct
+      // sprites, three rasterizations, three `drawImage` calls.
+      expect(drawn.count).toBe(3);
+    } finally {
+      restore();
+    }
+  });
+});
+
+/** A distinct shirt per index - the key carries the color, so each is a miss. */
+function shirtColor(index: number): string {
+  return `#${index.toString(16).padStart(6, "0")}`;
+}
+
+describe("officeSpriteSurface", () => {
+  it("holds the cache to its cap however many agents are drawn", () => {
+    // The key carries an agent's APPEARANCE, so without a cap the cache grows
+    // by one entry per pose per agent ever seen - across every epic, for as
+    // long as the tab lives. Twice the cap of distinct sprites is asked for.
+    clearOfficeSpriteCache();
+    for (let i = 0; i < OFFICE_SPRITE_CACHE_LIMIT * 2; i += 1) {
+      officeSpriteSurface(
+        {
+          name: "character",
+          facing: "down",
+          pose: "stand",
+          appearance: { ...APPEARANCE, shirt: shirtColor(i) },
+        },
         "dark",
       );
-      drawOfficeSprite(ctx, { name: "desk" }, { x: 16, y: 16 }, "light");
-      drawOfficeSprite(
-        ctx,
-        { name: "envelope", tint: "#d97757" },
-        { x: 4, y: 4 },
+    }
+
+    expect(officeSpriteCacheSize()).toBe(OFFICE_SPRITE_CACHE_LIMIT);
+  });
+
+  it("evicts the least recently drawn sprite, not the first one drawn", () => {
+    // A floor redraws the same few hundred sprites every frame. Evicting by
+    // insertion order alone would throw away the floor tile the next frame
+    // needs while keeping a sprite nobody has asked for since the tab opened.
+    //
+    // Surfaces are stubbed into existence here for one reason: a cached
+    // surface is the SAME OBJECT on a hit and a new one on a miss, and with
+    // jsdom's null surfaces there is nothing to tell the two apart - the cache
+    // size is identical either way, since evicting anything keeps it at the
+    // cap. Identity is the only honest discriminator.
+    clearOfficeSpriteCache();
+    const drawn = { count: 0 };
+    const restore = stubGetContext(() => recordingContext(drawn));
+    try {
+      const veteran = {
+        name: "character",
+        facing: "down",
+        pose: "stand",
+        appearance: { ...APPEARANCE, shirt: "#ffff00" },
+      } as const;
+      const first = officeSpriteSurface(veteran, "dark");
+      expect(first).not.toBeNull();
+
+      for (let i = 0; i < OFFICE_SPRITE_CACHE_LIMIT - 1; i += 1) {
+        officeSpriteSurface(
+          {
+            name: "character",
+            facing: "down",
+            pose: "stand",
+            appearance: { ...APPEARANCE, shirt: shirtColor(i) },
+          },
+          "dark",
+        );
+      }
+      expect(officeSpriteCacheSize()).toBe(OFFICE_SPRITE_CACHE_LIMIT);
+      // Drawn again: the veteran is now the YOUNGEST entry, and the oldest is
+      // the first sprite of the loop above.
+      officeSpriteSurface(veteran, "dark");
+
+      officeSpriteSurface(
+        {
+          name: "character",
+          facing: "down",
+          pose: "stand",
+          appearance: { ...APPEARANCE, shirt: "#ff00ff" },
+        },
         "dark",
       );
-    }).not.toThrow();
+
+      expect(officeSpriteCacheSize()).toBe(OFFICE_SPRITE_CACHE_LIMIT);
+      // The same surface, so the newcomer displaced the loop's first sprite -
+      // insertion order would have displaced this one.
+      expect(officeSpriteSurface(veteran, "dark")).toBe(first);
+    } finally {
+      restore();
+    }
   });
 });

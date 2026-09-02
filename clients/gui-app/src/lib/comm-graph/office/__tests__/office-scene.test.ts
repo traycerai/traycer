@@ -134,8 +134,18 @@ function hasBubbleAt(
   );
 }
 
+/**
+ * The layouts these helpers measure against, computed ONCE.
+ *
+ * `layoutOffice` walks every agent, room and tile, and these helpers are
+ * called inside tick loops that run them hundreds of times per test. The
+ * layout is a pure function of its agents, so recomputing it per call answered
+ * the same question at a cost that dominated the suite.
+ */
+const AGENTS_LAYOUT: OfficeLayout = layoutOffice(AGENTS);
+
 function seatedHead(agentId: string): OfficePoint {
-  const desk = layoutOffice(AGENTS).desks.get(agentId);
+  const desk = AGENTS_LAYOUT.desks.get(agentId);
   if (desk === undefined) throw new Error(`no desk for ${agentId}`);
   return {
     x: desk.chairTile.col * OFFICE_TILE + OFFICE_CHARACTER_WIDTH / 2,
@@ -211,8 +221,10 @@ const CREW_IDS: ReadonlySet<string> = new Set(
   IDLE_CREW.map((person) => person.id),
 );
 
+const CREW_LAYOUT: OfficeLayout = layoutOffice(IDLE_CREW);
+
 function crewSeatedRect(agentId: string): OfficeRect {
-  const desk = layoutOffice(IDLE_CREW).desks.get(agentId);
+  const desk = CREW_LAYOUT.desks.get(agentId);
   if (desk === undefined) throw new Error(`no desk for ${agentId}`);
   return {
     x: desk.chairTile.col * OFFICE_TILE,
@@ -1213,21 +1225,21 @@ describe("OfficeScene", () => {
       scene.tick(100);
       const balls = paperBalls(scene.frame());
       if (balls.length > previous.length) thrown += balls.length;
-      for (const ball of balls) {
-        // In the air: no two frames of a flight share a position.
-        if (
-          previous.some(
-            (before) => before.x !== ball.x && before.y === ball.y,
-          ) ||
-          previous.some((before) => before.x === ball.x && before.y !== ball.y)
-        ) {
-          flew = true;
-        }
-        // On the floor: a miss holds one position while it lies there.
-        if (
-          previous.some((before) => before.x === ball.x && before.y === ball.y)
-        ) {
+      // Read only from frames holding exactly ONE ball, in both this frame and
+      // the last. Drawables carry no identity, so with several in play a ball
+      // landing while another is thrown is indistinguishable from a ball
+      // moving - and the two matched-axis comparisons this replaced were worse
+      // still: they missed a DIAGONAL step entirely (neither axis held) and
+      // read one ball's position against another's as motion.
+      if (balls.length === 1 && previous.length === 1) {
+        const ball = balls[0];
+        const before = previous[0];
+        if (ball.x === before.x && ball.y === before.y) {
+          // On the floor: a miss holds one position while it lies there.
           rested += 1;
+        } else {
+          // In the air: the one ball on the floor is somewhere else now.
+          flew = true;
         }
       }
       previous = balls;

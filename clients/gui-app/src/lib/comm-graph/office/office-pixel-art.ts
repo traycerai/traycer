@@ -413,79 +413,28 @@ const PROP_MAPS: Readonly<Record<OfficeSpriteName, SpriteMap>> = {
   sparkle: SPARKLE_MAP,
 };
 
-/** Every name that has a single authored map, i.e. everything but `character`. */
-const PROP_SPRITE_NAMES: ReadonlyArray<OfficeSpriteName> = [
-  "desk",
-  "monitor-on",
-  "monitor-on-b",
-  "monitor-off",
-  "nameplate",
-  "partition",
-  "sign",
-  "monitor-small-on",
-  "monitor-small-off",
-  "monitor-wide-on",
-  "monitor-wide-on-b",
-  "monitor-wide-off",
-  "monitor-crash",
-  "envelope-stack-1",
-  "envelope-stack-2",
-  "envelope-stack-3",
-  "clock",
-  "dust-sheet",
-  "box",
-  "reception",
-  "stairs",
-  "water-cooler",
-  "cafe-table",
-  "sofa",
-  "bin",
-  "paper-ball",
-  "watering-can",
-  "pingpong-table",
-  "arcade",
-  "floor-pod-a",
-  "floor-pod-b",
-  "partition-h",
-  "pod-plate",
-  "sleep-bag",
-  "armchair",
-  "bookcase",
-  "floor-grass-a",
-  "floor-grass-b",
-  "tree",
-  "bench",
-  "foosball",
-  "dartboard",
-  "chess-table",
-  "tv",
-  "treadmill",
-  "floor-pod-warm-a",
-  "floor-pod-warm-b",
-  "planter",
-  "shelf",
-  "shelf-h",
-  "vending",
-  "menu-board",
-  "chair",
-  "plant",
-  "floor-a",
-  "floor-b",
-  "rug",
-  "wall",
-  "wall-top",
-  "door",
-  "window",
-  "whiteboard",
-  "coffee-machine",
-  "envelope",
-  "bubble-awaiting",
-  "bubble-attention",
-  "bubble-notice",
-  "bubble-hello",
-  "bubble-sleep",
-  "sparkle",
-];
+/**
+ * Narrows a key of {@link PROP_MAPS} back to its own key type.
+ *
+ * `Object.keys` erases to `string[]`, and a cast to put the type back would
+ * re-introduce exactly the drift the derivation below exists to remove.
+ */
+function isPropSpriteName(name: string): name is OfficeSpriteName {
+  return Object.hasOwn(PROP_MAPS, name);
+}
+
+/**
+ * Every name that has a single authored map, i.e. everything but `character`.
+ *
+ * DERIVED from the maps rather than listed beside them. The art-shape test
+ * reads this list, so a hand-written copy meant a new sprite could be authored,
+ * drawn, shipped and never once checked - the test would pass by not looking.
+ */
+const PROP_SPRITE_NAMES: ReadonlyArray<OfficeSpriteName> = Object.keys(
+  PROP_MAPS,
+)
+  .filter(isPropSpriteName)
+  .filter((name) => name !== "character");
 
 export function officeSpriteSize(ref: OfficeSpriteRef): OfficeSize {
   return SPRITE_SIZES[ref.name];
@@ -702,13 +651,72 @@ function selectMap(ref: OfficeSpriteRef): SelectedMap {
 
 // ---- Draw ------------------------------------------------------------ //
 
-type SpriteSurface = HTMLCanvasElement | OffscreenCanvas;
+export type SpriteSurface = HTMLCanvasElement | OffscreenCanvas;
 
 /** `null` records a surface that could not be created, so we try exactly once. */
 const surfaceCache = new Map<string, SpriteSurface | null>();
 
+/**
+ * How many rasterized surfaces to keep.
+ *
+ * The cache is keyed partly by an agent's APPEARANCE, which is generated per
+ * agent id - so without a cap it holds one entry per pose per agent the person
+ * has ever opened an office on, in any epic, for as long as the tab lives.
+ * A floor draws a few hundred distinct sprites at once, so this is roomy
+ * enough that a live floor never evicts something it is still using, and
+ * bounded enough that a long session cannot grow without limit.
+ */
+export const OFFICE_SPRITE_CACHE_LIMIT = 1024;
+
 export function clearOfficeSpriteCache(): void {
   surfaceCache.clear();
+}
+
+/** How many surfaces are held. Exists so the cap can be asserted on. */
+export function officeSpriteCacheSize(): number {
+  return surfaceCache.size;
+}
+
+/**
+ * Reads a cached surface, refreshing its recency.
+ *
+ * `undefined` means "not cached"; `null` means "cached as unbuildable". A `Map`
+ * iterates in INSERTION order, so deleting and re-inserting a hit is what moves
+ * it to the young end and makes the eviction below least-recently-used rather
+ * than first-in-first-out - the difference between evicting the sprite nobody
+ * has asked for in ten minutes and evicting the floor tile every frame draws.
+ */
+function readCachedSurface(key: string): SpriteSurface | null | undefined {
+  if (!surfaceCache.has(key)) return undefined;
+  const surface = surfaceCache.get(key) ?? null;
+  surfaceCache.delete(key);
+  surfaceCache.set(key, surface);
+  return surface;
+}
+
+function writeCachedSurface(key: string, surface: SpriteSurface | null): void {
+  surfaceCache.set(key, surface);
+  while (surfaceCache.size > OFFICE_SPRITE_CACHE_LIMIT) {
+    const oldest = surfaceCache.keys().next();
+    if (oldest.done === true) return;
+    surfaceCache.delete(oldest.value);
+  }
+}
+
+/**
+ * The cached surface for one sprite, rasterizing it on the first ask. `null`
+ * where the host has no 2D context to paint on.
+ */
+export function officeSpriteSurface(
+  ref: OfficeSpriteRef,
+  theme: OfficeTheme,
+): SpriteSurface | null {
+  const key = cacheKey(ref, theme);
+  const cached = readCachedSurface(key);
+  if (cached !== undefined) return cached;
+  const built = buildSurface(ref, theme);
+  writeCachedSurface(key, built);
+  return built;
 }
 
 function cacheKey(ref: OfficeSpriteRef, theme: OfficeTheme): string {
@@ -787,12 +795,7 @@ export function drawOfficeSprite(
   at: OfficePoint,
   theme: OfficeTheme,
 ): void {
-  const key = cacheKey(ref, theme);
-  let surface = surfaceCache.get(key);
-  if (surface === undefined) {
-    surface = buildSurface(ref, theme);
-    surfaceCache.set(key, surface);
-  }
+  const surface = officeSpriteSurface(ref, theme);
   if (surface === null) {
     return;
   }

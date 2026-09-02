@@ -104,6 +104,24 @@ describe("OfficeFrameGate rate cap", () => {
 
     expect(gate.elapsed(1)).not.toBeNull();
   });
+
+  it("paints the first frame back even when the floor never moved", () => {
+    const gate = new OfficeFrameGate();
+    // A still floor, drawn once and then skipped - the state a tile is in when
+    // it gets hidden.
+    expect(gate.shouldDraw(STILL)).toBe(true);
+    expect(gate.shouldDraw(STILL)).toBe(false);
+
+    gate.resume();
+
+    // The canvas still holds the pre-pause image, so the idle skip has to
+    // stand aside too. Standing aside only for the RATE cap left the tile
+    // showing a stale frame until something happened to move.
+    expect(gate.elapsed(1)).not.toBeNull();
+    expect(gate.shouldDraw(STILL)).toBe(true);
+    // ...and settles again straight after, rather than staying awake.
+    expect(gate.shouldDraw(STILL)).toBe(false);
+  });
 });
 
 describe("OfficeFrameGate idle skip", () => {

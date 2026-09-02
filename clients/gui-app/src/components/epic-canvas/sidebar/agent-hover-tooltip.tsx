@@ -110,8 +110,14 @@ export function AgentHoverTooltip(props: AgentHoverTooltipProps): ReactNode {
     side,
   } = props;
   const roleContent = agentRoleHoverContent(nodeName, roleClaims);
+  // BOTH absent values, because `ReactNode` already includes `undefined` and
+  // the prop type cannot exclude it. Testing only for `null` let an omitted
+  // `extraContent` build an empty fragment, and a non-null `supplemental` is
+  // what displaces the name label below - so the card lost its title and
+  // showed nothing in its place.
+  const hasExtra = extraContent !== null && extraContent !== undefined;
   const supplemental =
-    roleContent === null && extraContent === null ? null : (
+    roleContent === null && !hasExtra ? null : (
       <>
         {roleContent}
         {extraContent}

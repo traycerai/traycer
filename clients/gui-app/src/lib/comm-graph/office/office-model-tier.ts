@@ -56,14 +56,26 @@ const LARGE_MARKERS: ReadonlyArray<string> = [
  * Sonnet is the one family that spans the classes: 3.5 is a mid-size model and
  * 4.5 onwards is not. Version-gated rather than listed, so a future 6 lands on
  * the right side without an edit here.
+ *
+ * A DASH is a decimal point here. Slugs write the same version both ways -
+ * `sonnet-4.5` and `sonnet-4-5` are one model - and reading only the dot form
+ * parsed the second as bare 4, putting a frontier model at a mid-size desk.
+ *
+ * Each number is capped at two digits and must not be followed by another,
+ * which is what keeps a DATE out of the version. `claude-sonnet-4-20250514` is
+ * Sonnet 4 with a release stamp, not Sonnet 4.20250514, and
+ * `claude-3-5-sonnet-20241022` has no version after the word at all - matching
+ * its stamp read that model as version 20241022 and called it large.
  */
-const SONNET_VERSION = /sonnet[-\s_]?(\d+(?:\.\d+)?)/;
+const SONNET_VERSION = /sonnet[-\s_]?(\d{1,2}(?:[.-]\d{1,2}(?!\d))?)(?!\d)/;
 const LARGE_SONNET_FROM = 4.5;
 
 function isLargeSonnet(name: string): boolean {
   const match = SONNET_VERSION.exec(name);
   if (match === null) return false;
-  const version = Number.parseFloat(match[1]);
+  // At most one separator can appear inside the captured version, so a single
+  // replacement normalizes the dashed form onto the dotted one.
+  const version = Number.parseFloat(match[1].replace("-", "."));
   return Number.isFinite(version) && version >= LARGE_SONNET_FROM;
 }
 

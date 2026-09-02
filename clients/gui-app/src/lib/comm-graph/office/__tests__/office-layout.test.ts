@@ -4,6 +4,7 @@ import { findOfficePath } from "@/lib/comm-graph/office/office-path";
 import type {
   OfficeAgentInput,
   OfficeAppearance,
+  OfficeErrandSpot,
   OfficeFloor,
   OfficeLayout,
   OfficeRoom,
@@ -922,7 +923,10 @@ describe("layoutOffice floors", () => {
     const floor = layout.floors[0];
     const kinds = new Set(floor.errandSpots.map((spot) => spot.kind));
 
-    for (const kind of [
+    // Typed rather than asserted through `as never`: the point of the list is
+    // that it names REAL spot kinds, and a cast is what would let a renamed one
+    // sit here forever passing.
+    const expected: ReadonlyArray<OfficeErrandSpot["kind"]> = [
       "coffee",
       "cooler",
       "cafe",
@@ -935,8 +939,9 @@ describe("layoutOffice floors", () => {
       "bin",
       "peek",
       "corridor",
-    ]) {
-      expect(kinds.has(kind as never), kind).toBe(true);
+    ];
+    for (const kind of expected) {
+      expect(kinds.has(kind), kind).toBe(true);
     }
 
     // Two tables, two seats each, and the seats of one table are neighbours so
@@ -1235,6 +1240,17 @@ describe("layoutOffice floors", () => {
       const look = spots.find(
         (spot) => spot.kind === "plant" && spot.tile.col === plant.tile.col,
       );
+      // ASSERTED before skipping: a plant with no spots beside it is the bug
+      // this test exists to catch, and `continue` alone made the whole loop
+      // pass by finding nothing to check.
+      expect(
+        water,
+        `no watering spot beside the plant at ${plant.tile.col}`,
+      ).toBeDefined();
+      expect(
+        look,
+        `no looking spot beside the plant at ${plant.tile.col}`,
+      ).toBeDefined();
       if (water === undefined || look === undefined) continue;
       // The can has to reach the leaves, so watering happens from the tile
       // touching the plant; standing and looking at it happens from further

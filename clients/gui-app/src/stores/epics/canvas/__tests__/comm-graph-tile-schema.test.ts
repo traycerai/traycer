@@ -39,11 +39,14 @@ describe("comm-graph tile schema", () => {
     expect(parseTileRef(serializeTileRef(ref))).toEqual(ref);
   });
 
-  it("opens on the office floor by default", () => {
+  it("opens a NEWLY CREATED tile on the office floor", () => {
+    // The new-tile default and the parse fallback deliberately disagree: the
+    // floor is the better first look, but only for a tile that has no history
+    // of rendering anything else.
     expect(makeCommGraphTileRef(EPIC_ID).view.mode).toBe("office");
   });
 
-  it("reads a tile persisted before the mode existed as the office", () => {
+  it("reads a tile persisted before the mode existed as the graph", () => {
     const parsed = parseTileRef({
       id: commGraphTileId(EPIC_ID),
       instanceId: "inst-1",
@@ -55,11 +58,13 @@ describe("comm-graph tile schema", () => {
     });
     expect(parsed?.type).toBe("comm-graph");
     if (parsed === null || parsed.type !== "comm-graph") return;
-    // The framing the user chose survives; only the missing mode is filled in.
-    expect(parsed.view).toEqual({ x: 4, y: 5, zoom: 2, mode: "office" });
+    // The framing the user chose survives, and the missing mode is filled in
+    // with what that tile ALWAYS rendered - reopening it on the floor would
+    // silently change a surface the person already had set up.
+    expect(parsed.view).toEqual({ x: 4, y: 5, zoom: 2, mode: "graph" });
   });
 
-  it("degrades an unrecognized mode to the office rather than a blank tile", () => {
+  it("degrades an unrecognized mode to the graph rather than a blank tile", () => {
     const parsed = parseTileRef({
       id: commGraphTileId(EPIC_ID),
       instanceId: "inst-1",
@@ -68,6 +73,23 @@ describe("comm-graph tile schema", () => {
       hostId: UNKNOWN_HOST_PLACEHOLDER,
       epicId: EPIC_ID,
       view: { x: 0, y: 0, zoom: 1, mode: "isometric" },
+    });
+    expect(parsed?.type).toBe("comm-graph");
+    if (parsed === null || parsed.type !== "comm-graph") return;
+    // A mode from a future build lands on the rendering that has always
+    // existed, not on the newest one.
+    expect(parsed.view.mode).toBe("graph");
+  });
+
+  it("keeps an explicitly persisted office mode", () => {
+    const parsed = parseTileRef({
+      id: commGraphTileId(EPIC_ID),
+      instanceId: "inst-1",
+      type: "comm-graph",
+      name: "Communication graph",
+      hostId: UNKNOWN_HOST_PLACEHOLDER,
+      epicId: EPIC_ID,
+      view: { x: 0, y: 0, zoom: 1, mode: "office" },
     });
     expect(parsed?.type).toBe("comm-graph");
     if (parsed === null || parsed.type !== "comm-graph") return;
@@ -127,7 +149,7 @@ describe("comm-graph tile schema", () => {
     });
     expect(parsed).not.toBeNull();
     if (parsed === null || parsed.type !== "comm-graph") return;
-    expect(parsed.view).toEqual({ x: 0, y: 0, zoom: 1, mode: "office" });
+    expect(parsed.view).toEqual({ x: 0, y: 0, zoom: 1, mode: "graph" });
   });
 });
 
