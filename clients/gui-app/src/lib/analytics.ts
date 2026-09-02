@@ -77,6 +77,7 @@ export type AnalyticsSettingsSection =
   | "keybindings"
   | "link-phone"
   | "notifications"
+  | "opening-behavior"
   | "providers"
   | "shell"
   | "usage"
@@ -234,7 +235,7 @@ export type AnalyticsRole = "editor" | "owner" | "viewer";
 
 export type AnalyticsSetting =
   | "allowPrereleaseUpdates"
-  | "agentTabSurfacingMode"
+  | "agentTabSurfacing"
   | "artifactIconColorMode"
   | "artifactIconColors"
   | "chatTurnMinimapSide"
@@ -247,6 +248,7 @@ export type AnalyticsSetting =
   | "defaultSelection"
   | "defaultServiceTier"
   | "diffViewerPreferences"
+  | "linkOpen"
   | "pinContextUsageBreakdown"
   | "pointerCursors"
   | "preventSleepWhileRunning"
@@ -261,6 +263,7 @@ export type AnalyticsSetting =
   | "terminalFontFamily"
   | "terminalFontSize"
   | "theme"
+  | "tilePlacement"
   | "themePreset"
   | "uiFontFamily"
   | "uiFontSize"
@@ -1091,6 +1094,7 @@ const ANALYTICS_SETTINGS_SECTIONS = new Set<string>(
     keybindings: true,
     "link-phone": true,
     notifications: true,
+    "opening-behavior": true,
     providers: true,
     shell: true,
     usage: true,
@@ -1099,6 +1103,7 @@ const ANALYTICS_SETTINGS_SECTIONS = new Set<string>(
 );
 
 const ANALYTICS_SETTINGS = new Set<string>([
+  "agentTabSurfacing",
   "allowPrereleaseUpdates",
   "artifactIconColorMode",
   "artifactIconColors",
@@ -1111,6 +1116,7 @@ const ANALYTICS_SETTINGS = new Set<string>([
   "defaultSelection",
   "defaultServiceTier",
   "diffViewerPreferences",
+  "linkOpen",
   "pinContextUsageBreakdown",
   "pointerCursors",
   "preventSleepWhileRunning",
@@ -1123,6 +1129,7 @@ const ANALYTICS_SETTINGS = new Set<string>([
   "terminalFontSize",
   "theme",
   "themePreset",
+  "tilePlacement",
   "uiFontFamily",
   "uiFontSize",
   "voiceInputEnabled",

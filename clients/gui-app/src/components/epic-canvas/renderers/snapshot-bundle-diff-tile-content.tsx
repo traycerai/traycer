@@ -29,18 +29,18 @@ import {
   type BundleDiffFindFileNavigationInput,
 } from "@/components/diff/bundle-diff-find-registration-hooks";
 import { useBundleDiffScrollRestoration } from "@/hooks/scroll/use-bundle-diff-scroll-restoration";
-import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import {
   DiffBundleCollapseChevron,
   DiffBundleFileSectionFrame,
 } from "@/components/epic-canvas/git-diff/diff-bundle-file-section";
 import { FileChangeHeader } from "@/components/chat/segments/file-change-segment";
-import { useOpenEpicId } from "@/lib/epic-selectors";
 import { cn } from "@/lib/utils";
 import { getBasename, getDirname } from "@/lib/path/cross-platform-path";
 import type { BundleDiffFindFileInput } from "@/stores/tile-find";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 export type SnapshotCumulativeBundleDiffTileRef = Omit<
   SnapshotDiffTileRef,
   "diff"
@@ -179,11 +179,7 @@ function SnapshotBundleFileSection(props: {
   const diffViewerPreferences = useSettingsStore(
     (s) => s.diffViewerPreferences,
   );
-  const epicId = useOpenEpicId();
-  const navigateNested = useEpicNestedFocusNavigation();
-  const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
-    (s) => s.prepareOpenTileInTabFocusTarget,
-  );
+  const { openTile } = useEpicTileNavigation();
   const toggleCollapsed = useEpicCanvasStore(
     (s) => s.toggleSnapshotDiffBundleFileCollapsedInTab,
   );
@@ -221,13 +217,11 @@ function SnapshotBundleFileSection(props: {
       chatId: props.node.diff.chatId,
       filePath: props.entry.filePath,
     });
-    navigateNested(epicId, props.viewTabId, () =>
-      prepareOpenTileInTabFocusTarget(props.viewTabId, tile),
+    openTile(
+      tileIntent(tile, { tabId: props.viewTabId }, "explicit", "direct_ui"),
     );
   }, [
-    epicId,
-    navigateNested,
-    prepareOpenTileInTabFocusTarget,
+    openTile,
     props.entry.filePath,
     props.node.hostId,
     props.node.diff.chatId,

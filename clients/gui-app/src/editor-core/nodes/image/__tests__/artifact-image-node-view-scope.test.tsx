@@ -41,10 +41,6 @@ vi.mock("@/lib/attachments/use-attachment-blob-src", () => ({
   },
 }));
 
-vi.mock("@/hooks/runner/use-open-external-link-mutation", () => ({
-  useRunnerOpenExternalLink: () => ({ isPending: false, mutate: vi.fn() }),
-}));
-
 const seenScopes: Array<ArtifactAttachmentScopeValue | null> = [];
 
 const SCOPE: ArtifactAttachmentScopeValue = {

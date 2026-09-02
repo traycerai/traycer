@@ -2,13 +2,6 @@ import { useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { Switch } from "@/components/ui/switch";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { ImportLoginsDialog } from "@/components/settings/import-logins-dialog";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
@@ -28,57 +21,9 @@ import type {
   BrowserSavedLoginSite,
   BrowserSavedLoginSitesResponse,
 } from "@traycer/protocol/host/browser/contracts";
-import {
-  isAgentTabSurfacingMode,
-  isBrowserLinkDefaultMode,
-  isBrowserLinkOpenMode,
-  useSettingsStore,
-  type AgentTabSurfacingMode,
-  type BrowserLinkDefaultMode,
-  type BrowserLinkOpenMode,
-} from "@/stores/settings/settings-store";
-
-const BROWSER_LINK_DEFAULT_MODE_LABELS: Record<BrowserLinkDefaultMode, string> =
-  {
-    "in-app": "In app",
-    external: "External",
-    "per-kind": "Per kind",
-  };
-const BROWSER_LINK_OPEN_MODE_LABELS: Record<BrowserLinkOpenMode, string> = {
-  "in-app": "In app",
-  external: "External",
-};
-const AGENT_TAB_SURFACING_LABELS: Record<AgentTabSurfacingMode, string> = {
-  pip: "Float (PiP)",
-  tile: "Tile in canvas",
-  off: "Off (background only)",
-};
+import { useSettingsStore } from "@/stores/settings/settings-store";
 
 export function BrowserSettingsSection(): ReactNode {
-  const browserLinkDefaultMode = useSettingsStore(
-    (s) => s.browserLinkDefaultMode,
-  );
-  const setBrowserLinkDefaultMode = useSettingsStore(
-    (s) => s.setBrowserLinkDefaultMode,
-  );
-  const terminalBrowserLinkOpenMode = useSettingsStore(
-    (s) => s.terminalBrowserLinkOpenMode,
-  );
-  const setTerminalBrowserLinkOpenMode = useSettingsStore(
-    (s) => s.setTerminalBrowserLinkOpenMode,
-  );
-  const markdownBrowserLinkOpenMode = useSettingsStore(
-    (s) => s.markdownBrowserLinkOpenMode,
-  );
-  const setMarkdownBrowserLinkOpenMode = useSettingsStore(
-    (s) => s.setMarkdownBrowserLinkOpenMode,
-  );
-  const agentTabSurfacingMode = useSettingsStore(
-    (s) => s.agentTabSurfacingMode,
-  );
-  const setAgentTabSurfacingMode = useSettingsStore(
-    (s) => s.setAgentTabSurfacingMode,
-  );
   const browserDevOrigins = useSettingsStore((s) => s.browserDevOrigins);
   const removeBrowserDevOrigin = useSettingsStore(
     (s) => s.removeBrowserDevOrigin,
@@ -86,73 +31,16 @@ export function BrowserSettingsSection(): ReactNode {
 
   return (
     <>
-      <SettingsGroup
-        title="Browser"
-        tone="default"
-        dataTestId={undefined}
-        fill={false}
-      >
-        <SettingsRow
-          label="Web link default"
-          description="Choose where http and https links open."
-          control={
-            <EnumSelect
-              labels={BROWSER_LINK_DEFAULT_MODE_LABELS}
-              isValue={isBrowserLinkDefaultMode}
-              value={browserLinkDefaultMode}
-              onValueChange={setBrowserLinkDefaultMode}
-              ariaLabel="Web link default"
-              triggerClassName="w-[min(42vw,11rem)]"
-            />
-          }
-        />
-        {browserLinkDefaultMode === "per-kind" ? (
-          <>
-            <SettingsRow
-              label="Terminal links"
-              description="Applies to plain terminal URLs and OSC-8 hyperlinks."
-              control={
-                <EnumSelect
-                  labels={BROWSER_LINK_OPEN_MODE_LABELS}
-                  isValue={isBrowserLinkOpenMode}
-                  value={terminalBrowserLinkOpenMode}
-                  onValueChange={setTerminalBrowserLinkOpenMode}
-                  ariaLabel="Link open mode"
-                  triggerClassName="w-[min(42vw,10rem)]"
-                />
-              }
-            />
-            <SettingsRow
-              label="Markdown links"
-              description="Applies to rendered markdown http and https anchors."
-              control={
-                <EnumSelect
-                  labels={BROWSER_LINK_OPEN_MODE_LABELS}
-                  isValue={isBrowserLinkOpenMode}
-                  value={markdownBrowserLinkOpenMode}
-                  onValueChange={setMarkdownBrowserLinkOpenMode}
-                  ariaLabel="Link open mode"
-                  triggerClassName="w-[min(42vw,10rem)]"
-                />
-              }
-            />
-          </>
-        ) : null}
-        <SettingsRow
-          label="Agent tab surfacing"
-          description="Choose what happens on your canvas when the agent opens a browser tab: float it picture-in-picture, place a tile, or keep it in the background (sidebar only)."
-          control={
-            <EnumSelect
-              labels={AGENT_TAB_SURFACING_LABELS}
-              isValue={isAgentTabSurfacingMode}
-              value={agentTabSurfacingMode}
-              onValueChange={setAgentTabSurfacingMode}
-              ariaLabel="Agent tab surfacing"
-              triggerClassName="w-[min(42vw,11rem)]"
-            />
-          }
-        />
-        {browserDevOrigins.length > 0 ? (
+      {/* The whole group is conditional now, not just its row: link and agent
+          controls moved to Settings > Opening behavior, so with no detected
+          origins the card would be a heading over an empty box. */}
+      {browserDevOrigins.length > 0 ? (
+        <SettingsGroup
+          title="Browser"
+          tone="default"
+          dataTestId={undefined}
+          fill={false}
+        >
           <SettingsRow
             label="Detected dev origins"
             description="Terminal URLs with local hosts or explicit ports are kept for browser-origin classification."
@@ -163,52 +51,10 @@ export function BrowserSettingsSection(): ReactNode {
               />
             }
           />
-        ) : null}
-      </SettingsGroup>
+        </SettingsGroup>
+      ) : null}
       <BrowserSavedLoginsGroup />
     </>
-  );
-}
-
-/**
- * One `Select` over a string-union setting: the labels record supplies both
- * the options and their order, and the union's own store guard narrows what
- * Radix hands back.
- */
-function EnumSelect<T extends string>(props: {
-  /**
-   * Options and their order. Each caller declares its own constant as
-   * `Record<Union, string>`, so member coverage is checked there.
-   */
-  readonly labels: Readonly<Record<string, string>>;
-  readonly value: T;
-  readonly isValue: (value: string) => value is T;
-  readonly onValueChange: (value: T) => void;
-  readonly ariaLabel: string;
-  readonly triggerClassName: string;
-}): ReactNode {
-  return (
-    <Select
-      value={props.value}
-      onValueChange={(value) => {
-        if (props.isValue(value)) props.onValueChange(value);
-      }}
-    >
-      <SelectTrigger
-        aria-label={props.ariaLabel}
-        className={props.triggerClassName}
-        size="sm"
-      >
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        {Object.entries(props.labels).map(([value, label]) => (
-          <SelectItem key={value} value={value}>
-            {label}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
   );
 }
 

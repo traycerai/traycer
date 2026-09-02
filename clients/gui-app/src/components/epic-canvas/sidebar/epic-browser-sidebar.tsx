@@ -26,19 +26,16 @@ import {
 } from "@/components/epic-canvas/sidebar/use-browser-tab-rows";
 import { useBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
 import { BrowserSessionsHostBoundary } from "@/components/epic-canvas/renderers/browser-sessions-provider";
-import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import {
   useSurfaceHostPin,
   useTabSurfaceKey,
 } from "@/hooks/host/use-surface-host-pin";
 import { useEpicChatRecords } from "@/lib/epic-selectors";
 import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
-import {
-  findOpenTileInTab,
-  useEpicCanvasStore,
-} from "@/stores/epics/canvas/store";
 import { makeOpenableNodeRef } from "@/stores/epics/canvas/types";
 import { usePanelHeaderSearchQuery } from "@/stores/epics/panel-header-search-store";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 /**
  * The browsers panel's header cluster lives in
@@ -89,24 +86,8 @@ function BrowsersPanelBodyLive(props: {
     () => filterBrowserTabRows(tabs, searchQuery),
     [searchQuery, tabs],
   );
-  const navigateNested = useEpicNestedFocusNavigation();
-  const prepareOpen = useEpicCanvasStore(
-    (state) => state.prepareOpenTileInTabFocusTarget,
-  );
-  const prepareOpenPreview = useEpicCanvasStore(
-    (state) => state.prepareOpenTilePreviewInTabFocusTarget,
-  );
-  const prepareFocus = useEpicCanvasStore(
-    (state) => state.prepareSetActiveTileTabFocusTarget,
-  );
-  const promotePreview = useEpicCanvasStore(
-    (state) => state.promotePreviewInTab,
-  );
-  const { add: addBrowser, isAdding } = useAddBrowserAction(
-    props.epicId,
-    props.tabId,
-    null,
-  );
+  const { openTile } = useEpicTileNavigation();
+  const { add: addBrowser, isAdding } = useAddBrowserAction(props.tabId, null);
 
   const openTab = useCallback(
     (session: BrowserSessionInfo, tab: BrowserTabInfo) => {
@@ -115,11 +96,9 @@ function BrowsersPanelBodyLive(props: {
         sessionId: session.sessionId,
         tabId: tab.tabId,
       });
-      navigateNested(props.epicId, props.tabId, () =>
-        prepareOpenPreview(props.tabId, tile),
-      );
+      openTile(tileIntent(tile, { tabId: props.tabId }, "single", "direct_ui"));
     },
-    [navigateNested, prepareOpenPreview, props.epicId, props.tabId],
+    [openTile, props.tabId],
   );
 
   const openTabPermanently = useCallback(
@@ -129,25 +108,13 @@ function BrowsersPanelBodyLive(props: {
         sessionId: session.sessionId,
         tabId: tab.tabId,
       });
-      const existingPointer = findOpenTileInTab(props.tabId, tile);
-      navigateNested(props.epicId, props.tabId, () => {
-        if (existingPointer === null) return prepareOpen(props.tabId, tile);
-        promotePreview(props.tabId, existingPointer.paneId);
-        return prepareFocus(
-          props.tabId,
-          existingPointer.paneId,
-          existingPointer.instanceId,
-        );
-      });
+      // `explicit` pins the tile, and the resolver promotes an existing
+      // preview of it rather than opening a second instance.
+      openTile(
+        tileIntent(tile, { tabId: props.tabId }, "explicit", "direct_ui"),
+      );
     },
-    [
-      navigateNested,
-      prepareFocus,
-      prepareOpen,
-      promotePreview,
-      props.epicId,
-      props.tabId,
-    ],
+    [openTile, props.tabId],
   );
 
   const openDrivingChat = useCallback(
@@ -161,21 +128,18 @@ function BrowsersPanelBodyLive(props: {
         name: chat.title,
         hostId,
       });
-      const existing = findOpenTileInTab(props.tabId, chatTile);
-      navigateNested(props.epicId, props.tabId, () =>
-        existing === null
-          ? prepareOpen(props.tabId, chatTile)
-          : prepareFocus(props.tabId, existing.paneId, existing.instanceId),
+      openTile(
+        tileIntent(
+          chatTile,
+          { tabId: props.tabId },
+          // No double-click gesture exists on these rows, so `single` would
+          // leave nothing that pins the tile: the next preview would evict it.
+          "explicit",
+          "direct_ui",
+        ),
       );
     },
-    [
-      chatById,
-      navigateNested,
-      prepareFocus,
-      prepareOpen,
-      props.epicId,
-      props.tabId,
-    ],
+    [chatById, openTile, props.tabId],
   );
   const isUnavailable =
     sessions.lifecycle === "failed" || sessions.lifecycle === "closed";

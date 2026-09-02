@@ -166,6 +166,7 @@ export function useBrowserOpenerItems(
           openTileIntoTargetGroup({
             tabId: ctx.activeTabId,
             groupId: ctx.targetGroupId,
+            dedupe: false,
             navigateNestedFocus: ctx.router.navigateNestedFocus,
             ref: makeBrowserSessionTileRef({
               hostId,

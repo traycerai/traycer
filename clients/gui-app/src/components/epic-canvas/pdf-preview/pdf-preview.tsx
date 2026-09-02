@@ -17,6 +17,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type MouseEvent,
   type ReactNode,
 } from "react";
 import { getDocument, GlobalWorkerOptions } from "pdfjs-dist";
@@ -37,6 +38,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { appLogger } from "@/lib/logger";
+import { useOpenLink } from "@/lib/links/open-link";
 import { pdfDataFileUrls } from "./pdf-asset-urls";
 import { PdfOutlinePanel, type PdfOutlineEntry } from "./pdf-outline-panel";
 import { PdfPreviewToolbar } from "./pdf-preview-toolbar";
@@ -91,6 +93,7 @@ type ViewerBinding = {
 };
 
 export default function PdfPreview(props: PdfPreviewProps): ReactNode {
+  const openLink = useOpenLink();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const bindingRef = useRef<ViewerBinding | null>(null);
   const [documentReady, setDocumentReady] = useState(false);
@@ -350,19 +353,25 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
     binding.viewer.pagesRotation = (binding.viewer.pagesRotation + 90) % 360;
   }, []);
 
-  const handleOutlineNavigate = useCallback((entry: PdfOutlineEntry) => {
-    const binding = bindingRef.current;
-    if (binding === null) return;
-    if (entry.dest !== null) {
-      void binding.linkService.goToDestination(entry.dest);
-      return;
-    }
-    if (entry.url !== null) {
-      // Same exit as the annotation layer's external links (LinkTarget.BLANK):
-      // window.open, governed by the desktop shell's security handlers.
-      window.open(entry.url, "_blank", "noopener");
-    }
-  }, []);
+  const handleOutlineNavigate = useCallback(
+    (entry: PdfOutlineEntry, event: MouseEvent<HTMLButtonElement>) => {
+      const binding = bindingRef.current;
+      if (binding === null) return;
+      if (entry.dest !== null) {
+        void binding.linkService.goToDestination(entry.dest);
+        return;
+      }
+      if (entry.url !== null) {
+        // A link inside a rendered document, so it answers to the same
+        // "Open links" setting as the other document surfaces - and to the
+        // modifiers that override it per click, which is why the row hands
+        // the event up rather than swallowing it. `window.open` is a no-op in
+        // the Electron renderer and would bypass the setting outright.
+        void openLink(entry.url, "markdown", event);
+      }
+    },
+    [openLink],
+  );
 
   const dispatchFind = useCallback(
     (type: "" | "again", findPrevious: boolean) => {

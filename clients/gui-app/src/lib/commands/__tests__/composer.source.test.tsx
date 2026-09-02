@@ -13,7 +13,6 @@ import {
   resetActiveModelPickerForTests,
 } from "@/lib/commands/active-model-picker-registry";
 import { composerSource } from "@/lib/commands/sources/composer.source";
-import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
@@ -421,12 +420,14 @@ describe("composerSource", () => {
     expect(ids).toContain("composer:switch-model");
     expect(ids).not.toContain("composer:select-pc");
     expect(ids).toContain("composer:new-chat:replace");
-    expect(ids).toContain("composer:new-chat:split:right");
-    expect(ids).toContain("composer:new-chat:split:bottom");
     expect(ids).toContain("composer:new-terminal-agent");
+    // C8: the split rows are gone - one "New agent" row honours the
+    // configured conversation placement instead of naming an edge.
+    expect(ids).not.toContain("composer:new-chat:split:right");
+    expect(ids).not.toContain("composer:new-chat:split:bottom");
   });
 
-  it("new-chat active tile command opens the modal in chat mode (active-tile)", () => {
+  it("new-chat command opens the modal in chat mode with no explicit placement", () => {
     registerFocusedComposerControls(
       "chat-tile",
       stubControls({}),
@@ -446,7 +447,8 @@ describe("composerSource", () => {
     expect(useNewConversationModalOpenStore.getState().request).toEqual({
       epicId: "epic-1",
       tabId: "epic-1",
-      placement: { kind: "active-tile" },
+      // `null` - the conversation tile-placement setting decides (C3, C8).
+      placement: null,
       parentId: null,
       hostId: null,
     });
@@ -454,53 +456,6 @@ describe("composerSource", () => {
       useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"]
         ?.composerMode,
     ).toBe("chat");
-  });
-
-  it("new-chat split command opens the modal in chat mode with the active group's split placement", () => {
-    registerFocusedComposerControls(
-      "chat-tile",
-      stubControls({}),
-      TEST_HOST_CLIENT,
-    );
-    useEpicCanvasStore
-      .getState()
-      .seedEpic("epic-1", { tabId: "epic-1", name: "Epic 1" }, []);
-    useEpicCanvasStore.getState().openTileInTab("epic-1", {
-      id: "existing-spec",
-      instanceId: "inst-existing-spec",
-      type: "spec",
-      name: "Existing spec",
-      hostId: "test-host",
-    });
-    const activeGroupId =
-      useEpicCanvasStore.getState().canvasByTabId["epic-1"]?.activePaneId ??
-      null;
-    if (activeGroupId === null) throw new Error("expected an active group");
-    const items = captureItems("epic-1", "chat-tile");
-    const item = items.find((candidate) => {
-      return candidate.id === "composer:new-chat:split:right";
-    });
-    expect(item).not.toBeUndefined();
-    if (item === undefined) return;
-
-    void item.run(ctx("epic-1", "chat-tile"));
-
-    // The command opens the modal (no direct create) and leaves the canvas
-    // untouched until submit; placement carries the active group + edge.
-    expect(useNewConversationModalOpenStore.getState().request).toEqual({
-      epicId: "epic-1",
-      tabId: "epic-1",
-      placement: { kind: "split", groupId: activeGroupId, position: "right" },
-      parentId: null,
-      hostId: null,
-    });
-    expect(
-      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"]
-        ?.composerMode,
-    ).toBe("chat");
-    const canvas = useEpicCanvasStore.getState().canvasByTabId["epic-1"];
-    if (canvas === undefined) throw new Error("expected seeded tab canvas");
-    expect(collectPanes(canvas.root)).toHaveLength(1);
   });
 
   it("chat-tile without an active epic hides new-chat items", () => {

@@ -1969,17 +1969,26 @@ describe("Report issue capture dialog (deep interactions)", () => {
       ).not.toBeNull();
     });
 
-    it("keeps the preview on openExternalLink failure with a retryable toast", async () => {
+    it("keeps the preview when the final draft rebuild fails, with a retryable toast", async () => {
+      // One of the two steps that can fail with the report still in hand: the
+      // REBUILD that folds the edited title back through the scrubbing
+      // pipeline (the other is the OS handoff, below).
+      let builds = 0;
       const harness = createSupportBridgeHarness({
         snapshot: undefined,
         submitReport: () =>
           Promise.resolve({ status: "delivered", reportId: "rpt_openfail" }),
-        buildPublicDraft: undefined,
-        openExternalLink: () => Promise.reject(new Error("no browser")),
+        buildPublicDraft: (form) => {
+          builds += 1;
+          return builds === 1
+            ? Promise.resolve(publicDraftForForm(form))
+            : Promise.reject(new Error("no draft"));
+        },
+        openExternalLink: undefined,
         frozenDesktopLines: undefined,
         frozenHostLines: undefined,
       });
-      await reachConfirmedPreview(harness, "Open failure stays on preview");
+      await reachConfirmedPreview(harness, "Rebuild failure stays on preview");
 
       fireEvent.click(
         screen.getByRole("button", { name: "Open GitHub draft" }),
@@ -1993,13 +2002,43 @@ describe("Report issue capture dialog (deep interactions)", () => {
       });
       const openError = lastToastErrorOptions();
       expect(openError.description).toBe(
-        "Your report is safe - you can try opening it again. no browser",
+        "Your report is safe - you can try opening it again. no draft",
       );
       expect(openError.actionLabel).toBe("Try again");
       expect(
         screen.getByRole("heading", { name: "Preview the public issue" }),
       ).not.toBeNull();
       expect(harness.openedLinks).toEqual([]);
+    });
+
+    it("keeps the preview when the OS handoff itself fails (L1)", async () => {
+      // `openLink` is awaited, so a refused handoff rejects the mutation and
+      // `onError` keeps the preview with its retry - never the confirmation.
+      const harness = createSupportBridgeHarness({
+        snapshot: undefined,
+        submitReport: () =>
+          Promise.resolve({ status: "delivered", reportId: "rpt_handoff" }),
+        buildPublicDraft: undefined,
+        openExternalLink: () => Promise.reject(new Error("no browser")),
+        frozenDesktopLines: undefined,
+        frozenHostLines: undefined,
+      });
+      await reachConfirmedPreview(harness, "Handoff failure stays on preview");
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Open GitHub draft" }),
+      );
+
+      await waitFor(() => {
+        expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+          "Could not open the GitHub draft",
+          expect.anything(),
+        );
+      });
+      expect(lastToastErrorOptions().actionLabel).toBe("Try again");
+      expect(
+        screen.getByRole("heading", { name: "Preview the public issue" }),
+      ).not.toBeNull();
     });
 
     it("routes an idea-type report through feature_request.yml fields and template param", async () => {

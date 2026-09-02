@@ -10,7 +10,7 @@
  * file-at-revision tile kind; the user chose latest-only for now), so a
  * deleted PDF shows its status with no open affordance.
  */
-import { useCallback, useMemo, type ReactNode } from "react";
+import { useCallback, useMemo, type MouseEvent, type ReactNode } from "react";
 import { useDraggable } from "@dnd-kit/core";
 import type { GitFileStatus } from "@traycer/protocol/host";
 import { ExternalLink, FileTextIcon } from "lucide-react";
@@ -19,8 +19,8 @@ import { StartTruncatedText } from "@/components/ui/start-truncated-text";
 import { formatByteSize } from "@/lib/format-byte-size";
 import { getBasename } from "@/lib/path/cross-platform-path";
 import { useOpenEpicId } from "@/lib/epic-selectors";
-import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import { modifiersFromMouseEvent } from "@/lib/canvas/tile-open/intent";
 import { workspaceFileRefFromTreePath } from "@/components/epic-canvas/workspace-file/workspace-file-ref";
 import {
   getPaneScopedDndId,
@@ -79,10 +79,7 @@ function statusSummary(props: PdfDiffViewProps): PdfDiffStatusSummary {
 
 export function PdfDiffView(props: PdfDiffViewProps): ReactNode {
   const epicId = useOpenEpicId();
-  const navigateNested = useEpicNestedFocusNavigation();
-  const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
-    (s) => s.prepareOpenTileInTabFocusTarget,
-  );
+  const { openTile } = useEpicTileNavigation();
 
   // The block's headline path: the surviving side's. Only a DELETED file has
   // no current side, and its label is the (old) path being removed.
@@ -125,18 +122,25 @@ export function PdfDiffView(props: PdfDiffViewProps): ReactNode {
     disabled: openRef === null || dragDisabled,
   });
 
-  const handleOpen = useCallback(() => {
-    if (openRef === null) return;
-    navigateNested(epicId, props.viewTabId, () =>
-      prepareOpenTileInTabFocusTarget(props.viewTabId, openRef),
-    );
-  }, [
-    epicId,
-    navigateNested,
-    openRef,
-    prepareOpenTileInTabFocusTarget,
-    props.viewTabId,
-  ]);
+  // Through the one resolver, not a hand-rolled tab open: placement settings,
+  // grouping, dedupe, the route write and the analytics source all live there,
+  // and a shift- or middle-click on this button means what it means everywhere
+  // else only if the click's modifiers reach it.
+  const handleOpen = useCallback(
+    (event: MouseEvent<HTMLButtonElement>) => {
+      if (openRef === null) return;
+      openTile({
+        node: openRef,
+        target: { tabId: props.viewTabId },
+        gesture: "single",
+        modifiers: modifiersFromMouseEvent(event),
+        placement: null,
+        dedupe: true,
+        source: "direct_ui",
+      });
+    },
+    [openRef, openTile, props.viewTabId],
+  );
 
   const status = statusSummary(props);
   const sizeSuffix =

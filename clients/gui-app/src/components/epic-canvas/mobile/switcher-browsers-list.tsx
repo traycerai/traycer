@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useState, type MouseEvent } from "react";
 import { Bot, ListFilter, Moon, Plus, TriangleAlert, X } from "lucide-react";
 import type { BrowserTabInfo } from "@traycer/protocol/host/browser/contracts";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -41,18 +41,15 @@ import {
 } from "@/components/epic-canvas/sidebar/use-browser-tab-rows";
 import { useBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
 import { BrowserSessionsHostBoundary } from "@/components/epic-canvas/renderers/browser-sessions-provider";
-import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import { modifiersFromMouseEvent } from "@/lib/canvas/tile-open/intent";
 import {
   useSurfaceHostPin,
   useTabSurfaceKey,
 } from "@/hooks/host/use-surface-host-pin";
 import { useEpicChatRecords } from "@/lib/epic-selectors";
 import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
-import {
-  findOpenTileInTab,
-  useEpicCanvasStore,
-  useIsActiveTile,
-} from "@/stores/epics/canvas/store";
+import { useIsActiveTile } from "@/stores/epics/canvas/store";
 import { makeOpenableNodeRef } from "@/stores/epics/canvas/types";
 
 interface SwitcherListProps {
@@ -117,11 +114,7 @@ function SwitcherBrowsersListLive(props: SwitcherListProps) {
   // with a toast and opens nothing, and a sheet that left anyway would take the
   // unavailable state's Retry with it. Same rule the Terminals row follows,
   // which closes on `onLaunched`.
-  const { add: handleAdd, isAdding } = useAddBrowserAction(
-    epicId,
-    tabId,
-    onClose,
-  );
+  const { add: handleAdd, isAdding } = useAddBrowserAction(tabId, onClose);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -255,7 +248,7 @@ function SwitcherBrowserRow(props: {
 }) {
   const { row, epicId, tabId, onClose } = props;
   const { session, tab, identity } = row;
-  const activate = useSwitcherActivate(epicId, tabId, onClose);
+  const activate = useSwitcherActivate(tabId, onClose);
   // One source for what this row POINTS AT; the refs below are both built from
   // it, so the identity cannot drift between the one `isActive` is judged
   // against and the one a tap opens.
@@ -398,7 +391,6 @@ function SwitcherBrowserRowActions(props: {
       <SwitcherBrowserDriverButton
         row={row}
         chatById={props.chatById}
-        epicId={epicId}
         tabId={tabId}
         onClose={onClose}
       />
@@ -433,48 +425,39 @@ function SwitcherBrowserDriverButton(props: {
     string,
     { readonly id: string; readonly title: string }
   >;
-  readonly epicId: string;
   readonly tabId: string;
   readonly onClose: () => void;
 }) {
-  const { row, epicId, tabId, onClose } = props;
+  const { row, tabId, onClose } = props;
   const drivers = useCoalescedBrowserTabDrivers(row.tab.drivenBy);
   const { chatById } = props;
-  const navigateNested = useEpicNestedFocusNavigation();
-  const prepareOpen = useEpicCanvasStore(
-    (state) => state.prepareOpenTileInTabFocusTarget,
-  );
-  const prepareFocus = useEpicCanvasStore(
-    (state) => state.prepareSetActiveTileTabFocusTarget,
-  );
+  const { openTile } = useEpicTileNavigation();
   const driver = drivers.length === 0 ? null : drivers[0];
   const chat = driver === null ? undefined : chatById.get(driver.chatId);
-  const onSelect = useCallback(() => {
-    if (chat === undefined) return;
-    const chatTile = makeOpenableNodeRef({
-      id: chat.id,
-      instanceId: crypto.randomUUID(),
-      type: "chat",
-      name: chat.title,
-      hostId: row.session.hostId,
-    });
-    const existing = findOpenTileInTab(tabId, chatTile);
-    navigateNested(epicId, tabId, () =>
-      existing === null
-        ? prepareOpen(tabId, chatTile)
-        : prepareFocus(tabId, existing.paneId, existing.instanceId),
-    );
-    onClose();
-  }, [
-    chat,
-    epicId,
-    navigateNested,
-    onClose,
-    prepareFocus,
-    prepareOpen,
-    row.session.hostId,
-    tabId,
-  ]);
+  // No find-then-focus branch: `dedupe` focuses an already-open instance of
+  // this exact ref (content id AND host) and only opens when there is none.
+  const onSelect = useCallback(
+    (event: MouseEvent<HTMLButtonElement>) => {
+      if (chat === undefined) return;
+      openTile({
+        node: makeOpenableNodeRef({
+          id: chat.id,
+          instanceId: crypto.randomUUID(),
+          type: "chat",
+          name: chat.title,
+          hostId: row.session.hostId,
+        }),
+        target: { tabId },
+        gesture: "explicit",
+        modifiers: modifiersFromMouseEvent(event),
+        placement: null,
+        dedupe: true,
+        source: "direct_ui",
+      });
+      onClose();
+    },
+    [chat, onClose, openTile, row.session.hostId, tabId],
+  );
   // A driver whose chat this epic's records cannot resolve has nowhere to jump
   // to, so it stays a state the row reports rather than an action it offers.
   if (chat === undefined) return null;

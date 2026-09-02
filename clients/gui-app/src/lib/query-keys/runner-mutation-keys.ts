@@ -91,6 +91,8 @@ export const runnerMutationKeys = {
   // reloads. Keyed so the destructive action dedups and shows in devtools.
   clearAllLocalData: () => ["runner.clearAllLocalData"] as const,
   mermaidPngDownload: () => ["runner.mermaidPngDownload"] as const,
+  // The desktop link bridge (`useOpenExternalLink`) - every URL that leaves
+  // the app goes through this one mutation.
   openExternalLink: () => ["runner.openExternalLink"] as const,
   // Login import: the macOS Full Disk Access pane, via its own RunnerHost
   // method (the http(s)-only external-link gate refuses the pane's scheme).

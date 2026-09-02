@@ -3,7 +3,8 @@ import {
   act,
   cleanup,
   fireEvent,
-  render,
+  render as renderUi,
+  type RenderResult,
   screen,
   waitFor,
 } from "@testing-library/react";
@@ -156,6 +157,16 @@ vi.mock("@/lib/safe-area-insets", async (importOriginal) => {
 
 // Import after mocks are registered.
 import { OnboardingPage } from "@/components/onboarding/onboarding-page";
+import type { ReactNode } from "react";
+import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
+
+/**
+ * Every link surface below reaches the external-link bridge mutation, which
+ * needs a `QueryClientProvider` above it.
+ */
+function render(ui: ReactNode): RenderResult {
+  return renderUi(ui, { wrapper: WithTestQueryClient });
+}
 
 function renderPage() {
   return render(

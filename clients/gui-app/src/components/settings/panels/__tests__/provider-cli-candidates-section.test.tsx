@@ -53,6 +53,8 @@ type SectionMocks = {
   versionManagerPanel: Mock<(props: CapturedVersionManagerProps) => ReactNode>;
 };
 
+const openLink = vi.hoisted(() => vi.fn());
+
 const mocks = vi.hoisted((): SectionMocks => ({
   setSelectionMutate: vi.fn(),
   addCustomPathMutate: vi.fn(),
@@ -151,13 +153,9 @@ vi.mock("@/hooks/providers/use-providers-detect-version-query", () => ({
   }),
 }));
 
-// CliBinaryMissingNotice opens install URLs through this mutation; the empty
-// notice tests need the hook mocked so they do not require a QueryClient.
-vi.mock("@/hooks/runner/use-open-external-link-mutation", () => ({
-  useRunnerOpenExternalLink: () => ({
-    mutate: vi.fn(),
-    isPending: false,
-  }),
+// CliBinaryMissingNotice opens install URLs through this seam.
+vi.mock("@/lib/links/open-link", () => ({
+  useOpenLink: () => openLink,
 }));
 
 /**
@@ -319,6 +317,13 @@ describe("ProviderCliCandidatesSection: empty-candidate notice (F2 route-back)",
     ).toBeDefined();
     const guide = screen.getByRole("link", { name: "Amp installation guide" });
     expect(guide.getAttribute("href")).toBe("https://ampcode.com/manual");
+
+    fireEvent.click(guide);
+    expect(openLink).toHaveBeenCalledWith(
+      "https://ampcode.com/manual",
+      "docs",
+      null,
+    );
   });
 
   it("waits for the PATH probe instead of declaring the binary missing", () => {

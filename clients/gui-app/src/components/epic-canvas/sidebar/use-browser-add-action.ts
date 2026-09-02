@@ -2,13 +2,13 @@ import { useCallback } from "react";
 import { useIsMutating, useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
-import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { browserMutationKeys } from "@/lib/query-keys/browser-mutation-keys";
 import {
   DEFAULT_BROWSER_TILE_URL,
   makeBrowserSessionTileRef,
 } from "@/stores/epics/canvas/tile-schema/browser-tile";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 /** The host that answered, and the tab it opened there. */
 interface OpenedBrowserTab {
@@ -44,15 +44,11 @@ export interface AddBrowserAction {
  * holds that invariant for any surface that renders its own affordance.
  */
 export function useAddBrowserAction(
-  epicId: string,
   tabId: string,
   onOpened: (() => void) | null,
 ): AddBrowserAction {
   const sessions = useBrowserSessionsContext();
-  const navigateNested = useEpicNestedFocusNavigation();
-  const prepareOpen = useEpicCanvasStore(
-    (state) => state.prepareOpenTileInTabFocusTarget,
-  );
+  const { openTile } = useEpicTileNavigation();
   const openTabKey = browserMutationKeys.openTab(sessions.hostId);
   const addMutation = useMutation<OpenedBrowserTab>({
     mutationKey: openTabKey,
@@ -65,8 +61,13 @@ export function useAddBrowserAction(
       return { hostId, sessionId: opened.sessionId, tabId: opened.tabId };
     },
     onSuccess: (opened) => {
-      navigateNested(epicId, tabId, () =>
-        prepareOpen(tabId, makeBrowserSessionTileRef(opened)),
+      openTile(
+        tileIntent(
+          makeBrowserSessionTileRef(opened),
+          { tabId },
+          "explicit",
+          "direct_ui",
+        ),
       );
       onOpened?.();
     },

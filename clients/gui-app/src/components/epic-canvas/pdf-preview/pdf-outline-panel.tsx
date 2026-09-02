@@ -5,7 +5,7 @@
  * so this component stays pure - no pdf.js import, which keeps it testable
  * outside the lazy chunk.
  */
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState, type MouseEvent, type ReactNode } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -47,7 +47,10 @@ function keyOutline(
 function OutlineRow(props: {
   readonly node: KeyedOutlineNode;
   readonly depth: number;
-  readonly onNavigate: (entry: PdfOutlineEntry) => void;
+  readonly onNavigate: (
+    entry: PdfOutlineEntry,
+    event: MouseEvent<HTMLButtonElement>,
+  ) => void;
 }): ReactNode {
   const { node, depth, onNavigate } = props;
   // Mirror the browser viewers' default: top-level chapters open, deeper
@@ -86,7 +89,7 @@ function OutlineRow(props: {
             "min-w-0 flex-1 truncate rounded-sm px-1 py-0.5 text-left text-ui-xs",
             "text-muted-foreground hover:bg-foreground/8 hover:text-foreground",
           )}
-          onClick={() => onNavigate(node.entry)}
+          onClick={(event) => onNavigate(node.entry, event)}
         >
           {node.entry.title}
         </button>
@@ -109,7 +112,10 @@ function OutlineRow(props: {
 
 export function PdfOutlinePanel(props: {
   readonly items: readonly PdfOutlineEntry[];
-  readonly onNavigate: (entry: PdfOutlineEntry) => void;
+  readonly onNavigate: (
+    entry: PdfOutlineEntry,
+    event: MouseEvent<HTMLButtonElement>,
+  ) => void;
 }): ReactNode {
   const keyedItems = useMemo(() => keyOutline(props.items, ""), [props.items]);
   return (

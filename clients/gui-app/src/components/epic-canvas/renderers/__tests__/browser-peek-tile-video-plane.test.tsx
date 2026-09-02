@@ -1,11 +1,6 @@
 import "../../../../../__tests__/test-browser-apis";
-import {
-  act,
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-} from "@testing-library/react";
+import { act, cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderPeekTile } from "@/components/epic-canvas/renderers/__tests__/browser-peek-tile-render";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useEffect } from "react";
 import {
@@ -130,7 +125,7 @@ function jpegFrame(sequence: number, bytes: readonly number[]): void {
  * the start (ticket 26), so nothing paints until a plane does.
  */
 function renderTile(): void {
-  render(
+  renderPeekTile(
     <BrowserPeekTile
       viewTabId="view-tab-1"
       paneId="pane-1"
@@ -846,7 +841,7 @@ describe("BrowserPeekTile input ack", () => {
   });
 
   it("promotes input to the channels when a host inputAck drains the mux", async () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -1010,7 +1005,7 @@ describe("useLastBrowserPeekFrame", () => {
     // initializer instead of `useSyncExternalStore` - React runs the outgoing
     // tile's destroys AFTER the incoming placeholder renders, so the dormant
     // tile would stay blank on exactly the swap it exists for.
-    const view = render(<Swap dormant={false} />);
+    const view = renderPeekTile(<Swap dormant={false} />);
     expect(getLastBrowserPeekFrame(M52_KEY)).toBeNull();
 
     act(() => {
