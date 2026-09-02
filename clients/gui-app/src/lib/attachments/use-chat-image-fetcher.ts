@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 
@@ -9,10 +9,12 @@ import {
 import type {
   ImageBytesFetcher,
   ImageBytesResult,
+  ScopedImageBytesFetcher,
 } from "@/lib/attachments/image-blob-cache";
 import type { ImageBytes } from "@/lib/attachments/image-bytes";
 import { base64ToBytes } from "@/lib/composer/image-base64";
 import { getImageBytes } from "@/lib/composer/landing-image-store";
+import { readHeldEpicAttachmentBytes } from "@/lib/epic-replica-reads";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 
@@ -63,9 +65,13 @@ const hostBuildsWithoutChatAttachmentRead = new Set<string>();
  */
 function hostBuildKey(scope: ChatAttachmentScopeValue): string | null {
   if (scope.hostVersion === null) return null;
-  // Newline-separated: a host id never contains one, so no two distinct pairs
-  // can collide on a single key.
-  return `${scope.hostId}\n${scope.hostVersion}`;
+  // JSON-encoded, not newline-joined. The previous comment here asserted that
+  // "a host id never contains one" - an assumption about a value that crosses
+  // the wire as an unconstrained string, and it says nothing about
+  // `hostVersion` at all. A newline in either aliases distinct pairs, so an
+  // `E_HOST_UNSUPPORTED` verdict learned for one build would suppress
+  // attachment fetches for a different one for the rest of the session.
+  return JSON.stringify([scope.hostId, scope.hostVersion]);
 }
 
 /**
@@ -136,12 +142,15 @@ async function readChatAttachmentFromHost(
 /**
  * The legacy leg: the epic Y.Doc's content-addressed `attachments` map.
  *
- * Guarded by `hasAttachmentBytes`, and the guard is not optional.
- * `readAttachmentBytes` waits INDEFINITELY for a hash the local replica does
- * not hold - it is built for a doc-resident image that is still syncing - so
- * calling it unguarded here would park the chain forever on exactly the case
- * the chat-plane leg above is supposed to own, and the blob cache would never
- * retry the leg that could actually succeed.
+ * Guarded, and the guard is not optional - but it is no longer a separate
+ * `hasAttachmentBytes` pre-check on this side. The guard moved INTO the worker
+ * (`epic-replica-reads.ts`'s `readHeldEpicAttachmentBytes`), which answers
+ * `null` for a hash the replica does not hold rather than waiting for one to
+ * arrive. Before that, an unguarded read parked the chain forever on exactly
+ * the case the chat-plane leg above is supposed to own, and the blob cache
+ * never retried the leg that could actually succeed. One call now carries both
+ * halves, which is why the predicate stopped being a thing a caller can
+ * forget.
  *
  * Answers `mediaType: null`: the doc map holds raw bytes with no sniffed
  * header, so this leg has no verdict of its own and the caller's declared type
@@ -150,12 +159,12 @@ async function readChatAttachmentFromHost(
 async function readAttachmentFromEpicDoc(
   handle: OpenEpicStoreHandle | null,
   hash: string,
-  signal: AbortSignal,
 ): Promise<ImageBytesResult | null> {
   if (handle === null) return null;
-  const state = handle.store.getState();
-  if (!state.hasAttachmentBytes(hash)) return null;
-  const bytes = await state.readAttachmentBytes(hash, signal);
+  // Through the replica-read seam, in its non-waiting variant - the same
+  // guarded read this leg always did, now expressed as one contract that
+  // survives the replica moving into the runtime worker.
+  const bytes = await readHeldEpicAttachmentBytes(handle, hash);
   return bytes === null
     ? null
     : { bytes: new Uint8Array(bytes), mediaType: null };
@@ -183,10 +192,10 @@ async function readAttachmentFromEpicDoc(
  * Referentially stable per (scope, epic handle) so it can be handed to
  * `useImageBlobUrl` / `AttachmentStrip` without re-acquiring every render.
  */
-export function useChatImageFetcher(): ImageBytesFetcher {
+export function useChatImageFetcher(): ScopedImageBytesFetcher {
   const scope = useChatAttachmentScope();
   const handle = useMaybeOpenEpicHandle();
-  return useCallback<ImageBytesFetcher>(
+  const fetch = useCallback<ImageBytesFetcher>(
     async (hash, signal) => {
       const fromChatPlane = await readChatAttachmentFromHost(
         scope,
@@ -194,7 +203,7 @@ export function useChatImageFetcher(): ImageBytesFetcher {
         signal,
       );
       if (fromChatPlane !== null) return fromChatPlane;
-      const fromDoc = await readAttachmentFromEpicDoc(handle, hash, signal);
+      const fromDoc = await readAttachmentFromEpicDoc(handle, hash);
       if (fromDoc !== null) return fromDoc;
       try {
         const fromLanding = await getImageBytes(hash);
@@ -208,6 +217,40 @@ export function useChatImageFetcher(): ImageBytesFetcher {
     },
     [scope, handle],
   );
+  return useMemo<ScopedImageBytesFetcher>(
+    () => ({ scopeKey: chatAttachmentScopeKey(handle, scope), fetch }),
+    [handle, scope, fetch],
+  );
+}
+
+/**
+ * What a chat-plane byte read is authorized against, as a cache subject.
+ *
+ * `epic.readChatAttachment` takes `(epicId, chatId, hash)` and the server
+ * applies the CHAT's ACL behind it, so the chat id is the authorization
+ * subject and not a routing detail - the same argument
+ * `artifact-attachment-scope-context.ts` makes for the artifact id. Keyed on
+ * the bare hash, a hash learned from any other chat would be served from cache
+ * before that ACL ever ran.
+ *
+ * Deliberately a DIFFERENT namespace from the artifact leg's key even where
+ * both fall back to the same epic doc replica. The two subjects are only
+ * provably equivalent on that shared fallback, and which leg answers is decided
+ * per read inside the fetcher - so treating them as one subject would make the
+ * cache the thing that decides two authorizations are interchangeable, which is
+ * the class of judgment being taken away from it here. The cost is one extra
+ * fetch for an image referenced from both a chat and an artifact.
+ */
+function chatAttachmentScopeKey(
+  handle: OpenEpicStoreHandle | null,
+  scope: ChatAttachmentScopeValue | null,
+): string {
+  return JSON.stringify([
+    "chat-attachment",
+    scope?.hostId ?? "",
+    scope?.epicId ?? handle?.epicId ?? "",
+    scope?.chatId ?? "",
+  ]);
 }
 
 export type ChatAttachmentByteReader = (
@@ -244,7 +287,9 @@ export function useChatAttachmentByteReader(): ChatAttachmentByteReader {
         CHAT_ATTACHMENT_READ_TIMEOUT_MS,
       );
       try {
-        return (await fetcher(hash, controller.signal)).bytes;
+        // `.fetch` directly: this read never touches `imageBlobCache` (see the
+        // doc comment), so it needs the byte source, not the cache subject.
+        return (await fetcher.fetch(hash, controller.signal)).bytes;
       } catch {
         return null;
       } finally {

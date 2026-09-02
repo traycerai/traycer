@@ -347,8 +347,23 @@ export const RunnerHostInvoke = {
   browserViewGetDebugSnapshot: "runnerHost:browserView:getDebugSnapshot",
   browserViewPrimaryProfileCapture:
     "runnerHost:browserView:primaryProfile:capture",
-  browserViewCookieCryptoStateGet:
-    "runnerHost:browserView:cookieCryptoState:get",
+  // Clear cookies for one site (keychain refactor ticket 07). `...ClearSite` is
+  // the user's tile-menu action and reports the emptied slice to the host;
+  // `...EvictSite` is the host telling this desktop the same site was cleared
+  // elsewhere, and deliberately reports nothing back.
+  browserViewClearSite: "runnerHost:browserView:primaryProfile:clearSite",
+  browserViewEvictSite: "runnerHost:browserView:primaryProfile:evictSite",
+  // Saved browser logins: on by default, off only if the user says so in
+  // Settings. `...Set` switches the partition and brings the live tiles back.
+  browserViewSaveLoginsGet: "runnerHost:browserView:saveLogins:get",
+  browserViewSaveLoginsSet: "runnerHost:browserView:saveLogins:set",
+  // Store-key handshake (keychain refactor ticket 05).
+  browserViewStoreKeyWrap: "runnerHost:browserView:storeKey:wrap",
+  browserViewStoreKeyUnwrap: "runnerHost:browserView:storeKey:unwrap",
+  // "Forget all browser logins" (keychain refactor ticket 08). Driven by the
+  // host's `primaryProfileForgotten`, never by the renderer on its own: the
+  // host shreds its slice first, then every connected desktop clears its jar.
+  browserViewForgetLogins: "runnerHost:browserView:forgetLogins",
   browserViewStartAnnotation: "runnerHost:browserView:annotation:start",
   browserViewCancelAnnotation: "runnerHost:browserView:annotation:cancel",
   browserViewSetAnnotationTargetChatLabel:
@@ -419,11 +434,14 @@ export const RunnerHostEvent = {
   browserViewDownloadChange: "runnerHost:event:browserView:downloadChange",
   browserViewCertificateError: "runnerHost:event:browserView:certificateError",
   browserViewOpenTileRequest: "runnerHost:event:browserView:openTileRequest",
+  browserViewTileCommand: "runnerHost:event:browserView:tileCommand",
   browserViewSnapshotInvalidated:
     "runnerHost:event:browserView:snapshotInvalidated",
   browserViewAnnotationEvent: "runnerHost:event:browserView:annotation",
   browserViewAnnotationAttached:
     "runnerHost:event:browserView:annotationAttached",
+  browserViewPrimaryProfileDelta:
+    "runnerHost:event:browserView:primaryProfile:delta",
   // Native-tab PiP capture frames (`started` / `frame` / `stalled`).
   pipCaptureFrame: "runnerHost:event:pipCapture:frame",
   globalShortcutsChange: "runnerHost:event:globalShortcuts:change",

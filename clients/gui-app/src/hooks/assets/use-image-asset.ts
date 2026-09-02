@@ -149,6 +149,14 @@ function locationFor(request: ImageAssetRequest): string {
  * `contentIdentity`, so a re-stat that finds the same fingerprint reuses the
  * cached blob instead of re-transferring bytes.
  */
+/**
+ * Namespace for every workspace/git asset entry in the shared image blob
+ * cache. A constant rather than a per-request value because
+ * {@link buildImageAssetCacheKey} already carries this hook's whole
+ * authorization surface (host, source, location, path) in the subject.
+ */
+const IMAGE_ASSET_SCOPE_KEY = "image-asset";
+
 function buildImageAssetCacheKey(parts: {
   readonly hostId: string;
   readonly source: ImageAssetSource;
@@ -577,7 +585,7 @@ export function useImageAsset(
     }
     const cacheKey = cacheKeyRef.current;
     if (cacheKey !== null) {
-      imageBlobCache.discard(cacheKey);
+      imageBlobCache.discard(IMAGE_ASSET_SCOPE_KEY, cacheKey);
     }
     if (!isMountedRef.current) return;
     setResolved({
@@ -685,7 +693,12 @@ export function useImageAsset(
         const lease = imageBlobCache.acquire(
           key,
           header.mediaType,
-          fetcher,
+          // `key` is already the fully-scoped identity for this asset - it
+          // encodes hostId, source, location and path - so the namespace is
+          // all this adds, keeping asset entries disjoint from attachment
+          // ones. The fetcher ignores its subject argument entirely: it reads
+          // from the subscription opened above, not from a hash.
+          { scopeKey: IMAGE_ASSET_SCOPE_KEY, fetch: fetcher },
           retention,
         );
         releaseLease = lease.release;

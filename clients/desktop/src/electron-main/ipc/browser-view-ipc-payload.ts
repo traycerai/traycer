@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   browserCdpCommandSchema,
   browserCdpTargetSchema,
+  browserSessionProfileKindSchema,
   browserStorageStateSchema,
 } from "@traycer/protocol/host/browser/contracts";
 import type {
@@ -23,6 +24,7 @@ import type {
   BrowserViewFindStop,
   BrowserViewOverlayOcclusion,
   BrowserViewOverlayRelease,
+  BrowserViewReservedChord,
 } from "@traycer-clients/shared/platform/browser-view";
 import type { PipCaptureStartInput } from "@traycer-clients/shared/platform/browser-view";
 
@@ -128,6 +130,9 @@ const overlayPaintAckSchema = z.object({ overlayId: z.string() });
 const ensureTabSchema: z.ZodType<BrowserViewEnsureTab> =
   nativeTabKeySchema.extend({
     requestedUrl: nonEmptyStringSchema,
+    // The renderer relays the host's frame verbatim; an older renderer that
+    // does not know about profiles can only mean the shared jar.
+    profile: browserSessionProfileKindSchema.default("primary"),
     seedStorageState: browserStorageStateSchema.nullable().default(null),
   });
 const attachSurfaceSchema: z.ZodType<BrowserViewAttachSurface> =
@@ -151,6 +156,18 @@ const pipCaptureStartSchema: z.ZodType<PipCaptureStartInput> =
     quality: z.number().int().min(0).max(100),
   });
 
+/** Base64 key material crossing the store-key handshake (ticket 05). */
+const storeKeyMaterialSchema = z.base64();
+
+/**
+ * The registrable domain an evict names (ticket 07). Non-empty only: the scope
+ * is what bounds the removal, and an empty one would name the whole jar.
+ */
+const evictDomainSchema = z.object({ domain: z.string().min(1) });
+
+/** The saved-logins toggle's new value. */
+const saveLoginsSchema = z.boolean();
+
 export const browserViewIpcPayload = {
   annotationAttachResult: annotationAttachResultSchema,
   annotationStart: annotationStartSchema,
@@ -163,6 +180,7 @@ export const browserViewIpcPayload = {
   electronTabCdpDispatch: electronTabCdpDispatchSchema,
   electronTabControl: electronTabControlSchema,
   ensureTab: ensureTabSchema,
+  evictDomain: evictDomainSchema,
   findRequest: findRequestSchema,
   findStop: findStopSchema,
   nativeTabCapability: nativeTabCapabilitySchema,
@@ -170,14 +188,38 @@ export const browserViewIpcPayload = {
   overlayPaintAck: overlayPaintAckSchema,
   overlayRelease: overlayReleaseSchema,
   pipCaptureStart: pipCaptureStartSchema,
+  saveLogins: saveLoginsSchema,
+  storeKeyMaterial: storeKeyMaterialSchema,
   tileKey: tileKeySchema,
 } as const;
 
-const reservedChordTokensSchema = z.object({
-  tokens: z.array(z.string()).catch([]),
+/**
+ * Per-ROW catch, deliberately. A newer renderer may list a command this build
+ * has never heard of; catching on the ARRAY would discard the whole policy
+ * table over that one row and leave every chord unclaimed.
+ */
+const reservedChordRowSchema = z
+  .object({
+    token: z.string(),
+    command: z
+      .union([
+        z.literal("closeTab"),
+        z.literal("newTab"),
+        z.literal("focusAddressBar"),
+      ])
+      .nullable(),
+  })
+  .nullable()
+  .catch(null);
+
+const reservedChordsSchema = z.object({
+  chords: z.array(reservedChordRowSchema).catch([]),
 });
 
-export function parseReservedChordTokens(payload: unknown): readonly string[] {
-  const parsed = reservedChordTokensSchema.safeParse(payload);
-  return parsed.success ? parsed.data.tokens : [];
+export function parseReservedChords(
+  payload: unknown,
+): readonly BrowserViewReservedChord[] {
+  const parsed = reservedChordsSchema.safeParse(payload);
+  if (!parsed.success) return [];
+  return parsed.data.chords.filter((row) => row !== null);
 }

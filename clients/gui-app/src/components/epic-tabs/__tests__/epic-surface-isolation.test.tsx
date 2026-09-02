@@ -17,10 +17,13 @@ import { TestRouterProvider } from "@/__tests__/with-test-router";
 import { EpicSurface } from "@/components/epic-tabs/epic-surface";
 import { TabSurfaceActivityProvider } from "@/components/layout/tab-surface-activity";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import {
-  __getOpenEpicRegistryForTests,
-  __setEpicStreamClientFactoryForTests,
-} from "@/lib/registries/epic-session-registry";
+  __setEpicRuntimeWorkerFactoryForTests,
+  getEpicRuntimeWorkerFactoryOverride,
+} from "@/lib/registries/epic-runtime-worker-factory-slot";
+import { createInProcessEpicRuntimeWorker } from "@/stores/epics/open-epic/test-support/in-process-epic-runtime-worker";
+import type { RuntimeWorkerLike } from "@/stores/epics/open-epic/runtime/worker/spawn-epic-runtime-worker";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
@@ -30,6 +33,9 @@ interface FakeStream {
   readonly callbacks: EpicStreamCallbacks;
   readonly epicId: string;
 }
+
+/** The jsdom setup file's coreless worker, put back in `afterEach`. */
+let previousWorkerFactory: (() => RuntimeWorkerLike) | null = null;
 
 const hostBoundary = vi.hoisted(() => ({
   seenTileHostIds: new Set<string>(),
@@ -44,6 +50,7 @@ vi.mock(
       hostId: "host-test",
       lifecycle: "connecting",
       inventoryReady: false,
+      canMaterializeElectron: false,
       items: [],
       errorMessage: null,
       retry: () => undefined,
@@ -112,18 +119,27 @@ const activeHostClient = vi.hoisted(() => {
 // presentation writes are idempotent by value), so this is the fixture no
 // longer contradicting the contract of the hook it doubles, not a live fix.
 // Full rationale: `lib/registries/__tests__/chat-session-registry.test.ts`.
-const refuseDurableTransport = vi.hoisted(() => () => {
-  throw new Error("the Epic stream override must prevent socket creation");
-});
 const hostDirectory = vi.hoisted(() => ({
   findById: (hostId: string) =>
     hostId === activeHostEntry.hostId ? activeHostEntry : null,
   onChange: () => ({ dispose: () => undefined }),
 }));
 
-vi.mock("@/lib/host/use-durable-stream-transport", () => ({
-  useDurableStreamTransportFactory: () => refuseDurableTransport,
-}));
+// This opener REFUSED - "the Epic stream override must prevent socket
+// creation" - and that name described a real contract while the stream
+// override made `EpicSessionProvider` skip opening a transport. The override is
+// gone (a factory built on MAIN cannot cross `postMessage` to a runtime living
+// in the worker), the provider opens unconditionally, and a refusing opener now
+// fails the file. "No socket in tests" is supplied by the fake instead; the
+// suite drives both sessions' streams at the WORKER seam below.
+vi.mock("@/lib/host/use-durable-stream-transport", async () => {
+  const { fakeDurableStreamTransports } =
+    await import("@/lib/host/test-support/fake-durable-stream-transport");
+  return {
+    useDurableStreamTransportFactory: () =>
+      fakeDurableStreamTransports().opener,
+  };
+});
 
 vi.mock("@/hooks/host/use-host-stream-client-for", async (importOriginal) => ({
   ...(await importOriginal<
@@ -180,6 +196,7 @@ vi.mock("@/hooks/host/use-effective-host-id", () => ({
 }));
 
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
+  useRemoteSessionPollReadiness: () => false,
   useHostReachability: (hostId: string) => {
     // `UNKNOWN_HOST_PLACEHOLDER` is the sentinel tab-kind-agnostic callers
     // pass to keep hook order stable across tab kinds - the real hook answers
@@ -342,13 +359,16 @@ describe("<EpicSurface /> split isolation", () => {
       .getState()
       .openTileInTab(TAB_B, terminalRef("terminal-b", "tile-host-b"));
     __getOpenEpicRegistryForTests().disposeAll();
-    __setEpicStreamClientFactoryForTests(null);
+    previousWorkerFactory = getEpicRuntimeWorkerFactoryOverride();
   });
 
   afterEach(() => {
     cleanup();
     __getOpenEpicRegistryForTests().disposeAll();
-    __setEpicStreamClientFactoryForTests(null);
+    // RESTORED to the jsdom setup file's coreless worker, never nulled: `null`
+    // means "use the production constructor", which is `new Worker(new
+    // URL(...))` - the one form jsdom cannot execute.
+    __setEpicRuntimeWorkerFactoryForTests(previousWorkerFactory);
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useLeftPanelStore.setState(useLeftPanelStore.getInitialState(), true);
     useAuthStore.getState().setSignedOut();
@@ -356,17 +376,29 @@ describe("<EpicSurface /> split isolation", () => {
 
   it("keeps two live Epic bodies isolated across sessions, sidebars, canvases, hosts, and scrolling", async () => {
     const streams: FakeStream[] = [];
-    __setEpicStreamClientFactoryForTests((epicId, callbacks) => {
-      streams.push({ epicId, callbacks });
-      return {
-        applyUpdate: () => undefined,
-        awareness: () => undefined,
-        applyArtifactRoomUpdate: () => undefined,
-        artifactRoomAwareness: () => undefined,
-        retryMigration: () => undefined,
-        close: () => undefined,
-      };
-    });
+    // A FRESH in-process worker per spawn, which is the whole point in this
+    // file: the two Epic surfaces are two sessions, and one helper instance
+    // owns one bridge pair and one composition - sharing it would give both
+    // sessions the same runtime and quietly defeat the isolation this suite
+    // exists to pin. The stream factory itself is unchanged and still
+    // accumulates into one `streams` array, exactly as the deleted stream
+    // override did when the provider called it once per session.
+    __setEpicRuntimeWorkerFactoryForTests(() =>
+      createInProcessEpicRuntimeWorker({
+        streamClientFactory: (epicId, callbacks) => {
+          streams.push({ epicId, callbacks });
+          return {
+            applyUpdate: () => undefined,
+            awareness: () => undefined,
+            applyArtifactRoomUpdate: () => undefined,
+            artifactRoomAwareness: () => undefined,
+            retryMigration: () => undefined,
+            close: () => undefined,
+          };
+        },
+        laneSelection: null,
+      }).createWorker(),
+    );
 
     renderTwoEpicSurfaces();
 
@@ -402,8 +434,10 @@ describe("<EpicSurface /> split isolation", () => {
     expect(firstHandle).not.toBe(secondHandle);
     expect(firstHandle.store).not.toBe(secondHandle.store);
 
-    act(() => {
-      firstHandle.store.getState().setEpicTitle("Only Epic A changed");
+    await act(async () => {
+      await firstHandle.store
+        .getState()
+        .beginEpicTitleMutation("Only Epic A changed");
       useEpicCanvasStore
         .getState()
         .openTileInTab(TAB_A, terminalRef("terminal-a-second", "tile-host-a"));

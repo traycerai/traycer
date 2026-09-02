@@ -3,9 +3,14 @@ import { X } from "lucide-react";
 import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
 import type { HostUnavailability } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { ElectronTabSurface } from "./agent-browser-tile";
-import { BrowserPeekTile, type BrowserPeekNode } from "./browser-peek-tile";
+import {
+  BrowserPeekTile,
+  type BrowserPeekCompleteMeaning,
+  type BrowserPeekNode,
+} from "./browser-peek-tile";
 import { useBrowserSessionsContext } from "./browser-sessions-context";
 import { useCloseCanvasTileWithNestedFocus } from "./use-close-canvas-tile-with-nested-focus";
+import { Button } from "@/components/ui/button";
 import {
   useElectronTabBindingOnHost,
   type ElectronTabBinding,
@@ -30,6 +35,32 @@ interface BrowserSessionTileBodyProps extends BrowserSessionTileProps {
   readonly tab: BrowserSessionInfo["tabs"][number] | undefined;
   readonly binding: ElectronTabBinding | null;
   readonly inventoryReady: boolean;
+  /**
+   * Whether THIS client could place a native tab on the session's host
+   * (`BrowserSessionsState.canMaterializeElectron`). Every other input here is
+   * a host-side fact that describes some other client's window, and reading
+   * only those is what stranded a viewer-only client on an Electron session:
+   * `kind === "electron"` with no binding read as "my native tab is
+   * reconnecting" on a client that has no native tabs to reconnect.
+   */
+  readonly canMaterializeElectron: boolean;
+  readonly wakeRequested: boolean;
+  readonly wakeExpired: boolean;
+  readonly onRequestWake: () => void;
+}
+
+/**
+ * What the host's `complete` frame means for a peek standing in for this
+ * session, which is entirely a question about the client reading it: the frame
+ * says "this tab is Electron-placed and has no viewer plane here", and only
+ * the client knows whether that Electron tab is its own.
+ */
+function browserPeekCompleteMeaning(
+  runtimeKind: BrowserSessionInfo["runtime"]["kind"],
+  canMaterializeElectron: boolean,
+): BrowserPeekCompleteMeaning {
+  if (runtimeKind !== "electron") return "ended";
+  return canMaterializeElectron ? "native-handoff" : "native-elsewhere";
 }
 
 function BrowserSessionTileBody(props: BrowserSessionTileBodyProps) {
@@ -48,7 +79,25 @@ function BrowserSessionTileBody(props: BrowserSessionTileBodyProps) {
     );
   }
 
-  if (props.session.runtime.kind !== "electron") {
+  // The wake-capable branch is chosen per TAB, not per session. A session's
+  // runtime says where the tabs that ARE attached live; it says nothing about
+  // a durable tab that has not been attached yet. `materialize` provisions
+  // only the tab it was asked for, so an `electron` session routinely holds
+  // dormant siblings - and the peek tile's screencast subscription is what
+  // funnels one into the host's `ensureTabAttached`, which attaches a tab
+  // into an already-electron session and publishes its native binding. Take
+  // that branch only while there is no binding: a bound tab's pixels are
+  // native, whatever the host has published for its status.
+  //
+  // A client that cannot place a native tab on this host takes it
+  // unconditionally: every branch below waits on a binding this client can
+  // never be handed, so the viewer is the only one that can ever resolve.
+  if (
+    props.session.runtime.kind !== "electron" ||
+    !props.canMaterializeElectron ||
+    (props.binding === null &&
+      (props.tab.status === "dormant" || props.wakeRequested))
+  ) {
     const peek: BrowserPeekNode = {
       id: props.node.id,
       instanceId: props.node.instanceId,
@@ -64,15 +113,20 @@ function BrowserSessionTileBody(props: BrowserSessionTileBodyProps) {
         node={peek}
         viewTabId={props.viewTabId}
         paneId={props.paneId}
+        completeMeans={browserPeekCompleteMeaning(
+          props.session.runtime.kind,
+          props.canMaterializeElectron,
+        )}
       />
     );
   }
 
   if (props.binding === null) {
     return (
-      <div className="flex h-full w-full items-center justify-center px-4 text-ui-sm text-muted-foreground">
-        Reconnecting browser tab…
-      </div>
+      <BrowserTabRebindWait
+        onWake={props.onRequestWake}
+        startExpired={props.wakeExpired}
+      />
     );
   }
 
@@ -92,6 +146,71 @@ function BrowserSessionTileBody(props: BrowserSessionTileBodyProps) {
       viewTabId={props.viewTabId}
       paneId={props.paneId}
     />
+  );
+}
+
+/**
+ * How long a bound-for-life native tab may go without a renderer binding
+ * before the tile stops calling it a reconnect. The window only has to cover
+ * a desktop-side re-publish (a `browser.sessions` reconnect re-announces every
+ * live binding), so seconds, not minutes - past it the wait is not transient
+ * and an unbounded spinner is indistinguishable from a lost tab.
+ */
+const BROWSER_TAB_REBIND_DEADLINE_MS = 10_000;
+
+/**
+ * The bounded half of the null-binding wait. Below the deadline this is the
+ * ordinary reconnect spinner; past it the tab is offered the same wake path a
+ * dormant tab takes, which asks the host to attach the tab again and publish a
+ * fresh binding.
+ *
+ * `startExpired` skips straight to the error state with no timer: the tile
+ * passes it once the bounded wake window it started on "Reopen tab" has
+ * itself expired with the binding still null, so a reader who already waited
+ * once is not made to sit through a second identical spinner before seeing
+ * the button again.
+ */
+function BrowserTabRebindWait(props: {
+  readonly onWake: () => void;
+  readonly startExpired: boolean;
+}) {
+  const [expired, setExpired] = useState(props.startExpired);
+  useEffect(() => {
+    if (props.startExpired) return;
+    const timer = setTimeout(() => {
+      setExpired(true);
+    }, BROWSER_TAB_REBIND_DEADLINE_MS);
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [props.startExpired]);
+
+  if (!expired) {
+    return (
+      <div
+        role="status"
+        aria-label="Reconnecting browser tab"
+        aria-busy
+        className="flex h-full w-full items-center justify-center px-4 text-ui-sm text-muted-foreground"
+      >
+        Reconnecting browser tab…
+      </div>
+    );
+  }
+  return (
+    <div
+      role="alert"
+      data-testid="browser-tab-rebind-timeout"
+      className="flex h-full w-full flex-col items-center justify-center gap-3 px-6 text-center text-ui-sm text-muted-foreground"
+    >
+      <p className="max-w-md">
+        This browser tab did not come back from its window. Reopening it starts
+        a fresh view of the same page.
+      </p>
+      <Button type="button" variant="outline" size="sm" onClick={props.onWake}>
+        Reopen tab
+      </Button>
+    </div>
   );
 }
 
@@ -276,6 +395,47 @@ export function BrowserSessionTile(props: BrowserSessionTileProps) {
     session?.runtime.kind ?? null,
     session?.runtime.revision ?? null,
   );
+  // Bounded, not latched: once the reader has asked for the tab back, the
+  // wake path stays selected for one BROWSER_TAB_REBIND_DEADLINE_MS window -
+  // the same deadline the reconnect wait itself uses, long enough to cover
+  // the peek tile's own attach round trip. `wakeRequestedAt` is written ONLY
+  // by the "Reopen tab" click, which is also the only place a fresh request
+  // clears `wakeWindowExpired`; the timer that flips it back to `true` is
+  // armed once per click (keyed on `wakeRequestedAt` alone) and keeps
+  // counting down regardless of binding transitions in between - a binding
+  // arriving doesn't need to reset anything, because a bound tab already
+  // wins over the wake branch below purely by requiring `binding === null`,
+  // and a stale expiry is inert while bound. `wakeActive`/`wakeExpired` are
+  // plain reads of that state at render time (render must stay pure, so
+  // `Date.now()` is read only inside the click handler and the effect, never
+  // here) - if a LATER reconnect drops the binding again after the window
+  // has already elapsed, it reads straight as expired, the same actionable
+  // alert a fresh expiry produces, never a phantom headless projection or an
+  // infinite spinner.
+  const [wakeRequestedAt, setWakeRequestedAt] = useState<number | null>(null);
+  const [wakeWindowExpired, setWakeWindowExpired] = useState(false);
+  const requestWake = useCallback(() => {
+    setWakeRequestedAt(Date.now());
+    setWakeWindowExpired(false);
+  }, []);
+  useEffect(() => {
+    if (wakeRequestedAt === null) return;
+    const remaining =
+      BROWSER_TAB_REBIND_DEADLINE_MS - (Date.now() - wakeRequestedAt);
+    const timer = setTimeout(
+      () => {
+        setWakeWindowExpired(true);
+      },
+      Math.max(remaining, 0),
+    );
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [wakeRequestedAt]);
+  const wakeActive =
+    binding === null && wakeRequestedAt !== null && !wakeWindowExpired;
+  const wakeExpired =
+    binding === null && wakeRequestedAt !== null && wakeWindowExpired;
   useEffect(() => {
     if (session !== undefined && tab !== undefined) return;
     if (sessions.lifecycle !== "live" || !sessions.inventoryReady) return;
@@ -327,6 +487,10 @@ export function BrowserSessionTile(props: BrowserSessionTileProps) {
           tab={tab}
           binding={binding}
           inventoryReady={sessions.inventoryReady}
+          canMaterializeElectron={sessions.canMaterializeElectron}
+          wakeRequested={wakeActive}
+          wakeExpired={wakeExpired}
+          onRequestWake={requestWake}
         />
       </div>
     </div>

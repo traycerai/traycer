@@ -715,8 +715,13 @@ export function NewConversationModalBody(props: {
     async (hash: string) => {
       if (hasPastedImageBytes?.(hash) !== true) return null;
       // Capture deliberately survives composer unmount, so this read is not
-      // coupled to component-lifecycle cancellation.
-      const read = await fetchEpicImage(hash, new AbortController().signal);
+      // coupled to component-lifecycle cancellation. `.fetch` directly: this
+      // one-shot read bypasses `imageBlobCache`, so it wants the byte source
+      // rather than the cache subject bundled with it.
+      const read = await fetchEpicImage.fetch(
+        hash,
+        new AbortController().signal,
+      );
       return new Uint8Array(read.bytes);
     },
     [fetchEpicImage, hasPastedImageBytes],

@@ -10,6 +10,7 @@ import {
   providerManagedInstallStateSchema,
   providerManagedVersionsSchema,
   providerManagedVersionsUnavailableSchema,
+  providerPackRefreshOutcomeSchema,
   providerPackVersionCertificationSchema,
   providerPackVersionInstallStateSchema,
   providerPackVersionSchema,
@@ -21,6 +22,8 @@ import {
   providersListRequestSchema,
   providersListResponseSchema,
   providersListResponseSchemaV60,
+  providersRefreshPackDiscoveryRequestSchema,
+  providersRefreshPackDiscoveryResponseSchema,
   providersRemovePackVersionRequestSchema,
   providersRemovePackVersionResponseSchema,
   providersSetPackPolicyRequestSchema,
@@ -295,6 +298,11 @@ describe("per-pack RPC contracts", () => {
       requestSchema: providersSetPackPolicyRequestSchema,
       responseSchema: providersSetPackPolicyResponseSchema,
     },
+    {
+      method: "providers.refreshPackDiscovery",
+      requestSchema: providersRefreshPackDiscoveryRequestSchema,
+      responseSchema: providersRefreshPackDiscoveryResponseSchema,
+    },
   ] as const;
 
   it("registers each new @1.0 name with unsupported degradation", () => {
@@ -467,6 +475,89 @@ describe("per-pack RPC contracts", () => {
       providersSetPackPolicyRequestSchema.safeParse({
         packId: "pack-shared",
         autoDownload: "yes",
+      }).success,
+    ).toBe(false);
+  });
+
+  // A separate `it` rather than folding into the block above: that one covers
+  // the four store MUTATIONS as a set, and this method mutates nothing - it
+  // runs the discovery poll, which reads a registry head. Keeping it apart
+  // also gives a failure here better attribution than one more assertion
+  // buried at the end of an already long test.
+  it("accepts valid requests, rejects malformed payloads, and round-trips outcomes and refusals", () => {
+    expect(
+      providersRefreshPackDiscoveryRequestSchema.safeParse({
+        packId: "pack-shared",
+      }).success,
+    ).toBe(true);
+    expect(
+      providersRefreshPackDiscoveryRequestSchema.safeParse({ packId: "" })
+        .success,
+    ).toBe(false);
+
+    // All four, written out literally rather than derived from `.options`,
+    // for the same reason the install-version refusal codes above are
+    // literal: a derived list stays green through exactly the drift it is
+    // meant to catch.
+    for (const outcome of [
+      "moved",
+      "unchanged",
+      "unreachable",
+      "unusable",
+    ] as const) {
+      const parsed = providersRefreshPackDiscoveryResponseSchema.parse({
+        result: { ok: true, outcome },
+      });
+      expect(parsed.result).toEqual({ ok: true, outcome });
+    }
+
+    // The enum is closed both ways. Each member has its own panel copy, and
+    // `unpublished` was considered and deliberately folded into `unchanged`
+    // (see the schema's doc comment), so a fifth member appearing here would
+    // silently ship an outcome no renderer has copy for.
+    expect(providerPackRefreshOutcomeSchema.options).toEqual([
+      "moved",
+      "unchanged",
+      "unreachable",
+      "unusable",
+    ]);
+    expect(
+      providersRefreshPackDiscoveryResponseSchema.safeParse({
+        result: { ok: true, outcome: "unpublished" },
+      }).success,
+    ).toBe(false);
+    // `outcome` is what the whole call exists to deliver, so a success arm
+    // without one must not decode - the mirror of the `detail` check below.
+    expect(
+      providersRefreshPackDiscoveryResponseSchema.safeParse({
+        result: { ok: true },
+      }).success,
+    ).toBe(false);
+
+    for (const [code, detail] of [
+      ["discovery-unavailable", "no discovery ticker on this host"],
+      ["pack-disabled", null],
+    ] as const) {
+      const parsed = providersRefreshPackDiscoveryResponseSchema.parse({
+        result: { ok: false, code, detail },
+      });
+      expect(parsed.result).toEqual({ ok: false, code, detail });
+    }
+
+    // An unknown pack id throws host-side and is deliberately not a member of
+    // this enum, so "pack-not-managed" is the realistic typo to guard - a
+    // resolver that emitted it would ship a refusal this schema never models.
+    expect(
+      providersRefreshPackDiscoveryResponseSchema.safeParse({
+        result: { ok: false, code: "pack-not-managed", detail: null },
+      }).success,
+    ).toBe(false);
+
+    // `detail` is required-and-nullable, not optional - mirrors the
+    // equivalent check on `providersRemovePackVersionResponseSchema` above.
+    expect(
+      providersRefreshPackDiscoveryResponseSchema.safeParse({
+        result: { ok: false, code: "pack-disabled" },
       }).success,
     ).toBe(false);
   });

@@ -225,6 +225,12 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
 
   const client = new WsStreamClient<HostStreamRpcRegistry>({
     registry: hostStreamRpcRegistry,
+    // The host this endpoint resolves to, or `null` while it has resolved none
+    // yet - which simply declines the seed. Safe even where `endpoint` is
+    // re-resolved later in the run: the seed is consulted only before this
+    // client's first handshake, which is while this id is still the current
+    // one, and the latch closes it for good after that.
+    hostId: endpoint?.hostId ?? null,
     endpoint: () => endpoint,
     bearer: () => lease,
     // `auth: null` opts out of the WsStreamClient's built-in stream-auth

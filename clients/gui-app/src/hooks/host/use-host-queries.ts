@@ -250,7 +250,7 @@ export function useHostQueriesWithResponseMap<
       // silently replaced by "always true" the moment a client is bound.
       // Mirrors `useHostQueryWithResponseMap` in `use-host-query.ts`.
       enabled: (query) => {
-        if (client === null || !readiness.isReady) return false;
+        if (client === null || !readiness.canExecute) return false;
         const callerEnabled = options?.enabled;
         return typeof callerEnabled === "function"
           ? callerEnabled(query)

@@ -15,11 +15,9 @@ import type {
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
 import { EpicViewTabContext } from "@/components/epic-canvas/view-tab-context";
-import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-  type OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
+import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
+import type { EpicStreamClientFactory } from "@/stores/epics/open-epic/runtime/legacy-epic-stream-adapter";
+import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import {
   clampArtifactVersionHistoryPanelWidthPx,
   DEFAULT_ARTIFACT_VERSION_HISTORY_PANEL_WIDTH_PX,
@@ -331,11 +329,18 @@ describe("<ArtifactVersionHistoryEntryPoint />", () => {
     useArtifactVersionHistoryPanelStore.setState({
       panelWidthPx: DEFAULT_ARTIFACT_VERSION_HISTORY_PANEL_WIDTH_PX,
     });
-    epicHandle = createOpenEpicStore({
+    // The store stopped constructing a runtime, so the stream factory goes to
+    // the COMPOSITION the harness spawns rather than to the store. This suite
+    // never writes through the command queue - it drives the history panel's
+    // RPCs, which are mocked above - hence `writeCommand: null`.
+    epicHandle = openStoreForTest({
       epicId: "epic-a",
-      streamClientFactory: noopEpicStreamClientFactory,
       userId: null,
-      onAuthError: null,
+      factories: {
+        streamClientFactory: noopEpicStreamClientFactory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
     state.supportedMethods = new Set(HISTORY_METHODS);
     state.supportError = false;

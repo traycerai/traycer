@@ -226,6 +226,7 @@ export function HostTrayCommandListener() {
         onClose={() => setPendingRestart(false)}
       />
       <ConfirmDestructiveDialog
+        blockedReason={null}
         open={pendingInstallVersion !== null}
         onOpenChange={(open) => {
           if (!open) setPendingInstallVersion(null);

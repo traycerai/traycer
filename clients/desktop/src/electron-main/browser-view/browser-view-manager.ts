@@ -23,10 +23,13 @@ import type {
   PipCaptureStartInput,
 } from "@traycer-clients/shared/platform/browser-view";
 import type { PipCaptureIpcPayload } from "../../ipc-contracts/pip-capture-types";
+import { registrableDomainForUrl } from "@traycer/protocol/host/browser/registrable-domain";
 import { describeLogError, log } from "../app/logger";
 import type {
   BrowserSessionCertificateErrorChange,
   BrowserSessionDownloadChange,
+  BrowserSessionProfile,
+  BrowserSessionProfileRequest,
 } from "./browser-session";
 import type {
   BrowserViewDevToolsWindow,
@@ -63,7 +66,6 @@ import { BrowserViewFind } from "./manager/browser-view-find";
 import {
   assertEntryCapturable,
   BrowserViewGeometry,
-  normalizeBounds,
 } from "./manager/browser-view-geometry";
 import { BrowserViewOverlay } from "./manager/browser-view-overlay";
 import { BrowserViewPipCapture } from "./manager/browser-view-pip-capture";
@@ -83,10 +85,13 @@ export const BOUNDS_STREAM_LOG_INTERVAL_MS = 1000;
 const DEVTOOLS_TITLE = "Traycer Browser DevTools";
 
 interface BrowserViewManagerOptions {
-  readonly createView: () => ManagedBrowserView;
+  readonly createView: (
+    request: BrowserSessionProfileRequest,
+  ) => ManagedBrowserView;
   readonly getWindow: (windowId: string) => BrowserViewWindow | null;
   readonly createPopupWindowOptions: (
     windowId: string,
+    request: BrowserSessionProfileRequest,
   ) => BrowserWindowConstructorOptions;
   readonly createDevToolsWindow: (
     windowId: string,
@@ -101,6 +106,13 @@ interface BrowserViewManagerOptions {
     listener: (change: BrowserSessionCertificateErrorChange) => void,
   ) => () => void;
   readonly onWindowChange: (listener: () => void) => () => void;
+  /**
+   * Page zoom of the app windows. Tile rects arrive in renderer CSS pixels,
+   * so every native rect is derived from the stored CSS rect times this.
+   */
+  readonly getZoomFactor: () => number;
+  /** Fires after the app windows have been re-zoomed. */
+  readonly onZoomChange: (listener: () => void) => () => void;
   readonly notifyHostWindowRendererReset: (windowId: string) => void;
   readonly send: BrowserViewSend;
   readonly seedStorageState: (
@@ -110,6 +122,15 @@ interface BrowserViewManagerOptions {
   readonly observePrimaryProfileOrigin: (
     url: string,
     webContents: ManagedBrowserView["webContents"],
+    profile: BrowserSessionProfile,
+  ) => void;
+  /**
+   * Drops an isolated session's partition once its last native tab is gone.
+   * Only ever called with `profile: "isolated"`; the shared jars outlive
+   * every guest.
+   */
+  readonly releaseSessionStorage: (
+    request: BrowserSessionProfileRequest,
   ) => void;
   /** Flush window for the aggregate `bounds_stream` perf log. */
   readonly boundsStreamLogIntervalMs: number;
@@ -130,7 +151,11 @@ export class BrowserViewManager {
     windowId: string,
   ) => BrowserViewDevToolsWindow;
   private readonly send: BrowserViewSend;
+  private readonly releaseSessionStorage: (
+    request: BrowserSessionProfileRequest,
+  ) => void;
   private readonly offWindowChange: () => void;
+  private readonly offZoomChange: () => void;
   private readonly offDownloadChange: () => void;
   private readonly offCertificateError: () => void;
   private readonly entries = new BrowserViewEntryRegistry<BrowserViewEntry>();
@@ -153,8 +178,10 @@ export class BrowserViewManager {
     this.getWindow = options.getWindow;
     this.createDevToolsWindow = options.createDevToolsWindow;
     this.send = options.send;
+    this.releaseSessionStorage = options.releaseSessionStorage;
     this.geometry = new BrowserViewGeometry({
       getWindow: options.getWindow,
+      getZoomFactor: options.getZoomFactor,
       boundsStreamLogIntervalMs: options.boundsStreamLogIntervalMs,
     });
     this.debugSessions = new BrowserViewDebugSessions({
@@ -179,6 +206,7 @@ export class BrowserViewManager {
     this.chords = new BrowserViewChords({
       getWindow: options.getWindow,
       hostPlatform: options.hostPlatform,
+      send: options.send,
     });
     this.windows = new BrowserViewWindowAttachment({
       entries: this.entries,
@@ -226,8 +254,8 @@ export class BrowserViewManager {
       entries: this.entries,
       windows: this.windows,
       debugSessions: this.debugSessions,
-      createEntry: (requestedUrl, identity) =>
-        this.entryFactory.create(requestedUrl, identity),
+      createEntry: (requestedUrl, identity, profile) =>
+        this.entryFactory.create(requestedUrl, identity, profile),
       seedStorageState: options.seedStorageState,
       closeEntry: (entry) => this.closeEntry(entry),
       navigate: (entry, url) => this.navigate(entry, url),
@@ -237,6 +265,16 @@ export class BrowserViewManager {
     });
     this.offWindowChange = options.onWindowChange(() => {
       this.windows.reconcileVisibility(this.pip);
+    });
+    // Zoom rescales the renderer's CSS pixel, so every stored tile rect now
+    // maps to a different native rect. Re-deriving here is authoritative:
+    // the renderer's own resize-driven re-send is asynchronous and may
+    // arrive before or after this, and either order lands on the same rect.
+    this.offZoomChange = options.onZoomChange(() => {
+      for (const entry of Array.from(this.entries.surfaceValues())) {
+        this.geometry.applyBounds(entry);
+        this.geometry.applyVisibility(entry);
+      }
     });
     this.offDownloadChange = options.onDownloadChange((change) => {
       this.handleDownloadChange(change);
@@ -376,7 +414,9 @@ export class BrowserViewManager {
   updateBounds(windowId: string, input: BrowserViewBoundsUpdate): void {
     const entry = this.entries.getTile(windowId, input);
     if (entry === undefined) return;
-    entry.bounds = normalizeBounds(input.bounds);
+    // Stored exactly as the renderer measured it (CSS pixels); rounding and
+    // the CSS -> DIP conversion belong to the apply seam in geometry.
+    entry.bounds = input.bounds;
     this.geometry.applyBounds(entry);
     this.geometry.applyVisibility(entry);
   }
@@ -426,7 +466,11 @@ export class BrowserViewManager {
       throw new Error("Browser view tile is not available for capture");
     }
     const surface = requireSurface(entry);
-    assertEntryCapturable(entry, this.getWindow(surface.windowId));
+    assertEntryCapturable(
+      entry,
+      this.getWindow(surface.windowId),
+      this.geometry.zoomFactor(),
+    );
     const bytes = Buffer.from(
       (await entry.view.webContents.capturePage()).toPNG(),
     );
@@ -438,6 +482,26 @@ export class BrowserViewManager {
       sha256: createHash("sha256").update(bytes).digest("hex"),
       capturedAt: Date.now(),
     };
+  }
+
+  /**
+   * What "clear cookies for this site" would clear for one tile: the
+   * registrable domain of the page it is on. `null` refuses the action, for
+   * the three reasons it must be refused - the tile is gone, it is not on an
+   * http(s) page (there is no site to name), or it is a private session, whose
+   * partition dies with the session and is shared with nothing.
+   *
+   * The site is derived here, from the tile's own URL, and never taken from
+   * the renderer: a domain on the wire would let any window name any site.
+   */
+  readClearSiteTarget(
+    windowId: string,
+    input: BrowserViewTileKey,
+  ): string | null {
+    const entry = this.entries.getTile(windowId, input);
+    if (entry === undefined || entry.profile !== "primary") return null;
+    if (!isHttpBrowserUrl(entry.currentUrl)) return null;
+    return registrableDomainForUrl(entry.currentUrl);
   }
 
   getDebugSnapshot(
@@ -480,6 +544,7 @@ export class BrowserViewManager {
 
   dispose(): void {
     this.offWindowChange();
+    this.offZoomChange();
     this.offDownloadChange();
     this.offCertificateError();
     this.geometry.dispose();
@@ -489,6 +554,40 @@ export class BrowserViewManager {
     this.popups.dispose();
     this.overlay.dispose();
     this.annotations.dispose();
+  }
+
+  /**
+   * Destroys every live `primary` guest so the host revives it on whichever
+   * jar the saved-logins pref names now (it has already flipped before this
+   * runs). Destroying a native guest is the re-placement mechanism: the host
+   * suspends the session to dormant when its Electron route goes away and
+   * re-materializes the same durable tab ids, seeding them from its own
+   * primary-profile store. Guests the host has not accepted yet are left
+   * alone - there is no durable route to revive them with, and the next tile
+   * they open picks the current partition anyway.
+   */
+  async recreateNativeTabsOnCurrentPartition(): Promise<readonly string[]> {
+    const migrating = Array.from(this.entries.guestValues()).filter(
+      (entry) =>
+        // Isolated guests have nothing to move: their jar is throwaway and
+        // never reaches the persistent partition. Recreating them would only
+        // destroy the private session the user is sitting in.
+        entry.profile === "primary" &&
+        entry.closePromise === null &&
+        entry.identity.lifecycle.accepted,
+    );
+    const migratedKeys = migrating.map((entry) => entry.guestKey);
+    await Promise.all(
+      migrating.map((entry) =>
+        this.closeEntry(entry).catch((error: unknown) => {
+          log.warn("[browser-view] browser tile recreate failed", {
+            error: describeLogError(error),
+            guestKey: entry.guestKey,
+          });
+        }),
+      ),
+    );
+    return migratedKeys;
   }
 
   hasNativeTabsForWindow(windowId: string): boolean {
@@ -865,8 +964,29 @@ export class BrowserViewManager {
     this.geometry.hide(entry);
     webContents.close();
     this.entries.remove(entry);
+    this.releaseIsolatedSessionStorage(entry);
     this.windows.detachResetListenerIfUnused(entry.identity.lifecycleWindowId);
     log.info("[browser-view] view destroy requested", { keyId });
+  }
+
+  /**
+   * An isolated session's partition is throwaway by construction, so it dies
+   * with the session's last native tab - not with each tab, because siblings
+   * of the same session share the one partition.
+   */
+  private releaseIsolatedSessionStorage(entry: BrowserViewEntry): void {
+    if (entry.profile !== "isolated") return;
+    const sessionKey = nativeSessionKey(entry.identity.key);
+    for (const remaining of this.entries.guestValues()) {
+      if (nativeSessionKey(remaining.identity.key) === sessionKey) return;
+    }
+    this.releaseSessionStorage({
+      profile: entry.profile,
+      sessionId: entry.identity.key.sessionId,
+    });
+    log.info("[browser-view] isolated session storage released", {
+      sessionId: entry.identity.key.sessionId,
+    });
   }
 
   private destroyDevToolsWindow(entry: BrowserViewEntry): void {
@@ -897,5 +1017,18 @@ function readNavigationReadings(webContents: BrowserViewWebContents): {
     };
   } catch {
     return null;
+  }
+}
+
+/**
+ * A clear-site scope only means anything for a page: `about:blank`, a devtools
+ * URL or a `file://` tile has no site whose logins could be cleared.
+ */
+function isHttpBrowserUrl(url: string): boolean {
+  try {
+    const protocol = new URL(url).protocol;
+    return protocol === "http:" || protocol === "https:";
+  } catch {
+    return false;
   }
 }

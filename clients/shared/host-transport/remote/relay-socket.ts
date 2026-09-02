@@ -150,7 +150,11 @@ export class RelaySocket {
     this.handlers = options.handlers;
     this.lastInboundAt = Date.now();
     const dialUrl = withGrantQuery(options.attachBaseUrl, options.grantJws);
-    this.socket = options.webSocketFactory.create(dialUrl);
+    // Not a host method, and not classifiable as one: this is the single
+    // durable leg that MULTIPLEXES every unary call and every stream for a
+    // remote host, so anything queued behind it is queued behind all of them.
+    // It holds a dial slot only while connecting, so it cannot squat.
+    this.socket = options.webSocketFactory.create(dialUrl, "interactive");
     this.wireSocket(this.socket);
     this.dialTimer = setTimeout(() => {
       this.dialTimer = null;

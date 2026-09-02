@@ -157,6 +157,7 @@ describe("BrowserPeekTile", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
 
@@ -175,6 +176,7 @@ describe("BrowserPeekTile", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -238,6 +240,7 @@ describe("BrowserPeekTile", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -256,6 +259,76 @@ describe("BrowserPeekTile", () => {
     expect(screen.getByText("Screencast ended.")).toBeTruthy();
   });
 
+  it("reads a native-handoff complete frame as a handoff spinner, not a dead cast", () => {
+    // `completeMeans="native-handoff"`: this client is the one placing the
+    // native tab, so the host's `complete` frame (browser-screencast-plane.ts's
+    // `subscribeScreencast`) means "attached, going native" - pins existing
+    // behavior for the electron-capable client (browser-session-tile.tsx's
+    // `browserPeekCompleteMeaning`).
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+        completeMeans="native-handoff"
+      />,
+    );
+    const stream = liveStream();
+
+    act(() => {
+      stream.emit(
+        {
+          kind: "complete",
+          hasBinaryPayload: false,
+        },
+        null,
+      );
+    });
+
+    expect(screen.getByText("Going native")).toBeTruthy();
+    expect(screen.getByText("Handing off to the native tab.")).toBeTruthy();
+    expect(screen.queryByText("Ended")).toBeNull();
+  });
+
+  it("reads a native-elsewhere complete frame as an honest terminal state, not a handoff spinner", () => {
+    // `completeMeans="native-elsewhere"`: a client with no native window of
+    // its own for the session's host (e.g. a viewer-only client, or an
+    // electron-capable client on a DIFFERENT host than the session's) gets the
+    // same `complete` frame for a tab that will never stream here. It must not
+    // read as "Going native" (nothing is arriving) nor as "Ended" (the tab is
+    // not dead, it is just unreachable from this client).
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+        completeMeans="native-elsewhere"
+      />,
+    );
+    const stream = liveStream();
+
+    act(() => {
+      stream.emit(
+        {
+          kind: "complete",
+          hasBinaryPayload: false,
+        },
+        null,
+      );
+    });
+
+    expect(screen.getByText("Open natively")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "This tab is open in the desktop app on that host, so it can't be streamed here.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText("Going native")).toBeNull();
+    expect(screen.queryByText("Ended")).toBeNull();
+  });
+
   it("ignores callbacks from a replaced screencast subscription", () => {
     const rendered = render(
       <BrowserPeekTile
@@ -263,6 +336,7 @@ describe("BrowserPeekTile", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const retired = liveStream();
@@ -273,6 +347,7 @@ describe("BrowserPeekTile", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     hookState.visible = true;
@@ -282,6 +357,7 @@ describe("BrowserPeekTile", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const current = liveStream();
@@ -312,6 +388,7 @@ describe("BrowserPeekTile", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -355,6 +432,7 @@ describe("BrowserPeekTile", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -397,6 +475,7 @@ describe("BrowserPeekTile", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -443,6 +522,7 @@ describe("BrowserPeekTile", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -483,6 +563,7 @@ describe("BrowserPeekTile", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -548,6 +629,7 @@ describe("BrowserPeekTile", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -601,6 +683,7 @@ describe("BrowserPeekTile", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -648,6 +731,7 @@ describe("BrowserPeekTile", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -760,6 +844,7 @@ describe("BrowserPeekTile", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -801,6 +886,7 @@ describe("BrowserPeekTile", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -812,6 +898,7 @@ describe("BrowserPeekTile", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
 
@@ -828,6 +915,7 @@ describe("BrowserPeekTile", () => {
           paneId="pane-1"
           epicId="epic-1"
           node={PEEK_NODE}
+          completeMeans="ended"
         />,
       );
       const stream = liveStream();
@@ -881,6 +969,7 @@ describe("BrowserPeekTile", () => {
           paneId="pane-1"
           epicId="epic-1"
           node={PEEK_NODE}
+          completeMeans="ended"
         />,
       );
       const stream = liveStream();
@@ -941,6 +1030,7 @@ describe("BrowserPeekTile rttProbe handling", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -969,6 +1059,7 @@ describe("BrowserPeekTile rttProbe handling", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();

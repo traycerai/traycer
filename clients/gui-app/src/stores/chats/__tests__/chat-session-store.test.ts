@@ -53,6 +53,8 @@ import {
   MAX_ACCEPTED_CHAT_ACTION_RECORDS,
   MAX_ERROR_NOTICE_RECORDS,
   createChatSessionStore,
+  dispatchedWorktreeIntentForDisplay,
+  projectQueueWithPendingCancellations,
   type ChatSessionStoreHandle,
   type SentChatMessageAction,
 } from "@/stores/chats/chat-session-store";
@@ -87,6 +89,7 @@ import {
 } from "@/stores/notifications/app-local-notifications-store";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
+import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
 /**
  * The plain text send these suites exercise: content in, no browser context,
@@ -363,6 +366,8 @@ class ProtocolMockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
     super({
       clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
+      // This endpoint resolves no host, so there is none to name.
+      hostId: null,
       endpoint: () => null,
       bearer: () => null,
       auth: null,
@@ -407,6 +412,7 @@ function createHarness(): Harness {
   const sent: ChatSubscribeClientFrame[] = [];
   let callbacks: ChatStreamCallbacks | null = null;
   const handle = createChatSessionStore({
+    environment: CHAT_STORE_TEST_ENVIRONMENT,
     hostId: "host-a",
     epicId: EPIC_ID,
     chatId: CHAT_ID,
@@ -443,6 +449,7 @@ function createProtocolChainHarness(
   const mockWs = new ProtocolMockWsStreamClient(negotiatedVersion);
   const created: { client: ChatStreamClient | null } = { client: null };
   const handle = createChatSessionStore({
+    environment: CHAT_STORE_TEST_ENVIRONMENT,
     hostId: "host-a",
     epicId: EPIC_ID,
     chatId: CHAT_ID,
@@ -1131,6 +1138,7 @@ describe("createChatSessionStore", () => {
     let lastCallbacks: ChatStreamCallbacks | null = null;
     let closeCalls = 0;
     const handle = createChatSessionStore({
+      environment: CHAT_STORE_TEST_ENVIRONMENT,
       hostId: "host-a",
       epicId: EPIC_ID,
       chatId: CHAT_ID,
@@ -1185,6 +1193,7 @@ describe("createChatSessionStore", () => {
   it("retry ignores callbacks from the stale stream client", () => {
     let lastCallbacks: ChatStreamCallbacks | null = null;
     const handle = createChatSessionStore({
+      environment: CHAT_STORE_TEST_ENVIRONMENT,
       hostId: "host-a",
       epicId: EPIC_ID,
       chatId: CHAT_ID,
@@ -2665,7 +2674,8 @@ describe("createChatSessionStore", () => {
 
   it("attaches a staged worktree intent to the send frame and consumes it", () => {
     const harness = createHarness();
-    emitSnapshot(harness.callbacks(), "owner");
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
     const key: WorktreeStagingKey = {
       surface: "owner",
       hostId: "host-a",
@@ -2728,6 +2738,67 @@ describe("createChatSessionStore", () => {
     const pendingEchoes = harness.handle.store.getState().pendingUserMessages;
     expect(pendingEchoes).toHaveLength(1);
     expect(pendingEchoes[0]?.messageId).toBe(frame.messageId);
+
+    const stagingKeyId = worktreeStagingKeyString(key);
+    const consumedClientActionId =
+      useWorktreeIntentStagingStore.getState().consumedForDispatchByKey[
+        stagingKeyId
+      ]?.clientActionId ?? null;
+    expect(consumedClientActionId).toBe(frame.clientActionId);
+    const displayIntent = (): WorktreeIntent | null => {
+      const state = harness.handle.store.getState();
+      return dispatchedWorktreeIntentForDisplay(
+        state.pendingActions,
+        state.acceptedActions,
+        consumedClientActionId,
+      );
+    };
+    expect(displayIntent()).toEqual(intent);
+
+    callbacks.onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: frame.clientActionId,
+      action: "send",
+      status: "accepted",
+      reason: null,
+      code: null,
+      backgroundStopTaskIds: [],
+    });
+    // An ack does not end the bridge: queued sends can be accepted long before
+    // their deferred worktree creation begins.
+    expect(displayIntent()).toEqual(intent);
+
+    callbacks.onMessageAccepted({
+      kind: "messageAccepted",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      message: {
+        role: "user",
+        messageId: frame.messageId,
+        sender: { type: "user", userId: OWNER_ID },
+        message: {
+          kind: "user",
+          content: CONTENT,
+          browserAnnotations: [],
+        },
+        timestamp: 2,
+        sessionAnchor: null,
+      },
+    });
+    // Host ordering guarantees the replacement binding was published before
+    // the message entered the transcript, so retained action bookkeeping must
+    // no longer override it.
+    expect(displayIntent()).toBeNull();
+    // Windowed transcript eviction must not resurrect the overlay. Accepted
+    // action records intentionally outlive hydrated rows for recovery, so the
+    // display lifetime is recorded on the action rather than re-derived from
+    // the current transcript window.
+    harness.handle.store.setState({ messages: [] });
+    expect(displayIntent()).toBeNull();
   });
 
   it("restores a staged worktree intent when the send is rejected", () => {
@@ -4261,9 +4332,16 @@ describe("createChatSessionStore", () => {
     expect(
       harness.handle.store.getState().acceptedActions[frame.clientActionId],
     ).toBeUndefined();
+    expect(
+      harness.handle.store.getState().pendingActions[frame.clientActionId],
+    ).toMatchObject({ messageConfirmedByHost: true });
+
+    // The window may evict the row before the action ack lands. The pending
+    // action must retain the host sighting independently of hydration.
+    harness.handle.store.setState({ messages: [] });
 
     // ...then the ack lands and the record is BORN. The transcript already
-    // holds the message, and the birth must say so.
+    // recorded the message, and the birth must say so even after eviction.
     acceptLastAction(harness);
     expect(
       harness.handle.store.getState().acceptedActions[frame.clientActionId],
@@ -7310,6 +7388,146 @@ describe("createChatSessionStore", () => {
     ).toMatchObject({
       action: "pauseQueue",
     });
+  });
+
+  it("projects pending queue cancellations and rolls them back on rejection or reconnect", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const queuedItem = {
+      kind: "managed-command" as const,
+      queueItemId: "queue-command-1",
+      commandId: "command-1",
+      description: "bun test --watch",
+      monitoring: true,
+      delivery: "next_turn" as const,
+      targetTurnId: null,
+      status: "pending" as const,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const emitQueuedSnapshot = (): void => {
+      emitSnapshotFrame({
+        callbacks,
+        access: "owner",
+        messages: [],
+        queue: { status: "running", items: [queuedItem] },
+        pendingFileEditApprovals: [],
+      });
+    };
+    const visibleQueueItemIds = (): string[] => {
+      const state = harness.handle.store.getState();
+      return projectQueueWithPendingCancellations(
+        state.queue,
+        state.pendingActions,
+        state.acceptedActions,
+      ).items.map((item) => item.queueItemId);
+    };
+
+    emitQueuedSnapshot();
+    const rejectedActionId = harness.handle.store
+      .getState()
+      .queueCancel(queuedItem.queueItemId);
+    expect(rejectedActionId).not.toBeNull();
+    expect(
+      harness.handle.store.getState().pendingActions[rejectedActionId ?? ""],
+    ).toMatchObject({
+      action: "queueCancel",
+      queueItemId: queuedItem.queueItemId,
+    });
+    expect(visibleQueueItemIds()).toEqual([]);
+
+    rejectLastAction(harness, "This delivery can no longer be cancelled.");
+    expect(visibleQueueItemIds()).toEqual([queuedItem.queueItemId]);
+
+    expect(
+      harness.handle.store.getState().queueCancel(queuedItem.queueItemId),
+    ).not.toBeNull();
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitQueuedSnapshot();
+    expect(harness.handle.store.getState().pendingActions).toEqual({});
+    expect(visibleQueueItemIds()).toEqual([queuedItem.queueItemId]);
+
+    expect(
+      harness.handle.store.getState().queueCancel(queuedItem.queueItemId),
+    ).not.toBeNull();
+    acceptLastAction(harness);
+    expect(visibleQueueItemIds()).toEqual([]);
+    callbacks.onQueueChanged({
+      kind: "queueChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      queue: { status: "idle", items: [] },
+    });
+    expect(visibleQueueItemIds()).toEqual([]);
+  });
+
+  it("retains an accepted queue cancellation while the accepted-action cap is full", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const queuedItem = {
+      kind: "managed-command" as const,
+      queueItemId: "queue-command-cap",
+      commandId: "command-cap",
+      description: "bun test --watch",
+      monitoring: true,
+      delivery: "next_turn" as const,
+      targetTurnId: null,
+      status: "pending" as const,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "running", items: [queuedItem] },
+      pendingFileEditApprovals: [],
+    });
+
+    for (let index = 0; index < MAX_ACCEPTED_CHAT_ACTION_RECORDS; index += 1) {
+      const actionId = harness.handle.store.getState().resumeQueue();
+      if (actionId === null) throw new Error("Expected resume action");
+      acceptLastAction(harness);
+    }
+
+    const cancelActionId = harness.handle.store
+      .getState()
+      .queueCancel(queuedItem.queueItemId);
+    if (cancelActionId === null)
+      throw new Error("Expected queue cancel action");
+    acceptLastAction(harness);
+
+    const state = harness.handle.store.getState();
+    expect(state.acceptedActions[cancelActionId]).toMatchObject({
+      action: "queueCancel",
+      queueItemId: queuedItem.queueItemId,
+    });
+    expect(
+      projectQueueWithPendingCancellations(
+        state.queue,
+        state.pendingActions,
+        state.acceptedActions,
+      ).items,
+    ).toEqual([]);
+
+    callbacks.onQueueChanged({
+      kind: "queueChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      queue: { status: "idle", items: [] },
+    });
+    expect(
+      harness.handle.store.getState().acceptedActions[cancelActionId],
+    ).toBeUndefined();
+    expect(
+      projectQueueWithPendingCancellations(
+        harness.handle.store.getState().queue,
+        harness.handle.store.getState().pendingActions,
+        harness.handle.store.getState().acceptedActions,
+      ).items,
+    ).toEqual([]);
   });
 
   it("retains accepted send records when pruning accepted action records by cap", () => {
@@ -12070,6 +12288,7 @@ function createCoalesceHarness(): CoalesceHarness {
   const manual = createManualCoordinator();
   let callbacks: ChatStreamCallbacks | null = null;
   const handle = createChatSessionStore({
+    environment: CHAT_STORE_TEST_ENVIRONMENT,
     hostId: "host-a",
     epicId: EPIC_ID,
     chatId: CHAT_ID,
@@ -12469,6 +12688,7 @@ describe("surface visibility rollup", () => {
       }),
     };
     const handle = createChatSessionStore({
+      environment: CHAT_STORE_TEST_ENVIRONMENT,
       hostId: "host-a",
       epicId: EPIC_ID,
       chatId: CHAT_ID,
@@ -12926,6 +13146,7 @@ describe("createChatSessionStore - persisted auth-error provider nudge", () => {
     let nudges = 0;
     let callbacks: ChatStreamCallbacks | null = null;
     const handle = createChatSessionStore({
+      environment: CHAT_STORE_TEST_ENVIRONMENT,
       hostId: "host-a",
       epicId: EPIC_ID,
       chatId: CHAT_ID,

@@ -76,6 +76,7 @@ interface HarnessModelPickerPanelProps {
     profileId: string | null,
   ) => void;
   readonly onRefreshCatalog: () => Promise<void>;
+  readonly hostUnavailableLabel: string | null;
   readonly onOpenProviderSettings: () => void;
   /** Closes the picker popover without opening Settings - used by the profile
    *  dropdown's "Create new profile" row, which opens the add-profile flow in
@@ -146,6 +147,7 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
     onRetryPack,
     onProfileChange,
     onRefreshCatalog,
+    hostUnavailableLabel,
     onOpenProviderSettings,
     onClosePicker,
     listRef,
@@ -240,6 +242,7 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
           onEntryChange={onEntryChange}
           onRetryPack={onRetryPack}
           onRefresh={onRefreshCatalog}
+          refreshDisabledReason={hostUnavailableLabel ?? undefined}
           onOpenProviderSettings={onOpenProviderSettings}
         />
         <div
@@ -297,6 +300,7 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
               initialTopMostItemIndex={initialTopMostItemIndex}
               catalogLoading={catalogHarnessesLoading}
               catalogError={catalogHarnessesError}
+              hostUnavailableLabel={hostUnavailableLabel}
               activeProvider={activeProvider}
               onHover={onHoverRow}
               onActive={onActiveRow}

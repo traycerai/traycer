@@ -119,7 +119,9 @@ import { useChatSessionHandle } from "@/lib/registries/chat-session-registry";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import {
+  dispatchedWorktreeIntentForDisplay,
   isWindowedTranscript,
+  projectQueueWithPendingCancellations,
   type ChatSessionState,
   type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
@@ -1494,6 +1496,15 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       refreshMissingWorktreePaths: s.refreshMissingWorktreePaths,
     })),
   );
+  const projectedQueue = useMemo(
+    () =>
+      projectQueueWithPendingCancellations(
+        state.queue,
+        state.pendingActions,
+        state.acceptedActions,
+      ),
+    [state.queue, state.pendingActions, state.acceptedActions],
+  );
   const chatWorktreeStagingKeyId = useMemo(
     () =>
       worktreeStagingKeyString({
@@ -1507,6 +1518,16 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   );
   const stagedChatWorktreeIntent = useWorktreeIntentStagingStore(
     (s) => s.intentByKey[chatWorktreeStagingKeyId],
+  );
+  const consumedWorktreeIntentClientActionId = useWorktreeIntentStagingStore(
+    (s) =>
+      s.consumedForDispatchByKey[chatWorktreeStagingKeyId]?.clientActionId ??
+      null,
+  );
+  const inFlightChatWorktreeIntent = dispatchedWorktreeIntentForDisplay(
+    state.pendingActions,
+    state.acceptedActions,
+    consumedWorktreeIntentClientActionId,
   );
   const stagedChatWorkspacePaths = useMemo<ReadonlySet<string>>(() => {
     if (stagedChatWorktreeIntent === undefined) {
@@ -1684,7 +1705,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   // and its remount key, neither of which a content-free managed-command item
   // could supply.
   const editingQueueItem =
-    state.queue.items.find(
+    projectedQueue.items.find(
       (item): item is ChatQueuedPromptItem =>
         item.kind === "prompt" &&
         item.queueItemId === uiState.editingQueueItemId,
@@ -2713,6 +2734,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
           // would make sense for.
           hasActiveTurn: composerActiveTurnStatus !== null,
           ownerLabel: node.name,
+          inFlightWorktreeIntent: inFlightChatWorktreeIntent,
           missingWorktreePaths: effectiveMissingPaths,
           bindingResolved: state.snapshotLoaded,
           onBindingCommitted: clearMissingPathsAfterBindingCommit,
@@ -2726,6 +2748,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       node.id,
       node.name,
       state.worktreeBinding,
+      inFlightChatWorktreeIntent,
       effectiveMissingPaths,
       state.snapshotLoaded,
       activeTurnStatus,
@@ -2902,7 +2925,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     () => ({
       editingItem: editingQueueItem,
       editingItemId: activeEditingQueueItemId,
-      value: state.queue,
+      value: projectedQueue,
       resumeRequested: pendingQueueIntent.resumeRequested,
       keepPausedRequested: pendingQueueIntent.keepPausedRequested,
       onPause: chatActions.pauseQueue,
@@ -2920,7 +2943,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     [
       editingQueueItem,
       activeEditingQueueItemId,
-      state.queue,
+      projectedQueue,
       pendingQueueIntent,
       chatActions.pauseQueue,
       chatActions.resumeQueue,

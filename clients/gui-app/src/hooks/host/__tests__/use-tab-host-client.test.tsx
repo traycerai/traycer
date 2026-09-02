@@ -53,6 +53,10 @@ function getFollowingClient(): HostClient<HostRpcRegistry> {
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: getFollowingClient,
+  useHostBinding: () => ({
+    hostClient: getGlobalClient(),
+    hostId: null,
+  }),
   // `useHostClientForHostId` reads BOTH through the barrel: the spine for
   // the directory lookups, the effective host for the following branch.
   useHostRuntimeClient: getGlobalClient,
@@ -160,15 +164,17 @@ describe("useTabHostClient", () => {
     expect(result.current.byId?.getActiveHostId()).toBe(TAB_HOST.hostId);
   });
 
-  it("agrees with useHostClientForHostId on `null` when the tab's host is nowhere in the directory", () => {
+  it("agrees with useHostClientForHostId on an unresolved identity requester when the tab's host is nowhere in the directory", () => {
     globalClientRef.value = buildGlobalClient(() => [mockLocalHostEntry]);
     directoryState.data = [mockLocalHostEntry];
     const { result } = renderHook(() => useBothClients("host-nobody-knows"), {
       wrapper: tabWrapper("host-nobody-knows"),
     });
 
-    expect(result.current.tab).toBeNull();
-    expect(result.current.byId).toBeNull();
+    expect(result.current.tab).not.toBeNull();
+    expect(result.current.byId).not.toBeNull();
+    expect(result.current.tab?.getActiveHostId()).toBeNull();
+    expect(result.current.byId?.getActiveHostId()).toBeNull();
   });
 
   it("stays a pinned requester - never the mutable default client - even when the tab's host IS the app-wide default", () => {
@@ -208,7 +214,7 @@ describe("useTabHostClient", () => {
     );
   });
 
-  it("returns null with no authenticated request context (signed out), like its sibling", () => {
+  it("keeps identity requesters with no authenticated request context so readiness owns the auth gate", () => {
     const globalClient = buildGlobalClient(() => [
       mockLocalHostEntry,
       TAB_HOST,
@@ -220,7 +226,9 @@ describe("useTabHostClient", () => {
       wrapper: tabWrapper(TAB_HOST.hostId),
     });
 
-    expect(result.current.tab).toBeNull();
-    expect(result.current.byId).toBeNull();
+    expect(result.current.tab).not.toBeNull();
+    expect(result.current.byId).not.toBeNull();
+    expect(result.current.tab?.getActiveHostId()).toBe(TAB_HOST.hostId);
+    expect(result.current.byId?.getActiveHostId()).toBe(TAB_HOST.hostId);
   });
 });

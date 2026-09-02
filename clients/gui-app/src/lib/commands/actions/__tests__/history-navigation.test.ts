@@ -17,11 +17,11 @@ import {
   getOpenEpicRegistry,
   handleHostIds,
 } from "@/lib/registries/epic-session-registry";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-  type OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
@@ -160,7 +160,7 @@ const noopStreamClientFactory: EpicStreamClientFactory = () => ({
 // record-list authority are independent: the shared Epic doc can be current
 // while the host-owned chat registry is still answering after a restart.
 // Tracked and released in `afterEach` so sessions never leak across tests.
-const liveEpicHandles: OpenEpicStoreHandle[] = [];
+const liveEpicHandles: OpenedStoreForTest[] = [];
 function seedLiveEpicSession(
   epicId: string,
   liveNodeIds: ReadonlyArray<string>,
@@ -169,11 +169,17 @@ function seedLiveEpicSession(
     chatRecordListAuthoritative: boolean;
   },
 ): void {
-  const handle = createOpenEpicStore({
-    epicId,
-    streamClientFactory: noopStreamClientFactory,
+  const handle = openStoreForTest({
+    epicId: epicId,
     userId: null,
-    onAuthError: null,
+    // The factories go to the COMPOSITION now: the store stopped
+    // constructing a runtime, so a `streamClientFactory` has nowhere
+    // else to go.
+    factories: {
+      streamClientFactory: noopStreamClientFactory,
+      laneSelection: null,
+    },
+    writeCommand: null,
   });
   handle.store.setState((state) => ({
     snapshotLoaded: authority.snapshotLoaded,

@@ -101,12 +101,6 @@ export interface BuildHostScopeOptionsInput {
    */
   readonly authorityAttached: boolean;
   /**
-   * The account's plan does not include remote hosts. Their relay URLs still
-   * appear in the directory, but attaching is refused server-side, so the route
-   * is not usable even though it looks like one.
-   */
-  readonly remoteHostsPlanRestricted: boolean;
-  /**
    * The local host controller's mutation lane is busy (install, start,
    * restart, update). Actor-agnostic by construction — the lane is the
    * controller's own, so this is true whether the desktop's launch reconciler,
@@ -127,22 +121,18 @@ export function buildHostScopeOptions(
   const options = hostIds.map((hostId): HostScopeOption => {
     const entry = entries.get(hostId) ?? null;
     const item = items.get(hostId) ?? null;
+    const lease = leases.get(hostId) ?? null;
+    const leasePlanRestricted = isLeasePlanRestricted(lease);
     const isLocalMachine = hostId === input.localHostId;
     return {
       hostId,
       name: resolveHostName(hostId, entry, item),
       isLocalMachine,
       isActive: hostId === input.activeHostId,
-      connectable: isAdministrableRoute(
-        entry,
-        input.remoteHostsPlanRestricted,
-        input.hasLiveSession(hostId),
-      ),
-      planRestricted: isPlanRestrictedRoute(
-        entry,
-        input.remoteHostsPlanRestricted,
-        input.hasLiveSession(hostId),
-      ),
+      connectable:
+        !leasePlanRestricted &&
+        isAdministrableRoute(entry, input.hasLiveSession(hostId)),
+      planRestricted: leasePlanRestricted || isPlanRestrictedRoute(entry),
       settingUp: isLocalMachine && input.localHostSettingUp,
       registered: item !== null,
       platform: item?.platform ?? null,
@@ -152,13 +142,9 @@ export function buildHostScopeOptions(
         isLocalMachine,
         hasLiveSession: input.hasLiveSession(hostId),
         service: isLocalMachine ? input.localService : undefined,
-        lease: leases.get(hostId) ?? null,
+        lease,
         authorityAttached: input.authorityAttached,
-        // The registry row carries pure liveness; the account's entitlement is
-        // this input, the same one the route gates below read. Passing it here
-        // is what keeps the health word and the route verdict from disagreeing
-        // about the same host.
-        planAllowsRemote: !input.remoteHostsPlanRestricted,
+        planAllowsRemote: true,
         nowMs: input.nowMs,
       }),
       updateState: item?.status.updateState ?? null,
@@ -170,11 +156,15 @@ export function buildHostScopeOptions(
   return options.sort(compareHostOptions);
 }
 
+function isLeasePlanRestricted(lease: HostLeaseSnapshot | null): boolean {
+  return lease?.status === "dead" && lease.dead.reason === "plan-restricted";
+}
+
 /**
  * Can this row be administered over the host's own RPC right now?
  *
  * A directory entry with no websocket URL is a listing, not a route:
- * `buildTransientHostClient` returns null for it, so offering it as an
+ * `buildDialableHostClient` returns null for it, so offering it as an
  * administrable target would produce a picker row that can never load.
  *
  * Dialability is half of that question, not a detail — so this now CALLS the
@@ -186,7 +176,7 @@ export function buildHostScopeOptions(
  * transport was taught that a failed liveness read still dials, and a
  * hand-copied predicate cannot be told that.
  *
- * The URL check matters on its own: `buildTransientHostClient` does not
+ * The URL check matters on its own: `buildDialableHostClient` does not
  * re-check it, so a URL-only test handed back a live-looking client whose every
  * call hangs — the scope read `ready`, panels mounted, and the Add-host dialog
  * announced a machine as connected and ready to run agents.
@@ -197,67 +187,19 @@ export function buildHostScopeOptions(
  * rather than restating it, for exactly the reason the paragraph above gives:
  * a hand-copied dialability predicate is only right until the transport learns
  * something the copy cannot be told.
- *
- * The plan gate is the same kind of claim. A remote host on a plan without
- * remote hosts advertises a relay URL the server refuses to attach
- * (`plan_restricted`); the header and workspace pickers already disable those
- * rows. Registry-backed administration is account-level and unaffected, so it
- * keeps rendering — the entitlement costs the RPC route, not the whole host.
  */
 export function isAdministrableRoute(
   entry: HostDirectoryEntry | null,
-  remoteHostsPlanRestricted: boolean,
   hasLiveSession: boolean,
 ): boolean {
-  if (entry === null || dialableHostEndpointFor(entry, hasLiveSession) === null)
-    return false;
-  // A READY session also outranks the CLIENT-side plan gate, matching the
-  // transport's own mid-downgrade rule ("the existing session survives, the
-  // next dial refuses"): the RPC route works over the surviving session, and
-  // unmounting the panels here while every other layer keeps routing over it
-  // would report a working host as unreachable. With no session the gate
-  // refuses exactly as before.
-  return !(
-    remoteHostsPlanRestricted &&
-    entry.kind === "remote" &&
-    !hasLiveSession
+  return (
+    entry !== null && dialableHostEndpointFor(entry, hasLiveSession) !== null
   );
 }
 
-/**
- * The one case where `connectable: false` is a BILLING fact rather than a
- * connectivity one: only the plan gate refuses this route. Recorded separately
- * because the boolean alone erased the distinction — the deleted My Hosts
- * notice said "requires a paid plan — Upgrade", and rendering these rows as
- * generically "unreachable" replaced that remedy with a retry that can never
- * work.
- *
- * There are now TWO ways to learn it, and requiring only the first is what
- * lost the reason:
- *
- *   - the CLIENT's own plan gate (`remoteHostsPlanRestricted`) — the route is
- *     live and the server would refuse the attach;
- *   - the ENTRY's stamped plan (`planAllowsRemote: false` ⇒ `plan-restricted`)
- *     — the host is alive or unreadable, but this account has no remote route.
- *
- * The old body demanded a dialable entry, which the second case can never
- * satisfy: a `local-only` host is exactly the one the mapper marks
- * not-dialable. So a free-tier user's own host came back non-connectable AND
- * non-plan-restricted, and every surface downstream fell through to its
- * generic connection-failure copy — the upgrade path invisible precisely to
- * the person who needed it.
- */
-function isPlanRestrictedRoute(
-  entry: HostDirectoryEntry | null,
-  remoteHostsPlanRestricted: boolean,
-  hasLiveSession: boolean,
-): boolean {
-  if (entry === null) return false;
-  if (hostUnavailability(entry) === "plan-restricted") return true;
-  // The CLIENT-side gate only applies to a route that otherwise exists, so it
-  // asks the transport's own question rather than a second copy of it.
-  if (dialableHostEndpointFor(entry, hasLiveSession) === null) return false;
-  return remoteHostsPlanRestricted && entry.kind === "remote";
+/** Preserve an authn-reported denial reason without deriving one from plan. */
+function isPlanRestrictedRoute(entry: HostDirectoryEntry | null): boolean {
+  return entry !== null && hostUnavailability(entry) === "plan-restricted";
 }
 
 /**
@@ -366,12 +308,11 @@ export function resolveScopedHost(input: {
 
 /**
  * The one rule for which directory entry a transient client may be built
- * from. `buildTransientHostClient` checks only that a `websocketUrl` exists —
- * not `status`, not the plan gate — so any caller that hands it an entry from
- * a non-`connectable` row gets back a live-looking client for a route the
- * transport refuses. Panels read `scope.client` before their gate renders
- * (Notifications does), so such a client does not sit unused: it fires real
- * queries. Withholding the ENTRY here means the client never exists.
+ * from. `buildDialableHostClient` independently checks the canonical
+ * transport predicate and authenticated request context, but panels read
+ * `scope.client` before their gate renders (Notifications does). Withholding
+ * a non-`connectable` entry here keeps those panels from mounting a client for
+ * a route the scope already knows cannot be administered.
  *
  * `isFollowing` is not a refusal — the active host already has the ambient
  * client, and building a second one would duplicate its socket.

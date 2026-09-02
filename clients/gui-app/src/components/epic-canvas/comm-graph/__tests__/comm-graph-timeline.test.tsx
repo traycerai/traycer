@@ -38,12 +38,17 @@ vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
 }));
 
-const openTransportStub = vi.hoisted(() => () => {
-  throw new Error("openTransport must not be called in this test");
+// Threw until `EpicSessionProvider` started opening its transport
+// unconditionally - see the fuller note in the sibling `comm-graph-tile`
+// suite for what the throw was pinning and what still pins it.
+vi.mock("@/lib/host/use-durable-stream-transport", async () => {
+  const { fakeDurableStreamTransports } =
+    await import("@/lib/host/test-support/fake-durable-stream-transport");
+  return {
+    useDurableStreamTransportFactory: () =>
+      fakeDurableStreamTransports().opener,
+  };
 });
-vi.mock("@/lib/host/use-durable-stream-transport", () => ({
-  useDurableStreamTransportFactory: () => openTransportStub,
-}));
 
 vi.mock("@/providers/use-resolved-theme", () => ({
   useResolvedTheme: () => ({
@@ -65,6 +70,21 @@ vi.mock("@/hooks/host/use-effective-host-id", () => ({
 
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
+}));
+
+// Nodes render `WorktreeOwnerMetadataTooltip` for their hover card, which
+// derives PR pills from `pr.subscribeListForEpic` via this hook - unmocked,
+// it reaches for `useHostDirectoryEntryForHostId` (absent from the partial
+// host-client mock above) and a real stream client, neither of which this
+// file provides. This suite is about comm-graph timeline projection, not PR
+// pills, so an inert result suffices.
+vi.mock("@/hooks/pr/use-owner-pr-references", () => ({
+  useOwnerListPrReferences: () => ({
+    references: [],
+    isPending: false,
+    error: false,
+    sendRefresh: () => undefined,
+  }),
 }));
 
 const tileNavigationMocks = vi.hoisted(() => ({

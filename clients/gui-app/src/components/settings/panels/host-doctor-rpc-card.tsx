@@ -390,6 +390,7 @@ export function HostDoctorRpcCard(props: {
       )}
       <DoctorRerunRow pending={doctorRun.isPending} onRerun={run} />
       <ConfirmDestructiveDialog
+        blockedReason={null}
         open={freePortIssue !== null}
         onOpenChange={(open) => {
           if (!open) setFreePortIssue(null);

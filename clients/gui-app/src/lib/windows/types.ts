@@ -173,7 +173,17 @@ export interface DesktopZoomBridge {
   onChange(handler: (percent: number) => void): { dispose: () => void };
 }
 
-export type DesktopSupportLogTarget = "desktop" | "host";
+// Field-for-field match with main's `SupportLogTarget`
+// (`ipc-contracts/window-types.ts`). `browserTelemetry`/`browserTrace` name
+// the two browser diagnostic files - absence of the trace file is the
+// normal production state, so callers must go through the
+// existence-filtered `DesktopSupportSnapshot.logs` manifest rather than
+// assuming a browser target always resolves to a real file.
+export type DesktopSupportLogTarget =
+  | "desktop"
+  | "host"
+  | "browserTelemetry"
+  | "browserTrace";
 
 export type DesktopSupportLinkId =
   | "website"
@@ -634,6 +644,12 @@ export interface DesktopReportIssueForm {
   // the private submission / diagnostic bundle when false.
   readonly includeDesktopLog: boolean;
   readonly includeHostLog: boolean;
+  // One toggle covering both browser diagnostic files (plan D3, ticket 03):
+  // `browser-telemetry.jsonl` and `browser-trace.jsonl`. Default on, same
+  // shape as `includeDesktopLog`/`includeHostLog` - withholds both frozen
+  // tails when false. Field-for-field match with main's
+  // `SupportSubmitReportRequest.includeBrowserDiagnostics`.
+  readonly includeBrowserDiagnostics: boolean;
   // Consent panel's diagnostics toggle: gates layer-0/process-metrics/
   // version-platform-host tags+contexts on both the Sentry event and the
   // bundle's environment block. Never gates the report's own identity

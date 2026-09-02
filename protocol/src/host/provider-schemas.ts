@@ -3223,6 +3223,106 @@ export type ProvidersSetPackPolicyResponse = z.infer<
   typeof providersSetPackPolicyResponseSchema
 >;
 
+// ── On-demand pack discovery refresh ───────────────────────────────────────
+//
+// Another BRAND-NEW method name at `@1.0`, riding the same
+// optional-capability channel as the version-manager mutations above and for
+// the same reason: a host that predates it must refuse the call per-call with
+// upgrade guidance rather than fail the handshake.
+//
+// It is not one of those mutations. Nothing here writes the store - it runs
+// the discovery poll this host otherwise only runs on its own jittered
+// ticker, so a user who knows a version was just published does not have to
+// wait out the period to see it.
+
+/**
+ * Run the pack-discovery poll for one pack now.
+ *
+ * Keyed by `packId`, never by provider (D5): the head this polls belongs to
+ * the PACK, and one pack serves several providers, so a per-provider request
+ * would resolve to the same pack from several ids and poll one head once per
+ * provider.
+ */
+export const providersRefreshPackDiscoveryRequestSchema = z.object({
+  // A managed pack id. An unknown one is a caller BUG, not a typed refusal
+  // below - the host throws, exactly as the per-pack mutations do.
+  packId: z.string().min(1),
+});
+export type ProvidersRefreshPackDiscoveryRequest = z.infer<
+  typeof providersRefreshPackDiscoveryRequestSchema
+>;
+
+/**
+ * What the poll did to this host's knowledge of the pack.
+ *
+ * `moved` means THIS HOST'S target knowledge changed - a new head revision,
+ * generation or floor, the first population of a never-derived pack, or a
+ * sibling host's pin/install move. It does NOT mean a newer version exists;
+ * read `providers.list`'s `updateAvailable` for that. `unchanged` covers a
+ * 304, an identical revision, and a pack this host has never seen that the
+ * registry has not published yet.
+ *
+ * `unreachable` and `unusable` are both failures and are NOT interchangeable.
+ * `unreachable` is the transport class - timeout, 403, 5xx, an unopenable
+ * keyring - and leaves existing knowledge in place, so the honest copy is
+ * "couldn't reach the registry, try again". `unusable` means the registry
+ * answered and the answer could not be trusted (stale head, schema error, no
+ * generation this host supports); a pack that WAS known has its update
+ * knowledge cleared until a later check succeeds. Collapsing the two into one
+ * "check failed" would offer a retry for an answer that will not change and
+ * would hide the cleared knowledge behind a transient-sounding message.
+ */
+export const providerPackRefreshOutcomeSchema = z.enum([
+  "moved",
+  "unchanged",
+  "unreachable",
+  "unusable",
+]);
+export type ProviderPackRefreshOutcome = z.infer<
+  typeof providerPackRefreshOutcomeSchema
+>;
+
+/**
+ * Same `{ ok: true, … } | { ok: false, code, detail }` shape the per-pack
+ * mutations use, so the panel's refusal handling stays uniform across the
+ * popover's controls.
+ */
+export const providersRefreshPackDiscoveryResultSchema = z.union([
+  z.object({ ok: z.literal(true), outcome: providerPackRefreshOutcomeSchema }),
+  z.object({
+    ok: z.literal(false),
+    // Two members, both typed rather than thrown because the panel has a
+    // specific sentence to put ON THE ROW for each - a thrown error only ever
+    // reaches a generic toast.
+    //
+    // `discovery-unavailable` means this host has no discovery machinery to
+    // run at all right now (an abandoned or failed boot chain, or a call
+    // landing in the window before the ticker is constructed): update checks
+    // are off on this host, not broken for this pack. `pack-disabled` means
+    // the provider is turned off, and the scheduled poll deliberately never
+    // includes a disabled pack - the popover stays reachable for one because
+    // version staging has no enablement refcount - so enabling it is the
+    // user's next step.
+    //
+    // An unknown `packId` is NOT a member: it is a caller bug and throws.
+    // `detail` stays operator-facing and is never primary copy, same rule as
+    // every other typed error in this file.
+    code: z.enum(["discovery-unavailable", "pack-disabled"]),
+    detail: z.string().nullable(),
+  }),
+]);
+export type ProvidersRefreshPackDiscoveryResult = z.infer<
+  typeof providersRefreshPackDiscoveryResultSchema
+>;
+
+/** Response envelope, shaped like every sibling's in this group. */
+export const providersRefreshPackDiscoveryResponseSchema = z.object({
+  result: providersRefreshPackDiscoveryResultSchema,
+});
+export type ProvidersRefreshPackDiscoveryResponse = z.infer<
+  typeof providersRefreshPackDiscoveryResponseSchema
+>;
+
 export function downgradeProviderAuthV20ToV10(
   auth: ProviderAuthV20,
 ): ProviderAuthV10 {

@@ -405,11 +405,20 @@ vi.mock("@/hooks/epic/use-epic-tui-agent-mutations", () => ({
 }));
 
 vi.mock("@/providers/use-open-epic-handle", () => ({
+  // The chat write-routing gate reads the session through the
+  // NON-throwing accessor. `null` here is the honest double: this suite
+  // mounts no epic store, and no session means no epic write path to gate.
+  useMaybeOpenEpicHandle: () => null,
   useOpenEpicHandle: () => ({
     epicId: "epic-1",
     store: {
       getState: () => ({
         deleteArtifact: testState.localDeleteArtifact,
+        // The unread marker computes its variant from BOTH stores, reading
+        // the tree non-reactively through this handle so a body-write stamp
+        // cannot re-render the row. That makes `tree` part of the state this
+        // double has to carry.
+        tree: testState.tree,
         renameArtifact: vi.fn(),
         chats: { byId: {} },
         tuiAgents: { byId: {} },
@@ -563,6 +572,13 @@ vi.mock("@/hooks/use-epic-store", () => ({
   useEpicStore: (selector: (state: unknown) => unknown) =>
     selector({
       snapshotLoaded: true,
+      // The tree index, because the row-level tree reads subscribe HERE now
+      // rather than through `useEpicTreeIndex`. A row that used to take the
+      // whole slice re-rendered on every record change; it now selects its own
+      // answer out of the store, so this fake has to carry what production
+      // reads. Same object the `epic-selectors` fake hands back, so the two
+      // mocks cannot disagree about the shape of the tree.
+      tree: testState.tree,
       artifacts: {
         allIds: testState.records
           .filter((record) => record.type !== "chat")

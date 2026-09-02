@@ -847,10 +847,14 @@ describe("Report issue capture dialog (deep interactions)", () => {
       fireEvent.click(screen.getByRole("radio", { name: "Idea" }));
       expect(switchState("Include App log tail")).toBe("unchecked");
       expect(switchState("Include Host log tail")).toBe("unchecked");
+      // Full D8 symmetry (ticket 03 fix round): browser diagnostics follows
+      // the same default split as the other two log toggles.
+      expect(switchState("Include browser diagnostics")).toBe("unchecked");
 
       fireEvent.click(screen.getByRole("radio", { name: "Bug" }));
       expect(switchState("Include App log tail")).toBe("checked");
       expect(switchState("Include Host log tail")).toBe("checked");
+      expect(switchState("Include browser diagnostics")).toBe("checked");
 
       // User-touched toggle must not be clobbered by a later type switch.
       fireEvent.click(
@@ -861,6 +865,62 @@ describe("Report issue capture dialog (deep interactions)", () => {
       expect(switchState("Include App log tail")).toBe("unchecked");
       fireEvent.click(screen.getByRole("radio", { name: "Bug" }));
       expect(switchState("Include App log tail")).toBe("unchecked");
+    });
+
+    it("shows 'log tails off' in the collapsed summary once Idea resets browser diagnostics too (D8 collapsed-summary symmetry)", async () => {
+      const harness = createSupportBridgeHarness({
+        snapshot: undefined,
+        submitReport: undefined,
+        buildPublicDraft: undefined,
+        openExternalLink: undefined,
+        frozenDesktopLines: undefined,
+        frozenHostLines: undefined,
+      });
+      openManualReport();
+      renderReportIssueDialog(createRunnerHost(harness));
+      await flushDialogEffects();
+
+      // Collapsed, still "Bug": all three toggles default on.
+      expect(screen.getByText(/log tails on/)).not.toBeNull();
+
+      // Before the fix, browser diagnostics stayed on for "Idea" while the
+      // other two defaulted off, so the collapsed summary read "partially
+      // on" - a stale hint that unattached evidence was still going out.
+      fireEvent.click(screen.getByRole("radio", { name: "Idea" }));
+      expect(screen.getByText(/log tails off/)).not.toBeNull();
+      expect(screen.queryByText(/log tails partially on/)).toBeNull();
+    });
+
+    it("treats a touched browser diagnostics toggle as touched for D8 defaulting too", async () => {
+      const harness = createSupportBridgeHarness({
+        snapshot: undefined,
+        submitReport: undefined,
+        buildPublicDraft: undefined,
+        openExternalLink: undefined,
+        frozenDesktopLines: undefined,
+        frozenHostLines: undefined,
+      });
+      openManualReport();
+      renderReportIssueDialog(createRunnerHost(harness));
+      await flushDialogEffects();
+
+      fireEvent.click(screen.getByRole("button", { name: "details" }));
+      expect(switchState("Include browser diagnostics")).toBe("checked");
+
+      // Touch ONLY the browser diagnostics toggle - not desktop/host.
+      fireEvent.click(
+        screen.getByRole("switch", { name: "Include browser diagnostics" }),
+      );
+      expect(switchState("Include browser diagnostics")).toBe("unchecked");
+
+      // A later type switch must not re-default it back on - proof
+      // `onToggleBrowserDiagnostics` calls `onLogsTouched()` itself, same as
+      // the sibling desktop/host toggles, rather than relying on one of them
+      // having been touched too.
+      fireEvent.click(screen.getByRole("radio", { name: "Idea" }));
+      expect(switchState("Include browser diagnostics")).toBe("unchecked");
+      fireEvent.click(screen.getByRole("radio", { name: "Bug" }));
+      expect(switchState("Include browser diagnostics")).toBe("unchecked");
     });
 
     it("submits includeDesktopLog/includeHostLog:false when the user toggles logs off", async () => {
@@ -892,6 +952,39 @@ describe("Report issue capture dialog (deep interactions)", () => {
       const form = lastSubmittedForm(harness);
       expect(form.includeDesktopLog).toBe(false);
       expect(form.includeHostLog).toBe(false);
+    });
+
+    // Ticket 03 / plan D3: one switch covers both browser diagnostic files.
+    // Type defaults to "bug" here (D8), so it starts checked same as the
+    // other two log toggles (full D8 symmetry - see the D8 test above for
+    // the idea/other split), and the toggle-off must reach the wire exactly
+    // like the other two log toggles above.
+    it("defaults includeBrowserDiagnostics on for bug and submits false when toggled off", async () => {
+      const harness = createSupportBridgeHarness({
+        snapshot: undefined,
+        submitReport: undefined,
+        buildPublicDraft: undefined,
+        openExternalLink: undefined,
+        frozenDesktopLines: undefined,
+        frozenHostLines: undefined,
+      });
+      openManualReport();
+      renderReportIssueDialog(createRunnerHost(harness));
+      await flushDialogEffects();
+
+      fireEvent.click(screen.getByRole("button", { name: "details" }));
+      expect(switchState("Include browser diagnostics")).toBe("checked");
+      fireEvent.click(
+        screen.getByRole("switch", { name: "Include browser diagnostics" }),
+      );
+      fireEvent.change(bugIntentField(), {
+        target: { value: "Browser diagnostics should be withheld" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Send report" }));
+
+      await screen.findByRole("heading", { name: "Report sent" });
+      const form = lastSubmittedForm(harness);
+      expect(form.includeBrowserDiagnostics).toBe(false);
     });
 
     it("wires the diagnostics toggle and G1 contact checkbox into the submitted request", async () => {
