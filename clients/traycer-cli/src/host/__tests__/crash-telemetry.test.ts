@@ -26,6 +26,11 @@ const sentryMocks = vi.hoisted(() => ({
     vi.fn<(extras: Record<string, string | number | boolean>) => void>(),
   setUser: vi.fn<(user: { id: string }) => void>(),
   captureMessage: vi.fn<(message: string, level: string) => void>(),
+  // Defaults to a healthy, already-drained flush so tests that never touch
+  // the transport budget still resolve cleanly.
+  flush: vi.fn<(timeout: number) => Promise<boolean>>(() =>
+    Promise.resolve(true),
+  ),
 }));
 
 vi.mock("@sentry/node", () => ({
@@ -40,6 +45,16 @@ vi.mock("@sentry/node", () => ({
   },
   captureMessage: (message: string, level: string) =>
     sentryMocks.captureMessage(message, level),
+  flush: (timeout: number) => sentryMocks.flush(timeout),
+}));
+
+const sentryTransportMocks = vi.hoisted(() => ({
+  destroySentryTransportRequests: vi.fn<() => number>(() => 0),
+}));
+
+vi.mock("../../sentry-transport", () => ({
+  destroySentryTransportRequests: () =>
+    sentryTransportMocks.destroySentryTransportRequests(),
 }));
 
 const pidMetadataMocks = vi.hoisted(() => ({
@@ -62,6 +77,7 @@ const {
   reportHostCrashToSentry,
   HOST_CRASH_FINGERPRINT_ROOT,
   HOST_CRASH_IDENTITY_TIMEOUT_MS,
+  HOST_CRASH_TRANSPORT_TIMEOUT_MS,
 } = await import("../crash-telemetry");
 
 const { resolveCliVersion } = await import("../../cli-version");
@@ -399,6 +415,12 @@ describe("reportHostCrashToSentry", () => {
     sentryMocks.setExtras.mockReset();
     sentryMocks.setUser.mockReset();
     sentryMocks.captureMessage.mockReset();
+    sentryMocks.flush.mockReset();
+    sentryMocks.flush.mockImplementation(() => Promise.resolve(true));
+    sentryTransportMocks.destroySentryTransportRequests.mockReset();
+    sentryTransportMocks.destroySentryTransportRequests.mockImplementation(
+      () => 0,
+    );
   });
 
   afterEach(() => {
@@ -490,5 +512,98 @@ describe("reportHostCrashToSentry", () => {
     await expect(
       reportHostCrashToSentry(sampleTelemetry({})),
     ).resolves.toBeUndefined();
+  });
+
+  describe("transport budget", () => {
+    it("flushes the transport exactly once with the transport timeout after a successful capture", async () => {
+      pidMetadataMocks.readHostPidMetadata.mockResolvedValue(null);
+
+      await reportHostCrashToSentry(sampleTelemetry({}));
+
+      expect(sentryMocks.flush).toHaveBeenCalledTimes(1);
+      expect(sentryMocks.flush).toHaveBeenCalledWith(
+        HOST_CRASH_TRANSPORT_TIMEOUT_MS,
+      );
+    });
+
+    it("does not destroy the transport when flush resolves true", async () => {
+      pidMetadataMocks.readHostPidMetadata.mockResolvedValue(null);
+      sentryMocks.flush.mockImplementation(() => Promise.resolve(true));
+
+      await reportHostCrashToSentry(sampleTelemetry({}));
+      // Flush the microtask queue so a wrongly-called destroy would have run.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(
+        sentryTransportMocks.destroySentryTransportRequests,
+      ).not.toHaveBeenCalled();
+    });
+
+    it("destroys the transport once when flush resolves false", async () => {
+      pidMetadataMocks.readHostPidMetadata.mockResolvedValue(null);
+      sentryMocks.flush.mockImplementation(() => Promise.resolve(false));
+
+      await reportHostCrashToSentry(sampleTelemetry({}));
+
+      await vi.waitFor(() => {
+        expect(
+          sentryTransportMocks.destroySentryTransportRequests,
+        ).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    it("destroys the transport once when flush rejects, without an unhandled rejection", async () => {
+      pidMetadataMocks.readHostPidMetadata.mockResolvedValue(null);
+      sentryMocks.flush.mockImplementation(() =>
+        Promise.reject(new Error("transport flush failed")),
+      );
+
+      await expect(
+        reportHostCrashToSentry(sampleTelemetry({})),
+      ).resolves.toBeUndefined();
+
+      await vi.waitFor(() => {
+        expect(
+          sentryTransportMocks.destroySentryTransportRequests,
+        ).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    it("does not flush or destroy the transport when captureMessage throws", async () => {
+      pidMetadataMocks.readHostPidMetadata.mockResolvedValue(null);
+      sentryMocks.captureMessage.mockImplementation(() => {
+        throw new Error("Sentry transport exploded");
+      });
+
+      await reportHostCrashToSentry(sampleTelemetry({}));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(sentryMocks.flush).not.toHaveBeenCalled();
+      expect(
+        sentryTransportMocks.destroySentryTransportRequests,
+      ).not.toHaveBeenCalled();
+    });
+
+    it("resolves before the flush settles", async () => {
+      let resolveFlush: (drained: boolean) => void = () => undefined;
+      sentryMocks.flush.mockImplementation(
+        () =>
+          new Promise<boolean>((resolve) => {
+            resolveFlush = resolve;
+          }),
+      );
+      pidMetadataMocks.readHostPidMetadata.mockResolvedValue(null);
+
+      await reportHostCrashToSentry(sampleTelemetry({}));
+
+      // The reporter's own promise already resolved above, while flush is
+      // still pending - so the destroy it could trigger has not run yet.
+      expect(
+        sentryTransportMocks.destroySentryTransportRequests,
+      ).not.toHaveBeenCalled();
+
+      resolveFlush(true);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    });
   });
 });
