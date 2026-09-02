@@ -36,6 +36,16 @@ const mocks = vi.hoisted(() => ({
   }>,
   serviceControllerCalls: [] as string[],
   progressEvents: [] as ProgressInfo[],
+  agentSendCalls: [] as Array<{
+    readonly epicId: string | null;
+    readonly senderAgentId: string | null;
+    readonly to: string;
+    readonly message: string | null;
+    readonly messageFile: string | null;
+    readonly stdin: boolean;
+    readonly expectReply: boolean;
+    readonly responseId: string | null;
+  }>,
 }));
 
 // `host free-port-and-restart`'s handler calls `createServiceController().restart(...)`
@@ -231,6 +241,17 @@ vi.mock("../../commands/config-env-list", () => ({
     human: null,
     exitCode: 0,
   }),
+}));
+
+// Keep Commander and index.ts's option mapping real while stopping the two
+// agent-send wiring tests below before they read stdin/a file or dial a host.
+vi.mock("../../commands/agent-send", () => ({
+  buildAgentSendCommand:
+    (opts: (typeof mocks.agentSendCalls)[number]): CommandFn =>
+    async () => {
+      mocks.agentSendCalls.push(opts);
+      return { data: { responseId: null }, human: null, exitCode: 0 };
+    },
 }));
 
 // Replaces only `runCommand` (which owns `process.exit` - see
@@ -1256,6 +1277,49 @@ describe("traycer CLI entrypoint registration", () => {
     const required = cmd.options.filter((o) => o.mandatory).map((o) => o.long);
     expect(required).toContain("--agent-id");
   });
+
+  it.each([
+    [
+      "--message-file",
+      ["--message-file", "/private/prompt.txt"],
+      { messageFile: "/private/prompt.txt", stdin: false },
+    ],
+    ["--stdin", ["--stdin"], { messageFile: null, stdin: true }],
+  ] as const)(
+    "parses and forwards agent send %s through the real Commander tree",
+    async (_spelling, inputArgs, expected) => {
+      const originalSurface = process.env.TRAYCER_AGENT_CLI_SURFACE;
+      process.env.TRAYCER_AGENT_CLI_SURFACE = "full";
+      mocks.agentSendCalls.length = 0;
+      try {
+        const program = buildProgram();
+        program.exitOverride();
+        await program.parseAsync(
+          ["agent", "send", "--to", "agent-receiver", ...inputArgs],
+          { from: "user" },
+        );
+
+        expect(mocks.agentSendCalls).toEqual([
+          {
+            epicId: null,
+            senderAgentId: null,
+            to: "agent-receiver",
+            message: null,
+            messageFile: expected.messageFile,
+            stdin: expected.stdin,
+            expectReply: false,
+            responseId: null,
+          },
+        ]);
+      } finally {
+        if (originalSurface === undefined) {
+          delete process.env.TRAYCER_AGENT_CLI_SURFACE;
+        } else {
+          process.env.TRAYCER_AGENT_CLI_SURFACE = originalSurface;
+        }
+      }
+    },
+  );
 
   it("limits readonly agent CLI help to inspection commands", () => {
     const originalSurface = process.env.TRAYCER_AGENT_CLI_SURFACE;

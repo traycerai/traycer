@@ -2848,7 +2848,18 @@ function registerAgentCommands(
       .command("send", readonlyHidden)
       .description("Send a prompt to another agent")
       .requiredOption("--to <agentId>", "Receiver agent id")
-      .requiredOption("--message <text>", "Prompt to deliver")
+      .option(
+        "--message <text>",
+        "Prompt to deliver (choose exactly one prompt source)",
+      )
+      .option(
+        "--message-file <path>",
+        "Read the prompt from a UTF-8 file (choose exactly one prompt source)",
+      )
+      .option(
+        "--stdin",
+        "Read the prompt from stdin (choose exactly one prompt source)",
+      )
       .option(
         "--expect-reply",
         "Open or reuse a reply thread; the host returns a responseId. Without it the peer processes your message and never reports back.",
@@ -2862,7 +2873,10 @@ function registerAgentCommands(
         epicId: null,
         senderAgentId: null,
         to: typeof opts.to === "string" ? opts.to : "",
-        message: typeof opts.message === "string" ? opts.message : "",
+        message: typeof opts.message === "string" ? opts.message : null,
+        messageFile:
+          typeof opts.messageFile === "string" ? opts.messageFile : null,
+        stdin: opts.stdin === true,
         expectReply: opts.expectReply === true,
         responseId:
           typeof opts.responseId === "string" ? opts.responseId : null,

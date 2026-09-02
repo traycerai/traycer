@@ -870,10 +870,12 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
     options: [
       { flags: "--expect-reply", mandatory: false },
       { flags: "--json", mandatory: false },
-      { flags: "--message <text>", mandatory: true },
+      { flags: "--message <text>", mandatory: false },
+      { flags: "--message-file <path>", mandatory: false },
       { flags: "--no-progress", mandatory: false },
       { flags: "--quiet", mandatory: false },
       { flags: "--response-id <id>", mandatory: false },
+      { flags: "--stdin", mandatory: false },
       { flags: "--to <agentId>", mandatory: true },
     ],
     args: [],
