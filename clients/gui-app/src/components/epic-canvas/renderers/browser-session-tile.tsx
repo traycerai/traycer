@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/button";
 import {
   useElectronTabBindingOnHost,
   type ElectronTabBinding,
-} from "@/lib/browser-view/sessions/electron-tabs";
+} from "@/lib/browser-view/sessions/electron-tab-directory";
 import {
   browserPeekFrameKey,
   clearLastBrowserPeekFrame,

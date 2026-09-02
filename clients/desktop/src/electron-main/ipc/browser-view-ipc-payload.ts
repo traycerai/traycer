@@ -1,10 +1,9 @@
 import { z } from "zod";
 import {
-  browserCdpCommandSchema,
-  browserCdpTargetSchema,
-  browserSessionProfileKindSchema,
-  browserStorageStateSchema,
+  BROWSER_SESSIONS_UX_CLIENT_FRAME_KINDS,
+  browserSessionsClientFrameSchema,
 } from "@traycer/protocol/host/browser/contracts";
+import { registrableDomain } from "@traycer/protocol/host/browser/registrable-domain";
 import type {
   BrowserAnnotationAttachResultInput,
   BrowserAnnotationSetTargetChatLabelInput,
@@ -12,14 +11,14 @@ import type {
 } from "../../ipc-contracts/browser-annotation-types";
 import { BROWSER_VIEW_VIEWPORT_PRESET_IDS } from "@traycer-clients/shared/platform/browser-view";
 import type {
+  BrowserSessionsStreamKey,
+  BrowserSessionsStreamSend,
   BrowserViewAttachSurface,
   BrowserViewBoundsUpdate,
   BrowserViewCertificateTrust,
   BrowserViewDetachSurface,
   BrowserViewDownloadCancel,
-  BrowserViewElectronTabCdpDispatch,
   BrowserViewElectronTabControl,
-  BrowserViewEnsureTab,
   BrowserViewFindRequest,
   BrowserViewFindStop,
   BrowserViewOverlayOcclusion,
@@ -127,14 +126,6 @@ const overlayReleaseSchema: z.ZodType<BrowserViewOverlayRelease> = z.object({
   overlayId: z.string(),
 });
 const overlayPaintAckSchema = z.object({ overlayId: z.string() });
-const ensureTabSchema: z.ZodType<BrowserViewEnsureTab> =
-  nativeTabKeySchema.extend({
-    requestedUrl: nonEmptyStringSchema,
-    // The renderer relays the host's frame verbatim; an older renderer that
-    // does not know about profiles can only mean the shared jar.
-    profile: browserSessionProfileKindSchema.default("primary"),
-    seedStorageState: browserStorageStateSchema.nullable().default(null),
-  });
 const attachSurfaceSchema: z.ZodType<BrowserViewAttachSurface> =
   nativeTabCapabilitySchema.extend({
     bindingId: nonEmptyStringSchema,
@@ -144,11 +135,6 @@ const detachSurfaceSchema: z.ZodType<BrowserViewDetachSurface> =
   nativeTabCapabilitySchema.extend({ bindingId: nonEmptyStringSchema });
 const electronTabControlSchema: z.ZodType<BrowserViewElectronTabControl> =
   nativeTabCapabilitySchema.extend({ action: electronTabControlActionSchema });
-const electronTabCdpDispatchSchema: z.ZodType<BrowserViewElectronTabCdpDispatch> =
-  nativeTabCapabilitySchema.extend({
-    target: browserCdpTargetSchema,
-    command: browserCdpCommandSchema,
-  });
 const pipCaptureStartSchema: z.ZodType<PipCaptureStartInput> =
   nativeTabCapabilitySchema.extend({
     maxWidth: z.number().int().positive(),
@@ -156,17 +142,66 @@ const pipCaptureStartSchema: z.ZodType<PipCaptureStartInput> =
     quality: z.number().int().min(0).max(100),
   });
 
-/** Base64 key material crossing the store-key handshake (ticket 05). */
-const storeKeyMaterialSchema = z.base64();
-
-/**
- * The registrable domain an evict names (ticket 07). Non-empty only: the scope
- * is what bounds the removal, and an empty one would name the whole jar.
- */
-const evictDomainSchema = z.object({ domain: z.string().min(1) });
-
 /** The saved-logins toggle's new value. */
 const saveLoginsSchema = z.boolean();
+
+/**
+ * Which main-owned `browser.sessions` stream a renderer means.
+ *
+ * A host ID, never a directory row: the row carries the host's static Noise
+ * key, and accepting one from a renderer would let a compromised renderer aim
+ * main's jar stream at a host it controls. Bounded because every field is
+ * echoed into a map key and a log line.
+ */
+const sessionsStreamKeySchema: z.ZodType<BrowserSessionsStreamKey> =
+  z.strictObject({
+    epicId: nonEmptyStringSchema.max(128),
+    hostId: nonEmptyStringSchema.max(128),
+    identityKey: nonEmptyStringSchema.max(512),
+  });
+
+/**
+ * One user-initiated request onto that stream, parsed against the PROTOCOL's
+ * own client-frame schema and then narrowed to the three kinds a renderer may
+ * ask for.
+ *
+ * The narrowing is the gate, not the parse: `forgetLogins` and `clearSite`
+ * shred every connected host's slice of the user's logins, so they are
+ * produced in main behind its own confirmation and refused here.
+ */
+const sessionsStreamSendSchema = z
+  .strictObject({
+    key: sessionsStreamKeySchema,
+    frame: browserSessionsClientFrameSchema,
+  })
+  .refine(
+    (value): value is BrowserSessionsStreamSend =>
+      UX_CLIENT_FRAME_KINDS.has(value.frame.kind),
+    { message: "Only tab requests may be sent from a renderer." },
+  );
+
+/** The protocol's own list, so this gate cannot drift from the type it guards. */
+const UX_CLIENT_FRAME_KINDS: ReadonlySet<string> = new Set(
+  BROWSER_SESSIONS_UX_CLIENT_FRAME_KINDS,
+);
+
+/**
+ * One saved-login row's domain, as Settings names it.
+ *
+ * A REGISTRABLE domain and nothing else. It is interpolated into a native
+ * confirmation dialog and it is the blast radius of the clear that dialog
+ * authorises, so a renderer that could name `x` could write the sentence the
+ * user is answering. Anything that does not collapse to itself - a subdomain, a
+ * url, a sentence - is refused rather than narrowed, because narrowing would
+ * clear a scope the caller did not name.
+ */
+const savedLoginSiteSchema = z.strictObject({
+  domain: nonEmptyStringSchema
+    .max(253)
+    .refine((domain) => registrableDomain(domain) === domain, {
+      message: "A saved-login site is a registrable domain.",
+    }),
+});
 
 export const browserViewIpcPayload = {
   annotationAttachResult: annotationAttachResultSchema,
@@ -177,10 +212,7 @@ export const browserViewIpcPayload = {
   certificateTrust: certificateTrustSchema,
   detachSurface: detachSurfaceSchema,
   downloadCancel: downloadCancelSchema,
-  electronTabCdpDispatch: electronTabCdpDispatchSchema,
   electronTabControl: electronTabControlSchema,
-  ensureTab: ensureTabSchema,
-  evictDomain: evictDomainSchema,
   findRequest: findRequestSchema,
   findStop: findStopSchema,
   nativeTabCapability: nativeTabCapabilitySchema,
@@ -188,8 +220,10 @@ export const browserViewIpcPayload = {
   overlayPaintAck: overlayPaintAckSchema,
   overlayRelease: overlayReleaseSchema,
   pipCaptureStart: pipCaptureStartSchema,
+  savedLoginSite: savedLoginSiteSchema,
   saveLogins: saveLoginsSchema,
-  storeKeyMaterial: storeKeyMaterialSchema,
+  sessionsStreamKey: sessionsStreamKeySchema,
+  sessionsStreamSend: sessionsStreamSendSchema,
   tileKey: tileKeySchema,
 } as const;
 

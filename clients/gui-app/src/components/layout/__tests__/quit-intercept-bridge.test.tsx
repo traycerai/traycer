@@ -30,25 +30,6 @@ import type { OpenEpicSessionRegistry } from "@/stores/epics/open-epic/session-r
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
 
-const browserSessionsMocks = vi.hoisted(() => ({
-  captureFinalPrimaryProfiles: vi.fn<() => Promise<void>>(),
-}));
-
-vi.mock(
-  "@/lib/browser-view/sessions/browser-sessions-coordinator",
-  async (importOriginal) => {
-    const actual =
-      await importOriginal<
-        typeof import("@/lib/browser-view/sessions/browser-sessions-coordinator")
-      >();
-    return {
-      ...actual,
-      captureFinalPrimaryProfiles:
-        browserSessionsMocks.captureFinalPrimaryProfiles,
-    };
-  },
-);
-
 interface RunnerHostOnWindow {
   runnerHost?: unknown;
 }
@@ -1063,56 +1044,5 @@ describe("QuitInterceptBridge", () => {
       decision: "userConfirmedDiscard",
     });
     expect(screen.queryByTestId("quit-intercept-dialog")).toBeNull();
-  });
-  it("reports the final browser capture even when the capture REJECTS", async () => {
-    // `browser.sessions` disconnecting mid-capture rejects it. Swallowed
-    // without a reply, main's waiter sat out its whole
-    // FINAL_BROWSER_CAPTURE_TIMEOUT_MS - a 10s stall on quit and on every
-    // window close that hits this path.
-    const respondFinalBrowserStateCaptured = vi.fn(() => Promise.resolve());
-    let emitCapture:
-      | ((request: { readonly requestId: string }) => void)
-      | null = null;
-    const windowHost = window as WindowMutable;
-    windowHost.runnerHost = {
-      appLifecycle: {
-        setUnsyncedEditsSnapshot: vi.fn(() => Promise.resolve()),
-        respondToQuitRequest: vi.fn(() => Promise.resolve()),
-        onQuitRequested: vi.fn(() => ({ dispose: () => undefined })),
-        onCaptureFinalBrowserState: vi.fn(
-          (handler: (request: { readonly requestId: string }) => void) => {
-            emitCapture = handler;
-            return {
-              dispose: () => {
-                emitCapture = null;
-              },
-            };
-          },
-        ),
-        respondFinalBrowserStateCaptured,
-      },
-    };
-    browserSessionsMocks.captureFinalPrimaryProfiles.mockImplementation(() =>
-      Promise.reject(new Error("browser sessions disconnected")),
-    );
-
-    render(<QuitInterceptBridge />);
-
-    const emit = emitCapture as
-      | ((request: { readonly requestId: string }) => void)
-      | null;
-    if (emit === null) throw new Error("no final-capture subscriber");
-    act(() => {
-      emit({ requestId: "capture-1" });
-    });
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    expect(respondFinalBrowserStateCaptured).toHaveBeenCalledTimes(1);
-    expect(respondFinalBrowserStateCaptured).toHaveBeenCalledWith({
-      requestId: "capture-1",
-    });
   });
 });
