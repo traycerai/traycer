@@ -12,6 +12,7 @@ import type {
   ProviderManagedVersions,
 } from "@traycer/protocol/host/provider-schemas";
 import { chatPublicationDefinitiveReason } from "@/lib/chats/chat-publication-definitive";
+import { PROVIDER_PACK_DISCOVERY_CHECK_TIMEOUT_MS } from "@/lib/host-rpc-policy/provider-pack-discovery-check-timeout";
 import { RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS } from "@/lib/rate-limits/rate-limit-timing";
 
 const SECOND_MS = 1_000;
@@ -997,7 +998,27 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
-  "epic.listCommentThreads": { ...LATEST_SCHEDULING, poll: null },
+  // A FIXED cadence the caller gates, not an always-on one. Comment threads
+  // normally arrive pushed on the records lane, and while that lane is up this
+  // poll must stay quiet - the lane is fresher by construction and a cadence
+  // beside it would be pure waste. But the lane's rows are RETAINED when it
+  // drops, and `resolveArtifactCommentThreads` only hands precedence back once
+  // the poll has answered SINCE that drop - so with no cadence at all, a
+  // permanently dead lane on a focused window froze the surface on retained
+  // rows indefinitely, hiding remote additions, deletions and status changes.
+  // `useEpicCommentThreadsForClient` therefore passes `poll` = "the lane is
+  // down" (`commentThreadsShouldPoll`).
+  //
+  // A condition policy would be the wrong shape: `classify` reads the
+  // RESPONSE, and the lane's liveness is not in it.
+  //
+  // 15s matches that hook's `staleTime`, deliberately - inside the stale
+  // window a read is served from cache anyway, so a tighter interval would
+  // spend requests to learn nothing.
+  "epic.listCommentThreads": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 15 * SECOND_MS },
+  },
   "epic.resolveArtifactByPath": { ...LATEST_SCHEDULING, poll: null },
   "epic.searchArtifacts": { ...LATEST_SCHEDULING, poll: null },
   // The workspace context the decomposed lanes fetch at tab open. A read, so
@@ -1520,6 +1541,25 @@ export const HOST_METHOD_POLL_TABLE = {
   "providers.setPackPolicy": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // The on-demand "Check for updates" in the same popover. `fifo` for a
+  // different reason than the four above - it writes no durable state - but the
+  // same consequence: each press is answered with its own outcome, so two rapid
+  // taps must not coalesce into one answer. `poll: null` because this method IS
+  // the poll; a cadence here would be a second discovery ticker living in the
+  // client.
+  //
+  // `joinResponseTimeoutMs` here is a PERMISSION, not a budget. It buys nothing
+  // on its own: the host client rejects a `requestWithResponseTimeout` whose
+  // value is not exactly this number, and the extended budget only ever applies
+  // because `useProvidersRefreshPackDiscovery` passes the same constant through
+  // `useHostMutationWithResponseTimeout`. Under a plain `useHostMutation` the
+  // call would run on the transport default and this line would be inert - the
+  // gap `providers.refreshProfileStatus` above still has.
+  "providers.refreshPackDiscovery": {
+    mode: "fifo",
+    joinResponseTimeoutMs: PROVIDER_PACK_DISCOVERY_CHECK_TIMEOUT_MS,
     poll: null,
   },
   "worktree.listBindingsForEpic": { ...LATEST_SCHEDULING, poll: null },

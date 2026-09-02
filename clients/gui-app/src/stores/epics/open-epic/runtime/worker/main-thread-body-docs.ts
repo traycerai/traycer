@@ -61,6 +61,14 @@ const MAIN_BODY_REMOTE_ORIGIN = Symbol("open-epic/main-body-remote");
  */
 export interface MainThreadBodyDocSinks {
   readonly onResidencyChange: () => void;
+  /**
+   * A resident doc was retired or replaced.
+   *
+   * Separate from `onResidencyChange`: replacing one doc under the same key
+   * does not change the resident set, but it does retire every main-only edit
+   * that belonged to the previous lineage.
+   */
+  readonly onDocRetired: (docKey: string) => void;
   /** A local edit to a resident body: `body/update`. */
   readonly onLocalDocUpdate: (docKey: string, update: Uint8Array) => void;
   /**
@@ -257,20 +265,23 @@ export function createMainThreadBodyDocStore(
         ) {
           destroy(held);
           bodies.delete(input.docKey);
+          sinks.onDocRetired(input.docKey);
         } else if (held.docGuid === input.docGuid) {
           // Origin-stamped: this is the worker's copy of the body arriving,
           // not something the editor typed. See MAIN_BODY_REMOTE_ORIGIN.
           Y.applyUpdate(held.doc, input.update, MAIN_BODY_REMOTE_ORIGIN);
           held.hostStateVector = input.hostStateVector;
           return;
+        } else {
+          // DIFFERENT lineage. Replace, never splice - see this module's
+          // header. The old doc is destroyed rather than left for the GC
+          // because its awareness holds a listener on it and because any
+          // editor still bound to it must fail loudly rather than keep editing
+          // a document nothing will ever demote.
+          destroy(held);
+          bodies.delete(input.docKey);
+          sinks.onDocRetired(input.docKey);
         }
-        // DIFFERENT lineage. Replace, never splice - see this module's header.
-        // The old doc is destroyed rather than left for the GC because its
-        // awareness holds a listener on it and because any editor still bound
-        // to it must fail loudly rather than keep editing a document nothing
-        // will ever demote.
-        destroy(held);
-        bodies.delete(input.docKey);
       }
       const doc = new Y.Doc();
       const tracked = track(input.docKey, doc, new Awareness(doc));
@@ -316,6 +327,7 @@ export function createMainThreadBodyDocStore(
       if (held === undefined) return;
       bodies.delete(docKey);
       destroy(held);
+      sinks.onDocRetired(docKey);
       sinks.onResidencyChange();
     },
 
@@ -338,11 +350,14 @@ export function createMainThreadBodyDocStore(
     },
 
     dropAll(): void {
-      const held = [...bodies.values()];
+      const held = [...bodies.entries()];
       // Cleared BEFORE destroying, so a destroy handler that reads this store
       // sees the post-teardown state rather than a half-emptied map.
       bodies.clear();
-      for (const body of held) destroy(body);
+      for (const [docKey, body] of held) {
+        destroy(body);
+        sinks.onDocRetired(docKey);
+      }
       if (held.length > 0) sinks.onResidencyChange();
     },
   };

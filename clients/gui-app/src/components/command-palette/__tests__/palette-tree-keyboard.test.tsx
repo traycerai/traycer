@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { Command, CommandInput, CommandList } from "@/components/ui/command";
 import { SubpageView } from "@/components/command-palette/palette-cmdk";
 import type {
@@ -167,6 +173,46 @@ it("scopes tree arrows to the command surface receiving the key", () => {
   fireEvent.keyDown(firstInput, { key: "ArrowDown" });
   fireEvent.keyDown(firstInput, { key: "ArrowRight" });
   expect(screen.getAllByText("Grandchild")).toHaveLength(1);
+});
+
+it("separates browser creation from the selected host's open tabs", () => {
+  const subpage: CommandSubpage = {
+    id: "open:browser",
+    title: "Browser",
+    useItems: () => [
+      {
+        ...baseItem("open:browser:host", "Change host"),
+        statusBadge: "Browser Mac",
+        subpage: {
+          id: "open:browser:host",
+          title: "Show browsers from",
+          useItems: () => [],
+        },
+      },
+      baseItem("open:browser:new", "New browser"),
+      baseItem("open:browser:existing", "Example docs"),
+    ],
+  };
+  render(
+    <Command>
+      <CommandList>
+        <SubpageView
+          subpage={subpage}
+          ctx={context}
+          onSelect={() => undefined}
+        />
+      </CommandList>
+    </Command>,
+  );
+
+  const creationGroup = screen.getByRole("group", { name: "Browser" });
+  const inventoryGroup = screen.getByRole("group", {
+    name: "Open tabs on Browser Mac",
+  });
+  expect(within(creationGroup).getByText("New browser")).toBeTruthy();
+  expect(within(creationGroup).getByText("Change host")).toBeTruthy();
+  expect(within(creationGroup).queryByText("Example docs")).toBeNull();
+  expect(within(inventoryGroup).getByText("Example docs")).toBeTruthy();
 });
 
 it("expands an actionable path branch from the command input", () => {

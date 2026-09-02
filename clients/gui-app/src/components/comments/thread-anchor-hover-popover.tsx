@@ -126,7 +126,10 @@ export function ThreadAnchorHoverPopover(props: ThreadAnchorHoverPopoverProps) {
     epicId,
     artifactType: artifactType,
     artifactId: artifactId,
-    options: { enabled: false },
+    // `enabled: false` already means this surface never fires traffic, so the
+    // cadence is inert here - passed because the option is required, and
+    // required so no call site can silently omit the lane's liveness.
+    options: { enabled: false, laneDroppedAt },
   });
   const threadsById = useMemo(() => {
     const map = new Map<string, CommentThreadWire>();

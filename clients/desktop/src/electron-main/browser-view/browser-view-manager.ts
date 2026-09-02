@@ -66,7 +66,6 @@ import { BrowserViewFind } from "./manager/browser-view-find";
 import {
   assertEntryCapturable,
   BrowserViewGeometry,
-  normalizeBounds,
 } from "./manager/browser-view-geometry";
 import { BrowserViewOverlay } from "./manager/browser-view-overlay";
 import { BrowserViewPipCapture } from "./manager/browser-view-pip-capture";
@@ -107,6 +106,13 @@ interface BrowserViewManagerOptions {
     listener: (change: BrowserSessionCertificateErrorChange) => void,
   ) => () => void;
   readonly onWindowChange: (listener: () => void) => () => void;
+  /**
+   * Page zoom of the app windows. Tile rects arrive in renderer CSS pixels,
+   * so every native rect is derived from the stored CSS rect times this.
+   */
+  readonly getZoomFactor: () => number;
+  /** Fires after the app windows have been re-zoomed. */
+  readonly onZoomChange: (listener: () => void) => () => void;
   readonly notifyHostWindowRendererReset: (windowId: string) => void;
   readonly send: BrowserViewSend;
   readonly seedStorageState: (
@@ -149,6 +155,7 @@ export class BrowserViewManager {
     request: BrowserSessionProfileRequest,
   ) => void;
   private readonly offWindowChange: () => void;
+  private readonly offZoomChange: () => void;
   private readonly offDownloadChange: () => void;
   private readonly offCertificateError: () => void;
   private readonly entries = new BrowserViewEntryRegistry<BrowserViewEntry>();
@@ -174,6 +181,7 @@ export class BrowserViewManager {
     this.releaseSessionStorage = options.releaseSessionStorage;
     this.geometry = new BrowserViewGeometry({
       getWindow: options.getWindow,
+      getZoomFactor: options.getZoomFactor,
       boundsStreamLogIntervalMs: options.boundsStreamLogIntervalMs,
     });
     this.debugSessions = new BrowserViewDebugSessions({
@@ -198,6 +206,7 @@ export class BrowserViewManager {
     this.chords = new BrowserViewChords({
       getWindow: options.getWindow,
       hostPlatform: options.hostPlatform,
+      send: options.send,
     });
     this.windows = new BrowserViewWindowAttachment({
       entries: this.entries,
@@ -256,6 +265,16 @@ export class BrowserViewManager {
     });
     this.offWindowChange = options.onWindowChange(() => {
       this.windows.reconcileVisibility(this.pip);
+    });
+    // Zoom rescales the renderer's CSS pixel, so every stored tile rect now
+    // maps to a different native rect. Re-deriving here is authoritative:
+    // the renderer's own resize-driven re-send is asynchronous and may
+    // arrive before or after this, and either order lands on the same rect.
+    this.offZoomChange = options.onZoomChange(() => {
+      for (const entry of Array.from(this.entries.surfaceValues())) {
+        this.geometry.applyBounds(entry);
+        this.geometry.applyVisibility(entry);
+      }
     });
     this.offDownloadChange = options.onDownloadChange((change) => {
       this.handleDownloadChange(change);
@@ -394,8 +413,17 @@ export class BrowserViewManager {
 
   updateBounds(windowId: string, input: BrowserViewBoundsUpdate): void {
     const entry = this.entries.getTile(windowId, input);
-    if (entry === undefined) return;
-    entry.bounds = normalizeBounds(input.bounds);
+    if (entry === undefined) {
+      // A renderer that measures before its surface is (re)bound loses its
+      // only send - the rAF loop dedupes the identical rect forever after.
+      log.debug("[browser-view] bounds update for an unbound surface", {
+        surfaceKeyId: entryKeyId({ ...input, windowId }),
+      });
+      return;
+    }
+    // Stored exactly as the renderer measured it (CSS pixels); rounding and
+    // the CSS -> DIP conversion belong to the apply seam in geometry.
+    entry.bounds = input.bounds;
     this.geometry.applyBounds(entry);
     this.geometry.applyVisibility(entry);
   }
@@ -445,7 +473,11 @@ export class BrowserViewManager {
       throw new Error("Browser view tile is not available for capture");
     }
     const surface = requireSurface(entry);
-    assertEntryCapturable(entry, this.getWindow(surface.windowId));
+    assertEntryCapturable(
+      entry,
+      this.getWindow(surface.windowId),
+      this.geometry.zoomFactor(),
+    );
     const bytes = Buffer.from(
       (await entry.view.webContents.capturePage()).toPNG(),
     );
@@ -519,6 +551,7 @@ export class BrowserViewManager {
 
   dispose(): void {
     this.offWindowChange();
+    this.offZoomChange();
     this.offDownloadChange();
     this.offCertificateError();
     this.geometry.dispose();

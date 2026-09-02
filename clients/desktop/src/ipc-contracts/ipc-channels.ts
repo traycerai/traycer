@@ -433,6 +433,7 @@ export const RunnerHostEvent = {
   browserViewDownloadChange: "runnerHost:event:browserView:downloadChange",
   browserViewCertificateError: "runnerHost:event:browserView:certificateError",
   browserViewOpenTileRequest: "runnerHost:event:browserView:openTileRequest",
+  browserViewTileCommand: "runnerHost:event:browserView:tileCommand",
   browserViewSnapshotInvalidated:
     "runnerHost:event:browserView:snapshotInvalidated",
   browserViewAnnotationEvent: "runnerHost:event:browserView:annotation",

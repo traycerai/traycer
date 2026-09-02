@@ -27,12 +27,13 @@
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { IStreamSession } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
-import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
+import type { AttributableDurableStreamTransport } from "@/lib/host/durable-stream-transport";
 
 /** One transport this opener minted, and what has happened to it since. */
 export interface FakeTransportRecord {
   readonly hostId: string;
   closeCount: number;
+  readonly closeReasons: string[];
   readonly wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>;
 }
 
@@ -56,7 +57,7 @@ export interface FakeDurableStreamTransports {
    * `resetFakeDurableStreamTransports` puts the default back, so a churned
    * opener cannot leak into the next test in the file.
    */
-  opener: (hostId: string) => DurableStreamTransport;
+  opener: (hostId: string) => AttributableDurableStreamTransport;
 }
 
 function fakeStreamSession(): IStreamSession {
@@ -72,17 +73,22 @@ function fakeStreamSession(): IStreamSession {
 
 function createWsStreamClient(
   instanceIndex: number,
+  closeReasons: string[],
 ): IHostStreamClient<HostStreamRpcRegistry> {
   let closed = false;
+  let closedReason: string | null = null;
   return {
     subscribe: () => fakeStreamSession(),
     subscribeWithParamsProvider: () => fakeStreamSession(),
-    close: () => {
+    close: (reason) => {
+      if (closed) return;
       closed = true;
+      closedReason = reason;
+      closeReasons.push(reason);
     },
     isClosed: () => closed,
     isReady: () => true,
-    getClosedReason: () => null,
+    getClosedReason: () => closedReason,
     notifyBearerRotated: () => undefined,
     reconnectAll: () => undefined,
     // "unsupported" on every lane method pins the adapter-selection verdict to
@@ -101,15 +107,26 @@ function createWsStreamClient(
 
 const records: FakeTransportRecord[] = [];
 
-const defaultOpener = (hostId: string): DurableStreamTransport => {
-  const wsStreamClient = createWsStreamClient(records.length);
-  const record: FakeTransportRecord = { hostId, closeCount: 0, wsStreamClient };
+const defaultOpener = (hostId: string): AttributableDurableStreamTransport => {
+  const closeReasons: string[] = [];
+  const wsStreamClient = createWsStreamClient(records.length, closeReasons);
+  const record: FakeTransportRecord = {
+    hostId,
+    closeCount: 0,
+    closeReasons,
+    wsStreamClient,
+  };
   records.push(record);
+  const closeWithReason = (reason: string): void => {
+    record.closeCount += 1;
+    wsStreamClient.close(reason);
+  };
   return {
     wsStreamClient,
     close: () => {
-      record.closeCount += 1;
+      closeWithReason("durable-transport-closed");
     },
+    closeWithReason,
   };
 };
 

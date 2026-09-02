@@ -59,6 +59,8 @@ function makeController(
     profile: "primary",
     url: "https://example.com",
     addressValue: "https://example.com",
+    setAddressInput: () => undefined,
+    focusAddress: () => undefined,
     canGoBack: true,
     canGoForward: true,
     zoomPercent: 100,

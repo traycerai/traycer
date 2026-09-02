@@ -18,6 +18,7 @@ import type {
   BrowserViewOverlayRelease,
   BrowserViewOverlayReleaseResult,
   BrowserViewSnapshotInvalidatedChange,
+  BrowserViewTileCommandEvent,
   BrowserViewTileKey,
 } from "@traycer-clients/shared/platform/browser-view";
 
@@ -115,6 +116,7 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
         stale: false,
       })),
       restoredTiles: [],
+      matchedCount: input.tiles.length,
     });
   }
 
@@ -215,6 +217,22 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
     dispose: () => void;
   } {
     return { dispose: () => undefined };
+  }
+
+  /** Captured so a suite can fire a browser-scoped chord at a tile. */
+  tileCommandHandlers: Array<(event: BrowserViewTileCommandEvent) => void> = [];
+
+  onTileCommand(handler: (event: BrowserViewTileCommandEvent) => void): {
+    dispose: () => void;
+  } {
+    this.tileCommandHandlers.push(handler);
+    return {
+      dispose: () => {
+        this.tileCommandHandlers = this.tileCommandHandlers.filter(
+          (entry) => entry !== handler,
+        );
+      },
+    };
   }
 
   onSnapshotInvalidated(

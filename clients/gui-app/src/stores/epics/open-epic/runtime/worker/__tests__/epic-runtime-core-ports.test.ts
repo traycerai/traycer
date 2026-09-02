@@ -683,11 +683,10 @@ describe("bodies.materialize — forward-only vs not-held", () => {
  *
  * Yjs delivers ONE freshly-encoded array to every `update` listener. On the
  * `@1` arm two listen: the tier's outbound observer, which turns it into an
- * `artifactRoomApplyUpdate` frame, and the body return leg. The return leg's
- * bytes are eventually handed to `takeBytesForTransfer`, which transfers a
- * full-span standalone buffer IN PLACE - so passing the shared array straight
- * through detaches the one the tier's frame is still holding, and that frame
- * decodes as `Unexpected end of array` wherever it is finally read.
+ * `artifactRoomApplyUpdate` frame, and the body return leg. Both downstream
+ * legs can eventually transfer a full-span standalone buffer IN PLACE, so
+ * both copy before that handoff. Passing the shared array through from either
+ * observer would detach it before every later observer can make its own copy.
  *
  * Pinned as IDENTITY rather than as a decode failure downstream: the property
  * is "we are not the owner, so we copy", and identity is what states it. A
