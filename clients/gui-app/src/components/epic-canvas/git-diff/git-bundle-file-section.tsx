@@ -17,8 +17,10 @@ import {
   gitImageDiffRevisionKey,
   gitImageDiffRouting,
   gitImageDiffSides,
+  gitRoutesToPdfDiffCards,
 } from "@/lib/git/git-diff-tile";
 import { ImageDiffView } from "@/components/epic-canvas/image-preview/image-diff-view";
+import { PdfDiffView } from "@/components/epic-canvas/pdf-preview/pdf-diff-view";
 import { DiffContentLoadingSkeleton } from "./diff-content-loading-skeleton";
 import {
   DiffBundleCollapseChevron,
@@ -124,6 +126,7 @@ export function BundleFileSection(props: BundleFileSectionProps): ReactNode {
     >
       <BundleFileSectionBody
         node={props.node}
+        viewTabId={props.viewTabId}
         file={props.file}
         headSha={props.headSha}
         isLarge={isLarge}
@@ -138,6 +141,7 @@ export function BundleFileSection(props: BundleFileSectionProps): ReactNode {
 
 interface BundleFileSectionBodyProps {
   readonly node: GitBundleDiffTileRef;
+  readonly viewTabId: string;
   readonly file: GitChangedFile;
   readonly headSha: string;
   readonly isLarge: boolean;
@@ -155,8 +159,16 @@ function BundleFileSectionBody(props: BundleFileSectionBodyProps): ReactNode {
   // binary image - see `gitImageDiffRouting` for the routing decision
   // itself, shared with the single-file diff tile.
   const { routeToImageDiff } = gitImageDiffRouting(props.file);
+  // Same decision as the single-file tile: by extension, image routing
+  // winning a straddling rename. No host-version gate - `git.streamFileAsset`
+  // is a stream method, absent from the unary manifest the negotiated-version
+  // registry records, so such a gate can never positively know a host is
+  // old; the opened tile's own stream negotiation is the authority, and an
+  // old host's refusal degrades there to the shared placeholder.
+  const routeToPdfCards =
+    !routeToImageDiff && gitRoutesToPdfDiffCards(props.file);
   useEffect(() => {
-    if (!props.file.isBinary && !routeToImageDiff) return;
+    if (!props.file.isBinary && !routeToImageDiff && !routeToPdfCards) return;
     bundleFindRegistration.registerCoverageState(
       props.bundleFindFileId,
       "binary",
@@ -166,6 +178,7 @@ function BundleFileSectionBody(props: BundleFileSectionBodyProps): ReactNode {
     props.bundleFindFileId,
     props.file.isBinary,
     routeToImageDiff,
+    routeToPdfCards,
   ]);
 
   if (routeToImageDiff) {
@@ -190,6 +203,25 @@ function BundleFileSectionBody(props: BundleFileSectionBodyProps): ReactNode {
         compact
         onOpenExternally={null}
         openExternallyOpening={false}
+      />
+    );
+  }
+  if (routeToPdfCards) {
+    const sides = gitImageDiffSides(props.file);
+    // Same compact block as the single-file tile - the bundle row composes
+    // the rich per-type views (the image branch above is the precedent), it
+    // does not fall back to a poorer rendering.
+    return (
+      <PdfDiffView
+        hostId={props.node.hostId}
+        viewTabId={props.viewTabId}
+        runningDir={props.node.diff.runningDir}
+        filePath={props.file.path}
+        previousPath={props.file.previousPath}
+        status={props.file.status}
+        oldStage={sides.oldStage}
+        newStage={sides.newStage}
+        sizeBytes={props.file.sizeBytes}
       />
     );
   }
