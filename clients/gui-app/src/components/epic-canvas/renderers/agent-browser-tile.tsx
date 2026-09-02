@@ -218,10 +218,9 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     props.binding.tabId,
   ]);
 
-  useEffect(() => {
-    if (browserView === null) return;
-    const subscription = browserView.onOpenTileRequest((change) => {
-      if (!isSameBrowserViewTile(change, tileKey)) return;
+  /** Open a tab in this tile's session and place it beside this tile. */
+  const openTabBesideThisTile = useCallback(
+    (url: string) => {
       if (
         browserSessions === null ||
         browserSessions.lifecycle !== "live" ||
@@ -231,7 +230,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
         return;
       }
       void browserSessions
-        .openTab(props.node.sessionId, change.url)
+        .openTab(props.node.sessionId, url)
         .then((opened) => {
           openBrowserSessionTileFromPage({
             viewTabId: props.viewTabId,
@@ -239,7 +238,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
             hostId: props.node.hostId,
             sessionId: opened.sessionId,
             tabId: opened.tabId,
-            url: change.url,
+            url,
             // Electron-only surface: a natively-placed tab exists on the
             // desktop canvas alone, which always has room beside it.
             placement: "split-right",
@@ -252,19 +251,26 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
               : "Couldn't open the browser tab.",
           );
         });
+    },
+    [
+      browserSessions,
+      props.node.hostId,
+      props.node.sessionId,
+      props.paneId,
+      props.viewTabId,
+    ],
+  );
+
+  useEffect(() => {
+    if (browserView === null) return;
+    const subscription = browserView.onOpenTileRequest((change) => {
+      if (!isSameBrowserViewTile(change, tileKey)) return;
+      openTabBesideThisTile(change.url);
     });
     return () => {
       subscription.dispose();
     };
-  }, [
-    browserSessions,
-    browserView,
-    props.node.hostId,
-    props.node.sessionId,
-    props.paneId,
-    props.viewTabId,
-    tileKey,
-  ]);
+  }, [browserView, openTabBesideThisTile, tileKey]);
 
   const attachedBrowserView = surfaceReady ? browserView : null;
   useBrowserViewBoundsBridge({
@@ -314,6 +320,65 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     initialViewportPreset: props.node.viewportPreset,
     onAttemptedUrl: latchAttemptedUrl,
   });
+
+  // Browser-scoped reserved chords: main claimed the keystroke from the guest
+  // page (the app renderer never sees it) and named what the browser should
+  // do. The policy table lives in
+  // `@/lib/browser-view/reserved-chords-registration`.
+  const {
+    controller: chromeController,
+    navigateToUrl,
+    downloads,
+    cancelDownload,
+    certificateError,
+    certificateProceeding,
+    proceedCertificate,
+  } = chrome;
+  const focusAddress = chromeController.focusAddress;
+  useEffect(() => {
+    if (browserView === null) return;
+    const subscription = browserView.onTileCommand((event) => {
+      if (!isSameBrowserViewTile(event, tileKey)) return;
+      switch (event.command) {
+        case "newTab":
+          openTabBesideThisTile(DEFAULT_BROWSER_TILE_URL);
+          return;
+        case "focusAddressBar":
+          focusAddress();
+          return;
+        case "closeTab": {
+          if (
+            browserSessions === null ||
+            browserSessions.lifecycle !== "live"
+          ) {
+            return;
+          }
+          // Retire the canvas tile only after the host agrees the tab is
+          // gone - a refused close must not leave a live tab with no tile.
+          void browserSessions
+            .closeTab(props.node.sessionId, props.binding.tabId)
+            .then(closeCanvasTile)
+            .catch(() => {
+              toast.error("Couldn't close the browser tab. Try again.");
+            });
+          return;
+        }
+      }
+    });
+    return () => {
+      subscription.dispose();
+    };
+  }, [
+    focusAddress,
+    browserSessions,
+    browserView,
+    closeCanvasTile,
+    openTabBesideThisTile,
+    props.binding.tabId,
+    props.node.sessionId,
+    tileKey,
+  ]);
+
   useEffect(() => {
     if (!shouldAttachSurface(visible, showStartPage)) return;
     let active = true;
@@ -364,7 +429,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
         tileKey={tileKey}
       />
       <BrowserTileToolbar
-        controller={chrome.controller}
+        controller={chromeController}
         pictureInPicture={{
           disabled: epicId === null,
           convert: () => {
@@ -390,7 +455,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
           startPageEpicId={startPageEpicId}
           hostId={hostId}
           snapshot={snapshot}
-          onNavigate={chrome.navigateToUrl}
+          onNavigate={navigateToUrl}
         />
         <div
           hidden={showStartPage}
@@ -409,13 +474,13 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
           />
         </div>
         <BrowserTileDownloadStrip
-          downloads={chrome.downloads}
-          onCancel={chrome.cancelDownload}
+          downloads={downloads}
+          onCancel={cancelDownload}
         />
         <BrowserTileCertificateInterstitial
-          certificateError={chrome.certificateError}
-          proceeding={chrome.certificateProceeding}
-          onProceed={chrome.proceedCertificate}
+          certificateError={certificateError}
+          proceeding={certificateProceeding}
+          onProceed={proceedCertificate}
         />
       </div>
     </div>

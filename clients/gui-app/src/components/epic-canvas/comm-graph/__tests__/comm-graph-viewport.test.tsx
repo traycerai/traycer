@@ -1,4 +1,7 @@
 const reactFlowMock = vi.hoisted(() => vi.fn((_props: unknown) => null));
+const registerFindAdapterMock = vi.hoisted(() =>
+  vi.fn<(adapter: TileFindAdapter) => void>(),
+);
 
 vi.mock("@xyflow/react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@xyflow/react")>();
@@ -10,6 +13,10 @@ vi.mock("@/providers/use-resolved-theme", () => ({
     resolvedTheme: "light" as const,
     themePreset: "default",
   }),
+}));
+
+vi.mock("@/components/epic-canvas/tile-find/tile-find-adapter-context", () => ({
+  useRegisterTileFindAdapter: registerFindAdapterMock,
 }));
 
 vi.mock("@/lib/epic-selectors", () => ({
@@ -38,6 +45,7 @@ import {
 } from "@/lib/comm-graph/comm-graph-layout";
 import type { CommGraphAgentNode } from "@/lib/comm-graph/comm-graph-model";
 import type { CommGraphPulse } from "@/lib/comm-graph/comm-graph-timeline";
+import type { TileFindAdapter } from "@/stores/tile-find";
 import { DEFAULT_COMM_GRAPH_VIEW } from "@/stores/epics/canvas/tile-schema/comm-graph-tile";
 import type { CommGraphTileViewState } from "@/stores/epics/canvas/types";
 
@@ -63,6 +71,7 @@ function canvas(view: CommGraphTileViewState, options: RenderCanvasOptions) {
   return (
     <CommGraphCanvas
       epicId="epic-1"
+      tileInstanceId="comm-graph-instance-1"
       agents={[AGENT]}
       agentIds={new Set([AGENT.id])}
       events={[]}
@@ -114,6 +123,16 @@ type FlowSetCenter = ReactFlowInstance<
   CommGraphAgentFlowNode,
   CommGraphFlowEdge
 >["setCenter"];
+type FlowFitView = ReactFlowInstance<
+  CommGraphAgentFlowNode,
+  CommGraphFlowEdge
+>["fitView"];
+
+function latestFindAdapter(): TileFindAdapter {
+  const adapter = registerFindAdapterMock.mock.lastCall?.[0];
+  if (adapter === undefined) throw new Error("Find adapter was not registered");
+  return adapter;
+}
 
 function createFlowInstanceStub(
   viewport: Viewport,
@@ -163,13 +182,14 @@ function createFlowInstanceStub(
 
 function installFlowInstance(viewport: Viewport): {
   readonly setCenter: Mock<FlowSetCenter>;
+  readonly fitView: Mock<FlowFitView>;
 } {
   const setCenter = vi.fn<FlowSetCenter>(() => Promise.resolve(true));
   const instance = createFlowInstanceStub(viewport, setCenter);
   act(() => {
     latestReactFlowProps().onInit?.(instance);
   });
-  return { setCenter };
+  return { setCenter, fitView: instance.fitView as Mock<FlowFitView> };
 }
 
 function setCanvasSize(element: HTMLElement): void {
@@ -189,6 +209,7 @@ function receiverOnlyPulse(senderAgentId: string): CommGraphPulse {
 afterEach(() => {
   cleanup();
   reactFlowMock.mockClear();
+  registerFindAdapterMock.mockClear();
   vi.restoreAllMocks();
 });
 
@@ -216,6 +237,36 @@ describe("CommGraphCanvas viewport", () => {
         minZoom: 0.1,
       }),
     );
+  });
+
+  it("frames a name match without zooming in and marks its node", async () => {
+    renderCanvas(DEFAULT_COMM_GRAPH_VIEW, STATIC_CANVAS);
+    const match = firstFlowNode();
+    const { fitView } = installFlowInstance({ x: 20, y: 30, zoom: 0.6 });
+
+    act(() => {
+      void latestFindAdapter().search({
+        requestId: 9,
+        query: "agent",
+        matchCase: false,
+      });
+    });
+
+    await waitFor(() => {
+      expect(fitView).toHaveBeenCalledWith({
+        nodes: [match],
+        padding: 0.35,
+        duration: 200,
+        minZoom: 0.1,
+        maxZoom: 0.6,
+      });
+      expect(firstFlowNode().data).toEqual(
+        expect.objectContaining({
+          searchMatched: true,
+          searchHighlightNonce: 9,
+        }),
+      );
+    });
   });
 
   it("centers an offscreen playback sender without changing zoom", async () => {

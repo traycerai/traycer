@@ -1,15 +1,26 @@
 /**
  * Content-addressed blob-URL cache, keyed on an opaque string identity.
  *
- * Chat image attachments key on content hash; their bytes are fetched once
- * per hash and exposed as a single shared `blob:` URL. Every message
- * generation, React fiber, and surface that renders the same image shares
- * that one URL instead of carrying its own base64 copy, so a given image
- * occupies the heap exactly once regardless of how many places reference it.
- * Workspace/git image assets (`useImageAsset`) key on a composite
- * `hostId + source + path + contentIdentity` string built by
- * `buildImageAssetCacheKey` instead - the cache itself is agnostic to what
- * the key encodes, so both callers share the same lifecycle unchanged.
+ * Image attachments key on their content hash TOGETHER with the subject that
+ * hash is authorized against (`buildScopedImageCacheKey`); their bytes are
+ * fetched once per subject-and-hash and exposed as a single shared `blob:`
+ * URL. Every message generation, React fiber, and surface that renders the
+ * same image within that subject shares that one URL instead of carrying its
+ * own base64 copy, so a given image occupies the heap exactly once regardless
+ * of how many places reference it. Workspace/git image assets
+ * (`useImageAsset`) key on a composite `hostId + source + path +
+ * contentIdentity` string built by `buildImageAssetCacheKey` instead - the
+ * cache itself is agnostic to what the key encodes, so both callers share the
+ * same lifecycle unchanged.
+ *
+ * The subject is in the key because the cache is REACHED BEFORE the fetcher:
+ * a hit (or a join onto an in-flight entry) returns bytes without the second
+ * acquirer's byte source ever running, so a bare-hash key would let one
+ * subject's authorization stand in for another's. See
+ * {@link ScopedImageBytesFetcher}. The cost is that two subjects referencing
+ * genuinely identical bytes now fetch and hold them twice, which is the right
+ * side of that trade: deduplication across an authorization boundary IS the
+ * boundary failing.
  *
  * Lifecycle is reference-counted: a `"grace"`-retention URL is revoked once
  * nothing holds it, after a short grace window so scroll/remount churn
@@ -85,6 +96,55 @@ export type ImageBytesFetcher = (
   signal: AbortSignal,
 ) => Promise<ImageBytesResult>;
 
+/**
+ * A byte source bundled with the SUBJECT its bytes are authorized against.
+ *
+ * The two are one value rather than two arguments because a content hash is an
+ * address, not a capability. Every hash-keyed source here authorizes against
+ * something wider than the hash - `epic.fetchArtifactAttachment` proves access
+ * to `(epicId, artifactId)`, `epic.readChatAttachment` to `(epicId, chatId)`
+ * with the chat's ACL applied server-side, and the landing store to nothing at
+ * all because it never leaves the device. Keyed on the bare hash, this cache
+ * hands a resolved (or in-flight) entry to the SECOND acquirer before that
+ * acquirer's fetcher runs, so the second subject's authorization never
+ * executes: a reference carrying a hash learned from any other artifact, chat
+ * or epic renders those bytes. `artifact-attachment-scope-context.ts` states
+ * the intended property - the artifact id "is what stops a cache key from
+ * becoming a capability" - and it was true of the RPC and false of the cache
+ * in front of it.
+ *
+ * Bundled rather than passed alongside because the failure mode is omission.
+ * A separate `scopeKey` argument threads through `AttachmentStrip` and
+ * `BrowserAnnotationCard` props to reach the three call sites, and any of them
+ * - or a fourth source added later - can leave it out and silently rejoin the
+ * shared namespace. As one value the compiler asks for it: a bare function is
+ * no longer assignable where a byte source is expected.
+ */
+export interface ScopedImageBytesFetcher {
+  /**
+   * Everything this source authorizes against, beyond the hash, as an opaque
+   * string. Two acquirers share a blob only when these are equal.
+   */
+  readonly scopeKey: string;
+  readonly fetch: ImageBytesFetcher;
+}
+
+/**
+ * The cache identity for one hash under one subject.
+ *
+ * JSON-encoded rather than delimiter-joined for the reason
+ * `buildImageAssetCacheKey` gives about its own key: an epic, chat or artifact
+ * id is `z.string()` on the wire, so any separator this picked could appear
+ * inside a component and alias two different subjects onto one entry - which
+ * is the bug this function exists to close, reintroduced through the escaping.
+ */
+export function buildScopedImageCacheKey(
+  scopeKey: string,
+  hash: string,
+): string {
+  return JSON.stringify([scopeKey, hash]);
+}
+
 /** Object-URL seam. Real impl uses the browser `URL`/`Blob`; tests inject fakes. */
 export interface ImageBlobOps {
   readonly create: (
@@ -117,7 +177,7 @@ export interface ImageBlobCache {
    * Acquire (and ref) the shared blob URL for `hash`, fetching bytes once via
    * `fetcher`. The fetcher is passed per call because the byte source is the
    * tab-scoped host; concurrent acquirers of the same hash reuse the first
-   * in-flight fetch, so only one fetcher actually runs per hash. `retention`
+   * in-flight fetch, so only one fetcher actually runs per key. `retention`
    * is read only when this call CREATES the entry - later acquirers of the
    * same hash must agree with the first caller (the key already encodes
    * whether the content is immutable), so it is not re-applied on a hit.
@@ -132,9 +192,15 @@ export interface ImageBlobCache {
    * later acquirer's claim cannot describe different bytes.
    */
   acquire: (
-    hash: string,
+    /**
+     * What the byte source is asked FOR - a content hash, or the composite
+     * `buildImageAssetCacheKey` string for workspace assets. NOT the cache
+     * key: `acquire` derives that from this and `fetcher.scopeKey`, so a
+     * caller cannot hand the fetcher a scoped identity by mistake.
+     */
+    subject: string,
     mediaType: string,
-    fetcher: ImageBytesFetcher,
+    fetcher: ScopedImageBytesFetcher,
     retention: ImageBlobRetention,
   ) => ImageBlobLease;
   /** Live entry count (diagnostics/tests). */
@@ -149,7 +215,7 @@ export interface ImageBlobCache {
    * again. Safe to call with a hash that is not (or no longer) cached - a
    * no-op. A later `acquire()` for the same identity starts a fresh fetch.
    */
-  discard: (hash: string) => void;
+  discard: (scopeKey: string, subject: string) => void;
   /**
    * Test-only: drops every entry immediately, bypassing grace/session
    * retention and revoking every live URL. `"session"`-retention entries
@@ -168,7 +234,7 @@ export function createImageBlobCache(
 ): ImageBlobCache {
   const entries = new Map<string, CacheEntry>();
 
-  const scheduleRevoke = (hash: string, entry: CacheEntry): void => {
+  const scheduleRevoke = (identity: string, entry: CacheEntry): void => {
     // Session retention (immutable git object bytes, decision #11): a
     // zero-ref entry stays cached for the rest of the app session rather
     // than being revoked after the grace window, so a remount later reuses
@@ -179,7 +245,7 @@ export function createImageBlobCache(
       entry.cancelRevoke = null;
       if (entry.refCount > 0) return;
       if (entry.resolved !== null) ops.revoke(entry.resolved.url);
-      entries.delete(hash);
+      entries.delete(identity);
     }, graceMs);
     entry.cancelRevoke = () => clearTimeout(handle);
   };
@@ -189,31 +255,39 @@ export function createImageBlobCache(
   // to be. This is the ABA fix: a `discard()`/prior-`release()` can already
   // have removed `target` from `entries` and a later `acquire()` can already
   // have installed an unrelated replacement there by the time this runs; the
-  // `entries.get(hash) !== target` check below is what stops this stale
+  // `entries.get(identity) !== target` check below is what stops this stale
   // release from touching that live replacement.
-  const releaseEntry = (hash: string, target: CacheEntry): void => {
+  const releaseEntry = (identity: string, target: CacheEntry): void => {
     if (target.refCount > 0) target.refCount -= 1;
     if (target.refCount > 0) return;
-    if (entries.get(hash) !== target) return;
+    if (entries.get(identity) !== target) return;
     if (target.inFlight !== null) {
       // Nothing wants the bytes anymore - cancel the fetch and drop the entry so
       // its observers/timers tear down; a re-acquire starts a fresh fetch.
       target.abort?.abort();
       target.abort = null;
       target.inFlight = null;
-      entries.delete(hash);
+      entries.delete(identity);
       return;
     }
-    scheduleRevoke(hash, target);
+    scheduleRevoke(identity, target);
   };
 
   const acquire = (
-    hash: string,
+    subject: string,
     mediaType: string,
-    fetcher: ImageBytesFetcher,
+    fetcher: ScopedImageBytesFetcher,
     retention: ImageBlobRetention,
   ): ImageBlobLease => {
-    let entry = entries.get(hash);
+    // The map key is DERIVED here, never taken from the caller, and the byte
+    // source is asked for `subject` - the two roles used to share one `hash`
+    // parameter, and a caller that correctly passed a scoped key for the first
+    // role thereby asked its RPC for `["scope","sha256..."]` instead of the
+    // hash. Deriving it is what makes the two impossible to disagree: there is
+    // no argument that can carry a scope into the fetcher, and none that can
+    // reach the map without one.
+    const identity = buildScopedImageCacheKey(fetcher.scopeKey, subject);
+    let entry = entries.get(identity);
     if (entry === undefined) {
       entry = {
         refCount: 0,
@@ -223,7 +297,7 @@ export function createImageBlobCache(
         retention,
         cancelRevoke: null,
       };
-      entries.set(hash, entry);
+      entries.set(identity, entry);
     }
     entry.refCount += 1;
     if (entry.cancelRevoke !== null) {
@@ -236,7 +310,7 @@ export function createImageBlobCache(
     const release = (): void => {
       if (released) return;
       released = true;
-      releaseEntry(hash, target);
+      releaseEntry(identity, target);
     };
 
     if (target.resolved !== null) {
@@ -248,11 +322,11 @@ export function createImageBlobCache(
 
     const controller = new AbortController();
     target.abort = controller;
-    // `entries.get(hash) === target` guards every late callback: once an entry
+    // `entries.get(identity) === target` guards every late callback: once an entry
     // is released/replaced, its stale fetch must not resurrect or clobber it.
-    target.inFlight = fetcher(hash, controller.signal).then(
+    target.inFlight = fetcher.fetch(subject, controller.signal).then(
       (result) => {
-        if (entries.get(hash) !== target) {
+        if (entries.get(identity) !== target) {
           throw new Error("image blob fetch superseded");
         }
         // The byte source's own verdict outranks the caller's declared type:
@@ -268,15 +342,15 @@ export function createImageBlobCache(
         target.inFlight = null;
         target.abort = null;
         // Released while the fetch was in flight: revoke once the grace passes.
-        if (target.refCount === 0) scheduleRevoke(hash, target);
+        if (target.refCount === 0) scheduleRevoke(identity, target);
         return resolved;
       },
       (error) => {
-        if (entries.get(hash) === target) {
+        if (entries.get(identity) === target) {
           target.inFlight = null;
           target.abort = null;
           // Never leave a poisoned entry: drop it so a later acquire retries.
-          entries.delete(hash);
+          entries.delete(identity);
         }
         throw error;
       },
@@ -291,10 +365,16 @@ export function createImageBlobCache(
     entries.delete(hash);
   };
 
-  const discard = (hash: string): void => {
-    const entry = entries.get(hash);
+  const discard = (scopeKey: string, subject: string): void => {
+    // Same derivation as `acquire`, for the same reason: the map is keyed by
+    // the scoped identity, so a bare subject matches nothing. `discard` is
+    // documented as a safe no-op on an absent key, which means a mismatch here
+    // fails SILENTLY - the undecodable entry stays live and its URL is never
+    // revoked - so it derives rather than accepting a key.
+    const identity = buildScopedImageCacheKey(scopeKey, subject);
+    const entry = entries.get(identity);
     if (entry === undefined) return;
-    dropEntry(hash, entry);
+    dropEntry(identity, entry);
   };
 
   const clear = (): void => {

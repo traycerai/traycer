@@ -1,6 +1,7 @@
 import { app, shell } from "electron";
 import { randomUUID } from "node:crypto";
 import { open, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import type { FileHandle } from "node:fs/promises";
 import { arch, platform } from "node:process";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -17,6 +18,7 @@ import type {
   SupportHostLayer0Snapshot,
   SupportFreezeEvidenceResult,
   SupportImageAttachmentInput,
+  SupportLogDescriptor,
   SupportLogTarget,
   SupportLogTailResult,
   SupportRevealLogResult,
@@ -77,6 +79,14 @@ interface FrozenEvidence {
   readonly reportId: string;
   readonly desktop: FrozenLogTail;
   readonly host: FrozenLogTail;
+  // Ticket 03 / plan D3: the always-on PII-free counter slice and the
+  // (env-gated) full self-verification trace. Unlike `desktop`/`host`, an
+  // absent source file is the normal state (production trace, or a fresh
+  // install with no browser activity yet) - `captureBrowserLogTail` returns
+  // an empty, non-truncated tail rather than throwing, so these are always
+  // present here even when nothing was ever written.
+  readonly browserTelemetry: FrozenLogTail;
+  readonly browserTrace: FrozenLogTail;
 }
 
 // The map key is scoped by sender (composed in support-ipc.ts), never a bare
@@ -137,6 +147,7 @@ export class DesktopSupportService {
     const host = this.host.getSnapshot();
     const authSession = this.authSession.get();
     const layer0 = await readHostLayer0Record(this.hostLayout);
+    const browserLogs = await existingBrowserLogDescriptors(this.hostLayout);
     return {
       appName: this.appName,
       appVersion: app.getVersion(),
@@ -170,6 +181,7 @@ export class DesktopSupportService {
           label: "Host Log",
           path: this.hostLayout.logFile,
         },
+        ...browserLogs,
       ],
       links: buildSupportLinks(),
       supportEmail: TRAYCER_SUPPORT_EMAIL,
@@ -179,7 +191,19 @@ export class DesktopSupportService {
 
   async revealLog(target: SupportLogTarget): Promise<SupportRevealLogResult> {
     const path = this.resolveSupportLogPath(target);
-    await ensureLogFile(path);
+    // `desktop`/`host` always exist (`ensureLogFile` creates them lazily,
+    // matching every prior release's behavior); a browser target must NEVER
+    // be created by a reveal - the snapshot manifest only ever offers Reveal
+    // for a browser entry that already exists, so this is the same file the
+    // user just saw listed, not a fabricated one (ticket 03 / plan D3).
+    if (!isBrowserLogTarget(target)) {
+      await ensureLogFile(path);
+    } else if (!(await pathExists(path))) {
+      // A race between the existence-filtered manifest and this call (the
+      // file rotated away, or never actually existed) - early-return rather
+      // than handing `shell.showItemInFolder` a path with nothing there.
+      return { target, path };
+    }
     shell.showItemInFolder(path);
     return { target, path };
   }
@@ -225,7 +249,7 @@ export class DesktopSupportService {
     const promise = captureFrozenEvidence(
       reportId,
       resolveDesktopLogPath(),
-      this.hostLayout.logFile,
+      this.hostLayout,
     );
     this.setFrozenEvidence(frozenEvidenceKey, { kind: "pending", promise });
     const evidence = await promise;
@@ -298,7 +322,7 @@ export class DesktopSupportService {
     if (frozen === undefined) {
       return { target, path, lines: [], truncated: false };
     }
-    const tail = target === "desktop" ? frozen.desktop : frozen.host;
+    const tail = frozenLogTailForTarget(frozen, target);
     return {
       target,
       path,
@@ -502,6 +526,28 @@ export class DesktopSupportService {
                     },
                   ]
                 : []),
+              // One toggle, two possible entries (ticket 03 / plan D3): each
+              // is skipped independently when its own tail is empty, same as
+              // the desktop/host logs above - an absent browser-trace.jsonl
+              // (the normal production state) never ships an empty
+              // attachment.
+              ...(form.includeBrowserDiagnostics &&
+              frozen.browserTelemetry.content
+                ? [
+                    {
+                      filename: "browser-telemetry.jsonl",
+                      data: frozen.browserTelemetry.content,
+                    },
+                  ]
+                : []),
+              ...(form.includeBrowserDiagnostics && frozen.browserTrace.content
+                ? [
+                    {
+                      filename: "browser-trace.jsonl",
+                      data: frozen.browserTrace.content,
+                    },
+                  ]
+                : []),
               // Screenshots attach here only - never to the GitHub URL/public
               // draft (ticket 08).
               ...imageAttachments,
@@ -615,6 +661,12 @@ export class DesktopSupportService {
       logs: {
         desktop: form.includeDesktopLog ? (frozen?.desktop.content ?? "") : "",
         host: form.includeHostLog ? (frozen?.host.content ?? "") : "",
+        browserTelemetry: form.includeBrowserDiagnostics
+          ? (frozen?.browserTelemetry.content ?? "")
+          : "",
+        browserTrace: form.includeBrowserDiagnostics
+          ? (frozen?.browserTrace.content ?? "")
+          : "",
       },
     };
     const dir = await mkdtemp(join(tmpdir(), "traycer-diagnostic-bundle-"));
@@ -681,8 +733,21 @@ export class DesktopSupportService {
     readonly tailLines: number;
   }): Promise<SupportLogTailResult> {
     const path = this.resolveSupportLogPath(input.target);
-    await ensureLogFile(path);
-    const content = await readFile(path, "utf8");
+    // Same no-create rule as `revealLog`: a browser target is never
+    // fabricated, and a race where the file disappears between the
+    // existence-filtered manifest and this call reads as an empty tail, not
+    // a thrown error (ticket 03 / plan D3).
+    if (!isBrowserLogTarget(input.target)) {
+      await ensureLogFile(path);
+    }
+    const content = isBrowserLogTarget(input.target)
+      ? await readBrowserLogFiles(
+          input.target === "browserTelemetry"
+            ? this.hostLayout.browserTelemetryRotatedFile
+            : this.hostLayout.browserTraceRotatedFile,
+          path,
+        )
+      : await readFile(path, "utf8");
     const lines = splitLogLines(content);
     return {
       target: input.target,
@@ -696,7 +761,103 @@ export class DesktopSupportService {
     if (target === "desktop") {
       return resolveDesktopLogPath();
     }
-    return this.hostLayout.logFile;
+    if (target === "host") {
+      return this.hostLayout.logFile;
+    }
+    if (target === "browserTelemetry") {
+      return this.hostLayout.browserTelemetryFile;
+    }
+    return this.hostLayout.browserTraceFile;
+  }
+}
+
+function isBrowserLogTarget(
+  target: SupportLogTarget,
+): target is "browserTelemetry" | "browserTrace" {
+  return target === "browserTelemetry" || target === "browserTrace";
+}
+
+async function readBrowserLogFiles(
+  rotatedPath: string,
+  livePath: string,
+): Promise<string> {
+  const readIfPresent = async (path: string): Promise<string> =>
+    readFile(path, "utf8").catch((error: unknown) => {
+      if (isMissingPathError(error)) return "";
+      throw error;
+    });
+  const [rotated, live] = await Promise.all([
+    readIfPresent(rotatedPath),
+    readIfPresent(livePath),
+  ]);
+  if (rotated.length === 0 || live.length === 0 || rotated.endsWith("\n")) {
+    return rotated + live;
+  }
+  return `${rotated}\n${live}`;
+}
+
+function frozenLogTailForTarget(
+  frozen: FrozenEvidence,
+  target: SupportLogTarget,
+): FrozenLogTail {
+  if (target === "desktop") return frozen.desktop;
+  if (target === "host") return frozen.host;
+  if (target === "browserTelemetry") return frozen.browserTelemetry;
+  return frozen.browserTrace;
+}
+
+/**
+ * The manifest entries `getSnapshot` advertises for the two browser
+ * diagnostic files - existence-filtered, unlike `desktop`/`host` which are
+ * always listed. Absence of `browser-trace.jsonl` is the normal production
+ * state (off by default there, per plan D1); listing a path nobody can
+ * open would make Reveal / the Recent-logs panel dead ends for most users.
+ * `browser-telemetry.jsonl` is always-on, but a fresh install before any
+ * browser activity has none written yet either.
+ */
+async function existingBrowserLogDescriptors(
+  hostLayout: HostFsLayout,
+): Promise<readonly SupportLogDescriptor[]> {
+  const [telemetryExists, traceExists] = await Promise.all([
+    pathExists(hostLayout.browserTelemetryFile),
+    pathExists(hostLayout.browserTraceFile),
+  ]);
+  return [
+    ...(telemetryExists
+      ? [
+          {
+            target: "browserTelemetry" as const,
+            label: "Browser Telemetry Log",
+            path: hostLayout.browserTelemetryFile,
+          },
+        ]
+      : []),
+    ...(traceExists
+      ? [
+          {
+            target: "browserTrace" as const,
+            label: "Browser Trace Log",
+            path: hostLayout.browserTraceFile,
+          },
+        ]
+      : []),
+  ];
+}
+
+// Total: ANY error (missing file, a permission error, a mid-read failure -
+// not just ENOENT) resolves to `false` rather than throwing. This gates
+// whether a browser log entry is offered at all (manifest listing, reveal),
+// so a broken file must never be able to break report-issue itself; the one
+// caller that needs the narrow ENOENT distinction (`tailLog`, so a genuine
+// permission error still surfaces instead of reading as "empty tail") does
+// its own `isMissingPathError` check rather than going through this.
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    const handle = await open(path, "r");
+    await handle.close();
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -709,13 +870,27 @@ async function ensureLogFile(path: string): Promise<void> {
 async function captureFrozenEvidence(
   reportId: string,
   desktopLogPath: string,
-  hostLogPath: string,
+  hostLayout: HostFsLayout,
 ): Promise<FrozenEvidence> {
-  const [desktop, host] = await Promise.all([
+  const [desktop, host, browserTelemetry, browserTrace] = await Promise.all([
     captureLogTail(desktopLogPath, LOG_TAIL_LINES, LOG_ATTACHMENT_MAX_BYTES),
-    captureLogTail(hostLogPath, LOG_TAIL_LINES, LOG_ATTACHMENT_MAX_BYTES),
+    captureLogTail(
+      hostLayout.logFile,
+      LOG_TAIL_LINES,
+      LOG_ATTACHMENT_MAX_BYTES,
+    ),
+    captureBrowserLogTail(
+      hostLayout.browserTelemetryRotatedFile,
+      hostLayout.browserTelemetryFile,
+      LOG_ATTACHMENT_MAX_BYTES,
+    ),
+    captureBrowserLogTail(
+      hostLayout.browserTraceRotatedFile,
+      hostLayout.browserTraceFile,
+      LOG_ATTACHMENT_MAX_BYTES,
+    ),
   ]);
-  return { reportId, desktop, host };
+  return { reportId, desktop, host, browserTelemetry, browserTrace };
 }
 
 async function captureLogTail(
@@ -739,6 +914,144 @@ async function captureLogTail(
     content: truncateToTrailingBytes(scrubbed, maxBytes),
     truncated: truncatedByLineCount || truncatedByByteCount,
   };
+}
+
+/**
+ * Ticket 03 / plan D3: `browser-telemetry.jsonl` and `browser-trace.jsonl`
+ * are append-only and can run unbounded between rotations, so unlike
+ * `captureLogTail` above (which reads the whole file, then keeps the last
+ * `LOG_TAIL_LINES` lines) this seeks straight to a bounded trailing BYTE
+ * window - shape of `readLogTailWindow` in `traycer-host/src/transport/rpc/
+ * resolvers/diagnostics/diagnostics-resolvers.ts` (internal repo, cannot be
+ * imported from this OSS submodule; duplicated by hand, same precedent as
+ * `image-attachment-guards.ts`'s magic-byte patterns). `rotatedPath` (the
+ * writer's `.1` sibling, plan D2) is read first, then `livePath`, so the
+ * window is taken from the trailing bytes of the two concatenated IN THAT
+ * ORDER - exactly what a reader who cat'd `file.jsonl.1 file.jsonl` would
+ * see. Missing files (either or both) resolve to an empty tail, never a
+ * throw - absence of `browser-trace.jsonl` is the normal production state.
+ */
+async function captureBrowserLogTail(
+  rotatedPath: string,
+  livePath: string,
+  maxBytes: number,
+): Promise<FrozenLogTail> {
+  const window = await readConcatenatedJsonlTailWindow(
+    rotatedPath,
+    livePath,
+    maxBytes,
+  );
+  const decodedLines = splitLogLines(window.bytes.toString("utf8"));
+  // A byte window can begin mid-codepoint and mid-record. Drop the first line
+  // only when the first included file was read from a nonzero offset; omitting
+  // an earlier file does not make the next file's first record partial.
+  const lines = window.headIsPartial ? decodedLines.slice(1) : decodedLines;
+  // Scrub BEFORE the byte cap, never after - same invariant as
+  // `captureLogTail` (ticket 09).
+  const scrubbed = scrubSupportText(lines.join("\n"));
+  const truncatedByByteCount = Buffer.byteLength(scrubbed, "utf8") > maxBytes;
+  return {
+    content: truncateToTrailingBytes(scrubbed, maxBytes),
+    truncated: window.windowed || truncatedByByteCount,
+  };
+}
+
+interface JsonlTailWindow {
+  readonly bytes: Buffer;
+  /** True when the window omits bytes from the start of the concatenation. */
+  readonly windowed: boolean;
+  /** True when the first returned byte is not the first byte of its file. */
+  readonly headIsPartial: boolean;
+}
+
+/**
+ * Reads at most `maxBytes` from the tail of (`rotatedPath` content followed
+ * by `livePath` content), without ever reading either file beyond what that
+ * trailing window needs: the live file's own tail is read first, and only
+ * the remaining budget (if any) is spent on the rotated file's tail.
+ */
+async function readConcatenatedJsonlTailWindow(
+  rotatedPath: string,
+  livePath: string,
+  maxBytes: number,
+): Promise<JsonlTailWindow> {
+  const live = await readTailBytes(livePath, maxBytes);
+  const rotated = await readTailBytes(
+    rotatedPath,
+    maxBytes - live.bytes.length,
+  );
+  const totalSize = rotated.size + live.size;
+  const windowed = rotated.bytes.length + live.bytes.length < totalSize;
+  const headIsPartial =
+    rotated.bytes.length > 0
+      ? rotated.bytes.length < rotated.size
+      : live.bytes.length < live.size;
+  // A crash or kill mid-write can leave the rotation's last flush torn - no
+  // trailing newline - which would otherwise fuse its last (partial) record
+  // onto the live file's first line. `readTailBytes` always reads through to
+  // the rotated file's real end, so its last byte is the file's actual last
+  // byte regardless of windowing; insert the missing record separator
+  // ourselves whenever the rotated tail is non-empty and doesn't already end
+  // in one.
+  const rotatedEndsInNewline =
+    rotated.bytes.length === 0 ||
+    rotated.bytes[rotated.bytes.length - 1] === 0x0a;
+  const bytes = rotatedEndsInNewline
+    ? Buffer.concat([rotated.bytes, live.bytes])
+    : Buffer.concat([rotated.bytes, Buffer.from("\n"), live.bytes]);
+  return { bytes, windowed, headIsPartial };
+}
+
+interface TailBytesResult {
+  readonly bytes: Buffer;
+  /** The file's real total size, even when `maxBytes` is 0. */
+  readonly size: number;
+}
+
+// Total: ANY error - missing file, a permission error, a stat/read failure
+// mid-flight - resolves to an empty, zero-size result rather than a throw. A
+// broken browser log file must never be able to break the report dialog.
+async function readTailBytes(
+  path: string,
+  maxBytes: number,
+): Promise<TailBytesResult> {
+  let handle: FileHandle;
+  try {
+    handle = await open(path, "r");
+  } catch {
+    return { bytes: Buffer.alloc(0), size: 0 };
+  }
+  try {
+    const { size } = await handle.stat();
+    const bytesToRead = Math.min(Math.max(size, 0), Math.max(maxBytes, 0));
+    const startOffset = size - bytesToRead;
+    const buffer = Buffer.alloc(bytesToRead);
+    let bytesRead = 0;
+    while (bytesRead < buffer.length) {
+      const result = await handle.read(
+        buffer,
+        bytesRead,
+        buffer.length - bytesRead,
+        startOffset + bytesRead,
+      );
+      if (result.bytesRead === 0) break;
+      bytesRead += result.bytesRead;
+    }
+    return { bytes: buffer.subarray(0, bytesRead), size };
+  } catch {
+    return { bytes: Buffer.alloc(0), size: 0 };
+  } finally {
+    await handle.close();
+  }
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "ENOENT"
+  );
 }
 
 // A line count is not a size bound: one host log line can carry a multi-KB

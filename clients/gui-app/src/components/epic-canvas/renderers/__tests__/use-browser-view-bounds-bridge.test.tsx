@@ -13,17 +13,6 @@ import type {
 import { createFakeRunnerHost } from "../../../../../__tests__/create-fake-runner-host";
 
 vi.mock("@/lib/browser-view/tiles/browser-overlay-coordinator", () => ({
-  rectFromDomRect: (rect: {
-    left: number;
-    top: number;
-    width: number;
-    height: number;
-  }) => ({
-    x: rect.left,
-    y: rect.top,
-    width: rect.width,
-    height: rect.height,
-  }),
   registerBrowserOverlayTile: vi.fn(() => () => undefined),
   updateBrowserOverlayTileRect: vi.fn(),
 }));
@@ -37,40 +26,6 @@ const TILE_KEY: BrowserViewTileKey = {
   tileInstanceId: "tile-1",
   pageSessionId: "page-1",
 };
-
-interface ControllableResizeObserver {
-  readonly observed: readonly Element[];
-  emit(): void;
-}
-
-let activeObserver: ControllableResizeObserver | null = null;
-
-class StubResizeObserver implements ResizeObserver {
-  private readonly targets: Element[] = [];
-
-  constructor(private readonly callback: ResizeObserverCallback) {
-    const controller: ControllableResizeObserver = {
-      observed: this.targets,
-      emit: () => {
-        this.callback([], this);
-      },
-    };
-    activeObserver = controller;
-  }
-
-  observe(target: Element): void {
-    this.targets.push(target);
-  }
-
-  unobserve(target: Element): void {
-    const index = this.targets.indexOf(target);
-    if (index >= 0) this.targets.splice(index, 1);
-  }
-
-  disconnect(): void {
-    this.targets.length = 0;
-  }
-}
 
 interface PendingFrame {
   readonly id: number;
@@ -94,6 +49,7 @@ function installFrameStub(): void {
   };
 }
 
+/** Runs exactly the frames scheduled so far; the loop re-arms itself. */
 function flushFrames(): void {
   const frames = pendingFrames;
   pendingFrames = [];
@@ -124,16 +80,25 @@ function domRect(
 interface Harness {
   readonly surface: HTMLDivElement;
   setRect(left: number, top: number, width: number, height: number): void;
+  clipTo(left: number, top: number, width: number, height: number): void;
   readonly sentBounds: BrowserViewBoundsUpdate[];
-  observer(): ControllableResizeObserver;
 }
 
 function renderBridge(withBridge: boolean): Harness {
+  const clipper = document.createElement("div");
+  // Longhands: jsdom's computed style does not expand the `overflow`
+  // shorthand. Set before mount - the clip chain is resolved per mount.
+  clipper.style.overflowX = "hidden";
+  clipper.style.overflowY = "hidden";
   const surface = document.createElement("div");
-  document.body.appendChild(surface);
+  clipper.appendChild(surface);
+  document.body.appendChild(clipper);
   const getBoundingClientRect = vi
     .spyOn(surface, "getBoundingClientRect")
     .mockReturnValue(domRect(8, 12, 400, 300));
+  const clipperRect = vi
+    .spyOn(clipper, "getBoundingClientRect")
+    .mockReturnValue(domRect(0, 0, 1000, 700));
   const surfaceRef: RefObject<HTMLDivElement | null> = { current: surface };
   const sentBounds: BrowserViewBoundsUpdate[] = [];
   const browserView = Object.assign(createFakeRunnerHost({}), {
@@ -167,104 +132,146 @@ function renderBridge(withBridge: boolean): Harness {
     setRect(left, top, width, height) {
       getBoundingClientRect.mockReturnValue(domRect(left, top, width, height));
     },
-    sentBounds,
-    observer() {
-      if (activeObserver === null) throw new Error("no observer installed");
-      return activeObserver;
+    clipTo(left, top, width, height) {
+      clipperRect.mockReturnValue(domRect(left, top, width, height));
     },
+    sentBounds,
   };
 }
 
 describe("useBrowserViewBoundsBridge", () => {
   beforeEach(() => {
     installFrameStub();
-    globalThis.ResizeObserver = StubResizeObserver;
   });
 
   afterEach(() => {
     cleanup();
-    activeObserver = null;
     vi.restoreAllMocks();
     vi.clearAllMocks();
   });
 
-  it("registers the tile with the mount-time rect and observes the surface", () => {
+  it("registers and sends the mount-time rect", () => {
     const harness = renderBridge(true);
 
-    expect(harness.observer().observed).toEqual([harness.surface]);
     expect(registerMock).toHaveBeenCalledWith({
       key: TILE_KEY,
-      rect: { x: 8, y: 12, width: 400, height: 300 },
-    });
-  });
-
-  it("updates the overlay registry immediately and coalesces a tick burst to the newest rect", () => {
-    const harness = renderBridge(true);
-
-    harness.setRect(0, 40, 420, 310);
-    act(() => {
-      harness.observer().emit();
-      harness.observer().emit();
-    });
-
-    expect(updateRectMock).toHaveBeenLastCalledWith(TILE_KEY, {
-      x: 0,
-      y: 40,
-      width: 420,
-      height: 310,
-    });
-    expect(pendingFrames).toHaveLength(1);
-
-    act(() => {
-      flushFrames();
+      rect: {
+        left: 8,
+        top: 12,
+        right: 408,
+        bottom: 312,
+        width: 400,
+        height: 300,
+      },
     });
     expect(harness.sentBounds).toHaveLength(1);
     expect(harness.sentBounds[0]).toMatchObject({
-      tileInstanceId: TILE_KEY.tileInstanceId,
-      bounds: { x: 0, y: 40, width: 420, height: 310 },
+      bounds: { x: 8, y: 12, width: 400, height: 300 },
     });
   });
 
-  it("never sends or registers zero-area rects", () => {
+  it("re-sends when the tile MOVES without resizing", () => {
     const harness = renderBridge(true);
-    act(() => {
-      flushFrames();
-    });
-    updateRectMock.mockClear();
     harness.sentBounds.length = 0;
 
-    harness.setRect(0, 0, 0, 0);
+    // No resize, no scroll, no DOM mutation: exactly the pane-animation and
+    // equal-pane-move cases that used to leave the native view behind.
+    harness.setRect(500, 12, 400, 300);
     act(() => {
-      harness.observer().emit();
       flushFrames();
     });
 
-    expect(harness.sentBounds).toHaveLength(0);
-    expect(updateRectMock).not.toHaveBeenCalled();
+    expect(harness.sentBounds).toHaveLength(1);
+    expect(harness.sentBounds[0]).toMatchObject({
+      bounds: { x: 500, y: 12, width: 400, height: 300 },
+    });
+    expect(updateRectMock).toHaveBeenLastCalledWith(
+      TILE_KEY,
+      expect.objectContaining({ left: 500 }),
+    );
   });
 
-  it("cancels a pending frame and unregisters on unmount", () => {
+  it("sends nothing while the rect is unchanged", () => {
     const harness = renderBridge(true);
+    harness.sentBounds.length = 0;
 
-    harness.setRect(4, 4, 200, 100);
     act(() => {
-      harness.observer().emit();
+      flushFrames();
+      flushFrames();
+      flushFrames();
     });
-    expect(pendingFrames).toHaveLength(1);
 
-    cleanup();
+    expect(harness.sentBounds).toEqual([]);
+  });
+
+  it("forwards sub-pixel movement, which main rounds in DIP space", () => {
+    // Rounding here would round in CSS space, before main has multiplied by
+    // the window zoom factor - at 125% an x of 8.1 and 8.4 are different DIPs
+    // while agreeing on 8 in CSS px, so suppressing the send would strand the
+    // native tile. Main coalesces identical DIP rects itself.
+    const harness = renderBridge(true);
+    harness.sentBounds.length = 0;
+
+    harness.setRect(8.1, 12.2, 399.9, 300.1);
     act(() => {
       flushFrames();
     });
 
-    expect(harness.sentBounds).toHaveLength(0);
-    expect(harness.observer().observed).toEqual([]);
+    expect(harness.sentBounds).toHaveLength(1);
+    expect(harness.sentBounds[0]?.bounds.x).toBe(8.1);
+    expect(harness.sentBounds[0]?.bounds.y).toBe(12.2);
+    expect(harness.sentBounds[0]?.bounds.width).toBeCloseTo(399.9, 6);
+    expect(harness.sentBounds[0]?.bounds.height).toBeCloseTo(300.1, 6);
+  });
+
+  it("reports only the part a clipping ancestor leaves visible", () => {
+    const harness = renderBridge(true);
+    harness.sentBounds.length = 0;
+
+    harness.clipTo(0, 0, 200, 700);
+    act(() => {
+      flushFrames();
+    });
+
+    expect(harness.sentBounds[0]).toMatchObject({
+      bounds: { x: 8, y: 12, width: 192, height: 300 },
+    });
+  });
+
+  it("reports a zero-area rect once the tile is clipped fully out of its container", () => {
+    const harness = renderBridge(true);
+    harness.sentBounds.length = 0;
+
+    harness.clipTo(0, 0, 1000, 700);
+    harness.setRect(8, 800, 400, 300);
+    act(() => {
+      flushFrames();
+    });
+
+    expect(harness.sentBounds[0]?.bounds).toMatchObject({
+      width: 0,
+      height: 0,
+    });
+  });
+
+  it("stops measuring on unmount", () => {
+    const harness = renderBridge(true);
+    harness.sentBounds.length = 0;
+
+    cleanup();
+    harness.setRect(500, 12, 400, 300);
+    act(() => {
+      flushFrames();
+    });
+
+    expect(harness.sentBounds).toEqual([]);
+    expect(pendingFrames).toEqual([]);
   });
 
   it("does not register anything without a desktop bridge", () => {
     renderBridge(false);
 
     expect(registerMock).not.toHaveBeenCalled();
-    expect(activeObserver).toBeNull();
+    expect(pendingFrames).toEqual([]);
   });
 });

@@ -10,6 +10,10 @@ import {
 import { selectConnectionManifestForPeer } from "@traycer/protocol/framework/capability-manifest";
 import { CLIENT_SERVED_STREAM_MAJORS } from "./served-stream-majors";
 import {
+  getMemoizedStreamMethodSupport,
+  recordNegotiatedStreamMethodSupport,
+} from "./stream-method-support-registry";
+import {
   extractBearerForOpenFrame,
   MissingBearerTokenForOpenFrameError,
   type HostEndpointProvider,
@@ -61,6 +65,7 @@ import type {
 } from "./i-stream-session";
 import type { TransportEvidenceReporter } from "@traycer-clients/shared/host-selection/transport-evidence";
 import type { IStreamClient } from "./i-stream-client";
+import { dialPriorityForMethod } from "./dial-priority";
 import type {
   IStreamWebSocketFactory,
   StreamWebSocketLike,
@@ -83,6 +88,17 @@ export interface WsStreamClientOptions<
   Registry extends VersionedStreamRpcRegistry,
 > {
   readonly registry: Registry;
+  /**
+   * The host this client talks to, or `null` for a client with no host
+   * identity (the CLI's, a test double's).
+   *
+   * Known at construction and NOT derived from the endpoint: an address can be
+   * reused by a different host across restarts, and the one thing this id is
+   * used for - seeding stream-method support from a previous handshake with the
+   * SAME host (`stream-method-support-registry.ts`) - is exactly where
+   * confusing two hosts would matter. `null` simply declines the seed.
+   */
+  readonly hostId: string | null;
   readonly endpoint: HostEndpointProvider;
   readonly bearer: BearerSourceProvider;
   /**
@@ -276,6 +292,13 @@ export class WsStreamClient<
   private readonly clientIdentity: ClientHandshakeIdentity;
   private readonly ownedSessions = new Set<StreamSession<Registry>>();
   private readonly methodSupport = new Map<string, StreamMethodSupport>();
+  /**
+   * Whether any handshake of this client's has settled. Latched on, never off:
+   * a reconnect CLEARS `methodSupport` but does not restore this client's
+   * innocence - the point of that clearing is to re-probe, and a client that
+   * fell back to the memo afterwards would re-probe nothing.
+   */
+  private hasCompletedHandshake = false;
   private readonly methodSchemaVersions = new Map<string, SchemaVersion>();
   private readonly methodSupportListeners = new Set<() => void>();
   private readonly closedListeners = new Set<() => void>();
@@ -455,8 +478,13 @@ export class WsStreamClient<
       maxBackoffMs: this.options.maxBackoffMs,
       clientIdentity: this.clientIdentity,
       onDispose: () => removeSession(),
-      onManifest: (manifest, subscribedMethod, support) =>
-        this.applyHostManifest(manifest, subscribedMethod, support),
+      onManifest: (manifest, subscribedMethod, support, handshakeHostId) =>
+        this.applyHostManifest(
+          manifest,
+          subscribedMethod,
+          support,
+          handshakeHostId,
+        ),
       onTransportReconnect: (reconnectingMethod) =>
         this.resetMethodSupport(reconnectingMethod),
       onHostCredentialAck: (hostId, state) => {
@@ -581,7 +609,55 @@ export class WsStreamClient<
   getMethodSupport<Method extends keyof Registry & string>(
     method: Method,
   ): StreamMethodSupport {
-    return this.methodSupport.get(method) ?? "unknown";
+    const own = this.methodSupport.get(method);
+    if (own !== undefined) return own;
+    return this.seededMethodSupport(method);
+  }
+
+  /**
+   * What a PREVIOUS handshake with this same host computed for `method`, for a
+   * client that has not handshaken yet.
+   *
+   * The Epic's stream client is minted per session, so without this every Epic
+   * open re-derived a fact ~50 boot subscriptions had already established about
+   * this host, and paid for it with a serial probe: dial the status lane, wait
+   * for its first frame, only then open the records lane.
+   *
+   * Gated on `hasCompletedHandshake`, which is the whole of the safety
+   * argument. Once this client has contacted the host, its own map is the
+   * authority INCLUDING when that map is empty: `resetMethodSupport` clears it
+   * on reconnect precisely because "a reconnect may be a new host incarnation,
+   * so capability evidence must be re-probed", and `epic-adapter-selection.ts`
+   * HOLDS its installed arm through the resulting `unknown` window rather than
+   * re-deciding. Answering from the memo there would overturn both. So the seed
+   * speaks once, before first contact, and then never again for this client.
+   *
+   * POSITIVE EVIDENCE ONLY, and the two directions are not symmetric. A stale
+   * `supported` is self-correcting at a cost the registry header already
+   * budgets for: the subscribe is rejected and `onRequiredLaneUnsupported`
+   * falls back to legacy. A stale `unsupported` is what a host UPGRADED IN
+   * PLACE leaves behind - `hostId` survives an upgrade, so the entry outlives
+   * the fact - and `readEpicAdapterVerdict` treats an explicit `unsupported`
+   * as a DECISION (`legacy`) rather than as the `undecided` that runs the
+   * probe. So every newly minted client on the upgraded host installs and
+   * subscribes the legacy arm, and only that unnecessary handshake can replace
+   * the verdict, at the price of a replica replacement onto the lanes
+   * mid-session. That reinstates the speculative legacy open and the extra
+   * round trip this memo exists to remove, exactly after the auto-update that
+   * makes the lanes available.
+   *
+   * Withholding a negative degrades to `unknown`, which is the pre-memo
+   * behaviour and the probe path - correct by construction, and the whole win
+   * this lever was measured for is on the positive side anyway.
+   */
+  private seededMethodSupport(method: string): StreamMethodSupport {
+    if (this.hasCompletedHandshake) return "unknown";
+    if (this.options.hostId === null) return "unknown";
+    const memoized = getMemoizedStreamMethodSupport(
+      this.options.hostId,
+      method,
+    );
+    return memoized === "supported" ? "supported" : "unknown";
   }
 
   getMethodSchemaVersion<Method extends keyof Registry & string>(
@@ -986,7 +1062,12 @@ export class WsStreamClient<
     theirManifest: ConnectionManifest,
     subscribedMethod: string,
     subscribedMethodSupport: "supported" | "unsupported",
+    handshakeHostId: string | null,
   ): void {
+    // First contact. From here on this client answers only from its own
+    // evidence - see `seededMethodSupport`.
+    this.hasCompletedHandshake = true;
+
     const myManifest = selectConnectionManifestForPeer(
       this.options.registry,
       buildStreamManifest(this.options.registry, CLIENT_SERVED_STREAM_MAJORS),
@@ -997,6 +1078,13 @@ export class WsStreamClient<
       if (method === subscribedMethod) {
         changed =
           this.updateMethodSupport(method, subscribedMethodSupport) || changed;
+        if (handshakeHostId !== null) {
+          recordNegotiatedStreamMethodSupport(
+            handshakeHostId,
+            method,
+            subscribedMethodSupport,
+          );
+        }
         continue;
       }
       const compat = checkStreamMethodCompatibility(
@@ -1006,11 +1094,14 @@ export class WsStreamClient<
         "client",
         method,
       );
+      const support: "supported" | "unsupported" = compat.ok
+        ? "supported"
+        : "unsupported";
       changed =
-        this.updateMethodSupportFromManifest(
-          method,
-          compat.ok ? "supported" : "unsupported",
-        ) || changed;
+        this.updateMethodSupportFromManifest(method, support) || changed;
+      if (handshakeHostId !== null) {
+        recordNegotiatedStreamMethodSupport(handshakeHostId, method, support);
+      }
     }
     if (changed) {
       this.notifyMethodSupportListeners();
@@ -1185,6 +1276,13 @@ interface StreamSessionOptions<Registry extends VersionedStreamRpcRegistry> {
     manifest: ConnectionManifest,
     subscribedMethod: keyof Registry & string,
     support: "supported" | "unsupported",
+    /**
+     * The host this handshake was with (`openFrameHostId`), or `null` when the
+     * open frame named none. Carried so the client can attribute the verdicts
+     * it computes to a HOST rather than to itself - see
+     * `stream-method-support-registry.ts`.
+     */
+    hostId: string | null,
   ) => void;
   readonly onTransportReconnect: (
     reconnectingMethod: keyof Registry & string,
@@ -1718,7 +1816,14 @@ class StreamSession<
     }
 
     const dialUrl = toStreamDialUrl(selected.websocketUrl);
-    const socket = this.config.webSocketFactory.create(dialUrl);
+    const socket = this.config.webSocketFactory.create(
+      dialUrl,
+      // A session is bound to one subscription method for its whole life, so
+      // every redial it makes classifies the same way. See `dial-priority.ts`:
+      // the Epic's own lanes are `interactive`, the app-chrome subscriptions
+      // that flood boot are not.
+      dialPriorityForMethod(this.config.method),
+    );
     this.activeSocket = socket;
     this.openFrameToken = token;
     this.openFrameHostId = selected.hostId;
@@ -2012,7 +2117,12 @@ class StreamSession<
     this.reportHostCredentialState(hostCredentialState);
 
     if (!compat.ok) {
-      this.config.onManifest(theirManifest, this.config.method, "unsupported");
+      this.config.onManifest(
+        theirManifest,
+        this.config.method,
+        "unsupported",
+        this.openFrameHostId,
+      );
       const terminalFrame: ClientStreamFatalErrorFrame = {
         kind: "fatalError",
         details: compat.details,
@@ -2048,7 +2158,12 @@ class StreamSession<
       return;
     }
     this.negotiatedSchemaVersion = prepared.onWireVersion;
-    this.config.onManifest(theirManifest, this.config.method, "supported");
+    this.config.onManifest(
+      theirManifest,
+      this.config.method,
+      "supported",
+      this.openFrameHostId,
+    );
     // Read BEFORE `transitionTo("open")` overwrites it: a session that was
     // "reconnecting" (dropped socket, or failed dial attempts) has just proved
     // the host is reachable again. The initial clean connect ("connecting" →

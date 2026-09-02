@@ -96,6 +96,7 @@ vi.mock(
           hostId: "host-test",
           lifecycle: ready ? "live" : "connecting",
           inventoryReady: ready,
+          canMaterializeElectron: false,
           items: ready ? readySessionsState.items : [],
           errorMessage: null,
           retry: () => undefined,

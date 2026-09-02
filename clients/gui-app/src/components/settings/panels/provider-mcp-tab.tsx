@@ -795,6 +795,7 @@ export function ProviderMcpTab(props: {
       />
 
       <ConfirmDestructiveDialog
+        blockedReason={null}
         open={deleteTarget !== null}
         onOpenChange={(open) => {
           if (!open) setDeleteTarget(null);

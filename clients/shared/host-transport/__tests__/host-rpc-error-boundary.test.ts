@@ -31,6 +31,7 @@ describe("toHostRpcError", () => {
     expect(toHostRpcError(rpcError, "host.echo")).toBe(rpcError);
 
     const transportError = new RetryableTransportError({
+      replaySafetyFromKey: false,
       code: "RPC_ERROR",
       message: "dial timeout",
       requestId: "req-2",

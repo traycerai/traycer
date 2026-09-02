@@ -62,6 +62,8 @@ import type {
 } from "@/lib/comm-graph/comm-graph-timeline";
 import type { CommGraphTileViewState } from "@/stores/epics/canvas/types";
 import { DEFAULT_COMM_GRAPH_VIEW } from "@/stores/epics/canvas/tile-schema/comm-graph-tile";
+import { useRegisterTileFindAdapter } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
+import { createCommGraphFindAdapter } from "@/components/epic-canvas/comm-graph/comm-graph-find-adapter";
 
 const NODE_TYPES = { [COMM_GRAPH_AGENT_NODE_TYPE]: CommGraphAgentNodeView };
 const EDGE_TYPES = { [COMM_GRAPH_EDGE_TYPE]: CommGraphEdgeView };
@@ -70,14 +72,60 @@ const PRO_OPTIONS = { hideAttribution: true };
 // React Flow defaults to 0.5, which is too close for a wide agent graph to fit.
 const COMM_GRAPH_MIN_ZOOM = 0.1;
 const COMM_GRAPH_AUTO_PAN_MS = 250;
+const COMM_GRAPH_SEARCH_PAN_MS = 200;
 
 /** Which detail surface the canvas has open, if any. */
 type CommGraphSelectedDetail =
   | { readonly kind: "pair"; readonly edgeId: string }
   | { readonly kind: "agent"; readonly agentId: string };
 
+interface CommGraphFindRuntime {
+  readonly getNodes: () => ReadonlyArray<CommGraphAgentFlowNode>;
+  readonly getFlowInstance: () => ReactFlowInstance<
+    CommGraphAgentFlowNode,
+    CommGraphFlowEdge
+  > | null;
+  readonly updateNodes: (nodes: ReadonlyArray<CommGraphAgentFlowNode>) => void;
+  readonly updateFlowInstance: (
+    instance: ReactFlowInstance<
+      CommGraphAgentFlowNode,
+      CommGraphFlowEdge
+    > | null,
+  ) => void;
+  readonly enablePlaybackAutoPan: () => void;
+  readonly disablePlaybackAutoPan: () => void;
+  readonly isPlaybackAutoPanEnabled: () => boolean;
+}
+
+function createCommGraphFindRuntime(): CommGraphFindRuntime {
+  let currentNodes: ReadonlyArray<CommGraphAgentFlowNode> = [];
+  let currentFlowInstance: ReactFlowInstance<
+    CommGraphAgentFlowNode,
+    CommGraphFlowEdge
+  > | null = null;
+  let playbackAutoPanEnabled = true;
+  return {
+    getNodes: () => currentNodes,
+    getFlowInstance: () => currentFlowInstance,
+    updateNodes: (nodes) => {
+      currentNodes = nodes;
+    },
+    updateFlowInstance: (instance) => {
+      currentFlowInstance = instance;
+    },
+    enablePlaybackAutoPan: () => {
+      playbackAutoPanEnabled = true;
+    },
+    disablePlaybackAutoPan: () => {
+      playbackAutoPanEnabled = false;
+    },
+    isPlaybackAutoPanEnabled: () => playbackAutoPanEnabled,
+  };
+}
+
 export interface CommGraphCanvasProps {
   readonly epicId: string;
+  readonly tileInstanceId: string;
   /**
    * EVERY agent in the epic. The layout runs over the full set on purpose:
    * positions stay put while playback reveals nodes, instead of the whole graph
@@ -176,6 +224,7 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
     onViewChange,
     playing,
     pulse,
+    tileInstanceId,
     view,
   } = props;
   // ONE detail surface at a time: opening an agent replaces an open pair and
@@ -186,8 +235,12 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
     CommGraphAgentFlowNode,
     CommGraphFlowEdge
   > | null>(null);
+  const [searchHighlight, setSearchHighlight] = useState<{
+    readonly agentIds: ReadonlySet<string>;
+    readonly requestId: number;
+  }>({ agentIds: new Set(), requestId: 0 });
   const canvasRef = useRef<HTMLDivElement | null>(null);
-  const autoPanEnabledRef = useRef(true);
+  const [findRuntime] = useState(createCommGraphFindRuntime);
   const wasPlayingRef = useRef(playing);
   // React Flow paints its own chrome (background dots, zoom controls) outside
   // the Tailwind cascade, so it needs the resolved mode handed to it.
@@ -286,6 +339,10 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
             archived: agent.archived,
             hostStatus: nodeHostStatus(agent.hostId, hostStatusById),
             activityTier: activityTiers.get(agent.id) ?? null,
+            searchMatched: searchHighlight.agentIds.has(agent.id),
+            searchHighlightNonce: searchHighlight.agentIds.has(agent.id)
+              ? searchHighlight.requestId
+              : 0,
             // The ONLY node pulse left: a message whose counterpart is not on
             // this canvas has no edge to travel along, so the endpoint that IS
             // here lights up instead of the exchange vanishing.
@@ -302,8 +359,77 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
       hostStatusById,
       positions,
       pulsingAgentId,
+      searchHighlight,
     ],
   );
+
+  // Find is registered once per tile instance. The adapter reads live nodes and
+  // viewport controls through an imperative runtime, so a playback step does
+  // not tear down the active find session or reset its query.
+  useEffect(() => {
+    findRuntime.updateNodes(nodes);
+  }, [findRuntime, nodes]);
+  useEffect(() => {
+    findRuntime.updateFlowInstance(flowInstance);
+  }, [findRuntime, flowInstance]);
+  const stopAutoPan = useCallback(() => {
+    findRuntime.disablePlaybackAutoPan();
+  }, [findRuntime]);
+  const findAdapter = useMemo(
+    () =>
+      createCommGraphFindAdapter({
+        tileInstanceId,
+        renderer: {
+          getNodes: () =>
+            findRuntime.getNodes().map((node) => ({
+              id: node.id,
+              name: node.data.name,
+            })),
+          showMatches: (agentIds, requestId) => {
+            setSearchHighlight({ agentIds, requestId });
+          },
+          frameMatches: (agentIds) => {
+            const instance = findRuntime.getFlowInstance();
+            if (instance === null) return;
+            const matchingNodes = findRuntime
+              .getNodes()
+              .filter((node) => agentIds.has(node.id));
+            if (matchingNodes.length === 0) return;
+            stopAutoPan();
+            const currentZoom = instance.getViewport().zoom;
+            void instance.fitView({
+              nodes: [...matchingNodes],
+              padding: 0.35,
+              duration: COMM_GRAPH_SEARCH_PAN_MS,
+              minZoom: COMM_GRAPH_MIN_ZOOM,
+              // Searching should zoom OUT when the result set needs it, but a
+              // single nearby result must not unexpectedly magnify the graph.
+              maxZoom: currentZoom,
+            });
+          },
+          focusMatch: (agentId) => {
+            const instance = findRuntime.getFlowInstance();
+            const match = findRuntime
+              .getNodes()
+              .find((node) => node.id === agentId);
+            if (instance === null || match === undefined) return;
+            stopAutoPan();
+            void instance.fitView({
+              nodes: [match],
+              padding: 0.5,
+              duration: COMM_GRAPH_SEARCH_PAN_MS,
+              minZoom: COMM_GRAPH_MIN_ZOOM,
+              maxZoom: 1,
+            });
+          },
+          clear: () => {
+            setSearchHighlight({ agentIds: new Set(), requestId: 0 });
+          },
+        },
+      }),
+    [findRuntime, stopAutoPan, tileInstanceId],
+  );
+  useRegisterTileFindAdapter(findAdapter);
 
   const edges = useMemo<ReadonlyArray<CommGraphFlowEdge>>(
     () =>
@@ -333,14 +459,11 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
   // re-arms after a person has taken manual control of the canvas.
   useEffect(() => {
     if (playing && !wasPlayingRef.current) {
-      autoPanEnabledRef.current = true;
+      findRuntime.enablePlaybackAutoPan();
     }
     wasPlayingRef.current = playing;
-  }, [playing]);
+  }, [findRuntime, playing]);
 
-  const stopAutoPan = () => {
-    autoPanEnabledRef.current = false;
-  };
   const handleMoveStart: OnMove = (event) => {
     // React Flow uses `null` for programmatic viewport changes, including our
     // own `setCenter`; a real interaction event means the person took over.
@@ -351,7 +474,7 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
   useEffect(() => {
     if (
       !playing ||
-      !autoPanEnabledRef.current ||
+      !findRuntime.isPlaybackAutoPanEnabled() ||
       senderAgentId === null ||
       flowInstance === null
     ) {
@@ -379,7 +502,7 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
     );
     // `pulse` is intentionally a dependency even when two consecutive rows
     // share a sender: every cursor step gets its own visibility decision.
-  }, [flowInstance, nodes, playing, pulse, senderAgentId]);
+  }, [findRuntime, flowInstance, nodes, playing, pulse, senderAgentId]);
 
   const selectedEdge =
     selectedDetail?.kind === "pair"

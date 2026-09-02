@@ -40,12 +40,14 @@ import type {
   StreamWebSocketLike,
   StreamWebSocketMessageEvent,
 } from "../ws-stream-factory";
+import type { DialPriority } from "../dial-priority";
 import type {
   StreamCloseReason,
   StreamConnectionStatus,
   StreamFrameEnvelope,
 } from "../i-stream-session";
 import { WsStreamClient } from "../ws-stream-client";
+import { resetStreamMethodSupportMemo } from "../stream-method-support-registry";
 import type {
   RevalidateOutcome,
   StreamAuthRevalidator,
@@ -144,6 +146,7 @@ class StubStreamWebSocket implements StreamWebSocketLike {
 interface RecordedSocket {
   readonly url: string;
   readonly socket: StubStreamWebSocket;
+  readonly priority: DialPriority;
 }
 
 function makeFactory(): {
@@ -152,9 +155,9 @@ function makeFactory(): {
 } {
   const sockets: RecordedSocket[] = [];
   const factory: IStreamWebSocketFactory = {
-    create(url: string): StreamWebSocketLike {
+    create(url: string, priority: DialPriority): StreamWebSocketLike {
       const socket = new StubStreamWebSocket();
-      sockets.push({ url, socket });
+      sockets.push({ url, socket, priority });
       return socket;
     },
   };
@@ -229,6 +232,7 @@ function makeClient(options: {
     clientIdentity: TEST_CLIENT_IDENTITY,
     registry: hostStreamRpcRegistry,
     endpoint: () => mockLocalHostEntry,
+    hostId: mockLocalHostEntry.hostId,
     bearer: () => ctx?.credentials ?? null,
     auth: null,
     clock: null,
@@ -274,6 +278,7 @@ function makeRotatableClient(
     clientIdentity: TEST_CLIENT_IDENTITY,
     registry: hostStreamRpcRegistry,
     endpoint: () => mockLocalHostEntry,
+    hostId: mockLocalHostEntry.hostId,
     bearer: () => ctx.credentials,
     auth: null,
     clock: null,
@@ -305,9 +310,14 @@ function makeClientWithEvidence(options: {
 }): WsStreamClient<typeof hostStreamRpcRegistry> {
   const ctx =
     options.authToken === null ? null : makeRequestContext(options.authToken);
+  // The hostId the memo seed would key on - taken once at construction, from
+  // whatever this call's endpoint currently resolves to, same as production
+  // resolves it from the already-selected target rather than the endpoint.
+  const hostId = options.endpoint()?.hostId ?? null;
   return new WsStreamClient({
     clientIdentity: TEST_CLIENT_IDENTITY,
     registry: hostStreamRpcRegistry,
+    hostId,
     endpoint: options.endpoint,
     bearer: () => ctx?.credentials ?? null,
     auth: null,
@@ -462,6 +472,40 @@ describe("WsStreamClient", () => {
     expect(statuses).toContain("open");
 
     session.close();
+  });
+
+  it("dials the priority `dialPriorityForMethod` computes for the method, not a literal - interactive for the Epic's own lane, background for an app-chrome subscription", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "token-abc",
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+
+    // "epic.state.subscribe" has a mounted shell waiting on its first frame -
+    // `dial-priority.ts` keeps it interactive.
+    const epicSession = client.subscribe("epic.state.subscribe", {
+      epicId: "epic-1",
+      resume: null,
+    });
+    await flush();
+    // "notifications.subscribe" is on the background list - it populates a
+    // surface the user has not looked at yet.
+    const notificationsSession = client.subscribe(
+      "notifications.subscribe",
+      {},
+    );
+    await flush();
+
+    expect(sockets).toHaveLength(2);
+    expect(sockets[0].priority).toBe("interactive");
+    expect(sockets[1].priority).toBe("background");
+
+    epicSession.close();
+    notificationsSession.close();
   });
 
   it("subscribes to a compatible method even when an unrelated method has major skew", async () => {
@@ -680,6 +724,7 @@ describe("WsStreamClient", () => {
       clientIdentity: TEST_CLIENT_IDENTITY,
       registry: versionSkewRegistry,
       endpoint: () => mockLocalHostEntry,
+      hostId: mockLocalHostEntry.hostId,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       clock: null,
@@ -777,6 +822,7 @@ describe("WsStreamClient", () => {
       clientIdentity: TEST_CLIENT_IDENTITY,
       registry,
       endpoint: () => mockLocalHostEntry,
+      hostId: mockLocalHostEntry.hostId,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       clock: null,
@@ -1622,6 +1668,7 @@ describe("WsStreamClient", () => {
       clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
       endpoint: () => mockLocalHostEntry,
+      hostId: mockLocalHostEntry.hostId,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       clock: null,
@@ -1680,6 +1727,7 @@ describe("WsStreamClient", () => {
       clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
       endpoint: () => mockLocalHostEntry,
+      hostId: mockLocalHostEntry.hostId,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       clock: null,
@@ -1739,6 +1787,7 @@ describe("WsStreamClient", () => {
       clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
       endpoint: () => mockLocalHostEntry,
+      hostId: mockLocalHostEntry.hostId,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       clock: null,
@@ -1871,6 +1920,7 @@ describe("WsStreamClient", () => {
       clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
       endpoint: () => mockLocalHostEntry,
+      hostId: mockLocalHostEntry.hostId,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       clock: null,
@@ -1932,6 +1982,7 @@ describe("WsStreamClient", () => {
       clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
       endpoint: () => mockLocalHostEntry,
+      hostId: mockLocalHostEntry.hostId,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       clock: null,
@@ -1984,6 +2035,7 @@ describe("WsStreamClient", () => {
       clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
       endpoint: () => mockLocalHostEntry,
+      hostId: mockLocalHostEntry.hostId,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       clock: null,
@@ -2022,6 +2074,7 @@ describe("WsStreamClient", () => {
       clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
       endpoint: () => mockLocalHostEntry,
+      hostId: mockLocalHostEntry.hostId,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       clock: null,
@@ -2073,6 +2126,7 @@ describe("WsStreamClient", () => {
       clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
       endpoint: () => mockLocalHostEntry,
+      hostId: mockLocalHostEntry.hostId,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       clock: null,
@@ -2117,6 +2171,7 @@ describe("WsStreamClient", () => {
       clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
       endpoint: () => mockLocalHostEntry,
+      hostId: mockLocalHostEntry.hostId,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       clock: null,
@@ -2175,6 +2230,7 @@ describe("WsStreamClient", () => {
       clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
       endpoint: () => mockLocalHostEntry,
+      hostId: mockLocalHostEntry.hostId,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       clock: null,
@@ -2228,6 +2284,7 @@ describe("WsStreamClient", () => {
       clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
       endpoint: () => mockLocalHostEntry,
+      hostId: mockLocalHostEntry.hostId,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       clock: null,
@@ -2278,6 +2335,7 @@ describe("WsStreamClient", () => {
       clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
       endpoint: () => mockLocalHostEntry,
+      hostId: mockLocalHostEntry.hostId,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       clock: null,
@@ -2356,6 +2414,7 @@ describe("WsStreamClient", () => {
       clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
       endpoint: () => mockLocalHostEntry,
+      hostId: mockLocalHostEntry.hostId,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       clock: null,
@@ -2396,6 +2455,7 @@ describe("WsStreamClient", () => {
       clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
       endpoint: () => mockLocalHostEntry,
+      hostId: mockLocalHostEntry.hostId,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       clock: null,
@@ -2442,6 +2502,7 @@ describe("WsStreamClient", () => {
       clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
       endpoint: () => mockLocalHostEntry,
+      hostId: mockLocalHostEntry.hostId,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       clock: null,
@@ -2553,6 +2614,7 @@ describe("WsStreamClient", () => {
       clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
       endpoint: () => entry,
+      hostId: entry.hostId,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       clock: null,
@@ -2591,6 +2653,7 @@ describe("WsStreamClient", () => {
       clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
       endpoint: () => entry,
+      hostId: entry.hostId,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       clock: null,
@@ -2790,6 +2853,7 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
       clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
       endpoint: () => mockLocalHostEntry,
+      hostId: mockLocalHostEntry.hostId,
       // A fixed bearer the host keeps rejecting (the test's revalidator never
       // actually rotates it), which is what lets the no-progress bound trip.
       bearer: () => makeRequestContext("expired").credentials,
@@ -3371,6 +3435,7 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
       clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
       endpoint: () => mockLocalHostEntry,
+      hostId: mockLocalHostEntry.hostId,
       bearer: () => ctx.credentials,
       auth,
       clock: null,
@@ -3684,9 +3749,13 @@ describe("WsStreamClient host credential provisioning", () => {
   }): WsStreamClient<typeof hostStreamRpcRegistry> {
     const token = options.authToken ?? "token-abc";
     const ctx = makeRequestContext(token);
+    // Same construction-time seed as `makeClientWithEvidence`: read once from
+    // this call's endpoint, not re-derived per dial.
+    const hostId = options.endpoint()?.hostId ?? null;
     return new WsStreamClient({
       clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
+      hostId,
       endpoint: options.endpoint,
       bearer: () => ctx.credentials,
       auth: null,
@@ -3719,9 +3788,11 @@ describe("WsStreamClient host credential provisioning", () => {
   }): WsStreamClient<typeof hostStreamRpcRegistry> {
     const token = options.authToken ?? "token-abc";
     const ctx = makeRequestContext(token);
+    const hostId = options.endpoint()?.hostId ?? null;
     return new WsStreamClient({
       clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
+      hostId,
       endpoint: options.endpoint,
       bearer: () => ctx.credentials,
       auth: null,
@@ -5317,6 +5388,7 @@ describe("WsStreamClient clock-skew park", () => {
       clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
       endpoint: () => mockLocalHostEntry,
+      hostId: mockLocalHostEntry.hostId,
       // Never rotated by these tests' revalidators, which is what makes every
       // cycle a NO-PROGRESS one - the exact shape of the incident.
       bearer: () => contextFor(options.bearer()).credentials,
@@ -5756,6 +5828,7 @@ describe("WsStreamClient clock-skew park re-entrancy", () => {
       clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
       endpoint: () => mockLocalHostEntry,
+      hostId: mockLocalHostEntry.hostId,
       bearer: () => ctx.credentials,
       auth: {
         revalidateForReconnect: async (): Promise<RevalidateOutcome> =>
@@ -5807,5 +5880,229 @@ describe("WsStreamClient clock-skew park re-entrancy", () => {
     }
     await wait(40);
     expect(sockets).toHaveLength(1);
+  });
+});
+
+/**
+ * Pins for `stream-method-support-registry.ts`'s seed - what a freshly
+ * constructed client's `getMethodSupport` answers BEFORE it has handshaken
+ * with its host, from a PRIOR client's completed handshake with that same
+ * host. Lives in this file rather than a standalone one so it can reuse the
+ * existing `StubStreamWebSocket` / `makeFactory` / `completeHandshake`
+ * harness instead of re-building a second copy of it.
+ */
+describe("WsStreamClient stream-method-support-registry seed", () => {
+  const HOST_A_ENTRY: HostDirectoryEntry = {
+    hostId: "seed-host-a",
+    label: "Seed host A",
+    kind: "local",
+    websocketUrl: "ws://127.0.0.1:4931/stream",
+    version: "0.0.0-test",
+    transportDialability: "dialable",
+  };
+  const HOST_B_ENTRY: HostDirectoryEntry = {
+    hostId: "seed-host-b",
+    label: "Seed host B",
+    kind: "local",
+    websocketUrl: "ws://127.0.0.1:4932/stream",
+    version: "0.0.0-test",
+    transportDialability: "dialable",
+  };
+  const SEED_METHOD = "resources.subscribe";
+
+  function makeSeedClient(options: {
+    readonly factory: IStreamWebSocketFactory;
+    readonly hostId: string | null;
+    readonly endpoint: () => HostDirectoryEntry | null;
+  }): WsStreamClient<typeof hostStreamRpcRegistry> {
+    const ctx = makeRequestContext("token-seed");
+    return new WsStreamClient({
+      clientIdentity: TEST_CLIENT_IDENTITY,
+      registry: hostStreamRpcRegistry,
+      hostId: options.hostId,
+      endpoint: options.endpoint,
+      bearer: () => ctx.credentials,
+      auth: null,
+      clock: null,
+      hostCredentialMint: null,
+      onHostCredentialState: null,
+      evidence: NO_TRANSPORT_EVIDENCE,
+      webSocketFactory: options.factory,
+      dialTimeoutMs: 1_000,
+      openAckTimeoutMs: 1_000,
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+  }
+
+  /**
+   * Completes a handshake against host A that negotiates {@link SEED_METHOD}
+   * as `"supported"`, recording that verdict into the memo under host A - the
+   * fact every case below either relies on or overrides.
+   */
+  async function recordHostASupportedViaHandshake(): Promise<void> {
+    const { factory, sockets } = makeFactory();
+    const seeding = makeSeedClient({
+      factory,
+      hostId: HOST_A_ENTRY.hostId,
+      endpoint: () => HOST_A_ENTRY,
+    });
+    const session = seeding.subscribe(SEED_METHOD, { epicId: "epic-seed" });
+    await flush();
+    completeHandshake(sockets[0].socket);
+    expect(seeding.getMethodSupport(SEED_METHOD)).toBe("supported");
+    session.close();
+  }
+
+  beforeEach(() => {
+    resetStreamMethodSupportMemo();
+  });
+
+  it("seeds a fresh client's getMethodSupport from a PRIOR client's completed handshake with the same host", async () => {
+    await recordHostASupportedViaHandshake();
+
+    // A second, freshly-constructed client for the SAME host - no handshake
+    // of its own - reports the memo's verdict. This is the whole lever: the
+    // Epic's client is minted per session, so this is what removes the probe.
+    const { factory } = makeFactory();
+    const fresh = makeSeedClient({
+      factory,
+      hostId: HOST_A_ENTRY.hostId,
+      endpoint: () => HOST_A_ENTRY,
+    });
+    expect(fresh.getMethodSupport(SEED_METHOD)).toBe("supported");
+  });
+
+  it("does not seed a client constructed for a DIFFERENT host", async () => {
+    await recordHostASupportedViaHandshake();
+
+    const { factory } = makeFactory();
+    const freshForB = makeSeedClient({
+      factory,
+      hostId: HOST_B_ENTRY.hostId,
+      endpoint: () => HOST_B_ENTRY,
+    });
+    expect(freshForB.getMethodSupport(SEED_METHOD)).toBe("unknown");
+  });
+
+  it("hostId: null declines the seed even when the host has a recording", async () => {
+    await recordHostASupportedViaHandshake();
+
+    const { factory } = makeFactory();
+    const noHostId = makeSeedClient({
+      factory,
+      hostId: null,
+      endpoint: () => HOST_A_ENTRY,
+    });
+    expect(noHostId.getMethodSupport(SEED_METHOD)).toBe("unknown");
+  });
+
+  it("a client's own handshake evidence overrides what the memo says for its host", async () => {
+    await recordHostASupportedViaHandshake();
+
+    // A second client for host A, whose OWN handshake computes `unsupported`
+    // for the seeded method (omitted from the host's ack manifest) - mirrors
+    // "remembers a missing stream method as unsupported for newer-client
+    // older-host pairs" above.
+    const { factory, sockets } = makeFactory();
+    const client = makeSeedClient({
+      factory,
+      hostId: HOST_A_ENTRY.hostId,
+      endpoint: () => HOST_A_ENTRY,
+    });
+    const session = client.subscribe(SEED_METHOD, { epicId: "epic-own" });
+    await flush();
+    sockets[0].socket.fireOpen();
+    sockets[0].socket.fireText({
+      kind: "openAck",
+      manifest: {
+        "epic.subscribe": { major: 1, minor: 0 },
+      },
+    });
+
+    expect(client.getMethodSupport(SEED_METHOD)).toBe("unsupported");
+    session.close();
+  });
+
+  it("does not seed a NEGATIVE verdict: an in-place host upgrade must reach the probe, not a decided legacy arm", async () => {
+    // The two directions are not symmetric, which is why only one of them is
+    // reused. A stale `supported` is self-correcting at a cost the registry
+    // header already budgets for: the subscribe is rejected and the caller
+    // falls back to legacy.
+    //
+    // A stale `unsupported` is what a host upgraded IN PLACE leaves behind -
+    // `hostId` survives an upgrade, so the entry outlives the fact it records
+    // - and `readEpicAdapterVerdict` treats an explicit `unsupported` as a
+    // DECISION (`legacy`), not as the `undecided` that runs the probe. So
+    // every newly minted client on the upgraded host would install and
+    // subscribe the legacy arm, and only that unnecessary handshake could
+    // replace the verdict - at the price of a replica replacement onto the
+    // lanes mid-session. That reinstates the speculative legacy open and the
+    // extra round trip this memo exists to remove, exactly after the
+    // auto-update that makes the lanes available.
+    //
+    // Recorded through a REAL handshake whose ack omits the method, the same
+    // way the "own handshake evidence overrides" case above does it, so this
+    // pins what production writes rather than what a direct `record…` call
+    // would let the test assert into existence.
+    const { factory: seedingFactory, sockets: seedingSockets } = makeFactory();
+    const seeding = makeSeedClient({
+      factory: seedingFactory,
+      hostId: HOST_A_ENTRY.hostId,
+      endpoint: () => HOST_A_ENTRY,
+    });
+    const seedingSession = seeding.subscribe(SEED_METHOD, {
+      epicId: "epic-pre-upgrade",
+    });
+    await flush();
+    seedingSockets[0].socket.fireOpen();
+    seedingSockets[0].socket.fireText({
+      kind: "openAck",
+      manifest: {
+        "epic.subscribe": { major: 1, minor: 0 },
+      },
+    });
+    // The negative really was negotiated and really is in the memo - without
+    // this the assertion below would pass just as happily against an empty
+    // registry, which is the answer it is trying to distinguish from.
+    expect(seeding.getMethodSupport(SEED_METHOD)).toBe("unsupported");
+    seedingSession.close();
+
+    // THE REDDENING ASSERTION. `unsupported` here is a decided legacy arm on a
+    // host that may well serve the lanes now; `unknown` is the probe, which is
+    // the pre-memo behaviour and correct by construction.
+    const { factory } = makeFactory();
+    const afterUpgrade = makeSeedClient({
+      factory,
+      hostId: HOST_A_ENTRY.hostId,
+      endpoint: () => HOST_A_ENTRY,
+    });
+    expect(afterUpgrade.getMethodSupport(SEED_METHOD)).toBe("unknown");
+  });
+
+  it("the latch: a client whose support map was cleared by a reconnect reports unknown, not the memo's value", async () => {
+    await recordHostASupportedViaHandshake();
+
+    const { factory, sockets } = makeFactory();
+    const client = makeSeedClient({
+      factory,
+      hostId: HOST_A_ENTRY.hostId,
+      endpoint: () => HOST_A_ENTRY,
+    });
+    const session = client.subscribe(SEED_METHOD, { epicId: "epic-latch" });
+    await flush();
+    completeHandshake(sockets[0].socket);
+    expect(client.getMethodSupport(SEED_METHOD)).toBe("supported");
+
+    // Drive a real reconnect the way production does - an abnormal drop -
+    // rather than reaching into the instance. `resetForReconnect` clears the
+    // client's own support map but leaves `hasCompletedHandshake` latched on,
+    // which is exactly what must stop the seed from answering here.
+    sockets[0].socket.fireClose(1006, "abnormal", false);
+
+    expect(client.getMethodSupport(SEED_METHOD)).toBe("unknown");
+    session.close();
   });
 });

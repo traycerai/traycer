@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { AlertTriangle, ArrowRight, Paintbrush } from "lucide-react";
+import { AlertTriangle, Paintbrush } from "lucide-react";
+import { toast } from "sonner";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
@@ -30,7 +31,6 @@ import { TeardownInlineDisclosure } from "@/components/worktree/teardown-disclos
 import { SweepWorktreesReview } from "@/components/epics/sweep-worktrees-review";
 import {
   SweepHostChoiceScope,
-  SweepHostRedirectButton,
   type SweepHostChoice,
   type SweepHostChoiceView,
 } from "@/components/epics/sweep-host-chip";
@@ -55,6 +55,7 @@ import {
   isBulkScopeRow,
   mergeSessionOutcomes,
   reconcileSessionOutcomes,
+  removeButtonLabel,
   safeSummaryCopy,
   selectionIsSafeOnly,
   selectAllCountCopy,
@@ -65,6 +66,10 @@ import {
   type SweepReviewSnapshot,
   type SweepSessionOutcome,
 } from "@/lib/epics/sweep-consequences";
+import {
+  useSweepSessionStore,
+  type ParkedSweepReview,
+} from "@/stores/epics/sweep-session-store";
 import { useTeardownAgentNames } from "@/lib/worktree/teardown-agent-names";
 import {
   formatUncheckedInUseKnown,
@@ -172,6 +177,7 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
     checkedAt,
     canRefresh,
     refresh: refreshCandidates,
+    prove: proveCandidates,
   } = useEpicSweepWorktreeCandidatesForClient(props.hostClient, epicIds);
   const taskCount = epicIds?.length ?? 0;
   const sweepMutation = useEpicSweepWorktrees();
@@ -195,7 +201,6 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
   useEffect(() => {
     sessionOutcomesRef.current = sessionOutcomes;
   }, [sessionOutcomes]);
-  const reviewRefreshGate = useRef(false);
   const claimRefreshKey = useBareKeyClaimer("r", (event) => {
     event.preventDefault();
     triggerRefresh();
@@ -250,6 +255,16 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
     selectionRetargeted,
     setPreviousInUseByPath,
     setCheckOverrides,
+  });
+  const proving = useSweepSessionParking({
+    selectionKey,
+    onParkedReview: (review) => {
+      sessionOutcomesRef.current = review.outcomes;
+      setSessionOutcomes(review.outcomes);
+      setReviewSnapshot(review.snapshot);
+      setInventoryChanged(false);
+      setStep("review");
+    },
   });
   const sweepingPaths = useSweepingWorktreePaths(hostId);
   const activeSweepCount = rows.filter((row) =>
@@ -345,19 +360,16 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
       },
     });
   };
-  const handlePrimary = (): void => {
+  const handlePrimary = (hostName: string | null): void => {
     startSweepPrimary({
-      proofReady,
+      sessionKey: selectionKey,
       hostId,
+      hostName,
       checkedRows,
-      refreshCandidates,
+      prove: proveCandidates,
       kickoff,
-      reviewRefreshGate,
       sessionOutcomes,
       setSessionOutcomes,
-      setReviewSnapshot,
-      setInventoryChanged,
-      setStep,
     });
   };
 
@@ -418,7 +430,6 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
         rows={rows}
         isRowChecked={isRowChecked}
         isRowSweeping={isRowSweeping}
-        interactionDisabled={refresh.refreshing || !proofReady}
         bulkRows={bulkRows}
         bulkSelectedCount={bulkSelectedCount}
         allBulkSelected={allBulkSelected}
@@ -445,13 +456,11 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
           })
         }
         onCancel={() => onOpenChange(false)}
-        onPrimary={handlePrimary}
-        primaryDisabled={
-          hostId === null ||
-          !proofReady ||
-          refresh.refreshing ||
-          checkedRows.length === 0
-        }
+        onPrimary={() => handlePrimary(host?.hostName ?? null)}
+        // NOT disabled by a refresh or an unsettled proof: the click itself
+        // proves before anything destructive, joining whatever is in flight.
+        // Only a click already being answered for this session locks it.
+        primaryDisabled={hostId === null || proving || checkedRows.length === 0}
         elevated={!selectionIsSafeOnly(checkedRows)}
         activeSweepCount={activeSweepCount}
         selectedEpicIds={selectedEpicIds}
@@ -472,7 +481,8 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
         ) : (
           <SweepHostChoiceScope
             hostId={hostChoice.hostId}
-            occupiedHostIds={hostChoice.occupiedHostIds}
+            selectedEpicIds={selectedEpicIds}
+            currentHostCount={censusedHostCount({ hostId, isError, rows })}
             unavailableHostId={hostChoice.unavailableHostId}
             // Review has no chip at all - it renders the frozen host read-only
             // and Back is the route to change it - so the review case is
@@ -487,6 +497,61 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
       </DialogContent>
     </Dialog>
   );
+}
+
+/**
+ * The flow never holds the user: a Remove click's proof runs as a plain
+ * promise chain that outlives the dialog, and the session store is where it
+ * leaves its answer. This is the dialog's side of that contract. It says when
+ * a dialog is on screen for a session (so the chain knows whether to toast
+ * instead of relying on a screen nobody is looking at), reports whether a
+ * click is still being answered (so Remove cannot be clicked twice), and
+ * hands over a review the chain parked - whether the chain settled while the
+ * dialog was open, or after it was closed and reopened on the same session.
+ */
+function useSweepSessionParking(input: {
+  readonly selectionKey: string | null;
+  readonly onParkedReview: (review: ParkedSweepReview) => void;
+}): boolean {
+  const { selectionKey, onParkedReview } = input;
+  useEffect(() => {
+    if (selectionKey === null) return;
+    const store = useSweepSessionStore.getState();
+    store.setOpen(selectionKey, true);
+    return () => store.setOpen(selectionKey, false);
+  }, [selectionKey]);
+  const proving = useSweepSessionStore(
+    (s) => selectionKey !== null && s.proving.has(selectionKey),
+  );
+  const parkedReview = useSweepSessionStore((s) =>
+    selectionKey === null ? null : (s.parked.get(selectionKey) ?? null),
+  );
+  // Taken through the store rather than from the subscription's value, so
+  // the hand-over is exactly-once even if two renders observe the same park.
+  const onParkedReviewRef = useRef(onParkedReview);
+  useEffect(() => {
+    onParkedReviewRef.current = onParkedReview;
+  }, [onParkedReview]);
+  useEffect(() => {
+    if (selectionKey === null || parkedReview === null) return;
+    const taken = useSweepSessionStore.getState().take(selectionKey);
+    if (taken !== null) onParkedReviewRef.current(taken);
+  }, [parkedReview, selectionKey]);
+  return proving;
+}
+
+/**
+ * The censused host's count for its own popover row: every owned worktree
+ * this dialog's walk found, the same attribution the popover asks the OTHER
+ * hosts for. Not re-asked, and not claimed while there is no walk to count.
+ */
+function censusedHostCount(input: {
+  readonly hostId: string | null;
+  readonly isError: boolean;
+  readonly rows: ReadonlyArray<EpicSweepWorktreeRow>;
+}): number | null {
+  if (input.hostId === null || input.isError) return null;
+  return input.rows.length;
 }
 
 /**
@@ -584,35 +649,43 @@ function applyInUseConsentDrop(input: {
   );
 }
 
+/**
+ * What a Remove click does: record the intent, prove, then either remove or
+ * ask - without ever holding the person in the dialog for it.
+ *
+ * Every click re-proves, the safe-looking selection included. Cached
+ * classifications are never the basis for deletion; the proof joins a refresh
+ * already in flight or starts a forced one. And the chain is a plain promise,
+ * not a per-call mutation callback, so it keeps running if the dialog is
+ * closed or the surface it sits on is left (TanStack drops `mutate(vars,
+ * { onSuccess })` callbacks on unmount; a `.then` is nobody's to drop). What
+ * it decides lands in the session store: a safe selection starts the
+ * background removal wherever the person is; one that needs consent is
+ * PARKED for the session, and toasted when no dialog is open to show it.
+ * Consent is never inferred - a parked review removes nothing until confirmed.
+ */
 function startSweepPrimary(input: {
-  readonly proofReady: boolean;
+  readonly sessionKey: string | null;
   readonly hostId: string | null;
+  readonly hostName: string | null;
   readonly checkedRows: ReadonlyArray<EpicSweepWorktreeRow>;
-  readonly refreshCandidates: () => Promise<
-    ReadonlyArray<EpicSweepWorktreeRow>
-  >;
+  readonly prove: () => Promise<ReadonlyArray<EpicSweepWorktreeRow>>;
   readonly kickoff: (targets: ReadonlyArray<EpicSweepWorktreeRow>) => void;
-  readonly reviewRefreshGate: { current: boolean };
   readonly sessionOutcomes: ReadonlyMap<string, SweepSessionOutcome>;
   readonly setSessionOutcomes: (
     next: ReadonlyMap<string, SweepSessionOutcome>,
   ) => void;
-  readonly setReviewSnapshot: (next: SweepReviewSnapshot | null) => void;
-  readonly setInventoryChanged: (value: boolean) => void;
-  readonly setStep: (step: "choose" | "review") => void;
 }): void {
+  const { sessionKey } = input;
   if (
-    !input.proofReady ||
+    sessionKey === null ||
     input.hostId === null ||
     input.checkedRows.length === 0
   ) {
     return;
   }
-  if (selectionIsSafeOnly(input.checkedRows)) {
-    input.kickoff(input.checkedRows);
-    return;
-  }
-  if (input.reviewRefreshGate.current) return;
+  const store = useSweepSessionStore.getState();
+  if (store.proving.has(sessionKey)) return;
   const selectedPaths = new Set(
     input.checkedRows.map((row) => row.entry.worktreePath),
   );
@@ -621,15 +694,18 @@ function startSweepPrimary(input: {
       .filter((row) => row.note === "in-use")
       .map((row) => row.entry.worktreePath),
   );
-  input.reviewRefreshGate.current = true;
+  store.beginProving(sessionKey);
   void input
-    .refreshCandidates()
+    .prove()
     .then((freshRows) => {
       const nextOutcomes = reconcileSessionOutcomes(
         input.sessionOutcomes,
         freshRows,
       );
       input.setSessionOutcomes(nextOutcomes);
+      // Reconciled by PATH - the row's identity - so a stale target is never
+      // deleted: a row that vanished, turned uncertain, or newly became in
+      // use since the click drops out of the intent.
       const selected = freshRows.filter((row) => {
         if (!selectedPaths.has(row.entry.worktreePath) || row.disabled) {
           return false;
@@ -645,25 +721,39 @@ function startSweepPrimary(input: {
         }
         return true;
       });
-      if (selected.length === 0) return;
+      const dialogOpen = useSweepSessionStore.getState().open.has(sessionKey);
+      if (selected.length === 0) {
+        if (!dialogOpen) {
+          toast.info(
+            "Nothing was removed — the selected worktrees changed while they were being checked.",
+          );
+        }
+        return;
+      }
       if (selectionIsSafeOnly(selected)) {
         input.kickoff(selected);
         return;
       }
-      input.setReviewSnapshot(
-        captureReviewSnapshot(
+      useSweepSessionStore.getState().park(sessionKey, {
+        snapshot: captureReviewSnapshot(
           selected,
           bannersFromSessionOutcomes(nextOutcomes),
         ),
-      );
-      input.setInventoryChanged(false);
-      input.setStep("review");
+        outcomes: nextOutcomes,
+      });
+      if (!dialogOpen) {
+        toast.info(
+          input.hostName === null
+            ? "Sweep needs your confirmation — open Sweep on these tasks to review."
+            : `Sweep on ${input.hostName} needs your confirmation — open Sweep on these tasks to review.`,
+        );
+      }
     })
     .catch(() => {
-      // Hook already toasted. Stay on Choose; do not open a stale receipt.
+      // The proof already toasted. Intent dropped; nothing is removed.
     })
     .finally(() => {
-      input.reviewRefreshGate.current = false;
+      useSweepSessionStore.getState().endProving(sessionKey);
     });
 }
 
@@ -765,30 +855,6 @@ function identityByPathFromRows(
   return next;
 }
 
-/**
- * The proof settled and found nothing on a host we could actually reach.
- *
- * Everything it excludes is a state where the row list is ALSO empty and the
- * emptiness means something else entirely - the fleet has not been described,
- * no host has been chosen, the chosen one stopped answering, the walk failed.
- * Only this one has earned the sentence "there is nothing here", and only this
- * one carries the redirect, which is why the header's nudge stands down for it
- * and for none of the others.
- */
-function sweepCensusIsEmpty(input: {
-  readonly proofReady: boolean;
-  readonly isError: boolean;
-  readonly rows: ReadonlyArray<EpicSweepWorktreeRow>;
-  readonly fleetPending: boolean;
-  readonly hostUnchosen: boolean;
-  readonly hostUnreachable: boolean;
-}): boolean {
-  if (input.fleetPending || input.hostUnchosen || input.hostUnreachable) {
-    return false;
-  }
-  return input.proofReady && !input.isError && input.rows.length === 0;
-}
-
 function SweepWorktreesChoose(props: {
   readonly taskCount: number;
   readonly taskTitle: string | null;
@@ -807,7 +873,6 @@ function SweepWorktreesChoose(props: {
   readonly rows: ReadonlyArray<EpicSweepWorktreeRow>;
   readonly isRowChecked: (row: EpicSweepWorktreeRow) => boolean;
   readonly isRowSweeping: (row: EpicSweepWorktreeRow) => boolean;
-  readonly interactionDisabled: boolean;
   readonly bulkRows: ReadonlyArray<EpicSweepWorktreeRow>;
   readonly bulkSelectedCount: number;
   readonly allBulkSelected: boolean;
@@ -827,21 +892,12 @@ function SweepWorktreesChoose(props: {
   readonly agentNames: ReadonlyMap<string, string>;
   readonly sessionOutcomes: ReadonlyMap<string, SweepSessionOutcome>;
 }): ReactNode {
-  // Named rather than inlined into the prop: as a `&&` chain in JSX position
-  // the linter's autofix rewrites it into a ternary whose else-arm is `null`,
-  // which is a third state this flag does not have.
-  // The proof settled and found nothing on a host we could actually reach.
-  // That, and only that, is when the empty state carries the redirect - so a
-  // host that has gone unreachable keeps the header's nudge, which is then the
-  // only route out of the dialog other than the chip itself.
-  const censusIsEmpty = sweepCensusIsEmpty(props);
   return (
     <>
       <SweepChooseHeader
         taskCount={props.taskCount}
         taskTitle={props.taskTitle}
         host={props.host}
-        censusIsEmpty={censusIsEmpty}
       />
       <TooltipProvider>
         <section
@@ -855,9 +911,7 @@ function SweepWorktreesChoose(props: {
               }
               selectableCount={props.bulkRows.length}
               selectedCount={props.bulkSelectedCount}
-              disabled={
-                props.interactionDisabled || props.bulkRows.length === 0
-              }
+              disabled={props.bulkRows.length === 0}
               testId="sweep-worktrees-select-all"
               onToggle={props.onToggleSelectAll}
               actionLabel={
@@ -886,7 +940,6 @@ function SweepWorktreesChoose(props: {
             rows={props.rows}
             isRowChecked={props.isRowChecked}
             isRowSweeping={props.isRowSweeping}
-            interactionDisabled={props.interactionDisabled}
             selectedEpicIds={props.selectedEpicIds}
             agentNames={props.agentNames}
             sessionOutcomes={props.sessionOutcomes}
@@ -927,19 +980,18 @@ function SweepWorktreesChoose(props: {
         >
           {props.activeSweepCount > 0 ? "Close" : "Cancel"}
         </Button>
+        {/* Always cues removal. Review is an automatic safety step on the way
+            when the proof finds consequences, not the person's goal. */}
         <Button
           type="button"
-          variant={props.elevated ? "default" : "destructive"}
+          variant="destructive"
           size="sm"
           className="w-full sm:w-auto"
           disabled={props.primaryDisabled}
           onClick={props.onPrimary}
           data-testid="sweep-worktrees-confirm"
         >
-          {props.elevated ? "Review consequences" : "Sweep selected"}
-          {props.elevated ? (
-            <ArrowRight className="size-3.5" aria-hidden />
-          ) : null}
+          {removeButtonLabel(props.selectedCount)}
         </Button>
       </div>
     </>
@@ -947,31 +999,16 @@ function SweepWorktreesChoose(props: {
 }
 
 /**
- * What is being swept, on which machine, and — when the records point at
- * another one — where else to look.
- *
- * The nudge and the empty state's redirect are the same offer with different
- * standing. While there are rows to judge, the badge is a quiet aside above
- * them; once the census comes back empty it is the only thing left to say, and
- * it moves down into the space the rows would have occupied. Exactly one of
- * them is ever on screen.
+ * What is being swept, and on which machine. The chip is the route to any
+ * other machine; its popover says how many of these Tasks' worktrees each
+ * one holds.
  */
 function SweepChooseHeader(props: {
   readonly taskCount: number;
   readonly taskTitle: string | null;
   readonly host: SweepHostChoiceView | null;
-  /** The proof settled, and found nothing on this host. */
-  readonly censusIsEmpty: boolean;
 }): ReactNode {
   const host = props.host;
-  const nudge = host?.nudge ?? null;
-  const headerNudge =
-    host === null ||
-    nudge === null ||
-    host.currentHostBadged ||
-    props.censusIsEmpty
-      ? null
-      : nudge;
   return (
     <div className="flex min-w-0 shrink-0 items-start gap-3 px-5 pt-5 pb-4">
       <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary ring-1 ring-primary/15">
@@ -986,20 +1023,6 @@ function SweepChooseHeader(props: {
           are selected for you.
         </DialogDescription>
         {host?.chip}
-        {headerNudge === null || host === null ? null : (
-          <p
-            className="flex min-w-0 flex-wrap items-center gap-1 text-ui-xs text-muted-foreground wrap-anywhere"
-            data-testid="sweep-worktrees-host-nudge"
-          >
-            {`This task's agents also ran on ${headerNudge.name}.`}
-            <SweepHostRedirectButton
-              hostName={headerNudge.name}
-              hostId={headerNudge.hostId}
-              onSwitch={host.requestSwitch}
-              testId="sweep-worktrees-nudge-redirect"
-            />
-          </p>
-        )}
       </div>
     </div>
   );
@@ -1181,7 +1204,6 @@ function SweepRowList(props: {
   readonly rows: ReadonlyArray<EpicSweepWorktreeRow>;
   readonly isRowChecked: (row: EpicSweepWorktreeRow) => boolean;
   readonly isRowSweeping: (row: EpicSweepWorktreeRow) => boolean;
-  readonly interactionDisabled: boolean;
   readonly selectedEpicIds: ReadonlySet<string>;
   readonly agentNames: ReadonlyMap<string, string>;
   readonly sessionOutcomes: ReadonlyMap<string, SweepSessionOutcome>;
@@ -1260,7 +1282,6 @@ function SweepRowList(props: {
           row={row}
           checked={props.isRowChecked(row)}
           isSweeping={props.isRowSweeping(row)}
-          interactionDisabled={props.interactionDisabled}
           selectedEpicIds={props.selectedEpicIds}
           agentNames={props.agentNames}
           sessionOutcome={props.sessionOutcomes.get(row.entry.worktreePath)}
@@ -1287,15 +1308,10 @@ function unreachableHostCopy(hostName: string | null): string {
 }
 
 /**
- * The census came back empty — the one place a zero-RPC badge can be worth
- * more than the proof next to it.
- *
- * "No worktrees here" is the honest end of the walk for THIS machine, and on a
- * single-host install it is the whole answer, so that sentence is untouched.
- * With a fleet it is only half of one: the Task's own records may name another
- * machine, and if they do, the useful thing to say is not that this host is
- * clean but where to look instead. The badge finally does something — it stops
- * being a decoration on a list and becomes the next step.
+ * The census came back empty - the honest end of the walk for THIS machine.
+ * On a single-host install it is the whole answer. With a fleet, the chip
+ * above is the route to the others, and its popover says which of them hold
+ * anything for these Tasks.
  */
 function SweepEmptyCensus(props: {
   readonly host: SweepHostChoiceView | null;
@@ -1312,32 +1328,15 @@ function SweepEmptyCensus(props: {
       </p>
     );
   }
-  const nudge = host.nudge;
   return (
-    <div className="flex flex-col items-start gap-1 py-2">
-      <p
-        className="text-ui-sm text-muted-foreground wrap-anywhere"
-        data-testid="sweep-worktrees-empty"
-      >
-        {props.taskCount > 1
-          ? `No worktrees for these tasks on ${host.hostName}.`
-          : `No worktrees for this task on ${host.hostName}.`}
-      </p>
-      {nudge === null ? null : (
-        <p
-          className="flex min-w-0 flex-wrap items-center gap-1 text-ui-sm text-foreground wrap-anywhere"
-          data-testid="sweep-worktrees-empty-redirect"
-        >
-          {`Its agents ran on ${nudge.name} — its worktrees are probably there.`}
-          <SweepHostRedirectButton
-            hostName={nudge.name}
-            hostId={nudge.hostId}
-            onSwitch={host.requestSwitch}
-            testId="sweep-worktrees-empty-redirect-action"
-          />
-        </p>
-      )}
-    </div>
+    <p
+      className="py-2 text-ui-sm text-muted-foreground wrap-anywhere"
+      data-testid="sweep-worktrees-empty"
+    >
+      {props.taskCount > 1
+        ? `No worktrees for these tasks on ${host.hostName}.`
+        : `No worktrees for this task on ${host.hostName}.`}
+    </p>
   );
 }
 
@@ -1346,18 +1345,18 @@ function SweepWorktreeRowItem(props: {
   readonly checked: boolean;
   /** A sweep of this exact path is already streaming (from any surface). */
   readonly isSweeping: boolean;
-  readonly interactionDisabled: boolean;
   readonly selectedEpicIds: ReadonlySet<string>;
   readonly agentNames: ReadonlyMap<string, string>;
   readonly sessionOutcome: SweepSessionOutcome | undefined;
   readonly onToggle: (worktreePath: string, checked: boolean) => void;
 }) {
-  const { row, checked, isSweeping, interactionDisabled, onToggle } = props;
+  const { row, checked, isSweeping, onToggle } = props;
   const entry = row.entry;
   const branch = entry.branch ?? "detached HEAD";
   const uncertainLocked = props.sessionOutcome?.kind === "uncertain";
-  const disabled =
-    row.disabled || interactionDisabled || isSweeping || uncertainLocked;
+  // Not disabled by a refresh in flight: rows stay selectable while facts are
+  // re-checked, because the Remove click re-proves before acting anyway.
+  const disabled = row.disabled || isSweeping || uncertainLocked;
   // Derived from `useId`, never from the path: a worktree path can contain
   // spaces (routine on Windows, e.g. `C:\\Users\\John Doe\\wt`), which makes an
   // invalid HTML id and silently breaks the `htmlFor` association below - the

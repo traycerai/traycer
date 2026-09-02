@@ -833,6 +833,7 @@ function startBatchDeleteCommand(
             },
           },
         }),
+      null,
     );
     commandRefs.set(commandId, client);
     // A callback can settle the command DURING the build - in production the
@@ -1062,6 +1063,7 @@ function startQueuedDelete(item: QueuedWorktreeDelete): void {
             },
           },
         }),
+      null,
     );
     clientRefs.set(item.key, client);
   } catch (error) {

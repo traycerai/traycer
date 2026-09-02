@@ -95,6 +95,7 @@ const sessionsState = vi.hoisted<{ value: BrowserSessionsState }>(() => ({
     hostId: "host-1",
     lifecycle: "live",
     inventoryReady: true,
+    canMaterializeElectron: false,
     items: [],
     errorMessage: null,
     retry: vi.fn(),

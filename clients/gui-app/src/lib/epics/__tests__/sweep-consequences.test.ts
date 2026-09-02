@@ -5,6 +5,7 @@ import {
   isBulkScopeRow,
   mergeSessionOutcomes,
   reconcileSessionOutcomes,
+  removeButtonLabel,
   selectAllCountCopy,
   selectionIsSafeOnly,
 } from "@/lib/epics/sweep-consequences";
@@ -52,22 +53,21 @@ describe("sweep consequence copy", () => {
     expect(selectionIsSafeOnly([row({ note: "shared" })])).toBe(false);
   });
 
-  it("names the dominant extra consequence on the final button", () => {
+  it("states the outcome on both buttons, never a category or a review", () => {
+    // The consequences are explained in the body; the buttons say what
+    // clicking them removes.
+    expect(removeButtonLabel(1)).toBe("Remove 1 worktree");
+    expect(removeButtonLabel(3)).toBe("Remove 3 worktrees");
     expect(finalSweepButtonLabel([row({ note: "in-use" })])).toBe(
-      "Stop work & sweep",
-    );
-    expect(finalSweepButtonLabel([row({ note: "not-landed" })])).toBe(
-      "Sweep anyway",
-    );
-    expect(finalSweepButtonLabel([row({ note: "shared" })])).toBe(
-      "Break bindings & sweep",
+      "Confirm and remove 1 worktree",
     );
     expect(
       finalSweepButtonLabel([
         row({ note: "in-use" }),
         row({ note: "not-landed" }),
+        row({ note: "shared" }),
       ]),
-    ).toBe("Confirm sweep");
+    ).toBe("Confirm and remove 3 worktrees");
   });
 
   it("renders the select-all count without an in-use qualifier", () => {
