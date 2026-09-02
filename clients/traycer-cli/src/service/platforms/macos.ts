@@ -464,10 +464,19 @@ async function installService(
     });
   } catch (cause) {
     if (isServiceMutationAuthorityError(cause)) throw cause;
+    // Post-registration: `bootstrap` succeeded, so launchd holds a
+    // `RunAtLoad` registration and may already be launching the supervisor.
+    // A caller holding a host-start adoption lease must honour it before
+    // surfacing this (`didServiceRegistrationCommit`), or the child launchd
+    // is bringing up is refused and the registered service is left hostless.
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
       message: `launchctl kickstart failed for ${options.label.id}: ${describeCause(cause)}`,
-      details: { label: options.label.id, cause: describeCause(cause) },
+      details: {
+        label: options.label.id,
+        cause: describeCause(cause),
+        registrationCommitted: true,
+      },
       exitCode: 1,
     });
   }

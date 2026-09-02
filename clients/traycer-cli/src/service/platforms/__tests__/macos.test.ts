@@ -39,6 +39,7 @@ import {
 } from "../../label";
 import { CLI_ERROR_CODES } from "../../../runner/errors";
 import { ServiceMutationAuthorityError } from "../../mutation-authority";
+import { didServiceRegistrationCommit } from "../../cli-invocation-record";
 
 const execFileAsync = promisify(execFile);
 
@@ -1002,6 +1003,79 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       "bootstrap",
       "kickstart",
     ]);
+  });
+
+  // `registrationCommitted: true` is the signal `didServiceRegistrationCommit`
+  // reads: `bootstrap` already succeeded here (launchd holds the
+  // registration), so a caller holding a host-start adoption lease must
+  // honour it rather than treat this as a clean pre-registration failure.
+  it("marks a kickstart failure after a successful bootstrap as a committed registration", async () => {
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (args[0] === "kickstart") {
+        throw buildLaunchctlError({
+          command,
+          cmdArgs: args,
+          stderr: "Could not kickstart service: 3\n",
+          stdout: "",
+          exitCode: 3,
+        });
+      }
+      return buildSuccessResult();
+    };
+    const controller = createMacosController(runner);
+    createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
+    let caught: unknown = null;
+    try {
+      await controller.install({
+        label,
+        cli: { command: "/usr/local/bin/traycer", args: [] },
+        enableLinger: false,
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+      details: { registrationCommitted: true },
+    });
+    expect(didServiceRegistrationCommit(caught)).toBe(true);
+  });
+
+  // The negative twin: a `bootstrap` failure happens BEFORE the registration
+  // is in launchd's hands, so it must never carry the committed flag.
+  it("does not mark a bootstrap failure (pre-registration) as a committed registration", async () => {
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (args[0] === "bootstrap") {
+        throw buildLaunchctlError({
+          command,
+          cmdArgs: args,
+          stderr: "Bootstrap failed: 5: Operation not permitted\n",
+          stdout: "",
+          exitCode: 5,
+        });
+      }
+      return buildSuccessResult();
+    };
+    const controller = createMacosController(runner);
+    createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
+    let caught: unknown = null;
+    try {
+      await controller.install({
+        label,
+        cli: { command: "/usr/local/bin/traycer", args: [] },
+        enableLinger: false,
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+    });
+    expect(didServiceRegistrationCommit(caught)).toBe(false);
   });
 
   it("uses a bounded launchd completion barrier when pid metadata is missing", async () => {

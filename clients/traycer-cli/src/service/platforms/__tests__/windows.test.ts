@@ -17,9 +17,10 @@ import {
   type WindowsTaskInstallDeps,
 } from "../windows";
 import { serviceLabelFor } from "../../label";
-import type { RunResult } from "../../process-runner";
+import { ProcessRunError, type RunResult } from "../../process-runner";
 import type { SpawnEvidenceBaseline } from "../../../host/spawn-evidence";
 import { CLI_ERROR_CODES } from "../../../runner/errors";
+import { didServiceRegistrationCommit } from "../../cli-invocation-record";
 
 const mocks = vi.hoisted(() => ({
   readHostPidMetadata: vi.fn(),
@@ -533,5 +534,120 @@ describe("Windows startService post-/Run spawn verification", () => {
         (call) => call.command === "schtasks" && call.args[0] === "/Run",
       ),
     ).toHaveLength(1);
+  });
+
+  // `registrationCommitted: true` is the signal `didServiceRegistrationCommit`
+  // reads: `/Create` already succeeded here (the task exists with its logon
+  // trigger), so a caller holding a host-start adoption lease must honour it
+  // rather than treat this as a clean pre-registration failure.
+  it("marks a /Run failure after a successful /Create as a committed registration", async () => {
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (command === "schtasks" && args[0] === "/Run") {
+        throw new ProcessRunError(
+          "schtasks /Run exited with code 1: Access is denied.",
+          command,
+          args,
+          1,
+          "",
+          "ERROR: Access is denied.",
+        );
+      }
+      return success("");
+    };
+    setWindowsTaskInstallDepsForTests(stagedTaskInstallDeps());
+    setWindowsStartEvidenceDepsForTests({
+      captureBaseline: async () => emptySpawnBaseline(),
+      createEvidenceReader: () => ({ collect: async () => null }),
+      sleep: async () => undefined,
+      verifyTimeoutMs: 40,
+      verifyPollMs: 10,
+    });
+
+    let caught: unknown = null;
+    try {
+      await createWindowsController(runner).install({
+        label: serviceLabelFor("staging"),
+        cli: { command: "C:\\traycer.exe", args: [] },
+        enableLinger: false,
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+      details: { registrationCommitted: true },
+    });
+    expect(didServiceRegistrationCommit(caught)).toBe(true);
+    expect(
+      calls.filter(
+        (call) => call.command === "schtasks" && call.args[0] === "/Create",
+      ),
+    ).toHaveLength(1);
+  });
+
+  // Same committed classification as the /Run failure above, for the other
+  // post-registration failure mode: /Run was ACCEPTED (the scheduler took
+  // the request) but no post-baseline spawn evidence ever showed up.
+  it("marks a spawn-evidence timeout after an accepted /Run as a committed registration", async () => {
+    const runner: ProcessRunner = async () => success("");
+    const deps: WindowsStartEvidenceDeps = {
+      captureBaseline: async () => emptySpawnBaseline(),
+      createEvidenceReader: () => ({ collect: async () => null }),
+      sleep: async () => undefined,
+      verifyTimeoutMs: 40,
+      verifyPollMs: 10,
+    };
+    setWindowsStartEvidenceDepsForTests(deps);
+
+    let caught: unknown = null;
+    try {
+      await createWindowsController(runner).start(serviceLabelFor("staging"));
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+      details: { registrationCommitted: true },
+    });
+    expect(didServiceRegistrationCommit(caught)).toBe(true);
+  });
+
+  // The negative twin: a `/Create` failure happens BEFORE the task exists at
+  // all, so it must never carry the committed flag.
+  it("does not mark a /Create failure as a committed registration", async () => {
+    const runner: ProcessRunner = async (command, args) => {
+      if (command === "schtasks" && args[0] === "/Create") {
+        throw new ProcessRunError(
+          "schtasks /Create exited with code 1: Access is denied.",
+          command,
+          args,
+          1,
+          "",
+          "ERROR: Access is denied.",
+        );
+      }
+      return success("");
+    };
+    setWindowsTaskInstallDepsForTests(stagedTaskInstallDeps());
+
+    let caught: unknown = null;
+    try {
+      await createWindowsController(runner).install({
+        label: serviceLabelFor("staging"),
+        cli: { command: "C:\\traycer.exe", args: [] },
+        enableLinger: false,
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+    });
+    expect(didServiceRegistrationCommit(caught)).toBe(false);
   });
 });

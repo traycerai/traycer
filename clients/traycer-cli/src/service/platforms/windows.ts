@@ -368,10 +368,19 @@ async function runTaskAndVerifyStart(
     });
   } catch (cause) {
     if (isServiceMutationAuthorityError(cause)) throw cause;
+    // Post-registration: `/Create` succeeded, so the task exists with its
+    // logon trigger whether or not this `/Run` was accepted. A caller holding
+    // a host-start adoption lease honours it before surfacing this
+    // (`didServiceRegistrationCommit`) rather than refusing a child the
+    // scheduler may already be starting.
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
       message: `schtasks /Run failed for ${taskName}: ${describeCause(cause)}`,
-      details: { task: taskName, cause: describeCause(cause) },
+      details: {
+        task: taskName,
+        cause: describeCause(cause),
+        registrationCommitted: true,
+      },
       exitCode: 1,
     });
   }
@@ -398,6 +407,10 @@ async function runTaskAndVerifyStart(
       task: taskName,
       lastRunResult,
       verifyTimeoutMs: startEvidenceDeps.verifyTimeoutMs,
+      // Same post-registration classification as the `/Run` failure above:
+      // the task exists and the scheduler accepted the run; only the spawn
+      // evidence is missing.
+      registrationCommitted: true,
     },
     exitCode: 1,
   });

@@ -1324,14 +1324,19 @@ describe("runServiceUninstallWithInvocationRecord", () => {
         cli: npmCli(),
         register: async () => undefined,
       });
-      // Uninstall performs two `assertStateDirUnchanged` checks with no
-      // contention before the point under test: acquiring the transaction,
-      // then this one - right after `options.uninstall()` resolved and the
-      // live record was confirmed to match this label, and before the
-      // record is removed. Swapping on the 2nd call means the (still-live)
+      // Uninstall performs three `assertStateDirUnchanged` checks with no
+      // contention on the happy path: acquiring the transaction, then the
+      // PRE-READ check inside `assertStateDirUnchangedAfterUninstall` - which
+      // now runs right after `options.uninstall()` resolves and BEFORE
+      // `liveRecordMatchesLabel`, so a "foreign" classification is always of
+      // the directory this transaction validated, not of whatever got
+      // swapped in - and only then the second `assertStateDirUnchangedAfterUninstall`
+      // call after the label compare (the pre-existing position). This is
+      // the point under test: swapping on the 2nd call means the (still-live)
       // record and the freshly acquired transaction marker are already on
-      // disk, through the untouched directory, before the identity check
-      // under test ever runs.
+      // disk, through the untouched directory, before the PRE-READ identity
+      // check fails - it never reaches the label compare or the record
+      // removal at all.
       let assertCalls = 0;
       const original = cliInvocationStateDir(hostHome);
       const movedAside = join(hostHome, "original-state-post-uninstall");
@@ -1423,6 +1428,121 @@ describe("runServiceUninstallWithInvocationRecord", () => {
           isCliInvocationTransactionMarkerBasename,
         ),
       ).toEqual([]);
+    });
+
+    it("when a foreign-label record is swapped in inside the OS uninstall callback, the pre-read check rejects before it can be read as foreign-and-clean", async () => {
+      await runServiceRegistrationWithInvocationRecord({
+        environment: "production",
+        hostHomeDir: hostHome,
+        waitMs: 2_000,
+        pollIntervalMs: 20,
+        serviceLabel: LABEL,
+        cli: npmCli(),
+        register: async () => undefined,
+      });
+      // The swap and the foreign plant happen INSIDE `options.uninstall()`
+      // itself - the exact moment `assertStateDirUnchangedAfterUninstall`'s
+      // pre-read call is meant to catch, independent of how many
+      // `assertStateDirUnchanged` calls happen to precede it. Keying this on
+      // a call COUNT (like the test above) would not distinguish the fixed
+      // ordering from the old one: with the pre-read call removed, the very
+      // next `assertStateDirUnchanged` invocation is the post-label-compare
+      // one, which still happens to observe the same mismatch - just one
+      // step too late, AFTER `liveRecordMatchesLabel` already read the
+      // planted record as "foreign" and returned clean. Swapping inside the
+      // callback pins the ordering itself: a VALID live record for a
+      // DIFFERENT label is planted in the freshly recreated directory before
+      // `options.uninstall()` returns, so a caller withOUT the pre-read
+      // check reads that planted record, classifies it "foreign", and
+      // returns CLEAN - leaving the real LABEL record (now sitting in
+      // `movedAside`) behind forever. The pre-read check exists precisely to
+      // fail before that read ever happens.
+      const original = cliInvocationStateDir(hostHome);
+      const movedAside = join(hostHome, "original-state-foreign-swap");
+      const plantedForeignRecord = {
+        schemaVersion: 1,
+        command: process.execPath,
+        args: [scriptPath],
+        source: {
+          kind: "service-registration",
+          platform: "linux",
+          serviceLabel: "ai.traycer.host.dev.other",
+        },
+        recoveredAt: "2026-09-01T00:00:00.000Z",
+      };
+      const recordBasename = basename(cliInvocationRecordPath(hostHome));
+      let uninstalled = false;
+      let resolvedClean = false;
+      let caught: unknown = null;
+      try {
+        await runServiceUninstallWithInvocationRecord({
+          environment: "production",
+          hostHomeDir: hostHome,
+          waitMs: 2_000,
+          pollIntervalMs: 20,
+          serviceLabel: LABEL,
+          uninstall: async () => {
+            uninstalled = true;
+            await renameFile(original, movedAside);
+            await mkdir(original, { recursive: true, mode: 0o700 });
+            await chmod(original, 0o700);
+            await writeFile(
+              cliInvocationRecordPath(hostHome),
+              `${JSON.stringify(plantedForeignRecord, null, 2)}\n`,
+              { mode: 0o600 },
+            );
+          },
+        });
+        resolvedClean = true;
+      } catch (error) {
+        caught = error;
+      }
+      expect(uninstalled).toBe(true);
+      // The call REJECTS - it must not read the planted record, classify it
+      // "foreign", and return clean.
+      expect(resolvedClean).toBe(false);
+      expect(caught).toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_UNINSTALL_FAILED,
+        details: {
+          label: LABEL,
+          phase: "invocation-state-dir",
+          causeCode: null,
+        },
+      });
+      // The retained transaction marker lives in the moved-aside directory -
+      // `writeStaleMarker`'s own identity re-check (inside
+      // `markStaleAndUnpreferLive`) fails the same way, so it never writes a
+      // stale marker or releases the transaction marker.
+      const movedMarkers = (await readdir(movedAside)).filter(
+        isCliInvocationTransactionMarkerBasename,
+      );
+      expect(movedMarkers).toHaveLength(1);
+      const markerName = movedMarkers[0];
+      if (markerName === undefined) {
+        throw new Error("expected the retained transaction marker");
+      }
+      const marker = parseCliInvocationTransactionMarker(
+        JSON.parse(await readFile(join(movedAside, markerName), "utf8")),
+      );
+      expect(marker?.operation).toBe("uninstall");
+      expect(marker?.serviceLabel).toBe(LABEL);
+      // The original label's live record is still in the moved-aside
+      // directory, untouched - the compare-then-unlink never had it in its
+      // sights once the fixed `livePath` pathname stopped resolving there.
+      expect(await exists(join(movedAside, recordBasename))).toBe(true);
+      const stillLive = parseCliInvocationRecord(
+        JSON.parse(await readFile(join(movedAside, recordBasename), "utf8")),
+      );
+      expect(stillLive?.source.serviceLabel).toBe(LABEL);
+      // The planted foreign record sits in the fresh `original` directory
+      // exactly where it was planted - the pre-read check fails before any
+      // read of it, so it is never touched, referenced, or removed.
+      const plantedStillThere = parseCliInvocationRecord(
+        JSON.parse(await readFile(join(original, recordBasename), "utf8")),
+      );
+      expect(plantedStillThere?.source.serviceLabel).toBe(
+        "ai.traycer.host.dev.other",
+      );
     });
   }
 });

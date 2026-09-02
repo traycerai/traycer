@@ -160,6 +160,13 @@ const NODE_FAMILY_BASENAMES: ReadonlySet<string> = new Set([
  * supervisor is already coming up and will present the lease, so the lease
  * has to be honoured (waited for) before the error is surfaced, or a
  * successfully registered service is left without its host.
+ *
+ * The OS backends answer the same question for their own partial failures,
+ * and the register-throw branch above rethrows their error unchanged so the
+ * flag travels: macOS `kickstart` after a successful `bootstrap`, Windows
+ * `/Run` and the spawn-evidence wait after a successful `/Create`. Linux
+ * rolls a failed `enable --now` back (disable, unit removed) and so does not
+ * set it.
  */
 export function didServiceRegistrationCommit(error: unknown): boolean {
   if (!(error instanceof CliError)) return false;
@@ -558,6 +565,12 @@ export async function runServiceUninstallWithInvocationRecord(
     await markStaleAndUnpreferLive(held);
     throw cause;
   }
+  // Identity BEFORE the label read, so every classification below - foreign
+  // included - is of the record in the directory this transaction validated.
+  // A directory swapped in after the uninstall would otherwise present some
+  // other environment's record as "foreign" and return clean, leaving the
+  // real record of the removed service behind an abandoned marker.
+  await assertStateDirUnchangedAfterUninstall(held, options, stateDirIdentity);
   const matching = await liveRecordMatchesLabel(
     held.livePath,
     options.serviceLabel,
@@ -573,31 +586,9 @@ export async function runServiceUninstallWithInvocationRecord(
     await releaseOwnedTransaction(held);
     return;
   }
-  try {
-    await assertStateDirUnchanged(
-      options.hostHomeDir,
-      stateDirIdentity,
-      options.serviceLabel,
-      "uninstall",
-    );
-  } catch (cause) {
-    // The service is gone and the record of this label still describes it,
-    // which is the OS-throw case above with the same remedy: unprefer and
-    // remove it as far as the moved directory allows. Where the identity
-    // re-check refuses every write, the retained transaction marker is the
-    // bypass that outlives this process, and the failure is reported rather
-    // than a removed service read as a clean uninstall.
-    logger.debug(
-      "CLI invocation state directory changed after OS uninstall; marking the cached invocation stale",
-      {
-        environment: options.environment,
-        label: options.serviceLabel,
-        errorName: errorFromUnknown(cause).name,
-      },
-    );
-    await markStaleAndUnpreferLive(held);
-    throw cause;
-  }
+  // Again after the label compare: this is the compare half of
+  // compare-then-unlink, and the identity must hold at the unlink too.
+  await assertStateDirUnchangedAfterUninstall(held, options, stateDirIdentity);
   // Strict, not best-effort: `matching` above is the compare half of
   // compare-then-unlink, and this is the unlink. A record that survives its
   // own uninstall - a sharing violation on Windows is the realistic case -
@@ -1308,6 +1299,40 @@ async function markStaleAndUnpreferLive(held: HeldTransaction): Promise<void> {
   await removeBestEffort(held.stagingPath);
   if (staleWritten) {
     await unlinkIfUnchanged(held.txnPath, held.rawMarker);
+  }
+}
+
+/**
+ * Post-uninstall identity check. The service is gone, so a record of this
+ * label that survives describes nothing - which is the OS-throw case with the
+ * same remedy: unprefer and remove it as far as the moved directory allows,
+ * and report the uninstall as failed rather than clean. Where the identity
+ * re-check refuses every write, the retained transaction marker is the bypass
+ * that outlives this process.
+ */
+async function assertStateDirUnchangedAfterUninstall(
+  held: HeldTransaction,
+  options: ServiceUninstallRecordOptions,
+  stateDirIdentity: CliInvocationStateDirIdentity,
+): Promise<void> {
+  try {
+    await assertStateDirUnchanged(
+      options.hostHomeDir,
+      stateDirIdentity,
+      options.serviceLabel,
+      "uninstall",
+    );
+  } catch (cause) {
+    createCliLogger(options.environment).debug(
+      "CLI invocation state directory changed after OS uninstall; marking the cached invocation stale",
+      {
+        environment: options.environment,
+        label: options.serviceLabel,
+        errorName: errorFromUnknown(cause).name,
+      },
+    );
+    await markStaleAndUnpreferLive(held);
+    throw cause;
   }
 }
 
