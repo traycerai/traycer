@@ -302,6 +302,36 @@ describe("WorktreeAutoCleanupSection", () => {
     ).toContain("next check in under a minute");
   });
 
+  it("flips to due now at the deadline without waiting for the next clock tick", async () => {
+    // The shared clock samples once a minute; a deadline landing between two
+    // samples must not leave "in under a minute" on screen past itself.
+    renderSection(
+      clientWithPolicy({
+        get: () =>
+          policyFixture({
+            enabled: true,
+            lastEvaluatedAt: Date.now() - 5 * 60_000,
+            nextEvaluationAt: Date.now() + 700,
+          }),
+        set: (r) => policyFixture(r),
+      }),
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("worktree-auto-cleanup-schedule").textContent,
+      ).toContain("next check in under a minute");
+    });
+    await waitFor(
+      () => {
+        expect(
+          screen.getByTestId("worktree-auto-cleanup-schedule").textContent,
+        ).toContain("next check due now");
+      },
+      { timeout: 3_000 },
+    );
+  });
+
   it("renders an overdue check as due now rather than counting down to zero", async () => {
     renderSection(
       clientWithPolicy({

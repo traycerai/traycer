@@ -1,4 +1,4 @@
-import { useCallback, useId, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useState, type ReactNode } from "react";
 import { History, Info } from "lucide-react";
 import type { WorktreeAutoCleanupPolicyState } from "@traycer/protocol/host/worktree-auto-cleanup-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -315,7 +315,26 @@ const UNDER_A_MINUTE_MS = 60_000;
  * cadence tick) reads as due rather than as a countdown of zero.
  */
 function AutoCleanupNextCheck(props: { readonly at: number }): ReactNode {
-  const now = useSampledNow();
+  const sampled = useSampledNow();
+  // The deadline-aligned wake. The shared clock samples once a minute, so
+  // without this "in under a minute" would outlive the deadline by up to a
+  // tick. Inside the last minute a one-shot timer fires exactly at `at`;
+  // re-armed on every sample as well as on `at`, because the minute the
+  // deadline enters is only known once a fresh sample says so. `arrivedAt`
+  // needs no reset when `at` moves: a stale value is always below the new
+  // deadline, and `max` with the live sample discards it.
+  const [arrivedAt, setArrivedAt] = useState<number | null>(null);
+  useEffect(() => {
+    const remaining = props.at - Date.now();
+    if (remaining <= 0 || remaining >= UNDER_A_MINUTE_MS) return undefined;
+    const handle = window.setTimeout(() => {
+      setArrivedAt(props.at);
+    }, remaining);
+    return () => {
+      window.clearTimeout(handle);
+    };
+  }, [props.at, sampled]);
+  const now = arrivedAt === null ? sampled : Math.max(sampled, arrivedAt);
   if (props.at <= now) return <>due now</>;
   if (props.at - now < UNDER_A_MINUTE_MS) return <>in under a minute</>;
   return <>in {formatResetCountdown(props.at, now)}</>;
