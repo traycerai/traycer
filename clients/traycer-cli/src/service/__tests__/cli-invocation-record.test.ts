@@ -106,6 +106,13 @@ const mocks = vi.hoisted(() => ({
   // with an EIO-shaped error. Reset after it fires.
   failReaddirOnCallNumber: 0,
   readdirCallCount: 0,
+  // Every `handle.readFile()` on a handle this suite opened. Production must
+  // never read an authority file unbounded, so a test can assert zero.
+  unboundedReadFileCalls: 0,
+  // When > 0, every positional `handle.read` returns at most this many bytes,
+  // the short-read behaviour a real file may exhibit and a reader must loop
+  // over. Reset per test.
+  shortReadChunkBytes: 0,
 }));
 
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -145,6 +152,28 @@ vi.mock("node:fs/promises", async (importOriginal) => {
         });
       }
       const handle = await actual.open(...args);
+      const originalRead = handle.read.bind(handle);
+      handle.read = (async (
+        buffer: Buffer,
+        offset: number,
+        length: number,
+        position: number,
+      ) => {
+        const chunk = mocks.shortReadChunkBytes;
+        return originalRead(
+          buffer,
+          offset,
+          chunk > 0 ? Math.min(length, chunk) : length,
+          position,
+        );
+      }) as typeof handle.read;
+      const originalReadFile = handle.readFile.bind(handle);
+      handle.readFile = (async (
+        ...readArgs: Parameters<typeof originalReadFile>
+      ) => {
+        mocks.unboundedReadFileCalls += 1;
+        return originalReadFile(...readArgs);
+      }) as typeof handle.readFile;
       const originalWrite = handle.writeFile.bind(handle);
       handle.writeFile = (async (data, options) => {
         mocks.writeFileCallCount += 1;
@@ -294,6 +323,8 @@ beforeEach(async () => {
   mocks.noopRmPath = null;
   mocks.failOpenForBasename = null;
   mocks.failCloseForPrefix = null;
+  mocks.shortReadChunkBytes = 0;
+  mocks.unboundedReadFileCalls = 0;
   mocks.failOpenCode = "EBUSY";
 });
 
@@ -2634,6 +2665,41 @@ describe("lifecycle generation", () => {
     expect((await readLifecycle())?.legacyMarkerEvidence).toEqual({
       kind: "digest",
       digest: cliInvocationTransactionMarkerDigest(corrupt),
+    });
+  });
+
+  it("reads an OVERSIZED corrupt legacy exact marker through a bounded read, names it by the digest of its prefix, and never calls readFile()", async () => {
+    // The bounded digest exists to discharge exactly this file. Reading all of
+    // it first would make one past the Buffer limit `unreadable` - and this
+    // command would then mutate the service and fail its release while every
+    // host kept bypassing the record it committed.
+    const exactPath = cliInvocationRecordTransactionMarkerPath(hostHome);
+    const oversized = Buffer.alloc(300 * 1024, 0x41);
+    oversized[0] = 0x7b; // "{" - still not JSON, still not ours
+    oversized[100_000] = 0xff; // and not valid UTF-8 either
+    await writeFile(exactPath, oversized, { mode: 0o600 });
+    const past = new Date(
+      Date.now() - CLI_INVOCATION_TXN_ABANDON_AFTER_MS - 60_000,
+    );
+    await utimes(exactPath, past, past);
+    mocks.unboundedReadFileCalls = 0;
+    // And every positional read comes back SHORT (1 KiB at a time), so the
+    // digest below is only right if the reader loops until the prefix is
+    // filled rather than hashing whatever the first read returned.
+    mocks.shortReadChunkBytes = 1024;
+    await runServiceRegistrationWithInvocationRecord({
+      environment: "production",
+      hostHomeDir: hostHome,
+      waitMs: 2_000,
+      pollIntervalMs: 20,
+      serviceLabel: LABEL,
+      cli: npmCli(),
+      register: async () => undefined,
+    });
+    expect(mocks.unboundedReadFileCalls).toBe(0);
+    expect((await readLifecycle())?.legacyMarkerEvidence).toEqual({
+      kind: "digest",
+      digest: cliInvocationTransactionMarkerDigest(oversized),
     });
   });
 

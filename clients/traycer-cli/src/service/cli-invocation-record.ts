@@ -33,6 +33,7 @@ import {
   cliInvocationStateDir,
   cliInvocationStateDirIdentitiesMatch,
   cliInvocationTransactionAbandonedByAge,
+  CLI_INVOCATION_TRANSACTION_MARKER_DIGEST_BYTES,
   cliInvocationTransactionMarkerDigest,
   cliInvocationTransactionMarkerMatchesBasename,
   electCliInvocationTransactionOwnerBasename,
@@ -1265,6 +1266,15 @@ type AuthorityRead =
   | { readonly kind: "not-a-file" }
   | { readonly kind: "unreadable"; readonly mtimeMs: number | null };
 
+/**
+ * The most an authority file is ever read: enough for the largest document
+ * this module parses AND for the digest prefix the protocol helper hashes.
+ */
+const AUTHORITY_FILE_READ_BOUND_BYTES = Math.max(
+  CLI_INVOCATION_RECORD_MAX_SERIALIZED_BYTES,
+  CLI_INVOCATION_TRANSACTION_MARKER_DIGEST_BYTES,
+);
+
 async function readAuthorityFile(path: string): Promise<AuthorityRead> {
   let handle: FileHandle;
   try {
@@ -1282,7 +1292,21 @@ async function readAuthorityFile(path: string): Promise<AuthorityRead> {
   try {
     const info = await handle.stat();
     if (!info.isFile()) return { kind: "not-a-file" };
-    const bytes = await handle.readFile();
+    // BOUNDED, never `readFile()`: a malformed, oversized legacy marker is
+    // exactly the file the bounded digest exists to discharge, and pulling all
+    // of it into memory first would turn one that exceeds the Buffer limit
+    // into `unreadable` (or into memory pressure) - after which this command
+    // mutates the service, records `unreadable`, and fails its release while
+    // every host keeps bypassing the record it just committed. Nothing of ours
+    // is ever larger than the bound: a record or lifecycle over
+    // `CLI_INVOCATION_RECORD_MAX_SERIALIZED_BYTES` does not parse anyway, and
+    // the digest helper hashes only its own prefix. What is truncated here is
+    // therefore garbage by construction, and the compare-then-unlink that
+    // later re-reads it compares the same prefix.
+    const bytes = await readAuthorityBytes(handle, info.size);
+    if (bytes === null) {
+      return { kind: "unreadable", mtimeMs: info.mtimeMs };
+    }
     return {
       kind: "ok",
       bytes,
@@ -1294,6 +1318,45 @@ async function readAuthorityFile(path: string): Promise<AuthorityRead> {
   } finally {
     await handle.close().catch(() => undefined);
   }
+}
+
+/**
+ * Fill-or-fail bounded read of an authority file whose `fstat` said `size`.
+ *
+ * One positional `read` is not guaranteed to fill the requested range even on
+ * a regular file, and a short read taken as the whole observation would hand
+ * a PREFIX to the parsers and to the digest - a lifecycle naming the digest of
+ * 2 KiB of a marker the host hashes 4 KiB of can never discharge it. So the
+ * reads loop until the wanted length is filled or the file ends, and:
+ *
+ *   - within the bound, the read asks for ONE BYTE MORE than the stat reported
+ *     and requires exactly `size` back. A byte more means the file grew after
+ *     the stat, fewer means it shrank; either way the bytes in hand describe
+ *     no coherent document, and the answer is `unreadable` - the host's
+ *     stable-read rule, applied here for the same reason;
+ *   - past the bound, the full bound must be filled: that prefix is the
+ *     file's identity for the shared digest, and a partial one is not.
+ */
+async function readAuthorityBytes(
+  handle: FileHandle,
+  size: number,
+): Promise<Buffer | null> {
+  const oversize = size > AUTHORITY_FILE_READ_BOUND_BYTES;
+  const wanted = oversize ? AUTHORITY_FILE_READ_BOUND_BYTES : size;
+  const capacity = oversize ? wanted : wanted + 1;
+  const buffer = Buffer.alloc(capacity);
+  let filled = 0;
+  while (filled < capacity) {
+    const { bytesRead } = await handle.read(
+      buffer,
+      filled,
+      capacity - filled,
+      filled,
+    );
+    if (bytesRead === 0) break;
+    filled += bytesRead;
+  }
+  return filled === wanted ? buffer.subarray(0, wanted) : null;
 }
 
 async function lstatMtimeMs(path: string): Promise<number | null> {
