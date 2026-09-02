@@ -53,6 +53,12 @@ export interface JarRecorder {
   deferCaptures: boolean;
   /** Resolves the OLDEST still-pending deferred capture, in call order. */
   resolvePendingCapture: () => void;
+  /**
+   * When set, the NEXT `capturePrimaryProfile` call rejects with this error
+   * instead of returning a result, then clears itself - once only, the way
+   * one bad file read is.
+   */
+  failNextCapture: Error | null;
 }
 
 export function createJarRecorder(): JarRecorder {
@@ -68,6 +74,7 @@ export function createJarRecorder(): JarRecorder {
     attested: [],
     captures: 0,
     deferCaptures: false,
+    failNextCapture: null,
     resolvePendingCapture: () => {
       const resolve = pendingCaptures.shift();
       if (resolve === undefined) {
@@ -85,6 +92,11 @@ export function createJarRecorder(): JarRecorder {
     port: {
       capturePrimaryProfile: () => {
         recorder.captures += 1;
+        if (recorder.failNextCapture !== null) {
+          const error = recorder.failNextCapture;
+          recorder.failNextCapture = null;
+          return Promise.reject(error);
+        }
         const result: BrowserPrimaryProfileCaptureResult = {
           status: "captured",
           storageState: { cookies: [], origins: [] },

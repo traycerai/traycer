@@ -9,7 +9,10 @@ import type {
 } from "@traycer-clients/shared/platform/browser-view";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { log } from "../../app/logger";
-import { BrowserSessionsRegistry } from "../browser-sessions-owner";
+import {
+  BrowserSessionsRegistry,
+  FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS,
+} from "../browser-sessions-owner";
 import {
   createRegistryHarness,
   LOCAL_HOST_ENTRY,
@@ -868,6 +871,117 @@ describe("the browser.sessions jar plane lives in main", () => {
     // Not-sent, so no host is counted, and there is no sibling stream on
     // this host to try instead.
     expect(await pushed).toBe(0);
+  });
+
+  it("the ack budget starts when the frame leaves, not when the jar read starts", async () => {
+    vi.useFakeTimers();
+    try {
+      const session = await openLiveStream(harness, registry, "window-1");
+      session.emit(
+        {
+          kind: "capturePrimaryProfile",
+          hasBinaryPayload: false,
+          requestId: "standing-1",
+          standing: true,
+        },
+        null,
+      );
+
+      harness.jar.deferCaptures = true;
+      const firstPushed = registry.capturePrimaryProfileOnEveryHost();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // The jar read is in flight. The ack waiter - and its timer - are only
+      // registered once the frame has LEFT, so nothing has been sent yet.
+      expect(harness.jar.captures).toBe(1);
+      expect(session.framesOfKind("primaryProfileCaptured")).toHaveLength(0);
+
+      // Advancing past the whole ack budget while the read is still pending
+      // must consume nothing: there is no timer running yet to expire.
+      await vi.advanceTimersByTimeAsync(FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS);
+
+      harness.jar.resolvePendingCapture();
+      for (let tick = 0; tick < 8; tick += 1) {
+        await Promise.resolve();
+      }
+
+      const captured = session.framesOfKind("primaryProfileCaptured");
+      expect(captured).toHaveLength(1);
+      const requestId = captured[0]?.requestId;
+      if (typeof requestId !== "string") {
+        throw new Error("no capture went out");
+      }
+
+      session.emit(
+        {
+          kind: "primaryProfileCaptureAck",
+          hasBinaryPayload: false,
+          requestId,
+        },
+        null,
+      );
+
+      // Acked: the budget only started once the frame left, and the ack
+      // arrived well inside it.
+      expect(await firstPushed).toBe(1);
+
+      // Control: a second run, this time with no ack at all. Its OWN budget
+      // starts only once ITS frame leaves, and expires normally from there.
+      harness.jar.deferCaptures = true;
+      const secondPushed = registry.capturePrimaryProfileOnEveryHost();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(harness.jar.captures).toBe(2);
+      harness.jar.resolvePendingCapture();
+      for (let tick = 0; tick < 8; tick += 1) {
+        await Promise.resolve();
+      }
+      expect(session.framesOfKind("primaryProfileCaptured")).toHaveLength(2);
+
+      await vi.advanceTimersByTimeAsync(FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS);
+
+      expect(await secondPushed).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a jar read that throws answers a closed reason and logs the cause, never the raw path", async () => {
+    const session = await openLiveStream(harness, registry, "window-1");
+    harness.jar.failNextCapture = new Error("EACCES /Users/x/Library/Cookies");
+
+    session.emit(
+      {
+        kind: "capturePrimaryProfile",
+        hasBinaryPayload: false,
+        requestId: "capture-1",
+        standing: false,
+      },
+      null,
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const captured = session.framesOfKind("primaryProfileCaptured");
+    expect(captured).toHaveLength(1);
+    expect(captured[0]?.status).toBe("failed");
+    expect(captured[0]?.reason).toBe("capture-failed");
+    // The raw path text never crosses into the frame the host receives.
+    expect(JSON.stringify(captured[0])).not.toContain("EACCES");
+    expect(JSON.stringify(captured[0])).not.toContain(
+      "/Users/x/Library/Cookies",
+    );
+
+    const warnCalls = vi.mocked(log.warn).mock.calls;
+    expect(
+      warnCalls.some((call) =>
+        /primary profile capture failed/.test(String(call[0])),
+      ),
+    ).toBe(true);
   });
 
   it("runs overlapping captures on one stream one at a time, the later one after the first's ack", async () => {

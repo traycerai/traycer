@@ -746,7 +746,6 @@ class BrowserSessionsStream {
     // refused and dropped there. Sending nothing is the same outcome without
     // the jar read.
     if (requestId === null) return "not-sent";
-    const acked = this.awaitCaptureAck(requestId);
     // The jar read is asynchronous, and the stream can close - or the host
     // can re-issue its standing id - while it runs. A frame that could not
     // be sent, or that would quote an id the host no longer holds, never
@@ -756,11 +755,12 @@ class BrowserSessionsStream {
       requestId,
       () => this.standingCaptureRequestId === requestId,
     );
-    if (!sent) {
-      this.cancelCaptureAckWaiter(requestId);
-      return "not-sent";
-    }
-    return (await acked) ? "acked" : "unacked";
+    if (!sent) return "not-sent";
+    // The ack waiter - and its timeout - start once the frame has LEFT, not
+    // before the jar read, which can queue behind the jar barrier for longer
+    // than the ack budget. No ack can be missed: the send was synchronous,
+    // and this continuation runs before any socket delivery.
+    return (await this.awaitCaptureAck(requestId)) ? "acked" : "unacked";
   }
 
   dispose(): void {
@@ -808,14 +808,6 @@ class BrowserSessionsStream {
     if (this.client === null) return false;
     this.client.sendClientFrame(frame);
     return true;
-  }
-
-  /** Releases an ack waiter for a frame that never left, as unacked. */
-  private cancelCaptureAckWaiter(requestId: string): void {
-    const settle = this.captureAckWaiters.get(requestId);
-    if (settle === undefined) return;
-    this.captureAckWaiters.delete(requestId);
-    settle(false);
   }
 
   private emit(event: BrowserSessionsStreamEventEnvelope["event"]): void {
@@ -1071,13 +1063,19 @@ class BrowserSessionsStream {
               reason: result.reason,
             };
     } catch (error: unknown) {
+      // The cause stays in this process's log: a jar read's error can carry
+      // a filesystem path or an OS error string, and the frame travels to a
+      // host that may log it. The host gets a closed reason.
+      log.warn("[browser-sessions] primary profile capture failed", {
+        error: describeLogError(error),
+      });
       frame = {
         kind: "primaryProfileCaptured",
         hasBinaryPayload: false,
         requestId,
         storageState: null,
         status: "failed",
-        reason: error instanceof Error ? error.message : String(error),
+        reason: "capture-failed",
       };
     }
     if (!stillWanted()) return false;
