@@ -97,6 +97,11 @@ const mocks = vi.hoisted(() => ({
   // succeeds while a READ of it is what fails.
   failOpenForBasename: null as string | null,
   failOpenCode: "EBUSY",
+  // Makes the NEXT `close()` of a handle whose basename starts with this
+  // prefix reject with an EIO-shaped error AFTER the real close succeeded -
+  // the delayed write-back failure a filesystem reports only at close.
+  // Reset after one use.
+  failCloseForPrefix: null as string | null,
 }));
 
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -154,6 +159,18 @@ vi.mock("node:fs/promises", async (importOriginal) => {
         }
         return originalWrite(data, options);
       }) as typeof handle.writeFile;
+      const originalClose = handle.close.bind(handle);
+      handle.close = (async () => {
+        const prefix = mocks.failCloseForPrefix;
+        if (prefix !== null && basename(target).startsWith(prefix)) {
+          mocks.failCloseForPrefix = null;
+          await originalClose();
+          throw Object.assign(new Error("SIMULATED_CLOSE_FAILURE"), {
+            code: "EIO",
+          });
+        }
+        return originalClose();
+      }) as typeof handle.close;
       return handle;
     },
     rename: async (
@@ -219,6 +236,7 @@ const {
   __setCliInvocationStateDirPauseAfterGateForTest,
   __setCliInvocationStateDirPauseBeforeWriteForTest,
   __setCliInvocationPauseAfterExclusiveCreateForTest,
+  __setCliInvocationTxnObservePauseForTest,
 } = await import("../cli-invocation-record");
 
 const LABEL = "ai.traycer.host";
@@ -258,6 +276,7 @@ beforeEach(async () => {
   mocks.failRmPath = null;
   mocks.noopRmPath = null;
   mocks.failOpenForBasename = null;
+  mocks.failCloseForPrefix = null;
   mocks.failOpenCode = "EBUSY";
 });
 
@@ -1840,6 +1859,111 @@ describe("runServiceRemovalWithInvocationRecord (generic)", () => {
       message: expect.stringContaining(`'${LABEL}' was retired`),
       details: { phase: "release", ownMarkerRetained: true },
     });
+  });
+
+  it("removes the contender it created when closing its file fails after the write", async () => {
+    // A delayed write-back error surfaces only at `close()`. It used to
+    // escape the exclusive-write cleanup and leave a valid, positively live
+    // marker owned by a process that believes it acquired nothing - so every
+    // retry in that process waited behind its own residue.
+    mocks.failCloseForPrefix = CLI_INVOCATION_RECORD_TXN_FILENAME_PREFIX;
+    let registered = false;
+    await expect(
+      runServiceRegistrationWithInvocationRecord({
+        environment: "production",
+        hostHomeDir: hostHome,
+        waitMs: 2_000,
+        pollIntervalMs: 20,
+        serviceLabel: LABEL,
+        cli: npmCli(),
+        register: async () => {
+          registered = true;
+        },
+      }),
+    ).rejects.toThrow(/could not acquire the CLI invocation/);
+    expect(registered).toBe(false);
+    expect(mocks.failCloseForPrefix).toBeNull();
+    // THE discriminating assertion: the contender the failed close belonged
+    // to is gone, not left behind as a live marker of this process.
+    expect(await transactionMarkerNames()).toEqual([]);
+  });
+
+  it("a losing contender that cannot remove its own marker keeps owning it and retries, instead of leaving a live orphan beside the winner", async () => {
+    if (process.platform === "win32") return;
+    // The competing contender: owned by THIS process (so it is positively
+    // live for as long as the test runs), identity-less (so liveness comes
+    // from the pid alone), and back-dated by a second so the election's
+    // earliest-mtime rule makes it the winner over the marker this command
+    // creates.
+    const winnerToken = "11111111-2222-4333-8444-555555555555";
+    const winnerPath = join(
+      cliInvocationStateDir(hostHome),
+      `${CLI_INVOCATION_RECORD_TXN_FILENAME_PREFIX}${winnerToken}`,
+    );
+    const plantWinner = async (): Promise<void> => {
+      await writeFile(
+        winnerPath,
+        serializeCliInvocationTransactionMarker({
+          schemaVersion: 1,
+          kind: "transaction",
+          owner: {
+            pid: process.pid,
+            token: winnerToken,
+            processStartIdentity: null,
+            startedAtMs: null,
+          },
+          stagingFile: `${CLI_INVOCATION_RECORD_STAGING_FILENAME_PREFIX}${winnerToken}`,
+          operation: "install",
+          serviceLabel: LABEL,
+          startedAt: new Date().toISOString(),
+        }),
+        { mode: 0o600 },
+      );
+      const older = new Date(Date.now() - 1_000);
+      await utimes(winnerPath, older, older);
+    };
+    // One pause per election pass, AFTER that pass observed the directory.
+    //   1: the directory was empty - plant the winner now, so this pass
+    //      creates our contender and the NEXT pass sees two live markers.
+    //   2: two live markers, we lose - make our unlink fail, so the marker
+    //      survives and `unlinkIfUnchanged` reports it retained.
+    //   3: still two, still losing - the retried unlink succeeds.
+    //   4: only the winner remains - retire it, so the pass after this one
+    //      finds an empty directory and acquires cleanly.
+    let pass = 0;
+    const previous = __setCliInvocationTxnObservePauseForTest(async () => {
+      pass += 1;
+      if (pass === 1) await plantWinner();
+      if (pass === 2) mocks.failNextRm = true;
+      if (pass === 4) await rm(winnerPath, { force: true });
+    });
+    let registered = false;
+    try {
+      await runServiceRegistrationWithInvocationRecord({
+        environment: "production",
+        hostHomeDir: hostHome,
+        // Below vitest's 5 s test timeout on purpose: without the retry the
+        // loop cannot converge, and the failure should be the `txn-busy`
+        // error this deadline produces rather than the runner giving up.
+        waitMs: 3_000,
+        pollIntervalMs: 20,
+        serviceLabel: LABEL,
+        cli: npmCli(),
+        register: async () => {
+          registered = true;
+        },
+      });
+    } finally {
+      __setCliInvocationTxnObservePauseForTest(previous);
+    }
+    expect(registered).toBe(true);
+    // The simulated failure was consumed by the loser's first unlink, and
+    // the command still converged: without the retry the orphaned marker
+    // stays positively live (its owner is this process) and every later
+    // pass waits behind it until the deadline.
+    expect(mocks.failNextRm).toBe(false);
+    expect(pass).toBeGreaterThanOrEqual(5);
+    expect(await transactionMarkerNames()).toEqual([]);
   });
 
   it("marks stale and removes the own-label record when remove() throws", async () => {

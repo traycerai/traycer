@@ -1031,8 +1031,17 @@ async function acquireTransaction(input: {
           })),
         );
         if (winnerBasename !== held.basename) {
-          await unlinkIfUnchanged(held.txnPath, held.rawMarker);
-          held = null;
+          // A loser removes its own marker and CONFIRMS the removal before it
+          // stops owning it. If the file survives - a sharing lock or an
+          // antivirus hold on Windows keeps an unlinked file present for a
+          // while - ownership is retained and the unlink is retried on the
+          // next pass. Dropping `held` here regardless would leave a marker
+          // this still-running process keeps positively live, which the
+          // elected winner then counts as a second live contender, and both
+          // commands wait out the shared deadline and fail.
+          if (await unlinkIfUnchanged(held.txnPath, held.rawMarker)) {
+            held = null;
+          }
         }
       }
     } else if (held === null) {
@@ -1083,16 +1092,25 @@ async function acquireTransaction(input: {
       }
     }
     if (performance.now() >= deadline) {
-      if (held !== null) {
-        await unlinkIfUnchanged(held.txnPath, held.rawMarker);
-      }
+      // Reported, not assumed: a marker this process could not remove stays
+      // live until the process exits, and the operator reading this error is
+      // the one who decides whether to wait or retry.
+      const ownMarkerRetained =
+        held !== null &&
+        !(await unlinkIfUnchanged(held.txnPath, held.rawMarker));
       throw cliError({
         code:
           input.operation === "uninstall"
             ? CLI_ERROR_CODES.SERVICE_UNINSTALL_FAILED
             : CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
-        message: `another CLI service ${input.operation} is already in progress for '${input.serviceLabel}'`,
-        details: { label: input.serviceLabel, phase: "txn-busy" },
+        message: ownMarkerRetained
+          ? `another CLI service ${input.operation} is already in progress for '${input.serviceLabel}', and this command's own transaction marker could not be removed; it stops blocking election when this process exits and is reclaimed by a later successful CLI service command`
+          : `another CLI service ${input.operation} is already in progress for '${input.serviceLabel}'`,
+        details: {
+          label: input.serviceLabel,
+          phase: "txn-busy",
+          ownMarkerRetained,
+        },
         exitCode: 75,
       });
     }
@@ -1443,12 +1461,19 @@ async function writeExclusiveAuthorityFile(
       await handle.chmod(0o600);
     }
     await handle.writeFile(contents, { encoding: "utf8" });
+    // INSIDE the cleanup boundary, not after it. A close that rejects - a
+    // delayed I/O error the filesystem reports only at the last write-back -
+    // used to escape this catch and leave the file it had just created in
+    // place; for a unique contender that is a valid transaction marker owned
+    // by a process that believes it acquired nothing, so every retry in that
+    // process waits behind its own residue until the deadline. A failed
+    // exclusive write removes what it created, whichever step failed.
+    await handle.close();
   } catch (cause) {
     await handle.close().catch(() => undefined);
     await removeBestEffort(path);
     throw cause;
   }
-  await handle.close();
 }
 
 async function writeRestrictiveFile(
