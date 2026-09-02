@@ -18,6 +18,11 @@ export interface ResourcesStreamMountProps {
   readonly epicId: string;
 }
 
+export interface GlobalResourcesStreamMountProps {
+  /** True only while the resource-monitor popover is actually visible. */
+  readonly interactive: boolean;
+}
+
 /**
  * Headless lifecycle owner for one epic's `resources.subscribe` stream. Mounted
  * inside the epic pane (where the app-wide `WsStreamClient` and the epic id are
@@ -89,7 +94,9 @@ export function ResourcesStreamMount(
   return null;
 }
 
-export function GlobalResourcesStreamMount(): ReactNode {
+export function GlobalResourcesStreamMount(
+  props: GlobalResourcesStreamMountProps,
+): ReactNode {
   const wsStreamClient = useWsStreamClient();
   // Taken from the SAME binding as the client above, never from a prop or a
   // scope model: the host id republished on the projection is what a scoped
@@ -186,6 +193,22 @@ export function GlobalResourcesStreamMount(): ReactNode {
     // machine. In practice it now moves WITH `wsStreamClient` (one binding, one
     // change), so this rarely fires on its own.
   }, [hostId, reacquireToken, resourcesUnsupported, wsStreamClient]);
+
+  // Declared after the acquire effect and carrying its full dependency set, so
+  // it runs on the same commit as any re-acquire and re-states the demand on
+  // the entry that acquire just installed. `getGlobal` is the registry's own
+  // accessor for that entry - no second handle needs to be held here.
+  useEffect(() => {
+    resourcesRegistry
+      .getGlobal()
+      ?.setDemand(props.interactive ? "interactive" : "background");
+  }, [
+    hostId,
+    props.interactive,
+    reacquireToken,
+    resourcesUnsupported,
+    wsStreamClient,
+  ]);
 
   return null;
 }

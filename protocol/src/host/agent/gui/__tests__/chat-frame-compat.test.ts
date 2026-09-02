@@ -1167,6 +1167,79 @@ describe("projectChatServerFrameForVersion", () => {
     });
   });
 
+  describe("relaunchOnHostRestart below 1.7", () => {
+    // `1.6` shipped binding the pre-relaunch command, so the flag must leave
+    // the wire for a `1.6` peer on BOTH channels the set rides - and the
+    // commands themselves must survive, since a projector that dropped the
+    // set would also satisfy "no flag on the wire".
+    const command = {
+      id: "cmd-1",
+      monitoring: false,
+      description: "deploy watcher",
+      command: "tail -f deploy.log",
+      cwd: null,
+      cadence: null,
+      status: { state: "running", pid: 4410, startedAtMs: 10 },
+      chatId: "chat-1",
+      relaunchOnHostRestart: true,
+      createdAtMs: 1,
+      updatedAtMs: 10,
+    };
+    const changed = asProjectedServerFrame({
+      kind: "managedCommandsChanged",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      managedCommands: [command],
+    });
+
+    it("strips the flag from a 1.6 snapshot's set and the managedCommandsChanged frame", () => {
+      const envelope = v16SnapshotEnvelope([userMessage()]);
+      const snapshot = envelope.snapshot as Record<string, unknown>;
+      snapshot.managedCommands = [command];
+      const frame = asProjectedServerFrame(envelope);
+
+      for (const version of legacyLines()) {
+        const projected = projectChatServerFrameForVersion(frame, version);
+        const set = asRecord(
+          asRecord(projected, "frame").snapshot,
+          "snapshot",
+        ).managedCommands;
+        // Strict: an explicit `relaunchOnHostRestart: undefined` is not the
+        // shipped shape either.
+        const { relaunchOnHostRestart: _flag, ...shipped } = command;
+        expect(set).toStrictEqual([shipped]);
+
+        const projectedChanged = projectChatServerFrameForVersion(
+          changed,
+          version,
+        );
+        expect(JSON.stringify(projectedChanged)).not.toContain(
+          "relaunchOnHostRestart",
+        );
+        expect(JSON.stringify(projectedChanged)).toContain("cmd-1");
+      }
+    });
+
+    it("keeps the flag on 1.7 and does not grow the key back on a set-less snapshot", () => {
+      expect(projectChatServerFrameForVersion(changed, live)).toBe(changed);
+      // A pre-1.6 peer's snapshot has already had the set stripped upstream;
+      // the projector must not re-add `managedCommands: undefined`.
+      const envelope = v16SnapshotEnvelope([userMessage()]);
+      delete (envelope.snapshot as Record<string, unknown>).managedCommands;
+      const projected = projectChatServerFrameForVersion(
+        asProjectedServerFrame(envelope),
+        { major: 1, minor: 5 },
+      );
+      expect(
+        Object.hasOwn(
+          asRecord(asRecord(projected, "frame").snapshot, "snapshot"),
+          "managedCommands",
+        ),
+      ).toBe(false);
+    });
+  });
+
   it("is identity on {1,7}", () => {
     const text = textBlock("text-1");
     const interview = populatedInterviewBlock("iv-1");
