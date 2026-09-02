@@ -256,7 +256,7 @@ beforeEach(() => {
     right: SURFACE_RECT.left + SURFACE_RECT.width,
     bottom: SURFACE_RECT.top + SURFACE_RECT.height,
     toJSON: () => undefined,
-  } as DOMRect);
+  });
 });
 
 afterEach(() => {
