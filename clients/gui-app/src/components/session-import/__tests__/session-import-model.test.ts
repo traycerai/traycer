@@ -15,10 +15,13 @@ import {
   groupSessionImportFailures,
   harnessDisplayName,
   sessionImportFailureLabel,
+  sessionImportFailureSummary,
   sessionImportGroupKey,
+  sessionImportScanWindowLabel,
   sessionImportSelectionKey,
   sessionImportWizardReducer,
   SESSION_IMPORT_INITIAL_STATE,
+  SESSION_IMPORT_SCAN_WINDOW_OPTIONS,
   type SessionImportOutcomeEntry,
   type SessionImportWizardAction,
   type SessionImportWizardState,
@@ -992,8 +995,8 @@ describe("groupSessionImportFailures", () => {
 
     expect(groups).toHaveLength(1);
     expect(groups[0]?.reason).toBe("source_unreadable");
-    expect(groups[0]?.label).toBe(
-      sessionImportFailureLabel("source_unreadable"),
+    expect(groups[0]?.summary).toBe(
+      sessionImportFailureSummary("source_unreadable", 2),
     );
     expect(groups[0]?.entries).toEqual([
       { selectionKey: knownKey, title: "Fix login bug", detail: "disk error" },
@@ -1020,9 +1023,9 @@ describe("groupSessionImportFailures", () => {
 
     expect(groups.map((entry) => entry.reason)).toEqual([
       "source_unreadable",
-      "source_empty",
       "workspace_bind_failed",
       "internal_error",
+      "source_empty",
     ]);
   });
 });
@@ -1038,3 +1041,45 @@ function failureEntry(
     outcome: { kind: "failed", reason, detail },
   };
 }
+
+describe("sessionImportFailureSummary", () => {
+  it("pluralizes the count-bearing sentence for every reason except the ones that never need it", () => {
+    expect(sessionImportFailureSummary("source_unreadable", 1)).toBe(
+      "1 could not be read",
+    );
+    expect(sessionImportFailureSummary("source_unreadable", 4)).toBe(
+      "4 could not be read",
+    );
+    expect(sessionImportFailureSummary("source_empty", 1)).toBe(
+      "1 had no messages to bring over",
+    );
+    expect(sessionImportFailureSummary("source_empty", 29)).toBe(
+      "29 had no messages to bring over",
+    );
+  });
+
+  it("swaps 'a task' for 'tasks' only when the count is not exactly one", () => {
+    expect(sessionImportFailureSummary("creation_failed", 1)).toBe(
+      "1 could not be turned into a task",
+    );
+    expect(sessionImportFailureSummary("creation_failed", 2)).toBe(
+      "2 could not be turned into tasks",
+    );
+  });
+});
+
+describe("SESSION_IMPORT_SCAN_WINDOW_OPTIONS", () => {
+  it("leads with a 24-hour option ahead of the default 7-day window", () => {
+    expect(SESSION_IMPORT_SCAN_WINDOW_OPTIONS[0]).toEqual({
+      window: 1,
+      label: "Last 24 hours",
+    });
+    expect(
+      SESSION_IMPORT_SCAN_WINDOW_OPTIONS.map((option) => option.window),
+    ).toEqual([1, 7, 14, 30, null]);
+  });
+
+  it("labels the 24-hour window", () => {
+    expect(sessionImportScanWindowLabel(1)).toBe("Last 24 hours");
+  });
+});

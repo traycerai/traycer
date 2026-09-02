@@ -29,6 +29,7 @@ import type {
   SessionImportScanClientOptions,
 } from "@traycer-clients/shared/host-transport/session-import-scan-client";
 import type { SessionImportRunRequest } from "@/components/session-import/session-import-run-handle";
+import type { SessionImportSurface } from "@/components/session-import/session-import-tone";
 import {
   SESSION_IMPORT_DEFAULT_SCAN_WINDOW,
   sessionImportGroupKey,
@@ -111,8 +112,30 @@ vi.mock("@/lib/analytics", () => ({
   AnalyticsEvent: { SessionImportStarted: "session_import_started" },
 }));
 
-import { SessionImportWizard } from "@/components/session-import/session-import-wizard";
+import {
+  SessionImportWizard,
+  type SessionImportSecondaryAction,
+} from "@/components/session-import/session-import-wizard";
+import { useSessionImportScan } from "@/components/session-import/use-session-import-scan";
 import { useSessionImportRunStore } from "@/stores/session-import/session-import-run-store";
+
+/**
+ * Stands in for the two real callers (`SessionImportDialog`,
+ * `OnboardingPage`): both start their own `useSessionImportScan` and hand the
+ * handle down as a prop, gated on the run store being idle exactly like the
+ * dialog does. Routing through this keeps every test's scan-client mock
+ * (`scanClient.callbacks`) working unchanged - only the wizard's own prop
+ * shape moved.
+ */
+function TestWizard(props: {
+  readonly surface: SessionImportSurface;
+  readonly onImportStarted: () => void;
+  readonly secondaryAction: SessionImportSecondaryAction | null;
+}) {
+  const runIdle = useSessionImportRunStore((state) => state.status === "idle");
+  const scan = useSessionImportScan(runIdle);
+  return <SessionImportWizard {...props} scan={scan} />;
+}
 
 const ZERO_TOTALS: SessionImportScanTotals = {
   groups: 0,
@@ -218,11 +241,10 @@ function missingFolderGroup(input: {
 
 function renderWizard(onImportStarted: () => void): RenderResult {
   return render(
-    <SessionImportWizard
+    <TestWizard
       surface="dialog"
       onImportStarted={onImportStarted}
       secondaryAction={null}
-      registerSubmit={null}
     />,
   );
 }
@@ -249,11 +271,10 @@ function replaceStreamClient(
   streamBinding.client = { stream: hostId };
   streamBinding.hostId = hostId;
   rerender(
-    <SessionImportWizard
+    <TestWizard
       surface="dialog"
       onImportStarted={vi.fn()}
       secondaryAction={null}
-      registerSubmit={null}
     />,
   );
 }
@@ -955,14 +976,13 @@ describe("<SessionImportWizard />", () => {
     expect(screen.queryAllByTestId("session-import-group")).toHaveLength(0);
   });
 
-  it("on the onboarding surface, renders no submit button and lets the caller's registered submit start the run", () => {
-    const registerSubmit = vi.fn<(submit: () => void) => void>();
+  it("on the onboarding surface, renders its own Import button that starts the run and notifies the caller", () => {
+    const onImportStarted = vi.fn();
     render(
-      <SessionImportWizard
+      <TestWizard
         surface="onboarding"
-        onImportStarted={vi.fn()}
+        onImportStarted={onImportStarted}
         secondaryAction={null}
-        registerSubmit={registerSubmit}
       />,
     );
     const callbacks = requireCallbacks();
@@ -976,27 +996,19 @@ describe("<SessionImportWizard />", () => {
       );
     });
 
-    // The tour has one forward control; a second Import button here would be
-    // a second way to do the same thing.
-    expect(screen.queryByTestId("session-import-submit")).toBeNull();
+    // Both surfaces submit through the wizard's own button now - the tour used
+    // to submit through its Continue instead, which imported the default
+    // selection without an explicit ask.
     expect(
       screen.getByTestId("session-import-selection-count").textContent,
     ).toBe("1 of 1 selected");
 
-    // Re-registered on every render, so Continue always presses whichever
-    // submit closed over the latest selection.
-    expect(registerSubmit).toHaveBeenCalled();
-    const latestSubmit = registerSubmit.mock.calls.at(-1)?.[0];
-    if (latestSubmit === undefined) {
-      throw new Error("Expected registerSubmit to have been called");
-    }
-    act(() => {
-      latestSubmit();
-    });
+    fireEvent.click(screen.getByTestId("session-import-submit"));
 
     expect(startSessionImportRunMock).toHaveBeenCalledTimes(1);
     expect(startSessionImportRunMock.mock.calls[0][0].selections).toEqual([
       { harness: "claude", nativeSessionId: "s1" },
     ]);
+    expect(onImportStarted).toHaveBeenCalledTimes(1);
   });
 });

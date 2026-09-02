@@ -58,6 +58,14 @@ vi.mock("@/hooks/session-import/use-session-import-available", () => ({
   useSessionImportAvailable: () => sessionImportAvailableMock.value,
 }));
 
+// The wizard is stubbed above, so nothing in this file can click its own
+// Import button - this mock exists solely to prove the tour's own forward
+// control never starts a run on its own.
+const startSessionImportRunMock = vi.hoisted(() => vi.fn());
+vi.mock("@/components/session-import/session-import-run-handle", () => ({
+  startSessionImportRun: startSessionImportRunMock,
+}));
+
 vi.mock("@/components/onboarding/onboarding-diorama", () => ({
   OnboardingDiorama: (props: {
     readonly actId: OnboardingActId;
@@ -189,6 +197,7 @@ describe("OnboardingPage", () => {
   beforeEach(() => {
     useOnboardingStore.setState({ completedAt: null, step: 0 });
     sessionImportAvailableMock.value = true;
+    startSessionImportRunMock.mockClear();
     navigateMock.mockReset();
     historyBackMock.mockReset();
     setGlobalGuideMock.mockClear();
@@ -386,6 +395,27 @@ describe("OnboardingPage", () => {
     expect(screen.queryByTestId("onboarding-diorama-stub")).toBeNull();
   });
 
+  it("does not start an import when 'Start building' is pressed on the session-import act", async () => {
+    // The wizard's own Import button is the only thing that starts a run; an
+    // earlier version made Continue do both, which imported the default
+    // selection without an explicit ask.
+    renderPage({ replay: false });
+
+    const acts = visibleActs();
+    await advanceToAct(acts[acts.length - 1].id);
+    expect(currentActId()).toBe("session-import");
+    expect(screen.getByTestId("onboarding-advance").textContent).toContain(
+      "Start building",
+    );
+
+    fireEvent.click(screen.getByTestId("onboarding-advance"));
+
+    await waitFor(() => {
+      expect(useOnboardingStore.getState().completedAt).not.toBeNull();
+    });
+    expect(startSessionImportRunMock).not.toHaveBeenCalled();
+  });
+
   it("first-run finish (no replay flag) marks complete and opens a fresh draft tab", async () => {
     renderPage({ replay: false });
 
@@ -438,6 +468,18 @@ describe("OnboardingPage", () => {
       expect(
         screen.getByTestId("onboarding-act").getAttribute("data-act-id"),
       ).toBe("command-theme");
+    });
+    expect(setGlobalGuideMock).not.toHaveBeenCalled();
+
+    // command-theme is no longer the last act - session-import now follows
+    // it - so Continue here only advances, and the guide is only saved once
+    // "Start building" is pressed on that final act.
+    fireEvent.click(screen.getByTestId("onboarding-advance"));
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("onboarding-act").getAttribute("data-act-id"),
+      ).toBe("session-import");
     });
     expect(setGlobalGuideMock).not.toHaveBeenCalled();
 
