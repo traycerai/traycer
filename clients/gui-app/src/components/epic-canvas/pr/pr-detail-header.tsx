@@ -22,7 +22,7 @@ import {
   PR_STATE_PILL_CLASS,
   PR_STATE_TINT_CLASS,
 } from "@/components/worktree/worktree-pr-state-palette";
-import { useOpenLink } from "@/lib/links/open-link";
+import { useOpenLinkWithPending } from "@/lib/links/open-link";
 import { formatPrActorName } from "@/lib/pr/pr-detail-projection";
 import { useRelativeTimestamp } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
@@ -248,16 +248,20 @@ function PrDetailStalenessLabel(props: {
 function PrDetailGitHubLink(props: {
   readonly prUrl: string | null;
 }): ReactNode {
-  const openLink = useOpenLink();
+  // Guarded on the bridge mutation's own pending flag (R10): each call fires a
+  // fresh request, so a click landing on an outstanding handoff would open a
+  // second OS tab.
+  const { isPending, openLink } = useOpenLinkWithPending();
   const prUrl = props.prUrl;
   const handleClick = useCallback(
     (event: MouseEvent<HTMLAnchorElement>): void => {
       event.stopPropagation();
       if (prUrl === null) return;
       event.preventDefault();
+      if (isPending) return;
       void openLink(prUrl, "github", event);
     },
-    [openLink, prUrl],
+    [isPending, openLink, prUrl],
   );
 
   if (props.prUrl === null) {
@@ -288,6 +292,7 @@ function PrDetailGitHubLink(props: {
       <a
         href={props.prUrl}
         aria-label="Open on GitHub"
+        aria-disabled={isPending}
         data-testid="pr-detail-github-link"
         onClick={handleClick}
         onAuxClick={onMiddleClick(handleClick)}

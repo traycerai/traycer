@@ -157,6 +157,10 @@ const CLICK: LinkClickEvent = {
 
 vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => mocks.openLink,
+  useOpenLinkWithPending: () => ({
+    isPending: false,
+    openLink: mocks.openLink,
+  }),
 }));
 vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   useEpicTileNavigation: () => mocks.tileNavigation,

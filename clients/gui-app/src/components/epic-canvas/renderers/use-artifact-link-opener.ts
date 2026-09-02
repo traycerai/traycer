@@ -21,7 +21,7 @@ import { useArtifactFolderChain } from "@/lib/epic-selectors";
 import { fetchResolveArtifactByPath } from "@/lib/host/resolve-artifact-by-path";
 import { fetchWorkspaceFileExists } from "@/lib/host/probe-workspace-file-exists";
 import type { LinkClickEvent } from "@/lib/links/open-link";
-import { useOpenLink } from "@/lib/links/open-link";
+import { useOpenLinkWithPending } from "@/lib/links/open-link";
 import { isAbsolutePath } from "@/lib/path/cross-platform-path";
 import { isBrowsable } from "@/lib/worktree/worktree-row-browsable";
 import { artifactEpicIdFromLinkPath } from "@/markdown/links/artifact-link-path";
@@ -190,7 +190,10 @@ export function useArtifactLinkOpener(args: {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const epicHandle = useOpenEpicHandle();
-  const openUrl = useOpenLink();
+  // `isPending` guards the egress the way the anchors do (R10): each call
+  // fires a fresh bridge request, so a double click would open two OS tabs.
+  const { isPending: urlOpenPending, openLink: openUrl } =
+    useOpenLinkWithPending();
   const pendingProjectedOpenCancelRef = useRef<(() => void) | null>(null);
   const disposedRef = useRef(false);
   const clickTokenRef = useRef(0);
@@ -247,6 +250,7 @@ export function useArtifactLinkOpener(args: {
   const openLink = useCallback(
     (link: OpenableArtifactLink, event: LinkClickEvent): void => {
       if (link.kind === "external") {
+        if (urlOpenPending) return;
         supersedePending();
         // An artifact document's external link is markdown egress like any
         // other (A1): the `markdown` setting decides in-app vs the OS browser,
@@ -311,6 +315,7 @@ export function useArtifactLinkOpener(args: {
       openUrl,
       selfFolderChain,
       supersedePending,
+      urlOpenPending,
       worktrees.isError,
     ],
   );
