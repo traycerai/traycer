@@ -1,4 +1,5 @@
 import type { MouseEvent, ReactNode } from "react";
+import { onMiddleClick } from "@/lib/links/anchor-aux-click";
 import { useOpenLink } from "@/lib/links/open-link";
 
 /**
@@ -13,15 +14,17 @@ export function ComposerMarkLink(props: {
   readonly children: ReactNode;
 }): ReactNode {
   const openLink = useOpenLink();
+  const open = (event: MouseEvent<HTMLAnchorElement>): void => {
+    event.preventDefault();
+    void openLink(props.href, "markdown", event);
+  };
   return (
     <a
       href={props.href}
       className="underline decoration-1 underline-offset-2"
       rel="noopener noreferrer"
-      onClick={(event: MouseEvent<HTMLAnchorElement>) => {
-        event.preventDefault();
-        void openLink(props.href, "markdown", event);
-      }}
+      onClick={open}
+      onAuxClick={onMiddleClick(open)}
     >
       {props.children}
     </a>

@@ -26,6 +26,7 @@ import { useLinkOpenInFlight } from "@/lib/links/use-link-open-in-flight";
 import { formatPrActorName } from "@/lib/pr/pr-detail-projection";
 import { useRelativeTimestamp } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
+import { onMiddleClick } from "@/lib/links/anchor-aux-click";
 
 type PrDisplayState = PrState | "draft";
 
@@ -290,6 +291,7 @@ function PrDetailGitHubLink(props: {
         aria-label="Open on GitHub"
         data-testid="pr-detail-github-link"
         onClick={handleClick}
+        onAuxClick={onMiddleClick(handleClick)}
       >
         GitHub
         <ExternalLink className="size-3" aria-hidden />

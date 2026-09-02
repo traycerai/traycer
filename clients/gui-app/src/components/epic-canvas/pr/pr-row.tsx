@@ -44,6 +44,7 @@ import {
 import { useRelativeTimestamp } from "@/lib/relative-time";
 import { useIsActiveTile } from "@/stores/epics/canvas/store";
 import { cn } from "@/lib/utils";
+import { onMiddleClick } from "@/lib/links/anchor-aux-click";
 
 /**
  * Every badge on row 1 speaks the hover card's dialect: borderless tint,
@@ -506,6 +507,7 @@ function PrNumberAnchor(props: {
       data-testid="pr-row-number"
       data-pr-state={props.state}
       onClick={handleClick}
+      onAuxClick={onMiddleClick(handleClick)}
     >
       {props.children}
     </a>

@@ -142,6 +142,7 @@ import {
   useWorktreesSettingsSelectionStore,
   type SelectedWorktreePathsUpdate,
 } from "@/stores/settings/worktrees-settings-selection-store";
+import { onMiddleClick } from "@/lib/links/anchor-aux-click";
 
 type WorktreeRowDeleteStatus = "deleting";
 // Per-row activity-enrichment state, driving ONLY the tier pill's presentation:
@@ -2891,6 +2892,7 @@ function WorktreePrAnchor(props: {
       data-testid={props.testId}
       data-pr-state={props.prState}
       onClick={openExternal}
+      onAuxClick={onMiddleClick(openExternal)}
     >
       {props.children}
     </a>

@@ -94,7 +94,7 @@ export function useOpenBrowserUrl(): (input: OpenBrowserUrlInput) => void {
 
       const match = input.modifiers.middle
         ? null
-        : findSamePageTab(sessions.items, input.url);
+        : findSamePageTab(hostId, sessions.items, input.url);
       if (match !== null) {
         open(match);
         if (hashOf(match.url) !== hashOf(input.url)) {
@@ -103,8 +103,7 @@ export function useOpenBrowserUrl(): (input: OpenBrowserUrlInput) => void {
         return;
       }
 
-      sessions
-        .openTab(null, input.url)
+      openTabOnce(sessions, hostId, input)
         .then(open)
         .catch((cause: unknown) => {
           failed(
@@ -116,6 +115,45 @@ export function useOpenBrowserUrl(): (input: OpenBrowserUrlInput) => void {
     },
     [openExternalLink, openTile, snapshot],
   );
+}
+
+/**
+ * `openTab` requests that have not settled yet, keyed by host + page (B4).
+ *
+ * The snapshot only learns about a new tab when the session frame lands, so
+ * two clicks on the same link inside that window would each see no match and
+ * mint their own host tab - and, holding different tab ids, defeat the tile
+ * dedupe as well. Joining the outstanding request makes the second click
+ * focus what the first one opened.
+ */
+const openTabsInFlight = new Map<
+  string,
+  Promise<{ readonly sessionId: string; readonly tabId: string }>
+>();
+
+function openTabOnce(
+  sessions: BrowserSessionsState,
+  hostId: string,
+  input: OpenBrowserUrlInput,
+): Promise<{ readonly sessionId: string; readonly tabId: string }> {
+  const pageKey = samePageKey(input.url);
+  // Middle-click means "another one" (B4), so it never joins and never
+  // registers - the next plain click must not be answered with its tab.
+  if (input.modifiers.middle || pageKey === null) {
+    return sessions.openTab(null, input.url);
+  }
+  const key = `${hostId}\u0000${pageKey}`;
+  const joined = openTabsInFlight.get(key);
+  if (joined !== undefined) return joined;
+  const request = sessions.openTab(null, input.url);
+  openTabsInFlight.set(key, request);
+  const forget = (): void => {
+    if (openTabsInFlight.get(key) === request) openTabsInFlight.delete(key);
+  };
+  // `then(forget, forget)`, not `finally`: this arm HANDLES the rejection, so
+  // the cleanup does not float a second unhandled copy of the caller's error.
+  void request.then(forget, forget);
+  return request;
 }
 
 /**
@@ -169,15 +207,27 @@ function browserTileIntent(args: {
 
 /** The first live tab on this host showing the same page (B4). */
 function findSamePageTab(
+  hostId: string,
   items: readonly BrowserSessionInfo[],
   url: string,
 ): MatchedTab | null {
   const key = samePageKey(url);
   if (key === null) return null;
+  const hash = hashOf(url);
   for (const session of items) {
     for (const tab of session.tabs) {
       if (tab.status === "closing" || tab.status === "crashed") continue;
       if (samePageKey(tab.url) !== key) continue;
+      // Same page, different fragment, and no way to move it there: focusing
+      // this tab would land the user on the anchor they came FROM, so let the
+      // click open a fresh tab at the fragment it asked for instead
+      // (see {@link navigateTab} for which tabs can be moved).
+      if (
+        hashOf(tab.url) !== hash &&
+        electronTabBinding(hostId, session.sessionId, tab.tabId) === null
+      ) {
+        continue;
+      }
       return { sessionId: session.sessionId, tabId: tab.tabId, url: tab.url };
     }
   }
@@ -190,8 +240,10 @@ function findSamePageTab(
  *
  * ponytail: Electron tabs only - a headless tab is navigated through the
  * screencast control stream, which needs an armed control session on a
- * mounted tile. Upgrade path is a `navigateTab` frame on `browser.sessions`;
- * until then a headless tab keeps its current fragment.
+ * mounted tile. A headless tab on another fragment is therefore not matched
+ * at all ({@link findSamePageTab}) and the click opens a fresh tab; the
+ * upgrade path is a `navigateTab` frame on `browser.sessions`, after which
+ * that tab can be reused like an Electron one.
  */
 function navigateTab(hostId: string, tab: MatchedTab, url: string): void {
   const binding = electronTabBinding(hostId, tab.sessionId, tab.tabId);

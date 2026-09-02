@@ -1,5 +1,6 @@
 import { useCallback, type MouseEvent, type ReactNode } from "react";
 import { useLinkOpenInFlight } from "@/lib/links/use-link-open-in-flight";
+import { onMiddleClick } from "@/lib/links/anchor-aux-click";
 
 /**
  * Every external GitHub anchor on the PR surfaces, in one place.
@@ -39,6 +40,7 @@ export function PrExternalGitHubLink(props: {
       className={props.className}
       data-testid={props.testId}
       onClick={handleClick}
+      onAuxClick={onMiddleClick(handleClick)}
     >
       {props.children}
     </a>

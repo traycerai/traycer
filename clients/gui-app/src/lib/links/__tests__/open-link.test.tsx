@@ -32,7 +32,16 @@ const harness = vi.hoisted<{
   sessions: BrowserSessionsState | null;
   bridged: string[];
   intents: TileOpenIntent[];
-}>(() => ({ sessions: null, bridged: [], intents: [] }));
+  /** Tab ids with an Electron control binding (headless tabs have none). */
+  boundTabIds: string[];
+  navigated: string[];
+}>(() => ({
+  sessions: null,
+  bridged: [],
+  intents: [],
+  boundTabIds: [],
+  navigated: [],
+}));
 
 vi.mock("sonner", () => ({ toast: { error: toastError } }));
 vi.mock("@/components/epic-canvas/renderers/browser-sessions-context", () => ({
@@ -43,6 +52,17 @@ vi.mock("@/lib/links/open-external-link", () => ({
     harness.bridged.push(url);
     return Promise.resolve();
   },
+}));
+vi.mock("@/lib/browser-view/sessions/electron-tab-directory", () => ({
+  electronTabBinding: (_hostId: string, _sessionId: string, tabId: string) =>
+    harness.boundTabIds.includes(tabId)
+      ? {
+          control: (frame: { kind: string; url: string }) => {
+            harness.navigated.push(frame.url);
+            return Promise.resolve();
+          },
+        }
+      : null,
 }));
 vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   useEpicTileNavigation: () => ({
@@ -136,6 +156,8 @@ beforeEach(() => {
   harness.sessions = liveSessions([]);
   harness.bridged = [];
   harness.intents = [];
+  harness.boundTabIds = [];
+  harness.navigated = [];
   openViewTab();
   useSettingsStore.setState({
     linkOpen: {
@@ -276,7 +298,8 @@ describe("useOpenLink", () => {
     ]);
     const { current: openLink } = renderOpenLink();
 
-    void openLink("https://example.test/docs#section", "markdown", null);
+    // Trailing slash is not a different page (B4).
+    void openLink("https://example.test/docs", "markdown", null);
 
     await waitFor(() => expect(harness.intents).toHaveLength(1));
     expect(openTab).not.toHaveBeenCalled();
@@ -286,6 +309,69 @@ describe("useOpenLink", () => {
       sessionId: "session-1",
       tabId: "tab-open",
     });
+  });
+
+  it("moves a bound tab to the clicked fragment instead of opening one", async () => {
+    harness.sessions = liveSessions([
+      session([tab({ tabId: "tab-open", url: "https://example.test/docs/" })]),
+    ]);
+    harness.boundTabIds = ["tab-open"];
+    const { current: openLink } = renderOpenLink();
+
+    void openLink("https://example.test/docs#section", "markdown", null);
+
+    await waitFor(() => expect(harness.intents).toHaveLength(1));
+    expect(openTab).not.toHaveBeenCalled();
+    expect(harness.navigated).toEqual(["https://example.test/docs#section"]);
+  });
+
+  it("opens a fresh tab when a tab it cannot move is on another fragment", async () => {
+    // Headless: no Electron binding, so reusing it would leave the user on the
+    // anchor they came from.
+    harness.sessions = liveSessions([
+      session([
+        tab({ tabId: "tab-open", url: "https://example.test/docs#intro" }),
+      ]),
+    ]);
+    const { current: openLink } = renderOpenLink();
+
+    void openLink("https://example.test/docs#section", "markdown", null);
+
+    await waitFor(() =>
+      expect(openTab).toHaveBeenCalledWith(
+        null,
+        "https://example.test/docs#section",
+      ),
+    );
+    expect(harness.navigated).toEqual([]);
+  });
+
+  it("joins an openTab already in flight for the same page", async () => {
+    const pending: {
+      settle: (tab: { sessionId: string; tabId: string }) => void;
+    } = { settle: () => undefined };
+    openTab.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          pending.settle = resolve;
+        }),
+    );
+    const { current: openLink } = renderOpenLink();
+
+    // Both clicks land before the first `openTab` settles, so neither can see
+    // the other's tab in the snapshot.
+    void openLink(DOCS_URL, "markdown", null);
+    void openLink(DOCS_URL, "markdown", null);
+
+    expect(openTab).toHaveBeenCalledTimes(1);
+    pending.settle({ sessionId: "session-1", tabId: "tab-joined" });
+
+    await waitFor(() => expect(harness.intents).toHaveLength(2));
+    expect(openTab).toHaveBeenCalledTimes(1);
+    expect(harness.intents.map((intent) => intent.node)).toEqual([
+      expect.objectContaining({ tabId: "tab-joined" }),
+      expect.objectContaining({ tabId: "tab-joined" }),
+    ]);
   });
 
   it("middle-click skips the match and opens a fresh background tab", async () => {

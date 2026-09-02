@@ -3061,6 +3061,22 @@ describe("BrowserViewManager in-page window.open (Decision #22)", () => {
     expect(safelyOpenExternalMock).toHaveBeenCalledWith("mailto:a@b.example");
   });
 
+  it("keeps an about:blank open in the session as a tile", async () => {
+    // A page that mints a blank tab and navigates it itself. The external
+    // allowlist rejects `about:`, so treating this as an OS handoff would
+    // leave the user with neither a popup nor a tile.
+    const opened = await openWindow("foreground-tab", "", "");
+    expect(opened.result.action).toBe("deny");
+    expect(opened.openTileRequests).toEqual([
+      {
+        ...BASE_TILE_KEY,
+        url: "about:blank",
+        disposition: "foreground",
+      },
+    ]);
+    expect(safelyOpenExternalMock).not.toHaveBeenCalled();
+  });
+
   it("leaves a real popup (non-empty features) as a native window", async () => {
     const opened = await openWindow(
       "new-window",

@@ -6,6 +6,7 @@ import { useOpenLink } from "@/lib/links/open-link";
 import { classifyHref } from "@/markdown/links/classify-href";
 import { MarkdownLinkContext } from "@/markdown/links/markdown-link-context";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
+import { onMiddleClick } from "@/lib/links/anchor-aux-click";
 
 const MARKDOWN_LINK_REPORT_CONTEXT = createReportIssueContext({
   title: "Markdown link could not be opened",
@@ -126,6 +127,7 @@ export function MarkdownAnchor({
       className={className}
       title={title}
       onClick={routeLinkClick}
+      onAuxClick={onMiddleClick(routeLinkClick)}
     >
       {children}
     </a>

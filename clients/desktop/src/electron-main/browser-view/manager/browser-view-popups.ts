@@ -31,7 +31,9 @@ interface BrowserViewPopupsOptions {
  * `target=_blank` and tab dispositions become Traycer tiles carrying
  * Chromium's disposition (`background-tab` -> background, else foreground).
  * Non-http(s) targets are not tiles at all: they leave to the OS through
- * `safelyOpenExternal`'s scheme allowlist, and no tile request is sent.
+ * `safelyOpenExternal`'s scheme allowlist, and no tile request is sent. The
+ * one exception is `about:blank` - a page opening a blank tab it will
+ * navigate itself, which stays in the session (see {@link isTileTarget}).
  */
 export class BrowserViewPopups {
   private readonly createPopupWindowOptions: (
@@ -66,7 +68,7 @@ export class BrowserViewPopups {
       const url = normalizeOpenedUrl(details.url, entry.currentUrl);
       // A4: only web URLs become tiles. mailto:/custom schemes go to the OS
       // through the existing allowlist, which rejects the opaque ones.
-      if (!isWebUrl(url)) {
+      if (!isTileTarget(url)) {
         void safelyOpenExternal(url);
         return { action: "deny" };
       }
@@ -133,6 +135,16 @@ function windowOpenShouldCreateTile(
   if (details.features.trim().length > 0) return false;
   if (details.frameName === "_blank") return true;
   return false;
+}
+
+/**
+ * `about:blank` is a page opening its own blank tab before navigating it - a
+ * tile target, not an OS handoff. `safelyOpenExternal` rejects the `about:`
+ * scheme, so classifying it as external would leave the user with no popup
+ * AND no tile.
+ */
+function isTileTarget(url: string): boolean {
+  return url === "about:blank" || isWebUrl(url);
 }
 
 function isWebUrl(url: string): boolean {

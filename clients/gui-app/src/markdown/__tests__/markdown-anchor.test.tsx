@@ -188,6 +188,44 @@ describe("MarkdownAnchor", () => {
     });
   });
 
+  it("routes a middle-click through the seam, which only auxclick carries", () => {
+    const host = createRunnerHost();
+    renderMarkdownWithBrowserRouting("[Docs](https://example.com/docs)", host);
+    const link = screen.getByRole("link", { name: "Docs" });
+
+    // A browser dispatches `auxclick` for the middle button and no `click` at
+    // all, so an onClick-only anchor would skip the seam AND keep its default.
+    const defaultAllowed = fireEvent(
+      link,
+      new MouseEvent("auxclick", {
+        bubbles: true,
+        cancelable: true,
+        button: 1,
+      }),
+    );
+
+    expect(defaultAllowed).toBe(false);
+    expect(openTab).toHaveBeenCalledWith(null, "https://example.com/docs");
+    expect(host.openedExternalLinks).toEqual([]);
+  });
+
+  it("leaves a right-click to the browser's context menu", () => {
+    const host = createRunnerHost();
+    renderMarkdownWithBrowserRouting("[Docs](https://example.com/docs)", host);
+
+    fireEvent(
+      screen.getByRole("link", { name: "Docs" }),
+      new MouseEvent("auxclick", {
+        bubbles: true,
+        cancelable: true,
+        button: 2,
+      }),
+    );
+
+    expect(openTab).not.toHaveBeenCalled();
+    expect(host.openedExternalLinks).toEqual([]);
+  });
+
   it("lets in-page anchors keep browser default navigation", () => {
     const host = createRunnerHost();
     renderMarkdown("[Usage](#usage)", host);

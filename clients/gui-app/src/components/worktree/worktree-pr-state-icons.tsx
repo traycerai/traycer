@@ -13,6 +13,7 @@ import {
   PR_STATE_ICON,
   PR_STATE_TINT_CLASS,
 } from "@/components/worktree/worktree-pr-state-palette";
+import { onMiddleClick } from "@/lib/links/anchor-aux-click";
 
 /**
  * Icon-only PR references for a sidebar chat row's second line: one glyph +
@@ -113,6 +114,7 @@ function WorktreePrStateIcon(props: {
           PR_STATE_TINT_CLASS[props.reference.state],
         )}
         onClick={openOnClick}
+        onAuxClick={onMiddleClick(openOnClick)}
         onKeyDown={openOnKeyDown}
         onPointerDown={stopDragActivation}
       >

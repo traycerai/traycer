@@ -32,6 +32,7 @@ import {
   PR_STATE_PILL_CLASS,
   PR_STATE_TINT_CLASS,
 } from "@/components/worktree/worktree-pr-state-palette";
+import { onMiddleClick } from "@/lib/links/anchor-aux-click";
 
 /**
  * PR pills for the Epic history list (page background) and the chat/owner
@@ -258,6 +259,7 @@ function WorktreePrAnchor(props: {
       data-testid="worktree-context-pr-pill"
       data-pr-state={props.reference.state}
       onClick={openPr}
+      onAuxClick={onMiddleClick(openPr)}
     >
       <WorktreePrPillContent
         label={props.reference.label}
