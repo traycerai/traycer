@@ -726,10 +726,12 @@ function ImageDiffSide(props: {
         // A PDF side is a deliberate product cut (workspace tile previews
         // PDFs; diffs don't - PDF preview design, Q7), so its copy must
         // read as a limit, not as "unsupported format" next to a file the
-        // app previews elsewhere.
+        // app previews elsewhere. It promises no action: the only Open
+        // Externally here opens the CURRENT path, which for a cross-type
+        // rename (`old.pdf -> new.png`) is not this side's file at all.
         reason={
           isPdfAssetPath(props.effectivePath)
-            ? "PDF diffs aren't previewed - use Open Externally to view either version."
+            ? "PDF diffs aren't previewed."
             : "This file is not one of the supported image formats."
         }
         onOpenExternally={props.onOpenExternally}

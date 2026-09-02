@@ -191,15 +191,21 @@ function SnapshotBundleFileSection(props: {
     props.entry.filePath,
   );
   const bundleFindFileId = snapshotBundleDiffFindFileId(props.entry.filePath);
+  // A PDF row never shows a text diff, so don't line-count its bytes either -
+  // an ASCII-authored PDF can be large and the count would be discarded.
+  const isPdf = isPdfAssetPath(props.entry.filePath);
   const counts = useMemo(
     () =>
-      diffLineCountsFromContents(
-        props.entry.beforeContent,
-        props.entry.afterContent,
-        diffViewerPreferences.ignoreWhitespace,
-      ),
+      isPdf
+        ? { additions: 0, deletions: 0 }
+        : diffLineCountsFromContents(
+            props.entry.beforeContent,
+            props.entry.afterContent,
+            diffViewerPreferences.ignoreWhitespace,
+          ),
     [
       diffViewerPreferences.ignoreWhitespace,
+      isPdf,
       props.entry.afterContent,
       props.entry.beforeContent,
     ],
@@ -327,24 +333,30 @@ function SnapshotBundleFileSectionBody(props: {
   readonly diffViewerPreferences: DiffViewerPreferences;
 }): ReactNode {
   const bundleFindRegistration = useBundleDiffFindRegistrationContext();
+  // Decided BEFORE the patch build: a PDF row renders a placeholder, so
+  // diffing its (possibly ASCII-authored, possibly large) contents would only
+  // stall the renderer to produce a patch nobody reads.
+  const isPdf = isPdfAssetPath(props.entry.filePath);
   const patch = useMemo(
     () =>
-      buildSnapshotUnifiedPatch({
-        filePath: props.entry.filePath,
-        beforeContent: props.entry.beforeContent,
-        afterContent: props.entry.afterContent,
-        ignoreWhitespace: props.diffViewerPreferences.ignoreWhitespace,
-      }),
+      isPdf
+        ? null
+        : buildSnapshotUnifiedPatch({
+            filePath: props.entry.filePath,
+            beforeContent: props.entry.beforeContent,
+            afterContent: props.entry.afterContent,
+            ignoreWhitespace: props.diffViewerPreferences.ignoreWhitespace,
+          }),
     [
+      isPdf,
       props.diffViewerPreferences.ignoreWhitespace,
       props.entry.afterContent,
       props.entry.beforeContent,
       props.entry.filePath,
     ],
   );
-  const isPdf = isPdfAssetPath(props.entry.filePath);
   useEffect(() => {
-    if (isPdf || props.entry.reason !== "snapshot") return;
+    if (patch === null || props.entry.reason !== "snapshot") return;
     bundleFindRegistration.registerLoadedPatch({
       fileId: props.bundleFindFileId,
       patch,
@@ -354,14 +366,15 @@ function SnapshotBundleFileSectionBody(props: {
   }, [
     bundleFindRegistration,
     patch,
-    isPdf,
     props.bundleFindFileId,
     props.entry.filePath,
     props.entry.reason,
     props.node.id,
   ]);
 
-  if (isPdf) {
+  // `null` is exactly the PDF case (see the memo above); checking the patch
+  // rather than `isPdf` is what narrows it for the diff primitive below.
+  if (patch === null) {
     return (
       <div className="p-4 text-ui-sm text-muted-foreground">
         {PDF_FILE_DIFF_COPY}

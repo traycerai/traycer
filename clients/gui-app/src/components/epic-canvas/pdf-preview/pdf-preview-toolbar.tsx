@@ -1,11 +1,12 @@
 /**
- * The viewer's toolbar, in two tiers keyed on the TOOLBAR's own width (a
+ * The viewer's toolbar, in three tiers keyed on the TOOLBAR's own width (a
  * container query - a narrow split pane on a desktop has exactly the phone's
  * problem, so the viewport is the wrong thing to ask). Wide: every control
- * inline. Narrow (under `@lg`, 32rem): page nav, zoom and the surface's
- * own actions (Open Externally) stay inline - the escape hatch must never
- * fold away - while fit-width, rotate, outline and search move into one
- * "More actions" menu with the same labels.
+ * inline. Narrow (under `@lg`, 32rem): fit-width, rotate, outline and search
+ * move into one "More actions" menu with the same labels. Narrowest (under
+ * `@sm`, 24rem - a tile pane can be dragged to 240px): zoom folds into the
+ * menu too, leaving page nav and the surface's own actions (Open Externally)
+ * inline - the escape hatch must never fold away.
  */
 import { useRef, type ReactNode } from "react";
 import {
@@ -25,6 +26,7 @@ import {
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
@@ -144,7 +146,10 @@ export function PdfPreviewToolbar(props: PdfPreviewToolbarProps): ReactNode {
             <ChevronRight className="size-4" />
           </Button>
         </TooltipWrapper>
-        <div className="mx-0.5 h-4 w-px bg-border" aria-hidden="true" />
+        <div
+          className="mx-0.5 h-4 w-px bg-border @max-sm:hidden"
+          aria-hidden="true"
+        />
         <TooltipWrapper
           label="Zoom out"
           side="top"
@@ -158,12 +163,13 @@ export function PdfPreviewToolbar(props: PdfPreviewToolbarProps): ReactNode {
             disabled={!props.documentReady}
             onClick={props.onZoomOut}
             aria-label="Zoom out"
+            className="@max-sm:hidden"
           >
             <Minus className="size-4" />
           </Button>
         </TooltipWrapper>
         <span
-          className="min-w-9 whitespace-nowrap text-center text-ui-xs tabular-nums text-muted-foreground"
+          className="min-w-9 whitespace-nowrap text-center text-ui-xs tabular-nums text-muted-foreground @max-sm:hidden"
           aria-label="Zoom level"
         >
           {props.scalePercent === null ? "–" : `${props.scalePercent}%`}
@@ -181,6 +187,7 @@ export function PdfPreviewToolbar(props: PdfPreviewToolbarProps): ReactNode {
             disabled={!props.documentReady}
             onClick={props.onZoomIn}
             aria-label="Zoom in"
+            className="@max-sm:hidden"
           >
             <Plus className="size-4" />
           </Button>
@@ -252,9 +259,12 @@ export function PdfPreviewToolbar(props: PdfPreviewToolbarProps): ReactNode {
 }
 
 /**
- * The narrow tier's home for the folded controls. Always mounted (its
+ * The narrow tiers' home for the folded controls. Always mounted (its
  * trigger is what the container query shows or hides) so the wide and
- * narrow tiers never drift - they render from the same props.
+ * narrow tiers never drift - they render from the same props. Zoom is
+ * listed unconditionally rather than only under the narrowest tier: the
+ * menu content is portalled out of the toolbar, so no container query can
+ * reach it, and a duplicate zoom entry in the 24-32rem band is harmless.
  */
 function PdfPreviewOverflowMenu(props: PdfPreviewToolbarProps): ReactNode {
   // Picking Search opens a row whose input takes focus in the same commit.
@@ -293,6 +303,29 @@ function PdfPreviewOverflowMenu(props: PdfPreviewToolbarProps): ReactNode {
           }
         }}
       >
+        {/* Zoom is a repeated gesture - keep the menu open across picks so
+            three steps in is three clicks, not three menu reopenings. */}
+        <DropdownMenuItem
+          disabled={!props.documentReady}
+          onSelect={(event) => {
+            event.preventDefault();
+            props.onZoomIn();
+          }}
+        >
+          <Plus className="size-4" />
+          Zoom in
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          disabled={!props.documentReady}
+          onSelect={(event) => {
+            event.preventDefault();
+            props.onZoomOut();
+          }}
+        >
+          <Minus className="size-4" />
+          Zoom out
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
         <DropdownMenuItem
           disabled={!props.documentReady}
           onSelect={props.onFitWidth}

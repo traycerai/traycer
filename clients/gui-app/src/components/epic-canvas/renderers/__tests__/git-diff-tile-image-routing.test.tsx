@@ -702,6 +702,37 @@ describe("<GitDiffTile /> image routing", () => {
     ).toEqual([expect.objectContaining({ side: "new" })]);
   });
 
+  it("keeps the text diff for an svg -> pdf rename toggled to source, instead of the PDF block", () => {
+    // Straddles both allowlists: the current path (.pdf) routes to
+    // `gitRoutesToPdfDiffCards`, the previous path (.svg) routes to the image
+    // diff with a source toggle. `showsPdfDiffBlock` must key off the RAW
+    // image-routing decision (always true here), not the post-toggle
+    // `showImageDiff` - otherwise picking Source would hand the row to the
+    // PDF block instead of revealing the text diff.
+    const changed = changedFile({
+      path: "assets/new.pdf",
+      previousPath: "assets/old.svg",
+      status: "renamed",
+      isBinary: false,
+    });
+
+    renderTile(changed);
+
+    // Old side (`old.svg`) is a previewable image; new side (`new.pdf`) is
+    // not, so it renders the PDF placeholder copy rather than a second
+    // image-preview-side.
+    expect(screen.getAllByTestId("image-preview-side")).toHaveLength(1);
+    expect(screen.getByText("PDF diffs aren't previewed.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "View source" })).toBeTruthy();
+    expect(screen.queryByTestId("pdf-diff-block")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "View source" }));
+
+    expect(screen.getByTestId("file-diff-content")).toBeTruthy();
+    expect(screen.queryByTestId("image-preview-side")).toBeNull();
+    expect(screen.queryByTestId("pdf-diff-block")).toBeNull();
+  });
+
   it("routes an ASCII-authored .pdf row to the compact PDF block and skips the text diff query", () => {
     const changed = changedFile({
       path: "docs/report.pdf",

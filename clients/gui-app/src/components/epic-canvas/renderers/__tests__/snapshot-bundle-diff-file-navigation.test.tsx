@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildSnapshotUnifiedPatch } from "@/lib/diff/snapshot-diff-patch";
+import { diffLineCountsFromContents } from "@/lib/file-change-diff-hunks";
 import { makeSnapshotCumulativeBundleDiffTile } from "@/lib/chat/snapshot-diff-tile";
 import type { SnapshotBundleSectionEntry } from "@/lib/chat/snapshot-bundle-section-entries";
 import { DEFAULT_DIFF_VIEWER_PREFERENCES } from "@/lib/diff/diff-viewer-preferences";
@@ -136,6 +138,30 @@ vi.mock("@/components/diff/diff-content-primitive", () => ({
   DiffContentPrimitive: () => <div data-testid="diff-primitive" />,
 }));
 
+/*
+ * Counting PASSTHROUGHS, not stubs: every test in this file still gets the
+ * real patch/counts for a text entry. Only the PDF-skip test below reads the
+ * call list, to pin that a PDF entry's (possibly ASCII-authored, possibly
+ * large) contents never reach either function.
+ */
+vi.mock("@/lib/diff/snapshot-diff-patch", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/diff/snapshot-diff-patch")>();
+  return {
+    ...actual,
+    buildSnapshotUnifiedPatch: vi.fn(actual.buildSnapshotUnifiedPatch),
+  };
+});
+
+vi.mock("@/lib/file-change-diff-hunks", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/file-change-diff-hunks")>();
+  return {
+    ...actual,
+    diffLineCountsFromContents: vi.fn(actual.diffLineCountsFromContents),
+  };
+});
+
 const ENTRY: SnapshotBundleSectionEntry = {
   filePath: "src/app.ts",
   beforeContent: "old();\n",
@@ -163,6 +189,8 @@ describe("<SnapshotBundleDiffTileContent /> file navigation", () => {
     testState.notifySectionMounted.mockClear();
     testState.registerLoadedPatch.mockClear();
     testState.useRegisterBundleDiffTileFindAdapter.mockClear();
+    vi.mocked(buildSnapshotUnifiedPatch).mockClear();
+    vi.mocked(diffLineCountsFromContents).mockClear();
   });
 
   afterEach(cleanup);
@@ -239,6 +267,33 @@ describe("<SnapshotBundleDiffTileContent /> file navigation", () => {
       (file) => file.filePath === ENTRY.filePath,
     );
     expect(textFile?.coverageState).toBe("unloaded");
+  });
+
+  // A PDF row renders a placeholder, never a text diff - `buildSnapshotUnifiedPatch`
+  // and `diffLineCountsFromContents` must not be handed its (possibly
+  // ASCII-authored, possibly large) contents. A sibling text entry in the
+  // same bundle still gets both calls.
+  it("skips buildSnapshotUnifiedPatch and diffLineCountsFromContents for a .pdf bundle entry", () => {
+    const node = snapshotBundleNode();
+
+    render(
+      <TooltipProvider>
+        <SnapshotBundleDiffTileContent
+          node={node}
+          viewTabId="view-1"
+          entries={[ENTRY, PDF_ENTRY]}
+        />
+      </TooltipProvider>,
+    );
+
+    const patchCalls = vi.mocked(buildSnapshotUnifiedPatch).mock.calls;
+    expect(patchCalls).toHaveLength(1);
+    expect(patchCalls[0]?.[0].filePath).toBe(ENTRY.filePath);
+
+    const countCalls = vi.mocked(diffLineCountsFromContents).mock.calls;
+    expect(countCalls).toHaveLength(1);
+    expect(countCalls[0]?.[0]).toBe(ENTRY.beforeContent);
+    expect(countCalls[0]?.[1]).toBe(ENTRY.afterContent);
   });
 });
 

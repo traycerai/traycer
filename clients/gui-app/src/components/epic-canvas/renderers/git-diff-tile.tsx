@@ -487,23 +487,19 @@ interface GitFileDiffPanelProps {
 }
 
 /**
- * Whether this row renders the compact PDF diff block. The block wants the
- * host to serve PDFs on `git.streamFileAsset` (>= 1.1, the minor that
- * widened the media-type enum) - but `git.streamFileAsset` is a STREAM
- * method, and the negotiated-manifest registry records only the unary
- * openAck manifest, so its version here is `null` for EVERY host. A
- * fails-closed gate on it can never open (the exact defect that shipped:
- * the block never rendered anywhere). Fail OPEN like the workspace tile
- * instead: only a positively-known pre-1.1 answer suppresses the block;
- * otherwise render it and let the open tile's own stream negotiation be
- * the authority. Image routing wins for a rename straddling both
- * allowlists.
+ * Whether this row renders the compact PDF diff block. Keyed on the RAW
+ * image-routing decision, not the post-toggle `showImageDiff`: a rename
+ * straddling the SVG and PDF allowlists (`a.svg -> b.pdf`) routes to the
+ * image diff and offers the Source toggle, and picking Source must reveal
+ * the text diff - not hand the row to the PDF block. No host-version gate:
+ * the open tile's own stream negotiation is the authority on whether the
+ * host can serve the bytes.
  */
 function showsPdfDiffBlock(args: {
   readonly file: GitChangedFile;
-  readonly showImageDiff: boolean;
+  readonly routeToImageDiff: boolean;
 }): boolean {
-  return !args.showImageDiff && gitRoutesToPdfDiffCards(args.file);
+  return !args.routeToImageDiff && gitRoutesToPdfDiffCards(args.file);
 }
 
 function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
@@ -517,11 +513,16 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
   const openExternallyOpening =
     editorOpen.isPending || openExternallyFeedbackActive;
 
-  const { showImageDiff, svgToggle } = useGitImageDiffRouting(props.file);
+  const { routeToImageDiff, showImageDiff, svgToggle } = useGitImageDiffRouting(
+    props.file,
+  );
   // Decided BEFORE the diff surface below so an ASCII-authored `.pdf`
   // (numstat says text) never fetches and find-indexes a patch the block
   // will not render.
-  const showPdfBlock = showsPdfDiffBlock({ file: props.file, showImageDiff });
+  const showPdfBlock = showsPdfDiffBlock({
+    file: props.file,
+    routeToImageDiff,
+  });
 
   const {
     displayedDiff,
@@ -748,6 +749,7 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
  * `gitImageDiffRouting`.
  */
 function useGitImageDiffRouting(file: GitChangedFile): {
+  readonly routeToImageDiff: boolean;
   readonly showImageDiff: boolean;
   readonly svgToggle: ReactNode;
 } {
@@ -762,7 +764,7 @@ function useGitImageDiffRouting(file: GitChangedFile): {
       />
     </DiffTabHeaderPortal>
   ) : null;
-  return { showImageDiff, svgToggle };
+  return { routeToImageDiff, showImageDiff, svgToggle };
 }
 
 function isLoadedGitDiff(

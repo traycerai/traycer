@@ -309,7 +309,9 @@ function ResumeOutputPanel(props: {
   readonly enabled: boolean;
 }) {
   // A PDF output file would render as raw bytes through the text pipeline -
-  // don't even fetch it; point at the real viewer instead.
+  // don't even fetch it. Show the path and nothing more: the output folder is
+  // often outside every bound root, so any "open it from X" instruction would
+  // point somewhere the file cannot be found.
   const isPdfOutput = isPdfAssetPath(props.outputFile.filePath);
   const outputQuery = useResumeOutputFileQuery(
     props.outputFile,
@@ -325,8 +327,8 @@ function ResumeOutputPanel(props: {
         className={undefined}
       >
         <div className="px-3 py-2">
-          <p className="m-0 text-ui-sm text-muted-foreground">
-            {`PDF output file (${props.outputFile.filePath}) - open it from the file tree to view.`}
+          <p className="m-0 break-all font-mono text-code-sm text-muted-foreground">
+            {props.outputFile.filePath}
           </p>
         </div>
       </SegmentPanel>

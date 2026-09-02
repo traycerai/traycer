@@ -200,9 +200,9 @@ export function gitImageDiffRouting(file: GitChangedFile): GitImageDiffRouting {
  * Extension-only, no `isBinary` requirement - the SVG precedent: a PDF can
  * be authored as pure ASCII (no NUL bytes), which git's content sniff calls
  * text, yet the cards are still the right rendering and the asset stream's
- * `%PDF-` magic check still guards the dialog. The caller additionally
- * gates on the host advertising `git.streamFileAsset >= 1.1` - capability,
- * not extension, so it lives at the component, not here.
+ * `%PDF-` magic check still guards the open tile. No host-version gate: the
+ * open tile's own stream negotiation is the authority on whether the host
+ * can serve the bytes.
  */
 export function gitRoutesToPdfDiffCards(file: GitChangedFile): boolean {
   const isPdf = isPdfAssetPath(file.path);
