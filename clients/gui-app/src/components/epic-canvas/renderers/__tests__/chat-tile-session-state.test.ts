@@ -910,8 +910,6 @@ function interviewMessage(
       kind: "interview",
       status: segment.status,
       toolName: "AskUserQuestion",
-      title: null,
-      description: null,
       questions: [],
       answers: [],
       draftAnswers: [],
