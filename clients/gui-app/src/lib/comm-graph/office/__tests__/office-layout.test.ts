@@ -786,6 +786,56 @@ describe("layoutOffice floors", () => {
     expect(cooler[1].tile.col - cooler[0].tile.col).toBe(1);
   });
 
+  it.each([1, 2])(
+    "gives a %i-agent epic a cafeteria rather than a bare corner",
+    (count) => {
+      // The break room is not a reward for having enough agents. A small epic
+      // is exactly where a floor with one lonely fixture reads as broken, so
+      // the storey is widened to fit one however few cabins there are.
+      const layout = layoutOffice(
+        Array.from({ length: count }, (_, index) => agent({ id: `a${index}` })),
+      );
+
+      expect(layout.floors[0].cafeteria).not.toBeNull();
+      const coffee = layout.props.filter(
+        (prop) => prop.sprite.name === "coffee-machine",
+      );
+      const board = layout.props.filter(
+        (prop) => prop.sprite.name === "menu-board",
+      );
+      expect(coffee).toHaveLength(1);
+      expect(board).toHaveLength(1);
+      // The board is what says which of the three fixtures is the coffee, so
+      // it has to hang over that one and not merely exist somewhere.
+      expect(board[0].tile.col).toBe(coffee[0].tile.col);
+      expect(board[0].tile.row).toBe(coffee[0].tile.row - 1);
+    },
+  );
+
+  it("hangs the menu board over the coffee machine on every floor", () => {
+    const layout = layoutOffice([
+      agent({ id: "a", hostId: "host-a" }),
+      agent({ id: "b", hostId: "host-b" }),
+    ]);
+
+    expect(layout.floors.length).toBe(2);
+    const coffee = layout.props
+      .filter((prop) => prop.sprite.name === "coffee-machine")
+      .map((prop) => prop.tile);
+    const boards = layout.props
+      .filter((prop) => prop.sprite.name === "menu-board")
+      .map((prop) => prop.tile);
+    expect(coffee).toHaveLength(2);
+    expect(boards).toHaveLength(2);
+    for (const machine of coffee) {
+      expect(
+        boards.some(
+          (board) => board.col === machine.col && board.row === machine.row - 1,
+        ),
+      ).toBe(true);
+    }
+  });
+
   it("falls back to corner fittings on a floor with no room for a cafeteria", () => {
     const layout = layoutOffice([]);
     const floor = layout.floors[0];

@@ -105,6 +105,33 @@ export type OfficeSpriteName =
   | "vending"
   /** Menu board on the cafeteria's wall, two tiles wide; the renderer draws no text on it. */
   | "menu-board"
+  /** Cafeteria sofa, two tiles wide; an idle agent lounges on it. */
+  | "sofa"
+  /** Waste bin beside a desk cluster; the target of a paper toss. */
+  | "bin"
+  /** Crumpled paper ball in flight; drawn like an envelope, tint-free. */
+  | "paper-ball"
+  /** Watering can held while tending a plant; drawn beside the character. */
+  | "watering-can"
+  /** Ping-pong table in the game room, two tiles wide, net across the middle. */
+  | "pingpong-table"
+  /** Arcade cabinet in the game room; lit screen. */
+  | "arcade"
+  /** Floor tiles inside a nested pod, tinted so a sub-team reads as a region; two checker variants. */
+  | "floor-pod-a"
+  | "floor-pod-b"
+  /** Horizontal glass divider, the top/bottom edge of a pod; `partition` is the vertical one. */
+  | "partition-h"
+  /** Small plate at a pod's top-left corner; the sub-lead's name is drawn over it as a label. */
+  | "pod-plate"
+  /** Warm-tinted pod floor, the alternative to the cool `floor-pod-*` pair. */
+  | "floor-pod-warm-a"
+  | "floor-pod-warm-b"
+  /** Planter box with a hedge; a pod outline style, one tile, works on any edge. */
+  | "planter"
+  /** Low bookshelf seen top-down; vertical and horizontal pod outline pieces. */
+  | "shelf"
+  | "shelf-h"
   | "chair"
   | "plant"
   | "floor-a"
@@ -197,7 +224,39 @@ export interface OfficeRoom {
   readonly doorTile: OfficeTilePos;
   /** Left tile of the two-tile sign on the cabin's top wall. */
   readonly signTile: OfficeTilePos;
+  /**
+   * Nested sub-teams inside this cabin, one per agent that has children,
+   * recursively. Depth 1 is a direct child of the root; a pod's bounds always
+   * lie inside its parent pod's (or the cabin's) interior.
+   */
+  readonly pods: ReadonlyArray<OfficePod>;
 }
+
+/**
+ * A sub-team's region inside a cabin: its lead's desk at the top-left, the
+ * lead's descendants packed inside. Drawn as tinted floor with a glass
+ * outline and a name plate, not walls, so the cabin stays one room.
+ */
+export interface OfficePod {
+  readonly leadAgentId: string;
+  readonly name: string;
+  /** 1 for a child of the cabin's root, 2 for a grandchild's pod, and so on. */
+  readonly depth: number;
+  /** Interior tiles of the pod, excluding the glass outline. */
+  readonly bounds: OfficeTileRect;
+  /** Where the name plate sits: the pod's top-left OUTLINE tile, outside `bounds`. */
+  readonly plateTile: OfficeTilePos;
+  /**
+   * How the outline is drawn. Chosen by the layout from the lead's id hash
+   * and depth so neighbouring pods differ and nested ones never match their
+   * parent.
+   */
+  readonly style: OfficePodStyle;
+  /** Floor tint family; also never the same as the parent's. */
+  readonly tint: "cool" | "warm";
+}
+
+export type OfficePodStyle = "glass" | "planters" | "shelves";
 
 /**
  * One building floor per host. A single-host epic has exactly one floor and
@@ -236,6 +295,22 @@ export interface OfficeFloor {
    * including its walls; `null` only when the floor is too small to hold one.
    */
   readonly cafeteria: OfficeTileRect | null;
+  /**
+   * The floor's game room: a walled room beside the cafeteria with a
+   * ping-pong table and an arcade cabinet. Outer bounds including walls.
+   */
+  readonly gameRoom: OfficeTileRect | null;
+  /**
+   * Named areas on this floor, each with the left tile of a two-tile `sign`
+   * on the area's top wall and the text drawn over it ("Cafeteria",
+   * "Game room"). Cabins carry their own sign in `OfficeRoom`.
+   */
+  readonly areaSigns: ReadonlyArray<OfficeAreaSign>;
+}
+
+export interface OfficeAreaSign {
+  readonly name: string;
+  readonly signTile: OfficeTilePos;
 }
 
 export type OfficeErrandKind =
@@ -244,6 +319,20 @@ export type OfficeErrandKind =
   /** A seat at a cafeteria table. */
   | "cafe"
   | "vending"
+  /** A seat on the cafeteria sofa. */
+  | "sofa"
+  /** Standing spot beside a waste bin, for a paper toss. */
+  | "bin"
+  /** Standing spot beside a cabin plant, for watering it. */
+  | "water-plant"
+  /** The corridor tile outside another cabin's door, for a peek inside. */
+  | "peek"
+  /** Beside the stairwell, looking down it; multi-floor buildings only. */
+  | "stairs"
+  /** One end of the ping-pong table; two agents rally. */
+  | "pingpong"
+  /** In front of the arcade cabinet. */
+  | "arcade"
   | "whiteboard"
   | "window"
   | "plant"

@@ -353,6 +353,15 @@ export const PLANT_MAP: SpriteMap = [
   "....OOOOOOOO....",
 ];
 
+/**
+ * The cafeteria's coffee machine.
+ *
+ * Legible at 16px is the whole requirement, and a plain metal box is not: the
+ * cup under the nozzle is what says "coffee" rather than "vending machine" or
+ * "server rack". So the alcove is dark to set the cup off, the cup is bright
+ * with a `woodDark` fill for what is in it, two pixels of steam rise between
+ * the nozzle and the rim, and a `metalLight` drip tray closes the recess.
+ */
 export const COFFEE_MACHINE_MAP: SpriteMap = [
   "..OOOOOOOOOOOO..",
   "..OMMMMMMMMMMO..",
@@ -363,16 +372,16 @@ export const COFFEE_MACHINE_MAP: SpriteMap = [
   "..OMMMMMMMMMMO..",
   "..OMMMOOOOMMMO..",
   "..OMMMMOOMMMMO..",
-  "..OMMMMMMMMMMO..",
-  "..OMMMMMMMMMMO..",
+  "..OMMMMbbMMMMO..",
+  "..OMMMbMMbMMMO..",
   "..OMOOOOOOOOMO..",
-  "..OMObbbbbbOMO..",
-  "..OMObWWWWbOMO..",
-  "..OMObWWWWbOMO..",
-  "..OMObWWWWbOMO..",
-  "..OMOObbbbOOMO..",
+  "..OMOBBBBBBOMO..",
+  "..OMOBbbbbBOMO..",
+  "..OMOBbWWbBOMO..",
+  "..OMOBbWWbBOMO..",
+  "..OMOBbbbbBOMO..",
   "..OMOOOOOOOOMO..",
-  "..OMMMMMMMMMMO..",
+  "..OMmmmmmmmmMO..",
   "..OMMMMMMMMMMO..",
   "..OMMMMMMMMMMO..",
   "..OOOOOOOOOOOO..",
@@ -938,4 +947,312 @@ export const BUBBLE_SLEEP_MAP: SpriteMap = [
   "..OOOObbOOOO..",
   ".....ObbO.....",
   "......OO......",
+];
+
+/**
+ * A two-tile cafeteria sofa, seen from above like every other piece of
+ * furniture here: the backrest is the darker band along the TOP edge, two
+ * cushions fill the seat, and the wooden legs peek out at the bottom corners.
+ */
+export const SOFA_MAP: SpriteMap = [
+  "..OOOOOOOOOOOOOOOOOOOOOOOOOOOO..",
+  "..OXXXXXXXXXXXXXXXXXXXXXXXXXXO..",
+  "..OXXXXXXXXXXXXXXXXXXXXXXXXXXO..",
+  "..OOOOOOOOOOOOOOOOOOOOOOOOOOOO..",
+  "..OxxxxxxxxxxOOxxxxxxxxxxxxxxO..",
+  "..OxxxxxxxxxxOOxxxxxxxxxxxxxxO..",
+  "..OxxxxxxxxxxOOxxxxxxxxxxxxxxO..",
+  "..OxxxxxxxxxxOOxxxxxxxxxxxxxxO..",
+  "..OxxxxxxxxxxOOxxxxxxxxxxxxxxO..",
+  "..OxxxxxxxxxxOOxxxxxxxxxxxxxxO..",
+  "..OxxxxxxxxxxOOxxxxxxxxxxxxxxO..",
+  "..OOOOOOOOOOOOOOOOOOOOOOOOOOOO..",
+  "...OWWO................OWWO.....",
+  "...OWWO................OWWO.....",
+  "...OOOO................OOOO.....",
+  "................................",
+];
+
+/**
+ * The waste bin: a grey drum with a rim, and one sheet of paper sticking out
+ * over the lip - the paper is what stops it reading as a plant pot at 16px.
+ */
+export const BIN_MAP: SpriteMap = [
+  "................",
+  "................",
+  ".........bb.....",
+  "........bbbb....",
+  ".......bbbb.....",
+  "...OOOOOOOOOO...",
+  "...OmmmmmmmmO...",
+  "...OMMMMMMMMO...",
+  "...OMmmmmmmMO...",
+  "...OMmMMMMmMO...",
+  "...OMmMMMMmMO...",
+  "...OMmMMMMmMO...",
+  "...OMmMMMMmMO...",
+  "....OMmMMmMO....",
+  "....OMMMMMMO....",
+  "....OOOOOOOO....",
+];
+
+/** A crumpled sheet mid-flight: white with one grey crease so it reads round. */
+export const PAPER_BALL_MAP: SpriteMap = [".bb.", "bbMb", "bbbb", ".bb."];
+
+/** The watering can an idle agent carries to a plant: green body, thin spout. */
+export const WATERING_CAN_MAP: SpriteMap = [
+  "...OOO..",
+  "..OggO..",
+  "OOgggO..",
+  "OgggggO.",
+  "OgggggO.",
+  ".OGGGO..",
+  ".OGGGO..",
+  "..OOO...",
+];
+
+/**
+ * The break room's ping-pong table, seen from above: a green bed with a white
+ * net across the middle and a paddle resting at each end. The net is what
+ * separates it from any other two-tile table at this size.
+ */
+export const PINGPONG_TABLE_MAP: SpriteMap = [
+  "..OOOOOOOOOOOOOOOOOOOOOOOOOOOO..",
+  "..OGGGGGGGGGGGGGGGGGGGGGGGGGGO..",
+  "..OGggggggggggggggggggggggggGO..",
+  "..OGgbbggggggggggggggggggbbgGO..",
+  "..OGgbbgggggggggbgggggggggbbgO..",
+  "..OGggggggggggggbggggggggggggO..",
+  "..OGggggggggggggbggggggggggggO..",
+  "..OGggggggggggggbggggggggggggO..",
+  "..OGggggggggggggbggggggggggggO..",
+  "..OGggggggggggggbggggggggggggO..",
+  "..OGgbbgggggggggbgggggggggbbgO..",
+  "..OGgbbggggggggggggggggggbbgGO..",
+  "..OGggggggggggggggggggggggggGO..",
+  "..OGGGGGGGGGGGGGGGGGGGGGGGGGGO..",
+  "..OOOOOOOOOOOOOOOOOOOOOOOOOOOO..",
+  "....OWWO..............OWWO......",
+];
+
+/**
+ * An arcade cabinet: dark shell, a lit screen carrying two colour pixels so it
+ * reads as a game rather than a monitor, and a joystick panel below it.
+ */
+export const ARCADE_MAP: SpriteMap = [
+  "..OOOOOOOOOOOO..",
+  "..OBBBBBBBBBBO..",
+  "..OBOOOOOOOOBO..",
+  "..OBOddddddOBO..",
+  "..OBOdynddddOO..",
+  "..OBOddddnyddO..",
+  "..OBOddccddddO..",
+  "..OBOddddddOBO..",
+  "..OBOOOOOOOOBO..",
+  "..OBBBBBBBBBBO..",
+  "..OBBBBBBBBBBO..",
+  "..OOOOOOOOOOOO..",
+  "..OmmmmmmmmmmO..",
+  "..OmmOnOmyOmmO..",
+  "..OmmOOOmOOmmO..",
+  "..OmmmmmmmmmmO..",
+  "..OOOOOOOOOOOO..",
+  "..OBBBBBBBBBBO..",
+  "..OBBBBBBBBBBO..",
+  "..OBBBBBBBBBBO..",
+  "..OBBBBBBBBBBO..",
+  "..OBBBBBBBBBBO..",
+  "..OWWWWWWWWWWO..",
+  "..OOOOOOOOOOOO..",
+];
+
+/**
+ * The two floor tiles of a sub-team POD: the ordinary checker shifted a few
+ * shades toward the glass tones, so a region of them reads as one area
+ * without a border drawn round it. No outline - a pod is a tint, not a box.
+ */
+export const FLOOR_POD_A_MAP: SpriteMap = [
+  "ffffffffvfffffff",
+  "ffffffffffffffff",
+  "ffffvfffffffffff",
+  "ffffffffffffffff",
+  "ffffffffffffvfff",
+  "ffffffffffffffff",
+  "ffvfffffffffffff",
+  "ffffffffffffffff",
+  "ffffffffffvfffff",
+  "ffffffffffffffff",
+  "ffffffvfffffffff",
+  "ffffffffffffffff",
+  "ffffffffffffffvf",
+  "ffffffffffffffff",
+  "fffvffffffffffff",
+  "ffffffffffffffff",
+];
+
+export const FLOOR_POD_B_MAP: SpriteMap = [
+  "FFFFFFFFFFFVFFFF",
+  "FFFFFFFFFFFFFFFF",
+  "FFFVFFFFFFFFFFFF",
+  "FFFFFFFFFFFFFFFF",
+  "FFFFFFFFFVFFFFFF",
+  "FFFFFFFFFFFFFFFF",
+  "FVFFFFFFFFFFFFFF",
+  "FFFFFFFFFFFFFFFF",
+  "FFFFFFFFFFFFFVFF",
+  "FFFFFFFFFFFFFFFF",
+  "FFFFFVFFFFFFFFFF",
+  "FFFFFFFFFFFFFFFF",
+  "FFFFFFFFVFFFFFFF",
+  "FFFFFFFFFFFFFFFF",
+  "FFFFFFFFFFFFFFVF",
+  "FFFFFFFFFFFFFFFF",
+];
+
+/**
+ * The horizontal partition: the same frosted band as {@link PARTITION_MAP}
+ * turned across the tile, with a base line under it so it reads as standing
+ * rather than lying on the floor.
+ */
+export const PARTITION_H_MAP: SpriteMap = [
+  "................",
+  "................",
+  "................",
+  "................",
+  "................",
+  "OOOOOOOOOOOOOOOO",
+  "vvvvvvvvvvvvvvvv",
+  "vvvvvvvvvvvvvvvv",
+  "VVVVVVVVVVVVVVVV",
+  "OOOOOOOOOOOOOOOO",
+  "................",
+  "................",
+  "................",
+  "................",
+  "................",
+  "................",
+];
+
+/**
+ * A pod's name plate: a dark field with a light border, sized so the renderer
+ * can draw the pod's name across it the way a cabin sign carries a room name.
+ */
+export const POD_PLATE_MAP: SpriteMap = [
+  "..OOOOOOOOOOOO..",
+  "..ObbbbbbbbbbO..",
+  "..ObBBBBBBBBbO..",
+  "..ObBBBBBBBBbO..",
+  "..ObBBBBBBBBbO..",
+  "..ObBBBBBBBBbO..",
+  "..ObbbbbbbbbbO..",
+  "..OOOOOOOOOOOO..",
+];
+
+/**
+ * The WARM sibling of the pod checker: the same floor shifted a few shades
+ * toward the wood tones. Two tinted pairs are what let two neighbouring pods
+ * read as different areas without either gaining a border.
+ */
+export const FLOOR_POD_WARM_A_MAP: SpriteMap = [
+  "ffffffffwfffffff",
+  "ffffffffffffffff",
+  "ffffwfffffffffff",
+  "ffffffffffffffff",
+  "ffffffffffffwfff",
+  "ffffffffffffffff",
+  "ffwfffffffffffff",
+  "ffffffffffffffff",
+  "ffffffffffwfffff",
+  "ffffffffffffffff",
+  "ffffffwfffffffff",
+  "ffffffffffffffff",
+  "ffffffffffffffwf",
+  "ffffffffffffffff",
+  "fffwffffffffffff",
+  "ffffffffffffffff",
+];
+
+export const FLOOR_POD_WARM_B_MAP: SpriteMap = [
+  "FFFFFFFFFFFWFFFF",
+  "FFFFFFFFFFFFFFFF",
+  "FFFWFFFFFFFFFFFF",
+  "FFFFFFFFFFFFFFFF",
+  "FFFFFFFFFWFFFFFF",
+  "FFFFFFFFFFFFFFFF",
+  "FWFFFFFFFFFFFFFF",
+  "FFFFFFFFFFFFFFFF",
+  "FFFFFFFFFFFFFWFF",
+  "FFFFFFFFFFFFFFFF",
+  "FFFFFWFFFFFFFFFF",
+  "FFFFFFFFFFFFFFFF",
+  "FFFFFFFFWFFFFFFF",
+  "FFFFFFFFFFFFFFFF",
+  "FFFFFFFFFFFFFFWF",
+  "FFFFFFFFFFFFFFFF",
+];
+
+/**
+ * A planter box marking a pod's edge: a wooden trough under a clipped hedge.
+ * Symmetric on both axes so one sprite serves every side of an area.
+ */
+export const PLANTER_MAP: SpriteMap = [
+  "................",
+  "..OOOOOOOOOOOO..",
+  "..OggGGggGGggO..",
+  "..OgGGggGGggGO..",
+  "..OGGggGGggGGO..",
+  "..OggGGggGGggO..",
+  "..OgGGggGGggGO..",
+  "..OGGggGGggGGO..",
+  "..OOOOOOOOOOOO..",
+  "..OwwwwwwwwwwO..",
+  "..OwWWwwwwWWwO..",
+  "..OwwwwwwwwwwO..",
+  "..OWWWWWWWWWWO..",
+  "..OOOOOOOOOOOO..",
+  "................",
+  "................",
+];
+
+/**
+ * A low bookshelf on a pod's edge, seen from above: a wooden carcass with
+ * coloured spines standing in it. The vertical run.
+ */
+export const SHELF_MAP: SpriteMap = [
+  "....OOOOOOOO....",
+  "....OwwwwwwO....",
+  "....OwOOOOwO....",
+  "....OwOnnOwO....",
+  "....OwOnnOwO....",
+  "....OwOyyOwO....",
+  "....OwOyyOwO....",
+  "....OwOggOwO....",
+  "....OwOggOwO....",
+  "....OwOqqOwO....",
+  "....OwOqqOwO....",
+  "....OwOOOOwO....",
+  "....OwwwwwwO....",
+  "....OWWWWWWO....",
+  "....OOOOOOOO....",
+  "................",
+];
+
+/** The bookshelf turned along a horizontal edge. */
+export const SHELF_H_MAP: SpriteMap = [
+  "................",
+  "................",
+  "................",
+  "................",
+  "OOOOOOOOOOOOOOOO",
+  "OwwwwwwwwwwwwwwO",
+  "OwOOOOOOOOOOOOwO",
+  "OwOnnyyggqqnnOwO",
+  "OwOnnyyggqqnnOwO",
+  "OwOOOOOOOOOOOOwO",
+  "OwwwwwwwwwwwwwwO",
+  "OWWWWWWWWWWWWWWO",
+  "OOOOOOOOOOOOOOOO",
+  "................",
+  "................",
+  "................",
 ];

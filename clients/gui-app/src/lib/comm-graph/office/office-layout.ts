@@ -150,9 +150,16 @@ const CAFETERIA_SEAT_ROW = 5;
 /**
  * Below this the storey is all cabin and corridor: dropping a ten-tile room into
  * it would seal the routes the cabins open onto. Such a floor keeps the older
- * corner fittings instead and reports `cafeteria: null`.
+ * corner fittings instead and reports `cafeteria: null`. After the widening
+ * above, only the empty-epic room ever does.
  */
 const CAFETERIA_MIN_INTERIOR_COLS = 14;
+/**
+ * The building width that interior minimum implies, counting both outer walls.
+ * Every furnished storey is widened to at least this, so `planCafeteria` can
+ * only fail on the empty-epic room.
+ */
+const CAFETERIA_MIN_BUILDING_COLS = CAFETERIA_MIN_INTERIOR_COLS + 2;
 const CAFETERIA_MIN_FLOOR_ROWS = CAFETERIA_ROWS + 4;
 /** Fallback fittings, when there is no room for a cafeteria. */
 const CORNER_COFFEE_COL_OFFSET = 3;
@@ -388,14 +395,24 @@ function buildFloors(
     // The cafeteria's width is reserved here rather than claimed later: it
     // stands to the RIGHT of every cabin band, and a room fitted into leftover
     // space would move whenever a family grew.
+    // The break room is not a reward for having enough agents: a one-agent
+    // epic is exactly where an empty floor reads as broken, so the storey is
+    // widened and deepened to fit a cafeteria whatever the cabins came to.
+    // Only the EMPTY-epic room opts out - it has no floor to furnish.
     const localCols =
       cabins.length === 0
         ? EMPTY_ROOM_COLS
-        : contentRight + BUILDING_RIGHT_MARGIN_TILES + CAFETERIA_COLS;
+        : Math.max(
+            contentRight + BUILDING_RIGHT_MARGIN_TILES + CAFETERIA_COLS,
+            CAFETERIA_MIN_BUILDING_COLS,
+          );
     const localRows =
       cabins.length === 0
         ? EMPTY_ROOM_ROWS
-        : contentBottom + BUILDING_BOTTOM_MARGIN_TILES;
+        : Math.max(
+            contentBottom + BUILDING_BOTTOM_MARGIN_TILES,
+            CAFETERIA_MIN_FLOOR_ROWS,
+          );
     builds.push({
       hostId: group.hostId,
       forest,
@@ -628,7 +645,14 @@ interface CafeteriaPlan {
   readonly tableTiles: ReadonlyArray<OfficeTilePos>;
 }
 
-/** The corner fittings a floor too small for a cafeteria keeps instead. */
+/**
+ * The corner fittings a floor with no cafeteria keeps instead.
+ *
+ * Reachable only by the EMPTY-epic room now that every furnished storey is
+ * widened to fit a break room. Kept for exactly that case: a room with no
+ * agents still wants something in the corner, and it has no cabins to widen
+ * around.
+ */
 interface CornerFittings {
   readonly coffeeTile: OfficeTilePos;
   readonly coolerTile: OfficeTilePos | null;
@@ -638,6 +662,8 @@ function planCafeteria(
   context: PlanContext,
   build: FloorBuild,
 ): CafeteriaPlan | null {
+  // Both guards now only fire for the empty-epic room; a furnished storey is
+  // sized to clear them - see `localCols` / `localRows`.
   if (context.cols - 2 < CAFETERIA_MIN_INTERIOR_COLS) return null;
   if (build.localRows < CAFETERIA_MIN_FLOOR_ROWS) return null;
   const col = context.cols - 1 - CAFETERIA_COLS;
@@ -973,6 +999,9 @@ function collectCabins(
       rooms.push({
         rootAgentId: cabin.root.id,
         name: cabin.root.name,
+        // Sub-team pods are a later lane's; a cabin with none is not a cabin
+        // with an unknown number of them.
+        pods: [],
         bounds: {
           col: cabin.col,
           row: cabinRow,
@@ -1160,6 +1189,10 @@ function fitFloor(request: FloorFitRequest): OfficeFloor {
       rooms: request.rooms,
     }),
     cafeteria: cafeteria === null ? null : cafeteria.bounds,
+    // Placed by a later lane. The fields are carried now so every floor has
+    // the same shape whether or not anything has filled them in yet.
+    gameRoom: null,
+    areaSigns: [],
   };
 }
 
