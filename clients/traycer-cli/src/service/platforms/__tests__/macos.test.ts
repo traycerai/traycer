@@ -30,7 +30,11 @@ import {
   buildCompatibleHostStartScript,
   buildHostStartLauncherScript,
 } from "../host-start-script";
-import { ProcessRunError, type RunResult } from "../../process-runner";
+import {
+  ProcessRunError,
+  ProcessSpawnError,
+  type RunResult,
+} from "../../process-runner";
 import type { ServiceController } from "../../index";
 import {
   serviceLabelFor,
@@ -38,7 +42,11 @@ import {
   smAppServiceAgentLabelId,
 } from "../../label";
 import { CLI_ERROR_CODES } from "../../../runner/errors";
-import { ServiceMutationAuthorityError } from "../../mutation-authority";
+import {
+  isServiceMutationAuthorityError,
+  ServiceMutationAuthorityError,
+} from "../../mutation-authority";
+import { didServiceRegistrationCommit } from "../../cli-invocation-record";
 
 const execFileAsync = promisify(execFile);
 
@@ -1002,6 +1010,140 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       "bootstrap",
       "kickstart",
     ]);
+  });
+
+  // `registrationCommitted: true` is the signal `didServiceRegistrationCommit`
+  // reads: `bootstrap` already succeeded here (launchd holds the
+  // registration), so a caller holding a host-start adoption lease must
+  // honour it rather than treat this as a clean pre-registration failure.
+  it("marks a kickstart failure after a successful bootstrap as a committed registration", async () => {
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (args[0] === "kickstart") {
+        throw buildLaunchctlError({
+          command,
+          cmdArgs: args,
+          stderr: "Could not kickstart service: 3\n",
+          stdout: "",
+          exitCode: 3,
+        });
+      }
+      return buildSuccessResult();
+    };
+    const controller = createMacosController(runner);
+    createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
+    let caught: unknown = null;
+    try {
+      await controller.install({
+        label,
+        cli: { command: "/usr/local/bin/traycer", args: [] },
+        enableLinger: false,
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+      details: { registrationCommitted: true },
+    });
+    expect(didServiceRegistrationCommit(caught)).toBe(true);
+  });
+
+  // The negative twin: a `bootstrap` failure happens BEFORE the registration
+  // is in launchd's hands, so it must never carry the committed flag.
+  it("does not mark a bootstrap failure (pre-registration) as a committed registration", async () => {
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (args[0] === "bootstrap") {
+        throw buildLaunchctlError({
+          command,
+          cmdArgs: args,
+          stderr: "Bootstrap failed: 5: Operation not permitted\n",
+          stdout: "",
+          exitCode: 5,
+        });
+      }
+      return buildSuccessResult();
+    };
+    const controller = createMacosController(runner);
+    createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
+    let caught: unknown = null;
+    try {
+      await controller.install({
+        label,
+        cli: { command: "/usr/local/bin/traycer", args: [] },
+        enableLinger: false,
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+    });
+    expect(didServiceRegistrationCommit(caught)).toBe(false);
+  });
+
+  // A mutation-authority loss is not a `CliError`: it must keep its own
+  // identity (`isServiceMutationAuthorityError`) rather than being wrapped,
+  // and `markRegistrationCommitted` marks it by reference instead of via
+  // `details.registrationCommitted`.
+  it("marks a mutation-authority loss from kickstart after a successful bootstrap as a committed registration", async () => {
+    const authorityError = new ServiceMutationAuthorityError(
+      new Error("maintenance lease revoked"),
+    );
+    const runner: ProcessRunner = async (_command, args) => {
+      if (args[0] === "kickstart") {
+        throw authorityError;
+      }
+      return buildSuccessResult();
+    };
+    const controller = createMacosController(runner);
+    createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
+    let caught: unknown = null;
+    try {
+      await controller.install({
+        label,
+        cli: { command: "/usr/local/bin/traycer", args: [] },
+        enableLinger: false,
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBe(authorityError);
+    expect(isServiceMutationAuthorityError(caught)).toBe(true);
+    expect(didServiceRegistrationCommit(caught)).toBe(true);
+  });
+
+  // The negative twin: a mutation-authority loss from `bootstrap` happens
+  // BEFORE the registration is in launchd's hands, so it must stay an
+  // authority error without ever being read as committed.
+  it("does not mark a mutation-authority loss from bootstrap (pre-registration) as a committed registration", async () => {
+    const authorityError = new ServiceMutationAuthorityError(
+      new Error("maintenance lease revoked"),
+    );
+    const runner: ProcessRunner = async (_command, args) => {
+      if (args[0] === "bootstrap") {
+        throw authorityError;
+      }
+      return buildSuccessResult();
+    };
+    const controller = createMacosController(runner);
+    createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
+    let caught: unknown = null;
+    try {
+      await controller.install({
+        label,
+        cli: { command: "/usr/local/bin/traycer", args: [] },
+        enableLinger: false,
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBe(authorityError);
+    expect(isServiceMutationAuthorityError(caught)).toBe(true);
+    expect(didServiceRegistrationCommit(caught)).toBe(false);
   });
 
   it("uses a bounded launchd completion barrier when pid metadata is missing", async () => {
@@ -2748,6 +2890,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         kind: "retire-failed",
         bootoutFailed: true,
         manifestRemovalFailed: false,
+        bootedOut: false,
+        bootoutIndeterminate: true,
+        manifestRemoved: false,
       });
 
       // The competing host is STILL RUNNING (its bootout failed), so starting
@@ -2755,6 +2900,44 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       // exists to remove. The `bootedOut` guard - not merely "the CLI label
       // was loaded" - is what prevents that.
       expect(calls.filter((call) => call.args[0] === "kickstart")).toEqual([]);
+    });
+
+    it("a bootout whose launchctl could not be spawned is a failed, NOT indeterminate, eviction", async () => {
+      // `ProcessSpawnError` means the binary never started, so the request
+      // never reached launchd and the registration is provably untouched -
+      // the record decorator must not invalidate for it, unlike a bootout
+      // that ran and failed (which may have been accepted before the waiter
+      // died).
+      const runner: ProcessRunner = async (command, args) => {
+        if (args[0] === "print") {
+          const target = args[1] ?? "";
+          return {
+            stdout: `${target} = {\n${target.endsWith(`/${agentLabelId}`) ? SMAPPSERVICE_PRINT : CLI_PRINT}\n}\n`,
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+        throw new ProcessSpawnError(
+          `${command} ${args.join(" ")} could not be spawned (ENOENT): `,
+          command,
+          args,
+          -1,
+          "",
+          "",
+        );
+      };
+      expect(existsSync(join(tempPlistDir, `${label.id}.plist`))).toBe(false);
+
+      await expect(
+        createMacosController(runner).retireCompetingRegistration(label),
+      ).resolves.toEqual({
+        kind: "retire-failed",
+        bootoutFailed: true,
+        manifestRemovalFailed: false,
+        bootedOut: false,
+        bootoutIndeterminate: false,
+        manifestRemoved: false,
+      });
     });
 
     // The availability guard. Without an SMAppService-owned agent there is
@@ -2848,6 +3031,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         kind: "retire-failed",
         bootoutFailed: true,
         manifestRemovalFailed: false,
+        bootedOut: false,
+        bootoutIndeterminate: true,
+        manifestRemoved: true,
       });
 
       expect(MOCKS.cliLoggerWarn).toHaveBeenCalled();
@@ -2893,6 +3079,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         kind: "retire-failed",
         bootoutFailed: true,
         manifestRemovalFailed: false,
+        bootedOut: false,
+        bootoutIndeterminate: false,
+        manifestRemoved: true,
       });
 
       // Never bootout an owner we could not identify: the CLI label may BE
@@ -2916,6 +3105,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         kind: "retire-failed",
         bootoutFailed: true,
         manifestRemovalFailed: false,
+        bootedOut: false,
+        bootoutIndeterminate: false,
+        manifestRemoved: false,
       });
     });
 
@@ -2953,6 +3145,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
             kind: "retire-failed",
             bootoutFailed: false,
             manifestRemovalFailed: true,
+            bootedOut: false,
+            bootoutIndeterminate: false,
+            manifestRemoved: false,
           });
         });
 
@@ -2979,6 +3174,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
             kind: "retire-failed",
             bootoutFailed: false,
             manifestRemovalFailed: true,
+            bootedOut: true,
+            bootoutIndeterminate: false,
+            manifestRemoved: false,
           });
         });
 
