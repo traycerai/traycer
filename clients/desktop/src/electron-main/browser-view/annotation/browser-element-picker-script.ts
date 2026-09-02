@@ -1,5 +1,4 @@
 import type {
-  BrowserViewElementAttribute,
   BrowserViewElementBoundingBox,
   BrowserViewElementCapture,
   BrowserViewElementStyle,
@@ -18,9 +17,7 @@ import {
  */
 
 export const ELEMENT_PICKER_LIMITS = {
-  outerHtml: 4000,
   textPreview: 200,
-  attributeCount: 30,
   attributeValue: 300,
   styleCount: 48,
   styleValue: 300,
@@ -82,11 +79,6 @@ export function sanitizeElementCapture(
   value: unknown,
 ): BrowserViewElementCapture | null {
   if (!isRecord(value)) return null;
-  const outerHtml = boundedString(
-    value.outerHtml,
-    ELEMENT_PICKER_LIMITS.outerHtml,
-    "",
-  );
   return {
     selector: boundedString(value.selector, ELEMENT_PICKER_LIMITS.selector, ""),
     tagName: boundedString(
@@ -103,9 +95,6 @@ export function sanitizeElementCapture(
       ELEMENT_PICKER_LIMITS.classCount,
       ELEMENT_PICKER_LIMITS.className,
     ),
-    attributes: sanitizeAttributes(value.attributes),
-    outerHtml,
-    outerHtmlTruncated: value.outerHtmlTruncated === true,
     textPreview: boundedStringOrNull(
       value.textPreview,
       ELEMENT_PICKER_LIMITS.textPreview,
@@ -121,27 +110,6 @@ export function sanitizeElementCapture(
     boundingBox: sanitizeBoundingBox(value.boundingBox),
     computedStyles: sanitizeStyles(value.computedStyles),
   };
-}
-
-function sanitizeAttributes(value: unknown): BrowserViewElementAttribute[] {
-  if (!Array.isArray(value)) return [];
-  return value
-    .slice(0, ELEMENT_PICKER_LIMITS.attributeCount)
-    .flatMap((entry): BrowserViewElementAttribute[] => {
-      if (!isRecord(entry)) return [];
-      const name = boundedStringOrNull(entry.name, 120);
-      if (name === null) return [];
-      return [
-        {
-          name,
-          value: boundedString(
-            entry.value,
-            ELEMENT_PICKER_LIMITS.attributeValue,
-            "",
-          ),
-        },
-      ];
-    });
 }
 
 const ELEMENT_PICKER_STYLE_PROP_SET = new Set<string>(

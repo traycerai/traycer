@@ -565,12 +565,22 @@ class FakeWindow implements BrowserViewWindow {
 }
 
 class FakePopupWebContents extends EventEmitter {
+  windowOpenHandler:
+    | ((details: { readonly url: string }) => { readonly action: string })
+    | null = null;
+
   constructor(readonly id: number) {
     super();
   }
 
   once(event: "destroyed", listener: () => void): this {
     return super.once(event, listener);
+  }
+
+  setWindowOpenHandler(
+    handler: (details: { readonly url: string }) => { readonly action: string },
+  ): void {
+    this.windowOpenHandler = handler;
   }
 }
 
@@ -791,7 +801,9 @@ function createHarnessWithOptions(
           throw new Error(`unexpected browser-view channel: ${channel}`);
       }
     },
-    seedStorageState: () => Promise.resolve(),
+    // The real one validates and narrows; this harness is about the manager,
+    // so it echoes what it was handed - the narrowing has its own suite.
+    seedStorageState: (input) => Promise.resolve(input.seedStorageState),
     observePrimaryProfileOrigin: (url, _webContents, profile) => {
       if (profile !== "primary") return;
       primaryProfileObservedUrls.push(url);
@@ -872,6 +884,7 @@ async function attachNativeTab(
     requestedUrl,
     profile: "primary",
     seedStorageState: null,
+    connectionId: null,
   });
   await harness.manager.acceptTab(capability);
   const bindingId = `binding-${key.tileInstanceId}`;
@@ -941,6 +954,7 @@ describe("BrowserViewManager isolated sessions", () => {
       requestedUrl: `https://example.com/${tabId}`,
       profile: "isolated",
       seedStorageState: null,
+      connectionId: null,
     });
   }
 
@@ -993,6 +1007,7 @@ describe("BrowserViewManager isolated sessions", () => {
       requestedUrl: "https://example.com/shared",
       profile: "primary",
       seedStorageState: null,
+      connectionId: null,
     });
     await harness.manager.acceptTab(capability);
 
@@ -1023,6 +1038,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
           },
         ],
       },
+      connectionId: null,
     });
 
     const view = harness.views[0];
@@ -1067,6 +1083,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
       requestedUrl: "https://example.com/",
       profile: "primary",
       seedStorageState: null,
+      connectionId: null,
     });
     const view = harness.views[0];
     if (view === undefined) throw new Error("expected native guest");
@@ -1110,6 +1127,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
       requestedUrl: "https://example.com/",
       profile: "primary",
       seedStorageState: null,
+      connectionId: null,
     } as const;
     const ready = await harness.manager.ensureTab("window-1", input);
     const view = harness.views[0];
@@ -1155,6 +1173,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
       requestedUrl: "https://example.com/",
       profile: "primary",
       seedStorageState: null,
+      connectionId: null,
     });
     const view = harness.views[0];
     if (view === undefined) throw new Error("expected native guest");
@@ -1176,6 +1195,199 @@ describe("BrowserViewManager native tab lifecycle", () => {
     ).toHaveLength(2);
   });
 
+  // Root cause C: guests had no navigation policy at all - `installNavigationGuard`
+  // covers the app shell only, so `file:`, `javascript:`, `data:` and the
+  // `traycer:` app scheme were reachable from a tile. Both doors are pinned:
+  // what this process is ASKED to navigate to, and what the page tries itself.
+  it.each([
+    ["file", "file:///etc/passwd"],
+    ["javascript", "javascript:fetch('https://attacker.test')"],
+    ["data", "data:text/html,<script>1</script>"],
+    ["custom scheme", "traycer://internal/settings"],
+  ])(
+    "refuses a %s control-action navigation without touching the guest",
+    async (_label, url) => {
+      const harness = createHarness();
+      const nativeKey = {
+        hostId: "host-1",
+        sessionId: "session-1",
+        tabId: "tab-1",
+      } as const;
+      const ready = await harness.manager.ensureTab("window-1", {
+        ...nativeKey,
+        requestedUrl: "https://example.com/",
+        profile: "primary",
+        seedStorageState: null,
+        connectionId: null,
+      });
+      await harness.manager.acceptTab(ready);
+      const view = harness.views[0];
+      if (view === undefined) throw new Error("expected native guest");
+      const loadedBefore = [...view.webContents.loadUrls];
+
+      await expect(
+        harness.manager.controlElectronTab("window-1", {
+          ...nativeKey,
+          registrationId: ready.registrationId,
+          action: { kind: "navigate", url },
+        }),
+      ).rejects.toThrow("http, https or about:blank");
+
+      expect(view.webContents.loadUrls).toEqual(loadedBefore);
+    },
+  );
+
+  it.each([
+    ["file", "file:///etc/passwd"],
+    ["javascript", "javascript:fetch('https://attacker.test')"],
+  ])("prevents a page-initiated %s navigation", async (_label, url) => {
+    const harness = createHarness();
+    const ready = await harness.manager.ensureTab("window-1", {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      requestedUrl: "https://example.com/",
+      profile: "primary",
+      seedStorageState: null,
+      connectionId: null,
+    });
+    await harness.manager.acceptTab(ready);
+    const view = harness.views[0];
+    if (view === undefined) throw new Error("expected native guest");
+    let prevented = 0;
+    const event = {
+      preventDefault: (): void => {
+        prevented += 1;
+      },
+    };
+
+    view.webContents.emit("will-navigate", event, url);
+    expect(prevented).toBe(1);
+
+    view.webContents.emit("will-navigate", event, "https://example.com/next");
+    expect(prevented).toBe(1);
+  });
+
+  it("refuses a cdpNavigate to a scheme a guest may not navigate to", async () => {
+    const harness = createHarness();
+    const nativeKey = {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+    } as const;
+    const ready = await harness.manager.ensureTab("window-1", {
+      ...nativeKey,
+      requestedUrl: "https://example.com/",
+      profile: "primary",
+      seedStorageState: null,
+      connectionId: null,
+    });
+    await harness.manager.acceptTab(ready);
+    const view = harness.views[0];
+    if (view === undefined) throw new Error("expected native guest");
+
+    // The quietest door: `cdpNavigate` reaches `Page.navigate` directly, so it
+    // sees neither `navigate()` nor `will-navigate`.
+    await expect(
+      harness.manager.dispatchElectronTabCdp({
+        ...nativeKey,
+        registrationId: ready.registrationId,
+        target: { kind: "root" },
+        command: { kind: "cdpNavigate", url: "file:///etc/passwd" },
+      }),
+    ).resolves.toMatchObject({
+      kind: "cdpNavigate",
+      ok: false,
+      error: { kind: "cdp_error" },
+    });
+    expect(
+      view.webContents.debugger.commands.filter(
+        ({ method }) => method === "Page.navigate",
+      ),
+    ).toEqual([]);
+
+    // And an allowed one still reaches CDP, so the gate is a scheme check and
+    // not a disabled command.
+    await harness.manager.dispatchElectronTabCdp({
+      ...nativeKey,
+      registrationId: ready.registrationId,
+      target: { kind: "root" },
+      command: { kind: "cdpNavigate", url: "https://example.com/next" },
+    });
+    expect(
+      view.webContents.debugger.commands.filter(
+        ({ method }) => method === "Page.navigate",
+      ),
+    ).toMatchObject([{ params: { url: "https://example.com/next" } }]);
+  });
+
+  it("denies a window.open to a scheme a guest may not navigate to", async () => {
+    const harness = createHarness();
+    const { view } = await attachNativeTab(
+      harness,
+      "window-1",
+      BASE_TILE_KEY,
+      "https://example.com/",
+    );
+    const open = view.webContents.windowOpenHandler;
+    if (open === undefined || open === null) {
+      throw new Error("expected a window-open handler");
+    }
+
+    expect(
+      open({
+        url: "file:///etc/passwd",
+        frameName: "_blank",
+        features: "",
+        disposition: "foreground-tab",
+      }),
+    ).toEqual({ action: "deny" });
+    // Denied, and it did not become a tile either: both outcomes of this
+    // handler carry the target onward, so the gate has to sit ahead of both.
+    expect(harness.openTileRequests).toEqual([]);
+
+    // A relative open still resolves against the opener and is allowed.
+    open({
+      url: "/next",
+      frameName: "_blank",
+      features: "",
+      disposition: "foreground-tab",
+    });
+    expect(harness.openTileRequests).toEqual([
+      { ...BASE_TILE_KEY, url: "https://example.com/next" },
+    ]);
+  });
+
+  it("guards a popup's own navigation and denies its window.open", async () => {
+    const harness = createHarness();
+    const { view } = await attachNativeTab(
+      harness,
+      "window-1",
+      BASE_TILE_KEY,
+      "https://example.com/",
+    );
+    const popup = new FakePopupWindow(999);
+
+    view.webContents.emit("did-create-window", popup);
+
+    // A popup shares the opener's jar, so `window.open()` then
+    // `location = "file:///..."` would otherwise walk around every gate.
+    let prevented = 0;
+    popup.webContents.emit(
+      "will-navigate",
+      {
+        preventDefault: (): void => {
+          prevented += 1;
+        },
+      },
+      "file:///etc/passwd",
+    );
+    expect(prevented).toBe(1);
+    expect(
+      popup.webContents.windowOpenHandler?.({ url: "https://ok.test/" }),
+    ).toEqual({ action: "deny" });
+  });
+
   it("controls an unbound tab through its native identity", async () => {
     const harness = createHarness();
     const nativeKey = {
@@ -1188,6 +1400,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
       requestedUrl: "https://example.com/",
       profile: "primary",
       seedStorageState: null,
+      connectionId: null,
     });
     const view = harness.views[0];
     if (view === undefined) throw new Error("expected native guest");
@@ -1278,6 +1491,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
       requestedUrl: "https://example.com/",
       profile: "primary",
       seedStorageState: null,
+      connectionId: null,
     });
     const view = harness.views[0];
     if (view === undefined) throw new Error("expected native guest");
@@ -1364,6 +1578,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
       requestedUrl: "https://example.com/",
       profile: "primary",
       seedStorageState: null,
+      connectionId: null,
     } as const;
     const ready = await harness.manager.ensureTab("window-1", ensureInput);
     const view = harness.views[0];
@@ -1400,6 +1615,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
       requestedUrl: "https://example.com/",
       profile: "primary",
       seedStorageState: null,
+      connectionId: null,
     } as const;
     const firstEnsure = harness.manager.ensureTab("window-1", ensureInput);
     const view = harness.views[0];
@@ -1444,6 +1660,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
       requestedUrl: "https://example.com/",
       profile: "primary",
       seedStorageState: null,
+      connectionId: null,
     } as const;
     const provisioned = await harness.manager.ensureTab("window-1", input);
     const view = harness.views[0];
@@ -1487,6 +1704,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
       requestedUrl: "https://example.com/",
       profile: "primary" as const,
       seedStorageState: null,
+      connectionId: null,
     };
 
     const firstEnsure = harness.manager.ensureTab("window-1", ensureInput);
@@ -1658,6 +1876,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
       requestedUrl: "https://example.com/",
       profile: "primary" as const,
       seedStorageState: null,
+      connectionId: null,
     };
     const ready = await harness.manager.ensureTab("window-1", input);
     await harness.manager.acceptTab(ready);
@@ -1707,6 +1926,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
       requestedUrl: "https://example.com/closing",
       profile: "primary",
       seedStorageState: null,
+      connectionId: null,
     });
     const remaining = await harness.manager.ensureTab("window-2", {
       hostId: "host-1",
@@ -1715,6 +1935,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
       requestedUrl: "https://example.com/remaining",
       profile: "primary",
       seedStorageState: null,
+      connectionId: null,
     });
     await harness.manager.acceptTab(closing);
     await harness.manager.acceptTab(remaining);
@@ -1746,6 +1967,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
       requestedUrl: "https://example.com/",
       profile: "primary",
       seedStorageState: null,
+      connectionId: null,
     });
     await harness.manager.acceptTab(accepted);
     const isolated = await harness.manager.ensureTab("window-1", {
@@ -1755,6 +1977,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
       requestedUrl: "https://example.com/private",
       profile: "isolated",
       seedStorageState: null,
+      connectionId: null,
     });
     await harness.manager.acceptTab(isolated);
     await harness.manager.ensureTab("window-1", {
@@ -1764,6 +1987,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
       requestedUrl: "https://example.com/provisional",
       profile: "primary",
       seedStorageState: null,
+      connectionId: null,
     });
 
     const migrated =
@@ -1786,6 +2010,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
       requestedUrl: "https://example.com/accepted",
       profile: "primary",
       seedStorageState: null,
+      connectionId: null,
     });
     await harness.manager.acceptTab(accepted);
     await harness.manager.ensureTab("window-1", {
@@ -1795,6 +2020,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
       requestedUrl: "https://example.com/provisional",
       profile: "primary",
       seedStorageState: null,
+      connectionId: null,
     });
 
     harness.manager.dispose();
@@ -1816,6 +2042,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
       requestedUrl: "https://example.com/provisional",
       profile: "primary",
       seedStorageState: null,
+      connectionId: null,
     });
     const accepted = await harness.manager.ensureTab("window-1", {
       hostId: "host-1",
@@ -1824,6 +2051,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
       requestedUrl: "https://example.com/accepted",
       profile: "primary",
       seedStorageState: null,
+      connectionId: null,
     });
     await harness.manager.acceptTab(accepted);
 
@@ -1849,6 +2077,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
       requestedUrl: "https://example.com/",
       profile: "primary",
       seedStorageState: null,
+      connectionId: null,
     });
     const view = harness.views[0];
     if (view === undefined) throw new Error("expected native guest");
@@ -1922,6 +2151,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
       requestedUrl: "https://example.com/",
       profile: "primary",
       seedStorageState: null,
+      connectionId: null,
     });
     const view = harness.views[0];
     if (view === undefined) throw new Error("expected native guest");
@@ -2406,8 +2636,6 @@ describe("BrowserViewManager annotation session", () => {
         tagName: "BUTTON",
         elementId: "go",
         classNames: ["primary"],
-        outerHtml: "<button>Go</button>",
-        outerHtmlTruncated: false,
         textPreview: "Go",
         ariaRole: "button",
         accessibleName: "Go",
@@ -2835,6 +3063,35 @@ describe("BrowserViewManager annotation session", () => {
   });
 });
 
+describe("BrowserViewManager visibility reconcile on window loss", () => {
+  it("reports viewed:false the moment a visible tab's window disappears, and stays silent on the next reconcile", async () => {
+    const harness = createHarness();
+    await attachNativeTab(
+      harness,
+      "window-1",
+      BASE_KEY,
+      "https://example.com/",
+    );
+    const statusesBeforeLoss = harness.nativeTabStatuses.length;
+    expect(harness.nativeTabStatuses.at(-1)?.viewed).toBe(true);
+
+    // The window this tile was parented to is gone (closed/destroyed) -
+    // reconcileVisibility must notice on the very next window-change pass.
+    harness.windows.delete("window-1");
+    harness.emitWindowChange();
+
+    const statusesAfterFirstReconcile = harness.nativeTabStatuses.length;
+    expect(statusesAfterFirstReconcile).toBe(statusesBeforeLoss + 1);
+    expect(harness.nativeTabStatuses.at(-1)?.viewed).toBe(false);
+
+    // A reconcile over an entry that is ALREADY hidden must not re-emit -
+    // this runs on every window-change, and a status per pass would flood
+    // the renderer with no new information.
+    harness.emitWindowChange();
+    expect(harness.nativeTabStatuses.length).toBe(statusesAfterFirstReconcile);
+  });
+});
+
 function reportAttachResult(
   harness: Harness,
   windowId: string,
@@ -2938,6 +3195,7 @@ describe("BrowserViewManager tile geometry under page zoom", () => {
       requestedUrl: "https://example.com/",
       profile: "primary",
       seedStorageState: null,
+      connectionId: null,
     });
     const view = harness.views[0];
     if (view === undefined) throw new Error("expected native guest");

@@ -102,6 +102,16 @@ export class BrowserViewGeometry {
     this.tileFrames.detach(keyId);
   }
 
+  /**
+   * Ticket 04 exit-edge handshake: resolves on this tile's next composited
+   * frame, read off the same BT-201 frame feed occlusion already reads
+   * (`cachedFrame`) rather than a second subscription. Null when no
+   * subscription is attached for the key.
+   */
+  awaitNextFrame(keyId: string): Promise<void> | null {
+    return this.tileFrames.awaitNextFrame(keyId);
+  }
+
   dispose(): void {
     if (this.boundsStreamLogTimer !== null) {
       clearTimeout(this.boundsStreamLogTimer);
@@ -115,7 +125,15 @@ export class BrowserViewGeometry {
     // may keep streaming rects while a menu is open, and applying them would
     // yank the offscreen-parked view back over the popover. The stored
     // rect is applied by the release path.
-    if (entry.overlayOwnerIds.length > 0) return;
+    //
+    // Ticket 04: the same swallow covers the restore handshake's two-step
+    // window too - `overlayOwnerIds` is already empty by the time release
+    // un-parks the view (that un-park IS the call this guard lets through),
+    // but a stand-in is still mounted in the renderer until the deferred
+    // restore event lands. A streamed rect landing in that gap must not
+    // reset `lastAppliedBounds` out from under the release path.
+    if (entry.overlayOwnerIds.length > 0 || entry.overlayRestoreToken !== null)
+      return;
     const bounds = applicableWindowBounds(entry, this.getZoomFactor());
     if (bounds === null) return;
     if (bounds.width <= 0 || bounds.height <= 0) {

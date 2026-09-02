@@ -403,7 +403,7 @@ function buildFakeBridge(
           token: null,
           profile: null,
         }),
-        set: async () => undefined,
+        set: async () => ({ outcome: "accepted" as const }),
         onChange: (_handler) => ({ dispose: () => undefined }),
       },
     },
@@ -503,6 +503,9 @@ function buildFakeBridge(
         showSystemDialog: async () => false,
         onPending: () => ({ dispose: () => undefined }),
       },
+      hostKeyPin: {
+        onMismatch: () => ({ dispose: () => undefined }),
+      },
       display: {
         list: async () => ({ displays: [], primaryId: 0 }),
         onTopologyChange: () => ({ dispose: () => undefined }),
@@ -532,22 +535,9 @@ function buildFakeBridge(
       onChange: (_handler) => ({ dispose: () => undefined }),
     },
     browserView: {
-      ensureTab: async (input) => ({
-        hostId: input.hostId,
-        sessionId: input.sessionId,
-        tabId: input.tabId,
-        registrationId: "registration-1",
-      }),
-      acceptTab: async () => undefined,
       attachSurface: async () => undefined,
       detachSurface: async () => undefined,
-      releaseTab: async () => true,
       controlElectronTab: async () => undefined,
-      dispatchElectronTabCdp: async () => ({
-        kind: "cdpGetFrameTree" as const,
-        ok: true as const,
-        frames: [],
-      }),
       setReservedChords: async () => undefined,
       overlayPaintAck: async () => undefined,
       updateBounds: async () => undefined,
@@ -577,31 +567,23 @@ function buildFakeBridge(
         matchedCount: input.tiles.length,
       }),
       releaseOverlay: async () => ({ restoredTiles: [] }),
-      capturePrimaryProfile: async () => ({
-        status: "captured" as const,
-        storageState: { cookies: [], origins: [] },
-        reason: null,
-      }),
       clearSite: async () => undefined,
-      evictSite: async () => undefined,
+      // H10: the jar/CDP plane moved into main's own `browser-sessions`
+      // owner. This shell test has no live stream to open - the three
+      // methods below are called and simply no-op.
+      openSessionsStream: async () => undefined,
+      closeSessionsStream: async () => undefined,
+      sendSessionsFrame: async () => undefined,
+      onSessionsStreamEvent: (_handler) => ({ dispose: () => undefined }),
       getSaveLogins: async () => true,
       setSaveLogins: async (enabled) => enabled,
-      // This shell test has no OS keystore; the store-key handshake refuses
-      // the same way a machine without one does.
-      wrapStoreKey: async () => ({
-        ok: false as const,
-        reason: "no keystore in this test bridge",
-      }),
-      unwrapStoreKey: async () => ({
-        ok: false as const,
-        reason: "no keystore in this test bridge",
-      }),
-      forgetLogins: async () => undefined,
-      onPrimaryProfileDelta: (_handler) => ({ dispose: () => undefined }),
+      forgetLogins: async () => true,
+      clearSavedLoginSite: async () => true,
       onFindChange: (_handler) => ({ dispose: () => undefined }),
       onDownloadChange: (_handler) => ({ dispose: () => undefined }),
       onCertificateError: (_handler) => ({ dispose: () => undefined }),
       onOpenTileRequest: (_handler) => ({ dispose: () => undefined }),
+      onOverlayTileRestored: (_handler) => ({ dispose: () => undefined }),
       onTileCommand: (_handler) => ({ dispose: () => undefined }),
       onSnapshotInvalidated: (_handler) => ({ dispose: () => undefined }),
       onAnnotationEvent: (_handler) => ({ dispose: () => undefined }),

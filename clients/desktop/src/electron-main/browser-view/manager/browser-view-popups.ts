@@ -2,6 +2,11 @@ import type { BrowserWindowConstructorOptions } from "electron";
 import { RunnerHostEvent } from "../../../ipc-contracts/ipc-channels";
 import { log } from "../../app/logger";
 import {
+  installGuestNavigationGuard,
+  isAllowedGuestNavigationUrl,
+  traceRefusedGuestNavigation,
+} from "../browser-guest-navigation";
+import {
   toTileKey,
   type BrowserViewEntry,
   type BrowserViewSend,
@@ -56,12 +61,22 @@ export class BrowserViewPopups {
   ): BrowserViewWindowOpenResult {
     const surface = entry.surface;
     if (surface === null) return { action: "deny" };
+    // The third door the guest scheme gate has to cover: a guest CAN open
+    // windows, and both outcomes below carry the target onward - one into a
+    // new tile, one into a real popup on the opener's jar. Resolved against
+    // the opener first, because `window.open("/x")` is relative and a scheme
+    // check on the raw string would be checking the wrong string.
+    const target = normalizeOpenedUrl(details.url, entry.currentUrl);
+    if (!isAllowedGuestNavigationUrl(target)) {
+      traceRefusedGuestNavigation(target, "window-open");
+      return { action: "deny" };
+    }
     // Electron exposes featureless scripted window.open the same as _blank
     // tab opens, so the available guardrail is non-empty popup features.
     if (windowOpenShouldCreateTile(details)) {
       this.send(surface.windowId, RunnerHostEvent.browserViewOpenTileRequest, {
         ...toTileKey(surface),
-        url: normalizeOpenedUrl(details.url, entry.currentUrl),
+        url: target,
       });
       return { action: "deny" };
     }
@@ -87,6 +102,16 @@ export class BrowserViewPopups {
       window.close();
       return;
     }
+    // A popup shares the opener's jar, so it needs the opener's navigation
+    // policy: without this, `window.open()` then `location = "file:///..."`
+    // walks straight around every gate the guest itself has. Its own
+    // `window.open` is denied outright rather than gated - a popup of a popup
+    // has no tile to become and no opener UX to preserve.
+    installGuestNavigationGuard(window.webContents);
+    window.webContents.setWindowOpenHandler((details) => {
+      traceRefusedGuestNavigation(details.url, "popup-window-open");
+      return { action: "deny" };
+    });
     this.registerPopupWebContents(window.webContents);
     this.openWindows.add(window);
     window.on("closed", () => {
