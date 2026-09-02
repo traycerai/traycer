@@ -249,8 +249,15 @@ import { useEpicImageFetcher } from "@/lib/attachments/use-attachment-blob-src";
 import { readHeldEpicAttachmentBytes } from "@/lib/epic-replica-reads";
 import type { ScopedImageBytesFetcher } from "@/lib/attachments/image-blob-cache";
 
-/** The jsdom setup file's coreless worker, put back in `afterEach`. */
-let previousWorkerFactory: (() => RuntimeWorkerLike) | null = null;
+/**
+ * The jsdom setup file's coreless worker, captured before this suite can
+ * replace it. A `null` override would fall through to the production Worker
+ * constructor, which jsdom cannot run.
+ */
+const setupWorkerFactory = getEpicRuntimeWorkerFactoryOverride();
+
+/** The worker override present at the start of the current test. */
+let workerFactoryBeforeTest: (() => RuntimeWorkerLike) | null = null;
 
 /**
  * Install this test's stream factory, one seam over.
@@ -293,7 +300,6 @@ interface FatalWorkerRig {
 function installWorkerWithFatalOnFirstSpawn(
   factory: EpicStreamClientFactory,
 ): FatalWorkerRig {
-  previousWorkerFactory = getEpicRuntimeWorkerFactoryOverride();
   let spawns = 0;
   let deliverFatal: (() => void) | null = null;
   __setEpicRuntimeWorkerFactoryForTests(() => {
@@ -368,7 +374,6 @@ function installWorkerWithFatalOnFirstSpawn(
  * bridge exists to report a `fatal` through.
  */
 function installWorkerThatThrowsOnSpawn(): { spawnCount(): number } {
-  previousWorkerFactory = getEpicRuntimeWorkerFactoryOverride();
   let spawns = 0;
   __setEpicRuntimeWorkerFactoryForTests(() => {
     spawns += 1;
@@ -378,7 +383,6 @@ function installWorkerThatThrowsOnSpawn(): { spawnCount(): number } {
 }
 
 function installStreamFactory(factory: EpicStreamClientFactory): void {
-  previousWorkerFactory = getEpicRuntimeWorkerFactoryOverride();
   __setEpicRuntimeWorkerFactoryForTests(() =>
     createInProcessEpicRuntimeWorker({
       streamClientFactory: factory,
@@ -388,7 +392,6 @@ function installStreamFactory(factory: EpicStreamClientFactory): void {
 }
 
 function installManifestDerivedWorker(): void {
-  previousWorkerFactory = getEpicRuntimeWorkerFactoryOverride();
   __setEpicRuntimeWorkerFactoryForTests(() =>
     createProxiedInProcessEpicRuntimeWorker().createWorker(),
   );
@@ -774,6 +777,10 @@ async function readRootEdit(
 
 describe("<EpicSessionProvider />", () => {
   beforeEach(() => {
+    // Capture unconditionally: even a test that installs no worker factory is
+    // followed by an `afterEach`, and restoring an uninitialised sentinel there
+    // would erase the jsdom setup file's coreless worker for the next test.
+    workerFactoryBeforeTest = getEpicRuntimeWorkerFactoryOverride();
     window.localStorage.clear();
     hostState.id = "host-a";
     hostState.attached = true;
@@ -796,8 +803,8 @@ describe("<EpicSessionProvider />", () => {
   afterEach(() => {
     cleanup();
     __getOpenEpicRegistryForTests().disposeAll();
-    // RESTORED, not nulled - see `previousWorkerFactory`.
-    __setEpicRuntimeWorkerFactoryForTests(previousWorkerFactory);
+    // RESTORED, not nulled - see `workerFactoryBeforeTest`.
+    __setEpicRuntimeWorkerFactoryForTests(workerFactoryBeforeTest);
     setDesktopEpicOwnershipBridge(null);
     resetCanvasStore();
     resetAuth("signed-out", null);
@@ -834,6 +841,15 @@ describe("<EpicSessionProvider />", () => {
       lanes.dispose();
       legacy.dispose();
     }
+  });
+
+  it("preserves the setup worker after a fixture-only test installs nothing", () => {
+    // This deliberately follows the fixture-construction guard above. That
+    // test never installs a worker factory, but its `afterEach` still runs. The
+    // setup override must survive; `null` would select the production Worker
+    // constructor and make the next jsdom session crash.
+    expect(setupWorkerFactory).not.toBeNull();
+    expect(getEpicRuntimeWorkerFactoryOverride()).toBe(setupWorkerFactory);
   });
 
   it("opens a genuinely lane-backed session through the public provider", async () => {
