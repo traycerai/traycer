@@ -224,13 +224,14 @@ describe("WorktreeAutoCleanupSection", () => {
     expect(screen.queryByRole("button", { name: /re-?authorize/i })).toBeNull();
   });
 
-  it("shows the history button only once automatic cleanup is on or has ever run", async () => {
-    // Fresh host, never enabled, never evaluated: a history button would point
-    // at an empty list, and the history is automatic runs only - manual
-    // deletions never appear in it.
+  it("shows the history button only while automatic cleanup is enabled", async () => {
+    // The history is automatic runs only - manual deletions never appear in
+    // it - so with the policy off the button is hidden even when earlier runs
+    // exist. A button beside "Cleanup is off" read as the place manual
+    // deletions should show up.
     const { unmount } = renderSection(
       clientWithPolicy({
-        get: () => policyFixture({}),
+        get: () => policyFixture({ enabled: false, lastEvaluatedAt: 1_000 }),
         set: (r) => policyFixture(r),
       }),
     );
@@ -242,11 +243,9 @@ describe("WorktreeAutoCleanupSection", () => {
     ).toBeNull();
     unmount();
 
-    // Disabled AFTER it ran: the record of what was deleted must stay
-    // reachable - turning the policy off is when someone comes looking.
     renderSection(
       clientWithPolicy({
-        get: () => policyFixture({ enabled: false, lastEvaluatedAt: 1_000 }),
+        get: () => policyFixture({ enabled: true }),
         set: (r) => policyFixture(r),
       }),
     );
@@ -278,6 +277,29 @@ describe("WorktreeAutoCleanupSection", () => {
     expect(schedule.textContent).toMatch(/next check in \d+m/);
     expect(schedule.textContent).not.toContain("next check Just now");
     expect(schedule.textContent).toContain("Last checked");
+  });
+
+  it("renders a sub-minute check as under a minute rather than a seconds count", async () => {
+    // The shared clock ticks once a minute, so a seconds count would sit
+    // frozen past its own deadline. The phrase stays true for the whole tick.
+    renderSection(
+      clientWithPolicy({
+        get: () =>
+          policyFixture({
+            enabled: true,
+            lastEvaluatedAt: Date.now() - 5 * 60_000,
+            nextEvaluationAt: Date.now() + 30_000,
+          }),
+        set: (r) => policyFixture(r),
+      }),
+    );
+
+    await waitFor(() => {
+      screen.getByTestId("worktree-auto-cleanup-schedule");
+    });
+    expect(
+      screen.getByTestId("worktree-auto-cleanup-schedule").textContent,
+    ).toContain("next check in under a minute");
   });
 
   it("renders an overdue check as due now rather than counting down to zero", async () => {

@@ -234,15 +234,12 @@ function AutoCleanupFooter(props: {
           Cleanup is off. Nothing is deleted automatically on this host.
         </span>
       )}
-      {policy !== null &&
-      (policy.enabled || policy.lastEvaluatedAt !== null) ? (
-        // History records AUTOMATIC runs only, so the button earns its spot
-        // when the policy is on or has ever run. Gated on `lastEvaluatedAt`
-        // rather than `enabled` alone: turning cleanup OFF after it deleted
-        // things is exactly when someone comes looking for the record, and
-        // every pass writes a run row, so a non-null last evaluation means
-        // there is history to show. A fresh, never-enabled host shows no
-        // button pointing at an empty list.
+      {policy !== null && policy.enabled ? (
+        // History records AUTOMATIC runs only - manual deletions never appear
+        // in it - so the button belongs to the enabled policy and nowhere
+        // else. With cleanup off, a button here read as the place manual
+        // deletions should show up. The rows themselves persist (retention
+        // is 200 runs / 90 days), so re-enabling brings the record back.
         <Button
           type="button"
           variant="outline"
@@ -302,6 +299,15 @@ function AutoCleanupWhen(props: { readonly at: number }): ReactNode {
 }
 
 /**
+ * A deadline closer than this reads as "under a minute" rather than as a
+ * seconds count. The shared clock ticks once a minute, so "in 28s" would sit
+ * frozen past its own deadline; a phrase that stays true for the whole
+ * minute is honest at that granularity, and a one-second timer for a row
+ * nobody watches would not be.
+ */
+const UNDER_A_MINUTE_MS = 60_000;
+
+/**
  * The FUTURE leaf. `useRelativeTimestamp` is a past-tense formatter whose
  * negative-delta clamp renders any upcoming instant as "Just now" - which is
  * exactly what a freshly enabled policy showed for a check ~30s away. A time
@@ -311,6 +317,7 @@ function AutoCleanupWhen(props: { readonly at: number }): ReactNode {
 function AutoCleanupNextCheck(props: { readonly at: number }): ReactNode {
   const now = useSampledNow();
   if (props.at <= now) return <>due now</>;
+  if (props.at - now < UNDER_A_MINUTE_MS) return <>in under a minute</>;
   return <>in {formatResetCountdown(props.at, now)}</>;
 }
 
