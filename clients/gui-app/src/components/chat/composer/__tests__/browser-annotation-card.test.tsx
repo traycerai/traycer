@@ -66,7 +66,6 @@ const EXTRA_ELEMENT: BrowserAnnotationRecord["elements"][number] = {
   selector: "main > button",
   tagName: "button",
   classNames: [...STUB_ANNOTATION_ELEMENT.classNames],
-  outerHtml: "<button>Go</button>",
   textPreview: "Go",
   ariaRole: "button",
   accessibleName: "Go",

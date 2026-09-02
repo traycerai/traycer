@@ -44,6 +44,8 @@ import {
 } from "@/markdown/links/classify-href";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { cn } from "@/lib/utils";
+import { useComposedRefs } from "radix-ui/internal";
+import { useRegisterBrowserOverlay } from "@/lib/browser-view/tiles/use-register-browser-overlay";
 import { isSingleTextblockLinkRange } from "./artifact-link-selection";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -715,6 +717,8 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
   // (unreliable under jsdom synthetic pointer events).
   const pointerOverHoverSurfaceRef = useRef(false);
   const cardRef = useRef<HTMLDivElement | null>(null);
+  const registerOverlayRef = useRegisterBrowserOverlay<HTMLDivElement>();
+  const composedCardRef = useComposedRefs(cardRef, registerOverlayRef);
   const urlInputRef = useRef<HTMLInputElement | null>(null);
   const showTimerRef = useRef<number | null>(null);
   const hideTimerRef = useRef<number | null>(null);
@@ -1436,7 +1440,7 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
 
   return createPortal(
     <div
-      ref={cardRef}
+      ref={composedCardRef}
       role="dialog"
       aria-label={surfaceLabel}
       data-slot="artifact-link-popover"

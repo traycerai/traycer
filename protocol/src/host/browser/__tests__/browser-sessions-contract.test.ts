@@ -1,13 +1,21 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
+  BROWSER_FORGET_LEDGER_MAX_DOMAINS,
+  BROWSER_PRIMARY_PROFILE_OBSERVED_MAX_COOKIES,
   browserCookieKeySchema,
+  browserForgetLedgerDomainSchema,
   browserPrimaryProfileDeltaSchema,
+  browserPrimaryProfileObservedSchema,
   browserSavedLoginSitesRequestSchema,
   browserSavedLoginSitesResponseSchema,
   browserSavedLoginSitesV10,
+  BROWSER_SESSIONS_JAR_SERVER_FRAME_KINDS,
+  BROWSER_SESSIONS_UX_CLIENT_FRAME_KINDS,
   browserSessionsClientFrameSchema,
+  isBrowserSessionsJarServerFrame,
   browserSessionsOpenRequestSchema,
+  canonicalDesktopIdentityAttestBytes,
   browserSessionsServerFrameSchema,
   browserSessionsV1,
   browserScreencastClientFrameSchema,
@@ -633,9 +641,8 @@ describe("browser.sessions@1.0 store-key handshake", () => {
   const RAW_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
   const WRAPPED_KEY = "d3JhcHBlZA==";
 
-  it("accepts the three client frames", () => {
+  it("accepts the two client frames", () => {
     for (const frame of [
-      { kind: "storeKeyOffer", hasBinaryPayload: false },
       {
         kind: "storeKeyWrapped",
         hasBinaryPayload: false,
@@ -714,43 +721,139 @@ describe("browser.sessions@1.0 store-key handshake", () => {
       }).success,
     ).toBe(false);
   });
+
+  it("rejects key material past the length cap on all four key fields", () => {
+    // A store key is 32 bytes and a wrapped blob a few hundred: the cap is
+    // slack. It exists so neither side can be made to buffer, or hand a
+    // keystore, an unbounded string named as key material.
+    const oversized = "A".repeat(4100);
+    const frames = [
+      { kind: "storeKeyWrapRequest", rawKey: oversized },
+      { kind: "storeKeyUnwrapRequest", wrappedKey: oversized },
+      { kind: "storeKeyWrapped", wrappedKey: oversized },
+      { kind: "storeKeyUnwrapped", rawKey: oversized },
+    ] as const;
+    for (const frame of frames) {
+      const candidate = {
+        ...frame,
+        hasBinaryPayload: false,
+        requestId: "request-1",
+      };
+      expect(
+        browserSessionsServerFrameSchema.safeParse(candidate).success ||
+          browserSessionsClientFrameSchema.safeParse(candidate).success,
+      ).toBe(false);
+    }
+  });
+});
+
+describe("browser.sessions@1.0 desktop identity attestation", () => {
+  const NONCE = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+  const PUBLIC_KEY = "cHVibGlj";
+  const SIGNATURE = "c2ln";
+
+  it("accepts the challenge and the attestation", () => {
+    expect(
+      browserSessionsServerFrameSchema.safeParse({
+        kind: "desktopIdentityChallenge",
+        hasBinaryPayload: false,
+        requestId: "request-1",
+        nonce: NONCE,
+      }).success,
+    ).toBe(true);
+    expect(
+      browserSessionsClientFrameSchema.safeParse({
+        kind: "desktopIdentityAttest",
+        hasBinaryPayload: false,
+        requestId: "request-1",
+        publicKey: PUBLIC_KEY,
+        keystoreId: "keystore-1",
+        signature: SIGNATURE,
+        jarEligible: true,
+      }).success,
+    ).toBe(true);
+  });
+
+  it("refuses key material that is not base64", () => {
+    expect(
+      browserSessionsClientFrameSchema.safeParse({
+        kind: "desktopIdentityAttest",
+        hasBinaryPayload: false,
+        requestId: "request-1",
+        publicKey: "not base64!",
+        keystoreId: "keystore-1",
+        signature: SIGNATURE,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("commits every field, and only these fields, to the signed bytes", () => {
+    const base = {
+      hostId: "host-1",
+      nonce: NONCE,
+      publicKey: PUBLIC_KEY,
+    };
+    const bytes = (input: typeof base): string =>
+      new TextDecoder().decode(canonicalDesktopIdentityAttestBytes(input));
+    // The domain tag is what stops a signature minted here being replayed as
+    // some other Ed25519 signature the same key produces.
+    expect(bytes(base)).toBe(
+      '{"domain":"traycer-desktop-identity-attest-v1","hostId":"host-1","nonce":"' +
+        NONCE +
+        '","publicKey":"' +
+        PUBLIC_KEY +
+        '"}',
+    );
+    for (const changed of [
+      { ...base, hostId: "host-2" },
+      { ...base, nonce: "b3RoZXI=" },
+      { ...base, publicKey: "b3RoZXI=" },
+    ]) {
+      expect(bytes(changed)).not.toBe(bytes(base));
+    }
+  });
 });
 
 describe("browser.sessions@1.0 forget all browser logins (ticket 08)", () => {
-  it("accepts the client trigger and the server fan-out, both payload-free", () => {
+  it("accepts the payload-free client trigger", () => {
     const forgetLogins = { kind: "forgetLogins", hasBinaryPayload: false };
-    const forgotten = {
-      kind: "primaryProfileForgotten",
-      hasBinaryPayload: false,
-    };
     expect(
       browserSessionsClientFrameSchema.safeParse(forgetLogins).success,
     ).toBe(true);
     expect(
       browserSessionsV1.clientFrameSchema.safeParse(forgetLogins).success,
     ).toBe(true);
-    expect(browserSessionsServerFrameSchema.safeParse(forgotten).success).toBe(
-      true,
-    );
+  });
+
+  it("has no server fan-out left: the ledger is the only forget channel", () => {
+    // universal-sign-in decision 6 retired `primaryProfileForgotten`. Two
+    // forget mechanisms must not coexist, so the arm is gone rather than
+    // deprecated - a peer that still sent one is refused here.
     expect(
-      browserSessionsV1.serverFrameSchema.safeParse(forgotten).success,
-    ).toBe(true);
+      browserSessionsServerFrameSchema.safeParse({
+        kind: "primaryProfileForgotten",
+        hasBinaryPayload: false,
+      }).success,
+    ).toBe(false);
   });
 });
 
 describe("browser.sessions@1.0 clear cookies for one site (ticket 07)", () => {
-  const evict = {
-    kind: "primaryProfileEvict",
-    hasBinaryPayload: false,
-    domain: "example.com",
-  };
-
-  it("accepts the server evict frame carrying one registrable domain", () => {
+  it("has no server evict frame left: the host cannot remove from a jar", () => {
+    // universal-sign-in ticket 08 retired `primaryProfileEvict`. It was the
+    // last host-driven removal primitive over the master jar, and the write
+    // channel is add-only without it, so the arm is gone rather than gated - a
+    // peer that still sent one is refused here.
+    const evict = {
+      kind: "primaryProfileEvict",
+      hasBinaryPayload: false,
+      domain: "example.com",
+    };
     expect(browserSessionsServerFrameSchema.safeParse(evict).success).toBe(
-      true,
+      false,
     );
     expect(browserSessionsV1.serverFrameSchema.safeParse(evict).success).toBe(
-      true,
+      false,
     );
   });
 });
@@ -831,5 +934,205 @@ describe("browser.savedLoginSites@1.0 (ticket 10)", () => {
         ],
       }).success,
     ).toBe(false);
+  });
+});
+
+describe("browser.sessions@1.0 universal sign-in carry-over (ticket 01)", () => {
+  const COOKIE = {
+    name: "sid",
+    value: "abc",
+    domain: "example.com",
+    path: "/",
+    expires: 1_700_000_000,
+    httpOnly: true,
+    secure: true,
+    sameSite: "Lax" as const,
+  };
+
+  const OBSERVED = {
+    kind: "primaryProfileObserved",
+    hasBinaryPayload: false,
+    domain: "example.com",
+    cookies: [COOKIE],
+  };
+
+  const LEDGER = {
+    kind: "primaryProfileForgetLedger",
+    hasBinaryPayload: false,
+    forgetAllAt: 1_700_000_000_000,
+    domains: [{ domain: "example.com", forgottenAt: 1_700_000_001_000 }],
+    revision: 7,
+  };
+
+  it("parses an observed frame without stripping the payload it validated", () => {
+    // `browserSessionsV1.serverFrameSchema` is the same object reference as
+    // this union - `defineStreamRpcContract` stores the schema as given - so
+    // parsing through it proves nothing extra and is not asserted twice. What
+    // this does pin is the chat-subscribe projection-strip class of bug: the
+    // whole payload has to survive the parse, with `partitionKey` defaulted
+    // rather than dropped.
+    const parsed = browserSessionsServerFrameSchema.safeParse(OBSERVED);
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data).toEqual({
+      ...OBSERVED,
+      cookies: [{ ...COOKIE, partitionKey: null }],
+    });
+  });
+
+  it("cannot express a removal: the observed frame is strict and has no removals field", () => {
+    expect(
+      browserSessionsServerFrameSchema.safeParse({
+        ...OBSERVED,
+        removedKeys: [{ domain: "example.com", name: "sid", path: "/" }],
+      }).success,
+    ).toBe(false);
+    expect(
+      browserPrimaryProfileObservedSchema.safeParse({
+        domain: "example.com",
+        cookies: [],
+        removedKeys: [],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("carries cookies only: localStorage origins are not a field of this frame", () => {
+    expect(
+      browserSessionsServerFrameSchema.safeParse({
+        ...OBSERVED,
+        origins: [
+          {
+            origin: "https://example.com",
+            localStorage: [{ name: "token", value: "abc" }],
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      browserPrimaryProfileObservedSchema.safeParse({
+        domain: "example.com",
+        storageState: { cookies: [], origins: [] },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("parses a forget-ledger digest without stripping it", () => {
+    const parsed = browserSessionsClientFrameSchema.safeParse(LEDGER);
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data).toEqual(LEDGER);
+  });
+
+  it("takes a ledger that has never seen a forget-all, but requires the field", () => {
+    expect(
+      browserSessionsClientFrameSchema.safeParse({
+        ...LEDGER,
+        forgetAllAt: null,
+        domains: [],
+      }).success,
+    ).toBe(true);
+    expect(
+      browserSessionsClientFrameSchema.safeParse({
+        kind: "primaryProfileForgetLedger",
+        hasBinaryPayload: false,
+        domains: LEDGER.domains,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("requires the revision the ack echoes back", () => {
+    const { revision: _revision, ...withoutRevision } = LEDGER;
+    expect(
+      browserSessionsClientFrameSchema.safeParse(withoutRevision).success,
+    ).toBe(false);
+    const ack = {
+      kind: "primaryProfileForgetLedgerAck",
+      hasBinaryPayload: false,
+      revision: LEDGER.revision,
+    };
+    expect(browserSessionsServerFrameSchema.safeParse(ack).success).toBe(true);
+    expect(browserSessionsV1.serverFrameSchema.safeParse(ack).success).toBe(
+      true,
+    );
+    expect(
+      browserSessionsServerFrameSchema.safeParse({
+        kind: "primaryProfileForgetLedgerAck",
+        hasBinaryPayload: false,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("is strict about ledger entries", () => {
+    expect(
+      browserSessionsClientFrameSchema.safeParse({
+        ...LEDGER,
+        domains: [{ domain: "example.com", forgottenAt: 1, cookies: ["sid"] }],
+      }).success,
+    ).toBe(false);
+    expect(
+      browserForgetLedgerDomainSchema.safeParse({
+        domain: "example.com",
+        forgottenAt: 1,
+      }).success,
+    ).toBe(true);
+  });
+
+  it("publishes bounds both ends validate against", () => {
+    expect(BROWSER_PRIMARY_PROFILE_OBSERVED_MAX_COOKIES).toBeGreaterThan(180);
+    expect(BROWSER_FORGET_LEDGER_MAX_DOMAINS).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * The two frame-kind sets are exported so main's dispatch, the direct
+ * session's drop and the IPC send-gate can test MEMBERSHIP instead of each
+ * keeping its own copy of the list. That only holds while the sets name kinds
+ * the unions actually declare, which is what these check.
+ */
+describe("browser.sessions@1.0 frame-kind sets", () => {
+  it("names jar server frames the union declares, and only those", () => {
+    for (const kind of BROWSER_SESSIONS_JAR_SERVER_FRAME_KINDS) {
+      expect(
+        browserSessionsServerFrameSchema.options.some(
+          (option) => option.shape.kind.value === kind,
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it("answers the predicate on both sides of that set", () => {
+    expect(
+      isBrowserSessionsJarServerFrame({
+        kind: "primaryProfileCaptureAck",
+        hasBinaryPayload: false,
+        requestId: "request-1",
+      }),
+    ).toBe(true);
+    // A UX kind is on the other side of the same predicate - the projection
+    // that carries it to a renderer is only safe because this answers false.
+    expect(
+      isBrowserSessionsJarServerFrame({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        sessions: [],
+      }),
+    ).toBe(false);
+  });
+
+  it("names UX client frames the union declares, and only those", () => {
+    for (const kind of BROWSER_SESSIONS_UX_CLIENT_FRAME_KINDS) {
+      expect(
+        browserSessionsClientFrameSchema.options.some(
+          (option) => option.shape.kind.value === kind,
+        ),
+      ).toBe(true);
+    }
+    // The two a renderer may never mint: they shred the account's slice on
+    // every connected host, so main produces them behind its own confirmation.
+    const uxKinds: ReadonlySet<string> = new Set(
+      BROWSER_SESSIONS_UX_CLIENT_FRAME_KINDS,
+    );
+    expect(uxKinds.has("forgetLogins")).toBe(false);
+    expect(uxKinds.has("clearSite")).toBe(false);
   });
 });

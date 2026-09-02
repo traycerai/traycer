@@ -77,8 +77,11 @@ vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
   useCanvasHostId: () => CANVAS_HOST_ID,
 }));
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  // `getRequestContextUserId` because the provider asks the client whether
+  // this renderer knows who it is signed in as yet (H10); it never names the
+  // user to main, so `null` is a complete answer here.
   useHostClientForHostId: (hostId: string | null) =>
-    hostId === null ? null : { hostId },
+    hostId === null ? null : { hostId, getRequestContextUserId: () => null },
 }));
 vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
   useEpicSessionHostClient: () => null,

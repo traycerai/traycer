@@ -1183,6 +1183,19 @@
     min-height 250ms cubic-bezier(0.38, 0.7, 0.125, 1);
 }
 
+/*
+ * The same glide for the surfaces POSITIONED against the keyboard rather than
+ * sized against it. `--spacing-safe-center-y` subtracts the keyboard inset, so
+ * a centred overlay re-centres in the band above the keyboard the moment the
+ * bridge reports one - and would teleport there while the keyboard slid, which
+ * is the abrupt feel overlay mode was chosen to avoid (capacitor.config.ts).
+ * `top` alone: the dialog's entrance animation owns transform and opacity, so
+ * the two never contend, and a transition never runs on first paint.
+ */
+.traycer-native-keyboard .top-safe-center-y {
+  transition: top 250ms cubic-bezier(0.38, 0.7, 0.125, 1);
+}
+
 @theme inline {
   /*
    * Safe-area spacing scale: `pt-safe-top`, `pb-safe-bottom`, `top-safe-top`,
@@ -1254,8 +1267,20 @@
    * viewport rather than `#root`'s padding box, so a centred overlay would
    * centre on the status bar too; `top-safe-center-y` with the usual
    * `-translate-y-1/2` centres it on the part of the screen the app owns.
+   *
+   * The soft keyboard bounds that region from below exactly as the status bar
+   * bounds it from above, so it comes off here too - HALF of it, because
+   * moving a midpoint is half of what you did to the edge. Subtracting the
+   * whole height would overshoot and push a centred dialog up under the status
+   * bar. Without this term a dialog stayed centred on the FULL screen while
+   * the keyboard covered the bottom of it, which on a phone buried the
+   * composer and the submit button of every dialog someone types into.
+   * Both terms are 0 off-device, where this collapses to the plain `50%` it
+   * replaced.
    */
-  --spacing-safe-center-y: calc(50% + var(--safe-area-inset-top) / 2);
+  --spacing-safe-center-y: calc(
+    50% + var(--safe-area-inset-top) / 2 - var(--keyboard-inset) / 2
+  );
 
   /*
    * The horizontal counterpart, and NOT a mirror of the vertical one. The two

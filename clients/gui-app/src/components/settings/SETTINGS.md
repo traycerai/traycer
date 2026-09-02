@@ -541,8 +541,7 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
       logins. Nothing is copied in either direction.
     - **Forget all browser logins** (destructive confirm) moved here from the
       tile shield popover, which was ticket 08's temporary home. It calls the
-      module-level `forgetAllBrowserLogins()` on the sessions coordinator and
-      so speaks for EVERY host the user has a live browser stream to; that is
+      bridge's `forgetLogins()` directly and so speaks for EVERY host the user has a live browser stream to; that is
       what "all" means, and it is why the action is not tile-scoped.
       It answers whether any stream took the frame, and the confirm closes only
       then - the same refusal the per-row Clear makes, so a click that reached
@@ -554,8 +553,28 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
       that never answered renders no list rather than an empty one. `sealed`
       is NOT "no sites": it says the logins exist but this host cannot open
       them until the desktop that wrapped its key connects, and it renders its
-      own hint. Per-row **Clear** sends the `clearSite { domain }` frame
-      (`clearSavedLoginSite()`) and refetches; the row is hidden optimistically
+      own hint. A row whose `contributedByHostId` names a host OTHER than this
+      machine's carries one muted "Includes a sign-in from <host>" line
+      (universal-sign-in decision 9) - weak copy on purpose, because the marker
+      behind it is sticky and survives the user signing into that site here.
+      The display name resolves through the host directory
+      (`useHostDirectoryEntry`), falling back to the raw hostId when this client
+      cannot currently list that host - the same last resort `resolveHostName`
+      takes, and better than inventing "another machine". The local comparison
+      goes through `useReactiveLocalHostId` (not the local directory ENTRY,
+      which goes null while the local host restarts), and a login this desktop
+      itself contributed says nothing at all - naming the user's own machine on
+      every row would bury the lines that mean "this came from somewhere else".
+      Two things about the id are worth knowing before reading a row: it is
+      always the ANSWERING host's own, so a third machine is never named and a
+      remote contribution that already reached this desktop's jar shows nothing
+      in the local host's list (it arrives there as a desktop-origin echo); and
+      the render guard is `typeof === "string"`, not `!== null`, because the
+      same-minor RPC path returns the payload UNPARSED - a host predating the
+      field sends no key at all, and the schema's `.default(null)` only runs on
+      the version-gap decode. Per-row **Clear** sends
+      the `clearSite { domain }` frame
+      (`browserView.clearSavedLoginSite()`) and refetches; the row is hidden optimistically
       because the host merges asynchronously and the refetch behind the click
       can still read the pre-clear slice. That optimism RELEASES itself: a
       domain is hidden only while the latest response still names it (retired

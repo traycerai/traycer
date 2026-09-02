@@ -7,13 +7,18 @@ import {
 } from "electron";
 import { randomUUID } from "node:crypto";
 import type { BrowserViewDownloadState } from "@traycer-clients/shared/platform/browser-view";
-import type { BrowserPrimaryProfileDelta } from "@traycer/protocol/host/browser/contracts";
+import type {
+  BrowserCookieKey,
+  BrowserPrimaryProfileDelta,
+} from "@traycer/protocol/host/browser/contracts";
 import { describeLogError, log } from "../app/logger";
+import { confirmDestructiveInMainSync } from "../app/confirm-destructive";
 import {
   setBrowserCertificateErrorHandler,
   type CertificateErrorReport,
 } from "../app/cert-trust";
 import { isBrowserSavedLoginsEnabled } from "./storage/browser-saved-logins";
+import { releaseHeadlessOriginCookieKeys } from "./storage/browser-forget-ledger";
 import {
   BrowserCookieChangeObserver,
   BROWSER_COOKIE_DELTA_WINDOW_MS,
@@ -206,6 +211,10 @@ export function ensureBrowserViewSessionForPartition(
  * Cookie deltas come from the durable `primary` jar and nowhere else: the
  * ephemeral jar's logins are gone at quit, and an isolated partition shares
  * nothing by construction (spec §6.1).
+ *
+ * This runs on the FIRST materialization of that partition, not at app start:
+ * the observer's startup grace window is therefore anchored to the user's
+ * first browser tile of the run. See `attach()` for what that costs.
  */
 function observePrimaryProfileCookieChanges(
   partition: string,
@@ -220,7 +229,14 @@ function observePrimaryProfileCookieChanges(
       browserCookieDeltaListeners.forEach((listener) => listener(delta));
     },
     now: () => Date.now(),
+    monotonicNow: () => performance.now(),
     coalesceWindowMs: BROWSER_COOKIE_DELTA_WINDOW_MS,
+    // The handler is synchronous, so the promise cannot be awaited here. It
+    // is not dropped work: the transfer is in memory the moment the call
+    // returns, the file write behind it is queued on the ledger's own write
+    // chain, and a failure to reach disk is warned about there rather than
+    // rejecting into nothing.
+    onLocalCookieWrite: (key) => void releaseHeadlessOriginCookieKeys([key]),
   });
   observer.attach();
   primaryCookieObserver = observer;
@@ -241,28 +257,48 @@ export function onBrowserPrimaryProfileDelta(
 }
 
 /**
- * Runs a deliberate local change to one site's cookies without it echoing back
- * to the host as a delta (ticket 07's "clear cookies for this site").
- */
-export async function suppressBrowserPrimaryProfileDelta<T>(
-  domain: string,
-  action: () => Promise<T>,
-): Promise<T> {
-  if (primaryCookieObserver === null) return await action();
-  return await primaryCookieObserver.suppress(domain, action);
-}
-
-/**
- * The same, for a change that spans the whole jar: ticket 08's "forget all
- * browser logins". A `clearStorageData()` fires a removal for every cookie
- * there is, and those deltas would reach the host after it had already shredded
- * the slice - re-creating an entry for the identity just forgotten.
+ * Runs a deliberate whole-jar change without it echoing back to the host as a
+ * delta: ticket 08's "forget all browser logins". A `clearStorageData()` fires
+ * a removal for every cookie there is, and those deltas would reach the host
+ * after it had already shredded the slice - re-creating an entry for the
+ * identity just forgotten.
+ *
+ * The whole jar is the only granularity this comes in. A per-domain form
+ * existed for the host-driven evict, which universal-sign-in ticket 08 retired
+ * along with the frame that drove it; the local "clear cookies for this site"
+ * deliberately does NOT suppress, because its removals are exactly the delta
+ * that tells the host the slice is empty.
  */
 export async function suppressAllBrowserPrimaryProfileDeltas<T>(
   action: () => Promise<T>,
 ): Promise<T> {
   if (primaryCookieObserver === null) return await action();
   return await primaryCookieObserver.suppressAll(action);
+}
+
+/**
+ * The observed-sign-in applier is about to write these keys into the DURABLE
+ * jar (universal-sign-in ticket 08). Their insert events belong to the
+ * applier, not to this machine's browsing, so the observer must not read them
+ * as the desktop taking the key back.
+ *
+ * A no-op when that jar has never been materialised this run - there is no
+ * observer, and therefore no insert to attribute either way. The applier never
+ * calls this for a write bound for the ephemeral jar: that jar is watched by
+ * nobody, and marking keys on the durable observer would make it miss a local
+ * write there.
+ */
+export function noteBrowserPrimaryProfileAppliedKeys(
+  keys: readonly BrowserCookieKey[],
+): void {
+  primaryCookieObserver?.noteAppliedKeys(keys);
+}
+
+/** The jar refused those writes, so the marks will never be answered. */
+export function forgetBrowserPrimaryProfileAppliedKeys(
+  keys: readonly BrowserCookieKey[],
+): void {
+  primaryCookieObserver?.forgetAppliedKeys(keys);
 }
 
 export function createBrowserViewWebPreferences(
@@ -476,7 +512,12 @@ function handleBrowserViewDownload(
 
   if (
     dangerType !== null &&
-    !confirmDangerousDownload(filename, dangerType, item.getURL())
+    !confirmDestructiveInMainSync({
+      title: "Confirm download",
+      message: `Save ${filename}?`,
+      detail: `${dangerType} files can run code on your machine.\n\nSource: ${item.getURL()}`,
+      confirmLabel: "Save anyway",
+    })
   ) {
     item.cancel();
     emitBrowserDownloadChange(item, webContents, {
@@ -598,24 +639,6 @@ function terminalDownloadState(state: string): BrowserViewDownloadState {
   if (state === "completed") return "completed";
   if (state === "cancelled") return "cancelled";
   return "interrupted";
-}
-
-function confirmDangerousDownload(
-  filename: string,
-  dangerType: string,
-  url: string,
-): boolean {
-  const response = dialog.showMessageBoxSync({
-    type: "warning",
-    buttons: ["Cancel", "Save anyway"],
-    defaultId: 0,
-    cancelId: 0,
-    title: "Confirm download",
-    message: `Save ${filename}?`,
-    detail: `${dangerType} files can run code on your machine.\n\nSource: ${url}`,
-    noLink: true,
-  });
-  return response === 1;
 }
 
 function dangerousDownloadType(filename: string): string | null {

@@ -7,6 +7,8 @@ import { HOVER_PREVIEW_SURFACE_CLASS } from "@/components/ui/hover-preview-surfa
 import { cn } from "@/lib/utils";
 import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
 import { useSafeAreaCollisionPadding } from "@/components/ui/safe-area-collision-padding";
+import { useComposedRefs } from "radix-ui/internal";
+import { useRegisterBrowserOverlay } from "@/lib/browser-view/tiles/use-register-browser-overlay";
 
 // Match the tooltip's 500ms hover-in; give a small grace on the way out so the
 // pointer can travel from the trigger into the card to reach its actions
@@ -50,6 +52,7 @@ function HoverCardTrigger({
 // home elsewhere: copy-path lives on the click-open folder rows (`FolderRow`),
 // and the PR link is also in the Epic history list.
 function HoverCardContent({
+  ref,
   className,
   align = "start",
   sideOffset = 4,
@@ -65,12 +68,14 @@ function HoverCardContent({
   // comes from its callers, so the cap matters here more than on the primitives
   // that size themselves.
   const safeAreaInsets = useSafeAreaCollisionPadding();
+  const registerOverlayRef = useRegisterBrowserOverlay<HTMLDivElement>();
+  const composedRef = useComposedRefs(ref, registerOverlayRef);
   if (concealed) return null;
   return (
     <HoverCardPrimitive.Portal>
       <HoverCardPrimitive.Content
+        ref={composedRef}
         data-slot="hover-card-content"
-        data-browser-overlay="hover-card"
         align={align}
         sideOffset={sideOffset}
         collisionPadding={collisionPadding ?? safeAreaInsets}
