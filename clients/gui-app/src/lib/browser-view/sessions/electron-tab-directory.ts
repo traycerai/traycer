@@ -59,8 +59,17 @@ const directoryListeners = new Set<() => void>();
  * binding: a second `tabBound` for the same tab republishes it without a
  * removal in between, and two chains for one tab can interleave the old
  * lease's detach with the new one's attach - which main refuses, leaving the
- * tile blank. Retired with the binding, so a republish after a removal starts
- * from a clean surface rather than trying to detach one main no longer has.
+ * tile blank.
+ *
+ * It therefore outlives a STREAM retirement, and only a genuine
+ * `tabReleased` drops it. Those are not the same event: retiring this
+ * renderer's bindings on a non-live transition tells main nothing, so main
+ * still holds the tab with the old `bindingId` attached and refuses the
+ * republished tile's attach while it does. Keeping the chain is what makes
+ * the republish detach the old surface first, in order, on the one chain -
+ * whereas dropping it started a second chain that attached against a surface
+ * main had not released, and the tile stayed blank. A release, by contrast,
+ * has already taken main's entry with it, so there is nothing left to detach.
  */
 const surfaceStates = new Map<string, ElectronTabSurfaceState>();
 
@@ -195,16 +204,27 @@ export function removeOwnedElectronTabBinding(
     return;
   }
   directory.delete(key);
+  // A genuine release: main has already dropped the native entry, so the
+  // recorded surface names something that no longer exists and the next
+  // incarnation of this tab must start from a clean chain.
   surfaceStates.delete(key);
   notifyDirectoryListeners();
 }
 
+/**
+ * Retires every binding this coordinator published - a stream that stopped
+ * being live, or a restart.
+ *
+ * The surface chains SURVIVE (see {@link surfaceStates}): main keeps the
+ * native tabs across a stream incarnation, still holding whatever
+ * `bindingId` this renderer last attached, and the republish has to detach
+ * that one before its own attach can be accepted.
+ */
 export function removeOwnedElectronTabBindings(owner: symbol): void {
   let removed = false;
   for (const [key, entry] of directory) {
     if (entry.owner !== owner) continue;
     directory.delete(key);
-    surfaceStates.delete(key);
     removed = true;
   }
   if (removed) notifyDirectoryListeners();

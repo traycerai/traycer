@@ -6,6 +6,7 @@ import type {
 } from "@traycer-clients/shared/platform/browser-view";
 import {
   publishElectronTabBinding,
+  removeOwnedElectronTabBinding,
   removeOwnedElectronTabBindings,
   useElectronTabBindingOnHost,
   type ElectronTabBinding,
@@ -37,12 +38,14 @@ function surfaceInput(bindingId: string): SurfaceInput {
 }
 
 /** The published binding, read the way a tile reads it. */
-function publishedBinding(): ElectronTabBinding {
+function publishedBinding(
+  capability: BrowserViewNativeTabCapability,
+): ElectronTabBinding {
   const { result } = renderHook(() =>
     useElectronTabBindingOnHost(
-      CAPABILITY.sessionId,
-      CAPABILITY.tabId,
-      CAPABILITY.hostId,
+      capability.sessionId,
+      capability.tabId,
+      capability.hostId,
     ),
   );
   const binding = result.current;
@@ -55,7 +58,7 @@ describe("publishElectronTabBinding surface serialization", () => {
     const bridge = new FakeBrowserViewBridge();
     const owner = Symbol("owner");
     publishElectronTabBinding(owner, bridge, CAPABILITY);
-    const first = await publishedBinding().bindSurface(
+    const first = await publishedBinding(CAPABILITY).bindSurface(
       surfaceInput("binding-1"),
     );
 
@@ -64,7 +67,9 @@ describe("publishElectronTabBinding surface serialization", () => {
     // started its own, so the old lease's detach could interleave with the new
     // attach - which main refuses, leaving the tile blank.
     publishElectronTabBinding(owner, bridge, CAPABILITY);
-    const second = publishedBinding().bindSurface(surfaceInput("binding-2"));
+    const second = publishedBinding(CAPABILITY).bindSurface(
+      surfaceInput("binding-2"),
+    );
     await Promise.all([second, first.detach()]);
 
     expect(bridge.surfaceCalls).toEqual([
@@ -74,5 +79,71 @@ describe("publishElectronTabBinding surface serialization", () => {
     ]);
 
     removeOwnedElectronTabBindings(owner);
+  });
+
+  it("re-attaches a still-live tab after a stream retirement republishes it", async () => {
+    // RULE: retiring this renderer's bindings on a non-live transition tells
+    // MAIN nothing - the native tab survives with the old `bindingId` still
+    // attached, and main refuses a second attach while it does. So the chain
+    // has to survive the retirement and detach the old surface first. Dropping
+    // it started a fresh chain that attached against a surface main had not
+    // released, and the tile came back blank.
+    const capability: BrowserViewNativeTabCapability = {
+      ...CAPABILITY,
+      tabId: "tab-retired",
+      registrationId: "native:tab-retired",
+    };
+    const bridge = new FakeBrowserViewBridge();
+    const owner = Symbol("owner");
+    publishElectronTabBinding(owner, bridge, capability);
+    const first = await publishedBinding(capability).bindSurface(
+      surfaceInput("binding-1"),
+    );
+
+    // The stream drops: the coordinator retires every binding it published.
+    removeOwnedElectronTabBindings(owner);
+
+    // It returns, the tab is republished, and the old tile's effect cleanup
+    // releases its lease against the new incarnation.
+    publishElectronTabBinding(owner, bridge, capability);
+    const second = publishedBinding(capability).bindSurface(
+      surfaceInput("binding-2"),
+    );
+    await Promise.all([second, first.detach()]);
+
+    // `binding-1` is detached exactly once, before `binding-2` attaches, and
+    // never after it.
+    expect(bridge.surfaceCalls).toEqual([
+      "attach:binding-1",
+      "detach:binding-1",
+      "attach:binding-2",
+    ]);
+  });
+
+  it("starts a clean chain after a genuine tab release", async () => {
+    // The counterpart: `tabReleased` means main already dropped the native
+    // entry, so the recorded surface names nothing and a later incarnation of
+    // the same tab must not open by detaching it.
+    const capability: BrowserViewNativeTabCapability = {
+      ...CAPABILITY,
+      tabId: "tab-released",
+      registrationId: "native:tab-released",
+    };
+    const bridge = new FakeBrowserViewBridge();
+    const owner = Symbol("owner");
+    publishElectronTabBinding(owner, bridge, capability);
+    await publishedBinding(capability).bindSurface(surfaceInput("binding-1"));
+
+    removeOwnedElectronTabBinding(owner, capability);
+
+    publishElectronTabBinding(owner, bridge, capability);
+    await publishedBinding(capability).bindSurface(surfaceInput("binding-2"));
+
+    expect(bridge.surfaceCalls).toEqual([
+      "attach:binding-1",
+      "attach:binding-2",
+    ]);
+
+    removeOwnedElectronTabBinding(owner, capability);
   });
 });
