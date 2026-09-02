@@ -318,7 +318,12 @@ describe("CommGraphOfficeCanvas", () => {
     // not replay the row its very first sync arrives on.
     view.rerender(officeElement(both, IN_FLIGHT));
     const rect = envelopeRect(both);
-    const surface = screen.getByTestId("comm-graph-office-canvas");
+    // The gestures live on the CANVAS, not on the wrapper - the wrapper is the
+    // parent of the overlay controls, and taking pointer capture there stole
+    // their clicks.
+    const surface = screen.getByRole("img", {
+      name: "Office view of the communication graph",
+    });
 
     // The camera is untouched here (jsdom starts no frame loop), so sprite
     // pixels and client pixels coincide and the centre of the box is the click.

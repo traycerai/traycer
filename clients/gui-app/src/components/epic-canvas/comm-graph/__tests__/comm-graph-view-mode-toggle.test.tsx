@@ -277,6 +277,63 @@ describe("comm-graph view mode", () => {
     ).toBe(true);
   });
 
+  it("switches on a REAL pointer sequence, not just a synthetic click", async () => {
+    await renderTile();
+    const graphButton = screen.getByTestId("comm-graph-mode-graph");
+    const surface = screen.getByTestId("comm-graph-office-canvas");
+    // The office's camera gestures must not take pointer capture on an
+    // ancestor of this button. Capture RETARGETS the following `click` to the
+    // capturing element, so the button would never see its own click - which
+    // is invisible to `fireEvent.click`, and was exactly the reported bug.
+    const capture = vi.spyOn(surface, "setPointerCapture");
+
+    await act(async () => {
+      fireEvent.pointerDown(graphButton, {
+        pointerId: 1,
+        clientX: 4,
+        clientY: 4,
+      });
+      fireEvent.pointerUp(graphButton, {
+        pointerId: 1,
+        clientX: 4,
+        clientY: 4,
+      });
+      fireEvent.click(graphButton);
+      await Promise.resolve();
+    });
+
+    expect(capture).not.toHaveBeenCalled();
+    expect(storedView()?.mode).toBe("graph");
+    expect(screen.getByTestId("comm-graph-canvas")).toBeDefined();
+  });
+
+  it("switches back to the office on a real pointer sequence too", async () => {
+    await renderTile();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("comm-graph-mode-graph"));
+      await Promise.resolve();
+    });
+
+    const officeButton = screen.getByTestId("comm-graph-mode-office");
+    await act(async () => {
+      fireEvent.pointerDown(officeButton, {
+        pointerId: 2,
+        clientX: 4,
+        clientY: 4,
+      });
+      fireEvent.pointerUp(officeButton, {
+        pointerId: 2,
+        clientX: 4,
+        clientY: 4,
+      });
+      fireEvent.click(officeButton);
+      await Promise.resolve();
+    });
+
+    expect(storedView()?.mode).toBe("office");
+    expect(screen.getByTestId("comm-graph-office-canvas")).toBeDefined();
+  });
+
   it("marks the live mode as pressed", async () => {
     await renderTile();
 

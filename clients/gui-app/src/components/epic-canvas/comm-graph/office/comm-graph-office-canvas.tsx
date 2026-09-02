@@ -1126,7 +1126,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   );
 
   const handlePointerDown = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
+    (event: ReactPointerEvent<HTMLCanvasElement>) => {
       runtime.takeManualControl();
       const camera = runtime.getCamera();
       dragRef.current = {
@@ -1143,7 +1143,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   );
 
   const handlePointerMove = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
+    (event: ReactPointerEvent<HTMLCanvasElement>) => {
       const drag = dragRef.current;
       if (drag !== null && drag.pointerId === event.pointerId) {
         const dx = event.clientX - drag.originX;
@@ -1185,7 +1185,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   }, []);
 
   const handlePointerUp = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
+    (event: ReactPointerEvent<HTMLCanvasElement>) => {
       const drag = dragRef.current;
       dragRef.current = null;
       if (drag === null || drag.pointerId !== event.pointerId) return;
@@ -1215,8 +1215,9 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   // A native listener, because a passive React `onWheel` cannot call
   // `preventDefault` - and without it the epic canvas scrolls under the floor.
   useEffect(() => {
+    const canvas = canvasRef.current;
     const container = containerRef.current;
-    if (container === null) return;
+    if (canvas === null || container === null) return;
     const onWheel = (event: WheelEvent): void => {
       event.preventDefault();
       runtime.takeManualControl();
@@ -1226,9 +1227,9 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       const factor = Math.exp(-event.deltaY / 300);
       zoomAbout(factor, event.clientX - rect.left, event.clientY - rect.top);
     };
-    container.addEventListener("wheel", onWheel, { passive: false });
+    canvas.addEventListener("wheel", onWheel, { passive: false });
     return () => {
-      container.removeEventListener("wheel", onWheel);
+      canvas.removeEventListener("wheel", onWheel);
     };
   }, [runtime, zoomAbout]);
 
@@ -1325,15 +1326,20 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         ref={containerRef}
         className="relative h-full min-h-0 w-full min-w-0 flex-1 overflow-hidden"
         data-testid="comm-graph-office-canvas"
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
-        onPointerCancel={handlePointerUp}
-        onPointerLeave={handlePointerLeave}
       >
         <canvas
           ref={canvasRef}
           className="absolute inset-0 h-full w-full"
+          // The camera gestures live on the CANVAS, never on the wrapper. The
+          // wrapper is also the parent of every overlay control, and a
+          // pointerdown there took pointer capture - which retargets the
+          // following `click` to the capturing element, so the mode toggle's
+          // own button never saw its click at all.
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onPointerCancel={handlePointerUp}
+          onPointerLeave={handlePointerLeave}
           // Nearest-neighbour scaling is what makes this pixel art rather than
           // a blurry upscale; the draw disables smoothing on its side too.
           style={{ imageRendering: "pixelated" }}
