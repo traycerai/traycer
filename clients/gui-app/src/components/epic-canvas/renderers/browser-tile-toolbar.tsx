@@ -141,9 +141,9 @@ export function BrowserTileToolbar(props: {
 }
 
 /**
- * The touch-grade chrome: the same nav buttons, a read-only address line, and
- * the page-loading spinner. No address field, no PiP and no more-menu - a
- * coarse pointer has no hover to reveal them and the tile has no room.
+ * The touch-grade chrome: the same nav buttons, the address field, and the
+ * page-loading spinner. No PiP and no more-menu - a coarse pointer has no
+ * hover to reveal them and the tile has no room.
  */
 export function BrowserTileToolbarCompact(props: {
   readonly controller: TileController;
@@ -158,9 +158,13 @@ export function BrowserTileToolbarCompact(props: {
       data-testid="browser-tile-toolbar-compact"
     >
       <BrowserTileToolbarNav controller={props.controller} />
-      <div className="min-w-0 flex-1 truncate px-1 text-ui-sm text-muted-foreground">
-        {url === "" ? "New tab" : url}
-      </div>
+      {props.controller.capabilities.navigate ? (
+        <BrowserTileToolbarAddress controller={props.controller} />
+      ) : (
+        <div className="min-w-0 flex-1 truncate px-1 text-ui-sm text-muted-foreground">
+          {url === "" ? "New tab" : url}
+        </div>
+      )}
       {props.readOnly ? (
         <Badge variant="outline" className="shrink-0">
           View only
@@ -227,33 +231,40 @@ function BrowserTileToolbarNav(props: { readonly controller: TileController }) {
 function BrowserTileToolbarAddress(props: {
   readonly controller: TileController;
 }) {
-  const controller = props.controller;
+  const {
+    disabled,
+    setAddressInput,
+    addressValue,
+    url,
+    onNavigate,
+    onAddressChange,
+    onAddressFocusChange,
+  } = props.controller;
   const canOpenExternally =
-    useRunnerHostOrNull() !== null && isWebOriginUrl(controller.url);
+    useRunnerHostOrNull() !== null && isWebOriginUrl(url);
   return (
-    <form
-      className="flex min-w-0 flex-1 items-center"
-      onSubmit={controller.onNavigate}
-    >
+    <form className="flex min-w-0 flex-1 items-center" onSubmit={onNavigate}>
       <InputGroup className="group/address h-7 border-transparent bg-transparent shadow-none transition-[background-color,border-color,box-shadow] hover:border-input hover:bg-input/20 focus-within:bg-input/20 motion-reduce:transition-none dark:bg-transparent">
         <InputGroupInput
-          aria-label="Browser address"
+          ref={setAddressInput}
           // The rest of the toolbar already honours `disabled`; the address
-          // field is where a `viewer` (H12) or a clientless tile would
-          // otherwise submit a nav frame nothing can carry.
-          disabled={controller.disabled}
-          value={controller.addressValue}
+          // field is where a `viewer` (H12), a peek tile with no host client,
+          // or any other clientless tile would otherwise submit a nav frame
+          // nothing can carry.
+          disabled={disabled}
+          aria-label="Browser address"
+          value={addressValue}
           onChange={(event) => {
-            controller.onAddressChange(event.target.value);
+            onAddressChange(event.target.value);
           }}
-          onFocus={() => controller.onAddressFocusChange(true)}
-          onBlur={() => controller.onAddressFocusChange(false)}
+          onFocus={() => onAddressFocusChange(true)}
+          onBlur={() => onAddressFocusChange(false)}
           className="h-full truncate px-2 font-mono text-ui-sm"
           spellCheck={false}
         />
         {canOpenExternally ? (
           <InputGroupAddon align="inline-end">
-            <BrowserOpenExternalButton url={controller.url} />
+            <BrowserOpenExternalButton url={url} />
           </InputGroupAddon>
         ) : null}
       </InputGroup>

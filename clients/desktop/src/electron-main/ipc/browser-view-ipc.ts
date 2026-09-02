@@ -12,7 +12,7 @@ import {
 } from "../../ipc-contracts/ipc-channels";
 import {
   browserViewIpcPayload,
-  parseReservedChordTokens,
+  parseReservedChords,
 } from "./browser-view-ipc-payload";
 import type { IpcManagedWindow } from "./runner-ipc-bridge";
 import {
@@ -337,6 +337,10 @@ export function registerBrowserViewIpc(
         bridge.windowRegistry.off("geometry", listener);
       };
     },
+    // Tile rects are renderer CSS pixels; the native rect they map to depends
+    // on the app's page zoom, which is a single app-wide preference.
+    getZoomFactor: () => bridge.zoomController.getZoomFactor(),
+    onZoomChange: (listener) => bridge.zoomController.onChange(listener),
     notifyHostWindowRendererReset: (windowId) => {
       bridge.markRendererUnavailable(windowId);
       // The renderer's tab bindings die with it, so the host-side rebind is
@@ -693,12 +697,13 @@ export function registerBrowserViewIpc(
     },
   );
 
-  // The renderer is the source of truth for which app chords outrank guest
-  // keystrokes; it pushes its binding tokens at startup.
+  // BT-302/BT-303: the renderer is the source of truth for the guest-focused
+  // input policy - which chords outrank guest keystrokes and what each one
+  // means. It pushes the whole table at startup.
   bridge.handleInvoke(
     RunnerHostInvoke.browserViewSetReservedChords,
     (_event, payload) => {
-      manager.chords.setTokens(parseReservedChordTokens(payload));
+      manager.chords.setReservedChords(parseReservedChords(payload));
     },
   );
 
@@ -1047,6 +1052,7 @@ function createBrowserDevToolsWindow(
     width: 1200,
     height: 800,
     backgroundColor: "#0b0b0d",
+    fullscreenable: false,
   });
 }
 

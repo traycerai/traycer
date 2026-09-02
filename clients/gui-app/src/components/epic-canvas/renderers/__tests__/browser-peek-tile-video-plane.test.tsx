@@ -136,7 +136,7 @@ function renderTile(): void {
       paneId="pane-1"
       epicId="epic-1"
       node={peekNode}
-      isElectronWake={false}
+      completeMeans="ended"
     />,
   );
   act(() => {
@@ -852,7 +852,7 @@ describe("BrowserPeekTile input ack", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={peekNode}
-        isElectronWake={false}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();

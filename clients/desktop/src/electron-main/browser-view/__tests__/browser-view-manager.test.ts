@@ -529,6 +529,8 @@ class FakeHostWebContents extends EventEmitter {
     readonly modifiers: readonly string[];
   }> = [];
 
+  focus(): void {}
+
   sendInputEvent(event: {
     readonly type: "keyDown";
     readonly keyCode: string;
@@ -640,6 +642,8 @@ interface Harness {
   emitDownload(change: BrowserSessionDownloadChange): void;
   emitCertificateError(change: BrowserSessionCertificateErrorChange): void;
   emitWindowChange(): void;
+  /** Re-zooms the app windows, as `WindowZoomController` does. */
+  setZoomFactor(factor: number): void;
 }
 
 type HarnessOptions = {
@@ -708,6 +712,8 @@ function createHarnessWithOptions(
   const viewProfileRequests: BrowserSessionProfileRequest[] = [];
   const registeredPopupWebContents: BrowserViewPopupWebContents[] = [];
   const windowListeners = new Set<() => void>();
+  const zoomListeners = new Set<() => void>();
+  let zoomFactor = 1;
   const downloadListeners = new Set<
     (change: BrowserSessionDownloadChange) => void
   >();
@@ -727,6 +733,13 @@ function createHarnessWithOptions(
       return view;
     },
     getWindow: (windowId) => windows.get(windowId) ?? null,
+    getZoomFactor: () => zoomFactor,
+    onZoomChange: (listener) => {
+      zoomListeners.add(listener);
+      return () => {
+        zoomListeners.delete(listener);
+      };
+    },
     onWindowChange: (listener) => {
       windowListeners.add(listener);
       return () => {
@@ -830,6 +843,10 @@ function createHarnessWithOptions(
     },
     emitWindowChange: () => {
       for (const listener of windowListeners) listener();
+    },
+    setZoomFactor: (factor) => {
+      zoomFactor = factor;
+      for (const listener of zoomListeners) listener();
     },
   };
 }
@@ -3089,3 +3106,140 @@ function reportAttachResult(
     status,
   });
 }
+
+describe("BrowserViewManager tile geometry under page zoom", () => {
+  it("scales renderer CSS rects into window DIPs before applying them", async () => {
+    const harness = createHarness();
+    harness.setZoomFactor(1.5);
+    const { view } = await attachNativeTab(
+      harness,
+      "window-1",
+      BASE_KEY,
+      "https://example.com/",
+    );
+
+    harness.manager.updateBounds("window-1", {
+      ...BASE_KEY,
+      bounds: { x: 100, y: 40, width: 300, height: 200 },
+    });
+
+    expect(view.bounds.at(-1)).toEqual({
+      x: 150,
+      y: 60,
+      width: 450,
+      height: 300,
+    });
+  });
+
+  it("re-derives every tile from its stored CSS rect when zoom changes", async () => {
+    const harness = createHarness();
+    const { view } = await attachNativeTab(
+      harness,
+      "window-1",
+      BASE_KEY,
+      "https://example.com/",
+    );
+    harness.manager.updateBounds("window-1", {
+      ...BASE_KEY,
+      bounds: { x: 100, y: 40, width: 300, height: 200 },
+    });
+    expect(view.bounds.at(-1)).toEqual({
+      x: 100,
+      y: 40,
+      width: 300,
+      height: 200,
+    });
+
+    // No new renderer measurement: the zoom change alone must move the view.
+    harness.setZoomFactor(2);
+
+    expect(view.bounds.at(-1)).toEqual({
+      x: 200,
+      y: 80,
+      width: 600,
+      height: 400,
+    });
+  });
+
+  it("hides a tile whose CSS sliver rounds away to a zero-width native rect", async () => {
+    // A positive CSS width is not a usable rect: it rounds to 0 DIP, so
+    // `applyBounds` rejects it and the guest would keep painting full-size.
+    const harness = createHarness();
+    const { view } = await attachNativeTab(
+      harness,
+      "window-1",
+      BASE_KEY,
+      "https://example.com/",
+    );
+    const boundsBefore = view.bounds.length;
+
+    harness.manager.updateBounds("window-1", {
+      ...BASE_KEY,
+      bounds: { x: 120, y: 40, width: 0.4, height: 200 },
+    });
+
+    expect(view.bounds).toHaveLength(boundsBefore);
+    expect(view.visible).toBe(false);
+  });
+
+  it("sizes an unbound PiP capture surface in DIPs, not zoomed CSS pixels", async () => {
+    const harness = createHarness();
+    harness.setZoomFactor(1.5);
+    const nativeKey = {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+    } as const;
+    const ready = await harness.manager.ensureTab("window-1", {
+      ...nativeKey,
+      requestedUrl: "https://example.com/",
+      profile: "primary",
+      seedStorageState: null,
+      connectionId: null,
+    });
+    const view = harness.views[0];
+    if (view === undefined) throw new Error("expected native guest");
+
+    await expect(
+      harness.manager.startPipCapture(
+        "window-1",
+        {
+          ...nativeKey,
+          registrationId: ready.registrationId,
+          maxWidth: 640,
+          maxHeight: 360,
+          quality: 75,
+        },
+        () => undefined,
+      ),
+    ).resolves.toBe(true);
+
+    expect(view.bounds.at(-1)).toEqual({
+      x: -640,
+      y: -360,
+      width: 640,
+      height: 360,
+    });
+
+    harness.manager.pip.stop();
+  });
+
+  it("hides a tile the renderer reports as fully clipped away", async () => {
+    const harness = createHarness();
+    const { view } = await attachNativeTab(
+      harness,
+      "window-1",
+      BASE_KEY,
+      "https://example.com/",
+    );
+    const boundsBefore = view.bounds.length;
+
+    harness.manager.updateBounds("window-1", {
+      ...BASE_KEY,
+      bounds: { x: 120, y: 900, width: 0, height: 0 },
+    });
+
+    expect(view.bounds).toHaveLength(boundsBefore);
+    expect(view.visible).toBe(false);
+  });
+});

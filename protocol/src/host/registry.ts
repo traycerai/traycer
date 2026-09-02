@@ -303,11 +303,17 @@ import {
   diagnosticsLogsTailV10,
 } from "@traycer/protocol/host/diagnostics/contracts";
 import {
+  managedCommandConfigureV10,
   managedCommandDeleteV10,
   managedCommandDeliverHeldV10,
+  managedCommandStartUpgradeV10ToV11,
   managedCommandStartV10,
+  managedCommandStartV11,
+  managedCommandStopUpgradeV10ToV11,
   managedCommandStopV10,
+  managedCommandStopV11,
   managedCommandSubscribeOutputV10,
+  managedCommandSubscribeOutputV11,
 } from "@traycer/protocol/host/managed-command/contracts";
 import { hostGetRuntimeCapabilitiesV10 } from "@traycer/protocol/host/runtime-capabilities/contracts";
 import { chatForkGetV10 } from "@traycer/protocol/host/chat-fork/contracts";
@@ -567,6 +573,7 @@ import {
   resourcesSubscribeV12,
   resourcesSubscribeV13,
   resourcesSubscribeV14,
+  resourcesSubscribeV15,
   resourcesKillV10,
   resourcesListLocalServersV10,
 } from "@traycer/protocol/host/resources/subscribe";
@@ -777,6 +784,8 @@ import {
   providersUsePackVersionResponseSchema,
   providersSetPackPolicyRequestSchema,
   providersSetPackPolicyResponseSchema,
+  providersRefreshPackDiscoveryRequestSchema,
+  providersRefreshPackDiscoveryResponseSchema,
   upgradeProviderCliStateV10ToV20,
   upgradeProviderCliStateListToV70Preimage,
   upgradeProviderCliStateV10ToMutationV20,
@@ -3031,9 +3040,9 @@ export const providersNativeMutateV10 = defineRpcContract({
   responseSchema: providersNativeMutateResponseSchema,
 });
 
-// ── The per-pack version-manager methods (v8.0's mutation surface) ─────────
+// ── Per-pack version-manager methods + the on-demand discovery refresh ─────
 //
-// Four BRAND-NEW method names, each at `@1.0`, all registered below with
+// BRAND-NEW method names, each at `@1.0`, all registered below with
 // `degrade: { kind: "unsupported" }` - none is in
 // `RELEASED_FLOOR_METHOD_NAMES`, so a host that predates them refuses these
 // calls per-call with upgrade guidance rather than failing the handshake, the
@@ -3079,6 +3088,20 @@ export const providersSetPackPolicyV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: providersSetPackPolicyRequestSchema,
   responseSchema: providersSetPackPolicyResponseSchema,
+});
+
+/**
+ * Run the pack-discovery poll for one pack now, instead of waiting out the
+ * jittered ticker period. Another new name at `@1.0` on the same
+ * optional-capability channel as the four above, and registered below the same
+ * way - it reads a head rather than mutating the store, which is why it is not
+ * one of them.
+ */
+export const providersRefreshPackDiscoveryV10 = defineRpcContract({
+  method: "providers.refreshPackDiscovery",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersRefreshPackDiscoveryRequestSchema,
+  responseSchema: providersRefreshPackDiscoveryResponseSchema,
 });
 
 /**
@@ -7010,14 +7033,21 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   // The human lifecycle controls for monitors and shells. Brand-new v1.0
   // methods on the same `degrade: unsupported` channel as `resources.kill`
   // above: a host without the managed-command subsystem simply lacks them.
+  // `1.1` on start/stop returns the command with `relaunchOnHostRestart`;
+  // the shipped `1.0` stays pinned to the pre-relaunch command shape (see
+  // `managedCommandSchemaPreRelaunch`).
   "managedCommand.start": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: managedCommandStartV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: managedCommandStartV11,
+          upgradeFromPreviousVersion: managedCommandStartUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -7026,11 +7056,15 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   "managedCommand.stop": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: managedCommandStopV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: managedCommandStopV11,
+          upgradeFromPreviousVersion: managedCommandStopUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -7043,6 +7077,25 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: managedCommandDeleteV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // The one human-editable setting: relaunch after a host restart. Same
+  // channel as the lifecycle three; a host too old to have the flag lacks the
+  // method, so the GUI hides the switch (`useHostSupportsMethod`), and its
+  // commands read `relaunchOnHostRestart: true` by default - which is what
+  // such a host does (it respawns every survivor; it never offered the
+  // choice).
+  "managedCommand.configure": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: managedCommandConfigureV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -8311,6 +8364,22 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  // The on-demand discovery poll the version popover's check button drives.
+  // Not one of the four above - it reads a head instead of writing the store -
+  // but a new name outside the floor all the same, so it degrades identically.
+  "providers.refreshPackDiscovery": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersRefreshPackDiscoveryV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "providers.submitLoginCode": {
     degrade: { kind: "unsupported" },
     1: {
@@ -8890,10 +8959,15 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // `host/managed-command/subscribe.ts` for what a global panel would re-add).
   "managedCommand.subscribeOutput": {
     1: {
-      latestMinor: 0,
+      // `1.1` adds `relaunchOnHostRestart` to the snapshot/status headers;
+      // `1.0` is pinned to the shipped pre-relaunch command shape.
+      latestMinor: 1,
       versions: {
         0: {
           contract: managedCommandSubscribeOutputV10,
+        },
+        1: {
+          contract: managedCommandSubscribeOutputV11,
         },
       },
     },
@@ -8991,7 +9065,7 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   },
   "resources.subscribe": {
     1: {
-      latestMinor: 4,
+      latestMinor: 5,
       versions: {
         0: {
           contract: resourcesSubscribeV10,
@@ -9011,6 +9085,11 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         // for every minor before this one.
         4: {
           contract: resourcesSubscribeV14,
+        },
+        // @1.5 lets a mounted stream remain on the background cadence while
+        // only a visible resource monitor asks for interactive refresh.
+        5: {
+          contract: resourcesSubscribeV15,
         },
       },
     },

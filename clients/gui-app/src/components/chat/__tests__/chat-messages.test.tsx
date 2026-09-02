@@ -277,8 +277,6 @@ function makeInterviewFindTranscript(count: number): ChatMessageModel[] {
         kind: "interview",
         status: "completed",
         toolName: "AskUserQuestion",
-        title: null,
-        description: null,
         questions: [
           {
             questionId: "q1",

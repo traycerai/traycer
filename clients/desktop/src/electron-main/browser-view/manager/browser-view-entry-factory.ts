@@ -291,10 +291,18 @@ export class BrowserViewEntryFactory {
     input: Input,
   ): void {
     if (input.type !== "keyDown") return;
+    // The guest seam runs BEFORE the macOS app-menu accelerator and is the
+    // only place in the chain that knows a browser tile has focus, so the
+    // whole focus-scoped input policy is decided here. `preventDefault` is
+    // what stops a menu equivalent (Cmd+W's "Close Tab") from also firing.
     const reserved = this.chords.match(input);
     if (reserved !== null) {
       event.preventDefault();
-      this.chords.forwardToHostWindow(entry, reserved);
+      // Every reserved chord is one-shot - holding Cmd+T at ~25 Hz would open
+      // (and split for) a tab per repeat - but the repeat is still CLAIMED
+      // above, or it walks straight into the menu equivalent while the first
+      // press's asynchronous close is still in flight.
+      if (!input.isAutoRepeat) this.chords.dispatch(entry.surface, reserved);
       return;
     }
     if (!(input.control || input.meta || input.shift || input.alt)) return;

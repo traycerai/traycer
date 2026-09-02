@@ -160,7 +160,7 @@ describe("BrowserPeekTile toolbar chrome", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
-        isElectronWake={false}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -200,7 +200,7 @@ describe("BrowserPeekTile toolbar chrome", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
-        isElectronWake={false}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -221,7 +221,7 @@ describe("BrowserPeekTile toolbar chrome", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
-        isElectronWake={false}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -254,7 +254,7 @@ describe("BrowserPeekTile toolbar chrome", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
-        isElectronWake={false}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -311,7 +311,7 @@ describe("BrowserPeekTile toolbar chrome", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
-        isElectronWake={false}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -370,7 +370,7 @@ describe("BrowserPeekTile toolbar chrome", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
-        isElectronWake={false}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -431,7 +431,7 @@ describe("BrowserPeekTile toolbar chrome", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
-        isElectronWake={false}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -459,7 +459,7 @@ describe("BrowserPeekTile toolbar chrome", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
-        isElectronWake={false}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();

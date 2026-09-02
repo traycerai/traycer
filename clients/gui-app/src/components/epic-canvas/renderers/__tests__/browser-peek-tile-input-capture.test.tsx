@@ -248,7 +248,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
-        isElectronWake={false}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -277,7 +277,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
-        isElectronWake={false}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -316,7 +316,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
-        isElectronWake={false}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -347,7 +347,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
-        isElectronWake={false}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -422,7 +422,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
-        isElectronWake={false}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -491,7 +491,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
-        isElectronWake={false}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -532,7 +532,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
-        isElectronWake={false}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -569,7 +569,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
-        isElectronWake={false}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -602,7 +602,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
-        isElectronWake={false}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -624,7 +624,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
-        isElectronWake={false}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -686,7 +686,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
-        isElectronWake={false}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -774,7 +774,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
-        isElectronWake={false}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -804,7 +804,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
-        isElectronWake={false}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -837,7 +837,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
-        isElectronWake={false}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -901,7 +901,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
-        isElectronWake={false}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -1017,7 +1017,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
-        isElectronWake={false}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -1098,7 +1098,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
-        isElectronWake={false}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -1141,7 +1141,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
-        isElectronWake={false}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -1184,7 +1184,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
-        isElectronWake={false}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -1230,7 +1230,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
-        isElectronWake={false}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -1259,7 +1259,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
-        isElectronWake={false}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -1292,7 +1292,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
-        isElectronWake={false}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -1329,7 +1329,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
-        isElectronWake={false}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -1355,7 +1355,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
-        isElectronWake={false}
+        completeMeans="ended"
       />,
     );
 
@@ -1371,7 +1371,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
-        isElectronWake={false}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -1437,7 +1437,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
-        isElectronWake={false}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -1486,7 +1486,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
-        isElectronWake={false}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -1526,7 +1526,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
-        isElectronWake={false}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -1576,7 +1576,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
-        isElectronWake={false}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -1618,7 +1618,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
-        isElectronWake={false}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -1661,7 +1661,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
-        isElectronWake={false}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -1748,7 +1748,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
-        isElectronWake={false}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -1779,7 +1779,7 @@ describe("BrowserPeekTile input capture", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
-        isElectronWake={false}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();

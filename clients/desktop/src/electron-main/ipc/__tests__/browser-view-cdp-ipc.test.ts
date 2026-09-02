@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { BrowserWindowConstructorOptions } from "electron";
 import type {
   BrowserViewElectronTabControl,
   BrowserViewNativeTabCapability,
@@ -43,6 +44,10 @@ const SIGNED_OUT: AuthSnapshot = {
   verified: false,
 };
 
+type BrowserViewManagerFactoryOptions = {
+  readonly createDevToolsWindow: (windowId: string) => unknown;
+};
+
 const captured = vi.hoisted(() => ({
   dispatchedTabs: [] as DispatchElectronTabCdpCall[],
   ensuredTabs: [] as EnsureTabCall[],
@@ -53,22 +58,16 @@ const captured = vi.hoisted(() => ({
   transportCloses: 0,
   /** Everyone main told to re-read the auth session. */
   authChangeListeners: [] as Array<() => void>,
-  authSnapshot: {
-    status: "signed-out",
-    token: null,
-    profile: null,
-    verified: false,
-  } as {
-    readonly status: string;
-    readonly token: string | null;
-    readonly profile: { readonly userId: string } | null;
-    readonly verified: boolean;
-  },
+  authSnapshot: SIGNED_OUT as AuthSnapshot,
+  browserWindowOptions: [] as BrowserWindowConstructorOptions[],
+  managerOptions: null as BrowserViewManagerFactoryOptions | null,
 }));
 
 vi.mock("electron", () => {
   class BrowserWindow {
-    constructor(_options: unknown) {}
+    constructor(options: BrowserWindowConstructorOptions) {
+      captured.browserWindowOptions.push(options);
+    }
   }
   class WebContentsView {
     readonly webContents = {
@@ -156,7 +155,9 @@ vi.mock("../../app/cert-trust", () => ({
 vi.mock("../../browser-view/browser-view-manager", () => ({
   BOUNDS_STREAM_LOG_INTERVAL_MS: 1_000,
   BrowserViewManager: class {
-    constructor(_options: unknown) {}
+    constructor(options: BrowserViewManagerFactoryOptions) {
+      captured.managerOptions = options;
+    }
 
     dispatchElectronTabCdp(input: BrowserViewElectronTabCdpDispatch): Promise<{
       readonly kind: "cdpInsertText";
@@ -255,6 +256,11 @@ function makeBridge() {
       on: vi.fn(),
       off: vi.fn(),
     },
+    zoomController: {
+      getZoomPercent: vi.fn(() => 100),
+      getZoomFactor: vi.fn(() => 1),
+      onChange: vi.fn(() => () => undefined),
+    },
     safeSendToWindow: vi.fn(),
     fanOut: vi.fn(),
     resolveSenderWindowId: vi.fn(() => "window-1"),
@@ -341,7 +347,27 @@ describe("native browser tab IPC", () => {
     captured.transportCloses = 0;
     captured.authChangeListeners = [];
     captured.authSnapshot = SIGNED_OUT;
+    captured.browserWindowOptions = [];
+    captured.managerOptions = null;
     vi.clearAllMocks();
+  });
+
+  it("keeps detached DevTools windowed when the renderer is full screen", async () => {
+    const { registerBrowserViewIpc } = await import("../browser-view-ipc");
+
+    registerBrowserViewIpc(makeBridge() as never);
+    const managerOptions = captured.managerOptions;
+    if (managerOptions === null) throw new Error("manager was not registered");
+    managerOptions.createDevToolsWindow("window-1");
+
+    expect(captured.browserWindowOptions).toContainEqual(
+      expect.objectContaining({
+        show: true,
+        width: 1200,
+        height: 800,
+        fullscreenable: false,
+      }),
+    );
   });
 
   // The renderer-facing CDP dispatch and ensure-tab invoke channels

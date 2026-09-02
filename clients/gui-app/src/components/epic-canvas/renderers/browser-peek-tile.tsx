@@ -1,5 +1,5 @@
 import { useLayoutEffect, useMemo, useState, type ReactElement } from "react";
-import { AlertTriangle, Pause, Radio, WifiOff } from "lucide-react";
+import { AlertTriangle, Monitor, Pause, Radio, WifiOff } from "lucide-react";
 import { toast } from "sonner";
 import { useTileBodyVisible } from "@/components/epic-canvas/hooks/use-tile-body-visible";
 import {
@@ -70,19 +70,31 @@ export type BrowserPeekNode = Pick<
   readonly initialUrl: string;
 };
 
+/**
+ * What the host's `complete` frame means for this tile. The host answers it for
+ * every Electron-placed tab (`browser-screencast-plane.ts`'s
+ * `subscribeScreencast`), because such a tab has no viewer plane there - so the
+ * frame alone cannot say whether pixels are about to appear somewhere else on
+ * this screen or will never appear here at all.
+ *
+ * - `ended` - an ordinary cast that stopped.
+ * - `native-handoff` - this client is the one placing the native tab, so its
+ *   own window is a beat away from showing the page.
+ * - `native-elsewhere` - the tab is live in the desktop app on that host and no
+ *   surface here can ever show it. Terminal, and said as such rather than
+ *   dressed as a handoff that is not coming.
+ */
+export type BrowserPeekCompleteMeaning =
+  | "ended"
+  | "native-handoff"
+  | "native-elsewhere";
+
 interface BrowserPeekTileProps {
   readonly epicId: string;
   readonly node: BrowserPeekNode;
   readonly viewTabId: string;
   readonly paneId: string;
-  /**
-   * Set only by `BrowserSessionTile` while this peek is standing in for a
-   * durable Electron session's dormant/wake branch (`runtime.kind ===
-   * "electron"`). There the host's `complete` frame means "attached, going
-   * native" (`browser-screencast-plane.ts`'s `subscribeScreencast`), not a
-   * dead cast - so the lifecycle chip must not read as a failure mid-handoff.
-   */
-  readonly isElectronWake: boolean;
+  readonly completeMeans: BrowserPeekCompleteMeaning;
 }
 
 /**
@@ -153,9 +165,9 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
         session.lifecycle,
         visible,
         session.details,
-        props.isElectronWake,
+        props.completeMeans,
       ),
-    [session.details, session.lifecycle, visible, props.isElectronWake],
+    [session.details, session.lifecycle, visible, props.completeMeans],
   );
 
   const chrome = useScreencastTileChrome({
@@ -511,7 +523,7 @@ function browserPeekStatus(
   lifecycle: ScreencastLifecycle,
   visible: boolean,
   details: string | null,
-  isElectronWake: boolean,
+  completeMeans: BrowserPeekCompleteMeaning,
 ): BrowserPeekStatus {
   if (!visible) {
     return {
@@ -545,12 +557,24 @@ function browserPeekStatus(
     // a dead cast (`browser-screencast-plane.ts`'s `subscribeScreencast`) -
     // WifiOff/"Ended" would read as a failure at the exact moment the tab is
     // succeeding.
-    if (isElectronWake) {
+    if (completeMeans === "native-handoff") {
       return {
         label: "Going native",
         overlay: "Handing off to the native tab.",
         tone: "muted",
         Icon: Radio,
+      };
+    }
+    // The same frame, read from a client with no native window of its own to
+    // hand off to. Nothing is in flight and nothing will arrive, so it says so
+    // rather than spinning on a handoff that is happening on another machine.
+    if (completeMeans === "native-elsewhere") {
+      return {
+        label: "Open natively",
+        overlay:
+          "This tab is open in the desktop app on that host, so it can't be streamed here.",
+        tone: "muted",
+        Icon: Monitor,
       };
     }
     return {

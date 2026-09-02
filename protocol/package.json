@@ -149,13 +149,13 @@
     "lint": "oxlint -c oxlint.config.ts --fix --deny-warnings ."
   },
   "dependencies": {
-    "@noble/curves": "^2.3.0",
+    "@noble/curves": "^2.4.0",
     "async-mutex": "^0.5.0",
     "fflate": "^0.8.3",
     "tldts": "7.4.10",
     "y-utility": "^0.1.4",
     "yjs": "^13.6.32",
-    "zod": "^4.4.3"
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@types/node": "catalog:",

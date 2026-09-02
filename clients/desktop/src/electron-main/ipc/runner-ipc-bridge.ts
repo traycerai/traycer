@@ -87,6 +87,7 @@ import { registerPowerIpc } from "./power-ipc";
 import { registerAppUpdateIpc } from "./app-update-ipc";
 import { registerGlobalShortcutsIpc } from "./global-shortcuts-ipc";
 import { registerZoomIpc } from "./zoom-ipc";
+import { zoomPercentToFactor } from "../windows/window-zoom";
 import { registerBrowserViewIpc } from "./browser-view-ipc";
 import type { BrowserSessionsRegistry } from "../browser-sessions/browser-sessions-owner";
 import { registerPipCaptureIpc } from "./pip-capture-ipc";
@@ -249,6 +250,7 @@ export interface IpcAuthTokenStore {
 
 export interface IpcZoomController {
   getZoomPercent(): ZoomPercent;
+  getZoomFactor(): number;
   zoomIn(): Promise<ZoomPercent>;
   zoomOut(): Promise<ZoomPercent>;
   reset(): Promise<ZoomPercent>;
@@ -1703,6 +1705,10 @@ class NullZoomController implements IpcZoomController {
 
   getZoomPercent(): ZoomPercent {
     return this.zoomPercent;
+  }
+
+  getZoomFactor(): number {
+    return zoomPercentToFactor(this.zoomPercent);
   }
 
   zoomIn(): Promise<ZoomPercent> {

@@ -23,6 +23,7 @@ import type {
   BrowserViewFindStop,
   BrowserViewOverlayOcclusion,
   BrowserViewOverlayRelease,
+  BrowserViewReservedChord,
 } from "@traycer-clients/shared/platform/browser-view";
 import type { PipCaptureStartInput } from "@traycer-clients/shared/platform/browser-view";
 
@@ -226,11 +227,33 @@ export const browserViewIpcPayload = {
   tileKey: tileKeySchema,
 } as const;
 
-const reservedChordTokensSchema = z.object({
-  tokens: z.array(z.string()).catch([]),
+/**
+ * Per-ROW catch, deliberately. A newer renderer may list a command this build
+ * has never heard of; catching on the ARRAY would discard the whole policy
+ * table over that one row and leave every chord unclaimed.
+ */
+const reservedChordRowSchema = z
+  .object({
+    token: z.string(),
+    command: z
+      .union([
+        z.literal("closeTab"),
+        z.literal("newTab"),
+        z.literal("focusAddressBar"),
+      ])
+      .nullable(),
+  })
+  .nullable()
+  .catch(null);
+
+const reservedChordsSchema = z.object({
+  chords: z.array(reservedChordRowSchema).catch([]),
 });
 
-export function parseReservedChordTokens(payload: unknown): readonly string[] {
-  const parsed = reservedChordTokensSchema.safeParse(payload);
-  return parsed.success ? parsed.data.tokens : [];
+export function parseReservedChords(
+  payload: unknown,
+): readonly BrowserViewReservedChord[] {
+  const parsed = reservedChordsSchema.safeParse(payload);
+  if (!parsed.success) return [];
+  return parsed.data.chords.filter((row) => row !== null);
 }
