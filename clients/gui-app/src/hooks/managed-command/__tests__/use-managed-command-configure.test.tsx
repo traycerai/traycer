@@ -281,6 +281,21 @@ describe("useManagedCommandConfigure", () => {
       { wrapper },
     );
     expect(caughtUp.result.current).toBe(false);
+    // An EQUAL stamp is the stream's too: another client's write in the same
+    // millisecond as ours is causally newer and lives in no local cache, so
+    // no local order could rank it. (For our own answer it changes nothing -
+    // the values agree.) Settled precedence here would show the obsolete
+    // value indefinitely.
+    const sameStamp = renderHook(
+      () =>
+        useManagedCommandRelaunchOnHostRestart(target, {
+          ...COMMAND,
+          relaunchOnHostRestart: false,
+          updatedAtMs: COMMAND.updatedAtMs + 1,
+        }),
+      { wrapper },
+    );
+    expect(sameStamp.result.current).toBe(false);
     // And an unrelated command never reads this command's write.
     const other = renderHook(
       () =>

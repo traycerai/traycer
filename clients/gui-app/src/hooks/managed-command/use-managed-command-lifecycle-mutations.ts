@@ -327,7 +327,14 @@ export function useManagedCommandRelaunchOnHostRestart(
       newest = candidate;
     }
   }
-  if (newest === null || newest.command.updatedAtMs < streamed.updatedAtMs) {
+  // The stream wins on EQUAL stamps too. The gap this hook closes is a stream
+  // record strictly OLDER than the answered write (the host bumps
+  // `updatedAtMs` on every live change, so the stale record always is). An
+  // equal stamp means the stream has caught up with this write, or with a
+  // write by another client in the same millisecond - which is causally newer
+  // and not in this cache, so no local order could rank it. Settled-state
+  // precedence on equality would show that obsolete value indefinitely.
+  if (newest === null || newest.command.updatedAtMs <= streamed.updatedAtMs) {
     return streamed.relaunchOnHostRestart;
   }
   return newest.command.relaunchOnHostRestart;
