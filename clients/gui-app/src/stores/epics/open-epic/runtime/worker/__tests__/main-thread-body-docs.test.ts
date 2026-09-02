@@ -46,6 +46,7 @@ function snapshotWith(text: string): { update: Uint8Array; guid: string } {
  */
 const NOOP_SINKS: MainThreadBodyDocSinks = {
   onResidencyChange: () => {},
+  onDocRetired: () => {},
   onLocalDocUpdate: () => {},
   onLocalAwareness: () => {},
 };

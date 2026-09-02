@@ -17,6 +17,7 @@ import type {
   BrowserViewOverlayOcclusionResult,
   BrowserViewOverlayReleaseResult,
   BrowserViewSnapshotInvalidatedChange,
+  BrowserViewTileCommandEvent,
   BrowserViewNativeTabCapability,
   BrowserViewNativeTabStatusChange,
 } from "@traycer-clients/shared/platform/browser-view";
@@ -70,10 +71,10 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
           RunnerHostInvoke.browserViewUpdateBounds,
           input,
         ) as Promise<void>,
-      setReservedChords: async (tokens) => {
+      setReservedChords: async (chords) => {
         await ipcRenderer.invoke(
           RunnerHostInvoke.browserViewSetReservedChords,
-          { tokens },
+          { chords },
         );
       },
       overlayPaintAck: async (overlayId) => {
@@ -202,6 +203,11 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
       onOpenTileRequest: (handler) =>
         subscribe<BrowserViewOpenTileRequest>(
           RunnerHostEvent.browserViewOpenTileRequest,
+          handler,
+        ),
+      onTileCommand: (handler) =>
+        subscribe<BrowserViewTileCommandEvent>(
+          RunnerHostEvent.browserViewTileCommand,
           handler,
         ),
       onSnapshotInvalidated: (handler) =>

@@ -216,6 +216,7 @@ async function mountSession(
   tabId: string,
 ): Promise<{
   handle: OpenEpicStoreHandle;
+  unmount: () => void;
   /**
    * Every handle this mount has presented, in order - a GETTER because the
    * interesting ones arrive after this function returns. One caller: the
@@ -224,13 +225,21 @@ async function mountSession(
   handles: () => ReadonlyArray<OpenEpicStoreHandle>;
 }> {
   const seenHandles: OpenEpicStoreHandle[] = [];
-  render(sessionBody(epicId, tabId, (handle) => seenHandles.push(handle)));
+  const rendered = render(
+    sessionBody(epicId, tabId, (handle) => seenHandles.push(handle)),
+  );
   await waitFor(() => {
     expect(seenHandles).toHaveLength(1);
   });
   const handle = seenHandles.at(0);
   if (handle === undefined) throw new Error("expected a handle");
-  return { handle, handles: () => seenHandles };
+  return {
+    handle,
+    handles: () => seenHandles,
+    unmount: () => {
+      rendered.unmount();
+    },
+  };
 }
 
 describe("<EpicSessionProvider /> transport ownership", () => {
@@ -311,6 +320,10 @@ describe("<EpicSessionProvider /> transport ownership", () => {
       handle.dispose();
     });
     expect(record.closeCount).toBe(1);
+    expect(record.closeReasons).toEqual(["durable-transport-closed:tab-close"]);
+    expect(record.wsStreamClient.getClosedReason()).toBe(
+      "durable-transport-closed:tab-close",
+    );
 
     // Idempotent on its own: a second dispose (e.g. a duplicate teardown path)
     // must not double-close the socket.
@@ -318,6 +331,33 @@ describe("<EpicSessionProvider /> transport ownership", () => {
       handle.dispose();
     });
     expect(record.closeCount).toBe(1);
+  });
+
+  it("attributes MRU prune teardown to prune", async () => {
+    // Unmount each provider so its clean session becomes WARM rather than
+    // remaining mounted (mounted entries are not prune candidates). The sixth
+    // acquisition exceeds the five-entry cap and prunes the oldest transport.
+    const leaveWarm = async (epicId: string): Promise<void> => {
+      const mounted = await mountSession(epicId, epicId);
+      act(() => {
+        mounted.handle.store.setState({
+          snapshotLoaded: true,
+          isDirty: false,
+          hostTransportStatus: "open",
+        });
+      });
+      mounted.unmount();
+    };
+    await leaveWarm("epic-prune-1");
+    await leaveWarm("epic-prune-2");
+    await leaveWarm("epic-prune-3");
+    await leaveWarm("epic-prune-4");
+    await leaveWarm("epic-prune-5");
+    await mountSession("epic-prune-6", "epic-prune-6");
+
+    const oldest = transportRegistry.records.at(0);
+    if (oldest === undefined) throw new Error("expected oldest transport");
+    expect(oldest.closeReasons).toEqual(["durable-transport-closed:prune"]);
   });
 
   it("attaches a plan-restricted reprobe to THIS session's client, and detaches it with the transport", async () => {
@@ -390,6 +430,9 @@ describe("<EpicSessionProvider /> transport ownership", () => {
       expect(transportRegistry.records.length).toBeGreaterThan(1);
     });
     expect(first.closeCount).toBe(1);
+    expect(first.closeReasons).toEqual([
+      "durable-transport-closed:retry-rebuild",
+    ]);
     expect(handles().length).toBeGreaterThan(1);
   });
 
@@ -406,6 +449,45 @@ describe("<EpicSessionProvider /> transport ownership", () => {
       handle.detachTransport();
     });
     expect(record.closeCount).toBe(1);
+    expect(record.closeReasons).toEqual(["durable-transport-closed:repoint"]);
+  });
+
+  it("attributes a host re-point candidate teardown to repoint", async () => {
+    const seenHandles: OpenEpicStoreHandle[] = [];
+    const rendered = render(
+      sessionBody("epic-repoint-reason", "epic-repoint-reason", (handle) => {
+        seenHandles.push(handle);
+      }),
+    );
+    await waitFor(() => {
+      expect(seenHandles).toHaveLength(1);
+    });
+
+    hostState.id = "host-b";
+    act(() => {
+      rendered.rerender(
+        sessionBody("epic-repoint-reason", "epic-repoint-reason", (handle) => {
+          seenHandles.push(handle);
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(transportRegistry.records.length).toBeGreaterThan(1);
+    });
+    const candidate = transportRegistry.records.at(1);
+    if (candidate === undefined) throw new Error("expected repoint candidate");
+
+    // The candidate is discarded once the already-mounted handle wins the
+    // re-point effect is cleaned up; its transport close must retain the
+    // product trigger even though the provider is unmounted before a snapshot
+    // can commit the replacement.
+    rendered.unmount();
+    await waitFor(() => {
+      expect(candidate.closeReasons).toEqual([
+        "durable-transport-closed:repoint",
+      ]);
+    });
   });
 
   it("dispose() and detachTransport() close the transport only ONCE, in either order", async () => {

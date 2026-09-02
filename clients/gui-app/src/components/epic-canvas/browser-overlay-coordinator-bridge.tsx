@@ -123,7 +123,21 @@ function BrowserOverlayCoordinator(props: {
         ) {
           return;
         }
+        // Latched up front so the in-flight call is not repeated by the next
+        // scan, and dropped again whenever the occlusion did not take: a
+        // rejected call, or one that matched no tile in main (a scan racing
+        // tile teardown or rebind). Keeping the signature there would make
+        // that miss permanent - the tile would stay live under the overlay
+        // until the overlay closed.
         activeSignaturesByOverlayId.set(target.overlayId, target.signature);
+        const forgetSignature = (): void => {
+          if (
+            activeSignaturesByOverlayId.get(target.overlayId) ===
+            target.signature
+          ) {
+            activeSignaturesByOverlayId.delete(target.overlayId);
+          }
+        };
         void browserView
           .occludeForOverlay({
             overlayId: target.overlayId,
@@ -131,13 +145,24 @@ function BrowserOverlayCoordinator(props: {
           })
           .then((result) => {
             if (disposed) return;
+            // A PARTIAL match is a miss too: the tiles that did match are
+            // occluded and keep their frames, but the ones that did not stay
+            // live under the overlay. Dropping the signature is what lets the
+            // next layout notification (tile registration, rebind) retry them
+            // - keeping it latched would compute the same signature and
+            // return early until the overlay closed.
+            if (result.matchedCount < target.tiles.length) forgetSignature();
+            if (result.matchedCount === 0) return;
             result.snapshots.forEach((snapshot) => {
               setBrowserViewSnapshot(snapshot);
             });
             applyRestoredTiles(result.restoredTiles);
+            void ackWhenPainted(target.overlayId);
           })
-          .then(() => ackWhenPainted(target.overlayId))
-          .catch(ignoreError);
+          .catch((error: unknown) => {
+            forgetSignature();
+            ignoreError(error);
+          });
       });
     };
 

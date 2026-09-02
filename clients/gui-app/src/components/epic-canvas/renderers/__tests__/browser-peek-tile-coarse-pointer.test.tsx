@@ -165,7 +165,7 @@ describe("BrowserPeekTile on a coarse pointer", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
-        isElectronWake={false}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -183,9 +183,11 @@ describe("BrowserPeekTile on a coarse pointer", () => {
       );
     });
 
+    // The address field is editable on touch too, so the URL is its value.
     expect(
-      screen.getByTestId("browser-tile-toolbar-compact").textContent,
-    ).toContain("https://example.com/path");
+      screen.getByRole<HTMLInputElement>("textbox", { name: "Browser address" })
+        .value,
+    ).toBe("https://example.com/path");
     expect(
       screen.getByRole("button", { name: "Back" }).hasAttribute("disabled"),
     ).toBe(false);
@@ -212,7 +214,7 @@ describe("BrowserPeekTile on a coarse pointer", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
-        isElectronWake={false}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
