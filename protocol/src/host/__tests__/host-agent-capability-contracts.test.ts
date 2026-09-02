@@ -3,9 +3,12 @@ import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import { agentArchiveV10 } from "@traycer/protocol/host/agent/archive";
 import {
+  HOST_FILE_TRANSFER_MAX_CHUNK_BASE64_CHARS,
+  HOST_FILE_TRANSFER_MAX_CHUNK_BYTES,
   HOST_FILE_TRANSFER_UNREADABLE_MESSAGE_MAX_LENGTH,
   hostDirectoryListV10,
   hostFileCopyCancelV10,
+  hostFileCopyManifestSchema,
   hostFileCopyStartV10,
   hostFileCopyStatusV10,
   hostFileTransferCloseV10,
@@ -229,6 +232,19 @@ describe("host-agent capability contracts", () => {
         nextCursor: null,
       }).success,
     ).toBe(false);
+    expect(
+      hostFileTransferEnumerateV10.responseSchema.safeParse({
+        entries: [
+          {
+            kind: "unreadable",
+            relativePath: "src/private.ts",
+            operation: "write",
+            message: "destination-only operation must reject",
+          },
+        ],
+        nextCursor: null,
+      }).success,
+    ).toBe(false);
   });
 
   it("keeps failed-job reasons bounded and out of other terminal states", () => {
@@ -303,6 +319,68 @@ describe("host-agent capability contracts", () => {
           operation: "enumerate",
           message: "must not be accepted",
         },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("bounds host-to-host readChunk payloads independently", () => {
+    expect(
+      hostFileTransferReadChunkV10.responseSchema.safeParse({
+        bytesBase64: "YQ==",
+        bytesRead: 1,
+        eof: true,
+      }).success,
+    ).toBe(true);
+    expect(
+      hostFileTransferReadChunkV10.responseSchema.safeParse({
+        bytesBase64: "YQ==",
+        bytesRead: HOST_FILE_TRANSFER_MAX_CHUNK_BYTES + 1,
+        eof: false,
+      }).success,
+    ).toBe(false);
+    expect(
+      hostFileTransferReadChunkV10.responseSchema.safeParse({
+        bytesBase64: "A".repeat(HOST_FILE_TRANSFER_MAX_CHUNK_BASE64_CHARS + 4),
+        bytesRead: 1,
+        eof: false,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects manifests whose counts disagree with sampled items", () => {
+    const consistent = {
+      summary: {
+        filesCopied: 1,
+        directoriesCreated: 0,
+        symlinksCreated: 0,
+        bytesCopied: 3,
+        replacements: 0,
+        skippedExisting: 0,
+      },
+      failureCount: 1,
+      failures: [
+        {
+          relativePath: "src/private.ts",
+          operation: "stat",
+          message: "permission denied",
+        },
+      ],
+      failuresOmitted: 0,
+      skippedUnsafeSymlinkCount: 0,
+      skippedUnsafeSymlinks: [],
+      skippedUnsafeSymlinksOmitted: 0,
+    };
+    expect(hostFileCopyManifestSchema.safeParse(consistent).success).toBe(true);
+    expect(
+      hostFileCopyManifestSchema.safeParse({
+        ...consistent,
+        failureCount: 2,
+      }).success,
+    ).toBe(false);
+    expect(
+      hostFileCopyManifestSchema.safeParse({
+        ...consistent,
+        skippedUnsafeSymlinkCount: 1,
       }).success,
     ).toBe(false);
   });

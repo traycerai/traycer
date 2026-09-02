@@ -240,21 +240,47 @@ export type HostFileCopyManifestSummary = z.infer<
  * `failureCount` and `skippedUnsafeSymlinkCount` are exact. Their item arrays
  * are separately capped samples, with the omitted counts explicit, because
  * deriving totals from an unbounded item list would make large failures
- * impossible to report through one unary status response.
+ * impossible to report through one unary status response. The object refine
+ * enforces that each count equals its sample length plus omitted remainder.
  */
-export const hostFileCopyManifestSchema = z.object({
-  summary: hostFileCopyManifestSummarySchema,
-  failureCount: z.number().int().nonnegative(),
-  failures: z
-    .array(hostFileCopyFailureSchema)
-    .max(HOST_FILE_COPY_MANIFEST_ITEM_LIMIT),
-  failuresOmitted: z.number().int().nonnegative(),
-  skippedUnsafeSymlinkCount: z.number().int().nonnegative(),
-  skippedUnsafeSymlinks: z
-    .array(hostFileCopySkippedUnsafeSymlinkSchema)
-    .max(HOST_FILE_COPY_MANIFEST_ITEM_LIMIT),
-  skippedUnsafeSymlinksOmitted: z.number().int().nonnegative(),
-});
+export const hostFileCopyManifestSchema = z
+  .object({
+    summary: hostFileCopyManifestSummarySchema,
+    failureCount: z.number().int().nonnegative(),
+    failures: z
+      .array(hostFileCopyFailureSchema)
+      .max(HOST_FILE_COPY_MANIFEST_ITEM_LIMIT),
+    failuresOmitted: z.number().int().nonnegative(),
+    skippedUnsafeSymlinkCount: z.number().int().nonnegative(),
+    skippedUnsafeSymlinks: z
+      .array(hostFileCopySkippedUnsafeSymlinkSchema)
+      .max(HOST_FILE_COPY_MANIFEST_ITEM_LIMIT),
+    skippedUnsafeSymlinksOmitted: z.number().int().nonnegative(),
+  })
+  .superRefine((manifest, ctx) => {
+    if (
+      manifest.failureCount !==
+      manifest.failures.length + manifest.failuresOmitted
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["failureCount"],
+        message: "failureCount must equal failures.length + failuresOmitted",
+      });
+    }
+    if (
+      manifest.skippedUnsafeSymlinkCount !==
+      manifest.skippedUnsafeSymlinks.length +
+        manifest.skippedUnsafeSymlinksOmitted
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["skippedUnsafeSymlinkCount"],
+        message:
+          "skippedUnsafeSymlinkCount must equal skippedUnsafeSymlinks.length + skippedUnsafeSymlinksOmitted",
+      });
+    }
+  });
 export type HostFileCopyManifest = z.infer<typeof hostFileCopyManifestSchema>;
 
 const hostFileCopyActiveStatusFields = {
@@ -469,11 +495,16 @@ export const hostFileTransferOpenV10 = defineRpcContract({
 
 /**
  * Maximum RAW bytes returned by one ranged read. The JSON unary envelope
- * carries canonical base64, so 512 KiB raw expands to 699,052 characters
- * (about 683 KiB) before JSON framing. Raise this only against the encoded
- * size and transport budgets, never by reasoning from raw bytes alone.
+ * carries canonical base64, so this expands to
+ * `HOST_FILE_TRANSFER_MAX_CHUNK_BASE64_CHARS` characters before JSON
+ * framing. Raise this only against the encoded size and transport budgets,
+ * never by reasoning from raw bytes alone.
  */
 export const HOST_FILE_TRANSFER_MAX_CHUNK_BYTES = 512 * 1024;
+
+/** Canonical base64 length of `HOST_FILE_TRANSFER_MAX_CHUNK_BYTES`. */
+export const HOST_FILE_TRANSFER_MAX_CHUNK_BASE64_CHARS =
+  Math.ceil(HOST_FILE_TRANSFER_MAX_CHUNK_BYTES / 3) * 4;
 
 export const hostFileTransferReadChunkRequestSchema = z.object({
   handleId: z.string().min(1),
@@ -492,8 +523,12 @@ export type HostFileTransferReadChunkRequest = z.infer<
  * accepted as a tool argument, so the agent never holds or re-emits bytes.
  */
 export const hostFileTransferReadChunkResponseSchema = z.object({
-  bytesBase64: z.base64(),
-  bytesRead: z.number().int().nonnegative(),
+  bytesBase64: z.base64().max(HOST_FILE_TRANSFER_MAX_CHUNK_BASE64_CHARS),
+  bytesRead: z
+    .number()
+    .int()
+    .nonnegative()
+    .max(HOST_FILE_TRANSFER_MAX_CHUNK_BYTES),
   eof: z.boolean(),
 });
 export type HostFileTransferReadChunkResponse = z.infer<
