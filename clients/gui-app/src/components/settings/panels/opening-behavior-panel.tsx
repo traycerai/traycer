@@ -9,8 +9,11 @@ import {
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { SettingsRow } from "@/components/settings/settings-row";
+import { useSettingsRowDescriptionId } from "@/components/settings/settings-row-description";
 import { useSettingsDensity } from "@/providers/settings-density-context";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { cn } from "@/lib/utils";
+import { altLabel, modLabel, shiftLabel } from "@/lib/keybindings/platform";
 import { trackSettingChanged, type AnalyticsSetting } from "@/lib/analytics";
 import {
   isAgentTabSurfacing,
@@ -30,14 +33,16 @@ import {
 
 /**
  * Settings > Opening behavior: the one page that answers "where does the thing
- * I just clicked end up". Links (which surface a URL opens on), tile placement
- * (tab, split or picture-in-picture) and what a host-opened browser tab does
- * are three halves of the same question, so they share a panel instead of
- * hiding one each in Browser, Appearance and General.
+ * I just clicked end up". Two groups - links (which surface a URL opens on)
+ * and tile placement (this pane, a split, or picture-in-picture, plus what a
+ * host-opened browser tab does, which is a placement question wearing another
+ * name) - so the page reads as two questions rather than three.
  *
- * Every control is a plain enum select over the settings store - the modifier
- * keys that override a choice per click are stated in the row copy rather than
- * given rows of their own, because none of them is configurable.
+ * Every control is a plain enum select over the settings store. The modifier
+ * keys that override a choice per click get ONE platform-aware legend under
+ * the groups instead of a clause in each row's copy: none of them is
+ * configurable, so repeating them per row spends description space that the
+ * row's own scope needs.
  */
 
 const LINK_OPEN_MODE_LABELS: Record<LinkOpenMode, string> = {
@@ -46,18 +51,19 @@ const LINK_OPEN_MODE_LABELS: Record<LinkOpenMode, string> = {
 };
 const LINK_OPEN_DEFAULT_LABELS: Record<LinkOpenSettings["default"], string> = {
   ...LINK_OPEN_MODE_LABELS,
-  "per-kind": "Per kind",
+  "per-kind": "Per link type",
 };
+/** Named for where the tile LANDS, not for the container it becomes. */
 const TILE_PLACEMENT_LABELS: Record<TilePlacement, string> = {
-  tab: "As a tab",
-  split: "In a split",
+  tab: "In this pane",
+  split: "In a new split",
 };
 const TILE_PLACEMENT_DEFAULT_LABELS: Record<
   TilePlacementSettings["default"],
   string
 > = {
   ...TILE_PLACEMENT_LABELS,
-  "per-category": "Per category",
+  "per-category": "Per tile type",
 };
 /** Only the browser category can float - the other two have no PiP host. */
 const BROWSER_TILE_PLACEMENT_LABELS: Record<BrowserTilePlacement, string> = {
@@ -65,12 +71,22 @@ const BROWSER_TILE_PLACEMENT_LABELS: Record<BrowserTilePlacement, string> = {
   pip: "Picture in picture",
 };
 const AGENT_TAB_SURFACING_LABELS: Record<AgentTabSurfacing, string> = {
-  surface: "Surface on canvas",
-  off: "Off",
+  surface: "Like any browser tile",
+  off: "Leave in the sidebar",
 };
 
-const DEFAULT_TRIGGER_CLASS = "w-[min(42vw,11rem)]";
-const OVERRIDE_TRIGGER_CLASS = "w-[min(42vw,10rem)]";
+const TRIGGER_CLASS = "w-[min(60vw,12rem)]";
+
+/**
+ * A single-tile viewport has nowhere to put a split or a floating tile, so
+ * every placement choice on this page collapses to "here". Said as the row's
+ * DESCRIPTION rather than the amber hint: nothing is wrong, and nothing was
+ * overridden - the window is simply narrow.
+ */
+const SINGLE_TILE_VIEWPORT_NOTE =
+  "Narrow windows show one tile at a time, so everything opens in this pane.";
+
+const MODIFIER_LEGEND = `${modLabel()}-click opens a link in your default browser · ${altLabel()}-click flips the choice · ${shiftLabel()}-click opens a tile in a split · middle-click opens it in the background`;
 
 function trackOpeningBehaviorSetting(setting: AnalyticsSetting): void {
   trackSettingChanged("opening-behavior", setting);
@@ -84,6 +100,7 @@ export function OpeningBehaviorPanel(): ReactNode {
   const agentTabSurfacing = useSettingsStore((s) => s.agentTabSurfacing);
   const setAgentTabSurfacing = useSettingsStore((s) => s.setAgentTabSurfacing);
   const compact = useSettingsDensity() === "compact";
+  const singleTileViewport = useIsMobileViewport();
 
   return (
     <SettingsPanelShell
@@ -100,7 +117,6 @@ export function OpeningBehaviorPanel(): ReactNode {
         >
           <SettingsRow
             label="Open links"
-            description="Ctrl/Cmd-click always opens in your default browser, and alt-click flips whichever choice applies."
             control={
               <EnumSelect
                 labels={LINK_OPEN_DEFAULT_LABELS}
@@ -111,16 +127,14 @@ export function OpeningBehaviorPanel(): ReactNode {
                   setLinkOpen({ default: value });
                 }}
                 ariaLabel="Open links"
-                triggerClassName={DEFAULT_TRIGGER_CLASS}
               />
             }
           />
           {linkOpen.default === "per-kind" ? (
-            <>
+            <div className="bg-foreground/3">
               <LinkKindRow
                 label="Markdown"
-                ariaLabel="Markdown links"
-                description="Chat, artifacts, comm graph, and markdown previews."
+                description="In chat, artifacts, comm graph, and markdown previews."
                 value={linkOpen.markdown}
                 onValueChange={(markdown) => {
                   setLinkOpen({ markdown });
@@ -128,8 +142,7 @@ export function OpeningBehaviorPanel(): ReactNode {
               />
               <LinkKindRow
                 label="Terminal"
-                ariaLabel="Terminal links"
-                description="Plain terminal URLs and OSC-8 hyperlinks."
+                description="URLs and hyperlinks printed by a terminal."
                 value={linkOpen.terminal}
                 onValueChange={(terminal) => {
                   setLinkOpen({ terminal });
@@ -137,7 +150,6 @@ export function OpeningBehaviorPanel(): ReactNode {
               />
               <LinkKindRow
                 label="GitHub"
-                ariaLabel="GitHub links"
                 description="Pull request rows, headers, commits, and worktree PR chips."
                 value={linkOpen.github}
                 onValueChange={(github) => {
@@ -146,14 +158,13 @@ export function OpeningBehaviorPanel(): ReactNode {
               />
               <LinkKindRow
                 label="Images"
-                ariaLabel="Image links"
                 description="Images opened from the lightbox."
                 value={linkOpen.image}
                 onValueChange={(image) => {
                   setLinkOpen({ image });
                 }}
               />
-            </>
+            </div>
           ) : null}
         </SettingsGroup>
 
@@ -164,8 +175,10 @@ export function OpeningBehaviorPanel(): ReactNode {
           fill={false}
         >
           <SettingsRow
-            label="Place new tiles"
-            description="Shift-click opens in a split, and middle-click opens in the background."
+            label="Open new tiles"
+            description={
+              singleTileViewport ? SINGLE_TILE_VIEWPORT_NOTE : undefined
+            }
             control={
               <EnumSelect
                 labels={TILE_PLACEMENT_DEFAULT_LABELS}
@@ -175,16 +188,15 @@ export function OpeningBehaviorPanel(): ReactNode {
                   trackOpeningBehaviorSetting("tilePlacement");
                   setTilePlacement({ default: value });
                 }}
-                ariaLabel="Place new tiles"
-                triggerClassName={DEFAULT_TRIGGER_CLASS}
+                ariaLabel="Open new tiles"
               />
             }
           />
           {tilePlacement.default === "per-category" ? (
-            <>
+            <div className="bg-foreground/3">
               <SettingsRow
-                label="Content"
-                description="Files, diffs, artifacts, pull requests, and command output."
+                label="Files, diffs & artifacts"
+                description="Files, diffs, pull requests, artifacts, command output, and the communication graph."
                 control={
                   <EnumSelect
                     labels={TILE_PLACEMENT_LABELS}
@@ -194,14 +206,13 @@ export function OpeningBehaviorPanel(): ReactNode {
                       trackOpeningBehaviorSetting("tilePlacement");
                       setTilePlacement({ content });
                     }}
-                    ariaLabel="Content tiles"
-                    triggerClassName={OVERRIDE_TRIGGER_CLASS}
+                    ariaLabel="Files, diffs & artifacts"
                   />
                 }
               />
               <SettingsRow
-                label="Conversations"
-                description="Chats, agents, and terminals."
+                label="Agents & terminals"
+                description="Chats, agents, and terminal sessions."
                 control={
                   <EnumSelect
                     labels={TILE_PLACEMENT_LABELS}
@@ -211,13 +222,12 @@ export function OpeningBehaviorPanel(): ReactNode {
                       trackOpeningBehaviorSetting("tilePlacement");
                       setTilePlacement({ conversation });
                     }}
-                    ariaLabel="Conversation tiles"
-                    triggerClassName={OVERRIDE_TRIGGER_CLASS}
+                    ariaLabel="Agents & terminals"
                   />
                 }
               />
               <SettingsRow
-                label="Browser"
+                label="Browsers"
                 description="Browser sessions and their tabs."
                 control={
                   <EnumSelect
@@ -228,24 +238,15 @@ export function OpeningBehaviorPanel(): ReactNode {
                       trackOpeningBehaviorSetting("tilePlacement");
                       setTilePlacement({ browser });
                     }}
-                    ariaLabel="Browser tiles"
-                    triggerClassName={OVERRIDE_TRIGGER_CLASS}
+                    ariaLabel="Browsers"
                   />
                 }
               />
-            </>
+            </div>
           ) : null}
-        </SettingsGroup>
-
-        <SettingsGroup
-          title="Agent-opened browser tabs"
-          tone="default"
-          dataTestId="settings-opening-agent-tabs"
-          fill={false}
-        >
           <SettingsRow
             label="Agent-opened tabs"
-            description="Surfacing places the tab using the Browser placement above; off leaves it in the sidebar."
+            description="When an agent or a page opens a browser tab without you clicking anything."
             control={
               <EnumSelect
                 labels={AGENT_TAB_SURFACING_LABELS}
@@ -256,11 +257,14 @@ export function OpeningBehaviorPanel(): ReactNode {
                   setAgentTabSurfacing(value);
                 }}
                 ariaLabel="Agent-opened tabs"
-                triggerClassName={DEFAULT_TRIGGER_CLASS}
               />
             }
           />
         </SettingsGroup>
+
+        <p className="px-1 text-ui-sm text-muted-foreground">
+          {MODIFIER_LEGEND}
+        </p>
       </div>
     </SettingsPanelShell>
   );
@@ -269,8 +273,6 @@ export function OpeningBehaviorPanel(): ReactNode {
 /** The four per-kind link rows differ only in copy and which field they set. */
 function LinkKindRow(props: {
   readonly label: string;
-  /** Spoken name for the select - the visible label reads as a noun alone. */
-  readonly ariaLabel: string;
   readonly description: string;
   readonly value: LinkOpenMode;
   readonly onValueChange: (value: LinkOpenMode) => void;
@@ -288,8 +290,7 @@ function LinkKindRow(props: {
             trackOpeningBehaviorSetting("linkOpen");
             props.onValueChange(value);
           }}
-          ariaLabel={props.ariaLabel}
-          triggerClassName={OVERRIDE_TRIGGER_CLASS}
+          ariaLabel={props.label}
         />
       }
     />
@@ -311,9 +312,11 @@ function EnumSelect<T extends string>(props: {
   readonly value: T;
   readonly isValue: (value: string) => value is T;
   readonly onValueChange: (value: T) => void;
+  /** Verbatim the row's visible label - a spoken name that matches what is read. */
   readonly ariaLabel: string;
-  readonly triggerClassName: string;
 }): ReactNode {
+  // The row's description, spoken after the name instead of being lost.
+  const describedById = useSettingsRowDescriptionId();
   return (
     <Select
       value={props.value}
@@ -323,7 +326,8 @@ function EnumSelect<T extends string>(props: {
     >
       <SelectTrigger
         aria-label={props.ariaLabel}
-        className={props.triggerClassName}
+        aria-describedby={describedById}
+        className={TRIGGER_CLASS}
         size="sm"
       >
         <SelectValue />
