@@ -9,6 +9,10 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
+import {
+  sessionInfo,
+  tabInfo,
+} from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
 import { BrowserSessionTile } from "@/components/epic-canvas/renderers/browser-session-tile";
 import type { BrowserPeekCompleteMeaning } from "@/components/epic-canvas/renderers/browser-peek-tile";
 import type { ElectronTabBinding } from "@/lib/browser-view/sessions/electron-tab-directory";
@@ -155,25 +159,20 @@ function session(
   status: "ready" | "dormant" | "navigating" | "crashed",
   runtime: "headless" | "electron" | "dormant",
 ): BrowserSessionInfo {
-  return {
+  return sessionInfo({
     sessionId: "sess-1",
-    epicId: "epic-1",
     hostId: "host-test",
-    profile: "primary",
     lastActivityAt: 2,
     runtime: { kind: runtime, revision: 1 },
     tabs: [
-      {
+      tabInfo({
         tabId: "tab-1",
         url: "https://example.com/page",
-        originTier: "dev",
         status,
         title: "Example",
-        viewed: false,
-        drivenBy: [],
-      },
+      }),
     ],
-  };
+  });
 }
 
 function binding(): ElectronTabBinding {

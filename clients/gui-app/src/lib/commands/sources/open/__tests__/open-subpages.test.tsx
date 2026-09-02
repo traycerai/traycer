@@ -6,6 +6,10 @@ import type {
 } from "@traycer/protocol/host/worktree-schemas";
 import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
 import type { BrowserSessionsLifecycle } from "@traycer-clients/shared/platform/browser-view";
+import {
+  sessionInfo,
+  tabInfo,
+} from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
 import type { CommandContext, CommandItem } from "@/lib/commands/types";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
 import type { OpenTileIntoTargetGroupArgs } from "@/lib/commands/actions/open-into-target";
@@ -1067,25 +1071,19 @@ describe("Browser opener sub-page", () => {
     browserHostIdMock.current = "browser-host";
     browserPinSelectionMock.current = "browser-host";
     const items = renderBrowserItems([
-      {
+      sessionInfo({
         sessionId: "session-open",
-        epicId: "epic-1",
         hostId: "browser-host",
-        profile: "primary",
         lastActivityAt: 1,
         runtime: { kind: "electron", revision: 0 },
         tabs: [
-          {
+          tabInfo({
             tabId: "tab-open",
             url: "https://example.com/docs",
             title: "Example docs",
-            originTier: "dev",
-            status: "ready",
-            viewed: false,
-            drivenBy: [],
-          },
+          }),
         ],
-      },
+      }),
     ]);
 
     expect(items.map((item) => item.label)).toEqual([

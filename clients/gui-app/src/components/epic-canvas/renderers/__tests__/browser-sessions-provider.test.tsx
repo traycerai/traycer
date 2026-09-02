@@ -16,6 +16,11 @@ import {
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
 import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
+import {
+  openRequest,
+  sessionInfo,
+  tabInfo,
+} from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
 
 const hookState = vi.hoisted(() => ({
   streamClient: null as FakeStreamClient | null,
@@ -401,15 +406,12 @@ function browserSessionFixture(
   hostId: string,
   sessionId: string,
 ): BrowserSessionInfo {
-  return {
+  return sessionInfo({
     sessionId,
-    epicId: "epic-1",
     hostId,
-    profile: "primary",
     lastActivityAt: 2,
     runtime: { kind: "electron", revision: 0 },
-    tabs: [],
-  };
+  });
 }
 
 describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
@@ -428,7 +430,7 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
     expect(client?.subscribes).toEqual([
       {
         method: "browser.sessions",
-        params: { epicId: "epic-1" },
+        params: openRequest(),
       },
     ]);
   });
@@ -453,7 +455,7 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
       expect(client.subscribes).toEqual([
         {
           method: "browser.sessions",
-          params: { epicId: "epic-1" },
+          params: openRequest(),
         },
       ]);
     });
@@ -665,7 +667,7 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
       expect(client.subscribes).toEqual([
         {
           method: "browser.sessions",
-          params: { epicId: "epic-1" },
+          params: openRequest(),
         },
       ]);
     });
@@ -674,7 +676,7 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
       {
         endpoint: INITIAL_ENDPOINT,
         method: "browser.sessions",
-        params: { epicId: "epic-1" },
+        params: openRequest(),
       },
     ]);
 
@@ -730,7 +732,7 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
     expect(client.wireSubscriptions[1]).toEqual({
       endpoint: RESTARTED_ENDPOINT,
       method: "browser.sessions",
-      params: { epicId: "epic-1" },
+      params: openRequest(),
     });
     expect(stream.closed).toBe(false);
 
@@ -748,25 +750,19 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
           kind: "snapshot",
           hasBinaryPayload: false,
           sessions: [
-            {
+            sessionInfo({
               sessionId: "sess-1",
-              epicId: "epic-1",
               hostId: "host-test",
-              profile: "primary",
               lastActivityAt: 2,
               runtime: { kind: "electron", revision: 0 },
               tabs: [
-                {
+                tabInfo({
                   tabId: "tab-1",
                   url: "https://example.com",
-                  originTier: "dev",
-                  status: "ready",
                   title: "Example",
-                  viewed: false,
-                  drivenBy: [],
-                },
+                }),
               ],
-            },
+            }),
           ],
         },
         null,
@@ -795,25 +791,19 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
           kind: "snapshot",
           hasBinaryPayload: false,
           sessions: [
-            {
+            sessionInfo({
               sessionId: "sess-1",
-              epicId: "epic-1",
               hostId: "host-test",
-              profile: "primary",
               lastActivityAt: 2,
               runtime: { kind: "electron", revision: 0 },
               tabs: [
-                {
+                tabInfo({
                   tabId: "tab-1",
                   url: "https://example.com",
-                  originTier: "dev",
-                  status: "ready",
                   title: "Example",
-                  viewed: false,
-                  drivenBy: [],
-                },
+                }),
               ],
-            },
+            }),
           ],
         },
         null,
