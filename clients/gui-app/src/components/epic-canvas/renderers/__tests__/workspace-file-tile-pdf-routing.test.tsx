@@ -1,12 +1,12 @@
 /**
  * PDF routing in the workspace file tile (PDF preview design):
  *
- * - `.pdf` + host >= 1.1 -> the pdf.js viewer tile, streaming over
- *   `useFileAsset`, never the text path.
- * - `.pdf` + no handshake yet -> attempt the stream so its negotiation can
- *   establish support; stream rejection still reaches the shared fallback.
- * - `.pdf` + known old host -> the EXACT pre-PDF behavior: the text path,
- *   untouched.
+ * - Every `.pdf` routes to the pdf.js viewer tile, streaming over
+ *   `useFileAsset`, never the text path - there is no host-version gate on
+ *   this routing decision. The STREAM's own negotiation is the sole
+ *   authority: an old host's refusal degrades inside `useFileAsset` to the
+ *   shared fallback placeholder, rather than the router trying to guess the
+ *   host's age up front.
  * - Fallback statuses render the shared `BinaryPlaceholder` with the
  *   PDF-specific copy the hook supplies (e.g. the 20 MiB cap message).
  * - Image routing is unaffected by the PDF branch.
@@ -25,14 +25,11 @@ import type {
   FileAssetState,
   FileAssetStatus,
 } from "@/hooks/assets/use-file-asset";
-import type { SchemaVersion } from "@traycer/protocol/framework/index";
 import type { WorkspaceFileRef } from "@/stores/epics/canvas/types";
 
 interface PdfRoutingTestState {
   asset: FileAssetState;
   assetRequests: FileAssetRequest[];
-  /** `null` = "no handshake yet" - the fails-closed branch under test. */
-  assetStreamVersion: SchemaVersion | null;
   readFileCalls: number;
   openPaths: Mock;
   triggerOpenExternally: Mock;
@@ -50,7 +47,6 @@ const state = vi.hoisted((): PdfRoutingTestState => ({
     servedFromCache: false,
   },
   assetRequests: [],
-  assetStreamVersion: { major: 1, minor: 1 },
   readFileCalls: 0,
   openPaths: vi.fn(),
   triggerOpenExternally: vi.fn(),
@@ -64,9 +60,18 @@ vi.mock("@/hooks/assets/use-file-asset", () => ({
   },
 }));
 
+// `workspace-file-tile.tsx` itself no longer imports
+// `useHostMethodSchemaVersion` - the PDF *route* has no host-version gate
+// left. But `WorkspacePdfFileTile` still calls `usePdfOpenExternallyTarget`
+// (`use-pdf-open-target.ts`) for its Open Externally target, and THAT hook
+// still reads `editor.openPaths`'s negotiated version - an unrelated,
+// still-live gate this suite does not assert on, so a fixed "supported"
+// version keeps it out of the way. `useHostSupportsMethod` remains a live
+// seam too (the writeFile-support check in `WorkspaceFileTileLive`, which
+// the PDF tile never mounts).
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostSupportsMethod: () => false,
-  useHostMethodSchemaVersion: () => state.assetStreamVersion,
+  useHostMethodSchemaVersion: () => ({ major: 1, minor: 1 }),
 }));
 
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
@@ -265,7 +270,6 @@ describe("workspace file tile PDF routing", () => {
       servedFromCache: false,
     };
     state.assetRequests.length = 0;
-    state.assetStreamVersion = { major: 1, minor: 1 };
     state.readFileCalls = 0;
     state.viewerUnavailable = false;
   });
@@ -275,7 +279,11 @@ describe("workspace file tile PDF routing", () => {
     vi.clearAllMocks();
   });
 
-  it("routes a .pdf to the viewer on a 1.1 host, streaming instead of reading text", () => {
+  // No host-version gate remains on this route: every `.pdf` streams
+  // through the viewer regardless of handshake state, so this single test
+  // now covers what used to be split across a known-1.1, an unknown-
+  // handshake, and a known-1.0 case.
+  it("routes every .pdf to the viewer, streaming instead of reading text", () => {
     renderTile(nodeFor("docs/report.pdf"));
 
     const preview = screen.getByRole("toolbar", {
@@ -293,36 +301,6 @@ describe("workspace file tile PDF routing", () => {
     // Single-bar contract: the viewer's own toolbar (carrying the path and
     // the Open Externally slot) is the tile's ONLY bar in the ready state.
     expect(screen.queryByTestId("workspace-file-toolbar")).toBeNull();
-  });
-
-  it("attempts the PDF stream while the first handshake is still unknown", () => {
-    state.assetStreamVersion = null;
-    renderTile(nodeFor("docs/report.pdf"));
-
-    expect(
-      screen.getByRole("toolbar", { name: "PDF preview controls" }),
-    ).toBeTruthy();
-    expect(state.readFileCalls).toBe(0);
-    expect(state.assetRequests).toEqual([
-      {
-        method: "workspace",
-        workspacePath: "/work/repo",
-        filePath: "docs/report.pdf",
-      },
-    ]);
-  });
-
-  it("falls back to the pre-PDF text path on a known 1.0 host", () => {
-    state.assetStreamVersion = { major: 1, minor: 0 };
-    renderTile(nodeFor("docs/report.pdf"));
-
-    expect(
-      screen.queryByRole("toolbar", { name: "PDF preview controls" }),
-    ).toBeNull();
-    // The text path IS the pre-PDF behavior - the router must not invent
-    // a new degraded state for old hosts.
-    expect(state.readFileCalls).toBeGreaterThan(0);
-    expect(state.assetRequests).toEqual([]);
   });
 
   it("renders the shared placeholder with the hook's PDF copy on fallback", () => {

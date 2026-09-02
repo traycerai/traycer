@@ -43,6 +43,7 @@ import { useNativeDivScrollRestoration } from "@/hooks/scroll/use-native-div-scr
 import {
   createLoadedDiffTileFindSource,
   createLoadingDiffTileFindSource,
+  createMetadataOnlyDiffTileFindSource,
   createMissingDiffTileFindSource,
   type DiffTileFindSource,
 } from "@/stores/tile-find";
@@ -66,6 +67,8 @@ const SNAPSHOT_DIFF_LOADING_FIND_MESSAGE =
   "Snapshot diff content is still loading.";
 const SNAPSHOT_DIFF_MISSING_FIND_MESSAGE =
   "Snapshot source content is unavailable.";
+const SNAPSHOT_DIFF_PDF_FIND_MESSAGE =
+  "PDF content is not searchable; only file metadata was searched.";
 
 interface SnapshotDiffTileBodyProps {
   readonly node: SnapshotDiffTileRef;
@@ -323,13 +326,8 @@ function SnapshotDiffTileResolved(props: {
     });
   }, [node.diff, node.id, settledCapture, updatePayload, viewTabId]);
 
-  // A hash-backed tile aimed at a PDF is decided by PATH, not by content: a
-  // binary PDF's blobs were never captured (`SnapshotStore.capture` rejects
-  // non-text), so its query would come back `reason: "binary"` and fall into
-  // the generic source-unavailable banner instead of the PDF copy - and an
-  // ASCII one would download blobs the tile never renders.
-  const segmentIsPdf =
-    segmentHashes !== null && isPdfAssetPath(segmentHashes.filePath);
+  const pdfFilePath = snapshotTilePdfPath(node.diff, segmentHashes);
+  const tileIsPdf = pdfFilePath !== null;
 
   const segmentQuery = useSnapshotDiffQuery({
     // The snapshot blobs were written by the host this TILE is bound to - the
@@ -337,7 +335,7 @@ function SnapshotDiffTileResolved(props: {
     client: tabHostClient,
     beforeHash: segmentHashes?.beforeHash ?? null,
     afterHash: segmentHashes?.afterHash ?? null,
-    enabled: segmentHashes !== null && !segmentIsPdf,
+    enabled: segmentHashes !== null && !tileIsPdf,
   });
 
   const cumulative = useSnapshotResolveCumulativeDiffs({
@@ -350,7 +348,7 @@ function SnapshotDiffTileResolved(props: {
     hostRows,
     hostRowsComplete,
     inlineChanges: accumulatedFileChanges,
-    enabled: segmentHashes === null,
+    enabled: segmentHashes === null && !tileIsPdf,
   });
 
   const resolved = useMemo<ReadonlyArray<ResolvedSnapshotDiff>>(() => {
@@ -416,9 +414,22 @@ function SnapshotDiffTileResolved(props: {
     );
   }
 
-  if (segmentIsPdf) {
+  if (pdfFilePath !== null) {
+    // Terminal, like every other branch: global Find still gets the file's
+    // metadata (name, directory, kind) and an honest coverage note, rather
+    // than a tile that simply does not exist to it.
     return (
       <SnapshotDiffTileShell node={node} viewTabId={viewTabId}>
+        <SnapshotDiffFindRegistration
+          tileInstanceId={node.instanceId}
+          source={createMetadataOnlyDiffTileFindSource({
+            metadataUnits: snapshotDiffMetadataUnits({
+              node,
+              filePaths: [pdfFilePath],
+            }),
+            coverageMessage: SNAPSHOT_DIFF_PDF_FIND_MESSAGE,
+          })}
+        />
         <div className="p-4 text-ui-sm text-muted-foreground">
           {PDF_FILE_DIFF_COPY}
         </div>
@@ -492,7 +503,7 @@ function SnapshotFileDiffContent(props: {
         patch: props.patch,
         metadataUnits: snapshotDiffMetadataUnits({
           node: props.node,
-          resolved: props.resolved,
+          filePaths: props.resolved.map((entry) => entry.filePath),
         }),
         cacheKey: `snapshot:${props.node.id}`,
         isPartial: false,
@@ -550,20 +561,38 @@ function SnapshotDiffFindRegistration(props: {
   return null;
 }
 
+/**
+ * The PDF a single-file tile is aimed at, or `null`. Decided by PATH, not
+ * by content, for every single-file kind (hash-backed OR cumulative): a
+ * binary PDF's blobs were never captured (`SnapshotStore.capture` rejects
+ * non-text), so a content query would come back `reason: "binary"` and fall
+ * into the generic source-unavailable banner instead of the PDF copy - and
+ * an ASCII one would download and render source the tile must not show as
+ * a diff. Bundles decide per row (`SnapshotBundleDiffTileContent`).
+ */
+function snapshotTilePdfPath(
+  diff: SnapshotDiffTilePayload,
+  segmentHashes: { readonly filePath: string } | null,
+): string | null {
+  if (diff.kind === "snapshot-cumulative-bundle") return null;
+  const filePath = segmentHashes?.filePath ?? diff.filePath;
+  return isPdfAssetPath(filePath) ? filePath : null;
+}
+
 function snapshotDiffMetadataUnits(args: {
   readonly node: SnapshotDiffTileRef;
-  readonly resolved: ReadonlyArray<ResolvedSnapshotDiff>;
+  readonly filePaths: ReadonlyArray<string>;
 }): ReadonlyArray<DiffFindMetadataUnitInput> {
-  return args.resolved.map((entry, index) => {
-    const directory = getDirname(entry.filePath);
+  return args.filePaths.map((filePath, index) => {
+    const directory = getDirname(filePath);
     return {
-      id: `snapshot-file:${args.node.id}:${index}:${entry.filePath}`,
-      filePath: entry.filePath,
+      id: `snapshot-file:${args.node.id}:${index}:${filePath}`,
+      filePath,
       scopeId: null,
       text: [
-        snapshotDiffFindTitle(args.node.diff, entry.filePath),
+        snapshotDiffFindTitle(args.node.diff, filePath),
         directory.length > 0 ? directory : "Repository root",
-        entry.filePath,
+        filePath,
         snapshotDiffFindKindLabel(args.node.diff),
       ]
         .filter((part) => part.length > 0)

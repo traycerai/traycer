@@ -9,10 +9,29 @@ import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { SnapshotDiffTileRef } from "@/stores/epics/canvas/types";
+import type { BundleDiffTileFindRenderer } from "@/components/diff/bundle-diff-find-registration-hooks";
+import type { TileKindId } from "@/stores/epics/canvas/tile-kinds";
+import type {
+  BundleDiffFindFileInput,
+  DiffTileFindSource,
+} from "@/stores/tile-find";
 import {
   SnapshotBundleDiffTileContent,
   type SnapshotCumulativeBundleDiffTileRef,
 } from "@/components/epic-canvas/renderers/snapshot-bundle-diff-tile-content";
+
+// The real hook's argument shape - tracked via the wrapping mock below so a
+// `.pdf` entry's computed `coverageState` can be asserted without replacing
+// the hook's return, which the notifySectionMounted/registerLoadedPatch
+// assertions below still depend on.
+interface RegisterBundleDiffTileFindAdapterCall {
+  readonly tileInstanceId: string;
+  readonly tileKind: TileKindId;
+  readonly files: ReadonlyArray<BundleDiffFindFileInput>;
+  readonly contentIdentity: string;
+  readonly renderer: BundleDiffTileFindRenderer;
+  readonly sourceOverride: DiffTileFindSource | null;
+}
 
 interface VirtuosoMockProps {
   readonly data: ReadonlyArray<SnapshotBundleSectionEntry>;
@@ -36,6 +55,11 @@ const testState = vi.hoisted(() => ({
   ),
   notifySectionMounted: vi.fn(),
   registerLoadedPatch: vi.fn(),
+  // Tracked so the coverage-state test can assert what `files` the content
+  // component computed per entry, rather than only what the mocked
+  // registration hook returns.
+  useRegisterBundleDiffTileFindAdapter:
+    vi.fn<(args: RegisterBundleDiffTileFindAdapterCall) => void>(),
 }));
 
 vi.mock("react-virtuoso", async () => {
@@ -90,12 +114,17 @@ vi.mock(
       useBundleDiffFindNavigation: () => ({
         setRootElement: vi.fn(),
       }),
-      useRegisterBundleDiffTileFindAdapter: () => ({
-        notifySectionMounted: testState.notifySectionMounted,
-        registerCoverageState: vi.fn(),
-        registerLoadedPatch: testState.registerLoadedPatch,
-        unregisterLoadedPatch: vi.fn(),
-      }),
+      useRegisterBundleDiffTileFindAdapter: (
+        args: RegisterBundleDiffTileFindAdapterCall,
+      ) => {
+        testState.useRegisterBundleDiffTileFindAdapter(args);
+        return {
+          notifySectionMounted: testState.notifySectionMounted,
+          registerCoverageState: vi.fn(),
+          registerLoadedPatch: testState.registerLoadedPatch,
+          unregisterLoadedPatch: vi.fn(),
+        };
+      },
     };
   },
 );
@@ -115,6 +144,14 @@ const ENTRY: SnapshotBundleSectionEntry = {
   reason: "snapshot",
 };
 
+const PDF_ENTRY: SnapshotBundleSectionEntry = {
+  filePath: "docs/report.pdf",
+  beforeContent: null,
+  afterContent: null,
+  operation: "edit",
+  reason: "snapshot",
+};
+
 describe("<SnapshotBundleDiffTileContent /> file navigation", () => {
   beforeEach(() => {
     window.localStorage.clear();
@@ -125,6 +162,7 @@ describe("<SnapshotBundleDiffTileContent /> file navigation", () => {
     testState.navigateNested.mockClear();
     testState.notifySectionMounted.mockClear();
     testState.registerLoadedPatch.mockClear();
+    testState.useRegisterBundleDiffTileFindAdapter.mockClear();
   });
 
   afterEach(cleanup);
@@ -166,6 +204,41 @@ describe("<SnapshotBundleDiffTileContent /> file navigation", () => {
       chatId: "chat-1",
       filePath: ENTRY.filePath,
     });
+  });
+
+  // `snapshotBundleFileCoverageState` checks the PDF extension BEFORE the
+  // reason check - a PDF's blobs are never captured, so it must read as
+  // "binary" (the same terminal coverage the git bundle gives its media
+  // rows) rather than as an "unloaded" file that was simply never searched.
+  it("computes binary coverage state for a .pdf bundle entry", () => {
+    const node = snapshotBundleNode();
+
+    render(
+      <TooltipProvider>
+        <SnapshotBundleDiffTileContent
+          node={node}
+          viewTabId="view-1"
+          entries={[ENTRY, PDF_ENTRY]}
+        />
+      </TooltipProvider>,
+    );
+
+    const registration =
+      testState.useRegisterBundleDiffTileFindAdapter.mock.calls.at(-1)?.[0];
+    if (registration === undefined) {
+      throw new Error("expected a bundle find-adapter registration");
+    }
+    const pdfFile = registration.files.find(
+      (file) => file.filePath === PDF_ENTRY.filePath,
+    );
+    if (pdfFile === undefined) {
+      throw new Error("expected a files entry for the PDF path");
+    }
+    expect(pdfFile.coverageState).toBe("binary");
+    const textFile = registration.files.find(
+      (file) => file.filePath === ENTRY.filePath,
+    );
+    expect(textFile?.coverageState).toBe("unloaded");
   });
 });
 

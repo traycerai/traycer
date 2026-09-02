@@ -77,7 +77,6 @@ import {
   PDF_VIEWER_UNAVAILABLE_REASON,
   PdfPreviewLazy,
 } from "@/components/epic-canvas/pdf-preview/pdf-preview-lazy";
-import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
 import {
   DEFAULT_ANIMATION_MS,
   ImagePreview,
@@ -171,20 +170,14 @@ function WorkspaceFileTileRouter(props: {
   const isPdf = isPdfAssetPath(node.filePath);
   const [viewAsSource, setViewAsSource] = useState(false);
   // PDF needs `workspace.streamAsset >= 1.1` (the minor that taught the host
-  // `application/pdf`). A KNOWN older host keeps the pre-PDF text/binary path.
-  // An unknown version must attempt the asset stream: its negotiation is what
-  // can establish support, and the hook already maps rejection by an old host
-  // to the shared fallback placeholder.
-  const hostId = useTabHostId();
-  const assetStreamVersion = useHostMethodSchemaVersion(
-    hostId,
-    "workspace.streamAsset",
-  );
-  const pdfKnownUnsupported =
-    assetStreamVersion !== null &&
-    (assetStreamVersion.major !== 1 || assetStreamVersion.minor < 1);
+  // `application/pdf`), and the STREAM's own negotiation is the only
+  // authority on that: stream methods never reach the unary openAck manifest
+  // the negotiated-version registry records, so no client-side version gate
+  // can ever positively know a host is old. The asset hook maps an old host's
+  // refusal to the shared fallback placeholder (honest copy + Open
+  // Externally) - that IS the old-host path.
 
-  if (isPdf && !pdfKnownUnsupported) {
+  if (isPdf) {
     return (
       <WorkspacePdfFileTile
         node={node}

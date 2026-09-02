@@ -21,7 +21,6 @@ import {
 } from "@/lib/git/git-diff-tile";
 import { ImageDiffView } from "@/components/epic-canvas/image-preview/image-diff-view";
 import { PdfDiffView } from "@/components/epic-canvas/pdf-preview/pdf-diff-view";
-import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
 import { DiffContentLoadingSkeleton } from "./diff-content-loading-skeleton";
 import {
   DiffBundleCollapseChevron,
@@ -160,24 +159,14 @@ function BundleFileSectionBody(props: BundleFileSectionBodyProps): ReactNode {
   // binary image - see `gitImageDiffRouting` for the routing decision
   // itself, shared with the single-file diff tile.
   const { routeToImageDiff } = gitImageDiffRouting(props.file);
-  // Same shape as the single-file tile, including the FAIL-OPEN direction:
-  // `git.streamFileAsset` is a stream method, absent from the unary openAck
-  // manifest this registry records, so its version is `null` for every
-  // host and a fails-closed gate would never open (see `GitFileDiffPanel`).
-  // Only a positively-known pre-1.1 host suppresses the cards; an old
-  // host's stream refusal degrades inside the View dialog. Image routing
-  // wins a straddling rename, exactly as in `GitFileDiffPanel`.
-  const gitAssetStreamVersion = useHostMethodSchemaVersion(
-    props.node.hostId,
-    "git.streamFileAsset",
-  );
-  const pdfCardsKnownUnsupported =
-    gitAssetStreamVersion !== null &&
-    (gitAssetStreamVersion.major !== 1 || gitAssetStreamVersion.minor < 1);
+  // Same decision as the single-file tile: by extension, image routing
+  // winning a straddling rename. No host-version gate - `git.streamFileAsset`
+  // is a stream method, absent from the unary manifest the negotiated-version
+  // registry records, so such a gate can never positively know a host is
+  // old; the opened tile's own stream negotiation is the authority, and an
+  // old host's refusal degrades there to the shared placeholder.
   const routeToPdfCards =
-    !routeToImageDiff &&
-    gitRoutesToPdfDiffCards(props.file) &&
-    !pdfCardsKnownUnsupported;
+    !routeToImageDiff && gitRoutesToPdfDiffCards(props.file);
   useEffect(() => {
     if (!props.file.isBinary && !routeToImageDiff && !routeToPdfCards) return;
     bundleFindRegistration.registerCoverageState(

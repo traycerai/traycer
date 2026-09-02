@@ -1,9 +1,8 @@
 /**
  * PDF routing in BUNDLE diff rows: the aggregated view composes the same
  * per-type views as the single-file tile (the image branch is the
- * precedent), so a .pdf row renders the compact summary block -
- * extension-only, failing OPEN on an unknown stream version, and falling
- * back to the exact pre-PDF rendering on a positively-known old host.
+ * precedent), so a .pdf row renders the compact summary block by extension
+ * alone - there is no host-version gate on this routing decision.
  */
 import type { ReactNode } from "react";
 import {
@@ -22,7 +21,6 @@ import {
   type RenderResult,
 } from "@testing-library/react";
 import type { GitChangedFile } from "@traycer/protocol/host";
-import type { SchemaVersion } from "@traycer/protocol/framework/index";
 import type {
   FileAssetRequest,
   FileAssetState,
@@ -45,12 +43,10 @@ const state = vi.hoisted(
     requests: Array<FileAssetRequest | null>;
     coverage: Mock;
     asset: FileAssetState | null;
-    assetStreamVersion: SchemaVersion | null;
   } => ({
     requests: [],
     coverage: vi.fn(),
     asset: null,
-    assetStreamVersion: { major: 1, minor: 1 },
   }),
 );
 
@@ -62,9 +58,13 @@ vi.mock("@/hooks/assets/use-file-asset", () => ({
   },
 }));
 
+// `git-bundle-file-section.tsx` no longer imports `useHostMethodSchemaVersion`
+// - `routeToPdfCards` is decided purely by `gitRoutesToPdfDiffCards(file)`.
+// `useHostSupportsMethod` stays mocked defensively; nothing in this render
+// tree currently calls it, but `PdfDiffView` shares the module with code
+// paths that do.
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostSupportsMethod: () => false,
-  useHostMethodSchemaVersion: () => state.assetStreamVersion,
 }));
 
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
@@ -243,7 +243,6 @@ function renderSection(changedFile: GitChangedFile): RenderResult {
 beforeEach(() => {
   state.requests.length = 0;
   state.coverage.mockReset();
-  state.assetStreamVersion = { major: 1, minor: 1 };
   state.asset = {
     status: "ready",
     url: "blob:pdf",
@@ -259,7 +258,11 @@ afterEach(() => {
 });
 
 describe("<BundleFileSection /> PDF routing", () => {
-  it("routes a binary PDF row to the summary cards on a 1.1 host", () => {
+  // No host-version gate remains here: `routeToPdfCards` is decided purely
+  // by `gitRoutesToPdfDiffCards(file)`, so this single test now covers what
+  // used to be split across a known-1.1, an unknown-handshake, and a
+  // known-1.0 case.
+  it("routes a binary PDF row to the summary cards", () => {
     renderSection(file({ path: "docs/report.pdf", isBinary: true }));
 
     expect(screen.getByTestId("pdf-diff-block")).toBeTruthy();
@@ -278,26 +281,6 @@ describe("<BundleFileSection /> PDF routing", () => {
 
     expect(screen.getByTestId("pdf-diff-block")).toBeTruthy();
     expect(screen.queryByTestId("bundle-file-diff")).toBeNull();
-  });
-
-  it("renders the cards when the stream version is UNKNOWN (fail-open)", () => {
-    // `git.streamFileAsset` is a stream method and is NEVER in the unary
-    // openAck manifest, so `null` is the steady state for every host - a
-    // fails-closed gate here means the cards never render anywhere. This
-    // pins the fail-open direction (the production regression).
-    state.assetStreamVersion = null;
-    renderSection(file({ path: "docs/report.pdf", isBinary: true }));
-
-    expect(screen.getByTestId("pdf-diff-block")).toBeTruthy();
-    expect(screen.queryByText("Binary file")).toBeNull();
-  });
-
-  it("keeps the pre-PDF placeholder for a binary PDF on a known 1.0 host", () => {
-    state.assetStreamVersion = { major: 1, minor: 0 };
-    renderSection(file({ path: "docs/report.pdf", isBinary: true }));
-
-    expect(screen.queryByTestId("pdf-diff-block")).toBeNull();
-    expect(screen.getByText("Binary file")).toBeTruthy();
   });
 
   it("keeps non-PDF binary rows on the bundle placeholder", () => {

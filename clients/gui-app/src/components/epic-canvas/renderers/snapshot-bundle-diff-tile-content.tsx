@@ -434,11 +434,15 @@ function snapshotBundleDiffFindFileInput(args: {
 
 // Only snapshot-reason entries ever load a diff patch; every other reason
 // renders a terminal "unavailable" body, so account for it as a final (failed)
-// coverage state instead of a pending "unloaded" one.
+// coverage state instead of a pending "unloaded" one. A PDF section is
+// terminal too - it renders the stand-in copy and never registers a patch -
+// so it takes the same "binary" state the git bundle gives its media rows,
+// rather than reading as an unloaded file that was never searched.
 function snapshotBundleFileCoverageState(args: {
   readonly entry: SnapshotBundleSectionEntry;
   readonly collapsed: boolean;
-}): "failed" | "collapsed" | "unloaded" {
+}): "failed" | "collapsed" | "unloaded" | "binary" {
+  if (isPdfAssetPath(args.entry.filePath)) return "binary";
   if (args.entry.reason !== "snapshot") return "failed";
   if (args.collapsed) return "collapsed";
   return "unloaded";

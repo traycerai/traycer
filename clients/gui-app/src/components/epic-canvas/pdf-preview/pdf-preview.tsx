@@ -245,16 +245,13 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
       linkService.setDocument(pdfDocument, null);
       setPageCount(pdfDocument.numPages);
 
-      // pdf.js types promise an array, but a document without an outline
-      // resolves `null` at runtime.
-      const outlineItems: readonly PdfOutlineEntry[] | null = await pdfDocument
-        .getOutline()
-        .catch((): null => null);
-      if (isCancelled()) {
-        void pdfDocument.destroy();
-        return;
-      }
-      setOutline(outlineItems ?? []);
+      // Bind the controls BEFORE anything else is awaited: `pagesinit`
+      // (which enables the toolbar) fires on its own schedule after
+      // `setDocument`, and an outline fetch that lost that race left every
+      // handler no-op'ing against a null binding - a page or search typed in
+      // that window was silently dropped.
+      binding = { viewer, eventBus, linkService, document: pdfDocument };
+      bindingRef.current = binding;
 
       // Keep the automatic fit in force across container resizes (tile
       // resize, outline pane toggle, first layout after a zero-width
@@ -267,8 +264,14 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
       });
       resizeObserver.observe(container);
 
-      binding = { viewer, eventBus, linkService, document: pdfDocument };
-      bindingRef.current = binding;
+      // pdf.js types promise an array, but a document without an outline
+      // resolves `null` at runtime. Cancellation past this point is the
+      // cleanup's business - `binding` is set, so it destroys the document.
+      const outlineItems: readonly PdfOutlineEntry[] | null = await pdfDocument
+        .getOutline()
+        .catch((): null => null);
+      if (isCancelled()) return;
+      setOutline(outlineItems ?? []);
     };
 
     open().catch((error: unknown) => {

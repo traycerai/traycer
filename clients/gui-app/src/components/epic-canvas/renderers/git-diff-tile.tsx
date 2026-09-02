@@ -30,7 +30,6 @@ import {
   gitStageLabel,
 } from "@/lib/git/git-diff-tile";
 import { PdfDiffView } from "@/components/epic-canvas/pdf-preview/pdf-diff-view";
-import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
 import { gitChangedFileBelongsToBundleGroup } from "@/lib/git/panel-file-rendering";
 import { ImageDiffView } from "@/components/epic-canvas/image-preview/image-diff-view";
 import { getBasename, getDirname } from "@/lib/path/cross-platform-path";
@@ -500,23 +499,11 @@ interface GitFileDiffPanelProps {
  * the authority. Image routing wins for a rename straddling both
  * allowlists.
  */
-function useShowPdfDiffBlock(args: {
-  readonly hostId: string;
+function showsPdfDiffBlock(args: {
   readonly file: GitChangedFile;
   readonly showImageDiff: boolean;
 }): boolean {
-  const gitAssetStreamVersion = useHostMethodSchemaVersion(
-    args.hostId,
-    "git.streamFileAsset",
-  );
-  const knownUnsupported =
-    gitAssetStreamVersion !== null &&
-    (gitAssetStreamVersion.major !== 1 || gitAssetStreamVersion.minor < 1);
-  return (
-    !args.showImageDiff &&
-    gitRoutesToPdfDiffCards(args.file) &&
-    !knownUnsupported
-  );
+  return !args.showImageDiff && gitRoutesToPdfDiffCards(args.file);
 }
 
 function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
@@ -534,11 +521,7 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
   // Decided BEFORE the diff surface below so an ASCII-authored `.pdf`
   // (numstat says text) never fetches and find-indexes a patch the block
   // will not render.
-  const showPdfBlock = useShowPdfDiffBlock({
-    hostId: props.node.hostId,
-    file: props.file,
-    showImageDiff,
-  });
+  const showPdfBlock = showsPdfDiffBlock({ file: props.file, showImageDiff });
 
   const {
     displayedDiff,
