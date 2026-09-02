@@ -72,11 +72,31 @@ export function cookieDomainInScope(
   return host === scope || host.endsWith(`.${scope}`);
 }
 
-/** Lowercased, dot-trimmed host, or `null` when nothing is left. */
+/**
+ * Lowercased, dot-trimmed, IDNA-encoded host, or `null` when nothing is left.
+ *
+ * The punycode step is what makes the two ends of the wire agree on an
+ * international domain (browser-security-hardening H11): `tldts` treats
+ * `munchen.de` spelled in Unicode and the same name spelled `xn--mnchen-3ya.de`
+ * as two different registrable domains, so a capture scope derived from one
+ * form rejected every cookie whose jar spelled it the other way. Chromium's
+ * jar always holds the A-label form; a wire domain may carry either. Applied
+ * only when the host is not already ASCII, so the ordinary case pays nothing.
+ */
 function normalizeHost(value: string): string | null {
   let host = value.trim().toLowerCase();
   if (host.startsWith(".")) host = host.slice(1);
   if (host.endsWith(".")) host = host.slice(0, -1);
   if (host.startsWith("[") && host.endsWith("]")) host = host.slice(1, -1);
+  if (host.length === 0) return null;
+  if (!ASCII_ONLY_PATTERN.test(host)) {
+    try {
+      host = new URL(`https://${host}/`).hostname;
+    } catch {
+      return null;
+    }
+  }
   return host.length === 0 ? null : host;
 }
+
+const ASCII_ONLY_PATTERN = /^[\x00-\x7F]*$/u;

@@ -503,6 +503,9 @@ function buildFakeBridge(
         showSystemDialog: async () => false,
         onPending: () => ({ dispose: () => undefined }),
       },
+      hostKeyPin: {
+        onMismatch: () => ({ dispose: () => undefined }),
+      },
       display: {
         list: async () => ({ displays: [], primaryId: 0 }),
         onTopologyChange: () => ({ dispose: () => undefined }),

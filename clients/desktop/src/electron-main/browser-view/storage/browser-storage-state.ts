@@ -434,8 +434,9 @@ export function browserStorageCookies(
  * {@link toStorageCookie} for a jar that may hold a cookie this shell cannot
  * represent, answering `null` instead of throwing.
  *
- * That is reachable, not hypothetical: {@link readCookieDomain} rejects a
- * domain the URL parser rewrites, and an IDN domain punycodes there. The
+ * Still reachable, though narrower since H11 made {@link readCookieDomain}
+ * normalise rather than reject: a domain the URL parser cannot place at all
+ * (and a cookie whose name or path this shell refuses) still throws. The
  * delta, the site clear and the removal-key path all want the same thing from
  * such a cookie - skip it and keep going - so they share this one guard rather
  * than each growing a `try`.
@@ -524,9 +525,41 @@ export async function mergeObservedProfileCookies(
  * A cookie's identity, as every path that has to match one across the jar, the
  * wire and the ownership ledger spells it: (name, domain, path), which is what
  * Chromium itself replaces by.
+ *
+ * The domain is CANONICALISED first (browser-security-hardening H11). A key is
+ * minted from three sources that do not agree on spelling - the jar read
+ * (Chromium's own, always lowercase A-labels), the claim the applier records
+ * from the wire (a sender's `.Example.COM.`), and the release the observer
+ * performs from its own read - and an id that carried the sender's spelling
+ * made those three different keys. The consequence was not cosmetic: a claim
+ * nothing ever releases leaves the name permanently desktop-owned, and the
+ * ownership rule then refuses every later sign-in for it.
+ *
+ * The leading dot is PRESERVED, because it is not a spelling: it is the RFC
+ * 6265 difference between a host-only cookie and a domain cookie, two rows
+ * Chromium keeps apart.
  */
 export function cookieKeyId(key: BrowserCookieKey): string {
-  return `${key.domain}\u0000${key.name}\u0000${key.path}`;
+  return `${canonicalKeyDomain(key.domain)}\u0000${key.name}\u0000${key.path}`;
+}
+
+/**
+ * Lowercased, IDNA-encoded, trailing-root-dot-trimmed host, with any leading
+ * dot kept. Falls back to a plain lowercase for a domain the URL parser cannot
+ * place - such a cookie is refused everywhere else, and an id still has to be
+ * a total function of its key.
+ */
+function canonicalKeyDomain(domain: string): string {
+  const leadingDot = domain.startsWith(".");
+  let host = leadingDot ? domain.slice(1) : domain;
+  if (host.endsWith(".")) host = host.slice(0, -1);
+  let canonical: string;
+  try {
+    canonical = new URL(`https://${host}/`).hostname;
+  } catch {
+    canonical = host.toLowerCase();
+  }
+  return leadingDot ? `.${canonical}` : canonical;
 }
 
 /**
@@ -538,11 +571,12 @@ export function cookieKeyId(key: BrowserCookieKey): string {
  * exactly as the change observer and the ownership ledger spell it.
  *
  * KNOWN LIMIT, and the only open direction in the ownership rule: a jar cookie
- * this shell cannot represent (an IDN domain form `readCookieDomain` refuses,
- * say) is simply absent here, so the rule reads it as a key - and a name - the
- * jar does not hold. It is bounded by the same normalisation refusing to
- * capture that cookie in the first place, so such a cookie never crosses to a
- * host either.
+ * this shell cannot represent (a domain the URL parser cannot place at all)
+ * is simply absent here, so the rule reads it as a key - and a name - the jar
+ * does not hold. It is bounded by the same normalisation refusing to capture
+ * that cookie in the first place, so such a cookie never crosses to a host
+ * either. Case and IDN forms are no longer in that set: H11 made
+ * `readCookieDomain` normalise them the way Chromium's own jar does.
  */
 export async function browserJarCookieKeys(
   domain: string,
@@ -664,7 +698,11 @@ function toCookieSetDetails(
     url: cookieUrl(cookie),
     name: cookie.name,
     value: cookie.value,
-    domain: cookie.domain.startsWith(".") ? cookie.domain : null,
+    // The CANONICAL domain attribute, not the sender's spelling: Chromium
+    // files the row under its own normalisation, so handing it
+    // `.Example.COM.` would have the jar read back a key that no longer
+    // matches what the applier claimed (H11). `null` is host-only scope.
+    domain: cookie.domain.startsWith(".") ? `.${cookie.canonicalDomain}` : null,
     path: cookie.path,
     expirationDate: cookie.expires < 0 ? undefined : cookie.expires,
     httpOnly: cookie.httpOnly,
@@ -815,22 +853,38 @@ function readNonEmptyString(value: string, field: string): string {
   throw new Error(`Browser storageState ${field} must be non-empty`);
 }
 
+/**
+ * Splits a wire cookie domain into the form it was sent in and the host form
+ * this shell builds URLs from.
+ *
+ * The canonical half is NORMALISED rather than merely checked
+ * (browser-security-hardening H11). It used to demand the input already be the
+ * form the URL parser produces, which rejected three spellings a real jar
+ * hands out - `Example.COM`, the FQDN `example.com.`, and any Unicode IDN -
+ * and every cookie carrying one was silently dropped on the delta, clear and
+ * removal-key paths. The three RFC 6265 wire affordances (leading dot, trailing
+ * root dot, case) are stripped here and the rest is handed to the URL parser,
+ * which lowercases and IDNA-encodes exactly as Chromium's jar does. A domain
+ * the parser cannot place at all is still refused.
+ */
 function readCookieDomain(value: string | undefined): BrowserCookieDomain {
   const parsed = z.string().safeParse(value);
   if (!parsed.success) {
     throw new Error("Browser storageState cookie domain must be a string");
   }
   const domain = readNonEmptyString(parsed.data, "cookie domain");
-  const canonicalDomain = domain.startsWith(".") ? domain.slice(1) : domain;
-  if (
-    canonicalDomain.length === 0 ||
-    URL_SCOPE_SYNTAX_PATTERN.test(canonicalDomain)
-  ) {
+  let host = domain.startsWith(".") ? domain.slice(1) : domain;
+  if (host.endsWith(".")) host = host.slice(0, -1);
+  if (host.length === 0 || URL_SCOPE_SYNTAX_PATTERN.test(host)) {
     throw new Error("Browser storageState cookie domain is invalid");
   }
-  const url = new URL("https://traycer.invalid/");
-  url.hostname = canonicalDomain;
-  if (url.hostname !== canonicalDomain) {
+  let canonicalDomain: string;
+  try {
+    canonicalDomain = new URL(`https://${host}/`).hostname;
+  } catch {
+    throw new Error("Browser storageState cookie domain is invalid");
+  }
+  if (canonicalDomain.length === 0) {
     throw new Error("Browser storageState cookie domain is invalid");
   }
   return { domain, canonicalDomain };

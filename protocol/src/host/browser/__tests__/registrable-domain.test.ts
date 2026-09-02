@@ -66,6 +66,17 @@ describe("registrableDomain", () => {
       "example.unknowntld",
     );
   });
+
+  // H11: the two ends of the wire have to derive one scope for an
+  // international domain however it is spelled. `tldts` alone treats the two
+  // spellings as different names, so a scope derived from the Unicode form
+  // rejected every cookie the jar spelled in A-labels.
+  it("collapses a Unicode IDN onto its punycode form", () => {
+    expect(registrableDomain("m\u00fcnchen.de")).toBe("xn--mnchen-3ya.de");
+    expect(registrableDomain("a.M\u00dcNCHEN.de")).toBe("xn--mnchen-3ya.de");
+    expect(registrableDomain("xn--mnchen-3ya.de")).toBe("xn--mnchen-3ya.de");
+    expect(registrableDomain(".m\u00fcnchen.de.")).toBe("xn--mnchen-3ya.de");
+  });
 });
 
 describe("registrableDomainForUrl", () => {
@@ -103,5 +114,14 @@ describe("cookieDomainInScope", () => {
 
   it("is case-insensitive", () => {
     expect(cookieDomainInScope(".EXAMPLE.com", "Example.COM")).toBe(true);
+  });
+
+  it("matches across IDN spellings (H11)", () => {
+    expect(cookieDomainInScope(".xn--mnchen-3ya.de", "m\u00fcnchen.de")).toBe(
+      true,
+    );
+    expect(cookieDomainInScope("a.m\u00fcnchen.de", "xn--mnchen-3ya.de")).toBe(
+      true,
+    );
   });
 });

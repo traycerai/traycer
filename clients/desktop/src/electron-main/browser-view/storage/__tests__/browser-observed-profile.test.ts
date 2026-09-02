@@ -265,6 +265,74 @@ describe("observed sign-in apply", () => {
     );
   });
 
+  /**
+   * H11: the claimed scope and each cookie's own domain are collapsed by the
+   * same derivation, so the two only have to name the same site - not spell it
+   * the same way. A jar hands out A-labels; a wire frame may carry either
+   * form, and either casing.
+   */
+  it("matches a claimed scope against a cookie spelled in another IDN or case form", async () => {
+    const harness = new ObservedApplyHarness();
+
+    const result = await harness.apply({
+      domain: "m\u00fcnchen.de",
+      cookies: [
+        observedCookie({
+          name: "punycode",
+          domain: "xn--mnchen-3ya.de",
+          expires: -1,
+        }),
+        observedCookie({
+          name: "unicode",
+          domain: ".M\u00dcNCHEN.de",
+          expires: -1,
+        }),
+        observedCookie({ name: "stolen", domain: "evil.test", expires: -1 }),
+      ],
+      connectionId: "connection-1",
+    });
+
+    expect(result.outcome).toBe("applied");
+    expect(result.domainMismatchCookies).toBe(1);
+    expect([...harness.jar.names()].sort()).toEqual(["punycode", "unicode"]);
+  });
+
+  it("claims a sender-spelled domain under the canonical id the jar reads back", async () => {
+    // H11: the claim is recorded from the WIRE spelling and released from the
+    // jar's own, so an id that carried the sender's spelling left the claim
+    // standing forever - and with it, the name desktop-owned and every later
+    // sign-in for it refused.
+    const harness = new ObservedApplyHarness();
+
+    await harness.apply({
+      domain: "example.com",
+      cookies: [
+        observedCookie({ name: "sid", domain: ".Example.COM.", expires: -1 }),
+      ],
+      connectionId: "connection-1",
+    });
+
+    // Claimed under the canonical spelling, which is the one the jar - and so
+    // the observer's release - will use.
+    expect(
+      harness.headlessOriginKeyIds.has(
+        cookieKeyId({ domain: ".example.com", name: "sid", path: "/" }),
+      ),
+    ).toBe(true);
+
+    // And the ownership rule reads the jar's own key as host-contributed, so a
+    // second observation of the same cookie is still allowed through.
+    const second = await harness.apply({
+      domain: "example.com",
+      cookies: [
+        observedCookie({ name: "sid", domain: ".example.com", expires: -1 }),
+      ],
+      connectionId: "connection-1",
+    });
+    expect(second.ownedByDesktopCookies).toBe(0);
+    expect(second.appliedCookies).toBe(1);
+  });
+
   it("leaves the cookie an expired one names in the jar, and applies the live cookie beside it", async () => {
     // The acceptance test for the implicit sign-out channel: the frame cannot
     // express a removal, so a compromised host's only remaining move is to

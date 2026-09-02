@@ -408,6 +408,12 @@ export const RunnerHostEvent = {
   migrationRunChange: "runnerHost:event:migration:runChange",
   accessibilityThemeChange: "runnerHost:event:accessibilityTheme:change",
   certificateErrorPending: "runnerHost:event:cert:errorPending",
+  // A host answered the registry with a different Noise static key than the
+  // one this client pinned on first sight (browser-security-hardening H11).
+  // Same shape of channel as the certificate refusal above, and for the same
+  // reason: the refusal has already happened in main, and this is how a
+  // surface gets to say so.
+  hostKeyPinMismatch: "runnerHost:event:hostKeyPin:mismatch",
   appUpdateChange: "runnerHost:event:appUpdate:change",
   displayTopologyChange: "runnerHost:event:display:topologyChange",
   // Tray-driven host commands forwarded to the renderer's

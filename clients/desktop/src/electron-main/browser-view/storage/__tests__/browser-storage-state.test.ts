@@ -2,6 +2,7 @@ import type { Cookie, CookiesSetDetails } from "electron";
 import { describe, expect, it, vi } from "vitest";
 import {
   BrowserPrimaryProfileSnapshotCoordinator,
+  cookieKeyId,
   captureBrowserPrimaryProfile,
   mergeObservedProfileCookies,
   type BrowserPrimaryProfileCaptureDependencies,
@@ -96,7 +97,6 @@ describe("host-contributed cookie normalisation", () => {
     ["path syntax", "example.test/path"],
     ["whitespace", "example. test"],
     ["control character", "example.test\n"],
-    ["hostname normalization mismatch", "\u00e9xample.test"],
   ])(
     "refuses a cookie domain with %s before writing",
     async (_label, domain) => {
@@ -130,6 +130,65 @@ describe("host-contributed cookie normalisation", () => {
       expect(result.applied).toBe(0);
       expect(result.refused).toEqual([{ domain, name: "sid", path: "/" }]);
       expect(set).not.toHaveBeenCalled();
+    },
+  );
+
+  /**
+   * H11: the three spellings a real jar hands out that the old
+   * already-canonical check rejected outright. Each has to reach the jar under
+   * the host form Chromium itself uses, with the sender's DOMAIN attribute
+   * untouched - the wire form is what tells a host-only cookie from a domain
+   * cookie, and normalising it would change the cookie's scope.
+   */
+  it.each([
+    ["uppercase", "Example.COM", "https://example.com/", null],
+    ["trailing root dot", "example.com.", "https://example.com/", null],
+    [
+      // The DOMAIN attribute is canonicalised too (H11): Chromium files the
+      // row under its own normalisation, so a claim spelled the sender's way
+      // would never match the key the jar reads back.
+      "uppercase and trailing dot",
+      ".Example.COM.",
+      "https://example.com/",
+      ".example.com",
+    ],
+    ["unicode IDN", "m\u00fcnchen.de", "https://xn--mnchen-3ya.de/", null],
+    ["punycode IDN", "xn--mnchen-3ya.de", "https://xn--mnchen-3ya.de/", null],
+  ])(
+    "canonicalises a %s cookie domain instead of dropping it",
+    async (_label, domain, url, domainAttribute) => {
+      const written: CookiesSetDetails[] = [];
+
+      const result = await mergeObservedProfileCookies(
+        [
+          {
+            name: "sid",
+            value: "sid-value",
+            domain,
+            path: "/",
+            expires: -1,
+            httpOnly: false,
+            secure: true,
+            sameSite: "Lax",
+            partitionKey: null,
+          },
+        ],
+        {
+          cookies: {
+            get: () => Promise.resolve([]),
+            set: (details: CookiesSetDetails) => {
+              written.push(details);
+              return Promise.resolve();
+            },
+            flushStore: () => Promise.resolve(),
+          },
+        },
+      );
+
+      expect(result).toEqual({ applied: 1, refused: [] });
+      expect(written).toHaveLength(1);
+      expect(written[0]?.url).toBe(url);
+      expect(written[0]?.domain ?? null).toBe(domainAttribute);
     },
   );
 });
@@ -677,3 +736,34 @@ function primaryCaptureDependencies(
     }),
   };
 }
+
+/**
+ * H11: the ownership ledger's key is minted from three sources that do not
+ * agree on spelling - the jar read, the applier's claim off the wire, and the
+ * observer's release - so the id has to canonicalise or a claim outlives every
+ * release and the name stays desktop-owned forever.
+ */
+describe("cookieKeyId canonicalisation", () => {
+  it("collapses case, a trailing root dot and IDN spelling onto one id", () => {
+    const canonical = cookieKeyId({
+      domain: ".example.com",
+      name: "sid",
+      path: "/",
+    });
+    for (const domain of [".Example.COM.", ".example.com.", ".EXAMPLE.com"]) {
+      expect(cookieKeyId({ domain, name: "sid", path: "/" })).toBe(canonical);
+    }
+    expect(
+      cookieKeyId({ domain: "m\u00fcnchen.de", name: "sid", path: "/" }),
+    ).toBe(
+      cookieKeyId({ domain: "xn--mnchen-3ya.de", name: "sid", path: "/" }),
+    );
+  });
+
+  it("keeps a host-only cookie distinct from the domain cookie of the same name", () => {
+    // Not a spelling: RFC 6265's leading dot is two different rows in the jar.
+    expect(
+      cookieKeyId({ domain: "example.com", name: "sid", path: "/" }),
+    ).not.toBe(cookieKeyId({ domain: ".example.com", name: "sid", path: "/" }));
+  });
+});

@@ -641,7 +641,8 @@ export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
   z
     .object({
       // Store-key handshake (keychain refactor ticket 05). The host mints the
-      // per-user store key and asks the elected desktop to wrap it with that
+      // per-user store key and asks a JAR-AUTHORIZED desktop (one whose
+      // `desktopIdentityAttest` this host enrolled, H09) to wrap it with that
       // machine's OS keystore; the host keeps the raw bytes in memory only.
       kind: z.literal("storeKeyWrapRequest"),
       ...requestFrameFields,
@@ -896,6 +897,11 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
+      // The answer to a `capturePrimaryProfile` this host issued. No `userId`
+      // - the identity is the stream's authenticated user; the frame is
+      // matched to an in-flight (or standing) request BY `requestId` AND
+      // subscriber id, so it is heard only from the connection that was
+      // asked. Lifecycle election gates nothing here.
       kind: z.literal("primaryProfileCaptured"),
       ...requestFrameFields,
       storageState: browserStorageStateSchema.nullable(),
@@ -908,9 +914,11 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
       // Unsolicited: the client's persistent `primary` jar reported cookie
       // changes for one registrable domain and coalesced them into a window
       // (keychain refactor ticket 06). There is no request to answer and no
-      // `userId` - the identity is the stream's authenticated user, and only
-      // the elected lifecycle subscriber is heard (same gate as
-      // `primaryProfileCaptured`).
+      // `userId` - the identity is the stream's authenticated user, and the
+      // host hears the frame only from a JAR-AUTHORIZED subscriber: one that
+      // answered `desktopIdentityChallenge` with a signature this host has
+      // enrolled (browser-security-hardening H09). Lifecycle election is a
+      // different question and gates nothing here.
       kind: z.literal("primaryProfileDelta"),
       ...textFrameFields,
       ...browserPrimaryProfileDeltaSchema.shape,
@@ -967,8 +975,9 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
       // fans NOTHING back: the host->desktop removal frame was retired by
       // universal-sign-in ticket 08, which left the desktop's write channel
       // add-only. No `userId` - the identity is the stream's authenticated
-      // user, and only the elected lifecycle subscriber is heard (same gate as
-      // `primaryProfileDelta`).
+      // user, and the host hears the frame only from a JAR-AUTHORIZED
+      // subscriber - see `primaryProfileDelta`. Lifecycle election gates
+      // nothing here.
       kind: z.literal("clearSite"),
       ...textFrameFields,
       domain: z.string(),
@@ -982,8 +991,9 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
       // asked clears its own partition itself and records the forget in its
       // ledger, and the hosts that were not connected to hear this frame learn
       // it from that ledger instead (universal-sign-in decision 6). No `userId`
-      // - the identity is the stream's authenticated user, and only the elected
-      // lifecycle subscriber is heard (same gate as `primaryProfileCaptured`).
+      // - the identity is the stream's authenticated user, and the host hears
+      // the frame only from a JAR-AUTHORIZED subscriber - see
+      // `primaryProfileDelta`. Lifecycle election gates nothing here.
       kind: z.literal("forgetLogins"),
       ...textFrameFields,
     })
@@ -998,9 +1008,9 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
       // what orders the desktop's applier against this host's observations;
       // re-sending it is always safe, because the prune is idempotent.
       // Supersedes the `primaryProfileForgotten` fan-out, which is gone. No
-      // `userId` - the identity is the stream's authenticated user, and only
-      // the elected lifecycle subscriber is heard (same gate as
-      // `primaryProfileDelta`).
+      // `userId` - the identity is the stream's authenticated user, and the
+      // host hears the frame only from a JAR-AUTHORIZED subscriber - see
+      // `primaryProfileDelta`. Lifecycle election gates nothing here.
       kind: z.literal("primaryProfileForgetLedger"),
       ...textFrameFields,
       ...browserForgetLedgerSchema.shape,

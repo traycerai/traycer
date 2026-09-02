@@ -72,6 +72,7 @@ import type {
   DisplayTopology,
   FileSaveInput,
   FileSaveResult,
+  HostKeyPinMismatch,
   InstalledFont,
   PendingCertificateError,
   ProcessMetricsSnapshot,
@@ -90,6 +91,7 @@ export type {
   CertificateTrustScope,
   DisplaySnapshot,
   DisplayTopology,
+  HostKeyPinMismatch,
   PendingCertificateError,
   ProcessMetricsSnapshot,
   TrustedCertificateEntry,
@@ -457,6 +459,11 @@ export interface DesktopPlatformBridge {
     dismissPending(id: string): Promise<void>;
     showSystemDialog(certificate: unknown, message: string): Promise<boolean>;
     onPending(handler: (entry: PendingCertificateError) => void): {
+      dispose: () => void;
+    };
+  };
+  hostKeyPin: {
+    onMismatch(handler: (entry: HostKeyPinMismatch) => void): {
       dispose: () => void;
     };
   };

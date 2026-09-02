@@ -329,9 +329,13 @@ describe("BrowserCookieChangeObserver coalescing", () => {
 describe("BrowserCookieChangeObserver unrepresentable cookies", () => {
   it("still emits the scope's delta when the jar holds a cookie it cannot normalise", async () => {
     const source = new FakeCookieChangeSource();
-    // An IDN domain punycodes in the domain check and throws there - a cookie
-    // Chromium hands over for any such site the user visits.
-    source.seed(makeCookie({ name: "idn", domain: "exämple.example.com" }));
+    // A domain the URL parser cannot place at all. It used to be enough for
+    // the domain merely to need normalising (an IDN, a trailing root dot, a
+    // capital); H11 made `readCookieDomain` normalise those the way Chromium's
+    // own jar does, so only a genuinely malformed one refuses now.
+    source.seed(
+      makeCookie({ name: "malformed", domain: "ex ample.example.com" }),
+    );
     const gone = makeCookie({ name: "gone", domain: "example.com" });
     source.seed(gone);
 

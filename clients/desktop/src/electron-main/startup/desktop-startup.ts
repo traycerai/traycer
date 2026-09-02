@@ -131,6 +131,10 @@ import {
 } from "../browser-view/storage/browser-forget-ledger";
 import { installProductionProxyAuthHandler } from "../app/proxy-auth";
 import {
+  installDesktopHostKeyPins,
+  setHostKeyPinMismatchEmitter,
+} from "../host/host-key-pins";
+import {
   installCertificateErrorHandler,
   setPendingCertificateEmitter,
 } from "../app/cert-trust";
@@ -414,6 +418,10 @@ async function runOnReady(state: BootState): Promise<void> {
     ),
     timed("on-ready", "proxy-auth", () => installProductionProxyAuthHandler()),
     timed("on-ready", "cert-handler", () => installCertificateErrorHandler()),
+    // Before any host list is fetched: an unbacked pin store is a pass-through,
+    // and a registry answer that slipped through before the install would pin
+    // (or admit) a key nothing checked.
+    timed("on-ready", "host-key-pins", () => installDesktopHostKeyPins()),
     timed("on-ready", "jumplist", () => installWindowsJumplistTasks()),
     timed("on-ready", "download-observer", () => installDownloadObserver()),
     timed("on-ready", "preconnect", () => preconnectTraycerHosts()),
@@ -656,6 +664,9 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
   });
   setPendingCertificateEmitter((entry) => {
     bridge.fanOut(RunnerHostEvent.certificateErrorPending, entry);
+  });
+  setHostKeyPinMismatchEmitter((entry) => {
+    bridge.fanOut(RunnerHostEvent.hostKeyPinMismatch, entry);
   });
   installScreenMonitor((reason, topology) => {
     bridge.fanOut(RunnerHostEvent.displayTopologyChange, { reason, topology });
