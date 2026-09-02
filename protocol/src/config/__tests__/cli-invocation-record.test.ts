@@ -31,6 +31,7 @@ import {
   cliInvocationStaleMarkerRemovableBy,
   cliInvocationTransactionAbandonedByAge,
   cliInvocationTransactionMarkerBasenamesFrom,
+  CLI_INVOCATION_TRANSACTION_MARKER_DIGEST_BYTES,
   cliInvocationTransactionMarkerDigest,
   cliInvocationLifecycleNewerThanLegacyExactMarker,
   cliInvocationLifecycleSupersedesLegacyExactMarker,
@@ -682,6 +683,37 @@ describe("cliInvocationTransactionMarkerDigest", () => {
       createHash("sha256").update(bytes).digest("hex"),
     );
   });
+
+  it("covers exactly the first CLI_INVOCATION_TRANSACTION_MARKER_DIGEST_BYTES bytes, so a host's bounded read and the CLI's whole-file read agree on an oversize marker", () => {
+    const bound = CLI_INVOCATION_TRANSACTION_MARKER_DIGEST_BYTES;
+    const oversize = Buffer.alloc(bound + 1000, 0x41);
+    oversize[bound] = 0x42; // differs only PAST the bound
+    const prefix = oversize.subarray(0, bound);
+    expect(cliInvocationTransactionMarkerDigest(oversize)).toBe(
+      cliInvocationTransactionMarkerDigest(prefix),
+    );
+    expect(cliInvocationTransactionMarkerDigest(oversize)).toBe(
+      createHash("sha256").update(prefix).digest("hex"),
+    );
+    // A byte INSIDE the bound still changes the digest.
+    const inside = Buffer.from(oversize);
+    inside[bound - 1] = 0x42;
+    expect(cliInvocationTransactionMarkerDigest(inside)).not.toBe(
+      cliInvocationTransactionMarkerDigest(oversize),
+    );
+  });
+
+  it("digests raw bytes, so a marker that is not valid UTF-8 has one digest rather than the digest of its decode-and-re-encode", () => {
+    const invalid = Buffer.from([0x7b, 0xff, 0xfe, 0x22, 0x7d]);
+    const reencoded = Buffer.from(invalid.toString("utf8"), "utf8");
+    expect(reencoded.equals(invalid)).toBe(false);
+    expect(cliInvocationTransactionMarkerDigest(invalid)).toBe(
+      createHash("sha256").update(invalid).digest("hex"),
+    );
+    expect(cliInvocationTransactionMarkerDigest(invalid)).not.toBe(
+      cliInvocationTransactionMarkerDigest(reencoded),
+    );
+  });
 });
 
 describe("cliInvocationLifecycleSupersedesLegacyExactMarker", () => {
@@ -750,6 +782,47 @@ describe("cliInvocationLifecycleSupersedesLegacyExactMarker", () => {
         },
       ),
     ).toBe(true);
+  });
+
+  it("an UNPARSEABLE marker (`parsed: null`) is discharged by a matching digest, and by nothing else", () => {
+    // The digest is over the marker's bytes, so a corrupt legacy marker the
+    // CLI elected around is still one its lifecycle can name. The timestamp
+    // fallback has no start to order and refuses. Without the first half a
+    // corrupt marker - which no writer unlinks - kept every host off a
+    // record the CLI had just reported committing.
+    const corruptDigest = cliInvocationTransactionMarkerDigest(
+      Buffer.from("not json{", "utf8"),
+    );
+    expect(
+      cliInvocationLifecycleSupersedesLegacyExactMarker(
+        { parsed: null, digest: corruptDigest },
+        {
+          ...LIFECYCLE_SAMPLE,
+          at: "2020-01-01T00:00:00.000Z",
+          legacyMarkerEvidence: { kind: "digest", digest: corruptDigest },
+        },
+      ),
+    ).toBe(true);
+    expect(
+      cliInvocationLifecycleSupersedesLegacyExactMarker(
+        { parsed: null, digest: corruptDigest },
+        {
+          ...LIFECYCLE_SAMPLE,
+          at: "2026-09-01T00:00:00.001Z",
+          legacyMarkerEvidence: { kind: "digest", digest: "f".repeat(64) },
+        },
+      ),
+    ).toBe(false);
+    expect(
+      cliInvocationLifecycleSupersedesLegacyExactMarker(
+        { parsed: null, digest: corruptDigest },
+        {
+          ...LIFECYCLE_SAMPLE,
+          at: "2026-09-01T00:00:00.001Z",
+          legacyMarkerEvidence: { kind: "unknown" },
+        },
+      ),
+    ).toBe(false);
   });
 
   it("returns false for `none` evidence even when `at` is later than the marker", () => {

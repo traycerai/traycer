@@ -515,14 +515,37 @@ const LEGACY_MARKER_UNREADABLE_WIRE = "unreadable";
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 
 /**
+ * How many leading bytes of a transaction marker its digest covers.
+ *
+ * A real marker is a few hundred bytes, so every marker either side ever
+ * wrote is digested whole. The bound exists for the OTHER case - a corrupt or
+ * oversize legacy marker that the CLI elects around by age and names by
+ * digest so a host can discharge it. That discharge only works if both sides
+ * hash identical bytes, and the host reads a marker through a bounded
+ * descriptor read; putting the bound HERE, inside the one helper both call,
+ * is what makes "identical bytes" true by construction rather than by two
+ * constants agreeing. The host's bounded read must cover at least this many
+ * bytes; the CLI passes whatever it read and the helper takes the prefix.
+ */
+export const CLI_INVOCATION_TRANSACTION_MARKER_DIGEST_BYTES = 4096;
+
+/**
  * Identity of a transaction marker's BYTES, shared so the CLI (which writes
  * the digest into a lifecycle) and the host (which computes it from the file
  * it read) cannot disagree on the hashing.
+ *
+ * Over the RAW bytes as read from the file, never text decoded from them: a
+ * corrupt marker may not be valid UTF-8, and a decode-then-re-encode would
+ * hash replacement characters the file does not contain. Bounded to
+ * {@link CLI_INVOCATION_TRANSACTION_MARKER_DIGEST_BYTES} for the reason given
+ * there.
  */
 export function cliInvocationTransactionMarkerDigest(
   bytes: Uint8Array,
 ): string {
-  return createHash("sha256").update(bytes).digest("hex");
+  return createHash("sha256")
+    .update(bytes.subarray(0, CLI_INVOCATION_TRANSACTION_MARKER_DIGEST_BYTES))
+    .digest("hex");
 }
 
 export function serializeCliInvocationLifecycle(
@@ -729,11 +752,16 @@ export function cliInvocationLifecycleNewerThanLegacyExactMarker(
  * discharge that later transaction and drop its record bypass.
  *
  * `digest` is the {@link cliInvocationTransactionMarkerDigest} of the marker
- * file's bytes as the caller read them.
+ * file's bytes as the caller read them. `parsed` is `null` when those bytes do
+ * not parse: the digest still names them - the CLI digests bytes, not a
+ * payload, so a corrupt marker it elected around is dischargeable by the
+ * causal arm - while the timestamp fallback has no start to order and
+ * refuses. Without that, a corrupt legacy marker (which no writer unlinks)
+ * kept every host off a record the CLI had just reported committing.
  */
 export function cliInvocationLifecycleSupersedesLegacyExactMarker(
   marker: {
-    readonly parsed: CliInvocationTransactionMarker;
+    readonly parsed: CliInvocationTransactionMarker | null;
     readonly digest: string;
   },
   lifecycle: CliInvocationLifecycle,
@@ -748,10 +776,12 @@ export function cliInvocationLifecycleSupersedesLegacyExactMarker(
     case "unreadable":
       return false;
     case "unknown":
-      return cliInvocationLifecycleNewerThanLegacyExactMarker(
-        marker.parsed,
-        lifecycle,
-      );
+      return marker.parsed === null
+        ? false
+        : cliInvocationLifecycleNewerThanLegacyExactMarker(
+            marker.parsed,
+            lifecycle,
+          );
     default: {
       const unhandled: never = evidence;
       return unhandled;

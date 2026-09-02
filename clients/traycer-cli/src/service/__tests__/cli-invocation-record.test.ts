@@ -102,6 +102,10 @@ const mocks = vi.hoisted(() => ({
   // the delayed write-back failure a filesystem reports only at close.
   // Reset after one use.
   failCloseForPrefix: null as string | null,
+  // 1-indexed `readdir` call number (counted only while non-zero) to reject
+  // with an EIO-shaped error. Reset after it fires.
+  failReaddirOnCallNumber: 0,
+  readdirCallCount: 0,
 }));
 
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -173,6 +177,19 @@ vi.mock("node:fs/promises", async (importOriginal) => {
       }) as typeof handle.close;
       return handle;
     },
+    readdir: (async (...args: Parameters<typeof actual.readdir>) => {
+      if (mocks.failReaddirOnCallNumber > 0) {
+        mocks.readdirCallCount += 1;
+        if (mocks.readdirCallCount === mocks.failReaddirOnCallNumber) {
+          mocks.failReaddirOnCallNumber = 0;
+          mocks.readdirCallCount = 0;
+          throw Object.assign(new Error("SIMULATED_READDIR_FAILURE"), {
+            code: "EIO",
+          });
+        }
+      }
+      return actual.readdir(...args);
+    }) as typeof actual.readdir,
     rename: async (
       from: Parameters<typeof actual.rename>[0],
       to: Parameters<typeof actual.rename>[1],
@@ -1888,6 +1905,35 @@ describe("runServiceRemovalWithInvocationRecord (generic)", () => {
     expect(await transactionMarkerNames()).toEqual([]);
   });
 
+  it("a transient readdir failure during the confirmation scan keeps the contender owned and the command succeeds", async () => {
+    // Scan 1 elects (nothing present, contender created), scan 2 re-checks
+    // for competitors, scan 3 is the confirmation of this process's own
+    // marker. Failing scan 3 used to read as an EMPTY directory: the loop
+    // concluded its contender had vanished, dropped ownership without
+    // unlinking the file, and then waited out the deadline behind the marker
+    // it still positively owned - a self-inflicted `txn-busy`.
+    mocks.readdirCallCount = 0;
+    mocks.failReaddirOnCallNumber = 3;
+    let registered = false;
+    await expect(
+      runServiceRegistrationWithInvocationRecord({
+        environment: "production",
+        hostHomeDir: hostHome,
+        waitMs: 3_000,
+        pollIntervalMs: 20,
+        serviceLabel: LABEL,
+        cli: npmCli(),
+        register: async () => {
+          registered = true;
+        },
+      }),
+    ).resolves.toBeUndefined();
+    expect(registered).toBe(true);
+    // The failure fired (reset on use), and no marker was orphaned by it.
+    expect(mocks.failReaddirOnCallNumber).toBe(0);
+    expect(await transactionMarkerNames()).toEqual([]);
+  });
+
   it("a losing contender that cannot remove its own marker keeps owning it and retries, instead of leaving a live orphan beside the winner", async () => {
     if (process.platform === "win32") return;
     // The competing contender: owned by THIS process (so it is positively
@@ -2555,6 +2601,39 @@ describe("lifecycle generation", () => {
       digest: cliInvocationTransactionMarkerDigest(
         Buffer.from(exactRaw, "utf8"),
       ),
+    });
+  });
+
+  it("names a CORRUPT legacy exact marker by the digest of its raw bytes - not of a UTF-8 re-encoding - so the host's digest of the same file can match", async () => {
+    // Bytes that are not valid UTF-8: decoding and re-encoding them yields
+    // replacement characters the file does not contain, and a digest of that
+    // could never equal the host's digest of the bytes on disk - which is the
+    // one comparison that lets the host stop bypassing the record this
+    // command commits.
+    const exactPath = cliInvocationRecordTransactionMarkerPath(hostHome);
+    const corrupt = Buffer.from([0x7b, 0xff, 0xfe, 0x22, 0x7d, 0x0a]);
+    expect(Buffer.from(corrupt.toString("utf8"), "utf8").equals(corrupt)).toBe(
+      false,
+    );
+    await writeFile(exactPath, corrupt, { mode: 0o600 });
+    // Unparseable, so abandoned by AGE: back-date it past the window.
+    const past = new Date(
+      Date.now() - CLI_INVOCATION_TXN_ABANDON_AFTER_MS - 60_000,
+    );
+    await utimes(exactPath, past, past);
+    await runServiceRegistrationWithInvocationRecord({
+      environment: "production",
+      hostHomeDir: hostHome,
+      waitMs: 2_000,
+      pollIntervalMs: 20,
+      serviceLabel: LABEL,
+      cli: npmCli(),
+      register: async () => undefined,
+    });
+    expect((await readFile(exactPath)).equals(corrupt)).toBe(true);
+    expect((await readLifecycle())?.legacyMarkerEvidence).toEqual({
+      kind: "digest",
+      digest: cliInvocationTransactionMarkerDigest(corrupt),
     });
   });
 

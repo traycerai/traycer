@@ -976,7 +976,15 @@ interface ObservedContender {
   readonly basename: string;
   readonly path: string;
   readonly mtimeMs: number;
-  /** Empty when `unreadable`; never treated as the file's bytes then. */
+  /**
+   * The file's bytes as read; what the legacy-marker digest is taken over.
+   * The host digests the same bytes from its own bounded read, and the
+   * protocol helper applies one bound to both, so a corrupt marker that is
+   * not valid UTF-8 - or longer than that bound - still yields the same
+   * digest on both sides. Empty when `unreadable`.
+   */
+  readonly bytes: Buffer;
+  /** `bytes` as UTF-8 text; empty when `unreadable`. Never digested. */
   readonly raw: string;
   readonly abandoned: boolean;
   /**
@@ -1007,6 +1015,18 @@ async function acquireTransaction(input: {
     const observed = await observeTransactionMarkers(input.hostHomeDir);
     if (observePauseForTest !== null) {
       await observePauseForTest();
+    }
+    if (observed === null) {
+      // A scan that FAILED is retried, with `held` untouched: this process may
+      // own a marker in the directory it could not list, and the one thing it
+      // must not do is stop owning that marker on the strength of not having
+      // seen it. A scan that keeps failing until the deadline is reported as
+      // exactly that, not as another transaction being in progress.
+      if (performance.now() >= deadline) {
+        await failAcquisition(input, held, "enumeration-failed");
+      }
+      await sleep(input.pollIntervalMs);
+      continue;
     }
     // Abandoned contenders are elected AROUND, never unlinked here. Each one
     // is a dead owner that may have mutated the OS before it could commit its
@@ -1055,9 +1075,15 @@ async function acquireTransaction(input: {
       continue;
     } else {
       const heldPath = held.txnPath;
+      // A failed confirmation scan (`null`) confirms nothing either way: the
+      // marker stays held and the scan is retried on the next pass.
       const all = await observeTransactionMarkers(input.hostHomeDir);
-      const confirmed = all.filter((entry) => !entry.abandoned);
-      if (confirmed.length === 1 && confirmed[0]?.path === heldPath) {
+      const confirmed = all?.filter((entry) => !entry.abandoned) ?? [];
+      if (
+        all !== null &&
+        confirmed.length === 1 &&
+        confirmed[0]?.path === heldPath
+      ) {
         // The legacy exact marker is never unlinked by anyone, so an
         // abandoned one is residue this transaction is about to supersede.
         // Its bytes are what the lifecycle will name as superseded; a LIVE
@@ -1076,9 +1102,7 @@ async function acquireTransaction(input: {
                 ? { kind: "unreadable" }
                 : {
                     kind: "digest",
-                    digest: cliInvocationTransactionMarkerDigest(
-                      Buffer.from(legacy.raw, "utf8"),
-                    ),
+                    digest: cliInvocationTransactionMarkerDigest(legacy.bytes),
                   },
           abandonedResidue: all.filter(
             (entry) =>
@@ -1087,35 +1111,53 @@ async function acquireTransaction(input: {
           ),
         };
       }
-      if (!confirmed.some((entry) => entry.path === heldPath)) {
+      if (all !== null && !confirmed.some((entry) => entry.path === heldPath)) {
         held = null;
       }
     }
     if (performance.now() >= deadline) {
-      // Reported, not assumed: a marker this process could not remove stays
-      // live until the process exits, and the operator reading this error is
-      // the one who decides whether to wait or retry.
-      const ownMarkerRetained =
-        held !== null &&
-        !(await unlinkIfUnchanged(held.txnPath, held.rawMarker));
-      throw cliError({
-        code:
-          input.operation === "uninstall"
-            ? CLI_ERROR_CODES.SERVICE_UNINSTALL_FAILED
-            : CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
-        message: ownMarkerRetained
-          ? `another CLI service ${input.operation} is already in progress for '${input.serviceLabel}', and this command's own transaction marker could not be removed; it stops blocking election when this process exits and is reclaimed by a later successful CLI service command`
-          : `another CLI service ${input.operation} is already in progress for '${input.serviceLabel}'`,
-        details: {
-          label: input.serviceLabel,
-          phase: "txn-busy",
-          ownMarkerRetained,
-        },
-        exitCode: 75,
-      });
+      await failAcquisition(input, held, "busy");
     }
     await sleep(input.pollIntervalMs);
   }
+}
+
+/**
+ * The deadline failure of `acquireTransaction`, for both of its causes.
+ *
+ * Reported, not assumed: a marker this process could not remove stays live
+ * until the process exits, and the operator reading this error is the one who
+ * decides whether to wait or retry.
+ */
+async function failAcquisition(
+  input: {
+    readonly operation: CliInvocationTransactionOperation;
+    readonly serviceLabel: string;
+  },
+  held: HeldTransaction | null,
+  cause: "busy" | "enumeration-failed",
+): Promise<never> {
+  const ownMarkerRetained =
+    held !== null && !(await unlinkIfUnchanged(held.txnPath, held.rawMarker));
+  const retainedSuffix = ownMarkerRetained
+    ? ", and this command's own transaction marker could not be removed; it stops blocking election when this process exits and is reclaimed by a later successful CLI service command"
+    : "";
+  throw cliError({
+    code:
+      input.operation === "uninstall"
+        ? CLI_ERROR_CODES.SERVICE_UNINSTALL_FAILED
+        : CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+    message:
+      cause === "busy"
+        ? `another CLI service ${input.operation} is already in progress for '${input.serviceLabel}'${retainedSuffix}`
+        : `could not list the CLI invocation transaction markers for '${input.serviceLabel}' before the deadline${retainedSuffix}`,
+    details: {
+      label: input.serviceLabel,
+      phase: cause === "busy" ? "txn-busy" : "txn-enumerate",
+      ownMarkerRetained,
+    },
+    exitCode: 75,
+  });
 }
 
 async function createUniqueContender(input: {
@@ -1211,7 +1253,14 @@ function openFlagsForAuthorityRead(): number {
  *     a stale marker that cannot be read cannot be reported cleared.
  */
 type AuthorityRead =
-  | { readonly kind: "ok"; readonly raw: string; readonly mtimeMs: number }
+  | {
+      readonly kind: "ok";
+      /** The file's bytes, as read. What a digest is taken over. */
+      readonly bytes: Buffer;
+      /** `bytes` decoded as UTF-8, for the parsers and the compare-then-unlink. */
+      readonly raw: string;
+      readonly mtimeMs: number;
+    }
   | { readonly kind: "absent" }
   | { readonly kind: "not-a-file" }
   | { readonly kind: "unreadable"; readonly mtimeMs: number | null };
@@ -1233,9 +1282,11 @@ async function readAuthorityFile(path: string): Promise<AuthorityRead> {
   try {
     const info = await handle.stat();
     if (!info.isFile()) return { kind: "not-a-file" };
+    const bytes = await handle.readFile();
     return {
       kind: "ok",
-      raw: await handle.readFile("utf8"),
+      bytes,
+      raw: bytes.toString("utf8"),
       mtimeMs: info.mtimeMs,
     };
   } catch {
@@ -1253,15 +1304,31 @@ async function lstatMtimeMs(path: string): Promise<number | null> {
   }
 }
 
+/**
+ * Every transaction marker in the state directory, or `null` when the
+ * directory could not be ENUMERATED.
+ *
+ * `null` and `[]` are different answers and the caller must not collapse them:
+ * ENOENT is a directory nobody has created yet, which genuinely holds no
+ * markers, but a `readdir` that fails for any other reason (EIO, EACCES, an
+ * antivirus hold on Windows) says nothing about what is in there - and the
+ * caller may already OWN a marker in it. Reading that failure as "empty" made
+ * `acquireTransaction` conclude its contender had vanished and drop `held`
+ * without unlinking the file; the next successful scan then saw that marker
+ * as a live competitor this process could neither reclaim nor remove, so the
+ * command waited out its deadline and failed, leaving the bypass in place
+ * until the process exited.
+ */
 async function observeTransactionMarkers(
   hostHomeDir: string,
-): Promise<ObservedContender[]> {
+): Promise<ObservedContender[] | null> {
   const stateDir = cliInvocationStateDir(hostHomeDir);
   let names: string[];
   try {
     names = await readdir(stateDir);
-  } catch {
-    return [];
+  } catch (cause: unknown) {
+    if (isErrnoException(cause) && cause.code === "ENOENT") return [];
+    return null;
   }
   const observed = await Promise.all(
     names.filter(isCliInvocationTransactionMarkerBasename).map(async (name) => {
@@ -1281,6 +1348,7 @@ async function observeTransactionMarkers(
           basename: name,
           path,
           mtimeMs,
+          bytes: Buffer.alloc(0),
           raw: "",
           abandoned: cliInvocationTransactionAbandonedByAge(
             mtimeMs,
@@ -1293,6 +1361,7 @@ async function observeTransactionMarkers(
         basename: name,
         path,
         mtimeMs: read.mtimeMs,
+        bytes: read.bytes,
         raw: read.raw,
         abandoned: await isAbandonedContender(name, read.raw, read.mtimeMs),
         unreadable: false,
