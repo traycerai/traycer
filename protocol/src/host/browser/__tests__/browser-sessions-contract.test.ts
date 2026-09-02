@@ -718,6 +718,30 @@ describe("browser.sessions@1.0 store-key handshake", () => {
       }).success,
     ).toBe(false);
   });
+
+  it("rejects key material past the length cap on all four key fields", () => {
+    // A store key is 32 bytes and a wrapped blob a few hundred: the cap is
+    // slack. It exists so neither side can be made to buffer, or hand a
+    // keystore, an unbounded string named as key material.
+    const oversized = "A".repeat(4100);
+    const frames = [
+      { kind: "storeKeyWrapRequest", rawKey: oversized },
+      { kind: "storeKeyUnwrapRequest", wrappedKey: oversized },
+      { kind: "storeKeyWrapped", wrappedKey: oversized },
+      { kind: "storeKeyUnwrapped", rawKey: oversized },
+    ] as const;
+    for (const frame of frames) {
+      const candidate = {
+        ...frame,
+        hasBinaryPayload: false,
+        requestId: "request-1",
+      };
+      expect(
+        browserSessionsServerFrameSchema.safeParse(candidate).success ||
+          browserSessionsClientFrameSchema.safeParse(candidate).success,
+      ).toBe(false);
+    }
+  });
 });
 
 describe("browser.sessions@1.0 desktop identity attestation", () => {

@@ -645,7 +645,10 @@ export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
       // machine's OS keystore; the host keeps the raw bytes in memory only.
       kind: z.literal("storeKeyWrapRequest"),
       ...requestFrameFields,
-      rawKey: z.base64(),
+      // A store key is 32 bytes and a wrapped blob a few hundred; the cap is
+      // slack, not a size contract, and it exists so neither side can be made
+      // to buffer or `safeStorage`-process an unbounded string.
+      rawKey: z.base64().max(4096),
     })
     .strict(),
   z
@@ -653,7 +656,7 @@ export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
       // The blob some desktop wrapped earlier, handed back for `decryptString`.
       kind: z.literal("storeKeyUnwrapRequest"),
       ...requestFrameFields,
-      wrappedKey: z.base64(),
+      wrappedKey: z.base64().max(4096),
     })
     .strict(),
   z
@@ -942,7 +945,7 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
       // `safeStorage.encryptString(rawKey)` for the `requestId` the host sent.
       kind: z.literal("storeKeyWrapped"),
       ...requestFrameFields,
-      wrappedKey: z.base64(),
+      wrappedKey: z.base64().max(4096),
     })
     .strict(),
   z
@@ -952,7 +955,7 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
       // the host then stays sealed and never re-mints over a live blob.
       kind: z.literal("storeKeyUnwrapped"),
       ...requestFrameFields,
-      rawKey: z.base64().nullable(),
+      rawKey: z.base64().max(4096).nullable(),
     })
     .strict(),
   z
