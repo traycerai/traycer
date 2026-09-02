@@ -11,7 +11,6 @@ import {
 const CLOUD_ONLY_OUTAGE_STATES: readonly EpicSyncPillState[] = [
   "connecting",
   "reconnecting",
-  "offlineWithUnsavedChanges",
   "offlineWithHostPending",
   "offlineChangesSavedLocally",
 ];
@@ -45,6 +44,13 @@ describe("isCloudOnlyOutage", () => {
       expect(isCloudOnlyOutage(state, "open")).toBe(false);
     },
   );
+
+  it("reads false for offlineWithUnsavedChanges even with the transport open", () => {
+    // The one state that LOOKS cloud-only and is not: it is the deriver's
+    // divergence arm, so the work is renderer-only and awaiting the host's
+    // ack. An open transport does not make it durable anywhere.
+    expect(isCloudOnlyOutage("offlineWithUnsavedChanges", "open")).toBe(false);
+  });
 });
 
 describe("useCloudLinkGrace", () => {
@@ -90,6 +96,43 @@ describe("useCloudLinkGrace", () => {
       expect(result.current).toBe("reconnecting");
     },
   );
+
+  it("passes 'offlineWithUnsavedChanges' through on the first frame and keeps it there", () => {
+    // Renderer-only work awaiting the host's ack: closing the window discards
+    // it, and the amber copy is the only thing that says so. Quieting it even
+    // briefly is the one thing this grace must never do - so the assertion is
+    // not just "amber at t=0" but "amber for the whole window a graced state
+    // would have spent as 'syncing'".
+    vi.useFakeTimers();
+    const { result, rerender } = renderHook(() =>
+      useCloudLinkGrace("offlineWithUnsavedChanges", "open"),
+    );
+
+    expect(result.current).toBe("offlineWithUnsavedChanges");
+
+    act(() => {
+      vi.advanceTimersByTime(CLOUD_LINK_GRACE_MS * 2);
+    });
+    rerender();
+    expect(result.current).toBe("offlineWithUnsavedChanges");
+  });
+
+  it("does not let a graced outage carry its quiet verdict into unsaved renderer work", () => {
+    // The grace latches per outage, and a cloud drop can turn into local
+    // divergence without an intervening recovery frame. If the latch were
+    // keyed on anything coarser than the state itself, the transition below
+    // would inherit 'syncing' and hide the warning.
+    vi.useFakeTimers();
+    const { result, rerender } = renderHook(
+      (props: { derived: EpicSyncPillState }) =>
+        useCloudLinkGrace(props.derived, "open"),
+      { initialProps: { derived: "reconnecting" as EpicSyncPillState } },
+    );
+    expect(result.current).toBe("syncing");
+
+    rerender({ derived: "offlineWithUnsavedChanges" });
+    expect(result.current).toBe("offlineWithUnsavedChanges");
+  });
 
   it("recovering to 'synced' at any point returns 'synced' immediately", () => {
     vi.useFakeTimers();

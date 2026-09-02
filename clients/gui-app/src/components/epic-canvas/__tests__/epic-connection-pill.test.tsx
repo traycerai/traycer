@@ -623,20 +623,19 @@ describe("<EpicConnectionPill />", () => {
     expect(pill.dataset.source).toBe("chat-backup");
   });
 
-  it("shows the unsafe overlap warning after the cloud-only grace elapses", async () => {
-    // `offlineWithUnsavedChanges` only ever derives with the GUI↔host
-    // transport open (see `deriveEpicSyncPillState`), so it is a cloud-only
-    // outage and must clear `CLOUD_LINK_GRACE_MS` before it may read amber.
+  it("shows the unsafe overlap warning immediately, with no cloud-only grace", async () => {
+    // `offlineWithUnsavedChanges` derives with the GUI↔host transport open,
+    // but an open transport is not host ACKNOWLEDGEMENT: this is the
+    // deriver's divergence arm, so the work is renderer-only and the copy
+    // below ("Keep this window open") is the only thing telling the user the
+    // edit dies with the window. It is excluded from the cloud-link grace for
+    // exactly that reason, so it must read amber on the first frame.
     vi.useFakeTimers();
     renderPill("offlineWithUnsavedChanges");
-    expect(screen.queryByText("Offline — saving changes…")).toBeNull();
-
-    act(() => {
-      vi.advanceTimersByTime(15_000);
-    });
-    vi.useRealTimers();
 
     expect(screen.getByText("Offline — saving changes…")).not.toBeNull();
+    vi.useRealTimers();
+
     expect(
       screen.getByTestId("epic-connection-pill").getAttribute("data-status"),
     ).toBe("offlineWithUnsavedChanges");

@@ -9,10 +9,14 @@ import type { EpicSyncPillState } from "@/lib/epic-sync-pill-state";
  * provider re-dials after 1 s, and a fresh backend instance answers auth and
  * sync a few seconds later (a probe against production measured ~7 s from
  * open to `synced`). Painting amber for that interval taught users that the
- * product's connection was broken while nothing was lost - the host holds
- * every update durably and replays it on reconnect - and during a backend
- * incident it did so several times a minute. Past this window the outage is
- * real enough to name.
+ * product's connection was broken while, for the states this window covers,
+ * the work was already on the host and replayed on reconnect - and during a
+ * backend incident it did so several times a minute. Past this window the
+ * outage is real enough to name.
+ *
+ * The window is a delay on NAMING an outage, never on warning about work at
+ * risk; {@link CLOUD_LINK_DOWN_STATES} is where that distinction is drawn and
+ * is the part to read before widening this.
  *
  * Deliberately longer than the presence plane's `stream-down` grace and far
  * shorter than `LINK_DOWN_ESCALATION_MS`: the first covers a link whose loss
@@ -22,17 +26,32 @@ import type { EpicSyncPillState } from "@/lib/epic-sync-pill-state";
 export const CLOUD_LINK_GRACE_MS = 15_000;
 
 /**
- * The verdicts that describe ONLY the host↔cloud leg while the GUI↔host
- * transport is open. Every one of them keeps the user's edits somewhere
- * durable (the host's store) - which is what makes a quiet grace honest here
- * and NOT for a host-link drop, where an unsent edit exists in this window's
- * memory alone and the amber copy is the only thing telling the user so.
+ * The verdicts that describe ONLY the host↔cloud leg AND carry no work this
+ * window is the last holder of.
+ *
+ * The line is host ACKNOWLEDGEMENT, not an open transport. An `open` transport
+ * proves the socket exists, never that the host received a frame or persisted
+ * it - which is why `offlineWithUnsavedChanges` is deliberately absent. That
+ * verdict is `deriveEpicSyncPillState`'s divergence arm: renderer-only work
+ * still awaiting the host's ack, so closing the window discards it and the
+ * amber copy is the only thing saying so. Quieting it for even a second trades
+ * the user's data for the pill's calm.
+ *
+ * The members that remain are all on the other side of that line:
+ *
+ * - `connecting` / `reconnecting` here mean the CLOUD leg is coming up while
+ *   the transport is open - a host-link drop never reaches this hook.
+ * - `offlineWithHostPending` is only reachable with `hasRuntimeDivergence`
+ *   false, so the host has acked everything this replica knows about; the open
+ *   question is the host's own durable flush, which no window kept open can
+ *   help with.
+ * - `offlineChangesSavedLocally` is the strongest durability claim in the
+ *   union, and today unreachable from the deriver.
  */
 const CLOUD_LINK_DOWN_STATES: ReadonlySet<EpicSyncPillState> =
   new Set<EpicSyncPillState>([
     "connecting",
     "reconnecting",
-    "offlineWithUnsavedChanges",
     "offlineWithHostPending",
     "offlineChangesSavedLocally",
   ]);
@@ -51,10 +70,12 @@ export function isCloudOnlyOutage(
  * `syncing` is the honest placeholder: its copy is "Saving changes", it makes
  * no durability claim (that is `synced`'s alone), and it is exactly what the
  * ladder derives for pending work with no cloud evidence. The clock runs per
- * OUTAGE: any frame that is not a cloud-only outage (recovery, or a host-link
- * drop, which bypasses this hook entirely) resets it in the render phase so a
- * recovery never paints one stale amber frame, and a later drop earns its own
- * full window.
+ * OUTAGE: any frame that is not a cloud-only outage resets it in the render
+ * phase, so a recovery never paints one stale amber frame and a later drop
+ * earns its own full window. Three kinds of frame reset it - a recovery, a
+ * host-link drop, and renderer-only work awaiting the host's ack - and the
+ * last two are passed straight through, because both are cases where this
+ * window may be the only holder of an edit.
  */
 export function useCloudLinkGrace(
   derived: EpicSyncPillState,
