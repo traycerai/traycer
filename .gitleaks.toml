@@ -76,3 +76,12 @@ paths = [
   '''^clients/gui-app/src/components/epic-canvas/pr/__tests__/pr-local-diff-body\.test\.tsx$''',
 ]
 regexes = ['''^YmFkLf(?:8|4)udHh0$''']
+
+[[allowlists]]
+description = "Wrapped-store-key fixture in the desktop browser-sessions owner suite. `d3JhcHBlZEtleQ==` is base64 for the literal ASCII string `wrappedKey`; it stands in for a `storeKeyUnwrapRequest` payload so the suite can prove the request is priced against the account main opened the stream for. The generic-api-key rule matches it on base64 shape and entropy alone. Scoped to the exact value and source path so unrelated findings stay reportable."
+condition = "AND"
+regexTarget = "secret"
+paths = [
+  '''^clients/desktop/src/electron-main/browser-sessions/__tests__/browser-sessions-owner\.test\.ts$''',
+]
+regexes = ['''^d3JhcHBlZEtleQ==$''']

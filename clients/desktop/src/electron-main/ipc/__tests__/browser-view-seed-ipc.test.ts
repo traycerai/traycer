@@ -398,7 +398,11 @@ describe("createElectronTab storage seed", () => {
     expect(fixture.retained).toEqual([]);
   });
 
-  it("still installs localStorage when a cookie actually landed", async () => {
+  // One unrelated cookie landing beside a refusal buys no right to clear the
+  // origin: the refused key names a site the user's own browsing signed into
+  // here, so its localStorage is the desktop's too and `clear()` would take
+  // the very login the cookie rule just protected.
+  it("installs no localStorage when any seeded cookie is one the desktop owns", async () => {
     fixture.jarKeys = [{ domain: "example.test", name: "sid", path: "/" }];
 
     const seeded = await seed(
@@ -410,8 +414,19 @@ describe("createElectronTab storage seed", () => {
     );
 
     expect(fixture.merged).toEqual([{ name: "prefs", domain: "example.test" }]);
-    expect(seeded?.origins).toEqual([ORIGIN]);
-    expect(fixture.retained).toEqual([ORIGIN.origin]);
+    expect(seeded).toBeNull();
+    expect(fixture.retained).toEqual([]);
+  });
+
+  // A cookie-less seed establishes nothing about the origin, so clearing and
+  // rewriting its localStorage would be an arbitrary overwrite of whatever
+  // the desktop holds there.
+  it("installs no localStorage for a seed that carries no cookies at all", async () => {
+    const seeded = await seed([], [ORIGIN]);
+
+    expect(seeded).toBeNull();
+    expect(fixture.merged).toEqual([]);
+    expect(fixture.retained).toEqual([]);
   });
 
   it("hands back only the tab's own site for the localStorage script", async () => {
@@ -419,7 +434,7 @@ describe("createElectronTab storage seed", () => {
     // an unfiltered seed makes one tab an authority over every site in the
     // host's snapshot.
     const seeded = await seed(
-      [],
+      [seedCookie("sid", {})],
       [
         ORIGIN,
         {

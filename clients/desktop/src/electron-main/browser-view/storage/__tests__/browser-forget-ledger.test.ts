@@ -595,6 +595,33 @@ describe("forget ledger clear reconciliation", () => {
     expect(browserForgetLedgerPendingClears().domains).toEqual([]);
   });
 
+  it("drains past a revision whose row a re-forget of the same site replaced", async () => {
+    // RULE: the contiguous watermark must step over a revision the ledger no
+    // longer represents. Forgetting the same site twice before the first jar
+    // clear finishes replaces revision 1's row with revision 2's, so nothing
+    // can ever complete revision 1 - and a watermark that waits for it leaves
+    // the surviving row pending at every launch, re-clearing the site and
+    // deleting whatever login the user created in between.
+    await recordForgottenBrowserSite("example.com");
+    await recordForgottenBrowserSite("example.com");
+
+    expect(browserForgetLedgerPendingClears().domains).toEqual([
+      { domain: "example.com", revision: 2 },
+    ]);
+
+    await markBrowserForgetLedgerCleared(2);
+    expect(browserForgetLedgerPendingClears().domains).toEqual([]);
+
+    // And a LATER forget still drains on its own mark, rather than inheriting
+    // the hole the replaced row left behind.
+    await recordForgottenBrowserSite("other.test");
+    expect(browserForgetLedgerPendingClears().domains).toEqual([
+      { domain: "other.test", revision: 3 },
+    ]);
+    await markBrowserForgetLedgerCleared(3);
+    expect(browserForgetLedgerPendingClears().domains).toEqual([]);
+  });
+
   it("V-1: carries clearedThrough across the gap a forget-all's own deletes create", async () => {
     // RULE: recordForgetAllBrowserLogins must set clearedThrough to
     // revision - 1, not leave it below a gap made by rows it just deleted -

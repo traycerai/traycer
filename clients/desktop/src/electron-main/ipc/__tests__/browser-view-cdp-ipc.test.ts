@@ -58,7 +58,12 @@ const captured = vi.hoisted(() => ({
   transportCloses: 0,
   /** Everyone main told to re-read the auth session. */
   authChangeListeners: [] as Array<() => void>,
-  authSnapshot: SIGNED_OUT as AuthSnapshot,
+  authSnapshot: {
+    status: "signed-out",
+    token: null,
+    profile: null,
+    verified: false,
+  } as AuthSnapshot,
   browserWindowOptions: [] as BrowserWindowConstructorOptions[],
   managerOptions: null as BrowserViewManagerFactoryOptions | null,
 }));

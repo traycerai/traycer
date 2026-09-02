@@ -335,7 +335,24 @@ export async function markBrowserForgetLedgerCleared(
   // record is one the next launch re-runs anyway.
   completedClears.add(revision);
   let clearedThrough = ledger.clearedThrough;
-  while (completedClears.delete(clearedThrough + 1)) clearedThrough += 1;
+  // A revision the ledger no longer REPRESENTS can never be completed, and the
+  // contiguous drain must step over it rather than wedge on it. That happens
+  // whenever a row is superseded before its clear finishes - forget a site
+  // twice and the second record replaces the first's row - or when
+  // `trimDomains` drops one. Nothing is pending for such a revision by
+  // definition, so treating it as complete re-runs no clear; leaving it as a
+  // hole is what made the boot reconciler re-clear the same site at every
+  // launch forever, deleting whatever login the user created in between.
+  const nothingPendingAt = (candidate: number): boolean =>
+    candidate <= ledger.revision &&
+    ledger.forgetAll?.revision !== candidate &&
+    !ledger.domains.some((entry) => entry.revision === candidate);
+  while (
+    completedClears.delete(clearedThrough + 1) ||
+    nothingPendingAt(clearedThrough + 1)
+  ) {
+    clearedThrough += 1;
+  }
   if (clearedThrough === ledger.clearedThrough) return;
   mutate({ ...ledger, clearedThrough });
   await persist();

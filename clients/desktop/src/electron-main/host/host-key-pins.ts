@@ -75,8 +75,25 @@ export function installDesktopHostKeyPins(): void {
     },
     async pin(hostId, publicKey) {
       const current = await loaded();
+      // Mutated BEFORE the write and rolled back after a failed one, rather
+      // than snapshotted: the map is shared by every in-flight pin, and a
+      // snapshot taken here would drop a concurrent first-sight pin that
+      // landed in the map after it (R3-9).
       current[hostId] = publicKey;
-      await file.save({ pins: current });
+      try {
+        // `saveStrict`, not `save`: `save` swallows a persist failure, so a
+        // read-only userData or an ENOSPC would log a pin nothing wrote and
+        // never reach `onPinWriteFailed`. A first-sight pin is the whole of
+        // this store's TOFU protection - a write that did not land has to be
+        // reported.
+        await file.saveStrict({ pins: current });
+      } catch (cause) {
+        // Undo the memory half too, or the failed pin reads as pinned for the
+        // rest of the process and blocks the retry the next registry read
+        // would perform - while disappearing at the next restart.
+        delete current[hostId];
+        throw cause;
+      }
       log.info("[host-key-pin] pinned a host's static key on first sight", {
         hostId,
       });

@@ -399,13 +399,26 @@ export function registerBrowserViewIpc(
       // just refused would restore by another door exactly what the forget
       // removed.
       if (result.outcome !== "applied") return null;
-      // Nothing of this seed's cookies landed, and the reason was the OWNERSHIP
-      // rule: every one of them names a key the user's own browsing put in this
-      // jar. The localStorage half would then `clear()` and rewrite the origin's
-      // storage for a site the cookie half was just refused for - the same
-      // resurrection by another door the ledger gate exists to stop, with the
-      // user's own session as the thing overwritten.
-      if (result.appliedCookies === 0 && result.ownedByDesktopCookies > 0) {
+      // The localStorage half has no per-key merge: installing it runs
+      // `clear()` and rewrites the whole origin, which is a DESTRUCTIVE write
+      // however add-only the cookie half was. Two shapes therefore refuse it,
+      // and both are about what the desktop already owns rather than about
+      // what happened to land:
+      //
+      //  - Any cookie of this seed was refused as `owned-by-desktop`. That
+      //    names a site the user's own browsing signed into on this machine,
+      //    so its localStorage is the desktop's too - and one unrelated cookie
+      //    landing beside the refusal does not buy the right to clear it.
+      //  - Nothing landed at all, a seed carrying no cookies included. Then
+      //    nothing establishes that this host has anything to say about the
+      //    origin, and a clear-and-rewrite would be an arbitrary overwrite of
+      //    whatever the desktop holds - the same resurrection by another door
+      //    the ledger gate exists to stop.
+      //
+      // The cost is a localStorage-only login on a cookie-less site never
+      // carrying over, which is the fail-closed half of a channel that is
+      // add-only by construction (universal-sign-in decision 8).
+      if (result.ownedByDesktopCookies > 0 || result.appliedCookies === 0) {
         return null;
       }
       // Retained only for a seed that LANDED, and after the verdict rather

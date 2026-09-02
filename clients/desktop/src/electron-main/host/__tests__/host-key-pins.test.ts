@@ -17,6 +17,8 @@ const storeState = vi.hoisted(() => ({
    * can both be driven before either underlying load settles.
    */
   loadGate: null as Promise<void> | null,
+  /** Makes the durable write reject, the way a read-only userData does. */
+  saveError: null as Error | null,
 }));
 
 vi.mock("electron", () => ({
@@ -25,6 +27,7 @@ vi.mock("electron", () => ({
 
 vi.mock("../../app/logger", () => ({
   log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  describeLogError: (cause: unknown) => String(cause),
 }));
 
 vi.mock("../../app/json-file-store", () => ({
@@ -32,6 +35,14 @@ vi.mock("../../app/json-file-store", () => ({
     load: () =>
       (storeState.loadGate ?? Promise.resolve()).then(() => storeState.payload),
     save: (payload: { pins: Record<string, string> }) => {
+      storeState.payload = { pins: { ...payload.pins } };
+      return Promise.resolve();
+    },
+    // `save` swallows a persist failure; `saveStrict` is the one the pin
+    // store must use, so the fake distinguishes them.
+    saveStrict: (payload: { pins: Record<string, string> }) => {
+      const error = storeState.saveError;
+      if (error !== null) return Promise.reject(error);
       storeState.payload = { pins: { ...payload.pins } };
       return Promise.resolve();
     },
@@ -65,6 +76,7 @@ function itemForHost(hostId: string, publicKey: string): HostListItem {
 beforeEach(() => {
   storeState.payload = { pins: {} };
   storeState.loadGate = null;
+  storeState.saveError = null;
   installDesktopHostKeyPins();
 });
 
@@ -76,6 +88,25 @@ afterEach(() => {
 describe("desktop host key pins", () => {
   it("persists the first key it sees", async () => {
     await applyHostKeyPins([item("pk-1")]);
+    expect(storeState.payload.pins).toEqual({ "host-1": "pk-1" });
+  });
+
+  it("reports a first-sight pin the disk refused, and stays unpinned for the retry", async () => {
+    // A swallowed write logged a pin nothing persisted: `onPinWriteFailed`
+    // never ran, and the mutated in-memory map made every later read look
+    // pinned, so the retry the next registry read would perform could not
+    // happen and the pin was simply gone after a restart. TOFU protection for
+    // this host is the whole of what that costs.
+    storeState.saveError = new Error("EROFS: read-only file system");
+
+    // Still admitted - nothing is pinned, so nothing disagrees.
+    expect(await applyHostKeyPins([item("pk-1")])).toHaveLength(1);
+    expect(storeState.payload.pins).toEqual({});
+
+    // And the next read tries the write again rather than reading a pin that
+    // only ever existed in memory.
+    storeState.saveError = null;
+    expect(await applyHostKeyPins([item("pk-1")])).toHaveLength(1);
     expect(storeState.payload.pins).toEqual({ "host-1": "pk-1" });
   });
 
