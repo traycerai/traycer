@@ -156,6 +156,13 @@ export function createBrowserSessionsHostDirectory(
   const refreshOnce = (): Promise<void> => {
     const running = inFlight;
     if (running !== null) return running;
+    // No bearer, no read - and therefore nothing to spend. Checked HERE as
+    // well as inside `refresh`, because reaching that early return still
+    // consumed the forced flag and still stamped the cooldown from the
+    // `finally` below: an account switch sets `forced = true`, and any resolve
+    // landing before the new bearer is installed would burn the one fresh read
+    // it asked for and arm the floor against the read that could have answered.
+    if (deps.bearerToken() === null) return Promise.resolve();
     const since = lastRefreshAt;
     if (
       !forced &&

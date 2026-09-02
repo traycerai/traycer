@@ -198,7 +198,17 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
     return pending;
   }
 
-  const retireBirth = (birth: ElectronTabBirth): void => {
+  /**
+   * Drops a birth's bookkeeping. `notifyReleased` is explicit because
+   * `rollbackUnacceptedBirth` follows this with `releaseBirth`, which emits
+   * `onTabReleased` itself once the tab is actually released - so notifying
+   * here too sent the same `registrationId` twice on every disconnect,
+   * dispose and stale-provision rollback.
+   */
+  const retireBirth = (
+    birth: ElectronTabBirth,
+    notifyReleased: boolean,
+  ): void => {
     birth.cancelled = true;
     const tabKey = browserViewNativeTabKeyId({
       hostId: options.hostId,
@@ -211,7 +221,7 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
     if (requestIdByTabKey.get(tabKey) === birth.create.requestId) {
       requestIdByTabKey.delete(tabKey);
     }
-    if (birth.provisioned !== null) {
+    if (notifyReleased && birth.provisioned !== null) {
       options.onTabReleased(
         nativeKeyFor(birth, birth.provisioned.registrationId),
       );
@@ -220,7 +230,9 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
 
   function rollbackUnacceptedBirth(birth: ElectronTabBirth): void {
     if (birthStatus(birth) === "accepted") return;
-    retireBirth(birth);
+    // `releaseBirth` owns the notification here: it fires after the tab is
+    // genuinely gone, which is what a consumer of `tabReleased` wants.
+    retireBirth(birth, false);
     void releaseBirth(birth).catch(() => undefined);
   }
 
@@ -304,7 +316,7 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
         );
         return Promise.resolve();
       }
-      if (previous !== undefined) retireBirth(previous);
+      if (previous !== undefined) retireBirth(previous, true);
     }
     ensureStatusSubscription();
 
@@ -339,7 +351,7 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
               identityMessage(frame),
             );
             void options.tabs.releaseTab(provisioned).catch(() => undefined);
-            retireBirth(birth);
+            retireBirth(birth, true);
             return;
           }
           birth.provisioned = provisioned;
@@ -367,7 +379,7 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
               cause instanceof Error ? cause.message : String(cause),
             ),
           );
-          retireBirth(birth);
+          retireBirth(birth, true);
         }),
       provisioned: null,
       accepted: null,

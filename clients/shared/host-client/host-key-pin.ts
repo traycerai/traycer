@@ -114,7 +114,19 @@ export async function applyHostKeyPins(
   }
   const admitted: HostListItem[] = [];
   for (const host of hosts) {
-    const pinned = await pinning.store.read(host.hostId);
+    // A READ that fails is not the same as a write that fails, and it is the
+    // one direction that must not admit: something may be pinned and this
+    // process cannot see it, so admitting would accept a changed key on the
+    // strength of not having looked. Refused per host rather than thrown,
+    // because the caller's contract is a `{ kind }` union and a rejection here
+    // failed the whole registry read.
+    let pinned: string | null;
+    try {
+      pinned = await pinning.store.read(host.hostId);
+    } catch (cause) {
+      pinning.onPinWriteFailed(host.hostId, cause);
+      continue;
+    }
     if (pinned === null) {
       // A first-sight pin that cannot be WRITTEN still admits the host. The
       // caller is a registry read whose contract is a `{ kind }` union, so a

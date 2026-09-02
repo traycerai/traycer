@@ -523,267 +523,277 @@ afterEach(() => {
 });
 
 describe("RunnerIpcBridge", () => {
-  it("registers the refreshed IRunnerHost invoke channels", async () => {
-    const mod = await import("../register-runner-ipc");
-    const host = new FakeHost();
-    const bridge = new mod.RunnerIpcBridge({
-      host,
-      hostController: new FakeHostController(),
-      authnBaseUrl: "http://localhost:5005",
-      authRedirectUri: null,
-      tray: null,
-      zoomController: undefined,
-      authTokenStore: undefined,
-      window: buildWindow(),
-    });
-    bridge.install();
+  // An explicit timeout because the cost here is the dynamic IMPORT, not the
+  // assertion: `register-runner-ipc` pulls in the whole main-process IPC
+  // surface, which H10 grew by the browser-sessions owner and the jar plane.
+  // It settles in ~2.5 s locally and has crossed the 5 s default on both the
+  // Linux and macOS runners. This case measures which channels get registered;
+  // making it a de-facto import-speed budget only produces cross-OS flakes.
+  it(
+    "registers the refreshed IRunnerHost invoke channels",
+    { timeout: 30_000 },
+    async () => {
+      const mod = await import("../register-runner-ipc");
+      const host = new FakeHost();
+      const bridge = new mod.RunnerIpcBridge({
+        host,
+        hostController: new FakeHostController(),
+        authnBaseUrl: "http://localhost:5005",
+        authRedirectUri: null,
+        tray: null,
+        zoomController: undefined,
+        authTokenStore: undefined,
+        window: buildWindow(),
+      });
+      bridge.install();
 
-    const channels = Array.from(ipcMainState.handlers.keys()).sort();
-    expect(channels).toEqual(
-      [
-        RunnerHostInvoke.workspaceFoldersPick,
-        RunnerHostInvoke.validateAuthTokenIdentity,
-        RunnerHostInvoke.deviceFlowStart,
-        RunnerHostInvoke.deviceFlowPollNow,
-        RunnerHostInvoke.deviceFlowCancel,
-        // §3 FileTokenStore IPC seam (get/signIn/rotate/delete, plus the
-        // atomic conditional delete); §6 adds the one-time legacy→file
-        // migration channel.
-        RunnerHostInvoke.authTokenStoreGet,
-        RunnerHostInvoke.authTokenStoreSignIn,
-        RunnerHostInvoke.authTokenStoreRotate,
-        RunnerHostInvoke.authTokenStoreDelete,
-        RunnerHostInvoke.authTokenStoreDeleteIfToken,
-        RunnerHostInvoke.authTokenStoreMigrateLegacy,
-        // Remote Host Support: host-registry read (§7) and version-policy
-        // write (§13, T16) run in main for the renderer-origin CORS reason.
-        RunnerHostInvoke.deregisterHostFromAccount,
-        RunnerHostInvoke.listRegisteredHosts,
-        RunnerHostInvoke.updateHostVersionPolicy,
-        RunnerHostInvoke.listUserSessions,
-        RunnerHostInvoke.revokeUserSession,
-        RunnerHostInvoke.revokeAllSessions,
-        RunnerHostInvoke.mintHostCredential,
-        RunnerHostInvoke.requestStepUpChallenge,
-        RunnerHostInvoke.verifyStepUpChallenge,
-        RunnerHostInvoke.notificationShow,
-        RunnerHostInvoke.openExternalLink,
-        RunnerHostInvoke.getRegisteredUrlSchemes,
-        RunnerHostInvoke.requestMicrophoneAccess,
-        RunnerHostInvoke.openMicrophoneSettings,
-        RunnerHostInvoke.notificationOpenSystemSettings,
-        RunnerHostInvoke.requestHostRespawn,
-        RunnerHostInvoke.lastKnownLocalHostId,
-        RunnerHostInvoke.localHostSnapshot,
-        RunnerHostInvoke.traySetIndicator,
-        RunnerHostInvoke.traySetEpics,
-        RunnerHostInvoke.setUnsyncedEditsSnapshot,
-        RunnerHostInvoke.appLifecycleQuit,
-        RunnerHostInvoke.acknowledgeQuitRequest,
-        RunnerHostInvoke.respondToQuitRequest,
-        RunnerHostInvoke.freshUnsyncedSnapshotResponse,
-        // H10: main captures the final browser state directly off the
-        // `BrowserSessionsRegistry` on quit - there is no renderer round
-        // trip left to ack, so this channel is gone.
-        RunnerHostInvoke.unsyncableWorkAcrossWindows,
-        RunnerHostInvoke.appUpdateCheck,
-        RunnerHostInvoke.appUpdateDownload,
-        RunnerHostInvoke.appUpdateGetSnapshot,
-        RunnerHostInvoke.appUpdateInstall,
-        RunnerHostInvoke.appUpdateResolveCompatRecovery,
-        // Previously absent from this list because it was never registered at
-        // all: the preload and renderer halves shipped while the main handler
-        // went with the removed Settings channel toggle, so `setAllowPrerelease`
-        // rejected as an unhandled channel. The compatibility-recovery RC opt-in
-        // is the one caller that reaches it now.
-        RunnerHostInvoke.appUpdateSetAllowPrerelease,
-        RunnerHostInvoke.globalShortcutsGetSnapshot,
-        RunnerHostInvoke.globalShortcutsSet,
-        RunnerHostInvoke.windowsList,
-        RunnerHostInvoke.windowsRequestNew,
-        RunnerHostInvoke.windowsRequestFocus,
-        RunnerHostInvoke.windowsRequestClose,
-        RunnerHostInvoke.windowsRequestOpenEpicInNewWindow,
-        RunnerHostInvoke.windowsRequestOpenDraftInNewWindow,
-        RunnerHostInvoke.ownershipSnapshot,
-        RunnerHostInvoke.ownershipClaim,
-        RunnerHostInvoke.ownershipRelease,
-        RunnerHostInvoke.perWindowStateGet,
-        RunnerHostInvoke.perWindowStateCapabilities,
-        RunnerHostInvoke.perWindowStateUpdate,
-        RunnerHostInvoke.perWindowStateClear,
-        RunnerHostInvoke.authSessionGet,
-        RunnerHostInvoke.authSessionSet,
-        RunnerHostInvoke.supportSaveDiagnosticBundle,
-        RunnerHostInvoke.supportDiscardFrozenEvidence,
-        RunnerHostInvoke.supportFreezeEvidence,
-        RunnerHostInvoke.supportReadFrozenLogTail,
-        RunnerHostInvoke.supportGetFingerprintOccurrence,
-        RunnerHostInvoke.supportRevealLog,
-        RunnerHostInvoke.supportTailLog,
-        RunnerHostInvoke.supportBuildPublicDraft,
-        RunnerHostInvoke.supportSubmitReport,
-        RunnerHostInvoke.supportSnapshotGet,
-        RunnerHostInvoke.powerSetSleepBlocked,
-        // Legacy `runnerHost:service:*` install/uninstall/start/stop/restart/
-        // upgrade/enableLinger/status/getLogTail channels have been removed
-        // in favor of the `traycer-cli`-driven host-management handlers
-        // (`traycerHost*`). The bridge no longer registers them.
-        RunnerHostInvoke.traycerHostStatus,
-        RunnerHostInvoke.traycerConfigShellGet,
-        RunnerHostInvoke.traycerConfigShellList,
-        RunnerHostInvoke.traycerConfigShellSet,
-        RunnerHostInvoke.traycerConfigShellReset,
-        RunnerHostInvoke.traycerConfigShellAdd,
-        RunnerHostInvoke.traycerConfigShellRemove,
-        RunnerHostInvoke.traycerConfigShellProbe,
-        RunnerHostInvoke.traycerConfigShellPickProgramFile,
-        RunnerHostInvoke.traycerConfigShellRevertArgs,
-        RunnerHostInvoke.traycerConfigEnvList,
-        RunnerHostInvoke.traycerConfigEnvSet,
-        RunnerHostInvoke.traycerConfigEnvDelete,
-        RunnerHostInvoke.migrationAnnounceRunning,
-        RunnerHostInvoke.migrationGetRunningSnapshot,
-        // Native-packaging host-management bridge (Flow 4 / Flow 6).
-        // These channels are registered by `registerHostManagementIpc`
-        // which the bridge invokes during `install()`.
-        RunnerHostInvoke.traycerHostControllerStatusGet,
-        RunnerHostInvoke.traycerHostConvergeReady,
-        RunnerHostInvoke.traycerHostApplyStaged,
-        RunnerHostInvoke.traycerHostActivateInstalled,
-        RunnerHostInvoke.traycerHostInstallVersion,
-        RunnerHostInvoke.traycerHostUninstall,
-        RunnerHostInvoke.traycerAppUninstall,
-        RunnerHostInvoke.traycerHostRemovalGet,
-        RunnerHostInvoke.traycerHostRemovalClear,
-        RunnerHostInvoke.traycerHostRestart,
-        RunnerHostInvoke.traycerHostLogs,
-        RunnerHostInvoke.traycerHostDoctor,
-        RunnerHostInvoke.traycerHostAvailable,
-        RunnerHostInvoke.traycerHostInstalled,
-        RunnerHostInvoke.traycerHostNameGet,
-        RunnerHostInvoke.traycerHostNameSet,
-        RunnerHostInvoke.traycerServiceRegister,
-        RunnerHostInvoke.traycerServiceDeregister,
-        RunnerHostInvoke.traycerRegistryCheck,
-        RunnerHostInvoke.traycerFreePortAndRestart,
-        RunnerHostInvoke.traycerFreePortAndRestartIfIdle,
-        RunnerHostInvoke.traycerCliManifestRead,
-        // The maintenance-RPC projections the GUI's local fallback serves
-        // when a local host too old for the v1.2.0 `host.*` maintenance
-        // family negotiated it away. Registered by the same
-        // `registerHostManagementIpc` call as the block above.
-        RunnerHostInvoke.traycerMaintenanceUpdateCheck,
-        RunnerHostInvoke.traycerMaintenanceDoctor,
-        RunnerHostInvoke.traycerMaintenanceInstallationInfo,
-        RunnerHostInvoke.traycerMaintenanceInstallVersion,
-        RunnerHostInvoke.traycerHostRestartIfIdle,
-        RunnerHostInvoke.traycerDoctorRepairQueued,
-        RunnerHostInvoke.traycerDoctorRepairIfIdle,
-        // Platform IPC channels installed by `registerPlatformIpc(bridge)`,
-        // which is now invoked from `RunnerIpcBridge.install()` rather than
-        // wired by the host. They cover recent docs, window effects, GPU,
-        // proxies, certificates, diagnostics, displays, and TouchID.
-        RunnerHostInvoke.recentDocumentAdd,
-        RunnerHostInvoke.windowFlashFrame,
-        RunnerHostInvoke.windowSetProgressBar,
-        RunnerHostInvoke.windowSetBadge,
-        RunnerHostInvoke.windowSetRepresentedFilename,
-        RunnerHostInvoke.windowSetDocumentEdited,
-        RunnerHostInvoke.windowSetContentProtection,
-        RunnerHostInvoke.diagnosticsGetMetrics,
-        RunnerHostInvoke.diagnosticsTakeHeapSnapshot,
-        RunnerHostInvoke.diagnosticsTraceStart,
-        RunnerHostInvoke.diagnosticsTraceStop,
-        RunnerHostInvoke.systemPreferencesAccentColor,
-        RunnerHostInvoke.systemPreferencesAppearance,
-        RunnerHostInvoke.systemPreferencesAccessibilityTheme,
-        RunnerHostInvoke.touchIdAvailable,
-        RunnerHostInvoke.touchIdPrompt,
-        RunnerHostInvoke.windowSetVibrancy,
-        RunnerHostInvoke.windowSetBackgroundMaterial,
-        RunnerHostInvoke.windowSetVisibleOnAllWorkspaces,
-        RunnerHostInvoke.proxyAuthList,
-        RunnerHostInvoke.proxyAuthSave,
-        RunnerHostInvoke.proxyAuthClear,
-        RunnerHostInvoke.proxySetConfig,
-        RunnerHostInvoke.proxyResolve,
-        RunnerHostInvoke.certTrustList,
-        RunnerHostInvoke.certTrustAdd,
-        RunnerHostInvoke.certTrustRemove,
-        RunnerHostInvoke.certTrustListPending,
-        RunnerHostInvoke.certTrustDismissPending,
-        RunnerHostInvoke.certTrustSystemDialog,
-        RunnerHostInvoke.windowSetOverlayIcon,
-        RunnerHostInvoke.windowSetTitleBarOverlay,
-        // Windows frameless menu strip → native submenu popup.
-        RunnerHostInvoke.menuOpenTopLevel,
-        RunnerHostInvoke.displayList,
-        RunnerHostInvoke.fileDropWriteTemporary,
-        RunnerHostInvoke.fileDropCopyTemporary,
-        RunnerHostInvoke.fileDropReadNativeClipboardPaths,
-        RunnerHostInvoke.fileSave,
-        RunnerHostInvoke.fileOpenSaved,
-        RunnerHostInvoke.clipboardWriteImage,
-        RunnerHostInvoke.gpuAccelerationGet,
-        RunnerHostInvoke.gpuAccelerationSet,
-        RunnerHostInvoke.logLevelsGet,
-        RunnerHostInvoke.logLevelsSet,
-        RunnerHostInvoke.featureSettingsGet,
-        RunnerHostInvoke.agentRolesEnabledSet,
-        RunnerHostInvoke.fontsList,
-        RunnerHostInvoke.zoomGet,
-        RunnerHostInvoke.zoomSet,
-        RunnerHostInvoke.zoomStepIn,
-        RunnerHostInvoke.zoomStepOut,
-        RunnerHostInvoke.zoomReset,
-        // H10: the jar/CDP plane moved into main's own `browser-sessions`
-        // owner. The renderer no longer ensures/accepts/releases native tabs,
-        // dispatches CDP, captures/applies profiles, wraps store keys or
-        // attests desktop identity directly - it opens/closes/sends onto the
-        // `browser.sessions` stream and main drives all of that itself.
-        RunnerHostInvoke.browserViewSessionsOpen,
-        RunnerHostInvoke.browserViewSessionsClose,
-        RunnerHostInvoke.browserViewSessionsSend,
-        RunnerHostInvoke.browserViewAttachSurface,
-        RunnerHostInvoke.browserViewDetachSurface,
-        RunnerHostInvoke.browserViewControlElectronTab,
-        RunnerHostInvoke.browserViewUpdateBounds,
-        RunnerHostInvoke.browserViewOverlayPaintAck,
-        RunnerHostInvoke.browserViewSetReservedChords,
-        RunnerHostInvoke.browserViewOccludeForOverlay,
-        RunnerHostInvoke.browserViewReleaseOverlay,
-        RunnerHostInvoke.browserViewCapturePage,
-        RunnerHostInvoke.browserViewFindInPage,
-        RunnerHostInvoke.browserViewStopFindInPage,
-        RunnerHostInvoke.browserViewCancelDownload,
-        RunnerHostInvoke.browserViewTrustCertificate,
-        RunnerHostInvoke.browserViewStartAnnotation,
-        RunnerHostInvoke.browserViewCancelAnnotation,
-        RunnerHostInvoke.browserViewSetAnnotationTargetChatLabel,
-        RunnerHostInvoke.browserViewAnnotationAttachResult,
-        RunnerHostInvoke.browserViewGetDebugSnapshot,
-        // Keychain refactor tickets 07 and 08: the tile-menu clear-site and
-        // the whole-jar forget. The host-driven eviction of one site went with
-        // the `primaryProfileEvict` frame (universal-sign-in ticket 08).
-        RunnerHostInvoke.browserViewClearSite,
-        RunnerHostInvoke.browserViewForgetLogins,
-        RunnerHostInvoke.browserViewSaveLoginsGet,
-        RunnerHostInvoke.browserViewSaveLoginsSet,
-        // H10: "Clear" on one Settings > Browser row. Main confirms and sends
-        // the `clearSite` frames itself.
-        RunnerHostInvoke.browserViewClearSavedLoginSite,
-        RunnerHostInvoke.pipCaptureStart,
-        RunnerHostInvoke.pipCaptureStop,
-        // Selection authority (D16 / P1.1), plus P1.3's fleet-refresh edge.
-        RunnerHostInvoke.selectionAttach,
-        RunnerHostInvoke.selectionReportEvidence,
-        RunnerHostInvoke.selectionActivate,
-        RunnerHostInvoke.selectionRefreshFleet,
-      ].sort(),
-    );
-    bridge.dispose();
-  });
+      const channels = Array.from(ipcMainState.handlers.keys()).sort();
+      expect(channels).toEqual(
+        [
+          RunnerHostInvoke.workspaceFoldersPick,
+          RunnerHostInvoke.validateAuthTokenIdentity,
+          RunnerHostInvoke.deviceFlowStart,
+          RunnerHostInvoke.deviceFlowPollNow,
+          RunnerHostInvoke.deviceFlowCancel,
+          // §3 FileTokenStore IPC seam (get/signIn/rotate/delete, plus the
+          // atomic conditional delete); §6 adds the one-time legacy→file
+          // migration channel.
+          RunnerHostInvoke.authTokenStoreGet,
+          RunnerHostInvoke.authTokenStoreSignIn,
+          RunnerHostInvoke.authTokenStoreRotate,
+          RunnerHostInvoke.authTokenStoreDelete,
+          RunnerHostInvoke.authTokenStoreDeleteIfToken,
+          RunnerHostInvoke.authTokenStoreMigrateLegacy,
+          // Remote Host Support: host-registry read (§7) and version-policy
+          // write (§13, T16) run in main for the renderer-origin CORS reason.
+          RunnerHostInvoke.deregisterHostFromAccount,
+          RunnerHostInvoke.listRegisteredHosts,
+          RunnerHostInvoke.updateHostVersionPolicy,
+          RunnerHostInvoke.listUserSessions,
+          RunnerHostInvoke.revokeUserSession,
+          RunnerHostInvoke.revokeAllSessions,
+          RunnerHostInvoke.mintHostCredential,
+          RunnerHostInvoke.requestStepUpChallenge,
+          RunnerHostInvoke.verifyStepUpChallenge,
+          RunnerHostInvoke.notificationShow,
+          RunnerHostInvoke.openExternalLink,
+          RunnerHostInvoke.getRegisteredUrlSchemes,
+          RunnerHostInvoke.requestMicrophoneAccess,
+          RunnerHostInvoke.openMicrophoneSettings,
+          RunnerHostInvoke.notificationOpenSystemSettings,
+          RunnerHostInvoke.requestHostRespawn,
+          RunnerHostInvoke.lastKnownLocalHostId,
+          RunnerHostInvoke.localHostSnapshot,
+          RunnerHostInvoke.traySetIndicator,
+          RunnerHostInvoke.traySetEpics,
+          RunnerHostInvoke.setUnsyncedEditsSnapshot,
+          RunnerHostInvoke.appLifecycleQuit,
+          RunnerHostInvoke.acknowledgeQuitRequest,
+          RunnerHostInvoke.respondToQuitRequest,
+          RunnerHostInvoke.freshUnsyncedSnapshotResponse,
+          // H10: main captures the final browser state directly off the
+          // `BrowserSessionsRegistry` on quit - there is no renderer round
+          // trip left to ack, so this channel is gone.
+          RunnerHostInvoke.unsyncableWorkAcrossWindows,
+          RunnerHostInvoke.appUpdateCheck,
+          RunnerHostInvoke.appUpdateDownload,
+          RunnerHostInvoke.appUpdateGetSnapshot,
+          RunnerHostInvoke.appUpdateInstall,
+          RunnerHostInvoke.appUpdateResolveCompatRecovery,
+          // Previously absent from this list because it was never registered at
+          // all: the preload and renderer halves shipped while the main handler
+          // went with the removed Settings channel toggle, so `setAllowPrerelease`
+          // rejected as an unhandled channel. The compatibility-recovery RC opt-in
+          // is the one caller that reaches it now.
+          RunnerHostInvoke.appUpdateSetAllowPrerelease,
+          RunnerHostInvoke.globalShortcutsGetSnapshot,
+          RunnerHostInvoke.globalShortcutsSet,
+          RunnerHostInvoke.windowsList,
+          RunnerHostInvoke.windowsRequestNew,
+          RunnerHostInvoke.windowsRequestFocus,
+          RunnerHostInvoke.windowsRequestClose,
+          RunnerHostInvoke.windowsRequestOpenEpicInNewWindow,
+          RunnerHostInvoke.windowsRequestOpenDraftInNewWindow,
+          RunnerHostInvoke.ownershipSnapshot,
+          RunnerHostInvoke.ownershipClaim,
+          RunnerHostInvoke.ownershipRelease,
+          RunnerHostInvoke.perWindowStateGet,
+          RunnerHostInvoke.perWindowStateCapabilities,
+          RunnerHostInvoke.perWindowStateUpdate,
+          RunnerHostInvoke.perWindowStateClear,
+          RunnerHostInvoke.authSessionGet,
+          RunnerHostInvoke.authSessionSet,
+          RunnerHostInvoke.supportSaveDiagnosticBundle,
+          RunnerHostInvoke.supportDiscardFrozenEvidence,
+          RunnerHostInvoke.supportFreezeEvidence,
+          RunnerHostInvoke.supportReadFrozenLogTail,
+          RunnerHostInvoke.supportGetFingerprintOccurrence,
+          RunnerHostInvoke.supportRevealLog,
+          RunnerHostInvoke.supportTailLog,
+          RunnerHostInvoke.supportBuildPublicDraft,
+          RunnerHostInvoke.supportSubmitReport,
+          RunnerHostInvoke.supportSnapshotGet,
+          RunnerHostInvoke.powerSetSleepBlocked,
+          // Legacy `runnerHost:service:*` install/uninstall/start/stop/restart/
+          // upgrade/enableLinger/status/getLogTail channels have been removed
+          // in favor of the `traycer-cli`-driven host-management handlers
+          // (`traycerHost*`). The bridge no longer registers them.
+          RunnerHostInvoke.traycerHostStatus,
+          RunnerHostInvoke.traycerConfigShellGet,
+          RunnerHostInvoke.traycerConfigShellList,
+          RunnerHostInvoke.traycerConfigShellSet,
+          RunnerHostInvoke.traycerConfigShellReset,
+          RunnerHostInvoke.traycerConfigShellAdd,
+          RunnerHostInvoke.traycerConfigShellRemove,
+          RunnerHostInvoke.traycerConfigShellProbe,
+          RunnerHostInvoke.traycerConfigShellPickProgramFile,
+          RunnerHostInvoke.traycerConfigShellRevertArgs,
+          RunnerHostInvoke.traycerConfigEnvList,
+          RunnerHostInvoke.traycerConfigEnvSet,
+          RunnerHostInvoke.traycerConfigEnvDelete,
+          RunnerHostInvoke.migrationAnnounceRunning,
+          RunnerHostInvoke.migrationGetRunningSnapshot,
+          // Native-packaging host-management bridge (Flow 4 / Flow 6).
+          // These channels are registered by `registerHostManagementIpc`
+          // which the bridge invokes during `install()`.
+          RunnerHostInvoke.traycerHostControllerStatusGet,
+          RunnerHostInvoke.traycerHostConvergeReady,
+          RunnerHostInvoke.traycerHostApplyStaged,
+          RunnerHostInvoke.traycerHostActivateInstalled,
+          RunnerHostInvoke.traycerHostInstallVersion,
+          RunnerHostInvoke.traycerHostUninstall,
+          RunnerHostInvoke.traycerAppUninstall,
+          RunnerHostInvoke.traycerHostRemovalGet,
+          RunnerHostInvoke.traycerHostRemovalClear,
+          RunnerHostInvoke.traycerHostRestart,
+          RunnerHostInvoke.traycerHostLogs,
+          RunnerHostInvoke.traycerHostDoctor,
+          RunnerHostInvoke.traycerHostAvailable,
+          RunnerHostInvoke.traycerHostInstalled,
+          RunnerHostInvoke.traycerHostNameGet,
+          RunnerHostInvoke.traycerHostNameSet,
+          RunnerHostInvoke.traycerServiceRegister,
+          RunnerHostInvoke.traycerServiceDeregister,
+          RunnerHostInvoke.traycerRegistryCheck,
+          RunnerHostInvoke.traycerFreePortAndRestart,
+          RunnerHostInvoke.traycerFreePortAndRestartIfIdle,
+          RunnerHostInvoke.traycerCliManifestRead,
+          // The maintenance-RPC projections the GUI's local fallback serves
+          // when a local host too old for the v1.2.0 `host.*` maintenance
+          // family negotiated it away. Registered by the same
+          // `registerHostManagementIpc` call as the block above.
+          RunnerHostInvoke.traycerMaintenanceUpdateCheck,
+          RunnerHostInvoke.traycerMaintenanceDoctor,
+          RunnerHostInvoke.traycerMaintenanceInstallationInfo,
+          RunnerHostInvoke.traycerMaintenanceInstallVersion,
+          RunnerHostInvoke.traycerHostRestartIfIdle,
+          RunnerHostInvoke.traycerDoctorRepairQueued,
+          RunnerHostInvoke.traycerDoctorRepairIfIdle,
+          // Platform IPC channels installed by `registerPlatformIpc(bridge)`,
+          // which is now invoked from `RunnerIpcBridge.install()` rather than
+          // wired by the host. They cover recent docs, window effects, GPU,
+          // proxies, certificates, diagnostics, displays, and TouchID.
+          RunnerHostInvoke.recentDocumentAdd,
+          RunnerHostInvoke.windowFlashFrame,
+          RunnerHostInvoke.windowSetProgressBar,
+          RunnerHostInvoke.windowSetBadge,
+          RunnerHostInvoke.windowSetRepresentedFilename,
+          RunnerHostInvoke.windowSetDocumentEdited,
+          RunnerHostInvoke.windowSetContentProtection,
+          RunnerHostInvoke.diagnosticsGetMetrics,
+          RunnerHostInvoke.diagnosticsTakeHeapSnapshot,
+          RunnerHostInvoke.diagnosticsTraceStart,
+          RunnerHostInvoke.diagnosticsTraceStop,
+          RunnerHostInvoke.systemPreferencesAccentColor,
+          RunnerHostInvoke.systemPreferencesAppearance,
+          RunnerHostInvoke.systemPreferencesAccessibilityTheme,
+          RunnerHostInvoke.touchIdAvailable,
+          RunnerHostInvoke.touchIdPrompt,
+          RunnerHostInvoke.windowSetVibrancy,
+          RunnerHostInvoke.windowSetBackgroundMaterial,
+          RunnerHostInvoke.windowSetVisibleOnAllWorkspaces,
+          RunnerHostInvoke.proxyAuthList,
+          RunnerHostInvoke.proxyAuthSave,
+          RunnerHostInvoke.proxyAuthClear,
+          RunnerHostInvoke.proxySetConfig,
+          RunnerHostInvoke.proxyResolve,
+          RunnerHostInvoke.certTrustList,
+          RunnerHostInvoke.certTrustAdd,
+          RunnerHostInvoke.certTrustRemove,
+          RunnerHostInvoke.certTrustListPending,
+          RunnerHostInvoke.certTrustDismissPending,
+          RunnerHostInvoke.certTrustSystemDialog,
+          RunnerHostInvoke.windowSetOverlayIcon,
+          RunnerHostInvoke.windowSetTitleBarOverlay,
+          // Windows frameless menu strip → native submenu popup.
+          RunnerHostInvoke.menuOpenTopLevel,
+          RunnerHostInvoke.displayList,
+          RunnerHostInvoke.fileDropWriteTemporary,
+          RunnerHostInvoke.fileDropCopyTemporary,
+          RunnerHostInvoke.fileDropReadNativeClipboardPaths,
+          RunnerHostInvoke.fileSave,
+          RunnerHostInvoke.fileOpenSaved,
+          RunnerHostInvoke.clipboardWriteImage,
+          RunnerHostInvoke.gpuAccelerationGet,
+          RunnerHostInvoke.gpuAccelerationSet,
+          RunnerHostInvoke.logLevelsGet,
+          RunnerHostInvoke.logLevelsSet,
+          RunnerHostInvoke.featureSettingsGet,
+          RunnerHostInvoke.agentRolesEnabledSet,
+          RunnerHostInvoke.fontsList,
+          RunnerHostInvoke.zoomGet,
+          RunnerHostInvoke.zoomSet,
+          RunnerHostInvoke.zoomStepIn,
+          RunnerHostInvoke.zoomStepOut,
+          RunnerHostInvoke.zoomReset,
+          // H10: the jar/CDP plane moved into main's own `browser-sessions`
+          // owner. The renderer no longer ensures/accepts/releases native tabs,
+          // dispatches CDP, captures/applies profiles, wraps store keys or
+          // attests desktop identity directly - it opens/closes/sends onto the
+          // `browser.sessions` stream and main drives all of that itself.
+          RunnerHostInvoke.browserViewSessionsOpen,
+          RunnerHostInvoke.browserViewSessionsClose,
+          RunnerHostInvoke.browserViewSessionsSend,
+          RunnerHostInvoke.browserViewAttachSurface,
+          RunnerHostInvoke.browserViewDetachSurface,
+          RunnerHostInvoke.browserViewControlElectronTab,
+          RunnerHostInvoke.browserViewUpdateBounds,
+          RunnerHostInvoke.browserViewOverlayPaintAck,
+          RunnerHostInvoke.browserViewSetReservedChords,
+          RunnerHostInvoke.browserViewOccludeForOverlay,
+          RunnerHostInvoke.browserViewReleaseOverlay,
+          RunnerHostInvoke.browserViewCapturePage,
+          RunnerHostInvoke.browserViewFindInPage,
+          RunnerHostInvoke.browserViewStopFindInPage,
+          RunnerHostInvoke.browserViewCancelDownload,
+          RunnerHostInvoke.browserViewTrustCertificate,
+          RunnerHostInvoke.browserViewStartAnnotation,
+          RunnerHostInvoke.browserViewCancelAnnotation,
+          RunnerHostInvoke.browserViewSetAnnotationTargetChatLabel,
+          RunnerHostInvoke.browserViewAnnotationAttachResult,
+          RunnerHostInvoke.browserViewGetDebugSnapshot,
+          // Keychain refactor tickets 07 and 08: the tile-menu clear-site and
+          // the whole-jar forget. The host-driven eviction of one site went with
+          // the `primaryProfileEvict` frame (universal-sign-in ticket 08).
+          RunnerHostInvoke.browserViewClearSite,
+          RunnerHostInvoke.browserViewForgetLogins,
+          RunnerHostInvoke.browserViewSaveLoginsGet,
+          RunnerHostInvoke.browserViewSaveLoginsSet,
+          // H10: "Clear" on one Settings > Browser row. Main confirms and sends
+          // the `clearSite` frames itself.
+          RunnerHostInvoke.browserViewClearSavedLoginSite,
+          RunnerHostInvoke.pipCaptureStart,
+          RunnerHostInvoke.pipCaptureStop,
+          // Selection authority (D16 / P1.1), plus P1.3's fleet-refresh edge.
+          RunnerHostInvoke.selectionAttach,
+          RunnerHostInvoke.selectionReportEvidence,
+          RunnerHostInvoke.selectionActivate,
+          RunnerHostInvoke.selectionRefreshFleet,
+        ].sort(),
+      );
+      bridge.dispose();
+    },
+  );
 
   it("gets and sets agent roles through typed IPC, rejecting non-boolean payloads", async () => {
     const mod = await import("../register-runner-ipc");

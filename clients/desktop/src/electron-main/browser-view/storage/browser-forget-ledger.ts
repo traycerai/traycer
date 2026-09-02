@@ -225,7 +225,22 @@ export async function initBrowserForgetLedger(filePath: string): Promise<void> {
     (value) => recordSchema.safeParse(value).data ?? EMPTY_RECORD,
   );
   completedClears.clear();
-  ledger = await store.load();
+  const loaded = await store.load();
+  // Clamped to the SAME bounds the write path applies. The schema puts none on
+  // these three lists, and every limit in this file lives on a mutation
+  // (`trimDomains`, MAX_ACKED_HOSTS, MAX_HEADLESS_ORIGIN_KEYS) - so a file
+  // grown past them, whether by an older build or by hand, is loaded whole and
+  // only comes back under the bound the next time that particular list is
+  // written. Clamping on load makes the bound a property of the ledger rather
+  // than of the last mutation to touch it.
+  ledger = {
+    ...loaded,
+    domains: trimDomains(loaded.domains),
+    ackedByHost: loaded.ackedByHost.slice(-MAX_ACKED_HOSTS),
+    headlessOriginKeys: loaded.headlessOriginKeys.slice(
+      -MAX_HEADLESS_ORIGIN_KEYS,
+    ),
+  };
   reindexHeadlessOriginKeys();
   log.info("[browser-view] forget ledger loaded", {
     revision: ledger.revision,
@@ -541,9 +556,19 @@ export function isHeadlessOriginCookieKey(keyId: string): boolean {
 export async function recordHeadlessOriginCookieKeys(
   keys: readonly BrowserCookieKey[],
 ): Promise<void> {
-  const added = keys.filter(
-    (key) => !headlessOriginKeyIds.has(cookieKeyId(key)),
-  );
+  // Deduplicated WITHIN the batch as well as against the index: the index is
+  // not updated during the filter, so two identical keys in one call both
+  // passed and both were appended. `reindexHeadlessOriginKeys` collapses them
+  // in the lookup set, which makes the duplicate rows invisible while they go
+  // on consuming a slot of MAX_HEADLESS_ORIGIN_KEYS and evicting a real
+  // contribution off the front.
+  const seen = new Set<string>();
+  const added = keys.filter((key) => {
+    const id = cookieKeyId(key);
+    if (headlessOriginKeyIds.has(id) || seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
   if (added.length === 0) return;
   mutate({
     ...ledger,

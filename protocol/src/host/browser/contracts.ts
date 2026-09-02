@@ -1094,6 +1094,11 @@ type BrowserSessionsUxFrameCarryingJarMaterial = Extract<
   | { readonly rawKey: unknown }
   | { readonly wrappedKey: unknown }
   | { readonly seedStorageState: unknown }
+  // The doc above says "or a signing challenge", and these are the two fields
+  // that carry one. Without them a future UX server frame that grew a `nonce`
+  // or a `signature` would compile straight through the guard.
+  | { readonly nonce: unknown }
+  | { readonly signature: unknown }
 >;
 const noJarMaterialReachesARenderer: BrowserSessionsUxFrameCarryingJarMaterial extends never
   ? true

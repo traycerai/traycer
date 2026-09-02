@@ -580,7 +580,19 @@ export async function browserJarCookieKeys(
   domain: string,
   browserSession: BrowserStorageSession,
 ): Promise<readonly BrowserCookieKey[]> {
-  return browserStorageCookies(await browserSession.cookies.get({ domain }));
+  // PROJECTED, not just narrowed by the return type: `browserStorageCookies`
+  // answers whole cookies, and TypeScript accepts the wider object for the
+  // three-field key type - so `value`, `expires`, `httpOnly`, `secure` and
+  // `sameSite` would reach every caller at runtime while the signature says
+  // "keys". This function exists so the ownership rule can ask what the jar
+  // HOLDS without reading what it holds.
+  return browserStorageCookies(
+    await browserSession.cookies.get({ domain }),
+  ).map((cookie) => ({
+    domain: cookie.domain,
+    name: cookie.name,
+    path: cookie.path,
+  }));
 }
 
 /**

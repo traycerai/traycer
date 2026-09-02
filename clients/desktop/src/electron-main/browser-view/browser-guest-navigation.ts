@@ -81,11 +81,17 @@ function navigationScheme(url: string): string {
  */
 export function guestNavigationGuards(): BrowserViewListenerMap {
   return {
+    // The event object carries its own `url` and the positional one is
+    // DEPRECATED in Electron 42 (`electron.d.ts`: `details`, then a
+    // `@deprecated url: string`). Both are passed today, so this reads the
+    // object first and keeps the positional as the fallback - a guard that
+    // silently receives `undefined` when the deprecated argument is finally
+    // dropped is a guard that stops naming what it is refusing.
     "will-navigate": (event: BrowserGuestNavigationEvent, url: string) => {
-      refuseUnlessAllowed(event, url, "will-navigate");
+      refuseUnlessAllowed(event, event.url ?? url, "will-navigate");
     },
     "will-redirect": (event: BrowserGuestNavigationEvent, url: string) => {
-      refuseUnlessAllowed(event, url, "will-redirect");
+      refuseUnlessAllowed(event, event.url ?? url, "will-redirect");
     },
     // Electron hands this one a single details object carrying its own url,
     // not the `(event, url)` pair the other two use.
@@ -107,6 +113,8 @@ export function installGuestNavigationGuard(webContents: {
 }
 
 interface BrowserGuestNavigationEvent {
+  /** Present on the Electron event object; the positional `url` is deprecated. */
+  readonly url?: string | undefined;
   preventDefault(): void;
 }
 

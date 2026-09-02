@@ -1,4 +1,5 @@
 import { useEffect, type ReactNode } from "react";
+import { appLogger } from "@/lib/logger";
 import { useAuthService } from "@/lib/host";
 import { useWindowsBridge } from "@/providers/windows-bridge-context";
 import { authSessionRefusedToast } from "@/lib/toast/channels";
@@ -60,18 +61,33 @@ export function WindowsBridgeAuthSessionBridge(
         return;
       }
       lastWrittenSerialized = serialized;
-      void bridge.authSession.set(desktopSnapshot).then((result) => {
-        if (result.outcome !== "refused") return;
-        // The latch is an echo suppressor, not a record of what the bridge
-        // holds: a refused write left nothing there, so keeping it latched
-        // makes the very next projection of the SAME snapshot a no-op and the
-        // window never re-attempts. Cleared only while the latch is still this
-        // write's - a newer projection has already superseded it.
-        if (lastWrittenSerialized === serialized) lastWrittenSerialized = null;
-        authSessionRefusedToast.warning(
-          describeAuthSessionRefusalReason(result.reason),
-        );
-      });
+      void bridge.authSession.set(desktopSnapshot).then(
+        (result) => {
+          if (result.outcome !== "refused") return;
+          // The latch is an echo suppressor, not a record of what the bridge
+          // holds: a refused write left nothing there, so keeping it latched
+          // makes the very next projection of the SAME snapshot a no-op and
+          // the window never re-attempts. Cleared only while the latch is
+          // still this write's - a newer projection has already superseded it.
+          if (lastWrittenSerialized === serialized)
+            lastWrittenSerialized = null;
+          authSessionRefusedToast.warning(
+            describeAuthSessionRefusalReason(result.reason),
+          );
+        },
+        (cause: unknown) => {
+          // An IPC invoke that REJECTS - the main handler threw, the channel is
+          // absent, the window is being destroyed - leaves exactly the stuck
+          // latch the refusal branch above exists to prevent, plus an unhandled
+          // rejection. Same clearing rule, so the next projection of the same
+          // snapshot is attempted again.
+          if (lastWrittenSerialized === serialized)
+            lastWrittenSerialized = null;
+          appLogger.warn("[auth] could not write the desktop auth session", {
+            cause: cause instanceof Error ? cause.message : String(cause),
+          });
+        },
+      );
     };
 
     const ingestInbound = (snapshot: DesktopAuthSessionSnapshot): void => {

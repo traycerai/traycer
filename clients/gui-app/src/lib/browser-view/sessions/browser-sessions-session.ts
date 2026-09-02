@@ -95,14 +95,30 @@ function openIpcSession(
       case "tabBound":
         args.callbacks.onTabBound(event.capability);
         return;
-      default:
+      case "tabReleased":
         args.callbacks.onTabReleased(event.capability);
+        return;
+      default: {
+        // A new envelope kind is a COMPILE error here, not a tab release. The
+        // old `default` read `event.capability` off whatever arrived, so an
+        // added kind was delivered as a release and failed only if it happened
+        // to lack that field. Same discipline the coordinator's frame router
+        // states for the server-frame union.
+        const unreachable: never = event;
+        void unreachable;
+      }
     }
   });
   void browserView.openSessionsStream(key).catch((cause: unknown) => {
     appLogger.warn("[browser] could not open the sessions stream", {
       cause: cause instanceof Error ? cause.message : String(cause),
     });
+    // Gated on `closed` the way the event handler above is: the open is an IPC
+    // round trip, so its rejection can land after the coordinator closed this
+    // session - and the coordinator reuses one `onStatus` closure across
+    // incarnations, so a late `failed` from a dead session would be reported
+    // against the live one that replaced it.
+    if (closed) return;
     args.callbacks.onStatus("failed", "Browser sessions stream failed.");
   });
   return {
@@ -147,11 +163,19 @@ function openDirectSession(
     throw cause;
   }
   const opened = stream;
+  // The same post-close contract the IPC path has: a `send` after close is
+  // ignored rather than pushed into a closed client, and a second `close` is a
+  // no-op rather than a second close of the client and the transport. Both
+  // implementations satisfy one interface, so they answer the same way.
+  let closed = false;
   return {
     send: (frame) => {
+      if (closed) return;
       opened.sendClientFrame(frame);
     },
     close: () => {
+      if (closed) return;
+      closed = true;
       opened.close();
       transport.close();
     },

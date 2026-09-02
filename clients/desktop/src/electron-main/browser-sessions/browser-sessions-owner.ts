@@ -221,7 +221,12 @@ export class BrowserSessionsRegistry {
   private countStreamsForWindow(windowId: string): number {
     let count = 0;
     for (const stream of this.streams.values()) {
-      if (stream.windowId === windowId) count += 1;
+      // A stream that never opened for an identity holds no socket, no
+      // attestation and no replay - the cap exists to bound those. Counting
+      // it would let a window that opened keys while signed out reach the cap
+      // with records that cost nothing, and the refusal would then fall on the
+      // streams that do.
+      if (stream.windowId === windowId && stream.holdsConnection) count += 1;
     }
     return count;
   }
@@ -406,6 +411,15 @@ class BrowserSessionsStream {
    * attach.
    */
   private openedUserId: string | null = null;
+
+  /**
+   * Has this stream actually opened for an identity? `false` while the desktop
+   * is signed out, when `start()` returns before dialling anything. See
+   * {@link BrowserSessionsRegistry.countStreamsForWindow}.
+   */
+  get holdsConnection(): boolean {
+    return this.openedUserId !== null;
+  }
   private readonly captureAckWaiters = new Map<string, () => void>();
 
   constructor(
@@ -428,6 +442,12 @@ class BrowserSessionsStream {
       // Signed out: there is no identity to open a stream for. A sign-in
       // rotates the bearer, and that is what re-drives this. Deliberately not
       // a failure - nothing was reported to the renderer to retry.
+      //
+      // The entry stays in the registry so the sign-in can re-drive it, which
+      // is why `countStreamsForWindow` skips a stream in this state: a window
+      // that opened keys while signed out would otherwise fill its cap with
+      // stream records holding no socket, and the refusal would then land on
+      // the streams that matter once the user signs in.
       return;
     }
     this.openedUserId = userId;
@@ -525,7 +545,13 @@ class BrowserSessionsStream {
         hostId: this.hostId,
         error: describeLogError(cause),
       });
-      this.teardownTransport();
+      // `teardown()`, not `teardownTransport()`: the electron-tab registration
+      // and the two jar subscriptions above are already installed by the time
+      // the client constructor can throw, and closing only the transport left
+      // them registered until `dispose()` with nothing to drive them - a
+      // `primaryProfileDelta` handler holding a live jar listener on a stream
+      // that will never open.
+      this.teardown();
       this.emitStatus("failed", "Browser sessions stream could not open.");
     }
   }

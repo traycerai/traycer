@@ -115,13 +115,24 @@ export function createDesktopBearerVerifier(
       if (!key.success || key.data.traycer_class !== BEARER_SIGNING_CLASS) {
         continue;
       }
-      parsed.set(
-        key.data.kid,
-        createPublicKey({
-          key: { kty: "RSA", n: key.data.n, e: key.data.e },
-          format: "jwk",
-        }),
-      );
+      // Guarded per key rather than per response: `jwkSchema` proves `n` and
+      // `e` are non-empty strings, not that they are valid base64url RSA
+      // parameters, and `createPublicKey` throws on one that is not. An
+      // uncaught throw here leaves the loop and rejects `fetchBearerKeys`, so
+      // one malformed entry would discard every other bearer-class key in the
+      // same response and turn a partial publish into a total refusal.
+      try {
+        parsed.set(
+          key.data.kid,
+          createPublicKey({
+            key: { kty: "RSA", n: key.data.n, e: key.data.e },
+            format: "jwk",
+          }),
+        );
+      } catch {
+        // Skipped, not fatal. If it was the only key, `parsed.size === 0`
+        // below still makes this a failed fetch rather than a verdict.
+      }
     }
     if (parsed.size === 0) {
       // Every published key was of another class, so this response verifies

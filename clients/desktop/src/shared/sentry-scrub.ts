@@ -214,6 +214,17 @@ export function scrubDesktopSentrySpanInPlace(span: DesktopSentrySpan): void {
 
 function reduceSpanAttributesInPlace(data: unknown): void {
   if (!isPlainRecord(data)) return;
+  // The whole record first, then the URL attributes. Span data is an OPEN map
+  // - any instrumentation, and any of our own code, may put an
+  // `authorization`, a `cookie` or a token-bearing custom key in it - so
+  // handling only the URL attributes below would send every other one through
+  // `beforeSendSpan` untouched. `deepScrubSentryRecord` answers a new record
+  // rather than mutating, so its result is written back key by key: the
+  // caller holds this object by reference and the reduction below operates on
+  // the same one.
+  const scrubbed = deepScrubSentryRecord(data, redactSensitiveText);
+  for (const key of Object.keys(data)) delete data[key];
+  Object.assign(data, scrubbed);
   delete data[QUERY_SPAN_ATTRIBUTE];
   for (const key of URL_BEARING_SPAN_ATTRIBUTES) {
     const value = data[key];

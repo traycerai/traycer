@@ -5,6 +5,7 @@ import {
   sign as cryptoSign,
 } from "node:crypto";
 import { randomUUID } from "node:crypto";
+import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import { canonicalDesktopIdentityAttestBytes } from "@traycer/protocol/host/browser/contracts";
@@ -88,6 +89,27 @@ export function browserDesktopIdentityFilePath(): string {
   return join(app.getPath("userData"), DESKTOP_IDENTITY_FILE_NAME);
 }
 
+/**
+ * Does the identity file exist at all? See {@link mintIdentity} for why the
+ * question cannot be answered from `load()`.
+ *
+ * ENOENT is the ONLY answer that means "absent". Any other errno means the
+ * path is there and this process could not look at it, which is not a reason
+ * to mint over it, so it answers `true` and fails closed.
+ */
+async function identityFileExists(): Promise<boolean> {
+  try {
+    await stat(browserDesktopIdentityFilePath());
+    return true;
+  } catch (cause) {
+    const code: unknown =
+      typeof cause === "object" && cause !== null && "code" in cause
+        ? (cause as { readonly code: unknown }).code
+        : null;
+    return code !== "ENOENT";
+  }
+}
+
 function identityStore(): StrictJsonFileStore<DesktopIdentityRecord | null> {
   store ??= createJsonFileStore<DesktopIdentityRecord | null>(
     browserDesktopIdentityFilePath(),
@@ -138,6 +160,18 @@ function loadOrMintIdentity(): Promise<DesktopIdentityRecord | null> {
 async function mintIdentity(): Promise<DesktopIdentityRecord | null> {
   const existing = await identityStore().load();
   if (existing !== null) return existing;
+  // `load()` cannot tell "no identity yet" from "the identity file could not
+  // be read": `createJsonFileStore.load()` catches every error and answers the
+  // fallback. Minting on that answer would write a NEW keypair over an
+  // existing one on a transient EACCES/EBUSY/EMFILE, and every host that had
+  // pinned the old public key would then refuse this desktop. So an existing
+  // file is checked for directly, and its presence refuses the mint.
+  if (await identityFileExists()) {
+    log.warn(
+      "[browser-view] a desktop identity file exists but could not be read; refusing to mint over it",
+    );
+    return null;
+  }
   const encrypted = isKeystoreEncrypting();
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
   const pkcs8Base64 = privateKey
