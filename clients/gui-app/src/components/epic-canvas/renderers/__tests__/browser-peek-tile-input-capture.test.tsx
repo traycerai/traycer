@@ -1,11 +1,6 @@
 import "../../../../../__tests__/test-browser-apis";
-import {
-  act,
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-} from "@testing-library/react";
+import { act, cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderPeekTile } from "@/components/epic-canvas/renderers/__tests__/browser-peek-tile-render";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   FakeStreamClient,
@@ -242,7 +237,7 @@ describe("BrowserPeekTile input capture", () => {
   });
 
   it("captures pointerId 1 on the overlay button at pointerdown", () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -271,7 +266,7 @@ describe("BrowserPeekTile input capture", () => {
   });
 
   it("releases pointer capture on pointerup", () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -310,7 +305,7 @@ describe("BrowserPeekTile input capture", () => {
   });
 
   it("releases pointer capture on pointercancel", () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -341,7 +336,7 @@ describe("BrowserPeekTile input capture", () => {
   });
 
   it("sends matching ups for every accepted button on pointercancel", () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -416,7 +411,7 @@ describe("BrowserPeekTile input capture", () => {
   });
 
   it("sends both releases for a multi-button chord", () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -485,7 +480,7 @@ describe("BrowserPeekTile input capture", () => {
   });
 
   it("releases pointer capture when the server revokes the arm", () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -526,7 +521,7 @@ describe("BrowserPeekTile input capture", () => {
   });
 
   it("releases pointer capture on an explicit Release", () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -563,7 +558,7 @@ describe("BrowserPeekTile input capture", () => {
   });
 
   it("releases pointer capture when the stream leaves open", () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -596,7 +591,7 @@ describe("BrowserPeekTile input capture", () => {
   });
 
   it("keeps the same screencast image mounted across sequence changes", () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -618,7 +613,7 @@ describe("BrowserPeekTile input capture", () => {
   });
 
   it("latches the presented sequence only at paint, not at frame arrival", () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -680,7 +675,7 @@ describe("BrowserPeekTile input capture", () => {
 
   it("sends clickCount 1 on armed down/up and 0 on move/wheel", async () => {
     const frames = installAnimationFrameQueue();
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -768,7 +763,7 @@ describe("BrowserPeekTile input capture", () => {
   it("increments nearby clicks and resets beyond the slop or time window", () => {
     let now = 100;
     vi.spyOn(performance, "now").mockImplementation(() => now);
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -798,7 +793,7 @@ describe("BrowserPeekTile input capture", () => {
   it("clamps the tracked click count at 8", () => {
     let now = 100;
     vi.spyOn(performance, "now").mockImplementation(() => now);
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -831,7 +826,7 @@ describe("BrowserPeekTile input capture", () => {
 
   it("emits at most one move per animation frame and keeps the latest sample", async () => {
     const frames = installAnimationFrameQueue();
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -895,7 +890,7 @@ describe("BrowserPeekTile input capture", () => {
 
   it("flushes a pending move before down, up, and wheel", async () => {
     const frames = installAnimationFrameQueue();
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -1011,7 +1006,7 @@ describe("BrowserPeekTile input capture", () => {
 
   it("normalizes armed wheel deltas and drops wheels outside the image", () => {
     const frames = installAnimationFrameQueue();
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -1092,7 +1087,7 @@ describe("BrowserPeekTile input capture", () => {
 
   it("coalesces same-direction wheel deltas within an animation frame", () => {
     const frames = installAnimationFrameQueue();
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -1135,7 +1130,7 @@ describe("BrowserPeekTile input capture", () => {
 
   it("sums a direction reversal into the same frame's single wheel", () => {
     const frames = installAnimationFrameQueue();
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -1178,7 +1173,7 @@ describe("BrowserPeekTile input capture", () => {
   });
 
   it("flushes a pending wheel before a pointerdown in the same frame, in order", () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -1224,7 +1219,7 @@ describe("BrowserPeekTile input capture", () => {
   });
 
   it("does not listen for wheel while unarmed", () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -1253,7 +1248,7 @@ describe("BrowserPeekTile input capture", () => {
   });
 
   it("forwards Escape as a repeating rawKeyDown without disarming", () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -1286,7 +1281,7 @@ describe("BrowserPeekTile input capture", () => {
   });
 
   it("forwards autoRepeat on a held letter", () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -1323,7 +1318,7 @@ describe("BrowserPeekTile input capture", () => {
   });
 
   it("closes the stream and releases capture when the tile is hidden", () => {
-    const view = render(
+    const view = renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -1365,7 +1360,7 @@ describe("BrowserPeekTile input capture", () => {
   });
 
   it("delivers a buffered cold click after arm confirmation", () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -1431,7 +1426,7 @@ describe("BrowserPeekTile input capture", () => {
   it("resets click counting when a buffered click is dropped", () => {
     let now = 100;
     vi.spyOn(performance, "now").mockImplementation(() => now);
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -1480,7 +1475,7 @@ describe("BrowserPeekTile input capture", () => {
   });
 
   it("does not replay a cold down when arm confirms before the matching up", () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -1520,7 +1515,7 @@ describe("BrowserPeekTile input capture", () => {
   });
 
   it("turns a buffered drag into arm-only", () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -1570,7 +1565,7 @@ describe("BrowserPeekTile input capture", () => {
   });
 
   it("does not deliver a buffered gesture after a stream reset", () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -1612,7 +1607,7 @@ describe("BrowserPeekTile input capture", () => {
   });
 
   it("drops both pointer frames when an armed down starts in the letterbox", () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -1655,7 +1650,7 @@ describe("BrowserPeekTile input capture", () => {
 
   it("drops an armed down outside the image and clamps a captured move/up to the edge", async () => {
     const frames = installAnimationFrameQueue();
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -1742,7 +1737,7 @@ describe("BrowserPeekTile input capture", () => {
     // viewer cannot see is worse than dropping the frame. Epoch correlation
     // itself is pinned in `screencast-input-correlation.test.tsx`, on a tile
     // that has a plane.
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -1773,7 +1768,7 @@ describe("BrowserPeekTile input capture", () => {
   it("drops the video plane when the transport dies", () => {
     // The epoch and the mode were both established by a transport that is
     // gone; the next one starts on JPEG until the host says otherwise.
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
