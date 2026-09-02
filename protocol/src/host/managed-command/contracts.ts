@@ -73,7 +73,8 @@ export const managedCommandStartV11 = defineRpcContract({
 
 // The request did not change. The response grew a defaulted field, so a `1.0`
 // response upgrades by parsing through the live schema, which fills the
-// default (`false`: a host that never offered the choice never relaunched).
+// default (`true`: a host that only serves `1.0` predates the choice and
+// respawns every survivor - see `managedCommandSchema`).
 export const managedCommandStartUpgradeV10ToV11 = defineUpgradePath<
   typeof managedCommandStartV10,
   typeof managedCommandStartV11

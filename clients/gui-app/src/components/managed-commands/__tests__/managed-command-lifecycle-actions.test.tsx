@@ -29,6 +29,19 @@ vi.mock(
   }),
 );
 
+// The host's negotiated method set, as the relaunch switch reads it. A
+// primitive slot rather than a nullable one so the tests below can flip it
+// without a cast (`let x = false` narrows to `false` under this repo's rules).
+const hostMethods = { configure: true };
+const supportsMethodSpy = vi.fn(
+  (_hostId: string | null, method: string) =>
+    method === "managedCommand.configure" && hostMethods.configure,
+);
+vi.mock("@/hooks/host/use-host-supports-method", () => ({
+  useHostSupportsMethod: (hostId: string | null, method: string) =>
+    supportsMethodSpy(hostId, method),
+}));
+
 import { ManagedCommandLifecycleActions } from "../managed-command-lifecycle-actions";
 
 const RUNNING: ManagedCommand = {
@@ -68,6 +81,8 @@ beforeEach(() => {
   stopMutate.mockClear();
   deleteMutate.mockClear();
   configureMutate.mockClear();
+  supportsMethodSpy.mockClear();
+  hostMethods.configure = true;
 });
 
 afterEach(() => {
@@ -136,6 +151,30 @@ describe("managed-command lifecycle actions", () => {
     // A toggle, not a lifecycle act: nothing was started or stopped by it.
     expect(startMutate).not.toHaveBeenCalled();
     expect(stopMutate).not.toHaveBeenCalled();
+    // And the gate was asked about THIS command's host, not the app-wide one.
+    expect(supportsMethodSpy).toHaveBeenCalledWith(
+      "host-1",
+      "managedCommand.configure",
+    );
+  });
+
+  it("hides the relaunch switch on a host that did not negotiate managedCommand.configure", () => {
+    // The method is off the released floor, so an older host negotiates it
+    // away; a switch against it could only fail. The rest of the row stays -
+    // asserted positively, since "switch absent" is also true of a row that
+    // failed to render at all.
+    hostMethods.configure = false;
+    renderActions({ ...RUNNING, relaunchOnHostRestart: true });
+
+    expect(
+      screen.queryByRole("button", { name: "Relaunches after a host restart" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Stays down after a host restart" }),
+    ).toBeNull();
+    expect(screen.getByRole("button", { name: "Stop" })).toBeDefined();
+    expect(screen.getByRole("button", { name: "Delete" })).toBeDefined();
+    expect(configureMutate).not.toHaveBeenCalled();
   });
 
   it("names the output history before deleting, and only deletes on confirm", () => {

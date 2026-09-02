@@ -6,6 +6,7 @@ import {
   ManagedCommandStopButton,
 } from "@/components/managed-commands/managed-command-action-buttons";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
+import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import {
   useManagedCommandConfigure,
   useManagedCommandDelete,
@@ -41,6 +42,12 @@ export interface ManagedCommandLifecycleActionsProps {
  * label carry the value. It is the person's override of what the agent asked
  * for at run time - the case it exists for is a shell the host keeps
  * relaunching that nobody wants relaunched.
+ *
+ * The switch is offered only when the command's host advertised
+ * `managedCommand.configure`: the method is off the released floor, so an
+ * older host negotiates it away rather than failing the handshake, and a
+ * switch against such a host could only fail. (Its commands still carry the
+ * flag - `true`, the legacy behaviour - through the schema default.)
  */
 export function ManagedCommandLifecycleActions(
   props: ManagedCommandLifecycleActionsProps,
@@ -52,7 +59,14 @@ export function ManagedCommandLifecycleActions(
   // this command - gating here, at the shared action, covers every surface
   // that renders a stop (menu row, output window, panel row) with one rule.
   const stopAllPending = useManagedCommandStopAllIsPending(command.chatId);
-  const configure = useManagedCommandConfigure();
+  const configure = useManagedCommandConfigure({
+    hostId,
+    commandId: command.id,
+  });
+  const supportsConfigure = useHostSupportsMethod(
+    hostId,
+    "managedCommand.configure",
+  );
   const remove = useManagedCommandDelete();
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const variables = { hostId, epicId, commandId: command.id };
@@ -84,29 +98,33 @@ export function ManagedCommandLifecycleActions(
           }}
         />
       )}
-      <ManagedCommandActionButton
-        label={relaunchOnHostRestartLabel(command.relaunchOnHostRestart)}
-        ariaLabel={relaunchOnHostRestartLabel(command.relaunchOnHostRestart)}
-        icon={
-          <RotateCcw
-            aria-hidden
-            className={cn(
-              "size-3.5",
-              command.relaunchOnHostRestart ? "text-foreground" : "opacity-50",
-            )}
-          />
-        }
-        isPending={configure.isPending}
-        testId={`managed-command-relaunch-${command.id}`}
-        className={undefined}
-        pressed={command.relaunchOnHostRestart}
-        onClick={() => {
-          configure.mutate({
-            ...variables,
-            relaunchOnHostRestart: !command.relaunchOnHostRestart,
-          });
-        }}
-      />
+      {supportsConfigure ? (
+        <ManagedCommandActionButton
+          label={relaunchOnHostRestartLabel(command.relaunchOnHostRestart)}
+          ariaLabel={relaunchOnHostRestartLabel(command.relaunchOnHostRestart)}
+          icon={
+            <RotateCcw
+              aria-hidden
+              className={cn(
+                "size-3.5",
+                command.relaunchOnHostRestart
+                  ? "text-foreground"
+                  : "opacity-50",
+              )}
+            />
+          }
+          isPending={configure.isPending}
+          testId={`managed-command-relaunch-${command.id}`}
+          className={undefined}
+          pressed={command.relaunchOnHostRestart}
+          onClick={() => {
+            configure.mutate({
+              ...variables,
+              relaunchOnHostRestart: !command.relaunchOnHostRestart,
+            });
+          }}
+        />
+      ) : null}
       <ManagedCommandActionButton
         label="Delete"
         ariaLabel="Delete"

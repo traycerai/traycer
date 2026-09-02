@@ -7084,9 +7084,10 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   // The one human-editable setting: relaunch after a host restart. Same
   // channel as the lifecycle three; a host too old to have the flag lacks the
-  // method, and its commands read `relaunchOnHostRestart: false` by default -
-  // which is what such a host does (it never declined a respawn, it never
-  // offered the choice).
+  // method, so the GUI hides the switch (`useHostSupportsMethod`), and its
+  // commands read `relaunchOnHostRestart: true` by default - which is what
+  // such a host does (it respawns every survivor; it never offered the
+  // choice).
   "managedCommand.configure": {
     degrade: { kind: "unsupported" },
     1: {

@@ -583,7 +583,10 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   // A toggle: two quick presses are on-then-off, and the second must not
   // coalesce into the first or the human ends up with the opposite of what
-  // the switch shows. Same fifo guarantees as the lifecycle three.
+  // the switch shows. `fifo` keeps two IDENTICAL presses distinct; it cannot
+  // order an on against an off, because the value is part of the params and
+  // so of the queue key - those are two queues. The per-command ordering
+  // lives one layer up, in `useManagedCommandConfigure`'s mutation scope.
   "managedCommand.configure": {
     mode: "fifo",
     joinResponseTimeoutMs: null,

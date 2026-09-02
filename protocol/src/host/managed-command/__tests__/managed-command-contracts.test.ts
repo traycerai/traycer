@@ -208,8 +208,8 @@ describe("managedCommand stream registry membership", () => {
       managedCommandStartV11.responseSchema.parse({ command: live }).command
         .relaunchOnHostRestart,
     ).toBe(true);
-    // A 1.0 response upgrades by filling the default - a host that never
-    // offered the choice never relaunched.
+    // A 1.0 response upgrades by filling the default - and a host that only
+    // serves 1.0 predates the choice, so it relaunches everything: `true`.
     const shippedResponse = managedCommandStartV10.responseSchema.parse({
       command: RUNNING_COMMAND,
     });
@@ -219,7 +219,7 @@ describe("managedCommand stream registry membership", () => {
     ]) {
       expect(
         bridge.upgradeResponse(shippedResponse).command.relaunchOnHostRestart,
-      ).toBe(false);
+      ).toBe(true);
       expect(
         bridge.upgradeRequest({ epicId: "epic-1", commandId: "cmd-1" }),
       ).toEqual({ epicId: "epic-1", commandId: "cmd-1" });
@@ -250,9 +250,12 @@ describe("managedCommand stream registry membership", () => {
     expect(header).not.toHaveProperty("command.relaunchOnHostRestart");
   });
 
-  it("defaults relaunchOnHostRestart to false on a command an older host sends without it", () => {
-    // Which is also what such a host does: it never offered the choice, and
-    // a command it left interrupted at boot stays interrupted.
+  it("defaults relaunchOnHostRestart to TRUE on a command an older host sends without it", () => {
+    // Only a host predating the flag omits it, and such a host respawns
+    // EVERY command that was running when it went down - so the truthful
+    // default is the legacy behaviour, not the new host's off-by-default.
+    // Reading it as `false` would show "stays down" for exactly the shells
+    // that loop (Codex P1 on #1656).
     const parsed = managedCommandSchema.parse({
       id: "cmd-1",
       monitoring: false,
@@ -262,6 +265,6 @@ describe("managedCommand stream registry membership", () => {
       createdAtMs: 1,
       updatedAtMs: 1,
     });
-    expect(parsed.relaunchOnHostRestart).toBe(false);
+    expect(parsed.relaunchOnHostRestart).toBe(true);
   });
 });

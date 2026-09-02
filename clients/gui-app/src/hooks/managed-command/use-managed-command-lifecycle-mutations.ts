@@ -232,14 +232,46 @@ export interface ManagedCommandConfigureVariables extends ManagedCommandLifecycl
   readonly relaunchOnHostRestart: boolean;
 }
 
+/** The command a configure hook serializes its writes for. */
+export interface ManagedCommandConfigureTarget {
+  readonly hostId: string;
+  readonly commandId: string;
+}
+
+/**
+ * The mutation scope that serializes configure writes to ONE command. Every
+ * hook instance for the same command - the list row, the output window header,
+ * a second canvas tile - shares it, so their writes run one at a time in the
+ * order they were pressed.
+ */
+export function managedCommandConfigureScopeId(
+  target: ManagedCommandConfigureTarget,
+): string {
+  return JSON.stringify([
+    "managedCommand.configure",
+    target.hostId,
+    target.commandId,
+  ]);
+}
+
 /**
  * The one setting a person edits on a command: whether a host restart brings
  * it back. Pinned to the command's own host like the lifecycle three, and for
  * the same reason - the row lives on one machine. Not routed through
  * {@link useManagedCommandLifecycleMutation} only because its variables carry
  * the value being set, which that helper's shared shape does not.
+ *
+ * Writes to one command are SERIALIZED here, through the mutation scope, and
+ * not left to the request coordinator's `fifo` lane: that coordinator keys its
+ * queues by the full params, and the value being set is part of them, so an
+ * "on" and an "off" for the same command are two independent queues that can
+ * reach the host in either order. A toggle pressed twice would then settle on
+ * whichever request the host happened to serve last. The scope is keyed by
+ * `(hostId, commandId)`, so the second press waits for the first to answer.
  */
-export function useManagedCommandConfigure(): UseMutationResult<
+export function useManagedCommandConfigure(
+  target: ManagedCommandConfigureTarget,
+): UseMutationResult<
   ResponseOfMethod<HostRpcRegistry, "managedCommand.configure">,
   HostRpcError,
   ManagedCommandConfigureVariables
@@ -250,6 +282,7 @@ export function useManagedCommandConfigure(): UseMutationResult<
   return useMutation(
     withHostMutationLifecycleBoundary("managedCommand.configure", {
       mutationKey: managedCommandMutationKeys.configure(),
+      scope: { id: managedCommandConfigureScopeId(target) },
       mutationFn: (variables: ManagedCommandConfigureVariables) =>
         withHostRpcErrorBoundary("managedCommand.configure", () => {
           const client = transientClientForEntry(

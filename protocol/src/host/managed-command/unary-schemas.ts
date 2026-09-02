@@ -100,10 +100,16 @@ export const managedCommandSchema = z.object({
    * Whether a host restart brings this command back. Off, the host records
    * a command it finds running at boot as `interrupted` and leaves it for
    * Start; on, it respawns it - bounded by a loop breaker that parks a
-   * command whose relaunch keeps taking the host down. Defaulted `false` for
-   * a host too old to send it, which is also what such a host DOES.
+   * command whose relaunch keeps taking the host down.
+   *
+   * Defaulted `true`, NOT the new host's off-by-default: only a host
+   * predating the flag omits it (a current host always sends it, and strips
+   * it only for a peer whose contract does not name it), and such a host
+   * respawns EVERY command that was running when it went down. Reading an
+   * absent flag as `false` would show "stays down" for exactly the shells
+   * that loop.
    */
-  relaunchOnHostRestart: z.boolean().default(false),
+  relaunchOnHostRestart: z.boolean().default(true),
   /**
    * The chat that created the command - the row's backlink. This is the
    * creating agent's id, which for a chat-hosted agent IS its chat id; the same
