@@ -65,6 +65,18 @@ export const MANAGED_COMMAND_QUEUED_CHIP_TOOLTIP =
 export const MANAGED_COMMAND_OUTPUT_WINDOW_TITLE = "Shell output";
 
 /**
+ * The relaunch switch's copy - the toggle's label and the details row read the
+ * same sentence, so the two can never describe one flag differently. Phrased
+ * as what the host will DO, not as the field's name: a person reading it is
+ * deciding whether they want this shell back after the next restart.
+ */
+export function relaunchOnHostRestartLabel(enabled: boolean): string {
+  return enabled
+    ? "Relaunches after a host restart"
+    : "Stays down after a host restart";
+}
+
+/**
  * The restart card's header verb, in the shell's own noun: "Restarted Monitor ·
  * deploy watcher". Same guard as `managedCommandTitle` for a shell with no
  * description, and for the same reason.
