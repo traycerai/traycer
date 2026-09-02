@@ -132,7 +132,6 @@ function applyAction(
       if (state.overlays.length === 0) return;
       const index = pickInt(random, state.overlays.length);
       const [overlay] = state.overlays.splice(index, 1);
-      if (overlay === undefined) return;
       overlay.deregister();
       overlay.element.remove();
       return;
@@ -176,7 +175,6 @@ function applyAction(
       if (state.tiles.length === 0) return;
       const index = pickInt(random, state.tiles.length);
       const [tile] = state.tiles.splice(index, 1);
-      if (tile === undefined) return;
       tile.deregister();
       return;
     }
@@ -283,11 +281,10 @@ function renderCoordinator(bridge: FakeBrowserViewBridge): void {
     { browserView: bridge },
   );
   render(
-    createElement(
-      RunnerHostProvider,
-      { runnerHost },
-      createElement(BrowserOverlayCoordinatorBridge),
-    ),
+    createElement(RunnerHostProvider, {
+      runnerHost,
+      children: createElement(BrowserOverlayCoordinatorBridge),
+    }),
   );
 }
 

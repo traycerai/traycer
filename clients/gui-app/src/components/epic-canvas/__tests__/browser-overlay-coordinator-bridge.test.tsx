@@ -216,7 +216,7 @@ describe("<BrowserOverlayCoordinator />", () => {
       const snapshot = getBrowserViewSnapshot(BASE_KEY);
       expect(snapshot).not.toBeNull();
       expect(occludedIds).toContain(
-        snapshot?.dataUrl.replace("data:image/png;base64,", ""),
+        snapshot?.dataUrl?.replace("data:image/png;base64,", ""),
       );
       expect(snapshot?.stale).toBe(false);
     });
@@ -735,7 +735,14 @@ describe("<BrowserOverlayCoordinator />", () => {
         });
       }, []);
       return (
-        <div ref={ref} data-testid="tile-surface" onClick={tileSurfaceClick}>
+        <div
+          ref={ref}
+          data-testid="tile-surface"
+          role="button"
+          tabIndex={0}
+          onClick={tileSurfaceClick}
+          onKeyDown={tileSurfaceClick}
+        >
           <BrowserViewSnapshotLayer snapshot={snapshot} />
         </div>
       );

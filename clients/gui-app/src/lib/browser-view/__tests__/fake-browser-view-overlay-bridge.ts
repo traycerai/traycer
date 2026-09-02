@@ -57,7 +57,10 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
    * whatever tile dropped out of the new set - a tile the overlay no longer
    * requests must not stay parked under it.
    */
-  private readonly tilesByOverlayId = new Map<string, BrowserViewTileKey[]>();
+  private readonly tilesByOverlayId = new Map<
+    string,
+    readonly BrowserViewTileKey[]
+  >();
   private readonly overlayIdsByTileId = new Map<string, Set<string>>();
   private readonly snapshotInvalidationHandlers = new Set<
     (change: BrowserViewSnapshotInvalidatedChange) => void
