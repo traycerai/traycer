@@ -12,9 +12,9 @@ import type {
   GitGetFileDiffResponse,
 } from "@traycer/protocol/host";
 import type {
-  ImageAssetRequest,
-  ImageAssetState,
-} from "@/hooks/assets/use-image-asset";
+  FileAssetRequest,
+  FileAssetState,
+} from "@/hooks/assets/use-file-asset";
 import type { DiffViewerPreferences } from "@/lib/diff/diff-viewer-preferences";
 import { makeGitFileDiffTile } from "@/lib/git/git-diff-tile";
 
@@ -50,8 +50,8 @@ const state = vi.hoisted(() => ({
   openFeedback: vi.fn(),
   refresh: vi.fn(),
   updateView: vi.fn(),
-  assetRequests: [] as Array<ImageAssetRequest | null>,
-  asset: null as ImageAssetState | null,
+  assetRequests: [] as Array<FileAssetRequest | null>,
+  asset: null as FileAssetState | null,
 }));
 
 // The tile re-provides its own `StreamRuntimeContext` for the host it is BOUND
@@ -90,8 +90,8 @@ vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => null,
 }));
 
-vi.mock("@/hooks/assets/use-image-asset", () => ({
-  useImageAsset: (request: ImageAssetRequest | null): ImageAssetState => {
+vi.mock("@/hooks/assets/use-file-asset", () => ({
+  useFileAsset: (request: FileAssetRequest | null): FileAssetState => {
     state.assetRequests.push(request);
     if (state.asset === null) throw new Error("missing image state");
     return state.asset;
@@ -195,6 +195,16 @@ vi.mock("@/components/epic-canvas/binary-placeholder", () => ({
     <div data-testid="binary-placeholder" data-file-name={props.fileName}>
       {props.reason}
     </div>
+  ),
+}));
+
+// The compact PDF diff block pulls in useDraggable/useEpicCanvasStore
+// selectors this suite does not stub end to end - the routing contract under
+// test is only "a PDF row shows the compact block and skips the text query",
+// which a stub component pins the same way `ImagePreview` is stubbed above.
+vi.mock("@/components/epic-canvas/pdf-preview/pdf-diff-view", () => ({
+  PdfDiffView: (props: { readonly filePath: string }) => (
+    <div data-testid="pdf-diff-block" data-file-name={props.filePath} />
   ),
 }));
 
@@ -690,6 +700,84 @@ describe("<GitDiffTile /> image routing", () => {
     expect(
       state.assetRequests.filter((request) => request?.method === "git"),
     ).toEqual([expect.objectContaining({ side: "new" })]);
+  });
+
+  it("keeps the text diff for an svg -> pdf rename toggled to source, instead of the PDF block", () => {
+    // Straddles both allowlists: the current path (.pdf) routes to
+    // `gitRoutesToPdfDiffCards`, the previous path (.svg) routes to the image
+    // diff with a source toggle. `showsPdfDiffBlock` must key off the RAW
+    // image-routing decision (always true here), not the post-toggle
+    // `showImageDiff` - otherwise picking Source would hand the row to the
+    // PDF block instead of revealing the text diff.
+    const changed = changedFile({
+      path: "assets/new.pdf",
+      previousPath: "assets/old.svg",
+      status: "renamed",
+      isBinary: false,
+    });
+
+    renderTile(changed);
+
+    // Old side (`old.svg`) is a previewable image; new side (`new.pdf`) is
+    // not, so it renders the PDF placeholder copy rather than a second
+    // image-preview-side.
+    expect(screen.getAllByTestId("image-preview-side")).toHaveLength(1);
+    expect(screen.getByText("PDF diffs aren't previewed.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "View source" })).toBeTruthy();
+    expect(screen.queryByTestId("pdf-diff-block")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "View source" }));
+
+    expect(screen.getByTestId("file-diff-content")).toBeTruthy();
+    expect(screen.queryByTestId("image-preview-side")).toBeNull();
+    expect(screen.queryByTestId("pdf-diff-block")).toBeNull();
+  });
+
+  it("offers no source toggle for a BINARY svg -> pdf rename, keeping the side-by-side view", () => {
+    // The same straddling rename as above, but git calls it binary (a PDF
+    // with a NUL byte - the ordinary case). The text diff is never fetched
+    // for a binary row, so a Source toggle here could only drop the tile
+    // onto the bare binary placeholder, losing the one view that names both
+    // sides. The toggle is therefore not offered at all.
+    const changed = changedFile({
+      path: "assets/new.pdf",
+      previousPath: "assets/old.svg",
+      status: "renamed",
+      isBinary: true,
+    });
+
+    renderTile(changed);
+
+    // An image side at all means the side-by-side surface, not the
+    // tile-level binary fallback (which renders neither side).
+    expect(screen.getAllByTestId("image-preview-side")).toHaveLength(1);
+    expect(screen.getByText("PDF diffs aren't previewed.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "View source" })).toBeNull();
+    expect(state.editableCalls.at(-1)?.queryEnabled).toBe(false);
+  });
+
+  it("offers no source toggle for a binary .svg, whose text diff is never fetched", () => {
+    renderTile(changedFile({ path: "assets/icon.svg", isBinary: true }));
+
+    expect(screen.getAllByTestId("image-preview-side")).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: "View source" })).toBeNull();
+  });
+
+  it("routes an ASCII-authored .pdf row to the compact PDF block and skips the text diff query", () => {
+    const changed = changedFile({
+      path: "docs/report.pdf",
+      // The git numstat path can report a PDF as non-binary (e.g. a mostly-
+      // text PDF stream) - routing must still key off the EXTENSION, not
+      // `isBinary`, so this deliberately sets it false.
+      isBinary: false,
+    });
+
+    renderTile(changed);
+
+    expect(screen.getByTestId("pdf-diff-block")).toBeTruthy();
+    expect(screen.queryByTestId("file-diff-content")).toBeNull();
+    expect(screen.queryByTestId("binary-placeholder")).toBeNull();
+    expect(state.editableCalls.at(-1)?.queryEnabled).toBe(false);
   });
 
   // Live E2E (ticket 06) found a real conflicted binary image falling
