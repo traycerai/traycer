@@ -1,5 +1,5 @@
 import { createElement, type ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   QueryClient,
   QueryClientProvider,
@@ -69,10 +69,15 @@ vi.mock("@/hooks/host/use-host-query", () => ({
 }));
 
 import {
+  EPIC_PIN_UNAUTHORIZED_MESSAGE,
   useEpicSetPinned,
   usePendingSetPinnedEpicIds,
 } from "@/hooks/epic/use-epic-set-pinned-mutation";
 import { epicMutationKeys } from "@/lib/query-keys";
+import { useAuthStore } from "@/stores/auth/auth-store";
+
+const PROFILE = { userId: "user-1", userName: "U", email: "u@example.com" };
+const CONTEXT = { userId: "user-1", username: "U" };
 
 function epicTask(epicId: string, pinned: boolean): ListTaskLight {
   return {
@@ -135,10 +140,17 @@ describe("useEpicSetPinned", () => {
     vi.clearAllMocks();
     testState.activeHostId = "host-1";
     testState.userId = "user-1";
+    // The dispatch re-reads the live verdict; these cases model a session
+    // that holds one unless they say otherwise.
+    useAuthStore.getState().setSignedIn(PROFILE, CONTEXT, []);
     useCloudEpicTasksPagesStore.setState({
       pagesByIdentity: {},
       generationByIdentity: {},
     });
+  });
+
+  afterEach(() => {
+    useAuthStore.getState().setSignedOut();
   });
 
   it("optimistically flips the row in the scoped first page and tails on mutate, leaving other scopes alone", () => {
@@ -249,6 +261,75 @@ describe("useEpicSetPinned", () => {
       ),
     ).toEqual({ "epic-1": false });
     expect(toast.error).toHaveBeenCalledWith("Couldn't update pinned task.");
+  });
+
+  it("refuses at dispatch without a cloud verdict, before the optimistic patch", () => {
+    // A row rendered while verified and activated after a demotion - or the
+    // tab strip's Undo toast outliving its click - reaches this one shared
+    // dispatch. It must refuse BEFORE touching a cache, so the refusal's
+    // `onError` (which carries no context) has nothing to undo.
+    const queryClient = new QueryClient();
+    const scopedQueryKey = cloudEpicTasksQueryKey(
+      "host-1",
+      "user-1",
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    queryClient.setQueryData(
+      scopedQueryKey,
+      pageWith([epicTask("epic-1", false)]),
+    );
+    renderHook(() => useEpicSetPinned(), {
+      wrapper: makeWrapper(queryClient),
+    });
+    useAuthStore.getState().setUnverifiedSession(PROFILE, CONTEXT);
+
+    expect(() =>
+      capturedOptions.onMutate?.({ epicId: "epic-1", pinned: true }),
+    ).toThrow(EPIC_PIN_UNAUTHORIZED_MESSAGE);
+    expect(pinnedById(queryClient.getQueryData(scopedQueryKey))).toEqual({
+      "epic-1": false,
+    });
+
+    // Non-vacuity: the verdict returning is what admits the same dispatch.
+    useAuthStore.getState().setSignedIn(PROFILE, CONTEXT, []);
+    capturedOptions.onMutate?.({ epicId: "epic-1", pinned: true });
+    expect(pinnedById(queryClient.getQueryData(scopedQueryKey))).toEqual({
+      "epic-1": true,
+    });
+  });
+
+  it("toasts the unverified copy for a refused dispatch, with no inverse patch", () => {
+    const queryClient = new QueryClient();
+    const scopedQueryKey = cloudEpicTasksQueryKey(
+      "host-1",
+      "user-1",
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    queryClient.setQueryData(
+      scopedQueryKey,
+      pageWith([epicTask("epic-1", false)]),
+    );
+    renderHook(() => useEpicSetPinned(), {
+      wrapper: makeWrapper(queryClient),
+    });
+
+    capturedOptions.onError?.(
+      {
+        code: "RPC_ERROR",
+        message: EPIC_PIN_UNAUTHORIZED_MESSAGE,
+        fatalDetails: null,
+      },
+      { epicId: "epic-1", pinned: true },
+      undefined,
+    );
+
+    // Nothing was patched, so nothing is un-patched.
+    expect(pinnedById(queryClient.getQueryData(scopedQueryKey))).toEqual({
+      "epic-1": false,
+    });
+    expect(toast.error).toHaveBeenCalledWith(
+      "Your sign-in couldn't be confirmed, so cloud changes are paused. Pinning will work again once it reconnects.",
+    );
   });
 
   it("leaves every cache untouched when the mutation scope is null", async () => {

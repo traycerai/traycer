@@ -24,7 +24,10 @@ import type { CloudChatIdentity } from "@traycer/protocol/host/epic/cloud-chat";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { cloudChatListCacheKeyIdentity } from "@/lib/chats/cloud-chat-list-cache";
-import { createHostCloudChatReadPort } from "@/lib/chats/cloud-chat-read-port";
+import {
+  cloudChatReadRefusedWithoutVerdict,
+  createHostCloudChatReadPort,
+} from "@/lib/chats/cloud-chat-read-port";
 import { activeChatPartCache } from "@/lib/chats/cloud-chat-part-cache";
 import { cloudChatQueryKeys } from "@/lib/query-keys/cloud-chat-query-keys";
 import {
@@ -548,6 +551,15 @@ export function useCloudChatPayload(args: {
   const run = async (): Promise<CloudChatPayloadBytes> => {
     if (client === null || identity === null || ref === null) {
       throw new Error("Cloud chat payload read ran without its inputs");
+    }
+    // The verdict is re-read at DISPATCH, not only in `enabled` below. A
+    // `refetch()` is a caller override of `enabled` in TanStack v5, and the
+    // published-chat surfaces expose exactly that as their Retry action for a
+    // failed side - so a Retry still rendered after a demotion would otherwise
+    // send this read on the retained host credential. Same refusal, same
+    // shape, as the port `useCloudChatRead` reads through.
+    if (!authorizesCloudCapability(useAuthStore.getState().status)) {
+      throw cloudChatReadRefusedWithoutVerdict("epic.readCloudChatPayload");
     }
     // Same normalization boundary as `useCloudChatRead`: the decode's own
     // rejections (a digest mismatch, `crypto.subtle` unavailable) are plain

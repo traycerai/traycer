@@ -40,15 +40,7 @@ export function createHostCloudChatReadPort(
   client: Pick<HostRequester<HostRpcRegistry>, "request">,
   mayReadCloud: () => boolean,
 ): CloudChatReadPort {
-  const refuse = (method: string): HostRpcError =>
-    new HostRpcError({
-      code: "RPC_ERROR",
-      message:
-        "This session no longer holds a cloud verdict, so the cloud chat read was not sent.",
-      requestId: "client-pre-flight",
-      method,
-      fatalDetails: null,
-    });
+  const refuse = cloudChatReadRefusedWithoutVerdict;
   return {
     resolveHead: (identity) =>
       mayReadCloud()
@@ -63,6 +55,26 @@ export function createHostCloudChatReadPort(
           })
         : Promise.reject(refuse("epic.readCloudChatPart")),
   };
+}
+
+/**
+ * The pre-flight refusal every cloud chat read shares when the session holds
+ * no cloud verdict at the moment of dispatch. One constructor rather than one
+ * per reader: the port above and `useCloudChatPayload`'s own dispatch (a bare
+ * `useQuery` whose `refetch()` overrides `enabled`) must refuse with the SAME
+ * shape, so a consumer that classifies one classifies the other.
+ */
+export function cloudChatReadRefusedWithoutVerdict(
+  method: string,
+): HostRpcError {
+  return new HostRpcError({
+    code: "RPC_ERROR",
+    message:
+      "This session no longer holds a cloud verdict, so the cloud chat read was not sent.",
+    requestId: "client-pre-flight",
+    method,
+    fatalDetails: null,
+  });
 }
 
 /**

@@ -45,8 +45,13 @@ import {
 } from "@/lib/comm-graph/comm-graph-cloud-registry";
 import {
   selectCommGraphAuthoritativeSnapshot,
+  type CommGraphCloudAvailability,
   type CommGraphCloudSubscriptionOpener,
 } from "@/lib/comm-graph/comm-graph-cloud-subscription";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
 import {
   getCommGraphCloudSubscriptionOpenerOverride,
   getCommGraphSubscriptionOpenerOverride,
@@ -210,7 +215,21 @@ export function useCommGraphSnapshot(
     cloudManager.setRelayReadinessKeys(relayReadinessKeys);
   }, [cloudManager, relayReadinessKeys]);
 
+  // `host.communicationGraph.subscribe` is a Traycer Cloud-sourced feed, read
+  // through whichever host relays it on a bearer the cloud must still vouch
+  // for - and the host connection carries no renderer verdict of its own. So
+  // the cloud claim is held only while the session holds a cloud verdict,
+  // read reactively: a demotion while the tile stays mounted releases the
+  // claim (the manager detaches, closing the relay stream, and retains its
+  // rows for a later re-attach), and re-verification claims it again. The
+  // local `epic.communicationGraph.subscribe` fan-in below is this host's own
+  // event log and keeps serving either way.
+  const cloudAuthorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
+
   useEffect(() => {
+    if (!cloudAuthorized) return;
     acquireCommGraphCloudSubscription(
       epicId,
       cloudClaim,
@@ -220,7 +239,7 @@ export function useCommGraphSnapshot(
     return () => {
       releaseCommGraphCloudSubscription(epicId, cloudClaim);
     };
-  }, [cloudClaim, cloudManager, cloudOpener, epicId]);
+  }, [cloudAuthorized, cloudClaim, cloudManager, cloudOpener, epicId]);
 
   useEffect(() => {
     cloudManager.setRelayHostIds(relayHostIds);
@@ -235,11 +254,21 @@ export function useCommGraphSnapshot(
     () => cloudManager.getSnapshot(),
     () => EMPTY_COMM_GRAPH_SNAPSHOT,
   );
-  const cloudAvailability = useSyncExternalStore(
+  const retainedCloudAvailability = useSyncExternalStore(
     (listener) => cloudManager.subscribe(listener),
     () => cloudManager.getAvailability(),
     () => "pending" as const,
   );
+  // A detached manager RETAINS its `available` verdict for the next attach.
+  // Without a verdict that retained answer is not this session's to act on:
+  // reading it as authoritative would keep the local fan-in detached and
+  // render a frozen cloud snapshot as if it were live. So the cloud plane
+  // reads as `pending` until the verdict returns, which re-attaches the local
+  // fan-in (its cursor was retained on release) and selects its snapshot -
+  // the same local plane every other unverified surface falls back to.
+  const cloudAvailability: CommGraphCloudAvailability = cloudAuthorized
+    ? retainedCloudAvailability
+    : "pending";
   const cloudHistoryCaughtUp = useSyncExternalStore(
     (listener) => cloudManager.subscribe(listener),
     () => cloudManager.isInitialHistoryCaughtUp(),
