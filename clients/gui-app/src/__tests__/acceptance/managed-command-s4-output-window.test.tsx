@@ -87,6 +87,12 @@ vi.mock(
       mutate: mocks.deleteMutate,
       isPending: false,
     }),
+    useManagedCommandConfigureIsPending: () => false,
+    useManagedCommandRelaunchOnHostRestart: (
+      _target: unknown,
+      streamed: { relaunchOnHostRestart: boolean },
+    ) => streamed.relaunchOnHostRestart,
+    useManagedCommandConfigure: () => ({ mutate: vi.fn(), isPending: false }),
     useManagedCommandStopAllIsPending: () => false,
   }),
 );
@@ -193,6 +199,7 @@ function makeCommand(over: Partial<ManagedCommand>): ManagedCommand {
     cadence: { debounceMs: 500, maxWaitMs: 15_000, throttleMs: 5_000 },
     status: { state: "running", pid: 4410, startedAtMs: T0 },
     chatId: "chat-owner",
+    relaunchOnHostRestart: false,
     createdAtMs: T0,
     updatedAtMs: T0,
     ...over,

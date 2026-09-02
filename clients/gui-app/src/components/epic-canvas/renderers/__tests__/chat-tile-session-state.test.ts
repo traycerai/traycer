@@ -553,6 +553,7 @@ describe("chatActivityIndicator", () => {
       cadence: null,
       status,
       chatId: "chat-1",
+      relaunchOnHostRestart: false,
       createdAtMs: 1,
       updatedAtMs: 1,
     };
