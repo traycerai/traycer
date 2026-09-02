@@ -271,6 +271,13 @@ export type LoginImportBlocked =
   | "keyring-unavailable"
   | "needs-full-disk-access"
   | "browser-locked"
+  /**
+   * Import only: the source changed between the scan and the Import click in
+   * a way that would open a keystore the Choose step did not name (a site the
+   * scan read as plaintext gained an encrypted row). Nothing was imported and
+   * no prompt fired; the way back in is a fresh scan.
+   */
+  | "source-changed"
   | "unreadable";
 
 /**
@@ -354,7 +361,13 @@ export type LoginImportResult =
        * Chosen sites the jar already held cookies for, now replaced.
        */
       readonly replacedSites: number;
-      /** Cookies the source held for a chosen site that could not be written. */
+      /**
+       * Cookies the scan COUNTED for a chosen site that could not be written:
+       * a value that would not decrypt, or a `set` Electron refused. A row the
+       * scan never counted - expired, nameless, breaking its own prefix rule -
+       * is not here either, so a site's `cookieCount` from the scan is exactly
+       * its share of `importedCookies` plus its share of this number.
+       */
       readonly skippedInvalid: number;
       /**
        * Hosts that acked the jar main pushed after the write, counted once per

@@ -52,7 +52,13 @@ import { registrableDomain } from "@traycer/protocol/host/browser/registrable-do
  * still hold if this bound fired mid-forget. This only stops a wedged call
  * from freezing every cookie operation in the process for its lifetime.
  */
-const BARRIER_ACTION_TIMEOUT_MS = 30_000;
+/**
+ * The whole-jar barrier's budget for forget-all: a clear that has not settled
+ * in this long is wedged, and the per-domain work queued behind it is let
+ * through. A caller with a longer bounded action (the login import, which
+ * writes every chosen site) passes its own budget and reads the abort signal.
+ */
+export const BARRIER_ACTION_TIMEOUT_MS = 30_000;
 
 export class BrowserJarSerializer {
   /**
@@ -97,13 +103,22 @@ export class BrowserJarSerializer {
    * `runOnDomain` call made while the barrier is still waiting for the work
    * ahead of it queues behind the barrier rather than racing it.
    */
-  runOnEveryDomain<T>(action: () => Promise<T>): Promise<T> {
+  runOnEveryDomain<T>(
+    action: (signal: AbortSignal) => Promise<T>,
+    timeoutMs: number,
+  ): Promise<T> {
     const previousBarrier = this.barrierGate;
     const ahead = [...this.inFlight];
     let openGate = (): void => undefined;
     this.barrierGate = new Promise<void>((resolve) => {
       openGate = resolve;
     });
+    // Aborted the moment the barrier expires, BEFORE the gate opens: an
+    // action that is still running when its time is up (a long login import)
+    // must stop mutating the jar, since the work queued behind it is about to
+    // be admitted. The action reads the signal between its steps; the race
+    // below only stops the caller waiting, never the action itself.
+    const controller = new AbortController();
     return (async (): Promise<T> => {
       // Armed before the first await so it covers the whole barrier: the wait
       // for the work ahead can wedge on the same kind of hung call the action
@@ -113,23 +128,25 @@ export class BrowserJarSerializer {
         expire = (): void =>
           reject(
             new Error(
-              `The whole-jar barrier did not settle within ${BARRIER_ACTION_TIMEOUT_MS}ms; the jar gate was forced open.`,
+              `The whole-jar barrier did not settle within ${timeoutMs}ms; the jar gate was forced open.`,
             ),
           );
       });
       const timer = setTimeout(() => {
-        // The gate first: queued per-domain work must not stay blocked on a
-        // call that is never coming back.
+        // The action first, then the gate: queued per-domain work must not
+        // stay blocked on a call that is never coming back, and must not be
+        // admitted under one that is still writing.
+        controller.abort();
         openGate();
         expire();
-      }, BARRIER_ACTION_TIMEOUT_MS);
+      }, timeoutMs);
       timer.unref();
       try {
         return await Promise.race([
           (async (): Promise<T> => {
             await previousBarrier;
             await Promise.all(ahead);
-            return await action();
+            return await action(controller.signal);
           })(),
           expired,
         ]);

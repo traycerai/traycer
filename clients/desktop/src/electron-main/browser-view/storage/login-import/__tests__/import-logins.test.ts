@@ -445,7 +445,7 @@ function buildHarness(
     snapshotRoot: DEFAULT_SNAPSHOT_ROOT,
     readSaveLogins: () => true,
     getDurableSession: () => session,
-    serializeJarWrite: async (action) => action(),
+    serializeJarWrite: async (action) => action(new AbortController().signal),
     suppressDeltas: async (action) => action(),
     releaseHostOwnedKeys: async () => undefined,
     settleWindowMs: 5,
@@ -1354,10 +1354,12 @@ describe("import - the jar write runs inside serializeJarWrite, and suppressDelt
         platform: "darwin",
         homeDir,
         snapshotRoot: await makeTempDir("snap-"),
-        serializeJarWrite: async <T>(action: () => Promise<T>): Promise<T> => {
+        serializeJarWrite: async <T>(
+          action: (signal: AbortSignal) => Promise<T>,
+        ): Promise<T> => {
           events.push("serialize-start");
           try {
-            return await action();
+            return await action(new AbortController().signal);
           } finally {
             events.push("serialize-end");
           }
@@ -1479,6 +1481,147 @@ describe("import - releases host ownership of exactly the keys it wrote", () => 
 
     expect(result).toEqual({ status: "blocked", reason: "saved-logins-off" });
     expect(releaseHostOwnedKeys).not.toHaveBeenCalled();
+  });
+});
+
+// =================================================================================
+// 8g. The barrier's abort signal stops the write loop mid-import
+// =================================================================================
+
+describe("import - stops writing when the barrier's signal is aborted", () => {
+  // Pins: an abort raised while a site's cookies.set is in flight stops the
+  // write loop before the NEXT site starts (throwIfBarrierExpired at the top
+  // of writeSite), still runs the flush+settle in the write's `finally`, and
+  // answers `blocked`/`unreadable` rather than throwing out of `import()`.
+  it("stops writing when the barrier's signal is aborted, still flushes and settles, and answers blocked", async () => {
+    const homeDir = await makeTempDir("login-import-abort-signal-");
+    await createDarwinChromeSource(
+      homeDir,
+      [
+        domainCookieRow(".abort-site-a.com", "sid", {
+          kind: "plain",
+          value: "a",
+        }),
+        domainCookieRow(".abort-site-b.com", "sid", {
+          kind: "plain",
+          value: "b",
+        }),
+      ],
+      23,
+    );
+    const session = new FakeLoginImportSession([]);
+    const controller = new AbortController();
+    const originalSet = session.cookies.set;
+    let setCallCount = 0;
+    session.cookies.set = (details: CookiesSetDetails): Promise<void> => {
+      setCallCount += 1;
+      const result = originalSet(details);
+      // Aborts from INSIDE the first site's write, mimicking the barrier
+      // expiring while the import is mid-flight.
+      if (setCallCount === 1) controller.abort();
+      return result;
+    };
+    const sleep = vi.fn(() => Promise.resolve());
+    const { service } = buildHarness(
+      {
+        platform: "darwin",
+        homeDir,
+        snapshotRoot: await makeTempDir("snap-"),
+        serializeJarWrite: async <T>(
+          action: (signal: AbortSignal) => Promise<T>,
+        ): Promise<T> => action(controller.signal),
+        sleep,
+      },
+      session,
+    );
+    const { sourceId } = await scanChromeSource(service);
+
+    const result = await service.import({
+      sourceId,
+      domains: ["abort-site-a.com", "abort-site-b.com"],
+      includeDeviceBound: false,
+    });
+
+    expect(result).toEqual({ status: "blocked", reason: "unreadable" });
+    // Only the first site's set() ran; the second site's writeSite call hit
+    // throwIfBarrierExpired before it ever reached cookies.get/cookies.set.
+    expect(session.setCalls.length).toBe(1);
+    expect(session.flushes).toBe(1);
+    expect(sleep).toHaveBeenCalled();
+  });
+});
+
+// =================================================================================
+// 8h. releaseHostOwnedKeys runs inside the barrier, after the mute lifts
+// =================================================================================
+
+describe("import - releases host ownership inside the barrier, after the mute lifts", () => {
+  // Pins the ordering `LoginImportServiceDependencies.releaseHostOwnedKeys`
+  // documents: entered inside serializeJarWrite's action, after
+  // suppressDeltas has resolved, and before the barrier's own action
+  // resolves - so nothing queued behind the barrier can observe an older
+  // value for a key this import just wrote.
+  it("releases host ownership inside the barrier, after the mute lifts and before the barrier's action resolves", async () => {
+    const homeDir = await makeTempDir("login-import-release-inside-barrier-");
+    await createDarwinChromeSource(
+      homeDir,
+      [
+        domainCookieRow(".inside-barrier.com", "sid", {
+          kind: "plain",
+          value: "v",
+        }),
+      ],
+      23,
+    );
+    const events: string[] = [];
+    const session = new FakeLoginImportSession([]);
+    const { service } = buildHarness(
+      {
+        platform: "darwin",
+        homeDir,
+        snapshotRoot: await makeTempDir("snap-"),
+        serializeJarWrite: async <T>(
+          action: (signal: AbortSignal) => Promise<T>,
+        ): Promise<T> => {
+          events.push("serialize-start");
+          try {
+            return await action(new AbortController().signal);
+          } finally {
+            events.push("serialize-end");
+          }
+        },
+        suppressDeltas: async <T>(action: () => Promise<T>): Promise<T> => {
+          events.push("suppress-start");
+          try {
+            return await action();
+          } finally {
+            events.push("suppress-end");
+          }
+        },
+        releaseHostOwnedKeys: async (
+          _keys: readonly BrowserCookieKey[],
+        ): Promise<void> => {
+          events.push("release");
+        },
+      },
+      session,
+    );
+    const { sourceId } = await scanChromeSource(service);
+
+    const result = await service.import({
+      sourceId,
+      domains: ["inside-barrier.com"],
+      includeDeviceBound: false,
+    });
+
+    expect(result.status).toBe("imported");
+    expect(events).toEqual([
+      "serialize-start",
+      "suppress-start",
+      "suppress-end",
+      "release",
+      "serialize-end",
+    ]);
   });
 });
 
@@ -1973,5 +2116,173 @@ describe("import - operations are serialized", () => {
     await pendingB;
 
     expect(session.setCalls.map((call) => call.name)).toEqual(["sid", "sid"]);
+  });
+});
+
+// =================================================================================
+// 15. source-changed: the prompt the Choose step promised is the only prompt
+//     Import may raise
+// =================================================================================
+
+describe("import - source-changed: a chosen site gained an encrypted row needing an unscanned keystore", () => {
+  // Pins: a chosen site that was all `v10` (peanuts, no keyring) at scan
+  // time and gains a `v11` row before Import is clicked would open a
+  // keystore prompt the Choose step never promised - `unlockFor` on the
+  // fresh candidates now says `linux-keyring`, but no chosen site's
+  // RECORDED scan said that, so the import blocks as source-changed and
+  // drops the scan. A second import without a re-scan then blocks as
+  // unreadable (no scan on record); a re-scan picks up the v11 row and lets
+  // the import proceed.
+  it("blocks as source-changed when a chosen site gained an encrypted row since the scan, and drops the scan", async () => {
+    const homeDir = await makeTempDir("login-import-source-changed-");
+    await createLinuxChromeSource(
+      homeDir,
+      [
+        domainCookieRow(".linux-site.com", "sid", {
+          kind: "encrypted",
+          bytes: encryptCbc(
+            "v10",
+            CHROMIUM_LINUX_BASIC_PASSPHRASE,
+            CHROMIUM_PBKDF2_ITERATIONS.linux,
+            "linux-v10-value",
+          ),
+        }),
+      ],
+      23,
+    );
+    const session = new FakeLoginImportSession([]);
+    const { service, secrets } = buildHarness(
+      { platform: "linux", homeDir, snapshotRoot: await makeTempDir("snap-") },
+      session,
+    );
+    const { sourceId, scan } = await scanChromeSource(service);
+    // All v10 (peanuts): no keystore prompt at scan time.
+    expect(scan.unlock).toBeNull();
+
+    const cookiesPath = join(
+      homeDir,
+      ".config",
+      "google-chrome",
+      "Default",
+      "Cookies",
+    );
+    appendChromiumCookieRow(
+      cookiesPath,
+      domainCookieRow(".linux-site.com", "auth", {
+        kind: "encrypted",
+        bytes: encryptCbc(
+          "v11",
+          "gnome-keyring-secret",
+          CHROMIUM_PBKDF2_ITERATIONS.linux,
+          "linux-v11-value",
+        ),
+      }),
+    );
+
+    const firstResult = await service.import({
+      sourceId,
+      domains: ["linux-site.com"],
+      includeDeviceBound: false,
+    });
+
+    expect(firstResult).toEqual({
+      status: "blocked",
+      reason: "source-changed",
+    });
+    expect(secrets.linuxSecretService).not.toHaveBeenCalled();
+
+    // The scan was dropped: a second import without a re-scan blocks as
+    // unreadable, the "no scan on record" path.
+    const secondResult = await service.import({
+      sourceId,
+      domains: ["linux-site.com"],
+      includeDeviceBound: false,
+    });
+    expect(secondResult).toEqual({ status: "blocked", reason: "unreadable" });
+
+    // A fresh scan sees the v11 row and lists linux-keyring; import now
+    // proceeds and consults the keyring.
+    secrets.linuxSecretService.mockResolvedValue({
+      ok: true,
+      secret: "gnome-keyring-secret",
+    });
+    const rescan = await service.scan(sourceId);
+    expect(rescan.unlock).toBe("linux-keyring");
+
+    const thirdResult = await service.import({
+      sourceId,
+      domains: ["linux-site.com"],
+      includeDeviceBound: false,
+    });
+
+    expect(thirdResult.status).toBe("imported");
+    expect(secrets.linuxSecretService).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("import - source-changed: not raised when a chosen site already needed that keystore", () => {
+  // Pins: source-changed is only about a keystore prompt no CHOSEN site was
+  // scanned as needing. Here one of the two chosen sites (darwin-encrypted)
+  // was already scanned as needing macos-keychain, so the same prompt at
+  // Import time is not a surprise and the import proceeds normally.
+  it("does not block as source-changed when some chosen site was scanned as needing that keystore", async () => {
+    const homeDir = await makeTempDir("login-import-source-changed-ok-");
+    await createDarwinChromeSource(
+      homeDir,
+      [
+        domainCookieRow(".darwin-encrypted.com", "auth", {
+          kind: "encrypted",
+          bytes: encryptCbc(
+            "v10",
+            "macos-keychain-secret",
+            CHROMIUM_PBKDF2_ITERATIONS.darwin,
+            "darwin-secret-value",
+          ),
+        }),
+        domainCookieRow(".darwin-plain.com", "sid", {
+          kind: "plain",
+          value: "plain-value",
+        }),
+      ],
+      23,
+    );
+    const session = new FakeLoginImportSession([]);
+    const macosKeychain = vi.fn(() =>
+      Promise.resolve({ ok: true as const, secret: "macos-keychain-secret" }),
+    );
+    const { service } = buildHarness(
+      {
+        platform: "darwin",
+        homeDir,
+        snapshotRoot: await makeTempDir("snap-"),
+        secrets: {
+          macosKeychain,
+          linuxSecretService: alwaysUnavailable(),
+          windowsDpapi: () => Promise.resolve(null),
+        },
+      },
+      session,
+    );
+    const { sourceId, scan } = await scanChromeSource(service);
+    expect(scan.sites).toEqual([
+      {
+        domain: "darwin-encrypted.com",
+        cookieCount: 1,
+        unlock: "macos-keychain",
+      },
+      { domain: "darwin-plain.com", cookieCount: 1, unlock: null },
+    ]);
+
+    const result = await service.import({
+      sourceId,
+      domains: ["darwin-encrypted.com", "darwin-plain.com"],
+      includeDeviceBound: false,
+    });
+
+    if (result.status !== "imported") {
+      throw new Error(`expected imported, got ${result.status}`);
+    }
+    expect(result.importedSites).toBe(2);
+    expect(macosKeychain).toHaveBeenCalledTimes(1);
   });
 });

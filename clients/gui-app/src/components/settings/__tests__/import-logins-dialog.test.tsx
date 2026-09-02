@@ -355,6 +355,7 @@ describe("<ImportLoginsDialog /> choose-sites step", () => {
   it.each<LoginImportBlocked>([
     "keyring-unavailable",
     "browser-locked",
+    "source-changed",
     "unreadable",
   ])("renders the %s explainer and a Try again affordance", async (reason) => {
     const bridge = new TestBridge();
@@ -363,8 +364,17 @@ describe("<ImportLoginsDialog /> choose-sites step", () => {
     renderDialog(bridge);
     await pickSource(/Google Chrome/);
 
-    await screen.findAllByRole("note");
+    const notes = await screen.findAllByRole("note");
     expect(screen.getByRole("button", { name: "Try again" })).not.toBeNull();
+
+    // source-changed is the guard that fires when a chosen site's rows
+    // changed under the user between the scan and the Import click; its
+    // explainer has to say the import is safe to retry, not just that
+    // something went wrong.
+    if (reason === "source-changed") {
+      const explainerText = notes.map((note) => note.textContent).join(" ");
+      expect(explainerText).toContain("try again to read the profile afresh");
+    }
   });
 
   it("renders the macOS-keychain unlock hint when the selected site's unlock is macos-keychain", async () => {

@@ -449,8 +449,11 @@ class BrowserSessionsStream {
    * the connection, because a reconnect brings a new one.
    */
   private standingCaptureRequestId: string | null = null;
-  /** The capture two overlapping callers share; see `capturePrimaryProfileNow`. */
+  /** The one capture running on this stream; see `capturePrimaryProfileNow`. */
   private captureInFlight: Promise<BrowserPrimaryProfileCaptureOutcome> | null =
+    null;
+  /** The one capture queued behind it, shared by everyone who arrived meanwhile. */
+  private trailingCapture: Promise<BrowserPrimaryProfileCaptureOutcome> | null =
     null;
   /**
    * The account this stream was OPENED for, captured at `start()`.
@@ -702,15 +705,32 @@ class BrowserSessionsStream {
    * the middle one told apart from the last: a frame that left is the host's
    * one capture even if the ack never came.
    *
-   * Two callers overlapping - a login import beside the quit-path flush, or
-   * two Settings windows importing - SHARE the capture in flight rather than
-   * each sending one: the standing request id is the same for both, and
-   * one ack waiter per id means the second would have overwritten the
-   * first's, leaving it to time out and report `unacked` for a jar the host
-   * did take.
+   * Captures on one stream run ONE AT A TIME, and a caller that arrives while
+   * one is in flight gets the NEXT one, never the current one: the standing
+   * request id is the same for both, so two in flight would share one ack
+   * waiter and the later would overwrite the earlier; and the one in flight
+   * may have read the jar before this caller's write landed (two Settings
+   * windows importing in succession), so answering it with that capture
+   * would count a host as notified of a login it was never sent. Every
+   * caller that arrives during the same in-flight capture shares the one
+   * trailing capture, so a burst costs two frames, not one per caller.
    */
   capturePrimaryProfileNow(): Promise<BrowserPrimaryProfileCaptureOutcome> {
-    if (this.captureInFlight !== null) return this.captureInFlight;
+    if (this.captureInFlight === null) return this.startCapture();
+    if (this.trailingCapture === null) {
+      this.trailingCapture = this.captureInFlight.then(() => {
+        this.trailingCapture = null;
+        // Through the public path, not `startCapture`: a caller that arrived
+        // in the microtask between the in-flight capture settling and this
+        // continuation may already have started the next one, and this
+        // trailing capture then queues behind it rather than beside it.
+        return this.capturePrimaryProfileNow();
+      });
+    }
+    return this.trailingCapture;
+  }
+
+  private startCapture(): Promise<BrowserPrimaryProfileCaptureOutcome> {
     const capture = this.capturePrimaryProfileOnce().finally(() => {
       this.captureInFlight = null;
     });

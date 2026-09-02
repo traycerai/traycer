@@ -863,6 +863,14 @@ function BlockedExplainer(props: {
           cookies with an extension and import the file.
         </Notice>
       );
+    case "source-changed":
+      return (
+        <Notice tone="warning">
+          This profile's cookies changed after Traycer read them, and importing
+          them now would need a keystore you weren't told about. Nothing was
+          imported; try again to read the profile afresh.
+        </Notice>
+      );
     default: {
       // A reason added to the closed set without an explainer is a compile
       // error here, not a title with no cause and no action under it.

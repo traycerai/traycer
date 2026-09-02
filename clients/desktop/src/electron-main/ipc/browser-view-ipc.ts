@@ -71,7 +71,10 @@ import {
   type BrowserObservedProfileTarget,
 } from "../browser-view/storage/browser-observed-profile";
 import { registrableDomainForUrl } from "@traycer/protocol/host/browser/registrable-domain";
-import { BrowserJarSerializer } from "../browser-view/storage/browser-jar-serializer";
+import {
+  BARRIER_ACTION_TIMEOUT_MS,
+  BrowserJarSerializer,
+} from "../browser-view/storage/browser-jar-serializer";
 import {
   browserForgetLedgerDigestForHost,
   browserForgetLedgerPendingClears,
@@ -87,7 +90,10 @@ import {
   releaseHeadlessOriginCookieKeys,
 } from "../browser-view/storage/browser-forget-ledger";
 import { trustBrowserCertificate } from "../app/cert-trust";
-import { createLoginImportService } from "../browser-view/storage/login-import/login-import-runtime";
+import {
+  LOGIN_IMPORT_JAR_BARRIER_TIMEOUT_MS,
+  createLoginImportService,
+} from "../browser-view/storage/login-import/login-import-runtime";
 import { normalizePickedFilePath } from "../browser-view/storage/login-import/sources";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
 import { fetchRegisteredHostsViaHttp } from "@traycer-clients/shared/host-client/remote-fetcher";
@@ -230,33 +236,35 @@ export function registerBrowserViewIpc(
     // one of them: an observed merge for ANY domain that is mid-flight
     // finishes first, and one that arrives during the forget waits until the
     // jar is empty rather than writing into a clear.
-    await jarSerializer.runOnEveryDomain(async () =>
-      suppressAllBrowserPrimaryProfileDeltas(async () => {
-        let failure: { readonly error: unknown } | null = null;
-        for (const primarySession of jars) {
-          try {
-            await primarySession.clearStorageData();
-          } catch (error) {
-            // The tiles still have to be recreated: they are sitting on a jar
-            // the host no longer holds a key for, and leaving them there is
-            // worse. The other jar still gets its turn for the same reason.
-            failure ??= { error };
-            log.warn("[browser-view] primary session clear failed", {
-              error: describeLogError(error),
-            });
+    await jarSerializer.runOnEveryDomain(
+      async () =>
+        suppressAllBrowserPrimaryProfileDeltas(async () => {
+          let failure: { readonly error: unknown } | null = null;
+          for (const primarySession of jars) {
+            try {
+              await primarySession.clearStorageData();
+            } catch (error) {
+              // The tiles still have to be recreated: they are sitting on a jar
+              // the host no longer holds a key for, and leaving them there is
+              // worse. The other jar still gets its turn for the same reason.
+              failure ??= { error };
+              log.warn("[browser-view] primary session clear failed", {
+                error: describeLogError(error),
+              });
+            }
           }
-        }
-        // Unconditional, unlike `clearBrowserSiteEverywhere`'s prune, and for
-        // the reason that prune is conditional: a whole-jar clear names no
-        // origins, so dropping this memory starves no retry - while KEEPING it
-        // after a failed clear would let the next capture upload to the host
-        // the very localStorage it just shredded its slice for.
-        primaryProfileSnapshots.reset();
-        await manager.recreateNativeTabsOnCurrentPartition();
-        // Surfaced only once the tiles are back, and surfaced at all so the
-        // caller is not told the logins are gone when a jar still holds them.
-        if (failure !== null) throw failure.error;
-      }),
+          // Unconditional, unlike `clearBrowserSiteEverywhere`'s prune, and for
+          // the reason that prune is conditional: a whole-jar clear names no
+          // origins, so dropping this memory starves no retry - while KEEPING it
+          // after a failed clear would let the next capture upload to the host
+          // the very localStorage it just shredded its slice for.
+          primaryProfileSnapshots.reset();
+          await manager.recreateNativeTabsOnCurrentPartition();
+          // Surfaced only once the tiles are back, and surfaced at all so the
+          // caller is not told the logins are gone when a jar still holds them.
+          if (failure !== null) throw failure.error;
+        }),
+      BARRIER_ACTION_TIMEOUT_MS,
     );
     log.info("[browser-view] forgot the saved browser logins");
   };
@@ -1033,7 +1041,11 @@ export function registerBrowserViewIpc(
   // wait for it rather than be marked complete under a write that then puts
   // the logins back.
   const loginImport = createLoginImportService({
-    serializeJarWrite: (action) => jarSerializer.runOnEveryDomain(action),
+    serializeJarWrite: (action) =>
+      jarSerializer.runOnEveryDomain(
+        action,
+        LOGIN_IMPORT_JAR_BARRIER_TIMEOUT_MS,
+      ),
   });
 
   bridge.handleInvoke(

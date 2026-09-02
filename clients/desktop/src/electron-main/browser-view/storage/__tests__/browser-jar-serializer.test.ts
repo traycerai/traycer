@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { BrowserJarSerializer } from "../browser-jar-serializer";
+import {
+  BARRIER_ACTION_TIMEOUT_MS,
+  BrowserJarSerializer,
+} from "../browser-jar-serializer";
 
 /**
  * The barrier's liveness escape (browser-security-hardening H11). Ordering
@@ -25,6 +28,7 @@ describe("BrowserJarSerializer whole-jar barrier", () => {
         new Promise<void>((resolve) => {
           releaseBarrier = resolve;
         }),
+      BARRIER_ACTION_TIMEOUT_MS,
     );
     let domainRan = false;
     const domain = serializer.runOnDomain("example.com", async () => {
@@ -45,6 +49,7 @@ describe("BrowserJarSerializer whole-jar barrier", () => {
     // Never resolves: the wedged CDP call the escape exists for.
     const barrier = serializer.runOnEveryDomain(
       () => new Promise<void>(() => undefined),
+      BARRIER_ACTION_TIMEOUT_MS,
     );
     const rejection = expect(barrier).rejects.toThrow(/did not settle within/);
 
@@ -64,13 +69,50 @@ describe("BrowserJarSerializer whole-jar barrier", () => {
 
   it("never rejects a barrier that settled before the bound", async () => {
     const serializer = new BrowserJarSerializer();
-    await expect(serializer.runOnEveryDomain(async () => "done")).resolves.toBe(
-      "done",
-    );
+    await expect(
+      serializer.runOnEveryDomain(
+        async () => "done",
+        BARRIER_ACTION_TIMEOUT_MS,
+      ),
+    ).resolves.toBe("done");
     // Past the bound: the cleared timer must not surface a late rejection.
     await vi.advanceTimersByTimeAsync(60_000);
     await expect(
       serializer.runOnDomain("example.com", async () => "after"),
     ).resolves.toBe("after");
+  });
+
+  // Pins that expiry aborts the action's signal BEFORE the gate opens (so
+  // queued domain work never races an action that is still writing), and
+  // that a caller-provided timeout shorter than BARRIER_ACTION_TIMEOUT_MS is
+  // honoured rather than the module constant.
+  it("aborts the action's signal before opening the gate when the barrier expires", async () => {
+    const serializer = new BrowserJarSerializer();
+    const events: string[] = [];
+    const shortTimeoutMs = 1_000;
+    const barrier = serializer.runOnEveryDomain(
+      (signal) =>
+        new Promise<void>(() => {
+          signal.addEventListener("abort", () => {
+            events.push("aborted");
+          });
+        }),
+      shortTimeoutMs,
+    );
+    const rejection = expect(barrier).rejects.toThrow(/did not settle within/);
+
+    const domain = serializer.runOnDomain("example.com", async () => {
+      events.push("domain-ran");
+    });
+
+    // Not yet at the shorter bound: neither the abort nor the queued domain
+    // work has happened.
+    await vi.advanceTimersByTimeAsync(shortTimeoutMs - 1);
+    expect(events).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await rejection;
+    await domain;
+    expect(events).toEqual(["aborted", "domain-ran"]);
   });
 });

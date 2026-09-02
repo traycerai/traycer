@@ -24,9 +24,24 @@ const SNAPSHOT_DIRECTORY_NAME = "login-import-snapshots";
  * `BrowserJarSerializer` every jar mutation goes through.
  */
 export interface LoginImportJarCoordination {
-  /** `BrowserJarSerializer.runOnEveryDomain` - the whole-jar barrier. */
-  readonly serializeJarWrite: <T>(action: () => Promise<T>) => Promise<T>;
+  /**
+   * `BrowserJarSerializer.runOnEveryDomain` with the import's own budget -
+   * the whole-jar barrier, whose abort signal the write loop reads between
+   * rows so an import the barrier gave up on stops before queued work runs.
+   */
+  readonly serializeJarWrite: <T>(
+    action: (signal: AbortSignal) => Promise<T>,
+  ) => Promise<T>;
 }
+
+/**
+ * How long the import may hold the whole-jar barrier. Far above what a large
+ * profile needs (thousands of `cookies.set` calls take seconds, plus the
+ * settle window), because expiry is not a soft limit here: the serializer
+ * aborts the write and admits the queued jar work, and the import answers
+ * `blocked` for a jar it only partly wrote.
+ */
+export const LOGIN_IMPORT_JAR_BARRIER_TIMEOUT_MS = 10 * 60_000;
 
 /** The service wired to Electron, the OS keystores, and the durable jar. */
 export function createLoginImportService(

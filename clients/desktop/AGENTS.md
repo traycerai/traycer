@@ -126,16 +126,22 @@ failures.
   a profile path, or a keychain's answer must never travel that way (the
   service logs an errno code and a stage, nothing else); and the jar write
   runs under the `BrowserJarSerializer`'s whole-jar barrier (the one
-  forget-all takes, so a forget confirmed mid-import waits for it) and,
-  inside that, under `suppressAllBrowserPrimaryProfileDeltas` plus one
-  coalescing window - held through the failure path too - because the
-  per-site removals would otherwise reach the host as `removedKeys` and
-  evict the site from every live session. That mute also skips the
-  observer's `onLocalCookieWrite`, so the import hands the desktop
-  ownership of the keys it wrote by hand afterwards
-  (`releaseHeadlessOriginCookieKeys`), or a host that had seeded one of
-  them could observe an older value back over the import. A site is
-  written BEFORE anything of it is
+  forget-all takes, so a forget confirmed mid-import waits for it; the
+  import passes its own 10-minute budget, and reads the barrier's abort
+  signal between rows so an import the barrier gives up on STOPS before the
+  queued work is admitted) and, inside that, under
+  `suppressAllBrowserPrimaryProfileDeltas` plus one coalescing window -
+  held through the failure path too - because the per-site removals would
+  otherwise reach the host as `removedKeys` and evict the site from every
+  live session. That mute also skips the observer's `onLocalCookieWrite`,
+  so the import hands the desktop ownership of the keys it wrote by hand
+  (`releaseHeadlessOriginCookieKeys`) - still inside the barrier, after the
+  mute lifts, or a merge queued behind the barrier could observe an older
+  value back over the import the moment the gate opens. The Import click
+  may open only a keystore the Choose step announced for some chosen site;
+  a source that gained an encrypted row since the scan answers
+  `source-changed` and drops the scan. A site is written BEFORE anything of
+  it is
   removed: the source's cookies go in first, and only a site with at least
   one written cookie has what the source did not carry removed after, so a
   source whose every row Electron rejects leaves the jar's slice as it was.

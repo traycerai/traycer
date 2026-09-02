@@ -125,9 +125,13 @@ export interface LoginImportServiceDependencies extends LoginImportDiscoveryEnvi
    * The jar serializer's whole-jar barrier: no host-observed merge, per-site
    * clear or forget-all runs while the import writes, and a forget confirmed
    * mid-import waits for it rather than being marked complete under a write
-   * that then puts the logins back.
+   * that then puts the logins back. The signal is aborted when the barrier
+   * gives the import up (its budget ran out) and is about to admit the work
+   * queued behind it; the write loop reads it between rows and stops.
    */
-  readonly serializeJarWrite: <T>(action: () => Promise<T>) => Promise<T>;
+  readonly serializeJarWrite: <T>(
+    action: (signal: AbortSignal) => Promise<T>,
+  ) => Promise<T>;
   readonly suppressDeltas: <T>(action: () => Promise<T>) => Promise<T>;
   /**
    * Hands the desktop ownership of the keys the import wrote. Ordinarily the
@@ -135,7 +139,9 @@ export interface LoginImportServiceDependencies extends LoginImportDiscoveryEnvi
    * the import writes under `suppressDeltas`, where the observer returns
    * before it gets there - so a key a host had seeded would stay host-owned
    * and that host's next observation could overwrite the value the user just
-   * imported.
+   * imported. Called INSIDE the barrier, after the mute lifts: a merge queued
+   * behind the barrier runs the moment it opens, and it must find the keys
+   * already the desktop's.
    */
   readonly releaseHostOwnedKeys: (
     keys: readonly BrowserCookieKey[],
@@ -226,6 +232,30 @@ interface ScannedSites {
   readonly sites: ReadonlySet<string>;
   /** The Google rows, importable only with `includeDeviceBound`. */
   readonly excluded: ReadonlySet<string>;
+  /**
+   * The keystore each listed site was shown to need. An import may open only
+   * a keystore some chosen site was scanned as needing: the Choose step
+   * promised that prompt, and a site that gained an encrypted row since is a
+   * source that changed under the user, not a prompt to spring on them.
+   */
+  readonly unlockBySite: ReadonlyMap<string, LoginImportUnlock | null>;
+}
+
+/** Which key prefixes a set of rows carries, for `unlockFor`. */
+interface KeyNeeds {
+  readonly needsV10: boolean;
+  readonly needsV11: boolean;
+}
+
+function keyNeedsOf(candidates: readonly ImportCandidate[]): KeyNeeds {
+  let needsV10 = false;
+  let needsV11 = false;
+  for (const candidate of candidates) {
+    if (candidate.row.secret.kind !== "encrypted") continue;
+    if (candidate.row.secret.version === "v10") needsV10 = true;
+    else needsV11 = true;
+  }
+  return { needsV10, needsV11 };
 }
 
 export class LoginImportService {
@@ -296,6 +326,12 @@ export class LoginImportService {
         this.scanned.set(sourceId, {
           sites: new Set(scan.sites.map((site) => site.domain)),
           excluded: new Set(scan.excluded.map((site) => site.domain)),
+          unlockBySite: new Map(
+            [...scan.sites, ...scan.excluded].map((site) => [
+              site.domain,
+              site.unlock,
+            ]),
+          ),
         });
         return scan;
       } catch (error) {
@@ -363,6 +399,20 @@ export class LoginImportService {
       if (scope === null || !chosen.has(scope.site)) continue;
       candidates.push({ row, scope });
     }
+    // The prompt the Choose step announced is the only prompt Import may
+    // raise. A keystore no chosen site was scanned as needing means the
+    // source changed since (a Linux site that was all `v10` gained a `v11`
+    // row); the scan is dropped so the way back in is a fresh one. DPAPI is
+    // exempt: it unseals silently, so there was nothing to announce.
+    const needed = this.unlockFor(keyNeedsOf(candidates));
+    if (
+      needed !== null &&
+      needed !== "windows-dpapi" &&
+      ![...chosen].some((site) => allowed.unlockBySite.get(site) === needed)
+    ) {
+      this.scanned.delete(request.sourceId);
+      return { status: "blocked", reason: "source-changed" };
+    }
     const keys = await this.resolveKeys(read, candidates);
     if (!keys.ok) return { status: "blocked", reason: keys.reason };
 
@@ -382,9 +432,9 @@ export class LoginImportService {
     // Under the serializer's barrier and, inside it, with the observer muted:
     // the barrier orders this write against every other jar mutation, and
     // the mute is what keeps the per-site removals from reaching the hosts.
-    const written = await this.deps.serializeJarWrite(() =>
-      this.deps.suppressDeltas(async () => {
-        const outcome: WriteOutcome = {
+    const written = await this.deps.serializeJarWrite(async (signal) => {
+      const outcome = await this.deps.suppressDeltas(async () => {
+        const tally: WriteOutcome = {
           importedSites: 0,
           importedCookies: 0,
           replacedSites: 0,
@@ -400,7 +450,8 @@ export class LoginImportService {
               keys,
               nowSeconds,
               session,
-              outcome,
+              signal,
+              tally,
             );
           }
         } finally {
@@ -416,12 +467,14 @@ export class LoginImportService {
             await this.deps.sleep(this.deps.settleWindowMs);
           }
         }
-        return outcome;
-      }),
-    );
-    // Before the caller pushes the jar: the keys are the desktop's from here
-    // on, so no host's later observation of an older value can win them back.
-    await this.deps.releaseHostOwnedKeys(written.writtenKeys);
+        return tally;
+      });
+      // Still inside the barrier, so nothing queued behind it - a host's
+      // observation of an OLDER value for one of these keys - can run before
+      // the keys are the desktop's. Then the caller pushes the jar.
+      await this.deps.releaseHostOwnedKeys(outcome.writtenKeys);
+      return outcome;
+    });
     log.info("[browser-view] imported browser logins", {
       browser: source.browser,
       sites: written.importedSites,
@@ -462,12 +515,15 @@ export class LoginImportService {
     keys: ChromiumKeys & { ok: true },
     nowSeconds: number,
     session: LoginImportJarSession,
+    signal: AbortSignal,
     outcome: WriteOutcome,
   ): Promise<void> {
+    throwIfBarrierExpired(signal);
     const previous = await listBrowserSiteCookies(site, session.cookies);
     const writtenKeyIds = new Set<string>();
     const writtenRows: ImportCandidate[] = [];
     for (const candidate of siteRows) {
+      throwIfBarrierExpired(signal);
       const key = await this.writeRow(
         candidate,
         read,
@@ -493,10 +549,12 @@ export class LoginImportService {
     );
     const removedNames = new Set(stale.map((cookie) => cookie.name));
     for (const cookie of stale) {
+      throwIfBarrierExpired(signal);
       await removeBrowserCookie(cookie, session.cookies);
     }
     for (const candidate of writtenRows) {
       if (!removedNames.has(candidate.row.name)) continue;
+      throwIfBarrierExpired(signal);
       const key = await this.writeRow(
         candidate,
         read,
@@ -592,35 +650,32 @@ export class LoginImportService {
         .map(([domain, tally]) => ({
           domain,
           cookieCount: tally.cookieCount,
-          unlock: this.unlockFor(tally.needsV10, tally.needsV11),
+          unlock: this.unlockFor(tally),
         }))
         .sort((left, right) => left.domain.localeCompare(right.domain)),
       excluded: [...excluded]
         .map(([domain, tally]) => ({
           domain,
           cookieCount: tally.cookieCount,
-          unlock: this.unlockFor(tally.needsV10, tally.needsV11),
+          unlock: this.unlockFor(tally),
           reason: "google-device-bound" as const,
         }))
         .sort((left, right) => left.domain.localeCompare(right.domain)),
       protectedCookieCount,
       partitionedCookieCount,
       unreadableCookieCount: read.unreadable,
-      unlock: this.unlockFor(needsV10, needsV11),
+      unlock: this.unlockFor({ needsV10, needsV11 }),
       blocked: null,
     };
   }
 
   /** Which keystore Import will open, from the rows' prefixes alone. */
-  private unlockFor(
-    needsV10: boolean,
-    needsV11: boolean,
-  ): LoginImportUnlock | null {
-    if (!needsV10 && !needsV11) return null;
+  private unlockFor(needs: KeyNeeds): LoginImportUnlock | null {
+    if (!needs.needsV10 && !needs.needsV11) return null;
     if (this.deps.platform === "darwin") return "macos-keychain";
     if (this.deps.platform === "win32") return "windows-dpapi";
     // Linux `v10` is the built-in `peanuts` key: no keyring is opened for it.
-    return needsV11 ? "linux-keyring" : null;
+    return needs.needsV11 ? "linux-keyring" : null;
   }
 
   private async readSource(
@@ -713,13 +768,7 @@ export class LoginImportService {
     read: SourceRead & { ok: true },
     candidates: readonly ImportCandidate[],
   ): Promise<ChromiumKeys> {
-    let needsV10 = false;
-    let needsV11 = false;
-    for (const candidate of candidates) {
-      if (candidate.row.secret.kind !== "encrypted") continue;
-      if (candidate.row.secret.version === "v10") needsV10 = true;
-      else needsV11 = true;
-    }
+    const { needsV10, needsV11 } = keyNeedsOf(candidates);
     if (!needsV10 && !needsV11) return { ok: true, v10: null, v11: null };
     if (read.chromium === null) return { ok: true, v10: null, v11: null };
     const browser = read.chromium.browser;
@@ -836,6 +885,19 @@ export class LoginImportService {
       code:
         errnoCode(error) ?? (error instanceof Error ? error.name : "unknown"),
     });
+  }
+}
+
+/**
+ * The barrier gave this import up and is admitting the jar work queued
+ * behind it: stop before the next mutation. The flush and settle window still
+ * run (the write's `finally`), and the outer catch answers `blocked` for a
+ * jar that was only partly written - the message never leaves this process,
+ * `warn` logs only the error's name.
+ */
+function throwIfBarrierExpired(signal: AbortSignal): void {
+  if (signal.aborted) {
+    throw new Error("The jar barrier expired before the import finished");
   }
 }
 

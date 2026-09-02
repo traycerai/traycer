@@ -764,7 +764,7 @@ describe("the browser.sessions jar plane lives in main", () => {
     expect(second.framesOfKind("primaryProfileCaptured")).toHaveLength(0);
   });
 
-  it("shares one frame and one ack between two overlapping captures on one stream", async () => {
+  it("runs overlapping captures on one stream one at a time, the later one after the first's ack", async () => {
     const session = await openLiveStream(harness, registry, "window-1");
     session.emit(
       {
@@ -777,8 +777,11 @@ describe("the browser.sessions jar plane lives in main", () => {
     );
 
     // Two callers overlapping on the SAME stream - a login import's push
-    // beside the quit-path flush - share the capture in flight rather than
-    // each sending one.
+    // beside the quit-path flush, or two imports in succession. The second
+    // does NOT ride the first's frame: that frame may have read the jar
+    // before the second caller's write landed. It gets the next capture,
+    // which starts only once the first has been acked, so the two never
+    // share the standing id's one ack waiter.
     const pushed = registry.capturePrimaryProfileOnEveryHost();
     const flushed = registry.captureFinalPrimaryProfiles("window-1");
     await Promise.resolve();
@@ -798,7 +801,80 @@ describe("the browser.sessions jar plane lives in main", () => {
     );
 
     expect(await pushed).toBe(1);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // The trailing capture read the jar again and sent its own frame.
+    expect(harness.jar.captures).toBe(2);
+    expect(session.framesOfKind("primaryProfileCaptured")).toHaveLength(2);
+
+    session.emit(
+      {
+        kind: "primaryProfileCaptureAck",
+        hasBinaryPayload: false,
+        requestId: "standing-1",
+      },
+      null,
+    );
     await flushed;
+  });
+
+  it("a third caller during the same in-flight capture shares the one trailing capture", async () => {
+    const session = await openLiveStream(harness, registry, "window-1");
+    session.emit(
+      {
+        kind: "capturePrimaryProfile",
+        hasBinaryPayload: false,
+        requestId: "standing-1",
+        standing: true,
+      },
+      null,
+    );
+
+    // Three back-to-back callers on the same stream, all arriving while the
+    // first capture is still in flight. The second and third must share ONE
+    // trailing capture rather than each minting their own - a burst of
+    // overlapping callers costs two frames total on this stream, never one
+    // per caller.
+    const first = registry.capturePrimaryProfileOnEveryHost();
+    const second = registry.capturePrimaryProfileOnEveryHost();
+    const third = registry.capturePrimaryProfileOnEveryHost();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(harness.jar.captures).toBe(1);
+    expect(session.framesOfKind("primaryProfileCaptured")).toHaveLength(1);
+
+    session.emit(
+      {
+        kind: "primaryProfileCaptureAck",
+        hasBinaryPayload: false,
+        requestId: "standing-1",
+      },
+      null,
+    );
+    for (let tick = 0; tick < 8; tick += 1) {
+      await Promise.resolve();
+    }
+
+    // Exactly ONE more frame for the shared trailing capture - not two.
+    expect(harness.jar.captures).toBe(2);
+    expect(session.framesOfKind("primaryProfileCaptured")).toHaveLength(2);
+
+    session.emit(
+      {
+        kind: "primaryProfileCaptureAck",
+        hasBinaryPayload: false,
+        requestId: "standing-1",
+      },
+      null,
+    );
+
+    expect(await first).toBe(1);
+    expect(await second).toBe(1);
+    expect(await third).toBe(1);
   });
 
   it("counts no host for an import push when none issued a standing capture request", async () => {
