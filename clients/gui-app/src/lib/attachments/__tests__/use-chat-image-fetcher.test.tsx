@@ -19,6 +19,10 @@ import {
   useChatAttachmentByteReader,
   useChatImageFetcher,
 } from "@/lib/attachments/use-chat-image-fetcher";
+import { useAuthStore } from "@/stores/auth/auth-store";
+
+const PROFILE = { userId: "user-1", userName: "U", email: "u@example.com" };
+const CONTEXT = { userId: "user-1", username: "U" };
 
 /**
  * The chat-plane byte chain: `epic.readChatAttachment` on the tile's host
@@ -39,6 +43,8 @@ const docMocks = vi.hoisted(() => ({
       Promise.resolve(null),
   ),
   present: true,
+  /** The session's durability status, read live by the verdict gate. */
+  durabilityStatus: null as "local" | "promoting" | "cloud" | null,
 }));
 
 vi.mock("@/providers/use-open-epic-handle", () => ({
@@ -50,6 +56,7 @@ vi.mock("@/providers/use-open-epic-handle", () => ({
             getState: () => ({
               hasAttachmentBytes: docMocks.hasAttachmentBytes,
               readAttachmentBytes: docMocks.readAttachmentBytes,
+              durabilityStatus: docMocks.durabilityStatus,
             }),
           },
         }
@@ -137,6 +144,11 @@ async function bytesOnce(
 }
 
 beforeEach(() => {
+  // The chat-plane leg is admitted for a session holding a cloud verdict (or
+  // a local-homed epic); every case models a verified session unless it says
+  // otherwise.
+  useAuthStore.getState().setSignedIn(PROFILE, CONTEXT, []);
+  docMocks.durabilityStatus = null;
   resetChatAttachmentHostSupportForTests();
   request.mockReset();
   docMocks.present = true;
@@ -147,6 +159,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  useAuthStore.getState().setSignedOut();
   vi.restoreAllMocks();
 });
 
@@ -364,6 +377,42 @@ describe("useChatImageFetcher", () => {
       DOC_BYTES,
     );
     expect(request).not.toHaveBeenCalled();
+  });
+
+  it("skips the chat-plane leg for a cloud-homed epic once the cloud verdict is withdrawn", async () => {
+    // The host's leg is a bearer pass-through to the cloud blob for an
+    // attachment another host published, and the request has no plane
+    // selector - so without a verdict the leg is not dispatched at all, and
+    // the doc replica is the only remaining source.
+    request.mockResolvedValue({
+      ok: true,
+      bytesBase64: CHAT_PLANE_BASE64,
+      mediaType: "image/png",
+    });
+    docMocks.readAttachmentBytes.mockResolvedValue(DOC_BYTES);
+    useAuthStore.getState().setUnverifiedSession(PROFILE, CONTEXT);
+
+    await expect(bytesOnce(scopeValue("host-1", true))).resolves.toEqual(
+      DOC_BYTES,
+    );
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("keeps the chat-plane leg for a LOCAL-homed epic without a verdict", async () => {
+    // No cloud task exists for a local home, so the host has nothing to fall
+    // back to and its disk-served images keep rendering.
+    request.mockResolvedValue({
+      ok: true,
+      bytesBase64: CHAT_PLANE_BASE64,
+      mediaType: "image/png",
+    });
+    docMocks.durabilityStatus = "local";
+    useAuthStore.getState().setUnverifiedSession(PROFILE, CONTEXT);
+
+    await expect(bytesOnce(scopeValue("host-1", true))).resolves.toEqual(
+      CHAT_PLANE_BYTES,
+    );
+    expect(request).toHaveBeenCalledTimes(1);
   });
 
   it("treats an undecodable body as a retryable failure, not a miss", async () => {

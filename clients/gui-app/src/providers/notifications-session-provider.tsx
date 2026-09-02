@@ -225,6 +225,9 @@ export function NotificationsSessionProvider(
   const notificationFeedMode = useHeldNotificationFeedMode(
     negotiatedFeedMode,
     cloudFeedSupport,
+    // The hold is per serving host: a switch to another host settles to that
+    // host's own negotiation instead of carrying the previous host's mode.
+    servingHostEntry?.hostId ?? null,
   );
   // The session body itself consumes the mode (through
   // `useMergedNotificationsActions`), and a component cannot read a context it

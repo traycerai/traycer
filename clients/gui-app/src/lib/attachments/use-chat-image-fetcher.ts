@@ -16,6 +16,33 @@ import { base64ToBytes } from "@/lib/composer/image-base64";
 import { readHeldEpicAttachmentBytes } from "@/lib/epic-replica-reads";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
+import { isLocalHomedDurabilityStatus } from "@/lib/epic-selectors";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
+
+/**
+ * Whether the chat-plane leg may be dispatched for this read.
+ *
+ * `epic.readChatAttachment` serves from the host's own disk store first, but
+ * for an attachment another host published it is a bearer pass-through to the
+ * cloud blob - and the request carries no plane selector, so the host cannot
+ * be told to stop at its disk. The host connection carries no renderer
+ * verdict either. So for a session without a cloud verdict the leg is skipped
+ * for a cloud-homed epic: the retained bearer must not read published bytes
+ * after the verdict was withdrawn. A local-homed epic (`local` /
+ * `promoting`, read LIVE from the session's durability status) has no cloud
+ * task the host could fall back to, so its disk-served images keep rendering,
+ * and the epic-doc replica leg below serves legacy hashes either way. The
+ * cost - disk-served images of a cloud-homed epic while unverified - is the
+ * follow-up a negotiated local-only selector would remove.
+ */
+function chatPlaneLegAdmitted(handle: OpenEpicStoreHandle | null): boolean {
+  if (authorizesCloudCapability(useAuthStore.getState().status)) return true;
+  const status = handle?.store.getState().durabilityStatus ?? null;
+  return isLocalHomedDurabilityStatus(status);
+}
 
 /**
  * How long a one-shot byte read (clipboard re-inline, prompt stash) waits before
@@ -196,11 +223,11 @@ export function useChatImageFetcher(): ScopedImageBytesFetcher {
   const handle = useMaybeOpenEpicHandle();
   const fetch = useCallback<ImageBytesFetcher>(
     async (hash, signal) => {
-      const fromChatPlane = await readChatAttachmentFromHost(
-        scope,
-        hash,
-        signal,
-      );
+      // Re-read per fetch, not captured at hook time: a Retry or a late
+      // render after a demotion must see the verdict as it is now.
+      const fromChatPlane = chatPlaneLegAdmitted(handle)
+        ? await readChatAttachmentFromHost(scope, hash, signal)
+        : null;
       if (fromChatPlane !== null) return fromChatPlane;
       const fromDoc = await readAttachmentFromEpicDoc(handle, hash);
       if (fromDoc !== null) return fromDoc;

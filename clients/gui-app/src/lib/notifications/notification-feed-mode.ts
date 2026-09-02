@@ -79,6 +79,7 @@ export function useNotificationFeedMode(): NotificationFeedMode {
 }
 
 interface HeldNotificationFeedMode {
+  readonly servingHostId: string | null;
   readonly negotiated: NotificationFeedMode;
   readonly cloudFeedSupport: StreamMethodSupport | null;
   readonly settled: NotificationFeedMode;
@@ -101,6 +102,18 @@ interface HeldNotificationFeedMode {
  * `null` support (no client at all) is NOT held: there is no handshake in
  * flight to wait for, and the negotiated `local` is the genuine answer.
  *
+ * Held for the SAME serving host only. The hold exists for a rebuild of one
+ * host's client; a relay-only shell can also switch its serving host from A
+ * to B, and B's fresh client reports `unknown` for the same beat. Carrying
+ * A's `cloud` across that switch would have every consumer send the
+ * `home: "local"` partition selector on B's unary calls before B's own
+ * negotiation said B supports it - and an older B strips the selector, so
+ * whole-origin rows merge into the cloud lane and a mark-all reaches
+ * cloud-home rows (the exact failure the five-method floor in
+ * `useNotificationFeedModeFor` exists to prevent). So a host change settles
+ * to B's raw negotiation - `local`, the single safe view - and B's own
+ * handshake re-decides from there.
+ *
  * Derived state, adjusted during render rather than in an effect: the settled
  * mode must be visible in the same commit as the negotiation change, or the
  * beat this exists to remove would still reach one render's worth of
@@ -109,18 +122,23 @@ interface HeldNotificationFeedMode {
 export function useHeldNotificationFeedMode(
   negotiated: NotificationFeedMode,
   cloudFeedSupport: StreamMethodSupport | null,
+  servingHostId: string | null,
 ): NotificationFeedMode {
   const [held, setHeld] = useState<HeldNotificationFeedMode>({
+    servingHostId,
     negotiated,
     cloudFeedSupport,
     settled: negotiated,
   });
   if (
+    held.servingHostId !== servingHostId ||
     held.negotiated !== negotiated ||
     held.cloudFeedSupport !== cloudFeedSupport
   ) {
-    const settled = cloudFeedSupport === "unknown" ? held.settled : negotiated;
-    setHeld({ negotiated, cloudFeedSupport, settled });
+    const sameHost = held.servingHostId === servingHostId;
+    const settled =
+      sameHost && cloudFeedSupport === "unknown" ? held.settled : negotiated;
+    setHeld({ servingHostId, negotiated, cloudFeedSupport, settled });
     return settled;
   }
   return held.settled;
