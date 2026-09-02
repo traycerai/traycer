@@ -119,9 +119,10 @@ describe("useCloudLinkGrace", () => {
 
   it("does not let a graced outage carry its quiet verdict into unsaved renderer work", () => {
     // The grace latches per outage, and a cloud drop can turn into local
-    // divergence without an intervening recovery frame. If the latch were
-    // keyed on anything coarser than the state itself, the transition below
-    // would inherit 'syncing' and hide the warning.
+    // divergence without an intervening recovery frame. Both directions are
+    // covered: mid-window (the latch is still false) and after a COMPLETED
+    // window (it is true) - the second is what actually exercises the
+    // render-phase reset, since the first passes either way.
     vi.useFakeTimers();
     const { result, rerender } = renderHook(
       (props: { derived: EpicSyncPillState }) =>
@@ -130,8 +131,26 @@ describe("useCloudLinkGrace", () => {
     );
     expect(result.current).toBe("syncing");
 
+    // Mid-window: never quieted, even with a graced outage in flight.
     rerender({ derived: "offlineWithUnsavedChanges" });
     expect(result.current).toBe("offlineWithUnsavedChanges");
+
+    // Now run a window all the way out so the latch is genuinely set.
+    rerender({ derived: "reconnecting" });
+    act(() => {
+      vi.advanceTimersByTime(CLOUD_LINK_GRACE_MS);
+    });
+    rerender({ derived: "reconnecting" });
+    expect(result.current).toBe("reconnecting");
+
+    // Passing through the excluded state must CLEAR that latch, not just be
+    // exempt from it. Without the reset the next outage would inherit
+    // `sustained` and skip its window entirely.
+    rerender({ derived: "offlineWithUnsavedChanges" });
+    expect(result.current).toBe("offlineWithUnsavedChanges");
+
+    rerender({ derived: "reconnecting" });
+    expect(result.current).toBe("syncing");
   });
 
   it("recovering to 'synced' at any point returns 'synced' immediately", () => {
