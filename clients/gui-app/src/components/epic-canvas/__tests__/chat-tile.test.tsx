@@ -1190,7 +1190,7 @@ function registerWaitingChatHandoff(): void {
     content: INITIAL_HANDOFF_CONTENT,
     settings: INITIAL_HANDOFF_SETTINGS,
     worktreeIntent: null,
-    placement: { kind: "active-tile" },
+    placement: null,
     messageId: "msg-test",
     clientActionId: "cai-test",
     createdAt: 1,

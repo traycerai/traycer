@@ -4,10 +4,9 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
-import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { DiffViewerPreferences } from "@/lib/diff/diff-viewer-preferences";
-import { useOpenEpicId } from "@/lib/epic-selectors";
 import { getBasename } from "@/lib/path/cross-platform-path";
 import { workspaceFileRefFromTreePath } from "@/components/epic-canvas/workspace-file/workspace-file-ref";
 import { BUNDLE_INLINE_LINE_THRESHOLD } from "@/lib/git/bundle-thresholds";
@@ -37,6 +36,7 @@ import {
 import { type GitBundleDiffTileRef } from "./git-diff-tile-shared";
 import { useEditableGitDiffSurface } from "./git-diff-editing";
 import { GitDiffEditStatusContent } from "./git-diff-edit-status";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 interface BundleFileSectionProps {
   readonly node: GitBundleDiffTileRef;
@@ -49,11 +49,7 @@ interface BundleFileSectionProps {
 
 export function BundleFileSection(props: BundleFileSectionProps): ReactNode {
   const bundleFindRegistration = useBundleDiffFindRegistrationContext();
-  const epicId = useOpenEpicId();
-  const navigateNested = useEpicNestedFocusNavigation();
-  const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
-    (s) => s.prepareOpenTileInTabFocusTarget,
-  );
+  const { openTile } = useEpicTileNavigation();
   const toggleCollapsed = useEpicCanvasStore(
     (s) => s.toggleGitDiffBundleFileCollapsedInTab,
   );
@@ -72,13 +68,11 @@ export function BundleFileSection(props: BundleFileSectionProps): ReactNode {
       getBasename(props.file.path),
     );
     if (tile === null) return;
-    navigateNested(epicId, props.viewTabId, () =>
-      prepareOpenTileInTabFocusTarget(props.viewTabId, tile),
+    openTile(
+      tileIntent(tile, { tabId: props.viewTabId }, "explicit", "direct_ui"),
     );
   }, [
-    epicId,
-    navigateNested,
-    prepareOpenTileInTabFocusTarget,
+    openTile,
     props.file.path,
     props.node.hostId,
     props.node.diff.runningDir,

@@ -29,20 +29,20 @@ export function HostedChatSurfaceContextBridge(props: {
   );
   return (
     <EpicSessionContext.Provider value={environment.services.openEpicHandle}>
-      <BrowserSessionsHostProvider
-        hostId={hostId}
-        hostClient={environment.services.hostClient}
-        epicId={environment.placement.epicId}
-      >
-        <EpicViewTabContext.Provider value={environment.placement.viewTabId}>
-          <PaneSurfaceActivityContext.Provider
-            value={{
-              visible: environment.presentation.topLevelVisible,
-              focused: environment.presentation.topLevelFocused,
-            }}
+      <EpicViewTabContext.Provider value={environment.placement.viewTabId}>
+        <PaneSurfaceActivityContext.Provider
+          value={{
+            visible: environment.presentation.topLevelVisible,
+            focused: environment.presentation.topLevelFocused,
+          }}
+        >
+          <PaneVisibilityContext.Provider
+            value={environment.presentation.topLevelVisible}
           >
-            <PaneVisibilityContext.Provider
-              value={environment.presentation.topLevelVisible}
+            <BrowserSessionsHostProvider
+              hostId={hostId}
+              hostClient={environment.services.hostClient}
+              epicId={environment.placement.epicId}
             >
               <PaneActivationFocusIntentContext.Provider
                 value={environment.paneActivation.focusIntent}
@@ -61,10 +61,10 @@ export function HostedChatSurfaceContextBridge(props: {
                   </PanePortalContainerContext.Provider>
                 </PaneFocusProbeContext.Provider>
               </PaneActivationFocusIntentContext.Provider>
-            </PaneVisibilityContext.Provider>
-          </PaneSurfaceActivityContext.Provider>
-        </EpicViewTabContext.Provider>
-      </BrowserSessionsHostProvider>
+            </BrowserSessionsHostProvider>
+          </PaneVisibilityContext.Provider>
+        </PaneSurfaceActivityContext.Provider>
+      </EpicViewTabContext.Provider>
     </EpicSessionContext.Provider>
   );
 }

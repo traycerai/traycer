@@ -317,8 +317,8 @@ export function registerBrowserViewIpc(
       toBrowserViewWindow(
         bridge.windowRegistry.getRecordById(windowId)?.window,
       ),
-    createPopupWindowOptions: (windowId, request) =>
-      createBrowserPopupWindowOptions(bridge, windowId, request),
+    createPopupWindowOptions: (request) =>
+      createBrowserPopupWindowOptions(request),
     createDevToolsWindow: (windowId) =>
       createBrowserDevToolsWindow(bridge, windowId),
     registerPopupWebContents: (webContents) => {
@@ -1039,17 +1039,21 @@ function createElectronBrowserView(
 }
 
 function createBrowserPopupWindowOptions(
-  bridge: RunnerIpcBridge,
-  windowId: string,
   request: BrowserSessionProfileRequest,
 ): BrowserWindowConstructorOptions {
-  const parentWindow = bridge.windowRegistry.getRecordById(windowId)?.window;
   return {
-    parent: isElectronBrowserWindow(parentWindow) ? parentWindow : undefined,
     show: true,
     width: 900,
     height: 700,
     backgroundColor: "#0b0b0d",
+    // A native child of a fullscreen BrowserWindow inherits macOS's
+    // fullscreen space. Closing that child can leave the owning window's
+    // compositor black, so arbitrary web popups must remain top-level native
+    // windows. Chromium still retains the original window.opener relationship.
+    fullscreen: false,
+    fullscreenable: false,
+    modal: false,
+    kiosk: false,
     webPreferences: createBrowserViewWebPreferences(request),
   };
 }

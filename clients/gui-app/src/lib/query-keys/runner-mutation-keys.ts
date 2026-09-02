@@ -91,6 +91,8 @@ export const runnerMutationKeys = {
   // reloads. Keyed so the destructive action dedups and shows in devtools.
   clearAllLocalData: () => ["runner.clearAllLocalData"] as const,
   mermaidPngDownload: () => ["runner.mermaidPngDownload"] as const,
+  // The desktop link bridge (`useOpenExternalLink`) - every URL that leaves
+  // the app goes through this one mutation.
   openExternalLink: () => ["runner.openExternalLink"] as const,
   // Re-open a file the desktop save dialog just wrote (`fileDrops.openSavedFile`).
   openSavedFile: () => ["runner.fileDrops.openSavedFile"] as const,

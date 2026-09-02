@@ -2,7 +2,8 @@ import {
   act,
   cleanup,
   fireEvent,
-  render,
+  render as renderUi,
+  type RenderResult,
   screen,
   waitFor,
 } from "@testing-library/react";
@@ -11,6 +12,16 @@ import type { DesktopSupportBridge } from "@/lib/windows/types";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { AboutDetailsDialog } from "@/components/layout/dialogs/desktop/about-details-dialog";
 import { createDesktopSupportBridgeStub } from "./support-bridge-stub";
+import type { ReactNode } from "react";
+import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
+
+/**
+ * Every link surface below reaches the external-link bridge mutation, which
+ * needs a `QueryClientProvider` above it.
+ */
+function render(ui: ReactNode): RenderResult {
+  return renderUi(ui, { wrapper: WithTestQueryClient });
+}
 
 afterEach(() => {
   cleanup();
@@ -74,7 +85,6 @@ describe("<AboutDetailsDialog />", () => {
         open
         onOpenChange={() => {}}
         support={readySupport()}
-        openExternalLink={() => Promise.resolve()}
       />,
     );
 
@@ -104,7 +114,6 @@ describe("<AboutDetailsDialog />", () => {
         open
         onOpenChange={() => {}}
         support={unavailableSupport()}
-        openExternalLink={() => Promise.resolve()}
       />,
     );
 
@@ -120,7 +129,6 @@ describe("<AboutDetailsDialog />", () => {
         open
         onOpenChange={() => {}}
         support={unavailableSupport()}
-        openExternalLink={() => Promise.resolve()}
       />,
     );
 
@@ -147,14 +155,7 @@ describe("<AboutDetailsDialog />", () => {
   });
 
   it("gates the missing-support-bridge report action on capability", () => {
-    render(
-      <AboutDetailsDialog
-        open
-        onOpenChange={() => {}}
-        support={null}
-        openExternalLink={() => Promise.resolve()}
-      />,
-    );
+    render(<AboutDetailsDialog open onOpenChange={() => {}} support={null} />);
 
     screen.getByText("Desktop support bridge unavailable.");
     expect(screen.queryByRole("button", { name: "Report issue" })).toBeNull();

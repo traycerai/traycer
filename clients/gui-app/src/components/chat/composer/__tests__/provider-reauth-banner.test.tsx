@@ -73,7 +73,7 @@ const mocks = vi.hoisted(() => ({
   setEnvOverrideMutate: vi.fn(),
   setApiKeyMutate: vi.fn(),
   refreshProviders: vi.fn(() => Promise.resolve()),
-  openExternalLink: vi.fn(),
+  openLink: vi.fn(),
   reportableErrorToast: vi.fn(),
   openSettings: vi.fn(),
   hostKind: "local",
@@ -149,11 +149,8 @@ vi.mock("@/hooks/providers/use-providers-set-api-key-mutation", () => ({
 vi.mock("@/hooks/providers/use-tab-refresh-providers", () => ({
   useTabRefreshProviders: () => mocks.refreshProviders,
 }));
-vi.mock("@/hooks/runner/use-open-external-link-mutation", () => ({
-  useRunnerOpenExternalLink: () => ({ mutate: mocks.openExternalLink }),
-}));
-vi.mock("@/providers/use-runner-host", () => ({
-  useRunnerHost: () => ({ openExternalLink: mocks.openExternalLink }),
+vi.mock("@/lib/links/open-link", () => ({
+  useOpenLink: () => mocks.openLink,
 }));
 vi.mock("@/lib/reportable-error-toast", () => ({
   reportableErrorToast: mocks.reportableErrorToast,
@@ -406,7 +403,7 @@ describe("<ProviderReauthBanner />", () => {
     mocks.setEnvOverrideMutate.mockClear();
     mocks.setApiKeyMutate.mockClear();
     mocks.refreshProviders.mockClear();
-    mocks.openExternalLink.mockClear();
+    mocks.openLink.mockClear();
     mocks.reportableErrorToast.mockClear();
     mocks.hostKind = "local";
     useProvidersFocusStore.getState().clearFocusHarnessId();
@@ -715,8 +712,10 @@ describe("<ProviderReauthBanner />", () => {
     expect(screen.getByText(/Approve sign-in in your browser/)).toBeDefined();
 
     fireEvent.click(screen.getByRole("button", { name: "Open browser again" }));
-    expect(mocks.openExternalLink).toHaveBeenCalledWith(
+    expect(mocks.openLink).toHaveBeenCalledWith(
       "http://localhost:56988/callback",
+      "auth",
+      null,
     );
 
     const input = screen.getByLabelText("Paste the code");

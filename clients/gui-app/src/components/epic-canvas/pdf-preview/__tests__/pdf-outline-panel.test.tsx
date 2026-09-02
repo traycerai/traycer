@@ -68,17 +68,21 @@ describe("PdfOutlinePanel", () => {
     const onNavigate = vi.fn();
     render(<PdfOutlinePanel items={OUTLINE} onNavigate={onNavigate} />);
 
+    // The click travels with the entry: an external outline link answers to
+    // the "Open links" setting, and to the modifiers that override it.
     fireEvent.click(screen.getByRole("button", { name: "Reliability" }));
     expect(onNavigate).toHaveBeenCalledWith(
       expect.objectContaining({
         title: "Reliability",
         dest: "dest:Reliability",
       }),
+      expect.objectContaining({ type: "click" }),
     );
 
     fireEvent.click(screen.getByRole("button", { name: "External resource" }));
     expect(onNavigate).toHaveBeenCalledWith(
       expect.objectContaining({ dest: null, url: "https://example.com" }),
+      expect.objectContaining({ type: "click" }),
     );
   });
 });

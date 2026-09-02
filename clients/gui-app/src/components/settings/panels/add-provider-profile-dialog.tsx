@@ -41,7 +41,7 @@ import { useProvidersSubmitLoginCodeForClient } from "@/hooks/providers/use-prov
 import { useProvidersTouchLoginForClient } from "@/hooks/providers/use-providers-touch-login-mutation";
 import { useRecolorProviderProfileForClient } from "@/hooks/providers/use-recolor-provider-profile-mutation";
 import { useRenameProviderProfileForClient } from "@/hooks/providers/use-rename-provider-profile-mutation";
-import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
+import { useOpenLink } from "@/lib/links/open-link";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { redactEmail } from "@/lib/providers/redact-email";
 import { CodePasteField, CodePasteRestartNotice } from "./code-paste-field";
@@ -127,7 +127,7 @@ export function AddProviderProfileDialog({
   ) => void;
   readonly onProfileCreated: (profileId: string) => void;
 }): ReactNode {
-  const openExternalLink = useRunnerOpenExternalLink();
+  const openLink = useOpenLink();
   const supportsShareSkillsAndPlugins =
     PROVIDER_SHARES_SKILLS_AND_PLUGINS[state.providerId];
   const [shareSkillsAndPlugins, setShareSkillsAndPlugins] = useState(
@@ -352,7 +352,9 @@ export function AddProviderProfileDialog({
             setEmailRevealed={setEmailRevealed}
             linkDisabled={trimmedLabel.length === 0 || flow.busy}
             onLink={linkAccount}
-            onOpenExternalLink={(url) => openExternalLink.mutate(url)}
+            onOpenExternalLink={(url) => {
+              void openLink(url, "auth", null);
+            }}
             onCancel={() => close(false)}
             onRetryLogin={linkAccount}
             onRetryFinalize={retryFinalize}

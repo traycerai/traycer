@@ -8,6 +8,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BrowserSettingsSection } from "@/components/settings/browser-settings-section";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { BrowserSaveLoginsController } from "@/lib/browser-view/use-browser-save-logins";
 import type {
   BrowserSavedLoginSite,
@@ -164,6 +165,8 @@ describe("<BrowserSettingsSection /> saved logins", () => {
     browserView.forgetLogins.mockClear();
     browserView.clearSavedLoginSite.mockClear();
     refetch.mockClear();
+    hostBinding.current = {};
+    useSettingsStore.setState({ browserDevOrigins: [] });
   });
 
   it("reflects the machine's decision", () => {
@@ -228,6 +231,10 @@ describe("<BrowserSettingsSection /> saved logins", () => {
 
   it("renders nothing at all without a host runtime", () => {
     hostBinding.current = null;
+    // Seeded so the dev-origins group has a row: it is all that is left of the
+    // Browser group now that link and agent-tab controls live in Settings >
+    // Opening behavior.
+    useSettingsStore.setState({ browserDevOrigins: ["http://localhost:5173"] });
     renderSection(controller({ enabled: true }), {
       kind: "sites",
       sites: [savedSite("example.com")],
@@ -241,7 +248,7 @@ describe("<BrowserSettingsSection /> saved logins", () => {
       screen.queryByRole("button", { name: "Forget all browser logins…" }),
     ).toBeNull();
     // The rest of the Browser section is unaffected.
-    expect(screen.getByText("Web link default")).not.toBeNull();
+    expect(screen.getByText("Detected dev origins")).not.toBeNull();
   });
 
   it("lists site names and last-seen times, and never a value", () => {

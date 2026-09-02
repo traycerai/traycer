@@ -8,7 +8,7 @@ import type {
   TileChromeCapabilities,
   TileController,
 } from "@/components/epic-canvas/renderers/tile-controller";
-import { normalizeBrowserAddressInput } from "@/lib/browser-view/link-routing/browser-link-routing-core";
+import { normalizeBrowserAddressInput } from "@/lib/browser-view/browser-tab-display";
 import { useAddressDraft } from "@/components/epic-canvas/renderers/use-address-draft";
 import type { BrowserViewViewportPresetId } from "@traycer-clients/shared/platform/browser-view";
 import { toast } from "sonner";
