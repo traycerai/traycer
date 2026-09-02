@@ -510,6 +510,8 @@ async function runWithPublishedHostStartAdoption(
     }
     throw error;
   } finally {
-    await lease?.cancel();
+    // cancel() propagating out of this `finally` would swap in its own error
+    // for the actuator or record error being reported.
+    await lease?.cancel().catch(() => undefined);
   }
 }
