@@ -127,11 +127,7 @@ function selectBrowserSessionsPresenters(
       viewTabId: presentation.viewTabId,
       navigateNested: candidate.navigateNested,
     };
-    const priority = presentation.focused
-      ? 0
-      : presentation.visible
-        ? 1
-        : 2;
+    const priority = presentation.focused ? 0 : presentation.visible ? 1 : 2;
     const previous = byViewTabId.get(presentation.viewTabId);
     if (previous === undefined || priority < previous.priority) {
       byViewTabId.set(presentation.viewTabId, { presenter, priority });

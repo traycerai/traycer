@@ -264,9 +264,9 @@ describe("surfaceHostOpenedTab", () => {
     );
     expect(canvas().activePaneId).toBe(presentingPaneId);
     expect(tileCount()).toBe(2);
-    expect(
-      useEpicCanvasStore.getState().canvasByTabId[otherViewTabId],
-    ).toBe(otherCanvas);
+    expect(useEpicCanvasStore.getState().canvasByTabId[otherViewTabId]).toBe(
+      otherCanvas,
+    );
   });
 
   it("never mints a header tab for an epic the user has not opened", () => {

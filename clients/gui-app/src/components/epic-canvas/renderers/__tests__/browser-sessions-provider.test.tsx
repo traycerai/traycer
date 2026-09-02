@@ -697,58 +697,55 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
     expect(stream.closed).toBe(true);
   });
 
-  it(
-    "presents a host-opened tab in the focused retained view, not the first coordinator consumer",
-    async () => {
-      render(
-        <>
-          <PresentedBrowserSessionsProvider
-            viewTabId="view-background"
-            visible={false}
-            focused={false}
-            id="background"
-          />
-          <PresentedBrowserSessionsProvider
-            viewTabId="view-focused"
-            visible
-            focused
-            id="focused"
-          />
-        </>,
-      );
-      const client = hookState.streamClient;
-      await waitFor(() => {
-        expect(client?.subscribes).toHaveLength(1);
-      });
-      const stream = client?.sessions[0];
-      if (stream === undefined) throw new Error("expected shared stream");
+  it("presents a host-opened tab in the focused retained view, not the first coordinator consumer", async () => {
+    render(
+      <>
+        <PresentedBrowserSessionsProvider
+          viewTabId="view-background"
+          visible={false}
+          focused={false}
+          id="background"
+        />
+        <PresentedBrowserSessionsProvider
+          viewTabId="view-focused"
+          visible
+          focused
+          id="focused"
+        />
+      </>,
+    );
+    const client = hookState.streamClient;
+    await waitFor(() => {
+      expect(client?.subscribes).toHaveLength(1);
+    });
+    const stream = client?.sessions[0];
+    if (stream === undefined) throw new Error("expected shared stream");
 
-      act(() => {
-        stream.emitStatus("open");
-        stream.emit(
-          {
-            kind: "tabOpened",
-            hasBinaryPayload: false,
-            sessionId: "session-popup",
-            tabId: "tab-popup",
-            source: "page",
-          },
-          null,
-        );
-      });
-
-      expect(surfaceHostOpenedTabMock).toHaveBeenCalledOnce();
-      expect(surfaceHostOpenedTabMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          epicId: "epic-1",
-          viewTabId: "view-focused",
+    act(() => {
+      stream.emitStatus("open");
+      stream.emit(
+        {
+          kind: "tabOpened",
+          hasBinaryPayload: false,
           sessionId: "session-popup",
           tabId: "tab-popup",
           source: "page",
-        }),
+        },
+        null,
       );
-    },
-  );
+    });
+
+    expect(surfaceHostOpenedTabMock).toHaveBeenCalledOnce();
+    expect(surfaceHostOpenedTabMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        epicId: "epic-1",
+        viewTabId: "view-focused",
+        sessionId: "session-popup",
+        tabId: "tab-popup",
+        source: "page",
+      }),
+    );
+  });
 
   it("falls back when the preferred presenter was closed before delivery", async () => {
     surfaceHostOpenedTabMock

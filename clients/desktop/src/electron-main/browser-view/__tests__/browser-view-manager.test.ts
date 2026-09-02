@@ -575,9 +575,9 @@ class FakeWindow implements BrowserViewWindow {
 }
 
 class FakePopupWebContents extends EventEmitter {
-  windowOpenHandler: Parameters<
-    BrowserViewPopupWebContents["setWindowOpenHandler"]
-  >[0] | null = null;
+  windowOpenHandler:
+    | Parameters<BrowserViewPopupWebContents["setWindowOpenHandler"]>[0]
+    | null = null;
 
   constructor(readonly id: number) {
     super();
@@ -3114,9 +3114,8 @@ describe("BrowserViewManager in-page window.open (Decision #22)", () => {
 
     const popupHandler = popup.webContents.windowOpenHandler;
     expect(popupHandler).toEqual(expect.any(Function));
-    const popupOpenTileListeners = popup.webContents.listenerCount(
-      "did-create-window",
-    );
+    const popupOpenTileListeners =
+      popup.webContents.listenerCount("did-create-window");
     expect(popupOpenTileListeners).toBe(1);
 
     const nestedPopup = new FakePopupWindow(102);
@@ -3124,9 +3123,7 @@ describe("BrowserViewManager in-page window.open (Decision #22)", () => {
     expect(nestedPopup.webContents.windowOpenHandler).toEqual(
       expect.any(Function),
     );
-    expect(
-      nestedPopup.webContents.listenerCount("did-create-window"),
-    ).toBe(1);
+    expect(nestedPopup.webContents.listenerCount("did-create-window")).toBe(1);
 
     const nestedPopupHandler = nestedPopup.webContents.windowOpenHandler;
     if (nestedPopupHandler === null) {
@@ -3149,9 +3146,9 @@ describe("BrowserViewManager in-page window.open (Decision #22)", () => {
     // A repeated did-create-window delivery for the same native child must
     // not register another handler or closed listener.
     view.webContents.emit("did-create-window", popup);
-    expect(
-      popup.webContents.listenerCount("did-create-window"),
-    ).toBe(popupOpenTileListeners);
+    expect(popup.webContents.listenerCount("did-create-window")).toBe(
+      popupOpenTileListeners,
+    );
     expect(popup.webContents.windowOpenHandler).toBe(popupHandler);
   });
 });

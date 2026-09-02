@@ -120,12 +120,12 @@ describe("surfaceHostOpenedTab with the real nested-focus router", () => {
     ).toBe(true);
 
     await waitFor(() => {
-      const presenterCanvas = useEpicCanvasStore.getState().canvasByTabId[
-        PRESENTING_TAB
-      ];
+      const presenterCanvas =
+        useEpicCanvasStore.getState().canvasByTabId[PRESENTING_TAB];
       if (presenterCanvas === undefined) throw new Error("missing presenter");
       const presenterPane = collectPanes(presenterCanvas.root).at(0);
-      if (presenterPane === undefined) throw new Error("missing presenter pane");
+      if (presenterPane === undefined)
+        throw new Error("missing presenter pane");
       const popupInstanceId = presenterPane.activeTabId;
       expect(presenterCanvas.activePaneId).toBe(paneId);
       expect(popupInstanceId).not.toBe(sourceInstanceId);
