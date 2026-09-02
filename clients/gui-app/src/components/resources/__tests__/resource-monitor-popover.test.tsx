@@ -812,7 +812,7 @@ function installStubFactory(): { emit: () => ResourcesStreamCallbacks } {
   let captured: ResourcesStreamCallbacks | null = null;
   __setResourcesStreamClientFactoryForTests((_scope, callbacks) => {
     captured = callbacks;
-    return { close: () => undefined };
+    return { close: () => undefined, setDemand: () => undefined };
   });
   return {
     emit: () => {
@@ -1888,12 +1888,117 @@ describe("ResourceMonitorPopover", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    // The dash is `aria-hidden` decoration; these are the words assistive
+    // tech is actually handed. `aria-label` on the bare span cannot supply
+    // them - naming is prohibited on the generic role.
     expect(
-      screen.getByLabelText("Resident memory (RSS): unavailable"),
+      screen.getByText("Resident memory (RSS): unavailable"),
     ).not.toBeNull();
-    expect(screen.getByLabelText("RAM share: unavailable")).not.toBeNull();
+    expect(screen.getByText("RAM share: unavailable")).not.toBeNull();
     expect(screen.queryByRole("progressbar")).toBeNull();
     expect(screen.queryByText("0 B")).toBeNull();
+  });
+
+  it("uses PSS for the label, headline, RAM share, rows and sort when the whole scope has it", () => {
+    const stub = installStubFactory();
+    renderPopover();
+
+    // Every reading in the displayed scope carries a PSS value, so the panel
+    // is entitled to the proportional view - and once it takes it, the label,
+    // the total, the share and the ordering must all be on that same metric.
+    const MiB = 1024 * 1024;
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          app: {
+            ...app(),
+            pssBytes: 8 * MiB,
+            privateBytes: 6 * MiB,
+            process: resourceProcess({
+              pssBytes: 8 * MiB,
+              privateBytes: 6 * MiB,
+            }),
+          },
+          hostTree: hostTree({
+            rssBytes: 1_024 * MiB,
+            pssBytes: 512 * MiB,
+            privateBytes: 256 * MiB,
+          }),
+          owners: [
+            owner({
+              pssBytes: 60 * MiB,
+              privateBytes: 40 * MiB,
+              processes: [
+                resourceProcess({
+                  pid: 100,
+                  rootPid: 100,
+                  name: "zsh",
+                  command: "/bin/zsh",
+                  cpuPercent: 0,
+                  rssBytes: 1 * MiB,
+                  pssBytes: 1 * MiB,
+                  privateBytes: 1 * MiB,
+                }),
+                // RSS says alpha is the heavier row; PSS says beta is. The
+                // order that appears is the proof of which metric sorted.
+                resourceProcess({
+                  pid: 101,
+                  parentPid: 100,
+                  rootPid: 100,
+                  name: "alpha",
+                  command: "alpha",
+                  cpuPercent: 1,
+                  rssBytes: 300 * MiB,
+                  pssBytes: 20 * MiB,
+                  privateBytes: 10 * MiB,
+                }),
+                resourceProcess({
+                  pid: 102,
+                  parentPid: 100,
+                  rootPid: 100,
+                  name: "beta",
+                  command: "beta",
+                  cpuPercent: 2,
+                  rssBytes: 100 * MiB,
+                  pssBytes: 90 * MiB,
+                  privateBytes: 50 * MiB,
+                }),
+              ],
+            }),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+
+    expect(screen.getByText("Proportional memory (PSS)")).not.toBeNull();
+    // The host tree's PSS, not its 1 GB resident set.
+    expect(screen.getByText("512 MB")).not.toBeNull();
+    expect(screen.queryByText("1.0 GB")).toBeNull();
+    // 512 MiB of the 2 GiB fixture total, computed from the same metric.
+    expect(screen.getByText("25%")).not.toBeNull();
+    expect(screen.getByRole("progressbar").getAttribute("aria-valuenow")).toBe(
+      "25",
+    );
+
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Sort resource rows" }),
+      { button: 0, ctrlKey: false, pointerType: "mouse" },
+    );
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Memory" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Expand process tree" }),
+    );
+
+    // Rows carry the PSS reading too, never the resident one beside it.
+    expect(screen.getByText("90.0 MB")).not.toBeNull();
+    expect(screen.queryByText("300 MB")).toBeNull();
+    const beta = screen.getByText("beta");
+    const alpha = screen.getByText("alpha");
+    expect(
+      beta.compareDocumentPosition(alpha) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
   });
 
   it("renders restricted usage as an aggregate-only row", () => {
@@ -1920,10 +2025,8 @@ describe("ResourceMonitorPopover", () => {
     fireEvent.click(screen.getByRole("button", { name: "Resources" }));
     expect(screen.getByText("Restricted")).not.toBeNull();
     expect(screen.getByText("2 processes")).not.toBeNull();
-    expect(screen.getAllByLabelText("Memory unavailable")).not.toHaveLength(0);
-    expect(
-      screen.queryByRole("button", { name: /Restricted|Outside scope/ }),
-    ).toBeNull();
+    expect(screen.getAllByText("Memory unavailable")).not.toHaveLength(0);
+    expect(screen.queryByRole("button", { name: /Restricted/ })).toBeNull();
   });
 
   it("renders Other as a non-navigable, expandable process-root section", () => {

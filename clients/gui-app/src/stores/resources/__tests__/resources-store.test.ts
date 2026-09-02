@@ -162,6 +162,7 @@ function makeFakeClient(): FakeClient {
         close: () => {
           closed = true;
         },
+        setDemand: () => undefined,
       };
     },
     callbacks: () => {
@@ -649,7 +650,7 @@ describe("global scope support", () => {
             upgradeGuidance: null,
           },
         });
-        return { close: () => undefined };
+        return { close: () => undefined, setDemand: () => undefined };
       },
     });
 

@@ -163,12 +163,14 @@ import type {
 } from "@/stores/epics/canvas/types";
 import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
 import {
-  clampPercentage,
+  formatMemoryBytesOrUnavailable,
   resourceMemoryBytes,
   resourceMemoryLabel,
   selectResourceMemoryMetric,
   sumCompleteMemoryBytes,
+  UNAVAILABLE_DASH,
   type ResourceMemoryMetric,
+  type ResourceMemoryUsage,
 } from "@/lib/resources/memory-metric";
 
 type ResourceSortOption = "memory" | "cpu" | "name" | "tab";
@@ -1262,27 +1264,17 @@ function ResourceMonitorPanel(props: {
   const activeEpicId = readActiveEpicIdFromPath(activePathname);
   const activeTabId = readActiveEpicTabIdFromPath(activePathname);
   const supportsHostTree = resourcesSubscribeV12Supported(resourcesVersion);
-  const memoryMetric = useMemo(
-    () =>
-      selectResourceMemoryMetric(
-        {
-          app: projection.app,
-          hostTree: supportsHostTree ? projection.hostTree : null,
-          other: supportsHostTree ? projection.other : null,
-          restricted: projection.restricted,
-          owners: projection.owners,
-        },
-        desktopApp !== null,
-      ),
-    [
-      desktopApp,
-      projection.app,
-      projection.hostTree,
-      projection.other,
-      projection.owners,
-      projection.restricted,
-      supportsHostTree,
-    ],
+  // A string: memoizing it would buy no referential stability, and every
+  // consumer below compares it by value.
+  const memoryMetric = selectResourceMemoryMetric(
+    {
+      app: projection.app,
+      hostTree: supportsHostTree ? projection.hostTree : null,
+      other: supportsHostTree ? projection.other : null,
+      restricted: projection.restricted,
+      owners: projection.owners,
+    },
+    desktopApp !== null,
   );
   const summary = useMemo(
     () =>
@@ -1460,8 +1452,12 @@ function ResourceMonitorPanel(props: {
     summary.memoryBytes !== null
       ? (summary.memoryBytes / projection.app.hostTotalMemoryBytes) * 100
       : null;
+  // Only the bar geometry and its ARIA value are bounded; the text above
+  // reports the raw ratio, including a >100% one that exposes overlap.
   const clampedMemorySharePercent =
-    memorySharePercent === null ? null : clampPercentage(memorySharePercent);
+    memorySharePercent === null
+      ? null
+      : Math.min(100, Math.max(0, memorySharePercent));
 
   const dismissSortMenuFromPanelClick = (
     event: PointerEvent<HTMLDivElement>,
@@ -1662,7 +1658,11 @@ function ResourceMonitorPanel(props: {
               />
               <MetricBlock
                 label={resourceMemoryLabel(memoryMetric, desktopApp !== null)}
-                value={formatMemoryBytesOrUnavailable(summary.memoryBytes)}
+                value={
+                  summary.memoryBytes === null
+                    ? null
+                    : formatMemoryBytes(summary.memoryBytes)
+                }
                 detail={
                   <MemoryMetricDetail
                     summary={summary}
@@ -1675,7 +1675,7 @@ function ResourceMonitorPanel(props: {
                 label="RAM share"
                 value={
                   memorySharePercent === null
-                    ? "—"
+                    ? null
                     : formatCpuPercent(memorySharePercent)
                 }
                 detail={null}
@@ -1759,7 +1759,6 @@ function ResourceMonitorPanel(props: {
               <RestrictedResourceSection
                 usage={search.restricted}
                 memoryMetric={memoryMetric}
-                label="Restricted"
               />
             )}
             {search.noResults ? (
@@ -1905,9 +1904,15 @@ function ResourceSearchInput(props: {
   );
 }
 
+/**
+ * `value` is `null` for an unavailable reading rather than a pre-rendered dash:
+ * the em dash is decoration a screen reader must not be left with, and `<span
+ * aria-label>` cannot supply the words - naming is prohibited on the generic
+ * role, so AT ignores it. A visually-hidden sibling is the repo's idiom.
+ */
 function MetricBlock(props: {
   readonly label: string;
-  readonly value: string;
+  readonly value: string | null;
   readonly detail: ReactNode;
 }) {
   const content = (
@@ -1924,13 +1929,14 @@ function MetricBlock(props: {
         {props.label}
       </div>
       <div className="mt-1 truncate text-lg tabular-nums text-foreground">
-        <span
-          aria-label={
-            props.value === "—" ? `${props.label}: unavailable` : undefined
-          }
-        >
-          {props.value}
-        </span>
+        {props.value === null ? (
+          <>
+            <span aria-hidden="true">{UNAVAILABLE_DASH}</span>
+            <span className="sr-only">{props.label}: unavailable</span>
+          </>
+        ) : (
+          props.value
+        )}
       </div>
     </div>
   );
@@ -1947,14 +1953,6 @@ function MetricBlock(props: {
   );
 }
 
-function formatMemoryBytesOrUnavailable(bytes: number | null): string {
-  return bytes === null ? "—" : formatMemoryBytes(bytes);
-}
-
-function memoryAvailabilityLabel(bytes: number | null): string {
-  return bytes === null ? "Unavailable" : formatMemoryBytes(bytes);
-}
-
 function MemoryMetricDetail(props: {
   readonly summary: HeadlineResourceSummary;
   readonly metric: ResourceMemoryMetric;
@@ -1968,7 +1966,7 @@ function MemoryMetricDetail(props: {
     props.summary.privateBytes === null
       ? "Unavailable for this complete scope"
       : formatMemoryBytes(props.summary.privateBytes);
-  const rss = memoryAvailabilityLabel(props.summary.rssBytes);
+  const rss = formatMemoryBytesOrUnavailable(props.summary.rssBytes);
   return (
     <div className="max-w-xs space-y-1 text-ui-xs">
       <div>
@@ -2177,9 +2175,12 @@ function legacyHeadlineSummary(
   return owners.reduce(
     (summary, owner) => ({
       cpuPercent: summary.cpuPercent + owner.cpuPercent,
-      rssBytes: addNullableBytes(summary.rssBytes, owner.rssBytes),
-      pssBytes: addNullableBytes(summary.pssBytes, owner.pssBytes),
-      privateBytes: addNullableBytes(summary.privateBytes, owner.privateBytes),
+      rssBytes: sumCompleteMemoryBytes([summary.rssBytes, owner.rssBytes]),
+      pssBytes: sumCompleteMemoryBytes([summary.pssBytes, owner.pssBytes]),
+      privateBytes: sumCompleteMemoryBytes([
+        summary.privateBytes,
+        owner.privateBytes,
+      ]),
       trackedProcessCount: summary.trackedProcessCount + owner.processCount,
     }),
     {
@@ -2190,13 +2191,6 @@ function legacyHeadlineSummary(
       trackedProcessCount: app?.processCount ?? 0,
     },
   );
-}
-
-function addNullableBytes(
-  left: number | null,
-  right: number | null,
-): number | null {
-  return left === null || right === null ? null : left + right;
 }
 
 function desktopResourceSummary(
@@ -2409,14 +2403,13 @@ function OtherResourceSection(props: {
 function RestrictedResourceSection(props: {
   readonly usage: RestrictedResourceUsage;
   readonly memoryMetric: ResourceMemoryMetric;
-  readonly label: "Restricted" | "Outside scope";
 }) {
   return (
     <div className="border-b border-border/50 py-1 last:border-b-0">
       <div className="flex items-center justify-between px-3.5 py-1.5">
         <div className="min-w-0">
           <div className="truncate text-ui-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            {props.label}
+            Restricted
           </div>
           <div className="text-ui-xs text-muted-foreground/80">
             {countLabel(props.usage.processCount, "process", "processes")}
@@ -3393,11 +3386,11 @@ function ProcessMetricPair(props: {
         <div className="space-y-1 text-ui-xs">
           <div>
             Self: {formatCpuPercent(props.selfCpuPercent)} CPU ·{" "}
-            {memoryAvailabilityLabel(props.selfMemoryBytes)} memory
+            {formatMemoryBytesOrUnavailable(props.selfMemoryBytes)} memory
           </div>
           <div>
             Tree: {formatCpuPercent(props.treeCpuPercent)} CPU ·{" "}
-            {memoryAvailabilityLabel(props.treeMemoryBytes)} memory
+            {formatMemoryBytesOrUnavailable(props.treeMemoryBytes)} memory
           </div>
         </div>
       }
@@ -3418,13 +3411,15 @@ function MetricPair(props: {
   return (
     <div className={cn(METRIC_COLS, props.className)}>
       <span className={CPU_COL}>{formatCpuPercent(props.cpuPercent)}</span>
-      <span
-        className={MEM_COL}
-        aria-label={
-          props.memoryBytes === null ? "Memory unavailable" : undefined
-        }
-      >
-        {formatMemoryBytesOrUnavailable(props.memoryBytes)}
+      <span className={MEM_COL}>
+        {props.memoryBytes === null ? (
+          <>
+            <span aria-hidden="true">{UNAVAILABLE_DASH}</span>
+            <span className="sr-only">Memory unavailable</span>
+          </>
+        ) : (
+          formatMemoryBytes(props.memoryBytes)
+        )}
       </span>
     </div>
   );
@@ -3715,9 +3710,9 @@ function processSearchTerms(
   process: ResourceProcessSnapshotWireV15,
 ): readonly (string | number | null)[] {
   return [
+    // The descriptor's own label, since it is what the row displays; the raw
+    // enum values behind it are never shown and so are not searchable.
     processLabel(process),
-    process.descriptor?.runtime ?? null,
-    process.descriptor?.role ?? null,
     process.name,
     process.command,
     process.pid,
@@ -3925,7 +3920,7 @@ function buildResourceSearchProjection(input: {
       : null;
   const restricted =
     input.restricted !== null &&
-    matchesResourceSearch(input.searchQuery, ["Restricted", "Outside scope"])
+    matchesResourceSearch(input.searchQuery, ["Restricted"])
       ? input.restricted
       : null;
   const taskRows = filterTaskRowsForSearch(
@@ -4460,15 +4455,9 @@ function sortTaskRows(
   const sorted = [...rows];
   switch (sortOption) {
     case "memory":
-      sorted.sort((a, b) => {
-        const byMemory = compareNullableMemoryDescending(
-          a.memoryBytes,
-          b.memoryBytes,
-        );
-        if (byMemory !== 0) return byMemory;
-        const byLabel = a.label.localeCompare(b.label);
-        return byLabel !== 0 ? byLabel : a.tabOrder - b.tabOrder;
-      });
+      sorted.sort((a, b) =>
+        compareNullableMemoryDescending(a.memoryBytes, b.memoryBytes),
+      );
       break;
     case "cpu":
       sorted.sort((a, b) => b.cpuPercent - a.cpuPercent);
@@ -4513,15 +4502,9 @@ function sortOwnerRows(
   const sorted = [...rows];
   switch (sortOption) {
     case "memory":
-      sorted.sort((a, b) => {
-        const byMemory = compareNullableMemoryDescending(
-          a.treeMemoryBytes,
-          b.treeMemoryBytes,
-        );
-        if (byMemory !== 0) return byMemory;
-        const byLabel = a.label.localeCompare(b.label);
-        return byLabel !== 0 ? byLabel : a.tabOrder - b.tabOrder;
-      });
+      sorted.sort((a, b) =>
+        compareNullableMemoryDescending(a.treeMemoryBytes, b.treeMemoryBytes),
+      );
       break;
     case "cpu":
       sorted.sort((a, b) => b.treeCpuPercent - a.treeCpuPercent);
@@ -5059,22 +5042,13 @@ function processRowComparator(
 ): ((a: ProcessDisplayRow, b: ProcessDisplayRow) => number) | null {
   switch (sortOption) {
     case "memory":
-      return (a, b) => {
-        const byMemory = compareNullableMemoryDescending(
-          a.treeMemoryBytes,
-          b.treeMemoryBytes,
-        );
-        return byMemory !== 0 ? byMemory : a.process.pid - b.process.pid;
-      };
+      return (a, b) =>
+        compareNullableMemoryDescending(a.treeMemoryBytes, b.treeMemoryBytes);
     case "cpu":
       return (a, b) => b.treeCpuPercent - a.treeCpuPercent;
     case "name":
-      return (a, b) => {
-        const byLabel = processLabel(a.process).localeCompare(
-          processLabel(b.process),
-        );
-        return byLabel !== 0 ? byLabel : a.process.pid - b.process.pid;
-      };
+      return (a, b) =>
+        processLabel(a.process).localeCompare(processLabel(b.process));
     case "tab":
       return null;
   }
@@ -5083,11 +5057,9 @@ function processRowComparator(
 function buildProcessRows(
   processes: readonly ResourceProcessSnapshotWireV15[],
   expandedKeys: ReadonlySet<string>,
-  fallback: {
-    readonly cpuPercent: number;
-    readonly rssBytes: number | null;
-    readonly pssBytes: number | null;
-  },
+  // Every call site passes a whole `@1.5` aggregate, so name the reading shape
+  // the metric selector already takes rather than a narrower structural echo.
+  fallback: ResourceMemoryUsage & { readonly cpuPercent: number },
   sortOption: ResourceSortOption,
   memoryMetric: ResourceMemoryMetric,
 ): OwnerProcessRows {

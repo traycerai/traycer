@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { ResourcesStreamClient } from "@traycer-clients/shared/host-transport/resources-stream-client";
 import {
   useStreamHostId,
@@ -10,7 +10,6 @@ import { resourcesRegistry } from "@/stores/resources/resources-registry";
 import {
   createResourcesStore,
   type ResourcesStreamClientFactory,
-  type ResourcesStoreHandle,
 } from "@/stores/resources/resources-store";
 import { getResourcesStreamClientFactoryOverride } from "@/providers/resources-stream-factory-override";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -117,11 +116,6 @@ export function GlobalResourcesStreamMount(
   const resourcesUnsupported = useGlobalResourcesPreCheckUnsupported();
   // Bumped ONLY by the recovery listener below — never during a render.
   const [reprobeGeneration, setReprobeGeneration] = useState(0);
-  const activeHandleRef = useRef<ResourcesStoreHandle | null>(null);
-  const desiredDemandRef = useRef<"background" | "interactive">(
-    props.interactive ? "interactive" : "background",
-  );
-  desiredDemandRef.current = props.interactive ? "interactive" : "background";
   // "Which stream should be open": the transport, plus the re-probe generation.
   // The generation belongs in the identity rather than in the effect alone, so
   // a bump rebuilds the entry even when a second lease holder would otherwise
@@ -184,16 +178,13 @@ export function GlobalResourcesStreamMount(
               callbacks,
             });
           };
-    const handle = resourcesRegistry.acquireGlobal(clientToken, hostId, () =>
+    resourcesRegistry.acquireGlobal(clientToken, hostId, () =>
       createResourcesStore({
         scope: { kind: "global" },
         streamClientFactory,
       }),
     );
-    activeHandleRef.current = handle;
-    handle.setDemand(desiredDemandRef.current);
     return () => {
-      if (activeHandleRef.current === handle) activeHandleRef.current = null;
       resourcesRegistry.releaseGlobal();
     };
     // `hostId` belongs in the deps, not just in the closure: the name is fixed
@@ -203,9 +194,21 @@ export function GlobalResourcesStreamMount(
     // change), so this rarely fires on its own.
   }, [hostId, reacquireToken, resourcesUnsupported, wsStreamClient]);
 
+  // Declared after the acquire effect and carrying its full dependency set, so
+  // it runs on the same commit as any re-acquire and re-states the demand on
+  // the entry that acquire just installed. `getGlobal` is the registry's own
+  // accessor for that entry - no second handle needs to be held here.
   useEffect(() => {
-    activeHandleRef.current?.setDemand(desiredDemandRef.current);
-  }, [props.interactive, reacquireToken]);
+    resourcesRegistry
+      .getGlobal()
+      ?.setDemand(props.interactive ? "interactive" : "background");
+  }, [
+    hostId,
+    props.interactive,
+    reacquireToken,
+    resourcesUnsupported,
+    wsStreamClient,
+  ]);
 
   return null;
 }

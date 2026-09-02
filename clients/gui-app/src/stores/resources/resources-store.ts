@@ -35,8 +35,10 @@ import type {
  * frames - see `mergeOwners`) and re-render only when its own metrics move.
  */
 
-export type ResourcesStreamClientHandle = Pick<ResourcesStreamClient, "close"> &
-  Partial<Pick<ResourcesStreamClient, "setDemand">>;
+export type ResourcesStreamClientHandle = Pick<
+  ResourcesStreamClient,
+  "close" | "setDemand"
+>;
 
 export type ResourcesStreamClientFactory = (
   scope: ResourcesStreamScope,
@@ -49,14 +51,6 @@ export type AppResourceUsage = AppResourceSnapshotWireV15;
 export type HostTreeResourceUsage = HostTreeResourceSnapshotWireV15;
 export type OtherResourceUsage = OtherResourceSnapshotWireV15;
 export type RestrictedResourceUsage = RestrictedResourceSnapshotWireV15;
-
-export interface TaskResourceSummary {
-  readonly cpuPercent: number;
-  readonly rssBytes: number | null;
-  readonly pssBytes: number | null;
-  readonly privateBytes: number | null;
-  readonly trackedProcessCount: number;
-}
 
 /**
  * Stable map key for one owner within an epic's projection.
@@ -388,7 +382,6 @@ export function createResourcesStore(
 ): ResourcesStoreHandle {
   let disposed = false;
   let streamClient: ResourcesStreamClientHandle | null = null;
-  let lastDemand: ResourcesSubscribeDemand | null = null;
   const key =
     options.scope.kind === "global" ? "__global__" : options.scope.epicId;
 
@@ -459,10 +452,10 @@ export function createResourcesStore(
     key,
     scope: options.scope,
     store,
+    // The client already ignores a demand it is holding, so there is nothing
+    // to dedupe here.
     setDemand: (demand) => {
-      if (demand === lastDemand) return;
-      lastDemand = demand;
-      streamClient?.setDemand?.(demand);
+      streamClient?.setDemand(demand);
     },
     dispose: () => {
       store.getState().dispose();

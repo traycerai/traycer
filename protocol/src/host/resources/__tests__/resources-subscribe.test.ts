@@ -550,6 +550,7 @@ describe("resources.subscribe@1.5 demand control", () => {
       ...PROCESS_FIXTURE,
       pssBytes: 3_072,
       privateBytes: 2_048,
+      descriptor: null,
     };
     const owner = {
       ...OWNER_FIXTURE,
@@ -568,6 +569,7 @@ describe("resources.subscribe@1.5 demand control", () => {
       epic: null,
       hostTree: null,
       other: null,
+      restricted: null,
       hasBinaryPayload: false as const,
     };
     const v15 = resourcesSubscribeServerFrameSchemaV15.parse(frame);
@@ -648,6 +650,14 @@ describe("resources.subscribe@1.5 demand control", () => {
     expect(parsed.hostTree?.rssBytes).toBeNull();
     expect(parsed.other?.rssBytes).toBeNull();
     expect(parsed.restricted?.rssBytes).toBeNull();
+    // A jittery CPU delta must stay parseable: `@1.5` deliberately keeps the
+    // frozen minors' `z.number()` so one odd reading cannot cost the frame.
+    expect(
+      resourcesSubscribeServerFrameSchemaV15.safeParse({
+        ...frame,
+        hostTree: { ...aggregate, cpuPercent: -0.5 },
+      }).success,
+    ).toBe(true);
     expect(() => resourcesSubscribeServerFrameSchemaV14.parse(frame)).toThrow();
 
     expect(() =>
@@ -670,7 +680,7 @@ describe("resources.subscribe@1.5 demand control", () => {
     ).toThrow();
   });
 
-  it("carries only bounded Chromium descriptors and defaults older @1.5 frames", () => {
+  it("carries only bounded Chromium descriptors", () => {
     const process = {
       ...PROCESS_FIXTURE,
       pssBytes: null,
@@ -699,6 +709,7 @@ describe("resources.subscribe@1.5 demand control", () => {
       epic: null,
       hostTree: null,
       other: null,
+      restricted: null,
       hasBinaryPayload: false as const,
     };
 
@@ -709,19 +720,6 @@ describe("resources.subscribe@1.5 demand control", () => {
       runtime: "cell-runner",
       role: "renderer",
     });
-    const withoutDescriptor = resourcesSubscribeServerFrameSchemaV15.parse({
-      ...frame,
-      owners: [
-        {
-          ...frame.owners[0],
-          processes: [{ ...process, descriptor: undefined }],
-        },
-      ],
-    });
-    if (withoutDescriptor.kind !== "snapshot") {
-      throw new Error("expected snapshot");
-    }
-    expect(withoutDescriptor.owners[0].processes[0].descriptor).toBeNull();
 
     expect(() =>
       resourcesSubscribeServerFrameSchemaV15.parse({

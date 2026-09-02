@@ -1,25 +1,80 @@
 import { describe, expect, it } from "vitest";
 import {
-  clampPercentage,
   resourceMemoryBytes,
   resourceMemoryLabel,
   selectResourceMemoryMetric,
   sumCompleteMemoryBytes,
   type ResourceMemoryProjection,
-  type ResourceMemoryUsage,
 } from "../memory-metric";
+import type { OwnerResourceUsage } from "@/stores/resources/resources-store";
 
-function usage(pssBytes: number | null): ResourceMemoryUsage {
+function detail(pssBytes: number | null): {
+  readonly rssBytes: number;
+  readonly pssBytes: number | null;
+  readonly privateBytes: number | null;
+} {
   return { rssBytes: 100, pssBytes, privateBytes: pssBytes };
+}
+
+function process(pssBytes: number | null) {
+  return {
+    pid: 1,
+    parentPid: null,
+    rootPid: 1,
+    name: "bash",
+    command: "/bin/bash",
+    cpuPercent: 1,
+    ...detail(pssBytes),
+    descriptor: null,
+  };
+}
+
+function owner(pssBytes: number | null): OwnerResourceUsage {
+  return {
+    owner: {
+      kind: "terminal",
+      hostId: "host-1",
+      epicId: "epic-1",
+      ownerId: "s1",
+    },
+    sampledAt: 1_000,
+    rootPids: [1],
+    activeProcessName: "bash",
+    harnessId: null,
+    managedCommand: null,
+    processCount: 1,
+    cpuPercent: 1,
+    ...detail(pssBytes),
+    processes: [process(pssBytes)],
+  };
 }
 
 function projection(pssBytes: number | null): ResourceMemoryProjection {
   return {
-    app: { ...usage(pssBytes), process: usage(pssBytes) },
-    hostTree: usage(pssBytes),
-    other: { ...usage(pssBytes), processes: [usage(pssBytes)] },
+    app: {
+      sampledAt: 1_000,
+      hostTotalMemoryBytes: 16_000,
+      processCount: 1,
+      cpuPercent: 1,
+      ...detail(pssBytes),
+      process: process(pssBytes),
+    },
+    hostTree: {
+      sampledAt: 1_000,
+      processCount: 1,
+      cpuPercent: 1,
+      ...detail(pssBytes),
+    },
+    other: {
+      sampledAt: 1_000,
+      rootPids: [1],
+      processCount: 1,
+      cpuPercent: 1,
+      ...detail(pssBytes),
+      processes: [process(pssBytes)],
+    },
     restricted: null,
-    owners: [{ ...usage(pssBytes), processes: [usage(pssBytes)] }],
+    owners: [owner(pssBytes)],
   };
 }
 
@@ -28,9 +83,7 @@ describe("resource memory metric selection", () => {
     const complete = projection(40);
     const metric = selectResourceMemoryMetric(complete, false);
     expect(metric).toBe("pss");
-    expect(resourceMemoryBytes(complete.hostTree ?? usage(null), metric)).toBe(
-      40,
-    );
+    expect(resourceMemoryBytes(owner(40), metric)).toBe(40);
     expect(resourceMemoryLabel(metric, false)).toContain("PSS");
   });
 
@@ -39,19 +92,24 @@ describe("resource memory metric selection", () => {
     expect(selectResourceMemoryMetric(projection(40), true)).toBe("rss");
     expect(resourceMemoryLabel("rss", true)).toContain("working-set");
     expect(
-      resourceMemoryBytes({ ...usage(null), rssBytes: null }, "rss"),
+      resourceMemoryBytes(
+        { rssBytes: null, pssBytes: null, privateBytes: null },
+        "rss",
+      ),
     ).toBeNull();
+  });
+
+  it("falls back to RSS when a single leaf is missing its PSS reading", () => {
+    const complete = projection(40);
+    const oneBlindLeaf: ResourceMemoryProjection = {
+      ...complete,
+      owners: [{ ...complete.owners[0], processes: [process(null)] }],
+    };
+    expect(selectResourceMemoryMetric(oneBlindLeaf, false)).toBe("rss");
   });
 
   it("makes a containing memory sum unavailable when any reading is unavailable", () => {
     expect(sumCompleteMemoryBytes([10, 20, 30])).toBe(60);
     expect(sumCompleteMemoryBytes([10, null, 30])).toBeNull();
-  });
-
-  it("clamps the visual and accessible percentage source", () => {
-    expect(clampPercentage(-1)).toBe(0);
-    expect(clampPercentage(35)).toBe(35);
-    expect(clampPercentage(125)).toBe(100);
-    expect(clampPercentage(Number.NaN)).toBe(0);
   });
 });

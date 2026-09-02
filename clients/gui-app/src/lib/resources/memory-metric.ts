@@ -1,5 +1,15 @@
+import { formatMemoryBytes } from "@/lib/resources/format-resource-usage";
+import type {
+  AppResourceUsage,
+  HostTreeResourceUsage,
+  OtherResourceUsage,
+  OwnerResourceUsage,
+  RestrictedResourceUsage,
+} from "@/stores/resources/resources-store";
+
 export type ResourceMemoryMetric = "pss" | "rss";
 
+/** The three readings every `@1.5` row and aggregate carries. */
 export interface ResourceMemoryUsage {
   readonly rssBytes: number | null;
   readonly pssBytes: number | null;
@@ -7,25 +17,11 @@ export interface ResourceMemoryUsage {
 }
 
 export interface ResourceMemoryProjection {
-  readonly app:
-    | (ResourceMemoryUsage & {
-        readonly process: ResourceMemoryUsage | null;
-      })
-    | null;
-  readonly hostTree: ResourceMemoryUsage | null;
-  readonly other:
-    | (ResourceMemoryUsage & {
-        readonly processes: readonly ResourceMemoryUsage[];
-      })
-    | null;
-  readonly restricted: ResourceMemoryUsage | null;
-  readonly owners: readonly (ResourceMemoryUsage & {
-    readonly processes: readonly ResourceMemoryUsage[];
-  })[];
-}
-
-function hasPss(usage: ResourceMemoryUsage): boolean {
-  return usage.pssBytes !== null;
+  readonly app: AppResourceUsage | null;
+  readonly hostTree: HostTreeResourceUsage | null;
+  readonly other: OtherResourceUsage | null;
+  readonly restricted: RestrictedResourceUsage | null;
+  readonly owners: readonly OwnerResourceUsage[];
 }
 
 /**
@@ -38,7 +34,7 @@ export function selectResourceMemoryMetric(
   includesDesktopWorkingSet: boolean,
 ): ResourceMemoryMetric {
   if (includesDesktopWorkingSet || projection.hostTree === null) return "rss";
-  const all = [
+  const all: ResourceMemoryUsage[] = [
     projection.hostTree,
     ...(projection.app === null
       ? []
@@ -52,7 +48,7 @@ export function selectResourceMemoryMetric(
     ...(projection.restricted === null ? [] : [projection.restricted]),
     ...projection.owners.flatMap((owner) => [owner, ...owner.processes]),
   ];
-  return all.every(hasPss) ? "pss" : "rss";
+  return all.every((usage) => usage.pssBytes !== null) ? "pss" : "rss";
 }
 
 /** Caller chooses PSS only after complete-scope validation above. */
@@ -85,7 +81,13 @@ export function resourceMemoryLabel(
     : "Resident memory (RSS)";
 }
 
-export function clampPercentage(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return Math.min(100, Math.max(0, value));
+/**
+ * The one rendering of an unavailable reading. Split deliberately: the dash is
+ * decoration (`aria-hidden`) wherever a row shows it, and the words are what a
+ * screen reader or a tooltip gets - never `0 B`, which is a real measurement.
+ */
+export const UNAVAILABLE_DASH = "\u2014";
+
+export function formatMemoryBytesOrUnavailable(bytes: number | null): string {
+  return bytes === null ? "Unavailable" : formatMemoryBytes(bytes);
 }

@@ -466,7 +466,10 @@ const nullableMemoryDetailFields = {
 } as const;
 
 const resourceReadingFieldsV15 = {
-  cpuPercent: z.number().finite().nonnegative(),
+  // Deliberately the frozen minors' `z.number()`: tightening a field a client
+  // has to parse turns a jittery host reading into an unparseable frame, and
+  // the client has no cheaper recovery than dropping the projection.
+  cpuPercent: z.number(),
   rssBytes: z.number().int().nonnegative().nullable(),
   ...nullableMemoryDetailFields,
 } as const;
@@ -500,9 +503,7 @@ export type ChromiumProcessDescriptorWire = z.infer<
 export const resourceProcessSnapshotSchemaV15 = z.object({
   ...resourceProcessSnapshotSchema.shape,
   ...resourceReadingFieldsV15,
-  // Defaulted for a client on the still-staging @1.5 surface speaking to a
-  // host built before semantic labels joined this same minor.
-  descriptor: chromiumProcessDescriptorSchema.nullable().default(null),
+  descriptor: chromiumProcessDescriptorSchema.nullable(),
 });
 export type ResourceProcessSnapshotWireV15 = z.infer<
   typeof resourceProcessSnapshotSchemaV15
@@ -577,9 +578,7 @@ const resourcesProjectionFieldsV15 = {
   epics: z.array(epicResourceSnapshotSchemaV15).optional(),
   hostTree: hostTreeResourceSnapshotSchemaV15.nullable(),
   other: otherResourceSnapshotSchemaV15.nullable(),
-  // Optional keeps the still-staging @1.5 surface tolerant of an earlier host
-  // while every newly projected frame supplies the field explicitly.
-  restricted: restrictedResourceSnapshotSchemaV15.nullable().optional(),
+  restricted: restrictedResourceSnapshotSchemaV15.nullable(),
 } as const;
 
 export const resourcesSubscribeServerFrameSchemaV15 = z.discriminatedUnion(

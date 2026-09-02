@@ -10,6 +10,7 @@ import {
   formatMemoryBytes,
   formatProcessCount,
 } from "@/lib/resources/format-resource-usage";
+import { UNAVAILABLE_DASH } from "@/lib/resources/memory-metric";
 import { cn } from "@/lib/utils";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -71,13 +72,20 @@ interface ResourceUsageChipProps {
  */
 export function ResourceUsageChip(props: ResourceUsageChipProps) {
   const cpu = formatCpuPercent(props.cpuPercent);
+  // One row is its own scope, so the popover's complete-scope rule reduces to
+  // "PSS when this row has one". The metric is named in the VISIBLE text, not
+  // only in the accessible one: two chips on screen otherwise show numbers
+  // that are not comparable with nothing to tell them apart.
   const memoryMetric = props.pssBytes === null ? "RSS" : "PSS";
   const memoryBytes = props.pssBytes ?? props.rssBytes;
-  const memory = memoryBytes === null ? "—" : formatMemoryBytes(memoryBytes);
+  const memory =
+    memoryBytes === null
+      ? UNAVAILABLE_DASH
+      : `${formatMemoryBytes(memoryBytes)} ${memoryMetric}`;
   const processes = formatProcessCount(props.processCount);
   const processWord = pluralize(props.processCount, "process", "processes");
   const memoryDescription =
-    memoryBytes === null ? "memory unavailable" : `${memory} ${memoryMetric}`;
+    memoryBytes === null ? "memory unavailable" : memory;
   const description = `${props.label}: ${cpu} CPU, ${memoryDescription}, ${processes} ${processWord}`;
 
   return (

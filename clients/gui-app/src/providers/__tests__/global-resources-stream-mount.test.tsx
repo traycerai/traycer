@@ -112,7 +112,7 @@ describe("GlobalResourcesStreamMount", () => {
     let builds = 0;
     __setResourcesStreamClientFactoryForTests((_scope, _callbacks) => {
       builds += 1;
-      return { close: () => undefined };
+      return { close: () => undefined, setDemand: () => undefined };
     });
 
     render(<GlobalResourcesStreamMount interactive={false} />);
@@ -144,7 +144,7 @@ describe("GlobalResourcesStreamMount", () => {
     __setResourcesStreamClientFactoryForTests((_scope, callbacks) => {
       builds += 1;
       captured = callbacks;
-      return { close: () => undefined };
+      return { close: () => undefined, setDemand: () => undefined };
     });
 
     render(<GlobalResourcesStreamMount interactive={false} />);
@@ -181,7 +181,7 @@ describe("GlobalResourcesStreamMount", () => {
     __setResourcesStreamClientFactoryForTests((_scope, callbacks) => {
       builds += 1;
       captured = callbacks;
-      return { close: () => undefined };
+      return { close: () => undefined, setDemand: () => undefined };
     });
 
     render(<GlobalResourcesStreamMount interactive={false} />);
@@ -214,7 +214,7 @@ describe("GlobalResourcesStreamMount", () => {
     __setResourcesStreamClientFactoryForTests((_scope, callbacks) => {
       builds += 1;
       captured = callbacks;
-      return { close: () => undefined };
+      return { close: () => undefined, setDemand: () => undefined };
     });
 
     render(<GlobalResourcesStreamMount interactive={false} />);

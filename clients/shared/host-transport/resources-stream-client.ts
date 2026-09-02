@@ -159,7 +159,9 @@ export class ResourcesStreamClient {
   private closed: boolean;
   private scopeSupport: ResourcesScopeSupport = "unknown";
   private demand: ResourcesSubscribeDemand = "background";
-  private sentDemand: ResourcesSubscribeDemand | null = null;
+  // Seeded (and re-seeded on every drop) with the cadence the host starts a
+  // subscription at, so a background holder never spends a frame restating it.
+  private sentDemand: ResourcesSubscribeDemand = "background";
 
   constructor(options: ResourcesStreamClientOptions) {
     this.callbacks = options.callbacks;
@@ -174,7 +176,7 @@ export class ResourcesStreamClient {
       this.handleServerFrame(envelope, binaryPayload);
     });
     this.session.onStatusChange((status, reason) => {
-      if (status !== "open") this.sentDemand = null;
+      if (status !== "open") this.sentDemand = "background";
       // Before the status itself, so a consumer reacting to the `closed`
       // transition already sees why rather than reading last round's verdict.
       this.updateScopeSupport(status, reason);
@@ -303,13 +305,27 @@ export class ResourcesStreamClient {
     envelope: StreamFrameEnvelope,
     _binaryPayload: Uint8Array | null,
   ): void {
-    // Newest-first: `@1.5` (nullable Linux memory detail), `@1.4`
-    // (managed-command owners), `@1.3` (owners carry
-    // harnessId), `@1.2` (hostTree + other), then the frozen `@1.0`/`@1.1`
-    // base. Each schema strips unknown keys, so an older client parsing a newer
-    // frame degrades cleanly.
-    const parsed = parseNewestFirst(envelope);
+    // Parse at the version this session NEGOTIATED, not at whichever shape
+    // happens to accept the bytes. Trialling newest-first lets one bad field
+    // silently demote a `@1.5` frame to `@1.4` - which strips the memory
+    // detail the frame exists to carry, and, once `rssBytes` is null, fails
+    // every older shape too and drops the projection with no signal at all.
+    // The ladder survives only for a frame that arrives before a handshake
+    // settles, where there is no negotiated version to parse at.
+    const version = this.session.getNegotiatedSchemaVersion();
+    const negotiated = version !== null && version.major === 1 ? version : null;
+    const parsed =
+      negotiated === null
+        ? parseNewestFirst(envelope)
+        : parseAtMinor(envelope, negotiated.minor);
     if (!parsed.success) {
+      if (negotiated !== null) {
+        // Bounded and constant: the offending body is remote input and never
+        // rendered into a log line.
+        console.error(
+          `[stream] resources.subscribe frame failed its negotiated schema @1.${negotiated.minor}; dropping frame`,
+        );
+      }
       return;
     }
     const frame:
@@ -335,6 +351,24 @@ export class ResourcesStreamClient {
   }
 }
 
+/** The one schema the negotiated minor promises; `@1.5+` reads as `@1.5`. */
+function parseAtMinor(envelope: StreamFrameEnvelope, minor: number) {
+  if (minor >= 5) {
+    return resourcesSubscribeServerFrameSchemaV15.safeParse(envelope);
+  }
+  if (minor === 4) {
+    return resourcesSubscribeServerFrameSchemaV14.safeParse(envelope);
+  }
+  if (minor === 3) {
+    return resourcesSubscribeServerFrameSchemaV13.safeParse(envelope);
+  }
+  if (minor === 2) {
+    return resourcesSubscribeServerFrameSchemaV12.safeParse(envelope);
+  }
+  return resourcesSubscribeServerFrameSchema.safeParse(envelope);
+}
+
+/** Only for a frame that beats its own handshake - see `handleServerFrame`. */
 function parseNewestFirst(envelope: StreamFrameEnvelope) {
   const v15 = resourcesSubscribeServerFrameSchemaV15.safeParse(envelope);
   if (v15.success) return v15;
@@ -366,10 +400,9 @@ function toPayload(
     // below `@1.3`, and a host below `@1.4` reports no managed-command owners.
     owners: frame.owners.map((owner) => ({
       ...owner,
+      ...memoryDetailsOrNull(owner),
       harnessId: "harnessId" in owner ? owner.harnessId : null,
       managedCommand: "managedCommand" in owner ? owner.managedCommand : null,
-      pssBytes: "pssBytes" in owner ? owner.pssBytes : null,
-      privateBytes: "privateBytes" in owner ? owner.privateBytes : null,
       processes: owner.processes.map(normalizeProcess),
     })),
     epic: frame.epic === null ? null : normalizeEpic(frame.epic),
@@ -395,13 +428,18 @@ function normalizeProcess(
 ): ResourceProcessSnapshotWireV15 {
   return {
     ...process,
-    pssBytes: "pssBytes" in process ? process.pssBytes : null,
-    privateBytes: "privateBytes" in process ? process.privateBytes : null,
+    ...memoryDetailsOrNull(process),
     descriptor: "descriptor" in process ? process.descriptor : null,
   };
 }
 
+/**
+ * `cpuPercent` is named only so this is a reading rather than an all-optional
+ * weak type: every wire reading carries it, and a frozen-minor one - which has
+ * neither memory field - has nothing else in common to satisfy the check.
+ */
 function memoryDetailsOrNull(value: {
+  readonly cpuPercent: number;
   readonly pssBytes?: number | null;
   readonly privateBytes?: number | null;
 }): { readonly pssBytes: number | null; readonly privateBytes: number | null } {

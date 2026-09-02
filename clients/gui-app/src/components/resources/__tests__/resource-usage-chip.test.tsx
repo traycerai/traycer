@@ -97,7 +97,7 @@ function installStubFactory(): { emit: () => ResourcesStreamCallbacks } {
   let captured: ResourcesStreamCallbacks | null = null;
   __setResourcesStreamClientFactoryForTests((_scope, callbacks) => {
     captured = callbacks;
-    return { close: () => undefined };
+    return { close: () => undefined, setDemand: () => undefined };
   });
   return {
     emit: () => {
@@ -129,8 +129,28 @@ describe("ResourceUsageChip", () => {
       "Resource usage: 12% CPU, 357 MB RSS, 3 processes",
     );
     expect(chip.textContent).toContain("12%");
-    expect(chip.textContent).toContain("357 MB");
+    expect(chip.textContent).toContain("357 MB RSS");
     expect(chip.textContent).toContain("3");
+  });
+
+  it("names PSS in the visible text so two chips stay comparable", () => {
+    render(
+      <ResourceUsageChip
+        cpuPercent={12}
+        rssBytes={357 * 1024 * 1024}
+        pssBytes={120 * 1024 * 1024}
+        processCount={3}
+        label="Resource usage"
+        className={undefined}
+      />,
+    );
+    const chip = screen.getByLabelText(
+      "Resource usage: 12% CPU, 120 MB PSS, 3 processes",
+    );
+    // The proportional reading wins, and it says so on screen rather than
+    // looking like a smaller resident number.
+    expect(chip.textContent).toContain("120 MB PSS");
+    expect(chip.textContent).not.toContain("357 MB");
   });
 
   it("renders unavailable memory as an em dash, never as zero", () => {
