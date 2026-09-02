@@ -16,7 +16,8 @@ import { useValidateTuiForkProfile } from "@/hooks/agent/use-validate-tui-fork-p
 import { useTuiForkProfileSupported } from "@/hooks/agent/use-tui-fork-profile-support";
 import { useWorktreeCreateForClient } from "@/hooks/worktree/use-worktree-create-mutation";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
-import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import type { ExplicitTilePlacement } from "@/lib/canvas/tile-open/intent";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { type HostRpcRegistry, useHostClient } from "@/lib/host";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
@@ -145,18 +146,6 @@ type ValidateForkProfileMutateAsync = (
  *     background audit (`workspaceBinding.removeEntry`) does not reap it; closing
  *     it is a separate atomic-create / orphan-reaper follow-up.
  */
-/**
- * Where the create flow opens the agent's placeholder tile.
- *
- * - `active-tile`: today's behavior - opens into the active group via
- *   `openTileInTab` (dedup-aware).
- * - `target-group`: opener path - drops a fresh instance into the explicit
- *   `groupId` via `openTileInPane` (no dedup / no active-group resolution).
- */
-export type TuiAgentPlacement =
-  | { readonly kind: "active-tile" }
-  | { readonly kind: "target-group"; readonly groupId: string };
-
 export type CreateTuiAgentStatus =
   | "preparing-workspace"
   | "forking-session"
@@ -167,8 +156,12 @@ export interface CreateTuiAgentInput {
   readonly tabId: string;
   readonly parentId: string | null;
   readonly title: string;
-  /** Explicit placement for the placeholder tile (no implicit default). */
-  readonly placement: TuiAgentPlacement;
+  /**
+   * Explicit placement for the placeholder tile, or `null` to let the
+   * conversation tile-placement setting decide (C3, C8). Only the in-pane
+   * PaneOpener names a pane.
+   */
+  readonly placement: ExplicitTilePlacement | null;
   readonly harnessId: TuiHarnessId;
   readonly model: string | null;
   readonly reasoningEffort: string | null;
@@ -245,13 +238,7 @@ export function useCreateTuiAgentForClient(
   const validateForkProfile = useValidateTuiForkProfile(hostClient);
   const forkProfilePreflightSupported =
     useTuiForkProfileSupported(placeholderHostId);
-  const navigateNested = useEpicNestedFocusNavigation();
-  const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
-    (s) => s.prepareOpenTileInTabFocusTarget,
-  );
-  const prepareOpenTileInPaneFocusTarget = useEpicCanvasStore(
-    (s) => s.prepareOpenTileInPaneFocusTarget,
-  );
+  const { openTile } = useEpicTileNavigation();
   const markArtifactPendingCreate = useEpicCanvasStore(
     (s) => s.markArtifactPendingCreate,
   );
@@ -294,21 +281,15 @@ export function useCreateTuiAgentForClient(
           hostId: placeholderHostId,
           pendingTuiHarnessId: input.harnessId,
         };
-        if (input.placement.kind === "target-group") {
-          const groupId = input.placement.groupId;
-          navigateNested(input.epicId, input.tabId, () =>
-            prepareOpenTileInPaneFocusTarget(
-              input.tabId,
-              groupId,
-              placeholderRef,
-              { mode: "permanent", index: null },
-            ),
-          );
-        } else {
-          navigateNested(input.epicId, input.tabId, () =>
-            prepareOpenTileInTabFocusTarget(input.tabId, placeholderRef),
-          );
-        }
+        openTile({
+          node: placeholderRef,
+          target: { tabId: input.tabId },
+          gesture: "explicit",
+          modifiers: null,
+          placement: input.placement,
+          dedupe: true,
+          source: "direct_ui",
+        });
       };
 
       let clearStashedPreparedLaunch = false;
@@ -439,9 +420,7 @@ export function useCreateTuiAgentForClient(
     [
       startSession,
       createTuiAgent,
-      navigateNested,
-      prepareOpenTileInTabFocusTarget,
-      prepareOpenTileInPaneFocusTarget,
+      openTile,
       markArtifactPendingCreate,
       unmarkArtifactPendingCreate,
       placeholderHostId,

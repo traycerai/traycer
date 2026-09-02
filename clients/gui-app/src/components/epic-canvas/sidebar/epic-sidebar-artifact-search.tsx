@@ -41,6 +41,7 @@ import type {
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import type { TileOpenGesture } from "@/lib/canvas/tile-open/intent";
 import { epicNodeRefForNodeId } from "@/lib/epic-selectors";
 import {
   highlightSegmentsFromByteRanges,
@@ -246,11 +247,11 @@ export function ArtifactSearchBox(props: ArtifactSearchBoxProps) {
 
   // ── Opening a hit (authoritative selection route) ─────────────────────────
   const handle = useOpenEpicHandle();
-  const tileNavigation = useEpicTileNavigation();
+  const { openTile } = useEpicTileNavigation();
   const [staleArtifactId, setStaleArtifactId] = useState<string | null>(null);
 
   const openHit = useCallback(
-    (hit: SearchArtifactHit) => {
+    (hit: SearchArtifactHit, gesture: TileOpenGesture) => {
       // Re-resolve the hit against the authoritative Y.Doc projection rather
       // than the disk mirror it was found in: a stale / deleted hit resolves to
       // `null` and is reported in place instead of opening anything.
@@ -264,9 +265,17 @@ export function ArtifactSearchBox(props: ArtifactSearchBoxProps) {
         return;
       }
       setStaleArtifactId(null);
-      tileNavigation.openTilePreviewInTab(tabId, ref);
+      openTile({
+        node: ref,
+        target: { tabId },
+        gesture,
+        modifiers: null,
+        placement: null,
+        dedupe: true,
+        source: "direct_ui",
+      });
     },
-    [handle, activeHostId, tileNavigation, tabId],
+    [handle, activeHostId, openTile, tabId],
   );
 
   // ── Combobox keyboard navigation ──────────────────────────────────────────
@@ -341,7 +350,7 @@ export function ArtifactSearchBox(props: ArtifactSearchBoxProps) {
       } else if (event.key === "Enter") {
         if (clampedActiveIndex < 0) return;
         event.preventDefault();
-        openHit(results[clampedActiveIndex]);
+        openHit(results[clampedActiveIndex], "explicit");
       }
     },
     [exitSearch, resultCount, clampedActiveIndex, openHit, results],
@@ -435,7 +444,10 @@ interface ArtifactSearchResultsRegionProps {
   readonly response: SearchArtifactsResponse | null;
   readonly results: ReadonlyArray<SearchArtifactHit>;
   readonly activeIndex: number;
-  readonly onActivate: (hit: SearchArtifactHit) => void;
+  readonly onActivate: (
+    hit: SearchArtifactHit,
+    gesture: TileOpenGesture,
+  ) => void;
   readonly onHoverIndex: (index: number) => void;
   readonly staleArtifactId: string | null;
 }
@@ -559,7 +571,10 @@ interface ArtifactSearchResultRowProps {
   readonly hit: SearchArtifactHit;
   readonly active: boolean;
   readonly stale: boolean;
-  readonly onActivate: (hit: SearchArtifactHit) => void;
+  readonly onActivate: (
+    hit: SearchArtifactHit,
+    gesture: TileOpenGesture,
+  ) => void;
   readonly onHover: () => void;
 }
 
@@ -590,13 +605,13 @@ const ArtifactSearchResultRow = memo(function ArtifactSearchResultRow(
         stale && "opacity-60",
       )}
       onMouseEnter={onHover}
-      onClick={() => onActivate(hit)}
+      onClick={() => onActivate(hit, "single")}
       onKeyDown={(event) => {
         // The combobox input owns navigation; this only matters if a row ever
         // receives direct focus (satisfies the click/key-parity a11y rule).
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
-          onActivate(hit);
+          onActivate(hit, "explicit");
         }
       }}
       data-testid={`epic-artifact-search-result-${hit.artifactId}`}

@@ -34,6 +34,8 @@ import {
   type RectLike,
 } from "@/components/epic-canvas/dnd/dnd";
 import { computeTabDropIndex } from "@/components/epic-canvas/dnd/tab-strip-drop-preview";
+import type { ExplicitTilePlacement } from "@/lib/canvas/tile-open/intent";
+import { openTileWithNavigation } from "@/lib/canvas/tile-open/open-tile";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { findPaneById } from "@/stores/epics/canvas/tile-tree";
 import {
@@ -448,7 +450,6 @@ function commitArtifactTabDrop(
  */
 function placeResolvedCanvasTile(
   resolved: {
-    readonly epicId: string;
     readonly tile:
       | EpicNodeRef
       | GitDiffTileRef
@@ -459,7 +460,7 @@ function placeResolvedCanvasTile(
   },
   navigateNested: NavigateNestedFocus,
 ): boolean {
-  const { epicId, tile, target, preview } = resolved;
+  const { tile, target, preview } = resolved;
   if (
     preview.kind === "left-panel-rail" ||
     preview.kind === "left-panel-rail-list" ||
@@ -467,13 +468,31 @@ function placeResolvedCanvasTile(
   ) {
     return false;
   }
-  const canvasStore = useEpicCanvasStore.getState();
-  if (preview.kind === "empty-shell") {
-    if (target.kind !== "empty-shell") return false;
-    navigateNested(epicId, target.viewTabId, () =>
-      canvasStore.prepareOpenTileInTabFocusTarget(target.viewTabId, tile),
+  // A drop position IS the placement decision, so it travels as the intent's
+  // explicit placement (C7) - center lands as a tab at the drop index, an
+  // edge splits. Everything else (focus, route, analytics) is the resolver's.
+  const openDroppedTile = (
+    viewTabId: string,
+    placement: ExplicitTilePlacement | null,
+  ): boolean => {
+    openTileWithNavigation(
+      {
+        node: tile,
+        target: { tabId: viewTabId },
+        gesture: "explicit",
+        modifiers: null,
+        placement,
+        dedupe: true,
+        source: "direct_ui",
+      },
+      navigateNested,
     );
     return true;
+  };
+  if (preview.kind === "empty-shell") {
+    if (target.kind !== "empty-shell") return false;
+    // No pane to name yet: the executor seeds the root pane.
+    return openDroppedTile(target.viewTabId, null);
   }
   if (target.kind === "empty-shell") return false;
   if (
@@ -484,37 +503,24 @@ function placeResolvedCanvasTile(
     return false;
   }
   if (preview.kind === "artifact-tab-strip") {
-    navigateNested(epicId, target.viewTabId, () =>
-      canvasStore.prepareInsertNodeOnTabStripFocusTarget(
-        target.viewTabId,
-        preview.groupId,
-        preview.index,
-        tile,
-      ),
-    );
-    return true;
+    return openDroppedTile(target.viewTabId, {
+      kind: "tab",
+      paneId: preview.groupId,
+      index: preview.index,
+    });
   }
   if (preview.position === "center") {
-    navigateNested(epicId, target.viewTabId, () =>
-      canvasStore.prepareInsertNodeOnTabStripFocusTarget(
-        target.viewTabId,
-        preview.groupId,
-        target.kind === "artifact-tab-group-body" ? target.tabCount : 0,
-        tile,
-      ),
-    );
-    return true;
+    return openDroppedTile(target.viewTabId, {
+      kind: "tab",
+      paneId: preview.groupId,
+      index: target.kind === "artifact-tab-group-body" ? target.tabCount : 0,
+    });
   }
-  const position = preview.position;
-  navigateNested(epicId, target.viewTabId, () =>
-    canvasStore.prepareSplitPaneWithNodeFocusTarget(
-      target.viewTabId,
-      preview.groupId,
-      position,
-      tile,
-    ),
-  );
-  return true;
+  return openDroppedTile(target.viewTabId, {
+    kind: "split",
+    paneId: preview.groupId,
+    edge: preview.position,
+  });
 }
 
 export function commitResolvedCanvasDrop(
@@ -548,7 +554,6 @@ export function commitResolvedCanvasDrop(
   if (tile !== null) {
     return placeResolvedCanvasTile(
       {
-        epicId: drop.source.epicId,
         tile,
         target: drop.target,
         preview: drop.preview,

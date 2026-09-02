@@ -4,7 +4,7 @@ import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
-import type { ConversationTilePlacement } from "@/lib/canvas/conversation-tile-placement";
+import type { ExplicitTilePlacement } from "@/lib/canvas/tile-open/intent";
 
 export type InitialChatHandoffStatus =
   | "pending"
@@ -37,11 +37,12 @@ export interface InitialChatHandoff {
    */
   readonly worktreeIntent: WorktreeIntent | null;
   /**
-   * Where the eager-opened chat tile lands. The creation trigger picks this:
-   * sidebar `+` / landing → `active-tile` (new tab); in-pane PaneOpener →
-   * `target-group`; ⌘K split commands → `split`.
+   * Explicit placement for the eager-opened chat tile, or `null` to let the
+   * conversation tile-placement setting decide (C3, C8). Only the in-pane
+   * PaneOpener names a pane; the sidebar `+`, the landing composer and the
+   * palette pass `null`.
    */
-  readonly placement: ConversationTilePlacement;
+  readonly placement: ExplicitTilePlacement | null;
   readonly clientActionId: string | null;
   readonly messageId: string | null;
   readonly failureReason: string | null;
@@ -59,7 +60,7 @@ export interface RegisterInitialChatHandoffInput extends InitialChatHandoffScope
   readonly content: JsonContent;
   readonly settings: ChatRunSettings;
   readonly worktreeIntent: WorktreeIntent | null;
-  readonly placement: ConversationTilePlacement;
+  readonly placement: ExplicitTilePlacement | null;
   // Pre-minted at submit so the same ids ride on `epic.createChat`'s
   // `initialMessage` (turn-overlap) and on any fallback `send`, letting the
   // host's idempotency gate dedupe.

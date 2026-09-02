@@ -29,7 +29,7 @@ import {
 } from "@/components/ui/input-group";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
+import { useOpenLink } from "@/lib/links/open-link";
 import { cn } from "@/lib/utils";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import {
@@ -250,7 +250,7 @@ function BrowserTileToolbarAddress(props: {
 }
 
 function BrowserOpenExternalButton(props: { readonly url: string }) {
-  const openExternalLink = useRunnerOpenExternalLink();
+  const openLink = useOpenLink();
   return (
     <TooltipWrapper
       label="Open in default browser"
@@ -262,9 +262,8 @@ function BrowserOpenExternalButton(props: { readonly url: string }) {
         type="button"
         size="icon-xs"
         aria-label="Open in default browser"
-        disabled={openExternalLink.isPending}
         className="pointer-events-none text-muted-foreground opacity-0 transition-[color,opacity] duration-150 group-hover/address:pointer-events-auto group-hover/address:opacity-100 group-focus-within/address:pointer-events-auto group-focus-within/address:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100 motion-reduce:transition-none"
-        onClick={() => openExternalLink.mutate(props.url)}
+        onClick={() => openLink(props.url, "app", null)}
       >
         <ExternalLink aria-hidden />
       </InputGroupButton>

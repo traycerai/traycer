@@ -50,21 +50,41 @@ interface TabSplitArgs {
   readonly position: string;
 }
 
+interface FakeEpicCanvasTab {
+  readonly epicId: string;
+}
+
 interface TestCanvasStore {
+  canvasByTabId: Record<string, unknown>;
+  tabsById: Record<string, FakeEpicCanvasTab>;
   promotePreviewInTab: () => void;
   openTileInTab: (viewTabId: string, node: unknown) => void;
-  prepareOpenTileInTabFocusTarget: (viewTabId: string, node: unknown) => null;
+  prepareOpenTileInTabFocusTargetFromSource: (
+    viewTabId: string,
+    node: unknown,
+    source: unknown,
+  ) => null;
+  prepareOpenTilePreviewInTabFocusTargetFromSource: (
+    viewTabId: string,
+    node: unknown,
+    source: unknown,
+  ) => null;
+  prepareOpenTileInBackgroundTabFocusTargetFromSource: (
+    viewTabId: string,
+    node: unknown,
+    source: unknown,
+  ) => null;
   insertNodeOnTabStrip: (
     viewTabId: string,
     groupId: string,
     index: number,
     node: unknown,
   ) => void;
-  prepareInsertNodeOnTabStripFocusTarget: (
+  prepareOpenTileInPaneFocusTargetFromSource: (
     viewTabId: string,
     groupId: string,
-    index: number,
     node: unknown,
+    options: { mode: unknown; index: number | null; source: unknown },
   ) => null;
   moveTabOnTabStrip: (viewTabId: string, args: TabStripMoveArgs) => void;
   prepareMoveActiveTabOnTabStripFocusTarget: (
@@ -104,19 +124,28 @@ interface TestCanvasStore {
 
 const testState = vi.hoisted(() => ({
   canvasStore: {
+    canvasByTabId: {},
+    tabsById: { "commits-view-tab": { epicId: "commits-epic" } },
     promotePreviewInTab: vi.fn(),
     openTileInTab: vi.fn(),
-    prepareOpenTileInTabFocusTarget: vi.fn((viewTabId, node) => {
+    prepareOpenTileInTabFocusTargetFromSource: vi.fn((viewTabId, node) => {
       testState.canvasStore.openTileInTab(viewTabId, node);
       return null;
     }),
+    prepareOpenTilePreviewInTabFocusTargetFromSource: vi.fn(() => null),
+    prepareOpenTileInBackgroundTabFocusTargetFromSource: vi.fn(() => null),
     insertNodeOnTabStrip: vi.fn(),
-    prepareInsertNodeOnTabStripFocusTarget: vi.fn(
-      (viewTabId, groupId, index, node) => {
+    prepareOpenTileInPaneFocusTargetFromSource: vi.fn(
+      (
+        viewTabId: string,
+        groupId: string,
+        node: unknown,
+        options: { mode: unknown; index: number | null; source: unknown },
+      ) => {
         testState.canvasStore.insertNodeOnTabStrip(
           viewTabId,
           groupId,
-          index,
+          options.index,
           node,
         );
         return null;
@@ -169,6 +198,7 @@ const testState = vi.hoisted(() => ({
 }));
 
 vi.mock("@/stores/epics/canvas/store", () => ({
+  trackOpenedCanvasTile: vi.fn(),
   useEpicCanvasStore: {
     getState: () => testState.canvasStore,
   },

@@ -22,7 +22,7 @@ interface WorkspaceMarkdownLinkProviderProps {
 export function WorkspaceMarkdownLinkProvider(
   props: WorkspaceMarkdownLinkProviderProps,
 ) {
-  const tileNavigation = useEpicTileNavigation();
+  const { openTile } = useEpicTileNavigation();
   const linkPolicy = useMemo<MarkdownLinkPolicy>(
     () => ({
       supersedePendingFileLink: () => undefined,
@@ -40,17 +40,21 @@ export function WorkspaceMarkdownLinkProvider(
           link.path,
         );
         if (ref === null) return false;
-        tileNavigation.openTilePreviewInTab(props.tabId, ref);
+        // A markdown link click is a single-click gesture (C4/C11); the
+        // anchor hands over the link, not the mouse event, so no modifiers.
+        openTile({
+          node: ref,
+          target: { tabId: props.tabId },
+          gesture: "single",
+          modifiers: null,
+          placement: null,
+          dedupe: true,
+          source: "direct_ui",
+        });
         return true;
       },
     }),
-    [
-      props.hostId,
-      props.filePath,
-      props.tabId,
-      props.workspacePath,
-      tileNavigation,
-    ],
+    [props.hostId, props.filePath, props.tabId, props.workspacePath, openTile],
   );
 
   return (

@@ -9,15 +9,11 @@ import type { MarkdownFileLink } from "@/markdown/links/markdown-link-context";
 import type { ResolveArtifactByPathResult } from "@traycer/protocol/host/epic/unary-schemas";
 import { useArtifactLinkOpener } from "../use-artifact-link-opener";
 
-interface ExternalMutationOptions {
-  readonly onSettled: () => void;
-}
-
 const mocks = vi.hoisted(() => {
   const runPolicy = vi.fn<
     (link: MarkdownFileLink, lifecycle: ChatLinkLifecycle) => boolean
   >(() => true);
-  const previewTileInTab = vi.fn();
+  const openTile = vi.fn();
   const worktreeQuery: {
     data:
       | {
@@ -35,21 +31,19 @@ const mocks = vi.hoisted(() => {
     listBindingsForClient: vi.fn(() => worktreeQuery),
     runPolicy,
     buildPolicy: vi.fn(() => runPolicy),
-    openExternal:
-      vi.fn<(url: string, options: ExternalMutationOptions) => void>(),
-    runnerPending: false,
+    openLink: vi.fn<(url: string, kind: string, event: null) => void>(),
     toast: vi.fn(),
     folderChain: vi.fn<(artifactId: string) => readonly string[] | null>(() => [
       "root-artifact",
     ]),
     navigate: vi.fn(),
-    previewTileInTab,
+    openTile,
     epicHandle: { store: {} },
     // A STABLE object reference returned on every call, matching how the
     // real hook (context/Zustand-backed) behaves - a fresh literal per call
     // would destabilize every memo/callback downstream of it for reasons
     // that don't exist in production.
-    tileNavigation: { openTilePreviewInTab: previewTileInTab },
+    tileNavigation: { openTile },
     candidateWorkspaceFileRefsForRelativeLinkPath: vi.fn<
       (
         hostId: string,
@@ -149,11 +143,8 @@ vi.mock("@/stores/epics/canvas/workspace-file-reveal-store", () => ({
     mocks.setWorkspaceFileRevealTarget(tabId, contentId, line, col);
   },
 }));
-vi.mock("@/hooks/runner/use-open-external-link-mutation", () => ({
-  useRunnerOpenExternalLink: () => ({
-    mutate: mocks.openExternal,
-    isPending: mocks.runnerPending,
-  }),
+vi.mock("@/lib/links/open-link", () => ({
+  useOpenLink: () => mocks.openLink,
 }));
 vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   useEpicTileNavigation: () => mocks.tileNavigation,
@@ -191,13 +182,12 @@ beforeEach(() => {
   mocks.buildPolicy.mockClear();
   mocks.runPolicy.mockReset();
   mocks.runPolicy.mockReturnValue(true);
-  mocks.openExternal.mockClear();
-  mocks.runnerPending = false;
+  mocks.openLink.mockClear();
   mocks.toast.mockClear();
   mocks.folderChain.mockReset();
   mocks.folderChain.mockReturnValue(["root-artifact"]);
   mocks.navigate.mockClear();
-  mocks.previewTileInTab.mockReset();
+  mocks.openTile.mockReset();
   mocks.candidateWorkspaceFileRefsForRelativeLinkPath.mockReset();
   mocks.candidateWorkspaceFileRefsForRelativeLinkPath.mockReturnValue(null);
   mocks.fetchWorkspaceFileExists.mockReset();
@@ -339,7 +329,7 @@ describe("useArtifactLinkOpener", () => {
     expect(mocks.toast).toHaveBeenCalledWith("Couldn't open link");
   });
 
-  it("routes external links through the runner mutation", () => {
+  it("routes external links through the link seam as markdown egress", () => {
     const { result } = renderHook(
       () =>
         useArtifactLinkOpener({
@@ -355,10 +345,14 @@ describe("useArtifactLinkOpener", () => {
       url: "https://example.com",
     });
 
-    expect(mocks.openExternal.mock.calls[0]?.[0]).toBe("https://example.com");
+    expect(mocks.openLink).toHaveBeenCalledWith(
+      "https://example.com",
+      "markdown",
+      null,
+    );
   });
 
-  it("keeps the opener stable when the mutation result object is recreated", () => {
+  it("keeps the opener stable across rerenders", () => {
     const { result, rerender } = renderHook(
       () =>
         useArtifactLinkOpener({
@@ -404,47 +398,11 @@ describe("useArtifactLinkOpener", () => {
     });
 
     expect(cancel).toHaveBeenCalledTimes(1);
-    expect(mocks.openExternal.mock.calls[0]?.[0]).toBe("https://example.com");
-  });
-
-  it("atomically rejects a same-turn second external open until settlement", () => {
-    let settle: () => void = () => undefined;
-    mocks.openExternal.mockImplementation((_url, options) => {
-      settle = options.onSettled;
-    });
-    const { result } = renderHook(
-      () =>
-        useArtifactLinkOpener({
-          epicId: "epic-1",
-          artifactId: "artifact-1",
-          viewTabId: "tab-1",
-        }),
-      { wrapper: QueryWrapper },
+    expect(mocks.openLink).toHaveBeenCalledWith(
+      "https://example.com",
+      "markdown",
+      null,
     );
-
-    const link = { kind: "external" as const, url: "https://example.com" };
-    result.current.openLink(link);
-    result.current.openLink(link);
-
-    expect(mocks.openExternal).toHaveBeenCalledTimes(1);
-    settle();
-    result.current.openLink(link);
-    expect(mocks.openExternal).toHaveBeenCalledTimes(2);
-  });
-
-  it("exposes runner pending state", () => {
-    mocks.runnerPending = true;
-    const { result } = renderHook(
-      () =>
-        useArtifactLinkOpener({
-          epicId: "epic-1",
-          artifactId: "artifact-1",
-          viewTabId: "tab-1",
-        }),
-      { wrapper: QueryWrapper },
-    );
-
-    expect(result.current.isExternalPending).toBe(true);
   });
 
   it("toasts when the async artifact outcome reports that nothing opened", () => {
@@ -572,13 +530,27 @@ describe("useArtifactLinkOpener", () => {
       mocks.openProjectedSidebarNodeInTabWhenAvailable,
     ).toHaveBeenCalledWith(
       expect.objectContaining({
-        tabId: "tab-1",
         nodeId: "artifact-sub",
         fallbackHostId: "tab-host",
       }),
     );
-    expect(mocks.previewTileInTab).not.toHaveBeenCalled();
+    // Nothing opens until the projection lands - the destination tab now
+    // rides on the `openNode` closure rather than a `tabId` arg, so drive it
+    // to prove the wait still targets this tab.
+    expect(mocks.openTile).not.toHaveBeenCalled();
     expect(mocks.runPolicy).not.toHaveBeenCalled();
+    const waitArgs =
+      mocks.openProjectedSidebarNodeInTabWhenAvailable.mock.calls[0][0];
+    waitArgs.openNode({
+      id: "artifact-sub",
+      instanceId: "instance-sub",
+      type: "ticket",
+      name: "Sub ticket",
+      hostId: "tab-host",
+    });
+    expect(mocks.openTile).toHaveBeenCalledWith(
+      expect.objectContaining({ target: { tabId: "tab-1" } }),
+    );
   });
 
   it("opens the own-directory artifact candidate over a same-named workspace file when both exist (#1)", async () => {
@@ -622,7 +594,7 @@ describe("useArtifactLinkOpener", () => {
     ).toHaveBeenCalledWith(
       expect.objectContaining({ nodeId: "artifact-own-dir" }),
     );
-    expect(mocks.previewTileInTab).not.toHaveBeenCalled();
+    expect(mocks.openTile).not.toHaveBeenCalled();
   });
 
   it("opens the own-directory artifact candidate as soon as it resolves, without waiting on a slower file probe (#1)", async () => {
@@ -779,7 +751,14 @@ describe("useArtifactLinkOpener", () => {
 
     // Not rewritten into an artifact-folder reference: the real file wins the
     // race, so it opens as a plain workspace-file preview.
-    expect(mocks.previewTileInTab).toHaveBeenCalledWith("tab-1", fileRef);
+    expect(mocks.openTile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        node: fileRef,
+        target: { tabId: "tab-1" },
+        gesture: "single",
+        placement: null,
+      }),
+    );
     expect(
       mocks.openProjectedSidebarNodeInTabWhenAvailable,
     ).not.toHaveBeenCalled();

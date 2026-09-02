@@ -16,7 +16,7 @@ import {
   type MobileAppPlatform,
 } from "@/lib/mobile-app";
 import { useDesktopAppUpdates } from "@/hooks/runner/use-desktop-app-updates";
-import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
+import { useOpenLink } from "@/lib/links/open-link";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { requestAppUpdateInstall } from "@/lib/app-update/request-app-update-install";
 import {
@@ -68,7 +68,6 @@ export function ClientUpdateRequiredAction(props: {
   readonly requirement: ClientCompatibilityRequirement;
 }): ReactNode {
   const { bridge, snapshot } = useDesktopAppUpdates();
-  const openExternalLink = useRunnerOpenExternalLink();
   const openInstallGuidance = useDesktopDialogStore(
     (state) => state.openInstallGuidance,
   );
@@ -178,7 +177,7 @@ export function ClientUpdateRequiredAction(props: {
           the next step. If you would rather install a newer build by hand, quit
           Traycer first.
         </p>
-        <ReleasesPageButton openExternalLink={openExternalLink} />
+        <ReleasesPageButton />
       </>
     );
   }
@@ -224,7 +223,7 @@ export function ClientUpdateRequiredAction(props: {
     );
   }
 
-  return <ReleasesPageButton openExternalLink={openExternalLink} />;
+  return <ReleasesPageButton />;
 }
 
 function renderCachedUpdateAction(input: {
@@ -339,34 +338,23 @@ function mobileStoreUpdateNote(platform: MobileAppPlatform | null): string {
   return "Update the Traycer app from the store you installed it from, then reopen it.";
 }
 
-function ReleasesPageButton(props: {
-  readonly openExternalLink: UseMutationResult<void, Error, string>;
-}): ReactNode {
+function ReleasesPageButton(): ReactNode {
+  const openLink = useOpenLink();
   return (
     <Button
       type="button"
       size="sm"
       variant="default"
-      disabled={props.openExternalLink.isPending}
       data-testid="client-update-required-download-page"
       onClick={() => {
         // ONE destination for both channels. GitHub Releases lists
         // prereleases alongside stable, so an `rc` remedy and a `stable` one
         // are the same page - and it is the only download location this
         // repository can vouch for (see `traycerInfo.releasesPage`).
-        props.openExternalLink.mutate(traycerInfo.releasesPage);
+        openLink(traycerInfo.releasesPage, "docs", null);
       }}
     >
-      <span className="inline-flex items-center gap-1.5">
-        <span>Get the latest Traycer</span>
-        {props.openExternalLink.isPending ? (
-          <AgentSpinningDots
-            className="text-current"
-            testId={undefined}
-            variant={undefined}
-          />
-        ) : null}
-      </span>
+      <span>Get the latest Traycer</span>
     </Button>
   );
 }

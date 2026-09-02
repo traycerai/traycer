@@ -1969,17 +1969,28 @@ describe("Report issue capture dialog (deep interactions)", () => {
       ).not.toBeNull();
     });
 
-    it("keeps the preview on openExternalLink failure with a retryable toast", async () => {
+    it("keeps the preview when the final draft rebuild fails, with a retryable toast", async () => {
+      // The OS handoff itself is now fire-and-forget through the link seam
+      // (A6), which owns its own failure toast - so the step that can still
+      // fail with the report in hand is the REBUILD that folds the edited
+      // title back through the scrubbing pipeline, and that is what has to
+      // keep the preview and a retry.
+      let builds = 0;
       const harness = createSupportBridgeHarness({
         snapshot: undefined,
         submitReport: () =>
           Promise.resolve({ status: "delivered", reportId: "rpt_openfail" }),
-        buildPublicDraft: undefined,
-        openExternalLink: () => Promise.reject(new Error("no browser")),
+        buildPublicDraft: (form) => {
+          builds += 1;
+          return builds === 1
+            ? Promise.resolve(publicDraftForForm(form))
+            : Promise.reject(new Error("no draft"));
+        },
+        openExternalLink: undefined,
         frozenDesktopLines: undefined,
         frozenHostLines: undefined,
       });
-      await reachConfirmedPreview(harness, "Open failure stays on preview");
+      await reachConfirmedPreview(harness, "Rebuild failure stays on preview");
 
       fireEvent.click(
         screen.getByRole("button", { name: "Open GitHub draft" }),
@@ -1993,7 +2004,7 @@ describe("Report issue capture dialog (deep interactions)", () => {
       });
       const openError = lastToastErrorOptions();
       expect(openError.description).toBe(
-        "Your report is safe - you can try opening it again. no browser",
+        "Your report is safe - you can try opening it again. no draft",
       );
       expect(openError.actionLabel).toBe("Try again");
       expect(

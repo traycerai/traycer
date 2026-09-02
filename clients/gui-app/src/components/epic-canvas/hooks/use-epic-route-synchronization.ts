@@ -14,6 +14,7 @@ import {
 } from "@/stores/epics/canvas/store";
 import { isTileRefRecordLive } from "@/stores/epics/canvas/canvas-selectors";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import {
   cloudChatListAuthorizesRecordSweep,
@@ -103,7 +104,7 @@ export function useEpicRouteSynchronization(
   });
   const currentTab = useEpicTab(tabId);
   const renameTab = useEpicCanvasStore((s) => s.renameTab);
-  const openTileInTab = useEpicCanvasStore((s) => s.openTileInTab);
+  const { openTile } = useEpicTileNavigation();
   const applyNestedRouteFocus = useEpicCanvasStore(
     (s) => s.applyNestedRouteFocus,
   );
@@ -387,12 +388,21 @@ export function useEpicRouteSynchronization(
     if (activeArtifactId === target.id) {
       return;
     }
-    openTileInTab(tabId, {
-      id: target.id,
-      instanceId: uuidv4(),
-      type: target.type,
-      name: target.name,
-      hostId: target.hostId,
+    // Route landing uses the same gesture mapping as a link click (C11).
+    openTile({
+      node: {
+        id: target.id,
+        instanceId: uuidv4(),
+        type: target.type,
+        name: target.name,
+        hostId: target.hostId,
+      },
+      target: { tabId },
+      gesture: "single",
+      modifiers: null,
+      placement: null,
+      dedupe: true,
+      source: "deep_link",
     });
   }, [
     snapshotLoaded,
@@ -401,7 +411,7 @@ export function useEpicRouteSynchronization(
     focusedAt,
     persistedFocus,
     hasRestoredCanvas,
-    openTileInTab,
+    openTile,
     activeArtifactId,
     epicId,
     tabId,

@@ -13,7 +13,10 @@ import type {
 import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import { appLogger } from "@/lib/logger";
-import { surfaceAgentTab } from "@/lib/browser-view/tiles/agent-tab-surfacing";
+import {
+  openHostPushedTile,
+  surfaceHostOpenedTab,
+} from "@/lib/browser-view/tiles/surface-host-opened-tab";
 import {
   browserSessionsLifecycle,
   browserSessionsReducer,
@@ -918,9 +921,6 @@ function forgetLocalLogins(browserView: BrowserViewBridge | null): void {
 }
 
 /**
- * ticket 09 rewrites this into `surfaceHostOpenedTab`, which honours
- * `frame.disposition` and handles `source === "page"` popups too.
- *
  * Extracted for the same reason as {@link forgetLocalLogins}: inlined into the
  * frame switch it puts {@link handleBrowserSessionsSubsystemFrame} over the
  * complexity budget.
@@ -930,12 +930,14 @@ function handleTabOpenedFrame(
   epicId: string,
   hostId: string,
 ): void {
-  if (frame.source !== "agent") return;
-  surfaceAgentTab({
+  surfaceHostOpenedTab({
     epicId,
     hostId,
     sessionId: frame.sessionId,
     tabId: frame.tabId,
+    source: frame.source,
+    disposition: frame.disposition,
+    openTile: openHostPushedTile,
   });
 }
 

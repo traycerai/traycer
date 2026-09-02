@@ -1,4 +1,4 @@
-import { use, useCallback, type MouseEvent, type ReactNode } from "react";
+import { useCallback, type MouseEvent, type ReactNode } from "react";
 import {
   ArrowRight,
   ExternalLink,
@@ -14,7 +14,6 @@ import type {
   PrSourceNotice,
   PrState,
 } from "@traycer/protocol/host/pr-schemas";
-import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { PrActorAvatar } from "@/components/epic-canvas/pr/pr-detail-avatar";
@@ -23,11 +22,10 @@ import {
   PR_STATE_PILL_CLASS,
   PR_STATE_TINT_CLASS,
 } from "@/components/worktree/worktree-pr-state-palette";
-import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
+import { useOpenLink } from "@/lib/links/open-link";
 import { formatPrActorName } from "@/lib/pr/pr-detail-projection";
 import { useRelativeTimestamp } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
-import { RunnerHostContext } from "@/providers/runner-host-context";
 
 type PrDisplayState = PrState | "draft";
 
@@ -249,20 +247,16 @@ function PrDetailStalenessLabel(props: {
 function PrDetailGitHubLink(props: {
   readonly prUrl: string | null;
 }): ReactNode {
-  const runnerHost = use(RunnerHostContext);
-  const openExternalLink = useRunnerOpenExternalLink();
-  const isPending = openExternalLink.isPending;
+  const openLink = useOpenLink();
+  const prUrl = props.prUrl;
   const handleClick = useCallback(
     (event: MouseEvent<HTMLAnchorElement>): void => {
       event.stopPropagation();
-      if (props.prUrl === null || runnerHost === null) return;
+      if (prUrl === null) return;
       event.preventDefault();
-      // Guard against a second RunnerHost request firing while the first
-      // `openExternalLink` mutation for this PR is still in flight.
-      if (isPending) return;
-      openExternalLink.mutate(props.prUrl);
+      openLink(prUrl, "github", event);
     },
-    [isPending, openExternalLink, props.prUrl, runnerHost],
+    [openLink, prUrl],
   );
 
   if (props.prUrl === null) {
@@ -292,23 +286,12 @@ function PrDetailGitHubLink(props: {
     >
       <a
         href={props.prUrl}
-        target="_blank"
-        rel="noreferrer"
         aria-label="Open on GitHub"
-        aria-disabled={isPending}
         data-testid="pr-detail-github-link"
         onClick={handleClick}
       >
         GitHub
-        {isPending ? (
-          <AgentSpinningDots
-            testId="pr-detail-github-link-dots"
-            variant="dots"
-            className="size-3"
-          />
-        ) : (
-          <ExternalLink className="size-3" aria-hidden />
-        )}
+        <ExternalLink className="size-3" aria-hidden />
       </a>
     </Button>
   );

@@ -116,7 +116,7 @@ function PrPanelBodyContent(props: {
   readonly isPending: boolean;
   readonly hasCachedData: boolean;
 }): ReactNode {
-  const tileNavigation = useEpicTileNavigation();
+  const { openTile } = useEpicTileNavigation();
   const groups = useMemo(() => groupPrItemsByRepo(props.items), [props.items]);
   const [collapsedRepos, setCollapsedRepos] = useState<ReadonlySet<string>>(
     new Set<string>(),
@@ -131,7 +131,6 @@ function PrPanelBodyContent(props: {
 
   const hostId = props.hostId;
   const epicId = props.epicId;
-  const openTileInEpic = tileNavigation.openTileInEpic;
   const buildEntry = useCallback(
     (item: PrLightItem): PrRowEntry => {
       const identified = fullyIdentifiedPrBase(item);
@@ -158,17 +157,22 @@ function PrPanelBodyContent(props: {
           tileArgs === null
             ? null
             : () => {
-                openTileInEpic(
-                  epicId,
-                  makePrDetailTile({
+                openTile({
+                  node: makePrDetailTile({
                     ...tileArgs,
                     name: formatPrRowTitle(item),
                   }),
-                );
+                  target: { epicId },
+                  gesture: "explicit",
+                  modifiers: null,
+                  placement: null,
+                  dedupe: true,
+                  source: "direct_ui",
+                });
               },
       };
     },
-    [epicId, hostId, openTileInEpic],
+    [epicId, hostId, openTile],
   );
 
   if (props.isPending && !props.hasCachedData) {

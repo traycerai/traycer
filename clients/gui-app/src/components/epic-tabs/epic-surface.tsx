@@ -10,7 +10,7 @@ import {
 } from "@/components/epic-tabs/pane-visibility-context";
 import { EpicViewTabContext } from "@/components/epic-canvas/view-tab-context";
 import { useTabSurfaceActivity } from "@/components/layout/tab-surface-activity-hooks";
-import { setEpicSurfaceVisibility } from "@/lib/browser-view/tiles/agent-tab-surfacing";
+import { setEpicSurfaceVisibility } from "@/lib/browser-view/tiles/surface-host-opened-tab";
 import { EpicSessionProvider } from "@/providers/epic-session-provider";
 import { AgentBrowserPip } from "@/components/epic-canvas/pip/agent-browser-pip";
 import { BrowserSessionsProvider } from "@/components/epic-canvas/renderers/browser-sessions-provider";

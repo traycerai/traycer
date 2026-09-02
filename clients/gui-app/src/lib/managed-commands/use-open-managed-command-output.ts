@@ -25,17 +25,23 @@ export type OpenManagedCommandOutput = (args: {
 export function useOpenManagedCommandOutput(
   epicId: string,
 ): OpenManagedCommandOutput {
-  const { openTilePreviewInEpic } = useEpicTileNavigation();
+  const { openTile } = useEpicTileNavigation();
   return useCallback(
     (args) => {
-      openTilePreviewInEpic(
-        epicId,
-        makeManagedCommandOutputTileRef({
+      openTile({
+        node: makeManagedCommandOutputTileRef({
           commandId: args.commandId,
           hostId: args.hostId,
         }),
-      );
+        // `single` is what makes it a preview tab - see the note above.
+        gesture: "single",
+        target: { epicId },
+        modifiers: null,
+        placement: null,
+        dedupe: true,
+        source: "direct_ui",
+      });
     },
-    [epicId, openTilePreviewInEpic],
+    [epicId, openTile],
   );
 }

@@ -1,11 +1,4 @@
-import {
-  use,
-  useCallback,
-  useId,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { useCallback, useId, useRef, useState, type ReactNode } from "react";
 import { ChevronDown, Info, Plus, TriangleAlert, Trash2 } from "lucide-react";
 import {
   PROVIDER_DISPLAY_NAMES,
@@ -37,8 +30,7 @@ import {
   providerPackRetryable,
   type ProviderPackPreparing,
 } from "@/components/providers/provider-pack-readiness";
-import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
-import { RunnerHostContext } from "@/providers/runner-host-context";
+import { useOpenLink } from "@/lib/links/open-link";
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
 import { cn } from "@/lib/utils";
 import { ProviderPackVersionManagerPanel } from "./provider-pack-version-manager-panel";
@@ -352,8 +344,7 @@ function CliBinaryMissingNotice({
   readonly providerLabel: string;
   readonly installGuideUrl: string | null;
 }): ReactNode {
-  const openExternalLink = useRunnerOpenExternalLink();
-  const runnerHost = use(RunnerHostContext);
+  const openLink = useOpenLink();
   return (
     <div className="rounded-lg border border-border/60 bg-foreground/2 p-3 text-ui-sm text-muted-foreground">
       <p>
@@ -363,16 +354,12 @@ function CliBinaryMissingNotice({
       {installGuideUrl === null ? null : (
         <a
           href={installGuideUrl}
-          target="_blank"
-          rel="noreferrer"
           onClick={(event) => {
-            // No RunnerHost bound (e.g. web): let the browser open the anchor
-            // natively; the desktop shell routes it through `openExternalLink`
-            // instead (mirrors PrChip in worktrees-settings-panel).
-            if (runnerHost === null) return;
-            // oxlint-disable-next-line react-doctor/no-prevent-default -- desktop shell opens external links via the Electron `openExternalLink` bridge, not renderer navigation; the null-guard above preserves native anchor nav in web builds.
+            // The app owns every URL egress (A6); the `href` stays for anchor
+            // semantics only.
+            // oxlint-disable-next-line react-doctor/no-prevent-default -- `openLink` owns the open, not renderer navigation.
             event.preventDefault();
-            openExternalLink.mutate(installGuideUrl);
+            openLink(installGuideUrl, "docs", null);
           }}
           className="mt-1 inline-flex text-ui-xs font-medium text-primary transition-colors hover:text-primary/80 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 rounded"
         >

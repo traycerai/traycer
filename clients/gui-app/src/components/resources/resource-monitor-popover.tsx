@@ -147,6 +147,10 @@ import {
   type EpicPostResolvePreparation,
   type EpicRouteFocus,
 } from "@/lib/tab-navigation";
+import {
+  commitWithoutNavigation,
+  openTileWithNavigation,
+} from "@/lib/canvas/tile-open/open-tile";
 import { cn } from "@/lib/utils";
 import { useCloudEpicTasksQuery } from "@/hooks/epics/use-cloud-epic-tasks-query";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -4332,7 +4336,11 @@ function openResourceOwner(args: {
       focus: focusForOwner(snapshot),
       // A preserved tile the human already chose to keep once: reopening it is
       // a return to their own tab, not a glance at a new one.
-      preparation: { kind: "open-tile", node: closedTile.node, preview: false },
+      preparation: {
+        kind: "open-tile",
+        node: closedTile.node,
+        gesture: "explicit",
+      },
       navigate: args.navigate,
       navigateNested: args.navigateNested,
       activeEpicId: args.activeEpicId,
@@ -4359,8 +4367,9 @@ function openResourceOwner(args: {
         }),
         // Same glance every other shell door is (see
         // `useOpenManagedCommandOutput`): jumping from a resource row to the
-        // log is a look, and the strip should not keep it unasked.
-        preview: true,
+        // log is a look, and the strip should not keep it unasked. `single` is
+        // the gesture that lands a preview tab.
+        gesture: "single",
       },
       navigate: args.navigate,
       navigateNested: args.navigateNested,
@@ -4402,7 +4411,7 @@ function openResourceOwner(args: {
         name: displayTitle(record.name, "agent"),
         hostId: record.hostId,
       },
-      preview: false,
+      gesture: "explicit",
     },
     navigate: args.navigate,
     navigateNested: args.navigateNested,
@@ -4469,9 +4478,20 @@ function prepareResourceTarget(
 ): NestedFocusTarget | null {
   const canvas = useEpicCanvasStore.getState();
   if (preparation.kind === "open-tile") {
-    return preparation.preview
-      ? canvas.prepareOpenTilePreviewInTabFocusTarget(tabId, preparation.node)
-      : canvas.prepareOpenTileInTabFocusTarget(tabId, preparation.node);
+    // `commitWithoutNavigation`: the caller already wrapped this in its own
+    // `navigateNested`, so the open must not issue a second route write.
+    return openTileWithNavigation(
+      {
+        node: preparation.node,
+        target: { tabId },
+        gesture: preparation.gesture,
+        modifiers: null,
+        placement: null,
+        dedupe: true,
+        source: "direct_ui",
+      },
+      commitWithoutNavigation,
+    );
   }
   return canvas.prepareSetActiveTileTabFocusTarget(
     tabId,

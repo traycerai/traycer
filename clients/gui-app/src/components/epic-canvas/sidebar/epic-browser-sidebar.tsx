@@ -26,17 +26,13 @@ import {
 } from "@/components/epic-canvas/sidebar/use-browser-tab-rows";
 import { useBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
 import { BrowserSessionsHostBoundary } from "@/components/epic-canvas/renderers/browser-sessions-provider";
-import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import {
   useSurfaceHostPin,
   useTabSurfaceKey,
 } from "@/hooks/host/use-surface-host-pin";
 import { useEpicChatRecords } from "@/lib/epic-selectors";
 import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
-import {
-  findOpenTileInTab,
-  useEpicCanvasStore,
-} from "@/stores/epics/canvas/store";
 import { makeOpenableNodeRef } from "@/stores/epics/canvas/types";
 import { usePanelHeaderSearchQuery } from "@/stores/epics/panel-header-search-store";
 
@@ -89,18 +85,8 @@ function BrowsersPanelBodyLive(props: {
     () => filterBrowserTabRows(tabs, searchQuery),
     [searchQuery, tabs],
   );
-  const navigateNested = useEpicNestedFocusNavigation();
-  const prepareOpen = useEpicCanvasStore(
-    (state) => state.prepareOpenTileInTabFocusTarget,
-  );
-  const prepareFocus = useEpicCanvasStore(
-    (state) => state.prepareSetActiveTileTabFocusTarget,
-  );
-  const { add: addBrowser, isAdding } = useAddBrowserAction(
-    props.epicId,
-    props.tabId,
-    null,
-  );
+  const { openTile } = useEpicTileNavigation();
+  const { add: addBrowser, isAdding } = useAddBrowserAction(props.tabId, null);
 
   const openTab = useCallback(
     (session: BrowserSessionInfo, tab: BrowserTabInfo) => {
@@ -109,18 +95,17 @@ function BrowsersPanelBodyLive(props: {
         sessionId: session.sessionId,
         tabId: tab.tabId,
       });
-      const existingPointer = findOpenTileInTab(props.tabId, tile);
-      navigateNested(props.epicId, props.tabId, () =>
-        existingPointer === null
-          ? prepareOpen(props.tabId, tile)
-          : prepareFocus(
-              props.tabId,
-              existingPointer.paneId,
-              existingPointer.instanceId,
-            ),
-      );
+      openTile({
+        node: tile,
+        target: { tabId: props.tabId },
+        gesture: "single",
+        modifiers: null,
+        placement: null,
+        dedupe: true,
+        source: "direct_ui",
+      });
     },
-    [navigateNested, prepareFocus, prepareOpen, props.epicId, props.tabId],
+    [openTile, props.tabId],
   );
 
   const openDrivingChat = useCallback(
@@ -134,21 +119,17 @@ function BrowsersPanelBodyLive(props: {
         name: chat.title,
         hostId,
       });
-      const existing = findOpenTileInTab(props.tabId, chatTile);
-      navigateNested(props.epicId, props.tabId, () =>
-        existing === null
-          ? prepareOpen(props.tabId, chatTile)
-          : prepareFocus(props.tabId, existing.paneId, existing.instanceId),
-      );
+      openTile({
+        node: chatTile,
+        target: { tabId: props.tabId },
+        gesture: "single",
+        modifiers: null,
+        placement: null,
+        dedupe: true,
+        source: "direct_ui",
+      });
     },
-    [
-      chatById,
-      navigateNested,
-      prepareFocus,
-      prepareOpen,
-      props.epicId,
-      props.tabId,
-    ],
+    [chatById, openTile, props.tabId],
   );
   const isUnavailable =
     sessions.lifecycle === "failed" || sessions.lifecycle === "closed";

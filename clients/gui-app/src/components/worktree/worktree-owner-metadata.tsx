@@ -78,7 +78,7 @@ export function WorktreeOwnerMetadataTooltip(props: {
     useState<OwnerMetadataHoverState>(CLOSED_HOVER_STATE);
   const open = !hoverState.pressed && hoverState.hoverOpen;
   const client = useHostClientForHostId(props.hostId);
-  const tileNavigation = useEpicTileNavigation();
+  const { openTile } = useEpicTileNavigation();
   const openPrInApp = (reference: WorktreePrReference): void => {
     if (
       reference.githubHost === null ||
@@ -87,9 +87,8 @@ export function WorktreeOwnerMetadataTooltip(props: {
     ) {
       return;
     }
-    tileNavigation.openTileInEpic(
-      props.epicId,
-      makePrDetailTile({
+    openTile({
+      node: makePrDetailTile({
         hostId: props.hostId,
         githubHost: reference.githubHost,
         owner: reference.owner,
@@ -97,7 +96,13 @@ export function WorktreeOwnerMetadataTooltip(props: {
         prNumber: reference.prNumber,
         name: `${reference.repo} #${reference.prNumber}`,
       }),
-    );
+      target: { epicId: props.epicId },
+      gesture: "explicit",
+      modifiers: null,
+      placement: null,
+      dedupe: true,
+      source: "direct_ui",
+    });
   };
   const metadata = useWorktreeOwnerMetadata({
     client,

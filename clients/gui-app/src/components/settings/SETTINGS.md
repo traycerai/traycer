@@ -881,7 +881,7 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     the tabs that were supposed to hold its settings (and hid the fact that
     Cursor's General tab rendered nothing). Nothing renders between the provider
     header and the tab rail now. Also a "Create an API key" link
-    that opens the provider dashboard via `runnerHost.openExternalLink`
+    that opens the provider dashboard via `openLink(url, "docs")`
     (`API_KEY_DASHBOARD_URL`). The key is stored AES-256-GCM encrypted in
     `provider-overrides.json` and never returned over RPC - `state.apiKey` only
     reports `configured` + `source` (`stored` | `env`). When unset, the host
@@ -1580,7 +1580,7 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
         wrong thing to open a tab on, so the dialog carries an explicit policy
         (`applyStartResult` vs `applyPollResult`) instead of inferring one from
         the arm: a tick refreshes the panel and the resume record, and only a
-        user action reaches `openExternalLink`. Handling both in one place
+        user action reaches `openLink`. Handling both in one place
         reopened the sign-in page every 1.5s, on a flow the user was already in.
       - **Polling is single-flight**, scheduled from the previous tick's
         settlement rather than on a `setInterval`: an interval keeps firing

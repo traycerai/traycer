@@ -71,7 +71,7 @@ import type {
   DesktopSupportLogTarget,
   DesktopSupportSnapshot,
 } from "@/lib/windows/types";
-import { useRunnerHost } from "@/providers/use-runner-host";
+import { useOpenLink } from "@/lib/links/open-link";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import type { FileRouteTypes } from "@/routeTree.gen";
 import type { DesktopSupportDialogProps } from "./types";
@@ -406,7 +406,7 @@ export function ReportIssueDialog(
   props: DesktopSupportDialogProps & { readonly draftId: number },
 ): ReactNode {
   const { draftId, onOpenChange, open, support } = props;
-  const runnerHost = useRunnerHost();
+  const openLink = useOpenLink();
   const draftContext = useDesktopDialogStore(
     (state) => state.reportIssueDraftContext,
   );
@@ -678,20 +678,13 @@ export function ReportIssueDialog(
         buildRequest(previewTitle),
       );
       const url = buildGitHubIssueUrl(finalDraft);
-      // Track the attempt whether the OS handoff succeeds or not - the
-      // analytics event is about the user asking to open, not about the
-      // browser actually launching. Re-throw after tracking so onError keeps
-      // the preview screen and a retryable toast (publish flow: open failure
-      // must never silently claim success or leave the confirmation).
-      try {
-        await runnerHost.openExternalLink(url);
-      } catch (error) {
-        Analytics.getInstance().track(
-          AnalyticsEvent.ReportIssuePublicOpenAttempted,
-          null,
-        );
-        throw error;
-      }
+      // A GitHub issue draft is a `docs`-class page, so it always leaves for
+      // the OS browser (A2). The handoff is fire-and-forget - the seam owns the
+      // failure toast - so this mutation's retry toast now covers the
+      // rebuild, which is the step that can fail with the report still in
+      // hand. The analytics event was always about the user asking to open,
+      // not about the browser actually launching.
+      openLink(url, "docs", null);
       Analytics.getInstance().track(
         AnalyticsEvent.ReportIssuePublicOpenAttempted,
         null,

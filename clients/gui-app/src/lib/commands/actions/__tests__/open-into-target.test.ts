@@ -105,6 +105,7 @@ describe("openTileIntoTargetGroup", () => {
     expect(mock).toHaveBeenCalledWith("tab-1", "group-1", REF, {
       mode: "permanent",
       index: null,
+      source: "command_palette",
     });
   });
 
@@ -173,6 +174,7 @@ describe("openTileIntoTargetGroup", () => {
     expect(mock).toHaveBeenCalledWith(tabId, targetGroupId, REF, {
       mode: "permanent",
       index: null,
+      source: "command_palette",
     });
   });
 
@@ -191,6 +193,7 @@ describe("openTileIntoTargetGroup", () => {
     expect(mock).toHaveBeenCalledWith("unknown-tab", "group-1", REF, {
       mode: "permanent",
       index: null,
+      source: "command_palette",
     });
   });
 });

@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { useSetupTerminalRegistrationStore } from "@/stores/chats/setup-terminal-registration-store";
 import { recordSetupTerminal } from "@/stores/worktree/setup-terminals";
 import {
@@ -52,9 +52,7 @@ export function useRegisterSetupTerminalTabsFromBinding(options: {
 }): void {
   const { binding, viewTabId } = options;
   const hostId = useTabHostId();
-  const openTileInBackgroundTab = useEpicCanvasStore(
-    (s) => s.openTileInBackgroundTab,
-  );
+  const { openTile } = useEpicTileNavigation();
   const registerSetupTerminalOnce = useSetupTerminalRegistrationStore(
     (s) => s.registerOnce,
   );
@@ -82,22 +80,26 @@ export function useRegisterSetupTerminalTabsFromBinding(options: {
       // would alias handles when the same session opens in multiple views.
       // Dedup/convergence with the setup card's "Open terminal" is by
       // content `id`, not instance.
-      openTileInBackgroundTab(viewTabId, {
-        id: sessionId,
-        instanceId: uuidv4(),
-        type: "terminal",
-        name: setupTerminalTitle(entry),
-        titleSource: "manual",
-        hostId,
-        cwd: setupTerminalCwd(entry),
-        origin: "setup",
+      openTile({
+        node: {
+          id: sessionId,
+          instanceId: uuidv4(),
+          type: "terminal",
+          name: setupTerminalTitle(entry),
+          titleSource: "manual",
+          hostId,
+          cwd: setupTerminalCwd(entry),
+          origin: "setup",
+        },
+        target: { tabId: viewTabId },
+        // The host pushed this at us; there was no gesture behind it, so it
+        // lands as a background tab and never steals focus (C4).
+        gesture: "host",
+        modifiers: null,
+        placement: null,
+        dedupe: true,
+        source: "direct_ui",
       });
     });
-  }, [
-    binding,
-    viewTabId,
-    hostId,
-    openTileInBackgroundTab,
-    registerSetupTerminalOnce,
-  ]);
+  }, [binding, viewTabId, hostId, openTile, registerSetupTerminalOnce]);
 }

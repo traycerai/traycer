@@ -99,7 +99,6 @@ function renderPopover(editor: Editor, editable: boolean) {
         editable={editable}
         scrollContainer={null}
         openLink={openLink}
-        openLinkPending={false}
         onOpenChange={onOpenChange}
       />
     </>,
@@ -149,7 +148,6 @@ function ToolbarPopoverHarness(props: { readonly editor: Editor }) {
         editable
         scrollContainer={null}
         openLink={() => undefined}
-        openLinkPending={false}
         onOpenChange={setLinkOpen}
       />
     </>
@@ -186,7 +184,6 @@ function KeyboardPopoverHarness(props: {
         editable={editable}
         scrollContainer={null}
         openLink={openLink}
-        openLinkPending={false}
         onOpenChange={() => undefined}
       />
       <button type="button">Outside</button>
@@ -323,7 +320,6 @@ describe("ArtifactLinkPopover", () => {
           editable
           scrollContainer={null}
           openLink={vi.fn()}
-          openLinkPending={false}
           onOpenChange={onOpenChange}
         />
       </SurfacePresentationBoundary>
@@ -1199,7 +1195,6 @@ describe("ArtifactLinkPopover", () => {
             editable
             scrollContainer={null}
             openLink={() => undefined}
-            openLinkPending={false}
             onOpenChange={() => undefined}
           />
         </KeybindingProvider>,
@@ -1370,32 +1365,6 @@ describe("ArtifactLinkPopover", () => {
     expect(screen.getByLabelText("Link")).not.toBeNull();
     expect(screen.getByText("custom:target")).not.toBeNull();
     expect(screen.queryByRole("button", { name: /Open link:/ })).toBeNull();
-    cleanup();
-
-    const pendingEditor = makeEditor(LINK_CONTENT);
-    pendingEditor.commands.setTextSelection(2);
-    const openLink = vi.fn<(link: OpenableArtifactLink) => void>();
-    render(
-      <>
-        <EditorContent editor={pendingEditor} />
-        <ArtifactLinkPopover
-          editor={pendingEditor}
-          editable={false}
-          scrollContainer={null}
-          openLink={openLink}
-          openLinkPending
-          onOpenChange={() => undefined}
-        />
-      </>,
-    );
-
-    const open = await screen.findByRole<HTMLButtonElement>("button", {
-      name: "Open link: https://example.com",
-    });
-    expect(open.disabled).toBe(true);
-    expect(screen.getByTestId("artifact-link-open-pending")).not.toBeNull();
-    fireEvent.click(open);
-    expect(openLink).not.toHaveBeenCalled();
   });
 
   it("tracks the mapped anchor one-for-one on ordinary scroll", async () => {
@@ -1439,7 +1408,6 @@ describe("ArtifactLinkPopover", () => {
           editable
           scrollContainer={boundary}
           openLink={() => undefined}
-          openLinkPending={false}
           onOpenChange={() => undefined}
         />
       </>,
@@ -1504,7 +1472,6 @@ describe("ArtifactLinkPopover", () => {
           editable
           scrollContainer={null}
           openLink={openLink}
-          openLinkPending={false}
           onOpenChange={onOpenChange}
         />
       </>,
@@ -1544,7 +1511,6 @@ describe("ArtifactLinkPopover", () => {
           editable={false}
           scrollContainer={null}
           openLink={openLink}
-          openLinkPending={false}
           onOpenChange={() => undefined}
         />
       </>,

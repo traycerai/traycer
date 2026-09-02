@@ -34,10 +34,7 @@ vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
 const tileNavigationMocks = vi.hoisted(() => ({
   // Typed so assertions can read the recorded call without `any` leaking
   // through `mock.calls`.
-  openTileInEpic: vi.fn<(epicId: string, tile: unknown) => void>(),
-  openTileInTab: vi.fn(),
-  openTilePreviewInEpic: vi.fn(),
-  openTilePreviewInTab: vi.fn(),
+  openTile: vi.fn<(intent: { readonly node: unknown }) => void>(),
 }));
 vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   useEpicTileNavigation: () => tileNavigationMocks,
@@ -131,7 +128,7 @@ describe("<SwitcherPanelEmbed /> pull-requests category", () => {
     viewportState.isMobile = true;
     subscriptionState.items = [];
     subscriptionState.lastEnabled = null;
-    tileNavigationMocks.openTileInEpic.mockClear();
+    tileNavigationMocks.openTile.mockClear();
     useLeftPanelStore.setState({
       mainCollapsedByTabId: {},
       panelSectionCollapsedByPanelId: {},
@@ -161,17 +158,20 @@ describe("<SwitcherPanelEmbed /> pull-requests category", () => {
     subscriptionState.items = [buildPrItem({})];
     renderEmbed();
     await user.click(screen.getByTestId("pr-row"));
-    expect(tileNavigationMocks.openTileInEpic).toHaveBeenCalledTimes(1);
-    const call = tileNavigationMocks.openTileInEpic.mock.calls.at(0);
+    expect(tileNavigationMocks.openTile).toHaveBeenCalledTimes(1);
+    const call = tileNavigationMocks.openTile.mock.calls.at(0);
     if (call === undefined) throw new Error("expected a tile-open call");
-    const [epicId, tile] = call;
-    expect(epicId).toBe(EPIC_ID);
-    expect(tile).toMatchObject({
-      type: "pr-detail",
-      hostId: HOST_ID,
-      owner: "acme",
-      repo: "widgets",
-      prNumber: 7,
+    const [intent] = call;
+    expect(intent).toMatchObject({
+      target: { epicId: EPIC_ID },
+      gesture: "explicit",
+      node: {
+        type: "pr-detail",
+        hostId: HOST_ID,
+        owner: "acme",
+        repo: "widgets",
+        prNumber: 7,
+      },
     });
   });
 

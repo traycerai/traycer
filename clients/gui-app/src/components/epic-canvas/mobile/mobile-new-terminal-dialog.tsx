@@ -12,9 +12,8 @@ import {
   type TerminalLaunchTarget,
 } from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
 import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
-import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { useTabSurfaceKey } from "@/hooks/host/use-surface-host-pin";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 
 interface MobileNewTerminalDialogProps {
   readonly epicId: string;
@@ -41,29 +40,25 @@ export function MobileNewTerminalDialog(props: MobileNewTerminalDialogProps) {
   // The same per-tab pin surface the sidebar "+" popover keys, so the phone
   // dialog and the desktop popover remember one host pick per tab.
   const surfaceKey = useTabSurfaceKey("new-terminal", tabId);
-  const navigateNested = useEpicNestedFocusNavigation();
-  const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
-    (s) => s.prepareOpenTileInTabFocusTarget,
-  );
+  const { openTile } = useEpicTileNavigation();
   // Same launch wiring as the sidebar "+" popover (`NewTerminalPicker`): the
   // shared body only reports the picked target; opening the tile is the
   // shell's job.
   const handleLaunch = useCallback(
     (target: TerminalLaunchTarget) => {
-      navigateNested(epicId, tabId, () =>
-        prepareOpenTileInTabFocusTarget(tabId, buildTerminalTileRef(target)),
-      );
+      openTile({
+        node: buildTerminalTileRef(target),
+        target: { tabId },
+        gesture: "explicit",
+        modifiers: null,
+        placement: null,
+        dedupe: true,
+        source: "direct_ui",
+      });
       onOpenChange(false);
       if (onLaunched !== null) onLaunched();
     },
-    [
-      navigateNested,
-      prepareOpenTileInTabFocusTarget,
-      epicId,
-      tabId,
-      onOpenChange,
-      onLaunched,
-    ],
+    [openTile, tabId, onOpenChange, onLaunched],
   );
   // A touch pointer is the one that pays for a focused text field: focusing
   // the picker's workspace search raises a software keyboard nobody asked for,

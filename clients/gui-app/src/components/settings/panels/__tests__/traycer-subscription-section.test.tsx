@@ -18,8 +18,10 @@ const mocks = vi.hoisted(() => ({
   data: null as AuthenticatedUser | null,
   isError: false,
   refetch: vi.fn(() => Promise.resolve({})),
-  openExternalLink: vi.fn(),
+  openLink: vi.fn(),
 }));
+
+vi.mock("@/lib/links/open-link", () => ({ useOpenLink: () => mocks.openLink }));
 
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({
@@ -41,7 +43,6 @@ vi.mock("@/providers/use-runner-host", () => ({
     // fixture would silently exercise the production fallback instead of the
     // deployment it names.
     signInUrl: "https://platform.traycer.ai/sign-in",
-    openExternalLink: mocks.openExternalLink,
   }),
 }));
 
@@ -160,6 +161,22 @@ describe("TraycerSubscriptionSection", () => {
       reportIssueContext: null,
       reportIssueDraftId: 0,
     });
+  });
+
+  it("opens the billing page as an always-external `account` link", () => {
+    render(<TraycerSubscriptionSection />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /Manage subscription/ }),
+    );
+
+    // `account` is hard-external (A2): billing has no in-app meaning, so the
+    // link setting never applies to it.
+    expect(mocks.openLink).toHaveBeenCalledWith(
+      "https://platform.traycer.ai",
+      "account",
+      null,
+    );
   });
 
   it("renders the personal subscription by default", () => {

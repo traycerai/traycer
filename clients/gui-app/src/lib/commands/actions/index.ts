@@ -23,7 +23,6 @@ export {
   type CreateChatCommand,
   type CreatedChatOpenIntent,
   type OpenCreatedChatWhenProjectedWithNavigationArgs,
-  type NewChatSplitPosition,
 } from "./new-chat";
 export {
   ensureHistoryTab,

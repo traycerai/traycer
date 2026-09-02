@@ -40,12 +40,15 @@ import type {
   ElectronTabBinding,
   ElectronTabSurfaceLease,
 } from "@/lib/browser-view/sessions/electron-tabs";
-import { openBrowserSessionTileFromPage } from "@/lib/browser-view/tiles/browser-page-tile-open";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { cn } from "@/lib/utils";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { convertBrowserTabToPip } from "@/lib/browser-view/pip/pip-store";
-import { DEFAULT_BROWSER_TILE_URL } from "@/stores/epics/canvas/tile-schema/browser-tile";
+import {
+  DEFAULT_BROWSER_TILE_URL,
+  makeBrowserSessionTileRef,
+} from "@/stores/epics/canvas/tile-schema/browser-tile";
 
 interface ElectronTabSurfaceNode {
   readonly id: string;
@@ -124,6 +127,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     visible,
   });
   const browserSessions = useMaybeBrowserSessionsContext();
+  const { openTile } = useEpicTileNavigation();
   const epicId = useEpicCanvasStore(
     (state) => state.tabsById[props.viewTabId]?.epicId ?? null,
   );
@@ -233,16 +237,21 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
       void browserSessions
         .openTab(props.node.sessionId, change.url)
         .then((opened) => {
-          openBrowserSessionTileFromPage({
-            viewTabId: props.viewTabId,
-            paneId: props.paneId,
-            hostId: props.node.hostId,
-            sessionId: opened.sessionId,
-            tabId: opened.tabId,
-            url: change.url,
-            // Electron-only surface: a natively-placed tab exists on the
-            // desktop canvas alone, which always has room beside it.
-            placement: "split-right",
+          // Browser semantics, never the placement setting (A4): the popup is
+          // a tab of THIS pane's session, and a background disposition
+          // (middle/ctrl/cmd-click) leaves the current tab active.
+          openTile({
+            node: makeBrowserSessionTileRef({
+              hostId: props.node.hostId,
+              sessionId: opened.sessionId,
+              tabId: opened.tabId,
+            }),
+            target: { tabId: props.viewTabId },
+            gesture: change.disposition === "background" ? "host" : "explicit",
+            modifiers: null,
+            placement: { kind: "tab", paneId: props.paneId, index: null },
+            dedupe: true,
+            source: "direct_ui",
           });
         })
         .catch((cause: unknown) => {
@@ -259,6 +268,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
   }, [
     browserSessions,
     browserView,
+    openTile,
     props.node.hostId,
     props.node.sessionId,
     props.paneId,

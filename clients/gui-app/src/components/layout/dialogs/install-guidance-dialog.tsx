@@ -7,7 +7,7 @@ import {
   DialogDescription,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { useRunnerHost } from "@/providers/use-runner-host";
+import { useOpenLink } from "@/lib/links/open-link";
 import type { DesktopAppUpdateGuidance } from "@/lib/windows/types";
 
 export interface InstallGuidanceDialogProps {
@@ -24,7 +24,7 @@ export interface InstallGuidanceDialogProps {
  */
 export function InstallGuidanceDialog(props: InstallGuidanceDialogProps) {
   const { open, onOpenChange, guidance } = props;
-  const runnerHost = useRunnerHost();
+  const openLink = useOpenLink();
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -79,7 +79,7 @@ export function InstallGuidanceDialog(props: InstallGuidanceDialogProps) {
             size="sm"
             className="h-auto px-0 text-muted-foreground"
             onClick={() => {
-              void runnerHost.openExternalLink(guidance.releaseUrl);
+              openLink(guidance.releaseUrl, "docs", null);
             }}
           >
             View release page

@@ -15,9 +15,12 @@
  * Same nested-focus boundary and same no-op-without-target guards as
  * {@link openTileIntoTargetGroup}.
  */
+import {
+  commitWithoutNavigation,
+  openTileWithNavigation,
+} from "@/lib/canvas/tile-open/open-tile";
 import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 
 export interface OpenSingletonTileIntoTargetGroupArgs {
   /** Active header (epic-view) tab that owns the canvas. */
@@ -32,16 +35,19 @@ export function openSingletonTileIntoTargetGroup(
   args: OpenSingletonTileIntoTargetGroupArgs,
 ): void {
   if (args.tabId === null || args.groupId === null) return;
-  const tabId = args.tabId;
-  const groupId = args.groupId;
-  const prepare = () =>
-    useEpicCanvasStore
-      .getState()
-      .prepareOpenSingletonTileInPaneFocusTarget(tabId, groupId, args.ref);
-  const epicId = useEpicCanvasStore.getState().tabsById[tabId]?.epicId ?? null;
-  if (epicId === null || args.navigateNestedFocus === undefined) {
-    prepare();
-    return;
-  }
-  args.navigateNestedFocus(epicId, tabId, prepare);
+  openTileWithNavigation(
+    {
+      node: args.ref,
+      target: { tabId: args.tabId },
+      // Same explicit target pane as `openTileIntoTargetGroup`, but dedupe
+      // stays ON: a singleton focuses its one instance instead of minting a
+      // second view whose per-content state both tabs would write.
+      gesture: "explicit",
+      modifiers: null,
+      placement: { kind: "tab", paneId: args.groupId, index: null },
+      dedupe: true,
+      source: "command_palette",
+    },
+    args.navigateNestedFocus ?? commitWithoutNavigation,
+  );
 }

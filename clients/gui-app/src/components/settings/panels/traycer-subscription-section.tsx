@@ -32,6 +32,7 @@ import {
 } from "@/lib/auth/traycer-subscription-content";
 import { useAuthUser } from "@/hooks/auth/use-auth-user-query";
 import { useRefreshCreditsOnTraycerTurn } from "@/hooks/auth/use-refresh-credits-on-traycer-turn";
+import { useOpenLink } from "@/lib/links/open-link";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import {
   resolveAccountContext,
@@ -44,6 +45,7 @@ export function TraycerSubscriptionSection() {
   // refetches credits. Only mounted here, so it costs nothing elsewhere.
   useRefreshCreditsOnTraycerTurn();
   const runnerHost = useRunnerHost();
+  const openLink = useOpenLink();
   const stored = useAccountContextStore((s) => s.accountContext);
   const setAccountContext = useAccountContextStore((s) => s.setAccountContext);
 
@@ -65,7 +67,7 @@ export function TraycerSubscriptionSection() {
           <button
             type="button"
             onClick={() => {
-              void runnerHost.openExternalLink(manageUrl);
+              openLink(manageUrl, "account", null);
               Analytics.getInstance().track(
                 AnalyticsEvent.SubscriptionManagementOpened,
                 { source: "direct_ui" },

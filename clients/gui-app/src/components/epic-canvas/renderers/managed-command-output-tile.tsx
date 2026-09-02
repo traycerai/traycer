@@ -814,7 +814,6 @@ function ManagedCommandOutputControls(props: {
       <span className="pointer-events-auto flex shrink-0 items-center">
         <ManagedCommandOutputDetails
           command={props.command}
-          epicId={props.epicId}
           hostId={props.hostId}
           viewTabId={props.viewTabId}
         />
@@ -846,7 +845,6 @@ function ManagedCommandOutputControls(props: {
  */
 function ManagedCommandOutputDetails(props: {
   readonly command: ManagedCommand;
-  readonly epicId: string;
   readonly hostId: string;
   readonly viewTabId: string;
 }) {
@@ -920,7 +918,6 @@ function ManagedCommandOutputDetails(props: {
           )}
           <DetailRow label="Started by">
             <ManagedCommandChatBacklink
-              epicId={props.epicId}
               tabId={props.viewTabId}
               chatId={command.chatId}
               fallbackHostId={props.hostId}

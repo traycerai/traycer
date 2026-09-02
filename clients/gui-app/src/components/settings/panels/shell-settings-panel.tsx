@@ -54,6 +54,7 @@ import { Button } from "@/components/ui/button";
 import { HostRuntimeContext } from "@/lib/host";
 import { useHostCapabilityProbe } from "@/hooks/host/use-host-capability-probe";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import { useOpenLink } from "@/lib/links/open-link";
 import { cn } from "@/lib/utils";
 import { useSettingsDensity } from "@/providers/settings-density-context";
 import { useRunnerHost } from "@/providers/use-runner-host";
@@ -70,6 +71,32 @@ type ShellSaveTarget = "program" | "flags";
 // earns a caption (Windows hosts only) - one quiet line under the picker, with
 // the WSLg remedy behind a hover card instead of inline prose.
 const WSL_INSTALL_DOCS_URL = "https://docs.traycer.ai/install#windows-via-wsl";
+
+/**
+ * The WSL install docs anchor. `href` stays for anchor semantics; the click
+ * goes through `openLink` because the app owns every URL egress (A6) and a
+ * bare `target="_blank"` would bypass the setting entirely.
+ */
+function WslInstallDocsLink(props: {
+  readonly className: string;
+  readonly ariaLabel: string | undefined;
+  readonly children: ReactNode;
+}): ReactNode {
+  const openLink = useOpenLink();
+  return (
+    <a
+      href={WSL_INSTALL_DOCS_URL}
+      aria-label={props.ariaLabel}
+      className={props.className}
+      onClick={(event) => {
+        event.preventDefault();
+        openLink(WSL_INSTALL_DOCS_URL, "docs", null);
+      }}
+    >
+      {props.children}
+    </a>
+  );
+}
 
 /** Final path segment of the resolved shell, used to name its flags. */
 function programName(path: string): string {
@@ -683,15 +710,12 @@ function WslAgentCaption() {
             className="size-1.5 rounded-full bg-[var(--term-ansi-yellow)]"
           />
           WSL applies to terminal tabs only
-          <a
-            href={WSL_INSTALL_DOCS_URL}
-            target="_blank"
-            rel="noreferrer"
-            aria-label="Install Traycer in WSL"
+          <WslInstallDocsLink
+            ariaLabel="Install Traycer in WSL"
             className="rounded transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
           >
             <Info className="size-3" />
-          </a>
+          </WslInstallDocsLink>
         </span>
       </HoverCardTrigger>
       <HoverCardContent
@@ -702,14 +726,12 @@ function WslAgentCaption() {
           Choosing WSL here changes the shell for new terminal tabs. It does not
           move the Traycer host or agents into WSL.
         </p>
-        <a
-          href={WSL_INSTALL_DOCS_URL}
-          target="_blank"
-          rel="noreferrer"
+        <WslInstallDocsLink
+          ariaLabel={undefined}
           className="inline-block font-medium text-foreground underline underline-offset-4 hover:opacity-80"
         >
           Install Traycer in WSL
-        </a>
+        </WslInstallDocsLink>
       </HoverCardContent>
     </HoverCard>
   );
@@ -786,15 +808,12 @@ function WslUnavailableCaption(props: { readonly health: WslHealthValue }) {
           {notInstalled
             ? "WSL isn't installed — terminals won't start"
             : "WSL has no Linux distribution — terminals won't start"}
-          <a
-            href={WSL_INSTALL_DOCS_URL}
-            target="_blank"
-            rel="noreferrer"
-            aria-label="Install Traycer in WSL"
+          <WslInstallDocsLink
+            ariaLabel="Install Traycer in WSL"
             className="rounded transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
           >
             <Info className="size-3" />
-          </a>
+          </WslInstallDocsLink>
         </span>
       </HoverCardTrigger>
       <HoverCardContent
@@ -809,14 +828,12 @@ function WslUnavailableCaption(props: { readonly health: WslHealthValue }) {
         <code className="block rounded bg-foreground/5 px-2 py-1 font-mono">
           {notInstalled ? "wsl --install" : "wsl --install -d Ubuntu"}
         </code>
-        <a
-          href={WSL_INSTALL_DOCS_URL}
-          target="_blank"
-          rel="noreferrer"
+        <WslInstallDocsLink
+          ariaLabel={undefined}
           className="inline-block font-medium text-foreground underline underline-offset-4 hover:opacity-80"
         >
           Install Traycer in WSL
-        </a>
+        </WslInstallDocsLink>
       </HoverCardContent>
     </HoverCard>
   );

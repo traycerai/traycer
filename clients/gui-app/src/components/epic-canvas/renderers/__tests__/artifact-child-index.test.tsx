@@ -1,13 +1,14 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { nestedFocusBoundaryMock } from "@/__tests__/nested-focus-boundary-mock";
 import { ArtifactChildIndex } from "@/components/epic-canvas/renderers/artifact-child-index";
 import { readEpicCanvasDragSourceData } from "@/components/epic-canvas/dnd/dnd";
+import { openTileWithNavigation } from "@/lib/canvas/tile-open/open-tile";
+import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import type {
-  EpicCanvasTileRef,
-  EpicNodeRef,
-} from "@/stores/epics/canvas/types";
+import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
+import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 
 type TestTreeNode = {
   readonly type: string | null;
@@ -35,10 +36,7 @@ const dnd = vi.hoisted(() => ({
 }));
 
 const navigation = vi.hoisted(() => ({
-  openTilePreviewInTab: vi.fn(
-    (_tabId: string, _node: EpicCanvasTileRef): NestedFocusTarget | null =>
-      null,
-  ),
+  openTile: vi.fn((_intent: TileOpenIntent): NestedFocusTarget | null => null),
 }));
 
 vi.mock("@/lib/epic-selectors", () => ({
@@ -49,30 +47,34 @@ vi.mock("@/lib/epic-selectors", () => ({
 
 vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   useEpicTileNavigation: () => ({
-    openTilePreviewInTab: navigation.openTilePreviewInTab,
-    openTileInTab: vi.fn(),
-    openTileInEpic: vi.fn(),
-    openTilePreviewInEpic: vi.fn(),
+    openTile: navigation.openTile,
   }),
 }));
 
-vi.mock("@/stores/settings/settings-store", () => ({
-  useSettingsStore: (
-    selector: (state: {
-      artifactIconColorMode: "byType";
-      artifactIconColors: Record<string, string>;
-    }) => unknown,
-  ) =>
-    selector({
-      artifactIconColorMode: "byType",
-      artifactIconColors: {
-        spec: "#fbbf24",
-        ticket: "#a78bfa",
-        story: "#34d399",
-        review: "#fb7185",
-      },
-    }),
-}));
+// `importOriginal` so the real `tilePlacement` defaults (and the module's
+// other exports) survive: the click path runs the real `openTile` seam, which
+// reads placement off `useSettingsStore.getState()`.
+vi.mock("@/stores/settings/settings-store", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/stores/settings/settings-store")>();
+  const state = {
+    artifactIconColorMode: "byType",
+    artifactIconColors: {
+      spec: "#fbbf24",
+      ticket: "#a78bfa",
+      story: "#34d399",
+      review: "#fb7185",
+    },
+    tilePlacement: actual.DEFAULT_TILE_PLACEMENT_SETTINGS,
+  };
+  return {
+    ...actual,
+    useSettingsStore: Object.assign(
+      (selector: (settingsState: typeof state) => unknown) => selector(state),
+      { getState: () => state },
+    ),
+  };
+});
 
 vi.mock("@/lib/logger", () => ({
   appLogger: {
@@ -104,15 +106,14 @@ describe("<ArtifactChildIndex />", () => {
   beforeEach(() => {
     window.localStorage.clear();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
-    navigation.openTilePreviewInTab.mockImplementation(
-      (tabId: string, node: EpicCanvasTileRef): NestedFocusTarget | null =>
-        useEpicCanvasStore
-          .getState()
-          .prepareOpenTilePreviewInTabFocusTarget(tabId, node),
+    nestedFocusBoundaryMock.navigateNested.mockClear();
+    navigation.openTile.mockImplementation(
+      (intent: TileOpenIntent): NestedFocusTarget | null =>
+        openTileWithNavigation(intent, nestedFocusBoundaryMock.navigateNested),
     );
     projection.childIdsByParent = {};
     projection.nodesById = {};
-    navigation.openTilePreviewInTab.mockClear();
+    navigation.openTile.mockClear();
     dnd.draggables = [];
     dnd.setNodeRef.mockClear();
   });
@@ -158,16 +159,28 @@ describe("<ArtifactChildIndex />", () => {
 
     fireEvent.click(row);
 
-    // A revert to a raw canvas `openTilePreviewInTab` call would still mutate
-    // the store, but would not hit this route-aware boundary spy.
-    expect(navigation.openTilePreviewInTab).toHaveBeenCalledWith(
-      viewTabId,
+    // A revert to a raw canvas `prepareOpenTilePreviewInTabFocusTarget` call
+    // would still mutate the store, but would not hit this route-aware
+    // boundary spy.
+    expect(navigation.openTile).toHaveBeenCalledWith(
       expect.objectContaining({
-        id: "child-story",
-        type: "story",
-        name: "Child Story",
-        hostId: "host-1",
+        target: { tabId: viewTabId },
+        gesture: "single",
+        dedupe: true,
+        modifiers: { shift: false, alt: false, middle: false },
+        placement: null,
+        node: expect.objectContaining({
+          id: "child-story",
+          type: "story",
+          name: "Child Story",
+          hostId: "host-1",
+        }) as EpicCanvasTileRef,
       }),
+    );
+    expect(nestedFocusBoundaryMock.navigateNested).toHaveBeenCalledWith(
+      "epic-1",
+      viewTabId,
+      expect.any(Function),
     );
     const canvas = useEpicCanvasStore.getState().canvasByTabId[viewTabId];
     if (canvas?.root?.kind !== "pane") throw new Error("expected pane");

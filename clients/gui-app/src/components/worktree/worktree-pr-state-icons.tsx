@@ -1,14 +1,12 @@
 import {
-  use,
   useCallback,
   type KeyboardEvent,
   type MouseEvent,
   type PointerEvent,
   type ReactNode,
 } from "react";
-import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
+import { useOpenLink } from "@/lib/links/open-link";
 import { cn } from "@/lib/utils";
-import { RunnerHostContext } from "@/providers/runner-host-context";
 import type { WorktreePrReference } from "@/components/worktree/worktree-pr-metadata-model";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import {
@@ -54,16 +52,8 @@ export function WorktreePrStateIcons(props: {
 function WorktreePrStateIcon(props: {
   readonly reference: WorktreePrReference;
 }): ReactNode {
-  const runnerHost = use(RunnerHostContext);
-  const openExternalLink = useRunnerOpenExternalLink();
+  const openLink = useOpenLink();
   const url = props.reference.url;
-  const open = useCallback((): void => {
-    if (runnerHost === null) {
-      window.open(url, "_blank", "noreferrer");
-      return;
-    }
-    openExternalLink.mutate(url);
-  }, [openExternalLink, runnerHost, url]);
   const openOnClick = useCallback(
     (event: MouseEvent<HTMLSpanElement>): void => {
       // `stopPropagation` keeps the row's onClick from opening the chat;
@@ -72,9 +62,9 @@ function WorktreePrStateIcon(props: {
       // than a bubbled handler.
       event.stopPropagation();
       event.preventDefault();
-      open();
+      openLink(url, "github", event);
     },
-    [open],
+    [openLink, url],
   );
   const openOnKeyDown = useCallback(
     (event: KeyboardEvent<HTMLSpanElement>): void => {
@@ -83,9 +73,9 @@ function WorktreePrStateIcon(props: {
       // the enclosing row.
       event.stopPropagation();
       event.preventDefault();
-      open();
+      openLink(url, "github", null);
     },
-    [open],
+    [openLink, url],
   );
   const stopDragActivation = useCallback(
     (event: PointerEvent<HTMLSpanElement>): void => {

@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useState, type MouseEvent, type ReactNode } from "react";
 import { FileDiff, GripVertical } from "lucide-react";
 import type { DraggableSyntheticListeners } from "@dnd-kit/core";
 import { v4 as uuidv4 } from "uuid";
@@ -8,6 +8,7 @@ import { StaticEpicNodeIcon } from "@/components/epic-canvas/epic-node-tab-icon"
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { STATUS_LABELS } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import { modifiersFromMouseEvent } from "@/lib/canvas/tile-open/intent";
 import { EPIC_NODE_LABELS } from "@/lib/artifacts/node-display";
 import {
   useArtifactById,
@@ -321,7 +322,7 @@ function ArtifactKindMeta(props: {
 function ArtifactSummaryControl(props: {
   readonly canOpen: boolean;
   readonly openTitle: string;
-  readonly onOpen: () => void;
+  readonly onOpen: (event: MouseEvent<HTMLButtonElement>) => void;
   readonly displayKind: EpicArtifactKind;
   readonly title: string | null;
   readonly isDeleted: boolean;
@@ -501,7 +502,7 @@ function ArtifactCardSegmentContent(props: ArtifactCardSegmentProps) {
   const tombstone = useEpicDeletedArtifact(artifactId);
   const epicId = useOpenEpicId();
   const activeHostId = useTabHostId();
-  const tileNavigation = useEpicTileNavigation();
+  const { openTile } = useEpicTileNavigation();
   const [diffOpen, setDiffOpen] = useState(false);
 
   // Prefer the tombstone for a delete (the live entry is already gone); else the
@@ -563,15 +564,23 @@ function ArtifactCardSegmentContent(props: ArtifactCardSegmentProps) {
     enabled: canOpen,
   });
 
-  const openArtifact = (): void => {
+  const openArtifact = (event: MouseEvent<HTMLButtonElement>): void => {
     // Re-check the raw conditions so the host id narrows to a non-null string.
     if (isDeleted || live === null) return;
-    tileNavigation.openTileInEpic(epicId, {
-      id: artifactId,
-      instanceId: uuidv4(),
-      type: displayKind,
-      name: openTitle,
-      hostId: activeHostId,
+    openTile({
+      node: {
+        id: artifactId,
+        instanceId: uuidv4(),
+        type: displayKind,
+        name: openTitle,
+        hostId: activeHostId,
+      },
+      target: { epicId },
+      gesture: "explicit",
+      modifiers: modifiersFromMouseEvent(event),
+      placement: null,
+      dedupe: true,
+      source: "direct_ui",
     });
   };
 

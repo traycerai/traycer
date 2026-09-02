@@ -2,11 +2,10 @@
  * Docs: see ./README.md
  *
  * Canonical opener action: place a tile ref into the palette's bound target
- * group as a fresh instance (no dedup), via the canvas store's
- * `prepareOpenTileInPaneFocusTarget` (see `stores/epics/canvas/store.ts` →
- * Decision 2 of the pane-opener tech plan). Both the "open" command source's
- * leaves and any future manual UI route through here per the palette →
- * manual-UI parity rule.
+ * group as a fresh instance (no dedup), via `openTile` with the bound pane as
+ * the intent's explicit placement (decisions C1, C6, C7). Both the "open"
+ * command source's leaves and any future manual UI route through here per the
+ * palette → manual-UI parity rule.
  *
  * Routes through the nested-focus navigation boundary (see the
  * "Nested Focus Opener Boundary" decision) so the open both mutates the
@@ -14,7 +13,7 @@
  * `navigateNestedFocus` is threaded in from the caller's `CommandContext.router`
  * (the same seam `KeybindingRouter.navigateNestedFocus` uses for non-React
  * dispatch). When the tab has no resolvable epic (e.g. the tab record doesn't
- * exist yet) or no navigation seam is available, the raw canvas mutation still
+ * exist yet) or no navigation seam is available, the canvas mutation still
  * runs - only the route write is skipped, matching every other
  * `prepareX...FocusTarget` caller's no-op-when-no-router-context contract.
  *
@@ -22,9 +21,12 @@
  * tab - the opener is only reachable in open-into-target mode, but guarding
  * keeps the delegate safe to call unconditionally from a leaf's `run`.
  */
+import {
+  commitWithoutNavigation,
+  openTileWithNavigation,
+} from "@/lib/canvas/tile-open/open-tile";
 import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 
 export interface OpenTileIntoTargetGroupArgs {
   /** Active header (epic-view) tab that owns the canvas. */
@@ -44,19 +46,18 @@ export function openTileIntoTargetGroup(
   args: OpenTileIntoTargetGroupArgs,
 ): void {
   if (args.tabId === null || args.groupId === null) return;
-  const tabId = args.tabId;
-  const groupId = args.groupId;
-  const prepare = () =>
-    useEpicCanvasStore
-      .getState()
-      .prepareOpenTileInPaneFocusTarget(tabId, groupId, args.ref, {
-        mode: "permanent",
-        index: null,
-      });
-  const epicId = useEpicCanvasStore.getState().tabsById[tabId]?.epicId ?? null;
-  if (epicId === null || args.navigateNestedFocus === undefined) {
-    prepare();
-    return;
-  }
-  args.navigateNestedFocus(epicId, tabId, prepare);
+  openTileWithNavigation(
+    {
+      node: args.ref,
+      target: { tabId: args.tabId },
+      // The opener's own pane IS the placement, and a second view of the same
+      // content is the whole point of this action, so dedupe is off (C6, C7).
+      gesture: "explicit",
+      modifiers: null,
+      placement: { kind: "tab", paneId: args.groupId, index: null },
+      dedupe: false,
+      source: "command_palette",
+    },
+    args.navigateNestedFocus ?? commitWithoutNavigation,
+  );
 }

@@ -29,6 +29,8 @@ import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { requestArtifactEditorFocus } from "@/lib/artifacts/pending-editor-focus";
 import { openProjectedSidebarNodeInTabWhenAvailable } from "@/components/epic-canvas/sidebar/open-projected-sidebar-node";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import { modifiersFromMouseEvent } from "@/lib/canvas/tile-open/intent";
 import { useEpicExportArtifacts } from "@/hooks/epic/use-epic-export-artifacts-mutation";
 import { cn } from "@/lib/utils";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
@@ -766,16 +768,10 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
   const node = useArtifactRowNode(nodeId);
   const childIds = useFilteredPanelChildIds(nodeId, treeFilter);
   const navigateNested = useEpicNestedFocusNavigation();
-  const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
-    (s) => s.prepareOpenTileInTabFocusTargetFromSource,
-  );
+  const { openTile } = useEpicTileNavigation();
   const prepareCloseCanvasTabFocusTarget = useEpicCanvasStore(
     (s) => s.prepareCloseCanvasTabFocusTarget,
   );
-  const prepareOpenTilePreviewInTabFocusTarget = useEpicCanvasStore(
-    (s) => s.prepareOpenTilePreviewInTabFocusTargetFromSource,
-  );
-  const promotePreviewInTab = useEpicCanvasStore((s) => s.promotePreviewInTab);
   const markArtifactSelfDeleted = useEpicCanvasStore(
     (s) => s.markArtifactSelfDeleted,
   );
@@ -902,17 +898,18 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
       pendingProjectedOpenCancelRef.current =
         openProjectedSidebarNodeInTabWhenAvailable({
           epicHandle,
-          tabId,
           nodeId: projectedNodeId,
           fallbackHostId: activeHostId,
-          openTileInTab: (targetTabId, nodeRef) => {
-            navigateNested(epicId, targetTabId, () =>
-              prepareOpenTileInTabFocusTarget(
-                targetTabId,
-                nodeRef,
-                "direct_ui",
-              ),
-            );
+          openNode: (nodeRef) => {
+            openTile({
+              node: nodeRef,
+              target: { tabId },
+              gesture: "explicit",
+              modifiers: null,
+              placement: null,
+              dedupe: true,
+              source: "direct_ui",
+            });
           },
           onBeforeOpen,
           onOpened: () => {
@@ -930,14 +927,7 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
           onCleanup: null,
         });
     },
-    [
-      activeHostId,
-      epicHandle,
-      epicId,
-      navigateNested,
-      prepareOpenTileInTabFocusTarget,
-      tabId,
-    ],
+    [activeHostId, epicHandle, openTile, tabId],
   );
 
   const clearPendingChildCreate = useCallback(() => {
@@ -948,73 +938,45 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
     });
   }, []);
 
-  const selectArtifactNode = useCallback(() => {
-    if (isRenaming) return;
-    if (openableType === null) return;
-    navigateNested(epicId, tabId, () =>
-      prepareOpenTilePreviewInTabFocusTarget(
-        tabId,
-        {
+  const openRowTile = useCallback(
+    (
+      event: React.MouseEvent<HTMLButtonElement>,
+      gesture: "single" | "double",
+    ) => {
+      if (isRenaming) return;
+      if (openableType === null) return;
+      openTile({
+        node: {
           id: nodeId,
           instanceId: uuidv4(),
           type: openableType,
           name: nodeName,
           hostId: activeHostId,
         },
-        "direct_ui",
-      ),
-    );
-  }, [
-    activeHostId,
-    epicId,
-    isRenaming,
-    navigateNested,
-    nodeName,
-    nodeId,
-    openableType,
-    prepareOpenTilePreviewInTabFocusTarget,
-    tabId,
-  ]);
-
-  const handleDoubleClick = useCallback(() => {
-    if (isRenaming) return;
-    if (openableType === null) return;
-    const found = findOpenArtifactInTab(tabId, nodeId);
-    if (found !== null) {
-      navigateNested(epicId, tabId, () => {
-        promotePreviewInTab(tabId, found.paneId);
-        return {
-          paneId: found.paneId,
-          tileInstanceId: found.instanceId,
-        };
+        target: { tabId },
+        gesture,
+        modifiers: modifiersFromMouseEvent(event),
+        placement: null,
+        dedupe: true,
+        source: "direct_ui",
       });
-    } else {
-      navigateNested(epicId, tabId, () =>
-        prepareOpenTileInTabFocusTarget(
-          tabId,
-          {
-            id: nodeId,
-            instanceId: uuidv4(),
-            type: openableType,
-            name: nodeName,
-            hostId: activeHostId,
-          },
-          "direct_ui",
-        ),
-      );
-    }
-  }, [
-    activeHostId,
-    epicId,
-    isRenaming,
-    navigateNested,
-    nodeId,
-    nodeName,
-    openableType,
-    prepareOpenTileInTabFocusTarget,
-    promotePreviewInTab,
-    tabId,
-  ]);
+    },
+    [activeHostId, isRenaming, nodeId, nodeName, openTile, openableType, tabId],
+  );
+
+  const selectArtifactNode = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      openRowTile(event, "single");
+    },
+    [openRowTile],
+  );
+
+  const handleDoubleClick = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      openRowTile(event, "double");
+    },
+    [openRowTile],
+  );
 
   const handleToggle = useCallback(
     (event: React.MouseEvent<HTMLSpanElement>) => {
@@ -1180,7 +1142,7 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
       onToggleSelection(nodeId);
       return;
     }
-    selectArtifactNode();
+    selectArtifactNode(event);
   };
   const rowDoubleClick = selectionMode ? noopRowAction : handleDoubleClick;
 
@@ -1267,7 +1229,7 @@ interface ArtifactNodeShellProps {
   readonly onRenameKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
   readonly onToggle: (event: React.MouseEvent<HTMLSpanElement>) => void;
   readonly onClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
-  readonly onDoubleClick: () => void;
+  readonly onDoubleClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
   readonly statusValue: number | null;
   readonly showStatusDot: boolean;
   readonly unreadMarkerVariant: ArtifactUnreadMarkerVariant | null;
@@ -1645,7 +1607,7 @@ interface ArtifactRowButtonProps {
   readonly expanded: boolean;
   readonly onToggle: (event: React.MouseEvent<HTMLSpanElement>) => void;
   readonly onClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
-  readonly onDoubleClick: () => void;
+  readonly onDoubleClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
   readonly Icon: LucideIcon;
   readonly artifactIconColorMode: "byType" | "none";
   readonly iconStyle: { color: string | undefined } | undefined;

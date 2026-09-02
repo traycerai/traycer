@@ -77,20 +77,28 @@ function usePrOwnerResolution(args: {
   // the rest of the app already relies on.
   const nodeHostId = useEpicNodeHostId(args.owner.ownerId);
   const hostId = nodeHostId ?? args.fallbackHostId;
-  const tileNavigation = useEpicTileNavigation();
+  const { openTile } = useEpicTileNavigation();
   const label = resolvePrOwnerLabel({ owner: args.owner, chat, tuiAgent });
   const { epicId } = args;
   const { ownerId, ownerKind } = args.owner;
   const openOwner = useCallback((): void => {
     if (label === null || hostId === null) return;
-    tileNavigation.openTileInEpic(epicId, {
-      id: ownerId,
-      instanceId: uuidv4(),
-      type: ownerKind,
-      name: label,
-      hostId,
+    openTile({
+      node: {
+        id: ownerId,
+        instanceId: uuidv4(),
+        type: ownerKind,
+        name: label,
+        hostId,
+      },
+      target: { epicId },
+      gesture: "explicit",
+      modifiers: null,
+      placement: null,
+      dedupe: true,
+      source: "direct_ui",
     });
-  }, [epicId, hostId, label, ownerId, ownerKind, tileNavigation]);
+  }, [epicId, hostId, label, openTile, ownerId, ownerKind]);
 
   return { label, hostId, Icon: EPIC_NODE_ICONS[ownerKind], openOwner };
 }

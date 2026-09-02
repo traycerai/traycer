@@ -1,21 +1,14 @@
-import { use, useCallback, type MouseEvent, type ReactNode } from "react";
-import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
-import { RunnerHostContext } from "@/providers/runner-host-context";
+import { useCallback, type MouseEvent, type ReactNode } from "react";
+import { useOpenLink } from "@/lib/links/open-link";
 
 /**
  * Every external GitHub anchor on the PR surfaces, in one place.
  *
- * Routed through the RunnerHost bridge rather than left as a bare
- * `target="_blank"` link: in the desktop shell a plain anchor opens a second,
- * unmanaged browser surface instead of the user's actual browser. With no
- * RunnerHost bound (the web client) the handler is a NO-OP that deliberately
- * does not call `preventDefault`, so the anchor's own native new-tab
- * navigation still applies - the web client has no bridge to route through and
- * blocking it there would break the link outright.
- *
- * A click landing while the bridge request is still in flight is dropped:
- * `mutate` fires a fresh RunnerHost request per call, so a double click would
- * otherwise open the browser twice.
+ * Routed through {@link useOpenLink} rather than left as a bare
+ * `target="_blank"` link: a plain anchor opens a second, unmanaged browser
+ * surface instead of honouring the user's `github` link setting (A1). The
+ * `href` stays for anchor semantics (copy link, hover preview, middle-click
+ * intent); `target`/`rel` go, because the click never navigates natively.
  */
 export function PrExternalGitHubLink(props: {
   readonly href: string;
@@ -24,27 +17,20 @@ export function PrExternalGitHubLink(props: {
   readonly testId: string | undefined;
   readonly children: ReactNode;
 }): ReactNode {
-  const runnerHost = use(RunnerHostContext);
-  const openExternalLink = useRunnerOpenExternalLink();
-  const isPending = openExternalLink.isPending;
+  const openLink = useOpenLink();
   const { href } = props;
   const handleClick = useCallback(
     (event: MouseEvent<HTMLAnchorElement>): void => {
-      if (runnerHost === null) return;
       event.preventDefault();
-      if (isPending) return;
-      openExternalLink.mutate(href);
+      openLink(href, "github", event);
     },
-    [href, isPending, openExternalLink, runnerHost],
+    [href, openLink],
   );
 
   return (
     <a
       href={href}
-      target="_blank"
-      rel="noreferrer"
       className={props.className}
-      aria-disabled={isPending}
       data-testid={props.testId}
       onClick={handleClick}
     >

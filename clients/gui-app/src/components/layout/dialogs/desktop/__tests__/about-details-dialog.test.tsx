@@ -74,7 +74,6 @@ describe("<AboutDetailsDialog />", () => {
         open
         onOpenChange={() => {}}
         support={readySupport()}
-        openExternalLink={() => Promise.resolve()}
       />,
     );
 
@@ -104,7 +103,6 @@ describe("<AboutDetailsDialog />", () => {
         open
         onOpenChange={() => {}}
         support={unavailableSupport()}
-        openExternalLink={() => Promise.resolve()}
       />,
     );
 
@@ -120,7 +118,6 @@ describe("<AboutDetailsDialog />", () => {
         open
         onOpenChange={() => {}}
         support={unavailableSupport()}
-        openExternalLink={() => Promise.resolve()}
       />,
     );
 
@@ -147,14 +144,7 @@ describe("<AboutDetailsDialog />", () => {
   });
 
   it("gates the missing-support-bridge report action on capability", () => {
-    render(
-      <AboutDetailsDialog
-        open
-        onOpenChange={() => {}}
-        support={null}
-        openExternalLink={() => Promise.resolve()}
-      />,
-    );
+    render(<AboutDetailsDialog open onOpenChange={() => {}} support={null} />);
 
     screen.getByText("Desktop support bridge unavailable.");
     expect(screen.queryByRole("button", { name: "Report issue" })).toBeNull();

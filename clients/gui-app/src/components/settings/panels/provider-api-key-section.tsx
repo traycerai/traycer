@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useProvidersSetApiKey } from "@/hooks/providers/use-providers-set-api-key-mutation";
 import { useProvidersClearApiKey } from "@/hooks/providers/use-providers-clear-api-key-mutation";
-import { useRunnerHost } from "@/providers/use-runner-host";
+import { useOpenLink } from "@/lib/links/open-link";
 import { envNamePlaceholder } from "./provider-env-name-placeholder";
 
 type ProviderId = ProviderCliState["providerId"];
@@ -90,7 +90,7 @@ export function ProviderApiKeySection({
   const inputId = useId();
   const setApiKey = useProvidersSetApiKey();
   const clearApiKey = useProvidersClearApiKey();
-  const runnerHost = useRunnerHost();
+  const openLink = useOpenLink();
 
   if (!state.apiKey.supported) return null;
 
@@ -122,7 +122,7 @@ export function ProviderApiKeySection({
         <button
           type="button"
           onClick={() => {
-            void runnerHost.openExternalLink(dashboardUrl);
+            openLink(dashboardUrl, "docs", null);
           }}
           className="inline-flex w-fit items-center gap-1.5 text-ui-xs font-medium text-primary transition-colors hover:text-primary/80 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 rounded"
         >

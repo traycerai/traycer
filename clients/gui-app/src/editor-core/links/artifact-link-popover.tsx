@@ -30,7 +30,6 @@ import {
 import { createPortal } from "react-dom";
 import * as Y from "yjs";
 import { Button } from "@/components/ui/button";
-import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { HOVER_PREVIEW_SURFACE_CLASS } from "@/components/ui/hover-preview-surface";
 import {
   isPresentationLossBlur,
@@ -62,7 +61,6 @@ export interface ArtifactLinkPopoverProps {
   readonly editable: boolean;
   readonly scrollContainer: HTMLElement | null;
   readonly openLink: (link: OpenableArtifactLink) => void;
-  readonly openLinkPending: boolean;
   readonly onOpenChange: (open: boolean) => void;
 }
 
@@ -573,7 +571,6 @@ interface LinkPreviewProps {
   readonly copied: boolean;
   readonly editable: boolean;
   readonly href: string;
-  readonly openLinkPending: boolean;
   readonly onCopy: () => void;
   readonly onEdit: () => void;
   readonly onOpen: () => void;
@@ -583,8 +580,6 @@ function LinkPreview(props: LinkPreviewProps) {
   const openable =
     props.classifiedHref.kind === "external" ||
     props.classifiedHref.kind === "file";
-  const externalOpenPending =
-    props.classifiedHref.kind === "external" && props.openLinkPending;
   return (
     <>
       <LinkKindIndicator
@@ -605,17 +600,10 @@ function LinkPreview(props: LinkPreviewProps) {
               variant="ghost"
               aria-label={`Open link: ${props.href}`}
               className="min-w-0 max-w-[min(55vw,16rem)] justify-start px-1.5 font-normal text-muted-foreground hover:text-foreground"
-              disabled={props.href.trim().length === 0 || externalOpenPending}
+              disabled={props.href.trim().length === 0}
               onClick={props.onOpen}
             >
               <span className="truncate">{props.href}</span>
-              {externalOpenPending ? (
-                <AgentSpinningDots
-                  className={undefined}
-                  testId="artifact-link-open-pending"
-                  variant={undefined}
-                />
-              ) : null}
             </Button>
           </span>
         </TooltipWrapper>
@@ -680,14 +668,7 @@ function LinkPreview(props: LinkPreviewProps) {
  * fields.
  */
 export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
-  const {
-    editor,
-    editable,
-    scrollContainer,
-    openLink,
-    openLinkPending,
-    onOpenChange,
-  } = props;
+  const { editor, editable, scrollContainer, openLink, onOpenChange } = props;
   const [target, setTargetState] = useState<LinkTarget | null>(null);
   const [href, setHref] = useState("");
   const [displayText, setDisplayText] = useState("");
@@ -848,12 +829,11 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
       const classified = classifyHref(rawHref);
       if (classified.kind === "default") return "default";
       if (classified.kind === "external" || classified.kind === "file") {
-        if (classified.kind === "external" && openLinkPending) return "handled";
         openLink(classified);
       }
       return "handled";
     },
-    [openLink, openLinkPending],
+    [openLink],
   );
 
   const handlePointerOver = useEffectEvent((event: PointerEvent): void => {
@@ -1456,7 +1436,6 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
           copied={copied}
           editable={editable}
           href={href}
-          openLinkPending={openLinkPending}
           onCopy={() => copy(href.trim())}
           onEdit={beginEditing}
           onOpen={() => routeHref(href)}

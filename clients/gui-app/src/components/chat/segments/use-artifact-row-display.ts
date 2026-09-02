@@ -35,7 +35,7 @@ export function useArtifactRowDisplay(input: {
   const live = useArtifactById(input.artifactId);
   const epicId = useOpenEpicId();
   const activeHostId = useTabHostId();
-  const tileNavigation = useEpicTileNavigation();
+  const { openTile } = useEpicTileNavigation();
 
   const displayKind: EpicArtifactKind =
     live?.kind ?? input.artifactKind ?? "spec";
@@ -50,12 +50,20 @@ export function useArtifactRowDisplay(input: {
     if (live === null || input.artifactId === null) {
       return;
     }
-    tileNavigation.openTileInEpic(epicId, {
-      id: input.artifactId,
-      instanceId: uuidv4(),
-      type: displayKind,
-      name: title,
-      hostId: activeHostId,
+    openTile({
+      node: {
+        id: input.artifactId,
+        instanceId: uuidv4(),
+        type: displayKind,
+        name: title,
+        hostId: activeHostId,
+      },
+      target: { epicId },
+      gesture: "explicit",
+      modifiers: null,
+      placement: null,
+      dedupe: true,
+      source: "direct_ui",
     });
   };
 

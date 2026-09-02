@@ -2,7 +2,6 @@ import {
   type MouseEvent,
   type ReactNode,
   type RefObject,
-  use,
   useCallback,
   useEffect,
   useEffectEvent,
@@ -40,9 +39,9 @@ import { OnboardingThemePicker } from "@/components/onboarding/onboarding-theme-
 import { useAgentSelectionGuideGlobalOnboardingDraftQuery } from "@/hooks/agent/use-agent-selection-guide-global-onboarding-draft-query";
 import { useAgentSelectionGuideSetGlobalMutation } from "@/hooks/agent/use-agent-selection-guide-set-global-mutation";
 import { useSessionImportAvailable } from "@/hooks/session-import/use-session-import-available";
-import { RunnerHostContext } from "@/providers/runner-host-context";
 import { getClientAppVersionLabel } from "@/lib/app-version";
 import { shortcutHintsVisible } from "@/lib/keybindings/shortcut-hints";
+import { useOpenLink } from "@/lib/links/open-link";
 import { isMobileApp } from "@/lib/mobile-app";
 import { readSafeAreaInsets } from "@/lib/safe-area-insets";
 import {
@@ -1263,24 +1262,14 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
 }
 
 function OnboardingFooterLinks() {
-  const runnerHost = use(RunnerHostContext);
-
-  const openInBrowser = useCallback((url: string) => {
-    window.open(url, "_blank", "noopener,noreferrer");
-  }, []);
+  const openLink = useOpenLink();
 
   const openFooterLink = useCallback(
     (event: MouseEvent<HTMLAnchorElement>, url: string) => {
       event.preventDefault();
-      if (runnerHost !== null) {
-        void runnerHost.openExternalLink(url).catch(() => {
-          openInBrowser(url);
-        });
-        return;
-      }
-      openInBrowser(url);
+      openLink(url, "docs", null);
     },
-    [openInBrowser, runnerHost],
+    [openLink],
   );
 
   return (
@@ -1290,8 +1279,6 @@ function OnboardingFooterLinks() {
           <li key={link.label}>
             <a
               href={link.url}
-              target="_blank"
-              rel="noreferrer"
               onClick={(event) => openFooterLink(event, link.url)}
               className="transition-colors hover:text-white/80"
             >

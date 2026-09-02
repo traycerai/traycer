@@ -1,8 +1,7 @@
 import type { ReactNode } from "react";
-import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { resolvePlatformBaseUrl } from "@/lib/auth/platform-base-url";
-import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
+import { useOpenLink } from "@/lib/links/open-link";
 import { useRunnerHost } from "@/providers/use-runner-host";
 
 /**
@@ -23,32 +22,24 @@ import { useRunnerHost } from "@/providers/use-runner-host";
  *
  * Kept a component rather than inlined, as it was in the gate: `useRunnerHost`
  * then mounts only in the plan-restricted branch, so both callers stay
- * renderable without the runner provider. The open goes through
- * `useRunnerOpenExternalLink` rather than the bridge directly — the mutation
- * owns the query key and the runner-error mapping, so a shell that cannot open
- * links says so instead of failing silently.
+ * renderable without the runner provider. The open goes through `openLink`
+ * (kind `account`, always external per A2), which owns the runner-error
+ * mapping, so a shell that cannot open links says so instead of failing
+ * silently.
  */
 export function PlanRestrictedUpgradeAction(): ReactNode {
   const runnerHost = useRunnerHost();
-  const openExternalLink = useRunnerOpenExternalLink();
+  const openLink = useOpenLink();
   return (
     <Button
       type="button"
       variant="outline"
       size="sm"
-      disabled={openExternalLink.isPending}
       onClick={() => {
-        openExternalLink.mutate(resolvePlatformBaseUrl(runnerHost.signInUrl));
+        openLink(resolvePlatformBaseUrl(runnerHost.signInUrl), "account", null);
       }}
       data-testid="host-scope-plan-upgrade"
     >
-      {openExternalLink.isPending ? (
-        <AgentSpinningDots
-          className="text-current"
-          testId={undefined}
-          variant={undefined}
-        />
-      ) : null}
       Upgrade plan
     </Button>
   );

@@ -1,4 +1,4 @@
-import { useCallback, type ReactNode } from "react";
+import { useCallback, type MouseEvent, type ReactNode } from "react";
 import { Check, Copy, GitCommitHorizontal } from "lucide-react";
 import type {
   PrCommit,
@@ -11,6 +11,7 @@ import {
   PrRelativeTime,
 } from "@/components/epic-canvas/pr/pr-detail-conversation";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
+import type { LinkClickEvent } from "@/lib/links/open-link";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { cn } from "@/lib/utils";
 
@@ -18,8 +19,8 @@ import { cn } from "@/lib/utils";
  * The Commits tab: the PR's commits as a list of rows that open on GitHub.
  *
  * Every row is a button rather than an `<a>` because the desktop shell owns
- * external navigation (`runner.openExternalLink`) - a bare anchor in the
- * renderer would either navigate the app frame or be swallowed.
+ * external navigation - a bare anchor in the renderer would either navigate
+ * the app frame or be swallowed.
  *
  * The sha chip beside it COPIES rather than opens: the row already goes to
  * GitHub, so a second control pointing at the same place bought nothing, while
@@ -33,7 +34,7 @@ import { cn } from "@/lib/utils";
 export function PrDetailCommits(props: {
   readonly core: PrDetailCore;
   readonly commits: PrCommitsSection;
-  readonly onOpenCommit: (url: string) => void;
+  readonly onOpenCommit: (url: string, event: LinkClickEvent) => void;
 }): ReactNode {
   const shown = props.commits.commits;
   if (shown.length === 0) {
@@ -94,7 +95,7 @@ const COPIED_RESET_MS = 1600;
 function PrCommitRow(props: {
   readonly commit: PrCommit;
   readonly prUrl: string | null;
-  readonly onOpenCommit: (url: string) => void;
+  readonly onOpenCommit: (url: string, event: LinkClickEvent) => void;
 }): ReactNode {
   const shortOid = props.commit.oid.slice(0, 7);
   const headline = props.commit.messageHeadline ?? shortOid;
@@ -106,9 +107,12 @@ function PrCommitRow(props: {
   const url =
     props.prUrl === null ? null : `${props.prUrl}/commits/${props.commit.oid}`;
   const { onOpenCommit } = props;
-  const openCommit = useCallback((): void => {
-    if (url !== null) onOpenCommit(url);
-  }, [onOpenCommit, url]);
+  const openCommit = useCallback(
+    (event: MouseEvent<HTMLButtonElement>): void => {
+      if (url !== null) onOpenCommit(url, event);
+    },
+    [onOpenCommit, url],
+  );
 
   // The chip is a SIBLING of the row button, not a child of it: a button
   // inside a button is invalid HTML, and the browser will not deliver the

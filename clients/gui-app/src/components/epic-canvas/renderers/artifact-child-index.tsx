@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, type MouseEvent } from "react";
 import { v4 as uuidv4 } from "uuid";
 import {
   computeArtifactNodeStatusDot,
@@ -9,6 +9,7 @@ import {
   type ArtifactDragIdentity,
 } from "@/components/epic-canvas/dnd/use-artifact-drag-source";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import { modifiersFromMouseEvent } from "@/lib/canvas/tile-open/intent";
 import {
   EPIC_NODE_ICONS,
   isEpicArtifactKind,
@@ -78,7 +79,7 @@ function ChildIndexRow(props: {
 }) {
   const { epicId, childId, viewTabId, hostId } = props;
   const treeNode = useTreeNodeById(childId);
-  const tileNavigation = useEpicTileNavigation();
+  const { openTile } = useEpicTileNavigation();
   const iconColorMode = useSettingsStore((s) => s.artifactIconColorMode);
   const iconColors = useSettingsStore((s) => s.artifactIconColors);
   const type = treeNode?.type ?? null;
@@ -104,19 +105,27 @@ function ChildIndexRow(props: {
     enabled: dragIdentity !== null,
   });
 
-  const open = useCallback(() => {
-    if (type === null || !isOpenableEpicNodeKind(type)) return;
-    tileNavigation.openTilePreviewInTab(
-      viewTabId,
-      makeOpenableNodeRef({
-        id: childId,
-        instanceId: uuidv4(),
-        type,
-        name: title,
-        hostId,
-      }),
-    );
-  }, [type, title, childId, viewTabId, hostId, tileNavigation]);
+  const open = useCallback(
+    (event: MouseEvent<HTMLButtonElement>) => {
+      if (type === null || !isOpenableEpicNodeKind(type)) return;
+      openTile({
+        node: makeOpenableNodeRef({
+          id: childId,
+          instanceId: uuidv4(),
+          type,
+          name: title,
+          hostId,
+        }),
+        target: { tabId: viewTabId },
+        gesture: "single",
+        modifiers: modifiersFromMouseEvent(event),
+        placement: null,
+        dedupe: true,
+        source: "direct_ui",
+      });
+    },
+    [type, title, childId, viewTabId, hostId, openTile],
+  );
 
   // Children of an artifact are themselves artifacts; the guard keeps the row
   // type-safe and quietly drops any non-artifact node that ever appears here.

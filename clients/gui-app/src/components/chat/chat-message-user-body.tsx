@@ -230,7 +230,7 @@ function AgentMessageDisplayView({
   );
 
   const epicId = useOpenEpicId();
-  const tileNavigation = useEpicTileNavigation();
+  const { openTile } = useEpicTileNavigation();
   const senderNode = useEpicArtifact(agentSenderInfo.agentId);
   // Resolve the live sender from the epic projection. A chat or
   // terminal-agent is openable as a tab; an absent node (e.g. a
@@ -262,14 +262,22 @@ function AgentMessageDisplayView({
 
   const openSenderTab = useCallback(() => {
     if (openTarget === null) return;
-    tileNavigation.openTileInEpic(epicId, {
-      id: agentSenderInfo.agentId,
-      instanceId: uuidv4(),
-      type: openTarget.type,
-      name: senderName,
-      hostId: openTarget.hostId,
+    openTile({
+      node: {
+        id: agentSenderInfo.agentId,
+        instanceId: uuidv4(),
+        type: openTarget.type,
+        name: senderName,
+        hostId: openTarget.hostId,
+      },
+      target: { epicId },
+      gesture: "explicit",
+      modifiers: null,
+      placement: null,
+      dedupe: true,
+      source: "direct_ui",
     });
-  }, [agentSenderInfo.agentId, epicId, openTarget, senderName, tileNavigation]);
+  }, [agentSenderInfo.agentId, epicId, openTarget, senderName, openTile]);
 
   const header = (
     <>

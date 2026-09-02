@@ -682,17 +682,25 @@ function A2ASendToolSegment(
   const receiverNode = useEpicAgentReference(send.receiverAgentId);
   const activeHostId = useTabHostId();
   const epicId = useOpenEpicId();
-  const tileNavigation = useEpicTileNavigation();
+  const { openTile } = useEpicTileNavigation();
   const receiverName = receiverDisplayName(receiverNode, send.receiverAgentId);
   const openTarget = receiverOpenTarget(receiverNode, activeHostId);
   const openReceiverTab = () => {
     if (openTarget === null || receiverNode === null) return;
-    tileNavigation.openTileInEpic(epicId, {
-      id: receiverNode.id,
-      instanceId: uuidv4(),
-      type: openTarget.type,
-      name: receiverName,
-      hostId: openTarget.hostId,
+    openTile({
+      node: {
+        id: receiverNode.id,
+        instanceId: uuidv4(),
+        type: openTarget.type,
+        name: receiverName,
+        hostId: openTarget.hostId,
+      },
+      target: { epicId },
+      gesture: "explicit",
+      modifiers: null,
+      placement: null,
+      dedupe: true,
+      source: "direct_ui",
     });
   };
 

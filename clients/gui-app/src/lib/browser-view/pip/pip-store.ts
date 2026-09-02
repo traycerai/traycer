@@ -18,7 +18,7 @@ export interface PipTarget extends BrowserViewNativeTabKey {
   /**
    * Who asked for this PiP. The agent-surfacing pipeline never replaces a
    * `manual` target (explicit user intent) but freely replaces `agent`
-   * targets latest-wins; see `decideAgentTabDisposition`.
+   * targets latest-wins; see `hostOpenedTabSuppressReason`.
    */
   readonly origin: "manual" | "agent";
 }

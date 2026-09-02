@@ -1,6 +1,8 @@
+import type { MouseEvent } from "react";
 import { GitBranch } from "lucide-react";
 import { v4 as uuidv4 } from "uuid";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import { modifiersFromMouseEvent } from "@/lib/canvas/tile-open/intent";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 interface ForkedChatLinkSegmentProps {
@@ -12,15 +14,25 @@ interface ForkedChatLinkSegmentProps {
 
 export function ForkedChatLinkSegment(props: ForkedChatLinkSegmentProps) {
   const { viewTabId, sourceChatId, sourceChatTitle, sourceHostId } = props;
-  const tileNavigation = useEpicTileNavigation();
+  const { openTile } = useEpicTileNavigation();
 
-  const openSourceConversation = (): void => {
-    tileNavigation.openTileInTab(viewTabId, {
-      id: sourceChatId,
-      instanceId: uuidv4(),
-      type: "chat",
-      name: sourceChatTitle,
-      hostId: sourceHostId,
+  const openSourceConversation = (
+    event: MouseEvent<HTMLButtonElement>,
+  ): void => {
+    openTile({
+      node: {
+        id: sourceChatId,
+        instanceId: uuidv4(),
+        type: "chat",
+        name: sourceChatTitle,
+        hostId: sourceHostId,
+      },
+      target: { tabId: viewTabId },
+      gesture: "explicit",
+      modifiers: modifiersFromMouseEvent(event),
+      placement: null,
+      dedupe: true,
+      source: "direct_ui",
     });
   };
 

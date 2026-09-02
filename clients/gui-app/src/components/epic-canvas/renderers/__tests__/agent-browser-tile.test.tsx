@@ -8,11 +8,15 @@ import type {
   ElectronTabSurfaceLease,
 } from "@/lib/browser-view/sessions/electron-tabs";
 import type { TileController } from "@/components/epic-canvas/renderers/tile-controller";
+import type { BrowserSessionsState } from "@/components/epic-canvas/renderers/browser-sessions-context";
+import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 
 const state = vi.hoisted(() => ({
   visible: true,
   bridge: null as TestBridge | null,
   chromeInputs: [] as Array<Record<string, unknown>>,
+  sessions: null as BrowserSessionsState | null,
+  openTile: vi.fn<(intent: TileOpenIntent) => void>(),
 }));
 
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
@@ -44,7 +48,10 @@ vi.mock("@/lib/browser-view/tiles/visible-tile-registry", async (load) => {
   return { ...actual, useRegisterVisibleBrowserTile: () => undefined };
 });
 vi.mock("@/components/epic-canvas/renderers/browser-sessions-context", () => ({
-  useMaybeBrowserSessionsContext: () => null,
+  useMaybeBrowserSessionsContext: () => state.sessions,
+}));
+vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
+  useEpicTileNavigation: () => ({ openTile: state.openTile }),
 }));
 vi.mock("@/components/epic-canvas/renderers/browser-start-page", () => ({
   BrowserStartPage: () => <div>Local servers</div>,
@@ -115,6 +122,15 @@ const CHROME_CONTROLLER: TileController = {
   onClearSite: () => undefined,
 };
 
+interface OpenTileRequest {
+  readonly viewTabId: string;
+  readonly paneId: string;
+  readonly tileInstanceId: string;
+  readonly pageSessionId: string;
+  readonly url: string;
+  readonly disposition: "foreground" | "background";
+}
+
 interface NativeStatusChange {
   readonly hostId: string;
   readonly sessionId: string;
@@ -138,8 +154,17 @@ class TestBridge {
     return { dispose: () => (this.statusHandler = null) };
   }
 
-  onOpenTileRequest(): { dispose: () => void } {
-    return { dispose: () => {} };
+  private openTileHandler: ((change: OpenTileRequest) => void) | null = null;
+
+  onOpenTileRequest(handler: (change: OpenTileRequest) => void): {
+    dispose: () => void;
+  } {
+    this.openTileHandler = handler;
+    return { dispose: () => (this.openTileHandler = null) };
+  }
+
+  emitOpenTileRequest(change: OpenTileRequest): void {
+    this.openTileHandler?.(change);
   }
 
   onFindChange(): { dispose: () => void } {
@@ -185,11 +210,39 @@ function renderTile(binding: ElectronTabBinding) {
   );
 }
 
+function liveSessions(): BrowserSessionsState {
+  return {
+    hostId: "host-1",
+    lifecycle: "live",
+    inventoryReady: true,
+    items: [],
+    errorMessage: null,
+    retry: () => {},
+    openTab: () => Promise.resolve({ sessionId: "session-1", tabId: "tab-2" }),
+    closeTab: () => Promise.resolve(),
+  };
+}
+
+function popupRequest(
+  disposition: "foreground" | "background",
+): OpenTileRequest {
+  return {
+    viewTabId: "view-1",
+    paneId: "pane-1",
+    tileInstanceId: "tile-1",
+    pageSessionId: "browser-session:session-1:tab-1",
+    url: "https://popup.example/",
+    disposition,
+  };
+}
+
 describe("ElectronTabSurface", () => {
   beforeEach(() => {
     state.visible = true;
     state.bridge = new TestBridge();
     state.chromeInputs = [];
+    state.sessions = null;
+    state.openTile.mockReset();
   });
 
   afterEach(() => {
@@ -263,6 +316,52 @@ describe("ElectronTabSurface", () => {
 
     expect(await screen.findByText("Agent browser unavailable")).toBeTruthy();
     expect(screen.getByText("surface attach rejected")).toBeTruthy();
+  });
+
+  it("opens an in-page popup as a tab of this pane, foreground focusing it", async () => {
+    const bridge = state.bridge;
+    if (bridge === null) throw new Error("bridge missing");
+    state.sessions = liveSessions();
+    renderTile(
+      createBinding(() => Promise.resolve({ detach: () => Promise.resolve() })),
+    );
+
+    act(() => {
+      bridge.emitOpenTileRequest(popupRequest("foreground"));
+    });
+
+    await waitFor(() => {
+      expect(state.openTile).toHaveBeenCalledTimes(1);
+    });
+    expect(state.openTile.mock.calls[0]?.[0]).toMatchObject({
+      target: { tabId: "view-1" },
+      gesture: "explicit",
+      modifiers: null,
+      placement: { kind: "tab", paneId: "pane-1", index: null },
+      dedupe: true,
+      node: { type: "browser-session", sessionId: "session-1", tabId: "tab-2" },
+    });
+  });
+
+  it("opens a background popup as a host push, leaving the current tab active", async () => {
+    const bridge = state.bridge;
+    if (bridge === null) throw new Error("bridge missing");
+    state.sessions = liveSessions();
+    renderTile(
+      createBinding(() => Promise.resolve({ detach: () => Promise.resolve() })),
+    );
+
+    act(() => {
+      bridge.emitOpenTileRequest(popupRequest("background"));
+    });
+
+    await waitFor(() => {
+      expect(state.openTile).toHaveBeenCalledTimes(1);
+    });
+    expect(state.openTile.mock.calls[0]?.[0]).toMatchObject({
+      gesture: "host",
+      placement: { kind: "tab", paneId: "pane-1", index: null },
+    });
   });
 
   it("accepts status only for the exact host, session, and tab", async () => {

@@ -146,3 +146,20 @@ const TILE_CATEGORY_BY_KIND: Record<TileKindId, TileCategory> = {
 export function tileCategoryOf(node: EpicCanvasTileRef): TileCategory {
   return TILE_CATEGORY_BY_KIND[node.type];
 }
+
+/**
+ * The modifier triple behind a real click (C4). Takes the structural shape
+ * rather than `React.MouseEvent` so a native `MouseEvent` and a synthetic one
+ * both fit, and so a test can hand it a literal.
+ */
+export function modifiersFromMouseEvent(event: {
+  readonly shiftKey: boolean;
+  readonly altKey: boolean;
+  readonly button: number;
+}): TileOpenModifiers {
+  return {
+    shift: event.shiftKey,
+    alt: event.altKey,
+    middle: event.button === 1,
+  };
+}

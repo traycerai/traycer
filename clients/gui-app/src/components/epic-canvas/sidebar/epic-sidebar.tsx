@@ -40,6 +40,7 @@ import { FileTreeWorkspacePicker } from "@/components/epic-canvas/sidebar/file-t
 import { FileTreePanelBodyForWorkspace } from "@/components/epic-canvas/sidebar/epic-sidebar-file-tree";
 import { WorkspacePickerWithOpener } from "@/components/worktree/workspace-picker-with-opener";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { useWorktreeListBindingsForEpicForClient } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
 import {
   useSurfaceHostClient,
@@ -182,6 +183,7 @@ import {
 import { GitDiffPanelBodyLive } from "@/components/epic-canvas/git-diff/git-diff-panel-body-live";
 import { GitDiffPanelActions } from "@/components/epic-canvas/git-diff/git-diff-panel-actions";
 import { PrPanelBody } from "@/components/epic-canvas/pr/pr-panel-body";
+import { LinkTargetProvider } from "@/lib/links/link-target-provider";
 import { PrPanelActions } from "@/components/epic-canvas/pr/pr-panel-actions";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -682,7 +684,12 @@ export function EpicLeftPanelHost(props: EpicLeftPanelHostProps) {
       data-left-panel-group-size={panels.length}
     >
       <ArtifactReadLifecycleBridge epicId={epicId} tabId={tabId} />
-      <PanelGroupBody epicId={epicId} tabId={tabId} panels={panels} />
+      {/* A5a: the sidebar renders GitHub and markdown links (PR rows, comment
+          bodies) OUTSIDE `renderTile`, so without this they would have no
+          in-app destination and every one of them would open externally. */}
+      <LinkTargetProvider epicId={epicId} viewTabId={tabId}>
+        <PanelGroupBody epicId={epicId} tabId={tabId} panels={panels} />
+      </LinkTargetProvider>
     </Sidebar>
   );
 }
@@ -1831,10 +1838,7 @@ function TreePanelActions(props: TreePanelActionsProps) {
   // A and opened a B-bound tile for it: the create succeeds and the tile is
   // wrong, which is the failure mode that looks like nothing went wrong.
   const activeHostId = useEpicSessionHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
-  const navigateNested = useEpicNestedFocusNavigation();
-  const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
-    (s) => s.prepareOpenTileInTabFocusTarget,
-  );
+  const { openTile } = useEpicTileNavigation();
   const createArtifact = useEpicCreateArtifact();
   const setLocalRootCreatePending = useEpicLeftPanelStore(
     (s) => s.setLocalRootCreatePending,
@@ -1861,13 +1865,18 @@ function TreePanelActions(props: TreePanelActionsProps) {
     (nodeId: string, onBeforeOpen: ((node: EpicNodeRef) => void) | null) => {
       const cancel = openProjectedSidebarNodeInTabWhenAvailable({
         epicHandle,
-        tabId: props.tabId,
         nodeId,
         fallbackHostId: activeHostId,
-        openTileInTab: (targetTabId, nodeRef) => {
-          navigateNested(props.epicId, targetTabId, () =>
-            prepareOpenTileInTabFocusTarget(targetTabId, nodeRef),
-          );
+        openNode: (nodeRef) => {
+          openTile({
+            node: nodeRef,
+            target: { tabId: props.tabId },
+            gesture: "explicit",
+            modifiers: null,
+            placement: null,
+            dedupe: true,
+            source: "direct_ui",
+          });
         },
         onBeforeOpen,
         onOpened: () => {
@@ -1886,8 +1895,7 @@ function TreePanelActions(props: TreePanelActionsProps) {
       activeHostId,
       clearAcknowledgedRootCreatePending,
       epicHandle,
-      navigateNested,
-      prepareOpenTileInTabFocusTarget,
+      openTile,
       projectedOpenCancels,
       props.epicId,
       props.panelId,

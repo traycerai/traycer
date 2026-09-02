@@ -2,12 +2,7 @@ import { useCallback } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { DEFAULT_EPIC_NODE_NAMES } from "@/lib/artifacts/node-display";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
-import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
-import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
-import {
-  findOpenArtifactInTab,
-  useEpicCanvasStore,
-} from "@/stores/epics/canvas/store";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import type { EpicTerminalRef } from "@/stores/epics/canvas/types";
 import { recordSetupTerminal } from "@/stores/worktree/setup-terminals";
 
@@ -33,13 +28,7 @@ export function useFocusEpicTerminalSession(
   cwd: string,
   overrides: EpicTerminalRefOverrides | null,
 ) => void {
-  const navigateNested = useEpicNestedFocusNavigation();
-  const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
-    (s) => s.prepareOpenTileInTabFocusTarget,
-  );
-  const prepareSetActiveTileTabFocusTarget = useEpicCanvasStore(
-    (s) => s.prepareSetActiveTileTabFocusTarget,
-  );
+  const { openTile } = useEpicTileNavigation();
   // Setup-event terminals inherit the bound host of the chat tile
   // that emitted the event - same artifact, same host binding.
   const activeHostId = useTabHostId();
@@ -53,32 +42,13 @@ export function useFocusEpicTerminalSession(
           sessionId: terminalSessionId,
         });
       }
-      // This is a committed user open/focus, so the nested route search must
-      // become the new focus authority - otherwise route sync re-applies the
-      // stale target and the tab opens without ever becoming visible.
-      const epicId =
-        useEpicCanvasStore.getState().tabsById[viewTabId]?.epicId ?? null;
-      const commit = (prepare: () => NestedFocusTarget | null): void => {
-        if (epicId === null) {
-          prepare();
-          return;
-        }
-        navigateNested(epicId, viewTabId, prepare);
-      };
-      const found = findOpenArtifactInTab(viewTabId, terminalSessionId);
-      if (found !== null) {
-        // `found` is keyed by content id; activate by the tab's instanceId.
-        commit(() =>
-          prepareSetActiveTileTabFocusTarget(
-            viewTabId,
-            found.paneId,
-            found.instanceId,
-          ),
-        );
-        return;
-      }
-      commit(() =>
-        prepareOpenTileInTabFocusTarget(viewTabId, {
+      // `dedupe` focuses a session already on this canvas; only a genuinely
+      // new one is opened. This is a committed user open/focus, so the nested
+      // route search must become the new focus authority - otherwise route
+      // sync re-applies the stale target and the tab opens without ever
+      // becoming visible.
+      openTile({
+        node: {
           id: terminalSessionId,
           instanceId: uuidv4(),
           type: "terminal",
@@ -88,15 +58,15 @@ export function useFocusEpicTerminalSession(
           cwd,
           origin: overrides?.origin,
           originProviderId: overrides?.originProviderId,
-        }),
-      );
+        },
+        target: { tabId: viewTabId },
+        gesture: "explicit",
+        modifiers: null,
+        placement: null,
+        dedupe: true,
+        source: "direct_ui",
+      });
     },
-    [
-      activeHostId,
-      navigateNested,
-      prepareOpenTileInTabFocusTarget,
-      prepareSetActiveTileTabFocusTarget,
-      viewTabId,
-    ],
+    [activeHostId, openTile, viewTabId],
   );
 }

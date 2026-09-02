@@ -91,7 +91,6 @@ export const runnerMutationKeys = {
   // reloads. Keyed so the destructive action dedups and shows in devtools.
   clearAllLocalData: () => ["runner.clearAllLocalData"] as const,
   mermaidPngDownload: () => ["runner.mermaidPngDownload"] as const,
-  openExternalLink: () => ["runner.openExternalLink"] as const,
   // Re-open a file the desktop save dialog just wrote (`fileDrops.openSavedFile`).
   openSavedFile: () => ["runner.fileDrops.openSavedFile"] as const,
   // Windows frameless title-bar menu strip: pop up a top-level native submenu.

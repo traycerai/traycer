@@ -2,7 +2,7 @@
  * Timeline row → its source, opened in the epic.
  *
  * Two steps, always in this order: open (or focus) the owning agent's tile via
- * `openTileInEpic`, then - only for a GUI anchor - park a transcript jump the
+ * `openTile`, then - only for a GUI anchor - park a transcript jump the
  * chat tile picks up. The jump is parked rather than called because the target
  * tile may not be mounted yet at the moment of the click.
  *
@@ -23,6 +23,7 @@
 import { useCallback, useMemo, useSyncExternalStore } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 import { useHostDirectory } from "@/lib/host";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useRemoteSessionsPollReadiness } from "@/hooks/host/use-remote-sessions-poll-readiness";
@@ -92,12 +93,28 @@ function openableRefForAgent(agent: CommGraphAgentNode): EpicArtifactRef {
   });
 }
 
+/** Every jump here is a deliberate row action, never a raw click gesture. */
+function openAgentIntent(
+  epicId: string,
+  agent: CommGraphAgentNode,
+): TileOpenIntent {
+  return {
+    node: openableRefForAgent(agent),
+    target: { epicId },
+    gesture: "explicit",
+    modifiers: null,
+    placement: null,
+    dedupe: true,
+    source: "direct_ui",
+  };
+}
+
 export function useCommGraphJump(
   epicId: string,
   agents: ReadonlyArray<CommGraphAgentNode>,
   events: ReadonlyArray<CommGraphEvent>,
 ): CommGraphJump {
-  const tileNavigation = useEpicTileNavigation();
+  const { openTile } = useEpicTileNavigation();
   const directory = useHostDirectory();
   const requestJump = useChatTranscriptJumpStore((s) => s.requestJump);
 
@@ -171,7 +188,7 @@ export function useCommGraphJump(
       if (target === null) return;
       const agent = agentById.get(commGraphJumpAgentId(target));
       if (agent === undefined) return;
-      tileNavigation.openTileInEpic(epicId, openableRefForAgent(agent));
+      openTile(openAgentIntent(epicId, agent));
       if (target.kind === "chat-block") {
         requestJump(event.hostId, target.chatId, {
           kind: "block",
@@ -186,7 +203,7 @@ export function useCommGraphJump(
         });
       }
     },
-    [agentById, epicId, isOriginAvailable, requestJump, tileNavigation],
+    [agentById, epicId, isOriginAvailable, openTile, requestJump],
   );
 
   const canJumpToSender = useCallback(
@@ -215,7 +232,7 @@ export function useCommGraphJump(
       }
       const sender = agentById.get(event.senderAgentId);
       if (sender === undefined || sender.kind !== "chat") return;
-      tileNavigation.openTileInEpic(epicId, openableRefForAgent(sender));
+      openTile(openAgentIntent(epicId, sender));
       requestJump(event.hostId, event.senderAgentId, {
         kind: "sent-message",
         receiverAgentId: event.receiverAgentId,
@@ -223,7 +240,7 @@ export function useCommGraphJump(
         timestamp: event.timestamp,
       });
     },
-    [agentById, epicId, isOriginAvailable, requestJump, tileNavigation],
+    [agentById, epicId, isOriginAvailable, openTile, requestJump],
   );
 
   const canJumpToCreated = useCallback(
@@ -244,19 +261,19 @@ export function useCommGraphJump(
       }
       const created = agentById.get(event.receiverAgentId);
       if (created === undefined || created.kind !== "chat") return;
-      tileNavigation.openTileInEpic(epicId, openableRefForAgent(created));
+      openTile(openAgentIntent(epicId, created));
       requestJump(event.hostId, event.receiverAgentId, {
         kind: "first-message",
       });
     },
-    [agentById, epicId, isOriginAvailable, requestJump, tileNavigation],
+    [agentById, epicId, isOriginAvailable, openTile, requestJump],
   );
 
   const openAgent = useCallback(
     (agent: CommGraphAgentNode): void => {
-      tileNavigation.openTileInEpic(epicId, openableRefForAgent(agent));
+      openTile(openAgentIntent(epicId, agent));
     },
-    [epicId, tileNavigation],
+    [epicId, openTile],
   );
 
   return {

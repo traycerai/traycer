@@ -47,7 +47,6 @@ import {
 type CanvasStoreSlice = Pick<
   EpicCanvasStore,
   | "renameTab"
-  | "openTileInTab"
   | "applyNestedRouteFocus"
   | "closeCanvasTab"
   | "pendingCreateArtifactIds"
@@ -102,7 +101,6 @@ const testState = vi.hoisted<TestState>(() => ({
   chatRecordListAuthoritative: true,
   canvasStore: {
     renameTab: vi.fn(),
-    openTileInTab: vi.fn(),
     applyNestedRouteFocus: vi.fn(),
     closeCanvasTab: vi.fn(),
     pendingCreateArtifactIds: new Set<string>(),
@@ -111,6 +109,14 @@ const testState = vi.hoisted<TestState>(() => ({
     setLastFocusedArtifactId: vi.fn(),
     setLastFocusedThreadId: vi.fn(),
   },
+}));
+
+const tileNavigationMocks = vi.hoisted(() => ({
+  openTile: vi.fn(),
+}));
+
+vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
+  useEpicTileNavigation: () => ({ openTile: tileNavigationMocks.openTile }),
 }));
 
 vi.mock("@tanstack/react-router", () => ({
@@ -317,7 +323,7 @@ function resetStores(): void {
   testState.cloudCollaboratorChatIds = new Set();
   testState.chatRecordListAuthoritative = true;
   vi.mocked(testState.canvasStore.renameTab).mockClear();
-  vi.mocked(testState.canvasStore.openTileInTab).mockClear();
+  tileNavigationMocks.openTile.mockClear();
   vi.mocked(testState.canvasStore.applyNestedRouteFocus).mockClear();
   vi.mocked(testState.canvasStore.closeCanvasTab).mockClear();
   testState.openEpicState.setLastFocusedArtifactId.mockClear();
@@ -486,12 +492,18 @@ describe("useEpicRouteSynchronization", () => {
     );
 
     await waitFor(() => {
-      expect(testState.canvasStore.openTileInTab).toHaveBeenCalledWith(
-        TAB_ID,
+      expect(tileNavigationMocks.openTile).toHaveBeenCalledWith(
         expect.objectContaining({
-          id: "artifact-1",
-          type: "spec",
-          name: "Focused artifact",
+          target: { tabId: TAB_ID },
+          gesture: "single",
+          placement: null,
+          dedupe: true,
+          source: "deep_link",
+          node: expect.objectContaining({
+            id: "artifact-1",
+            type: "spec",
+            name: "Focused artifact",
+          }) as EpicCanvasTileRef,
         }),
       );
     });
@@ -540,12 +552,18 @@ describe("useEpicRouteSynchronization", () => {
     );
 
     await waitFor(() => {
-      expect(testState.canvasStore.openTileInTab).toHaveBeenCalledWith(
-        TAB_ID,
+      expect(tileNavigationMocks.openTile).toHaveBeenCalledWith(
         expect.objectContaining({
-          id: "chat-notified",
-          type: "chat",
-          name: "Notified chat",
+          target: { tabId: TAB_ID },
+          gesture: "single",
+          placement: null,
+          dedupe: true,
+          source: "deep_link",
+          node: expect.objectContaining({
+            id: "chat-notified",
+            type: "chat",
+            name: "Notified chat",
+          }) as EpicCanvasTileRef,
         }),
       );
     });
@@ -587,7 +605,7 @@ describe("useEpicRouteSynchronization", () => {
       );
     });
     expect(testState.navigate).not.toHaveBeenCalled();
-    expect(testState.canvasStore.openTileInTab).not.toHaveBeenCalled();
+    expect(tileNavigationMocks.openTile).not.toHaveBeenCalled();
   });
 
   it("does not let a stale route target undo an in-flight local pane navigation", () => {
@@ -769,7 +787,7 @@ describe("useEpicRouteSynchronization", () => {
 
     await waitFor(() => {
       expect(testState.navigate).not.toHaveBeenCalled();
-      expect(testState.canvasStore.openTileInTab).not.toHaveBeenCalled();
+      expect(tileNavigationMocks.openTile).not.toHaveBeenCalled();
       expect(
         testState.openEpicState.setLastFocusedArtifactId,
       ).not.toHaveBeenCalledWith("artifact-1");
@@ -865,12 +883,18 @@ describe("useEpicRouteSynchronization", () => {
     );
 
     await waitFor(() => {
-      expect(testState.canvasStore.openTileInTab).toHaveBeenCalledWith(
-        TAB_ID,
+      expect(tileNavigationMocks.openTile).toHaveBeenCalledWith(
         expect.objectContaining({
-          id: "artifact-1",
-          type: "spec",
-          name: "Focused artifact",
+          target: { tabId: TAB_ID },
+          gesture: "single",
+          placement: null,
+          dedupe: true,
+          source: "deep_link",
+          node: expect.objectContaining({
+            id: "artifact-1",
+            type: "spec",
+            name: "Focused artifact",
+          }) as EpicCanvasTileRef,
         }),
       );
     });
@@ -943,17 +967,23 @@ describe("useEpicRouteSynchronization", () => {
     );
 
     await waitFor(() => {
-      expect(testState.canvasStore.openTileInTab).toHaveBeenCalledWith(
-        TAB_ID,
+      expect(tileNavigationMocks.openTile).toHaveBeenCalledWith(
         expect.objectContaining({
-          id: "artifact-1",
-          type: "spec",
-          name: "Focused artifact",
+          target: { tabId: TAB_ID },
+          gesture: "single",
+          placement: null,
+          dedupe: true,
+          source: "deep_link",
+          node: expect.objectContaining({
+            id: "artifact-1",
+            type: "spec",
+            name: "Focused artifact",
+          }) as EpicCanvasTileRef,
         }),
       );
     });
 
-    vi.mocked(testState.canvasStore.openTileInTab).mockClear();
+    tileNavigationMocks.openTile.mockClear();
     hook.rerender({
       ...THREAD_FOCUS_INTENT,
       epicId: "route-sync-epic-b",
@@ -962,12 +992,18 @@ describe("useEpicRouteSynchronization", () => {
     });
 
     await waitFor(() => {
-      expect(testState.canvasStore.openTileInTab).toHaveBeenCalledWith(
-        "route-sync-tab-b",
+      expect(tileNavigationMocks.openTile).toHaveBeenCalledWith(
         expect.objectContaining({
-          id: "artifact-1",
-          type: "spec",
-          name: "Focused artifact",
+          target: { tabId: "route-sync-tab-b" },
+          gesture: "single",
+          placement: null,
+          dedupe: true,
+          source: "deep_link",
+          node: expect.objectContaining({
+            id: "artifact-1",
+            type: "spec",
+            name: "Focused artifact",
+          }) as EpicCanvasTileRef,
         }),
       );
     });

@@ -5,11 +5,12 @@ import { toastFromRunnerError } from "@/lib/runner-error-toast";
 /**
  * The desktop bridge - the only door out of the app (A2, A5, A6).
  *
- * Deliberately NOT `useRunnerOpenExternalLink`: that mutation needs a
+ * Deliberately a plain hook and not a react-query mutation (the
+ * `useRunnerOpenExternalLink` this replaced): a mutation needs a
  * `QueryClientProvider` above it, and this hook is called from every link
  * surface there is (markdown anchors, terminal links), including surfaces
  * rendered far from the app root. The mutation's only behaviour beyond the
- * bridge call is the standard runner-error toast, which is right here.
+ * bridge call was the standard runner-error toast, which is right here.
  */
 export function useOpenExternalLink(): (url: string) => void {
   const runnerHost = use(RunnerHostContext);

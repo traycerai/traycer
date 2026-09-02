@@ -24,6 +24,7 @@ import type { ResolveArtifactByPathResult } from "@traycer/protocol/host/epic/un
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { collectPanes, type TilePane } from "@/stores/epics/canvas/tile-tree";
 import { useWorkspaceFileRevealStore } from "@/stores/epics/canvas/workspace-file-reveal-store";
+import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 
 const HOST_ID = "host-1";
 const OPEN_EPIC_ID = "epic-open";
@@ -242,18 +243,10 @@ function expectedWorkspaceFileContentId(linkPath: string): string {
 
 describe("ChatMarkdownLinkProvider", () => {
   it("routes rendered markdown file links through the shared tile navigation hook", async () => {
-    const openTilePreviewInTab = vi.fn<
-      EpicTileNavigation["openTilePreviewInTab"]
-    >(() => null);
+    const openTile = vi.fn<EpicTileNavigation["openTile"]>(() => null);
     const hookSpy = vi
       .spyOn(epicTileNavigationModule, "useEpicTileNavigation")
-      .mockReturnValue({
-        openTile: vi.fn(() => null),
-        openTileInTab: vi.fn(() => null),
-        openTilePreviewInTab,
-        openTileInEpic: vi.fn(() => null),
-        openTilePreviewInEpic: vi.fn(() => null),
-      });
+      .mockReturnValue({ openTile });
     const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic 1");
 
     try {
@@ -271,10 +264,14 @@ describe("ChatMarkdownLinkProvider", () => {
       fireEvent.click(screen.getByRole("link", { name: "Open app" }));
 
       await waitFor(() => {
-        expect(openTilePreviewInTab).toHaveBeenCalledWith(
-          tabId,
+        expect(openTile).toHaveBeenCalledWith(
           expect.objectContaining({
-            id: workspaceFileTabId(HOST_ID, "/repo", "src/app.ts"),
+            target: { tabId },
+            gesture: "single",
+            placement: null,
+            node: expect.objectContaining({
+              id: workspaceFileTabId(HOST_ID, "/repo", "src/app.ts"),
+            }) as EpicCanvasTileRef,
           }),
         );
       });
@@ -404,10 +401,9 @@ describe("ChatMarkdownLinkProvider", () => {
     });
     const openArgs =
       mocks.openProjectedSidebarNodeInTabWhenAvailable.mock.calls[0][0];
-    expect(openArgs.tabId).toBe(tabId);
     expect(openArgs.nodeId).toBe("artifact-same");
     expect(openArgs.fallbackHostId).toBe(HOST_ID);
-    expect(typeof openArgs.openTileInTab).toBe("function");
+    expect(typeof openArgs.openNode).toBe("function");
     expect(mocks.navigate).not.toHaveBeenCalled();
     // It claimed the click without falling through to a file preview.
     expect(previewTabId(tabId)).toBeNull();
