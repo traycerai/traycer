@@ -2886,6 +2886,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         kind: "retire-failed",
         bootoutFailed: true,
         manifestRemovalFailed: false,
+        bootedOut: false,
+        bootoutIndeterminate: true,
+        manifestRemoved: false,
       });
 
       // The competing host is STILL RUNNING (its bootout failed), so starting
@@ -2986,6 +2989,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         kind: "retire-failed",
         bootoutFailed: true,
         manifestRemovalFailed: false,
+        bootedOut: false,
+        bootoutIndeterminate: true,
+        manifestRemoved: true,
       });
 
       expect(MOCKS.cliLoggerWarn).toHaveBeenCalled();
@@ -3031,6 +3037,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         kind: "retire-failed",
         bootoutFailed: true,
         manifestRemovalFailed: false,
+        bootedOut: false,
+        bootoutIndeterminate: false,
+        manifestRemoved: true,
       });
 
       // Never bootout an owner we could not identify: the CLI label may BE
@@ -3054,6 +3063,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         kind: "retire-failed",
         bootoutFailed: true,
         manifestRemovalFailed: false,
+        bootedOut: false,
+        bootoutIndeterminate: false,
+        manifestRemoved: false,
       });
     });
 
@@ -3091,6 +3103,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
             kind: "retire-failed",
             bootoutFailed: false,
             manifestRemovalFailed: true,
+            bootedOut: false,
+            bootoutIndeterminate: false,
+            manifestRemoved: false,
           });
         });
 
@@ -3117,6 +3132,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
             kind: "retire-failed",
             bootoutFailed: false,
             manifestRemovalFailed: true,
+            bootedOut: true,
+            bootoutIndeterminate: false,
+            manifestRemoved: false,
           });
         });
 

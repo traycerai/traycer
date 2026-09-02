@@ -772,8 +772,12 @@ describe("Windows startService post-/Run spawn verification", () => {
 
   // The negative twin: `/Create` itself fails, so the task was never
   // registered - the staging cleanup's authority loss must not be read as
-  // committed even though it is the error that ultimately propagates (the
-  // `finally` throw replaces the `/Create` failure the try block raised).
+  // committed. This is deliberate, not an oversight: the authority loss is
+  // still what propagates, REPLACING the `SERVICE_INSTALL_FAILED` cliError
+  // the `/Create` catch block built (a `finally` throw pre-empts the try
+  // block's own control flow), because "may not mutate at all" is the more
+  // fundamental fact of the two. It just must not be misread as committed,
+  // since the task itself was never registered.
   it("does not mark a mutation-authority loss from the staging cleanup when /Create failed as a committed registration", async () => {
     const authorityError = new ServiceMutationAuthorityError(
       new Error("maintenance lease revoked"),
@@ -815,6 +819,134 @@ describe("Windows startService post-/Run spawn verification", () => {
     expect(caught).toBe(authorityError);
     expect(isServiceMutationAuthorityError(caught)).toBe(true);
     expect(didServiceRegistrationCommit(caught)).toBe(false);
+  });
+
+  // A NON-authority staging cleanup failure is the ordinary case (a leftover
+  // temp dir, a locked file) - it is logged at debug and swallowed, so when
+  // `/Create` failed the propagating error stays the `SERVICE_INSTALL_FAILED`
+  // cliError the catch block built, not the cleanup's own error.
+  it("does not let a non-authority staging cleanup failure override a /Create failure", async () => {
+    const runner: ProcessRunner = async (command, args) => {
+      if (command === "schtasks" && args[0] === "/Create") {
+        throw new ProcessRunError(
+          "schtasks /Create exited with code 1: Access is denied.",
+          command,
+          args,
+          1,
+          "",
+          "ERROR: Access is denied.",
+        );
+      }
+      return success("");
+    };
+    setWindowsTaskInstallDepsForTests({
+      stageTaskDefinition: async () => ({
+        tmpDir: "/tmp/traycer-task-test",
+        xmlPath: "/tmp/traycer-task-test/task.xml",
+      }),
+      removeStagedTaskDefinition: async () => {
+        throw new Error("EBUSY");
+      },
+    });
+
+    let caught: unknown = null;
+    try {
+      await createWindowsController(runner).install({
+        label: serviceLabelFor("staging"),
+        cli: { command: "C:\\traycer.exe", args: [] },
+        enableLinger: false,
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+    });
+    expect(didServiceRegistrationCommit(caught)).toBe(false);
+  });
+
+  // The other side of the same swallow: a non-authority cleanup failure must
+  // not stop install from proceeding to the verified `/Run` once `/Create`
+  // already succeeded.
+  it("still runs /Run after a non-authority staging cleanup failure when /Create succeeded", async () => {
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      return success("");
+    };
+    setWindowsTaskInstallDepsForTests({
+      stageTaskDefinition: async () => ({
+        tmpDir: "/tmp/traycer-task-test",
+        xmlPath: "/tmp/traycer-task-test/task.xml",
+      }),
+      removeStagedTaskDefinition: async () => {
+        throw new Error("EBUSY");
+      },
+    });
+    setWindowsStartEvidenceDepsForTests({
+      captureBaseline: async () => emptySpawnBaseline(),
+      createEvidenceReader: () => ({
+        collect: async () => ({
+          kind: "starting-marker",
+          reason: "post-baseline starting marker",
+          marker: null,
+          pid: null,
+        }),
+      }),
+      sleep: async () => undefined,
+      verifyTimeoutMs: 5_000,
+      verifyPollMs: 1,
+    });
+
+    await expect(
+      createWindowsController(runner).install({
+        label: serviceLabelFor("staging"),
+        cli: { command: "C:\\traycer.exe", args: [] },
+        enableLinger: false,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(
+      calls.filter(
+        (call) => call.command === "schtasks" && call.args[0] === "/Run",
+      ),
+    ).toHaveLength(1);
+  });
+
+  // The post-`/Run` evidence poll is wrapped in try/catch so a NON-authority
+  // rejection from `evidenceReader.collect()` is also rethrown marked
+  // committed: the task exists and `/Run` was accepted, so everything from
+  // here on is post-registration whatever the cause of the failure.
+  it("marks a non-authority evidence-poll failure after an accepted /Run as a committed registration", async () => {
+    const evidenceError = new Error("EIO");
+    const runner: ProcessRunner = async () => success("");
+    setWindowsTaskInstallDepsForTests(stagedTaskInstallDeps());
+    setWindowsStartEvidenceDepsForTests({
+      captureBaseline: async () => emptySpawnBaseline(),
+      createEvidenceReader: () => ({
+        collect: async () => {
+          throw evidenceError;
+        },
+      }),
+      sleep: async () => undefined,
+      verifyTimeoutMs: 40,
+      verifyPollMs: 10,
+    });
+
+    let caught: unknown = null;
+    try {
+      await createWindowsController(runner).install({
+        label: serviceLabelFor("staging"),
+        cli: { command: "C:\\traycer.exe", args: [] },
+        enableLinger: false,
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBe(evidenceError);
+    expect(didServiceRegistrationCommit(caught)).toBe(true);
   });
 
   // `readTaskLastRunResult` is only ever reached after `/Run` was accepted

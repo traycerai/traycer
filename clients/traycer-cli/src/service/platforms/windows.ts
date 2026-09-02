@@ -4,6 +4,7 @@ import {
   verifyServiceMutationAuthority,
 } from "../mutation-authority";
 import { markRegistrationCommitted } from "../cli-invocation-record";
+import { createCliLogger } from "../../logger";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -205,9 +206,29 @@ async function installService(
     try {
       await taskInstallDeps.removeStagedTaskDefinition(staged.tmpDir);
     } catch (cause) {
-      throw created && isServiceMutationAuthorityError(cause)
-        ? markRegistrationCommitted(cause)
-        : cause;
+      // Removing the staging directory is best effort - a leftover temp dir
+      // changes nothing about the task - so an ordinary filesystem failure
+      // here is logged and swallowed. That is what lets the `/Create` error
+      // the try block raised stay the error the operator sees (a throw from
+      // `finally` would replace it), and after a successful `/Create` it is
+      // what lets a committed registration go on to its `/Run` verification.
+      //
+      // An authority loss is different: it is NOT about this directory. The
+      // default cleanup verifies mutation authority before touching anything,
+      // and a revoked lease must reach the lease-holding caller whatever step
+      // observed it - deliberately even when it replaces a `/Create` failure,
+      // since "may not mutate at all" is the more fundamental fact of the
+      // two. After `/Create` succeeded it is post-registration, and every
+      // post-registration throw is marked (`didServiceRegistrationCommit`),
+      // by reference so the error keeps its identity.
+      if (!isServiceMutationAuthorityError(cause)) {
+        createCliLogger(options.label.environment).debug(
+          "Failed to remove the staged task definition; leaving it behind",
+          { task: taskName, cause: describeCause(cause) },
+        );
+      } else {
+        throw created ? markRegistrationCommitted(cause) : cause;
+      }
     }
   }
   // Registration is also the recovery launch. Verify this exact `/Run` so
@@ -405,12 +426,23 @@ async function runTaskAndVerifyStart(
   // baseline, or a post-baseline bootstrap marker). On none, surface the
   // task's Last Run Result so Retry can escalate to a task rewrite.
   const deadline = Date.now() + startEvidenceDeps.verifyTimeoutMs;
-  while (Date.now() < deadline) {
-    const evidence = await evidenceReader.collect(label.environment);
-    if (evidence !== null) {
-      return;
+  try {
+    while (Date.now() < deadline) {
+      const evidence = await evidenceReader.collect(label.environment);
+      if (evidence !== null) {
+        return;
+      }
+      await startEvidenceDeps.sleep(startEvidenceDeps.verifyPollMs);
     }
-    await startEvidenceDeps.sleep(startEvidenceDeps.verifyPollMs);
+  } catch (cause) {
+    // Everything after an accepted `/Run` is post-registration, the evidence
+    // reader's own failures included (a `host.log` handle that cannot be
+    // read or closed rejects straight out of `collect`). Marked by reference
+    // so the error keeps its identity; without this a lease-holding caller
+    // would cancel the lease while the scheduler may already be launching
+    // the supervisor - the exact gap the constructed timeout below closes
+    // for its own case.
+    throw markRegistrationCommitted(cause);
   }
   const lastRunResult = await readTaskLastRunResult(taskName, run);
   throw cliError({

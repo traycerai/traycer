@@ -103,10 +103,24 @@ export type CompetingRegistrationRetirement =
       readonly manifestRemoved: boolean;
       readonly agentStartRequested: boolean;
     }
+  // A failed repair still reports what it DID: `bootedOut` / `manifestRemoved`
+  // are the halves that succeeded before or beside the one that failed, and
+  // together with `bootoutIndeterminate` they decide whether the
+  // registration may have been touched at all. `bootoutFailed` alone cannot:
+  // it is also set when no bootout was attempted (an owner that could not be
+  // read), and when one WAS attempted and failed, "not confirmed" is not
+  // "did not happen" - a `bootout --wait` timeout kills the waiter after
+  // launchd may already have accepted the eviction. So a bootout that was
+  // attempted and did not confirm is `bootoutIndeterminate`, and counts as
+  // a possible removal; one never attempted, beside a manifest that was
+  // already absent, provably removed nothing.
   | {
       readonly kind: "retire-failed";
       readonly bootoutFailed: boolean;
       readonly manifestRemovalFailed: boolean;
+      readonly bootedOut: boolean;
+      readonly bootoutIndeterminate: boolean;
+      readonly manifestRemoved: boolean;
     };
 
 // Outcome of `ServiceController.takeoverDesktopRegistration`.
@@ -374,20 +388,32 @@ export function withCliInvocationRecord(
     // The competing-registration repair removes THIS label's registration -
     // the one a live record describes - on macOS when Desktop owns host
     // registration, so it runs inside the same transaction as an uninstall.
-    // `removed` is decided from the result: `retired` and `retire-failed`
-    // both mean the registration was taken away wholly or in part (a
-    // half-retired one is as gone for the record's purposes as a deleted
-    // one); every other outcome touched nothing and leaves the record alone.
-    // Desktop's own `<label>.agent` registration is never what the host
-    // recovers or records, so `takeoverDesktopRegistration` stays outside.
+    // `removed` is decided from what the result says HAPPENED or MAY have
+    // happened, not from its kind alone: `retired` always took the
+    // registration away, and a `retire-failed` did so when one of its
+    // halves succeeded (a half-retired registration is as gone for the
+    // record's purposes as a deleted one) or when the eviction was attempted
+    // and never confirmed - the record must not outlive a bootout launchd
+    // may have accepted. Only a repair that provably touched nothing (no
+    // bootout attempted, manifest already absent) leaves the record alone,
+    // since invalidating a valid record for it would send every later
+    // maintenance run through OS recovery for an intact service. Every
+    // other outcome touched nothing and leaves the record alone. Desktop's
+    // own `<label>.agent` registration is never what the host recovers or
+    // records, so `takeoverDesktopRegistration` stays outside.
     retireCompetingRegistration: (label) =>
       runServiceRemovalWithInvocationRecord<CompetingRegistrationRetirement>({
         environment: label.environment,
         hostHomeDir: hostHomeDir(label.environment),
         serviceLabel: label.id,
+        operation: "retired",
         remove: () => controller.retireCompetingRegistration(label),
         removed: (result) =>
-          result.kind === "retired" || result.kind === "retire-failed",
+          result.kind === "retired" ||
+          (result.kind === "retire-failed" &&
+            (result.bootedOut ||
+              result.bootoutIndeterminate ||
+              result.manifestRemoved)),
         waitMs: CLI_INVOCATION_TXN_WAIT_MS,
         pollIntervalMs: CLI_INVOCATION_TXN_POLL_MS,
       }),

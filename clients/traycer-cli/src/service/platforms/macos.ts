@@ -1393,6 +1393,10 @@ async function retireCompetingRegistration(
   const logger = createCliLogger(label.environment);
   let bootedOut = false;
   let bootoutFailed = false;
+  // Attempted and not confirmed - distinct from `bootoutFailed`, which is
+  // also set below when NO bootout runs. The record decorator reads this as
+  // "the registration may be gone" (see `CompetingRegistrationRetirement`).
+  let bootoutIndeterminate = false;
   if (ownership === null) {
     // Deliberately no bootout on an unknown owner. The one thing that would
     // make eviction catastrophic here is the CLI label BEING Desktop's
@@ -1434,6 +1438,7 @@ async function retireCompetingRegistration(
       // evicted, but nothing failed either.
       if (!isBenignBootoutFailure(cause)) {
         bootoutFailed = true;
+        bootoutIndeterminate = true;
         // Deliberately does NOT claim the competing host is still running.
         // With `--wait` the likeliest way here is the timeout, and the
         // timeout kills `launchctl` - the waiter - not the job: launchd
@@ -1539,7 +1544,14 @@ async function retireCompetingRegistration(
   // manifest is already gone, which is now a NORMAL steady state because
   // Desktop's launch repair removes manifests without booting out.
   if (bootoutFailed || manifestRemovalFailed) {
-    return { kind: "retire-failed", bootoutFailed, manifestRemovalFailed };
+    return {
+      kind: "retire-failed",
+      bootoutFailed,
+      manifestRemovalFailed,
+      bootedOut,
+      bootoutIndeterminate,
+      manifestRemoved,
+    };
   }
   if (!bootedOut && !manifestRemoved) {
     return { kind: "nothing-to-retire" };

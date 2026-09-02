@@ -245,11 +245,13 @@ describe("withCliInvocationRecord retireCompetingRegistration wiring", () => {
     );
   });
 
-  it("classifies retired and retire-failed as removed - every other outcome as untouched", async () => {
-    // `retired` and `retire-failed` both mean the registration was taken
-    // away wholly or in part, so the record must be invalidated exactly as
-    // an uninstall does; every other outcome touched nothing on the OS side
-    // and must leave the record alone. This drives the captured `removed`
+  it("classifies retired and a retire-failed that removed something as removed - every other outcome as untouched", async () => {
+    // `retired` and a `retire-failed` with a successful half both mean the
+    // registration was taken away wholly or in part, so the record must be
+    // invalidated exactly as an uninstall does; a `retire-failed` whose
+    // halves both did nothing (a failed bootout on an already-absent
+    // manifest) and every other outcome touched nothing on the OS side and
+    // must leave the record alone. This drives the captured `removed`
     // predicate directly against all five `CompetingRegistrationRetirement`
     // kinds, rather than relying on whichever one kind a single call
     // happens to produce - the case ablation D targets specifically
@@ -274,13 +276,54 @@ describe("withCliInvocationRecord retireCompetingRegistration wiring", () => {
         agentStartRequested: false,
       }),
     ).toBe(true);
+    // Half-retired: the bootout failed but the manifest went.
     expect(
       removed({
         kind: "retire-failed",
         bootoutFailed: true,
         manifestRemovalFailed: false,
+        bootedOut: false,
+        bootoutIndeterminate: false,
+        manifestRemoved: true,
       }),
     ).toBe(true);
+    // The other half: evicted, but the manifest could not be removed.
+    expect(
+      removed({
+        kind: "retire-failed",
+        bootoutFailed: false,
+        manifestRemovalFailed: true,
+        bootedOut: true,
+        bootoutIndeterminate: false,
+        manifestRemoved: false,
+      }),
+    ).toBe(true);
+    // Attempted and unconfirmed: a `bootout --wait` timeout kills the waiter
+    // after launchd may already have accepted the eviction, so "not
+    // confirmed" is not "did not happen" and the record must not outlive it.
+    expect(
+      removed({
+        kind: "retire-failed",
+        bootoutFailed: true,
+        manifestRemovalFailed: false,
+        bootedOut: false,
+        bootoutIndeterminate: true,
+        manifestRemoved: false,
+      }),
+    ).toBe(true);
+    // Nothing happened: no bootout was attempted (the owner could not be
+    // read) and the manifest was already absent, so the registration is
+    // exactly as it was, and the record with it.
+    expect(
+      removed({
+        kind: "retire-failed",
+        bootoutFailed: true,
+        manifestRemovalFailed: false,
+        bootedOut: false,
+        bootoutIndeterminate: false,
+        manifestRemoved: false,
+      }),
+    ).toBe(false);
     expect(removed({ kind: "not-applicable" })).toBe(false);
     expect(removed({ kind: "nothing-to-retire" })).toBe(false);
     expect(

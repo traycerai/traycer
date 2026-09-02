@@ -80,8 +80,9 @@ import {
  * identity recycled) means that contender crashed: the host may recover
  * from the OS and persist if no live contender remains, and still must
  * not unlink txn files. Unparseable markers fall back to
- * {@link CLI_INVOCATION_TXN_ABANDON_AFTER_MS} with a symmetric clock
- * window.
+ * {@link CLI_INVOCATION_TXN_ABANDON_AFTER_MS} measured as ELAPSED age
+ * only; a marker stamped in the future stays live
+ * ({@link cliInvocationTransactionAbandonedByAge}).
  *
  * CLI election (host does not implement this): observe existing
  * markers and elect AROUND dead **unique** files - they are not
@@ -463,7 +464,7 @@ export interface CliInvocationLifecycle {
   readonly at: string;
   /**
    * Causal evidence for discharging a legacy exact `cli-invocation.txn`.
-   * See {@link CliInvocationLegacyMarkerEvidence} for the three states and
+   * See {@link CliInvocationLegacyMarkerEvidence} for the four states and
    * {@link cliInvocationLifecycleSupersedesLegacyExactMarker} for how each
    * one decides.
    */
@@ -474,7 +475,7 @@ export interface CliInvocationLifecycle {
  * What the confirming transaction saw of the legacy exact marker when it
  * acquired, as written into the lifecycle it committed.
  *
- * Three states, because "no digest" means two different things:
+ * Four states, because "no digest" means three different things:
  *
  *   - `digest`: the {@link cliInvocationTransactionMarkerDigest} of the
  *     abandoned legacy marker that was present. A host matching it against
@@ -544,17 +545,35 @@ export function serializeCliInvocationLifecycle(
       ...(evidence.kind === "unknown"
         ? {}
         : {
-            supersededLegacyMarkerDigest:
-              evidence.kind === "digest"
-                ? evidence.digest
-                : evidence.kind === "unreadable"
-                  ? LEGACY_MARKER_UNREADABLE_WIRE
-                  : null,
+            supersededLegacyMarkerDigest: recordedEvidenceWireValue(evidence),
           }),
     },
     null,
     2,
   )}\n`;
+}
+
+/**
+ * The wire value of a RECORDED evidence state. Exhaustive by construction: a
+ * new evidence kind fails to compile here rather than falling through to the
+ * `null` that means "saw no marker", which is the one value that would let a
+ * later host discharge on a claim nobody made.
+ */
+function recordedEvidenceWireValue(
+  evidence: Exclude<CliInvocationLegacyMarkerEvidence, { kind: "unknown" }>,
+): string | null {
+  switch (evidence.kind) {
+    case "digest":
+      return evidence.digest;
+    case "unreadable":
+      return LEGACY_MARKER_UNREADABLE_WIRE;
+    case "none":
+      return null;
+    default: {
+      const unhandled: never = evidence;
+      return unhandled;
+    }
+  }
 }
 
 export function parseCliInvocationLifecycle(
@@ -720,23 +739,47 @@ export function cliInvocationLifecycleSupersedesLegacyExactMarker(
   lifecycle: CliInvocationLifecycle,
 ): boolean {
   const evidence = lifecycle.legacyMarkerEvidence;
-  if (evidence.kind === "digest") return evidence.digest === marker.digest;
-  if (evidence.kind === "none" || evidence.kind === "unreadable") return false;
-  return cliInvocationLifecycleNewerThanLegacyExactMarker(
-    marker.parsed,
-    lifecycle,
-  );
+  // Exhaustive on purpose: the timestamp fallback is the fail-OPEN arm, so a
+  // new evidence kind must be placed deliberately rather than inherit it.
+  switch (evidence.kind) {
+    case "digest":
+      return evidence.digest === marker.digest;
+    case "none":
+    case "unreadable":
+      return false;
+    case "unknown":
+      return cliInvocationLifecycleNewerThanLegacyExactMarker(
+        marker.parsed,
+        lifecycle,
+      );
+    default: {
+      const unhandled: never = evidence;
+      return unhandled;
+    }
+  }
 }
 
 /**
- * Symmetric age window for unparseable / identity-less markers.
+ * Elapsed-age window for unparseable / identity-less markers.
  * A parsed still-alive owner is never abandoned by this function.
+ *
+ * ONE-SIDED on purpose. A marker stamped in the future - the wall clock was
+ * stepped back after it was written - is not old, it is unreadable in time,
+ * and the callers that reach this function are exactly the ones that could
+ * not verify the owner's liveness any other way (an unreadable file, an
+ * unparseable payload, an identity-less owner). Ageing such a marker out on
+ * the absolute distance from `now` would let a second CLI elect around an
+ * owner that is still running and mutate the OS registration beside it,
+ * which is the one thing the transaction exists to prevent. A future stamp
+ * therefore stays LIVE until the clock catches up with it plus the window;
+ * the cost is a wait that reports the marker by path, the alternative is two
+ * writers.
  */
 export function cliInvocationTransactionAbandonedByAge(
   startedAtMs: number,
   nowMs: number,
 ): boolean {
-  return Math.abs(nowMs - startedAtMs) >= CLI_INVOCATION_TXN_ABANDON_AFTER_MS;
+  return nowMs - startedAtMs >= CLI_INVOCATION_TXN_ABANDON_AFTER_MS;
 }
 
 export function serializeCliInvocationTransactionMarker(

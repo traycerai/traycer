@@ -462,7 +462,7 @@ describe("electCliInvocationTransactionOwnerBasename", () => {
 });
 
 describe("cliInvocationTransactionAbandonedByAge", () => {
-  it("uses a symmetric window around now", () => {
+  it("ages a marker out by elapsed time only - a future stamp stays live", () => {
     const now = 1_000_000;
     expect(
       cliInvocationTransactionAbandonedByAge(
@@ -472,16 +472,21 @@ describe("cliInvocationTransactionAbandonedByAge", () => {
     ).toBe(true);
     expect(
       cliInvocationTransactionAbandonedByAge(
-        now + CLI_INVOCATION_TXN_ABANDON_AFTER_MS,
-        now,
-      ),
-    ).toBe(true);
-    expect(
-      cliInvocationTransactionAbandonedByAge(
         now - CLI_INVOCATION_TXN_ABANDON_AFTER_MS + 1,
         now,
       ),
     ).toBe(false);
+    // A clock stepped back after the marker was written: the marker is not
+    // old, and the observers that reach this window are the ones that could
+    // not verify the owner's liveness, so it must keep blocking rather than
+    // let a second writer elect around a running owner.
+    expect(
+      cliInvocationTransactionAbandonedByAge(
+        now + CLI_INVOCATION_TXN_ABANDON_AFTER_MS,
+        now,
+      ),
+    ).toBe(false);
+    expect(cliInvocationTransactionAbandonedByAge(now + 1, now)).toBe(false);
   });
 });
 

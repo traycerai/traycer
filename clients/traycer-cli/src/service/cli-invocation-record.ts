@@ -234,6 +234,14 @@ export interface ServiceUninstallRecordOptions extends ServiceRemovalRecordConte
 export interface ServiceRemovalRecordOptions<
   T,
 > extends ServiceRemovalRecordContext {
+  /**
+   * What `remove` did to the service, as the operator reads it in a failure
+   * message: the uninstall path is `uninstalled`, the competing-registration
+   * repair is `retired`. Every message below describes a service that was
+   * already taken away when the record step failed, so the noun has to be
+   * the operation that took it.
+   */
+  readonly operation: "uninstalled" | "retired";
   /** The OS operation, run inside the transaction. */
   readonly remove: () => Promise<T>;
   /**
@@ -609,6 +617,7 @@ export async function runServiceUninstallWithInvocationRecord(
     environment: options.environment,
     hostHomeDir: options.hostHomeDir,
     serviceLabel: options.serviceLabel,
+    operation: "uninstalled",
     remove: options.uninstall,
     removed: () => true,
     waitMs: options.waitMs,
@@ -727,7 +736,7 @@ export async function runServiceRemovalWithInvocationRecord<T>(
     await markStaleKeepLive(held);
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_UNINSTALL_FAILED,
-      message: `service '${options.serviceLabel}' was uninstalled, but its CLI invocation record could not be removed; it was marked stale so it cannot be preferred`,
+      message: `service '${options.serviceLabel}' was ${options.operation}, but its CLI invocation record could not be removed; it was marked stale so it cannot be preferred`,
       details: { label: options.serviceLabel, phase: "record-remove" },
       exitCode: 1,
     });
@@ -760,7 +769,7 @@ export async function runServiceRemovalWithInvocationRecord<T>(
     await markStaleKeepLive(held);
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_UNINSTALL_FAILED,
-      message: `service '${options.serviceLabel}' was uninstalled, but the lifecycle generation could not be written; a stale marker was left so the cached invocation cannot be replayed`,
+      message: `service '${options.serviceLabel}' was ${options.operation}, but the lifecycle generation could not be written; a stale marker was left so the cached invocation cannot be replayed`,
       details: { label: options.serviceLabel, phase: "lifecycle" },
       exitCode: 1,
     });
@@ -773,7 +782,7 @@ export async function runServiceRemovalWithInvocationRecord<T>(
   if (release === "retained" || residue.length > 0) {
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_UNINSTALL_FAILED,
-      message: `service '${options.serviceLabel}' was uninstalled and its CLI invocation record removed, but a transaction marker could not be removed; the host re-reads the OS registration until a later service command clears it`,
+      message: `service '${options.serviceLabel}' was ${options.operation} and its CLI invocation record removed, but a transaction marker could not be removed; the host re-reads the OS registration until a later service command clears it`,
       details: {
         label: options.serviceLabel,
         phase: "release",

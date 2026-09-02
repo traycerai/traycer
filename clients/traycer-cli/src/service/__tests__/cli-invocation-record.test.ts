@@ -1763,6 +1763,7 @@ describe("runServiceRemovalWithInvocationRecord (generic)", () => {
       environment: "production",
       hostHomeDir: hostHome,
       serviceLabel: LABEL,
+      operation: "retired",
       remove: async () => ({ took: true }),
       removed: (r) => r.took,
       waitMs: 2_000,
@@ -1793,6 +1794,7 @@ describe("runServiceRemovalWithInvocationRecord (generic)", () => {
       environment: "production",
       hostHomeDir: hostHome,
       serviceLabel: LABEL,
+      operation: "retired",
       remove: async () => ({ took: false }),
       removed: (r) => r.took,
       waitMs: 2_000,
@@ -1805,6 +1807,39 @@ describe("runServiceRemovalWithInvocationRecord (generic)", () => {
       beforeLifecycle?.generation,
     );
     expect(await transactionMarkerNames()).toEqual([]);
+  });
+
+  it("names the operation in a release-phase failure - a retirement reads 'was retired', never 'was uninstalled'", async () => {
+    await runServiceRegistrationWithInvocationRecord({
+      environment: "production",
+      hostHomeDir: hostHome,
+      waitMs: 2_000,
+      pollIntervalMs: 20,
+      serviceLabel: LABEL,
+      cli: npmCli(),
+      register: async () => undefined,
+    });
+    await expect(
+      runServiceRemovalWithInvocationRecord<void>({
+        environment: "production",
+        hostHomeDir: hostHome,
+        waitMs: 2_000,
+        pollIntervalMs: 20,
+        serviceLabel: LABEL,
+        operation: "retired",
+        remove: async () => {
+          mocks.failRmPath = join(
+            cliInvocationStateDir(hostHome),
+            (await readSoleTransactionMarker()).name,
+          );
+        },
+        removed: () => true,
+      }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_UNINSTALL_FAILED,
+      message: expect.stringContaining(`'${LABEL}' was retired`),
+      details: { phase: "release", ownMarkerRetained: true },
+    });
   });
 
   it("marks stale and removes the own-label record when remove() throws", async () => {
@@ -1822,6 +1857,7 @@ describe("runServiceRemovalWithInvocationRecord (generic)", () => {
         environment: "production",
         hostHomeDir: hostHome,
         serviceLabel: LABEL,
+        operation: "uninstalled",
         remove: async () => {
           throw new Error("indeterminate-removal");
         },
