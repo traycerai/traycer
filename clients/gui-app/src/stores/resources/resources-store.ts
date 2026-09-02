@@ -194,7 +194,8 @@ function processDescriptorEqual(
   b: ResourceProcessSnapshotWireV15["descriptor"],
 ): boolean {
   if (a === null || b === null) return a === b;
-  return a.family === b.family && a.runtime === b.runtime && a.role === b.role;
+  // `family` is a literal type on both sides; comparing it is always true.
+  return a.runtime === b.runtime && a.role === b.role;
 }
 
 function processesEqual(

@@ -167,6 +167,7 @@ import {
   resourceMemoryBytes,
   resourceMemoryLabel,
   selectResourceMemoryMetric,
+  type ResourceMemoryProjection,
   sumCompleteMemoryBytes,
   UNAVAILABLE_DASH,
   type ResourceMemoryMetric,
@@ -1267,24 +1268,18 @@ function ResourceMonitorPanel(props: {
   // A string: memoizing it would buy no referential stability, and every
   // consumer below compares it by value.
   const memoryMetric = selectResourceMemoryMetric(
-    {
-      app: projection.app,
-      hostTree: supportsHostTree ? projection.hostTree : null,
-      other: supportsHostTree ? projection.other : null,
-      restricted: projection.restricted,
-      owners: projection.owners,
-    },
+    hostTreeVisibleProjection(projection, supportsHostTree),
     desktopApp !== null,
   );
   const summary = useMemo(
     () =>
-      combineHeadlineResourceSummary(
-        supportsHostTree ? projection.hostTree : null,
-        projection.app,
-        projection.owners,
+      combineHeadlineResourceSummary({
+        hostTree: supportsHostTree ? projection.hostTree : null,
+        app: projection.app,
+        owners: projection.owners,
         desktopApp,
         memoryMetric,
-      ),
+      }),
     [
       desktopApp,
       projection.app,
@@ -1445,20 +1440,6 @@ function ResourceMonitorPanel(props: {
     if (opened) props.onClose();
   };
 
-  const memorySharePercent =
-    projection.app !== null &&
-    projection.app.hostTotalMemoryBytes > 0 &&
-    summary !== null &&
-    summary.memoryBytes !== null
-      ? (summary.memoryBytes / projection.app.hostTotalMemoryBytes) * 100
-      : null;
-  // Only the bar geometry and its ARIA value are bounded; the text above
-  // reports the raw ratio, including a >100% one that exposes overlap.
-  const clampedMemorySharePercent =
-    memorySharePercent === null
-      ? null
-      : Math.min(100, Math.max(0, memorySharePercent));
-
   const dismissSortMenuFromPanelClick = (
     event: PointerEvent<HTMLDivElement>,
   ): void => {
@@ -1485,44 +1466,7 @@ function ResourceMonitorPanel(props: {
   const handlePanelKeyDown = (
     event: ReactKeyboardEvent<HTMLDivElement>,
   ): void => {
-    if (!(event.target instanceof HTMLElement)) return;
-    const target = event.target;
-    const isSearch = target.hasAttribute(RESOURCE_SEARCH_ATTRIBUTE);
-    const navigationKey = target.getAttribute(
-      RESOURCE_NAVIGATION_KEY_ATTRIBUTE,
-    );
-    if (isSearch || navigationKey !== null) {
-      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-        if (
-          moveResourceNavigationFocus(
-            panelRef.current ?? event.currentTarget,
-            target,
-            event.key === "ArrowDown" ? 1 : -1,
-          )
-        ) {
-          event.preventDefault();
-          event.stopPropagation();
-        }
-        return;
-      }
-    }
-    if (navigationKey !== null && event.key === "Enter") {
-      event.preventDefault();
-      event.stopPropagation();
-      target.click();
-      return;
-    }
-    if (
-      navigationKey !== null &&
-      (event.key === "Delete" || event.key === "Backspace") &&
-      armResourceRowAction(
-        panelRef.current ?? event.currentTarget,
-        navigationKey,
-      )
-    ) {
-      event.preventDefault();
-      event.stopPropagation();
-    }
+    handleResourcePanelKeyDown(event, panelRef.current);
   };
 
   return (
@@ -1671,36 +1615,9 @@ function ResourceMonitorPanel(props: {
                   />
                 }
               />
-              <MetricBlock
-                label="RAM share"
-                value={
-                  memorySharePercent === null
-                    ? null
-                    : formatCpuPercent(memorySharePercent)
-                }
-                detail={null}
-              />
+              <HostRamShareMetric app={projection.app} summary={summary} />
             </div>
-            {clampedMemorySharePercent === null ? null : (
-              <div
-                className="mt-3 h-1 w-full overflow-hidden rounded-full bg-foreground/6"
-                role="progressbar"
-                aria-label="Tracked RAM share"
-                aria-valuenow={Math.round(clampedMemorySharePercent)}
-                aria-valuemin={0}
-                aria-valuemax={100}
-              >
-                <div
-                  className={cn(
-                    "h-full rounded-full transition-[width] duration-300",
-                    memoryShareBarClass(clampedMemorySharePercent),
-                  )}
-                  style={{
-                    width: `${clampedMemorySharePercent}%`,
-                  }}
-                />
-              </div>
-            )}
+            <HostRamShareBar app={projection.app} summary={summary} />
           </>
         )}
       </div>
@@ -2126,13 +2043,122 @@ function resourcesSubscribeV12Supported(
   return version === null || (version.major === 1 && version.minor >= 2);
 }
 
-function combineHeadlineResourceSummary(
-  hostTree: HostTreeResourceSnapshotWireV15 | null,
+function hostTreeVisibleProjection(
+  projection: GlobalResourceProjection,
+  supportsHostTree: boolean,
+): ResourceMemoryProjection {
+  return {
+    app: projection.app,
+    hostTree: supportsHostTree ? projection.hostTree : null,
+    other: supportsHostTree ? projection.other : null,
+    restricted: projection.restricted,
+    owners: projection.owners,
+  };
+}
+
+function hostMemorySharePercent(
   app: AppResourceUsage | null,
-  owners: readonly OwnerResourceSnapshotWireV15[],
-  desktopApp: DesktopAppResourceUsage | null,
-  memoryMetric: ResourceMemoryMetric,
-): HeadlineResourceSummary | null {
+  summary: HeadlineResourceSummary | null,
+): number | null {
+  if (app === null || app.hostTotalMemoryBytes <= 0) return null;
+  if (summary === null || summary.memoryBytes === null) return null;
+  return (summary.memoryBytes / app.hostTotalMemoryBytes) * 100;
+}
+
+function HostRamShareMetric(props: {
+  readonly app: AppResourceUsage | null;
+  readonly summary: HeadlineResourceSummary | null;
+}) {
+  const percent = hostMemorySharePercent(props.app, props.summary);
+  return (
+    <MetricBlock
+      label="RAM share"
+      value={percent === null ? null : formatCpuPercent(percent)}
+      detail={null}
+    />
+  );
+}
+
+function HostRamShareBar(props: {
+  readonly app: AppResourceUsage | null;
+  readonly summary: HeadlineResourceSummary | null;
+}) {
+  const percent = hostMemorySharePercent(props.app, props.summary);
+  if (percent === null) return null;
+  // Only the bar geometry and its ARIA value are bounded; the text above
+  // reports the raw ratio, including a >100% one that exposes overlap.
+  const clamped = Math.min(100, Math.max(0, percent));
+  return (
+    <div
+      className="mt-3 h-1 w-full overflow-hidden rounded-full bg-foreground/6"
+      role="progressbar"
+      aria-label="Tracked RAM share"
+      aria-valuenow={Math.round(clamped)}
+      aria-valuemin={0}
+      aria-valuemax={100}
+    >
+      <div
+        className={cn(
+          "h-full rounded-full transition-[width] duration-300",
+          memoryShareBarClass(clamped),
+        )}
+        style={{ width: `${clamped}%` }}
+      />
+    </div>
+  );
+}
+
+// Module scope on purpose: the panel's keyboard routing is pure DOM work over
+// the event and the panel element, and keeping it inline pushed the component
+// past the complexity budget.
+function handleResourcePanelKeyDown(
+  event: ReactKeyboardEvent<HTMLDivElement>,
+  panel: HTMLDivElement | null,
+): void {
+  if (!(event.target instanceof HTMLElement)) return;
+  const target = event.target;
+  const isSearch = target.hasAttribute(RESOURCE_SEARCH_ATTRIBUTE);
+  const navigationKey = target.getAttribute(RESOURCE_NAVIGATION_KEY_ATTRIBUTE);
+  const root = panel ?? event.currentTarget;
+  if (isSearch || navigationKey !== null) {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      if (
+        moveResourceNavigationFocus(
+          root,
+          target,
+          event.key === "ArrowDown" ? 1 : -1,
+        )
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+      return;
+    }
+  }
+  if (navigationKey !== null && event.key === "Enter") {
+    event.preventDefault();
+    event.stopPropagation();
+    target.click();
+    return;
+  }
+  if (
+    navigationKey !== null &&
+    (event.key === "Delete" || event.key === "Backspace") &&
+    armResourceRowAction(root, navigationKey)
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+}
+
+function combineHeadlineResourceSummary(input: {
+  readonly hostTree: HostTreeResourceSnapshotWireV15 | null;
+  readonly app: AppResourceUsage | null;
+  readonly owners: readonly OwnerResourceSnapshotWireV15[];
+  readonly desktopApp: DesktopAppResourceUsage | null;
+  readonly memoryMetric: ResourceMemoryMetric;
+}): HeadlineResourceSummary | null {
+  const { hostTree, app, owners, desktopApp, memoryMetric } = input;
   if (
     hostTree === null &&
     app === null &&
@@ -2308,13 +2334,13 @@ function OtherResourceSection(props: {
   // need; the per-root breakdown (provider servers, probes, misc children)
   // is inspect-on-demand, matching collapsed-by-default owner trees.
   const [expanded, setExpanded] = useState(false);
-  const allProcessRows = buildProcessRows(
-    props.other.processes,
-    props.expandedProcesses,
-    props.other,
-    props.sortOption,
-    props.memoryMetric,
-  );
+  const allProcessRows = buildProcessRows({
+    processes: props.other.processes,
+    expandedKeys: props.expandedProcesses,
+    fallback: props.other,
+    sortOption: props.sortOption,
+    memoryMetric: props.memoryMetric,
+  });
   const sectionMatchesSearch = matchesResourceSearch(props.searchQuery, [
     "Other",
   ]);
@@ -2899,13 +2925,13 @@ function OwnerTreeRow(props: {
     props.liveOwnerTitleByKey.get(rowKey) ?? null,
   );
   const shells = props.row.shells;
-  const processRows = buildProcessRows(
-    props.row.snapshot.processes,
-    props.expandedProcesses,
-    props.row.snapshot,
-    props.sortOption,
-    props.memoryMetric,
-  );
+  const processRows = buildProcessRows({
+    processes: props.row.snapshot.processes,
+    expandedKeys: props.expandedProcesses,
+    fallback: props.row.snapshot,
+    sortOption: props.sortOption,
+    memoryMetric: props.memoryMetric,
+  });
   const processSearch = buildOwnerProcessSearchProjection({
     row: props.row,
     label,
@@ -3488,13 +3514,13 @@ function buildOwnerRow(
   const location = input.canvasIndex.locationByOwner.get(key) ?? null;
   const closedTile = input.canvasIndex.closedTileByOwner.get(key) ?? null;
   const record = input.recordByOwner.get(key) ?? null;
-  const processRows = buildProcessRows(
-    snapshot.processes,
-    NO_EXPANDED_PROCESSES,
-    snapshot,
-    input.sortOption,
-    input.memoryMetric,
-  );
+  const processRows = buildProcessRows({
+    processes: snapshot.processes,
+    expandedKeys: NO_EXPANDED_PROCESSES,
+    fallback: snapshot,
+    sortOption: input.sortOption,
+    memoryMetric: input.memoryMetric,
+  });
   return {
     snapshot,
     label: ownerLabel(
@@ -5054,15 +5080,16 @@ function processRowComparator(
   }
 }
 
-function buildProcessRows(
-  processes: readonly ResourceProcessSnapshotWireV15[],
-  expandedKeys: ReadonlySet<string>,
+function buildProcessRows(input: {
+  readonly processes: readonly ResourceProcessSnapshotWireV15[];
+  readonly expandedKeys: ReadonlySet<string>;
   // Every call site passes a whole `@1.5` aggregate, so name the reading shape
   // the metric selector already takes rather than a narrower structural echo.
-  fallback: ResourceMemoryUsage & { readonly cpuPercent: number },
-  sortOption: ResourceSortOption,
-  memoryMetric: ResourceMemoryMetric,
-): OwnerProcessRows {
+  readonly fallback: ResourceMemoryUsage & { readonly cpuPercent: number };
+  readonly sortOption: ResourceSortOption;
+  readonly memoryMetric: ResourceMemoryMetric;
+}): OwnerProcessRows {
+  const { processes, expandedKeys, fallback, sortOption, memoryMetric } = input;
   const fallbackMemoryBytes = resourceMemoryBytes(fallback, memoryMetric);
   if (processes.length === 0) {
     return {
