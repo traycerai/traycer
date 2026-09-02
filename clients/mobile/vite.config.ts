@@ -7,6 +7,7 @@ import tailwindcss from "@tailwindcss/vite";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import { defineConfig, type Connect, type Plugin, type UserConfig } from "vite";
+import { pdfjsAssets } from "../gui-app/vite/pdfjs-assets";
 import { sanitizeDevDesktopSlot } from "../shared/platform/dev-desktop-slot";
 import { devRelayBaseUrlFromEnv } from "../shared/platform/dev-backend-urls";
 import {
@@ -382,6 +383,7 @@ export default defineConfig(async (): Promise<UserConfig> => {
       }),
       react(),
       tailwindcss(),
+      pdfjsAssets(),
       babel({ presets: [reactCompilerPreset()] }).then((plugin) => ({
         ...plugin,
         enforce: "post" as const,

@@ -37,6 +37,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { appLogger } from "@/lib/logger";
+import { pdfDataFileUrls } from "./pdf-asset-urls";
 import { PdfOutlinePanel, type PdfOutlineEntry } from "./pdf-outline-panel";
 import { PdfPreviewToolbar } from "./pdf-preview-toolbar";
 
@@ -167,7 +168,10 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
       const bytes = await response.arrayBuffer();
       if (isCancelled()) return;
 
-      loadingTask = getDocument({ data: bytes });
+      // Bytes come from us; the data files come from the bundle. Both halves
+      // are needed - without the second, CID fonts and scanned images fail
+      // silently (see `pdf-asset-urls.ts`).
+      loadingTask = getDocument({ data: bytes, ...pdfDataFileUrls() });
       const pdfDocument = await loadingTask.promise;
       if (isCancelled()) {
         void pdfDocument.destroy();
