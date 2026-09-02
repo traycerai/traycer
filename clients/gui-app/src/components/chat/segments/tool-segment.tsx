@@ -697,9 +697,12 @@ function A2ASendToolSegment(
   };
 
   const receiver = (
-    <span className="flex min-w-0 flex-1 items-center gap-1.5 text-ui-sm">
-      <span className="min-w-0 truncate">
-        <span className="text-muted-foreground">to agent </span>
+    // flex-wrap lets the badge drop to a second line on narrow (mobile)
+    // widths; the name group truncates last, so the receiver stays visible
+    // and tappable instead of collapsing to "to agent …".
+    <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-1 text-ui-sm">
+      <span className="flex min-w-0 items-center gap-1">
+        <span className="shrink-0 text-muted-foreground">to agent</span>
         <AgentHeaderLink
           name={receiverName}
           onOpen={openTarget !== null ? openReceiverTab : null}

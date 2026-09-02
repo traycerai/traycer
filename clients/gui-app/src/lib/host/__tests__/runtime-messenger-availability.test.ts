@@ -34,6 +34,7 @@ import { buildRuntimeHostMessenger } from "../host-messenger";
 // stays REAL, matching `stream-runtime.test.tsx`.
 const mocks = vi.hoisted(() => ({
   createRemoteHostTransport: vi.fn(),
+  planRestrictedReprobeAtForHost: vi.fn<() => number | null>(() => null),
 }));
 
 vi.mock(
@@ -46,6 +47,7 @@ vi.mock(
     return {
       ...actual,
       createRemoteHostTransport: mocks.createRemoteHostTransport,
+      planRestrictedReprobeAtForHost: mocks.planRestrictedReprobeAtForHost,
     };
   },
 );
@@ -200,6 +202,7 @@ function authorityFor(hostId: string, websocketUrl: string) {
 
 function harness(): {
   session: ControllableSession;
+  sessions: readonly ControllableSession[];
   recovered: string[];
   requestRemote: () => void;
   requestRemoteRaw: () => Promise<unknown>;
@@ -212,15 +215,24 @@ function harness(): {
   reset: () => void;
   dispose: () => void;
 } {
-  const session = controllableSession();
-  mocks.createRemoteHostTransport.mockImplementation(() => ({
-    session,
-    messenger: {
-      request: () => Promise.resolve({}),
-      requestWithResponseTimeout: () => Promise.resolve({}),
-    },
-    streamClient: {},
-  }));
+  const firstSession = controllableSession();
+  const sessions: ControllableSession[] = [firstSession];
+  let cachedSession: ControllableSession | null = firstSession;
+  mocks.createRemoteHostTransport.mockImplementation(() => {
+    if (cachedSession === null || cachedSession.isClosed()) {
+      cachedSession = controllableSession();
+      sessions.push(cachedSession);
+    }
+    const session = cachedSession;
+    return {
+      session,
+      messenger: {
+        request: () => Promise.resolve({}),
+        requestWithResponseTimeout: () => Promise.resolve({}),
+      },
+      streamClient: {},
+    };
+  });
   const recovered: string[] = [];
   const binding = buildRuntimeHostMessenger<HostRpcRegistry>({
     registry: hostRpcRegistry,
@@ -234,14 +246,22 @@ function harness(): {
     },
   });
   return {
-    session,
+    session: firstSession,
+    sessions,
     recovered,
     requestRemote: () => {
       void binding.messenger
         .request(
           "host.status",
           {},
-          authorityFor(REMOTE_HOST_ID, remoteEntry.websocketUrl ?? ""),
+          {
+            replayMustBeKeyed: false,
+            idempotencyKey: null,
+            authority: authorityFor(
+              REMOTE_HOST_ID,
+              remoteEntry.websocketUrl ?? "",
+            ),
+          },
         )
         .catch(() => undefined);
     },
@@ -249,32 +269,56 @@ function harness(): {
       binding.messenger.request(
         "host.status",
         {},
-        authorityFor(REMOTE_HOST_ID, remoteEntry.websocketUrl ?? ""),
+        {
+          replayMustBeKeyed: false,
+          idempotencyKey: null,
+          authority: authorityFor(
+            REMOTE_HOST_ID,
+            remoteEntry.websocketUrl ?? "",
+          ),
+        },
       ),
     requestRemoteWithSignal: (abortSignal: AbortSignal) =>
       binding.messenger.request(
         "host.status",
         {},
         {
-          ...authorityFor(REMOTE_HOST_ID, remoteEntry.websocketUrl ?? ""),
-          abortSignal,
+          replayMustBeKeyed: false,
+          idempotencyKey: null,
+          authority: {
+            ...authorityFor(REMOTE_HOST_ID, remoteEntry.websocketUrl ?? ""),
+            abortSignal,
+          },
         },
       ),
     requestRemoteWithTimeoutAndSignal: (abortSignal: AbortSignal) =>
       binding.messenger.requestWithResponseTimeout("host.status", {}, 5_000, {
-        ...authorityFor(REMOTE_HOST_ID, remoteEntry.websocketUrl ?? ""),
-        abortSignal,
+        replayMustBeKeyed: false,
+        idempotencyKey: null,
+        authority: {
+          ...authorityFor(REMOTE_HOST_ID, remoteEntry.websocketUrl ?? ""),
+          abortSignal,
+        },
       }),
     requestLocalWithSignal: (abortSignal: AbortSignal) =>
       binding.messenger.request(
         "host.status",
         {},
         {
-          ...authorityFor(LOCAL_HOST_ID, "ws://127.0.0.1:1/"),
-          abortSignal,
+          replayMustBeKeyed: false,
+          idempotencyKey: null,
+          authority: {
+            ...authorityFor(LOCAL_HOST_ID, "ws://127.0.0.1:1/"),
+            abortSignal,
+          },
         },
       ),
-    reset: () => binding.reset(),
+    reset: () => {
+      // Auth reset changes the cache identity even if the old shared session
+      // remains warm, so the next transport construction cannot adopt it.
+      cachedSession = null;
+      binding.reset();
+    },
     // The local branch dials for real; the dial itself is irrelevant here -
     // what matters is that taking this branch evicts the remote binding first.
     requestLocal: () => {
@@ -282,7 +326,11 @@ function harness(): {
         .request(
           "host.status",
           {},
-          authorityFor(LOCAL_HOST_ID, "ws://127.0.0.1:1/"),
+          {
+            replayMustBeKeyed: false,
+            idempotencyKey: null,
+            authority: authorityFor(LOCAL_HOST_ID, "ws://127.0.0.1:1/"),
+          },
         )
         .catch(() => undefined);
     },
@@ -519,18 +567,33 @@ describe("RuntimeHostMessenger availability forwarding", () => {
     h.dispose();
   });
 
-  it("reset() keeps a still-owed orphan attached", () => {
-    // reset() fires on every hostClient change event - including the
-    // host-bound promotion that lands while this binding's session is still
-    // dialing, which is precisely the window the orphan exists for. Teardown
-    // semantics here would drop the promoted host's first ready boundary.
+  it("reset() hard-detaches a still-owed orphan from the previous auth context", () => {
     const h = harness();
     h.requestRemote();
-    h.reset();
+    h.requestLocal();
     expect(h.session.availabilityListenerCount).toBe(1);
 
-    h.session.emitReady();
-    expect(h.recovered).toEqual([REMOTE_HOST_ID]);
+    h.reset();
+    expect(h.session.availabilityListenerCount).toBe(0);
+
+    h.session.fatal = incompatibleFatal();
+    h.session.emitClosed();
+    expect(h.recovered).toEqual([]);
+
+    h.dispose();
+  });
+
+  it("reset() hard-detaches the current binding from the previous auth context", () => {
+    const h = harness();
+    h.requestRemote();
+    expect(h.session.availabilityListenerCount).toBe(1);
+
+    h.reset();
+    expect(h.session.availabilityListenerCount).toBe(0);
+
+    h.session.fatal = incompatibleFatal();
+    h.session.emitClosed();
+    expect(h.recovered).toEqual([]);
 
     h.dispose();
   });
@@ -648,6 +711,22 @@ describe("RuntimeHostMessenger availability forwarding", () => {
     h.dispose();
   });
 
+  it("auth reset clears a terminal verdict before the next credential context requests", async () => {
+    const h = harness();
+    h.requestRemote();
+    h.session.fatal = incompatibleFatal();
+    h.session.emitClosed();
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(1);
+
+    h.reset();
+    await expect(h.requestRemoteRaw()).resolves.toEqual({});
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(2);
+    expect(h.sessions).toHaveLength(2);
+    expect(h.sessions[1]?.isClosed()).toBe(false);
+
+    h.dispose();
+  });
+
   it("rejects with the recorded verdict instead of redialing while it is fresh, then redials after the TTL", async () => {
     vi.useFakeTimers();
     try {
@@ -684,6 +763,54 @@ describe("RuntimeHostMessenger availability forwarding", () => {
     }
   });
 
+  it("does not extend a non-plan verdict with another cached session's plan-denial deadline", () => {
+    vi.useFakeTimers();
+    try {
+      const h = harness();
+      h.requestRemote();
+      mocks.planRestrictedReprobeAtForHost.mockReturnValueOnce(
+        Date.now() + 15 * 60_000,
+      );
+
+      h.session.fatal = incompatibleFatal();
+      h.session.emitClosed();
+      expect(mocks.planRestrictedReprobeAtForHost).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(30_000);
+      h.requestRemote();
+      expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(2);
+
+      h.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a plan verdict through the cache-controlled reprobe deadline", () => {
+    vi.useFakeTimers();
+    try {
+      const h = harness();
+      h.requestRemote();
+      mocks.planRestrictedReprobeAtForHost.mockReturnValueOnce(
+        Date.now() + 15 * 60_000,
+      );
+
+      h.session.fatal = planRestrictedFatal();
+      h.session.emitClosed();
+      expect(mocks.planRestrictedReprobeAtForHost).toHaveBeenCalledWith(
+        REMOTE_HOST_ID,
+      );
+
+      vi.advanceTimersByTime(30_000);
+      h.requestRemote();
+      expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(1);
+
+      h.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("drops the verdict early when the host's transport identity changes - a host update must not wait out the TTL", async () => {
     // An INCOMPATIBLE fatal is resolved exactly by a version change, and the
     // directory publishes that as a new transport key. The verdict describes
@@ -713,7 +840,14 @@ describe("RuntimeHostMessenger availability forwarding", () => {
       binding.messenger.request(
         "host.status",
         {},
-        authorityFor(REMOTE_HOST_ID, remoteEntry.websocketUrl ?? ""),
+        {
+          replayMustBeKeyed: false,
+          idempotencyKey: null,
+          authority: authorityFor(
+            REMOTE_HOST_ID,
+            remoteEntry.websocketUrl ?? "",
+          ),
+        },
       );
 
     await requestRemote().catch(() => undefined);
@@ -758,6 +892,15 @@ function incompatibleFatal(): FatalErrorDetails {
   return {
     code: "INCOMPATIBLE",
     reason: "protocol manifests do not overlap",
+    incompatibleMethods: null,
+    upgradeGuidance: null,
+  };
+}
+
+function planRestrictedFatal(): FatalErrorDetails {
+  return {
+    code: "PLAN_RESTRICTED",
+    reason: "remote hosts are unavailable on this plan",
     incompatibleMethods: null,
     upgradeGuidance: null,
   };

@@ -84,6 +84,7 @@ import { registerPowerIpc } from "./power-ipc";
 import { registerAppUpdateIpc } from "./app-update-ipc";
 import { registerGlobalShortcutsIpc } from "./global-shortcuts-ipc";
 import { registerZoomIpc } from "./zoom-ipc";
+import { zoomPercentToFactor } from "../windows/window-zoom";
 import { registerBrowserViewIpc } from "./browser-view-ipc";
 import { registerPipCaptureIpc } from "./pip-capture-ipc";
 import type { BrowserViewManager } from "../browser-view/browser-view-manager";
@@ -240,6 +241,7 @@ export interface IpcAuthTokenStore {
 
 export interface IpcZoomController {
   getZoomPercent(): ZoomPercent;
+  getZoomFactor(): number;
   zoomIn(): Promise<ZoomPercent>;
   zoomOut(): Promise<ZoomPercent>;
   reset(): Promise<ZoomPercent>;
@@ -291,13 +293,16 @@ type HostChangeListener = (
 export const QUIT_REQUEST_SERVICE_ACK_TIMEOUT_MS = 1_000;
 
 /**
- * Upper bound on how long the quit/close path waits for a renderer to
- * acknowledge a browser handoff drain. A wedged renderer that never replies
- * must not make the app unquittable (`authorizeQuitAfterFlush` awaits this)
- * or the window unclosable (`handleWindowClose` already preventDefault'ed),
- * so the wait resolves as "drained as far as we can tell" instead of hanging.
+ * Upper bound on how long the quit/close path waits for a renderer to report
+ * its final browser capture. A wedged renderer that never replies must not
+ * make the app unquittable (`authorizeQuitAfterFlush` awaits this) or the
+ * window unclosable (`handleWindowClose` already preventDefault'ed), so the
+ * wait resolves as "captured as far as we can tell" instead of hanging. What
+ * that costs is every login minted since the last successful capture: the
+ * session re-materializes from the older jar, so those sites ask the user to
+ * sign in again.
  */
-export const BROWSER_HANDOFF_DRAIN_TIMEOUT_MS = 10_000;
+export const FINAL_BROWSER_CAPTURE_TIMEOUT_MS = 10_000;
 
 export interface QuitDecisionWaiter {
   readonly requestId: string;
@@ -482,7 +487,7 @@ interface FreshSnapshotWaiter {
   readonly resolveStale: () => void;
 }
 
-interface BrowserHandoffDrainWaiter {
+interface FinalBrowserCaptureWaiter {
   readonly windowId: string;
   readonly resolve: () => void;
   readonly reject: (error: Error) => void;
@@ -528,9 +533,9 @@ export class RunnerIpcBridge {
    * `setUnsyncedEditsSnapshot` pushes during the wait do NOT settle these.
    */
   readonly freshSnapshotWaiters = new Map<string, FreshSnapshotWaiter>();
-  private readonly browserHandoffDrainWaiters = new Map<
+  private readonly finalBrowserCaptureWaiters = new Map<
     string,
-    BrowserHandoffDrainWaiter
+    FinalBrowserCaptureWaiter
   >();
   private browserViewManager: BrowserViewManager | null = null;
 
@@ -824,17 +829,36 @@ export class RunnerIpcBridge {
     }));
   }
 
-  async drainBrowserHandoffs(): Promise<void> {
+  /**
+   * Asks every mounted renderer, not only the ones holding a live native
+   * guest. What has to be flushed is the primary-profile store, and a window
+   * whose last native tab was already torn down (or whose tabs went dormant on
+   * a route change) still holds the coordinator that can report a jar. Only
+   * that coordinator knows whether it has anything to say, and it answers
+   * immediately when it does not.
+   */
+  async captureFinalBrowserState(): Promise<void> {
     const windowIds = this.windowRegistry
       .records()
       .map((record) => record.windowId)
-      .filter((windowId) => this.canHandoffBrowserTabsForWindow(windowId));
-    await Promise.all(
-      windowIds.map((windowId) => this.handOffBrowserTabs(windowId)),
+      .filter((windowId) => this.appLifecycleReadyWindowIds.has(windowId));
+    // Every window gets its full chance BEFORE the first failure is re-raised.
+    // A bare `Promise.all` settles on the first rejection (an undeliverable
+    // window whose renderer is already gone), and `authorizeQuitAfterFlush`
+    // catches that and calls `app.quit()` with a healthy sibling's capture
+    // still in flight - losing the jar this path exists to save. The failure
+    // is still surfaced afterwards so the quit path can log it.
+    const attempts = windowIds.map((windowId) =>
+      this.requestFinalBrowserCapture(windowId),
     );
+    await Promise.allSettled(attempts);
+    // Everything has settled, so this only re-raises the first failure for the
+    // caller to log; it never shortens the wait.
+    await Promise.all(attempts);
   }
 
-  canHandoffBrowserTabsForWindow(windowId: string): boolean {
+  /** The native-teardown gate: this window owns guests that are about to die. */
+  needsFinalBrowserCaptureForWindow(windowId: string): boolean {
     return (
       this.appLifecycleReadyWindowIds.has(windowId) &&
       this.browserViewManager?.hasNativeTabsForWindow(windowId) === true
@@ -843,72 +867,63 @@ export class RunnerIpcBridge {
 
   async prepareBrowserWindowClose(windowId: string): Promise<void> {
     const manager = this.browserViewManager;
-    if (manager === null || !this.canHandoffBrowserTabsForWindow(windowId)) {
+    if (manager === null || !this.needsFinalBrowserCaptureForWindow(windowId)) {
       return;
     }
     try {
-      await this.handOffBrowserTabs(windowId);
+      await this.requestFinalBrowserCapture(windowId);
     } finally {
+      // Native teardown only. The host suspends the session to dormant on
+      // route loss and re-materializes the same durable tabs later, so a
+      // window close must never read as the user closing those tabs.
       await manager.closeNativeSessionsForWindow(windowId);
     }
   }
 
   /**
-   * Hand this window's native browser tabs back to the host: flush what main
-   * owns, then wait (bounded) for the renderer to acknowledge its own drain.
+   * Asks this window's renderer for one last browser capture and waits
+   * (bounded) for it to report back, before its native tabs are destroyed.
    */
-  private async handOffBrowserTabs(windowId: string): Promise<void> {
-    await this.browserViewManager?.handoff.drainForWindow(windowId);
-    await this.requestBrowserHandoffDrain([windowId]);
+  private requestFinalBrowserCapture(windowId: string): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const requestId = randomUUID();
+      const timer = setTimeout(() => {
+        if (!this.finalBrowserCaptureWaiters.delete(requestId)) return;
+        log.warn("[runner-ipc] final browser capture timed out", {
+          windowId,
+          timeoutMs: FINAL_BROWSER_CAPTURE_TIMEOUT_MS,
+        });
+        resolve();
+      }, FINAL_BROWSER_CAPTURE_TIMEOUT_MS);
+      this.finalBrowserCaptureWaiters.set(requestId, {
+        windowId,
+        resolve,
+        reject,
+        timer,
+      });
+      if (
+        this.safeSendToWindow(
+          windowId,
+          RunnerHostEvent.captureFinalBrowserState,
+          { requestId },
+        )
+      ) {
+        return;
+      }
+      this.finalBrowserCaptureWaiters.delete(requestId);
+      clearTimeout(timer);
+      reject(
+        new Error(
+          `Final browser capture request could not be delivered to window ${windowId}`,
+        ),
+      );
+    });
   }
 
-  private async requestBrowserHandoffDrain(
-    windowIds: readonly string[],
-  ): Promise<void> {
-    await Promise.all(
-      windowIds.map(
-        (windowId) =>
-          new Promise<void>((resolve, reject) => {
-            const requestId = randomUUID();
-            const timer = setTimeout(() => {
-              if (!this.browserHandoffDrainWaiters.delete(requestId)) return;
-              log.warn("[runner-ipc] browser handoff drain timed out", {
-                windowId,
-                timeoutMs: BROWSER_HANDOFF_DRAIN_TIMEOUT_MS,
-              });
-              resolve();
-            }, BROWSER_HANDOFF_DRAIN_TIMEOUT_MS);
-            this.browserHandoffDrainWaiters.set(requestId, {
-              windowId,
-              resolve,
-              reject,
-              timer,
-            });
-            if (
-              this.safeSendToWindow(
-                windowId,
-                RunnerHostEvent.drainBrowserHandoffs,
-                { requestId },
-              )
-            ) {
-              return;
-            }
-            this.browserHandoffDrainWaiters.delete(requestId);
-            clearTimeout(timer);
-            reject(
-              new Error(
-                `Browser handoff drain request could not be delivered to window ${windowId}`,
-              ),
-            );
-          }),
-      ),
-    );
-  }
-
-  acknowledgeBrowserHandoffsDrained(windowId: string, requestId: string): void {
-    const waiter = this.browserHandoffDrainWaiters.get(requestId);
+  acknowledgeFinalBrowserCapture(windowId: string, requestId: string): void {
+    const waiter = this.finalBrowserCaptureWaiters.get(requestId);
     if (waiter?.windowId !== windowId) return;
-    this.browserHandoffDrainWaiters.delete(requestId);
+    this.finalBrowserCaptureWaiters.delete(requestId);
     clearTimeout(waiter.timer);
     waiter.resolve();
   }
@@ -922,9 +937,9 @@ export class RunnerIpcBridge {
     this.settleFreshSnapshotWaitersAsStale(
       (waiter) => waiter.windowId === windowId,
     );
-    this.rejectBrowserHandoffDrainWaiters(
+    this.rejectFinalBrowserCaptureWaiters(
       (waiter) => waiter.windowId === windowId,
-      new Error("Renderer reset before acknowledging browser handoff drain"),
+      new Error("Renderer reset before reporting its final browser capture"),
     );
   }
 
@@ -1011,10 +1026,10 @@ export class RunnerIpcBridge {
     this.rejectAllQuitDecisionWaiters(
       new Error("Runner IPC bridge disposed before quit decision resolved"),
     );
-    this.rejectBrowserHandoffDrainWaiters(
+    this.rejectFinalBrowserCaptureWaiters(
       () => true,
       new Error(
-        "Runner IPC bridge disposed before browser handoff drain resolved",
+        "Runner IPC bridge disposed before the final browser capture resolved",
       ),
     );
     // Mirrors the quit-decision cleanup above: a fresh-snapshot request left
@@ -1358,9 +1373,9 @@ export class RunnerIpcBridge {
     this.settleFreshSnapshotWaitersAsStale(
       (waiter) => !liveWindowIds.has(waiter.windowId),
     );
-    this.rejectBrowserHandoffDrainWaiters(
+    this.rejectFinalBrowserCaptureWaiters(
       (waiter) => !liveWindowIds.has(waiter.windowId),
-      new Error("Browser handoff window closed before acknowledging the drain"),
+      new Error("Window closed before reporting its final browser capture"),
     );
   }
 
@@ -1426,13 +1441,13 @@ export class RunnerIpcBridge {
     }
   }
 
-  private rejectBrowserHandoffDrainWaiters(
-    predicate: (waiter: BrowserHandoffDrainWaiter) => boolean,
+  private rejectFinalBrowserCaptureWaiters(
+    predicate: (waiter: FinalBrowserCaptureWaiter) => boolean,
     error: Error,
   ): void {
-    for (const [requestId, waiter] of this.browserHandoffDrainWaiters) {
+    for (const [requestId, waiter] of this.finalBrowserCaptureWaiters) {
       if (!predicate(waiter)) continue;
-      this.browserHandoffDrainWaiters.delete(requestId);
+      this.finalBrowserCaptureWaiters.delete(requestId);
       clearTimeout(waiter.timer);
       waiter.reject(error);
     }
@@ -1787,6 +1802,10 @@ class NullZoomController implements IpcZoomController {
 
   getZoomPercent(): ZoomPercent {
     return this.zoomPercent;
+  }
+
+  getZoomFactor(): number {
+    return zoomPercentToFactor(this.zoomPercent);
   }
 
   zoomIn(): Promise<ZoomPercent> {

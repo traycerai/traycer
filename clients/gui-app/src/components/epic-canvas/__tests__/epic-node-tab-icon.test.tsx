@@ -7,11 +7,9 @@ import {
 import { EpicNodeTabIcon } from "@/components/epic-canvas/epic-node-tab-icon";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
-import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-  type OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
+import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
+import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import {
   __resetAppLocalNotificationsStoreForTests,
   emitTerminalCrashedNotification,
@@ -242,13 +240,22 @@ function publishWorking(agentIds: readonly string[]): void {
   ]);
 }
 
+// Returns what the REGISTRY returns, which is the production handle type -
+// the registry narrows whatever it is handed. The only caller discards it, so
+// nothing here needs the harness's extra members.
 function registerEpicSession(epicId: string): OpenEpicStoreHandle {
   return __getOpenEpicRegistryForTests().acquire(epicId, () =>
-    createOpenEpicStore({
-      epicId,
+    openStoreForTest({
+      epicId: epicId,
       userId: null,
-      streamClientFactory: fakeStreamClientFactory,
-      onAuthError: null,
+      // The factories go to the COMPOSITION now: the store stopped
+      // constructing a runtime, so a `streamClientFactory` has nowhere
+      // else to go.
+      factories: {
+        streamClientFactory: fakeStreamClientFactory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     }),
   );
 }

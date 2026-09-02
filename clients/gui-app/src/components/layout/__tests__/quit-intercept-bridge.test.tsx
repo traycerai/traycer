@@ -1,3 +1,4 @@
+import { INERT_ROOT_STATE_PORT } from "@/stores/epics/open-epic/test-support/root-state-port-fixture";
 import {
   afterEach,
   beforeEach,
@@ -29,20 +30,24 @@ import type { OpenEpicSessionRegistry } from "@/stores/epics/open-epic/session-r
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
 
-const electronTabsMocks = vi.hoisted(() => ({
-  drainElectronTabHandoffs: vi.fn<() => Promise<void>>(),
+const browserSessionsMocks = vi.hoisted(() => ({
+  captureFinalPrimaryProfiles: vi.fn<() => Promise<void>>(),
 }));
 
-vi.mock("@/lib/browser-view/sessions/electron-tabs", async (importOriginal) => {
-  const actual =
-    await importOriginal<
-      typeof import("@/lib/browser-view/sessions/electron-tabs")
-    >();
-  return {
-    ...actual,
-    drainElectronTabHandoffs: electronTabsMocks.drainElectronTabHandoffs,
-  };
-});
+vi.mock(
+  "@/lib/browser-view/sessions/browser-sessions-coordinator",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/lib/browser-view/sessions/browser-sessions-coordinator")
+      >();
+    return {
+      ...actual,
+      captureFinalPrimaryProfiles:
+        browserSessionsMocks.captureFinalPrimaryProfiles,
+    };
+  },
+);
 
 interface RunnerHostOnWindow {
   runnerHost?: unknown;
@@ -100,14 +105,22 @@ function buildHandle(epicId: string, title: string): FakeHandle {
   const handle: FakeHandle = {
     epicId,
     userId: null,
-    doc,
-    awareness: {} as never,
+    // A production handle has no `doc` / `awareness`: the replica lives on the
+    // worker thread and a `Y.Doc` cannot cross a structured clone.
+    projection: {
+      accept: () => null,
+      apply: () => {},
+      reject: () => {},
+    },
+    body: { applyDocUpdate: () => {}, applyAwareness: () => {} },
     store,
     dispose: () => undefined,
     detachTransport: () => undefined,
     requestFreshSnapshot: () => undefined,
+    retryTransport: () => undefined,
     isClean: () => !state.isDirty,
     hotArtifactRoomIdsForTests: () => [],
+    ...INERT_ROOT_STATE_PORT,
     setDirty: (isDirty, queueSize) => {
       state.isDirty = isDirty;
       state.unsyncedQueueSize = queueSize;
@@ -1051,54 +1064,55 @@ describe("QuitInterceptBridge", () => {
     });
     expect(screen.queryByTestId("quit-intercept-dialog")).toBeNull();
   });
-  it("reports the browser handoff drain even when the drain REJECTS", async () => {
-    // `browser.sessions` disconnecting mid-handoff rejects the drain. Swallowed
+  it("reports the final browser capture even when the capture REJECTS", async () => {
+    // `browser.sessions` disconnecting mid-capture rejects it. Swallowed
     // without a reply, main's waiter sat out its whole
-    // BROWSER_HANDOFF_DRAIN_TIMEOUT_MS - a 10s stall on quit and on every
+    // FINAL_BROWSER_CAPTURE_TIMEOUT_MS - a 10s stall on quit and on every
     // window close that hits this path.
-    const respondBrowserHandoffsDrained = vi.fn(() => Promise.resolve());
-    let emitDrain: ((request: { readonly requestId: string }) => void) | null =
-      null;
+    const respondFinalBrowserStateCaptured = vi.fn(() => Promise.resolve());
+    let emitCapture:
+      | ((request: { readonly requestId: string }) => void)
+      | null = null;
     const windowHost = window as WindowMutable;
     windowHost.runnerHost = {
       appLifecycle: {
         setUnsyncedEditsSnapshot: vi.fn(() => Promise.resolve()),
         respondToQuitRequest: vi.fn(() => Promise.resolve()),
         onQuitRequested: vi.fn(() => ({ dispose: () => undefined })),
-        onDrainBrowserHandoffs: vi.fn(
+        onCaptureFinalBrowserState: vi.fn(
           (handler: (request: { readonly requestId: string }) => void) => {
-            emitDrain = handler;
+            emitCapture = handler;
             return {
               dispose: () => {
-                emitDrain = null;
+                emitCapture = null;
               },
             };
           },
         ),
-        respondBrowserHandoffsDrained,
+        respondFinalBrowserStateCaptured,
       },
     };
-    electronTabsMocks.drainElectronTabHandoffs.mockImplementation(() =>
+    browserSessionsMocks.captureFinalPrimaryProfiles.mockImplementation(() =>
       Promise.reject(new Error("browser sessions disconnected")),
     );
 
     render(<QuitInterceptBridge />);
 
-    const emit = emitDrain as
+    const emit = emitCapture as
       | ((request: { readonly requestId: string }) => void)
       | null;
-    if (emit === null) throw new Error("no drain subscriber");
+    if (emit === null) throw new Error("no final-capture subscriber");
     act(() => {
-      emit({ requestId: "drain-1" });
+      emit({ requestId: "capture-1" });
     });
     await act(async () => {
       await Promise.resolve();
       await Promise.resolve();
     });
 
-    expect(respondBrowserHandoffsDrained).toHaveBeenCalledTimes(1);
-    expect(respondBrowserHandoffsDrained).toHaveBeenCalledWith({
-      requestId: "drain-1",
+    expect(respondFinalBrowserStateCaptured).toHaveBeenCalledTimes(1);
+    expect(respondFinalBrowserStateCaptured).toHaveBeenCalledWith({
+      requestId: "capture-1",
     });
   });
 });

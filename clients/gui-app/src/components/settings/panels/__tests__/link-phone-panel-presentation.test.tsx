@@ -1,5 +1,5 @@
 /**
- * What the Link-a-phone panel SHOWS for each state the watch reports: the
+ * What the Link mobile app panel SHOWS for each state the watch reports: the
  * tile's frame drains with the same clock as the countdown text, a rotation
  * mounts a fresh tile, and every terminal state states plainly what happened
  * and what the user can do next. The watch itself is faked here — its

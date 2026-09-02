@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { BrowserWindowConstructorOptions } from "electron";
 import type {
   BrowserViewElectronTabCdpDispatch,
   BrowserViewElectronTabControl,
@@ -23,15 +24,23 @@ type InvokeHandler = (
   payload: unknown,
 ) => unknown | Promise<unknown>;
 
+type BrowserViewManagerFactoryOptions = {
+  readonly createDevToolsWindow: (windowId: string) => unknown;
+};
+
 const captured = vi.hoisted(() => ({
   dispatchedTabs: [] as DispatchElectronTabCdpCall[],
   ensuredTabs: [] as EnsureTabCall[],
   controlledTabs: [] as ControlElectronTabCall[],
+  browserWindowOptions: [] as BrowserWindowConstructorOptions[],
+  managerOptions: null as BrowserViewManagerFactoryOptions | null,
 }));
 
 vi.mock("electron", () => {
   class BrowserWindow {
-    constructor(_options: unknown) {}
+    constructor(options: BrowserWindowConstructorOptions) {
+      captured.browserWindowOptions.push(options);
+    }
   }
   class WebContentsView {
     readonly webContents = {
@@ -41,6 +50,11 @@ vi.mock("electron", () => {
     constructor(_options: unknown) {}
   }
   return {
+    app: {
+      getPath: (_key: string): string => "/tmp/traycer-desktop-test",
+      relaunch: (): void => undefined,
+      exit: (_code: number): void => undefined,
+    },
     BrowserWindow,
     WebContentsView,
     dialog: {
@@ -80,7 +94,9 @@ vi.mock("../../app/cert-trust", () => ({
 vi.mock("../../browser-view/browser-view-manager", () => ({
   BOUNDS_STREAM_LOG_INTERVAL_MS: 1_000,
   BrowserViewManager: class {
-    constructor(_options: unknown) {}
+    constructor(options: BrowserViewManagerFactoryOptions) {
+      captured.managerOptions = options;
+    }
 
     dispatchElectronTabCdp(input: BrowserViewElectronTabCdpDispatch): Promise<{
       readonly kind: "cdpInsertText";
@@ -127,27 +143,30 @@ vi.mock("../../browser-view/browser-session", () => ({
   cancelBrowserViewDownload: vi.fn(),
   clearBrowserViewPendingCertificateError: vi.fn(),
   ensureBrowserViewSession: vi.fn(),
+  ensureBrowserViewSessionForPartition: vi.fn(),
+  BROWSER_VIEW_PARTITION: "persist:traycer-browser",
+  BROWSER_VIEW_EPHEMERAL_PARTITION: "traycer-browser-ephemeral",
+  onBrowserPrimaryProfileDelta: vi.fn(() => () => undefined),
   onBrowserViewCertificateError: vi.fn(),
   onBrowserViewDownloadChange: vi.fn(),
   readBrowserViewPendingCertificateError: vi.fn(() => null),
   registerBrowserViewWebContents: vi.fn(),
 }));
 
-vi.mock("../../browser-view/storage/browser-cookie-crypto", () => ({
-  getBrowserCookieCryptoState: vi.fn(() =>
-    Promise.resolve({
-      mode: "real",
-      persistence: "persistent",
-      reason: "os-backed",
-      storageBackend: null,
-      encryptionAvailable: true,
-    }),
-  ),
+vi.mock("../../browser-view/storage/browser-saved-logins", () => ({
+  isBrowserSavedLoginsEnabled: vi.fn(() => true),
+  setBrowserSavedLoginsEnabled: vi.fn(() => Promise.resolve(true)),
+  wrapStoreKey: vi.fn(() => "wrapped"),
+  unwrapStoreKey: vi.fn(() => "unwrapped"),
 }));
 
 vi.mock("../../browser-view/storage/browser-storage-state", () => ({
   BrowserPrimaryProfileSnapshotCoordinator: class {
     observe(): void {}
+
+    rememberedOrigins() {
+      return [];
+    }
 
     capture() {
       return Promise.resolve({
@@ -165,16 +184,6 @@ vi.mock("../../browser-view/storage/browser-storage-state", () => ({
       reason: null,
     }),
   ),
-  captureBrowserViewStorageState: vi.fn(() =>
-    Promise.resolve({
-      storageState: { cookies: [], origins: [] },
-      cookieCount: 0,
-      cookieDomains: [],
-      localStorageCount: 0,
-      localStorageAvailable: true,
-      localStorageReason: null,
-    }),
-  ),
   seedBrowserViewCookies: vi.fn(() => Promise.resolve()),
 }));
 
@@ -187,7 +196,13 @@ function makeBridge() {
       on: vi.fn(),
       off: vi.fn(),
     },
+    zoomController: {
+      getZoomPercent: vi.fn(() => 100),
+      getZoomFactor: vi.fn(() => 1),
+      onChange: vi.fn(() => () => undefined),
+    },
     safeSendToWindow: vi.fn(),
+    fanOut: vi.fn(),
     resolveSenderWindowId: vi.fn(() => "window-1"),
   };
 }
@@ -220,7 +235,27 @@ describe("native browser tab IPC", () => {
     captured.dispatchedTabs = [];
     captured.ensuredTabs = [];
     captured.controlledTabs = [];
+    captured.browserWindowOptions = [];
+    captured.managerOptions = null;
     vi.clearAllMocks();
+  });
+
+  it("keeps detached DevTools windowed when the renderer is full screen", async () => {
+    const { registerBrowserViewIpc } = await import("../browser-view-ipc");
+
+    registerBrowserViewIpc(makeBridge() as never);
+    const managerOptions = captured.managerOptions;
+    if (managerOptions === null) throw new Error("manager was not registered");
+    managerOptions.createDevToolsWindow("window-1");
+
+    expect(captured.browserWindowOptions).toContainEqual(
+      expect.objectContaining({
+        show: true,
+        width: 1200,
+        height: 800,
+        fullscreenable: false,
+      }),
+    );
   });
 
   it("dispatches a curated command with its logical frame target", async () => {

@@ -8,13 +8,17 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  BrowserPeekTile,
-  type BrowserPeekNode,
-} from "@/components/epic-canvas/renderers/browser-peek-tile";
-import {
   FakeStreamClient,
   type FakeStreamSession,
+  PEEK_NODE,
+  epicNestedFocusNavigationModule,
+  hostDirectoryEntryModule,
+  liveStream as fixtureLiveStream,
+  streamAuthRevalidatorModule,
+  tabHostIdModule,
+  tileBodyVisibleModule,
 } from "@/components/epic-canvas/renderers/__tests__/browser-peek-tile-stream-fixture";
+import { BrowserPeekTile } from "@/components/epic-canvas/renderers/browser-peek-tile";
 
 const hookState = vi.hoisted(() => ({
   streamClient: null as FakeStreamClient | null,
@@ -22,17 +26,17 @@ const hookState = vi.hoisted(() => ({
   visible: true,
 }));
 
-vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
-  useTabHostId: () => "host-test",
-}));
+vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () =>
+  tabHostIdModule(),
+);
 
-vi.mock("@/components/epic-canvas/hooks/use-tile-body-visible", () => ({
-  useTileBodyVisible: () => hookState.visible,
-}));
+vi.mock("@/components/epic-canvas/hooks/use-tile-body-visible", () =>
+  tileBodyVisibleModule(hookState),
+);
 
-vi.mock("@/hooks/host/use-host-directory-entry", () => ({
-  useHostDirectoryEntry: () => ({ hostId: "host-test" }),
-}));
+vi.mock("@/hooks/host/use-host-directory-entry", () =>
+  hostDirectoryEntryModule(),
+);
 
 vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
   useHostStreamClientFor: () =>
@@ -41,25 +45,21 @@ vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
       : hookState.streamClientFactory(),
 }));
 
-vi.mock("@/lib/host/stream-auth-revalidator", () => ({
-  useStreamAuthRevalidator: () => null,
-}));
+vi.mock("@/lib/host/stream-auth-revalidator", () =>
+  streamAuthRevalidatorModule(),
+);
 
-vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
-  useEpicNestedFocusNavigation:
-    () =>
-    (_epicId: string, _tabId: string, prepare: () => unknown): unknown =>
-      prepare(),
-}));
+vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () =>
+  epicNestedFocusNavigationModule(),
+);
+
+function peekTile(): HTMLElement {
+  return screen.getByTestId(`browser-peek-tile-${PEEK_NODE.instanceId}`);
+}
 
 /** Latest stream session (React StrictMode remount may open more than one). */
 function liveStream(): FakeStreamSession {
-  const sessions = hookState.streamClient?.sessions ?? [];
-  const stream = sessions.at(-1);
-  if (stream === undefined) {
-    throw new Error("expected browser.sessions stream");
-  }
-  return stream;
+  return fixtureLiveStream(hookState);
 }
 
 let controllableResizeObservers: ControllableResizeObserver[] = [];
@@ -123,15 +123,6 @@ Object.defineProperty(globalThis, "ResizeObserver", {
   value: ControllableResizeObserver,
 });
 
-const PEEK_NODE: BrowserPeekNode = {
-  id: "browser-peek-headless-1",
-  instanceId: "peek-instance-1",
-  hostId: "host-test",
-  sessionId: "headless-1",
-  tabId: "headless-tab-1",
-  initialUrl: "http://localhost:3000",
-};
-
 function armPeekTile(stream: FakeStreamSession): void {
   fireEvent.focus(
     screen.getByRole("button", { name: "Browser screencast controls" }),
@@ -166,6 +157,7 @@ describe("BrowserPeekTile", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
 
@@ -177,13 +169,14 @@ describe("BrowserPeekTile", () => {
     );
   });
 
-  it("renders JPEG frames and acks only after the image is presented", () => {
+  it("renders JPEG frames and acks on arrival, before the image is presented", () => {
     render(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -218,22 +211,26 @@ describe("BrowserPeekTile", () => {
       );
     });
 
-    expect(screen.getByAltText("Browser screencast").getAttribute("src")).toBe(
-      "data:image/jpeg;base64,AQID",
-    );
-    expect(stream.sentFrames).not.toContainEqual({
-      kind: "ack",
-      hasBinaryPayload: false,
-      sequence: 7,
-    });
-
-    fireEvent.load(screen.getByAltText("Browser screencast"));
-
+    // Ack fires the moment the frame arrives over the wire - the host gates
+    // its next capture on it, and waiting for paint would outrun the host.
     expect(stream.sentFrames).toContainEqual({
       kind: "ack",
       hasBinaryPayload: false,
       sequence: 7,
     });
+    expect(screen.getByAltText("Browser screencast").getAttribute("src")).toBe(
+      "data:image/jpeg;base64,AQID",
+    );
+
+    const ackCountBeforePaint = stream.sentFrames.filter(
+      (frame) => frame.kind === "ack",
+    ).length;
+    fireEvent.load(screen.getByAltText("Browser screencast"));
+
+    // Paint does not ack again - it only latches the presented sequence.
+    expect(
+      stream.sentFrames.filter((frame) => frame.kind === "ack"),
+    ).toHaveLength(ackCountBeforePaint);
   });
 
   it("renders a terminal screencast frame", () => {
@@ -243,6 +240,7 @@ describe("BrowserPeekTile", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -261,6 +259,76 @@ describe("BrowserPeekTile", () => {
     expect(screen.getByText("Screencast ended.")).toBeTruthy();
   });
 
+  it("reads a native-handoff complete frame as a handoff spinner, not a dead cast", () => {
+    // `completeMeans="native-handoff"`: this client is the one placing the
+    // native tab, so the host's `complete` frame (browser-screencast-plane.ts's
+    // `subscribeScreencast`) means "attached, going native" - pins existing
+    // behavior for the electron-capable client (browser-session-tile.tsx's
+    // `browserPeekCompleteMeaning`).
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+        completeMeans="native-handoff"
+      />,
+    );
+    const stream = liveStream();
+
+    act(() => {
+      stream.emit(
+        {
+          kind: "complete",
+          hasBinaryPayload: false,
+        },
+        null,
+      );
+    });
+
+    expect(screen.getByText("Going native")).toBeTruthy();
+    expect(screen.getByText("Handing off to the native tab.")).toBeTruthy();
+    expect(screen.queryByText("Ended")).toBeNull();
+  });
+
+  it("reads a native-elsewhere complete frame as an honest terminal state, not a handoff spinner", () => {
+    // `completeMeans="native-elsewhere"`: a client with no native window of
+    // its own for the session's host (e.g. a viewer-only client, or an
+    // electron-capable client on a DIFFERENT host than the session's) gets the
+    // same `complete` frame for a tab that will never stream here. It must not
+    // read as "Going native" (nothing is arriving) nor as "Ended" (the tab is
+    // not dead, it is just unreachable from this client).
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+        completeMeans="native-elsewhere"
+      />,
+    );
+    const stream = liveStream();
+
+    act(() => {
+      stream.emit(
+        {
+          kind: "complete",
+          hasBinaryPayload: false,
+        },
+        null,
+      );
+    });
+
+    expect(screen.getByText("Open natively")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "This tab is open in the desktop app on that host, so it can't be streamed here.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText("Going native")).toBeNull();
+    expect(screen.queryByText("Ended")).toBeNull();
+  });
+
   it("ignores callbacks from a replaced screencast subscription", () => {
     const rendered = render(
       <BrowserPeekTile
@@ -268,6 +336,7 @@ describe("BrowserPeekTile", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const retired = liveStream();
@@ -278,6 +347,7 @@ describe("BrowserPeekTile", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     hookState.visible = true;
@@ -287,6 +357,7 @@ describe("BrowserPeekTile", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const current = liveStream();
@@ -310,13 +381,101 @@ describe("BrowserPeekTile", () => {
     expect(screen.getByText("Screencast ended.")).toBeTruthy();
   });
 
-  it("ignores an armed ack that arrives after blur disarmed the tile", () => {
+  it("pre-arms on hover and stops re-claiming once the host denies it", () => {
     render(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
+      />,
+    );
+    const stream = liveStream();
+    const controls = screen.getByRole("button", {
+      name: "Browser screencast controls",
+    });
+
+    fireEvent.pointerEnter(controls);
+    expect(stream.sentFrames).toContainEqual({
+      kind: "preArm",
+      hasBinaryPayload: false,
+      armEpoch: 1,
+    });
+
+    act(() => {
+      stream.emit(
+        {
+          kind: "revoked",
+          hasBinaryPayload: false,
+          armEpoch: 1,
+          cause: "denied",
+        },
+        null,
+      );
+    });
+    fireEvent.pointerLeave(controls);
+    fireEvent.pointerEnter(controls);
+
+    // Someone else is driving: hovering across the tile must not storm the
+    // control plane with claims that will be refused again.
+    expect(
+      stream.sentFrames.filter((frame) => frame.kind === "preArm"),
+    ).toHaveLength(1);
+    expect(controls.className).not.toContain("ring-primary");
+  });
+
+  it("shows no control chrome for a hover pre-arm and lights it on the click", () => {
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+        completeMeans="ended"
+      />,
+    );
+    const stream = liveStream();
+    const controls = screen.getByRole("button", {
+      name: "Browser screencast controls",
+    });
+
+    fireEvent.pointerEnter(controls);
+    act(() => {
+      stream.emit(
+        { kind: "armed", hasBinaryPayload: false, armEpoch: 1 },
+        null,
+      );
+    });
+
+    // The claim is granted, but hovering is not controlling.
+    expect(screen.queryByText("Controlling")).toBeNull();
+    expect(peekTile().querySelector(".ring-primary")).toBeNull();
+
+    fireEvent.pointerDown(controls, {
+      pointerId: 1,
+      clientX: 100,
+      clientY: 100,
+      button: 0,
+      buttons: 1,
+    });
+
+    // No second arm round trip: the claim it needed was already there.
+    expect(
+      stream.sentFrames.filter((frame) => frame.kind === "arm"),
+    ).toHaveLength(0);
+    expect(screen.getByText("Controlling")).not.toBeNull();
+    expect(peekTile().querySelector(".ring-primary")).not.toBeNull();
+  });
+
+  it("ignores an armed ack that arrives after an explicit Release", () => {
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -330,7 +489,13 @@ describe("BrowserPeekTile", () => {
       hasBinaryPayload: false,
       armEpoch: 1,
     });
-    fireEvent.blur(controls);
+    act(() => {
+      stream.emit(
+        { kind: "armed", hasBinaryPayload: false, armEpoch: 1 },
+        null,
+      );
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Release control" }));
     expect(stream.sentFrames).toContainEqual({
       kind: "disarm",
       hasBinaryPayload: false,
@@ -357,6 +522,7 @@ describe("BrowserPeekTile", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -397,6 +563,7 @@ describe("BrowserPeekTile", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -462,6 +629,7 @@ describe("BrowserPeekTile", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -515,6 +683,7 @@ describe("BrowserPeekTile", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -562,6 +731,7 @@ describe("BrowserPeekTile", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -674,6 +844,7 @@ describe("BrowserPeekTile", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -715,6 +886,7 @@ describe("BrowserPeekTile", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -726,6 +898,7 @@ describe("BrowserPeekTile", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
 
@@ -742,6 +915,7 @@ describe("BrowserPeekTile", () => {
           paneId="pane-1"
           epicId="epic-1"
           node={PEEK_NODE}
+          completeMeans="ended"
         />,
       );
       const stream = liveStream();
@@ -779,5 +953,187 @@ describe("BrowserPeekTile", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("restates the measured viewport once a stream that was still dialing opens", async () => {
+    vi.useFakeTimers();
+    try {
+      // The field case: the tile is laid out and measured while the transport
+      // is still completing its subscribe handshake, which drops everything it
+      // is handed. Nothing resizes afterwards, so without a restatement at
+      // `open` the host serves the whole round on its last-tile-close defaults.
+      hookState.streamClient = new FakeStreamClient(false);
+      render(
+        <BrowserPeekTile
+          viewTabId="view-tab-1"
+          paneId="pane-1"
+          epicId="epic-1"
+          node={PEEK_NODE}
+          completeMeans="ended"
+        />,
+      );
+      const stream = liveStream();
+      const observer = controllableResizeObservers.at(-1);
+      if (observer === undefined) throw new Error("expected resize observer");
+
+      observer.emit(1272, 800);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
+      expect(
+        stream.sentFrames.filter((frame) => frame.kind === "viewport"),
+      ).toEqual([]);
+
+      act(() => {
+        stream.emitStatus("open");
+      });
+
+      expect(
+        stream.sentFrames.filter((frame) => frame.kind === "viewport"),
+      ).toEqual([
+        {
+          kind: "viewport",
+          hasBinaryPayload: false,
+          width: 1272,
+          height: 800,
+          dpr: window.devicePixelRatio,
+        },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+/**
+ * Ticket 18's viewer-side half of the RTT probe: the tile answers every
+ * `rttProbe` the host sends with exactly one `rttProbeAck` carrying the same
+ * `probeId`, and doing so must not disturb any other frame handling on the
+ * same subscription.
+ */
+describe("BrowserPeekTile rttProbe handling", () => {
+  beforeEach(() => {
+    hookState.visible = true;
+    hookState.streamClient = new FakeStreamClient(true);
+    hookState.streamClientFactory = null;
+  });
+
+  afterEach(() => {
+    cleanup();
+    hookState.streamClientFactory = null;
+  });
+
+  it("answers an rttProbe with exactly one rttProbeAck carrying the same probeId", () => {
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+        completeMeans="ended"
+      />,
+    );
+    const stream = liveStream();
+
+    act(() => {
+      stream.emit(
+        {
+          kind: "rttProbe",
+          hasBinaryPayload: false,
+          probeId: 42,
+          controlPlaneRttMs: 120,
+        },
+        null,
+      );
+    });
+
+    expect(
+      stream.sentFrames.filter((frame) => frame.kind === "rttProbeAck"),
+    ).toEqual([{ kind: "rttProbeAck", hasBinaryPayload: false, probeId: 42 }]);
+  });
+
+  it("does not disturb other frame handling on the same subscription", () => {
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+        completeMeans="ended"
+      />,
+    );
+    const stream = liveStream();
+
+    act(() => {
+      stream.emit(
+        {
+          kind: "rttProbe",
+          hasBinaryPayload: false,
+          probeId: 1,
+          controlPlaneRttMs: null,
+        },
+        null,
+      );
+      stream.emit(
+        {
+          kind: "started",
+          hasBinaryPayload: false,
+          frameWidth: 800,
+          frameHeight: 600,
+          deviceScaleFactor: 1,
+        },
+        null,
+      );
+      stream.emit(
+        {
+          kind: "frame",
+          hasBinaryPayload: true,
+          sequence: 7,
+          metadata: {
+            offsetTop: 0,
+            pageScaleFactor: 1,
+            deviceWidth: 800,
+            deviceHeight: 600,
+            scrollOffsetX: 0,
+            scrollOffsetY: 0,
+            timestamp: 1,
+          },
+        },
+        new Uint8Array([1, 2, 3]),
+      );
+    });
+
+    expect(stream.sentFrames).toContainEqual({
+      kind: "rttProbeAck",
+      hasBinaryPayload: false,
+      probeId: 1,
+    });
+    expect(stream.sentFrames).toContainEqual({
+      kind: "ack",
+      hasBinaryPayload: false,
+      sequence: 7,
+    });
+    expect(screen.getByAltText("Browser screencast").getAttribute("src")).toBe(
+      "data:image/jpeg;base64,AQID",
+    );
+
+    // A second probe still answers exactly once each, never a duplicate ack.
+    act(() => {
+      stream.emit(
+        {
+          kind: "rttProbe",
+          hasBinaryPayload: false,
+          probeId: 2,
+          controlPlaneRttMs: 150,
+        },
+        null,
+      );
+    });
+    expect(
+      stream.sentFrames.filter((frame) => frame.kind === "rttProbeAck"),
+    ).toEqual([
+      { kind: "rttProbeAck", hasBinaryPayload: false, probeId: 1 },
+      { kind: "rttProbeAck", hasBinaryPayload: false, probeId: 2 },
+    ]);
   });
 });

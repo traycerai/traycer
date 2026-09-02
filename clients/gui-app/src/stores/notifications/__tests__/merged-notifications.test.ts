@@ -756,6 +756,36 @@ describe("merged notifications feed", () => {
     });
   });
 
+  it("routes a Task sweep completion back to the Task that initiated it", () => {
+    expect(
+      rowFromHostEntry({
+        id: "worktree.deletion:command-task-sweep",
+        updatedAt: 10,
+        readAt: null,
+        kind: "host.operation.finished",
+        sourceRef: "command-task-sweep",
+        severity: "done",
+        outcome: "completed",
+        epicId: null,
+        chatId: null,
+        payload: {
+          kind: "worktree_deletion",
+          operation: "worktree.deletion",
+          title: "Worktrees deleted",
+          message: "Deleted 2 worktrees.",
+          commandId: "command-task-sweep",
+          source: "task_sweep",
+          epicId: "epic-1",
+          requestedCount: 2,
+          deletedCount: 2,
+          failedCount: 0,
+        },
+      }),
+    ).toMatchObject({
+      payload: { kind: "epic", epicId: "epic-1" },
+    });
+  });
+
   it("renders a newer host's unknown operation payload from its common fields, with no destination", () => {
     const row = rowFromHostEntry({
       id: "testbox.provision:command-2",

@@ -123,6 +123,7 @@ function renderMarkdownWithBrowserRouting(
           hostId: SOURCE_TILE.hostId,
           lifecycle: "live",
           inventoryReady: true,
+          canMaterializeElectron: false,
           items: [],
           errorMessage: null,
           retry: () => undefined,

@@ -2,9 +2,9 @@ import type {
   BrowserCdpCommand,
   BrowserCdpResult,
   BrowserCdpTarget,
-  BrowserElectronTabHandoffSibling,
+  BrowserPrimaryProfileDelta,
   BrowserScreencastServerFrame,
-  BrowserSessionsClientFrame,
+  BrowserSessionProfileKind,
   BrowserStorageState,
 } from "@traycer/protocol/host/browser/contracts";
 import type {
@@ -33,6 +33,12 @@ export interface BrowserViewNativeTabCapability extends BrowserViewNativeTabKey 
 
 export interface BrowserViewEnsureTab extends BrowserViewNativeTabKey {
   readonly requestedUrl: string;
+  /**
+   * Which jar the guest is born into. It travels from the host's
+   * `createElectronTab` frame; `isolated` selects the session's own in-memory
+   * partition and never carries a seed.
+   */
+  readonly profile: BrowserSessionProfileKind;
   readonly seedStorageState: BrowserStorageState | null;
 }
 
@@ -167,6 +173,29 @@ export interface BrowserViewOpenTileRequest extends BrowserViewTileKey {
   readonly url: string;
 }
 
+/**
+ * What a reserved chord does to the tile that owns keyboard focus, when the
+ * chord is BROWSER-scoped rather than app-scoped. Main claims the keystroke
+ * from the guest page and names one of these back to the renderer, which runs
+ * it against the focused tile's own session tab.
+ */
+export type BrowserViewTileCommand = "closeTab" | "newTab" | "focusAddressBar";
+
+/**
+ * One row of the guest-focused input policy: which chord, and what it means
+ * while a native browser tile has focus. `command: null` is the app-forwarded
+ * case - main replays the keystroke into the host renderer so the app's own
+ * keybinding runs, exactly as if the guest never had focus.
+ */
+export interface BrowserViewReservedChord {
+  readonly token: string;
+  readonly command: BrowserViewTileCommand | null;
+}
+
+export interface BrowserViewTileCommandEvent extends BrowserViewTileKey {
+  readonly command: BrowserViewTileCommand;
+}
+
 export interface BrowserViewOverlayOcclusion {
   readonly overlayId: string;
   readonly tiles: readonly BrowserViewTileKey[];
@@ -184,6 +213,13 @@ export interface BrowserViewOverlaySnapshot extends BrowserViewTileKey {
 export interface BrowserViewOverlayOcclusionResult {
   readonly snapshots: readonly BrowserViewOverlaySnapshot[];
   readonly restoredTiles: readonly BrowserViewTileKey[];
+  /**
+   * How many of the requested tiles the main process actually knows. Zero
+   * means the occlusion did not take at all (the scan raced tile teardown or
+   * a surface rebind), so the caller must be able to try that overlay again
+   * instead of remembering it as done.
+   */
+  readonly matchedCount: number;
 }
 
 export interface BrowserViewOverlayReleaseResult {
@@ -193,6 +229,12 @@ export interface BrowserViewOverlayReleaseResult {
 export interface BrowserViewSnapshotInvalidatedChange extends BrowserViewTileKey {
   readonly reason: string;
 }
+
+/**
+ * One coalesced cookie-change window from the durable `primary` jar. Re-exported
+ * so renderer code sees the bridge and its payloads in one import.
+ */
+export type { BrowserPrimaryProfileDelta };
 
 export type BrowserPrimaryProfileCaptureResult =
   | {
@@ -211,40 +253,23 @@ export interface BrowserViewElectronTabCdpDispatch extends BrowserViewNativeTabC
   readonly command: BrowserCdpCommand;
 }
 
-export interface BrowserViewElectronTabHandoffChange extends BrowserViewNativeTabCapability {
-  readonly capturedUrl: string;
-  readonly capturedStorageState: BrowserStorageState | null;
-  readonly siblingTabs: readonly BrowserElectronTabHandoffSibling[];
-  readonly reason: Extract<
-    BrowserSessionsClientFrame,
-    { readonly kind: "electronTabHandoff" }
-  >["reason"];
-}
+/**
+ * Answer to one store-key wrap. `ok: false` is an expected outcome, not a bug:
+ * the keystore may be unavailable on this machine, and the host then simply
+ * stays sealed.
+ */
+export type BrowserStoreKeyWrapResult =
+  | { readonly ok: true; readonly wrappedKey: string }
+  | { readonly ok: false; readonly reason: string };
 
-type BrowserCookieCryptoMode = "real" | "basic" | "degraded";
-type BrowserCookiePersistence = "persistent" | "ephemeral";
-export type BrowserCookieStorageBackend =
-  | "basic_text"
-  | "gnome_libsecret"
-  | "kwallet"
-  | "kwallet5"
-  | "kwallet6"
-  | "unknown"
-  | null;
-export type BrowserCookieCryptoReason =
-  | "os-backed"
-  | "linux-basic-text"
-  | "keychain-denied"
-  | "encryption-unavailable"
-  | "unresolved";
-
-export interface BrowserCookieCryptoState {
-  readonly mode: BrowserCookieCryptoMode;
-  readonly persistence: BrowserCookiePersistence;
-  readonly reason: BrowserCookieCryptoReason;
-  readonly storageBackend: BrowserCookieStorageBackend;
-  readonly encryptionAvailable: boolean;
-}
+/**
+ * Answer to one store-key unwrap. `ok: false` means this machine cannot open
+ * the host's blob (keystore item ACL changed, or a different machine wrapped
+ * it); the host is told so it can stay sealed instead of re-minting.
+ */
+export type BrowserStoreKeyUnwrapResult =
+  | { readonly ok: true; readonly rawKey: string }
+  | { readonly ok: false; readonly reason: string };
 
 export type BrowserViewConsoleLevel =
   | "log"
@@ -307,7 +332,7 @@ export type {
 
 export interface BrowserViewBridge {
   updateBounds(input: BrowserViewBoundsUpdate): Promise<void>;
-  setReservedChords(tokens: readonly string[]): Promise<void>;
+  setReservedChords(chords: readonly BrowserViewReservedChord[]): Promise<void>;
   findInPage(input: BrowserViewFindRequest): Promise<void>;
   stopFindInPage(input: BrowserViewFindStop): Promise<void>;
   cancelDownload(input: BrowserViewDownloadCancel): Promise<void>;
@@ -332,10 +357,70 @@ export interface BrowserViewBridge {
   releaseOverlay(
     input: BrowserViewOverlayRelease,
   ): Promise<BrowserViewOverlayReleaseResult>;
-  getCookieCryptoState(): Promise<BrowserCookieCryptoState>;
+  /**
+   * Does this machine keep browser logins across restarts? On by default,
+   * Chrome-style; the only way it is false is the user turning it off in
+   * Settings, and the answer is per-machine (desktop userData), never per
+   * account.
+   */
+  getSaveLogins(): Promise<boolean>;
+  /**
+   * Turns saving on or off and moves every live `primary` tile onto the jar the
+   * new answer names, at the same URL. Nothing is copied either way: turning it
+   * off leaves the `persist:` jar on disk untouched, turning it on drops the
+   * in-memory one. Returns the settled value.
+   */
+  setSaveLogins(enabled: boolean): Promise<boolean>;
+  /**
+   * Seals the host's freshly minted primary-profile store key with this
+   * machine's OS keystore (spec §6.2). The host keeps the returned blob; it
+   * never sees a key this machine cannot open again.
+   */
+  wrapStoreKey(rawKey: string): Promise<BrowserStoreKeyWrapResult>;
+  /** Opens a blob wrapped earlier on this machine, so the host can unseal. */
+  unwrapStoreKey(wrappedKey: string): Promise<BrowserStoreKeyUnwrapResult>;
+  /**
+   * "Forget all browser logins" (spec §6.5), this machine's half: clear the
+   * `primary` jars - the durable partition always, and the ephemeral one the
+   * live guests are on when saving is off, which otherwise keeps them signed
+   * in until the app restarts - drop the remembered localStorage origins, and
+   * recreate the open primary tiles at their URLs on the empty jar.
+   *
+   * Called only in answer to the host's `primaryProfileForgotten`, so the key
+   * and the host's slice are already gone by the time the jar is cleared -
+   * never the other way round, which would leave the host holding logins the
+   * user believes are forgotten.
+   */
+  forgetLogins(): Promise<void>;
+  /**
+   * Push for every coalesced cookie change in the durable `primary` jar (spec
+   * §6.3). Unsolicited and continuous: the renderer holding the host stream
+   * forwards each one as a `primaryProfileDelta` client frame, so a login
+   * reaches the store within a window instead of waiting for teardown.
+   */
+  onPrimaryProfileDelta(handler: (delta: BrowserPrimaryProfileDelta) => void): {
+    dispose: () => void;
+  };
   /** Renderer confirms the replacement frame is painted before main parks the view. */
   readonly overlayPaintAck: (overlayId: string) => Promise<void>;
   capturePrimaryProfile(): Promise<BrowserPrimaryProfileCaptureResult>;
+  /**
+   * "Clear cookies for this site" (spec §6.5): removes the tile's registrable
+   * domain from the shared `primary` jars - cookies and the localStorage of
+   * every remembered origin under it - and reports the emptied slice to the
+   * host as one delta, which is what turns it into tombstones. The durable jar
+   * always, and the ephemeral one as well when saving is off, since it is the
+   * one the live tiles are on then. A tile with no site to name - a private
+   * session, or a non-http(s) page - is a no-op.
+   */
+  clearSite(input: BrowserViewTileKey): Promise<void>;
+  /**
+   * The receiving half of the same action: the host says one site was cleared
+   * somewhere else for this user (`primaryProfileEvict`), so this machine's
+   * `primary` jars drop it too. Emits **no** delta - the store already recorded the
+   * tombstones, and an echo would only re-assert what it just decided.
+   */
+  evictSite(domain: string): Promise<void>;
   onFindChange(handler: (change: BrowserViewFindChange) => void): {
     dispose: () => void;
   };
@@ -348,6 +433,10 @@ export interface BrowserViewBridge {
     dispose: () => void;
   };
   onOpenTileRequest(handler: (change: BrowserViewOpenTileRequest) => void): {
+    dispose: () => void;
+  };
+  /** A browser-scoped reserved chord fired inside a focused guest page. */
+  onTileCommand(handler: (event: BrowserViewTileCommandEvent) => void): {
     dispose: () => void;
   };
   onSnapshotInvalidated(
@@ -386,8 +475,5 @@ export interface BrowserViewBridge {
   ): { dispose: () => void };
   onNativeTabStatusChange(
     handler: (change: BrowserViewNativeTabStatusChange) => void,
-  ): { dispose: () => void };
-  onElectronTabHandoff(
-    handler: (change: BrowserViewElectronTabHandoffChange) => void,
   ): { dispose: () => void };
 }

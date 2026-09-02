@@ -125,6 +125,7 @@ const FORM: SupportSubmitReportRequest = {
   allowContact: false,
   includeDesktopLog: true,
   includeHostLog: true,
+  includeBrowserDiagnostics: true,
   includeDiagnostics: true,
   images: [],
   overrideTitle: null,
@@ -152,6 +153,10 @@ function buildService(signedInEmail: string | null): DesktopSupportService {
     pendingLoginItemRevisionFile: join(tempDir, "login-item"),
     substrateFile: join(tempDir, "substrate.json"),
     transitionJournalFile: join(tempDir, "transition.json"),
+    browserTelemetryFile: join(tempDir, "browser-telemetry.jsonl"),
+    browserTelemetryRotatedFile: join(tempDir, "browser-telemetry.jsonl.1"),
+    browserTraceFile: join(tempDir, "browser-trace.jsonl"),
+    browserTraceRotatedFile: join(tempDir, "browser-trace.jsonl.1"),
     environment: "production",
   };
   return new DesktopSupportService({
@@ -423,6 +428,74 @@ describe("DesktopSupportService.submitReport - consent panel log toggles", () =>
       KEY,
     );
     expect(lastHint().attachments).toEqual([]);
+  });
+});
+
+// Ticket 03 / plan D3: one consent flag covers both browser diagnostic
+// files, each skipped independently of the other when its own tail is
+// empty - same "toggle off must actually withhold it" invariant as the
+// desktop/host toggles above, plus the "absence is normal" skip-on-empty
+// rule that has no desktop/host equivalent (those two always exist).
+describe("DesktopSupportService.submitReport - browser diagnostics consent (ticket 03)", () => {
+  it("skips both browser attachments when neither file exists, even with the toggle on", async () => {
+    const service = buildService(null);
+    await service.freezeEvidence(KEY, null);
+    await service.submitReport(
+      { ...FORM, includeBrowserDiagnostics: true },
+      KEY,
+    );
+    expect(lastHint().attachments.map((a) => a.filename)).toEqual([
+      "desktop.log",
+      "local-host.log",
+    ]);
+  });
+
+  it("attaches both browser files when present and the toggle is on", async () => {
+    await writeFile(
+      join(tempDir, "browser-telemetry.jsonl"),
+      '{"seq":1,"kind":"nav"}\n',
+      "utf8",
+    );
+    await writeFile(
+      join(tempDir, "browser-trace.jsonl"),
+      '{"seq":1,"kind":"cdp.command"}\n',
+      "utf8",
+    );
+    const service = buildService(null);
+    await service.freezeEvidence(KEY, null);
+    await service.submitReport(
+      { ...FORM, includeBrowserDiagnostics: true },
+      KEY,
+    );
+    expect(lastHint().attachments.map((a) => a.filename)).toEqual([
+      "desktop.log",
+      "local-host.log",
+      "browser-telemetry.jsonl",
+      "browser-trace.jsonl",
+    ]);
+  });
+
+  it("withholds both browser attachments when the toggle is off, even though the files exist", async () => {
+    await writeFile(
+      join(tempDir, "browser-telemetry.jsonl"),
+      '{"seq":1,"kind":"nav"}\n',
+      "utf8",
+    );
+    await writeFile(
+      join(tempDir, "browser-trace.jsonl"),
+      '{"seq":1,"kind":"cdp.command"}\n',
+      "utf8",
+    );
+    const service = buildService(null);
+    await service.freezeEvidence(KEY, null);
+    await service.submitReport(
+      { ...FORM, includeBrowserDiagnostics: false },
+      KEY,
+    );
+    expect(lastHint().attachments.map((a) => a.filename)).toEqual([
+      "desktop.log",
+      "local-host.log",
+    ]);
   });
 });
 
@@ -1216,6 +1289,41 @@ describe("DesktopSupportService.saveDiagnosticBundle", () => {
     };
     expect(bundle.logs.desktop).toBe("");
     expect(bundle.logs.host).not.toBe("");
+  });
+
+  it("includes both browser log tails when present and the toggle is on, blank when toggled off (ticket 03)", async () => {
+    await writeFile(
+      join(tempDir, "browser-telemetry.jsonl"),
+      '{"seq":1,"kind":"nav"}\n',
+      "utf8",
+    );
+    await writeFile(
+      join(tempDir, "browser-trace.jsonl"),
+      '{"seq":1,"kind":"cdp.command"}\n',
+      "utf8",
+    );
+    const service = buildService(null);
+    await service.freezeEvidence(KEY, null);
+
+    const { path: onPath } = await service.saveDiagnosticBundle(
+      { ...FORM, includeBrowserDiagnostics: true },
+      KEY,
+    );
+    const onBundle = JSON.parse(await readFile(onPath, "utf8")) as {
+      logs: { browserTelemetry: string; browserTrace: string };
+    };
+    expect(onBundle.logs.browserTelemetry).toContain('"kind":"nav"');
+    expect(onBundle.logs.browserTrace).toContain('"kind":"cdp.command"');
+
+    const { path: offPath } = await service.saveDiagnosticBundle(
+      { ...FORM, includeBrowserDiagnostics: false },
+      KEY,
+    );
+    const offBundle = JSON.parse(await readFile(offPath, "utf8")) as {
+      logs: { browserTelemetry: string; browserTrace: string };
+    };
+    expect(offBundle.logs.browserTelemetry).toBe("");
+    expect(offBundle.logs.browserTrace).toBe("");
   });
 
   it("omits appVersion/platform/arch/versions/host from the bundle when includeDiagnostics is off", async () => {

@@ -7,6 +7,7 @@ import type {
   BrowserViewViewportPresetId,
 } from "@traycer-clients/shared/platform/browser-view";
 import type { BrowserAnnotationSession } from "../annotation/browser-annotation-session";
+import type { BrowserSessionProfile } from "../browser-session";
 import type { BrowserDebugSession } from "../debug/browser-debug-session";
 import type { BrowserViewEntryKey } from "./browser-view-entry-registry";
 import type {
@@ -40,14 +41,27 @@ export interface BrowserViewEntry {
   surfaceBindingId: string | null;
   readonly guestKey: string;
   readonly identity: BrowserViewNativeIdentity;
+  /**
+   * The jar this guest was born into, kept on the entry because teardown is
+   * the only thing that can tell an isolated session's partition it may go:
+   * by then the host frame that named the profile is long gone.
+   */
+  readonly profile: BrowserSessionProfile;
   readonly view: ManagedBrowserView;
   readonly listeners: BrowserViewListenerMap;
   parentWindowId: string | null;
   desiredVisible: boolean;
+  /**
+   * Last rect the renderer measured for this tile, in RENDERER CSS PIXELS -
+   * the space `getBoundingClientRect` reports and page zoom scales. The native
+   * rect is always re-derived from it (`BrowserViewGeometry.applyBounds`), so
+   * a zoom change needs no new measurement.
+   */
   bounds: BrowserViewBounds | null;
   /**
-   * BT-101: last effective rect actually handed to `view.setBounds`. Identical
-   * follow-up updates coalesce to a no-op so a streamed drag burst does not
+   * BT-101: last effective rect, in window DIPs, actually handed to
+   * `view.setBounds`. Identical follow-up
+   * updates coalesce to a no-op so a streamed drag burst does not
    * relayout the guest per frame for unchanged geometry. Invalidated when
    * anything else moves the view directly (PiP offscreen parking).
    */

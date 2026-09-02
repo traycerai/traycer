@@ -2,7 +2,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
@@ -32,6 +32,16 @@ const mocks = vi.hoisted(() => ({
   copyImageBlobPromiseToClipboard:
     vi.fn<(blobPromise: Promise<Blob>) => Promise<void>>(),
   saveBlobToDisk: vi.fn(),
+  downloadBlobToDevice: vi.fn(),
+  hasSeparateDownloadRoute: vi.fn<() => boolean>(),
+  canDownloadToDevice: vi.fn<() => boolean>(),
+  useCanCopyImages: vi.fn<() => boolean>(),
+}));
+
+// The shell capability behind "Copy image". Mocked at the hook rather than by
+// mounting a runner host, so a case states the one fact it varies.
+vi.mock("@/hooks/images/use-can-copy-images", () => ({
+  useCanCopyImages: mocks.useCanCopyImages,
 }));
 
 // html-to-image's `toBlob` rasterises via a canvas that jsdom can't back -
@@ -51,11 +61,23 @@ vi.mock("@/lib/images/copy-image-to-clipboard", () => ({
 
 vi.mock("@/lib/files/save-blob-to-disk", () => ({
   saveBlobToDisk: mocks.saveBlobToDisk,
+  downloadBlobToDevice: mocks.downloadBlobToDevice,
+  hasSeparateDownloadRoute: mocks.hasSeparateDownloadRoute,
+  canDownloadToDevice: mocks.canDownloadToDevice,
   // Browser-runtime shape: the picker never reports a path, so the saved
   // toast has no "Open file" action to offer.
   canOpenSavedFile: () => false,
   openSavedFile: vi.fn(),
 }));
+
+beforeEach(() => {
+  // The shape of every shell whose own save route IS the download - desktop
+  // and a plain browser tab. The share-sheet shape is opted into per case.
+  mocks.hasSeparateDownloadRoute.mockReturnValue(false);
+  // Every shell but a chooser-only one can honour a Download.
+  mocks.canDownloadToDevice.mockReturnValue(true);
+  mocks.useCanCopyImages.mockReturnValue(true);
+});
 
 afterEach(() => {
   cleanup();
@@ -63,6 +85,10 @@ afterEach(() => {
   mocks.copyImageBlobToClipboard.mockReset();
   mocks.copyImageBlobPromiseToClipboard.mockReset();
   mocks.saveBlobToDisk.mockReset();
+  mocks.downloadBlobToDevice.mockReset();
+  mocks.hasSeparateDownloadRoute.mockReset();
+  mocks.canDownloadToDevice.mockReset();
+  mocks.useCanCopyImages.mockReset();
 });
 
 const ZERO_PROVENANCE_SPLIT: UsageSummaryResponse["summary"]["totals"]["provenanceSplit"] =
@@ -321,7 +347,7 @@ describe("<UsageSummaryPanel /> image export", () => {
     const user = userEvent.setup();
     const blob = new Blob(["fake-png-bytes"], { type: "image/png" });
     mocks.captureUsageExportImageBlob.mockResolvedValue(blob);
-    mocks.saveBlobToDisk.mockResolvedValue({
+    mocks.downloadBlobToDevice.mockResolvedValue({
       name: "traycer-usage-30d.png",
       path: null,
     });
@@ -332,11 +358,11 @@ describe("<UsageSummaryPanel /> image export", () => {
     await user.click(screen.getByTestId("usage-download-image"));
 
     await waitFor(() => {
-      expect(mocks.saveBlobToDisk).toHaveBeenCalledWith(
+      expect(mocks.downloadBlobToDevice).toHaveBeenCalledWith(
         blob,
         expect.stringMatching(/^traycer-usage-30d\.png$/),
         // This harness mounts no runner host, so there is no native save
-        // route and the save falls through to the browser APIs.
+        // route and the download falls through to the browser APIs.
         null,
       );
     });
@@ -346,5 +372,87 @@ describe("<UsageSummaryPanel /> image export", () => {
       subheading: EXPECTED_SUBHEADING,
     });
     expect(mocks.copyImageBlobPromiseToClipboard).not.toHaveBeenCalled();
+  });
+
+  it("offers no share control on a shell whose save route is already the download", async () => {
+    renderPanel(usageSummaryResponse);
+    await screen.findByTestId("usage-cost-figure");
+
+    expect(screen.queryByTestId("usage-share-image")).toBeNull();
+    expect(screen.getByTestId("usage-copy-image")).toBeTruthy();
+  });
+
+  it("adds share alongside copy on a shell whose save route is an OS chooser", async () => {
+    // The iOS install: its `saveFile` reaches the share sheet, so share and
+    // download are two different acts - and WKWebView does honour an image
+    // clipboard write, so Copy stays. All three controls.
+    mocks.hasSeparateDownloadRoute.mockReturnValue(true);
+    renderPanel(usageSummaryResponse);
+    await screen.findByTestId("usage-cost-figure");
+    await screen.findByTestId("usage-activity-section");
+
+    expect(screen.getByTestId("usage-copy-image")).toBeTruthy();
+    const shareButton = screen.getByTestId("usage-share-image");
+    expect(
+      shareButton instanceof HTMLButtonElement && shareButton.disabled,
+    ).toBe(false);
+    expect(screen.getByTestId("usage-download-image")).toBeTruthy();
+  });
+
+  it("drops copy where the shell cannot put an image on the clipboard", async () => {
+    // The Android install: the write RESOLVES having written nothing, so a
+    // Copy button would report a success the clipboard never received. Share
+    // and download are unaffected, and the sheet's own Copy action is the
+    // route that works.
+    mocks.hasSeparateDownloadRoute.mockReturnValue(true);
+    mocks.useCanCopyImages.mockReturnValue(false);
+    renderPanel(usageSummaryResponse);
+    await screen.findByTestId("usage-cost-figure");
+    await screen.findByTestId("usage-activity-section");
+
+    expect(screen.queryByTestId("usage-copy-image")).toBeNull();
+    expect(screen.getByTestId("usage-share-image")).toBeTruthy();
+    expect(screen.getByTestId("usage-download-image")).toBeTruthy();
+  });
+
+  it("drops copy on a clipboard-less shell even with no share route", async () => {
+    // The two capabilities are independent: losing Copy must not depend on
+    // having gained Share.
+    mocks.useCanCopyImages.mockReturnValue(false);
+    renderPanel(usageSummaryResponse);
+    await screen.findByTestId("usage-cost-figure");
+
+    expect(screen.queryByTestId("usage-copy-image")).toBeNull();
+    expect(screen.queryByTestId("usage-share-image")).toBeNull();
+    expect(screen.getByTestId("usage-download-image")).toBeTruthy();
+  });
+
+  it("sends share through the shell's own save route and download past it", async () => {
+    const user = userEvent.setup();
+    const blob = new Blob(["fake-png-bytes"], { type: "image/png" });
+    mocks.hasSeparateDownloadRoute.mockReturnValue(true);
+    mocks.captureUsageExportImageBlob.mockResolvedValue(blob);
+    mocks.saveBlobToDisk.mockResolvedValue({ name: "shared.png", path: null });
+    mocks.downloadBlobToDevice.mockResolvedValue({
+      name: "traycer-usage-30d.png",
+      path: "file:///docs/Traycer/traycer-usage-30d.png",
+    });
+    renderPanel(usageSummaryResponse);
+    await screen.findByTestId("usage-cost-figure");
+    await screen.findByTestId("usage-activity-section");
+
+    await user.click(screen.getByTestId("usage-share-image"));
+    await waitFor(() => {
+      expect(mocks.saveBlobToDisk).toHaveBeenCalledTimes(1);
+    });
+    expect(mocks.downloadBlobToDevice).not.toHaveBeenCalled();
+
+    await user.click(screen.getByTestId("usage-download-image"));
+    await waitFor(() => {
+      expect(mocks.downloadBlobToDevice).toHaveBeenCalledTimes(1);
+    });
+    // The share leg did not run again: the two controls are genuinely
+    // separate routes, not one route under two labels.
+    expect(mocks.saveBlobToDisk).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,3 +1,4 @@
+import { INERT_ROOT_STATE_PORT } from "@/stores/epics/open-epic/test-support/root-state-port-fixture";
 import { TabStrip } from "@/components/layout/tabs/tab-strip";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { paneTabRefs } from "@/stores/epics/canvas/actions";
@@ -63,6 +64,7 @@ import {
 } from "vitest";
 
 import { anyTooltipHasText } from "@/components/ui/__tests__/tooltip-probe";
+import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
 const notificationIndicatorTestState = vi.hoisted(
   (): {
@@ -336,28 +338,34 @@ function buildHeaderEpicHandle(
     isDirty: false,
     unsyncedQueueSize: 0,
     bindingVersion: 0,
+    installedArm: null,
+    chatIngestSeq: 0,
+    tuiAgentIngestSeq: 0,
   };
   const storeCallable = (_selector: unknown): unknown => state;
   const storeBase: unknown = Object.assign(storeCallable, {
     getState: () => state as never,
     subscribe: () => () => undefined,
   });
-  const awareness = {
-    getStates: () => new Map<number, Record<string, unknown>>(),
-    on: () => undefined,
-    off: () => undefined,
-  };
   return {
     epicId: tab.id,
     userId: null,
-    doc: {} as never,
-    awareness: awareness as never,
+    // A production handle has no `doc` / `awareness`: the replica lives on the
+    // worker thread and a `Y.Doc` cannot cross a structured clone.
+    projection: {
+      accept: () => null,
+      apply: () => {},
+      reject: () => {},
+    },
+    body: { applyDocUpdate: () => {}, applyAwareness: () => {} },
     store: storeBase as OpenEpicStoreHandle["store"],
     dispose: () => undefined,
     detachTransport: () => undefined,
     requestFreshSnapshot: () => undefined,
+    retryTransport: () => undefined,
     isClean: () => true,
     hotArtifactRoomIdsForTests: () => [],
+    ...INERT_ROOT_STATE_PORT,
   };
 }
 
@@ -375,6 +383,7 @@ function registerChatSession(epicId: string, chatId: string): void {
     },
     (factoryEpicId, factoryChatId) =>
       createChatSessionStore({
+        environment: CHAT_STORE_TEST_ENVIRONMENT,
         hostId: "host-a",
         epicId: factoryEpicId,
         chatId: factoryChatId,

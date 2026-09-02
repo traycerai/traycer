@@ -8,13 +8,21 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  FakeStreamClient,
+  PEEK_NODE,
+  clearScreencastOwner,
+  hostDirectoryEntryModule,
+  hostStreamClientForWithAuthModule,
+  liveStream as fixtureLiveStream,
+  streamAuthRevalidatorModule,
+  tabHostIdModule,
+  tileBodyVisibleModule,
+  type FakeStreamSession,
+} from "@/components/epic-canvas/renderers/__tests__/browser-peek-tile-stream-fixture";
+import {
   BrowserPeekTile,
   type BrowserPeekNode,
 } from "@/components/epic-canvas/renderers/browser-peek-tile";
-import {
-  FakeStreamClient,
-  type FakeStreamSession,
-} from "@/components/epic-canvas/renderers/__tests__/browser-peek-tile-stream-fixture";
 import { isMac } from "@/lib/keybindings/platform";
 import { useScreencastArmedStore } from "@/stores/screencast-armed-store";
 
@@ -23,36 +31,26 @@ const hookState = vi.hoisted(() => ({
   visible: true,
 }));
 
-vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
-  useTabHostId: () => "host-test",
-}));
+vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () =>
+  tabHostIdModule(),
+);
 
-vi.mock("@/components/epic-canvas/hooks/use-tile-body-visible", () => ({
-  useTileBodyVisible: () => hookState.visible,
-}));
+vi.mock("@/components/epic-canvas/hooks/use-tile-body-visible", () =>
+  tileBodyVisibleModule(hookState),
+);
 
-vi.mock("@/hooks/host/use-host-directory-entry", () => ({
-  useHostDirectoryEntry: () => ({ hostId: "host-test" }),
-}));
+vi.mock("@/hooks/host/use-host-directory-entry", () =>
+  hostDirectoryEntryModule(),
+);
 
-vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
-  useHostStreamClientFor: () => hookState.streamClient,
-  authenticatedHostStreamKey: () => "authenticated-host-test",
-  authenticatedOwnerIdentityKey: () => "local\u0000host-test\u0000user-test",
-}));
+vi.mock("@/hooks/host/use-host-stream-client-for", () =>
+  hostStreamClientForWithAuthModule(hookState),
+);
 
-vi.mock("@/lib/host/stream-auth-revalidator", () => ({
-  useStreamAuthRevalidator: () => null,
-}));
+vi.mock("@/lib/host/stream-auth-revalidator", () =>
+  streamAuthRevalidatorModule(),
+);
 
-const PEEK_NODE: BrowserPeekNode = {
-  id: "browser-peek-headless-1",
-  instanceId: "peek-instance-1",
-  hostId: "host-test",
-  sessionId: "headless-1",
-  tabId: "headless-tab-1",
-  initialUrl: "http://localhost:3000",
-};
 const PEEK_OWNER_ID = [
   PEEK_NODE.hostId,
   PEEK_NODE.sessionId,
@@ -63,12 +61,7 @@ const PEEK_OWNER_ID = [
 const PASTE_TEXT = "pasted from clipboard";
 
 function liveStream(): FakeStreamSession {
-  const sessions = hookState.streamClient?.sessions ?? [];
-  const stream = sessions.at(-1);
-  if (stream === undefined) {
-    throw new Error("expected browser.screencast stream");
-  }
-  return stream;
+  return fixtureLiveStream(hookState);
 }
 
 function overlayButton(): HTMLElement {
@@ -152,11 +145,6 @@ function armPeekTile(stream: FakeStreamSession): void {
   });
 }
 
-function clearScreencastOwner(): void {
-  const store = useScreencastArmedStore.getState();
-  if (store.ownerId !== null) store.release(store.ownerId);
-}
-
 describe("BrowserPeekTile shortcuts and paste", () => {
   beforeEach(() => {
     hookState.visible = true;
@@ -177,6 +165,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -208,6 +197,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -225,6 +215,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -238,6 +229,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     await flushMacrotask();
@@ -255,6 +247,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -280,6 +273,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -307,6 +301,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -333,6 +328,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -352,6 +348,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -382,6 +379,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -396,6 +394,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     await flushMacrotask();
@@ -410,6 +409,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -423,13 +423,14 @@ describe("BrowserPeekTile shortcuts and paste", () => {
     expect(useScreencastArmedStore.getState().ownerId).toBeNull();
   });
 
-  it("clears the armed flag on Escape-free blur out of the tile", async () => {
+  it("keeps control across a blur out of the tile", async () => {
     render(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -440,7 +441,12 @@ describe("BrowserPeekTile shortcuts and paste", () => {
     fireEvent.blur(imeInput(), { relatedTarget: document.body });
     await flushMacrotask();
 
-    expect(useScreencastArmedStore.getState().ownerId).toBeNull();
+    // Focus is not ownership: release is explicit (the Release button above),
+    // or a steal, a hidden tile, or a dead transport - never a click away.
+    expect(useScreencastArmedStore.getState().ownerId).toBe(PEEK_OWNER_ID);
+    expect(framesOfKind(stream, "disarm")).toEqual([]);
+    // The badge reads arm state, not focus state.
+    expect(screen.getByText("Controlling")).not.toBeNull();
   });
 
   it("does not preventDefault the V keydown of a paste chord", async () => {
@@ -450,6 +456,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -468,6 +475,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -487,6 +495,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -525,6 +534,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -550,6 +560,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -580,6 +591,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -609,6 +621,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
           paneId="pane-1"
           epicId="epic-1"
           node={PEEK_NODE}
+          completeMeans="ended"
         />
       </div>,
     );
@@ -640,12 +653,14 @@ describe("BrowserPeekTile shortcuts and paste", () => {
           paneId="pane-1"
           epicId="epic-1"
           node={PEEK_NODE}
+          completeMeans="ended"
         />
         <BrowserPeekTile
           viewTabId="view-tab-1"
           paneId="pane-1"
           epicId="epic-1"
           node={sibling}
+          completeMeans="ended"
         />
       </div>,
     );
@@ -659,6 +674,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
           paneId="pane-1"
           epicId="epic-1"
           node={PEEK_NODE}
+          completeMeans="ended"
         />
       </div>,
     );

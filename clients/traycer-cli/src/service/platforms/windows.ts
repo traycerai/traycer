@@ -3,6 +3,8 @@ import {
   isServiceMutationAuthorityError,
   verifyServiceMutationAuthority,
 } from "../mutation-authority";
+import { markRegistrationCommitted } from "../cli-invocation-record";
+import { createCliLogger } from "../../logger";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -166,6 +168,12 @@ async function installService(
   // the controller's install → verified `/Run` composition can be unit-tested
   // without touching a real user service surface.
   const staged = await taskInstallDeps.stageTaskDefinition(options);
+  // Set the moment `/Create` returns: from here the task exists with its
+  // logon trigger, and any throw - the staging cleanup below included, whose
+  // default verifies mutation authority first - is post-registration and must
+  // reach a lease-holding caller as such (`didServiceRegistrationCommit`).
+  let created = false;
+  let createFailure: unknown = null;
   try {
     await run(
       "schtasks",
@@ -177,8 +185,42 @@ async function installService(
         tolerateNonZeroExit: false,
       },
     );
+    created = true;
   } catch (cause) {
-    if (isServiceMutationAuthorityError(cause)) throw cause;
+    createFailure = cause;
+  }
+  // Staging cleanup runs whether `/Create` succeeded or not, and it runs
+  // BEFORE the `/Create` failure is classified, because the two outcomes are
+  // ranked: an authority loss observed here outranks a `/Create` failure.
+  //
+  // Removing the staging directory is best effort - a leftover temp dir
+  // changes nothing about the task - so an ordinary filesystem failure is
+  // logged and swallowed. That is what lets a `/Create` failure stay the
+  // error the operator sees, and after a successful `/Create` it is what lets
+  // a committed registration go on to its `/Run` verification.
+  //
+  // An authority loss is different: it is NOT about this directory. The
+  // default cleanup verifies mutation authority before touching anything, and
+  // a revoked lease must reach the lease-holding caller whatever step observed
+  // it - deliberately even when `/Create` also failed, since "may not mutate
+  // at all" is the more fundamental fact of the two. After `/Create` succeeded
+  // it is post-registration, and every post-registration throw is marked
+  // (`didServiceRegistrationCommit`), by reference so the error keeps its
+  // identity. Thrown from here rather than from a `finally` so the ranking is
+  // explicit in the control flow instead of relying on a `finally` throw
+  // replacing an in-flight one.
+  const cleanupAuthorityLoss = await removeStagedTaskDefinition(
+    staged.tmpDir,
+    taskName,
+    options.label.environment,
+  );
+  if (cleanupAuthorityLoss !== null) {
+    throw created
+      ? markRegistrationCommitted(cleanupAuthorityLoss)
+      : cleanupAuthorityLoss;
+  }
+  if (createFailure !== null) {
+    if (isServiceMutationAuthorityError(createFailure)) throw createFailure;
     // Roll the launcher back: `stageTaskDefinition` wrote the persistent
     // VBS before /Create ran, and a launcher without a task is an orphan
     // that outlives the failed install (only a later uninstall would
@@ -190,17 +232,38 @@ async function installService(
     );
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
-      message: `schtasks /Create failed for ${taskName}: ${describeCause(cause)}`,
-      details: { task: taskName, cause: describeCause(cause) },
+      message: `schtasks /Create failed for ${taskName}: ${describeCause(createFailure)}`,
+      details: { task: taskName, cause: describeCause(createFailure) },
       exitCode: 1,
     });
-  } finally {
-    await taskInstallDeps.removeStagedTaskDefinition(staged.tmpDir);
   }
   // Registration is also the recovery launch. Verify this exact `/Run` so
   // callers never baseline after it and mistake IgnoreNew's suppressed second
   // run for a failed repair.
   await runTaskAndVerifyStart(options.label, run);
+}
+
+/**
+ * Remove the staging directory, returning the ONE failure that outranks
+ * whatever the caller is in the middle of: a mutation-authority loss.
+ * Every other failure is best effort and swallowed here - see the caller.
+ */
+async function removeStagedTaskDefinition(
+  tmpDir: string,
+  taskName: string,
+  environment: ServiceLabel["environment"],
+): Promise<unknown | null> {
+  try {
+    await taskInstallDeps.removeStagedTaskDefinition(tmpDir);
+    return null;
+  } catch (cause) {
+    if (isServiceMutationAuthorityError(cause)) return cause;
+    createCliLogger(environment).debug(
+      "Failed to remove the staged task definition; leaving it behind",
+      { task: taskName, cause: describeCause(cause) },
+    );
+    return null;
+  }
 }
 
 async function uninstallService(
@@ -367,11 +430,23 @@ async function runTaskAndVerifyStart(
       tolerateNonZeroExit: false,
     });
   } catch (cause) {
-    if (isServiceMutationAuthorityError(cause)) throw cause;
+    // Post-registration: `/Create` succeeded, so the task exists with its
+    // logon trigger whether or not this `/Run` was accepted. A caller holding
+    // a host-start adoption lease honours it before surfacing this
+    // (`didServiceRegistrationCommit`) rather than refusing a child the
+    // scheduler may already be starting - an authority loss landing here
+    // included, which keeps its identity and is marked by reference.
+    if (isServiceMutationAuthorityError(cause)) {
+      throw markRegistrationCommitted(cause);
+    }
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
       message: `schtasks /Run failed for ${taskName}: ${describeCause(cause)}`,
-      details: { task: taskName, cause: describeCause(cause) },
+      details: {
+        task: taskName,
+        cause: describeCause(cause),
+        registrationCommitted: true,
+      },
       exitCode: 1,
     });
   }
@@ -380,12 +455,23 @@ async function runTaskAndVerifyStart(
   // baseline, or a post-baseline bootstrap marker). On none, surface the
   // task's Last Run Result so Retry can escalate to a task rewrite.
   const deadline = Date.now() + startEvidenceDeps.verifyTimeoutMs;
-  while (Date.now() < deadline) {
-    const evidence = await evidenceReader.collect(label.environment);
-    if (evidence !== null) {
-      return;
+  try {
+    while (Date.now() < deadline) {
+      const evidence = await evidenceReader.collect(label.environment);
+      if (evidence !== null) {
+        return;
+      }
+      await startEvidenceDeps.sleep(startEvidenceDeps.verifyPollMs);
     }
-    await startEvidenceDeps.sleep(startEvidenceDeps.verifyPollMs);
+  } catch (cause) {
+    // Everything after an accepted `/Run` is post-registration, the evidence
+    // reader's own failures included (a `host.log` handle that cannot be
+    // read or closed rejects straight out of `collect`). Marked by reference
+    // so the error keeps its identity; without this a lease-holding caller
+    // would cancel the lease while the scheduler may already be launching
+    // the supervisor - the exact gap the constructed timeout below closes
+    // for its own case.
+    throw markRegistrationCommitted(cause);
   }
   const lastRunResult = await readTaskLastRunResult(taskName, run);
   throw cliError({
@@ -398,6 +484,10 @@ async function runTaskAndVerifyStart(
       task: taskName,
       lastRunResult,
       verifyTimeoutMs: startEvidenceDeps.verifyTimeoutMs,
+      // Same post-registration classification as the `/Run` failure above:
+      // the task exists and the scheduler accepted the run; only the spawn
+      // evidence is missing.
+      registrationCommitted: true,
     },
     exitCode: 1,
   });
@@ -425,7 +515,12 @@ async function readTaskLastRunResult(
     );
     return parseSchtasksLastRunResult(result.stdout);
   } catch (cause) {
-    if (isServiceMutationAuthorityError(cause)) throw cause;
+    // Only ever reached after `/Run` was accepted on a task `/Create` made,
+    // so an authority loss here is post-registration like the `/Run` failure
+    // it is diagnosing.
+    if (isServiceMutationAuthorityError(cause)) {
+      throw markRegistrationCommitted(cause);
+    }
     return null;
   }
 }

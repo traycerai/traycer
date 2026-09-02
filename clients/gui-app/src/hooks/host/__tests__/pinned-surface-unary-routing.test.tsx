@@ -57,6 +57,7 @@ function getSpine(): HostClient<HostRpcRegistry> {
 vi.mock("@/lib/host/runtime", () => ({
   // The SPINE - what an explicit host id is resolved AGAINST.
   useHostRuntimeClient: getSpine,
+  useHostBinding: () => ({ hostClient: getSpine(), hostId: null }),
   // The AMBIENT client, pinned to host A. Any hook still reading this instead
   // of its own `hostId` lands on A, which is the whole point of the fixture.
   useHostClient: () =>
@@ -72,7 +73,12 @@ vi.mock("@/providers/use-runner-host", () => ({
 }));
 
 vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
-  useReactiveHostReadiness: () => ({ hostId: "host-b", isReady: true }),
+  useReactiveHostReadiness: () => ({
+    hostId: "host-b",
+    isReady: true,
+    hasRpcEndpoint: true,
+    canExecute: true,
+  }),
 }));
 
 import { useGitCapabilitiesQuery } from "@/hooks/git/use-git-capabilities-query";

@@ -2,6 +2,7 @@ import type { SyntheticEvent } from "react";
 import type {
   BrowserNavState,
   BrowserScreencastUnsupportedFeature,
+  BrowserSessionProfileKind,
 } from "@traycer/protocol/host/browser/contracts";
 import type {
   TileChromeCapabilities,
@@ -40,6 +41,7 @@ const SCREENCAST_UNSUPPORTED_INTERACTION_TOASTS = {
 const UNUSED_VIEWPORT_PRESET: BrowserViewViewportPresetId = "responsive";
 
 interface UseScreencastTileChromeArgs {
+  readonly profile: BrowserSessionProfileKind;
   readonly navState: BrowserNavState;
   readonly initialUrl: string;
   readonly disabled: boolean;
@@ -89,14 +91,16 @@ export function useScreencastTileChrome(
 
   const controller: TileController = {
     capabilities: SCREENCAST_TILE_CHROME_CAPABILITIES,
+    profile: args.profile,
     url: liveUrl,
     addressValue,
+    setAddressInput: draft.setAddressInput,
+    focusAddress: draft.focusAddress,
     canGoBack: navState.canGoBack,
     canGoForward: navState.canGoForward,
     zoomPercent: 100,
     viewportPreset: UNUSED_VIEWPORT_PRESET,
     disabled,
-    cookieCryptoState: null,
     zoomLocked: false,
     annotation: null,
     onNavigate: (event: SyntheticEvent<HTMLFormElement, SubmitEvent>) => {
@@ -120,6 +124,9 @@ export function useScreencastTileChrome(
     onResetZoom: ignoreChromeAction,
     onViewportPresetChange: ignoreViewportPreset,
     onOpenDevTools: ignoreChromeAction,
+    // A screencast tile watches a headless context on the host; there is no
+    // local jar here to clear, and the host's own eviction is what reaches it.
+    onClearSite: null,
   };
 
   return {

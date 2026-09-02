@@ -39,6 +39,7 @@ function PickerStateRow(props: PickerStateRowProps) {
 interface ModelRowsStateProps {
   readonly catalogLoading: boolean;
   readonly catalogError: boolean;
+  readonly hostUnavailableLabel: string | null;
   readonly hasQuery: boolean;
   readonly activeProvider: GuiHarnessCatalogEntry | null;
   readonly rowsCount: number;
@@ -49,11 +50,22 @@ export function ModelRowsState(props: ModelRowsStateProps): ReactNode | null {
   const {
     catalogLoading,
     catalogError,
+    hostUnavailableLabel,
     hasQuery,
     activeProvider,
     rowsCount,
     onOpenProviderSettings,
   } = props;
+
+  if (hostUnavailableLabel !== null && rowsCount === 0) {
+    return (
+      <PickerStateRow
+        icon={undefined}
+        label={hostUnavailableLabel}
+        action={undefined}
+      />
+    );
+  }
 
   if (catalogLoading && rowsCount === 0) {
     return (

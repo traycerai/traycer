@@ -303,11 +303,17 @@ import {
   diagnosticsLogsTailV10,
 } from "@traycer/protocol/host/diagnostics/contracts";
 import {
+  managedCommandConfigureV10,
   managedCommandDeleteV10,
   managedCommandDeliverHeldV10,
+  managedCommandStartUpgradeV10ToV11,
   managedCommandStartV10,
+  managedCommandStartV11,
+  managedCommandStopUpgradeV10ToV11,
   managedCommandStopV10,
+  managedCommandStopV11,
   managedCommandSubscribeOutputV10,
+  managedCommandSubscribeOutputV11,
 } from "@traycer/protocol/host/managed-command/contracts";
 import { hostGetRuntimeCapabilitiesV10 } from "@traycer/protocol/host/runtime-capabilities/contracts";
 import { chatForkGetV10 } from "@traycer/protocol/host/chat-fork/contracts";
@@ -366,7 +372,9 @@ import {
   epicChatBackupStatusV10,
   epicChatReplicaReadV10,
   epicFetchArtifactAttachmentV10,
+  epicListChatRecordsUpgradeV10ToV11,
   epicListChatRecordsV10,
+  epicListChatRecordsV11,
   epicGetChatRunSettingsDowngradeV20ToV10,
   epicGetChatRunSettingsUpgradeV10ToV20,
   epicGetChatRunSettingsV10,
@@ -418,7 +426,6 @@ import {
   epicSubscribeV11,
   epicSubscribeV12,
   epicSubscribeV13,
-  epicSubscribeV20,
   epicUpdateArtifactStatusV10,
   epicUpdateTitleV10,
 } from "@traycer/protocol/host/epic/contracts";
@@ -429,6 +436,13 @@ import {
   epicListTuiAgentsV11,
   epicListTuiAgentsV12,
 } from "@traycer/protocol/host/epic/tui-agent-records";
+import { epicStateSubscribeV10 } from "@traycer/protocol/host/epic/state-subscribe";
+import { epicStatusSubscribeV10 } from "@traycer/protocol/host/epic/status-subscribe";
+import { artifactSubscribeV10 } from "@traycer/protocol/host/epic/artifact-subscribe";
+import {
+  epicGetWorkspaceContextV10,
+  epicRetryMigrationV10,
+} from "@traycer/protocol/host/epic/lane-unaries";
 import {
   workspaceBrowseFoldersV10,
   workspaceBrowseFoldersV11,
@@ -483,6 +497,7 @@ import {
   terminalSubscribeV16,
 } from "@traycer/protocol/host/terminal/contracts";
 import {
+  browserSavedLoginSitesV10,
   browserScreencastV1,
   browserSessionsV1,
 } from "@traycer/protocol/host/browser/contracts";
@@ -525,18 +540,21 @@ import {
   hostNotificationsIndicatorState,
   hostNotificationsIndicatorStateUpgradeV10ToV11,
   hostNotificationsIndicatorStateV10,
-  hostNotificationsListDowngradeV21ToV10,
+  hostNotificationsListDowngradeV22ToV10,
   hostNotificationsListUpgradeV10ToV20,
   hostNotificationsListUpgradeV20ToV21,
+  hostNotificationsListUpgradeV21ToV22,
   hostNotificationsListV10,
   hostNotificationsListV20,
   hostNotificationsListV21,
+  hostNotificationsListV22,
   hostNotificationsMarkAllRead,
   hostNotificationsMarkRead,
   hostNotificationsResolve,
   hostNotificationsSetConfig,
   hostNotificationsFeedSubscribeV10,
   hostNotificationsFeedSubscribeV11,
+  hostNotificationsFeedSubscribeV12,
   hostNotificationsCloudFeedSubscribeV10,
   hostNotificationsCloudFeedSubscribeV11,
   hostNotificationsCloudFeedMarkRead,
@@ -555,6 +573,7 @@ import {
   resourcesSubscribeV12,
   resourcesSubscribeV13,
   resourcesSubscribeV14,
+  resourcesSubscribeV15,
   resourcesKillV10,
   resourcesListLocalServersV10,
 } from "@traycer/protocol/host/resources/subscribe";
@@ -765,6 +784,8 @@ import {
   providersUsePackVersionResponseSchema,
   providersSetPackPolicyRequestSchema,
   providersSetPackPolicyResponseSchema,
+  providersRefreshPackDiscoveryRequestSchema,
+  providersRefreshPackDiscoveryResponseSchema,
   upgradeProviderCliStateV10ToV20,
   upgradeProviderCliStateListToV70Preimage,
   upgradeProviderCliStateV10ToMutationV20,
@@ -3019,9 +3040,9 @@ export const providersNativeMutateV10 = defineRpcContract({
   responseSchema: providersNativeMutateResponseSchema,
 });
 
-// ── The per-pack version-manager methods (v8.0's mutation surface) ─────────
+// ── Per-pack version-manager methods + the on-demand discovery refresh ─────
 //
-// Four BRAND-NEW method names, each at `@1.0`, all registered below with
+// BRAND-NEW method names, each at `@1.0`, all registered below with
 // `degrade: { kind: "unsupported" }` - none is in
 // `RELEASED_FLOOR_METHOD_NAMES`, so a host that predates them refuses these
 // calls per-call with upgrade guidance rather than failing the handshake, the
@@ -3067,6 +3088,20 @@ export const providersSetPackPolicyV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: providersSetPackPolicyRequestSchema,
   responseSchema: providersSetPackPolicyResponseSchema,
+});
+
+/**
+ * Run the pack-discovery poll for one pack now, instead of waiting out the
+ * jittered ticker period. Another new name at `@1.0` on the same
+ * optional-capability channel as the four above, and registered below the same
+ * way - it reads a head rather than mutating the store, which is why it is not
+ * one of them.
+ */
+export const providersRefreshPackDiscoveryV10 = defineRpcContract({
+  method: "providers.refreshPackDiscovery",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersRefreshPackDiscoveryRequestSchema,
+  responseSchema: providersRefreshPackDiscoveryResponseSchema,
 });
 
 /**
@@ -3976,6 +4011,27 @@ export const epicCreateTuiAgentUpgradeV10ToV11 = defineUpgradePath<
 });
 
 const HOST_RPC_REGISTRY_BASE_DEFINITION = {
+  "browser.savedLoginSites": {
+    // Settings > Browser's "Sites with saved logins" list (keychain refactor
+    // ticket 10). Brand-new v1.0 and not part of `RELEASED_FLOOR_METHOD_NAMES`
+    // - the whole saved-logins surface is unreleased - so it rides the
+    // optional-capability channel: a host that predates it advertises nothing,
+    // and the client renders the group without the list rather than failing the
+    // connection. Read-only and names-only; the clearing half is the
+    // `clearSite` frame on `browser.sessions`, which needs the elected-desktop
+    // gate a unary RPC has no notion of.
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: browserSavedLoginSitesV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   // Machine-user-global config store capabilities. None were part of the
   // released method floor, so a peer that predates them advertises neither
   // handler nor capability; clients feature-detect and render their explicit
@@ -4577,7 +4633,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
     2: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: hostNotificationsListV20,
@@ -4594,9 +4650,16 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
           // post-query filter". See host-notifications-resolvers.ts.
           responseGrowthProjectionGated: true,
         },
+        // 2.2 adds `browser.human.needed` under the same projection gate. It is
+        // a new minor rather than a widening of 2.1 because 2.1 has shipped.
+        2: {
+          contract: hostNotificationsListV22,
+          upgradeFromPreviousVersion: hostNotificationsListUpgradeV21ToV22,
+          responseGrowthProjectionGated: true,
+        },
       },
       downgradePathsFromLatest: {
-        1: hostNotificationsListDowngradeV21ToV10,
+        1: hostNotificationsListDowngradeV22ToV10,
       },
     },
   },
@@ -6595,10 +6658,85 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   // surface of its own, only the absence of the union.
   "epic.listChatRecords": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicListChatRecordsV10,
+          upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: epicListChatRecordsV11,
+          upgradeFromPreviousVersion: epicListChatRecordsUpgradeV10ToV11,
+          // The chat half of the doc-remainder union, and deliberately the
+          // SAME registry shape as `epic.listTuiAgents@1.1` - including what it
+          // does NOT declare.
+          //
+          // REQUEST: `hasDocReplica` is required at 1.1 and the upgrade path
+          // fills it for a 1.0 caller. That fill is load-bearing rather than
+          // cosmetic - it decides whether the caller is served the doc-resident
+          // rows at all - and it is safe because the dispatcher validates params
+          // against the NEGOTIATED contract and hands the resolver the upgraded
+          // value, so a 1.0 peer can neither send the field nor be read as
+          // having sent one.
+          //
+          // RESPONSE: NO `responseGrowthProjectionGated`. 1.1 does return MORE
+          // ROWS than 1.0, and the instinct to annotate that is strong, but the
+          // annotation covers response VALUE growth an older peer's schema would
+          // actively REFUSE - a new enum member, a new union arm. `docResident`
+          // is a plain added object key, which zod strips unconditionally. Row
+          // COUNT is not something the validator can see at all; the resolver's
+          // request-driven gate is the entire mechanism.
+          //
+          // Declaring it anyway is not inert: `assertSchemaCompatibility`
+          // rejects an annotation it cannot justify, and it runs at MODULE
+          // IMPORT, so the registry would throw for every consumer - the app,
+          // not just a test - while `bun run compile` passed clean through it.
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  // The workspace context a tab needs before any lane can answer - repos,
+  // workspaces, repo mapping, resolved folders, `epicLight`, permission role.
+  // Exactly the payload `epic.subscribe@1`'s `earlyMeta` frame carried, and a
+  // unary because that is what it always was: a read the host can serve from
+  // `resolveWorkspaceContext` before a cloud room exists.
+  //
+  // Optional and never on the released floor (a new floor name is
+  // handshake-fatal against every released peer). A host that predates this is
+  // by definition one still serving `epic.subscribe@1`, whose `earlyMeta` frame
+  // IS this payload - so the degrade arm is the legacy adapter that is already
+  // there, not a blank surface. The refetch obligation (reconnect, and every
+  // control-lane migration/permission frame) is documented on the contract.
+  "epic.getWorkspaceContext": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicGetWorkspaceContextV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  // Re-run a failed major migration. Replaces the monolith's `retryMigration`
+  // CLIENT FRAME, which could not answer the caller at all - "the host refused"
+  // and "the host never received it" were the same observation from the modal's
+  // Retry button. Progress still arrives on `epic.status.subscribe`; this call
+  // starts the work, it does not report it.
+  //
+  // Optional, off the released floor, same degrade story as the read above: an
+  // older host still understands the frame, so the legacy adapter covers it and
+  // a client must not surface a dead Retry button.
+  "epic.retryMigration": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicRetryMigrationV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -6895,14 +7033,21 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   // The human lifecycle controls for monitors and shells. Brand-new v1.0
   // methods on the same `degrade: unsupported` channel as `resources.kill`
   // above: a host without the managed-command subsystem simply lacks them.
+  // `1.1` on start/stop returns the command with `relaunchOnHostRestart`;
+  // the shipped `1.0` stays pinned to the pre-relaunch command shape (see
+  // `managedCommandSchemaPreRelaunch`).
   "managedCommand.start": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: managedCommandStartV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: managedCommandStartV11,
+          upgradeFromPreviousVersion: managedCommandStartUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -6911,11 +7056,15 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   "managedCommand.stop": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: managedCommandStopV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: managedCommandStopV11,
+          upgradeFromPreviousVersion: managedCommandStopUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -6928,6 +7077,25 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: managedCommandDeleteV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // The one human-editable setting: relaunch after a host restart. Same
+  // channel as the lifecycle three; a host too old to have the flag lacks the
+  // method, so the GUI hides the switch (`useHostSupportsMethod`), and its
+  // commands read `relaunchOnHostRestart: true` by default - which is what
+  // such a host does (it respawns every survivor; it never offered the
+  // choice).
+  "managedCommand.configure": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: managedCommandConfigureV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -8196,6 +8364,22 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  // The on-demand discovery poll the version popover's check button drives.
+  // Not one of the four above - it reads a head instead of writing the store -
+  // but a new name outside the floor all the same, so it degrades identically.
+  "providers.refreshPackDiscovery": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersRefreshPackDiscoveryV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "providers.submitLoginCode": {
     degrade: { kind: "unsupported" },
     1: {
@@ -8601,15 +8785,65 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         },
       },
     },
-    // @2 replaces the root Y.Doc and eager room fan-out with a typed metadata
-    // plane plus explicit per-artifact body attaches. @1 remains installed for
-    // released peers; the multi-major handshake selects the shared line before
-    // a resolver is constructed.
-    2: {
+    // ONE major, and permanently so. `@2` (a typed metadata plane plus explicit
+    // per-artifact attaches, on the same single subscription) was installed here
+    // and removed without ever being released: no client advertised it
+    // (`CLIENT_SERVED_STREAM_MAJORS` pinned this method to `[1]`) and it is
+    // absent from `released-baseline-surface.json`, so no freeze rule attached
+    // to it. Its planes are inherited by `epic.state.subscribe`,
+    // `epic.status.subscribe` and `artifact.subscribe` below - see the
+    // retirement note at the foot of `epic/subscribe.ts` for what moved where.
+    //
+    // `@1` stays installed and served indefinitely for GUIs that have not
+    // updated. That is a support-horizon policy decision, not a plan item.
+  },
+  // ─── The epic LANES ───────────────────────────────────────────────────────
+  //
+  // Three subscriptions replacing the monolith above, one per data CLASS, each
+  // on its own `{major, minor}` line so the record plane, the control plane and
+  // the body plane version independently forever. All three are post-v1.0.0
+  // stream methods and therefore implicitly OPTIONAL: the `/stream` handshake
+  // checks compatibility PER METHOD at subscribe time, so a host that lacks one
+  // is a per-feature degrade (`onMethodSupport(..., "unsupported")`), never a
+  // fatal connection error.
+  //
+  // What a client renders when a peer does not advertise them: a host without
+  // these lanes is a host that still serves `epic.subscribe@1`, and the client's
+  // `@1` legacy adapter produces the same read model from the root Y.Doc. So the
+  // degrade is today's behaviour, not a degraded one - and the three lanes must
+  // be treated as ONE capability by a client (advertising two of three is a host
+  // that cannot serve an epic at all). None may ever be added to the unary
+  // released floor (`released-floor.ts`), which is fail-closed on the name set.
+  "epic.state.subscribe": {
+    1: {
       latestMinor: 0,
       versions: {
         0: {
-          contract: epicSubscribeV20,
+          contract: epicStateSubscribeV10,
+        },
+      },
+    },
+  },
+  "epic.status.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicStatusSubscribeV10,
+        },
+      },
+    },
+  },
+  // A new TOP-LEVEL namespace, deliberately: this lane is addressed by
+  // `artifactId` and is opened per open tile, so naming it `epic.*` would imply
+  // an epic-lifetime subscription it is emphatically not. It mirrors
+  // `chat.subscribe`'s lifetime, not `epic.subscribe`'s.
+  "artifact.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: artifactSubscribeV10,
         },
       },
     },
@@ -8644,13 +8878,16 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   },
   "host.notifications.feed.subscribe": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: hostNotificationsFeedSubscribeV10,
         },
         1: {
           contract: hostNotificationsFeedSubscribeV11,
+        },
+        2: {
+          contract: hostNotificationsFeedSubscribeV12,
         },
       },
     },
@@ -8722,10 +8959,15 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // `host/managed-command/subscribe.ts` for what a global panel would re-add).
   "managedCommand.subscribeOutput": {
     1: {
-      latestMinor: 0,
+      // `1.1` adds `relaunchOnHostRestart` to the snapshot/status headers;
+      // `1.0` is pinned to the shipped pre-relaunch command shape.
+      latestMinor: 1,
       versions: {
         0: {
           contract: managedCommandSubscribeOutputV10,
+        },
+        1: {
+          contract: managedCommandSubscribeOutputV11,
         },
       },
     },
@@ -8823,7 +9065,7 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   },
   "resources.subscribe": {
     1: {
-      latestMinor: 4,
+      latestMinor: 5,
       versions: {
         0: {
           contract: resourcesSubscribeV10,
@@ -8843,6 +9085,11 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         // for every minor before this one.
         4: {
           contract: resourcesSubscribeV14,
+        },
+        // @1.5 lets a mounted stream remain on the background cadence while
+        // only a visible resource monitor asks for interactive refresh.
+        5: {
+          contract: resourcesSubscribeV15,
         },
       },
     },

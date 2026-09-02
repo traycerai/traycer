@@ -6,19 +6,34 @@ import {
   type WebPreferences,
 } from "electron";
 import { randomUUID } from "node:crypto";
-import type {
-  BrowserCookieCryptoState,
-  BrowserViewDownloadState,
-} from "@traycer-clients/shared/platform/browser-view";
-import { log } from "../app/logger";
+import type { BrowserViewDownloadState } from "@traycer-clients/shared/platform/browser-view";
+import type { BrowserPrimaryProfileDelta } from "@traycer/protocol/host/browser/contracts";
+import { describeLogError, log } from "../app/logger";
 import {
   setBrowserCertificateErrorHandler,
   type CertificateErrorReport,
 } from "../app/cert-trust";
-import { getBrowserCookieCryptoState } from "./storage/browser-cookie-crypto";
+import { isBrowserSavedLoginsEnabled } from "./storage/browser-saved-logins";
+import {
+  BrowserCookieChangeObserver,
+  BROWSER_COOKIE_DELTA_WINDOW_MS,
+} from "./storage/browser-cookie-change-observer";
 
 export const BROWSER_VIEW_PARTITION = "persist:traycer-browser";
-const BROWSER_VIEW_EPHEMERAL_PARTITION = "traycer-browser-ephemeral";
+export const BROWSER_VIEW_EPHEMERAL_PARTITION = "traycer-browser-ephemeral";
+const BROWSER_VIEW_ISOLATED_PARTITION_PREFIX = "traycer-isolated-";
+
+/**
+ * Which jar a browser guest gets. `primary` is the one shared identity (user
+ * tabs, agent Electron tabs, popups); `isolated` is a per-session throwaway
+ * partition that shares cookies with nothing and dies with the session.
+ */
+export type BrowserSessionProfile = "primary" | "isolated";
+
+export interface BrowserSessionProfileRequest {
+  readonly profile: BrowserSessionProfile;
+  readonly sessionId: string;
+}
 
 type BrowserPermissionRequestHandler = (
   webContents: unknown,
@@ -153,33 +168,159 @@ const pendingCertificateErrorsById = new Map<
   BrowserSessionPendingCertificateError
 >();
 
-export function ensureBrowserViewSession(): Session {
-  const browserSession = session.fromPartition(getBrowserViewPartition(), {
-    cache: true,
-  });
+/**
+ * Sessions are memoised per partition name, not globally: toggling saved logins
+ * mid-process moves new guests between the persistent and ephemeral partitions,
+ * and each partition needs the hardening installed exactly once.
+ * `session.defaultSession` is never touched here - the app shell owns it.
+ */
+const sessionsByPartition = new Map<string, Session>();
+const browserCookieDeltaListeners = new Set<
+  (delta: BrowserPrimaryProfileDelta) => void
+>();
+/** One per process: the durable `primary` jar is the only observed partition. */
+let primaryCookieObserver: BrowserCookieChangeObserver | null = null;
+
+export function ensureBrowserViewSession(
+  request: BrowserSessionProfileRequest,
+): Session {
+  return ensureBrowserViewSessionForPartition(
+    partitionForProfile(request.profile, request.sessionId),
+  );
+}
+
+/** The named jar, bypassing the saved-logins pref. */
+export function ensureBrowserViewSessionForPartition(
+  partition: string,
+): Session {
+  const existing = sessionsByPartition.get(partition);
+  if (existing !== undefined) return existing;
+  const browserSession = session.fromPartition(partition, { cache: true });
   installBrowserViewSessionPolicy(browserSession);
+  sessionsByPartition.set(partition, browserSession);
+  observePrimaryProfileCookieChanges(partition, browserSession);
   return browserSession;
 }
 
-export function createBrowserViewWebPreferences(): WebPreferences {
+/**
+ * Cookie deltas come from the durable `primary` jar and nowhere else: the
+ * ephemeral jar's logins are gone at quit, and an isolated partition shares
+ * nothing by construction (spec §6.1).
+ */
+function observePrimaryProfileCookieChanges(
+  partition: string,
+  browserSession: Session,
+): void {
+  if (partition !== BROWSER_VIEW_PARTITION || primaryCookieObserver !== null) {
+    return;
+  }
+  const observer = new BrowserCookieChangeObserver({
+    cookies: browserSession.cookies,
+    emit: (delta) => {
+      browserCookieDeltaListeners.forEach((listener) => listener(delta));
+    },
+    now: () => Date.now(),
+    coalesceWindowMs: BROWSER_COOKIE_DELTA_WINDOW_MS,
+  });
+  observer.attach();
+  primaryCookieObserver = observer;
+}
+
+/**
+ * Every coalesced cookie delta from the durable `primary` jar. The IPC layer
+ * fans these out to the renderer, which forwards them to the host as
+ * `primaryProfileDelta`.
+ */
+export function onBrowserPrimaryProfileDelta(
+  listener: (delta: BrowserPrimaryProfileDelta) => void,
+): () => void {
+  browserCookieDeltaListeners.add(listener);
+  return () => {
+    browserCookieDeltaListeners.delete(listener);
+  };
+}
+
+/**
+ * Runs a deliberate local change to one site's cookies without it echoing back
+ * to the host as a delta (ticket 07's "clear cookies for this site").
+ */
+export async function suppressBrowserPrimaryProfileDelta<T>(
+  domain: string,
+  action: () => Promise<T>,
+): Promise<T> {
+  if (primaryCookieObserver === null) return await action();
+  return await primaryCookieObserver.suppress(domain, action);
+}
+
+/**
+ * The same, for a change that spans the whole jar: ticket 08's "forget all
+ * browser logins". A `clearStorageData()` fires a removal for every cookie
+ * there is, and those deltas would reach the host after it had already shredded
+ * the slice - re-creating an entry for the identity just forgotten.
+ */
+export async function suppressAllBrowserPrimaryProfileDeltas<T>(
+  action: () => Promise<T>,
+): Promise<T> {
+  if (primaryCookieObserver === null) return await action();
+  return await primaryCookieObserver.suppressAll(action);
+}
+
+export function createBrowserViewWebPreferences(
+  request: BrowserSessionProfileRequest,
+): WebPreferences {
   return {
-    partition: getBrowserViewPartition(),
+    partition: partitionForProfile(request.profile, request.sessionId),
     contextIsolation: true,
     nodeIntegration: false,
     sandbox: true,
   };
 }
 
-function getBrowserViewPartition(): string {
-  return browserViewPartitionForCryptoState(getBrowserCookieCryptoState());
+/**
+ * The single place that decides whether a guest gets a durable jar. `primary`
+ * is durable unless the user turned saved logins off on this machine.
+ */
+export function partitionForProfile(
+  profile: BrowserSessionProfile,
+  sessionId: string,
+): string {
+  // No `persist:` prefix, and the session id in the name: the jar lives in
+  // memory only, is shared by nothing else, and is cleared outright when the
+  // session's last tab goes away (spec §6.1, decision #24). The saved-logins
+  // pref is deliberately not consulted - an isolated session is ephemeral
+  // whether or not the user saves logins.
+  if (profile === "isolated") {
+    return `${BROWSER_VIEW_ISOLATED_PARTITION_PREFIX}${sessionId}`;
+  }
+  return isBrowserSavedLoginsEnabled()
+    ? BROWSER_VIEW_PARTITION
+    : BROWSER_VIEW_EPHEMERAL_PARTITION;
 }
 
-function browserViewPartitionForCryptoState(
-  state: BrowserCookieCryptoState,
-): string {
-  return state.mode === "degraded"
-    ? BROWSER_VIEW_EPHEMERAL_PARTITION
-    : BROWSER_VIEW_PARTITION;
+/**
+ * Drops a partition's jar and its memoised session. Only an isolated session's
+ * partition is ever released: the shared `primary` jars outlive every guest,
+ * and clearing one would sign the user out of the whole app.
+ */
+export async function releaseBrowserViewSession(
+  partition: string,
+): Promise<void> {
+  if (!partition.startsWith(BROWSER_VIEW_ISOLATED_PARTITION_PREFIX)) {
+    throw new Error(
+      `Refusing to clear the shared browser partition "${partition}".`,
+    );
+  }
+  const browserSession = sessionsByPartition.get(partition);
+  sessionsByPartition.delete(partition);
+  if (browserSession === undefined) return;
+  try {
+    await browserSession.clearStorageData();
+  } catch (error) {
+    log.warn("[browser-view] isolated partition clear failed", {
+      partition,
+      error: describeLogError(error),
+    });
+  }
 }
 
 function installBrowserViewSessionPolicy(

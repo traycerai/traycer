@@ -307,6 +307,8 @@ export const hostNotificationWorktreeDeletionPayloadSchema = z
     /** Open string, not the wire enum: a row minted by a newer host with a
      * source this build has never heard of must still render and route. */
     source: idSchema,
+    /** Task that initiated a single-Task sweep. */
+    epicId: idSchema.optional(),
     requestedCount: z.number().int().nonnegative(),
     deletedCount: z.number().int().nonnegative(),
     failedCount: z.number().int().nonnegative(),
@@ -314,6 +316,30 @@ export const hostNotificationWorktreeDeletionPayloadSchema = z
   .catchall(z.unknown());
 export type HostNotificationWorktreeDeletionPayload = z.infer<
   typeof hostNotificationWorktreeDeletionPayloadSchema
+>;
+
+/**
+ * `browser.human.needed` payload: the parked session's tile plus the agent's
+ * own reason for parking.
+ *
+ * `reason` is model-authored prose and is the only copy this row has, so it is
+ * rendered as the body and never as a title or an identifier. `sessionId` and
+ * `tabId` address the tile the click deep-links to; they are host-local by
+ * construction (browser sessions never move hosts), so the row's originHostId
+ * is what says where to open it.
+ */
+export const hostNotificationBrowserHumanNeededPayloadSchema = z
+  .object({
+    kind: z.literal("browser_human_needed"),
+    epicId: idSchema,
+    chatId: idSchema,
+    sessionId: idSchema,
+    tabId: idSchema,
+    reason: z.string().min(1),
+  })
+  .catchall(z.unknown());
+export type HostNotificationBrowserHumanNeededPayload = z.infer<
+  typeof hostNotificationBrowserHumanNeededPayloadSchema
 >;
 
 export const hostNotificationKnownPayloadSchema = z.discriminatedUnion("kind", [
@@ -324,6 +350,7 @@ export const hostNotificationKnownPayloadSchema = z.discriminatedUnion("kind", [
   hostNotificationApprovalPayloadSchema,
   hostNotificationInterviewPayloadSchema,
   hostNotificationWorktreeDeletionPayloadSchema,
+  hostNotificationBrowserHumanNeededPayloadSchema,
 ]);
 export type HostNotificationKnownPayload = z.infer<
   typeof hostNotificationKnownPayloadSchema
@@ -385,5 +412,7 @@ function payloadKindMatchesNotificationKind(
     // property the whole payload tier exists to provide.
     case "host.operation.finished":
       return payloadKind === "worktree_deletion";
+    case "browser.human.needed":
+      return payloadKind === "browser_human_needed";
   }
 }

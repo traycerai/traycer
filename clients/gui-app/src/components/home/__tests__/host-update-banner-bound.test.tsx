@@ -1146,6 +1146,64 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
         expect(screen.queryByTestId("host-update-banner")).toBeNull();
       });
     });
+
+    it("does not turn a stale idle reading into an up-to-date banner", async () => {
+      let statusReads = 0;
+      bindLocalHost({
+        "host.status": () => {
+          statusReads += 1;
+          if (statusReads === 1) {
+            return attemptStatus({ kind: "none" });
+          }
+          throw new Error("host is starting");
+        },
+      });
+      const queryClient = renderWithControllerStatus({
+        ...HOST_DOWN_STATUS,
+        localAttempt: null,
+      });
+
+      await waitFor(() => {
+        expect(statusReads).toBe(1);
+      });
+      expect(screen.queryByTestId("host-update-banner")).toBeNull();
+
+      await queryClient.refetchQueries({ type: "active" });
+      await waitFor(() => {
+        expect(statusReads).toBe(2);
+      });
+
+      expect(screen.queryByTestId("host-update-banner")).toBeNull();
+      expect(screen.queryByText("Last seen: Host is up to date")).toBeNull();
+    });
+
+    it("still renders a retained attempt after the same successful-read then refetch-failure transition", async () => {
+      let statusReads = 0;
+      bindLocalHost({
+        "host.status": () => {
+          statusReads += 1;
+          if (statusReads === 1) {
+            return attemptStatus(baseAttempt({ phase: "preparing" }));
+          }
+          throw new Error("host is starting");
+        },
+      });
+      const queryClient = renderWithControllerStatus({
+        ...HOST_DOWN_STATUS,
+        localAttempt: null,
+      });
+
+      expect(await findPhaseText()).toBe("Preparing update to v2.1.0");
+      await queryClient.refetchQueries({ type: "active" });
+      await waitFor(() => {
+        expect(statusReads).toBe(2);
+      });
+
+      expect(await findPhaseText()).toBe(
+        "Last seen: Preparing update to v2.1.0",
+      );
+      expect(screen.queryByTestId("host-update-banner-qualified")).toBeNull();
+    });
   });
 
   // 10. Operation-lane Retry routes on intent like every other retry here.

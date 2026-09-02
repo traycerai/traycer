@@ -93,8 +93,14 @@ function BrowsersPanelBodyLive(props: {
   const prepareOpen = useEpicCanvasStore(
     (state) => state.prepareOpenTileInTabFocusTarget,
   );
+  const prepareOpenPreview = useEpicCanvasStore(
+    (state) => state.prepareOpenTilePreviewInTabFocusTarget,
+  );
   const prepareFocus = useEpicCanvasStore(
     (state) => state.prepareSetActiveTileTabFocusTarget,
+  );
+  const promotePreview = useEpicCanvasStore(
+    (state) => state.promotePreviewInTab,
   );
   const { add: addBrowser, isAdding } = useAddBrowserAction(
     props.epicId,
@@ -109,18 +115,39 @@ function BrowsersPanelBodyLive(props: {
         sessionId: session.sessionId,
         tabId: tab.tabId,
       });
-      const existingPointer = findOpenTileInTab(props.tabId, tile);
       navigateNested(props.epicId, props.tabId, () =>
-        existingPointer === null
-          ? prepareOpen(props.tabId, tile)
-          : prepareFocus(
-              props.tabId,
-              existingPointer.paneId,
-              existingPointer.instanceId,
-            ),
+        prepareOpenPreview(props.tabId, tile),
       );
     },
-    [navigateNested, prepareFocus, prepareOpen, props.epicId, props.tabId],
+    [navigateNested, prepareOpenPreview, props.epicId, props.tabId],
+  );
+
+  const openTabPermanently = useCallback(
+    (session: BrowserSessionInfo, tab: BrowserTabInfo) => {
+      const tile = makeBrowserSessionTileRef({
+        hostId: session.hostId,
+        sessionId: session.sessionId,
+        tabId: tab.tabId,
+      });
+      const existingPointer = findOpenTileInTab(props.tabId, tile);
+      navigateNested(props.epicId, props.tabId, () => {
+        if (existingPointer === null) return prepareOpen(props.tabId, tile);
+        promotePreview(props.tabId, existingPointer.paneId);
+        return prepareFocus(
+          props.tabId,
+          existingPointer.paneId,
+          existingPointer.instanceId,
+        );
+      });
+    },
+    [
+      navigateNested,
+      prepareFocus,
+      prepareOpen,
+      promotePreview,
+      props.epicId,
+      props.tabId,
+    ],
   );
 
   const openDrivingChat = useCallback(
@@ -198,6 +225,7 @@ function BrowsersPanelBodyLive(props: {
               chatById={chatById}
               duplicateTitles={duplicateTitles}
               onOpenTab={openTab}
+              onOpenTabPermanently={openTabPermanently}
               onOpenDrivingChat={openDrivingChat}
               onCloseTab={sessions.closeTab}
             />

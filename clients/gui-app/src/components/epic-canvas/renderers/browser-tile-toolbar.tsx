@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   ArrowRight,
   Bug,
+  Cookie,
   EllipsisVertical,
   ExternalLink,
   Minus,
@@ -14,8 +15,10 @@ import {
   SquareMousePointer,
   Smartphone,
   Tablet,
+  VenetianMask,
 } from "lucide-react";
 import type { TileController } from "@/components/epic-canvas/renderers/tile-controller";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import type { BrowserAnnotationSessionController } from "@/hooks/browser/use-browser-annotation-session";
 import { Button } from "@/components/ui/button";
 import {
@@ -24,6 +27,7 @@ import {
   InputGroupButton,
   InputGroupInput,
 } from "@/components/ui/input-group";
+import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
 import { cn } from "@/lib/utils";
@@ -41,11 +45,22 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { browserCookieDegradedMessage } from "@/lib/browser-view/browser-cookie-degraded-message";
-import type {
-  BrowserCookieCryptoState,
-  BrowserViewViewportPresetId,
-} from "@traycer-clients/shared/platform/browser-view";
+import {
+  Popover,
+  PopoverContent,
+  PopoverDescription,
+  PopoverHeader,
+  PopoverTitle,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import type { BrowserViewViewportPresetId } from "@traycer-clients/shared/platform/browser-view";
+import { registrableDomainForUrl } from "@traycer/protocol/host/browser/registrable-domain";
+
+const BROWSER_PRIVATE_SESSION_SHIELD_COPY = {
+  headline: "Private session",
+  detail:
+    "This session has its own throwaway jar. It starts signed out, shares no cookies with your other tabs, and everything in it is discarded when the session closes.",
+} as const;
 
 export interface BrowserPictureInPictureControl {
   readonly disabled: boolean;
@@ -102,7 +117,10 @@ export function BrowserTileToolbar(props: {
     capabilities.devtools ||
     capabilities.siteInfo;
   const showTrailing =
-    capabilities.annotate || props.pictureInPicture !== null || showAdvanced;
+    capabilities.annotate ||
+    props.pictureInPicture !== null ||
+    controller.profile === "isolated" ||
+    showAdvanced;
   if (!showNav && !showAddress && !showTrailing) return null;
 
   return (
@@ -116,6 +134,42 @@ export function BrowserTileToolbar(props: {
           controller={controller}
           pictureInPicture={props.pictureInPicture}
         />
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * The touch-grade chrome: the same nav buttons, the address field, and the
+ * page-loading spinner. No PiP and no more-menu - a coarse pointer has no
+ * hover to reveal them and the tile has no room.
+ */
+export function BrowserTileToolbarCompact(props: {
+  readonly controller: TileController;
+  readonly loading: boolean;
+}) {
+  const url = props.controller.url;
+  return (
+    <div
+      className="flex min-h-11 w-full shrink-0 items-center gap-1 border-b border-border px-2"
+      data-testid="browser-tile-toolbar-compact"
+    >
+      <BrowserTileToolbarNav controller={props.controller} />
+      {props.controller.capabilities.navigate ? (
+        <BrowserTileToolbarAddress controller={props.controller} />
+      ) : (
+        <div className="min-w-0 flex-1 truncate px-1 text-ui-sm text-muted-foreground">
+          {url === "" ? "New tab" : url}
+        </div>
+      )}
+      {props.loading ? (
+        <span role="status" aria-label="Page loading" className="shrink-0">
+          <AgentSpinningDots
+            className="text-muted-foreground"
+            testId="browser-tile-toolbar-compact-loading"
+            variant={undefined}
+          />
+        </span>
       ) : null}
     </div>
   );
@@ -169,29 +223,39 @@ function BrowserTileToolbarNav(props: { readonly controller: TileController }) {
 function BrowserTileToolbarAddress(props: {
   readonly controller: TileController;
 }) {
-  const controller = props.controller;
+  const {
+    disabled,
+    setAddressInput,
+    addressValue,
+    url,
+    onNavigate,
+    onAddressChange,
+    onAddressFocusChange,
+  } = props.controller;
   const canOpenExternally =
-    useRunnerHostOrNull() !== null && isWebOriginUrl(controller.url);
+    useRunnerHostOrNull() !== null && isWebOriginUrl(url);
   return (
-    <form
-      className="flex min-w-0 flex-1 items-center"
-      onSubmit={controller.onNavigate}
-    >
+    <form className="flex min-w-0 flex-1 items-center" onSubmit={onNavigate}>
       <InputGroup className="group/address h-7 border-transparent bg-transparent shadow-none transition-[background-color,border-color,box-shadow] hover:border-input hover:bg-input/20 focus-within:bg-input/20 motion-reduce:transition-none dark:bg-transparent">
         <InputGroupInput
+          ref={setAddressInput}
+          // The compact toolbar is shown on peek tiles too, where a missing
+          // host client disables the whole controller - an editable field
+          // there would submit a navigation nothing can carry.
+          disabled={disabled}
           aria-label="Browser address"
-          value={controller.addressValue}
+          value={addressValue}
           onChange={(event) => {
-            controller.onAddressChange(event.target.value);
+            onAddressChange(event.target.value);
           }}
-          onFocus={() => controller.onAddressFocusChange(true)}
-          onBlur={() => controller.onAddressFocusChange(false)}
+          onFocus={() => onAddressFocusChange(true)}
+          onBlur={() => onAddressFocusChange(false)}
           className="h-full truncate px-2 font-mono text-ui-sm"
           spellCheck={false}
         />
         {canOpenExternally ? (
           <InputGroupAddon align="inline-end">
-            <BrowserOpenExternalButton url={controller.url} />
+            <BrowserOpenExternalButton url={url} />
           </InputGroupAddon>
         ) : null}
       </InputGroup>
@@ -228,8 +292,16 @@ function BrowserTileToolbarTrailing(props: {
 }) {
   const controller = props.controller;
   const capabilities = controller.capabilities;
+  // The confirm dialog lives here, not inside the menu: selecting the item
+  // closes the dropdown, which would unmount a dialog rendered under it before
+  // it could ever open.
+  const [clearSiteConfirmOpen, setClearSiteConfirmOpen] = useState(false);
+  const clearSite = browserClearSiteAction(controller);
   return (
     <div className="flex shrink-0 items-center gap-1 border-l border-border pl-2">
+      {controller.profile === "isolated" ? (
+        <BrowserPrivateSessionShield />
+      ) : null}
       {capabilities.annotate && controller.annotation !== null ? (
         <BrowserAnnotateToggle controller={controller.annotation} />
       ) : null}
@@ -240,15 +312,103 @@ function BrowserTileToolbarTrailing(props: {
       capabilities.viewportPreset ||
       capabilities.devtools ||
       capabilities.siteInfo ? (
-        <BrowserMoreMenu controller={controller} />
+        <BrowserMoreMenu
+          controller={controller}
+          clearSite={clearSite}
+          onRequestClearSite={() => setClearSiteConfirmOpen(true)}
+        />
       ) : null}
+      {clearSite === null || clearSite.site === null ? null : (
+        <ConfirmDestructiveDialog
+          open={clearSiteConfirmOpen}
+          onOpenChange={setClearSiteConfirmOpen}
+          title={`Clear cookies for ${clearSite.site}?`}
+          description={`You will be signed out of ${clearSite.site} in Traycer, everywhere this account is signed in. Other sites are untouched.`}
+          cascadeSummary={null}
+          actionLabel="Clear cookies"
+          isPending={false}
+          blockedReason={null}
+          onConfirm={() => {
+            setClearSiteConfirmOpen(false);
+            clearSite.clear();
+          }}
+        />
+      )}
     </div>
   );
 }
 
-function BrowserMoreMenu(props: { readonly controller: TileController }) {
+/**
+ * The clear-site action for one tile. `null` hides the item outright, for the
+ * two tiles that have no jar of their own to clear: a private session, whose
+ * partition dies with the session and is shared with nothing (spec §6.1), and
+ * a screencast tile, which watches a context on the host.
+ *
+ * A `null` `site` keeps the item visible but disabled: the tile is on
+ * `about:blank` or a devtools URL, so there is a jar but no site to name. That
+ * is a state the user can leave by navigating, which is why it reads as
+ * disabled rather than as an action that quietly disappeared.
+ */
+function browserClearSiteAction(
+  controller: TileController,
+): { readonly site: string | null; readonly clear: () => void } | null {
+  const clear = controller.onClearSite;
+  if (clear === null || controller.profile === "isolated") return null;
+  const site = isWebOriginUrl(controller.url)
+    ? registrableDomainForUrl(controller.url)
+    : null;
+  return { site, clear };
+}
+
+/**
+ * The one shield a tile still shows. Saving logins is silent and always-on for
+ * a `primary` tile - Chrome shows no badge for it either - so the only thing
+ * left worth saying in the toolbar is that THIS session is private: it has
+ * nothing to save, enable or clear, and closing it destroys the jar.
+ */
+function BrowserPrivateSessionShield() {
+  const [open, setOpen] = useState(false);
+  const copy = BROWSER_PRIVATE_SESSION_SHIELD_COPY;
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <TooltipWrapper
+        label={copy.headline}
+        side="top"
+        sideOffset={6}
+        align="center"
+      >
+        <PopoverTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label={`Saved logins: ${copy.headline}`}
+            className="shrink-0 text-muted-foreground hover:text-foreground aria-expanded:bg-accent aria-expanded:text-accent-foreground"
+          >
+            <VenetianMask aria-hidden />
+          </Button>
+        </PopoverTrigger>
+      </TooltipWrapper>
+      <PopoverContent align="end" className="w-[min(80vw,20rem)] min-w-0">
+        <PopoverHeader>
+          <PopoverTitle>{copy.headline}</PopoverTitle>
+          <PopoverDescription className="text-ui-xs">
+            {copy.detail}
+          </PopoverDescription>
+        </PopoverHeader>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function BrowserMoreMenu(props: {
+  readonly controller: TileController;
+  readonly clearSite: { readonly site: string | null } | null;
+  readonly onRequestClearSite: () => void;
+}) {
   const controller = props.controller;
   const capabilities = controller.capabilities;
+  const clearSite = props.clearSite;
   return (
     <DropdownMenu>
       <TooltipWrapper
@@ -284,11 +444,18 @@ function BrowserMoreMenu(props: { readonly controller: TileController }) {
           <BrowserZoomControls controller={controller} />
         ) : null}
         {capabilities.siteInfo ? (
-          <BrowserSiteInfoMenu
-            url={controller.url}
-            cookieCryptoState={controller.cookieCryptoState}
-          />
+          <BrowserSiteInfoMenu url={controller.url} />
         ) : null}
+        {clearSite === null ? null : (
+          <DropdownMenuItem
+            aria-label={browserClearSiteLabel(clearSite.site)}
+            disabled={controller.disabled || clearSite.site === null}
+            onSelect={props.onRequestClearSite}
+          >
+            <Cookie aria-hidden />
+            {browserClearSiteLabel(clearSite.site)}
+          </DropdownMenuItem>
+        )}
         {capabilities.devtools ? (
           <>
             <DropdownMenuLabel className="mt-1 text-overline uppercase tracking-wide">
@@ -307,6 +474,12 @@ function BrowserMoreMenu(props: { readonly controller: TileController }) {
       </DropdownMenuContent>
     </DropdownMenu>
   );
+}
+
+function browserClearSiteLabel(site: string | null): string {
+  return site === null
+    ? "Clear cookies for this site"
+    : `Clear cookies for ${site}`;
 }
 
 function BrowserZoomControls(props: { readonly controller: TileController }) {
@@ -471,24 +644,17 @@ function BrowserViewportPresetMenu(props: {
   );
 }
 
-function BrowserSiteInfoMenu(props: {
-  readonly url: string;
-  readonly cookieCryptoState: BrowserCookieCryptoState | null;
-}) {
+function BrowserSiteInfoMenu(props: { readonly url: string }) {
   const [open, setOpen] = useState(false);
   const isWebOrigin = isWebOriginUrl(props.url);
   const originTitle = isWebOrigin ? "Web page" : "Local page";
   const originDetail = isWebOrigin
     ? "Served over the network from this page's origin."
     : "Not loaded from a web address (for example, a blank tab or an internal page).";
-  const cookieDetail =
-    props.cookieCryptoState === null
-      ? null
-      : `${cookieCryptoHeadline(props.cookieCryptoState)}. ${cookieCryptoDetail(props.cookieCryptoState)}`;
   return (
     <DropdownMenuSub open={open} onOpenChange={setOpen}>
       <DropdownMenuSubTrigger
-        aria-label={`Site information. ${originTitle}. ${originDetail}${cookieDetail === null ? "" : ` ${cookieDetail}`}`}
+        aria-label={`Site information. ${originTitle}. ${originDetail}`}
         className="grid grid-cols-[minmax(0,1fr)_auto_1rem] items-center gap-1.5 [&>svg:last-child]:m-0 [&>svg:last-child]:justify-self-end"
         onClick={() => setOpen(true)}
       >
@@ -503,12 +669,6 @@ function BrowserSiteInfoMenu(props: {
         className="w-[min(80vw,18rem)] min-w-0 space-y-3 p-3 text-ui-sm"
       >
         <BrowserSiteInfoRow title={originTitle} detail={originDetail} />
-        {props.cookieCryptoState === null ? null : (
-          <BrowserSiteInfoRow
-            title={cookieCryptoHeadline(props.cookieCryptoState)}
-            detail={cookieCryptoDetail(props.cookieCryptoState)}
-          />
-        )}
       </DropdownMenuSubContent>
     </DropdownMenuSub>
   );
@@ -535,21 +695,4 @@ function isWebOriginUrl(url: string): boolean {
   } catch {
     return false;
   }
-}
-
-function cookieCryptoHeadline(state: BrowserCookieCryptoState): string {
-  if (state.persistence === "ephemeral") return "Logins aren't saved";
-  return state.mode === "real"
-    ? "Logins saved securely"
-    : "Logins saved with basic protection";
-}
-
-function cookieCryptoDetail(state: BrowserCookieCryptoState): string {
-  if (state.mode === "degraded" || state.persistence === "ephemeral") {
-    return browserCookieDegradedMessage(state);
-  }
-  if (state.mode === "real") {
-    return "Cookies and saved logins on this page are encrypted by your operating system.";
-  }
-  return "Cookies and saved logins on this page use basic, less secure encryption.";
 }

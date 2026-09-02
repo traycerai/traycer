@@ -1,3 +1,4 @@
+import type { TransportVantage } from "../../host-transport/vantage";
 import {
   hostInstallRecordSchema,
   hostInstallRecordWireV10Schema,
@@ -42,6 +43,15 @@ export const hostDoctorResponseSchema = z.discriminatedUnion("status", [
 ]);
 export type HostDoctorResponse = z.infer<typeof hostDoctorResponseSchema>;
 
+export const LOCAL_WS_DOCTOR_TRIVIALLY_GREEN_ISSUE_CODES = [
+  "SERVICE_STOPPED",
+  "PORT_UNREACHABLE",
+  "PORT_CONFLICT",
+] as const;
+
+/** No code is universally proven: a relay-served RPC gets this empty set. */
+export const RPC_DOCTOR_TRIVIALLY_GREEN_ISSUE_CODES = [] as const;
+
 /**
  * The host can only caption doctor issues as trivially green when this RPC
  * arrived over a direct local WebSocket. A relay session proves the relay
@@ -54,19 +64,8 @@ export type HostDoctorResponse = z.infer<typeof hostDoctorResponseSchema>;
  * credential/protocol codes remain meaningful because the spawned CLI uses a
  * separate stored bearer and performs its own negotiation.
  */
-export type DoctorTransportVantage = "local-ws" | "relay";
-
-export const LOCAL_WS_DOCTOR_TRIVIALLY_GREEN_ISSUE_CODES = [
-  "SERVICE_STOPPED",
-  "PORT_UNREACHABLE",
-  "PORT_CONFLICT",
-] as const;
-
-/** No code is universally proven: a relay-served RPC gets this empty set. */
-export const RPC_DOCTOR_TRIVIALLY_GREEN_ISSUE_CODES = [] as const;
-
 export function doctorTriviallyGreenIssueCodesForVantage(
-  vantage: DoctorTransportVantage,
+  vantage: TransportVantage,
 ): readonly string[] {
   return vantage === "local-ws"
     ? LOCAL_WS_DOCTOR_TRIVIALLY_GREEN_ISSUE_CODES
