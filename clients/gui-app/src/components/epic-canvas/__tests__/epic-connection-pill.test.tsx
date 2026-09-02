@@ -16,9 +16,15 @@ import type {
 import type { EpicChatBackupStatus } from "@/components/epic-canvas/panels/epic-chat-backup-status";
 import type { AgentActivityPresenceDegradedReason } from "@/hooks/agent/use-agent-activity-presence-degraded";
 import type { CommGraphFeedHealth } from "@/components/epic-canvas/comm-graph/use-comm-graph-feed-health";
+import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 
 const mocks = vi.hoisted(() => ({
   useEpicSyncPillState: vi.fn(),
+  // Defaults to `open`: most existing tests pin durability/host-visible
+  // states that assume the GUI↔host transport is up. A host-link-down test
+  // overrides this to `connecting`/`reconnecting` so `useCloudLinkGrace`'s
+  // `hostTransportStatus === "open"` gate never applies to it.
+  hostTransportStatus: "open" as StreamConnectionStatus,
   chatBackupStatus: null as EpicChatBackupStatus | null,
   presenceDegraded: null as AgentActivityPresenceDegradedReason | null,
   terminalCoverage: null as
@@ -56,6 +62,7 @@ vi.mock("@/lib/epic-selectors", () => ({
     );
   },
   useEpicWriteCommandAlert: () => mocks.writeCommandAlert,
+  useEpicHostTransportStatus: () => mocks.hostTransportStatus,
 }));
 vi.mock("@/components/epic-canvas/panels/epic-chat-backup-status", () => ({
   useEpicChatBackupStatus: () => mocks.chatBackupStatus,
@@ -132,6 +139,7 @@ describe("<EpicConnectionPill />", () => {
     cleanup();
     vi.clearAllMocks();
     vi.useRealTimers();
+    mocks.hostTransportStatus = "open";
     mocks.chatBackupStatus = null;
     mocks.presenceDegraded = null;
     mocks.terminalCoverage = null;
@@ -186,6 +194,10 @@ describe("<EpicConnectionPill />", () => {
   });
 
   it("renders connecting as the amber bootstrap pill", async () => {
+    // Host-link-down reading: the GUI↔host transport itself is coming up, so
+    // `useCloudLinkGrace`'s `hostTransportStatus === "open"` gate must not
+    // apply and the pill reads amber immediately.
+    mocks.hostTransportStatus = "connecting";
     renderPill("connecting");
 
     expect(screen.getByText("Connecting…")).not.toBeNull();
@@ -203,6 +215,8 @@ describe("<EpicConnectionPill />", () => {
   });
 
   it("renders reconnecting as the amber pill", async () => {
+    // Host-link-down reading: gets no grace.
+    mocks.hostTransportStatus = "reconnecting";
     renderPill("reconnecting");
 
     expect(screen.getByText("Reconnecting…")).not.toBeNull();
@@ -227,6 +241,8 @@ describe("<EpicConnectionPill />", () => {
   describe("stalled-link escalation (60s)", () => {
     it("reads Reconnecting… before the escalation threshold, with a silent status region", () => {
       vi.useFakeTimers();
+      // Host-link-down reading: no cloud grace applies.
+      mocks.hostTransportStatus = "reconnecting";
       renderPill("reconnecting");
 
       expect(screen.getByText("Reconnecting…")).not.toBeNull();
@@ -244,6 +260,7 @@ describe("<EpicConnectionPill />", () => {
 
     it("escalates to Still reconnecting… at 60s and announces it through role=status", () => {
       vi.useFakeTimers();
+      mocks.hostTransportStatus = "reconnecting";
       renderPill("reconnecting");
 
       act(() => {
@@ -264,6 +281,7 @@ describe("<EpicConnectionPill />", () => {
 
     it("resets the escalation clock once the link recovers, staying silent on a fresh reconnect", () => {
       vi.useFakeTimers();
+      mocks.hostTransportStatus = "reconnecting";
       const { rerender } = renderPill("reconnecting");
 
       act(() => {
@@ -281,6 +299,48 @@ describe("<EpicConnectionPill />", () => {
       expect(screen.getByText("Reconnecting…")).not.toBeNull();
       expect(screen.queryByText("Still reconnecting…")).toBeNull();
       expect(screen.getByRole("status").textContent).toBe("");
+    });
+  });
+
+  describe("cloud-only grace (15s)", () => {
+    // `reconnecting` with the GUI↔host transport `open` is the cloud-down
+    // reading (see `deriveEpicSyncPillState`): the host is reachable and
+    // edits stay durable there, so `useCloudLinkGrace` holds the pill at the
+    // quiet neutral `syncing` reading for `CLOUD_LINK_GRACE_MS` before it may
+    // say "Reconnecting…".
+    it("renders the quiet syncing indicator for 14_999ms, then amber Reconnecting at 15_000, with a silent aria-live region throughout the grace", () => {
+      vi.useFakeTimers();
+      mocks.hostTransportStatus = "open";
+      renderPill("reconnecting");
+
+      expect(
+        screen.getByTestId("epic-connection-pill").getAttribute("data-status"),
+      ).toBe("syncing");
+      expect(screen.queryByText("Reconnecting…")).toBeNull();
+      expect(
+        screen.getByTestId("epic-connection-pill").className,
+      ).not.toContain("bg-amber-500/10");
+      expect(screen.getByRole("status").textContent).toBe("");
+
+      act(() => {
+        vi.advanceTimersByTime(14_999);
+      });
+      expect(
+        screen.getByTestId("epic-connection-pill").getAttribute("data-status"),
+      ).toBe("syncing");
+      expect(screen.queryByText("Reconnecting…")).toBeNull();
+      expect(screen.getByRole("status").textContent).toBe("");
+
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(
+        screen.getByTestId("epic-connection-pill").getAttribute("data-status"),
+      ).toBe("reconnecting");
+      expect(screen.getByText("Reconnecting…")).not.toBeNull();
+      expect(screen.getByTestId("epic-connection-pill").className).toContain(
+        "bg-amber-500/10",
+      );
     });
   });
 
@@ -512,6 +572,7 @@ describe("<EpicConnectionPill />", () => {
       tooltip: "Chat backup failing · 1 chat not backed up",
       ariaLabel: "Chat backup failing · 1 chat not backed up",
     };
+    mocks.hostTransportStatus = "connecting";
     renderPill("connecting");
 
     const pill = screen.getByRole<HTMLButtonElement>("button");
@@ -562,8 +623,18 @@ describe("<EpicConnectionPill />", () => {
     expect(pill.dataset.source).toBe("chat-backup");
   });
 
-  it("shows the unsafe overlap warning immediately without a durability claim", async () => {
+  it("shows the unsafe overlap warning after the cloud-only grace elapses", async () => {
+    // `offlineWithUnsavedChanges` only ever derives with the GUI↔host
+    // transport open (see `deriveEpicSyncPillState`), so it is a cloud-only
+    // outage and must clear `CLOUD_LINK_GRACE_MS` before it may read amber.
+    vi.useFakeTimers();
     renderPill("offlineWithUnsavedChanges");
+    expect(screen.queryByText("Offline — saving changes…")).toBeNull();
+
+    act(() => {
+      vi.advanceTimersByTime(15_000);
+    });
+    vi.useRealTimers();
 
     expect(screen.getByText("Offline — saving changes…")).not.toBeNull();
     expect(
@@ -589,7 +660,15 @@ describe("<EpicConnectionPill />", () => {
   });
 
   it("shows host-pending offline work without claiming it is durable", async () => {
+    // Cloud-only outage: held back for the grace before it may read amber.
+    vi.useFakeTimers();
     renderPill("offlineWithHostPending");
+    expect(screen.queryByText("Offline — changes pending")).toBeNull();
+
+    act(() => {
+      vi.advanceTimersByTime(15_000);
+    });
+    vi.useRealTimers();
 
     expect(screen.getByText("Offline — changes pending")).not.toBeNull();
     expect(
@@ -642,7 +721,15 @@ describe("<EpicConnectionPill />", () => {
   });
 
   it("renders offlineChangesSavedLocally with its label, tooltip, and no spinner", async () => {
+    // Cloud-only outage: held back for the grace before it may read amber.
+    vi.useFakeTimers();
     renderPill("offlineChangesSavedLocally");
+    expect(screen.queryByText("Offline — changes saved locally")).toBeNull();
+
+    act(() => {
+      vi.advanceTimersByTime(15_000);
+    });
+    vi.useRealTimers();
 
     expect(screen.getByText("Offline — changes saved locally")).not.toBeNull();
     // The spinner (AgentSpinningDots) writes a braille glyph into the dot's
@@ -767,6 +854,12 @@ describe("<EpicConnectionPill />", () => {
       "one-directional guard: from a displayed synced, a derived %s shows immediately with no timer advance at all",
       (nextState) => {
         vi.useFakeTimers();
+        // This test pins the SETTLE guard, not the cloud-only grace: a
+        // cloud-down reading of the offline* states would otherwise hold
+        // them back as `syncing` for 15s and contradict "no timer advance at
+        // all". Take the host-link-down reading throughout so
+        // `useCloudLinkGrace` never applies.
+        mocks.hostTransportStatus = "reconnecting";
         const { rerender } = renderPill("synced");
         act(() => {
           vi.advanceTimersByTime(750);
@@ -815,6 +908,8 @@ describe("<EpicConnectionPill />", () => {
 
     it("loses to an artifact-sync warning like reconnecting", () => {
       mocks.presenceDegraded = "stream-down";
+      // Host-link-down reading, so no cloud grace holds the artifact leg back.
+      mocks.hostTransportStatus = "reconnecting";
       renderPill("reconnecting");
 
       const pill = screen.getByRole<HTMLButtonElement>("button");
