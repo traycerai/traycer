@@ -25,7 +25,7 @@ import {
  * `streamId`, `seq`, `qos`/flags, `json`, `binary`) is folded into the
  * plaintext that gets encrypted whole. Both production channels
  * (`traycer-host/src/transport/remote/noise-responder.ts` and
- * `clients/shared/host-transport/remote/noise-channel.ts`) call
+ * `protocol/src/host-transport/remote/noise-channel.ts`) call
  * `NoiseSession.encrypt`/`decrypt` with an EMPTY associated-data array — that
  * is correct *only* as long as the invariant above holds. This suite pins it:
  *

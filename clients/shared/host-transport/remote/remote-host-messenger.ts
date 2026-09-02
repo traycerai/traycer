@@ -49,6 +49,7 @@ export class RemoteHostMessenger<
       method,
       params,
       authority.abortSignal,
+      null,
       // No caller-specific budget: the session's shared
       // `UNARY_RESPONSE_TIMEOUT_MS` applies, as it always has.
       undefined,
@@ -78,6 +79,7 @@ export class RemoteHostMessenger<
       method,
       params,
       authority.abortSignal,
+      null,
       responseTimeoutMs,
     );
   }

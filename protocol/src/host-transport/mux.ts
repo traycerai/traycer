@@ -99,7 +99,7 @@ export const MuxFrameType = {
   OPEN: 1,
   /** Host ack of the open: `{manifest, capabilities}` (streamId 0). */
   OPEN_ACK: 2,
-  /** Unary request: `{requestId, method, schemaVersion, params, idempotencyKey}`. */
+  /** Unary request: `{requestId, method, schemaVersion, params, callerAgentId, idempotencyKey}`. */
   REQUEST: 3,
   /** Unary response: `{requestId, method, result|error}`. */
   RESPONSE: 4,
@@ -320,6 +320,12 @@ export interface UnaryRequestPayload {
   readonly schemaVersion: SchemaVersion;
   readonly params: unknown;
   /**
+   * Per-request sender attribution for host-agent sessions that multiplex
+   * several agents over one authenticated leg. `null` for user sessions and
+   * peers predating this additive field.
+   */
+  readonly callerAgentId: string | null;
+  /**
    * Reserved for later per-method dedup. v1 has no host dedup machinery, so the
    * authoritative wire value is `null`; non-null values fail schema validation.
    */
@@ -400,6 +406,7 @@ export const unaryRequestPayloadSchema: z.ZodType<UnaryRequestPayload> =
     method: z.string(),
     schemaVersion: schemaVersionSchema,
     params: z.unknown(),
+    callerAgentId: z.string().nullable().default(null),
     idempotencyKey: z.null(),
   });
 

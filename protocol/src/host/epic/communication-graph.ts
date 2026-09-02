@@ -122,10 +122,26 @@ const textFrameFields = {
  * representability exception in the module doc), and adding a kind is a NEW
  * MINOR, never a silent widening.
  */
+export const epicCommunicationGraphEventKindSchemaV10 = z.enum([
+  "a2a_message",
+  "a2a_notice",
+  "agent_created",
+]);
+export type EpicCommunicationGraphEventKindV10 = z.infer<
+  typeof epicCommunicationGraphEventKindSchemaV10
+>;
+
+/**
+ * @1.1 adds `host_agent_verb` so a remote host-agent invocation is visible
+ * on the local graph. @1.0 stays frozen: a client that negotiated it never
+ * receives the new kind (the serving host skips those rows under the
+ * representability exception).
+ */
 export const epicCommunicationGraphEventKindSchema = z.enum([
   "a2a_message",
   "a2a_notice",
   "agent_created",
+  "host_agent_verb",
 ]);
 export type EpicCommunicationGraphEventKind = z.infer<
   typeof epicCommunicationGraphEventKindSchema
@@ -140,10 +156,24 @@ export type EpicCommunicationGraphEventKind = z.infer<
  * - `tui_session`              - a terminal-agent session; opening the session
  *   is the whole behavior (there is no in-transcript anchor).
  */
+export const epicCommunicationGraphOriginKindSchemaV10 = z.enum([
+  "gui_block",
+  "gui_message",
+  "tui_session",
+]);
+export type EpicCommunicationGraphOriginKindV10 = z.infer<
+  typeof epicCommunicationGraphOriginKindSchemaV10
+>;
+
+/**
+ * @1.1 adds `remote_host` so capture can name the verified origin host of a
+ * host-agent verb. @1.0 stays frozen.
+ */
 export const epicCommunicationGraphOriginKindSchema = z.enum([
   "gui_block",
   "gui_message",
   "tui_session",
+  "remote_host",
 ]);
 export type EpicCommunicationGraphOriginKind = z.infer<
   typeof epicCommunicationGraphOriginKindSchema
@@ -221,6 +251,16 @@ export const epicCommunicationGraphEventSchema = z.object({
 });
 export type EpicCommunicationGraphEvent = z.infer<
   typeof epicCommunicationGraphEventSchema
+>;
+
+/** Frozen @1.0 event row: the three original kinds only. */
+export const epicCommunicationGraphEventSchemaV10 =
+  epicCommunicationGraphEventSchema.extend({
+    kind: epicCommunicationGraphEventKindSchemaV10,
+    originKind: epicCommunicationGraphOriginKindSchemaV10.nullable(),
+  });
+export type EpicCommunicationGraphEventV10 = z.infer<
+  typeof epicCommunicationGraphEventSchemaV10
 >;
 
 export const epicCommunicationGraphSubscribeOpenRequestSchema = z.object({
@@ -326,9 +366,38 @@ export type EpicCommunicationGraphSubscribeClientFrame = z.infer<
   typeof epicCommunicationGraphSubscribeClientFrameSchema
 >;
 
+export const epicCommunicationGraphSubscribeServerFrameSchemaV10 =
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("snapshot"),
+      epicId: z.string(),
+      events: z.array(epicCommunicationGraphEventSchemaV10),
+      headId: z.number().int().positive().nullable(),
+      ...textFrameFields,
+    }),
+    z.object({
+      kind: z.literal("event"),
+      epicId: z.string(),
+      event: epicCommunicationGraphEventSchemaV10,
+      ...textFrameFields,
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      ...textFrameFields,
+    }),
+  ]);
+
 export const epicCommunicationGraphSubscribeV10 = defineStreamRpcContract({
   method: "epic.communicationGraph.subscribe",
   schemaVersion: { major: 1, minor: 0 } as const,
+  openRequestSchema: epicCommunicationGraphSubscribeOpenRequestSchema,
+  serverFrameSchema: epicCommunicationGraphSubscribeServerFrameSchemaV10,
+  clientFrameSchema: epicCommunicationGraphSubscribeClientFrameSchema,
+});
+
+export const epicCommunicationGraphSubscribeV11 = defineStreamRpcContract({
+  method: "epic.communicationGraph.subscribe",
+  schemaVersion: { major: 1, minor: 1 } as const,
   openRequestSchema: epicCommunicationGraphSubscribeOpenRequestSchema,
   serverFrameSchema: epicCommunicationGraphSubscribeServerFrameSchema,
   clientFrameSchema: epicCommunicationGraphSubscribeClientFrameSchema,
@@ -426,6 +495,15 @@ export type HostCommunicationGraphCloudFeedEvent = z.infer<
   typeof hostCommunicationGraphCloudFeedEventSchema
 >;
 
+export const hostCommunicationGraphCloudFeedEventSchemaV10 =
+  hostCommunicationGraphCloudFeedEventSchema.extend({
+    kind: epicCommunicationGraphEventKindSchemaV10,
+    originKind: epicCommunicationGraphOriginKindSchemaV10.nullable(),
+  });
+export type HostCommunicationGraphCloudFeedEventV10 = z.infer<
+  typeof hostCommunicationGraphCloudFeedEventSchemaV10
+>;
+
 export const hostCommunicationGraphCloudFeedSubscribeOpenRequestSchemaV10 =
   z.object({
     epicId: z.string(),
@@ -468,7 +546,7 @@ export const hostCommunicationGraphCloudFeedSubscribeServerFrameSchemaV10 =
     z.object({
       kind: z.literal("snapshot"),
       epicId: z.string(),
-      events: z.array(hostCommunicationGraphCloudFeedEventSchema),
+      events: z.array(hostCommunicationGraphCloudFeedEventSchemaV10),
       /**
        * On the initial snapshot, the cloud's headVersion as of the first read:
        * the arrival boundary, exactly like the local contract's `headId`. On a
@@ -489,7 +567,7 @@ export const hostCommunicationGraphCloudFeedSubscribeServerFrameSchemaV10 =
     z.object({
       kind: z.literal("event"),
       epicId: z.string(),
-      event: hostCommunicationGraphCloudFeedEventSchema,
+      event: hostCommunicationGraphCloudFeedEventSchemaV10,
       ...textFrameFields,
     }),
     /**
@@ -546,6 +624,57 @@ export const hostCommunicationGraphCloudFeedSubscribeV10 =
       hostCommunicationGraphCloudFeedSubscribeOpenRequestSchemaV10,
     serverFrameSchema:
       hostCommunicationGraphCloudFeedSubscribeServerFrameSchemaV10,
+    clientFrameSchema:
+      hostCommunicationGraphCloudFeedSubscribeClientFrameSchemaV10,
+  });
+
+export const hostCommunicationGraphCloudFeedSubscribeServerFrameSchemaV11 =
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("availability"),
+      availability: z.literal("available"),
+      ...textFrameFields,
+    }),
+    z.object({
+      kind: z.literal("snapshot"),
+      epicId: z.string(),
+      events: z.array(hostCommunicationGraphCloudFeedEventSchema),
+      headVersion: z.number().int().nonnegative(),
+      frontier: z.number().int().nonnegative().optional(),
+      ...textFrameFields,
+    }),
+    z.object({
+      kind: z.literal("event"),
+      epicId: z.string(),
+      event: hostCommunicationGraphCloudFeedEventSchema,
+      ...textFrameFields,
+    }),
+    z.object({
+      kind: z.literal("caughtUp"),
+      epicId: z.string(),
+      headVersion: z.number().int().nonnegative(),
+      cursor: hostCommunicationGraphCloudFeedCursorSchema.nullable(),
+      ...textFrameFields,
+    }),
+    z.object({
+      kind: z.literal("connectionState"),
+      connectionState: z.literal("reconnecting"),
+      ...textFrameFields,
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      ...textFrameFields,
+    }),
+  ]);
+
+export const hostCommunicationGraphCloudFeedSubscribeV11 =
+  defineStreamRpcContract({
+    method: "host.communicationGraph.subscribe",
+    schemaVersion: { major: 1, minor: 1 } as const,
+    openRequestSchema:
+      hostCommunicationGraphCloudFeedSubscribeOpenRequestSchemaV10,
+    serverFrameSchema:
+      hostCommunicationGraphCloudFeedSubscribeServerFrameSchemaV11,
     clientFrameSchema:
       hostCommunicationGraphCloudFeedSubscribeClientFrameSchemaV10,
   });
