@@ -349,26 +349,45 @@ export async function markBrowserForgetLedgerCleared(
   // close. Held in memory only: a completion the process did not live to
   // record is one the next launch re-runs anyway.
   completedClears.add(revision);
-  let clearedThrough = ledger.clearedThrough;
   // A revision the ledger no longer REPRESENTS can never be completed, and the
-  // contiguous drain must step over it rather than wedge on it. That happens
-  // whenever a row is superseded before its clear finishes - forget a site
-  // twice and the second record replaces the first's row - or when
-  // `trimDomains` drops one. Nothing is pending for such a revision by
-  // definition, so treating it as complete re-runs no clear; leaving it as a
-  // hole is what made the boot reconciler re-clear the same site at every
-  // launch forever, deleting whatever login the user created in between.
-  const nothingPendingAt = (candidate: number): boolean =>
-    candidate <= ledger.revision &&
-    ledger.forgetAll?.revision !== candidate &&
-    !ledger.domains.some((entry) => entry.revision === candidate);
-  while (
-    completedClears.delete(clearedThrough + 1) ||
-    nothingPendingAt(clearedThrough + 1)
-  ) {
-    clearedThrough += 1;
+  // watermark must step over it rather than wedge on it. That happens whenever
+  // a row is superseded before its clear finishes - forget a site twice and
+  // the second record replaces the first's row - or when `trimDomains` drops
+  // one. Nothing is pending for such a revision by definition, so treating it
+  // as complete re-runs no clear; leaving it as a hole is what made the boot
+  // reconciler re-clear the same site at every launch forever, deleting
+  // whatever login the user created in between.
+  //
+  // So the watermark is computed from the entries the ledger actually HOLDS -
+  // exactly one below the OLDEST still-pending revision - rather than scanned
+  // one revision at a time toward `ledger.revision`. The run of unrepresented
+  // revisions is unbounded (a long-lived profile's revision runs far ahead of
+  // the handful of rows it still carries, and a restored file can name any
+  // number at all), and walking it would block Electron main for as many
+  // iterations as that number happens to be.
+  const oldestPending = [
+    ledger.forgetAll?.revision,
+    ...ledger.domains.map((entry) => entry.revision),
+  ].reduce<number | null>((oldest, candidate) => {
+    if (
+      candidate === undefined ||
+      candidate <= ledger.clearedThrough ||
+      completedClears.has(candidate)
+    ) {
+      return oldest;
+    }
+    return oldest === null || candidate < oldest ? candidate : oldest;
+  }, null);
+  const clearedThrough =
+    oldestPending === null
+      ? ledger.revision
+      : Math.min(ledger.revision, oldestPending - 1);
+  // Only the drained ones: a completion above the watermark is still the thing
+  // that lets a later drain step past its revision.
+  for (const done of [...completedClears]) {
+    if (done <= clearedThrough) completedClears.delete(done);
   }
-  if (clearedThrough === ledger.clearedThrough) return;
+  if (clearedThrough <= ledger.clearedThrough) return;
   mutate({ ...ledger, clearedThrough });
   await persist();
 }

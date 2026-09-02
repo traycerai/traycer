@@ -659,6 +659,43 @@ describe("forget ledger clear reconciliation", () => {
       domains: [],
     });
   });
+
+  it("R3-11: drains a SPARSE ledger without walking the gap to its top revision", async () => {
+    // RULE: the watermark is derived from the rows the ledger holds, never
+    // scanned one revision at a time toward `ledger.revision`. The gap
+    // between them is unbounded - the revision counter outlives the rows,
+    // and a restored file can name any number at all - and a per-revision
+    // scan runs that many iterations on the Electron MAIN thread, freezing
+    // the whole app on an operation whose real work is one row.
+    const path = pathIn("sparse.json");
+    await writeFile(
+      path,
+      JSON.stringify({
+        revision: 1_000_000_000_000_000,
+        clearedThrough: 0,
+        forgetAll: null,
+        domains: [{ domain: "example.com", forgottenAt: 5, revision: 1 }],
+        ackedByHost: [],
+      }),
+      "utf8",
+    );
+    await initBrowserForgetLedger(path);
+
+    expect(browserForgetLedgerPendingClears().domains).toEqual([
+      { domain: "example.com", revision: 1 },
+    ]);
+
+    await markBrowserForgetLedgerCleared(1);
+
+    // Nothing is represented above revision 1, so the watermark lands on the
+    // ledger's own top - reached, not walked to.
+    expect(browserForgetLedgerPendingClears()).toEqual({
+      forgetAll: null,
+      domains: [],
+    });
+    const persisted: unknown = JSON.parse(await readFile(path, "utf8"));
+    expect(persisted).toMatchObject({ clearedThrough: 1_000_000_000_000_000 });
+  }, 5_000);
 });
 
 describe("forget ledger acked-revision gate", () => {
