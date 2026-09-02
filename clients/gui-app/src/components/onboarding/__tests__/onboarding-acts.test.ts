@@ -28,9 +28,9 @@ describe("onboardingActsFor", () => {
       "navigation",
       "task-context",
       "providers",
-      "session-import",
       "agent-guide",
       "command-theme",
+      "session-import",
     ]);
     expect(onboardingActsFor(true)).toBe(ONBOARDING_ACTS);
   });
@@ -79,11 +79,11 @@ describe("onboardingActsFor", () => {
   });
 
   it("numbers the eyebrow off the tour being shown, not the catalog", () => {
-    // On a host that cannot scan, delegation is the tour's fifth act even
-    // though it sits sixth in the catalog.
+    // On a host that cannot scan, the tour ends on flow as its sixth act;
+    // the catalog goes on to a seventh, the session-import last act.
     const shorterTour = onboardingActsFor(false);
-    expect(actEyebrow(shorterTour[4], 4)).toBe("ACT 05 - DELEGATION");
-    expect(actEyebrow(ONBOARDING_ACTS[4], 4)).toBe("ACT 05 - YOUR WORK");
+    expect(actEyebrow(shorterTour[5], 5)).toBe("ACT 06 - FLOW");
+    expect(actEyebrow(ONBOARDING_ACTS[6], 6)).toBe("ACT 07 - YOUR WORK");
 
     setMobileApp(true);
     const mobileTour = onboardingActsFor(true);
