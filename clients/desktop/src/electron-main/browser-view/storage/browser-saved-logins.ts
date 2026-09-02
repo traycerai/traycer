@@ -77,6 +77,21 @@ export async function setBrowserSavedLoginsEnabled(
 }
 
 /**
+ * Does this machine's keystore actually ENCRYPT what it is handed?
+ *
+ * On Linux `safeStorage` falls back to a `basic_text` backend that obfuscates
+ * rather than encrypts, and a machine like that must not be handed anything
+ * that is supposed to be at rest under an OS keystore. One predicate, so the
+ * store-key wrap and the desktop identity refuse for one cause rather than
+ * two. `getSelectedStorageBackend` is Linux-only, so it is asked only there.
+ */
+export function isKeystoreEncrypting(): boolean {
+  if (!safeStorage.isEncryptionAvailable()) return false;
+  if (process.platform !== "linux") return true;
+  return safeStorage.getSelectedStorageBackend() !== "basic_text";
+}
+
+/**
  * `safeStorage.encryptString(rawKey)`, base64 for the wire: the desktop half of
  * the host's store-key handshake. Attempted whenever the host asks, on every
  * backend - a `basic_text` Linux keyring still round-trips, and a machine where

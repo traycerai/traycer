@@ -12,6 +12,7 @@ import {
   browserSavedLoginSitesV10,
   browserSessionsClientFrameSchema,
   browserSessionsOpenRequestSchema,
+  canonicalDesktopIdentityAttestBytes,
   browserSessionsServerFrameSchema,
   browserSessionsV1,
   browserScreencastClientFrameSchema,
@@ -637,9 +638,8 @@ describe("browser.sessions@1.0 store-key handshake", () => {
   const RAW_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
   const WRAPPED_KEY = "d3JhcHBlZA==";
 
-  it("accepts the three client frames", () => {
+  it("accepts the two client frames", () => {
     for (const frame of [
-      { kind: "storeKeyOffer", hasBinaryPayload: false },
       {
         kind: "storeKeyWrapped",
         hasBinaryPayload: false,
@@ -717,6 +717,72 @@ describe("browser.sessions@1.0 store-key handshake", () => {
         rawKey: "not base64!",
       }).success,
     ).toBe(false);
+  });
+});
+
+describe("browser.sessions@1.0 desktop identity attestation", () => {
+  const NONCE = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+  const PUBLIC_KEY = "cHVibGlj";
+  const SIGNATURE = "c2ln";
+
+  it("accepts the challenge and the attestation", () => {
+    expect(
+      browserSessionsServerFrameSchema.safeParse({
+        kind: "desktopIdentityChallenge",
+        hasBinaryPayload: false,
+        requestId: "request-1",
+        nonce: NONCE,
+      }).success,
+    ).toBe(true);
+    expect(
+      browserSessionsClientFrameSchema.safeParse({
+        kind: "desktopIdentityAttest",
+        hasBinaryPayload: false,
+        requestId: "request-1",
+        publicKey: PUBLIC_KEY,
+        keystoreId: "keystore-1",
+        signature: SIGNATURE,
+      }).success,
+    ).toBe(true);
+  });
+
+  it("refuses key material that is not base64", () => {
+    expect(
+      browserSessionsClientFrameSchema.safeParse({
+        kind: "desktopIdentityAttest",
+        hasBinaryPayload: false,
+        requestId: "request-1",
+        publicKey: "not base64!",
+        keystoreId: "keystore-1",
+        signature: SIGNATURE,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("commits every field, and only these fields, to the signed bytes", () => {
+    const base = {
+      hostId: "host-1",
+      nonce: NONCE,
+      publicKey: PUBLIC_KEY,
+    };
+    const bytes = (input: typeof base): string =>
+      new TextDecoder().decode(canonicalDesktopIdentityAttestBytes(input));
+    // The domain tag is what stops a signature minted here being replayed as
+    // some other Ed25519 signature the same key produces.
+    expect(bytes(base)).toBe(
+      '{"domain":"traycer-desktop-identity-attest-v1","hostId":"host-1","nonce":"' +
+        NONCE +
+        '","publicKey":"' +
+        PUBLIC_KEY +
+        '"}',
+    );
+    for (const changed of [
+      { ...base, hostId: "host-2" },
+      { ...base, nonce: "b3RoZXI=" },
+      { ...base, publicKey: "b3RoZXI=" },
+    ]) {
+      expect(bytes(changed)).not.toBe(bytes(base));
+    }
   });
 });
 

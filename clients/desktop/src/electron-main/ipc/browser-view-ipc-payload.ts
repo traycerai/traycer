@@ -162,6 +162,16 @@ const pipCaptureStartSchema: z.ZodType<PipCaptureStartInput> =
 const storeKeyMaterialSchema = z.base64();
 
 /**
+ * One host `desktopIdentityChallenge` to sign (H09). Bounded like the wire
+ * frame it came from: an unbounded renderer payload here would be signed
+ * material this process produced on a length it never checked.
+ */
+const desktopIdentityChallengeSchema = z.strictObject({
+  hostId: z.string().max(128),
+  nonce: z.base64().max(64),
+});
+
+/**
  * One `primaryProfileObserved` frame on its way to the jar (universal-sign-in
  * ticket 03).
  *
@@ -223,6 +233,7 @@ export const browserViewIpcPayload = {
   attachSurface: attachSurfaceSchema,
   boundsUpdate: boundsUpdateSchema,
   certificateTrust: certificateTrustSchema,
+  desktopIdentityChallenge: desktopIdentityChallengeSchema,
   detachSurface: detachSurfaceSchema,
   downloadCancel: downloadCancelSchema,
   electronTabCdpDispatch: electronTabCdpDispatchSchema,

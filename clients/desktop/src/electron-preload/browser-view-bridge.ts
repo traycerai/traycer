@@ -5,6 +5,7 @@ import {
 } from "../ipc-contracts/ipc-channels";
 import type {
   BrowserViewBridge,
+  BrowserDesktopIdentityAttestation,
   BrowserForgetLedgerChange,
   BrowserPrimaryProfileCaptureResult,
   BrowserStoreKeyUnwrapResult,
@@ -162,6 +163,11 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
           RunnerHostInvoke.browserViewStoreKeyUnwrap,
           wrappedKey,
         ) as Promise<BrowserStoreKeyUnwrapResult>,
+      attestDesktopIdentity: (input) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.browserViewDesktopIdentityAttest,
+          input,
+        ) as Promise<BrowserDesktopIdentityAttestation | null>,
       forgetLogins: () =>
         ipcRenderer.invoke(
           RunnerHostInvoke.browserViewForgetLogins,

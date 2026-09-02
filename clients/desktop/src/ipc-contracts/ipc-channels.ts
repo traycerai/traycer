@@ -364,6 +364,10 @@ export const RunnerHostInvoke = {
   // Store-key handshake (keychain refactor ticket 05).
   browserViewStoreKeyWrap: "runnerHost:browserView:storeKey:wrap",
   browserViewStoreKeyUnwrap: "runnerHost:browserView:storeKey:unwrap",
+  // Desktop identity attestation (browser-security-hardening H09). Main signs
+  // the host's challenge; the private key never crosses this boundary.
+  browserViewDesktopIdentityAttest:
+    "runnerHost:browserView:desktopIdentity:attest",
   // "Forget all browser logins" (keychain refactor ticket 08). Driven by
   // Settings, alongside the `forgetLogins` frame that shreds each connected
   // host's slice: this half empties the local jars and records the forget in

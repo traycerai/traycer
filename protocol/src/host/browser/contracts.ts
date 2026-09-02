@@ -649,6 +649,19 @@ export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
+      // "Prove you are a desktop this host hands the cookie jar to"
+      // (browser-security-hardening H09). Issued once per connection, on
+      // receipt of `electronTabLifecycleReady`. The nonce is 32 random bytes the host
+      // holds on the challenged subscriber and deletes on the first answer, so
+      // a captured signature replays onto nothing and a second connection's
+      // answer never settles this one.
+      kind: z.literal("desktopIdentityChallenge"),
+      ...requestFrameFields,
+      nonce: z.base64().max(64),
+    })
+    .strict(),
+  z
+    .object({
       // A sign-in this host witnessed inside a headless session, offered to
       // the desktops that hold the master jar (universal-sign-in decisions
       // 1-5). Emitted from headless capture events only - never echoed back
@@ -734,6 +747,46 @@ export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
 export type BrowserSessionsServerFrame = z.infer<
   typeof browserSessionsServerFrameSchema
 >;
+
+/**
+ * Domain-separation tag for the desktop identity attestation (H09). Versioned
+ * so a future payload shape cannot be confused with this one, and product-tagged
+ * so a signature minted here can never be replayed as any other Ed25519
+ * signature the same key might one day produce.
+ */
+export const DESKTOP_IDENTITY_ATTEST_DOMAIN =
+  "traycer-desktop-identity-attest-v1";
+
+/**
+ * The exact bytes `desktopIdentityAttest.signature` commits to.
+ *
+ * Deterministic by construction - fixed key order, string leaves only - so the
+ * desktop that signs and the host that verifies serialise identical bytes with
+ * no canonical-JSON dependency. Exported from the contract itself so the two
+ * sides cannot drift.
+ *
+ * `hostId` is committed so a signature produced for one host cannot be relayed
+ * into another host's challenge by a hostile host or relay. `publicKey` is
+ * committed so the key cannot be swapped under a captured signature. No
+ * `userId`: identity comes from the stream's authenticated owner, and an
+ * account id must not be added to a value that travels and gets logged.
+ */
+export function canonicalDesktopIdentityAttestBytes(input: {
+  readonly hostId: string;
+  /** The challenge nonce, base64, exactly as it came off the wire. */
+  readonly nonce: string;
+  /** Ed25519 SPKI DER, base64, exactly as it goes onto the wire. */
+  readonly publicKey: string;
+}): Uint8Array {
+  return new TextEncoder().encode(
+    JSON.stringify({
+      domain: DESKTOP_IDENTITY_ATTEST_DOMAIN,
+      hostId: input.hostId,
+      nonce: input.nonce,
+      publicKey: input.publicKey,
+    }),
+  );
+}
 
 export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
   z
@@ -855,14 +908,26 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
-      // "This machine can reach an OS keystore for you." Sent right after
-      // `electronTabLifecycleReady`; the host answers with whichever of
-      // the two key requests this user needs. The identity is the stream's
-      // authenticated user, so the frame carries no `userId`, and only the
-      // elected lifecycle subscriber is heard (same gate as
-      // `primaryProfileCaptured`).
-      kind: z.literal("storeKeyOffer"),
-      ...textFrameFields,
+      // The desktop's answer to `desktopIdentityChallenge`
+      // (browser-security-hardening H09): an Ed25519 signature over
+      // {@link canonicalDesktopIdentityAttestBytes}, made in the desktop's
+      // MAIN process with a key `safeStorage` holds. It is the whole basis of
+      // jar authorization - it replaced the `storeKeyOffer` frame, which was a
+      // declaration with nothing behind it. No `userId`: the identity is the
+      // stream's authenticated user, and the signed bytes commit to the hostId
+      // instead, so a signature cannot be relayed into another host's
+      // challenge.
+      kind: z.literal("desktopIdentityAttest"),
+      // Echoes the challenge's `requestId`.
+      ...requestFrameFields,
+      // Ed25519 SPKI DER.
+      publicKey: z.base64().max(128),
+      // Which keystore on this machine holds the private half. A slot label
+      // only - it is deliberately OUTSIDE the signature, because it is used
+      // only to replace an entry during a `local-ws` enrollment, and that lane
+      // already requires a socket on the host's own machine.
+      keystoreId: z.string().max(64),
+      signature: z.base64().max(128),
     })
     .strict(),
   z

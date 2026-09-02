@@ -30,6 +30,7 @@ import type {
   BrowserForgetLedgerAckInput,
   BrowserForgetLedgerChange,
   BrowserPrimaryProfileDelta,
+  BrowserDesktopIdentityAttestation,
   BrowserStoreKeyUnwrapResult,
   BrowserStoreKeyWrapResult,
 } from "@traycer-clients/shared/platform/browser-view";
@@ -197,6 +198,17 @@ class FakeBrowserViewBridge implements BrowserViewBridge {
 
   unwrapStoreKey(wrappedKey: string): Promise<BrowserStoreKeyUnwrapResult> {
     return Promise.resolve({ ok: true, rawKey: wrappedKey });
+  }
+
+  attestDesktopIdentity(_input: {
+    readonly hostId: string;
+    readonly nonce: string;
+  }): Promise<BrowserDesktopIdentityAttestation | null> {
+    return Promise.resolve({
+      publicKey: "cHVibGlj",
+      keystoreId: "fake-keystore",
+      signature: "c2ln",
+    });
   }
 
   forgetLogins(): Promise<boolean> {

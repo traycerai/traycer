@@ -51,6 +51,10 @@ import {
   wrapStoreKey,
 } from "../browser-view/storage/browser-saved-logins";
 import {
+  attestDesktopIdentity,
+  type DesktopIdentityAttestation,
+} from "../browser-view/storage/browser-desktop-identity";
+import {
   BrowserPrimaryProfileSnapshotCoordinator,
   captureBrowserOriginLocalStorage,
   captureBrowserPrimaryProfile,
@@ -815,6 +819,18 @@ export function registerBrowserViewIpc(
         ? { ok: false, reason: "keystore unavailable" }
         : { ok: true, rawKey };
     },
+  );
+
+  // The desktop's answer to one host `desktopIdentityChallenge` (H09). Main
+  // signs; the private key and the unwrapped PKCS8 never cross this boundary,
+  // and `null` is a defined answer the host has a behaviour for - it leaves
+  // this connection off the jar plane and keeps serving sessions.
+  bridge.handleInvoke(
+    RunnerHostInvoke.browserViewDesktopIdentityAttest,
+    (_event, payload): Promise<DesktopIdentityAttestation | null> =>
+      attestDesktopIdentity(
+        browserViewIpcPayload.desktopIdentityChallenge.parse(payload),
+      ),
   );
 
   // The desktop half of "forget all browser logins" (spec §6.5). Driven by

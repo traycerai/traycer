@@ -1,4 +1,5 @@
 import type {
+  BrowserDesktopIdentityAttestation,
   BrowserForgetLedger,
   BrowserForgetLedgerAckInput,
   BrowserForgetLedgerChange,
@@ -162,6 +163,17 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
 
   unwrapStoreKey(wrappedKey: string): Promise<BrowserStoreKeyUnwrapResult> {
     return Promise.resolve({ ok: true, rawKey: wrappedKey });
+  }
+
+  attestDesktopIdentity(_input: {
+    readonly hostId: string;
+    readonly nonce: string;
+  }): Promise<BrowserDesktopIdentityAttestation | null> {
+    return Promise.resolve({
+      publicKey: "cHVibGlj",
+      keystoreId: "fake-keystore",
+      signature: "c2ln",
+    });
   }
 
   forgetLogins(): Promise<boolean> {

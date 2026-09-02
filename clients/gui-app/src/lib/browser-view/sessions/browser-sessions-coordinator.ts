@@ -800,13 +800,14 @@ function createBrowserSessionsCoordinator(args: {
       }
       electronLifecycleReadySentForConnection = true;
       // ONE synchronous burst, and the order in it is the attach ordering
-      // guarantee. `electronTabLifecycleReady` is what makes this stream
-      // jar-authorized on the host; the ledger digest rides immediately behind
-      // it on the same ordered stream; and the store-key handshake the host
-      // starts off readiness costs a full round trip - so the digest is always
-      // RECEIVED before the handshake completes, and therefore before the
-      // attach replay it must precede. Nothing here waits on a clock, and
-      // nothing here waits on an IPC.
+      // guarantee. `electronTabLifecycleReady` is what makes the host CHALLENGE
+      // this stream for a desktop identity (H09); the ledger digest rides
+      // immediately behind it on the same ordered stream; and the store-key
+      // handshake now begins a full attestation round trip after that - one
+      // round trip LATER than the old readiness-driven start - so the digest is
+      // still always RECEIVED before the handshake completes, and therefore
+      // before the attach replay it must precede, with more margin than before.
+      // Nothing here waits on a clock, and nothing here waits on an IPC.
       stream?.sendClientFrame({
         kind: "electronTabLifecycleReady",
         hasBinaryPayload: false,
@@ -815,16 +816,6 @@ function createBrowserSessionsCoordinator(args: {
       });
       const ledger = forgetLedgerDigest;
       if (ledger !== null) sendForgetLedger(ledger, "attach");
-      // This machine can hold the host's store key. The host answers with a
-      // wrap or an unwrap request (handled below); it ignores the offer when
-      // it already has the key in memory. It rides with the readiness frame
-      // because readiness is what makes this stream jar-authorized - and the
-      // host now also starts the handshake off that frame, so the offer is
-      // usually the second of the two and simply ignored.
-      stream?.sendClientFrame({
-        kind: "storeKeyOffer",
-        hasBinaryPayload: false,
-      });
       // The cache was empty when the burst went out, or a forget landed while
       // it was being assembled. Either way this connection has not been told,
       // and the ordering above already held.
@@ -1234,6 +1225,14 @@ function handleBrowserSessionsSubsystemFrame(args: {
         sendClientFrame: args.sendClientFrame,
       });
       return;
+    case "desktopIdentityChallenge":
+      handleDesktopIdentityChallengeFrame({
+        frame,
+        hostId: args.hostId,
+        browserView: args.browserView,
+        sendClientFrame: args.sendClientFrame,
+      });
+      return;
     // `primaryProfileCaptureAck` and `primaryProfileForgetLedgerAck` are both
     // answered in `onServerFrame`, which owns the quit-flush waiters and the
     // connection identity the ledger ack is recorded under; the burst frames
@@ -1420,6 +1419,51 @@ function handlePrimaryProfileCaptureFrame(args: {
  * sealed. A failed *wrap* has no negative frame by design: nothing durable was
  * created, and the host simply re-asks on the next connect.
  */
+/**
+ * Answers one host challenge by asking main to sign it (H09). Main holds the
+ * key; this renderer only forwards a signature, and a `null` answer - this
+ * machine's keystore does not encrypt, so it has no identity - is simply not
+ * sent: the host leaves the connection off the jar plane and every other part
+ * of the session keeps working.
+ */
+function handleDesktopIdentityChallengeFrame(args: {
+  readonly frame: Extract<
+    BrowserSessionsServerFrame,
+    { readonly kind: "desktopIdentityChallenge" }
+  >;
+  readonly hostId: string;
+  readonly browserView: BrowserViewBridge | null;
+  readonly sendClientFrame: (frame: BrowserSessionsClientFrame) => void;
+}): void {
+  const browserView = args.browserView;
+  if (browserView === null) return;
+  const requestId = args.frame.requestId;
+  void browserView
+    .attestDesktopIdentity({ hostId: args.hostId, nonce: args.frame.nonce })
+    .then((attestation) => {
+      if (attestation === null) {
+        appLogger.warn(
+          "[browser] this machine holds no browser identity; the host stays sealed",
+          { hostId: args.hostId },
+        );
+        return;
+      }
+      args.sendClientFrame({
+        kind: "desktopIdentityAttest",
+        hasBinaryPayload: false,
+        requestId,
+        publicKey: attestation.publicKey,
+        keystoreId: attestation.keystoreId,
+        signature: attestation.signature,
+      });
+    })
+    .catch((cause: unknown) => {
+      appLogger.warn("[browser] the desktop identity attestation failed", {
+        cause: cause instanceof Error ? cause.message : String(cause),
+      });
+    });
+}
+
 function handleStoreKeyRequestFrame(args: {
   readonly frame: Extract<
     BrowserSessionsServerFrame,

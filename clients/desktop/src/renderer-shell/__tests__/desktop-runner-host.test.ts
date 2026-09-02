@@ -592,6 +592,8 @@ function buildFakeBridge(
         ok: false as const,
         reason: "no keystore in this test bridge",
       }),
+      // ...and with no keystore there is no identity to attest with either.
+      attestDesktopIdentity: async () => null,
       forgetLogins: async () => true,
       // An empty ledger: nothing forgotten, so nothing is refused here.
       readForgetLedger: async () => ({

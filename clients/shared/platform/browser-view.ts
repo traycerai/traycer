@@ -252,6 +252,19 @@ export type BrowserStoreKeyUnwrapResult =
   | { readonly ok: true; readonly rawKey: string }
   | { readonly ok: false; readonly reason: string };
 
+/**
+ * One machine's answer to a host `desktopIdentityChallenge`
+ * (browser-security-hardening H09): an Ed25519 signature made in the desktop's
+ * MAIN process. `null` means this machine holds no identity and will get none
+ * (its keystore does not encrypt), so the host leaves the connection off the
+ * jar plane. There is no shape here that could carry the private key.
+ */
+export type BrowserDesktopIdentityAttestation = {
+  readonly publicKey: string;
+  readonly keystoreId: string;
+  readonly signature: string;
+};
+
 export type BrowserViewConsoleLevel =
   | "log"
   | "info"
@@ -410,6 +423,16 @@ export interface BrowserViewBridge {
   wrapStoreKey(rawKey: string): Promise<BrowserStoreKeyWrapResult>;
   /** Opens a blob wrapped earlier on this machine, so the host can unseal. */
   unwrapStoreKey(wrappedKey: string): Promise<BrowserStoreKeyUnwrapResult>;
+  /**
+   * Signs one host `desktopIdentityChallenge` with this installation's
+   * identity key, minting the keypair on first use (H09). It is what makes a
+   * stream jar-authorized; a script holding the CLI credentials file has no
+   * such key and cannot get one out of this call.
+   */
+  attestDesktopIdentity(input: {
+    readonly hostId: string;
+    readonly nonce: string;
+  }): Promise<BrowserDesktopIdentityAttestation | null>;
   /**
    * "Forget all browser logins" (spec §6.5), this machine's half: record the
    * forget in the durable ledger, clear the `primary` jars - the durable
