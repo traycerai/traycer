@@ -574,7 +574,10 @@ import {
 import { sessionImportScanV10 } from "@traycer/protocol/host/session-import/scan";
 import { sessionImportRunV10 } from "@traycer/protocol/host/session-import/run";
 import { sessionImportStatusV10 } from "@traycer/protocol/host/session-import/contracts";
-import { worktreeDeleteBatchByPathStreamV10 } from "@traycer/protocol/host/worktree-delete-batch-stream";
+import {
+  worktreeDeleteBatchByPathStreamV10,
+  worktreeDeleteBatchByPathStreamV11,
+} from "@traycer/protocol/host/worktree-delete-batch-stream";
 import {
   worktreeDeleteByPathStreamV10,
   worktreeDeleteByPathStreamV11,
@@ -9059,10 +9062,13 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // which is what makes fallback safe for a destructive operation.
   "worktree.deleteBatchByPath": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: worktreeDeleteBatchByPathStreamV10,
+        },
+        1: {
+          contract: worktreeDeleteBatchByPathStreamV11,
         },
       },
     },
