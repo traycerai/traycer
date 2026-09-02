@@ -3083,7 +3083,10 @@ describe("BrowserViewManager in-page window.open (Decision #22)", () => {
       "https://target.example/popup",
       "width=400,height=300",
     );
-    expect(opened.result.action).toBe("allow");
+    expect(opened.result).toMatchObject({
+      action: "allow",
+      outlivesOpener: false,
+    });
     expect(opened.openTileRequests).toEqual([]);
     expect(safelyOpenExternalMock).not.toHaveBeenCalled();
   });

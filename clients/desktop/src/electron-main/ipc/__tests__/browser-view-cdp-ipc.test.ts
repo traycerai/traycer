@@ -26,6 +26,9 @@ type InvokeHandler = (
 
 type BrowserViewManagerFactoryOptions = {
   readonly createDevToolsWindow: (windowId: string) => unknown;
+  readonly createPopupWindowOptions: (
+    request: { readonly profile: string; readonly sessionId: string },
+  ) => BrowserWindowConstructorOptions;
 };
 
 const captured = vi.hoisted(() => ({
@@ -33,6 +36,7 @@ const captured = vi.hoisted(() => ({
   ensuredTabs: [] as EnsureTabCall[],
   controlledTabs: [] as ControlElectronTabCall[],
   browserWindowOptions: [] as BrowserWindowConstructorOptions[],
+  webPreferencesRequests: [] as unknown[],
   managerOptions: null as BrowserViewManagerFactoryOptions | null,
 }));
 
@@ -139,7 +143,10 @@ vi.mock("../../browser-view/browser-view-manager", () => ({
 }));
 
 vi.mock("../../browser-view/browser-session", () => ({
-  createBrowserViewWebPreferences: vi.fn(() => ({})),
+  createBrowserViewWebPreferences: vi.fn((request: unknown) => {
+    captured.webPreferencesRequests.push(request);
+    return { request };
+  }),
   cancelBrowserViewDownload: vi.fn(),
   clearBrowserViewPendingCertificateError: vi.fn(),
   ensureBrowserViewSession: vi.fn(),
@@ -236,6 +243,7 @@ describe("native browser tab IPC", () => {
     captured.ensuredTabs = [];
     captured.controlledTabs = [];
     captured.browserWindowOptions = [];
+    captured.webPreferencesRequests = [];
     captured.managerOptions = null;
     vi.clearAllMocks();
   });
@@ -256,6 +264,33 @@ describe("native browser tab IPC", () => {
         fullscreenable: false,
       }),
     );
+  });
+
+  it("creates a top-level secure popup with the opener's browser session", async () => {
+    const { registerBrowserViewIpc } = await import("../browser-view-ipc");
+
+    registerBrowserViewIpc(makeBridge() as never);
+    const managerOptions = captured.managerOptions;
+    if (managerOptions === null) throw new Error("manager was not registered");
+
+    const request = { profile: "isolated", sessionId: "popup-session" };
+    const popupOptions = managerOptions.createPopupWindowOptions(request);
+
+    expect(popupOptions).toEqual(
+      expect.objectContaining({
+        show: true,
+        width: 900,
+        height: 700,
+        backgroundColor: "#0b0b0d",
+        fullscreen: false,
+        fullscreenable: false,
+        modal: false,
+        kiosk: false,
+      }),
+    );
+    expect(popupOptions).not.toHaveProperty("parent");
+    expect(popupOptions.webPreferences).toEqual({ request });
+    expect(captured.webPreferencesRequests).toEqual([request]);
   });
 
   it("dispatches a curated command with its logical frame target", async () => {
