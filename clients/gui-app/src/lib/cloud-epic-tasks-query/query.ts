@@ -420,7 +420,11 @@ function hasMatchingRequestContext(
  * the render and manual-refetch gates were bypassed by the one path that
  * waits. Same shape as those gates: the live verdict admits everything; an
  * initial leg is still admitted when the live negotiated version says the
- * host serves it local-first; a cursor page (no directive) needs the verdict.
+ * host serves it local-first; a page with no directive - a cursor page, or
+ * the tab reconciler's local-home probe - needs the verdict. The reconciler
+ * only seeds a run under `signed-in`, so this bites it solely when the
+ * verdict is withdrawn mid-run, and its combiner reads any error as "do not
+ * close anything": the refusal is the fail-closed outcome that path wants.
  */
 function cloudLegAdmittedAtDispatch(
   client: HostClient<HostRpcRegistry>,

@@ -1,5 +1,5 @@
 import { QueryClient } from "@tanstack/react-query";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
@@ -12,9 +12,18 @@ import type {
 import { registerCloudEpicTasksClient } from "@/lib/cloud-epic-tasks-query";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { epicTabLocalHomeListQueryOptions } from "@/lib/cloud-epic-tasks-query/reconciler-local-home-query";
+import { CloudEpicTasksVerdictWithdrawnError } from "@/lib/cloud-epic-tasks-query/verdict-withdrawn-error";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 const USER_A = "user-a";
 const USER_B = "user-b";
+
+const USER_A_PROFILE = {
+  userId: USER_A,
+  userName: "User A",
+  email: "a@example.com",
+};
+const USER_A_CONTEXT = { userId: USER_A, username: USER_A };
 
 const LOCAL_HOME_PARAMS: ListTasksRequest = {
   limit: 100,
@@ -69,6 +78,15 @@ function createFixture() {
 }
 
 describe("epicTabLocalHomeListQueryOptions", () => {
+  // The reconciler seeds a run only under `signed-in`, so that is the verdict
+  // a probe dispatches under; the fetcher re-reads it at dispatch.
+  beforeEach(() => {
+    useAuthStore.getState().setSignedIn(USER_A_PROFILE, USER_A_CONTEXT, []);
+  });
+  afterEach(() => {
+    useAuthStore.getState().setSignedOut();
+  });
+
   it("dispatches a current reconciliation run through the shared scoped primitive", async () => {
     const fixture = createFixture();
 
@@ -96,6 +114,27 @@ describe("epicTabLocalHomeListQueryOptions", () => {
         fixture.options.queryKey,
       ),
     ).toBeUndefined();
+    expect(
+      fixture.queryClient.getQueryState(fixture.options.queryKey)?.status,
+    ).toBe("error");
+  });
+
+  it("refuses the probe without dispatching once the cloud verdict is withdrawn mid-run", async () => {
+    const fixture = createFixture();
+    // The run was seeded under `signed-in`; the session demotes before
+    // TanStack invokes the query function. The probe carries no local-first
+    // directive, so without a verdict it would be the cloud-backed list on
+    // the retained bearer. The reconciler's combiner reads the error as
+    // "close nothing", which is the fail-closed outcome this path wants.
+    useAuthStore
+      .getState()
+      .setUnverifiedSession(USER_A_PROFILE, USER_A_CONTEXT);
+
+    await expect(
+      fixture.queryClient.fetchQuery(fixture.options),
+    ).rejects.toBeInstanceOf(CloudEpicTasksVerdictWithdrawnError);
+
+    expect(fixture.dispatchCount()).toBe(0);
     expect(
       fixture.queryClient.getQueryState(fixture.options.queryKey)?.status,
     ).toBe("error");
