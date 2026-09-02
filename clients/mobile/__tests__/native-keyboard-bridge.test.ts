@@ -158,6 +158,26 @@ describe("startNativeKeyboardBridge", () => {
     });
   });
 
+  it("ignores a keyboardDidShow that lands after a hide was already declared", () => {
+    vi.useFakeTimers();
+    const plugin = startBridge(true);
+    plugin.show("keyboardWillShow", KEYBOARD_PX);
+    plugin.hide("keyboardWillHide");
+
+    // The show's own did- event, arriving after the hide superseded it.
+    // Honouring it would cancel the close watchdog and republish the old
+    // height, and with no didHide behind it the inset would stay there - the
+    // same stranding this module exists to prevent, mirrored onto the show side.
+    plugin.show("keyboardDidShow", KEYBOARD_PX);
+    vi.advanceTimersByTime(700);
+
+    expect(inset()).toBe("0px");
+    expect(publishState).toHaveBeenLastCalledWith({
+      open: false,
+      transitioning: false,
+    });
+  });
+
   it("writes no inset on a shell whose webview resizes itself", () => {
     const plugin = startBridge(false);
 

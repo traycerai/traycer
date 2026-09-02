@@ -118,6 +118,13 @@ export function startNativeKeyboardBridge(input: {
     .catch(warnListenerAttachFailure("keyboardWillShow"));
   plugin
     .addListener("keyboardDidShow", (info) => {
+      // Stale, and the mirror of the `willHide` guard below: a hide has already
+      // been declared and is still in flight, so this belongs to the show that
+      // hide superseded. Settling on it would cancel the close watchdog and
+      // republish the old height - and with no `didHide` behind it, strand the
+      // inset there. `watchdog !== null` is what separates this from a genuine
+      // show arriving while closed and settled, which must still open.
+      if (!open && watchdog !== null) return;
       // The settled height is the one the inset must rest at: a predictive bar
       // appearing during the animation makes it differ from what `willShow`
       // promised, and nothing else would ever correct that.
