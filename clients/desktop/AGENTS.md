@@ -126,10 +126,12 @@ failures.
   a profile path, or a keychain's answer must never travel that way (the
   service logs an errno code and a stage, nothing else; every file the
   import buffers - a picked export, Safari's jar, `Local State`,
-  `profiles.ini` - goes through `readBoundedFile`, which refuses anything
-  that is not a regular file before opening it and a regular file over
-  `MAX_LOGIN_IMPORT_FILE_BYTES` as `file-too-large`, since the picker offers
-  "All files"); and the import runs under the `BrowserJarSerializer`'s
+  `profiles.ini` - goes through `readBoundedFile`, which opens the path
+  non-blocking (so a FIFO cannot hold the open) and then, on the HANDLE and
+  never on the path beforehand, refuses anything that is not a regular file
+  and a regular file over `MAX_LOGIN_IMPORT_FILE_BYTES` as `file-too-large`,
+  since the picker offers "All files"); and the import runs under the
+  `BrowserJarSerializer`'s
   whole-jar barrier FROM THE USER'S CONFIRMATION ON - the source read, the
   keystore prompt and the write all inside it (the barrier forget-all takes,
   so a forget confirmed after the import's "Import" - while the jar is being
