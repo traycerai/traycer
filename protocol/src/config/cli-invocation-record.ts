@@ -400,7 +400,13 @@ export function parseCliInvocationStaleMarker(
   if (!isPlainRecord(value)) return null;
   if (value.schemaVersion !== CLI_INVOCATION_RECORD_SCHEMA_VERSION) return null;
   if (value.kind !== "stale") return null;
-  if (!("serviceLabel" in value) || value.serviceLabel === undefined) {
+  // Absent (a marker from a CLI predating the field) and an explicit `null`
+  // (that same marker re-serialised through this shape) are one legacy form.
+  if (
+    !("serviceLabel" in value) ||
+    value.serviceLabel === undefined ||
+    value.serviceLabel === null
+  ) {
     return {
       schemaVersion: CLI_INVOCATION_RECORD_SCHEMA_VERSION,
       kind: "stale",

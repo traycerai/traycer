@@ -565,7 +565,7 @@ describe("runServiceRegistrationWithInvocationRecord", () => {
   });
 
   it("does not mutate the OS when the transaction marker write fails, and leaves no sidecars", async () => {
-    mocks.failWriteCallNumber = 2; // txn acquired, unique staging write fails
+    mocks.failWriteCallNumber = 1; // the unique transaction-marker write fails
     let osMutated = false;
     await expect(
       runServiceRegistrationWithInvocationRecord({
@@ -579,7 +579,10 @@ describe("runServiceRegistrationWithInvocationRecord", () => {
           osMutated = true;
         },
       }),
-    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED });
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      details: { phase: "txn-acquire" },
+    });
     expect(osMutated).toBe(false);
     expect(await exists(cliInvocationRecordPath(hostHome))).toBe(false);
     expect(await exists(cliInvocationRecordStagingPath(hostHome))).toBe(false);

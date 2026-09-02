@@ -634,6 +634,18 @@ describe("stale marker serialize/parse", () => {
     });
   });
 
+  it("parses an explicit serviceLabel: null as the same legacy form", () => {
+    // A legacy marker re-serialised through the declared shape writes the
+    // field as null; the parser treats that exactly like an absent field.
+    expect(
+      parseCliInvocationStaleMarker({
+        schemaVersion: 1,
+        kind: "stale",
+        serviceLabel: null,
+      }),
+    ).toEqual({ schemaVersion: 1, kind: "stale", serviceLabel: null });
+  });
+
   it("rejects a stale-marker-shaped object with a different kind", () => {
     expect(
       parseCliInvocationStaleMarker({
