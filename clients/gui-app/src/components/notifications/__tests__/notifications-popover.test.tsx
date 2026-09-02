@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   act,
   cleanup,
@@ -703,6 +704,15 @@ function hostBeforeUpdatedAtCallParams(
 
 describe("NotificationsPopover", () => {
   beforeEach(() => {
+    // The cloud-feed writes this popover dispatches re-read the live verdict;
+    // a `cloud` feed mode stands for a session that holds one.
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: "user-popover", userName: "U", email: "u@example.com" },
+        { userId: "user-popover", username: "U" },
+        [],
+      );
     __resetTabNavigationControllerForTesting();
     hostRequestMock.mockReset();
     hostRequestMock.mockImplementation(defaultHostRequest);
@@ -735,6 +745,7 @@ describe("NotificationsPopover", () => {
 
   afterEach(() => {
     cleanup();
+    useAuthStore.getState().setSignedOut();
     __resetTabNavigationControllerForTesting();
     hostBindingState.current = null;
     __resetHostNotificationsStoreForTests();
