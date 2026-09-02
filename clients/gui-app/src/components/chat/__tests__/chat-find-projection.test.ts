@@ -123,8 +123,6 @@ describe("chat find projection", () => {
   it("projects every rendered interview field under the card's owning chain", () => {
     const segment: InterviewSegment = {
       ...interviewSegment("interview-all-fields", "errored"),
-      title: "Deployment title",
-      description: "Rollout description",
       questions: [
         {
           questionId: "q-options",
@@ -209,9 +207,6 @@ describe("chat find projection", () => {
     const model = deriveInterviewReviewModel({
       blockId: segment.id,
       status: segment.status,
-      toolName: segment.toolName,
-      title: segment.title,
-      description: segment.description,
       questions: segment.questions,
       answers: segment.answers,
       draftAnswers: segment.draftAnswers,
@@ -1226,8 +1221,6 @@ function interviewSegment(
     kind: "interview",
     status,
     toolName: "AskUserQuestion",
-    title: null,
-    description: null,
     questions: [
       {
         questionId: "q1",

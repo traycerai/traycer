@@ -4072,8 +4072,9 @@ const BLOCK_HANDLERS: {
     kind: "interview",
     status: block.status,
     toolName: block.toolName,
-    title: block.title,
-    description: block.description,
+    // The block's card-level `title` / `description` are persisted for
+    // history but deliberately not projected: the GUI renders only the
+    // per-question header, so nothing downstream reads them.
     questions: block.questions,
     answers: block.answers,
     draftAnswers: block.draftAnswers,
