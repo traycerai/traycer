@@ -1,7 +1,7 @@
 import "../../../../../__tests__/test-browser-apis";
 import { cleanup, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createElement } from "react";
+import { createElement, useEffect } from "react";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 import { renderNestedFocusFixture } from "@/__tests__/nested-focus-router-harness";
@@ -28,7 +28,13 @@ const OTHER_TAB = "view-other";
 let navigateNested: NavigateNestedFocus | null = null;
 
 function NestedFocusProbe(): null {
-  navigateNested = useEpicNestedFocusNavigation();
+  const navigate = useEpicNestedFocusNavigation();
+  // Published from an effect, not during render: writing an outer variable
+  // mid-render is a side effect (and `react-hooks/globals` says so). Every
+  // reader already `waitFor`s the handle, so the extra commit costs nothing.
+  useEffect(() => {
+    navigateNested = navigate;
+  }, [navigate]);
   return null;
 }
 

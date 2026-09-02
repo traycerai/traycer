@@ -132,7 +132,11 @@ function selectBrowserSessionsPresenters(
       viewTabId: presentation.viewTabId,
       navigateNested: candidate.navigateNested,
     };
-    const priority = presentation.focused ? 0 : presentation.visible ? 1 : 2;
+    // Focused beats merely visible beats hidden - as a chain, because a
+    // nested ternary is the one shape the lint config refuses.
+    let priority = 2;
+    if (presentation.focused) priority = 0;
+    else if (presentation.visible) priority = 1;
     const previous = byViewTabId.get(presentation.viewTabId);
     if (previous === undefined || priority < previous.priority) {
       byViewTabId.set(presentation.viewTabId, { presenter, priority });
