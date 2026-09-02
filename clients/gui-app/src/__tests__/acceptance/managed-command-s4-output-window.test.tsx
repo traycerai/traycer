@@ -87,6 +87,7 @@ vi.mock(
       mutate: mocks.deleteMutate,
       isPending: false,
     }),
+    useManagedCommandConfigureIsPending: () => false,
     useManagedCommandConfigure: () => ({ mutate: vi.fn(), isPending: false }),
     useManagedCommandStopAllIsPending: () => false,
   }),

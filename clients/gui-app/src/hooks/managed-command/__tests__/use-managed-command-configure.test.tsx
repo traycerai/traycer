@@ -32,7 +32,10 @@ vi.mock("@/lib/host", () => ({
   }),
 }));
 
-import { useManagedCommandConfigure } from "@/hooks/managed-command/use-managed-command-lifecycle-mutations";
+import {
+  useManagedCommandConfigure,
+  useManagedCommandConfigureIsPending,
+} from "@/hooks/managed-command/use-managed-command-lifecycle-mutations";
 
 const EPIC_ID = "epic-1";
 const COMMAND_ID = "cmd-1";
@@ -172,6 +175,50 @@ describe("useManagedCommandConfigure", () => {
     expect(header.result.current.data?.command.relaunchOnHostRestart).toBe(
       false,
     );
+  });
+
+  it("reports pending to every surface of the command, and to no other command", async () => {
+    // The shared read is what stops a second surface from doubling a write
+    // while the first is unanswered; it must be per command, or one shell's
+    // slow write would freeze every other shell's switch.
+    const target = { hostId: mockLocalHostEntry.hostId, commandId: COMMAND_ID };
+    const row = renderHook(() => useManagedCommandConfigure(target), {
+      wrapper,
+    });
+    const header = renderHook(
+      () => useManagedCommandConfigureIsPending(target),
+      { wrapper },
+    );
+    const other = renderHook(
+      () =>
+        useManagedCommandConfigureIsPending({
+          hostId: mockLocalHostEntry.hostId,
+          commandId: "cmd-other",
+        }),
+      { wrapper },
+    );
+    expect(header.result.current).toBe(false);
+
+    act(() => {
+      row.result.current.mutate({
+        hostId: mockLocalHostEntry.hostId,
+        epicId: EPIC_ID,
+        commandId: COMMAND_ID,
+        relaunchOnHostRestart: true,
+      });
+    });
+    await waitFor(() => {
+      expect(header.result.current).toBe(true);
+    });
+    expect(other.result.current).toBe(false);
+
+    act(() => {
+      gates[0].release();
+    });
+    await waitFor(() => {
+      expect(row.result.current.isSuccess).toBe(true);
+      expect(header.result.current).toBe(false);
+    });
   });
 
   it("does not serialize writes to DIFFERENT commands behind each other", async () => {

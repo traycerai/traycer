@@ -13,6 +13,7 @@ vi.mock(
     useManagedCommandStopAll: () => ({ mutate: vi.fn(), isPending: false }),
     useManagedCommandStopAllIsPending: () => false,
     useManagedCommandDelete: () => ({ mutate: vi.fn(), isPending: false }),
+    useManagedCommandConfigureIsPending: () => false,
     useManagedCommandConfigure: () => ({ mutate: vi.fn(), isPending: false }),
     useManagedCommandDeliverHeld: () => ({ mutate: vi.fn(), isPending: false }),
     useManagedCommandDeliverHeldIsPending: () => false,

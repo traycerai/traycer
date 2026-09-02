@@ -9,6 +9,7 @@ import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-di
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import {
   useManagedCommandConfigure,
+  useManagedCommandConfigureIsPending,
   useManagedCommandDelete,
   useManagedCommandStart,
   useManagedCommandStop,
@@ -63,6 +64,12 @@ export function ManagedCommandLifecycleActions(
     hostId,
     commandId: command.id,
   });
+  // Shared across every surface rendering this command, so a press in one
+  // cannot be doubled from another before the stream has caught up.
+  const configurePending = useManagedCommandConfigureIsPending({
+    hostId,
+    commandId: command.id,
+  });
   const supportsConfigure = useHostSupportsMethod(
     hostId,
     "managedCommand.configure",
@@ -113,7 +120,7 @@ export function ManagedCommandLifecycleActions(
               )}
             />
           }
-          isPending={configure.isPending}
+          isPending={configure.isPending || configurePending}
           testId={`managed-command-relaunch-${command.id}`}
           className={undefined}
           pressed={command.relaunchOnHostRestart}

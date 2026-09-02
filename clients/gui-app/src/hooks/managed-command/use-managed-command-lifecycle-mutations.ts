@@ -255,6 +255,28 @@ export function managedCommandConfigureScopeId(
 }
 
 /**
+ * Whether a configure write for this command is in flight from ANY surface.
+ * A mutation result's `isPending` is per-observer, and the same command is
+ * rendered in the list row and the output window header at once: with only
+ * the pressing surface disabled, the other still shows the OLD streamed value
+ * and a press there computes the same inverse again - two identical writes,
+ * not the on-then-off the person meant. Every surface reads this and stays
+ * disabled until the first write has answered and the stream has caught up.
+ */
+export function useManagedCommandConfigureIsPending(
+  target: ManagedCommandConfigureTarget,
+): boolean {
+  return (
+    useIsMutating({
+      mutationKey: managedCommandMutationKeys.configure(
+        target.hostId,
+        target.commandId,
+      ),
+    }) > 0
+  );
+}
+
+/**
  * The one setting a person edits on a command: whether a host restart brings
  * it back. Pinned to the command's own host like the lifecycle three, and for
  * the same reason - the row lives on one machine. Not routed through
@@ -268,6 +290,8 @@ export function managedCommandConfigureScopeId(
  * reach the host in either order. A toggle pressed twice would then settle on
  * whichever request the host happened to serve last. The scope is keyed by
  * `(hostId, commandId)`, so the second press waits for the first to answer.
+ * The scope orders writes; {@link useManagedCommandConfigureIsPending} is what
+ * keeps a second surface from issuing a duplicate one in the meantime.
  */
 export function useManagedCommandConfigure(
   target: ManagedCommandConfigureTarget,
@@ -281,7 +305,10 @@ export function useManagedCommandConfigure(
 
   return useMutation(
     withHostMutationLifecycleBoundary("managedCommand.configure", {
-      mutationKey: managedCommandMutationKeys.configure(),
+      mutationKey: managedCommandMutationKeys.configure(
+        target.hostId,
+        target.commandId,
+      ),
       scope: { id: managedCommandConfigureScopeId(target) },
       mutationFn: (variables: ManagedCommandConfigureVariables) =>
         withHostRpcErrorBoundary("managedCommand.configure", () => {

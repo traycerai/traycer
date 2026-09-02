@@ -25,9 +25,13 @@ vi.mock(
       mutate: configureMutate,
       isPending: false,
     }),
+    useManagedCommandConfigureIsPending: () => configureState.pendingElsewhere,
     useManagedCommandStopAllIsPending: () => false,
   }),
 );
+
+/** A configure write in flight from ANOTHER surface for the same command. */
+const configureState = { pendingElsewhere: false };
 
 // The host's negotiated method set, as the relaunch switch reads it. A
 // primitive slot rather than a nullable one so the tests below can flip it
@@ -83,6 +87,7 @@ beforeEach(() => {
   configureMutate.mockClear();
   supportsMethodSpy.mockClear();
   hostMethods.configure = true;
+  configureState.pendingElsewhere = false;
 });
 
 afterEach(() => {
@@ -156,6 +161,28 @@ describe("managed-command lifecycle actions", () => {
       "host-1",
       "managedCommand.configure",
     );
+  });
+
+  it("disables the switch while another surface's write for this command is in flight", () => {
+    // The same command sits in the list row and the output window header. A
+    // press in one leaves the other showing the OLD streamed value; if it
+    // stayed enabled, a press there would compute the same inverse again and
+    // send a duplicate write instead of the on-then-off the person meant.
+    // This instance's own mutation is idle - the pending signal comes from
+    // the shared per-command read.
+    configureState.pendingElsewhere = true;
+    renderActions(RUNNING);
+
+    const off = screen.getByRole("button", {
+      name: "Stays down after a host restart",
+    });
+    expect(off.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(off);
+    expect(configureMutate).not.toHaveBeenCalled();
+    // The rest of the row is untouched by the switch's shared pending.
+    expect(
+      screen.getByRole("button", { name: "Stop" }).hasAttribute("disabled"),
+    ).toBe(false);
   });
 
   it("hides the relaunch switch on a host that did not negotiate managedCommand.configure", () => {
