@@ -164,6 +164,22 @@ function isOpenRequest(
   return compareThreadCausalOrder(reply, event) < 0;
 }
 
+/**
+ * The `expectReply` sends that still have no reply on their thread.
+ *
+ * Exactly the openness rule `hasOpenThread` reports below, exposed as ROWS
+ * rather than as a flag on a pair. A consumer that needs the WAITING SENDER
+ * cannot recover direction from an undirected edge, and a second hand-rolled
+ * pass over thread causality would drift from this one the first time the
+ * ordering rules move - so there is one implementation and two views of it.
+ */
+export function openCommGraphRequests(
+  events: ReadonlyArray<CommGraphEvent>,
+): ReadonlyArray<CommGraphEvent> {
+  const latestReply = latestReplyByThread(events);
+  return events.filter((event) => isOpenRequest(event, latestReply));
+}
+
 interface MutablePairEntry {
   readonly agentAId: string;
   readonly agentBId: string;

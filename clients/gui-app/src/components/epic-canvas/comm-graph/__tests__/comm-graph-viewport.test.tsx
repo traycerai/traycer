@@ -60,6 +60,16 @@ const AGENT: CommGraphAgentNode = {
   createdAt: 1,
 };
 
+/**
+ * This suite drives the NODE-GRAPH rendering, so it names that mode
+ * explicitly - the schema default is the office floor, which renders no React
+ * Flow at all.
+ */
+const GRAPH_DEFAULT_VIEW: CommGraphTileViewState = {
+  ...DEFAULT_COMM_GRAPH_VIEW,
+  mode: "graph",
+};
+
 interface RenderCanvasOptions {
   readonly playing: boolean;
   readonly pulse: CommGraphPulse | null;
@@ -79,6 +89,8 @@ function canvas(view: CommGraphTileViewState, options: RenderCanvasOptions) {
       initialHistoryCaughtUp={false}
       playing={options.playing}
       pulse={options.pulse}
+      pulseKey={null}
+      modeToggle={null}
       view={view}
       onViewChange={vi.fn()}
       canOpenAgentForEvent={() => true}
@@ -215,11 +227,15 @@ afterEach(() => {
 
 describe("CommGraphCanvas viewport", () => {
   it("fits every node on first open and permits a full-graph overview", () => {
-    renderCanvas(DEFAULT_COMM_GRAPH_VIEW, STATIC_CANVAS);
+    // `GRAPH_DEFAULT_VIEW` differs from the schema default in `mode` alone, so
+    // this also pins that a mode toggle is not a framing gesture: counting it
+    // would open a never-panned graph at (0, 0) zoom 1 instead of fitting.
+    renderCanvas(GRAPH_DEFAULT_VIEW, STATIC_CANVAS);
 
     expect(reactFlowMock.mock.lastCall?.[0]).toEqual(
       expect.objectContaining({
-        defaultViewport: DEFAULT_COMM_GRAPH_VIEW,
+        // React Flow gets the three viewport fields, never the tile's `mode`.
+        defaultViewport: { x: 0, y: 0, zoom: 1 },
         fitView: true,
         minZoom: 0.1,
       }),
@@ -227,12 +243,17 @@ describe("CommGraphCanvas viewport", () => {
   });
 
   it("restores a user-positioned viewport instead of fitting it again", () => {
-    const persistedView = { x: 120, y: -80, zoom: 0.75 };
+    const persistedView: CommGraphTileViewState = {
+      x: 120,
+      y: -80,
+      zoom: 0.75,
+      mode: "graph",
+    };
     renderCanvas(persistedView, STATIC_CANVAS);
 
     expect(reactFlowMock.mock.lastCall?.[0]).toEqual(
       expect.objectContaining({
-        defaultViewport: persistedView,
+        defaultViewport: { x: 120, y: -80, zoom: 0.75 },
         fitView: false,
         minZoom: 0.1,
       }),
@@ -240,7 +261,7 @@ describe("CommGraphCanvas viewport", () => {
   });
 
   it("frames a name match without zooming in and marks its node", async () => {
-    renderCanvas(DEFAULT_COMM_GRAPH_VIEW, STATIC_CANVAS);
+    renderCanvas(GRAPH_DEFAULT_VIEW, STATIC_CANVAS);
     const match = firstFlowNode();
     const { fitView } = installFlowInstance({ x: 20, y: 30, zoom: 0.6 });
 
@@ -270,7 +291,7 @@ describe("CommGraphCanvas viewport", () => {
   });
 
   it("centers an offscreen playback sender without changing zoom", async () => {
-    const result = renderCanvas(DEFAULT_COMM_GRAPH_VIEW, {
+    const result = renderCanvas(GRAPH_DEFAULT_VIEW, {
       playing: true,
       pulse: playbackPulse(),
     });
@@ -292,7 +313,7 @@ describe("CommGraphCanvas viewport", () => {
   });
 
   it("does not pan to the receiver when the sender is not rendered", () => {
-    const result = renderCanvas(DEFAULT_COMM_GRAPH_VIEW, {
+    const result = renderCanvas(GRAPH_DEFAULT_VIEW, {
       playing: true,
       pulse: receiverOnlyPulse("offscreen-sender"),
     });
@@ -307,7 +328,7 @@ describe("CommGraphCanvas viewport", () => {
   });
 
   it("does not move when the playback sender already intersects the viewport", () => {
-    const result = renderCanvas(DEFAULT_COMM_GRAPH_VIEW, {
+    const result = renderCanvas(GRAPH_DEFAULT_VIEW, {
       playing: true,
       pulse: playbackPulse(),
     });
@@ -324,7 +345,7 @@ describe("CommGraphCanvas viewport", () => {
 
   it("stops following after manual interaction and re-arms on the next Play", async () => {
     const firstPulse = playbackPulse();
-    const result = renderCanvas(DEFAULT_COMM_GRAPH_VIEW, {
+    const result = renderCanvas(GRAPH_DEFAULT_VIEW, {
       playing: true,
       pulse: firstPulse,
     });
@@ -342,7 +363,7 @@ describe("CommGraphCanvas viewport", () => {
 
     fireEvent.pointerDown(canvasElement);
     result.rerender(
-      canvas(DEFAULT_COMM_GRAPH_VIEW, {
+      canvas(GRAPH_DEFAULT_VIEW, {
         playing: true,
         pulse: playbackPulse(),
       }),
@@ -350,10 +371,10 @@ describe("CommGraphCanvas viewport", () => {
     expect(setCenter).not.toHaveBeenCalled();
 
     result.rerender(
-      canvas(DEFAULT_COMM_GRAPH_VIEW, { playing: false, pulse: null }),
+      canvas(GRAPH_DEFAULT_VIEW, { playing: false, pulse: null }),
     );
     result.rerender(
-      canvas(DEFAULT_COMM_GRAPH_VIEW, {
+      canvas(GRAPH_DEFAULT_VIEW, {
         playing: true,
         pulse: playbackPulse(),
       }),

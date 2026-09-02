@@ -16,9 +16,12 @@
  */
 import { useCallback, useMemo } from "react";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { DEFAULT_COMM_GRAPH_VIEW } from "@/stores/epics/canvas/tile-schema/comm-graph-tile";
 import type { CommGraphTileRef } from "@/stores/epics/canvas/types";
 import type { CommGraphTileViewState } from "@/stores/epics/canvas/types";
 import { CommGraphCanvas } from "@/components/epic-canvas/comm-graph/comm-graph-canvas";
+import { CommGraphOfficeCanvas } from "@/components/epic-canvas/comm-graph/office/comm-graph-office-canvas";
+import { CommGraphViewModeToggle } from "@/components/epic-canvas/comm-graph/comm-graph-view-mode-toggle";
 import { useCommGraphAgents } from "@/components/epic-canvas/comm-graph/use-comm-graph-agents";
 import { useCommGraphJump } from "@/components/epic-canvas/comm-graph/use-comm-graph-jump";
 import { useCommGraphSnapshot } from "@/components/epic-canvas/comm-graph/use-comm-graph-snapshot";
@@ -95,34 +98,68 @@ export function CommGraphTile(props: CommGraphTileProps) {
     [node.id, updateView, viewTabId],
   );
 
+  const handleModeChange = useCallback(
+    (mode: CommGraphTileViewState["mode"]) => {
+      // The viewport is RESET, not carried over: the two modes measure it in
+      // different units (flow units against sprite pixels), so a framing chosen
+      // in one is meaningless in the other and would land the incoming mode
+      // off-screen with nothing to say it had. The neutral viewport is what
+      // each renderer reads as "fit yourself".
+      updateView(viewTabId, node.id, { ...DEFAULT_COMM_GRAPH_VIEW, mode });
+    },
+    [node.id, updateView, viewTabId],
+  );
+
   if (agents.length === 0) {
     return <EmptyCommGraph tileInstanceId={node.instanceId} />;
   }
 
+  // ONE props object for both renderings: they are two drawings of the same
+  // projection, so anything that reached only one of them would be a way for
+  // them to disagree about what happened.
+  const canvasProps = {
+    epicId: node.epicId,
+    // Find is registered per tile INSTANCE, by whichever renderer is mounted:
+    // both speak the same adapter contract, so switching mode re-registers
+    // rather than leaving the tile without a find surface.
+    tileInstanceId: node.instanceId,
+    agents,
+    agentIds: projection.visibleAgentIds,
+    events: projection.asOfEvents,
+    hosts: snapshot.hosts,
+    initialHistoryCaughtUp: snapshot.initialHistoryCaughtUp,
+    playing: projection.playing,
+    pulse: projection.pulse,
+    pulseKey: projection.pulseEventKey,
+    // Owned here (the view state is written here) but POSITIONED by the
+    // renderer, which is the only thing that knows where its canvas ends and a
+    // detail panel begins.
+    modeToggle: (
+      <CommGraphViewModeToggle
+        mode={node.view.mode}
+        onModeChange={handleModeChange}
+      />
+    ),
+    view: node.view,
+    onViewChange: handleViewChange,
+    canOpenAgentForEvent,
+    canJump,
+    onJump: jump,
+    canJumpToSender,
+    onJumpToSender: jumpToSender,
+    canJumpToCreated,
+    onJumpToCreated: jumpToCreated,
+    onOpenAgent: openAgent,
+  };
+
   return (
     <div className="flex h-full min-h-0 w-full min-w-0 flex-col">
       <div className="min-h-0 min-w-0 flex-1">
-        <CommGraphCanvas
-          epicId={node.epicId}
-          tileInstanceId={node.instanceId}
-          agents={agents}
-          agentIds={projection.visibleAgentIds}
-          events={projection.asOfEvents}
-          hosts={snapshot.hosts}
-          initialHistoryCaughtUp={snapshot.initialHistoryCaughtUp}
-          playing={projection.playing}
-          pulse={projection.pulse}
-          view={node.view}
-          onViewChange={handleViewChange}
-          canOpenAgentForEvent={canOpenAgentForEvent}
-          canJump={canJump}
-          onJump={jump}
-          canJumpToSender={canJumpToSender}
-          onJumpToSender={jumpToSender}
-          canJumpToCreated={canJumpToCreated}
-          onJumpToCreated={jumpToCreated}
-          onOpenAgent={openAgent}
-        />
+        {node.view.mode === "office" ? (
+          <CommGraphOfficeCanvas {...canvasProps} />
+        ) : (
+          <CommGraphCanvas {...canvasProps} />
+        )}
       </div>
       <CommGraphTransportBar epicId={node.epicId} events={snapshot.events} />
     </div>
