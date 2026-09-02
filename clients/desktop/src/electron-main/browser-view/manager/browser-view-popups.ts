@@ -42,6 +42,15 @@ export class BrowserViewPopups {
     webContents: BrowserViewPopupWebContents,
   ) => void;
   private readonly send: BrowserViewSend;
+  /**
+   * A native popup is still a browser guest. Keep the policy install keyed by
+   * WebContents so a duplicate did-create-window delivery cannot stack
+   * handlers, while allowing each popup to recursively create policy-bound
+   * children of its own.
+   */
+  private readonly policyInstalledOn =
+    new WeakSet<BrowserViewPopupWebContents>();
+  private readonly trackedPopupWindows = new WeakSet<BrowserViewPopupWindow>();
   // `outlivesOpener: false` preserves Chromium's opener lifetime, while these
   // windows intentionally have no native BrowserWindow parent: a native child
   // of a fullscreen macOS window can black out its owner after closing. Keep
@@ -102,17 +111,10 @@ export class BrowserViewPopups {
       window.close();
       return;
     }
-    // A popup shares the opener's jar, so it needs the opener's navigation
-    // policy: without this, `window.open()` then `location = "file:///..."`
-    // walks straight around every gate the guest itself has. Its own
-    // `window.open` is denied outright rather than gated - a popup of a popup
-    // has no tile to become and no opener UX to preserve.
-    installGuestNavigationGuard(window.webContents);
-    window.webContents.setWindowOpenHandler((details) => {
-      traceRefusedGuestNavigation(details.url, "popup-window-open");
-      return { action: "deny" };
-    });
+    if (this.trackedPopupWindows.has(window)) return;
+    this.trackedPopupWindows.add(window);
     this.registerPopupWebContents(window.webContents);
+    this.installPopupPolicy(entry, window.webContents);
     this.openWindows.add(window);
     window.on("closed", () => {
       this.openWindows.delete(window);
@@ -120,6 +122,21 @@ export class BrowserViewPopups {
     log.info("[browser-view] popup created", {
       openerWebContentsId: entry.view.webContents.id,
       popupWebContentsId: window.webContents.id,
+    });
+  }
+
+  private installPopupPolicy(
+    entry: BrowserViewEntry,
+    webContents: BrowserViewPopupWebContents,
+  ): void {
+    if (this.policyInstalledOn.has(webContents)) return;
+    this.policyInstalledOn.add(webContents);
+    installGuestNavigationGuard(webContents);
+    webContents.setWindowOpenHandler((details) =>
+      this.handleWindowOpen(entry, details),
+    );
+    webContents.on("did-create-window", (window: BrowserViewPopupWindow) => {
+      this.handleDidCreateWindow(entry, window);
     });
   }
 

@@ -83,9 +83,64 @@ interface BrowserSessionsCoordinatorRuntime {
    * all rather than what the host elects.
    */
   readonly localHostId: string | null;
-  /** Router-bound nested-focus commit supplied by the active React consumer. */
+  /**
+   * The retained Epic surface this consumer can present a host-opened tab in.
+   * Null for app-global consumers (for example the command palette) which can
+   * use the coordinator but do not own a canvas destination.
+   */
+  readonly presentation: BrowserSessionsPresentation | null;
+  /**
+   * Router-bound nested-focus commit supplied by this React consumer. The
+   * coordinator is shared outside React, so server-pushed foreground tabs use
+   * the callback paired with the selected presenter instead of reaching for a
+   * module-global router.
+   */
   readonly navigateNested: NavigateNestedFocus;
   readonly openTransport: (hostId: string) => DurableStreamTransport;
+}
+
+interface BrowserSessionsPresentation {
+  readonly viewTabId: string;
+  readonly visible: boolean;
+  readonly focused: boolean;
+}
+
+interface BrowserSessionsPresenter {
+  readonly viewTabId: string;
+  readonly navigateNested: NavigateNestedFocus;
+}
+
+/**
+ * Resource ownership and presentation ownership are deliberately separate.
+ * The first coordinator consumer owns the stream/browserView until release,
+ * but a host push belongs in the currently focused retained Epic surface.
+ * Falling back focused -> visible -> retained preserves hidden-Epic surfacing
+ * when no surface is currently presented without letting insertion order pick
+ * a background duplicate while a focused one exists.
+ */
+function selectBrowserSessionsPresenters(
+  runtimes: ReadonlyMap<symbol, BrowserSessionsCoordinatorRuntime>,
+): readonly BrowserSessionsPresenter[] {
+  const byViewTabId = new Map<
+    string,
+    { readonly presenter: BrowserSessionsPresenter; readonly priority: number }
+  >();
+  for (const candidate of runtimes.values()) {
+    const presentation = candidate.presentation;
+    if (presentation === null) continue;
+    const presenter = {
+      viewTabId: presentation.viewTabId,
+      navigateNested: candidate.navigateNested,
+    };
+    const priority = presentation.focused ? 0 : presentation.visible ? 1 : 2;
+    const previous = byViewTabId.get(presentation.viewTabId);
+    if (previous === undefined || priority < previous.priority) {
+      byViewTabId.set(presentation.viewTabId, { presenter, priority });
+    }
+  }
+  return [...byViewTabId.values()]
+    .sort((left, right) => left.priority - right.priority)
+    .map(({ presenter }) => presenter);
 }
 
 /**
@@ -471,7 +526,7 @@ function createBrowserSessionsCoordinator(args: {
       pendingCloses,
       pendingOpens,
       pendingPreviews,
-      navigateNested: runtime.navigateNested,
+      presenters: selectBrowserSessionsPresenters(runtimes),
       currentItems: () => coordinator.state.items,
     });
   };
@@ -613,7 +668,7 @@ function handleBrowserSessionsFrame(args: {
   readonly pendingCloses: PendingRequests<void>;
   readonly pendingOpens: PendingRequests<BrowserTabIdentity>;
   readonly pendingPreviews: PendingRequests<BrowserTabPreview>;
-  readonly navigateNested: NavigateNestedFocus;
+  readonly presenters: readonly BrowserSessionsPresenter[];
 }): void {
   const frame = args.frame;
   switch (frame.kind) {
@@ -653,14 +708,21 @@ function handleBrowserSessionsFrame(args: {
       });
       return;
     case "tabOpened":
-      surfaceHostOpenedTab({
-        epicId: args.epicId,
-        hostId: args.hostId,
-        sessionId: frame.sessionId,
-        tabId: frame.tabId,
-        source: frame.source,
-        navigateNested: args.navigateNested,
-      });
+      for (const presenter of args.presenters) {
+        if (
+          surfaceHostOpenedTab({
+            epicId: args.epicId,
+            viewTabId: presenter.viewTabId,
+            hostId: args.hostId,
+            sessionId: frame.sessionId,
+            tabId: frame.tabId,
+            source: frame.source,
+            navigateNested: presenter.navigateNested,
+          })
+        ) {
+          break;
+        }
+      }
       return;
     case "burstStarted":
     case "burstEnded":
