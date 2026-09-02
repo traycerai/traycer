@@ -9,6 +9,7 @@ import type {
 } from "@/lib/browser-view/sessions/electron-tabs";
 import type { TileController } from "@/components/epic-canvas/renderers/tile-controller";
 import type {
+  BrowserViewBoundsUpdate,
   BrowserViewTileCommand,
   BrowserViewTileCommandEvent,
 } from "@traycer-clients/shared/platform/browser-view";
@@ -17,6 +18,8 @@ const state = vi.hoisted(() => ({
   visible: true,
   bridge: null as TestBridge | null,
   chromeInputs: [] as Array<Record<string, unknown>>,
+  /** Attach/detach/bounds in the order they actually happened. */
+  events: [] as string[],
   closeTab: vi.fn((_sessionId: string, _tabId: string) => Promise.resolve()),
   openTab: vi.fn((sessionId: string | null, _url: string) =>
     Promise.resolve({ sessionId: sessionId ?? "session-1", tabId: "tab-2" }),
@@ -34,11 +37,23 @@ vi.mock("@/components/epic-canvas/hooks/use-tile-body-visible", () => ({
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({ browserView: state.bridge }),
 }));
+// The bounds bridge itself is REAL here: the regression this suite pins is the
+// ORDER in which the tile mounts it relative to the surface attach, and a
+// stubbed hook cannot have an order. Only the overlay registry it writes to is
+// faked, exactly as `use-browser-view-bounds-bridge.test.tsx` does.
 vi.mock(
-  "@/components/epic-canvas/renderers/use-browser-view-bounds-bridge",
-  () => ({
-    useBrowserViewBoundsBridge: () => undefined,
-  }),
+  "@/lib/browser-view/tiles/browser-overlay-coordinator",
+  async (load) => {
+    const actual =
+      await load<
+        typeof import("@/lib/browser-view/tiles/browser-overlay-coordinator")
+      >();
+    return {
+      ...actual,
+      registerBrowserOverlayTile: () => () => undefined,
+      updateBrowserOverlayTileRect: () => undefined,
+    };
+  },
 );
 vi.mock("@/components/epic-canvas/renderers/use-browser-view-snapshot", () => ({
   useBrowserViewSnapshot: () => null,
@@ -186,6 +201,14 @@ class TestBridge {
     return { dispose: () => {} };
   }
 
+  readonly boundsSends: BrowserViewBoundsUpdate[] = [];
+
+  updateBounds(input: BrowserViewBoundsUpdate): Promise<void> {
+    this.boundsSends.push(input);
+    state.events.push("bounds");
+    return Promise.resolve();
+  }
+
   emitStatus(change: NativeStatusChange): void {
     this.statusHandler?.(change);
   }
@@ -212,6 +235,45 @@ function createBinding(
     control: vi.fn(() => Promise.resolve()),
     bindSurface,
   };
+}
+
+const SURFACE_RECT = { left: 8, top: 12, width: 400, height: 300 };
+
+/**
+ * The real bounds bridge measures on mount and then only on animation frames.
+ * jsdom has no layout, so both have to be supplied: a fixed rect (any usable
+ * one - the assertions care that it is non-empty, not what it is) and a frame
+ * queue nothing drains, which leaves exactly the mount-time send observable.
+ */
+beforeEach(() => {
+  state.events = [];
+  window.requestAnimationFrame = () => 1;
+  window.cancelAnimationFrame = () => undefined;
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+    ...SURFACE_RECT,
+    x: SURFACE_RECT.left,
+    y: SURFACE_RECT.top,
+    right: SURFACE_RECT.left + SURFACE_RECT.width,
+    bottom: SURFACE_RECT.top + SURFACE_RECT.height,
+    toJSON: () => undefined,
+  } as DOMRect);
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+/** A binding whose attach/detach land in {@link state.events}. */
+function createRecordingBinding(): ElectronTabBinding {
+  return createBinding(() => {
+    state.events.push("bind");
+    return Promise.resolve({
+      detach: () => {
+        state.events.push("detach");
+        return Promise.resolve();
+      },
+    });
+  });
 }
 
 function renderTile(binding: ElectronTabBinding) {
@@ -294,6 +356,61 @@ describe("ElectronTabSurface", () => {
     );
     await waitFor(() => {
       expect(detach).toHaveBeenCalledOnce();
+    });
+  });
+
+  /**
+   * Canvas tabs are keep-alive: switching away hides the tile's layer, which
+   * detaches the surface in main (the key mapping and `entry.bounds` both go),
+   * and switching back re-attaches it. The bounds bridge is declared ABOVE the
+   * bind effect, so on the way back it re-mounts FIRST - and if the tile still
+   * believes it is attached, its single mount-time `updateBounds` lands on a
+   * surface key main no longer maps and is dropped. The rAF loop then dedupes
+   * that same rect forever, so the re-attached tile stays at `bounds === null`
+   * and renders blank until an unrelated window resize moves it.
+   */
+  it("re-attaches before sending bounds when a hidden tile comes back", async () => {
+    const binding = createRecordingBinding();
+    const bridge = state.bridge;
+    if (bridge === null) throw new Error("bridge missing");
+    const view = renderTile(binding);
+    await waitFor(() => {
+      expect(state.events).toEqual(["bind", "bounds"]);
+    });
+
+    const show = (visible: boolean): void => {
+      state.visible = visible;
+      view.rerender(
+        <ElectronTabSurface
+          node={NODE}
+          binding={binding}
+          viewTabId="view-1"
+          paneId="pane-1"
+        />,
+      );
+    };
+
+    show(false);
+    await waitFor(() => {
+      expect(state.events).toEqual(["bind", "bounds", "detach"]);
+    });
+
+    show(true);
+    await waitFor(() => {
+      expect(state.events).toEqual([
+        "bind",
+        "bounds",
+        "detach",
+        // Broken ordering puts "bounds" here, before the re-attach.
+        "bind",
+        "bounds",
+      ]);
+    });
+    expect(bridge.boundsSends.at(-1)?.bounds).toEqual({
+      x: SURFACE_RECT.left,
+      y: SURFACE_RECT.top,
+      width: SURFACE_RECT.width,
+      height: SURFACE_RECT.height,
     });
   });
 

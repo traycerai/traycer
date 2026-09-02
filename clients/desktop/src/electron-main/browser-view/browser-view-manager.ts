@@ -413,7 +413,14 @@ export class BrowserViewManager {
 
   updateBounds(windowId: string, input: BrowserViewBoundsUpdate): void {
     const entry = this.entries.getTile(windowId, input);
-    if (entry === undefined) return;
+    if (entry === undefined) {
+      // A renderer that measures before its surface is (re)bound loses its
+      // only send - the rAF loop dedupes the identical rect forever after.
+      log.debug("[browser-view] bounds update for an unbound surface", {
+        surfaceKeyId: entryKeyId({ ...input, windowId }),
+      });
+      return;
+    }
     // Stored exactly as the renderer measured it (CSS pixels); rounding and
     // the CSS -> DIP conversion belong to the apply seam in geometry.
     entry.bounds = input.bounds;
