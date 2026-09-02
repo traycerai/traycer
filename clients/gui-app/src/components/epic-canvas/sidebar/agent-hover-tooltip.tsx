@@ -85,7 +85,7 @@ export interface AgentHoverTooltipProps {
    * shared description, so a surface can add to what an agent says about
    * itself without being able to contradict it.
    */
-  readonly extraContent: ReactNode | null;
+  readonly extraContent: ReactElement | null;
 }
 
 /** `null` when there are no claims - an empty roles card is worse than none. */
@@ -110,14 +110,14 @@ export function AgentHoverTooltip(props: AgentHoverTooltipProps): ReactNode {
     side,
   } = props;
   const roleContent = agentRoleHoverContent(nodeName, roleClaims);
-  // BOTH absent values, because `ReactNode` already includes `undefined` and
-  // the prop type cannot exclude it. Testing only for `null` let an omitted
-  // `extraContent` build an empty fragment, and a non-null `supplemental` is
-  // what displaces the name label below - so the card lost its title and
-  // showed nothing in its place.
-  const hasExtra = extraContent !== null && extraContent !== undefined;
+  // `null` is the ONLY way to say "nothing to add", which is why the prop is
+  // an element and not a `ReactNode`. `ReactNode` admits `undefined`, `false`
+  // and `""`, all of which are absent to a reader and present to a `!== null`
+  // test - and a non-null `supplemental` is what displaces the name label
+  // below, so each of them cost the card its title and put nothing in its
+  // place. The type makes them unrepresentable instead of guarding for them.
   const supplemental =
-    roleContent === null && !hasExtra ? null : (
+    roleContent === null && extraContent === null ? null : (
       <>
         {roleContent}
         {extraContent}

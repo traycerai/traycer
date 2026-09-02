@@ -40,7 +40,7 @@ interface HoverOverrides {
   readonly ownerHostUnreachable: boolean;
   readonly roleClaims: readonly RoleClaim[];
   readonly side: "top" | "right" | "bottom" | "left";
-  readonly extraContent: React.ReactNode | null;
+  readonly extraContent: React.ReactElement | null;
 }
 
 const NO_EXTRA: Pick<HoverOverrides, "extraContent"> = { extraContent: null };
@@ -197,40 +197,6 @@ describe("AgentHoverTooltip", () => {
     const roles = supplemental.textContent.indexOf("Edge owner");
     const own = supplemental.textContent.indexOf("Working");
     expect(roles).toBeLessThan(own);
-  });
-
-  it("still names the agent when the caller passes no extra content", async () => {
-    // `ReactNode` includes `undefined`, so an omitted `extraContent` is not
-    // `null`. Testing only for `null` built an empty fragment, and a non-null
-    // supplemental is what displaces the name label - so the card lost its
-    // title and put nothing in its place.
-    render(
-      <TooltipProvider>
-        <AgentHoverTooltip
-          trigger={<button type="button">Reviewer of everything</button>}
-          epicId="epic-1"
-          nodeId="agent-1"
-          nodeName="Reviewer of everything"
-          hostId="host-a"
-          ownerHostUnreachable
-          ownerKind="chat"
-          roleClaims={[]}
-          // EXPLICITLY undefined, which is what the prop's `ReactNode` admits
-          // and what a caller that has nothing to add passes.
-          extraContent={undefined}
-          side="top"
-        />
-      </TooltipProvider>,
-    );
-
-    const trigger = screen.getByRole("button", {
-      name: "Reviewer of everything",
-    });
-    await userEvent.hover(trigger);
-
-    const labels = await screen.findAllByText("Reviewer of everything");
-    expect(labels).not.toHaveLength(0);
-    expect(screen.queryByTestId("agent-role-hover-content")).toBeNull();
   });
 
   it("keeps the trigger's own click working under the tooltip", async () => {

@@ -14,7 +14,7 @@
  * selects it whether or not the tooltip is open - the canvas below never sees
  * that press, because this element is over it.
  */
-import type { ReactNode } from "react";
+import type { ReactElement } from "react";
 import { AgentHoverTooltip } from "@/components/epic-canvas/sidebar/agent-hover-tooltip";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
@@ -32,7 +32,7 @@ export interface OfficeAgentHoverProps {
   /** The character's box in CONTAINER screen pixels, already camera-mapped. */
   readonly screenRect: OfficeRect;
   /** The floor's own reading of the agent, appended under the shared card. */
-  readonly extraContent: ReactNode;
+  readonly extraContent: ReactElement;
   readonly onSelect: (agentId: string) => void;
   readonly onLeave: () => void;
 }
