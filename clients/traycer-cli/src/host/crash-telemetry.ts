@@ -4,7 +4,7 @@ import {
   release as osRelease,
 } from "node:os";
 import * as Sentry from "@sentry/node";
-import { config } from "../config";
+import { resolveCliVersion } from "../cli-version";
 import type { Environment } from "../runner/environment";
 import { readHostPidMetadata } from "./pid-metadata";
 
@@ -39,6 +39,11 @@ export interface HostCrashTelemetry {
   readonly environment: Environment;
   readonly attemptId: string;
   readonly supervisorPid: number;
+  /**
+   * The crashed child's pid, `null` if the spawn never yielded one. Used to
+   * decide whether the pid.json on disk was written by THIS child.
+   */
+  readonly childPid: number | null;
   /** Version from the install record the supervisor spawned. */
   readonly hostVersion: string;
   /** Positive decimal exit status, `null` when the child died by signal. */
@@ -56,8 +61,13 @@ export interface HostCrashTelemetry {
 /** The host's own identity, read from pid.json after the crash. */
 export interface HostCrashIdentity {
   readonly hostId: string;
-  /** The version the HOST wrote, which can differ from the install record. */
-  readonly runningVersion: string;
+  /**
+   * The version the crashed child itself published, `null` when the pid.json
+   * on disk was written by a different process (an earlier child that died
+   * before this one could publish, possibly from a different install), in
+   * which case attributing its version to this crash would be wrong.
+   */
+  readonly runningVersion: string | null;
 }
 
 /**
@@ -118,7 +128,10 @@ export function buildHostCrashEvent(
       host_environment: telemetry.environment,
       host_version: telemetry.hostVersion,
       host_running_version: identity?.runningVersion ?? "unknown",
-      cli_version: config.version,
+      // The release-injected CLI version (`cli-version.ts`), not
+      // `config.version`: the published CLI artifacts stamp only the former,
+      // and the deploy-target build stamp stays at its source sentinel there.
+      cli_version: resolveCliVersion(process.env),
       platform,
       arch: osArch(),
       os_release: osRelease(),
@@ -127,6 +140,7 @@ export function buildHostCrashEvent(
     extra: {
       attemptId: telemetry.attemptId,
       supervisorPid: telemetry.supervisorPid,
+      childPid: telemetry.childPid ?? -1,
       exitCode: telemetry.exitCode ?? -1,
       signal: telemetry.signal ?? "",
       exitMeaning: telemetry.exitMeaning ?? "",
@@ -141,14 +155,23 @@ export function buildHostCrashEvent(
  * Read the host id from the pid.json the crashed host wrote. On a crash the
  * file survives (only a graceful shutdown removes it), and the host id is a
  * property of the host home rather than of the process, so a stale file from
- * an earlier child still names the right host.
+ * an earlier child still names the right host. The VERSION is per process,
+ * though: it is attributed to this crash only when the file's pid is the
+ * crashed child's, so a child that died before publishing (possibly from a
+ * different install than the file's author) reports its version as unknown
+ * rather than borrowing its predecessor's.
  */
 export async function readHostCrashIdentity(
   environment: Environment,
+  childPid: number | null,
 ): Promise<HostCrashIdentity | null> {
   const metadata = await readHostPidMetadata(environment);
   if (metadata === null) return null;
-  return { hostId: metadata.hostId, runningVersion: metadata.version };
+  const writtenByThisChild = childPid !== null && metadata.pid === childPid;
+  return {
+    hostId: metadata.hostId,
+    runningVersion: writtenByThisChild ? metadata.version : null,
+  };
 }
 
 /**
@@ -183,7 +206,9 @@ export async function reportHostCrashToSentry(
   let identity: HostCrashIdentity | null = null;
   try {
     identity = await Promise.race([
-      readHostCrashIdentity(telemetry.environment).catch(() => null),
+      readHostCrashIdentity(telemetry.environment, telemetry.childPid).catch(
+        () => null,
+      ),
       new Promise<null>((resolve) => {
         const timer = setTimeout(
           () => resolve(null),

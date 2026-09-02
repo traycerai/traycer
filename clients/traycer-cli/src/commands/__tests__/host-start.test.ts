@@ -1229,6 +1229,10 @@ describe("runHostStart - signal/exit propagation", () => {
     expect(report.attemptId).toBe(crashed?.fields.attemptId);
     expect(report.uptimeMs).toBeGreaterThanOrEqual(0);
     expect(report.environment).toBe("production");
+    // The crashed child's pid, as spawned by the stub - the crash telemetry
+    // uses it to decide whether the pid.json on disk was written by THIS
+    // child before attributing its published version to the crash.
+    expect(report.childPid).toBe(child.pid);
     // Sent AFTER the terminal marker, never before - the marker is
     // readiness authority and must not wait on telemetry.
     const markerIndex = recorded.sequence.indexOf("terminal-marker:crashed");

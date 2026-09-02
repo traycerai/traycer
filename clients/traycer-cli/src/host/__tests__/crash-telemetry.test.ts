@@ -64,7 +64,7 @@ const {
   HOST_CRASH_IDENTITY_TIMEOUT_MS,
 } = await import("../crash-telemetry");
 
-const { config } = await import("../../config");
+const { resolveCliVersion } = await import("../../cli-version");
 
 const TEST_ENVIRONMENT: Environment = "production";
 
@@ -91,6 +91,9 @@ function sampleTelemetry(
     environment: TEST_ENVIRONMENT,
     attemptId: "attempt-1",
     supervisorPid: 4242,
+    // Matches samplePidMetadata().pid, so the pid-match rule resolves to
+    // "written by this child" by default.
+    childPid: 4242,
     hostVersion: "1.2.3",
     exitCode: 7,
     signal: null,
@@ -174,6 +177,7 @@ describe("buildHostCrashEvent", () => {
     expect(Object.keys(event.extra).sort()).toEqual(
       [
         "attemptId",
+        "childPid",
         "exitCode",
         "exitMeaning",
         "hasDiagnosticReport",
@@ -195,7 +199,7 @@ describe("buildHostCrashEvent", () => {
     }
   });
 
-  it("populates tags from the telemetry, the identity, and the CLI's own config", () => {
+  it("populates tags from the telemetry, the identity, and the resolved CLI version", () => {
     const telemetry = sampleTelemetry({
       environment: "production",
       hostVersion: "1.2.3",
@@ -213,7 +217,7 @@ describe("buildHostCrashEvent", () => {
       host_environment: "production",
       host_version: "1.2.3",
       host_running_version: "1.2.4",
-      cli_version: config.version,
+      cli_version: resolveCliVersion(process.env),
       platform: platform(),
       arch: arch(),
       os_release: release(),
@@ -224,6 +228,30 @@ describe("buildHostCrashEvent", () => {
   it("tags host_running_version as 'unknown' when identity is null", () => {
     const event = buildHostCrashEvent(sampleTelemetry({}), null);
     expect(event.tags.host_running_version).toBe("unknown");
+  });
+
+  it("tags host_running_version as 'unknown' when identity carries a null runningVersion, but still reports the known hostId", () => {
+    const identity: HostCrashIdentity = {
+      hostId: "host-mismatched",
+      runningVersion: null,
+    };
+    const event = buildHostCrashEvent(sampleTelemetry({}), identity);
+    expect(event.tags.host_running_version).toBe("unknown");
+    expect(event.hostId).toBe("host-mismatched");
+    expect(event.extra.hostIdKnown).toBe(true);
+  });
+
+  describe("cli_version tag", () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it("follows the injected TRAYCER_CLI_VERSION at call time", () => {
+      vi.stubEnv("TRAYCER_CLI_VERSION", "9.9.9");
+      const event = buildHostCrashEvent(sampleTelemetry({}), null);
+      expect(event.tags.cli_version).toBe("9.9.9");
+      expect(event.tags.cli_version).toBe(resolveCliVersion(process.env));
+    });
   });
 
   it("defaults exitCode to -1 and signal/exitMeaning to empty strings when null", () => {
@@ -250,6 +278,20 @@ describe("buildHostCrashEvent", () => {
     expect(event.extra.uptimeMs).toBe(42);
   });
 
+  it("puts the telemetry's childPid in extra.childPid, and -1 when the spawn yielded no pid", () => {
+    const withPid = buildHostCrashEvent(
+      sampleTelemetry({ childPid: 4242 }),
+      null,
+    );
+    expect(withPid.extra.childPid).toBe(4242);
+
+    const withoutPid = buildHostCrashEvent(
+      sampleTelemetry({ childPid: null }),
+      null,
+    );
+    expect(withoutPid.extra.childPid).toBe(-1);
+  });
+
   it("sets hostIdKnown true and hostId to the identity's id when identity is present", () => {
     const identity: HostCrashIdentity = {
       hostId: "host-known",
@@ -272,17 +314,33 @@ describe("readHostCrashIdentity", () => {
     pidMetadataMocks.readHostPidMetadata.mockReset();
   });
 
-  it("maps the pid.json metadata to hostId and runningVersion", async () => {
+  it("reports the pid.json's version when its pid matches the crashed child's", async () => {
     pidMetadataMocks.readHostPidMetadata.mockResolvedValue(
-      samplePidMetadata({ hostId: "host-42", version: "1.9.9" }),
+      samplePidMetadata({ hostId: "host-42", version: "1.9.9", pid: 4242 }),
     );
-    const identity = await readHostCrashIdentity(TEST_ENVIRONMENT);
+    const identity = await readHostCrashIdentity(TEST_ENVIRONMENT, 4242);
     expect(identity).toEqual({ hostId: "host-42", runningVersion: "1.9.9" });
+  });
+
+  it("reports the hostId but a null runningVersion when the pid.json's pid does not match the crashed child's", async () => {
+    pidMetadataMocks.readHostPidMetadata.mockResolvedValue(
+      samplePidMetadata({ hostId: "host-42", version: "1.9.9", pid: 1111 }),
+    );
+    const identity = await readHostCrashIdentity(TEST_ENVIRONMENT, 4242);
+    expect(identity).toEqual({ hostId: "host-42", runningVersion: null });
+  });
+
+  it("reports the hostId but a null runningVersion when the crashed child's pid is unknown (null)", async () => {
+    pidMetadataMocks.readHostPidMetadata.mockResolvedValue(
+      samplePidMetadata({ hostId: "host-42", version: "1.9.9", pid: 4242 }),
+    );
+    const identity = await readHostCrashIdentity(TEST_ENVIRONMENT, null);
+    expect(identity).toEqual({ hostId: "host-42", runningVersion: null });
   });
 
   it("returns null when no pid.json metadata exists", async () => {
     pidMetadataMocks.readHostPidMetadata.mockResolvedValue(null);
-    const identity = await readHostCrashIdentity(TEST_ENVIRONMENT);
+    const identity = await readHostCrashIdentity(TEST_ENVIRONMENT, 4242);
     expect(identity).toBeNull();
   });
 });
@@ -347,16 +405,41 @@ describe("reportHostCrashToSentry", () => {
     vi.useRealTimers();
   });
 
-  it("carries the resolved hostId when the identity read resolves in time", async () => {
+  it("carries the resolved hostId and running version when the pid.json's pid matches the crashed child's", async () => {
     pidMetadataMocks.readHostPidMetadata.mockResolvedValue(
-      samplePidMetadata({ hostId: "host-resolved", version: "1.2.4" }),
+      samplePidMetadata({
+        hostId: "host-resolved",
+        version: "1.2.4",
+        pid: 4242,
+      }),
     );
 
-    await reportHostCrashToSentry(sampleTelemetry({}));
+    await reportHostCrashToSentry(sampleTelemetry({ childPid: 4242 }));
 
     expect(sentryMocks.setUser).toHaveBeenCalledWith({ id: "host-resolved" });
     expect(sentryMocks.setTags).toHaveBeenCalledWith(
       expect.objectContaining({ host_running_version: "1.2.4" }),
+    );
+    expect(sentryMocks.setExtras).toHaveBeenCalledWith(
+      expect.objectContaining({ hostIdKnown: true }),
+    );
+    expect(sentryMocks.captureMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("still carries the resolved hostId but tags 'unknown' when the pid.json's pid does not match the crashed child's", async () => {
+    pidMetadataMocks.readHostPidMetadata.mockResolvedValue(
+      samplePidMetadata({
+        hostId: "host-resolved",
+        version: "1.2.4",
+        pid: 1111,
+      }),
+    );
+
+    await reportHostCrashToSentry(sampleTelemetry({ childPid: 4242 }));
+
+    expect(sentryMocks.setUser).toHaveBeenCalledWith({ id: "host-resolved" });
+    expect(sentryMocks.setTags).toHaveBeenCalledWith(
+      expect.objectContaining({ host_running_version: "unknown" }),
     );
     expect(sentryMocks.setExtras).toHaveBeenCalledWith(
       expect.objectContaining({ hostIdKnown: true }),

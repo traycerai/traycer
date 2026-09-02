@@ -1917,6 +1917,7 @@ export async function runHostStart(
       attemptId,
       supervisorPid,
       bundle: target.executable,
+      childPid: child.pid ?? null,
       hostVersion: target.record.version,
       probeObservation,
       childSpawnedAtMs,
@@ -2284,6 +2285,10 @@ async function persistChildExit(input: {
   readonly attemptId: string;
   readonly supervisorPid: number;
   readonly bundle: string;
+  // The child's pid as spawned (`null` only if the spawn yielded none); the
+  // crash telemetry uses it to decide whether the pid.json on disk is this
+  // child's before attributing its published version to the crash.
+  readonly childPid: number | null;
   // Version from the install record the child was spawned from; the crash
   // telemetry tags it so a fleet count can be split by host version.
   readonly hostVersion: string;
@@ -2412,6 +2417,7 @@ async function persistChildExit(input: {
         environment,
         attemptId,
         supervisorPid,
+        childPid: input.childPid,
         hostVersion: input.hostVersion,
         exitCode: null,
         signal,
@@ -2515,6 +2521,7 @@ async function persistChildExit(input: {
     environment,
     attemptId,
     supervisorPid,
+    childPid: input.childPid,
     hostVersion: input.hostVersion,
     exitCode: code,
     signal: null,
