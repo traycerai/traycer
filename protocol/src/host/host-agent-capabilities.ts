@@ -185,6 +185,14 @@ export type HostFileCopyProgress = z.infer<typeof hostFileCopyProgressSchema>;
 
 export const HOST_FILE_TRANSFER_UNREADABLE_MESSAGE_MAX_LENGTH = 1024;
 
+/**
+ * Conventional PATH_MAX-style ceiling for source-authored path strings on the
+ * agent-facing manifest. Relative paths and skipped-symlink targets are
+ * attacker-influenced filesystem strings; bounding them is the same discipline
+ * as bounding `message`.
+ */
+export const HOST_FILE_COPY_MANIFEST_PATH_MAX_LENGTH = 4096;
+
 export const hostFileCopyFailureOperationSchema = z.enum([
   "enumerate",
   "stat",
@@ -201,16 +209,20 @@ export type HostFileCopyFailureOperation = z.infer<
   typeof hostFileCopyFailureOperationSchema
 >;
 
+/**
+ * Sampled failure items reach agent context through status. `message` shares
+ * the unreadable/reason bound; `relativePath` uses the path ceiling.
+ */
 export const hostFileCopyFailureSchema = z.object({
-  relativePath: z.string(),
+  relativePath: z.string().max(HOST_FILE_COPY_MANIFEST_PATH_MAX_LENGTH),
   operation: hostFileCopyFailureOperationSchema,
-  message: z.string(),
+  message: z.string().max(HOST_FILE_TRANSFER_UNREADABLE_MESSAGE_MAX_LENGTH),
 });
 export type HostFileCopyFailure = z.infer<typeof hostFileCopyFailureSchema>;
 
 export const hostFileCopySkippedUnsafeSymlinkSchema = z.object({
-  relativePath: z.string(),
-  target: z.string(),
+  relativePath: z.string().max(HOST_FILE_COPY_MANIFEST_PATH_MAX_LENGTH),
+  target: z.string().max(HOST_FILE_COPY_MANIFEST_PATH_MAX_LENGTH),
 });
 export type HostFileCopySkippedUnsafeSymlink = z.infer<
   typeof hostFileCopySkippedUnsafeSymlinkSchema

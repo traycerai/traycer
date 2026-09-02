@@ -3,12 +3,15 @@ import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import { agentArchiveV10 } from "@traycer/protocol/host/agent/archive";
 import {
+  HOST_FILE_COPY_MANIFEST_PATH_MAX_LENGTH,
   HOST_FILE_TRANSFER_MAX_CHUNK_BASE64_CHARS,
   HOST_FILE_TRANSFER_MAX_CHUNK_BYTES,
   HOST_FILE_TRANSFER_UNREADABLE_MESSAGE_MAX_LENGTH,
   hostDirectoryListV10,
   hostFileCopyCancelV10,
+  hostFileCopyFailureSchema,
   hostFileCopyManifestSchema,
+  hostFileCopySkippedUnsafeSymlinkSchema,
   hostFileCopyStartV10,
   hostFileCopyStatusV10,
   hostFileTransferCloseV10,
@@ -381,6 +384,51 @@ describe("host-agent capability contracts", () => {
       hostFileCopyManifestSchema.safeParse({
         ...consistent,
         skippedUnsafeSymlinkCount: 1,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("bounds sampled manifest item strings", () => {
+    expect(
+      hostFileCopyFailureSchema.safeParse({
+        relativePath: "a".repeat(HOST_FILE_COPY_MANIFEST_PATH_MAX_LENGTH),
+        operation: "stat",
+        message: "x".repeat(HOST_FILE_TRANSFER_UNREADABLE_MESSAGE_MAX_LENGTH),
+      }).success,
+    ).toBe(true);
+    expect(
+      hostFileCopyFailureSchema.safeParse({
+        relativePath: "src/private.ts",
+        operation: "stat",
+        message: "x".repeat(
+          HOST_FILE_TRANSFER_UNREADABLE_MESSAGE_MAX_LENGTH + 1,
+        ),
+      }).success,
+    ).toBe(false);
+    expect(
+      hostFileCopyFailureSchema.safeParse({
+        relativePath: "a".repeat(HOST_FILE_COPY_MANIFEST_PATH_MAX_LENGTH + 1),
+        operation: "stat",
+        message: "permission denied",
+      }).success,
+    ).toBe(false);
+
+    expect(
+      hostFileCopySkippedUnsafeSymlinkSchema.safeParse({
+        relativePath: "a".repeat(HOST_FILE_COPY_MANIFEST_PATH_MAX_LENGTH),
+        target: "b".repeat(HOST_FILE_COPY_MANIFEST_PATH_MAX_LENGTH),
+      }).success,
+    ).toBe(true);
+    expect(
+      hostFileCopySkippedUnsafeSymlinkSchema.safeParse({
+        relativePath: "link",
+        target: "b".repeat(HOST_FILE_COPY_MANIFEST_PATH_MAX_LENGTH + 1),
+      }).success,
+    ).toBe(false);
+    expect(
+      hostFileCopySkippedUnsafeSymlinkSchema.safeParse({
+        relativePath: "a".repeat(HOST_FILE_COPY_MANIFEST_PATH_MAX_LENGTH + 1),
+        target: "../escape",
       }).success,
     ).toBe(false);
   });
