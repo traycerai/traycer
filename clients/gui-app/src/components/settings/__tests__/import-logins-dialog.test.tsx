@@ -640,6 +640,33 @@ describe("<ImportLoginsDialog /> import", () => {
     ).not.toBeNull();
   });
 
+  it("a declined desktop confirmation leaves the checklist in place", async () => {
+    const bridge = new TestBridge();
+    bridge.sources = [source({})];
+    bridge.scanBySourceId.set(
+      "source-1",
+      scan({
+        sites: [{ domain: "example.com", cookieCount: 1, unlock: null }],
+      }),
+    );
+    bridge.importResult = { status: "cancelled" };
+    renderDialog(bridge);
+    await pickSource(/Google Chrome/);
+
+    await screen.findByText("example.com");
+    fireEvent.click(importConfirmButton());
+
+    await waitFor(() => {
+      expect(bridge.importCalls).toHaveLength(1);
+    });
+    // The Choose step is still rendered - a declined confirmation is not an
+    // outcome, so there is nothing for a Done step to show.
+    await screen.findByText("example.com");
+    expect(importConfirmButton()).not.toBeNull();
+    expect(screen.queryByText("Logins imported")).toBeNull();
+    expect(screen.queryByText("Nothing was imported")).toBeNull();
+  });
+
   it("renders a Try again affordance for a blocked import result", async () => {
     const bridge = new TestBridge();
     bridge.sources = [source({})];

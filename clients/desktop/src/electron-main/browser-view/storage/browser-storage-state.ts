@@ -348,6 +348,26 @@ export class BrowserPrimaryProfileSnapshotCoordinator {
     ];
   }
 
+  /**
+   * Every origin a site clear can NAME, which is wider than
+   * {@link rememberedOrigins}: the origins whose read is still IN FLIGHT are
+   * here too. A pending read has no entries yet, so it is nothing to
+   * capture - but the tile it was taken from is live on that origin, and a
+   * clear that only invalidated the read would leave the live localStorage
+   * where it is, to meet the imported cookies on the next reload. Settled
+   * first, then the pending ones not already named.
+   */
+  clearableOrigins(): readonly string[] {
+    const origins = this.rememberedOrigins().map((entry) => entry.origin);
+    const seen = new Set(origins);
+    for (const pending of this.observations) {
+      if (seen.has(pending.origin)) continue;
+      seen.add(pending.origin);
+      origins.push(pending.origin);
+    }
+    return origins;
+  }
+
   private retainObservedOrigin(
     evicted: BrowserPrimaryProfileOriginSnapshot,
   ): void {

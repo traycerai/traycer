@@ -31,8 +31,11 @@ import { registrableDomain } from "@traycer/protocol/host/browser/registrable-do
  *
  * NOT an ordering decision, and not an estimate of how long a forget takes:
  * ordering here rests on a fact - the gate opens when the barrier's own work
- * settles, and every path through `runOnEveryDomain` already opens it in a
- * `finally`, success or failure. That fact covers everything except the one
+ * settles, and every path through `runOnEveryDomain` opens it on settlement,
+ * success or failure, expired or not (an expired barrier keeps the gate for
+ * its action's in-flight call to land, up to `BARRIER_SETTLE_GRACE_MS`, since
+ * an abort cancels no Electron call already made). That fact covers
+ * everything except the one
  * case no fact can: a Chromium call that never settles at all (a wedged CDP
  * attach inside "forget all browser logins"). A promise that never resolves
  * emits no event to order against, so the only way to bound it is elapsed
@@ -64,6 +67,15 @@ import { registrableDomain } from "@traycer/protocol/host/browser/registrable-do
  * writes every chosen site) passes its own budget and reads the abort signal.
  */
 export const BARRIER_ACTION_TIMEOUT_MS = 30_000;
+
+/**
+ * How long an expired barrier's gate stays closed for its action to settle.
+ * A cooperative action (the login import) reads the aborted signal between
+ * Electron calls and settles as soon as the call in flight lands - well under
+ * this. A call that has not landed in this long is the wedge the timer is
+ * for, and the gate is forced open rather than frozen behind it.
+ */
+export const BARRIER_SETTLE_GRACE_MS = BARRIER_ACTION_TIMEOUT_MS;
 
 export class BrowserJarSerializer {
   /**
@@ -143,15 +155,8 @@ export class BrowserJarSerializer {
       const expired = new Promise<never>((_resolve, reject) => {
         expire = (): void => reject(barrierExpiredError(timeoutMs));
       });
-      const timer = setTimeout(() => {
-        // The action first, then the gate: queued per-domain work must not
-        // stay blocked on a call that is never coming back, and must not be
-        // admitted under one that is still writing.
-        controller.abort();
-        openGate();
-        expire();
-      }, timeoutMs);
-      timer.unref();
+      let running = false;
+      let gaveUp = false;
       const run = (async (): Promise<T> => {
         await previousBarrier;
         await Promise.all(ahead);
@@ -159,19 +164,48 @@ export class BrowserJarSerializer {
         // given up, so nothing may start now - least of all a forget-all the
         // user was just told did not happen.
         if (controller.signal.aborted) throw barrierExpiredError(timeoutMs);
+        running = true;
         return await action(controller.signal);
       })();
       // The race answers the caller once. A `run` that settles after that -
       // the cancel above, or an action rejecting past its expiry - has nobody
       // left to answer, and must not surface as an unhandled rejection.
-      void run.catch(ignore);
+      const settled = run.then(ignore, ignore);
+      const timer = setTimeout(() => {
+        gaveUp = true;
+        // The signal first, then the caller: the action must learn to stop
+        // before anything queued behind it can be admitted.
+        controller.abort();
+        expire();
+        if (!running) {
+          // Still waiting: nothing of this barrier's is touching the jar, and
+          // the gate is chained behind the barrier ahead anyway.
+          openGate();
+          return;
+        }
+        // Mid-action: an Electron call already in flight is not cancelled by
+        // the abort, and admitting a forget-all under it would let that call
+        // land in the emptied jar afterwards. The action reads the signal
+        // between its calls, so one that is merely long settles as soon as
+        // the call in flight does, and the gate opens THEN; only one that
+        // never settles - a wedged call, the case the timer exists for - has
+        // the gate forced open after the grace.
+        const grace = setTimeout(openGate, BARRIER_SETTLE_GRACE_MS);
+        grace.unref();
+        void settled.then(() => {
+          clearTimeout(grace);
+          openGate();
+        });
+      }, timeoutMs);
+      timer.unref();
       try {
         return await Promise.race([run, expired]);
       } finally {
         // Clearing before `openGate` is what keeps `expired` from rejecting
-        // after the race has already settled.
+        // after the race has already settled. After an expiry the gate is
+        // the timer's to open, on the terms above.
         clearTimeout(timer);
-        openGate();
+        if (!gaveUp) openGate();
       }
     })();
   }

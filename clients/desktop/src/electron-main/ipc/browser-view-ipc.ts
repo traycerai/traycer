@@ -146,11 +146,12 @@ export function registerBrowserViewIpc(
       }),
     captureBrowserOriginLocalStorage,
   );
-  // The remembered origins are the coordinator's: localStorage is not
+  // The origins a clear can name are the coordinator's: localStorage is not
   // enumerable from the session, so the origins this process has actually
-  // visited are the only ones a site clear can name.
+  // visited are the only ones a site clear can reach - including one whose
+  // read is still in flight, since the tile that read is from is live there.
   const rememberedClearSiteOrigins = (): readonly string[] =>
-    primaryProfileSnapshots.rememberedOrigins().map((origin) => origin.origin);
+    primaryProfileSnapshots.clearableOrigins();
   /**
    * Every jar a `primary` login can be sitting in right now, durable one first.
    *
@@ -1127,7 +1128,7 @@ export function registerBrowserViewIpc(
               includeDeviceBound: false,
             },
       );
-      if (written.status === "blocked") return written;
+      if (written.status !== "imported") return written;
       // The push is main's, exactly like forget-all's frames: a renderer may
       // not mint a jar frame at all. It is needed at all because the import
       // writes with the delta observer muted - the coalesced deltas that carry

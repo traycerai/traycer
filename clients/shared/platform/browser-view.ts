@@ -246,6 +246,22 @@ export type LoginImportBrowser =
   | "safari"
   | "file";
 
+/** The product names the dialog and main's confirmation both show. */
+export const LOGIN_IMPORT_BROWSER_LABELS: Readonly<
+  Record<LoginImportBrowser, string>
+> = {
+  chrome: "Google Chrome",
+  chromium: "Chromium",
+  edge: "Microsoft Edge",
+  brave: "Brave",
+  arc: "Arc",
+  vivaldi: "Vivaldi",
+  opera: "Opera",
+  firefox: "Firefox",
+  safari: "Safari",
+  file: "Cookie file",
+};
+
 /**
  * One importable cookie jar on this machine. `id` is opaque and derived from
  * the source's location: the renderer never learns a filesystem path, and can
@@ -400,7 +416,16 @@ export type LoginImportResult =
         | LoginImportBlocked
         | "keychain-denied"
         | "saved-logins-off";
-    };
+    }
+  /**
+   * The desktop's own confirmation - a native dialog main draws over every
+   * window, naming the source and how many sites the request validated to -
+   * was declined. Nothing was read or written; the dialog stays on the
+   * Choose step. The renderer may ASK for a replacement of saved logins, but
+   * a native dialog it cannot draw or dismiss is what turns the ask into a
+   * decision, exactly as for clearing a site or forgetting every login.
+   */
+  | { readonly status: "cancelled" };
 
 export type BrowserViewConsoleLevel =
   | "log"

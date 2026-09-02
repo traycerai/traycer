@@ -90,7 +90,8 @@ import {
  */
 export type LoginImportOutcome =
   | Omit<Extract<LoginImportResult, { status: "imported" }>, "notifiedHosts">
-  | Extract<LoginImportResult, { status: "blocked" }>;
+  | Extract<LoginImportResult, { status: "blocked" }>
+  | Extract<LoginImportResult, { status: "cancelled" }>;
 
 export interface LoginImportJarCookies {
   get(filter: CookiesGetFilter): Promise<Cookie[]>;
@@ -101,6 +102,16 @@ export interface LoginImportJarCookies {
 
 export interface LoginImportJarSession {
   readonly cookies: LoginImportJarCookies;
+}
+
+/**
+ * What main's confirmation dialog names: the registered source (never the
+ * renderer's word for it) and how many sites the request validated to.
+ */
+export interface LoginImportSummary {
+  readonly browser: LoginImportSource["browser"];
+  readonly profileLabel: string;
+  readonly siteCount: number;
 }
 
 /** Each reaches an OS keystore; injected so the suites reach none. */
@@ -144,6 +155,17 @@ export interface LoginImportServiceDependencies extends LoginImportDiscoveryEnvi
    * otherwise pair the old identity with the imported cookies.
    */
   readonly clearSiteLocalStorage: (site: string) => Promise<void>;
+  /**
+   * Main's own confirmation of the replacement, shown once the request has
+   * been validated against its scan and before anything is read, prompted or
+   * written. The renderer may ASK; a native dialog it cannot draw over or
+   * dismiss is what turns the ask into a decision - the same rule as clearing
+   * a site or forgetting every login, and for the same reason: a compromised
+   * renderer can list, scan and then import every site a profile holds, and
+   * a plaintext (Firefox, Safari, file) import raises no other prompt at all.
+   * Answers false for a declined or dismissed dialog.
+   */
+  readonly confirmImport: (summary: LoginImportSummary) => Promise<boolean>;
   /**
    * Hands the desktop ownership of the keys the import wrote. Ordinarily the
    * change observer does this on any local write (`onLocalCookieWrite`), but
@@ -447,6 +469,18 @@ export class LoginImportService {
         skippedInvalid: 0,
       };
     }
+    // Main's decision, after validation and before the first read: the copy
+    // names the REGISTERED source and the validated count, never anything
+    // the renderer sent.
+    const confirmed = await this.deps.confirmImport({
+      browser: source.browser,
+      profileLabel: source.profileLabel,
+      siteCount: chosen.size,
+    });
+    if (!confirmed) {
+      log.info("[browser-view] login import was not confirmed");
+      return { status: "cancelled" };
+    }
     const read = await this.readSource(source.location);
     if (!read.ok) return { status: "blocked", reason: read.blocked };
     const nowSeconds = Math.floor(this.deps.now() / 1000);
@@ -587,9 +621,11 @@ export class LoginImportService {
    *    the source did hold a replacement and removing the working one would
    *    turn one malformed row into a sign-out.
    * 4. Electron removes by `{url, name}`, which also catches a just-written
-   *    cookie of the same NAME under a different scope or path. Any written
-   *    row whose name a removal named is written once more, decrypted again
-   *    rather than held.
+   *    cookie of the same NAME under a different scope or path - and a kept
+   *    cookie of that name from step 3. Any written row whose name a removal
+   *    named is written once more, decrypted again rather than held; any
+   *    kept cookie it named is put back from the listing taken before the
+   *    first write.
    * 5. The site's localStorage goes with the cookies the source did not
    *    carry: it belongs to whichever account was signed in before, and a
    *    site that keeps account state there would otherwise run the old
@@ -619,6 +655,7 @@ export class LoginImportService {
         }),
       ),
     );
+    const writtenKeyIds = new Set<string>();
     const writtenRows: ImportCandidate[] = [];
     for (const candidate of siteRows) {
       throwIfBarrierExpired(signal);
@@ -633,6 +670,7 @@ export class LoginImportService {
         outcome.skippedInvalid += 1;
         continue;
       }
+      writtenKeyIds.add(cookieKeyId(key));
       outcome.writtenKeys.push(key);
       writtenRows.push(candidate);
     }
@@ -651,6 +689,24 @@ export class LoginImportService {
     }
     throwIfBarrierExpired(signal);
     await this.deps.clearSiteLocalStorage(site);
+    // The jar's cookies at a carried key the source could NOT write are kept
+    // (step 3) - but a same-name removal above reaches them too, so each one
+    // a removal named is put back as it was, from the listing taken before
+    // any write. Written rows are re-written from the source below.
+    for (const cookie of previous) {
+      const id = storageCookieKeyId(cookie);
+      if (!carriedKeyIds.has(id) || writtenKeyIds.has(id)) continue;
+      if (!removedNames.has(cookie.name)) continue;
+      throwIfBarrierExpired(signal);
+      try {
+        await session.cookies.set(
+          toElectronCookieSetDetails(toCookieSetDetails(cookie)),
+        );
+      } catch {
+        // The jar held it a moment ago and refuses it now; nothing else to
+        // put in its place, and the count already carries the failed row.
+      }
+    }
     for (const candidate of writtenRows) {
       if (!removedNames.has(candidate.row.name)) continue;
       throwIfBarrierExpired(signal);

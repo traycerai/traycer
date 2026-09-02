@@ -29,6 +29,7 @@ import type {
   LoginImportSource,
   LoginImportUnlock,
 } from "@traycer-clients/shared/platform/browser-view";
+import { LOGIN_IMPORT_BROWSER_LABELS } from "@traycer-clients/shared/platform/browser-view";
 
 /**
  * Settings › Browser › Saved logins › "Import logins from another browser".
@@ -67,21 +68,16 @@ type ImportStep =
       readonly kind: "done";
       readonly choice: ImportChoice;
       readonly source: LoginImportSource;
-      readonly result: LoginImportResult;
+      readonly result: LoginImportOutcome;
     };
 
-const BROWSER_LABELS: Readonly<Record<LoginImportBrowser, string>> = {
-  chrome: "Google Chrome",
-  chromium: "Chromium",
-  edge: "Microsoft Edge",
-  brave: "Brave",
-  arc: "Arc",
-  vivaldi: "Vivaldi",
-  opera: "Opera",
-  firefox: "Firefox",
-  safari: "Safari",
-  file: "Cookie file",
-};
+/**
+ * What Done can show. A `cancelled` result - the desktop's own confirmation
+ * declined - is not an outcome: the Choose step simply stays as it was.
+ */
+type LoginImportOutcome = Exclude<LoginImportResult, { status: "cancelled" }>;
+
+const BROWSER_LABELS = LOGIN_IMPORT_BROWSER_LABELS;
 
 export function ImportLoginsDialog(props: {
   readonly open: boolean;
@@ -134,6 +130,9 @@ export function ImportLoginsDialog(props: {
               },
               {
                 onSuccess: (result) => {
+                  // The desktop's confirmation was declined: nothing
+                  // happened, and the checklist is still the right place.
+                  if (result.status === "cancelled") return;
                   setStep({ kind: "done", source, choice, result });
                 },
               },
@@ -715,7 +714,7 @@ function UnlockExplainer(props: {
 
 function DoneStep(props: {
   readonly source: LoginImportSource;
-  readonly result: LoginImportResult;
+  readonly result: LoginImportOutcome;
   readonly onRetry: () => void;
   readonly onClose: () => void;
 }): ReactNode {

@@ -1,6 +1,8 @@
 import { app } from "electron";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { LOGIN_IMPORT_BROWSER_LABELS } from "@traycer-clients/shared/platform/browser-view";
+import { confirmDestructiveInMain } from "../../../app/confirm-destructive";
 import {
   BROWSER_VIEW_PARTITION,
   ensureBrowserViewSessionForPartition,
@@ -67,6 +69,21 @@ export function createLoginImportService(
       ensureBrowserViewSessionForPartition(BROWSER_VIEW_PARTITION),
     serializeJarWrite: jar.serializeJarWrite,
     clearSiteLocalStorage: jar.clearSiteLocalStorage,
+    // The same native dialog forget-all and a site clear go through: the
+    // copy names the registered source and the validated count, and Cancel
+    // is the default, so a raced or dismissed dialog refuses.
+    confirmImport: (summary) => {
+      const browser = LOGIN_IMPORT_BROWSER_LABELS[summary.browser];
+      const sites =
+        summary.siteCount === 1 ? "1 site" : `${summary.siteCount} sites`;
+      return confirmDestructiveInMain({
+        title: "Import logins?",
+        message: `Import the logins for ${sites} from ${browser} (${summary.profileLabel})?`,
+        detail:
+          "Any login Traycer already saved for those sites is replaced by the one from that profile, on this machine and on every host that syncs your browser logins.",
+        confirmLabel: "Import",
+      });
+    },
     suppressDeltas: suppressAllBrowserPrimaryProfileDeltas,
     // What the change observer does for an ordinary local write, done by
     // hand because the observer is muted for this one: the applier's

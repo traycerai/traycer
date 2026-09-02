@@ -31,6 +31,7 @@ import {
   type LoginImportOutcome,
   type LoginImportSecretProviders,
   type LoginImportServiceDependencies,
+  type LoginImportSummary,
 } from "../import-logins";
 import type { SecretReadResult } from "../secret-providers/secret-read-result";
 import type { BrowserCookieKey } from "@traycer/protocol/host/browser/contracts";
@@ -291,6 +292,7 @@ class FakeLoginImportSession implements LoginImportJarSession {
   readonly setCalls: CookiesSetDetails[] = [];
   flushes = 0;
   private readonly rejectSetNames = new Set<string>();
+  private readonly rejectSetValuesByName = new Map<string, Set<string>>();
 
   constructor(initial: readonly Cookie[]) {
     this.jar.push(...initial);
@@ -300,6 +302,17 @@ class FakeLoginImportSession implements LoginImportJarSession {
    * callers are unaffected. */
   rejectSet(name: string): void {
     this.rejectSetNames.add(name);
+  }
+
+  /** Rejects `cookies.set` for this name only when the incoming VALUE
+   * matches - unlike {@link rejectSet}, which rejects every call for the
+   * name. Lets a test fail one specific write (a source row) while a LATER
+   * `set` for the same name but a different value (a restore of the jar's
+   * original cookie) still succeeds. */
+  rejectSetValue(name: string, value: string): void {
+    const values = this.rejectSetValuesByName.get(name) ?? new Set<string>();
+    values.add(value);
+    this.rejectSetValuesByName.set(name, values);
   }
 
   readonly cookies: LoginImportJarCookies = {
@@ -316,6 +329,14 @@ class FakeLoginImportSession implements LoginImportJarSession {
     set: (details: CookiesSetDetails): Promise<void> => {
       this.setCalls.push(details);
       if (details.name !== undefined && this.rejectSetNames.has(details.name)) {
+        return Promise.reject(new Error("cookies.set rejected"));
+      }
+      if (
+        details.name !== undefined &&
+        details.value !== undefined &&
+        this.rejectSetValuesByName.get(details.name)?.has(details.value) ===
+          true
+      ) {
         return Promise.reject(new Error("cookies.set rejected"));
       }
       const host = new URL(details.url).hostname;
@@ -410,6 +431,9 @@ interface ServiceHarness {
   };
   /** Every site `clearSiteLocalStorage` was called with, in call order. */
   readonly clearedSites: string[];
+  /** Every summary the default `confirmImport` was called with, in call
+   * order. Unpopulated when a test overrides `confirmImport` itself. */
+  readonly confirmations: LoginImportSummary[];
 }
 
 // A per-suite temp dir rather than a bogus path: every test that never
@@ -442,6 +466,7 @@ function buildHarness(
     windowsDpapi,
   };
   const clearedSites: string[] = [];
+  const confirmations: LoginImportSummary[] = [];
   const deps: LoginImportServiceDependencies = {
     platform: "darwin",
     homeDir: "/unused-home",
@@ -455,6 +480,10 @@ function buildHarness(
       clearedSites.push(site);
       return Promise.resolve();
     },
+    confirmImport: (summary: LoginImportSummary): Promise<boolean> => {
+      confirmations.push(summary);
+      return Promise.resolve(true);
+    },
     releaseHostOwnedKeys: async () => undefined,
     settleWindowMs: 5,
     sleep: () => Promise.resolve(),
@@ -467,6 +496,7 @@ function buildHarness(
     session,
     secrets: { macosKeychain, linuxSecretService, windowsDpapi },
     clearedSites,
+    confirmations,
   };
 }
 
@@ -2700,5 +2730,222 @@ describe("import - clears a written site's localStorage and leaves an unwritten 
 
     expect(result).toEqual({ status: "blocked", reason: "saved-logins-off" });
     expect(clearedSites).toEqual([]);
+  });
+});
+
+// =================================================================================
+// 22. confirmImport: main confirms the validated selection before any side effect
+// =================================================================================
+
+describe("import - confirmImport", () => {
+  it("asks main to confirm the validated selection before reading the source", async () => {
+    const homeDir = await makeTempDir("login-import-confirm-order-");
+    await createDarwinChromeSource(
+      homeDir,
+      [
+        domainCookieRow(".confirm-a.com", "sid", { kind: "plain", value: "a" }),
+        domainCookieRow(".confirm-b.com", "auth", {
+          kind: "encrypted",
+          bytes: encryptCbc(
+            "v10",
+            "macos-keychain-secret",
+            CHROMIUM_PBKDF2_ITERATIONS.darwin,
+            "secret-value",
+          ),
+        }),
+      ],
+      23,
+    );
+    const session = new FakeLoginImportSession([]);
+    const order: string[] = [];
+    const confirmations: LoginImportSummary[] = [];
+    const { service } = buildHarness(
+      {
+        platform: "darwin",
+        homeDir,
+        snapshotRoot: await makeTempDir("snap-"),
+        confirmImport: (summary: LoginImportSummary): Promise<boolean> => {
+          order.push("confirm");
+          confirmations.push(summary);
+          return Promise.resolve(true);
+        },
+        secrets: {
+          macosKeychain: () => {
+            order.push("secret-read");
+            return Promise.resolve({
+              ok: true as const,
+              secret: "macos-keychain-secret",
+            });
+          },
+          linuxSecretService: alwaysUnavailable(),
+          windowsDpapi: () => Promise.resolve(null),
+        },
+      },
+      session,
+    );
+    const sources = await service.listSources();
+    const chrome = sources.find((source) => source.browser === "chrome");
+    if (chrome === undefined) throw new Error("expected a chrome source");
+    const scan = await service.scan(chrome.id);
+
+    const result = await service.import({
+      sourceId: chrome.id,
+      scanId: scan.scanId,
+      domains: ["confirm-a.com", "confirm-b.com", "never-listed.com"],
+      includeDeviceBound: false,
+    });
+
+    expect(result.status).toBe("imported");
+    expect(confirmations).toEqual([
+      { browser: "chrome", profileLabel: chrome.profileLabel, siteCount: 2 },
+    ]);
+    // The keystore is consulted only AFTER the confirmation, inside the
+    // barrier - never before main has confirmed the validated selection.
+    expect(order).toEqual(["confirm", "secret-read"]);
+  });
+
+  it("a declined confirmation imports nothing", async () => {
+    const homeDir = await makeTempDir("login-import-confirm-declined-");
+    await createDarwinChromeSource(
+      homeDir,
+      [
+        domainCookieRow(".declined-site.com", "sid", {
+          kind: "plain",
+          value: "v",
+        }),
+      ],
+      23,
+    );
+    const session = new FakeLoginImportSession([]);
+    const releaseHostOwnedKeys = vi.fn(async (): Promise<void> => undefined);
+    let serializeJarWriteEntered = false;
+    const { service, secrets, clearedSites } = buildHarness(
+      {
+        platform: "darwin",
+        homeDir,
+        snapshotRoot: await makeTempDir("snap-"),
+        confirmImport: (): Promise<boolean> => Promise.resolve(false),
+        releaseHostOwnedKeys,
+        serializeJarWrite: async <T>(
+          action: (signal: AbortSignal) => Promise<T>,
+        ): Promise<T> => {
+          serializeJarWriteEntered = true;
+          return action(new AbortController().signal);
+        },
+      },
+      session,
+    );
+    const { sourceId, scan } = await scanChromeSource(service);
+
+    const result = await service.import({
+      sourceId,
+      scanId: scan.scanId,
+      domains: ["declined-site.com"],
+      includeDeviceBound: false,
+    });
+
+    expect(result).toEqual({ status: "cancelled" });
+    expect(session.setCalls).toEqual([]);
+    expect(secrets.macosKeychain).not.toHaveBeenCalled();
+    expect(clearedSites).toEqual([]);
+    expect(releaseHostOwnedKeys).not.toHaveBeenCalled();
+    expect(serializeJarWriteEntered).toBe(false);
+  });
+
+  it("does not ask when nothing chosen validates", async () => {
+    const homeDir = await makeTempDir("login-import-confirm-unvalidated-");
+    await createDarwinChromeSource(
+      homeDir,
+      [
+        domainCookieRow(".scanned-only.com", "sid", {
+          kind: "plain",
+          value: "v",
+        }),
+      ],
+      23,
+    );
+    const session = new FakeLoginImportSession([]);
+    const { service, confirmations } = buildHarness(
+      { platform: "darwin", homeDir, snapshotRoot: await makeTempDir("snap-") },
+      session,
+    );
+    const { sourceId, scan } = await scanChromeSource(service);
+
+    const result = await service.import({
+      sourceId,
+      scanId: scan.scanId,
+      domains: ["not-in-the-scan.com"],
+      includeDeviceBound: false,
+    });
+
+    expect(result).toEqual({
+      status: "imported",
+      importedSites: 0,
+      importedCookies: 0,
+      replacedSites: 0,
+      skippedInvalid: 0,
+    });
+    expect(confirmations).toEqual([]);
+  });
+
+  it("puts back a kept cookie that a same-name removal reached", async () => {
+    const homeDir = await makeTempDir("login-import-confirm-restore-");
+    await createDarwinChromeSource(
+      homeDir,
+      [
+        domainCookieRow(".restore-site.com", "sid", {
+          kind: "plain",
+          value: "new-sid-value",
+        }),
+        domainCookieRow(".restore-site.com", "fresh", {
+          kind: "plain",
+          value: "fresh-value",
+        }),
+      ],
+      23,
+    );
+    const session = new FakeLoginImportSession([
+      // K1: a domain cookie - the key the source's "sid" row carries.
+      cookieFixture("sid", ".restore-site.com"),
+      // K2: a host-only cookie of the SAME name but a DIFFERENT key - the
+      // source does not carry this one at all.
+      cookieFixture("sid", "restore-site.com"),
+    ]);
+    // Rejects only the SOURCE's write (the new value); a later restore of
+    // K1's original value must still succeed.
+    session.rejectSetValue("sid", "new-sid-value");
+    const { service } = buildHarness(
+      { platform: "darwin", homeDir, snapshotRoot: await makeTempDir("snap-") },
+      session,
+    );
+    const { sourceId, scan } = await scanChromeSource(service);
+
+    const result = await service.import({
+      sourceId,
+      scanId: scan.scanId,
+      domains: ["restore-site.com"],
+      includeDeviceBound: false,
+    });
+
+    expect(result).toEqual({
+      status: "imported",
+      importedSites: 1,
+      importedCookies: 1,
+      replacedSites: 1,
+      skippedInvalid: 1,
+    });
+    const cookies = session.cookiesUnderDomain("restore-site.com");
+    expect(cookies.map((cookie) => cookie.name).sort()).toEqual([
+      "fresh",
+      "sid",
+    ]);
+    const sidCookie = cookies.find((cookie) => cookie.name === "sid");
+    // K1 is back, with its ORIGINAL value - the write that would have
+    // replaced it was rejected, but the removal that caught it (Electron's
+    // {url, name} removal is wider than one cookie) still put it back.
+    expect(sidCookie?.value).toBe("sid-value");
+    expect(sidCookie?.domain).toBe(".restore-site.com");
+    // K2 - the uncarried key - is gone for good.
+    expect(cookies.filter((cookie) => cookie.name === "sid")).toHaveLength(1);
   });
 });

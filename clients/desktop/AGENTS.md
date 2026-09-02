@@ -154,12 +154,20 @@ failures.
   in first, and only a site with at least one written cookie has what the
   source did not CARRY removed after - keyed by the source's rows, not by
   what was written, so a row that fails to decrypt or to set leaves the
-  jar's cookie at that key alone - so a source whose every row Electron
-  rejects leaves the jar's slice as it was. A written site's localStorage
-  goes too (`clearBrowserSiteLocalStorage` plus the coordinator's prune,
-  the same pair the site clear runs): the source carries cookies only, and
-  a site that keeps account state in localStorage would otherwise run the
-  previous identity on the imported cookies.
+  jar's cookie at that key alone, and a kept cookie that a same-name
+  removal reached anyway is put back from the pre-write listing - so a
+  source whose every row Electron rejects leaves the jar's slice as it was.
+  A written site's localStorage goes too (`clearBrowserSiteLocalStorage`
+  plus the coordinator's prune, the same pair the site clear runs, over
+  `clearableOrigins()`, which names an origin whose read is still in flight
+  as well): the source carries cookies only, and a site that keeps account
+  state in localStorage would otherwise run the previous identity on the
+  imported cookies. The import is CONFIRMED IN MAIN like a site clear and
+  forget-all (`confirmDestructiveInMain`, naming the registered source and
+  the validated site count) before anything is read: a compromised renderer
+  can list, scan and import every site a profile holds, and a plaintext
+  import raises no other prompt; a declined dialog answers `cancelled` and
+  the Choose step stays.
   A decrypted value exists only between the `readValue` inside that write
   loop and the `cookies.set` it feeds, never in a list; an imported SESSION
   cookie is given a bounded expiry, since a `persist:` partition drops one
