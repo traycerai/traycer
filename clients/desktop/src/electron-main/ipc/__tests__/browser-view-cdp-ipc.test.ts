@@ -46,9 +46,10 @@ const SIGNED_OUT: AuthSnapshot = {
 
 type BrowserViewManagerFactoryOptions = {
   readonly createDevToolsWindow: (windowId: string) => unknown;
-  readonly createPopupWindowOptions: (
-    request: { readonly profile: string; readonly sessionId: string },
-  ) => BrowserWindowConstructorOptions;
+  readonly createPopupWindowOptions: (request: {
+    readonly profile: string;
+    readonly sessionId: string;
+  }) => BrowserWindowConstructorOptions;
 };
 
 const captured = vi.hoisted(() => ({
