@@ -21,6 +21,7 @@ import type {
   BrowserViewElectronTabControl,
   BrowserViewFindRequest,
   BrowserViewFindStop,
+  LoginImportRequest,
   BrowserViewOverlayOcclusion,
   BrowserViewOverlayRelease,
   BrowserViewReservedChord,
@@ -203,6 +204,19 @@ const savedLoginSiteSchema = z.strictObject({
     }),
 });
 
+/** A source id the desktop listed for this renderer. */
+const loginImportScanSchema = z.object({ sourceId: nonEmptyStringSchema });
+
+/**
+ * The import request: registrable domains from the scan's own site list. A
+ * ceiling bounds the write; a real jar has a few hundred sites at most.
+ */
+const LOGIN_IMPORT_MAX_DOMAINS = 5_000;
+const loginImportRunSchema: z.ZodType<LoginImportRequest> = z.object({
+  sourceId: nonEmptyStringSchema,
+  domains: z.array(nonEmptyStringSchema).max(LOGIN_IMPORT_MAX_DOMAINS),
+  includeDeviceBound: z.boolean(),
+});
 export const browserViewIpcPayload = {
   annotationAttachResult: annotationAttachResultSchema,
   annotationStart: annotationStartSchema,
@@ -215,6 +229,8 @@ export const browserViewIpcPayload = {
   electronTabControl: electronTabControlSchema,
   findRequest: findRequestSchema,
   findStop: findStopSchema,
+  loginImportRun: loginImportRunSchema,
+  loginImportScan: loginImportScanSchema,
   nativeTabCapability: nativeTabCapabilitySchema,
   overlayOcclusion: overlayOcclusionSchema,
   overlayPaintAck: overlayPaintAckSchema,

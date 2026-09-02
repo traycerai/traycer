@@ -2,6 +2,7 @@ import {
   BrowserWindow,
   WebContentsView,
   app,
+  dialog,
   type BrowserWindowConstructorOptions,
   type IpcMainInvokeEvent,
   type Session,
@@ -86,6 +87,8 @@ import {
   releaseHeadlessOriginCookieKeys,
 } from "../browser-view/storage/browser-forget-ledger";
 import { trustBrowserCertificate } from "../app/cert-trust";
+import { createLoginImportService } from "../browser-view/storage/login-import/login-import-runtime";
+import { normalizePickedFilePath } from "../browser-view/storage/login-import/sources";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
 import { fetchRegisteredHostsViaHttp } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { config } from "../../config";
@@ -94,6 +97,11 @@ import {
   createBrowserSessionsHostDirectory,
   openBrowserSessionsTransport,
 } from "../browser-sessions/browser-sessions-transport";
+import type {
+  LoginImportResult,
+  LoginImportScan,
+  LoginImportSource,
+} from "@traycer-clients/shared/platform/browser-view";
 
 /**
  * The whole-jar capture reads the one shared `primary` identity, so its
@@ -1013,6 +1021,87 @@ export function registerBrowserViewIpc(
       }
       await clearOneSavedLoginSite(domain);
       return true;
+    },
+  );
+  // Import logins from another browser. Every handler answers a result value
+  // and never rejects: a rejected invoke's message is logged at WARN and
+  // forwarded to Sentry, and nothing on this path - a profile path, a
+  // keychain's answer, a cookie - may travel that way. The service holds the
+  // paths; the renderer sees opaque ids and registrable domains only.
+  const loginImport = createLoginImportService();
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.browserViewLoginImportListSources,
+    (): Promise<readonly LoginImportSource[]> => loginImport.listSources(),
+  );
+
+  // The native file dialog runs in main so the renderer never names a path;
+  // the picked file is registered under an opaque id like every other source.
+  // A dialog that cannot be shown answers like a cancelled one: there is no
+  // file, and the OS's reason is not for the renderer or the log.
+  bridge.handleInvoke(
+    RunnerHostInvoke.browserViewLoginImportPickFile,
+    async (event): Promise<LoginImportSource | null> => {
+      try {
+        const windowId = bridge.resolveSenderWindowId(event);
+        const parentWindow =
+          windowId === null
+            ? undefined
+            : bridge.windowRegistry.getRecordById(windowId)?.window;
+        const options = {
+          title: "Import logins from a cookie file",
+          properties: ["openFile" as const],
+          filters: [
+            { name: "Cookie exports", extensions: ["txt", "json"] },
+            { name: "All files", extensions: ["*"] },
+          ],
+        };
+        const result = isElectronBrowserWindow(parentWindow)
+          ? await dialog.showOpenDialog(parentWindow, options)
+          : await dialog.showOpenDialog(options);
+        const picked = result.canceled ? undefined : result.filePaths[0];
+        if (picked === undefined) return null;
+        const path = normalizePickedFilePath(picked);
+        if (path === null) return null;
+        return await loginImport.registerFile(path);
+      } catch {
+        return null;
+      }
+    },
+  );
+
+  // Payloads are validated with `safeParse`, unlike the neighbours above: a
+  // malformed payload here must come back as a blocked result too, because
+  // the bridge promises these calls never reject.
+  bridge.handleInvoke(
+    RunnerHostInvoke.browserViewLoginImportScan,
+    (_event, payload): Promise<LoginImportScan> => {
+      const parsed = browserViewIpcPayload.loginImportScan.safeParse(payload);
+      return loginImport.scan(parsed.success ? parsed.data.sourceId : "");
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.browserViewLoginImportRun,
+    async (_event, payload): Promise<LoginImportResult> => {
+      const parsed = browserViewIpcPayload.loginImportRun.safeParse(payload);
+      const written = await loginImport.import(
+        parsed.success
+          ? parsed.data
+          : { sourceId: "", domains: [], includeDeviceBound: false },
+      );
+      if (written.status === "blocked") return written;
+      // The push is main's, exactly like forget-all's frames: a renderer may
+      // not mint a jar frame at all. It is needed at all because the import
+      // writes with the delta observer muted - the coalesced deltas that carry
+      // an ordinary sign-in never fire for it, so without this capture the
+      // hosts would not see the imported logins until something else asked
+      // for one.
+      const notifiedHosts = await sessions.capturePrimaryProfileOnEveryHost();
+      log.info("[browser-view] pushed the imported logins to the hosts", {
+        notifiedHosts,
+      });
+      return { ...written, notifiedHosts };
     },
   );
 

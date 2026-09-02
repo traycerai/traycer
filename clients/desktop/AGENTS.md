@@ -115,6 +115,28 @@ failures.
   the deadline fallback, never the primary source. A tile must never be
   un-parked while any registered rect still intersects it, including across
   ownership handoff between two overlays - occlude before release, always.
+- **Login import** (`electron-main/browser-view/storage/login-import/`)
+  reads other browsers' cookie jars on this machine into the durable
+  `persist:traycer-browser` partition. Every reader is a pure function over
+  bytes plus an injected secret provider, so the suites run on fixtures and
+  never touch a keystore. Three rules are load-bearing: the SCAN never opens
+  a keystore (the only OS prompt fires on Import, after the dialog has said
+  which one); every failure is a RESULT VALUE with a closed reason, because
+  a rejected invoke's message reaches the WARN log and Sentry and a cookie,
+  a profile path, or a keychain's answer must never travel that way (the
+  service logs an errno code and a stage, nothing else); and the jar write
+  runs under `suppressAllBrowserPrimaryProfileDeltas` plus one coalescing
+  window, because the per-site removals would otherwise reach the host as
+  `removedKeys` and evict the site from every live session. Decrypted values
+  exist only between `importLogins` reading them and `cookies.set`
+  returning; SQLite snapshots live under a `0700` userData directory and are
+  unlinked the moment they are open on POSIX. `node:sqlite` is the reader:
+  it ships with Electron's Node and needs no native module, which is why the
+  "no Electron-native SQLite" rule below is about REBUILDS, not the builtin.
+  Because that suppression means no delta reaches a host on its own, the
+  import handler pushes the jar itself — `capturePrimaryProfileOnEveryHost()`
+  on the sessions registry, beside `forgetLoginsOnEveryHost()` and for the
+  same reason: a jar frame is main's to send, never a renderer's.
 - Never build `Tray` from `nativeImage.createEmpty()` (invisible tray).
 - No Electron-native SQLite / `better-sqlite3` rebuilds in this shell — host owns
   app-assets DB.

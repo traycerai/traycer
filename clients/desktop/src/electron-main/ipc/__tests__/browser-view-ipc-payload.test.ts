@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { parseReservedChords } from "../browser-view-ipc-payload";
+import {
+  browserViewIpcPayload,
+  parseReservedChords,
+} from "../browser-view-ipc-payload";
 
 /**
  * The guest-focused input policy arrives from the renderer, which may be newer
@@ -25,5 +28,39 @@ describe("parseReservedChords", () => {
   it("yields an empty policy for a payload that is not a chord list", () => {
     expect(parseReservedChords({ chords: "mod+w" })).toEqual([]);
     expect(parseReservedChords(null)).toEqual([]);
+  });
+});
+
+/**
+ * `includeDeviceBound` is required, not optional: a renderer built against an
+ * older protocol that omits it must be treated as malformed - the run handler
+ * answers a blocked result rather than silently defaulting the opt-in either
+ * way.
+ */
+describe("browserViewIpcPayload.loginImportRun", () => {
+  it("accepts a well-formed request with includeDeviceBound present", () => {
+    const parsed = browserViewIpcPayload.loginImportRun.safeParse({
+      sourceId: "opaque-id-1",
+      domains: ["example.com"],
+      includeDeviceBound: true,
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it("rejects a payload missing includeDeviceBound", () => {
+    const parsed = browserViewIpcPayload.loginImportRun.safeParse({
+      sourceId: "opaque-id-1",
+      domains: ["example.com"],
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("rejects includeDeviceBound of the wrong type", () => {
+    const parsed = browserViewIpcPayload.loginImportRun.safeParse({
+      sourceId: "opaque-id-1",
+      domains: ["example.com"],
+      includeDeviceBound: "true",
+    });
+    expect(parsed.success).toBe(false);
   });
 });

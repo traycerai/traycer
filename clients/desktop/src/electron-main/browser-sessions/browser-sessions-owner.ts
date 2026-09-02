@@ -313,6 +313,40 @@ export class BrowserSessionsRegistry {
     });
   }
 
+  /**
+   * Pushes the jar as it stands to every host this process holds a live stream
+   * to - once per host, for the same reason a forget is - and answers how many
+   * ACKED, not how many were written to.
+   *
+   * The login import is the caller. It writes the durable jar with the
+   * cookie-delta observer muted, so the coalesced deltas that carry an
+   * ordinary sign-in never fire for it and a host would otherwise not see the
+   * imported logins until it asked for a capture of its own.
+   *
+   * Hosts are pushed in parallel and a host's streams in order: one capture
+   * per host, and a second stream is only tried when the first could not send
+   * at all - the rule {@link sendOncePerHost} applies to a jar action frame.
+   * Never rejects, like every other capture path: a host that cannot take the
+   * jar is reported by not being counted.
+   */
+  async capturePrimaryProfileOnEveryHost(): Promise<number> {
+    const streamsByHost = new Map<string, BrowserSessionsStream[]>();
+    for (const stream of this.streams.values()) {
+      const forHost = streamsByHost.get(stream.hostId);
+      if (forHost === undefined) streamsByHost.set(stream.hostId, [stream]);
+      else forHost.push(stream);
+    }
+    const captured = await Promise.all(
+      [...streamsByHost.values()].map(async (streams) => {
+        for (const stream of streams) {
+          if (await stream.capturePrimaryProfileNow()) return true;
+        }
+        return false;
+      }),
+    );
+    return captured.filter((acked) => acked).length;
+  }
+
   dispose(): void {
     this.disposed = true;
     this.stopLocalHostChanges();
@@ -420,7 +454,10 @@ class BrowserSessionsStream {
   get holdsConnection(): boolean {
     return this.openedUserId !== null;
   }
-  private readonly captureAckWaiters = new Map<string, () => void>();
+  private readonly captureAckWaiters = new Map<
+    string,
+    (acked: boolean) => void
+  >();
 
   constructor(
     windowId: string,
@@ -636,16 +673,28 @@ class BrowserSessionsStream {
   }
 
   async captureFinalPrimaryProfile(): Promise<void> {
-    if (this.connectionStatus !== "open") return;
+    await this.capturePrimaryProfileNow();
+  }
+
+  /**
+   * One capture on this stream, answering whether the host ACKED it.
+   *
+   * `false` covers every way a host can fail to take the jar - the connection
+   * is not open, it holds no standing capture request, or it never acked
+   * within {@link FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS} - because to a
+   * caller reporting what was placed they are the same outcome.
+   */
+  async capturePrimaryProfileNow(): Promise<boolean> {
+    if (this.connectionStatus !== "open") return false;
     const requestId = this.standingCaptureRequestId;
     // No standing id means this host either never authorized the jar plane for
     // this connection or never unsealed the store, so a capture would be
     // refused and dropped there. Sending nothing is the same outcome without
     // the jar read.
-    if (requestId === null) return;
+    if (requestId === null) return false;
     const acked = this.awaitCaptureAck(requestId);
     await this.answerCaptureRequest(requestId);
-    await acked;
+    return await acked;
   }
 
   dispose(): void {
@@ -938,19 +987,24 @@ class BrowserSessionsStream {
     }
   }
 
-  private awaitCaptureAck(requestId: string): Promise<void> {
-    return new Promise<void>((resolve) => {
+  /**
+   * Resolves `true` only on a real ack from the host. A timeout, a connection
+   * that is not open, and a teardown all resolve `false`, so a caller counting
+   * what a host took cannot count a capture that merely left.
+   */
+  private awaitCaptureAck(requestId: string): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
       if (this.connectionStatus !== "open") {
-        resolve();
+        resolve(false);
         return;
       }
       const timer = setTimeout(() => {
         this.captureAckWaiters.delete(requestId);
-        resolve();
+        resolve(false);
       }, FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS);
-      this.captureAckWaiters.set(requestId, () => {
+      this.captureAckWaiters.set(requestId, (acked) => {
         clearTimeout(timer);
-        resolve();
+        resolve(acked);
       });
     });
   }
@@ -959,11 +1013,11 @@ class BrowserSessionsStream {
     const settle = this.captureAckWaiters.get(requestId);
     if (settle === undefined) return;
     this.captureAckWaiters.delete(requestId);
-    settle();
+    settle(true);
   }
 
   private resolveCaptureAckWaiters(): void {
-    for (const settle of [...this.captureAckWaiters.values()]) settle();
+    for (const settle of [...this.captureAckWaiters.values()]) settle(false);
     this.captureAckWaiters.clear();
   }
 

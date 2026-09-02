@@ -652,6 +652,94 @@ describe("the browser.sessions jar plane lives in main", () => {
     expect(second.framesOfKind("forgetLogins")).toHaveLength(0);
   });
 
+  it("pushes the imported jar once per host, and counts the host that acked", async () => {
+    const first = await openLiveStream(harness, registry, "window-1");
+    // The same host again: the jar is the user's whole slice there, so a
+    // second capture would read and send the identical jar twice.
+    const second = await openLiveStream(harness, registry, "window-2");
+    for (const session of [first, second]) {
+      session.emit(
+        {
+          kind: "capturePrimaryProfile",
+          hasBinaryPayload: false,
+          requestId: "standing-1",
+          standing: true,
+        },
+        null,
+      );
+    }
+
+    const pushed = registry.capturePrimaryProfileOnEveryHost();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(harness.jar.captures).toBe(1);
+    expect(first.framesOfKind("primaryProfileCaptured")).toHaveLength(1);
+    expect(second.framesOfKind("primaryProfileCaptured")).toHaveLength(0);
+    second.emit(
+      {
+        kind: "primaryProfileCaptureAck",
+        hasBinaryPayload: false,
+        requestId: "standing-1",
+      },
+      null,
+    );
+    first.emit(
+      {
+        kind: "primaryProfileCaptureAck",
+        hasBinaryPayload: false,
+        requestId: "standing-1",
+      },
+      null,
+    );
+
+    // One, not two: the ack that counts is the one from the stream the capture
+    // actually went out on, so the host cannot be counted twice by a sibling
+    // stream answering an id it was never sent.
+    expect(await pushed).toBe(1);
+  });
+
+  it("does not count a host the imported jar reached but that never acked it", async () => {
+    const session = await openLiveStream(harness, registry, "window-1");
+    session.emit(
+      {
+        kind: "capturePrimaryProfile",
+        hasBinaryPayload: false,
+        requestId: "standing-1",
+        standing: true,
+      },
+      null,
+    );
+
+    const pushed = registry.capturePrimaryProfileOnEveryHost();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    // The capture DID go out - this is not the "nothing was sent" case.
+    expect(session.framesOfKind("primaryProfileCaptured")).toHaveLength(1);
+    // The connection dies before the host answers, which is the honest form of
+    // an unanswered capture that needs no clock to reach.
+    session.emitStatus("reconnecting");
+
+    // Zero, not one: Done says how many hosts TOOK the jar, and a frame that
+    // left is not a host that has it.
+    expect(await pushed).toBe(0);
+  });
+
+  it("counts no host for an import push when none issued a standing capture request", async () => {
+    const session = await openLiveStream(harness, registry, "window-1");
+
+    const notified = await registry.capturePrimaryProfileOnEveryHost();
+
+    // Zero is the ordinary opportunistic outcome the Done step reports as
+    // "saved on this machine", not a failure - and the jar is never even read,
+    // because a capture answering no standing id would be refused there.
+    expect(notified).toBe(0);
+    expect(harness.jar.captures).toBe(0);
+    expect(session.framesOfKind("primaryProfileCaptured")).toHaveLength(0);
+  });
+
   it("relays a renderer's tab request onto the stream verbatim", async () => {
     const session = await openLiveStream(harness, registry, "window-1");
 

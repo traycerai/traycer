@@ -217,6 +217,11 @@ vi.mock("../../browser-view/browser-session", () => ({
   onBrowserViewDownloadChange: vi.fn(),
   readBrowserViewPendingCertificateError: vi.fn(() => null),
   registerBrowserViewWebContents: vi.fn(),
+  // The login-import service is built at registration and takes this as a
+  // dependency; nothing in this suite imports, so it only has to exist.
+  suppressAllBrowserPrimaryProfileDeltas: vi.fn(
+    (action: () => Promise<unknown>) => action(),
+  ),
 }));
 
 vi.mock("../../browser-view/storage/browser-saved-logins", () => ({

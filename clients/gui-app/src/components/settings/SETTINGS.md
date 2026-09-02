@@ -539,6 +539,44 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
       `persist:` jar on disk untouched - that is what Forget is for - so a
       confirm stands in front of it and turning it back on returns to the same
       logins. Nothing is copied in either direction.
+    - **Import logins from another browser** (`import-logins-dialog.tsx`) is
+      the row between the toggle and Forget-all. It opens a three-step dialog
+      over four desktop bridge calls: `listLoginImportSources` (Pick: the
+      browsers and profiles found on this machine, plus "Import from a
+      file…", whose native picker runs in main so the renderer never names a
+      path), `scanLoginImportSource` (Choose sites: a filterable checklist of
+      registrable domains with cookie counts, read from METADATA only so no
+      OS prompt fires yet), and `importLogins` (the one call that opens the
+      keychain / keyring and writes the durable jar). Google rows are listed
+      unchecked and disabled - Google binds sessions to the device (DBSC), so
+      a copied cookie can stop being a login at Google's next check - behind
+      an "Import Google logins anyway" switch that is off by default and
+      never remembered; turning it on moves them into the checklist ticked,
+      shows the warning beside the switch, and sends
+      `includeDeviceBound: true`, which is the only way the desktop honours
+      a Google domain. The dialog says which prompt the Import click will
+      raise before it does ("Allow, not Always Allow" on macOS). Windows'
+      app-bound (`v20`) cookies are reported under a banner
+      as protected, never silently dropped; the cookie-file path is the way
+      through there. The push to the hosts is MAIN's, like forget-all's
+      frames and for the same reason - a jar frame speaks for the user's
+      whole slice on a host, so a renderer may ask for one and may not send
+      one. `importLogins` writes the jar and then calls
+      `capturePrimaryProfileOnEveryHost()`, one whole-jar
+      `primaryProfileCaptured` per host with a live browser stream, and rides
+      the ack count back as `notifiedHosts`; `useLoginImportRun` is one call
+      with nothing to chain. Done reports "sent to N hosts" from that count -
+      never "saved", because a host acks a jar it may still drop. Zero live
+      streams is the documented opportunistic outcome, not a failure. The
+      capture is needed at all because the write mutes the delta observer, so
+      the coalesced deltas that carry an ordinary sign-in never fire for an
+      import. The row is disabled
+      with a hint when saving is off, since the import writes the durable
+      jar the tiles are not on then. Every failure is a result value with a
+      closed reason and one explainer (Full Disk Access deep-links to the
+      pane; "quit the browser fully" for a locked database); nothing retries
+      on its own, because a retry after a denied Keychain prompt is a second
+      prompt.
     - **Forget all browser logins** (destructive confirm) moved here from the
       tile shield popover, which was ticket 08's temporary home. It calls the
       bridge's `forgetLogins()` directly and so speaks for EVERY host the user has a live browser stream to; that is

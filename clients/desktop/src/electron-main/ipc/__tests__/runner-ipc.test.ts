@@ -782,6 +782,13 @@ describe("RunnerIpcBridge", () => {
           // H10: "Clear" on one Settings > Browser row. Main confirms and sends
           // the `clearSite` frames itself.
           RunnerHostInvoke.browserViewClearSavedLoginSite,
+          // Login import: list / pick-file / scan / run. Every one answers a
+          // result value; `run` is the one that opens a keystore and, like
+          // forget-all, pushes the jar to the hosts from main.
+          RunnerHostInvoke.browserViewLoginImportListSources,
+          RunnerHostInvoke.browserViewLoginImportPickFile,
+          RunnerHostInvoke.browserViewLoginImportScan,
+          RunnerHostInvoke.browserViewLoginImportRun,
           RunnerHostInvoke.pipCaptureStart,
           RunnerHostInvoke.pipCaptureStop,
           // Selection authority (D16 / P1.1), plus P1.3's fleet-refresh edge.

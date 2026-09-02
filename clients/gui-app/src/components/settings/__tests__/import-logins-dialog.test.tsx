@@ -1,0 +1,570 @@
+import "../../../../__tests__/test-browser-apis";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { ImportLoginsDialog } from "@/components/settings/import-logins-dialog";
+import { FakeBrowserViewBridge } from "@/lib/browser-view/__tests__/fake-browser-view-bridge";
+import type {
+  LoginImportBlocked,
+  LoginImportRequest,
+  LoginImportResult,
+  LoginImportScan,
+  LoginImportSource,
+} from "@traycer-clients/shared/platform/browser-view";
+
+/**
+ * Settings › Browser › Saved logins › "Import logins from another browser".
+ * Drives the three-step dialog against a bridge subclass so each step's
+ * bridge call (list / scan / import) is asserted at its own seam. The push to
+ * the hosts is main's and rides back on the import result, so what is asserted
+ * here is that the Done step reports the `notifiedHosts` it was handed.
+ */
+
+const FULL_DISK_ACCESS_PANE =
+  "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles";
+
+const openExternalMocks = vi.hoisted(() => ({ mutate: vi.fn() }));
+
+vi.mock("@/hooks/runner/use-open-external-link-mutation", () => ({
+  useRunnerOpenExternalLink: () => ({
+    mutate: openExternalMocks.mutate,
+    isPending: false,
+  }),
+}));
+
+class TestBridge extends FakeBrowserViewBridge {
+  sources: readonly LoginImportSource[] = [];
+  scanBySourceId = new Map<string, LoginImportScan>();
+  importResult: LoginImportResult = {
+    status: "imported",
+    importedSites: 0,
+    importedCookies: 0,
+    replacedSites: 0,
+    skippedInvalid: 0,
+    notifiedHosts: 0,
+  };
+  readonly importCalls: LoginImportRequest[] = [];
+
+  override listLoginImportSources(): Promise<readonly LoginImportSource[]> {
+    return Promise.resolve(this.sources);
+  }
+
+  override scanLoginImportSource(sourceId: string): Promise<LoginImportScan> {
+    const scan = this.scanBySourceId.get(sourceId);
+    if (scan === undefined) {
+      throw new Error(`no scan configured for ${sourceId}`);
+    }
+    return Promise.resolve(scan);
+  }
+
+  override importLogins(input: LoginImportRequest): Promise<LoginImportResult> {
+    this.importCalls.push(input);
+    return Promise.resolve(this.importResult);
+  }
+}
+
+function source(overrides: Partial<LoginImportSource>): LoginImportSource {
+  return {
+    id: "source-1",
+    browser: "chrome",
+    profileLabel: "Default",
+    lastUsedAt: null,
+    ...overrides,
+  };
+}
+
+function scan(overrides: Partial<LoginImportScan>): LoginImportScan {
+  return {
+    sourceId: "source-1",
+    sites: [],
+    excluded: [],
+    protectedCookieCount: 0,
+    partitionedCookieCount: 0,
+    unlock: null,
+    blocked: null,
+    ...overrides,
+  };
+}
+
+function renderDialog(bridge: TestBridge): {
+  readonly onOpenChange: ReturnType<typeof vi.fn>;
+} {
+  const onOpenChange = vi.fn();
+  const client = new QueryClient();
+  render(
+    <QueryClientProvider client={client}>
+      <ImportLoginsDialog
+        open
+        onOpenChange={onOpenChange}
+        browserView={bridge}
+      />
+    </QueryClientProvider>,
+  );
+  return { onOpenChange };
+}
+
+async function pickSource(name: RegExp | string): Promise<void> {
+  const button = await screen.findByRole("button", { name });
+  fireEvent.click(button);
+}
+
+function importConfirmButton(): HTMLElement {
+  return screen.getByTestId("import-logins-confirm");
+}
+
+afterEach(() => {
+  cleanup();
+  openExternalMocks.mutate.mockReset();
+});
+
+describe("<ImportLoginsDialog /> pick step", () => {
+  it("lists sources with last-used copy and an import-from-file entry", async () => {
+    const bridge = new TestBridge();
+    bridge.sources = [
+      source({
+        id: "source-1",
+        browser: "chrome",
+        profileLabel: "Default",
+        lastUsedAt: Date.now() - 60 * 60 * 1000,
+      }),
+    ];
+    renderDialog(bridge);
+
+    await waitFor(() => {
+      expect(screen.getByText("Google Chrome")).not.toBeNull();
+    });
+    expect(screen.getByText("Default")).not.toBeNull();
+    expect(screen.getByText("1h ago")).not.toBeNull();
+    expect(
+      screen.getByRole("button", { name: /Import from a file…/ }),
+    ).not.toBeNull();
+  });
+});
+
+describe("<ImportLoginsDialog /> choose-sites step", () => {
+  it("lists a checklist of registrable domains with counts, all checked by default", async () => {
+    const bridge = new TestBridge();
+    bridge.sources = [source({})];
+    bridge.scanBySourceId.set(
+      "source-1",
+      scan({
+        sites: [
+          { domain: "example.com", cookieCount: 3 },
+          { domain: "example.org", cookieCount: 1 },
+        ],
+      }),
+    );
+    renderDialog(bridge);
+    await pickSource(/Google Chrome/);
+
+    await waitFor(() => {
+      expect(screen.getByText("example.com")).not.toBeNull();
+    });
+    expect(screen.getByText("example.org")).not.toBeNull();
+    expect(screen.getByText("3 cookies")).not.toBeNull();
+    expect(screen.getByText("1 cookie")).not.toBeNull();
+    const first = screen.getByRole("checkbox", {
+      name: "Import logins for example.com",
+    });
+    const second = screen.getByRole("checkbox", {
+      name: "Import logins for example.org",
+    });
+    expect(first.getAttribute("data-state")).toBe("checked");
+    expect(second.getAttribute("data-state")).toBe("checked");
+    expect(screen.getByText("2 of 2 sites selected")).not.toBeNull();
+  });
+
+  it("disables and unchecks Google's excluded rows, with the opt-in switch off and no alert", async () => {
+    const bridge = new TestBridge();
+    bridge.sources = [source({})];
+    bridge.scanBySourceId.set(
+      "source-1",
+      scan({
+        sites: [{ domain: "example.com", cookieCount: 2 }],
+        excluded: [
+          {
+            domain: "google.com",
+            cookieCount: 5,
+            reason: "google-device-bound",
+          },
+        ],
+      }),
+    );
+    renderDialog(bridge);
+    await pickSource(/Google Chrome/);
+
+    const excludedCheckbox = await screen.findByRole("checkbox", {
+      name: "google.com can't be imported",
+    });
+    expect(excludedCheckbox.getAttribute("data-state")).toBe("unchecked");
+    expect(excludedCheckbox.hasAttribute("disabled")).toBe(true);
+    expect(
+      screen.getByText(
+        "Google accounts are left out: Google binds sign-ins to the device they were made on. Sign in to Google inside Traycer once, or import them anyway and accept that they can stop working.",
+      ),
+    ).not.toBeNull();
+    const optIn = screen.getByRole("switch", {
+      name: "Import Google logins anyway",
+    });
+    expect(optIn.getAttribute("aria-checked")).toBe("false");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("has no opt-in switch when the scan lists no excluded rows", async () => {
+    const bridge = new TestBridge();
+    bridge.sources = [source({})];
+    bridge.scanBySourceId.set(
+      "source-1",
+      scan({ sites: [{ domain: "example.com", cookieCount: 1 }] }),
+    );
+    renderDialog(bridge);
+    await pickSource(/Google Chrome/);
+
+    await screen.findByText("example.com");
+    expect(
+      screen.queryByRole("switch", { name: "Import Google logins anyway" }),
+    ).toBeNull();
+  });
+
+  it("toggling the opt-in on shows the warning, ticks google.com in the checklist, and updates the count", async () => {
+    const bridge = new TestBridge();
+    bridge.sources = [source({})];
+    bridge.scanBySourceId.set(
+      "source-1",
+      scan({
+        sites: [{ domain: "example.com", cookieCount: 2 }],
+        excluded: [
+          {
+            domain: "google.com",
+            cookieCount: 5,
+            reason: "google-device-bound",
+          },
+        ],
+      }),
+    );
+    renderDialog(bridge);
+    await pickSource(/Google Chrome/);
+
+    await screen.findByText("example.com");
+    expect(screen.getByText("1 of 1 sites selected")).not.toBeNull();
+    const optIn = screen.getByRole("switch", {
+      name: "Import Google logins anyway",
+    });
+
+    fireEvent.click(optIn);
+
+    expect(optIn.getAttribute("aria-checked")).toBe("true");
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain(
+      "Google binds sign-ins to the device they were made on.",
+    );
+    expect(
+      screen.queryByRole("checkbox", { name: "google.com can't be imported" }),
+    ).toBeNull();
+    const googleCheckbox = screen.getByRole("checkbox", {
+      name: "Import logins for google.com",
+    });
+    expect(googleCheckbox.getAttribute("data-state")).toBe("checked");
+    expect(screen.getByText("device-bound · 5 cookies")).not.toBeNull();
+    expect(screen.getByText("2 of 2 sites selected")).not.toBeNull();
+
+    fireEvent.click(optIn);
+
+    expect(optIn.getAttribute("aria-checked")).toBe("false");
+    expect(screen.getByText("1 of 1 sites selected")).not.toBeNull();
+    expect(
+      screen.getByRole("checkbox", { name: "google.com can't be imported" }),
+    ).not.toBeNull();
+  });
+
+  it("shows the protected-cookie banner when protectedCookieCount > 0", async () => {
+    const bridge = new TestBridge();
+    bridge.sources = [source({})];
+    bridge.scanBySourceId.set(
+      "source-1",
+      scan({
+        sites: [{ domain: "example.com", cookieCount: 1 }],
+        protectedCookieCount: 2,
+      }),
+    );
+    renderDialog(bridge);
+    await pickSource(/Google Chrome/);
+
+    const banner = await screen.findByRole("alert");
+    expect(banner.textContent).toContain(
+      "2 logins are protected by the browser on Windows and can't be imported.",
+    );
+  });
+
+  it("renders the needs-full-disk-access explainer, whose button opens the exact Full Disk Access URL", async () => {
+    const bridge = new TestBridge();
+    bridge.sources = [source({})];
+    bridge.scanBySourceId.set(
+      "source-1",
+      scan({ blocked: "needs-full-disk-access" }),
+    );
+    renderDialog(bridge);
+    await pickSource(/Google Chrome/);
+
+    const openButton = await screen.findByRole("button", {
+      name: "Open Full Disk Access settings",
+    });
+    fireEvent.click(openButton);
+
+    expect(openExternalMocks.mutate).toHaveBeenCalledExactlyOnceWith(
+      FULL_DISK_ACCESS_PANE,
+    );
+  });
+
+  it.each<LoginImportBlocked>([
+    "keyring-unavailable",
+    "browser-locked",
+    "unreadable",
+  ])("renders the %s explainer and a Try again affordance", async (reason) => {
+    const bridge = new TestBridge();
+    bridge.sources = [source({})];
+    bridge.scanBySourceId.set("source-1", scan({ blocked: reason }));
+    renderDialog(bridge);
+    await pickSource(/Google Chrome/);
+
+    await screen.findByRole("alert");
+    expect(screen.getByRole("button", { name: "Try again" })).not.toBeNull();
+  });
+
+  it("renders the macOS-keychain unlock hint when unlock is macos-keychain", async () => {
+    const bridge = new TestBridge();
+    bridge.sources = [source({ browser: "chrome" })];
+    bridge.scanBySourceId.set(
+      "source-1",
+      scan({
+        sites: [{ domain: "example.com", cookieCount: 1 }],
+        unlock: "macos-keychain",
+      }),
+    );
+    renderDialog(bridge);
+    await pickSource(/Google Chrome/);
+
+    const hint = await screen.findByRole("note");
+    expect(hint.textContent).toContain(
+      'macOS will ask whether "security" may read Google Chrome\'s key from your keychain. Click Allow, not Always Allow.',
+    );
+  });
+
+  it("disables the Import button with 0 sites selected", async () => {
+    const bridge = new TestBridge();
+    bridge.sources = [source({})];
+    bridge.scanBySourceId.set(
+      "source-1",
+      scan({ sites: [{ domain: "example.com", cookieCount: 1 }] }),
+    );
+    renderDialog(bridge);
+    await pickSource(/Google Chrome/);
+
+    await screen.findByText("example.com");
+    fireEvent.click(screen.getByRole("button", { name: "Select none" }));
+
+    expect(importConfirmButton().hasAttribute("disabled")).toBe(true);
+  });
+});
+
+describe("<ImportLoginsDialog /> import", () => {
+  it("sends exactly the currently-checked domains", async () => {
+    const bridge = new TestBridge();
+    bridge.sources = [source({})];
+    bridge.scanBySourceId.set(
+      "source-1",
+      scan({
+        sites: [
+          { domain: "example.com", cookieCount: 1 },
+          { domain: "example.org", cookieCount: 1 },
+        ],
+      }),
+    );
+    renderDialog(bridge);
+    await pickSource(/Google Chrome/);
+
+    await screen.findByText("example.com");
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Import logins for example.org" }),
+    );
+    fireEvent.click(importConfirmButton());
+
+    await waitFor(() => {
+      expect(bridge.importCalls).toHaveLength(1);
+    });
+    expect(bridge.importCalls[0]).toEqual({
+      sourceId: "source-1",
+      domains: ["example.com"],
+      includeDeviceBound: false,
+    });
+  });
+
+  it("sends includeDeviceBound: true and the google domain when the opt-in is on", async () => {
+    const bridge = new TestBridge();
+    bridge.sources = [source({})];
+    bridge.scanBySourceId.set(
+      "source-1",
+      scan({
+        sites: [{ domain: "example.com", cookieCount: 1 }],
+        excluded: [
+          {
+            domain: "google.com",
+            cookieCount: 3,
+            reason: "google-device-bound",
+          },
+        ],
+      }),
+    );
+    renderDialog(bridge);
+    await pickSource(/Google Chrome/);
+
+    await screen.findByText("example.com");
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Import Google logins anyway" }),
+    );
+    await screen.findByRole("checkbox", {
+      name: "Import logins for google.com",
+    });
+    fireEvent.click(importConfirmButton());
+
+    await waitFor(() => {
+      expect(bridge.importCalls).toHaveLength(1);
+    });
+    expect(bridge.importCalls[0]).toEqual({
+      sourceId: "source-1",
+      domains: ["example.com", "google.com"],
+      includeDeviceBound: true,
+    });
+  });
+
+  it("sends includeDeviceBound: false and no google domain when the opt-in is toggled on then off again before importing", async () => {
+    const bridge = new TestBridge();
+    bridge.sources = [source({})];
+    bridge.scanBySourceId.set(
+      "source-1",
+      scan({
+        sites: [{ domain: "example.com", cookieCount: 1 }],
+        excluded: [
+          {
+            domain: "google.com",
+            cookieCount: 3,
+            reason: "google-device-bound",
+          },
+        ],
+      }),
+    );
+    renderDialog(bridge);
+    await pickSource(/Google Chrome/);
+
+    await screen.findByText("example.com");
+    const optIn = screen.getByRole("switch", {
+      name: "Import Google logins anyway",
+    });
+    fireEvent.click(optIn);
+    await screen.findByRole("checkbox", {
+      name: "Import logins for google.com",
+    });
+    fireEvent.click(optIn);
+    await waitFor(() => {
+      expect(
+        screen.getByRole("checkbox", { name: "google.com can't be imported" }),
+      ).not.toBeNull();
+    });
+    fireEvent.click(importConfirmButton());
+
+    await waitFor(() => {
+      expect(bridge.importCalls).toHaveLength(1);
+    });
+    expect(bridge.importCalls[0]).toEqual({
+      sourceId: "source-1",
+      domains: ["example.com"],
+      includeDeviceBound: false,
+    });
+  });
+
+  it("pushes once on a successful import and shows the sent/saved copy on Done", async () => {
+    const bridge = new TestBridge();
+    bridge.sources = [source({})];
+    bridge.scanBySourceId.set(
+      "source-1",
+      scan({ sites: [{ domain: "example.com", cookieCount: 2 }] }),
+    );
+    bridge.importResult = {
+      status: "imported",
+      importedSites: 1,
+      importedCookies: 2,
+      replacedSites: 0,
+      skippedInvalid: 0,
+      notifiedHosts: 2,
+    };
+    renderDialog(bridge);
+    await pickSource(/Google Chrome/);
+
+    await screen.findByText("example.com");
+    fireEvent.click(importConfirmButton());
+
+    await screen.findByText("Logins imported");
+    expect(bridge.importCalls).toHaveLength(1);
+    expect(
+      screen.getByText("Signed in to 1 site on this machine (2 cookies)."),
+    ).not.toBeNull();
+    expect(
+      screen.getByText(
+        "Sent to 2 hosts. Hosts apply it when they next open a browser session.",
+      ),
+    ).not.toBeNull();
+  });
+
+  it("shows the saved-on-this-machine copy when nothing was pushed", async () => {
+    const bridge = new TestBridge();
+    bridge.sources = [source({})];
+    bridge.scanBySourceId.set(
+      "source-1",
+      scan({ sites: [{ domain: "example.com", cookieCount: 1 }] }),
+    );
+    bridge.importResult = {
+      status: "imported",
+      importedSites: 1,
+      importedCookies: 1,
+      replacedSites: 0,
+      skippedInvalid: 0,
+      notifiedHosts: 0,
+    };
+    renderDialog(bridge);
+    await pickSource(/Google Chrome/);
+
+    await screen.findByText("example.com");
+    fireEvent.click(importConfirmButton());
+
+    await screen.findByText("Logins imported");
+    expect(
+      screen.getByText(
+        "Saved on this machine. Hosts pick it up at the next capture.",
+      ),
+    ).not.toBeNull();
+  });
+
+  it("renders a Try again affordance for a blocked import result", async () => {
+    const bridge = new TestBridge();
+    bridge.sources = [source({})];
+    bridge.scanBySourceId.set(
+      "source-1",
+      scan({ sites: [{ domain: "example.com", cookieCount: 1 }] }),
+    );
+    bridge.importResult = { status: "blocked", reason: "browser-locked" };
+    renderDialog(bridge);
+    await pickSource(/Google Chrome/);
+
+    await screen.findByText("example.com");
+    fireEvent.click(importConfirmButton());
+
+    await screen.findByText("Nothing was imported");
+    expect(screen.getByRole("button", { name: "Try again" })).not.toBeNull();
+  });
+});

@@ -229,6 +229,135 @@ export interface BrowserViewSnapshotInvalidatedChange extends BrowserViewTileKey
   readonly reason: string;
 }
 
+/**
+ * Which browser a login-import source was read from. `file` is a cookie
+ * export the user picked (Netscape `cookies.txt`, Cookie-Editor JSON, or a
+ * Playwright storage state).
+ */
+export type LoginImportBrowser =
+  | "chrome"
+  | "chromium"
+  | "edge"
+  | "brave"
+  | "arc"
+  | "vivaldi"
+  | "opera"
+  | "firefox"
+  | "safari"
+  | "file";
+
+/**
+ * One importable cookie jar on this machine. `id` is opaque and derived from
+ * the source's location: the renderer never learns a filesystem path, and can
+ * only name a source the desktop listed for it. It survives a re-listing, so a
+ * scan taken in one settings window is still valid after another lists the
+ * sources, and it changes the moment the underlying jar moves - which is
+ * exactly when an earlier scan must not be trusted.
+ */
+export interface LoginImportSource {
+  readonly id: string;
+  readonly browser: LoginImportBrowser;
+  /** "Default", "Work", a Firefox profile name, or the picked file's name. */
+  readonly profileLabel: string;
+  /** When the jar was last written, or null when the desktop cannot tell. */
+  readonly lastUsedAt: number | null;
+}
+
+/**
+ * Why a source cannot be read at all. Every value is a state the dialog can
+ * explain and the user can act on; none carries a message from the OS.
+ */
+export type LoginImportBlocked =
+  | "keyring-unavailable"
+  | "needs-full-disk-access"
+  | "browser-locked"
+  | "unreadable";
+
+/**
+ * The OS credential store the Import click will touch for this source. Known
+ * from the scan without touching it: the cookie rows' encryption prefix says
+ * which key they need. `null` when nothing in the selection is encrypted.
+ */
+export type LoginImportUnlock =
+  | "macos-keychain"
+  | "linux-keyring"
+  | "windows-dpapi";
+
+export interface LoginImportSite {
+  /** Registrable domain (eTLD+1); never a cookie name, never a value. */
+  readonly domain: string;
+  readonly cookieCount: number;
+}
+
+export interface LoginImportExcludedSite {
+  readonly domain: string;
+  readonly cookieCount: number;
+  readonly reason: "google-device-bound";
+}
+
+/**
+ * What a source holds, read from metadata only: no keystore is opened and no
+ * value is decrypted, so a scan never prompts. Counts are honest by
+ * construction - a cookie the import cannot bring over is reported under the
+ * reason it cannot, never dropped from the arithmetic.
+ */
+export interface LoginImportScan {
+  readonly sourceId: string;
+  readonly sites: readonly LoginImportSite[];
+  readonly excluded: readonly LoginImportExcludedSite[];
+  /** Windows App-Bound-Encryption rows (`v20`), which no app can decrypt. */
+  readonly protectedCookieCount: number;
+  /**
+   * CHIPS / container cookies, which have no unpartitioned home in the jar.
+   */
+  readonly partitionedCookieCount: number;
+  readonly unlock: LoginImportUnlock | null;
+  readonly blocked: LoginImportBlocked | null;
+}
+
+export interface LoginImportRequest {
+  readonly sourceId: string;
+  /**
+   * Registrable domains from the scan's `sites` - and, only with
+   * `includeDeviceBound`, from its `excluded`; anything else is ignored.
+   */
+  readonly domains: readonly string[];
+  /**
+   * The user's explicit opt-in to the scan's `excluded` (Google) sites.
+   * Google binds its sessions to the device, so an imported one can end on
+   * its own; the dialog says so beside the toggle, and the desktop honours a
+   * Google domain only when this is true.
+   */
+  readonly includeDeviceBound: boolean;
+}
+
+export type LoginImportResult =
+  | {
+      readonly status: "imported";
+      readonly importedSites: number;
+      readonly importedCookies: number;
+      /**
+       * Chosen sites the jar already held cookies for, now replaced.
+       */
+      readonly replacedSites: number;
+      /** Cookies the source held for a chosen site that could not be written. */
+      readonly skippedInvalid: number;
+      /**
+       * Hosts that acked the jar main pushed after the write, counted once per
+       * host. Zero is an ordinary outcome (no host has a live stream yet), not
+       * a failure: the import is on this machine either way, and the next
+       * capture carries it.
+       */
+      readonly notifiedHosts: number;
+    }
+  | {
+      readonly status: "blocked";
+      readonly reason:
+        | LoginImportBlocked
+        | "keychain-denied"
+        | "saved-logins-off";
+    };
+
 export type BrowserViewConsoleLevel =
   | "log"
   | "info"
@@ -505,6 +634,33 @@ export interface BrowserViewBridge {
    * confirmed.
    */
   clearSavedLoginSite(domain: string): Promise<boolean>;
+  /**
+   * Import logins from another browser on this machine, in three calls that
+   * mirror the dialog's steps. `listLoginImportSources` discovers installed
+   * browsers and profiles; `pickLoginImportFile` opens the native file dialog
+   * from main so the renderer never names a path; `scanLoginImportSource`
+   * reads metadata only and never prompts; `importLogins` is the one call
+   * that opens the OS credential store, decrypts, and writes the durable
+   * `primary` jar with the cookie-delta observer muted. None of the four ever
+   * rejects: every failure is a result value, because a rejected invoke's
+   * message is logged and reported and a cookie must never travel that way.
+   */
+  listLoginImportSources(): Promise<readonly LoginImportSource[]>;
+  /** Null when no file was picked: the user cancelled, or the dialog could not open. */
+  pickLoginImportFile(): Promise<LoginImportSource | null>;
+  scanLoginImportSource(sourceId: string): Promise<LoginImportScan>;
+  /**
+   * Only domains the LAST successful scan of that source listed under `sites`
+   * are honoured (its `excluded` Google sites too, only with
+   * `includeDeviceBound`); anything else is dropped in main, and a source
+   * with no scan on record is refused. The user chooses from what they were
+   * shown.
+   *
+   * The push to the hosts is main's, like every other jar action: the write
+   * runs with the delta observer muted, so nothing would reach a host on its
+   * own, and `notifiedHosts` reports what main's capture actually placed.
+   */
+  importLogins(input: LoginImportRequest): Promise<LoginImportResult>;
   onFindChange(handler: (change: BrowserViewFindChange) => void): {
     dispose: () => void;
   };
