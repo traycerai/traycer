@@ -950,6 +950,138 @@ describe("the browser.sessions jar plane lives in main", () => {
     }
   });
 
+  it("a late ack for a timed-out frame does not satisfy the next capture", async () => {
+    vi.useFakeTimers();
+    try {
+      const session = await openLiveStream(harness, registry, "window-1");
+      session.emit(
+        {
+          kind: "capturePrimaryProfile",
+          hasBinaryPayload: false,
+          requestId: "standing-1",
+          standing: true,
+        },
+        null,
+      );
+
+      // The first capture's frame leaves and is never acked - it times out.
+      const firstPushed = registry.capturePrimaryProfileOnEveryHost();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(session.framesOfKind("primaryProfileCaptured")).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS);
+      expect(await firstPushed).toBe(0);
+
+      // A second capture on the SAME standing id: its frame leaves too, so
+      // there are now two frames outstanding under "standing-1" - the timed
+      // out one (settled, but still queued to absorb its own late ack) and
+      // this live one.
+      const secondPushed = registry.capturePrimaryProfileOnEveryHost();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(session.framesOfKind("primaryProfileCaptured")).toHaveLength(2);
+
+      let secondSettled = false;
+      void secondPushed.then(() => {
+        secondSettled = true;
+      });
+
+      // One ack: absorbed by the OLDEST slot, the already timed-out first
+      // frame's - not by the live second one.
+      session.emit(
+        {
+          kind: "primaryProfileCaptureAck",
+          hasBinaryPayload: false,
+          requestId: "standing-1",
+        },
+        null,
+      );
+      for (let tick = 0; tick < 8; tick += 1) {
+        await Promise.resolve();
+      }
+      expect(secondSettled).toBe(false);
+
+      // A second ack now reaches the second capture's own slot.
+      session.emit(
+        {
+          kind: "primaryProfileCaptureAck",
+          hasBinaryPayload: false,
+          requestId: "standing-1",
+        },
+        null,
+      );
+
+      expect(await secondPushed).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("an ack absorbed by a timed-out frame before the next frame leaves is not counted either", async () => {
+    vi.useFakeTimers();
+    try {
+      const session = await openLiveStream(harness, registry, "window-1");
+      session.emit(
+        {
+          kind: "capturePrimaryProfile",
+          hasBinaryPayload: false,
+          requestId: "standing-1",
+          standing: true,
+        },
+        null,
+      );
+
+      // The first capture's frame leaves and is never acked - it times out.
+      const firstPushed = registry.capturePrimaryProfileOnEveryHost();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(session.framesOfKind("primaryProfileCaptured")).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS);
+      expect(await firstPushed).toBe(0);
+
+      // The second capture's jar read is held open, so its frame has not
+      // left yet - no ack waiter for it exists.
+      harness.jar.deferCaptures = true;
+      const secondPushed = registry.capturePrimaryProfileOnEveryHost();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(harness.jar.captures).toBe(2);
+      expect(session.framesOfKind("primaryProfileCaptured")).toHaveLength(1);
+
+      // The ack arrives now, while only the timed-out first frame's slot is
+      // queued - it is absorbed there, harmlessly.
+      session.emit(
+        {
+          kind: "primaryProfileCaptureAck",
+          hasBinaryPayload: false,
+          requestId: "standing-1",
+        },
+        null,
+      );
+
+      // The jar read finishes and the second frame leaves, registering its
+      // OWN ack waiter fresh.
+      harness.jar.resolvePendingCapture();
+      for (let tick = 0; tick < 8; tick += 1) {
+        await Promise.resolve();
+      }
+      expect(session.framesOfKind("primaryProfileCaptured")).toHaveLength(2);
+
+      // No further ack arrives for the second frame - its own budget runs
+      // out and it is unacked, not satisfied by the ack absorbed earlier.
+      await vi.advanceTimersByTimeAsync(FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS);
+      expect(await secondPushed).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("a jar read that throws answers a closed reason and logs the cause, never the raw path", async () => {
     const session = await openLiveStream(harness, registry, "window-1");
     harness.jar.failNextCapture = new Error("EACCES /Users/x/Library/Cookies");

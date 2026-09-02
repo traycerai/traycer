@@ -4,7 +4,7 @@ import {
   randomBytes,
   randomUUID,
 } from "node:crypto";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
@@ -37,6 +37,7 @@ import type { SecretReadResult } from "../secret-providers/secret-read-result";
 import type { BrowserCookieKey } from "@traycer/protocol/host/browser/contracts";
 import type { LoginImportScan } from "@traycer-clients/shared/platform/browser-view";
 import { matchesDomainFilter } from "../../__tests__/cookie-jar-fixture";
+import { MAX_LOGIN_IMPORT_FILE_BYTES } from "../bounded-file";
 
 /**
  * `LoginImportService` orchestration suite. Every dependency is faked: no
@@ -297,6 +298,7 @@ class FakeLoginImportSession implements LoginImportJarSession {
     string,
     { readonly allowed: number; calls: number }
   >();
+  private readonly rejectRemoveNames = new Set<string>();
 
   constructor(initial: readonly Cookie[]) {
     this.jar.push(...initial);
@@ -334,6 +336,14 @@ class FakeLoginImportSession implements LoginImportJarSession {
       allowed: successfulCalls,
       calls: 0,
     });
+  }
+
+  /** Rejects `cookies.remove` for this name: the call throws and the jar is
+   * left untouched, as if the OS removal never completed - unlike
+   * `writeSite`'s recovery passes, which only see a name after its removal
+   * was ATTEMPTED (see `removedNames`), whether or not it actually took. */
+  rejectRemove(name: string): void {
+    this.rejectRemoveNames.add(name);
   }
 
   readonly cookies: LoginImportJarCookies = {
@@ -395,6 +405,9 @@ class FakeLoginImportSession implements LoginImportJarSession {
       return Promise.resolve();
     },
     remove: (url: string, name: string): Promise<void> => {
+      if (this.rejectRemoveNames.has(name)) {
+        return Promise.reject(new Error("cookies.remove rejected"));
+      }
       // Electron removes by {url, name}, which is WIDER than one cookie:
       // every cookie of that name whose domain matches the URL's host is
       // caught, not just the first one found - a domain cookie and a
@@ -3216,5 +3229,311 @@ describe("import - a localStorage clear that fails leaves the site's cookies who
     expect(releaseHostOwnedKeys).toHaveBeenCalledWith([
       { domain: ".clear-fails.com", name: "fresh", path: "/" },
     ]);
+  });
+});
+
+// =================================================================================
+// 25. The saved-logins pref is re-read as the FIRST thing inside the barrier,
+//     before the source is ever opened.
+// =================================================================================
+
+describe("import - the saved-logins pref is re-checked inside the barrier, before the source is read", () => {
+  // Pins: `readSaveLogins` is the first thing `serializeJarWrite`'s action
+  // does. Flipping it false only once the barrier is entered - never before,
+  // so the outer pre-barrier check and `confirmImport` both still see it on -
+  // means a source that cannot be read is never even opened: the pref wins
+  // before any read is attempted. Under the pre-fix code (the source read
+  // outside the barrier, before it was ever called) this same corrupted
+  // source would fail the read first, answering "unreadable" with
+  // `serializeJarWrite` never called at all - not "saved-logins-off" with it
+  // called exactly once.
+  it("reads the source inside the barrier, after the confirmation", async () => {
+    const homeDir = await makeTempDir("login-import-barrier-pref-order-");
+    const cookiesPath = await createDarwinChromeSource(
+      homeDir,
+      [
+        domainCookieRow(".pref-order-site.com", "sid", {
+          kind: "plain",
+          value: "v",
+        }),
+      ],
+      23,
+    );
+    const session = new FakeLoginImportSession([]);
+    let saveLoginsOn = true;
+    let serializeJarWriteCalls = 0;
+    const { service, confirmations } = buildHarness(
+      {
+        platform: "darwin",
+        homeDir,
+        snapshotRoot: await makeTempDir("snap-"),
+        readSaveLogins: () => saveLoginsOn,
+        serializeJarWrite: async <T>(
+          action: (signal: AbortSignal) => Promise<T>,
+        ): Promise<T> => {
+          serializeJarWriteCalls += 1;
+          saveLoginsOn = false;
+          return action(new AbortController().signal);
+        },
+      },
+      session,
+    );
+    const { sourceId, scan } = await scanChromeSource(service);
+    expect(scan.sites).toEqual([
+      { domain: "pref-order-site.com", cookieCount: 1, unlock: null },
+    ]);
+    // Corrupted AFTER the scan: if the pref check inside the barrier did not
+    // run before the read, this read would surface as "unreadable" instead.
+    await writeFile(cookiesPath, "not a sqlite database");
+
+    const result = await service.import({
+      sourceId,
+      scanId: scan.scanId,
+      domains: ["pref-order-site.com"],
+      includeDeviceBound: false,
+    });
+
+    expect(result).toEqual({ status: "blocked", reason: "saved-logins-off" });
+    expect(confirmations.length).toBe(1);
+    expect(serializeJarWriteCalls).toBe(1);
+  });
+});
+
+// =================================================================================
+// 26. A source that cannot be read is discovered from INSIDE the barrier
+// =================================================================================
+
+describe("import - a source that cannot be read answers blocked from inside the barrier", () => {
+  it("a source that cannot be read answers blocked from inside the barrier", async () => {
+    const homeDir = await makeTempDir("login-import-barrier-read-fails-");
+    const cookiesPath = await createDarwinChromeSource(
+      homeDir,
+      [
+        domainCookieRow(".barrier-read-fails.com", "sid", {
+          kind: "plain",
+          value: "v",
+        }),
+      ],
+      23,
+    );
+    const session = new FakeLoginImportSession([]);
+    let serializeJarWriteCalls = 0;
+    const { service } = buildHarness(
+      {
+        platform: "darwin",
+        homeDir,
+        snapshotRoot: await makeTempDir("snap-"),
+        serializeJarWrite: async <T>(
+          action: (signal: AbortSignal) => Promise<T>,
+        ): Promise<T> => {
+          serializeJarWriteCalls += 1;
+          return action(new AbortController().signal);
+        },
+      },
+      session,
+    );
+    const { sourceId, scan } = await scanChromeSource(service);
+
+    // Corrupted after the scan, so the IMPORT's read is the one that fails.
+    await writeFile(cookiesPath, "not a sqlite database");
+
+    const result = await service.import({
+      sourceId,
+      scanId: scan.scanId,
+      domains: ["barrier-read-fails.com"],
+      includeDeviceBound: false,
+    });
+
+    expect(result).toEqual({ status: "blocked", reason: "unreadable" });
+    // The barrier was entered even though the read inside it failed. Under
+    // the pre-fix code (read outside the barrier) this would never be
+    // called at all - the failed read would have answered "unreadable"
+    // before `serializeJarWrite` was ever reached.
+    expect(serializeJarWriteCalls).toBe(1);
+  });
+});
+
+// =================================================================================
+// 27. A failed stale-cookie removal no longer skips the recovery passes
+// =================================================================================
+
+describe("import - a failed stale-cookie removal still runs the recovery passes", () => {
+  it("rewrites the imported cookie and restores the kept one when a later stale removal rejects", async () => {
+    const homeDir = await makeTempDir("login-import-stale-removal-fails-");
+    await createDarwinChromeSource(
+      homeDir,
+      [
+        domainCookieRow(".stale-removal-fails.com", "sid", {
+          kind: "plain",
+          value: "new-sid-value",
+        }),
+      ],
+      23,
+    );
+    const session = new FakeLoginImportSession([
+      // A stale "sid" at an UNCARRIED scope (host-only): the source carries
+      // "sid" as a domain cookie, a different key, so this one is genuinely
+      // stale and due for removal - but Electron's {url, name} removal is
+      // wider than one cookie and also catches the just-written domain
+      // "sid".
+      cookieFixture("sid", "stale-removal-fails.com"),
+      // A second, unrelated stale cookie the source does not carry at all.
+      cookieFixture("other", ".stale-removal-fails.com"),
+    ]);
+    // The "other" removal rejects; the fake jar leaves it in place, as if
+    // the OS removal never completed.
+    session.rejectRemove("other");
+    const releaseHostOwnedKeys = vi.fn(async (): Promise<void> => undefined);
+    const { service, clearedSites } = buildHarness(
+      {
+        platform: "darwin",
+        homeDir,
+        snapshotRoot: await makeTempDir("snap-"),
+        releaseHostOwnedKeys,
+      },
+      session,
+    );
+    const { sourceId, scan } = await scanChromeSource(service);
+
+    const result = await service.import({
+      sourceId,
+      scanId: scan.scanId,
+      domains: ["stale-removal-fails.com"],
+      includeDeviceBound: false,
+    });
+
+    // The outer catch answers the same reason a barrier-expiry throw does
+    // (see "stops writing when the barrier's signal is aborted").
+    expect(result).toEqual({ status: "blocked", reason: "unreadable" });
+    const cookies = session.cookiesUnderDomain("stale-removal-fails.com");
+    // The imported "sid" is back: the same-name removal that caught it (via
+    // the stale host-only "sid") triggered a re-write, which still ran even
+    // though the LATER "other" removal failed.
+    const sidCookie = cookies.find((cookie) => cookie.name === "sid");
+    expect(sidCookie?.value).toBe("new-sid-value");
+    expect(sidCookie?.domain).toBe(".stale-removal-fails.com");
+    // "other" is still in the jar: its own removal rejected and never took.
+    const otherCookie = cookies.find((cookie) => cookie.name === "other");
+    expect(otherCookie).toBeDefined();
+    // A site whose write is answered blocked never gets its localStorage
+    // cleared.
+    expect(clearedSites).not.toContain("stale-removal-fails.com");
+    expect(releaseHostOwnedKeys).toHaveBeenCalledTimes(1);
+    expect(releaseHostOwnedKeys).toHaveBeenCalledWith([
+      { domain: ".stale-removal-fails.com", name: "sid", path: "/" },
+    ]);
+  });
+
+  it("puts reached cookies back when the barrier gives up between two removals", async () => {
+    const homeDir = await makeTempDir("login-import-abort-mid-removal-");
+    await createDarwinChromeSource(
+      homeDir,
+      [
+        domainCookieRow(".abort-mid-removal.com", "sid", {
+          kind: "plain",
+          value: "new-sid-value",
+        }),
+      ],
+      23,
+    );
+    const session = new FakeLoginImportSession([
+      cookieFixture("sid", "abort-mid-removal.com"),
+      cookieFixture("other", ".abort-mid-removal.com"),
+    ]);
+    const controller = new AbortController();
+    const originalRemove = session.cookies.remove;
+    let removeCallCount = 0;
+    session.cookies.remove = (url: string, name: string): Promise<void> => {
+      removeCallCount += 1;
+      const result = originalRemove(url, name);
+      // Aborts once the first stale removal has gone through, mimicking the
+      // barrier giving the import up between two removals.
+      if (removeCallCount === 1) controller.abort();
+      return result;
+    };
+    const { service } = buildHarness(
+      {
+        platform: "darwin",
+        homeDir,
+        snapshotRoot: await makeTempDir("snap-"),
+        serializeJarWrite: async <T>(
+          action: (signal: AbortSignal) => Promise<T>,
+        ): Promise<T> => action(controller.signal),
+      },
+      session,
+    );
+    const { sourceId, scan } = await scanChromeSource(service);
+
+    const result = await service.import({
+      sourceId,
+      scanId: scan.scanId,
+      domains: ["abort-mid-removal.com"],
+      includeDeviceBound: false,
+    });
+
+    expect(result).toEqual({ status: "blocked", reason: "unreadable" });
+    const cookies = session.cookiesUnderDomain("abort-mid-removal.com");
+    // The same-name recovery still ran even though the second stale removal
+    // never happened: the first removal caught the just-written cookie too,
+    // and the re-write put it back.
+    const sidCookie = cookies.find((cookie) => cookie.name === "sid");
+    expect(sidCookie?.value).toBe("new-sid-value");
+    expect(sidCookie?.domain).toBe(".abort-mid-removal.com");
+    // Two `set` calls for "sid" - the first write and the recovery re-write
+    // - prove the recovery pass actually ran.
+    const sidSetCalls = session.setCalls.filter((call) => call.name === "sid");
+    expect(sidSetCalls).toHaveLength(2);
+    // "other" was never reached: the loop broke before its turn, so it was
+    // never even attempted.
+    const otherCookie = cookies.find((cookie) => cookie.name === "other");
+    expect(otherCookie).toBeDefined();
+  });
+});
+
+// =================================================================================
+// 28. A picked cookie-file source enforces the bounded-read limit
+// =================================================================================
+
+describe("import - a picked cookie-file source enforces the read bound", () => {
+  it("answers file-too-large for a picked export over the bound", async () => {
+    const fileDir = await makeTempDir("login-import-picked-file-large-");
+    const filePath = join(fileDir, "cookies.txt");
+    await writeFile(
+      filePath,
+      "file-too-large-site.com\tFALSE\t/\tFALSE\t0\tsid\tabc123\n",
+    );
+    const { service } = buildHarness({}, new FakeLoginImportSession([]));
+    const source = await service.registerFile(filePath);
+    const scan = await service.scan(source.id);
+    expect(scan.sites).toEqual([
+      { domain: "file-too-large-site.com", cookieCount: 1, unlock: null },
+    ]);
+
+    // Grown past the bound AFTER the scan, so it is the IMPORT's read that
+    // fails. Sparse and instant via `truncate`: no need to actually write
+    // MAX_LOGIN_IMPORT_FILE_BYTES to disk.
+    await truncate(filePath, MAX_LOGIN_IMPORT_FILE_BYTES + 1);
+
+    const result = await service.import({
+      sourceId: source.id,
+      scanId: scan.scanId,
+      domains: ["file-too-large-site.com"],
+      includeDeviceBound: false,
+    });
+
+    expect(result).toEqual({ status: "blocked", reason: "file-too-large" });
+  });
+
+  it("answers unreadable for a picked path that is a directory", async () => {
+    const parentDir = await makeTempDir("login-import-picked-dir-");
+    const pickedDir = join(parentDir, "picked-as-a-file");
+    await mkdir(pickedDir, { recursive: true });
+    const { service } = buildHarness({}, new FakeLoginImportSession([]));
+    const source = await service.registerFile(pickedDir);
+
+    const scan = await service.scan(source.id);
+
+    expect(scan.blocked).toBe("unreadable");
+    expect(scan.sites).toEqual([]);
   });
 });

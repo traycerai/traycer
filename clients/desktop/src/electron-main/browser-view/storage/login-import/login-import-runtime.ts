@@ -45,9 +45,11 @@ export interface LoginImportJarCoordination {
 
 /**
  * How long the import may hold the whole-jar barrier. Far above what a large
- * profile needs (thousands of `cookies.set` calls take seconds, plus the
- * settle window) AND the keystore prompt, which is taken inside the barrier
- * and can hold the user for a couple of minutes - because expiry is not a
+ * profile needs (the source read, then thousands of `cookies.set` calls take
+ * seconds, plus the settle window) AND the keystore prompt, which is taken
+ * inside the barrier like the read - the barrier is held from the user's
+ * confirmation on - and can hold the user for a couple of minutes - because
+ * expiry is not a
  * soft limit here: the serializer aborts the write and admits the queued jar
  * work, and the import answers `blocked` for a jar it only partly wrote.
  */

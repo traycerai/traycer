@@ -358,6 +358,7 @@ describe("<ImportLoginsDialog /> choose-sites step", () => {
     "browser-locked",
     "source-changed",
     "unreadable",
+    "file-too-large",
   ])("renders the %s explainer and a Try again affordance", async (reason) => {
     const bridge = new TestBridge();
     bridge.sources = [source({})];

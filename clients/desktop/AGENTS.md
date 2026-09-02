@@ -124,11 +124,19 @@ failures.
   which one); every failure is a RESULT VALUE with a closed reason, because
   a rejected invoke's message reaches the WARN log and Sentry and a cookie,
   a profile path, or a keychain's answer must never travel that way (the
-  service logs an errno code and a stage, nothing else); and the import runs
-  under the `BrowserJarSerializer`'s whole-jar barrier FROM THE KEYSTORE
-  PROMPT ON (the one forget-all takes, so a forget confirmed while the
-  prompt is up or the write is running queues behind it instead of clearing
-  the jar, reporting done, and having the import write the logins back - and
+  service logs an errno code and a stage, nothing else; every file the
+  import buffers - a picked export, Safari's jar, `Local State`,
+  `profiles.ini` - goes through `readBoundedFile`, which refuses anything
+  that is not a regular file before opening it and a regular file over
+  `MAX_LOGIN_IMPORT_FILE_BYTES` as `file-too-large`, since the picker offers
+  "All files"); and the import runs under the `BrowserJarSerializer`'s
+  whole-jar barrier FROM THE USER'S CONFIRMATION ON - the source read, the
+  keystore prompt and the write all inside it (the barrier forget-all takes,
+  so a forget confirmed after the import's "Import" - while the jar is being
+  read, the prompt is up or the write is running - queues behind it instead
+  of clearing the jar, reporting done, and having the import write the
+  logins back; the read is inside because a large jar takes seconds to copy
+  and parse, which is the same window as the prompt, only shorter - and
   a queued barrier whose own budget runs out while it waits GIVES UP, its
   action never runs, so that forget fails and is retried after the import
   rather than emptying the jar late under no barrier; the import passes its
@@ -157,6 +165,11 @@ failures.
   jar's cookie at that key alone, and a kept cookie that a same-name
   removal reached anyway is put back from the pre-write listing - so a
   source whose every row Electron rejects leaves the jar's slice as it was.
+  Those two recovery passes run whatever ended the removals - a `remove`
+  Electron rejected, the barrier giving up between two - over every name a
+  removal REACHED, and only then is the failure thrown; they read no abort
+  signal, since the serializer holds the gate through the action's
+  settlement and a site left half-removed is a sign-out.
   A written site's localStorage goes too (`clearBrowserSiteLocalStorage`
   plus the coordinator's prune, the same pair the site clear runs, over
   `clearableOrigins()`, which names an origin whose read is still in flight
@@ -168,10 +181,11 @@ failures.
   can list, scan and import every site a profile holds, and a plaintext
   import raises no other prompt; a declined dialog answers `cancelled` and
   the Choose step stays. The saved-logins pref is re-read INSIDE the
-  import's barrier before the first write, and the pref flip itself takes
-  the same barrier (the pref only, not the tab recreation after it), so a
-  window turning saving off while the import sits on the confirmation or
-  the prompt cannot have the durable jar written where nothing reads it.
+  import's barrier, first thing, before the source is read, and the pref
+  flip itself takes the same barrier (the pref only, not the tab recreation
+  after it), so a window turning saving off while the import sits on the
+  confirmation cannot have the durable jar written where nothing reads it,
+  and one that did turn it off costs no read and no prompt.
   The site's localStorage is cleared LAST, after the cookie recovery, so a
   clear that fails leaves the cookie slice whole.
   A decrypted value exists only between the `readValue` inside that write
@@ -192,7 +206,11 @@ failures.
   could not send (it closed underneath the read) or that quotes a standing
   id the host has since re-issued never left, so the registry tries the
   host's sibling stream; only a frame that left and drew no ack is
-  `unacked`.
+  `unacked`. The ack budget starts when the frame leaves, and acks are
+  attributed in SEND order under the standing id (the host acks every
+  captured frame it receives, once, in order): a frame whose budget ran out
+  keeps its slot until its late ack absorbs it, so that ack cannot satisfy
+  the next capture's slot and count a host that never acked THAT jar.
 - Never build `Tray` from `nativeImage.createEmpty()` (invisible tray).
 - No Electron-native SQLite / `better-sqlite3` rebuilds in this shell — host owns
   app-assets DB.

@@ -1,7 +1,8 @@
-import { readdir, readFile, stat } from "node:fs/promises";
+import { readdir, stat } from "node:fs/promises";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { z } from "zod";
 import type { LoginImportBrowser } from "@traycer-clients/shared/platform/browser-view";
+import { MAX_LOGIN_IMPORT_FILE_BYTES, readBoundedFile } from "./bounded-file";
 import type { ChromiumImportBrowser } from "./chromium-browsers";
 import { errnoCode } from "./errno-code";
 
@@ -460,12 +461,13 @@ async function statMtime(path: string): Promise<MtimeResult> {
   }
 }
 
+/**
+ * Bounded like every other file read of the import: a `Local State` or
+ * `profiles.ini` is kilobytes, and one that is not is not read into main.
+ */
 async function readTextQuietly(path: string): Promise<string | null> {
-  try {
-    return await readFile(path, "utf8");
-  } catch {
-    return null;
-  }
+  const file = await readBoundedFile(path, MAX_LOGIN_IMPORT_FILE_BYTES);
+  return file.ok ? file.bytes.toString("utf8") : null;
 }
 
 async function readdirQuietly(path: string): Promise<readonly string[]> {

@@ -294,6 +294,12 @@ export type LoginImportBlocked =
    * no prompt fired; the way back in is a fresh scan.
    */
   | "source-changed"
+  /**
+   * The source is a regular file bigger than the desktop will read into
+   * main in one go (tens of megabytes; a cookie export is kilobytes). A path
+   * that is not a regular file at all - a FIFO, a device - is `unreadable`.
+   */
+  | "file-too-large"
   | "unreadable";
 
 /**

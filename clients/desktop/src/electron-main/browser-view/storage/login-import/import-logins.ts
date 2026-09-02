@@ -1,6 +1,5 @@
 import type { Cookie, CookiesGetFilter, CookiesSetDetails } from "electron";
 import { createHash, randomBytes } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import { z } from "zod";
 import type { BrowserCookieKey } from "@traycer/protocol/host/browser/contracts";
 import type {
@@ -20,6 +19,11 @@ import {
   toCookieSetDetails,
   toElectronCookieSetDetails,
 } from "../browser-storage-state";
+import {
+  MAX_LOGIN_IMPORT_FILE_BYTES,
+  readBoundedFile,
+  type BoundedFileRead,
+} from "./bounded-file";
 import type { ChromiumImportBrowser } from "./chromium-browsers";
 import { readChromiumCookieDatabase } from "./chromium-cookies";
 import {
@@ -249,15 +253,19 @@ interface WriteOutcome {
   readonly writtenKeys: BrowserCookieKey[];
 }
 
-/** What the barrier hands back: the tallies, or the keystore's refusal. */
+/**
+ * What the barrier hands back: the tallies, or why nothing was written - the
+ * source could not be read, changed since the scan, the keystore refused, or
+ * saving is off. Every reason is the renderer's closed set.
+ */
 type ImportWrite =
   | { readonly ok: true; readonly outcome: WriteOutcome }
   | {
       readonly ok: false;
-      readonly reason:
-        | "keychain-denied"
-        | "keyring-unavailable"
-        | "saved-logins-off";
+      readonly reason: Extract<
+        LoginImportResult,
+        { readonly status: "blocked" }
+      >["reason"];
     };
 
 const localStateKeySchema = z.object({
@@ -484,67 +492,73 @@ export class LoginImportService {
       log.info("[browser-view] login import was not confirmed");
       return { status: "cancelled" };
     }
-    const read = await this.readSource(source.location);
-    if (!read.ok) return { status: "blocked", reason: read.blocked };
-    const nowSeconds = Math.floor(this.deps.now() / 1000);
-    const candidates: ImportCandidate[] = [];
-    for (const row of read.rows) {
-      if (row.partitioned || row.secret.kind === "protected") continue;
-      const scope = classifyImportCookie(row, nowSeconds);
-      if (scope === null || !chosen.has(scope.site)) continue;
-      candidates.push({ row, scope });
-    }
-    // The prompt the Choose step announced is the only prompt Import may
-    // raise. A keystore no chosen site was scanned as needing means the
-    // source changed since (a Linux site that was all `v10` gained a `v11`
-    // row); the scan is dropped so the way back in is a fresh one. DPAPI is
-    // exempt: it unseals silently, so there was nothing to announce.
-    const needed = this.unlockFor(keyNeedsOf(candidates));
-    if (
-      needed !== null &&
-      needed !== "windows-dpapi" &&
-      ![...chosen].some((site) => allowed.unlockBySite.get(site) === needed)
-    ) {
-      this.scanned.delete(request.scanId);
-      return { status: "blocked", reason: "source-changed" };
-    }
-
-    // Grouped as ROWS, still ciphertext: a value is decrypted inside the
-    // write loop, immediately before its `cookies.set`, and is unreferenced
-    // once that call returns. Materialising the plaintext jar up front would
-    // keep every value alive through the other sites' writes, the flush and
-    // the settle window.
-    const bySite = new Map<string, ImportCandidate[]>();
-    for (const candidate of candidates) {
-      const siteRows = bySite.get(candidate.scope.site) ?? [];
-      siteRows.push(candidate);
-      bySite.set(candidate.scope.site, siteRows);
-    }
-
     const session = this.deps.getDurableSession();
-    // Under the serializer's barrier from the keystore prompt on, and inside
-    // it, with the observer muted for the write: the barrier orders this
-    // import against every other jar mutation, and the mute is what keeps
-    // the per-site removals from reaching the hosts. The prompt is INSIDE
-    // the barrier because it can hold the user for minutes, and a forget-all
-    // confirmed from another window while it is up must queue behind the
-    // import rather than clear the jar, report done, and then have this
-    // import write the logins back over an empty jar.
+    // Under the serializer's barrier FROM THE CONFIRMATION ON - the source
+    // read, the keystore prompt and the write all inside it, with the
+    // observer muted for the write. The barrier orders this import against
+    // every other jar mutation in the order the user confirmed them: a
+    // forget-all or a site clear confirmed from another window AFTER this
+    // "Import" queues behind the whole import rather than clearing the jar,
+    // reporting done, and then having this import write the logins back over
+    // an empty jar - which is what it would do from any point outside the
+    // barrier, the multi-second read of a large jar as much as the prompt
+    // the user can sit on for minutes. The mute is what keeps the per-site
+    // removals from reaching the hosts.
     const written = await this.deps.serializeJarWrite(
       async (signal): Promise<ImportWrite> => {
-        const keys = await this.resolveKeys(read, candidates);
-        if (!keys.ok) return { ok: false, reason: keys.reason };
-        // A prompt the user sat on past the budget: the barrier has moved on,
-        // so not one row is written, and no mute or settle window is spent.
-        throwIfBarrierExpired(signal);
-        // The pref again, inside the barrier the toggle itself takes: a
-        // window that turned saving off while this import sat on the
-        // confirmation or the prompt has moved the tiles to the ephemeral
-        // jar, and a write to the durable one now would land where nothing
-        // reads it and be captured by nobody.
+        // The pref first, inside the barrier the toggle itself takes, so it
+        // cannot change under anything below: a window that turned saving
+        // off while this import sat on the confirmation has moved the tiles
+        // to the ephemeral jar, and a write to the durable one now would land
+        // where nothing reads it and be captured by nobody - and there is no
+        // reason to read a jar, let alone raise a prompt, for that.
         if (!this.deps.readSaveLogins()) {
           return { ok: false, reason: "saved-logins-off" };
         }
+        const read = await this.readSource(source.location);
+        if (!read.ok) return { ok: false, reason: read.blocked };
+        const nowSeconds = Math.floor(this.deps.now() / 1000);
+        const candidates: ImportCandidate[] = [];
+        for (const row of read.rows) {
+          if (row.partitioned || row.secret.kind === "protected") continue;
+          const scope = classifyImportCookie(row, nowSeconds);
+          if (scope === null || !chosen.has(scope.site)) continue;
+          candidates.push({ row, scope });
+        }
+        // The prompt the Choose step announced is the only prompt Import may
+        // raise. A keystore no chosen site was scanned as needing means the
+        // source changed since (a Linux site that was all `v10` gained a
+        // `v11` row); the scan is dropped so the way back in is a fresh one.
+        // DPAPI is exempt: it unseals silently, so there was nothing to
+        // announce.
+        const needed = this.unlockFor(keyNeedsOf(candidates));
+        if (
+          needed !== null &&
+          needed !== "windows-dpapi" &&
+          ![...chosen].some((site) => allowed.unlockBySite.get(site) === needed)
+        ) {
+          this.scanned.delete(request.scanId);
+          return { ok: false, reason: "source-changed" };
+        }
+
+        // Grouped as ROWS, still ciphertext: a value is decrypted inside the
+        // write loop, immediately before its `cookies.set`, and is
+        // unreferenced once that call returns. Materialising the plaintext
+        // jar up front would keep every value alive through the other sites'
+        // writes, the flush and the settle window.
+        const bySite = new Map<string, ImportCandidate[]>();
+        for (const candidate of candidates) {
+          const siteRows = bySite.get(candidate.scope.site) ?? [];
+          siteRows.push(candidate);
+          bySite.set(candidate.scope.site, siteRows);
+        }
+
+        const keys = await this.resolveKeys(read, candidates);
+        if (!keys.ok) return { ok: false, reason: keys.reason };
+        // A read or a prompt the user sat on past the budget: the barrier
+        // has moved on, so not one row is written, and no mute or settle
+        // window is spent.
+        throwIfBarrierExpired(signal);
         const tally: WriteOutcome = {
           importedSites: 0,
           importedCookies: 0,
@@ -694,18 +708,41 @@ export class LoginImportService {
     const stale = previous.filter(
       (cookie) => !carriedKeyIds.has(storageCookieKeyId(cookie)),
     );
-    const removedNames = new Set(stale.map((cookie) => cookie.name));
+    // The names the removals REACHED, each added before its `remove` is
+    // attempted: a rejection tells nothing about what the call took with it,
+    // so the recovery below covers that name either way. A removal that
+    // fails, or the barrier giving up between two, ends the removals but not
+    // the site: the recovery passes run for whatever was reached, and only
+    // then is the failure thrown - a `sid` a successful removal erased and a
+    // later rejection would otherwise leave un-rewritten, which is a
+    // sign-out reported as `blocked`.
+    const removedNames = new Set<string>();
+    let removalFailure: { readonly error: unknown } | null = null;
     for (const cookie of stale) {
-      throwIfBarrierExpired(signal);
-      await removeBrowserCookie(cookie, session.cookies);
+      if (signal.aborted) {
+        if (removalFailure === null) {
+          removalFailure = { error: barrierExpiredError() };
+        }
+        break;
+      }
+      removedNames.add(cookie.name);
+      try {
+        await removeBrowserCookie(cookie, session.cookies);
+      } catch (error) {
+        if (removalFailure === null) removalFailure = { error };
+      }
     }
+    // The recovery passes read no abort signal: each is a handful of `set`
+    // calls that put a reached cookie back, the serializer holds the gate
+    // through the action's settlement (up to its grace) even after it has
+    // given the import up, and a site left half-removed is a sign-out.
+    //
     // Written rows a same-name removal reached are written once more. One
     // refused now is no longer written: its key leaves `writtenKeyIds`, so
     // the restore below treats it like any other carried key the source
     // could not write and puts the jar's prior cookie back.
     for (const candidate of writtenRows) {
       if (!removedNames.has(candidate.row.name)) continue;
-      throwIfBarrierExpired(signal);
       const key = await this.writeRow(
         candidate,
         read,
@@ -734,7 +771,6 @@ export class LoginImportService {
       const id = storageCookieKeyId(cookie);
       if (!carriedKeyIds.has(id) || writtenKeyIds.has(id)) continue;
       if (!removedNames.has(cookie.name)) continue;
-      throwIfBarrierExpired(signal);
       try {
         await session.cookies.set(
           toElectronCookieSetDetails(toCookieSetDetails(cookie)),
@@ -744,6 +780,10 @@ export class LoginImportService {
         // put in its place, and the count already carries the failed row.
       }
     }
+    // A removal that failed leaves the slice a union of two sign-ins, not the
+    // source's: reported, now that the cookies the removals reached are back,
+    // and without the localStorage clear a whole slice would earn.
+    if (removalFailure !== null) throw removalFailure.error;
     // LAST, once the cookie slice is whole again: a clear that fails throws
     // out of a site whose cookies are already the source's, not one whose
     // same-name removals have not been put back yet.
@@ -908,20 +948,20 @@ export class LoginImportService {
         };
       }
       case "safari": {
-        let bytes: Buffer;
-        try {
-          bytes = await readFile(location.cookiesPath);
-        } catch (error) {
-          const code = errnoCode(error);
+        const file = await readBoundedFile(
+          location.cookiesPath,
+          MAX_LOGIN_IMPORT_FILE_BYTES,
+        );
+        if (!file.ok) {
           return {
             ok: false,
             blocked:
-              code === "EPERM" || code === "EACCES"
+              file.reason === "denied"
                 ? "needs-full-disk-access"
-                : "unreadable",
+                : blockedForFile(file.reason),
           };
         }
-        const parsed = parseSafariBinaryCookies(bytes);
+        const parsed = parseSafariBinaryCookies(file.bytes);
         return {
           ok: true,
           rows: parsed.rows,
@@ -930,13 +970,13 @@ export class LoginImportService {
         };
       }
       case "file": {
-        let text: string;
-        try {
-          text = await readFile(location.path, "utf8");
-        } catch {
-          return { ok: false, blocked: "unreadable" };
-        }
-        const parsed = parseCookieFile(text);
+        const file = await readBoundedFile(
+          location.path,
+          MAX_LOGIN_IMPORT_FILE_BYTES,
+        );
+        if (!file.ok)
+          return { ok: false, blocked: blockedForFile(file.reason) };
+        const parsed = parseCookieFile(file.bytes.toString("utf8"));
         if (!parsed.ok) return { ok: false, blocked: "unreadable" };
         return { ok: true, rows: parsed.rows, unreadable: 0, chromium: null };
       }
@@ -1009,9 +1049,14 @@ export class LoginImportService {
   private async readWindowsEncryptedKey(
     localStatePath: string,
   ): Promise<string | null> {
+    const file = await readBoundedFile(
+      localStatePath,
+      MAX_LOGIN_IMPORT_FILE_BYTES,
+    );
+    if (!file.ok) return null;
     try {
       const parsed = localStateKeySchema.safeParse(
-        JSON.parse(await readFile(localStatePath, "utf8")),
+        JSON.parse(file.bytes.toString("utf8")),
       );
       return parsed.success ? parsed.data.os_crypt.encrypted_key : null;
     } catch {
@@ -1079,14 +1124,23 @@ export class LoginImportService {
  * `warn` logs only the error's name.
  */
 function throwIfBarrierExpired(signal: AbortSignal): void {
-  if (signal.aborted) {
-    throw new Error("The jar barrier expired before the import finished");
-  }
+  if (signal.aborted) throw barrierExpiredError();
+}
+
+function barrierExpiredError(): Error {
+  return new Error("The jar barrier expired before the import finished");
 }
 
 function blockedFor(reason: SqliteSnapshotFailure): LoginImportBlocked {
   if (reason === "locked") return "browser-locked";
   return "unreadable";
+}
+
+/** A file the bounded read refused; `denied` is the caller's to place. */
+function blockedForFile(
+  reason: Extract<BoundedFileRead, { readonly ok: false }>["reason"],
+): LoginImportBlocked {
+  return reason === "too-large" ? "file-too-large" : "unreadable";
 }
 
 function blockedScan(

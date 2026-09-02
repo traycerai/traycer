@@ -878,6 +878,14 @@ function BlockedExplainer(props: {
           imported; try again to read the profile afresh.
         </Notice>
       );
+    case "file-too-large":
+      return (
+        <Notice tone="warning">
+          This source is larger than Traycer reads in one go. A cookie export is
+          normally a few kilobytes; check that you picked the right file, or
+          export only the sites you need and import that.
+        </Notice>
+      );
     default: {
       // A reason added to the closed set without an explainer is a compile
       // error here, not a title with no cause and no action under it.

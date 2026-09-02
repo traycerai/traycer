@@ -52,9 +52,10 @@ import { registrableDomain } from "@traycer/protocol/host/browser/registrable-do
  * rather than each getting a fresh 30s to act in - and a barrier whose time
  * runs out while it is still waiting GIVES UP (its caller learns so, its
  * action never runs) rather than running late under no barrier; a forget-all
- * confirmed while a login import sits on a minutes-long keystore prompt
- * fails and is retried after, it does not empty the jar behind the user's
- * back. And it is not what orders a
+ * confirmed while a login import reads a large jar or sits on a minutes-long
+ * keystore prompt (both inside the import's barrier, from its confirmation
+ * on) fails and is retried after, it does not empty the jar behind the
+ * user's back. And it is not what orders a
  * forget against a host's observations - that is the forget ledger's revision
  * and its ack (`browser-forget-ledger.ts`), which decide on facts and would
  * still hold if this bound fired mid-forget. This only stops a wedged call

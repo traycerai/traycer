@@ -58,6 +58,15 @@ export type BrowserPrimaryProfileCaptureOutcome =
   | "not-sent";
 
 /**
+ * One sent frame's place in the ack order under its request id. `settle` is
+ * `null` once the slot is settled - acked, timed out, or torn down - and a
+ * settled slot stays queued only to absorb the ack it is still owed.
+ */
+interface CaptureAckSlot {
+  settle: ((acked: boolean) => void) | null;
+}
+
+/**
  * How many `browser.sessions` streams one window may hold.
  *
  * The renderer names the stream, and every distinct `identityKey` it names
@@ -474,10 +483,20 @@ class BrowserSessionsStream {
   get holdsConnection(): boolean {
     return this.openedUserId !== null;
   }
-  private readonly captureAckWaiters = new Map<
-    string,
-    (acked: boolean) => void
-  >();
+  /**
+   * Ack slots per request id, in SEND order.
+   *
+   * The standing id is reused by every capture on the connection and the
+   * host's ack quotes only that id, so an ack is attributed to the OLDEST
+   * frame still outstanding under it - which is sound because the host acks
+   * every `primaryProfileCaptured` it receives, once, in the order received.
+   * A slot whose budget ran out is SETTLED, not removed: its frame left, so
+   * its ack is still owed, and it must land on this slot rather than on the
+   * next frame's - a late ack that satisfied the next capture would count a
+   * host that never acked THAT jar. Cleared with the connection: the ids die
+   * with it, so nothing is left to absorb.
+   */
+  private readonly captureAckSlots = new Map<string, CaptureAckSlot[]>();
 
   constructor(
     windowId: string,
@@ -706,14 +725,15 @@ class BrowserSessionsStream {
    * one capture even if the ack never came.
    *
    * Captures on one stream run ONE AT A TIME, and a caller that arrives while
-   * one is in flight gets the NEXT one, never the current one: the standing
-   * request id is the same for both, so two in flight would share one ack
-   * waiter and the later would overwrite the earlier; and the one in flight
-   * may have read the jar before this caller's write landed (two Settings
-   * windows importing in succession), so answering it with that capture
-   * would count a host as notified of a login it was never sent. Every
-   * caller that arrives during the same in-flight capture shares the one
-   * trailing capture, so a burst costs two frames, not one per caller.
+   * one is in flight gets the NEXT one, never the current one: the one in
+   * flight may have read the jar before this caller's write landed (two
+   * Settings windows importing in succession), so answering it with that
+   * capture would count a host as notified of a login it was never sent.
+   * Every caller that arrives during the same in-flight capture shares the
+   * one trailing capture, so a burst costs two frames, not one per caller.
+   * The frames all quote the standing id, and their acks are told apart by
+   * send order alone - see {@link captureAckSlots} for why a timed-out
+   * frame's ack cannot be taken for the next frame's.
    */
   capturePrimaryProfileNow(): Promise<BrowserPrimaryProfileCaptureOutcome> {
     if (this.captureInFlight === null) return this.startCapture();
@@ -1093,27 +1113,40 @@ class BrowserSessionsStream {
         resolve(false);
         return;
       }
+      const slot: CaptureAckSlot = { settle: null };
       const timer = setTimeout(() => {
-        this.captureAckWaiters.delete(requestId);
+        // Settled in place, still queued: see `captureAckSlots`.
+        slot.settle = null;
         resolve(false);
       }, FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS);
-      this.captureAckWaiters.set(requestId, (acked) => {
+      slot.settle = (acked) => {
         clearTimeout(timer);
+        slot.settle = null;
         resolve(acked);
-      });
+      };
+      const queue = this.captureAckSlots.get(requestId) ?? [];
+      queue.push(slot);
+      this.captureAckSlots.set(requestId, queue);
     });
   }
 
+  /** One ack absorbs the oldest slot under its id, live or already timed out. */
   private resolveCaptureAckWaiter(requestId: string): void {
-    const settle = this.captureAckWaiters.get(requestId);
-    if (settle === undefined) return;
-    this.captureAckWaiters.delete(requestId);
-    settle(true);
+    const queue = this.captureAckSlots.get(requestId);
+    if (queue === undefined) return;
+    const slot = queue.shift();
+    if (queue.length === 0) this.captureAckSlots.delete(requestId);
+    if (slot !== undefined && slot.settle !== null) slot.settle(true);
   }
 
   private resolveCaptureAckWaiters(): void {
-    for (const settle of [...this.captureAckWaiters.values()]) settle(false);
-    this.captureAckWaiters.clear();
+    const queues = [...this.captureAckSlots.values()];
+    this.captureAckSlots.clear();
+    for (const queue of queues) {
+      for (const slot of queue) {
+        if (slot.settle !== null) slot.settle(false);
+      }
+    }
   }
 
   /**
