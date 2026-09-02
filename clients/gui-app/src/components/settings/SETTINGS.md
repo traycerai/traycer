@@ -24,6 +24,7 @@ SettingsLayout
     └── settings panel route
         ├── GeneralSettingsPanel
         ├── AppearanceSettingsPanel
+        ├── OpeningBehaviorPanel
         ├── ProvidersSettingsPanel
         ├── NotificationsSettingsPanel
         ├── AgentsSettingsPanel
@@ -495,37 +496,13 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
     for rebinding), Pin context usage breakdown (global toggle for the
     always-visible agent context-window breakdown, default off).
   - **Browser**: the in-app browser has no toggle - it is always on, and the
-    group carries no master switch.
-    Web link default + per-kind terminal/markdown link open-mode selects are
-    always active (no `disabled` state). They read and write `linkOpen`
-    (`{ default: "in-app" | "external" | "per-kind"; markdown, terminal,
-github, image: "in-app" | "external" }`, default all `in-app`) through
-    the single `setLinkOpen(patch)` setter; `linkOpenModeForKind` resolves a
-    kind against the default.
-    Agent tab surfacing (`agentTabSurfacing`: `surface` | `off`, default
-    `off` - what the GUI does when the AGENT opens a browser tab via its REPL
-    `openTab` tool) governs suppressing host-driven opens that previously
-    always split the canvas.
-    `surface` places the tab using the browser tile placement
-    (`tilePlacement.browser`, resolved by `tilePlacementForCategory`): `pip`
-    floats it picture-in-picture unless a user-converted PiP is showing or
-    the epic surface is hidden, and `tab`/`split` place a canvas tile grouped
-    by session - same-session opens become tabs of one pane - even in hidden
-    epics. `off` answers electron foreground creates with a hidden off-screen
-    view so the agent's open still succeeds, and leaves headless tabs in the
-    sidebar.
-    The pre-refactor keys (`browserLinkDefaultMode`,
-    `{terminal,markdown}BrowserLinkOpenMode`, `agentTabSurfacingMode`) are
-    migrated once in the store's persist `merge` and then dropped.
-    Disposition decisions live in `lib/browser-view/agent-tab-surfacing.ts`;
-    headless-origin tabs are diffed from `browser.sessions` lifecycle frames
-    in the dock, seeded snapshot-only so surfacing stays ephemeral across
-    reloads.
-    A conditional Detected dev origins row follows.
-    There is no standing risk disclosure in this group - the master toggle
-    row that carried one was deleted along with the toggle, and the
-    `SettingsRow` `risk` prop it was the sole consumer of was deleted with
-    it.
+    group carries no master switch. What is left of the group is the
+    conditional **Detected dev origins** row (terminal URLs with local hosts
+    or explicit ports, kept for browser-origin classification), so the whole
+    `SettingsGroup` is skipped when none were detected rather than drawing a
+    heading over an empty card. The link-open and agent-tab-surfacing selects
+    that used to lead this group live in **Opening behavior** now - see that
+    section for the fields and their semantics.
   - **Saved logins** (`browser-settings-section.tsx`'s second group,
     `data-testid="settings-saved-logins"`): where website logins in the in-app
     browser are kept, and the only place they can be turned off, forgotten, or
@@ -592,6 +569,41 @@ github, image: "in-app" | "external" }`, default all `in-app`) through
     distinct restrained-red card/label tone is unchanged from before the
     reorg, just carried by the shared group component instead of bespoke
     markup.
+- `Opening behavior` (`panels/opening-behavior-panel.tsx`,
+  `/settings/opening-behavior`, third in the Application group) Where a click
+  LANDS. Three `SettingsGroup`s, each one enum select per store field, written
+  through the store's single patch setters - no local state, no disabled
+  states. The modifier keys that override a choice per click are stated in the
+  row copy rather than given rows of their own, because none of them is
+  configurable.
+  - **Links**: "Open links" writes `linkOpen.default`
+    (`in-app | external | per-kind`, default `in-app`); `per-kind` reveals
+    Markdown / Terminal / GitHub / Images, each `in-app | external`.
+    `linkOpenModeForKind` resolves a kind against the default. Copy states the
+    two unconfigurable modifiers: ctrl/cmd-click always uses the default
+    browser, alt-click flips whichever choice applies.
+  - **Tile placement**: "Place new tiles" writes `tilePlacement.default`
+    (`tab | split | per-category`, default `per-category`); `per-category`
+    reveals Content / Conversations / Browser, and Browser alone adds
+    **Picture in picture** (`BrowserTilePlacement`) because the other two
+    categories have no PiP host. Defaults content=tab, conversation=tab,
+    browser=split; `tilePlacementForCategory` resolves a category against the
+    default. Copy states shift-click = split, middle-click = background.
+  - **Agent-opened browser tabs**: `agentTabSurfacing` (`surface | off`,
+    default `off`) - what the GUI does when a HOST opens a browser tab (the
+    agent's REPL `openTab` tool, or a headless page popup). `surface` places
+    the tab using the Browser placement above: `pip` floats it unless a
+    user-converted PiP is showing or the epic surface is hidden, and
+    `tab`/`split` place a canvas tile grouped by session - same-session opens
+    become tabs of one pane - even in hidden epics. `off` answers Electron
+    foreground creates with a hidden off-screen view so the open still
+    succeeds, and leaves headless tabs in the sidebar. Disposition decisions
+    live in `lib/browser-view/tiles/surface-host-opened-tab.ts`; headless-origin
+    tabs are diffed from `browser.sessions` lifecycle frames in the dock,
+    seeded snapshot-only so surfacing stays ephemeral across reloads.
+  - The pre-refactor keys (`browserLinkDefaultMode`,
+    `{terminal,markdown}BrowserLinkOpenMode`, `agentTabSurfacingMode`) are
+    migrated once in the store's persist `merge` and then dropped.
 - `Appearance` Five preference groups via `settings-group.tsx`, broad-to-
   specialized in one column: **Theme**, **Interface**, **Typography**,
   **Terminal**, **Artifact icons** - each a quiet `<h2>` label outside its own
