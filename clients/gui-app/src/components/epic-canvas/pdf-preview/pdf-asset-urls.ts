@@ -12,6 +12,7 @@ export interface PdfDataFileUrls {
   readonly cMapPacked: boolean;
   readonly standardFontDataUrl: string;
   readonly wasmUrl: string;
+  readonly iccUrl: string;
 }
 
 /**
@@ -32,5 +33,6 @@ export function pdfDataFileUrls(): PdfDataFileUrls {
     cMapPacked: true,
     standardFontDataUrl: dataFileUrl("standard_fonts"),
     wasmUrl: dataFileUrl("wasm"),
+    iccUrl: dataFileUrl("iccs"),
   };
 }

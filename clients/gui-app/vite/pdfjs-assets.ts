@@ -3,7 +3,8 @@
  *
  * pdf.js keeps the bulky, rarely-needed parts of a PDF renderer out of its
  * worker and fetches them per document: the predefined Adobe CMaps, the
- * standard-14 font data, and the wasm image codecs. Every one of those URLs
+ * standard-14 font data, the wasm image codecs and the CMYK ICC profile.
+ * Every one of those URLs
  * defaults to `null`, and a missing one does not fail loudly - the document
  * renders WRONG. A CID font naming a predefined CMap (the CJK case) loses its
  * glyphs AND its text extraction, so selection and search go with them; a
@@ -43,12 +44,19 @@ export const PDFJS_ASSET_DIR = "pdfjs";
  * - `wasm` - the JBIG2, JPEG 2000 and ICC decoders. JBIG2 is the codec
  *   scanners reach for, so this is the directory an ordinary user is most
  *   likely to need.
- *
- * `iccs` is deliberately absent: ICC handling uses a SYNCHRONOUS fetch that
- * exists only on pdf.js's worker-fetch path, and that path requires an
- * http(s) page - which neither `app://renderer` nor Capacitor is.
+ * - `iccs` - the CMYK profile for ICC-based colour spaces. pdf.js reads it
+ *   with a SYNCHRONOUS fetch that exists only on its worker-fetch path, and
+ *   that path opens only when every data URL is http(s): true of the
+ *   packaged Capacitor app (served from `http://localhost`) and of the dev
+ *   server, false of the packaged desktop's `app://renderer`, where pdf.js
+ *   falls back to its own colour conversion.
  */
-const PDFJS_ASSET_DIRECTORIES = ["cmaps", "standard_fonts", "wasm"] as const;
+const PDFJS_ASSET_DIRECTORIES = [
+  "cmaps",
+  "standard_fonts",
+  "wasm",
+  "iccs",
+] as const;
 
 /**
  * QuickJS is the wasm directory's odd one out: it evaluates the JavaScript
