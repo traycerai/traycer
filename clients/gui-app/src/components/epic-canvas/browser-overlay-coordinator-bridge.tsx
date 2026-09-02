@@ -167,11 +167,17 @@ function BrowserOverlayCoordinator(props: {
             // - keeping it latched would compute the same signature and
             // return early until the overlay closed.
             if (result.matchedCount < target.tiles.length) forgetSignature();
+            // Before the zero-match return, not after it: an occlusion that
+            // parked NOTHING can still have RESTORED something. Main runs its
+            // own diff-release on every `occlude()` call, so a tile this
+            // overlay used to cover and no longer targets comes back in
+            // `restoredTiles` even when every tile in the new set missed.
+            // Returning first would strand that tile under a stale stand-in.
+            applyRestoredTiles(result.restoredTiles);
             if (result.matchedCount === 0) return;
             result.snapshots.forEach((snapshot) => {
               setBrowserViewSnapshot(snapshot);
             });
-            applyRestoredTiles(result.restoredTiles);
             void ackWhenPainted(target.overlayId);
           })
           .catch((error: unknown) => {

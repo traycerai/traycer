@@ -23,7 +23,14 @@ import { listBrowserOverlayElements } from "./browser-overlay-coordinator";
  */
 function isUnregisteredPortalChild(element: Element): boolean {
   const registered = listBrowserOverlayElements();
-  if (registered.includes(element as HTMLElement)) return false;
+  // A DESCENDANT match counts as registered, not just identity: Radix puts
+  // its own portal `div` between `document.body` and the content node the
+  // wrapper registers (`SelectContent` registers `SelectPrimitive.Content`),
+  // so an identity check reports that container as an unregistered portal
+  // every time it has a positive-area rect.
+  if (registered.some((node) => node === element || element.contains(node))) {
+    return false;
+  }
   const rect = element.getBoundingClientRect();
   return rect.width > 0 && rect.height > 0;
 }

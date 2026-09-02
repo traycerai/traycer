@@ -68,14 +68,16 @@ export function AppShell(props: AppShellProps) {
     if (!import.meta.env.DEV) return;
     let dispose: (() => void) | undefined;
     let cancelled = false;
-    void import("@/lib/browser-view/tiles/unregistered-portal-tripwire").then(
-      (module) => {
+    void import("@/lib/browser-view/tiles/unregistered-portal-tripwire")
+      .then((module) => {
         if (cancelled) return;
         const appRoot = document.getElementById("root");
         if (appRoot === null) return;
         dispose = module.installUnregisteredPortalTripwire(appRoot);
-      },
-    );
+      })
+      // A dev-only diagnostic that fails to load stays silent rather than
+      // surfacing as an unhandled rejection in the app it is watching.
+      .catch(() => undefined);
     return () => {
       cancelled = true;
       dispose?.();

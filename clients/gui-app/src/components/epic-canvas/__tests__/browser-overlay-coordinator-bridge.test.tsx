@@ -871,27 +871,42 @@ describe("<BrowserOverlayCoordinator />", () => {
 describe("motion freeze (invariant 8)", () => {
   beforeEach(() => {
     let nextFrameId = 1;
+    // The cancel side has to honour the handle: the coordinator cancels its
+    // pending frame on dispose, and a mock that ignores the id lets that
+    // frame's `runScan` still fire afterwards, against a torn-down registry
+    // or the next test's.
+    const timersByFrameId = new Map<number, ReturnType<typeof setTimeout>>();
     vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
       const frameId = nextFrameId;
       nextFrameId += 1;
-      setTimeout(() => {
-        callback(performance.now());
-      }, 0);
+      timersByFrameId.set(
+        frameId,
+        setTimeout(() => {
+          timersByFrameId.delete(frameId);
+          callback(performance.now());
+        }, 0),
+      );
       return frameId;
     });
-    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(
-      (_handle) => undefined,
-    );
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation((handle) => {
+      const timer = timersByFrameId.get(handle);
+      if (timer === undefined) return;
+      clearTimeout(timer);
+      timersByFrameId.delete(handle);
+    });
   });
 
   afterEach(() => {
     cleanup();
+    // Before the tile registrations go: `setBrowserOverlayTileMotion` returns
+    // early when the key has no tile entry, so resetting after the unregister
+    // loop would be a no-op that only looks like teardown.
+    setBrowserOverlayTileMotion(BASE_KEY, false);
     unregisterTiles.forEach((unregister) => unregister());
     unregisterTiles.clear();
     unregisterOverlays.forEach((unregister) => unregister());
     unregisterOverlays.clear();
     clearBrowserViewSnapshot(BASE_KEY);
-    setBrowserOverlayTileMotion(BASE_KEY, false);
     vi.restoreAllMocks();
   });
 

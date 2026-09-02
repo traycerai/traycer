@@ -139,7 +139,24 @@ export function useBrowserViewBoundsBridge(
 
     measure();
 
+    // A pointer landing on the tile ends the freeze immediately instead of
+    // waiting out the rest hysteresis. While motion owns the tile its native
+    // view is parked off screen and the stand-in that replaces it is
+    // `pointer-events-none`, so a click arriving in the tail of a scroll
+    // reaches neither: releasing on `pointerdown` starts the restore
+    // handshake at the first sign of input rather than up to
+    // `MOTION_REST_FRAME_THRESHOLD` frames later. Capture phase, so a
+    // stand-in or status panel in front cannot swallow the signal.
+    const releaseMotionForInput = (): void => {
+      if (!inMotion) return;
+      inMotion = false;
+      restFrameCount = 0;
+      setBrowserOverlayTileMotion(tileKey, false);
+    };
+    surface.addEventListener("pointerdown", releaseMotionForInput, true);
+
     return () => {
+      surface.removeEventListener("pointerdown", releaseMotionForInput, true);
       if (frameId !== null) window.cancelAnimationFrame(frameId);
       unregisterOverlayTile();
     };

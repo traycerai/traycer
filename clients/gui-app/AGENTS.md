@@ -117,7 +117,7 @@ inset-0` and marked `data-full-bleed-surface`, so it takes the viewport
 - Zustand = client UI state; TanStack Query = server/host data.
 - Keep browser-safe unless the task adds a native host.
 - **Browser-tile overlay registration is explicit, not a DOM scan**
-  (`traycer/docs/adr/0001-browser-tile-rendering.md`). Mounting an overlay
+  (`docs/adr/0001-browser-tile-rendering.md`). Mounting an overlay
   primitive registers a live rect with the browser-tile occlusion
   coordinator; unmounting deregisters. The shadcn wrappers in
   `src/components/ui/` (Dialog, Popover, Select, DropdownMenu, Tooltip,

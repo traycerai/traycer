@@ -171,17 +171,29 @@ function renderWithBridge(
 describe("real-Radix overlay/tile occlusion integration", () => {
   beforeEach(() => {
     let nextFrameId = 1;
+    // The cancel side has to honour the handle: the coordinator cancels its
+    // pending frame on dispose, and a mock that ignores the id lets that
+    // frame's `runScan` still fire afterwards, against a torn-down registry
+    // or the next test's.
+    const timersByFrameId = new Map<number, ReturnType<typeof setTimeout>>();
     vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
       const frameId = nextFrameId;
       nextFrameId += 1;
-      setTimeout(() => {
-        callback(performance.now());
-      }, 0);
+      timersByFrameId.set(
+        frameId,
+        setTimeout(() => {
+          timersByFrameId.delete(frameId);
+          callback(performance.now());
+        }, 0),
+      );
       return frameId;
     });
-    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(
-      (_handle) => undefined,
-    );
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation((handle) => {
+      const timer = timersByFrameId.get(handle);
+      if (timer === undefined) return;
+      clearTimeout(timer);
+      timersByFrameId.delete(handle);
+    });
   });
 
   afterEach(() => {

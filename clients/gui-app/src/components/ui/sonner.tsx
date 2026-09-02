@@ -104,7 +104,11 @@ const Toaster = ({ ...props }: ToasterProps) => {
     };
     sync();
     const observer = new MutationObserver(sync);
-    observer.observe(section, { childList: true });
+    // `subtree`, not just the section's own children: a toast added to an
+    // ALREADY-mounted `<ol>` is a mutation inside it, not of the section, so
+    // a childList-only observer would keep the first measured size and let
+    // `pickToasterAnchor` compare a rect the grown toaster has outgrown.
+    observer.observe(section, { childList: true, subtree: true });
     return () => {
       observer.disconnect();
       deregisterByList.forEach((deregister) => deregister());

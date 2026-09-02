@@ -5,7 +5,7 @@ import {
   listBrowserOverlaySurfaces,
   listBrowserOverlayTiles,
   registerBrowserOverlay as registerBrowserOverlayDirect,
-  registerBrowserOverlayTile,
+  registerBrowserOverlayTile as registerBrowserOverlayTileDirect,
   resolveBrowserOverlayMotionTargets,
   resolveBrowserOverlayOcclusionTargets,
   setBrowserOverlayTileMotion,
@@ -13,14 +13,25 @@ import {
 import type { BrowserViewTileKey } from "@traycer-clients/shared/platform/browser-view";
 
 // Registry map hygiene: every registration made through `registerBrowserOverlay`
-// below is tracked and deregistered here, so a test that never calls its own
-// deregister thunk cannot leak a stale entry into the next test's
-// `overlaysById` map (the registry is module-level state, not reset per test).
+// or `registerBrowserOverlayTile` below is tracked and deregistered here, so a
+// test that never calls its own deregister thunk - an `expect` that throws
+// before the last statement is enough - cannot leak a stale entry into the
+// next test's `overlaysById` / `tilesByKeyId` map (the registry is
+// module-level state, not reset per test). Deregistering twice is a no-op, so
+// a test that does call its own thunk stays correct.
 let pendingDeregisters: Array<() => void> = [];
 function registerBrowserOverlay(
   input: Parameters<typeof registerBrowserOverlayDirect>[0],
 ): () => void {
   const deregister = registerBrowserOverlayDirect(input);
+  pendingDeregisters.push(deregister);
+  return deregister;
+}
+
+function registerBrowserOverlayTile(
+  input: Parameters<typeof registerBrowserOverlayTileDirect>[0],
+): () => void {
+  const deregister = registerBrowserOverlayTileDirect(input);
   pendingDeregisters.push(deregister);
   return deregister;
 }
