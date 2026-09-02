@@ -69,6 +69,7 @@ import {
   drawOfficeSprite,
   officePalette,
   officeSpriteSize,
+  type OfficePalette,
 } from "@/lib/comm-graph/office/office-pixel-art";
 import {
   ENVELOPE_ARC_LIFT,
@@ -83,6 +84,12 @@ import { officeClockAngles } from "@/lib/comm-graph/office/office-clock";
 import { officeFloorName } from "@/lib/comm-graph/office/office-floor-name";
 import { officeFlagKind } from "@/components/epic-canvas/comm-graph/office/office-flag-kind";
 import {
+  layoutNameTags,
+  NAME_TAG_LINE_HEIGHT,
+  type OfficeNameTagCandidate,
+} from "@/components/epic-canvas/comm-graph/office/office-name-tags";
+import {
+  OFFICE_CHARACTER_HEIGHT,
   OFFICE_LOGO_SIZE,
   OFFICE_TILE,
   type OfficeAgentInput,
@@ -90,6 +97,7 @@ import {
   type OfficeFloor,
   type OfficeFrame,
   type OfficeHitRegion,
+  type OfficeLayout,
   type OfficePoint,
   type OfficeRect,
   type OfficeSceneInput,
@@ -119,6 +127,11 @@ const VIEW_PERSIST_DEBOUNCE_MS = 150;
 const LABEL_FONT_PX = 10;
 const HOVER_LABEL_FONT_PX = 11;
 const MONOSPACE_STACK = "ui-monospace, SFMono-Regular, Menlo, monospace";
+const SIGN_FONT_PX = 10;
+const SIGN_PADDING_X = 4;
+const SIGN_PADDING_Y = 2;
+const SIGN_PLATE_RADIUS = 3;
+const SIGN_LETTER_SPACING = "0.08em";
 const CLOCK_HOUR_HAND = 3;
 const CLOCK_MINUTE_HAND = 4;
 const CLOCK_HUB_RADIUS = 1.5;
@@ -244,6 +257,8 @@ interface OfficeRuntime {
    */
   readonly getSceneInput: () => OfficeSceneInput | null;
   readonly setSceneInput: (next: OfficeSceneInput) => void;
+  readonly getHoveredAgentId: () => string | null;
+  readonly setHoveredAgentId: (next: string | null) => void;
   readonly getHostNames: () => ReadonlyMap<string, string>;
   readonly setHostNames: (next: ReadonlyMap<string, string>) => void;
 }
@@ -266,6 +281,7 @@ function createOfficeRuntime(view: CommGraphTileViewState): OfficeRuntime {
   let autoFitEnabled = isDefaultCommGraphView(view);
   let sceneInput: OfficeSceneInput | null = null;
   let hostNames: ReadonlyMap<string, string> = new Map();
+  let hoveredAgentId: string | null = null;
   return {
     getCamera: () => camera,
     getViewport: () => viewport,
@@ -310,6 +326,10 @@ function createOfficeRuntime(view: CommGraphTileViewState): OfficeRuntime {
     getSceneInput: () => sceneInput,
     setSceneInput: (next) => {
       sceneInput = next;
+    },
+    getHoveredAgentId: () => hoveredAgentId,
+    setHoveredAgentId: (next) => {
+      hoveredAgentId = next;
     },
     getHostNames: () => hostNames,
     setHostNames: (next) => {
@@ -499,6 +519,8 @@ interface DrawFrameArgs {
   /** One per host. A single-floor building names nothing - there is no choice to explain. */
   readonly floors: ReadonlyArray<OfficeFloor>;
   readonly hostNameById: ReadonlyMap<string, string>;
+  readonly awayAgentIds: ReadonlySet<string>;
+  readonly hoveredAgentId: string | null;
 }
 
 /**
@@ -678,25 +700,193 @@ function drawFloorSigns(args: {
   }
 }
 
+/**
+ * A room's name on a wall plate.
+ *
+ * SIGNAGE, not a name tag - and the distinction is the point. Cabin, area and
+ * pod names used to be drawn in the same face as an agent's name, so a reader
+ * counted "Cafeteria" as another person standing in the room. Uppercase,
+ * tracked out, and set on a plate, it reads as a fixture instead. The plate is
+ * also its own backing, so the four-offset outline the name tags use would
+ * only muddy it.
+ */
+function drawSignPlate(
+  ctx: CanvasRenderingContext2D,
+  sign: {
+    readonly text: string;
+    readonly screenX: number;
+    readonly screenY: number;
+    readonly palette: OfficePalette;
+  },
+): void {
+  const { palette, screenX, screenY, text } = sign;
+  ctx.save();
+  ctx.font = `bold ${SIGN_FONT_PX}px ${MONOSPACE_STACK}`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
+  ctx.letterSpacing = SIGN_LETTER_SPACING;
+  const width = ctx.measureText(text).width + SIGN_PADDING_X * 2;
+  const height = SIGN_FONT_PX + SIGN_PADDING_Y * 2;
+  const left = screenX - width / 2;
+  const top = screenY - SIGN_FONT_PX - SIGN_PADDING_Y;
+  ctx.beginPath();
+  if (typeof ctx.roundRect === "function") {
+    ctx.roundRect(left, top, width, height, SIGN_PLATE_RADIUS);
+  } else {
+    ctx.rect(left, top, width, height);
+  }
+  ctx.fillStyle = palette.ink;
+  ctx.fill();
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = palette.bright;
+  ctx.stroke();
+  ctx.fillStyle = palette.bright;
+  ctx.fillText(text, screenX, screenY);
+  ctx.restore();
+}
+
+/**
+ * The agent a name tag belongs to, or `null` when it belongs to no character.
+ *
+ * The scene emits a tag directly under its character and gives neither an id,
+ * so they are matched by GEOMETRY: same horizontal centre, and the tag's
+ * baseline within one tile below the character's feet. An empty desk's own
+ * plate label matches nothing - correctly, since a desk is not away.
+ */
+function nameTagOwner(
+  label: Extract<OfficeDrawable, { kind: "label" }>,
+  hitRegions: ReadonlyArray<OfficeHitRegion>,
+): string | null {
+  for (const region of hitRegions) {
+    if (region.rect.x + region.rect.width / 2 !== label.x) continue;
+    const feet = region.rect.y + region.rect.height;
+    if (label.y <= feet || label.y - feet > OFFICE_TILE) continue;
+    return region.agentId;
+  }
+  return null;
+}
+
+/**
+ * Agents whose character is not on its own chair tile - walking, on an errand,
+ * queueing, playing.
+ *
+ * Derived from the character hit region rather than from any scene internal:
+ * a region's bottom edge sits exactly on the bottom of the tile the character
+ * stands on, so the tile falls out of the rect with no offset to keep in step.
+ */
+function awayAgentIdsIn(
+  frame: OfficeFrame,
+  layout: OfficeLayout,
+): ReadonlySet<string> {
+  const away = new Set<string>();
+  for (const region of frame.hitRegions) {
+    const desk = layout.desks.get(region.agentId);
+    if (desk === undefined) continue;
+    if (region.rect.height !== OFFICE_CHARACTER_HEIGHT) continue;
+    const col = region.rect.x / OFFICE_TILE;
+    const row = (region.rect.y + region.rect.height) / OFFICE_TILE - 1;
+    if (col !== desk.chairTile.col || row !== desk.chairTile.row) {
+      away.add(region.agentId);
+    }
+  }
+  return away;
+}
+
+/**
+ * Cabin, area and pod names. They are the only `bright` labels the scene
+ * emits, which is what makes the tone a reliable test for "this is signage".
+ */
+function drawSignLabels(
+  ctx: CanvasRenderingContext2D,
+  labels: ReadonlyArray<Extract<OfficeDrawable, { kind: "label" }>>,
+  camera: OfficeCamera,
+  palette: OfficePalette,
+): void {
+  for (const label of labels) {
+    if (label.tone !== "bright") continue;
+    drawSignPlate(ctx, {
+      text: label.text.toUpperCase(),
+      screenX: label.x * camera.zoom + camera.x,
+      screenY: label.y * camera.zoom + camera.y,
+      palette,
+    });
+  }
+}
+
+/**
+ * Agent name tags, thinned and de-overlapped.
+ *
+ * An agent AWAY from its desk keeps its tag only while hovered: a walking
+ * character is already where the eye is, and its tag is what collides with
+ * everyone else's the moment a group gathers. What survives that is then
+ * placed by {@link layoutNameTags}, which moves or drops a tag rather than
+ * letting two print through each other.
+ */
+function drawNameTags(args: {
+  readonly ctx: CanvasRenderingContext2D;
+  readonly labels: ReadonlyArray<Extract<OfficeDrawable, { kind: "label" }>>;
+  readonly camera: OfficeCamera;
+  readonly palette: OfficePalette;
+  readonly backings: Readonly<Record<OfficeLabelTone, string>>;
+  readonly hitRegions: ReadonlyArray<OfficeHitRegion>;
+  readonly awayAgentIds: ReadonlySet<string>;
+  readonly hoveredAgentId: string | null;
+}): void {
+  const {
+    awayAgentIds,
+    backings,
+    camera,
+    ctx,
+    hitRegions,
+    hoveredAgentId,
+    labels,
+    palette,
+  } = args;
+  const candidates: OfficeNameTagCandidate[] = [];
+  ctx.font = `${LABEL_FONT_PX}px ${MONOSPACE_STACK}`;
+  for (const label of labels) {
+    if (label.tone === "bright") continue;
+    const owner = nameTagOwner(label, hitRegions);
+    if (owner !== null && awayAgentIds.has(owner) && owner !== hoveredAgentId) {
+      continue;
+    }
+    candidates.push({
+      text: label.text,
+      tone: label.tone,
+      centerX: label.x * camera.zoom + camera.x,
+      baselineY: label.y * camera.zoom + camera.y,
+      width: ctx.measureText(label.text).width,
+    });
+  }
+  for (const placed of layoutNameTags(candidates, NAME_TAG_LINE_HEIGHT)) {
+    drawScreenLabel(ctx, {
+      text: placed.text,
+      screenX: placed.centerX,
+      screenY: placed.baselineY,
+      fontPx: LABEL_FONT_PX,
+      color: placed.tone === "muted" ? palette.textMuted : palette.text,
+      backing: backings[placed.tone],
+      alpha: 1,
+    });
+  }
+}
+
 function drawOfficeFrame(args: DrawFrameArgs): void {
   const {
     camera,
     ctx,
+    awayAgentIds,
     dpr,
     floors,
     frame,
     hostNameById,
+    hoveredAgentId,
     nameById,
     searchMatchIds,
     theme,
     viewport,
   } = args;
   const palette = officePalette(theme);
-  const labelColors: Readonly<Record<OfficeLabelTone, string>> = {
-    default: palette.text,
-    muted: palette.textMuted,
-    bright: palette.bright,
-  };
   // The backing exists to separate glyphs from whatever they sit on, so it has
   // to contrast with the TEXT. A fixed dark backing did that for the dark
   // theme's light text and smeared the light theme's dark text into a bold
@@ -770,23 +960,19 @@ function drawOfficeFrame(args: DrawFrameArgs): void {
   // rather than `--foreground`, because they have to contrast with the ROOM,
   // which is the palette's own background and not the app's.
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  for (const label of labels) {
-    drawScreenLabel(ctx, {
-      text: label.text,
-      screenX: label.x * camera.zoom + camera.x,
-      screenY: label.y * camera.zoom + camera.y,
-      fontPx: LABEL_FONT_PX,
-      // `bright` is the cabin sign's tone: that sign is `palette.ink`, dark in
-      // both themes, so the room's own name needs a colour picked against the
-      // SIGN rather than against the floor the other labels sit on.
-      color: labelColors[label.tone],
-      backing: labelBackings[label.tone],
-      alpha: 1,
-    });
-  }
-  // A find match is named AND outlined. The name is the thing the query was
-  // typed against, so showing it is what makes a match checkable; the outline
-  // is what finds it on a crowded floor where a name tag alone reads as noise.
+
+  drawSignLabels(ctx, labels, camera, palette);
+  drawNameTags({
+    ctx,
+    labels,
+    camera,
+    palette,
+    backings: labelBackings,
+    hitRegions: frame.hitRegions,
+    awayAgentIds,
+    hoveredAgentId,
+  });
+
   drawFloorSigns({
     ctx,
     camera,
@@ -1289,6 +1475,8 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         nameById,
         floors: scene.layout().floors,
         hostNameById: runtime.getHostNames(),
+        awayAgentIds: awayAgentIdsIn(frame, scene.layout()),
+        hoveredAgentId: runtime.getHoveredAgentId(),
       });
       raf = requestAnimationFrame(step);
     };
@@ -1367,6 +1555,9 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       const region =
         point === null ? null : hitRegionFor(runtime.getHitRegions(), point);
       const camera = runtime.getCamera();
+      // Mirrored for the DRAW, which needs it to keep an away agent's name tag
+      // while the pointer is on it; the card itself is React state.
+      runtime.setHoveredAgentId(region === null ? null : region.agentId);
       setHoverCard(
         region === null
           ? null
@@ -1389,8 +1580,9 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   );
 
   const handlePointerLeave = useCallback(() => {
+    runtime.setHoveredAgentId(null);
     setHoverCard(null);
-  }, []);
+  }, [runtime]);
 
   const handlePointerUp = useCallback(
     (event: ReactPointerEvent<HTMLCanvasElement>) => {

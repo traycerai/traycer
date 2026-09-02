@@ -132,6 +132,29 @@ export type OfficeSpriteName =
   /** Low bookshelf seen top-down; vertical and horizontal pod outline pieces. */
   | "shelf"
   | "shelf-h"
+  /** Sleeping bag on the nap room floor; an agent lies on it. */
+  | "sleep-bag"
+  /** Armchair in the library nook. */
+  | "armchair"
+  /** Tall bookcase against a wall, the library's furniture. */
+  | "bookcase"
+  /** Garden ground, two checker variants. */
+  | "floor-grass-a"
+  | "floor-grass-b"
+  /** Garden tree, one tile wide, two tall. */
+  | "tree"
+  /** Garden bench, two tiles wide; seats are the tiles in front. */
+  | "bench"
+  /** Foosball table, two tiles wide, players on both long sides. */
+  | "foosball"
+  /** Dartboard mounted on a wall face. */
+  | "dartboard"
+  /** Small chess table with a board; seats are the tiles either side. */
+  | "chess-table"
+  /** Wall-mounted TV for the console corner; lit. */
+  | "tv"
+  /** Treadmill in the gym; an agent walks in place on it. */
+  | "treadmill"
   | "chair"
   | "plant"
   | "floor-a"
@@ -306,6 +329,30 @@ export interface OfficeFloor {
    * "Game room"). Cabins carry their own sign in `OfficeRoom`.
    */
   readonly areaSigns: ReadonlyArray<OfficeAreaSign>;
+  /**
+   * Every amenity room on this floor, including the cafeteria and game room
+   * (which stay mirrored in their own fields). Which rooms exist and how big
+   * they are follows the floor's agent count.
+   */
+  readonly amenities: ReadonlyArray<OfficeAmenity>;
+}
+
+export type OfficeAmenityKind =
+  | "cafeteria"
+  | "game"
+  | "nap"
+  | "library"
+  | "garden"
+  | "gym";
+
+export interface OfficeAmenity {
+  readonly kind: OfficeAmenityKind;
+  /** Outer bounds including the room's walls (the garden has a low hedge instead). */
+  readonly bounds: OfficeTileRect;
+  readonly doorTile: OfficeTilePos;
+  /** Left tile of the room's two-tile wall sign. */
+  readonly signTile: OfficeTilePos;
+  readonly name: string;
 }
 
 export interface OfficeAreaSign {
@@ -333,6 +380,22 @@ export type OfficeErrandKind =
   | "pingpong"
   /** In front of the arcade cabinet. */
   | "arcade"
+  /** One side of the foosball table; two agents play. */
+  | "foosball"
+  /** Throwing spot facing the dartboard. */
+  | "darts"
+  /** One seat at the chess table; two agents play. */
+  | "chess"
+  /** Sofa seat facing the TV. */
+  | "console"
+  /** A sleeping bag in the nap room. */
+  | "nap"
+  /** The armchair in the library nook. */
+  | "read"
+  /** A bench seat or a stroll spot in the garden. */
+  | "garden"
+  /** On the treadmill. */
+  | "treadmill"
   | "whiteboard"
   | "window"
   | "plant"

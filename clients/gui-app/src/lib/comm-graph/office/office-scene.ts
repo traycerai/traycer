@@ -276,6 +276,17 @@ const FILLER_SPIN_FACINGS: ReadonlyArray<OfficeFacing> = [
  * window is scenery, and a floor of scenery is the problem this solves.
  */
 const ERRAND_WEIGHTS: Readonly<Record<OfficeErrandTargetKind, number>> = {
+  // Zero until a lane places these spots: an errand kind with no spot on the
+  // floor can never be chosen, and weighting one that cannot happen would only
+  // skew the draw against the kinds that can.
+  foosball: 0,
+  darts: 0,
+  chess: 0,
+  console: 0,
+  nap: 0,
+  read: 0,
+  garden: 0,
+  treadmill: 0,
   coffee: 3,
   cafe: 3,
   sofa: 2,

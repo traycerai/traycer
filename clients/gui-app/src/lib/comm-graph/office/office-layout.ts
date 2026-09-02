@@ -1791,6 +1791,8 @@ function fitFloor(request: FloorFitRequest): OfficeFloor {
     cafeteria: cafeteria === null ? null : cafeteria.bounds,
     gameRoom: gameRoom === null ? null : gameRoom.bounds,
     areaSigns: areaSignsFor(cafeteria, gameRoom),
+    // Placed by a later lane; carried now so every floor has one shape.
+    amenities: [],
   };
 }
 
