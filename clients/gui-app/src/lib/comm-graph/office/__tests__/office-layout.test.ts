@@ -766,6 +766,10 @@ describe("layoutOffice floors", () => {
       "whiteboard",
       "window",
       "plant",
+      "water-plant",
+      "sofa",
+      "bin",
+      "peek",
       "corridor",
     ]) {
       expect(kinds.has(kind as never), kind).toBe(true);
@@ -811,6 +815,123 @@ describe("layoutOffice floors", () => {
       expect(board[0].tile.row).toBe(coffee[0].tile.row - 1);
     },
   );
+
+  it("stands a sofa in the break room with a seat in front of each half", () => {
+    const layout = layoutOffice(SINGLE_HOST);
+    const floor = layout.floors[0];
+    const room = floor.cafeteria;
+    if (room === null) throw new Error("no cafeteria");
+
+    const sofas = layout.props.filter((prop) => prop.sprite.name === "sofa");
+    expect(sofas).toHaveLength(1);
+    const sofa = sofas[0].tile;
+    // Inside the room's walls, not standing in one of them.
+    expect(sofa.col).toBeGreaterThan(room.col);
+    expect(sofa.col + 1).toBeLessThan(room.col + room.cols - 1);
+    // Two tiles of furniture, and neither is walkable.
+    expect(layout.walkable[sofa.row][sofa.col]).toBe(false);
+    expect(layout.walkable[sofa.row][sofa.col + 1]).toBe(false);
+
+    const seats = floor.errandSpots.filter((spot) => spot.kind === "sofa");
+    expect(seats).toHaveLength(2);
+    for (const seat of seats) {
+      // Directly in front of a sofa tile: a seat anywhere else is a character
+      // sitting in mid-air beside the furniture.
+      expect(seat.tile.row).toBe(sofa.row + 1);
+      expect(seat.tile.col).toBeGreaterThanOrEqual(sofa.col);
+      expect(seat.tile.col).toBeLessThanOrEqual(sofa.col + 1);
+      expect(seat.facing).toBe("up");
+    }
+  });
+
+  it("gives every cabin a bin with a throwing line under it", () => {
+    const agents = [
+      agent({ id: "root-a", createdAt: 1 }),
+      agent({ id: "a1", parentId: "root-a", createdAt: 2 }),
+      agent({ id: "root-b", createdAt: 3 }),
+    ];
+    const layout = layoutOffice(agents);
+    const bins = layout.props.filter((prop) => prop.sprite.name === "bin");
+    expect(bins).toHaveLength(layout.rooms.length);
+
+    const lines = layout.floors[0].errandSpots.filter(
+      (spot) => spot.kind === "bin",
+    );
+    expect(lines).toHaveLength(bins.length);
+    for (const bin of bins) {
+      // A bin is furniture, so nothing routes through it...
+      expect(layout.walkable[bin.tile.row][bin.tile.col]).toBe(false);
+      // ...and it stands in the cabin it belongs to, never in the corridor.
+      expect(
+        layout.rooms.some(
+          (room) =>
+            bin.tile.col > room.bounds.col &&
+            bin.tile.col < room.bounds.col + room.bounds.cols - 1 &&
+            bin.tile.row > room.bounds.row &&
+            bin.tile.row < room.bounds.row + room.bounds.rows - 1,
+        ),
+        `${bin.tile.col},${bin.tile.row}`,
+      ).toBe(true);
+      const line = lines.find((spot) => spot.tile.col === bin.tile.col);
+      expect(line, `no line under ${bin.tile.col}`).toBeDefined();
+      if (line === undefined) continue;
+      // Standing back from it, looking at it: a throw needs the distance.
+      expect(line.tile.row).toBeGreaterThan(bin.tile.row);
+      expect(line.facing).toBe("up");
+      expect(layout.walkable[line.tile.row][line.tile.col]).toBe(true);
+    }
+  });
+
+  it("puts a watering spot beside each plant and the looking spot behind it", () => {
+    const layout = layoutOffice(SINGLE_HOST);
+    const spots = layout.floors[0].errandSpots;
+    const plants = layout.props.filter((prop) => prop.sprite.name === "plant");
+    expect(plants.length).toBeGreaterThan(0);
+
+    for (const plant of plants) {
+      const water = spots.find(
+        (spot) =>
+          spot.kind === "water-plant" && spot.tile.col === plant.tile.col,
+      );
+      const look = spots.find(
+        (spot) => spot.kind === "plant" && spot.tile.col === plant.tile.col,
+      );
+      if (water === undefined || look === undefined) continue;
+      // The can has to reach the leaves, so watering happens from the tile
+      // touching the plant; standing and looking at it happens from further
+      // back, and the two can never be the same tile.
+      expect(water.tile.row).toBe(plant.tile.row + 1);
+      expect(look.tile.row).toBeGreaterThan(water.tile.row);
+    }
+    expect(spots.some((spot) => spot.kind === "water-plant")).toBe(true);
+  });
+
+  it("opens a peek spot on the corridor outside every cabin door", () => {
+    const agents = [
+      agent({ id: "root-a", createdAt: 1 }),
+      agent({ id: "root-b", createdAt: 2 }),
+      agent({ id: "root-c", createdAt: 3 }),
+    ];
+    const layout = layoutOffice(agents);
+    const peeks = layout.floors[0].errandSpots.filter(
+      (spot) => spot.kind === "peek",
+    );
+    expect(layout.rooms).toHaveLength(3);
+    expect(peeks).toHaveLength(3);
+
+    for (const room of layout.rooms) {
+      const outside = peeks.find(
+        (spot) =>
+          spot.tile.col === room.doorTile.col &&
+          spot.tile.row === room.doorTile.row + 1,
+      );
+      expect(outside, room.rootAgentId).toBeDefined();
+      if (outside === undefined) continue;
+      // Looking IN through the door it stands under.
+      expect(outside.facing).toBe("up");
+      expect(layout.walkable[outside.tile.row][outside.tile.col]).toBe(true);
+    }
+  });
 
   it("hangs the menu board over the coffee machine on every floor", () => {
     const layout = layoutOffice([

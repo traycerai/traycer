@@ -38,7 +38,7 @@ const SECTIONS: ReadonlyArray<LegendSection> = [
       { signal: "At reception", meaning: "queued for you" },
       {
         signal:
-          "Cafeteria, water cooler, window and corridor trips, desk stretches",
+          "Cafeteria, cooler, window, sofa, paper toss, watering plants, peeking, strolling",
         meaning: "idle",
       },
       { signal: "Ghosted", meaning: "archived" },

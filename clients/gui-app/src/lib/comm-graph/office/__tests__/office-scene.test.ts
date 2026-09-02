@@ -343,6 +343,33 @@ function headOfRegion(scene: OfficeScene, agentId: string): OfficePoint | null {
   return null;
 }
 
+/**
+ * A layout offering ONLY these errand kinds. Weights decide between the options
+ * a floor has, so pinning the options is the only way to test one activity
+ * without testing the draw that leads to it.
+ */
+function onlyKinds(
+  kinds: ReadonlyArray<string>,
+): (input: ReadonlyArray<OfficeAgentInput>) => OfficeLayout {
+  return (input) => {
+    const base = layoutOffice(input);
+    return {
+      ...base,
+      floors: base.floors.map((entry) => ({
+        ...entry,
+        errandSpots: entry.errandSpots.filter((spot) =>
+          kinds.includes(spot.kind),
+        ),
+      })),
+    };
+  };
+}
+
+/** Every paper ball drawn this frame, in overlay order. */
+function paperBalls(frame: OfficeFrame): ReadonlyArray<OfficeSpriteDrawable> {
+  return sprites(frame.overlay, "paper-ball");
+}
+
 function crewAway(frame: OfficeFrame): ReadonlyArray<string> {
   const away: string[] = [];
   for (const region of frame.hitRegions) {
@@ -830,10 +857,120 @@ describe("OfficeScene", () => {
     expect(firstBreakMs).not.toBeNull();
     expect(firstBreakMs).toBeGreaterThanOrEqual(5_000);
     expect(firstBreakMs).toBeLessThanOrEqual(10_000);
-    // ...and a floor where everyone stands up reads as an evacuation. Four
-    // idle agents put the cap at two, so this is the cap holding rather than
-    // the stagger happening to space them out.
-    expect(mostAtOnce).toBe(2);
+    // ...and then EVERYBODY goes. There is no cap: an idle agent is never at
+    // its desk, so a floor of four idle agents is a floor with four of them
+    // out. The old half-the-floor limit is what left the other half sitting
+    // perfectly still, which is the thing this is for.
+    expect(mostAtOnce).toBe(IDLE_CREW.length);
+  });
+
+  it("keeps every idle agent away for as long as it stays idle", () => {
+    const scene = new OfficeScene(layoutOffice);
+    scene.sync(sceneInput({ agents: IDLE_CREW, visibleAgentIds: CREW_IDS }));
+
+    // Past the threshold plus the widest stagger, nobody has any business in a
+    // chair. Sampled across a full minute rather than at one instant, because
+    // the failure this catches is an agent that goes back between errands - and
+    // that reads as a single frame of somebody seated, not as a floor at rest.
+    for (let step = 0; step < 90; step += 1) scene.tick(100);
+    let seatedFrames = 0;
+    for (let step = 0; step < 600; step += 1) {
+      scene.tick(100);
+      const away = new Set(crewAway(scene.frame()));
+      for (const person of IDLE_CREW) {
+        if (!away.has(person.id)) seatedFrames += 1;
+      }
+    }
+    expect(seatedFrames).toBe(0);
+  });
+
+  it("chains one errand into the next without going back to the desk", () => {
+    const scene = new OfficeScene(layoutOffice);
+    scene.sync(sceneInput({ agents: IDLE_CREW, visibleAgentIds: CREW_IDS }));
+
+    // Every spot alpha comes to a stop on, with the kind the plan gives it.
+    const byTile = new Map<string, string>();
+    for (const spot of scene.layout().floors[0].errandSpots) {
+      byTile.set(`${spot.tile.col},${spot.tile.row}`, spot.kind);
+    }
+    const kinds: string[] = [];
+    let previous = characterRect(scene.frame(), "alpha");
+    let moving = true;
+    for (let step = 0; step < 2_000; step += 1) {
+      scene.tick(100);
+      const rect = characterRect(scene.frame(), "alpha");
+      const still = rect.x === previous.x && rect.y === previous.y;
+      previous = rect;
+      if (!still) {
+        moving = true;
+        continue;
+      }
+      if (!moving) continue;
+      moving = false;
+      const kind = byTile.get(
+        `${rect.x / OFFICE_TILE},${(rect.y + 4) / OFFICE_TILE}`,
+      );
+      if (kind !== undefined) kinds.push(kind);
+    }
+
+    expect(kinds.length).toBeGreaterThan(3);
+    // Twice the same thing running is the animation being stuck rather than an
+    // agent with somewhere to be. A stroll's own legs are all `corridor`, but
+    // they are ONE errand - the kind that may not repeat is the errand's.
+    for (let index = 1; index < kinds.length; index += 1) {
+      if (kinds[index] === "corridor" && kinds[index - 1] === "corridor") {
+        continue;
+      }
+      expect(kinds[index], `errand ${index}`).not.toBe(kinds[index - 1]);
+    }
+    expect(new Set(kinds).size).toBeGreaterThan(2);
+  });
+
+  it("strolls the corridors when every spot on the floor is taken", () => {
+    // One cooler spot and nothing else: seven of the eight have nowhere to be,
+    // and the old engine put them back in their chairs.
+    const crowd = [1, 2, 3, 4, 5, 6, 7, 8].map((index) =>
+      agent({ id: `agent-${index}`, createdAt: index }),
+    );
+    const ids = new Set(crowd.map((person) => person.id));
+    const oneSpot = (input: ReadonlyArray<OfficeAgentInput>): OfficeLayout => {
+      const base = layoutOffice(input);
+      return {
+        ...base,
+        floors: base.floors.map((entry) => ({
+          ...entry,
+          errandSpots: entry.errandSpots.slice(0, 1),
+        })),
+      };
+    };
+    const scene = new OfficeScene(oneSpot);
+    scene.sync(sceneInput({ agents: crowd, visibleAgentIds: ids }));
+
+    for (let step = 0; step < 200; step += 1) scene.tick(100);
+    const away = new Set<string>();
+    let sat = 0;
+    for (let step = 0; step < 300; step += 1) {
+      scene.tick(100);
+      const frame = scene.frame();
+      for (const region of frame.hitRegions) {
+        if (region.rect.height !== OFFICE_CHARACTER_HEIGHT) continue;
+        const desk = scene.layout().desks.get(region.agentId);
+        if (desk === undefined) continue;
+        const seated =
+          region.rect.x === desk.chairTile.col * OFFICE_TILE &&
+          region.rect.y === desk.chairTile.row * OFFICE_TILE - 4;
+        if (seated) sat += 1;
+        else away.add(region.agentId);
+        // ...and a stroller never sits down: the sofa is the only errand taken
+        // sitting, and this floor has no sofa spot left.
+        const sprite = characterSpriteAt(frame, region.rect);
+        if (sprite !== null && !seated) {
+          expect(sprite.pose, region.agentId).not.toBe("sit");
+        }
+      }
+    }
+    expect(away.size).toBe(crowd.length);
+    expect(sat).toBe(0);
   });
 
   it("visits a spread of destinations rather than the same one twice", () => {
@@ -908,6 +1045,182 @@ describe("OfficeScene", () => {
     }
   });
 
+  it("throws paper at the bin, misses some of it, and stops throwing", () => {
+    const scene = new OfficeScene(onlyKinds(["bin"]));
+    scene.sync(sceneInput({ agents: IDLE_CREW, visibleAgentIds: CREW_IDS }));
+
+    // Where the bins actually are, so a ball can be shown to be aimed at one
+    // rather than merely to exist.
+    const bins = scene
+      .layout()
+      .props.filter((prop) => prop.sprite.name === "bin");
+    expect(bins.length).toBeGreaterThan(0);
+
+    let thrown = 0;
+    let flew = false;
+    let rested = 0;
+    let previous: ReadonlyArray<OfficeSpriteDrawable> = [];
+    for (let step = 0; step < 900; step += 1) {
+      scene.tick(100);
+      const balls = paperBalls(scene.frame());
+      if (balls.length > previous.length) thrown += balls.length;
+      for (const ball of balls) {
+        // In the air: no two frames of a flight share a position.
+        if (
+          previous.some(
+            (before) => before.x !== ball.x && before.y === ball.y,
+          ) ||
+          previous.some((before) => before.x === ball.x && before.y !== ball.y)
+        ) {
+          flew = true;
+        }
+        // On the floor: a miss holds one position while it lies there.
+        if (
+          previous.some((before) => before.x === ball.x && before.y === ball.y)
+        ) {
+          rested += 1;
+        }
+      }
+      previous = balls;
+    }
+
+    expect(thrown).toBeGreaterThan(0);
+    expect(flew).toBe(true);
+    // A missed ball rests for three seconds - thirty frames at this tick - so
+    // any resting at all is a miss, and it is the miss that proves the throw
+    // was not simply drawn at its destination.
+    expect(rested).toBeGreaterThan(0);
+
+    // ...and the tosses end. A bin errand that never finished would leave a
+    // character throwing at it forever.
+    let quiet = 0;
+    for (let step = 0; step < 200 && quiet < 20; step += 1) {
+      scene.tick(100);
+      quiet = paperBalls(scene.frame()).length === 0 ? quiet + 1 : 0;
+    }
+    expect(quiet).toBeGreaterThanOrEqual(20);
+  });
+
+  it("waters a cabin plant with a can and sparkles it at the end", () => {
+    const scene = new OfficeScene(onlyKinds(["water-plant"]));
+    scene.sync(sceneInput({ agents: IDLE_CREW, visibleAgentIds: CREW_IDS }));
+
+    const plants = new Set(
+      scene
+        .layout()
+        .props.filter((prop) => prop.sprite.name === "plant")
+        .map((prop) => `${prop.tile.col},${prop.tile.row}`),
+    );
+    let cans = 0;
+    let sparkledPlants = 0;
+    for (let step = 0; step < 600; step += 1) {
+      scene.tick(100);
+      const frame = scene.frame();
+      cans += sprites(frame.overlay, "watering-can").length;
+      for (const sparkle of sprites(frame.overlay, "sparkle")) {
+        // On the PLANT, not over the waterer's head: tile centres are the only
+        // place a sparkle at `(col + 8, row + 8)` can have come from.
+        const key = `${(sparkle.x - OFFICE_TILE / 2) / OFFICE_TILE},${(sparkle.y - OFFICE_TILE / 2) / OFFICE_TILE}`;
+        if (plants.has(key)) sparkledPlants += 1;
+      }
+    }
+    expect(cans).toBeGreaterThan(0);
+    expect(sparkledPlants).toBeGreaterThan(0);
+  });
+
+  it("sits down on the cafeteria sofa instead of standing at it", () => {
+    const scene = new OfficeScene(onlyKinds(["sofa"]));
+    scene.sync(sceneInput({ agents: IDLE_CREW, visibleAgentIds: CREW_IDS }));
+
+    const seats = scene
+      .layout()
+      .floors[0].errandSpots.filter((spot) => spot.kind === "sofa");
+    expect(seats).toHaveLength(2);
+
+    let sat = false;
+    let dozed = false;
+    for (let step = 0; step < 900 && !(sat && dozed); step += 1) {
+      scene.tick(100);
+      const frame = scene.frame();
+      for (const seat of seats) {
+        const rect: OfficeRect = {
+          x: seat.tile.col * OFFICE_TILE,
+          y: seat.tile.row * OFFICE_TILE - 4,
+          width: OFFICE_CHARACTER_WIDTH,
+          height: OFFICE_CHARACTER_HEIGHT,
+        };
+        const sprite = characterSpriteAt(frame, rect);
+        if (sprite === null) continue;
+        // Seated, and turned back toward the room rather than at the cushion
+        // it walked up to.
+        if (sprite.pose === "sit" && sprite.facing === "down") sat = true;
+        if (hasBubbleAt(frame, "bubble-sleep", { x: rect.x + 8, y: rect.y })) {
+          dozed = true;
+        }
+      }
+    }
+    expect(sat).toBe(true);
+    expect(dozed).toBe(true);
+  });
+
+  it("peeks in at another cabin's door and never at its own", () => {
+    const families = [
+      agent({ id: "root-a", createdAt: 1 }),
+      agent({ id: "a1", parentId: "root-a", createdAt: 2 }),
+      agent({ id: "root-b", createdAt: 3 }),
+      agent({ id: "b1", parentId: "root-b", createdAt: 4 }),
+    ];
+    const ids = new Set(families.map((person) => person.id));
+    const scene = new OfficeScene(onlyKinds(["peek"]));
+    scene.sync(sceneInput({ agents: families, visibleAgentIds: ids }));
+
+    // Each peek tile belongs to the cabin whose door is the tile above it.
+    const doorOwners = new Map<string, string>();
+    for (const room of scene.layout().rooms) {
+      doorOwners.set(
+        `${room.doorTile.col},${room.doorTile.row + 1}`,
+        room.rootAgentId,
+      );
+    }
+    expect(doorOwners.size).toBe(2);
+
+    let peeks = 0;
+    for (let step = 0; step < 600; step += 1) {
+      scene.tick(100);
+      for (const [key, agentId] of standingByTile(scene)) {
+        const owner = doorOwners.get(key);
+        if (owner === undefined) continue;
+        peeks += 1;
+        // Standing outside your OWN door is not a peek, it is loitering.
+        expect(cabinOf(scene, agentId), `${agentId} at ${key}`).not.toBe(owner);
+      }
+    }
+    expect(peeks).toBeGreaterThan(0);
+  });
+
+  it("offers the stairwell only on a building with more than one floor", () => {
+    const single = layoutOffice(IDLE_CREW);
+    expect(
+      single.floors[0].errandSpots.some((spot) => spot.kind === "stairs"),
+    ).toBe(false);
+
+    const stacked = [
+      agent({ id: "alpha", hostId: "host-a", createdAt: 1 }),
+      agent({ id: "beta", hostId: "host-b", createdAt: 2 }),
+    ];
+    const layout = layoutOffice(stacked);
+    expect(layout.floors).toHaveLength(2);
+    for (const floor of layout.floors) {
+      const stairs = floor.errandSpots.filter((spot) => spot.kind === "stairs");
+      expect(stairs).toHaveLength(1);
+      // Beside the well and looking at it, on a tile you can actually stand on.
+      expect(layout.walkable[stairs[0].tile.row][stairs[0].tile.col]).toBe(
+        true,
+      );
+      expect(stairs[0].facing).toBe("right");
+    }
+  });
+
   it("keeps two agents at neighbouring cafeteria spots talking in turn", () => {
     const crowd = [1, 2, 3, 4, 5, 6].map((index) =>
       agent({ id: `agent-${index}`, createdAt: index }),
@@ -975,6 +1288,16 @@ describe("OfficeScene", () => {
     const scene = new OfficeScene(layoutOffice);
     scene.sync(sceneInput({ agents: IDLE_CREW, visibleAgentIds: CREW_IDS }));
 
+    // The sofa is the one place off a desk where sitting is the activity, so
+    // it is the one place `sit` does not mean a filler leaked onto the floor.
+    const sofaKeys = new Set(
+      scene
+        .layout()
+        .floors[0].errandSpots.filter((spot) => spot.kind === "sofa")
+        .map((spot) => `${spot.tile.col},${spot.tile.row}`),
+    );
+    expect(sofaKeys.size).toBeGreaterThan(0);
+
     for (let step = 0; step < 1_500; step += 1) {
       scene.tick(100);
       const frame = scene.frame();
@@ -982,6 +1305,8 @@ describe("OfficeScene", () => {
         if (region.rect.height !== OFFICE_CHARACTER_HEIGHT) continue;
         const seated = crewSeatedRect(region.agentId);
         if (region.rect.x === seated.x && region.rect.y === seated.y) continue;
+        const key = `${region.rect.x / OFFICE_TILE},${(region.rect.y + 4) / OFFICE_TILE}`;
+        if (sofaKeys.has(key)) continue;
         const sprite = characterSpriteAt(frame, region.rect);
         if (sprite === null) continue;
         // A character off its chair is walking or standing at a spot. `sit` on
@@ -1550,8 +1875,17 @@ describe("OfficeScene", () => {
     expect(characterRect(returning, "alpha").y).toBe(
       scene.layout().floors[0].doorTile.row * OFFICE_TILE - 4,
     );
-    for (let step = 0; step < 120; step += 1) scene.tick(100);
-    expect(characterRect(scene.frame(), "alpha")).toEqual(seatedRect("alpha"));
+    // The walk in ends at the chair. It does not STAY there - an idle agent is
+    // never at its desk for long - so what is asserted is that the return
+    // completes, not where the character is a dozen seconds later.
+    let arrived = false;
+    for (let step = 0; step < 120 && !arrived; step += 1) {
+      scene.tick(100);
+      arrived =
+        JSON.stringify(characterRect(scene.frame(), "alpha")) ===
+        JSON.stringify(seatedRect("alpha"));
+    }
+    expect(arrived).toBe(true);
   });
 
   it("sheets an archived desk with no walk at all when motion is reduced", () => {

@@ -167,6 +167,22 @@ const CORNER_COOLER_COL_OFFSET = 5;
 
 /** A table is two tiles wide, and each of its tiles seats one agent. */
 const CAFE_TABLE_WIDTH_TILES = 2;
+/**
+ * The sofa stands against the break room's RIGHT wall, on the fixture row past
+ * the vending machine, with its two seats on the aisle tiles in front of it.
+ * Two tiles wide like the tables, so it seats a pair rather than one lounger.
+ */
+const CAFETERIA_SOFA_COL_OFFSET = 7;
+const SOFA_WIDTH_TILES = 2;
+/**
+ * The waste bin, in the manager desk's own slot: the spare column past the
+ * plant, on the desk row. Deliberately NOT the cabin's left aisle column -
+ * that column is how a character gets between slot rows, and a bin standing in
+ * it would wall a cabin's lower desks off from its door.
+ */
+const BIN_COL_OFFSET = 3;
+/** The bin's throwing line: the cabin aisle two rows under it, looking up. */
+const BIN_SPOT_ROW_OFFSET = 2;
 /** How many corridor spots one floor offers, and how wide the sample is. */
 const MAX_CORRIDOR_SPOTS = 4;
 /** More than three windows to stand at reads as a floor with nothing else to do. */
@@ -643,6 +659,8 @@ interface CafeteriaPlan {
   readonly vendingTile: OfficeTilePos;
   /** Left tile of each two-tile table. */
   readonly tableTiles: ReadonlyArray<OfficeTilePos>;
+  /** Left tile of the two-tile sofa, against the room's right wall. */
+  readonly sofaTile: OfficeTilePos;
 }
 
 /**
@@ -693,6 +711,12 @@ function planCafeteria(
       col: col + offset,
       row: row + CAFETERIA_TABLE_ROW,
     })),
+    // On the fixture row past the vending machine, so it backs onto the same
+    // wall the machines do and its seats look out over the tables.
+    sofaTile: {
+      col: col + CAFETERIA_SOFA_COL_OFFSET,
+      row: row + CAFETERIA_FIXTURE_ROW,
+    },
   };
 }
 
@@ -744,6 +768,15 @@ function buildCafeteria(context: PlanContext, plan: CafeteriaPlan): void {
       blockPlanTile(context, { col: tile.col + offset, row: tile.row });
     }
   }
+  // Two tiles wide like a table, and blocked across both: a sofa is furniture
+  // you sit ON from the front, never a tile the room routes through.
+  context.props.push({ sprite: { name: "sofa" }, tile: plan.sofaTile });
+  for (let offset = 0; offset < SOFA_WIDTH_TILES; offset += 1) {
+    blockPlanTile(context, {
+      col: plan.sofaTile.col + offset,
+      row: plan.sofaTile.row,
+    });
+  }
 }
 
 /**
@@ -793,6 +826,7 @@ interface ErrandSpotRequest {
   readonly cafeteria: CafeteriaPlan | null;
   readonly corner: CornerFittings | null;
   readonly rooms: ReadonlyArray<OfficeRoom>;
+  readonly stairsTile: OfficeTilePos | null;
 }
 
 /**
@@ -855,6 +889,17 @@ function addCafeteriaSpots(builder: SpotBuilder, plan: CafeteriaPlan): void {
       );
     }
   }
+  // One seat per sofa tile, on the aisle in front of it. The facing looks AT
+  // the sofa, as every spot's does; the scene turns whoever sits down back
+  // toward the room, which is the way a person on a sofa actually faces.
+  for (let offset = 0; offset < SOFA_WIDTH_TILES; offset += 1) {
+    addSpot(
+      builder,
+      "sofa",
+      { col: plan.sofaTile.col + offset, row: aisleRow },
+      "up",
+    );
+  }
 }
 
 function addCornerSpots(builder: SpotBuilder, corner: CornerFittings): void {
@@ -899,7 +944,12 @@ function addWallSpots(builder: SpotBuilder, build: FloorBuild): void {
   }
 }
 
-/** One spot per cabin plant: the tile directly under it, on the chair row. */
+/**
+ * Two spots per cabin plant, stacked under it. The near one is where you stand
+ * to WATER it, close enough that a can held at the hand reaches the leaves; the
+ * far one is the older errand of simply standing and looking at it, moved a row
+ * back so the two can never be the same tile.
+ */
 function addPlantSpots(builder: SpotBuilder, build: FloorBuild): void {
   const top = build.originRow;
   const bottom = top + build.localRows - 1;
@@ -908,10 +958,72 @@ function addPlantSpots(builder: SpotBuilder, build: FloorBuild): void {
     if (prop.tile.row < top || prop.tile.row > bottom) continue;
     addSpot(
       builder,
-      "plant",
+      "water-plant",
       { col: prop.tile.col, row: prop.tile.row + 1 },
       "up",
     );
+    addSpot(
+      builder,
+      "plant",
+      { col: prop.tile.col, row: prop.tile.row + 2 },
+      "up",
+    );
+  }
+}
+
+/** One throwing line per cabin bin: the aisle two rows under it, looking up. */
+function addBinSpots(builder: SpotBuilder, build: FloorBuild): void {
+  const top = build.originRow;
+  const bottom = top + build.localRows - 1;
+  for (const prop of builder.context.props) {
+    if (prop.sprite.name !== "bin") continue;
+    if (prop.tile.row < top || prop.tile.row > bottom) continue;
+    addSpot(
+      builder,
+      "bin",
+      { col: prop.tile.col, row: prop.tile.row + BIN_SPOT_ROW_OFFSET },
+      "up",
+    );
+  }
+}
+
+/**
+ * The corridor tile directly outside each cabin's door, looking in. A peek is
+ * paid to SOMEBODY ELSE'S room - the scene is what refuses an agent its own
+ * doorway, because the plan does not know who is idle.
+ */
+function addPeekSpots(
+  builder: SpotBuilder,
+  build: FloorBuild,
+  rooms: ReadonlyArray<OfficeRoom>,
+): void {
+  const top = build.originRow;
+  const bottom = top + build.localRows - 1;
+  for (const room of rooms) {
+    const door = room.doorTile;
+    if (door.row < top || door.row > bottom) continue;
+    addSpot(builder, "peek", { col: door.col, row: door.row + 1 }, "up");
+  }
+}
+
+/**
+ * Beside the stairwell, looking at it. Only a stacked building has one, so a
+ * single-floor epic simply offers no such spot - which is what makes the errand
+ * multi-floor-only without the scene having to count storeys.
+ */
+function addStairsSpot(
+  builder: SpotBuilder,
+  stairsTile: OfficeTilePos | null,
+): void {
+  if (stairsTile === null) return;
+  // Left of the well, on each of the two rows it spans: the first that is
+  // walkable wins, and a well hard against furniture simply offers none.
+  for (let offset = 0; offset < STAIRS_TILES; offset += 1) {
+    const tile: OfficeTilePos = {
+      col: stairsTile.col - 1,
+      row: stairsTile.row + offset,
+    };
+    if (addSpot(builder, "stairs", tile, "right")) return;
   }
 }
 
@@ -969,6 +1081,11 @@ function errandSpotsFor(
   else if (corner !== null) addCornerSpots(builder, corner);
   addWallSpots(builder, request.build);
   addPlantSpots(builder, request.build);
+  addBinSpots(builder, request.build);
+  addPeekSpots(builder, request.build, request.rooms);
+  addStairsSpot(builder, request.stairsTile);
+  // Last, so a corridor sample can never take a tile one of the named spots
+  // above was going to want.
   addCorridorSpots(builder, request);
   return builder.spots;
 }
@@ -1045,6 +1162,32 @@ function addManagerPlants(
         row: desk.deskTile.row,
       },
     });
+  }
+}
+
+/**
+ * One bin per cabin, in the manager's own slot: the spare column past the
+ * plant, on the desk row. Every slot is five wide whether or not it holds a
+ * plant, so that column exists in every cabin - and taking it leaves the
+ * slot's LAST column free, which is the one a character uses to get between
+ * slot rows when the cabin's left aisle is busy.
+ *
+ * Skipped where the tile is already spoken for, so a bin can never be the
+ * thing that walls a desk off from its door.
+ */
+function addCabinBins(
+  context: PlanContext,
+  desks: ReadonlyMap<string, OfficeDesk>,
+): void {
+  for (const desk of desks.values()) {
+    if (!desk.manager) continue;
+    const tile: OfficeTilePos = {
+      col: desk.deskTile.col + BIN_COL_OFFSET,
+      row: desk.deskTile.row,
+    };
+    if (tile.col >= context.cols) continue;
+    if (!context.walkable[tile.row][tile.col]) continue;
+    addBlockingProp(context, { sprite: { name: "bin" }, tile });
   }
 }
 
@@ -1187,6 +1330,7 @@ function fitFloor(request: FloorFitRequest): OfficeFloor {
       cafeteria,
       corner,
       rooms: request.rooms,
+      stairsTile,
     }),
     cafeteria: cafeteria === null ? null : cafeteria.bounds,
     // Placed by a later lane. The fields are carried now so every floor has
@@ -1218,6 +1362,7 @@ export function layoutOffice(
   // Before the storeys are fitted out, so a cabin's own furniture is already
   // standing when the errand spots are picked over the finished grid.
   addManagerPlants(context, desks);
+  addCabinBins(context, desks);
   addPodPartitions(context, builds, desks);
 
   const multiFloor = builds.length > 1;
