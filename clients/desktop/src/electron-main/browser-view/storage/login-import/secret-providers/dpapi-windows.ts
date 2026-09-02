@@ -1,3 +1,4 @@
+import { win32 } from "node:path";
 import type { CommandRunner } from "./run-command";
 
 /**
@@ -11,7 +12,22 @@ import type { CommandRunner } from "./run-command";
  * the process table for every other process on the machine to read.
  */
 
-const POWERSHELL_BINARY = "powershell.exe";
+/**
+ * Windows PowerShell by its absolute path, never by lookup: `spawn` would
+ * search `PATH` in order, and a writable directory ahead of System32 could
+ * supply a `powershell.exe` that receives the sealed key on stdin and answers
+ * a key of its own. `SystemRoot` is what Windows itself sets for the
+ * installation; the literal is its documented default.
+ */
+export function windowsPowerShellPath(env: NodeJS.ProcessEnv): string {
+  return win32.join(
+    env.SystemRoot ?? "C:\\Windows",
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
+    "powershell.exe",
+  );
+}
 const DPAPI_TIMEOUT_MS = 30_000;
 const DPAPI_PREFIX = Buffer.from("DPAPI", "latin1");
 const CHROMIUM_GCM_KEY_LENGTH = 32;
@@ -41,7 +57,7 @@ export async function unprotectChromiumWindowsKey(
     return null;
   }
   const result = await run({
-    file: POWERSHELL_BINARY,
+    file: windowsPowerShellPath(process.env),
     args: [
       "-NoProfile",
       "-NonInteractive",

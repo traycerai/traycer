@@ -47,9 +47,24 @@ class TestBridge extends FakeBrowserViewBridge {
     notifiedHosts: 0,
   };
   readonly importCalls: LoginImportRequest[] = [];
+  /**
+   * When true, `importLogins` never settles on its own - the test settles it
+   * later via `releaseImport`, so it can assert the pending UI first.
+   */
+  deferImport = false;
+  releaseImport: (() => void) | null = null;
+  /** Answers to successive `pickLoginImportFile()` calls, in order. */
+  pickResults: Array<LoginImportSource | null> = [];
+  private pickLoginImportFileCalls = 0;
 
   override listLoginImportSources(): Promise<readonly LoginImportSource[]> {
     return Promise.resolve(this.sources);
+  }
+
+  override pickLoginImportFile(): Promise<LoginImportSource | null> {
+    const index = this.pickLoginImportFileCalls;
+    this.pickLoginImportFileCalls += 1;
+    return Promise.resolve(this.pickResults[index] ?? null);
   }
 
   override scanLoginImportSource(sourceId: string): Promise<LoginImportScan> {
@@ -62,6 +77,13 @@ class TestBridge extends FakeBrowserViewBridge {
 
   override importLogins(input: LoginImportRequest): Promise<LoginImportResult> {
     this.importCalls.push(input);
+    if (this.deferImport) {
+      return new Promise<LoginImportResult>((resolve) => {
+        this.releaseImport = () => {
+          resolve(this.importResult);
+        };
+      });
+    }
     return Promise.resolve(this.importResult);
   }
 }
@@ -145,6 +167,41 @@ describe("<ImportLoginsDialog /> pick step", () => {
     expect(
       screen.getByRole("button", { name: /Import from a file…/ }),
     ).not.toBeNull();
+  });
+
+  it("picking the same file twice lists it once", async () => {
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    const bridge = new TestBridge();
+    const fileSourceAt = (lastUsedAt: number): LoginImportSource => ({
+      id: "file-source-1",
+      browser: "file",
+      profileLabel: "exported-cookies.txt",
+      lastUsedAt,
+    });
+    bridge.pickResults = [fileSourceAt(60_000), fileSourceAt(120_000)];
+    bridge.scanBySourceId.set("file-source-1", scan({}));
+    renderDialog(bridge);
+
+    await pickSource(/Import from a file…/);
+    await screen.findByTestId("import-logins-confirm");
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    await screen.findByRole("button", { name: /exported-cookies\.txt/ });
+
+    await pickSource(/Import from a file…/);
+    await screen.findByTestId("import-logins-confirm");
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    await screen.findByRole("button", { name: /exported-cookies\.txt/ });
+
+    expect(
+      screen.getAllByRole("button", { name: /exported-cookies\.txt/ }),
+    ).toHaveLength(1);
+    const duplicateKeyWarning = consoleError.mock.calls.some((call) =>
+      call.some((arg) => typeof arg === "string" && arg.includes("same key")),
+    );
+    expect(duplicateKeyWarning).toBe(false);
+    consoleError.mockRestore();
   });
 });
 
@@ -452,6 +509,56 @@ describe("<ImportLoginsDialog /> choose-sites step", () => {
     fireEvent.click(screen.getByRole("button", { name: "Select none" }));
 
     expect(importConfirmButton().hasAttribute("disabled")).toBe(true);
+  });
+
+  it("freezes Select all and Select none while the import is pending", async () => {
+    const bridge = new TestBridge();
+    bridge.deferImport = true;
+    bridge.sources = [source({})];
+    bridge.scanBySourceId.set(
+      "source-1",
+      scan({
+        sites: [
+          { domain: "example.com", cookieCount: 1, unlock: null },
+          { domain: "example.org", cookieCount: 1, unlock: null },
+        ],
+      }),
+    );
+    renderDialog(bridge);
+    await pickSource(/Google Chrome/);
+
+    await screen.findByText("example.com");
+    fireEvent.click(importConfirmButton());
+
+    await waitFor(() => {
+      expect(bridge.importCalls).toHaveLength(1);
+    });
+    // The mutation's `isPending` flip re-renders the Choose step, and the
+    // bridge object itself is part of the scan query's key - waiting for
+    // "Select all" to be findable (rather than reading the DOM synchronously)
+    // rides past that re-render instead of racing it.
+    expect(
+      (await screen.findByRole("button", { name: "Select all" })).hasAttribute(
+        "disabled",
+      ),
+    ).toBe(true);
+    expect(
+      screen
+        .getByRole("button", { name: "Select none" })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+    expect(
+      screen
+        .getByRole("checkbox", { name: "Import logins for example.com" })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+
+    const release = bridge.releaseImport;
+    if (release === null) {
+      throw new Error("the import was not deferred");
+    }
+    release();
+    await screen.findByText("Logins imported");
   });
 });
 

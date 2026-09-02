@@ -89,7 +89,10 @@ const cookieEditorCookieSchema = z.object({
   value: z.string(),
   path: z.string().default("/"),
   expirationDate: z.number().nullable().default(null),
-  hostOnly: z.boolean().default(false),
+  // Chrome's `cookies.Cookie` always carries it; an export that leaves it out
+  // said nothing about scope, and `null` lets the domain's own leading dot
+  // decide (see `parseJsonCookieFile`) rather than a default that widens.
+  hostOnly: z.boolean().nullable().default(null),
   httpOnly: z.boolean().default(false),
   secure: z.boolean().default(false),
   // The extension writes Chrome's own spelling (`lax`, `strict`,
@@ -165,7 +168,16 @@ function parseJsonCookieFile(text: string): CookieFileParse {
     return {
       ok: true,
       rows: cookieEditor.data.map((cookie) => ({
-        domain: withDomainScope(cookie.domain, !cookie.hostOnly),
+        // `hostOnly` present: the writer's word. Absent: the Netscape
+        // convention the domain itself carries - a leading dot is a domain
+        // cookie, a bare host is host-only - so an export that omits the
+        // flag is never widened to every subdomain by a default.
+        domain: withDomainScope(
+          cookie.domain,
+          cookie.hostOnly === null
+            ? cookie.domain.startsWith(".")
+            : !cookie.hostOnly,
+        ),
         name: cookie.name,
         path: cookie.path,
         expires:

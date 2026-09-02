@@ -129,8 +129,14 @@ failures.
   `profiles.ini` - goes through `readBoundedFile`, which opens the path
   non-blocking (so a FIFO cannot hold the open) and then, on the HANDLE and
   never on the path beforehand, refuses anything that is not a regular file
-  and a regular file over `MAX_LOGIN_IMPORT_FILE_BYTES` as `file-too-large`,
-  since the picker offers "All files"); and the import runs under the
+  (`not-a-file`), a regular file over `MAX_LOGIN_IMPORT_FILE_BYTES`
+  (`too-large`, which the import answers as `file-too-large`) and one whose
+  size or mtime moved under the read (`unreadable`: a complete prefix of an
+  export is still a valid export), since the picker offers "All files"; a
+  `Local State` `info_cache` key is
+  joined under User Data only if it is a plain directory name; and the
+  Windows DPAPI provider spawns PowerShell by its absolute System32 path,
+  never a name `PATH` resolves); and the import runs under the
   `BrowserJarSerializer`'s
   whole-jar barrier FROM THE USER'S CONFIRMATION ON - the source read, the
   keystore prompt and the write all inside it (the barrier forget-all takes,
@@ -162,9 +168,11 @@ failures.
   an encrypted row since answers `source-changed` and drops that scan. A
   site is written BEFORE anything of it is removed: the source's cookies go
   in first, and only a site with at least one written cookie has what the
-  source did not CARRY removed after - keyed by the source's rows, not by
-  what was written, so a row that fails to decrypt or to set leaves the
-  jar's cookie at that key alone, and a kept cookie that a same-name
+  source did not CARRY removed after - keyed by EVERY source row for the
+  site, not by what was written, so a row that fails to decrypt or to set,
+  or that the reader never opens (an app-bound `v20` row, a partitioned
+  one), leaves the jar's cookie at that key alone, and a kept cookie that a
+  same-name
   removal reached anyway is put back from the pre-write listing - so a
   source whose every row Electron rejects leaves the jar's slice as it was.
   Those two recovery passes run whatever ended the removals - a `remove`

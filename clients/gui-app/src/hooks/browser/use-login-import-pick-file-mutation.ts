@@ -32,9 +32,17 @@ export function useLoginImportPickFile(
     retry: false,
     onSuccess: (source) => {
       if (source === null) return;
+      // The desktop derives the id from the normalised path, so the same
+      // file picked twice is the same source: replaced in place (its
+      // `lastUsedAt` may have moved), never listed twice under one key.
       queryClient.setQueryData<readonly LoginImportSource[]>(
         browserQueryKeys.loginImportSources(browserView),
-        (current) => [...(current ?? []), source],
+        (current) => {
+          const listed = current ?? [];
+          return listed.some((entry) => entry.id === source.id)
+            ? listed.map((entry) => (entry.id === source.id ? source : entry))
+            : [...listed, source];
+        },
       );
     },
     onError: (error) => toastFromRunnerError(error, "Couldn't open the file"),

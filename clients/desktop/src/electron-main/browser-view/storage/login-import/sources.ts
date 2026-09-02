@@ -245,9 +245,19 @@ async function chromiumProfileDirectories(
 ): Promise<readonly { readonly directory: string; readonly label: string }[]> {
   const localState = await readJson(localStatePath, localStateSchema);
   const infoCache = localState?.profile?.info_cache ?? null;
-  if (infoCache !== null && Object.keys(infoCache).length > 0) {
+  // A key names a directory DIRECTLY under the root, and the file is on disk
+  // for anyone to edit: one with a separator or a dot segment would join to
+  // a path outside User Data and point discovery at any Cookies file on the
+  // machine, so it is dropped, whatever the file says.
+  const cached =
+    infoCache === null
+      ? []
+      : Object.entries(infoCache).filter(([directory]) =>
+          isPlainDirectoryName(directory),
+        );
+  if (cached.length > 0) {
     return disambiguateLabels(
-      Object.entries(infoCache).map(([directory, info]) => ({
+      cached.map(([directory, info]) => ({
         directory,
         label:
           info.name !== null && info.name.length > 0 ? info.name : directory,
@@ -258,6 +268,13 @@ async function chromiumProfileDirectories(
   return entries
     .filter((entry) => entry === "Default" || /^Profile \d+$/u.test(entry))
     .map((directory) => ({ directory, label: directory }));
+}
+
+/** One path segment: no separator of either platform, no NUL, not a dot entry. */
+function isPlainDirectoryName(name: string): boolean {
+  return (
+    name.length > 0 && name !== "." && name !== ".." && !/[\\/\0]/u.test(name)
+  );
 }
 
 /**

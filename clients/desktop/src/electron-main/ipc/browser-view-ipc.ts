@@ -1145,7 +1145,18 @@ export function registerBrowserViewIpc(
       // an ordinary sign-in never fire for it, so without this capture the
       // hosts would not see the imported logins until something else asked
       // for one.
-      const notifiedHosts = await sessions.capturePrimaryProfileOnEveryHost();
+      // Best-effort, because the cookies are already written: a stream whose
+      // capture threw must not turn a committed import into a rejected
+      // invoke that the user retries and Sentry records. Zero hosts is an
+      // honest answer here - the next capture carries the logins.
+      let notifiedHosts = 0;
+      try {
+        notifiedHosts = await sessions.capturePrimaryProfileOnEveryHost();
+      } catch (error) {
+        log.warn("[browser-view] pushing the imported logins failed", {
+          error: describeLogError(error),
+        });
+      }
       log.info("[browser-view] pushed the imported logins to the hosts", {
         notifiedHosts,
       });

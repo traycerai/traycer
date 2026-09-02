@@ -124,9 +124,13 @@ function parseCookie(
     domain: url,
     name,
     path,
-    expires: Number.isFinite(expiry)
-      ? Math.floor(expiry + MAC_ABSOLUTE_EPOCH_OFFSET_SECONDS)
-      : -1,
+    // An exact zero is the format's session-cookie marker, not an expiry at
+    // the 2001 epoch that the classifier would drop as long past. Any other
+    // finite value, negative included, is a real instant.
+    expires:
+      Number.isFinite(expiry) && expiry !== 0
+        ? Math.floor(expiry + MAC_ABSOLUTE_EPOCH_OFFSET_SECONDS)
+        : -1,
     secure: (flags & FLAG_SECURE) !== 0,
     httpOnly: (flags & FLAG_HTTP_ONLY) !== 0,
     sameSite: "Lax",

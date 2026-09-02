@@ -57,6 +57,14 @@ export const runCommand: CommandRunner = (request) =>
       clearTimeout(timer);
       settle({ kind: "spawn-failed", code: errnoCode(error) });
     });
+    // The pipe is its own emitter: an error on it (the far end gone before
+    // the read drained) is not the child's `error`, and unhandled it would
+    // throw out of this process's event loop.
+    child.stdout?.on("error", (error) => {
+      clearTimeout(timer);
+      settle({ kind: "spawn-failed", code: errnoCode(error) });
+      child.kill();
+    });
     child.stdout?.on("data", (chunk: Buffer) => {
       if (collected >= MAX_OUTPUT_BYTES) return;
       collected += chunk.length;

@@ -456,10 +456,14 @@ function SiteChecklist(props: {
             <span>
               {selected.length} of {sites.length} sites selected
             </span>
+            {/* Frozen with the checkboxes while the import is pending: the
+                request has captured its domains, and a list that could still
+                change would show a selection the desktop is not acting on. */}
             <span className="flex gap-2">
               <button
                 type="button"
-                className="underline-offset-2 hover:underline"
+                className="underline-offset-2 hover:underline disabled:pointer-events-none disabled:opacity-50"
+                disabled={props.pending}
                 onClick={() => {
                   setUnticked(new Set());
                 }}
@@ -468,7 +472,8 @@ function SiteChecklist(props: {
               </button>
               <button
                 type="button"
-                className="underline-offset-2 hover:underline"
+                className="underline-offset-2 hover:underline disabled:pointer-events-none disabled:opacity-50"
+                disabled={props.pending}
                 onClick={() => {
                   setUnticked(new Set(sites.map((site) => site.domain)));
                 }}

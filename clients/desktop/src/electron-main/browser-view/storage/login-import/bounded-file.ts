@@ -29,8 +29,9 @@ export type BoundedFileRead =
  * read-only open waits on until a writer appears - opens at once and is then
  * refused by kind, like a device or a directory; the flag changes nothing
  * about a regular file. The read itself is capped at one byte past the
- * handle's size, so a file that grows while it is read is refused rather
- * than truncated.
+ * handle's size and must fill exactly that size, with the handle's size and
+ * mtime unchanged after it, so a file that grows, shrinks or is rewritten
+ * while it is read is refused rather than returned in part.
  */
 export async function readBoundedFile(
   path: string,
@@ -60,7 +61,16 @@ export async function readBoundedFile(
       if (bytesRead === 0) break;
       filled += bytesRead;
     }
-    if (filled === buffer.length) return { ok: false, reason: "unreadable" };
+    // Exactly the bytes the handle promised, and the handle still describing
+    // the same file afterwards: a read that overran grew under us, one that
+    // came up short was truncated or rewritten under us - and a complete
+    // PREFIX of a cookie export is still a valid export, one whose missing
+    // tail the import would read as cookies the source does not carry.
+    if (filled !== info.size) return { ok: false, reason: "unreadable" };
+    const after = await handle.stat();
+    if (after.size !== info.size || after.mtimeMs !== info.mtimeMs) {
+      return { ok: false, reason: "unreadable" };
+    }
     return { ok: true, bytes: buffer.subarray(0, filled) };
   } catch (error) {
     return { ok: false, reason: refusedFor(error) };

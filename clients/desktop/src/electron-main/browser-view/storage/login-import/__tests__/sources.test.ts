@@ -1,6 +1,6 @@
 import { chmod, mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, sep } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   describeCookieFileSource,
@@ -190,6 +190,60 @@ describe("discoverLoginImportSources: chromium", () => {
     // "Not A Profile" is not `Default` or `Profile N`, so it is excluded from
     // the directory-name fallback even though it holds a jar.
     expect(chromeLabels).toEqual(["Default", "Profile 3"]);
+  });
+
+  it("drops an info_cache key that is not a plain directory name", async () => {
+    const chromeRoot = join(
+      root,
+      "Library",
+      "Application Support",
+      "Google",
+      "Chrome",
+    );
+    await mkdir(chromeRoot, { recursive: true });
+    await writeFile(
+      join(chromeRoot, "Local State"),
+      JSON.stringify({
+        profile: {
+          info_cache: {
+            Default: { name: "Default" },
+            "../../elsewhere": { name: "Escape" },
+            "Profile 2/../x": { name: "Traversal" },
+            "C:\\other": { name: "Backslash" },
+            "..": { name: "DotDot" },
+            "": { name: "Empty" },
+          },
+        },
+      }),
+    );
+    await mkdir(join(chromeRoot, "Default"), { recursive: true });
+    await writeFileAt(join(chromeRoot, "Default", "Cookies"), "a", T1);
+    // The key a pre-fix reader would have joined straight onto the User Data
+    // dir, escaping it two levels up. A real jar sits there so the assertion
+    // below proves discovery never reached it, not merely that nothing was
+    // there to find.
+    const traversalTarget = join(
+      root,
+      "Library",
+      "Application Support",
+      "elsewhere",
+    );
+    await writeFileAt(join(traversalTarget, "Cookies"), "escaped", T2);
+
+    const sources = await discoverLoginImportSources(environment({}));
+    const chromeSources = sources.filter(
+      (source) => source.browser === "chrome",
+    );
+
+    expect(chromeSources).toHaveLength(1);
+    expect(chromeSources[0]?.profileLabel).toBe("Default");
+    for (const source of sources) {
+      if (source.location.kind !== "chromium") continue;
+      const userDataDir = dirname(source.location.localStatePath);
+      expect(source.location.cookiesPath.startsWith(userDataDir + sep)).toBe(
+        true,
+      );
+    }
   });
 });
 
@@ -411,6 +465,7 @@ describe("discoverLoginImportSources: safari", () => {
   });
 
   it("is still listed, with a null lastUsedAt, when the container answers permission-denied", async () => {
+    if (process.platform === "win32") return;
     const cookiesDir = join(
       root,
       "Library",
@@ -445,6 +500,7 @@ describe("discoverLoginImportSources: safari", () => {
 
 describe("discoverLoginImportSources: ordering", () => {
   it("sorts by last-used descending, with a null lastUsedAt last", async () => {
+    if (process.platform === "win32") return;
     const chromeProfileDir = join(
       root,
       "Library",

@@ -171,6 +171,35 @@ describe("parseSafariBinaryCookies - well-formed fixtures", () => {
     expect(row.domain).toBe(".example.com");
   });
 
+  it("reads an exact zero expiry as a session cookie and a negative one as a real instant", () => {
+    const sessionCookie = buildCookieRecord({
+      domain: "session.example.com",
+      name: "session-marker",
+      path: "/",
+      value: "value",
+      flags: 0,
+      expiryMacAbsolute: 0,
+      createdMacAbsolute: secondsFromNow(-3_600),
+    });
+    const negativeCookie = buildCookieRecord({
+      domain: "negative.example.com",
+      name: "negative-instant",
+      path: "/",
+      value: "value",
+      flags: 0,
+      expiryMacAbsolute: -1,
+      createdMacAbsolute: secondsFromNow(-3_600),
+    });
+    const bytes = buildFile([buildPage([sessionCookie, negativeCookie])]);
+
+    const parsed = parseSafariBinaryCookies(bytes);
+
+    expect(parsed.malformed).toBe(0);
+    const byName = new Map(parsed.rows.map((row) => [row.name, row.expires]));
+    expect(byName.get("session-marker")).toBe(-1);
+    expect(byName.get("negative-instant")).toBe(978_307_199);
+  });
+
   it("parses two pages, each contributing its own rows", () => {
     const cookieA = buildCookieRecord({
       domain: "a.example.com",

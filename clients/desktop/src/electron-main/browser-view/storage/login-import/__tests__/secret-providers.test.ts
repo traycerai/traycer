@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { readMacosKeychainPassphrase } from "../secret-providers/keychain-macos";
 import { readLinuxSecretServicePassphrase } from "../secret-providers/secret-service-linux";
-import { unprotectChromiumWindowsKey } from "../secret-providers/dpapi-windows";
+import {
+  unprotectChromiumWindowsKey,
+  windowsPowerShellPath,
+} from "../secret-providers/dpapi-windows";
+import type { ChromiumImportBrowser } from "../chromium-browsers";
 import type {
   CommandRequest,
   CommandResult,
@@ -144,6 +148,36 @@ describe("readLinuxSecretServicePassphrase", () => {
 
     expect(result).toEqual({ ok: false, reason: "unavailable" });
   });
+
+  it("looks up each browser's own Secret Service application attribute", async () => {
+    const applicationByBrowser: Record<ChromiumImportBrowser, string> = {
+      chrome: "chrome",
+      chromium: "chromium",
+      edge: "chromium",
+      brave: "brave",
+      arc: "chromium",
+      vivaldi: "chrome",
+      opera: "chromium",
+    };
+
+    for (const [browser, application] of Object.entries(
+      applicationByBrowser,
+    ) as Array<[ChromiumImportBrowser, string]>) {
+      const { run, calls } = fakeRunner({
+        kind: "exited",
+        exitCode: 0,
+        stdout: "keyring-secret\n",
+      });
+
+      await readLinuxSecretServicePassphrase(browser, run);
+
+      expect(calls).toHaveLength(1);
+      const call = calls[0];
+      if (call === undefined) throw new Error("expected one call");
+      expect(call.file).toBe("secret-tool");
+      expect(call.args).toEqual(["lookup", "application", application]);
+    }
+  });
 });
 
 describe("unprotectChromiumWindowsKey", () => {
@@ -260,5 +294,34 @@ describe("unprotectChromiumWindowsKey", () => {
     expect(
       await unprotectChromiumWindowsKey(blob.toString("base64"), timedOut.run),
     ).toBeNull();
+  });
+
+  it("spawns Windows PowerShell by its absolute System32 path, never by PATH lookup", async () => {
+    const blob = Buffer.concat([
+      Buffer.from("DPAPI", "latin1"),
+      Buffer.from("sealed"),
+    ]);
+    const key = Buffer.alloc(32, 7);
+    const { run, calls } = fakeRunner({
+      kind: "exited",
+      exitCode: 0,
+      stdout: key.toString("base64"),
+    });
+
+    await unprotectChromiumWindowsKey(blob.toString("base64"), run);
+
+    expect(calls).toHaveLength(1);
+    const call = calls[0];
+    if (call === undefined) throw new Error("expected one call");
+    expect(call.file).toBe(windowsPowerShellPath(process.env));
+    expect(
+      call.file.endsWith("\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"),
+    ).toBe(true);
+    expect(windowsPowerShellPath({})).toBe(
+      "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+    );
+    expect(
+      windowsPowerShellPath({ SystemRoot: "D:\\Win" }).startsWith("D:\\Win\\"),
+    ).toBe(true);
   });
 });

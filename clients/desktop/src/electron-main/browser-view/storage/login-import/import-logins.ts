@@ -519,10 +519,25 @@ export class LoginImportService {
         if (!read.ok) return { ok: false, reason: read.blocked };
         const nowSeconds = Math.floor(this.deps.now() / 1000);
         const candidates: ImportCandidate[] = [];
+        // Every key the source HOLDS for a chosen site, whether or not this
+        // reader can open the row: a row this desktop cannot decrypt (an
+        // app-bound `v20`) or must not write (a partitioned one) still says
+        // the source has a cookie at that key, and the jar's cookie there is
+        // kept rather than removed as "not carried" - see `writeSite` step 3.
+        const carriedBySite = new Map<string, Set<string>>();
         for (const row of read.rows) {
-          if (row.partitioned || row.secret.kind === "protected") continue;
           const scope = classifyImportCookie(row, nowSeconds);
           if (scope === null || !chosen.has(scope.site)) continue;
+          const carried = carriedBySite.get(scope.site) ?? new Set<string>();
+          carried.add(
+            cookieKeyId({
+              domain: scope.domain,
+              name: row.name,
+              path: scope.path,
+            }),
+          );
+          carriedBySite.set(scope.site, carried);
+          if (row.partitioned || row.secret.kind === "protected") continue;
           candidates.push({ row, scope });
         }
         // The prompt the Choose step announced is the only prompt Import may
@@ -573,6 +588,7 @@ export class LoginImportService {
                 await this.writeSite(
                   site,
                   siteRows,
+                  carriedBySite.get(site) ?? new Set<string>(),
                   read,
                   keys,
                   nowSeconds,
@@ -642,9 +658,10 @@ export class LoginImportService {
    *    the site whose key no source row names - so the slice is the
    *    source's, not a union of two sign-ins. Carried, not written: a row
    *    the source has for that key but that could not be decrypted,
-   *    normalised or set leaves the jar's cookie at that key alone, since
-   *    the source did hold a replacement and removing the working one would
-   *    turn one malformed row into a sign-out.
+   *    normalised or set - or that this reader never tried, an app-bound
+   *    `v20` row or a partitioned one - leaves the jar's cookie at that key
+   *    alone, since the source did hold a cookie there and removing the
+   *    working one would turn one unreadable row into a sign-out.
    * 4. Electron removes by `{url, name}`, which also catches a just-written
    *    cookie of the same NAME under a different scope or path - and a kept
    *    cookie of that name from step 3. Any written row whose name a removal
@@ -660,6 +677,11 @@ export class LoginImportService {
   private async writeSite(
     site: string,
     siteRows: readonly ImportCandidate[],
+    // Every key the source holds for this site - the candidates' AND the
+    // rows this reader could not open - from the rows' metadata, which is
+    // the same scope the write derives its key from, so a row that fails on
+    // the way in (or never starts) still marks its key as carried.
+    carriedKeyIds: ReadonlySet<string>,
     read: SourceRead & { ok: true },
     keys: ChromiumKeys & { ok: true },
     nowSeconds: number,
@@ -669,18 +691,6 @@ export class LoginImportService {
   ): Promise<void> {
     throwIfBarrierExpired(signal);
     const previous = await listBrowserSiteCookies(site, session.cookies);
-    // Every key the source holds for this site, from the rows' metadata,
-    // which is the same scope the write derives its key from - so a row that
-    // fails on the way in still marks its key as carried.
-    const carriedKeyIds = new Set(
-      siteRows.map((candidate) =>
-        cookieKeyId({
-          domain: candidate.scope.domain,
-          name: candidate.row.name,
-          path: candidate.scope.path,
-        }),
-      ),
-    );
     const writtenKeyIds = new Set<string>();
     const writtenRows: ImportCandidate[] = [];
     for (const candidate of siteRows) {

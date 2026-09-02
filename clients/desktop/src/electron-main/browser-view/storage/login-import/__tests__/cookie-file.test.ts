@@ -151,6 +151,50 @@ describe("parseCookieFile: Cookie-Editor JSON", () => {
     expect(session?.expires).toBe(-1);
   });
 
+  it("reads scope from the domain's leading dot when hostOnly is absent", () => {
+    const text = JSON.stringify([
+      {
+        domain: ".example.com",
+        name: "absent-hostonly-dotted",
+        value: "v1",
+        path: "/",
+      },
+      {
+        domain: "example.com",
+        name: "absent-hostonly-bare",
+        value: "v2",
+        path: "/",
+      },
+      {
+        domain: ".example.com",
+        name: "hostonly-true-overrides",
+        value: "v3",
+        path: "/",
+        hostOnly: true,
+      },
+      {
+        domain: "example.com",
+        name: "hostonly-false-overrides",
+        value: "v4",
+        path: "/",
+        hostOnly: false,
+      },
+    ]);
+
+    const result = parseCookieFile(text);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const domainByName = new Map(
+      result.rows.map((row) => [row.name, row.domain]),
+    );
+
+    expect(domainByName.get("absent-hostonly-dotted")).toBe(".example.com");
+    expect(domainByName.get("absent-hostonly-bare")).toBe("example.com");
+    expect(domainByName.get("hostonly-true-overrides")).toBe("example.com");
+    expect(domainByName.get("hostonly-false-overrides")).toBe(".example.com");
+  });
+
   it("flags Cookie-Editor rows that carry a partition key", () => {
     const text = JSON.stringify([
       {

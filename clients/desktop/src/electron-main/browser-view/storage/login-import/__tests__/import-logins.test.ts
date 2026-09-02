@@ -2721,6 +2721,69 @@ describe("import - keeps the jar's cookie at a key the source carries but could 
 });
 
 // =================================================================================
+// 20b. carriedBySite is collected from every classified row, before the
+// protected/partitioned skip - not just from the rows that became candidates
+// =================================================================================
+
+describe("import - keeps the jar's cookie at a key the source holds only as a protected row", () => {
+  it("writes the plain row, removes the genuinely uncarried key, and leaves the protected key's cookie untouched", async () => {
+    const homeDir = await makeTempDir("login-import-carried-protected-");
+    await createDarwinChromeSource(
+      homeDir,
+      [
+        domainCookieRow(".carried-protected.com", "sid", {
+          kind: "plain",
+          value: "new-sid-value",
+        }),
+        // Never becomes a candidate - `importInner` skips a protected row
+        // before the candidates push - but the source DOES hold a row at
+        // this key, so `writeSite` must not treat it as uncarried.
+        domainCookieRow(".carried-protected.com", "app", {
+          kind: "protected",
+        }),
+      ],
+      23,
+    );
+    const session = new FakeLoginImportSession([
+      cookieFixture("app", ".carried-protected.com"),
+      // The source carries no row for this name at all - genuinely stale.
+      cookieFixture("old", ".carried-protected.com"),
+    ]);
+    const { service } = buildHarness(
+      {
+        platform: "darwin",
+        homeDir,
+        snapshotRoot: await makeTempDir("snap-"),
+      },
+      session,
+    );
+    const { sourceId, scan } = await scanChromeSource(service);
+
+    const result = await service.import({
+      sourceId,
+      scanId: scan.scanId,
+      domains: ["carried-protected.com"],
+      includeDeviceBound: false,
+    });
+
+    expect(result).toEqual({
+      status: "imported",
+      importedSites: 1,
+      importedCookies: 1,
+      replacedSites: 1,
+      skippedInvalid: 0,
+    });
+    const cookies = session.cookiesUnderDomain("carried-protected.com");
+    expect(cookies.map((cookie) => cookie.name).sort()).toEqual(["app", "sid"]);
+    // Before the fix, `app` would have been removed as "not carried" -
+    // `carriedBySite` was derived from the candidates, which never included
+    // the protected row.
+    const appCookie = cookies.find((cookie) => cookie.name === "app");
+    expect(appCookie?.value).toBe("app-value");
+  });
+});
+
+// =================================================================================
 // 21. clearSiteLocalStorage runs once per written site, never for an unwritten one
 // =================================================================================
 
