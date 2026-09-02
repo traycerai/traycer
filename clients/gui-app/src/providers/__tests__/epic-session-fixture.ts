@@ -1,60 +1,27 @@
 import * as Y from "yjs";
-import type {
-  EarlyMetaEpic,
-  SnapshotMetaEpic,
-} from "@traycer/protocol/host/epic/snapshot-meta";
+import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { EPIC_LANE_METHODS } from "@traycer-clients/shared/epic-lanes";
+import type { EpicStateSnapshotFrame } from "@traycer-clients/shared/host-transport/epic-state-stream-client";
+import type { EpicStatusSnapshotFrame } from "@traycer-clients/shared/host-transport/epic-status-stream-client";
+import type { IStreamSession } from "@traycer-clients/shared/host-transport/i-stream-session";
+import {
+  createRecordingStreamClient,
+  type RecordedSession,
+} from "@traycer-clients/shared/replica-runtime/worker/test-support/recording-stream-client";
 import type {
-  EpicStateStreamClientFactory,
-  EpicStatusStreamClientFactory,
-  ArtifactStreamClientFactory,
-} from "@traycer-clients/shared/epic-lanes";
-import type { EpicStreamClientFactory } from "@/stores/epics/open-epic/runtime/legacy-epic-stream-adapter";
-import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
-import type { EpicRuntimeStreamFactories } from "@/stores/epics/open-epic/runtime/worker/epic-runtime-composition";
-import type {
-  EpicLaneSelectionSources,
-  EpicLaneUnaries,
-} from "@/stores/epics/open-epic/runtime/epic-replica-runtime";
-import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
-import type {
-  EpicStateSnapshotFrame,
-  EpicStateStreamCallbacks,
-} from "@traycer-clients/shared/host-transport/epic-state-stream-client";
-import type {
-  EpicStatusSnapshotFrame,
-  EpicStatusStreamCallbacks,
-} from "@traycer-clients/shared/host-transport/epic-status-stream-client";
-import type { ArtifactStreamCallbacks } from "@traycer-clients/shared/host-transport/artifact-stream-client";
+  ParamsOf,
+  StreamMethodSupport,
+} from "@traycer-clients/shared/host-transport/ws-stream-client";
 import { epicStateSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/state-subscribe";
 import { epicStatusSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/status-subscribe";
 import { fakeDurableStreamTransports } from "@/lib/host/test-support/fake-durable-stream-transport";
 
 export type EpicSessionFixtureArm = "legacy" | "lanes";
 
-interface LegacyStream {
-  readonly callbacks: EpicStreamCallbacks;
-  closeCount: number;
-}
-
-interface StateStream {
-  readonly callbacks: EpicStateStreamCallbacks;
-  closeCount: number;
-}
-
-interface StatusStream {
-  readonly callbacks: EpicStatusStreamCallbacks;
-  closeCount: number;
-}
-
-interface ArtifactStream {
-  readonly callbacks: ArtifactStreamCallbacks;
-  closeCount: number;
-}
-
 export interface EpicSessionFixture {
   readonly arm: EpicSessionFixtureArm;
+  /** The host-side source from which both legacy and lane snapshots are built. */
   readonly sourceRoot: Y.Doc;
   readonly manifest: ReadonlyArray<{
     readonly method: keyof HostStreamRpcRegistry & string;
@@ -63,17 +30,15 @@ export interface EpicSessionFixture {
   readonly supportReads: ReadonlyArray<string>;
   readonly transportSupportReads: ReadonlyArray<string>;
   readonly support: (method: string) => StreamMethodSupport;
-  readonly factories: EpicRuntimeStreamFactories;
-  readonly laneSelection: EpicLaneSelectionSources | null;
-  readonly legacyStreams: ReadonlyArray<LegacyStream>;
-  readonly stateStreams: ReadonlyArray<StateStream>;
-  readonly statusStreams: ReadonlyArray<StatusStream>;
-  readonly artifactStreams: ReadonlyArray<ArtifactStream>;
+  readonly legacyStreams: ReadonlyArray<RecordedSession>;
+  readonly stateStreams: ReadonlyArray<RecordedSession>;
+  readonly statusStreams: ReadonlyArray<RecordedSession>;
+  readonly artifactStreams: ReadonlyArray<RecordedSession>;
   readonly opens: {
-    legacy: number;
-    state: number;
-    status: number;
-    artifact: number;
+    readonly legacy: number;
+    readonly state: number;
+    readonly status: number;
+    readonly artifact: number;
   };
   openLegacyStream(index: number): void;
   deliverLegacySnapshot(index: number, roomId: string): void;
@@ -83,16 +48,6 @@ export interface EpicSessionFixture {
 }
 
 const AUTHORITY_EPOCH = "fixture-authority-epoch";
-
-const EARLY_META: EarlyMetaEpic = {
-  epicLight: null,
-  permissionRole: "editor",
-  repos: [],
-  workspaces: [],
-  repoMapping: [],
-  workspaceFolders: [],
-  unresolvedRepos: [],
-};
 
 function legacySnapshotMeta(roomId: string): SnapshotMetaEpic {
   return {
@@ -109,7 +64,19 @@ function legacySnapshotMeta(roomId: string): SnapshotMetaEpic {
   };
 }
 
-function stateSnapshot(): EpicStateSnapshotFrame {
+/**
+ * The host's state-lane boundary, represented in the fixture by the same
+ * JSON-only frame contract the real `EpicLaneSession.snapshotFrame` emits.
+ *
+ * Reading the title from `sourceRoot` makes the source relationship
+ * observable in the provider test. The root's `attachments` map has no field
+ * in this contract, so it cannot cross this boundary with the projected state.
+ */
+function stateSnapshot(sourceRoot: Y.Doc): EpicStateSnapshotFrame {
+  const title: unknown = sourceRoot.getMap("epic").get("title");
+  if (typeof title !== "string") {
+    throw new Error("expected the source root to hold an epic title");
+  }
   const parsed = epicStateSubscribeServerFrameSchemaV10.parse({
     kind: "snapshot",
     hasBinaryPayload: false,
@@ -123,7 +90,7 @@ function stateSnapshot(): EpicStateSnapshotFrame {
     roleClaims: { revision: 1, claims: [] },
     epicMeta: {
       revision: 1,
-      meta: { title: "Fixture Epic", updatedAt: 1 },
+      meta: { title, updatedAt: 1 },
     },
   });
   if (parsed.kind !== "snapshot") {
@@ -150,13 +117,6 @@ function statusSnapshot(): EpicStatusSnapshotFrame {
   return parsed;
 }
 
-function laneUnaries(): EpicLaneUnaries {
-  return {
-    getWorkspaceContext: () => Promise.resolve(EARLY_META),
-    retryMigration: () => Promise.resolve(),
-  };
-}
-
 function buildSupport(arm: EpicSessionFixtureArm): ReadonlyArray<{
   readonly method: keyof HostStreamRpcRegistry & string;
   readonly support: StreamMethodSupport;
@@ -181,100 +141,65 @@ export function createEpicSessionFixture(
   const manifest = buildSupport(arm);
   const supportReads: string[] = [];
   const transportSupportReads: string[] = [];
+  const openedSessions: RecordedSession[] = [];
   const support = (method: string): StreamMethodSupport => {
     supportReads.push(method);
     return (
       manifest.find((entry) => entry.method === method)?.support ?? "unknown"
     );
   };
-  const legacyStreams: LegacyStream[] = [];
-  const stateStreams: StateStream[] = [];
-  const statusStreams: StatusStream[] = [];
-  const artifactStreams: ArtifactStream[] = [];
-  const opens = { legacy: 0, state: 0, status: 0, artifact: 0 };
-  const legacyStreamClientFactory: EpicStreamClientFactory = (
-    _epicId,
-    callbacks,
-  ) => {
-    const stream: LegacyStream = {
-      callbacks,
-      closeCount: 0,
-    };
-    legacyStreams.push(stream);
-    opens.legacy += 1;
-    return {
-      applyUpdate: () => undefined,
-      awareness: () => undefined,
-      applyArtifactRoomUpdate: () => undefined,
-      artifactRoomAwareness: () => undefined,
-      retryMigration: () => undefined,
-      close: () => {
-        stream.closeCount += 1;
-      },
-    };
+  const sessionsFor = (method: string): ReadonlyArray<RecordedSession> =>
+    openedSessions.filter((session) => session.method === method);
+  const opens = {
+    get legacy(): number {
+      return sessionsFor("epic.subscribe").length;
+    },
+    get state(): number {
+      return sessionsFor("epic.state.subscribe").length;
+    },
+    get status(): number {
+      return sessionsFor("epic.status.subscribe").length;
+    },
+    get artifact(): number {
+      return sessionsFor("artifact.subscribe").length;
+    },
   };
-  const stateStreamClientFactory: EpicStateStreamClientFactory = (
-    _epicId,
-    callbacks,
-  ) => {
-    const stream: StateStream = { callbacks, closeCount: 0 };
-    stateStreams.push(stream);
-    opens.state += 1;
-    return {
-      close: () => {
-        stream.closeCount += 1;
-      },
-    };
-  };
-  const statusStreamClientFactory: EpicStatusStreamClientFactory = (
-    _epicId,
-    callbacks,
-  ) => {
-    const stream: StatusStream = { callbacks, closeCount: 0 };
-    statusStreams.push(stream);
-    opens.status += 1;
-    return {
-      close: () => {
-        stream.closeCount += 1;
-      },
-    };
-  };
-  const artifactStreamClientFactory: ArtifactStreamClientFactory = (
-    request,
-  ) => {
-    const stream: ArtifactStream = {
-      callbacks: request.callbacks,
-      closeCount: 0,
-    };
-    artifactStreams.push(stream);
-    opens.artifact += 1;
-    return {
-      applyUpdate: () => undefined,
-      awareness: () => undefined,
-      close: () => {
-        stream.closeCount += 1;
-      },
-    };
-  };
-  const laneSelection: EpicLaneSelectionSources | null =
-    arm === "lanes"
-      ? {
-          support,
-          subscribeSupport: () => () => undefined,
-          stateStreamClientFactory,
-          statusStreamClientFactory,
-          artifactStreamClientFactory,
-          unaries: laneUnaries(),
-        }
-      : null;
-  const factories: EpicRuntimeStreamFactories = {
-    streamClientFactory: legacyStreamClientFactory,
-    laneSelection,
-  };
+
   const durableTransports = fakeDurableStreamTransports();
   const previousOpener = durableTransports.opener;
   const opener = (hostId: string) => {
     const transport = previousOpener(hostId);
+    const recording = createRecordingStreamClient();
+    const capture = (open: () => IStreamSession): IStreamSession => {
+      const previousCount = recording.opened().length;
+      const session = open();
+      const recorded = recording.opened().at(-1);
+      if (
+        recorded === undefined ||
+        recording.opened().length !== previousCount + 1
+      ) {
+        throw new Error("expected one recorded stream session");
+      }
+      openedSessions.push(recorded);
+      return session;
+    };
+    const subscribe = <Method extends keyof HostStreamRpcRegistry & string>(
+      method: Method,
+      params: ParamsOf<HostStreamRpcRegistry, Method>,
+    ): IStreamSession =>
+      capture(() => recording.client.subscribe(method, params));
+    const subscribeWithParamsProvider = <
+      Method extends keyof HostStreamRpcRegistry & string,
+    >(
+      method: Method,
+      paramsProvider: () => ParamsOf<HostStreamRpcRegistry, Method>,
+    ): IStreamSession =>
+      capture(() =>
+        recording.client.subscribeWithParamsProvider(method, paramsProvider),
+      );
+    transport.wsStreamClient.subscribe = subscribe;
+    transport.wsStreamClient.subscribeWithParamsProvider =
+      subscribeWithParamsProvider;
     transport.wsStreamClient.getMethodSupport = (method) => {
       transportSupportReads.push(method);
       return support(method);
@@ -282,6 +207,7 @@ export function createEpicSessionFixture(
     return transport;
   };
   durableTransports.opener = opener;
+
   return {
     arm,
     sourceRoot,
@@ -289,43 +215,53 @@ export function createEpicSessionFixture(
     supportReads,
     transportSupportReads,
     support,
-    factories,
-    laneSelection,
-    legacyStreams,
-    stateStreams,
-    statusStreams,
-    artifactStreams,
+    get legacyStreams() {
+      return sessionsFor("epic.subscribe");
+    },
+    get stateStreams() {
+      return sessionsFor("epic.state.subscribe");
+    },
+    get statusStreams() {
+      return sessionsFor("epic.status.subscribe");
+    },
+    get artifactStreams() {
+      return sessionsFor("artifact.subscribe");
+    },
     opens,
     openLegacyStream: (index) => {
-      const stream = legacyStreams.at(index);
+      const stream = sessionsFor("epic.subscribe").at(index);
       if (stream === undefined) throw new Error("expected a legacy stream");
-      stream.callbacks.onConnectionStatus("open", null);
+      stream.emitStatus("open", null);
     },
     deliverLegacySnapshot: (index, roomId) => {
-      const stream = legacyStreams.at(index);
+      const stream = sessionsFor("epic.subscribe").at(index);
       if (stream === undefined) throw new Error("expected a legacy stream");
-      stream.callbacks.onSnapshot(
-        legacySnapshotMeta(roomId),
+      stream.emitFrame(
+        {
+          kind: "snapshot",
+          hasBinaryPayload: true,
+          meta: legacySnapshotMeta(roomId),
+        },
         Y.encodeStateAsUpdate(sourceRoot),
       );
     },
     openLaneStreams: (index) => {
-      const status = statusStreams.at(index);
-      const state = stateStreams.at(index);
+      const status = sessionsFor("epic.status.subscribe").at(index);
+      const state = sessionsFor("epic.state.subscribe").at(index);
       if (status === undefined || state === undefined) {
         throw new Error("expected state and status streams");
       }
-      status.callbacks.onConnectionStatus("open", null);
-      state.callbacks.onConnectionStatus("open", null);
+      status.emitStatus("open", null);
+      state.emitStatus("open", null);
     },
     deliverLaneSnapshots: (index) => {
-      const status = statusStreams.at(index);
-      const state = stateStreams.at(index);
+      const status = sessionsFor("epic.status.subscribe").at(index);
+      const state = sessionsFor("epic.state.subscribe").at(index);
       if (status === undefined || state === undefined) {
         throw new Error("expected state and status streams");
       }
-      status.callbacks.onSnapshot(statusSnapshot());
-      state.callbacks.onSnapshot(stateSnapshot());
+      status.emitFrame(statusSnapshot(), null);
+      state.emitFrame(stateSnapshot(sourceRoot), null);
     },
     dispose: () => {
       sourceRoot.destroy();
