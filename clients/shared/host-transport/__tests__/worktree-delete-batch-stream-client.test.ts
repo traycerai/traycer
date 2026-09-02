@@ -229,6 +229,54 @@ describe("WorktreeDeleteBatchStreamClient replay safety", () => {
     batch.close();
   });
 
+  it("reports an incompatible close on the observe session as a connection failure, not unsupported", () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory);
+    const onUnsupported = vi.fn();
+    const onConnectionStatus = vi.fn();
+    const batch = new WorktreeDeleteBatchStreamClient({
+      wsStreamClient: client,
+      commandId: COMMAND_ID,
+      source: "settings",
+      targets: [{ worktreePath: "/wt/a", scripts: null, stopOwners: false }],
+      callbacks: {
+        ...NOOP_CALLBACKS,
+        onUnsupported,
+        onConnectionStatus,
+      },
+    });
+
+    // The host has the command: start was subscribed on a live socket.
+    completeHandshake(sockets[0]);
+    expect(subscribeParams(sockets[0])).toMatchObject({ mode: "start" });
+    sockets[0].fireClose(1006, "abnormal");
+    expect(sockets).toHaveLength(2);
+
+    // The replacement host lacks the method. `onUnsupported` here would
+    // licence the legacy fallback to run the deletion a second time.
+    const reason = {
+      kind: "fatalError" as const,
+      details: {
+        code: "INCOMPATIBLE",
+        reason: "host does not offer worktree.deleteBatchByPath",
+        incompatibleMethods: [
+          {
+            method: "worktree.deleteBatchByPath",
+            clientCanonical: { major: 1, minor: 1 },
+            hostCanonical: null,
+            blocking: "host-missing-method" as const,
+          },
+        ],
+        upgradeGuidance: null,
+      },
+    };
+    sockets[1].fireText(reason);
+
+    expect(onUnsupported).not.toHaveBeenCalled();
+    expect(onConnectionStatus).toHaveBeenLastCalledWith("closed", reason);
+    batch.close();
+  });
+
   it("keeps retrying start while the drop happened before the host ever saw it", () => {
     const { factory, sockets } = makeFactory();
     const client = makeClient(factory);

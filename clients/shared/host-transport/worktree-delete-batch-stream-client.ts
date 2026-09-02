@@ -240,8 +240,16 @@ export class WorktreeDeleteBatchStreamClient {
     // Local transports cache unsupported-method evidence on the client. Remote
     // mux sessions deliberately do not, so their only capability evidence is
     // the incompatible close emitted before the subscribe frame is enqueued.
+    //
+    // Only BEFORE the host has seen the command. `onUnsupported` is the
+    // caller's licence to run the legacy per-path delete because nothing was
+    // attempted; once `reachedHost` is true the command may be running or
+    // finished, so an incompatible close on a later observe session (a host
+    // swapped for a build without this method) is a connection failure, never
+    // a fallback trigger - the fallback would run the deletion a second time.
     if (
       status === "closed" &&
+      !this.reachedHost &&
       reason !== null &&
       (this.wsStreamClient.getMethodSupport(
         WORKTREE_DELETE_BATCH_STREAM_METHOD,
