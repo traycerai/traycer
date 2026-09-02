@@ -6,6 +6,10 @@ import type {
 
 import { annotationStalenessHint } from "@/lib/browser-view/annotation/browser-annotation-staleness";
 import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
+import {
+  sessionInfo,
+  tabInfo,
+} from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
 
 import { STUB_ANNOTATION_ELEMENT } from "./browser-annotation-fixtures";
 
@@ -33,28 +37,18 @@ function record(
 function tab(
   overrides: Partial<BrowserTabInfo> & Pick<BrowserTabInfo, "tabId" | "url">,
 ): BrowserTabInfo {
-  return {
-    originTier: "dev",
-    status: "ready",
-    title: null,
-    viewed: false,
-    drivenBy: [],
-    ...overrides,
-  };
+  return tabInfo(overrides);
 }
 
 function session(
   overrides: Partial<BrowserSessionInfo> &
     Pick<BrowserSessionInfo, "sessionId" | "tabs">,
 ): BrowserSessionInfo {
-  return {
-    epicId: "epic-1",
-    hostId: "host-1",
-    profile: "primary",
+  return sessionInfo({
     lastActivityAt: 2,
+    runtime: { kind: "electron", revision: 0 },
     ...overrides,
-    runtime: overrides.runtime ?? { kind: "electron", revision: 0 },
-  };
+  });
 }
 
 describe("annotationStalenessHint", () => {
