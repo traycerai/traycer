@@ -1,9 +1,14 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import type { ServiceController, ServiceLabel } from "../index";
+import type {
+  CompetingRegistrationRetirement,
+  ServiceController,
+  ServiceLabel,
+} from "../index";
 
 const mocks = vi.hoisted(() => ({
   registrations: [] as string[],
   uninstalls: [] as string[],
+  removals: [] as string[],
   hostHomes: [] as string[],
   callRegister: true,
   callUninstall: true,
@@ -19,6 +24,14 @@ const mocks = vi.hoisted(() => ({
   // it ran at all, and that the transaction is entered before the intent is
   // written.
   order: [] as string[],
+  // The `removed` predicate `withCliInvocationRecord` passes to
+  // `runServiceRemovalWithInvocationRecord` for `retireCompetingRegistration`,
+  // captured so tests can drive it directly against every
+  // `CompetingRegistrationRetirement` kind rather than only the one kind a
+  // single call happens to produce.
+  lastRemovedPredicate: null as
+    | ((result: CompetingRegistrationRetirement) => boolean)
+    | null,
 }));
 
 vi.mock("../cli-invocation-record", () => ({
@@ -46,6 +59,20 @@ vi.mock("../cli-invocation-record", () => ({
     }
     if (mocks.callUninstall) await opts.uninstall();
     mocks.order.push("txn-commit");
+  },
+  runServiceRemovalWithInvocationRecord: async (opts: {
+    readonly serviceLabel: string;
+    readonly hostHomeDir: string;
+    readonly remove: () => Promise<CompetingRegistrationRetirement>;
+    readonly removed: (result: CompetingRegistrationRetirement) => boolean;
+  }) => {
+    mocks.removals.push(opts.serviceLabel);
+    mocks.hostHomes.push(opts.hostHomeDir);
+    mocks.lastRemovedPredicate = opts.removed;
+    mocks.order.push("txn-open");
+    const result = await opts.remove();
+    mocks.order.push("txn-commit");
+    return result;
   },
 }));
 
@@ -96,11 +123,13 @@ function baseController(
 beforeEach(() => {
   mocks.registrations.length = 0;
   mocks.uninstalls.length = 0;
+  mocks.removals.length = 0;
   mocks.hostHomes.length = 0;
   mocks.callRegister = true;
   mocks.callUninstall = true;
   mocks.throwBeforeUninstall = false;
   mocks.order.length = 0;
+  mocks.lastRemovedPredicate = null;
 });
 
 describe("withCliInvocationRecord", () => {
@@ -168,6 +197,95 @@ describe("withCliInvocationRecord", () => {
     const status = vi.fn();
     const controller = withCliInvocationRecord(baseController({ status }));
     expect(controller.status).toBe(status);
+  });
+
+  it("forwards takeoverDesktopRegistration unchanged", () => {
+    const takeoverDesktopRegistration = vi.fn();
+    const controller = withCliInvocationRecord(
+      baseController({ takeoverDesktopRegistration }),
+    );
+    expect(controller.takeoverDesktopRegistration).toBe(
+      takeoverDesktopRegistration,
+    );
+  });
+});
+
+describe("withCliInvocationRecord retireCompetingRegistration wiring", () => {
+  it("runs OS retireCompetingRegistration inside the removal transaction and returns its result unchanged", async () => {
+    const retirement: CompetingRegistrationRetirement = {
+      kind: "retired",
+      bootedOut: true,
+      manifestRemoved: true,
+      agentStartRequested: false,
+    };
+    const controller = withCliInvocationRecord(
+      baseController({
+        retireCompetingRegistration: async () => {
+          mocks.order.push("os-retire");
+          return retirement;
+        },
+      }),
+    );
+    const result = await controller.retireCompetingRegistration(label);
+    expect(result).toEqual(retirement);
+    expect(mocks.removals).toEqual([label.id]);
+    expect(mocks.order).toEqual(["txn-open", "os-retire", "txn-commit"]);
+  });
+
+  it("propagates an OS retireCompetingRegistration failure without swallowing it", async () => {
+    const controller = withCliInvocationRecord(
+      baseController({
+        retireCompetingRegistration: async () => {
+          throw new Error("retire-refused");
+        },
+      }),
+    );
+    await expect(controller.retireCompetingRegistration(label)).rejects.toThrow(
+      "retire-refused",
+    );
+  });
+
+  it("classifies retired and retire-failed as removed - every other outcome as untouched", async () => {
+    // `retired` and `retire-failed` both mean the registration was taken
+    // away wholly or in part, so the record must be invalidated exactly as
+    // an uninstall does; every other outcome touched nothing on the OS side
+    // and must leave the record alone. This drives the captured `removed`
+    // predicate directly against all five `CompetingRegistrationRetirement`
+    // kinds, rather than relying on whichever one kind a single call
+    // happens to produce - the case ablation D targets specifically
+    // (`removed: () => false` would flip only the first two).
+    const controller = withCliInvocationRecord(
+      baseController({
+        retireCompetingRegistration: async () => ({
+          kind: "not-applicable",
+        }),
+      }),
+    );
+    await controller.retireCompetingRegistration(label);
+    const removed = mocks.lastRemovedPredicate;
+    if (removed === null) {
+      throw new Error("expected the removed predicate to be captured");
+    }
+    expect(
+      removed({
+        kind: "retired",
+        bootedOut: true,
+        manifestRemoved: true,
+        agentStartRequested: false,
+      }),
+    ).toBe(true);
+    expect(
+      removed({
+        kind: "retire-failed",
+        bootoutFailed: true,
+        manifestRemovalFailed: false,
+      }),
+    ).toBe(true);
+    expect(removed({ kind: "not-applicable" })).toBe(false);
+    expect(removed({ kind: "nothing-to-retire" })).toBe(false);
+    expect(
+      removed({ kind: "kept-agent-possibly-wedged", probe: "wedged" }),
+    ).toBe(false);
   });
 });
 

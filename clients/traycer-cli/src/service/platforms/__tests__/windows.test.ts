@@ -21,6 +21,10 @@ import { ProcessRunError, type RunResult } from "../../process-runner";
 import type { SpawnEvidenceBaseline } from "../../../host/spawn-evidence";
 import { CLI_ERROR_CODES } from "../../../runner/errors";
 import { didServiceRegistrationCommit } from "../../cli-invocation-record";
+import {
+  isServiceMutationAuthorityError,
+  ServiceMutationAuthorityError,
+} from "../../mutation-authority";
 
 const mocks = vi.hoisted(() => ({
   readHostPidMetadata: vi.fn(),
@@ -649,5 +653,206 @@ describe("Windows startService post-/Run spawn verification", () => {
       code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
     });
     expect(didServiceRegistrationCommit(caught)).toBe(false);
+  });
+
+  // A mutation-authority loss is not a `CliError`: it must keep its own
+  // identity (`isServiceMutationAuthorityError`) rather than being wrapped,
+  // and `markRegistrationCommitted` marks it by reference instead of via
+  // `details.registrationCommitted`.
+  it("marks a mutation-authority loss from /Run after a successful /Create as a committed registration", async () => {
+    const authorityError = new ServiceMutationAuthorityError(
+      new Error("maintenance lease revoked"),
+    );
+    const runner: ProcessRunner = async (command, args) => {
+      if (command === "schtasks" && args[0] === "/Run") {
+        throw authorityError;
+      }
+      return success("");
+    };
+    setWindowsTaskInstallDepsForTests(stagedTaskInstallDeps());
+    setWindowsStartEvidenceDepsForTests({
+      captureBaseline: async () => emptySpawnBaseline(),
+      createEvidenceReader: () => ({ collect: async () => null }),
+      sleep: async () => undefined,
+      verifyTimeoutMs: 40,
+      verifyPollMs: 10,
+    });
+
+    let caught: unknown = null;
+    try {
+      await createWindowsController(runner).install({
+        label: serviceLabelFor("staging"),
+        cli: { command: "C:\\traycer.exe", args: [] },
+        enableLinger: false,
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBe(authorityError);
+    expect(isServiceMutationAuthorityError(caught)).toBe(true);
+    expect(didServiceRegistrationCommit(caught)).toBe(true);
+  });
+
+  // The negative twin: a mutation-authority loss from `/Create` happens
+  // BEFORE the task exists at all, so it must stay an authority error
+  // without ever being read as committed.
+  it("does not mark a mutation-authority loss from /Create (pre-registration) as a committed registration", async () => {
+    const authorityError = new ServiceMutationAuthorityError(
+      new Error("maintenance lease revoked"),
+    );
+    const runner: ProcessRunner = async (command, args) => {
+      if (command === "schtasks" && args[0] === "/Create") {
+        throw authorityError;
+      }
+      return success("");
+    };
+    setWindowsTaskInstallDepsForTests(stagedTaskInstallDeps());
+
+    let caught: unknown = null;
+    try {
+      await createWindowsController(runner).install({
+        label: serviceLabelFor("staging"),
+        cli: { command: "C:\\traycer.exe", args: [] },
+        enableLinger: false,
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBe(authorityError);
+    expect(isServiceMutationAuthorityError(caught)).toBe(true);
+    expect(didServiceRegistrationCommit(caught)).toBe(false);
+  });
+
+  // The staging cleanup runs in `installService`'s `finally`, AFTER `/Create`
+  // has already registered the task. An authority loss there is therefore
+  // just as post-registration as one from `/Run` itself - and since the
+  // `finally` throw pre-empts the try block's own control flow, `/Run` is
+  // never reached at all.
+  it("marks a mutation-authority loss from the staging cleanup after a successful /Create as a committed registration, without attempting /Run", async () => {
+    const authorityError = new ServiceMutationAuthorityError(
+      new Error("maintenance lease revoked"),
+    );
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      return success("");
+    };
+    setWindowsTaskInstallDepsForTests({
+      stageTaskDefinition: async () => ({
+        tmpDir: "/tmp/traycer-task-test",
+        xmlPath: "/tmp/traycer-task-test/task.xml",
+      }),
+      removeStagedTaskDefinition: async () => {
+        throw authorityError;
+      },
+    });
+
+    let caught: unknown = null;
+    try {
+      await createWindowsController(runner).install({
+        label: serviceLabelFor("staging"),
+        cli: { command: "C:\\traycer.exe", args: [] },
+        enableLinger: false,
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBe(authorityError);
+    expect(isServiceMutationAuthorityError(caught)).toBe(true);
+    expect(didServiceRegistrationCommit(caught)).toBe(true);
+    expect(
+      calls.filter(
+        (call) => call.command === "schtasks" && call.args[0] === "/Run",
+      ),
+    ).toHaveLength(0);
+  });
+
+  // The negative twin: `/Create` itself fails, so the task was never
+  // registered - the staging cleanup's authority loss must not be read as
+  // committed even though it is the error that ultimately propagates (the
+  // `finally` throw replaces the `/Create` failure the try block raised).
+  it("does not mark a mutation-authority loss from the staging cleanup when /Create failed as a committed registration", async () => {
+    const authorityError = new ServiceMutationAuthorityError(
+      new Error("maintenance lease revoked"),
+    );
+    const runner: ProcessRunner = async (command, args) => {
+      if (command === "schtasks" && args[0] === "/Create") {
+        throw new ProcessRunError(
+          "schtasks /Create exited with code 1: Access is denied.",
+          command,
+          args,
+          1,
+          "",
+          "ERROR: Access is denied.",
+        );
+      }
+      return success("");
+    };
+    setWindowsTaskInstallDepsForTests({
+      stageTaskDefinition: async () => ({
+        tmpDir: "/tmp/traycer-task-test",
+        xmlPath: "/tmp/traycer-task-test/task.xml",
+      }),
+      removeStagedTaskDefinition: async () => {
+        throw authorityError;
+      },
+    });
+
+    let caught: unknown = null;
+    try {
+      await createWindowsController(runner).install({
+        label: serviceLabelFor("staging"),
+        cli: { command: "C:\\traycer.exe", args: [] },
+        enableLinger: false,
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBe(authorityError);
+    expect(isServiceMutationAuthorityError(caught)).toBe(true);
+    expect(didServiceRegistrationCommit(caught)).toBe(false);
+  });
+
+  // `readTaskLastRunResult` is only ever reached after `/Run` was accepted
+  // and the post-baseline spawn-evidence poll timed out, so an authority
+  // loss from that diagnostic query is just as post-registration as the
+  // `/Run` failure it exists to explain.
+  it("marks a mutation-authority loss from the Last Run Result query after an accepted /Run as a committed registration", async () => {
+    const authorityError = new ServiceMutationAuthorityError(
+      new Error("maintenance lease revoked"),
+    );
+    const runner: ProcessRunner = async (command, args) => {
+      if (command === "schtasks" && args[0] === "/Query") {
+        throw authorityError;
+      }
+      return success("");
+    };
+    setWindowsTaskInstallDepsForTests(stagedTaskInstallDeps());
+    setWindowsStartEvidenceDepsForTests({
+      captureBaseline: async () => emptySpawnBaseline(),
+      createEvidenceReader: () => ({ collect: async () => null }),
+      sleep: async () => undefined,
+      verifyTimeoutMs: 40,
+      verifyPollMs: 10,
+    });
+
+    let caught: unknown = null;
+    try {
+      await createWindowsController(runner).install({
+        label: serviceLabelFor("staging"),
+        cli: { command: "C:\\traycer.exe", args: [] },
+        enableLinger: false,
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBe(authorityError);
+    expect(isServiceMutationAuthorityError(caught)).toBe(true);
+    expect(didServiceRegistrationCommit(caught)).toBe(true);
   });
 });

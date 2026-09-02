@@ -408,7 +408,7 @@ const LIFECYCLE_SAMPLE: CliInvocationLifecycle = {
   event: "uninstalled",
   serviceLabel: "ai.traycer.host",
   at: "2026-09-01T00:00:00.000Z",
-  supersededLegacyMarkerDigest: null,
+  legacyMarkerEvidence: { kind: "none" },
 };
 
 describe("cliInvocationLifecycleNewerThanLegacyExactMarker", () => {
@@ -495,9 +495,16 @@ describe("parseCliInvocationLifecycle", () => {
   });
 
   it("tolerates unknown keys", () => {
-    expect(
-      parseCliInvocationLifecycle({ ...LIFECYCLE_SAMPLE, extra: true }),
-    ).toEqual(LIFECYCLE_SAMPLE);
+    // Spread the WIRE-shaped (serialized-then-parsed) form, not the typed
+    // LIFECYCLE_SAMPLE directly: the typed object carries `legacyMarkerEvidence`,
+    // not the wire's `supersededLegacyMarkerDigest`, and the parser reads the
+    // latter.
+    const wireShaped = JSON.parse(
+      serializeCliInvocationLifecycle(LIFECYCLE_SAMPLE),
+    );
+    expect(parseCliInvocationLifecycle({ ...wireShaped, extra: true })).toEqual(
+      LIFECYCLE_SAMPLE,
+    );
   });
 
   it("rejects a non-uuid generation and an unknown event", () => {
@@ -512,7 +519,7 @@ describe("parseCliInvocationLifecycle", () => {
     ).toBeNull();
   });
 
-  it("parses a legacy body without the digest field as null", () => {
+  it("parses a legacy body with the digest field absent as unknown evidence", () => {
     const legacyBody = {
       schemaVersion: LIFECYCLE_SAMPLE.schemaVersion,
       kind: LIFECYCLE_SAMPLE.kind,
@@ -521,7 +528,10 @@ describe("parseCliInvocationLifecycle", () => {
       serviceLabel: LIFECYCLE_SAMPLE.serviceLabel,
       at: LIFECYCLE_SAMPLE.at,
     };
-    expect(parseCliInvocationLifecycle(legacyBody)).toEqual(LIFECYCLE_SAMPLE);
+    expect(parseCliInvocationLifecycle(legacyBody)).toEqual({
+      ...LIFECYCLE_SAMPLE,
+      legacyMarkerEvidence: { kind: "unknown" },
+    });
   });
 
   it("rejects a non-hex or wrong-length digest", () => {
@@ -543,15 +553,117 @@ describe("parseCliInvocationLifecycle", () => {
     const digest = cliInvocationTransactionMarkerDigest(
       Buffer.from(serializeCliInvocationTransactionMarker(TXN_SAMPLE), "utf8"),
     );
-    const withDigest = {
+    const withDigest: CliInvocationLifecycle = {
       ...LIFECYCLE_SAMPLE,
-      supersededLegacyMarkerDigest: digest,
+      legacyMarkerEvidence: { kind: "digest", digest },
     };
     expect(
       parseCliInvocationLifecycle(
         JSON.parse(serializeCliInvocationLifecycle(withDigest)),
       ),
     ).toEqual(withDigest);
+  });
+
+  it("parses an explicit null as none", () => {
+    expect(
+      parseCliInvocationLifecycle({
+        ...LIFECYCLE_SAMPLE,
+        supersededLegacyMarkerDigest: null,
+      })?.legacyMarkerEvidence,
+    ).toEqual({ kind: "none" });
+  });
+
+  it("parses a valid sha256 hex string as digest", () => {
+    const digest = "a".repeat(64);
+    expect(
+      parseCliInvocationLifecycle({
+        ...LIFECYCLE_SAMPLE,
+        supersededLegacyMarkerDigest: digest,
+      })?.legacyMarkerEvidence,
+    ).toEqual({ kind: "digest", digest });
+  });
+
+  it("rejects a non-hex string like 'bogus'", () => {
+    expect(
+      parseCliInvocationLifecycle({
+        ...LIFECYCLE_SAMPLE,
+        supersededLegacyMarkerDigest: "bogus",
+      }),
+    ).toBeNull();
+  });
+
+  it("parses the literal 'unreadable' wire value as unreadable evidence", () => {
+    expect(
+      parseCliInvocationLifecycle({
+        ...LIFECYCLE_SAMPLE,
+        supersededLegacyMarkerDigest: "unreadable",
+      })?.legacyMarkerEvidence,
+    ).toEqual({ kind: "unreadable" });
+  });
+
+  it("round-trips unreadable evidence through serialize then parse", () => {
+    const withUnreadable: CliInvocationLifecycle = {
+      ...LIFECYCLE_SAMPLE,
+      legacyMarkerEvidence: { kind: "unreadable" },
+    };
+    expect(
+      parseCliInvocationLifecycle(
+        JSON.parse(serializeCliInvocationLifecycle(withUnreadable)),
+      ),
+    ).toEqual(withUnreadable);
+  });
+
+  it("never confuses a 64-hex digest with the 'unreadable' literal", () => {
+    // "unreadable" is not valid hex, and a genuine 64-hex digest (even one
+    // built entirely from hex-looking characters like repeated "f") must
+    // never be misread as the literal marker for the unreadable state.
+    const digest = "f".repeat(64);
+    expect(
+      parseCliInvocationLifecycle({
+        ...LIFECYCLE_SAMPLE,
+        supersededLegacyMarkerDigest: digest,
+      })?.legacyMarkerEvidence,
+    ).toEqual({ kind: "digest", digest });
+  });
+});
+
+describe("serializeCliInvocationLifecycle legacyMarkerEvidence wire shape", () => {
+  it("writes supersededLegacyMarkerDigest: null for kind none", () => {
+    const serialized = serializeCliInvocationLifecycle({
+      ...LIFECYCLE_SAMPLE,
+      legacyMarkerEvidence: { kind: "none" },
+    });
+    const parsedJson = JSON.parse(serialized) as Record<string, unknown>;
+    expect("supersededLegacyMarkerDigest" in parsedJson).toBe(true);
+    expect(parsedJson.supersededLegacyMarkerDigest).toBeNull();
+  });
+
+  it("omits the key entirely for kind unknown", () => {
+    const serialized = serializeCliInvocationLifecycle({
+      ...LIFECYCLE_SAMPLE,
+      legacyMarkerEvidence: { kind: "unknown" },
+    });
+    const parsedJson = JSON.parse(serialized) as Record<string, unknown>;
+    expect("supersededLegacyMarkerDigest" in parsedJson).toBe(false);
+  });
+
+  it("writes the digest string for kind digest", () => {
+    const digest = "b".repeat(64);
+    const serialized = serializeCliInvocationLifecycle({
+      ...LIFECYCLE_SAMPLE,
+      legacyMarkerEvidence: { kind: "digest", digest },
+    });
+    const parsedJson = JSON.parse(serialized) as Record<string, unknown>;
+    expect(parsedJson.supersededLegacyMarkerDigest).toBe(digest);
+  });
+
+  it("writes the literal 'unreadable' string for kind unreadable", () => {
+    const serialized = serializeCliInvocationLifecycle({
+      ...LIFECYCLE_SAMPLE,
+      legacyMarkerEvidence: { kind: "unreadable" },
+    });
+    const parsedJson = JSON.parse(serialized) as Record<string, unknown>;
+    expect(parsedJson.supersededLegacyMarkerDigest).toBe("unreadable");
   });
 });
 
@@ -579,7 +691,7 @@ describe("cliInvocationLifecycleSupersedesLegacyExactMarker", () => {
         {
           ...LIFECYCLE_SAMPLE,
           at: "2020-01-01T00:00:00.000Z",
-          supersededLegacyMarkerDigest: digest,
+          legacyMarkerEvidence: { kind: "digest", digest },
         },
       ),
     ).toBe(true);
@@ -592,7 +704,7 @@ describe("cliInvocationLifecycleSupersedesLegacyExactMarker", () => {
         {
           ...LIFECYCLE_SAMPLE,
           at: "2020-01-01T00:00:00.000Z",
-          supersededLegacyMarkerDigest: "f".repeat(64),
+          legacyMarkerEvidence: { kind: "digest", digest: "f".repeat(64) },
         },
       ),
     ).toBe(false);
@@ -611,23 +723,95 @@ describe("cliInvocationLifecycleSupersedesLegacyExactMarker", () => {
         {
           ...LIFECYCLE_SAMPLE,
           at: "2026-09-01T00:00:00.001Z",
-          supersededLegacyMarkerDigest: "f".repeat(64),
+          legacyMarkerEvidence: { kind: "digest", digest: "f".repeat(64) },
         },
       ),
     ).toBe(false);
   });
 
-  it("falls back to the timestamp rule when the field is null and `at` is later", () => {
+  it("falls back to the timestamp rule when evidence is unknown (pre-field lifecycle) and `at` is later", () => {
+    // Renamed from the old "field is null" framing: `null` on the wire is now
+    // `none` evidence, which never falls back to the clock (see the sibling
+    // test below). Only `unknown` - a lifecycle written by a CLI that
+    // predates the field - has no causal evidence at all and falls back to
+    // comparing timestamps.
     expect(
       cliInvocationLifecycleSupersedesLegacyExactMarker(
         { parsed: TXN_SAMPLE, digest },
         {
           ...LIFECYCLE_SAMPLE,
           at: "2026-09-01T00:00:00.001Z",
-          supersededLegacyMarkerDigest: null,
+          legacyMarkerEvidence: { kind: "unknown" },
         },
       ),
     ).toBe(true);
+  });
+
+  it("returns false for `none` evidence even when `at` is later than the marker", () => {
+    // `none` means a CURRENT CLI acquired and positively saw no legacy
+    // marker - so any legacy marker present now was created afterwards, by
+    // an older CLI, and must never be discharged whatever the clocks say.
+    // Unlike `unknown`, this never falls back to the timestamp rule.
+    expect(
+      cliInvocationLifecycleSupersedesLegacyExactMarker(
+        { parsed: TXN_SAMPLE, digest },
+        {
+          ...LIFECYCLE_SAMPLE,
+          at: "2026-09-01T00:00:00.001Z",
+          legacyMarkerEvidence: { kind: "none" },
+        },
+      ),
+    ).toBe(false);
+  });
+
+  it("returns false for `unknown` evidence when `at` is earlier than the marker", () => {
+    // The `unknown` fallback still applies the timestamp rule, and that rule
+    // requires `at` strictly after the marker - an earlier `at` is not
+    // supersession.
+    expect(
+      cliInvocationLifecycleSupersedesLegacyExactMarker(
+        { parsed: TXN_SAMPLE, digest },
+        {
+          ...LIFECYCLE_SAMPLE,
+          at: "2020-01-01T00:00:00.000Z",
+          legacyMarkerEvidence: { kind: "unknown" },
+        },
+      ),
+    ).toBe(false);
+  });
+
+  it("`unreadable` evidence never discharges the legacy marker, even when `at` is later", () => {
+    // `unreadable` is causal evidence like `none`, not an absence of it: a
+    // legacy marker was positively present and abandoned when this
+    // transaction acquired, but its bytes could not be read - there is no
+    // digest to compare, and unlike `unknown` (a pre-field lifecycle that
+    // recorded nothing) it must never fall back to the clock either. Falling
+    // back would let a later transaction's unreadable evidence discharge a
+    // marker it never proved postdates it, exactly the hazard `none` guards
+    // against.
+    expect(
+      cliInvocationLifecycleSupersedesLegacyExactMarker(
+        { parsed: TXN_SAMPLE, digest },
+        {
+          ...LIFECYCLE_SAMPLE,
+          at: "2026-09-01T00:00:00.001Z",
+          legacyMarkerEvidence: { kind: "unreadable" },
+        },
+      ),
+    ).toBe(false);
+  });
+
+  it("`unreadable` evidence returns false when `at` is earlier than the marker too", () => {
+    expect(
+      cliInvocationLifecycleSupersedesLegacyExactMarker(
+        { parsed: TXN_SAMPLE, digest },
+        {
+          ...LIFECYCLE_SAMPLE,
+          at: "2020-01-01T00:00:00.000Z",
+          legacyMarkerEvidence: { kind: "unreadable" },
+        },
+      ),
+    ).toBe(false);
   });
 });
 

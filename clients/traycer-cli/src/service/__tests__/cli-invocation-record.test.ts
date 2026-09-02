@@ -79,6 +79,16 @@ const mocks = vi.hoisted(() => ({
   // uninstall.
   failNextRm: false,
   failRmPath: null as string | null,
+  // Makes the NEXT `rm` call whose target path equals `noopRmPath` resolve
+  // successfully WITHOUT touching the file - unlike `failRmPath`, which
+  // makes `rm` reject. This is the only way this suite can express "the OS
+  // call reported success but the file is still there" (a real-world
+  // Windows sharing-violation-shaped case that a plain rejection cannot
+  // model): production code has no seam for it, so it is approximated here,
+  // entirely inside this test file's own `vi.mock`, by simply not calling
+  // through to the real `rm`. Reset after one use, symmetric with
+  // `failRmPath`.
+  noopRmPath: null as string | null,
   // Fails the NEXT `open` call whose target basename equals
   // `failOpenForBasename`, but ONLY on a read-shaped open (flags without
   // `O_CREAT` - `openFlagsForAuthorityRead`). A create-shaped open
@@ -179,6 +189,10 @@ vi.mock("node:fs/promises", async (importOriginal) => {
           code: "EACCES",
         });
       }
+      if (mocks.noopRmPath !== null && target === mocks.noopRmPath) {
+        mocks.noopRmPath = null;
+        return undefined;
+      }
       return actual.rm(...args);
     },
   };
@@ -200,6 +214,7 @@ vi.mock("../../logger", async (importOriginal) => {
 const {
   runServiceRegistrationWithInvocationRecord,
   runServiceUninstallWithInvocationRecord,
+  runServiceRemovalWithInvocationRecord,
   didServiceRegistrationCommit,
   __setCliInvocationStateDirPauseAfterGateForTest,
   __setCliInvocationStateDirPauseBeforeWriteForTest,
@@ -241,6 +256,7 @@ beforeEach(async () => {
   mocks.writeFileCallCount = 0;
   mocks.failNextRm = false;
   mocks.failRmPath = null;
+  mocks.noopRmPath = null;
   mocks.failOpenForBasename = null;
   mocks.failOpenCode = "EBUSY";
 });
@@ -839,6 +855,51 @@ describe("runServiceRegistrationWithInvocationRecord", () => {
     expect(await exists(cliInvocationRecordPath(hostHome))).toBe(true);
   });
 
+  it("commits the record but reports stale-clear failure when `rm` resolves yet the own-label marker is still readable afterward", async () => {
+    // `removeStaleMarkerIfOwn` treats `rm` resolving as necessary but not
+    // sufficient: it must also CONFIRM the marker is gone afterward
+    // (`confirmAbsent`). Mechanism: `mocks.noopRmPath` (this test file's own
+    // seam, see its definition above) makes the `rm` call for this exact
+    // path resolve successfully without removing the file - modelling a
+    // Windows-shaped "the OS call reported success but a handle elsewhere
+    // still holds the file open" case that a rejecting seam cannot express.
+    // No production file is touched to do this.
+    const stalePath = cliInvocationRecordStaleMarkerPath(hostHome);
+    await writeFile(
+      stalePath,
+      serializeCliInvocationStaleMarker({ serviceLabel: LABEL }),
+      { mode: 0o600 },
+    );
+    mocks.noopRmPath = stalePath;
+    await expect(
+      runServiceRegistrationWithInvocationRecord({
+        environment: "production",
+        hostHomeDir: hostHome,
+        waitMs: 2_000,
+        pollIntervalMs: 20,
+        serviceLabel: LABEL,
+        cli: npmCli(),
+        register: async () => undefined,
+      }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      details: {
+        phase: "stale-clear",
+        outcome: "failed",
+        registrationCommitted: true,
+      },
+    });
+    // The registration and record commit completed; only the strict clear of
+    // the own-label stale marker - `rm` resolved but the file is still
+    // there - failed.
+    expect(await exists(cliInvocationRecordPath(hostHome))).toBe(true);
+    expect(await exists(cliInvocationLifecyclePath(hostHome))).toBe(true);
+    expect(await transactionMarkerNames()).toEqual([]);
+    // The marker `rm` claimed to remove is still on disk, confirming the
+    // no-op: nothing in the production path actually deleted it.
+    expect(await exists(stalePath)).toBe(true);
+  });
+
   it("commits the record but reports failure when a foreign-label stale marker survives the strict clear", async () => {
     await writeFile(
       cliInvocationRecordStaleMarkerPath(hostHome),
@@ -1009,6 +1070,46 @@ describe("runServiceRegistrationWithInvocationRecord", () => {
       expect(await exists(join(original, staleBasename))).toBe(false);
     });
   }
+
+  it("reports a release-phase failure when the own transaction marker cannot be unlinked after a successful install", async () => {
+    let markerPath = "";
+    await expect(
+      runServiceRegistrationWithInvocationRecord({
+        environment: "production",
+        hostHomeDir: hostHome,
+        waitMs: 2_000,
+        pollIntervalMs: 20,
+        serviceLabel: LABEL,
+        cli: npmCli(),
+        register: async () => {
+          // The transaction marker is already on disk by the time `register`
+          // runs (acquireTransaction completed and staging was written
+          // before this callback). Target its own-marker unlink specifically
+          // - the mocked `rm` fails only the NEXT call whose path equals
+          // `failRmPath`, so the staging-file removal (a different path)
+          // that also runs through `rm` later is untouched.
+          markerPath = join(
+            cliInvocationStateDir(hostHome),
+            (await readSoleTransactionMarker()).name,
+          );
+          mocks.failRmPath = markerPath;
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      details: {
+        phase: "release",
+        ownMarkerRetained: true,
+        residue: [],
+        registrationCommitted: true,
+      },
+    });
+    // The record and lifecycle are committed even though the marker release
+    // failed; only the marker's own unlink could not be confirmed.
+    expect(await exists(cliInvocationRecordPath(hostHome))).toBe(true);
+    expect(await exists(cliInvocationLifecyclePath(hostHome))).toBe(true);
+    expect(await exists(markerPath)).toBe(true);
+  });
 });
 
 describe("runServiceUninstallWithInvocationRecord", () => {
@@ -1545,6 +1646,199 @@ describe("runServiceUninstallWithInvocationRecord", () => {
       );
     });
   }
+
+  it("reports a release-phase failure when the own transaction marker cannot be unlinked after a successful uninstall", async () => {
+    await runServiceRegistrationWithInvocationRecord({
+      environment: "production",
+      hostHomeDir: hostHome,
+      waitMs: 2_000,
+      pollIntervalMs: 20,
+      serviceLabel: LABEL,
+      cli: npmCli(),
+      register: async () => undefined,
+    });
+    let markerPath = "";
+    let uninstalled = false;
+    await expect(
+      runServiceUninstallWithInvocationRecord({
+        environment: "production",
+        hostHomeDir: hostHome,
+        waitMs: 2_000,
+        pollIntervalMs: 20,
+        serviceLabel: LABEL,
+        uninstall: async () => {
+          uninstalled = true;
+          markerPath = join(
+            cliInvocationStateDir(hostHome),
+            (await readSoleTransactionMarker()).name,
+          );
+          mocks.failRmPath = markerPath;
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_UNINSTALL_FAILED,
+      details: {
+        phase: "release",
+        ownMarkerRetained: true,
+        residue: [],
+      },
+    });
+    expect(uninstalled).toBe(true);
+    // The record was removed and an "uninstalled" lifecycle written even
+    // though the marker release failed; only the marker's own unlink could
+    // not be confirmed.
+    expect(await exists(cliInvocationRecordPath(hostHome))).toBe(false);
+    const lifecycle = await readLifecycle();
+    expect(lifecycle?.event).toBe("uninstalled");
+    expect(await exists(markerPath)).toBe(true);
+  });
+
+  it("rejects via reportRetainedRelease when the own marker cannot be released after leaving a foreign record untouched", async () => {
+    const foreign = {
+      schemaVersion: 1,
+      command: process.execPath,
+      args: [scriptPath],
+      source: {
+        kind: "service-registration",
+        platform: "linux",
+        serviceLabel: "ai.traycer.host.dev.other",
+      },
+      recoveredAt: "2026-09-01T00:00:00.000Z",
+    };
+    await writeFile(
+      cliInvocationRecordPath(hostHome),
+      `${JSON.stringify(foreign, null, 2)}\n`,
+      { mode: 0o600 },
+    );
+    let markerPath = "";
+    await expect(
+      runServiceUninstallWithInvocationRecord({
+        environment: "production",
+        hostHomeDir: hostHome,
+        waitMs: 2_000,
+        pollIntervalMs: 20,
+        serviceLabel: LABEL,
+        uninstall: async () => {
+          markerPath = join(
+            cliInvocationStateDir(hostHome),
+            (await readSoleTransactionMarker()).name,
+          );
+          mocks.failRmPath = markerPath;
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_UNINSTALL_FAILED,
+      details: {
+        phase: "release",
+        ownMarkerRetained: true,
+        residue: [],
+      },
+    });
+    // The foreign record was left exactly as it was - "nothing removed, or a
+    // foreign record" is the `reportRetainedRelease` path, distinct from the
+    // strict post-removal release check: only this owner's marker had to go,
+    // and it did not.
+    const live = parseCliInvocationRecord(
+      JSON.parse(await readFile(cliInvocationRecordPath(hostHome), "utf8")),
+    );
+    expect(live?.source.serviceLabel).toBe("ai.traycer.host.dev.other");
+    expect(await exists(markerPath)).toBe(true);
+  });
+});
+
+describe("runServiceRemovalWithInvocationRecord (generic)", () => {
+  it("invalidates the record and writes an uninstalled lifecycle when removed(result) is true", async () => {
+    await runServiceRegistrationWithInvocationRecord({
+      environment: "production",
+      hostHomeDir: hostHome,
+      waitMs: 2_000,
+      pollIntervalMs: 20,
+      serviceLabel: LABEL,
+      cli: npmCli(),
+      register: async () => undefined,
+    });
+    const result = await runServiceRemovalWithInvocationRecord<{
+      readonly took: boolean;
+    }>({
+      environment: "production",
+      hostHomeDir: hostHome,
+      serviceLabel: LABEL,
+      remove: async () => ({ took: true }),
+      removed: (r) => r.took,
+      waitMs: 2_000,
+      pollIntervalMs: 20,
+    });
+    expect(result).toEqual({ took: true });
+    expect(await exists(cliInvocationRecordPath(hostHome))).toBe(false);
+    const lifecycle = await readLifecycle();
+    expect(lifecycle?.event).toBe("uninstalled");
+    expect(await transactionMarkerNames()).toEqual([]);
+  });
+
+  it("leaves the record byte-identical when removed(result) is false", async () => {
+    await runServiceRegistrationWithInvocationRecord({
+      environment: "production",
+      hostHomeDir: hostHome,
+      waitMs: 2_000,
+      pollIntervalMs: 20,
+      serviceLabel: LABEL,
+      cli: npmCli(),
+      register: async () => undefined,
+    });
+    const before = await readFile(cliInvocationRecordPath(hostHome), "utf8");
+    const beforeLifecycle = await readLifecycle();
+    const result = await runServiceRemovalWithInvocationRecord<{
+      readonly took: boolean;
+    }>({
+      environment: "production",
+      hostHomeDir: hostHome,
+      serviceLabel: LABEL,
+      remove: async () => ({ took: false }),
+      removed: (r) => r.took,
+      waitMs: 2_000,
+      pollIntervalMs: 20,
+    });
+    expect(result).toEqual({ took: false });
+    const after = await readFile(cliInvocationRecordPath(hostHome), "utf8");
+    expect(after).toBe(before);
+    expect((await readLifecycle())?.generation).toBe(
+      beforeLifecycle?.generation,
+    );
+    expect(await transactionMarkerNames()).toEqual([]);
+  });
+
+  it("marks stale and removes the own-label record when remove() throws", async () => {
+    await runServiceRegistrationWithInvocationRecord({
+      environment: "production",
+      hostHomeDir: hostHome,
+      waitMs: 2_000,
+      pollIntervalMs: 20,
+      serviceLabel: LABEL,
+      cli: npmCli(),
+      register: async () => undefined,
+    });
+    await expect(
+      runServiceRemovalWithInvocationRecord<void>({
+        environment: "production",
+        hostHomeDir: hostHome,
+        serviceLabel: LABEL,
+        remove: async () => {
+          throw new Error("indeterminate-removal");
+        },
+        removed: () => true,
+        waitMs: 2_000,
+        pollIntervalMs: 20,
+      }),
+    ).rejects.toThrow("indeterminate-removal");
+    expect(await exists(cliInvocationRecordPath(hostHome))).toBe(false);
+    const stale = parseCliInvocationStaleMarker(
+      JSON.parse(
+        await readFile(cliInvocationRecordStaleMarkerPath(hostHome), "utf8"),
+      ),
+    );
+    expect(stale?.serviceLabel).toBe(LABEL);
+    expect(await transactionMarkerNames()).toEqual([]);
+  });
 });
 
 describe("readAuthorityFile unreadable handling", () => {
@@ -1589,7 +1883,7 @@ describe("readAuthorityFile unreadable handling", () => {
     expect(await exists(path)).toBe(true);
   });
 
-  it("ages out an unreadable transaction marker but does not unlink it (cannot confirm bytes)", async () => {
+  it("ages out an unreadable transaction marker, leaves it on disk (cannot confirm bytes), and reports it as residue", async () => {
     const token = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
     const raw = serializeCliInvocationTransactionMarker({
       schemaVersion: 1,
@@ -1612,18 +1906,34 @@ describe("readAuthorityFile unreadable handling", () => {
     );
     await utimes(path, staleTime, staleTime);
     mocks.failOpenForBasename = basename(path);
-    await runServiceRegistrationWithInvocationRecord({
-      environment: "production",
-      hostHomeDir: hostHome,
-      waitMs: 2_000,
-      pollIntervalMs: 20,
-      serviceLabel: LABEL,
-      cli: npmCli(),
-      register: async () => undefined,
+    // Aged out, so registration proceeds around it as abandoned residue - but
+    // it stays unreadable through the sweep too (the seam never resets), so
+    // compare-then-unlink never sees its bytes and it survives the sweep. A
+    // surviving residue entry is now reported rather than silently ignored:
+    // the OS registration and record commit still succeeded, so this is the
+    // "release" phase, not "stage" or "commit".
+    await expect(
+      runServiceRegistrationWithInvocationRecord({
+        environment: "production",
+        hostHomeDir: hostHome,
+        waitMs: 2_000,
+        pollIntervalMs: 20,
+        serviceLabel: LABEL,
+        cli: npmCli(),
+        register: async () => undefined,
+      }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      details: {
+        phase: "release",
+        ownMarkerRetained: false,
+        residue: [basename(path)],
+        registrationCommitted: true,
+      },
     });
     expect(await exists(cliInvocationRecordPath(hostHome))).toBe(true);
-    // Aged out, so registration proceeded around it - but compare-then-unlink
-    // never saw its bytes, so it is left on disk rather than unlinked.
+    // Left on disk rather than unlinked - compare-then-unlink never saw its
+    // bytes.
     expect(await exists(path)).toBe(true);
   });
 
@@ -2080,9 +2390,12 @@ describe("lifecycle generation", () => {
       register: async () => undefined,
     });
     expect(await readFile(exactPath, "utf8")).toBe(exactRaw);
-    expect((await readLifecycle())?.supersededLegacyMarkerDigest).toBe(
-      cliInvocationTransactionMarkerDigest(Buffer.from(exactRaw, "utf8")),
-    );
+    expect((await readLifecycle())?.legacyMarkerEvidence).toEqual({
+      kind: "digest",
+      digest: cliInvocationTransactionMarkerDigest(
+        Buffer.from(exactRaw, "utf8"),
+      ),
+    });
   });
 
   it("leaves the lifecycle's legacy-marker digest null when no legacy marker is present", async () => {
@@ -2095,7 +2408,100 @@ describe("lifecycle generation", () => {
       cli: npmCli(),
       register: async () => undefined,
     });
-    expect((await readLifecycle())?.supersededLegacyMarkerDigest).toBeNull();
+    expect((await readLifecycle())?.legacyMarkerEvidence).toEqual({
+      kind: "none",
+    });
+  });
+
+  it("commits the record with `unreadable` evidence (never a digest of empty bytes) but rejects on the release phase when the abandoned legacy marker cannot be read", async () => {
+    const exactPath = cliInvocationRecordTransactionMarkerPath(hostHome);
+    const exactRaw = serializeCliInvocationTransactionMarker({
+      schemaVersion: 1,
+      kind: "transaction",
+      owner: {
+        pid: 2147483646,
+        token: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+        processStartIdentity: null,
+        startedAtMs: 1,
+      },
+      stagingFile: `${CLI_INVOCATION_RECORD_STAGING_FILENAME_PREFIX}aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee`,
+      operation: "install",
+      serviceLabel: LABEL,
+      startedAt: "2020-01-01T00:00:00.000Z",
+    });
+    await writeFile(exactPath, exactRaw, { mode: 0o600 });
+    // Age the marker's mtime so `observeTransactionMarkers` classifies it as
+    // abandoned by the age window: for an UNREADABLE entry the owner cannot
+    // be identified (no bytes to parse), so age is the only abandonment
+    // signal available, unlike the readable-and-parseable digest case above
+    // where a dead pid abandons it regardless of mtime.
+    const staleTime = new Date(
+      Date.now() - CLI_INVOCATION_TXN_ABANDON_AFTER_MS - 5_000,
+    );
+    await utimes(exactPath, staleTime, staleTime);
+    // Prefer the suite's read-failure seam over a chmod: it works on every
+    // platform (chmod 0o000 is unreliable on Windows and as root).
+    mocks.failOpenForBasename = basename(exactPath);
+    // `unreadable` evidence never discharges the legacy marker (it is
+    // causal evidence like `none`, not an absence of it - see the protocol
+    // module), so `sweepAbandonedResidue` reports the legacy basename as
+    // surviving residue and the registration rejects on the release phase
+    // even though the OS registration, the record, and the lifecycle all
+    // committed successfully.
+    await expect(
+      runServiceRegistrationWithInvocationRecord({
+        environment: "production",
+        hostHomeDir: hostHome,
+        waitMs: 2_000,
+        pollIntervalMs: 20,
+        serviceLabel: LABEL,
+        cli: npmCli(),
+        register: async () => undefined,
+      }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      details: {
+        phase: "release",
+        ownMarkerRetained: false,
+        residue: [basename(exactPath)],
+        registrationCommitted: true,
+      },
+    });
+    // The legacy exact marker is never unlinked by anyone, unreadable or not.
+    expect(await exists(exactPath)).toBe(true);
+    // The record and the lifecycle (still carrying `unreadable` evidence,
+    // not a digest of the empty read) are committed despite the rejection.
+    expect(await exists(cliInvocationRecordPath(hostHome))).toBe(true);
+    expect((await readLifecycle())?.legacyMarkerEvidence).toEqual({
+      kind: "unreadable",
+    });
+  });
+
+  it("tells an unreadable legacy marker apart from a readable EMPTY one: the latter digests actual empty bytes", async () => {
+    const exactPath = cliInvocationRecordTransactionMarkerPath(hostHome);
+    // Readable, but empty: unparseable JSON, so it is classified abandoned
+    // by the same age window as the unreadable case above, but this time the
+    // read genuinely succeeds and returns zero bytes - a real digest of the
+    // empty buffer, not the sentinel `unreadable` state.
+    await writeFile(exactPath, "", { mode: 0o600 });
+    const staleTime = new Date(
+      Date.now() - CLI_INVOCATION_TXN_ABANDON_AFTER_MS - 5_000,
+    );
+    await utimes(exactPath, staleTime, staleTime);
+    await runServiceRegistrationWithInvocationRecord({
+      environment: "production",
+      hostHomeDir: hostHome,
+      waitMs: 2_000,
+      pollIntervalMs: 20,
+      serviceLabel: LABEL,
+      cli: npmCli(),
+      register: async () => undefined,
+    });
+    expect(await readFile(exactPath, "utf8")).toBe("");
+    expect((await readLifecycle())?.legacyMarkerEvidence).toEqual({
+      kind: "digest",
+      digest: cliInvocationTransactionMarkerDigest(Buffer.alloc(0)),
+    });
   });
 });
 
@@ -2479,6 +2885,28 @@ describe("cross-process transaction ownership", () => {
     expect(await transactionMarkerNames()).toEqual(["cli-invocation.txn"]);
   }, 30_000);
 
+  // The abandoned marker `writeDeadUniqueMarker` plants is no longer removed
+  // during election (only swept after the new owner's lifecycle write), so
+  // `readSoleTransactionMarker` - which asserts exactly one marker on disk -
+  // cannot be used while that residue is still present. This variant filters
+  // it out to find the live owner's marker instead.
+  async function readSoleTransactionMarkerExcluding(
+    excludeBasename: string,
+  ): Promise<{ readonly name: string; readonly raw: string }> {
+    const names = (await transactionMarkerNames()).filter(
+      (name) => name !== excludeBasename,
+    );
+    expect(names).toHaveLength(1);
+    const name = names[0];
+    if (name === undefined) {
+      throw new Error("expected one live transaction marker");
+    }
+    return {
+      name,
+      raw: await readFile(join(cliInvocationStateDir(hostHome), name), "utf8"),
+    };
+  }
+
   async function writeDeadUniqueMarker(): Promise<{
     readonly path: string;
     readonly raw: string;
@@ -2618,22 +3046,33 @@ describe("cross-process transaction ownership", () => {
       expect(await exists(dead.path)).toBe(true);
       await writeFile(firstPauseRelease, "go\n");
       await waitForFile(firstEntered);
-      const owner = await readSoleTransactionMarker();
+      const deadBasename = basename(dead.path);
+      const owner = await readSoleTransactionMarkerExcluding(deadBasename);
       expect(owner.name).not.toBe("cli-invocation.txn");
-      expect(await exists(dead.path)).toBe(false);
+      // Elected AROUND, not unlinked: the abandoned marker this owner
+      // observed is only swept after ITS lifecycle write, which has not
+      // happened yet - `first` is still parked inside `register()`.
+      expect(await exists(dead.path)).toBe(true);
       await writeFile(secondPauseRelease, "go\n");
       expect(await waitForExit(second)).toBe(1);
       expect(await readWorkerResult(secondResult)).toContain(
         '"code":"E_SERVICE_INSTALL_FAILED"',
       );
       expect(await exists(secondEntered)).toBe(false);
-      expect((await readSoleTransactionMarker()).raw).toBe(owner.raw);
+      expect((await readSoleTransactionMarkerExcluding(deadBasename)).raw).toBe(
+        owner.raw,
+      );
+      // The losing reclaimer's failed election must not have swept it either.
+      expect(await exists(dead.path)).toBe(true);
     } finally {
       await writeFile(firstOsRelease, "release\n");
       expect(await waitForExit(first)).toBe(0);
     }
     expect(await readWorkerResult(firstResult)).toBe("ok\n");
     expect(await transactionMarkerNames()).toEqual([]);
+    // Swept only now, after the winning owner's lifecycle write succeeded.
+    expect(await exists(dead.path)).toBe(false);
+    expect(await exists(cliInvocationLifecyclePath(hostHome))).toBe(true);
   }, 30_000);
 
   it("keeps a newly live owner safe from two other paused reclaimers", async () => {
@@ -2697,9 +3136,13 @@ describe("cross-process transaction ownership", () => {
 
       await writeFile(firstPauseRelease, "go\n");
       await waitForFile(firstEntered);
-      const owner = await readSoleTransactionMarker();
+      const deadBasename = basename(dead.path);
+      const owner = await readSoleTransactionMarkerExcluding(deadBasename);
       expect(owner.name).not.toBe("cli-invocation.txn");
-      expect(await exists(dead.path)).toBe(false);
+      // Elected AROUND, not unlinked: nothing has swept it yet - `first` is
+      // still parked inside `register()`, and its lifecycle has not been
+      // written.
+      expect(await exists(dead.path)).toBe(true);
 
       // Each delayed reclaimer still has the abandoned marker in its local
       // snapshot. Releasing it now must not remove the first actor's newly
@@ -2708,13 +3151,20 @@ describe("cross-process transaction ownership", () => {
       expect(await waitForExit(second)).toBe(1);
       secondExited = true;
       expect(await exists(secondEntered)).toBe(false);
-      expect((await readSoleTransactionMarker()).raw).toBe(owner.raw);
+      expect((await readSoleTransactionMarkerExcluding(deadBasename)).raw).toBe(
+        owner.raw,
+      );
+      expect(await exists(dead.path)).toBe(true);
 
       await writeFile(thirdPauseRelease, "go\n");
       expect(await waitForExit(third)).toBe(1);
       thirdExited = true;
       expect(await exists(thirdEntered)).toBe(false);
-      expect((await readSoleTransactionMarker()).raw).toBe(owner.raw);
+      expect((await readSoleTransactionMarkerExcluding(deadBasename)).raw).toBe(
+        owner.raw,
+      );
+      // Neither losing reclaimer's failed election swept it either.
+      expect(await exists(dead.path)).toBe(true);
     } finally {
       await writeFile(firstPauseRelease, "go\n");
       await writeFile(secondPauseRelease, "go\n");
@@ -2741,7 +3191,61 @@ describe("cross-process transaction ownership", () => {
       '"code":"E_SERVICE_INSTALL_FAILED"',
     );
     expect(await transactionMarkerNames()).toEqual([]);
+    // Swept only now, after the winning owner's lifecycle write succeeded.
+    expect(await exists(dead.path)).toBe(false);
+    expect(await exists(cliInvocationLifecyclePath(hostHome))).toBe(true);
   }, 30_000);
+
+  it("leaves the abandoned marker in place when register() throws", async () => {
+    const dead = await writeDeadUniqueMarker();
+    await expect(
+      runServiceRegistrationWithInvocationRecord({
+        environment: "production",
+        hostHomeDir: hostHome,
+        waitMs: 2_000,
+        pollIntervalMs: 20,
+        serviceLabel: LABEL,
+        cli: npmCli(),
+        register: async () => {
+          throw new Error("os-install-refused");
+        },
+      }),
+    ).rejects.toThrow("os-install-refused");
+    // A throw from `register()` never reaches the lifecycle write, so
+    // `sweepAbandonedResidue` never runs - the abandoned residue this owner
+    // elected around stays exactly where it was.
+    expect(await exists(dead.path)).toBe(true);
+  });
+
+  it("leaves the abandoned marker in place when the transaction fails before mutating the OS", async () => {
+    // One prior writeFile (planting the dead marker) precedes this owner's
+    // own txn-marker write (call 2) and staging write (call 3); see the
+    // `failWriteCallNumber` doc comment at the top of this file for the
+    // fresh-home numbering this offsets from.
+    const dead = await writeDeadUniqueMarker();
+    mocks.failWriteCallNumber = 3;
+    let osMutated = false;
+    await expect(
+      runServiceRegistrationWithInvocationRecord({
+        environment: "production",
+        hostHomeDir: hostHome,
+        waitMs: 2_000,
+        pollIntervalMs: 20,
+        serviceLabel: LABEL,
+        cli: npmCli(),
+        register: async () => {
+          osMutated = true;
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      details: { phase: "stage" },
+    });
+    expect(osMutated).toBe(false);
+    // The staging write failed before the OS was ever touched, so this
+    // transaction never reaches a lifecycle write and never sweeps.
+    expect(await exists(dead.path)).toBe(true);
+  });
 
   it("does not let a late contender preempt an established live unique owner", async () => {
     if (process.platform === "win32") return;

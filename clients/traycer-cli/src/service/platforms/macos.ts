@@ -62,6 +62,7 @@ import {
   isServiceMutationAuthorityError,
   verifyServiceMutationAuthority,
 } from "../mutation-authority";
+import { markRegistrationCommitted } from "../cli-invocation-record";
 
 // macOS service controller - CLI-owned launchctl. There is intentionally
 // no `SMAppService` path here (Decision 1 of the Tech Plan); the
@@ -463,12 +464,17 @@ async function installService(
       tolerateNonZeroExit: false,
     });
   } catch (cause) {
-    if (isServiceMutationAuthorityError(cause)) throw cause;
     // Post-registration: `bootstrap` succeeded, so launchd holds a
     // `RunAtLoad` registration and may already be launching the supervisor.
     // A caller holding a host-start adoption lease must honour it before
     // surfacing this (`didServiceRegistrationCommit`), or the child launchd
     // is bringing up is refused and the registered service is left hostless.
+    // That holds for an authority loss landing here just as much as for a
+    // kickstart failure: the error keeps its authority identity (a hard stop
+    // for the callers that classify it) and is marked by reference.
+    if (isServiceMutationAuthorityError(cause)) {
+      throw markRegistrationCommitted(cause);
+    }
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
       message: `launchctl kickstart failed for ${options.label.id}: ${describeCause(cause)}`,

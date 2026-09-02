@@ -44,6 +44,7 @@ import {
   serializeCliInvocationRecord,
   serializeCliInvocationStaleMarker,
   serializeCliInvocationTransactionMarker,
+  type CliInvocationLegacyMarkerEvidence,
   type CliInvocationLifecycleEvent,
   type CliInvocationRecord,
   type CliInvocationRecordPlatform,
@@ -76,13 +77,19 @@ import type { CliInvocation } from "./cli-binary";
 //
 // Ordering (registration):
 //   1. create a unique contender `cli-invocation.txn.<token>` (`wx`) and
-//      become owner only as the sole remaining live marker
+//      become owner only as the sole remaining live marker. Abandoned unique
+//      contenders are elected AROUND and left on disk: each may belong to an
+//      owner that mutated the OS before it could commit, and its marker is
+//      what keeps a host off the pre-mutation record until a fresh lifecycle
+//      generation exists
 //   2. write a unique staging file named in that marker
 //   3. mutate the OS registration
 //   4. on confirmed OS success, rename *this owner's* staging over the live
 //      record, write a fresh lifecycle generation, clear an earlier stale
-//      marker (compare-then-unlink on its label; a marker that survives is
-//      reported, because it keeps the committed record bypassed), release
+//      marker, sweep the abandoned residue from step 1, release this owner's
+//      marker. Every one of those removals is compare-then-unlink and
+//      CONFIRMED: a marker that survives is reported (`stale-clear`,
+//      `release`), because it keeps the committed record bypassed
 //   5. on commit failure, mark stale and unlink the live file so an older
 //      invocation cannot stay preferred, then fail the registration
 //   6. on OS throw, ALSO mark stale and unlink the live file. The platform
@@ -167,11 +174,36 @@ const NODE_FAMILY_BASENAMES: ReadonlySet<string> = new Set([
  * `/Run` and the spawn-evidence wait after a successful `/Create`. Linux
  * rolls a failed `enable --now` back (disable, unit removed) and so does not
  * set it.
+ *
+ * Two carriers, because the answer is independent of the error's TYPE. A
+ * `CliError` carries it as `details.registrationCommitted`. A mutation
+ * authority failure thrown from the same post-registration step is not a
+ * `CliError` and must keep its own identity (callers classify it by
+ * `isServiceMutationAuthorityError`, and wrapping it would turn a hard stop
+ * into an ordinary failure), so it is marked by reference instead:
+ * {@link markRegistrationCommitted}.
  */
 export function didServiceRegistrationCommit(error: unknown): boolean {
+  if (typeof error === "object" && error !== null) {
+    if (committedRegistrationFailures.has(error)) return true;
+  }
   if (!(error instanceof CliError)) return false;
   return error.details?.registrationCommitted === true;
 }
+
+/**
+ * Mark an error thrown AFTER the service manager accepted the registration,
+ * without changing its type or identity. Returns the same object so it can be
+ * rethrown in place: `throw markRegistrationCommitted(cause)`.
+ */
+export function markRegistrationCommitted<T>(error: T): T {
+  if (typeof error === "object" && error !== null) {
+    committedRegistrationFailures.add(error);
+  }
+  return error;
+}
+
+const committedRegistrationFailures = new WeakSet<object>();
 
 export interface ServiceRegistrationRecordOptions {
   readonly environment: Environment;
@@ -186,11 +218,31 @@ export interface ServiceRegistrationRecordOptions {
   readonly pollIntervalMs: number;
 }
 
-export interface ServiceUninstallRecordOptions {
+/** What every record transaction on the removal side is keyed on. */
+export interface ServiceRemovalRecordContext {
   readonly environment: Environment;
   readonly hostHomeDir: string;
   readonly serviceLabel: string;
+}
+
+export interface ServiceUninstallRecordOptions extends ServiceRemovalRecordContext {
   readonly uninstall: () => Promise<void>;
+  readonly waitMs: number;
+  readonly pollIntervalMs: number;
+}
+
+export interface ServiceRemovalRecordOptions<
+  T,
+> extends ServiceRemovalRecordContext {
+  /** The OS operation, run inside the transaction. */
+  readonly remove: () => Promise<T>;
+  /**
+   * Did `remove` take this label's registration away, wholly or in part? True
+   * invalidates the record exactly as an uninstall does; false leaves it as it
+   * was. A partial removal counts as removed: a record of a half-retired
+   * registration is as wrong as one of a deleted registration.
+   */
+  readonly removed: (result: T) => boolean;
   readonly waitMs: number;
   readonly pollIntervalMs: number;
 }
@@ -451,8 +503,8 @@ export async function runServiceRegistrationWithInvocationRecord(
     // The record is committed and correct, so it stays. What is missing is
     // the generation, and without it a host that latched an answer under
     // the OLD generation would serve it again the moment this owner's
-    // transaction marker is gone (an abandoned unique marker is reclaimed by
-    // the next CLI transaction, and nothing else in the key would have
+    // transaction marker is gone (an abandoned unique marker is swept by the
+    // next CONFIRMED CLI transaction, and nothing else in the key would have
     // moved). The stale marker is the durable substitute: it outlives this
     // process, bypasses the record on every read, and is cleared only by a
     // later confirmed transaction - which writes the generation this one
@@ -509,7 +561,12 @@ export async function runServiceRegistrationWithInvocationRecord(
   // until some later CLI transaction succeeds at this step. Silence here would
   // report a registration as clean while npm/nvm maintenance stays degraded.
   const staleOutcome = await removeStaleMarkerIfOwn(held);
-  await releaseOwnedTransaction(held);
+  // Same rule for every marker that would keep bypassing the record just
+  // committed: the abandoned contenders this owner elected around (safe to
+  // remove now that the generation is written) and this owner's own marker.
+  // Each is confirmed gone or reported; none is best-effort on a success path.
+  const residue = await sweepAbandonedResidue(held);
+  const release = await releaseOwnedTransaction(held);
   if (staleOutcome === "failed" || staleOutcome === "foreign") {
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
@@ -518,6 +575,20 @@ export async function runServiceRegistrationWithInvocationRecord(
         label: options.serviceLabel,
         phase: "stale-clear",
         outcome: staleOutcome,
+        registrationCommitted: true,
+      },
+      exitCode: 1,
+    });
+  }
+  if (release === "retained" || residue.length > 0) {
+    throw cliError({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      message: `service '${options.serviceLabel}' was registered and its CLI invocation record committed, but a transaction marker could not be removed; the host re-reads the OS registration until a later service command clears it`,
+      details: {
+        label: options.serviceLabel,
+        phase: "release",
+        ownMarkerRetained: release === "retained",
+        residue,
         registrationCommitted: true,
       },
       exitCode: 1,
@@ -534,6 +605,31 @@ export async function runServiceRegistrationWithInvocationRecord(
 export async function runServiceUninstallWithInvocationRecord(
   options: ServiceUninstallRecordOptions,
 ): Promise<void> {
+  await runServiceRemovalWithInvocationRecord<void>({
+    environment: options.environment,
+    hostHomeDir: options.hostHomeDir,
+    serviceLabel: options.serviceLabel,
+    remove: options.uninstall,
+    removed: () => true,
+    waitMs: options.waitMs,
+    pollIntervalMs: options.pollIntervalMs,
+  });
+}
+
+/**
+ * Run an OS operation that may remove this label's registration inside the
+ * record transaction, and invalidate the record exactly when it did.
+ *
+ * `uninstall` is the unconditional case (`removed` is always true). The
+ * competing-registration repair is the conditional one: it re-probes
+ * ownership itself and only sometimes boots the CLI label out, and the record
+ * of a registration that was retired - or half-retired - must not outlive it
+ * any more than after an uninstall. A result that removed nothing releases the
+ * transaction and leaves the record exactly as it was.
+ */
+export async function runServiceRemovalWithInvocationRecord<T>(
+  options: ServiceRemovalRecordOptions<T>,
+): Promise<T> {
   const logger = createCliLogger(options.environment);
   const stateDirIdentity = await ensureInvocationHostHome(
     options.hostHomeDir,
@@ -548,8 +644,9 @@ export async function runServiceUninstallWithInvocationRecord(
     pollIntervalMs: options.pollIntervalMs,
     stateDirIdentity,
   });
+  let result: T;
   try {
-    await options.uninstall();
+    result = await options.remove();
   } catch (cause) {
     // Same reasoning as the registration path: the backend may have removed
     // the service before the step that threw (`schtasks /Delete` runs before
@@ -564,6 +661,16 @@ export async function runServiceUninstallWithInvocationRecord(
     });
     await markStaleAndUnpreferLive(held);
     throw cause;
+  }
+  if (!options.removed(result)) {
+    // Nothing was removed, so the record still describes a registration that
+    // exists. Only this owner's marker has to go - and CONFIRMED, since a
+    // retained marker would keep every host read off that intact record.
+    reportRetainedRelease(
+      await releaseOwnedTransaction(held),
+      options.serviceLabel,
+    );
+    return result;
   }
   // Identity BEFORE the label read, so every classification below - foreign
   // included - is of the record in the directory this transaction validated.
@@ -583,8 +690,11 @@ export async function runServiceUninstallWithInvocationRecord(
         label: options.serviceLabel,
       },
     );
-    await releaseOwnedTransaction(held);
-    return;
+    reportRetainedRelease(
+      await releaseOwnedTransaction(held),
+      options.serviceLabel,
+    );
+    return result;
   }
   // Again after the label compare: this is the compare half of
   // compare-then-unlink, and the identity must hold at the unlink too.
@@ -655,10 +765,52 @@ export async function runServiceUninstallWithInvocationRecord(
       exitCode: 1,
     });
   }
-  await releaseOwnedTransaction(held);
+  // Same completion rule as the registration path: the abandoned residue this
+  // owner elected around is safe to sweep now that the generation is written,
+  // and every removal - residue and own marker - is confirmed or reported.
+  const residue = await sweepAbandonedResidue(held);
+  const release = await releaseOwnedTransaction(held);
+  if (release === "retained" || residue.length > 0) {
+    throw cliError({
+      code: CLI_ERROR_CODES.SERVICE_UNINSTALL_FAILED,
+      message: `service '${options.serviceLabel}' was uninstalled and its CLI invocation record removed, but a transaction marker could not be removed; the host re-reads the OS registration until a later service command clears it`,
+      details: {
+        label: options.serviceLabel,
+        phase: "release",
+        ownMarkerRetained: release === "retained",
+        residue,
+      },
+      exitCode: 1,
+    });
+  }
   logger.debug("CLI invocation record removed after confirmed uninstall", {
     environment: options.environment,
     label: options.serviceLabel,
+  });
+  return result;
+}
+
+/**
+ * The record was deliberately left as it was (nothing removed, or a foreign
+ * record); only this owner's marker had to go, and it did not. Reported for
+ * the same reason as every other retained marker: silence here would call an
+ * operation clean while it left every host read on the OS definition.
+ */
+function reportRetainedRelease(
+  release: "released" | "retained",
+  serviceLabel: string,
+): void {
+  if (release === "released") return;
+  throw cliError({
+    code: CLI_ERROR_CODES.SERVICE_UNINSTALL_FAILED,
+    message: `service '${serviceLabel}': the CLI invocation record was left in place, but this command's transaction marker could not be removed; the host re-reads the OS registration until a later service command clears it`,
+    details: {
+      label: serviceLabel,
+      phase: "release",
+      ownMarkerRetained: true,
+      residue: [],
+    },
+    exitCode: 1,
   });
 }
 
@@ -793,20 +945,38 @@ interface HeldTransaction {
   readonly serviceLabel: string;
   readonly operation: CliInvocationTransactionOperation;
   /**
-   * Digest of the abandoned legacy exact `cli-invocation.txn` this owner
-   * observed when it won the election, or `null`. Written into the lifecycle
-   * this transaction commits, so the host can discharge that marker by
-   * matching bytes rather than by comparing clocks.
+   * What this owner saw of the abandoned legacy exact `cli-invocation.txn`
+   * when it won the election: its digest, `none`, or `unreadable` (present,
+   * bytes not readable - never hashed as if they were empty). Written into
+   * the lifecycle this transaction commits, so the host can discharge that
+   * marker by matching bytes rather than by comparing clocks.
    */
-  readonly legacyMarkerDigest: string | null;
+  readonly legacyMarkerEvidence: CliInvocationLegacyMarkerEvidence;
+  /**
+   * Abandoned UNIQUE contenders observed when this owner won the election.
+   * Not unlinked then: each one is a dead owner that may have mutated the OS
+   * before it could commit its record, and until THIS transaction has written
+   * a fresh lifecycle generation its marker is the only durable thing telling
+   * a host not to prefer the pre-mutation record. They are swept after the
+   * lifecycle write, and left in place on every failure path.
+   */
+  readonly abandonedResidue: readonly ObservedContender[];
 }
 
 interface ObservedContender {
   readonly basename: string;
   readonly path: string;
   readonly mtimeMs: number;
+  /** Empty when `unreadable`; never treated as the file's bytes then. */
   readonly raw: string;
   readonly abandoned: boolean;
+  /**
+   * The file is there but its bytes could not be read. Kept apart from a
+   * readable empty file: the two look the same in `raw`, and hashing the
+   * empty read as if it were the marker's contents would write digest
+   * evidence that can never match the real bytes.
+   */
+  readonly unreadable: boolean;
 }
 
 async function acquireTransaction(input: {
@@ -829,13 +999,17 @@ async function acquireTransaction(input: {
     if (observePauseForTest !== null) {
       await observePauseForTest();
     }
-    await cleanupAbandonedContenders(
-      observed,
-      held === null ? "" : held.txnPath,
-    );
-    const live = (await observeTransactionMarkers(input.hostHomeDir)).filter(
-      (entry) => !entry.abandoned,
-    );
+    // Abandoned contenders are elected AROUND, never unlinked here. Each one
+    // is a dead owner that may have mutated the OS before it could commit its
+    // record, and its marker is what keeps a host off the pre-mutation record
+    // until some transaction writes a fresh lifecycle. Unlinking it during the
+    // election opened a window - between that unlink and this contender's own
+    // marker - in which a host read saw no marker and the old generation and
+    // replayed the pre-mutation invocation; and a contender that then failed
+    // before mutating anything released its own marker and left that exposure
+    // permanent. The residue is swept only after THIS owner's lifecycle write,
+    // see `sweepAbandonedResidue`.
+    const live = observed.filter((entry) => !entry.abandoned);
     const others = live.filter(
       (entry) => held === null || entry.path !== held.txnPath,
     );
@@ -877,12 +1051,22 @@ async function acquireTransaction(input: {
         );
         return {
           ...held,
-          legacyMarkerDigest:
+          legacyMarkerEvidence:
             legacy === undefined
-              ? null
-              : cliInvocationTransactionMarkerDigest(
-                  Buffer.from(legacy.raw, "utf8"),
-                ),
+              ? { kind: "none" }
+              : legacy.unreadable
+                ? { kind: "unreadable" }
+                : {
+                    kind: "digest",
+                    digest: cliInvocationTransactionMarkerDigest(
+                      Buffer.from(legacy.raw, "utf8"),
+                    ),
+                  },
+          abandonedResidue: all.filter(
+            (entry) =>
+              entry.abandoned &&
+              entry.basename !== CLI_INVOCATION_RECORD_TXN_FILENAME,
+          ),
         };
       }
       if (!confirmed.some((entry) => entry.path === heldPath)) {
@@ -968,7 +1152,8 @@ async function createUniqueContender(input: {
       stateDirIdentity: input.stateDirIdentity,
       serviceLabel: input.serviceLabel,
       operation: input.operation,
-      legacyMarkerDigest: null,
+      legacyMarkerEvidence: { kind: "none" },
+      abandonedResidue: [],
     };
   }
 }
@@ -1074,6 +1259,7 @@ async function observeTransactionMarkers(
             mtimeMs,
             Date.now(),
           ),
+          unreadable: true,
         };
       }
       return {
@@ -1082,6 +1268,7 @@ async function observeTransactionMarkers(
         mtimeMs: read.mtimeMs,
         raw: read.raw,
         abandoned: await isAbandonedContender(name, read.raw, read.mtimeMs),
+        unreadable: false,
       };
     }),
   );
@@ -1132,20 +1319,44 @@ async function isAbandonedContender(
   );
 }
 
-async function cleanupAbandonedContenders(
-  observed: readonly ObservedContender[],
-  keepPath: string,
-): Promise<void> {
-  for (const entry of observed) {
-    if (!entry.abandoned) continue;
-    if (entry.path === keepPath) continue;
-    // Never unlink the legacy exact path. Abandoned exact files are
-    // nonblocking residue; unique contenders elect around them.
+/**
+ * Remove the abandoned unique contenders this owner elected around, now that
+ * its lifecycle generation is on disk and no host can replay the answer those
+ * markers were guarding against. Only ever called after a lifecycle write, on
+ * a success path; the legacy exact path is never unlinked by anyone.
+ *
+ * Returns the basenames that survived: each one keeps every host read on the
+ * OS definition until a later transaction succeeds here, so the caller
+ * reports them rather than reporting a clean completion.
+ */
+async function sweepAbandonedResidue(held: HeldTransaction): Promise<string[]> {
+  const survivors: string[] = [];
+  for (const entry of held.abandonedResidue) {
     if (entry.basename === CLI_INVOCATION_RECORD_TXN_FILENAME) continue;
-    await unlinkIfUnchanged(entry.path, entry.raw);
+    if (!(await unlinkIfUnchanged(entry.path, entry.raw))) {
+      survivors.push(entry.basename);
+    }
   }
+  // A legacy exact marker this owner could not READ is a survivor too, by a
+  // different route: nobody unlinks that path, and the lifecycle just written
+  // names no bytes for it (`unreadable` never discharges - see the protocol
+  // module), so the host stays on the OS definition until a later confirmed
+  // transaction reads it and writes its digest. Reported for the same reason
+  // as a marker that refused to unlink.
+  if (held.legacyMarkerEvidence.kind === "unreadable") {
+    survivors.push(CLI_INVOCATION_RECORD_TXN_FILENAME);
+  }
+  return survivors;
 }
 
+/**
+ * Compare-then-unlink, CONFIRMED: `true` only when the file is gone afterwards.
+ *
+ * `removeBestEffort` swallows the unlink error, so without the re-read a
+ * sharing violation on Windows - the realistic case - would report a marker
+ * as released while it still sits on disk telling every host to bypass the
+ * record just committed.
+ */
 async function unlinkIfUnchanged(
   path: string,
   expectedRaw: string,
@@ -1158,12 +1369,44 @@ async function unlinkIfUnchanged(
   if (read.kind !== "ok") return false;
   if (read.raw !== expectedRaw) return false;
   await removeBestEffort(path);
-  return true;
+  return confirmAbsent(path);
 }
 
-async function releaseOwnedTransaction(held: HeldTransaction): Promise<void> {
+/**
+ * Is the file gone? Polled briefly rather than read once: on Windows a file
+ * another process holds open (the host reads markers on every maintenance
+ * RPC) is unlinked into a PENDING-DELETE state that reports access denied
+ * until that handle closes, and reading it exactly once would call a removal
+ * that has already happened "retained".
+ */
+async function confirmAbsent(path: string): Promise<boolean> {
+  for (let attempt = 0; attempt < REMOVAL_CONFIRM_ATTEMPTS; attempt += 1) {
+    if ((await readAuthorityFile(path)).kind === "absent") return true;
+    await sleep(REMOVAL_CONFIRM_INTERVAL_MS);
+  }
+  return (await readAuthorityFile(path)).kind === "absent";
+}
+
+const REMOVAL_CONFIRM_ATTEMPTS = 5;
+const REMOVAL_CONFIRM_INTERVAL_MS = 20;
+
+/**
+ * Release this owner's marker and staging file. `retained` when the marker
+ * could not be confirmed gone, which the completion paths report: a unique
+ * marker that outlives its transaction is a bypass the lifecycle never
+ * discharges, and a "clean" install or uninstall that leaves one behind keeps
+ * npm/nvm maintenance on OS re-reads until another transaction reclaims it.
+ * Failure paths call this too and ignore the answer - there the failure being
+ * reported already says the state is degraded, and the marker is retained by
+ * design.
+ */
+async function releaseOwnedTransaction(
+  held: HeldTransaction,
+): Promise<"released" | "retained"> {
   await removeBestEffort(held.stagingPath);
-  await unlinkIfUnchanged(held.txnPath, held.rawMarker);
+  return (await unlinkIfUnchanged(held.txnPath, held.rawMarker))
+    ? "released"
+    : "retained";
 }
 
 function openFlagsForExclusiveCreate(): number {
@@ -1226,7 +1469,11 @@ async function writeConfirmedLifecycle(
         event,
         serviceLabel,
         at: new Date().toISOString(),
-        supersededLegacyMarkerDigest: held.legacyMarkerDigest,
+        // Written as observed, `none` and `unreadable` included, never
+        // omitted: a lifecycle that saw no legacy marker must stay
+        // distinguishable from one written by a CLI that recorded nothing,
+        // because `none` never discharges by clock and `unknown` may.
+        legacyMarkerEvidence: held.legacyMarkerEvidence,
       }),
     );
     await rename(temporary, held.lifecyclePath);
@@ -1312,7 +1559,7 @@ async function markStaleAndUnpreferLive(held: HeldTransaction): Promise<void> {
  */
 async function assertStateDirUnchangedAfterUninstall(
   held: HeldTransaction,
-  options: ServiceUninstallRecordOptions,
+  options: ServiceRemovalRecordContext,
   stateDirIdentity: CliInvocationStateDirIdentity,
 ): Promise<void> {
   try {
@@ -1388,10 +1635,14 @@ async function removeStaleMarkerIfOwn(
   }
   try {
     await rm(held.stalePath, { force: true });
-    return "removed";
   } catch {
     return "failed";
   }
+  // CONFIRMED, like every other marker removal on a success path: a stale
+  // marker that `rm` accepted but that still answers at the pathname (Windows
+  // pending-delete under a host or AV handle) still bypasses the record just
+  // committed, and calling it `removed` would report that install as clean.
+  return (await confirmAbsent(held.stalePath)) ? "removed" : "failed";
 }
 
 async function sleep(ms: number): Promise<void> {

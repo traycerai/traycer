@@ -38,7 +38,10 @@ import {
   smAppServiceAgentLabelId,
 } from "../../label";
 import { CLI_ERROR_CODES } from "../../../runner/errors";
-import { ServiceMutationAuthorityError } from "../../mutation-authority";
+import {
+  isServiceMutationAuthorityError,
+  ServiceMutationAuthorityError,
+} from "../../mutation-authority";
 import { didServiceRegistrationCommit } from "../../cli-invocation-record";
 
 const execFileAsync = promisify(execFile);
@@ -1075,6 +1078,67 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     expect(caught).toMatchObject({
       code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
     });
+    expect(didServiceRegistrationCommit(caught)).toBe(false);
+  });
+
+  // A mutation-authority loss is not a `CliError`: it must keep its own
+  // identity (`isServiceMutationAuthorityError`) rather than being wrapped,
+  // and `markRegistrationCommitted` marks it by reference instead of via
+  // `details.registrationCommitted`.
+  it("marks a mutation-authority loss from kickstart after a successful bootstrap as a committed registration", async () => {
+    const authorityError = new ServiceMutationAuthorityError(
+      new Error("maintenance lease revoked"),
+    );
+    const runner: ProcessRunner = async (_command, args) => {
+      if (args[0] === "kickstart") {
+        throw authorityError;
+      }
+      return buildSuccessResult();
+    };
+    const controller = createMacosController(runner);
+    createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
+    let caught: unknown = null;
+    try {
+      await controller.install({
+        label,
+        cli: { command: "/usr/local/bin/traycer", args: [] },
+        enableLinger: false,
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBe(authorityError);
+    expect(isServiceMutationAuthorityError(caught)).toBe(true);
+    expect(didServiceRegistrationCommit(caught)).toBe(true);
+  });
+
+  // The negative twin: a mutation-authority loss from `bootstrap` happens
+  // BEFORE the registration is in launchd's hands, so it must stay an
+  // authority error without ever being read as committed.
+  it("does not mark a mutation-authority loss from bootstrap (pre-registration) as a committed registration", async () => {
+    const authorityError = new ServiceMutationAuthorityError(
+      new Error("maintenance lease revoked"),
+    );
+    const runner: ProcessRunner = async (_command, args) => {
+      if (args[0] === "bootstrap") {
+        throw authorityError;
+      }
+      return buildSuccessResult();
+    };
+    const controller = createMacosController(runner);
+    createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
+    let caught: unknown = null;
+    try {
+      await controller.install({
+        label,
+        cli: { command: "/usr/local/bin/traycer", args: [] },
+        enableLinger: false,
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBe(authorityError);
+    expect(isServiceMutationAuthorityError(caught)).toBe(true);
     expect(didServiceRegistrationCommit(caught)).toBe(false);
   });
 

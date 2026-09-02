@@ -3,6 +3,7 @@ import {
   isServiceMutationAuthorityError,
   verifyServiceMutationAuthority,
 } from "../mutation-authority";
+import { markRegistrationCommitted } from "../cli-invocation-record";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -166,6 +167,11 @@ async function installService(
   // the controller's install → verified `/Run` composition can be unit-tested
   // without touching a real user service surface.
   const staged = await taskInstallDeps.stageTaskDefinition(options);
+  // Set the moment `/Create` returns: from here the task exists with its
+  // logon trigger, and any throw - the staging cleanup below included, whose
+  // default verifies mutation authority first - is post-registration and must
+  // reach a lease-holding caller as such (`didServiceRegistrationCommit`).
+  let created = false;
   try {
     await run(
       "schtasks",
@@ -177,6 +183,7 @@ async function installService(
         tolerateNonZeroExit: false,
       },
     );
+    created = true;
   } catch (cause) {
     if (isServiceMutationAuthorityError(cause)) throw cause;
     // Roll the launcher back: `stageTaskDefinition` wrote the persistent
@@ -195,7 +202,13 @@ async function installService(
       exitCode: 1,
     });
   } finally {
-    await taskInstallDeps.removeStagedTaskDefinition(staged.tmpDir);
+    try {
+      await taskInstallDeps.removeStagedTaskDefinition(staged.tmpDir);
+    } catch (cause) {
+      throw created && isServiceMutationAuthorityError(cause)
+        ? markRegistrationCommitted(cause)
+        : cause;
+    }
   }
   // Registration is also the recovery launch. Verify this exact `/Run` so
   // callers never baseline after it and mistake IgnoreNew's suppressed second
@@ -367,12 +380,15 @@ async function runTaskAndVerifyStart(
       tolerateNonZeroExit: false,
     });
   } catch (cause) {
-    if (isServiceMutationAuthorityError(cause)) throw cause;
     // Post-registration: `/Create` succeeded, so the task exists with its
     // logon trigger whether or not this `/Run` was accepted. A caller holding
     // a host-start adoption lease honours it before surfacing this
     // (`didServiceRegistrationCommit`) rather than refusing a child the
-    // scheduler may already be starting.
+    // scheduler may already be starting - an authority loss landing here
+    // included, which keeps its identity and is marked by reference.
+    if (isServiceMutationAuthorityError(cause)) {
+      throw markRegistrationCommitted(cause);
+    }
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
       message: `schtasks /Run failed for ${taskName}: ${describeCause(cause)}`,
@@ -438,7 +454,12 @@ async function readTaskLastRunResult(
     );
     return parseSchtasksLastRunResult(result.stdout);
   } catch (cause) {
-    if (isServiceMutationAuthorityError(cause)) throw cause;
+    // Only ever reached after `/Run` was accepted on a task `/Create` made,
+    // so an authority loss here is post-registration like the `/Run` failure
+    // it is diagnosing.
+    if (isServiceMutationAuthorityError(cause)) {
+      throw markRegistrationCommitted(cause);
+    }
     return null;
   }
 }

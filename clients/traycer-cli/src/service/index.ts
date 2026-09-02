@@ -14,6 +14,7 @@ import {
   CLI_INVOCATION_TXN_POLL_MS,
   CLI_INVOCATION_TXN_WAIT_MS,
   runServiceRegistrationWithInvocationRecord,
+  runServiceRemovalWithInvocationRecord,
   runServiceUninstallWithInvocationRecord,
 } from "./cli-invocation-record";
 
@@ -367,6 +368,26 @@ export function withCliInvocationRecord(
         hostHomeDir: hostHomeDir(options.label.environment),
         serviceLabel: options.label.id,
         uninstall: () => controller.uninstall(options),
+        waitMs: CLI_INVOCATION_TXN_WAIT_MS,
+        pollIntervalMs: CLI_INVOCATION_TXN_POLL_MS,
+      }),
+    // The competing-registration repair removes THIS label's registration -
+    // the one a live record describes - on macOS when Desktop owns host
+    // registration, so it runs inside the same transaction as an uninstall.
+    // `removed` is decided from the result: `retired` and `retire-failed`
+    // both mean the registration was taken away wholly or in part (a
+    // half-retired one is as gone for the record's purposes as a deleted
+    // one); every other outcome touched nothing and leaves the record alone.
+    // Desktop's own `<label>.agent` registration is never what the host
+    // recovers or records, so `takeoverDesktopRegistration` stays outside.
+    retireCompetingRegistration: (label) =>
+      runServiceRemovalWithInvocationRecord<CompetingRegistrationRetirement>({
+        environment: label.environment,
+        hostHomeDir: hostHomeDir(label.environment),
+        serviceLabel: label.id,
+        remove: () => controller.retireCompetingRegistration(label),
+        removed: (result) =>
+          result.kind === "retired" || result.kind === "retire-failed",
         waitMs: CLI_INVOCATION_TXN_WAIT_MS,
         pollIntervalMs: CLI_INVOCATION_TXN_POLL_MS,
       }),

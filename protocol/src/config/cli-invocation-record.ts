@@ -84,15 +84,22 @@ import {
  * window.
  *
  * CLI election (host does not implement this): observe existing
- * markers and clean dead **unique** files (never the exact legacy
- * path), then create a unique contender only when no other live
- * marker remains. Become owner only as the sole remaining live
+ * markers and elect AROUND dead **unique** files - they are not
+ * unlinked during the election, because each may belong to an owner
+ * that mutated the OS before it could commit, and its marker is what
+ * keeps a host off the pre-mutation record until a fresh lifecycle
+ * generation exists. Create a unique contender only when no other
+ * live marker remains. Become owner only as the sole remaining live
  * marker after a confirm re-list. If two processes create in the
  * same empty window, the winner is earliest filesystem `mtimeMs`,
  * then basename; losers unlink **only their own** unique file. A
  * later arrival that sees a live owner — including a live legacy
  * exact marker — does not create a file and cannot unlink that
- * owner's path.
+ * owner's path. The winner sweeps the dead unique files it elected
+ * around only AFTER its lifecycle write succeeds, and confirms each
+ * removal; a file that survives is reported, never silently left as
+ * a bypass beside a record the command called clean. The exact
+ * legacy path is never unlinked by anyone.
  *
  * After a successful host migration write of the live record, the host may
  * unlink `cli-invocation.stale`. The host's own live-record commit uses a
@@ -455,17 +462,54 @@ export interface CliInvocationLifecycle {
   readonly serviceLabel: string;
   readonly at: string;
   /**
-   * Causal evidence for discharging a legacy exact `cli-invocation.txn`:
-   * the {@link cliInvocationTransactionMarkerDigest} of the abandoned legacy
-   * marker the confirming transaction observed when it acquired, or `null`
-   * when none was present (and for lifecycles written by a CLI predating the
-   * field). A host matching this digest against the marker it is looking at
-   * knows the marker predates the lifecycle without consulting any clock;
-   * {@link cliInvocationLifecycleSupersedesLegacyExactMarker} falls back to
-   * the timestamp rule only when the evidence is absent.
+   * Causal evidence for discharging a legacy exact `cli-invocation.txn`.
+   * See {@link CliInvocationLegacyMarkerEvidence} for the three states and
+   * {@link cliInvocationLifecycleSupersedesLegacyExactMarker} for how each
+   * one decides.
    */
-  readonly supersededLegacyMarkerDigest: string | null;
+  readonly legacyMarkerEvidence: CliInvocationLegacyMarkerEvidence;
 }
+
+/**
+ * What the confirming transaction saw of the legacy exact marker when it
+ * acquired, as written into the lifecycle it committed.
+ *
+ * Three states, because "no digest" means two different things:
+ *
+ *   - `digest`: the {@link cliInvocationTransactionMarkerDigest} of the
+ *     abandoned legacy marker that was present. A host matching it against
+ *     the marker it is looking at knows the marker predates the lifecycle
+ *     without consulting any clock.
+ *   - `none`: a current CLI acquired and saw NO legacy marker. Any legacy
+ *     marker present afterwards was therefore created after this lifecycle's
+ *     transaction acquired - by an older CLI - and must never be discharged
+ *     by it, whatever the clocks say. On the wire this is the field written
+ *     as `null`.
+ *   - `unreadable`: a legacy marker was present and abandoned by age, but its
+ *     bytes could not be read, so there is no digest to name. Hashing the
+ *     empty read would have manufactured evidence that can never match the
+ *     real bytes. This state NEVER discharges either: it proves a marker
+ *     existed but carries no identity for it, so once the path is readable
+ *     the host cannot tell "that same marker" from "a later incarnation an
+ *     older CLI wrote at the same path", and a timestamp comparison under a
+ *     backward clock step would discharge the later one - the exact hazard
+ *     `none` closes. The transaction that observed it reports the surviving
+ *     bypass on completion instead. On the wire this is the literal string
+ *     `"unreadable"`, which no hex digest can collide with.
+ *   - `unknown`: a lifecycle written by a CLI predating the field, which
+ *     recorded nothing. On the wire this is the field being absent.
+ *
+ * The timestamp comparison applies to `unknown` only: a pre-field CLI could
+ * not record what it saw, and ordering the two CLI-authored stamps is the
+ * best that remains for lifecycles it wrote.
+ */
+export type CliInvocationLegacyMarkerEvidence =
+  | { readonly kind: "digest"; readonly digest: string }
+  | { readonly kind: "none" }
+  | { readonly kind: "unreadable" }
+  | { readonly kind: "unknown" };
+
+const LEGACY_MARKER_UNREADABLE_WIRE = "unreadable";
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 
@@ -483,6 +527,7 @@ export function cliInvocationTransactionMarkerDigest(
 export function serializeCliInvocationLifecycle(
   record: CliInvocationLifecycle,
 ): string {
+  const evidence = record.legacyMarkerEvidence;
   return `${JSON.stringify(
     {
       schemaVersion: CLI_INVOCATION_RECORD_SCHEMA_VERSION,
@@ -491,7 +536,21 @@ export function serializeCliInvocationLifecycle(
       event: record.event,
       serviceLabel: record.serviceLabel,
       at: record.at,
-      supersededLegacyMarkerDigest: record.supersededLegacyMarkerDigest,
+      // `digest`, `none` and `unreadable` are all WRITTEN (a hex string,
+      // `null`, the literal `"unreadable"`), so a reader can tell each from
+      // "recorded nothing". `unknown` is only ever re-serialised from a
+      // parsed pre-field lifecycle and keeps the field absent, exactly as
+      // that CLI wrote it.
+      ...(evidence.kind === "unknown"
+        ? {}
+        : {
+            supersededLegacyMarkerDigest:
+              evidence.kind === "digest"
+                ? evidence.digest
+                : evidence.kind === "unreadable"
+                  ? LEGACY_MARKER_UNREADABLE_WIRE
+                  : null,
+          }),
     },
     null,
     2,
@@ -517,12 +576,32 @@ export function parseCliInvocationLifecycle(
   }
   if (typeof value.at !== "string") return null;
   if (Number.isNaN(Date.parse(value.at))) return null;
-  const digest =
-    "supersededLegacyMarkerDigest" in value
-      ? value.supersededLegacyMarkerDigest
-      : null;
-  if (digest !== null && digest !== undefined) {
-    if (typeof digest !== "string" || !SHA256_HEX.test(digest)) return null;
+  // Absent and `null` are DIFFERENT answers - see
+  // {@link CliInvocationLegacyMarkerEvidence}. Absent is a CLI that recorded
+  // nothing; `null` is a CLI that looked and saw nothing. Anything else that
+  // is not a hex digest is a document this parser cannot vouch for.
+  let legacyMarkerEvidence: CliInvocationLegacyMarkerEvidence;
+  if (
+    !("supersededLegacyMarkerDigest" in value) ||
+    value.supersededLegacyMarkerDigest === undefined
+  ) {
+    legacyMarkerEvidence = { kind: "unknown" };
+  } else if (value.supersededLegacyMarkerDigest === null) {
+    legacyMarkerEvidence = { kind: "none" };
+  } else if (
+    value.supersededLegacyMarkerDigest === LEGACY_MARKER_UNREADABLE_WIRE
+  ) {
+    legacyMarkerEvidence = { kind: "unreadable" };
+  } else if (
+    typeof value.supersededLegacyMarkerDigest === "string" &&
+    SHA256_HEX.test(value.supersededLegacyMarkerDigest)
+  ) {
+    legacyMarkerEvidence = {
+      kind: "digest",
+      digest: value.supersededLegacyMarkerDigest,
+    };
+  } else {
+    return null;
   }
   return {
     schemaVersion: CLI_INVOCATION_RECORD_SCHEMA_VERSION,
@@ -531,7 +610,7 @@ export function parseCliInvocationLifecycle(
     event: value.event,
     serviceLabel: value.serviceLabel,
     at: value.at,
-    supersededLegacyMarkerDigest: typeof digest === "string" ? digest : null,
+    legacyMarkerEvidence,
   };
 }
 
@@ -610,17 +689,25 @@ export function cliInvocationLifecycleNewerThanLegacyExactMarker(
  * the lifecycle it commits, so a lifecycle naming this marker's bytes was
  * written by a transaction that completed after the marker existed - true
  * regardless of what the wall clock did in between. The timestamp comparison
- * remains only for lifecycles that carry NO digest evidence: one written by a
- * CLI predating the field, or by a transaction that saw no legacy marker at
- * acquire time.
+ * remains only for a lifecycle written by a CLI predating the field
+ * (`unknown`).
  *
- * A digest that names a DIFFERENT marker is evidence against, not absence
- * of evidence: the confirming transaction saw another incarnation of this
- * file, so the marker read now was written after it acquired - by an older
- * CLI rewriting the exact path - and a lifecycle cannot discharge a
- * transaction that started after it. Falling back to timestamps there would
- * let a backward clock step discharge that later transaction and drop its
- * record bypass.
+ * Recorded evidence is decisive in every other case, and each of the other
+ * states refuses when it cannot match - `unreadable` always, since it names
+ * no bytes to match and a later incarnation at the same path would be
+ * indistinguishable from the one it saw:
+ *
+ *   - a digest naming a DIFFERENT marker is evidence against, not absence of
+ *     evidence: the confirming transaction saw another incarnation of this
+ *     file, so the marker read now was written after it acquired - by an
+ *     older CLI rewriting the exact path - and a lifecycle cannot discharge a
+ *     transaction that started after it;
+ *   - `none` is the same argument with nothing seen: the transaction acquired
+ *     with no legacy marker present (a LIVE one would have blocked its
+ *     election), so any legacy marker present now postdates it.
+ *
+ * Falling back to timestamps in either case would let a backward clock step
+ * discharge that later transaction and drop its record bypass.
  *
  * `digest` is the {@link cliInvocationTransactionMarkerDigest} of the marker
  * file's bytes as the caller read them.
@@ -632,9 +719,9 @@ export function cliInvocationLifecycleSupersedesLegacyExactMarker(
   },
   lifecycle: CliInvocationLifecycle,
 ): boolean {
-  if (lifecycle.supersededLegacyMarkerDigest !== null) {
-    return lifecycle.supersededLegacyMarkerDigest === marker.digest;
-  }
+  const evidence = lifecycle.legacyMarkerEvidence;
+  if (evidence.kind === "digest") return evidence.digest === marker.digest;
+  if (evidence.kind === "none" || evidence.kind === "unreadable") return false;
   return cliInvocationLifecycleNewerThanLegacyExactMarker(
     marker.parsed,
     lifecycle,
