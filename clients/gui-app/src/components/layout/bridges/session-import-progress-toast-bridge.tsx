@@ -68,7 +68,12 @@ export function SessionImportProgressToastBridge(): null {
         {
           id: SESSION_IMPORT_PROGRESS_TOAST_ID,
           duration: Infinity,
-          description: run.lastTitle ?? undefined,
+          // Always one line, even before the first title lands: the toast's
+          // height is then the same from the first frame to the last, instead
+          // of jumping as titles wrap, or shrinking when there is none yet.
+          description: (
+            <span className="block truncate">{run.lastTitle ?? "\u00a0"}</span>
+          ),
           onDismiss: () => {
             // Fires only for the user's own close: the terminal paths below
             // replace or dismiss this toast after clearing the visible flag.

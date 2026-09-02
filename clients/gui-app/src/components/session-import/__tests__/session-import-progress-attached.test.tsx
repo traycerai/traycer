@@ -191,35 +191,41 @@ describe("SessionImportProgress", () => {
 
     render(<SessionImportProgress tone={sessionImportTone("dialog")} />);
 
+    // One line, one toggle; the reasons are sections behind it.
+    expect(screen.getByTestId("session-import-not-imported").textContent).toBe(
+      "Not imported: 3 sessions",
+    );
+    expect(screen.queryByTestId("session-import-failure-group")).toBeNull();
+    expect(screen.queryByText("Broken session one")).toBeNull();
+
+    const toggle = screen.getByTestId("session-import-failure-toggle");
+    expect(toggle.textContent).toBe("Show details");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+
+    fireEvent.click(toggle);
+
+    expect(toggle.textContent).toBe("Hide details");
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
     const groups = screen.getAllByTestId("session-import-failure-group");
-    expect(groups).toHaveLength(2);
     // Canonical reason order, not arrival order: source_unreadable first.
     expect(groups.map((group) => group.getAttribute("data-reason"))).toEqual([
       "source_unreadable",
       "source_empty",
     ]);
-    expect(screen.getByText("2 could not be read")).toBeTruthy();
-    expect(screen.getByText("1 had no messages to bring over")).toBeTruthy();
-
-    expect(screen.queryByText("Broken session one")).toBeNull();
-
-    const toggles = screen.getAllByTestId("session-import-failure-toggle");
-    const unreadableToggle = toggles[0];
-    expect(unreadableToggle.textContent).toBe("Show sessions");
-    expect(unreadableToggle.getAttribute("aria-expanded")).toBe("false");
-
-    fireEvent.click(unreadableToggle);
-
-    expect(unreadableToggle.textContent).toBe("Hide sessions");
-    expect(unreadableToggle.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByText("Could not be read (2)")).toBeTruthy();
+    expect(screen.getByText("No messages (1)")).toBeTruthy();
     expect(screen.getByText("Broken session one")).toBeTruthy();
     expect(screen.getByText("Broken session two")).toBeTruthy();
-    // The other group's rows stay collapsed - the toggle is per group.
-    expect(screen.queryByText("Empty session")).toBeNull();
+    expect(screen.getByText("Empty session")).toBeTruthy();
+    // The host's detail rides only the rows where it varies per session.
+    expect(screen.getByText("disk error")).toBeTruthy();
+    expect(
+      screen.queryByText("the session holds no message worth a chat"),
+    ).toBeNull();
 
-    fireEvent.click(unreadableToggle);
+    fireEvent.click(toggle);
 
-    expect(unreadableToggle.textContent).toBe("Show sessions");
+    expect(toggle.textContent).toBe("Show details");
     expect(screen.queryByText("Broken session one")).toBeNull();
   });
 });

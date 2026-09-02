@@ -4,6 +4,8 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { cn } from "@/lib/utils";
 import {
   groupSessionImportFailures,
+  sessionImportFailureDetailVaries,
+  sessionImportNotImportedLine,
   type SessionImportFailureGroupView,
 } from "@/components/session-import/session-import-model";
 import type { SessionImportTone } from "@/components/session-import/session-import-tone";
@@ -141,11 +143,7 @@ export function SessionImportProgress(props: {
           ) : null}
         </div>
         {failures.length > 0 ? (
-          <ul className="flex w-full flex-col gap-2">
-            {failures.map((group) => (
-              <FailureGroup key={group.reason} group={group} tone={tone} />
-            ))}
-          </ul>
+          <NotImported groups={failures} tone={tone} />
         ) : null}
       </div>
     </div>
@@ -153,24 +151,26 @@ export function SessionImportProgress(props: {
 }
 
 /**
- * One cause, said once, with its sessions folded away behind a toggle. The
- * reason is what a person acts on; the list of which sessions is a detail
- * most never need, and unfolded it buried the headline under a wall of rows.
+ * What did not land, as one line with one toggle: "Not imported: 6 sessions
+ * with no messages". The details behind it are sectioned by cause, so a cause
+ * is written once as a heading rather than once per row, and the list scrolls
+ * inside a bounded height instead of pushing the headline off the panel.
  */
-function FailureGroup(props: {
-  readonly group: SessionImportFailureGroupView;
+function NotImported(props: {
+  readonly groups: ReadonlyArray<SessionImportFailureGroupView>;
   readonly tone: SessionImportTone;
 }) {
-  const { group, tone } = props;
+  const { groups, tone } = props;
   const [expanded, setExpanded] = useState(false);
   return (
-    <li
-      data-testid="session-import-failure-group"
-      data-reason={group.reason}
-      className="flex flex-col items-center gap-1"
-    >
+    <div className="flex w-full min-h-0 flex-col items-center gap-2">
       <div className="flex flex-wrap items-baseline justify-center gap-x-2">
-        <span className={cn("text-ui-xs", tone.muted)}>{group.summary}</span>
+        <span
+          data-testid="session-import-not-imported"
+          className={cn("text-ui-xs", tone.muted)}
+        >
+          {sessionImportNotImportedLine(groups)}
+        </span>
         <button
           type="button"
           data-testid="session-import-failure-toggle"
@@ -181,33 +181,54 @@ function FailureGroup(props: {
             tone.faint,
           )}
         >
-          {expanded ? "Hide sessions" : "Show sessions"}
+          {expanded ? "Hide details" : "Show details"}
         </button>
       </div>
       {expanded ? (
-        <ul
-          className={cn(
-            "flex w-full flex-col gap-1 rounded-lg border p-3 text-left",
-            tone.border,
-          )}
+        // Capped at roughly a third of the panel: a long list scrolls here
+        // rather than growing past the headline it explains.
+        <div
+          data-testid="session-import-failure-details"
+          className="flex max-h-[14rem] w-full flex-col gap-3 overflow-y-auto overscroll-contain text-left"
         >
-          {group.entries.map((entry) => (
-            <li
-              key={entry.selectionKey}
-              className="flex min-w-0 items-baseline gap-2"
+          {groups.map((group) => (
+            <section
+              key={group.reason}
+              data-testid="session-import-failure-group"
+              data-reason={group.reason}
+              className="flex flex-col gap-1"
             >
-              <span className={cn("min-w-0 truncate text-ui-xs", tone.muted)}>
-                {entry.title}
-              </span>
-              <span
-                className={cn("min-w-0 flex-1 truncate text-ui-xs", tone.faint)}
-              >
-                {entry.detail}
-              </span>
-            </li>
+              <h4 className={cn("text-ui-xs font-medium", tone.strong)}>
+                {group.label} ({group.entries.length})
+              </h4>
+              <ul className="flex flex-col gap-0.5">
+                {group.entries.map((entry) => (
+                  <li
+                    key={entry.selectionKey}
+                    className="flex min-w-0 items-baseline gap-2"
+                  >
+                    <span
+                      className={cn("min-w-0 truncate text-ui-xs", tone.muted)}
+                    >
+                      {entry.title}
+                    </span>
+                    {sessionImportFailureDetailVaries(group.reason) ? (
+                      <span
+                        className={cn(
+                          "min-w-0 flex-1 truncate text-ui-xs",
+                          tone.faint,
+                        )}
+                      >
+                        {entry.detail}
+                      </span>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            </section>
           ))}
-        </ul>
+        </div>
       ) : null}
-    </li>
+    </div>
   );
 }

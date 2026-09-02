@@ -505,7 +505,10 @@ const FAILURE_REASON_ORDER: ReadonlyArray<SessionImportFailureReason> = [
   "source_empty",
 ];
 
-/** The cause as a short label, for a single row's tooltip. */
+/**
+ * The cause as a short heading: what the summary's sections are titled, and
+ * what a greyed row's tooltip leads with.
+ */
 export function sessionImportFailureLabel(
   reason: SessionImportFailureReason,
 ): string {
@@ -513,7 +516,7 @@ export function sessionImportFailureLabel(
     case "source_unreadable":
       return "Could not be read";
     case "source_empty":
-      return "No messages to bring over";
+      return "No messages";
     case "workspace_bind_failed":
       return "No matching folder on this machine";
     case "creation_failed":
@@ -524,26 +527,56 @@ export function sessionImportFailureLabel(
 }
 
 /**
- * One plain sentence per cause, with its count: "29 had no messages to bring
- * over". It is said once above the group's session list rather than on every
- * row, because the reason is a fact about the group, not about each session.
+ * Whether the host's per-session detail says more than the reason does. For
+ * an unreadable file it is the actual error, worth a glance; for an empty
+ * session it restates the heading, and a list that repeats one sentence per
+ * row is what buried the summary under a wall of text.
  */
-export function sessionImportFailureSummary(
+export function sessionImportFailureDetailVaries(
   reason: SessionImportFailureReason,
-  count: number,
-): string {
-  const plural = count !== 1;
+): boolean {
   switch (reason) {
     case "source_unreadable":
-      return `${count} could not be read`;
-    case "source_empty":
-      return `${count} had no messages to bring over`;
-    case "workspace_bind_failed":
-      return `${count} could not be matched to a folder on this machine`;
     case "creation_failed":
-      return `${count} could not be turned into ${plural ? "tasks" : "a task"}`;
     case "internal_error":
-      return `${count} hit an unexpected error`;
+      return true;
+    case "source_empty":
+    case "workspace_bind_failed":
+      return false;
+  }
+}
+
+/**
+ * The one line the summary shows above the details: an outcome first, then
+ * the cause when there is exactly one - "Not imported: 6 sessions with no
+ * messages". Mixed causes keep the line plain and leave the reasons to the
+ * sections underneath.
+ */
+export function sessionImportNotImportedLine(
+  groups: ReadonlyArray<SessionImportFailureGroupView>,
+): string {
+  const count = groups.reduce(
+    (total, group) => total + group.entries.length,
+    0,
+  );
+  const noun = count === 1 ? "session" : "sessions";
+  const only = groups.length === 1 ? groups[0] : undefined;
+  if (only === undefined) return `Not imported: ${count} ${noun}`;
+  return `Not imported: ${count} ${noun} ${failureCause(only.reason)}`;
+}
+
+function failureCause(reason: SessionImportFailureReason): string {
+  switch (reason) {
+    case "source_unreadable":
+      return "that could not be read";
+    case "source_empty":
+      return "with no messages";
+    case "workspace_bind_failed":
+      return "with no matching folder on this machine";
+    case "creation_failed":
+      return "whose task could not be created";
+    case "internal_error":
+      return "that hit an unexpected error";
   }
 }
 
@@ -752,8 +785,8 @@ export interface SessionImportFailureEntryView {
 
 export interface SessionImportFailureGroupView {
   readonly reason: SessionImportFailureReason;
-  /** The group's one-line explanation, count included. */
-  readonly summary: string;
+  /** The cause as the section's heading. */
+  readonly label: string;
   readonly entries: ReadonlyArray<SessionImportFailureEntryView>;
 }
 
@@ -799,7 +832,7 @@ export function groupSessionImportFailures(
     )
     .map(([reason, entries]) => ({
       reason,
-      summary: sessionImportFailureSummary(reason, entries.length),
+      label: sessionImportFailureLabel(reason),
       entries,
     }));
 }

@@ -15,7 +15,8 @@ import {
   groupSessionImportFailures,
   harnessDisplayName,
   sessionImportFailureLabel,
-  sessionImportFailureSummary,
+  sessionImportFailureDetailVaries,
+  sessionImportNotImportedLine,
   sessionImportGroupKey,
   sessionImportScanWindowLabel,
   sessionImportSelectionKey,
@@ -995,9 +996,7 @@ describe("groupSessionImportFailures", () => {
 
     expect(groups).toHaveLength(1);
     expect(groups[0]?.reason).toBe("source_unreadable");
-    expect(groups[0]?.summary).toBe(
-      sessionImportFailureSummary("source_unreadable", 2),
-    );
+    expect(groups[0]?.label).toBe("Could not be read");
     expect(groups[0]?.entries).toEqual([
       { selectionKey: knownKey, title: "Fix login bug", detail: "disk error" },
       {
@@ -1042,28 +1041,48 @@ function failureEntry(
   };
 }
 
-describe("sessionImportFailureSummary", () => {
-  it("pluralizes the count-bearing sentence for every reason except the ones that never need it", () => {
-    expect(sessionImportFailureSummary("source_unreadable", 1)).toBe(
-      "1 could not be read",
+describe("sessionImportNotImportedLine", () => {
+  it("names the cause when every failure shares one", () => {
+    const groups = groupSessionImportFailures(
+      [
+        failureEntry("s1", "source_empty", ""),
+        failureEntry("s2", "source_empty", ""),
+      ],
+      new Map(),
     );
-    expect(sessionImportFailureSummary("source_unreadable", 4)).toBe(
-      "4 could not be read",
-    );
-    expect(sessionImportFailureSummary("source_empty", 1)).toBe(
-      "1 had no messages to bring over",
-    );
-    expect(sessionImportFailureSummary("source_empty", 29)).toBe(
-      "29 had no messages to bring over",
+    expect(sessionImportNotImportedLine(groups)).toBe(
+      "Not imported: 2 sessions with no messages",
     );
   });
 
-  it("swaps 'a task' for 'tasks' only when the count is not exactly one", () => {
-    expect(sessionImportFailureSummary("creation_failed", 1)).toBe(
-      "1 could not be turned into a task",
+  it("keeps the line plain when the causes are mixed, and singular for one session", () => {
+    const mixed = groupSessionImportFailures(
+      [
+        failureEntry("s1", "source_empty", ""),
+        failureEntry("s2", "source_unreadable", "disk error"),
+      ],
+      new Map(),
     );
-    expect(sessionImportFailureSummary("creation_failed", 2)).toBe(
-      "2 could not be turned into tasks",
+    expect(sessionImportNotImportedLine(mixed)).toBe(
+      "Not imported: 2 sessions",
+    );
+    const one = groupSessionImportFailures(
+      [failureEntry("s1", "source_unreadable", "disk error")],
+      new Map(),
+    );
+    expect(sessionImportNotImportedLine(one)).toBe(
+      "Not imported: 1 session that could not be read",
+    );
+  });
+});
+
+describe("sessionImportFailureDetailVaries", () => {
+  it("keeps the per-session detail only where it carries more than the heading", () => {
+    expect(sessionImportFailureDetailVaries("source_unreadable")).toBe(true);
+    expect(sessionImportFailureDetailVaries("internal_error")).toBe(true);
+    expect(sessionImportFailureDetailVaries("source_empty")).toBe(false);
+    expect(sessionImportFailureDetailVaries("workspace_bind_failed")).toBe(
+      false,
     );
   });
 });
