@@ -1,6 +1,7 @@
 import {
   useIsMutating,
   useMutation,
+  useMutationState,
   type UseMutationResult,
 } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -11,9 +12,11 @@ import {
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
-import type {
-  ManagedCommandHeldReleaseFailure,
-  ManagedCommandHeldReleaseUnattributed,
+import {
+  managedCommandControlResponseSchema,
+  type ManagedCommand,
+  type ManagedCommandHeldReleaseFailure,
+  type ManagedCommandHeldReleaseUnattributed,
 } from "@traycer/protocol/host/managed-command/unary-schemas";
 import {
   useHostClient,
@@ -226,6 +229,172 @@ export function useManagedCommandStopAll(
       toast.error(error.message);
     },
   });
+}
+
+export interface ManagedCommandConfigureVariables extends ManagedCommandLifecycleVariables {
+  readonly relaunchOnHostRestart: boolean;
+}
+
+/** The command a configure hook serializes its writes for. */
+export interface ManagedCommandConfigureTarget {
+  readonly hostId: string;
+  readonly commandId: string;
+}
+
+/**
+ * The mutation scope that serializes configure writes to ONE command. Every
+ * hook instance for the same command - the list row, the output window header,
+ * a second canvas tile - shares it, so their writes run one at a time in the
+ * order they were pressed.
+ */
+export function managedCommandConfigureScopeId(
+  target: ManagedCommandConfigureTarget,
+): string {
+  return JSON.stringify([
+    "managedCommand.configure",
+    target.hostId,
+    target.commandId,
+  ]);
+}
+
+/**
+ * Whether a configure write for this command is in flight from ANY surface.
+ * A mutation result's `isPending` is per-observer, and the same command is
+ * rendered in the list row and the output window header at once: with only
+ * the pressing surface disabled, the other still shows the OLD streamed value
+ * and a press there computes the same inverse again - two identical writes,
+ * not the on-then-off the person meant. Every surface reads this and stays
+ * disabled until the first write has answered and the stream has caught up.
+ */
+export function useManagedCommandConfigureIsPending(
+  target: ManagedCommandConfigureTarget,
+): boolean {
+  return (
+    useIsMutating({
+      mutationKey: managedCommandMutationKeys.configure(
+        target.hostId,
+        target.commandId,
+      ),
+    }) > 0
+  );
+}
+
+/**
+ * The relaunch value a surface should SHOW and INVERT for this command: the
+ * streamed record's, unless a configure write for the command has already
+ * answered with a newer record. Between a write resolving and the chat stream
+ * carrying the resulting `managedCommandsChanged`, the streamed value is
+ * stale; a surface deriving its next press from it would send the same
+ * inverse again. The mutation cache holds every surface's settled writes, so
+ * this reads the newest one there and lets `updatedAtMs` decide - a later
+ * stream record (any change bumps it) wins again the moment it lands.
+ */
+export function useManagedCommandRelaunchOnHostRestart(
+  target: ManagedCommandConfigureTarget,
+  streamed: ManagedCommand,
+): boolean {
+  const settled = useMutationState({
+    filters: {
+      mutationKey: managedCommandMutationKeys.configure(
+        target.hostId,
+        target.commandId,
+      ),
+      status: "success",
+    },
+    select: (mutation) => ({
+      data: mutation.state.data,
+      // Monotonic per mutation cache, assigned at `mutate()`: press order.
+      // Not `submittedAt` - two presses in one millisecond stamp the same
+      // clock value, which is exactly the collision this has to break.
+      order: mutation.mutationId,
+    }),
+  });
+  // Newest by the host's `updatedAtMs`, and among writes that landed in the
+  // same millisecond - two quick presses can - by press order, which is the
+  // order the scope delivered them to the host in. Without the tie-break the
+  // first of an on-then-off pair would keep winning.
+  let newest: { command: ManagedCommand; order: number } | null = null;
+  for (const entry of settled) {
+    const parsed = managedCommandControlResponseSchema.safeParse(entry.data);
+    if (!parsed.success) continue;
+    const candidate = { command: parsed.data.command, order: entry.order };
+    if (
+      newest === null ||
+      candidate.command.updatedAtMs > newest.command.updatedAtMs ||
+      (candidate.command.updatedAtMs === newest.command.updatedAtMs &&
+        candidate.order > newest.order)
+    ) {
+      newest = candidate;
+    }
+  }
+  // The stream wins on EQUAL stamps too. The gap this hook closes is a stream
+  // record strictly OLDER than the answered write (the host bumps
+  // `updatedAtMs` on every live change, so the stale record always is). An
+  // equal stamp means the stream has caught up with this write, or with a
+  // write by another client in the same millisecond - which is causally newer
+  // and not in this cache, so no local order could rank it. Settled-state
+  // precedence on equality would show that obsolete value indefinitely.
+  if (newest === null || newest.command.updatedAtMs <= streamed.updatedAtMs) {
+    return streamed.relaunchOnHostRestart;
+  }
+  return newest.command.relaunchOnHostRestart;
+}
+
+/**
+ * The one setting a person edits on a command: whether a host restart brings
+ * it back. Pinned to the command's own host like the lifecycle three, and for
+ * the same reason - the row lives on one machine. Not routed through
+ * {@link useManagedCommandLifecycleMutation} only because its variables carry
+ * the value being set, which that helper's shared shape does not.
+ *
+ * Writes to one command are SERIALIZED here, through the mutation scope, and
+ * not left to the request coordinator's `fifo` lane: that coordinator keys its
+ * queues by the full params, and the value being set is part of them, so an
+ * "on" and an "off" for the same command are two independent queues that can
+ * reach the host in either order. A toggle pressed twice would then settle on
+ * whichever request the host happened to serve last. The scope is keyed by
+ * `(hostId, commandId)`, so the second press waits for the first to answer.
+ * The scope orders writes; {@link useManagedCommandConfigureIsPending} is what
+ * keeps a second surface from issuing a duplicate one in the meantime.
+ */
+export function useManagedCommandConfigure(
+  target: ManagedCommandConfigureTarget,
+): UseMutationResult<
+  ResponseOfMethod<HostRpcRegistry, "managedCommand.configure">,
+  HostRpcError,
+  ManagedCommandConfigureVariables
+> {
+  const defaultClient = useHostClient();
+  const directory = useHostDirectory();
+
+  return useMutation(
+    withHostMutationLifecycleBoundary("managedCommand.configure", {
+      mutationKey: managedCommandMutationKeys.configure(
+        target.hostId,
+        target.commandId,
+      ),
+      scope: { id: managedCommandConfigureScopeId(target) },
+      mutationFn: (variables: ManagedCommandConfigureVariables) =>
+        withHostRpcErrorBoundary("managedCommand.configure", () => {
+          const client = transientClientForEntry(
+            defaultClient,
+            directory.findById(variables.hostId),
+          );
+          if (client === null) {
+            return Promise.reject(
+              hostClientUnavailableError("managedCommand.configure"),
+            );
+          }
+          return client.request("managedCommand.configure", {
+            epicId: variables.epicId,
+            commandId: variables.commandId,
+            relaunchOnHostRestart: variables.relaunchOnHostRestart,
+          });
+        }),
+      onError: (error: HostRpcError) =>
+        toastFromHostError(error, "Couldn't change it."),
+    }),
+  );
 }
 
 export function useManagedCommandDelete(): UseMutationResult<
