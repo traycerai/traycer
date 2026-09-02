@@ -555,7 +555,7 @@ export async function inspectCliInvocationStateDir(
         { code: "ENOTDIR" },
       );
     }
-    return cliInvocationStateDirIdentityFromStats(current);
+    return verifiableStateDirIdentity(current);
   }
   const handle = await open(dir, openFlagsForStateDir());
   try {
@@ -582,10 +582,35 @@ export async function inspectCliInvocationStateDir(
         { code: "EACCES" },
       );
     }
-    return cliInvocationStateDirIdentityFromStats(current);
+    return verifiableStateDirIdentity(current);
   } finally {
     await handle.close().catch(() => undefined);
   }
+}
+
+/**
+ * The directory's identity, or a rejection when the platform reports none.
+ *
+ * A zero `dev` or `ino` (Windows on a volume without file indexes) would make
+ * every directory on that volume compare equal to every other, which turns
+ * the pre-write identity re-check into a check that cannot fail. The protocol
+ * helper refuses to build an identity from it; this refuses to hold a record
+ * behind one.
+ */
+function verifiableStateDirIdentity(stats: {
+  readonly dev: number;
+  readonly ino: number;
+}): CliInvocationStateDirIdentity {
+  const identity = cliInvocationStateDirIdentityFromStats(stats);
+  if (identity === null) {
+    throw Object.assign(
+      new Error(
+        "CLI invocation state directory has no verifiable filesystem identity",
+      ),
+      { code: "EINVAL" },
+    );
+  }
+  return identity;
 }
 
 // Environment-aware CLI home mkdir. Non-environment callers pass undefined to

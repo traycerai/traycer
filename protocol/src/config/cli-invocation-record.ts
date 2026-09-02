@@ -29,11 +29,22 @@ import {
  * `cli-invocation.*` names are never authority. The child entry is gated
  * with a no-follow directory open (a symlink is rejected). Writers
  * re-check {@link CliInvocationStateDirIdentity} before each write
- * group. Residual: a post-gate swap of the child under a group-writable
- * parent can at most cause creation of NEW fixed-basename 0600 files in
- * a directory the attacker chose; existing files are not truncated,
- * written through, or chmod'd via a pathname (`fchmod` on the
- * exclusive-open inode; replace only by `rename` of that inode).
+ * group. Residual, stated exactly because Node has no `openat` family and
+ * every operation below the gate is therefore by pathname: a post-gate
+ * swap of the child under a group-writable parent can redirect a CREATE
+ * (a new fixed-basename 0600 file appears in the directory the attacker
+ * chose), a RENAME (a record or lifecycle lands there; the record names a
+ * `serviceLabel` the redirected directory's reader rejects as foreign,
+ * the lifecycle only re-keys that reader's cache), and an UNLINK. Unlinks
+ * are compare-then-remove: the live record is removed only after its
+ * label matched, the stale marker only after
+ * {@link cliInvocationStaleMarkerRemovableBy} agreed, and every other
+ * name carries a per-transaction token no other directory can hold. No
+ * existing file is truncated, written through, or chmod'd via a pathname
+ * (`fchmod` on the exclusive-open inode; replace only by `rename` of that
+ * inode). The precondition - another account with write access to this
+ * account's host home - already exposes the host install tree and the
+ * credentials beside it, so nothing here widens that boundary.
  *
  * ### Cache bypass
  *
@@ -110,7 +121,7 @@ export const CLI_INVOCATION_RECORD_SCHEMA_VERSION = 1;
 export const CLI_INVOCATION_STATE_DIRNAME = "cli-invocation";
 
 /**
- * Identity of the state directory from one `lstat`. Used to detect a
+ * Identity of the state directory from one `fstat` / `lstat`. Used to detect a
  * post-gate swap of the `cli-invocation` entry under a writable parent.
  */
 export interface CliInvocationStateDirIdentity {
@@ -118,10 +129,28 @@ export interface CliInvocationStateDirIdentity {
   readonly ino: number;
 }
 
+/**
+ * `null` when the stats carry no usable identity.
+ *
+ * A zero `dev` or `ino` is not an identity, it is the platform saying it has
+ * none: Windows reports `ino === 0` on a volume without file indexes, and two
+ * different directories there would compare equal. Treating that as evidence
+ * that the directory is unchanged would let a replacement through the exact
+ * check that exists to catch one, so both sides refuse to hold authority
+ * behind an identity they cannot verify.
+ */
 export function cliInvocationStateDirIdentityFromStats(stats: {
   readonly dev: number;
   readonly ino: number;
-}): CliInvocationStateDirIdentity {
+}): CliInvocationStateDirIdentity | null {
+  if (
+    !Number.isInteger(stats.dev) ||
+    !Number.isInteger(stats.ino) ||
+    stats.dev === 0 ||
+    stats.ino === 0
+  ) {
+    return null;
+  }
   return { dev: stats.dev, ino: stats.ino };
 }
 
@@ -331,6 +360,77 @@ export function cliInvocationRecordStaleMarkerPath(
     hostHomeDir,
     CLI_INVOCATION_RECORD_STALE_FILENAME,
   );
+}
+
+/**
+ * The stale marker's payload.
+ *
+ * `serviceLabel` is what makes removing the marker safe against a swapped
+ * state directory. Every removal of `cli-invocation.stale` is by pathname -
+ * Node has no `unlinkat` - so under a group-writable host home the entry
+ * named `cli-invocation` can be re-pointed at another environment's state
+ * directory between the identity check and the unlink. A remover that first
+ * reads the marker and compares this label with its own refuses a foreign
+ * marker, which turns that redirection from "the other slot's cache bypass
+ * silently disappears" into a no-op. A marker written by a CLI too old to
+ * carry the label parses with `serviceLabel: null` and is removable by anyone,
+ * exactly as it was before the field existed.
+ */
+export interface CliInvocationStaleMarker {
+  readonly schemaVersion: typeof CLI_INVOCATION_RECORD_SCHEMA_VERSION;
+  readonly kind: "stale";
+  readonly serviceLabel: string | null;
+}
+
+export function serializeCliInvocationStaleMarker(input: {
+  readonly serviceLabel: string;
+}): string {
+  return `${JSON.stringify({
+    schemaVersion: CLI_INVOCATION_RECORD_SCHEMA_VERSION,
+    kind: "stale",
+    serviceLabel: input.serviceLabel,
+  })}\n`;
+}
+
+/** `null` for anything that is not a stale marker of this schema version. */
+export function parseCliInvocationStaleMarker(
+  value: unknown,
+): CliInvocationStaleMarker | null {
+  if (!isPlainRecord(value)) return null;
+  if (value.schemaVersion !== CLI_INVOCATION_RECORD_SCHEMA_VERSION) return null;
+  if (value.kind !== "stale") return null;
+  if (!("serviceLabel" in value) || value.serviceLabel === undefined) {
+    return {
+      schemaVersion: CLI_INVOCATION_RECORD_SCHEMA_VERSION,
+      kind: "stale",
+      serviceLabel: null,
+    };
+  }
+  if (
+    typeof value.serviceLabel !== "string" ||
+    value.serviceLabel.length === 0 ||
+    value.serviceLabel.includes("\0")
+  ) {
+    return null;
+  }
+  return {
+    schemaVersion: CLI_INVOCATION_RECORD_SCHEMA_VERSION,
+    kind: "stale",
+    serviceLabel: value.serviceLabel,
+  };
+}
+
+/**
+ * May a remover that acts on behalf of `ownLabel` unlink this marker?
+ *
+ * Shared so the CLI and the host cannot drift on the rule: a legacy marker
+ * without a label is anyone's to remove, a labelled one belongs to its label.
+ */
+export function cliInvocationStaleMarkerRemovableBy(
+  marker: CliInvocationStaleMarker,
+  ownLabel: string,
+): boolean {
+  return marker.serviceLabel === null || marker.serviceLabel === ownLabel;
 }
 
 /** Lifecycle generation, given the host runtime home that contains it. */

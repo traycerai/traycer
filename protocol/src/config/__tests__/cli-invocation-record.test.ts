@@ -27,6 +27,7 @@ import {
   cliInvocationRecordStaleMarkerPath,
   cliInvocationRecordStagingPath,
   cliInvocationRecordTransactionMarkerPath,
+  cliInvocationStaleMarkerRemovableBy,
   cliInvocationTransactionAbandonedByAge,
   cliInvocationTransactionMarkerBasenamesFrom,
   cliInvocationLifecycleNewerThanLegacyExactMarker,
@@ -37,9 +38,11 @@ import {
   isCliInvocationTransactionMarkerBasename,
   parseCliInvocationLifecycle,
   parseCliInvocationRecord,
+  parseCliInvocationStaleMarker,
   parseCliInvocationTransactionMarker,
   serializeCliInvocationLifecycle,
   serializeCliInvocationRecord,
+  serializeCliInvocationStaleMarker,
   serializeCliInvocationTransactionMarker,
   type CliInvocationRecord,
   type CliInvocationTransactionMarker,
@@ -99,12 +102,36 @@ describe("cli invocation record paths", () => {
 describe("cliInvocationStateDirIdentitiesMatch", () => {
   it("compares lstat dev/ino pairs", () => {
     const left = cliInvocationStateDirIdentityFromStats({ dev: 1, ino: 2 });
+    if (left === null) {
+      throw new Error("expected a verifiable identity for {dev:1, ino:2}");
+    }
     expect(cliInvocationStateDirIdentitiesMatch(left, { dev: 1, ino: 2 })).toBe(
       true,
     );
     expect(cliInvocationStateDirIdentitiesMatch(left, { dev: 1, ino: 3 })).toBe(
       false,
     );
+  });
+});
+
+describe("cliInvocationStateDirIdentityFromStats", () => {
+  it("returns null when dev or ino carries no usable identity", () => {
+    expect(cliInvocationStateDirIdentityFromStats({ dev: 0, ino: 5 })).toBe(
+      null,
+    );
+    expect(cliInvocationStateDirIdentityFromStats({ dev: 5, ino: 0 })).toBe(
+      null,
+    );
+    expect(cliInvocationStateDirIdentityFromStats({ dev: 1.5, ino: 2 })).toBe(
+      null,
+    );
+  });
+
+  it("returns the identity when both dev and ino are nonzero integers", () => {
+    expect(cliInvocationStateDirIdentityFromStats({ dev: 5, ino: 7 })).toEqual({
+      dev: 5,
+      ino: 7,
+    });
   });
 });
 
@@ -478,5 +505,86 @@ describe("parseCliInvocationLifecycle", () => {
     expect(
       parseCliInvocationLifecycle({ ...LIFECYCLE_SAMPLE, event: "stale" }),
     ).toBeNull();
+  });
+});
+
+describe("stale marker serialize/parse", () => {
+  it("round-trips serviceLabel through serialize then parse", () => {
+    const serialized = serializeCliInvocationStaleMarker({
+      serviceLabel: "ai.traycer.host",
+    });
+    const parsed = parseCliInvocationStaleMarker(JSON.parse(serialized));
+    expect(parsed).toEqual({
+      schemaVersion: 1,
+      kind: "stale",
+      serviceLabel: "ai.traycer.host",
+    });
+  });
+
+  it("parses a legacy body with no serviceLabel field as serviceLabel: null", () => {
+    const legacyBody = '{"schemaVersion":1,"kind":"stale"}\n';
+    const parsed = parseCliInvocationStaleMarker(JSON.parse(legacyBody));
+    expect(parsed).toEqual({
+      schemaVersion: 1,
+      kind: "stale",
+      serviceLabel: null,
+    });
+  });
+
+  it("rejects a stale-marker-shaped object with a different kind", () => {
+    expect(
+      parseCliInvocationStaleMarker({
+        schemaVersion: 1,
+        kind: "lifecycle",
+        serviceLabel: "ai.traycer.host",
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects an empty or NUL-containing serviceLabel", () => {
+    expect(
+      parseCliInvocationStaleMarker({
+        schemaVersion: 1,
+        kind: "stale",
+        serviceLabel: "",
+      }),
+    ).toBeNull();
+    expect(
+      parseCliInvocationStaleMarker({
+        schemaVersion: 1,
+        kind: "stale",
+        serviceLabel: "ai.traycer\0host",
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("cliInvocationStaleMarkerRemovableBy", () => {
+  it("a legacy marker (serviceLabel: null) is removable by any label", () => {
+    const legacy = parseCliInvocationStaleMarker(
+      JSON.parse('{"schemaVersion":1,"kind":"stale"}\n'),
+    );
+    if (legacy === null) throw new Error("expected the legacy marker to parse");
+    expect(cliInvocationStaleMarkerRemovableBy(legacy, "ai.traycer.host")).toBe(
+      true,
+    );
+    expect(
+      cliInvocationStaleMarkerRemovableBy(legacy, "ai.traycer.host.other"),
+    ).toBe(true);
+  });
+
+  it("an own-label marker is removable only when the argument matches", () => {
+    const own = parseCliInvocationStaleMarker(
+      JSON.parse(
+        serializeCliInvocationStaleMarker({ serviceLabel: "ai.traycer.host" }),
+      ),
+    );
+    if (own === null) throw new Error("expected the own-label marker to parse");
+    expect(cliInvocationStaleMarkerRemovableBy(own, "ai.traycer.host")).toBe(
+      true,
+    );
+    expect(
+      cliInvocationStaleMarkerRemovableBy(own, "ai.traycer.host.other"),
+    ).toBe(false);
   });
 });

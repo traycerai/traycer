@@ -1,5 +1,13 @@
 import type { Stats } from "node:fs";
-import { lstat, mkdir, mkdtemp, rm } from "node:fs/promises";
+import {
+  chmod,
+  lstat,
+  mkdir,
+  mkdtemp,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -306,4 +314,69 @@ describe("inspectCliInvocationStateDir Windows branch", () => {
       restore();
     }
   });
+
+  it("rejects a directory reporting ino: 0 (no verifiable filesystem identity)", async () => {
+    const restore = stubPlatformWin32();
+    windowsStateDir.rejectOpen = true;
+    windowsStateDir.lstatOverride = async () => ({
+      isSymbolicLink: () => false,
+      isDirectory: () => true,
+      dev: 7,
+      ino: 0,
+    });
+    try {
+      await expect(
+        inspectCliInvocationStateDir("/fake-host-home", false),
+      ).rejects.toMatchObject({ code: "EINVAL" });
+    } finally {
+      restore();
+    }
+  });
 });
+
+describe.skipIf(process.platform === "win32")(
+  "inspectCliInvocationStateDir POSIX negative cases",
+  () => {
+    let hostHome = "";
+
+    afterEach(async () => {
+      if (hostHome !== "") {
+        await rm(hostHome, { recursive: true, force: true });
+        hostHome = "";
+      }
+    });
+
+    it("rejects a child directory with mode 0750 as EACCES", async () => {
+      hostHome = await mkdtemp(join(tmpdir(), "traycer-posix-state-"));
+      const child = join(hostHome, "cli-invocation");
+      await mkdir(child, { mode: 0o750 });
+      await chmod(child, 0o750);
+      await expect(
+        inspectCliInvocationStateDir(hostHome, false),
+      ).rejects.toMatchObject({ code: "EACCES" });
+    });
+
+    it("rejects a child that is a regular file as ENOTDIR", async () => {
+      hostHome = await mkdtemp(join(tmpdir(), "traycer-posix-state-"));
+      const child = join(hostHome, "cli-invocation");
+      await writeFile(child, "not-a-directory\n", { mode: 0o600 });
+      await expect(
+        inspectCliInvocationStateDir(hostHome, false),
+      ).rejects.toMatchObject({ code: "ENOTDIR" });
+    });
+
+    it("rejects a child that is a symlink to a real private directory", async () => {
+      hostHome = await mkdtemp(join(tmpdir(), "traycer-posix-state-"));
+      const target = join(hostHome, "real-target");
+      await mkdir(target, { mode: 0o700 });
+      await chmod(target, 0o700);
+      const child = join(hostHome, "cli-invocation");
+      await symlink(target, child);
+      await expect(
+        inspectCliInvocationStateDir(hostHome, false),
+      ).rejects.toMatchObject({
+        code: expect.stringMatching(/^(ELOOP|ENOTDIR)$/),
+      });
+    });
+  },
+);

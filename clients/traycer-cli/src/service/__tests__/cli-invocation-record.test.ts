@@ -1,7 +1,8 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import {
   chmod,
+  lstat as lstatFile,
   mkdir,
   readFile,
   rename as renameFile,
@@ -13,7 +14,15 @@ import {
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { readdir } from "node:fs/promises";
 import {
   CLI_INVOCATION_RECORD_MAX_ARGS,
@@ -32,21 +41,42 @@ import {
   isCliInvocationTransactionMarkerBasename,
   parseCliInvocationLifecycle,
   parseCliInvocationRecord,
+  parseCliInvocationStaleMarker,
   parseCliInvocationTransactionMarker,
+  serializeCliInvocationStaleMarker,
   serializeCliInvocationTransactionMarker,
 } from "@traycer/protocol/config/cli-invocation-record";
 import { CLI_ERROR_CODES } from "../../runner/errors";
 import { currentProcessIdentityToken } from "../../store/process-identity";
+
+beforeAll(() => {
+  const result = spawnSync("bun", ["--version"]);
+  if (result.error || result.status !== 0) {
+    throw new Error(
+      "these tests spawn worker fixtures with Bun; install Bun 1.3.12 (repo toolchain)",
+    );
+  }
+});
 
 const mocks = vi.hoisted(() => ({
   crashOnNextRename: false,
   crashOnLifecycleRename: false,
   failNextWrite: false,
   failLifecycleTempWrite: false,
-  // 1-indexed call number of writeFile to fail (staging=1, txn=2,
+  // 1-indexed call number of writeFile to fail (txn=1, staging=2,
   // stale-marker=3 on the commit-failure path). 0 means "use failNextWrite".
+  // txn=1: the unique transaction contender write in `createUniqueContender`,
+  // which happens before the staging write (staging=2) in
+  // `runServiceRegistrationWithInvocationRecord`.
   failWriteCallNumber: 0,
   writeFileCallCount: 0,
+  // Fails the NEXT `rm` call whose target path equals `failRmPath` (or, when
+  // `failRmPath` is null, any `rm` call at all) with an EACCES-shaped error.
+  // Used to simulate the live-record removal in
+  // `runServiceUninstallWithInvocationRecord` failing after a confirmed OS
+  // uninstall.
+  failNextRm: false,
+  failRmPath: null as string | null,
 }));
 
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -115,6 +145,20 @@ vi.mock("node:fs/promises", async (importOriginal) => {
       }
       return actual.rename(from, to);
     },
+    rm: async (...args: Parameters<typeof actual.rm>) => {
+      const target = String(args[0]);
+      const shouldFail =
+        mocks.failNextRm ||
+        (mocks.failRmPath !== null && target === mocks.failRmPath);
+      if (shouldFail) {
+        mocks.failNextRm = false;
+        mocks.failRmPath = null;
+        throw Object.assign(new Error("SIMULATED_RM_FAILURE"), {
+          code: "EACCES",
+        });
+      }
+      return actual.rm(...args);
+    },
   };
 });
 
@@ -172,6 +216,8 @@ beforeEach(async () => {
   mocks.failLifecycleTempWrite = false;
   mocks.failWriteCallNumber = 0;
   mocks.writeFileCallCount = 0;
+  mocks.failNextRm = false;
+  mocks.failRmPath = null;
 });
 
 afterEach(async () => {
@@ -361,7 +407,7 @@ describe("runServiceRegistrationWithInvocationRecord", () => {
     expect(await transactionMarkerNames()).toEqual([]);
   });
 
-  it("on OS throw, removes txn and staging and leaves any prior live record", async () => {
+  it("on OS throw, marks stale, removes a matching-label prior live record, and releases the txn", async () => {
     await runServiceRegistrationWithInvocationRecord({
       environment: "production",
       hostHomeDir: hostHome,
@@ -371,7 +417,7 @@ describe("runServiceRegistrationWithInvocationRecord", () => {
       cli: npmCli(),
       register: async () => undefined,
     });
-    const before = await readFile(cliInvocationRecordPath(hostHome), "utf8");
+    expect(await exists(cliInvocationRecordPath(hostHome))).toBe(true);
     await expect(
       runServiceRegistrationWithInvocationRecord({
         environment: "production",
@@ -385,10 +431,61 @@ describe("runServiceRegistrationWithInvocationRecord", () => {
         },
       }),
     ).rejects.toThrow("os-refused");
-    expect(await readFile(cliInvocationRecordPath(hostHome), "utf8")).toBe(
-      before,
+    // The controllers do not roll back, so the prior live record - matching
+    // this label - may now describe a registration that no longer exists. It
+    // is removed, and a stale marker carrying our label sends the host to the
+    // OS definition instead.
+    expect(await exists(cliInvocationRecordPath(hostHome))).toBe(false);
+    const stale = parseCliInvocationStaleMarker(
+      JSON.parse(
+        await readFile(cliInvocationRecordStaleMarkerPath(hostHome), "utf8"),
+      ),
     );
+    expect(stale?.serviceLabel).toBe(LABEL);
     expect(await exists(cliInvocationRecordStagingPath(hostHome))).toBe(false);
+    expect(await transactionMarkerNames()).toEqual([]);
+  });
+
+  it("on OS throw, retains a prior live record for a DIFFERENT label while still writing the stale marker", async () => {
+    const foreign = {
+      schemaVersion: 1,
+      command: process.execPath,
+      args: [scriptPath],
+      source: {
+        kind: "service-registration",
+        platform: "linux",
+        serviceLabel: "ai.traycer.host.dev.other",
+      },
+      recoveredAt: "2026-09-01T00:00:00.000Z",
+    };
+    await writeFile(
+      cliInvocationRecordPath(hostHome),
+      `${JSON.stringify(foreign, null, 2)}\n`,
+      { mode: 0o600 },
+    );
+    await expect(
+      runServiceRegistrationWithInvocationRecord({
+        environment: "production",
+        hostHomeDir: hostHome,
+        waitMs: 2_000,
+        pollIntervalMs: 20,
+        serviceLabel: LABEL,
+        cli: npmCli(),
+        register: async () => {
+          throw new Error("os-refused");
+        },
+      }),
+    ).rejects.toThrow("os-refused");
+    const live = parseCliInvocationRecord(
+      JSON.parse(await readFile(cliInvocationRecordPath(hostHome), "utf8")),
+    );
+    expect(live?.source.serviceLabel).toBe("ai.traycer.host.dev.other");
+    const stale = parseCliInvocationStaleMarker(
+      JSON.parse(
+        await readFile(cliInvocationRecordStaleMarkerPath(hostHome), "utf8"),
+      ),
+    );
+    expect(stale?.serviceLabel).toBe(LABEL);
     expect(await transactionMarkerNames()).toEqual([]);
   });
 
@@ -667,6 +764,114 @@ describe("runServiceRegistrationWithInvocationRecord", () => {
     expect(await readFile(exactPath, "utf8")).toBe(exactRaw);
     expect(await transactionMarkerNames()).toEqual(["cli-invocation.txn"]);
   });
+
+  it("removes an earlier stale marker carrying our own label on a successful registration", async () => {
+    await writeFile(
+      cliInvocationRecordStaleMarkerPath(hostHome),
+      serializeCliInvocationStaleMarker({ serviceLabel: LABEL }),
+      { mode: 0o600 },
+    );
+    await expect(
+      runServiceRegistrationWithInvocationRecord({
+        environment: "production",
+        hostHomeDir: hostHome,
+        waitMs: 2_000,
+        pollIntervalMs: 20,
+        serviceLabel: LABEL,
+        cli: npmCli(),
+        register: async () => undefined,
+      }),
+    ).resolves.toBeUndefined();
+    expect(await exists(cliInvocationRecordStaleMarkerPath(hostHome))).toBe(
+      false,
+    );
+    expect(await exists(cliInvocationRecordPath(hostHome))).toBe(true);
+  });
+
+  it("removes a legacy (label-less) stale marker on a successful registration", async () => {
+    await writeFile(
+      cliInvocationRecordStaleMarkerPath(hostHome),
+      '{"schemaVersion":1,"kind":"stale"}\n',
+      { mode: 0o600 },
+    );
+    await expect(
+      runServiceRegistrationWithInvocationRecord({
+        environment: "production",
+        hostHomeDir: hostHome,
+        waitMs: 2_000,
+        pollIntervalMs: 20,
+        serviceLabel: LABEL,
+        cli: npmCli(),
+        register: async () => undefined,
+      }),
+    ).resolves.toBeUndefined();
+    expect(await exists(cliInvocationRecordStaleMarkerPath(hostHome))).toBe(
+      false,
+    );
+    expect(await exists(cliInvocationRecordPath(hostHome))).toBe(true);
+  });
+
+  it("commits the record but reports failure when a foreign-label stale marker survives the strict clear", async () => {
+    await writeFile(
+      cliInvocationRecordStaleMarkerPath(hostHome),
+      serializeCliInvocationStaleMarker({
+        serviceLabel: "ai.traycer.host.dev.other",
+      }),
+      { mode: 0o600 },
+    );
+    await expect(
+      runServiceRegistrationWithInvocationRecord({
+        environment: "production",
+        hostHomeDir: hostHome,
+        waitMs: 2_000,
+        pollIntervalMs: 20,
+        serviceLabel: LABEL,
+        cli: npmCli(),
+        register: async () => undefined,
+      }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      details: { phase: "stale-clear", outcome: "foreign" },
+    });
+    // The OS registration and record commit still happened; only the
+    // strict foreign-marker clear failed.
+    expect(await exists(cliInvocationRecordPath(hostHome))).toBe(true);
+    expect(await exists(cliInvocationLifecyclePath(hostHome))).toBe(true);
+    expect(await transactionMarkerNames()).toEqual([]);
+    const stale = parseCliInvocationStaleMarker(
+      JSON.parse(
+        await readFile(cliInvocationRecordStaleMarkerPath(hostHome), "utf8"),
+      ),
+    );
+    expect(stale?.serviceLabel).toBe("ai.traycer.host.dev.other");
+  });
+
+  it("succeeds when a symlink occupies the stale-marker path (skip-not-live, absent not foreign)", async () => {
+    // The stale marker is read O_NOFOLLOW; a symlink there reads as absent,
+    // not foreign or failed, so a successful registration is not blocked by
+    // it and the planted link is left untouched.
+    if (process.platform === "win32") return;
+    const sentinel = join(hostHome, "stale-sentinel");
+    await writeFile(sentinel, "sentinel\n", { mode: 0o600 });
+    await symlink(sentinel, cliInvocationRecordStaleMarkerPath(hostHome));
+    await expect(
+      runServiceRegistrationWithInvocationRecord({
+        environment: "production",
+        hostHomeDir: hostHome,
+        waitMs: 2_000,
+        pollIntervalMs: 20,
+        serviceLabel: LABEL,
+        cli: npmCli(),
+        register: async () => undefined,
+      }),
+    ).resolves.toBeUndefined();
+    expect(await exists(cliInvocationRecordPath(hostHome))).toBe(true);
+    const linkStat = await lstatFile(
+      cliInvocationRecordStaleMarkerPath(hostHome),
+    );
+    expect(linkStat.isSymbolicLink()).toBe(true);
+    expect(await readFile(sentinel, "utf8")).toBe("sentinel\n");
+  });
 });
 
 describe("runServiceUninstallWithInvocationRecord", () => {
@@ -813,6 +1018,108 @@ describe("runServiceUninstallWithInvocationRecord", () => {
     } finally {
       await rm(otherHome, { recursive: true, force: true });
     }
+  });
+
+  it("marks stale and reports failure when the live record cannot be removed after a confirmed OS uninstall", async () => {
+    await runServiceRegistrationWithInvocationRecord({
+      environment: "production",
+      hostHomeDir: hostHome,
+      waitMs: 2_000,
+      pollIntervalMs: 20,
+      serviceLabel: LABEL,
+      cli: npmCli(),
+      register: async () => undefined,
+    });
+    mocks.failRmPath = cliInvocationRecordPath(hostHome);
+    let uninstalled = false;
+    await expect(
+      runServiceUninstallWithInvocationRecord({
+        environment: "production",
+        hostHomeDir: hostHome,
+        waitMs: 2_000,
+        pollIntervalMs: 20,
+        serviceLabel: LABEL,
+        uninstall: async () => {
+          uninstalled = true;
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_UNINSTALL_FAILED,
+      details: { phase: "record-remove" },
+    });
+    expect(uninstalled).toBe(true);
+    const stale = parseCliInvocationStaleMarker(
+      JSON.parse(
+        await readFile(cliInvocationRecordStaleMarkerPath(hostHome), "utf8"),
+      ),
+    );
+    expect(stale?.serviceLabel).toBe(LABEL);
+  });
+
+  it("leaves a foreign-label stale marker in place but still succeeds (best-effort clear)", async () => {
+    await runServiceRegistrationWithInvocationRecord({
+      environment: "production",
+      hostHomeDir: hostHome,
+      waitMs: 2_000,
+      pollIntervalMs: 20,
+      serviceLabel: LABEL,
+      cli: npmCli(),
+      register: async () => undefined,
+    });
+    // Written AFTER the registration so it is not this test's registration
+    // that has to clear it; uninstall's clear is best-effort, unlike
+    // registration's strict clear.
+    await writeFile(
+      cliInvocationRecordStaleMarkerPath(hostHome),
+      serializeCliInvocationStaleMarker({
+        serviceLabel: "ai.traycer.host.dev.other",
+      }),
+      { mode: 0o600 },
+    );
+    let uninstalled = false;
+    await expect(
+      runServiceUninstallWithInvocationRecord({
+        environment: "production",
+        hostHomeDir: hostHome,
+        waitMs: 2_000,
+        pollIntervalMs: 20,
+        serviceLabel: LABEL,
+        uninstall: async () => {
+          uninstalled = true;
+        },
+      }),
+    ).resolves.toBeUndefined();
+    expect(uninstalled).toBe(true);
+    const stale = parseCliInvocationStaleMarker(
+      JSON.parse(
+        await readFile(cliInvocationRecordStaleMarkerPath(hostHome), "utf8"),
+      ),
+    );
+    expect(stale?.serviceLabel).toBe("ai.traycer.host.dev.other");
+  });
+
+  it("leaves an unparseable live record untouched and still succeeds", async () => {
+    await mkdir(cliInvocationStateDir(hostHome), { recursive: true });
+    await writeFile(cliInvocationRecordPath(hostHome), "not-json-garbage\n", {
+      mode: 0o600,
+    });
+    let uninstalled = false;
+    await expect(
+      runServiceUninstallWithInvocationRecord({
+        environment: "production",
+        hostHomeDir: hostHome,
+        waitMs: 2_000,
+        pollIntervalMs: 20,
+        serviceLabel: LABEL,
+        uninstall: async () => {
+          uninstalled = true;
+        },
+      }),
+    ).resolves.toBeUndefined();
+    expect(uninstalled).toBe(true);
+    expect(await readFile(cliInvocationRecordPath(hostHome), "utf8")).toBe(
+      "not-json-garbage\n",
+    );
   });
 });
 
@@ -974,7 +1281,7 @@ describe("lifecycle generation", () => {
     );
   }
 
-  it("keeps txn and the prior generation when the lifecycle temp write fails", async () => {
+  it("marks stale, keeps the just-committed live record, and releases the txn when the lifecycle temp write fails", async () => {
     await runServiceRegistrationWithInvocationRecord({
       environment: "production",
       hostHomeDir: hostHome,
@@ -997,12 +1304,35 @@ describe("lifecycle generation", () => {
         register: async () => undefined,
       }),
     ).rejects.toMatchObject({ code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED });
+    // The lifecycle generation write failed, so the OLD generation is
+    // unchanged...
     expect((await readLifecycle())?.generation).toBe(prior?.generation);
-    expect(await transactionMarkerNames()).toHaveLength(1);
+    // ...but the RECORD was already committed by this second call's rename
+    // before the lifecycle write was attempted, so it reflects THIS
+    // invocation, not the prior one.
+    const committedRecordRaw = await readFile(
+      cliInvocationRecordPath(hostHome),
+      "utf8",
+    );
+    const committedRecord = parseCliInvocationRecord(
+      JSON.parse(committedRecordRaw),
+    );
+    expect(committedRecord?.source.serviceLabel).toBe(LABEL);
+    expect(committedRecord?.command).toBe(process.execPath);
+    expect(committedRecord?.args).toEqual([scriptPath]);
+    // The stale marker is the durable substitute for the missing generation;
+    // once written, this owner's transaction is released, not kept.
+    const stale = parseCliInvocationStaleMarker(
+      JSON.parse(
+        await readFile(cliInvocationRecordStaleMarkerPath(hostHome), "utf8"),
+      ),
+    );
+    expect(stale?.serviceLabel).toBe(LABEL);
+    expect(await transactionMarkerNames()).toEqual([]);
     expect(await leftoverLifecycleTemps()).toEqual([]);
   });
 
-  it("keeps txn and the prior generation when the lifecycle rename fails, and leaves no temp", async () => {
+  it("marks stale, keeps the just-committed live record, and releases the txn when the lifecycle rename fails", async () => {
     await runServiceRegistrationWithInvocationRecord({
       environment: "production",
       hostHomeDir: hostHome,
@@ -1026,7 +1356,23 @@ describe("lifecycle generation", () => {
       }),
     ).rejects.toMatchObject({ code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED });
     expect((await readLifecycle())?.generation).toBe(prior?.generation);
-    expect(await transactionMarkerNames()).toHaveLength(1);
+    const committedRecordRaw = await readFile(
+      cliInvocationRecordPath(hostHome),
+      "utf8",
+    );
+    const committedRecord = parseCliInvocationRecord(
+      JSON.parse(committedRecordRaw),
+    );
+    expect(committedRecord?.source.serviceLabel).toBe(LABEL);
+    expect(committedRecord?.command).toBe(process.execPath);
+    expect(committedRecord?.args).toEqual([scriptPath]);
+    const stale = parseCliInvocationStaleMarker(
+      JSON.parse(
+        await readFile(cliInvocationRecordStaleMarkerPath(hostHome), "utf8"),
+      ),
+    );
+    expect(stale?.serviceLabel).toBe(LABEL);
+    expect(await transactionMarkerNames()).toEqual([]);
     expect(await leftoverLifecycleTemps()).toEqual([]);
   });
 });
@@ -1945,7 +2291,10 @@ describe("invocation validation", () => {
             osMutated = true;
           },
         }),
-      ).rejects.toMatchObject({ code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED });
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+        details: { causeCode: expect.any(String) },
+      });
       expect(osMutated).toBe(false);
       await expect(
         runServiceUninstallWithInvocationRecord({
@@ -1960,6 +2309,7 @@ describe("invocation validation", () => {
         }),
       ).rejects.toMatchObject({
         code: CLI_ERROR_CODES.SERVICE_UNINSTALL_FAILED,
+        details: { causeCode: expect.any(String) },
       });
       expect(osMutated).toBe(false);
       expect(await readFile(join(target, "sentinel"), "utf8")).toBe("keep\n");

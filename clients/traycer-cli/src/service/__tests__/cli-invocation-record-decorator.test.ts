@@ -7,6 +7,12 @@ const mocks = vi.hoisted(() => ({
   hostHomes: [] as string[],
   callRegister: true,
   callUninstall: true,
+  // Shared ordering trace: the transaction wrapper pushes "txn-open" before
+  // calling the OS callback and "txn-commit" after it resolves, while the OS
+  // callback itself (supplied per-test) pushes its own "os-*" marker. This
+  // proves the OS mutation runs INSIDE the transaction, not merely that it
+  // ran at all.
+  order: [] as string[],
 }));
 
 vi.mock("../cli-invocation-record", () => ({
@@ -19,14 +25,18 @@ vi.mock("../cli-invocation-record", () => ({
   }) => {
     mocks.registrations.push(opts.serviceLabel);
     mocks.hostHomes.push(opts.hostHomeDir);
+    mocks.order.push("txn-open");
     if (mocks.callRegister) await opts.register();
+    mocks.order.push("txn-commit");
   },
   runServiceUninstallWithInvocationRecord: async (opts: {
     readonly serviceLabel: string;
     readonly uninstall: () => Promise<void>;
   }) => {
     mocks.uninstalls.push(opts.serviceLabel);
+    mocks.order.push("txn-open");
     if (mocks.callUninstall) await opts.uninstall();
+    mocks.order.push("txn-commit");
   },
 }));
 
@@ -77,15 +87,15 @@ beforeEach(() => {
   mocks.hostHomes.length = 0;
   mocks.callRegister = true;
   mocks.callUninstall = true;
+  mocks.order.length = 0;
 });
 
 describe("withCliInvocationRecord", () => {
   it("runs OS install inside the registration transaction", async () => {
-    const order: string[] = [];
     const controller = withCliInvocationRecord(
       baseController({
         install: async () => {
-          order.push("os-install");
+          mocks.order.push("os-install");
         },
       }),
     );
@@ -95,21 +105,20 @@ describe("withCliInvocationRecord", () => {
       enableLinger: false,
     });
     expect(mocks.registrations).toEqual([label.id]);
-    expect(order).toEqual(["os-install"]);
+    expect(mocks.order).toEqual(["txn-open", "os-install", "txn-commit"]);
   });
 
   it("runs OS uninstall inside the uninstall transaction", async () => {
-    const order: string[] = [];
     const controller = withCliInvocationRecord(
       baseController({
         uninstall: async () => {
-          order.push("os-uninstall");
+          mocks.order.push("os-uninstall");
         },
       }),
     );
     await controller.uninstall({ label });
     expect(mocks.uninstalls).toEqual([label.id]);
-    expect(order).toEqual(["os-uninstall"]);
+    expect(mocks.order).toEqual(["txn-open", "os-uninstall", "txn-commit"]);
   });
 
   it("propagates an OS install failure without swallowing it", async () => {

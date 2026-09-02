@@ -29,6 +29,7 @@ import {
   cliInvocationRecordPath,
   cliInvocationRecordPlatformFor,
   cliInvocationRecordStaleMarkerPath,
+  cliInvocationStaleMarkerRemovableBy,
   cliInvocationStateDir,
   cliInvocationStateDirIdentitiesMatch,
   cliInvocationTransactionAbandonedByAge,
@@ -36,9 +37,11 @@ import {
   electCliInvocationTransactionOwnerBasename,
   isCliInvocationTransactionMarkerBasename,
   parseCliInvocationRecord,
+  parseCliInvocationStaleMarker,
   parseCliInvocationTransactionMarker,
   serializeCliInvocationLifecycle,
   serializeCliInvocationRecord,
+  serializeCliInvocationStaleMarker,
   serializeCliInvocationTransactionMarker,
   type CliInvocationLifecycleEvent,
   type CliInvocationRecord,
@@ -71,16 +74,31 @@ import type { CliInvocation } from "./cli-binary";
 //   2. write a unique staging file named in that marker
 //   3. mutate the OS registration
 //   4. on confirmed OS success, rename *this owner's* staging over the live
-//      record
+//      record, write a fresh lifecycle generation, clear an earlier stale
+//      marker (compare-then-unlink on its label; a marker that survives is
+//      reported, because it keeps the committed record bypassed), release
 //   5. on commit failure, mark stale and unlink the live file so an older
 //      invocation cannot stay preferred, then fail the registration
-//   6. on OS throw (platform controllers roll back), release *this owner's*
-//      unique txn+staging and leave the live record
+//   6. on OS throw, ALSO mark stale and unlink the live file. The platform
+//      controllers do not roll back: launchd `bootstrap` succeeds before
+//      `kickstart` fails, `schtasks /Create` before `/Run` - so the previous
+//      record may describe a registration that no longer exists. The stale
+//      marker sends the host to the OS definition, which is the source of
+//      truth in either outcome
+//   7. on lifecycle-generation failure, mark stale but KEEP the live record:
+//      the record and the OS agree, but a host that re-keys on the old
+//      generation once this owner's marker is gone would replay a
+//      pre-registration answer. The stale marker survives this process and
+//      bypasses the record until the next confirmed CLI transaction clears
+//      it
 //
 // Uninstall contends for the same unique-marker election, so it cannot
 // delete an in-flight install's sidecars. It removes the live record only
-// after the OS uninstall resolves. A throw retains the live record and
-// still releases only this owner's unique txn.
+// after the OS uninstall resolves and only when that record carries its own
+// label. The removal is strict: a record that survives is marked stale so it
+// cannot be preferred, and the uninstall is reported as failed. A throw from
+// the OS uninstall retains the live record and releases only this owner's
+// unique txn.
 //
 // Unparseable txn files use the shared
 // `CLI_INVOCATION_TXN_ABANDON_AFTER_MS` age window, the same bound the
@@ -94,20 +112,21 @@ import type { CliInvocation } from "./cli-binary";
 // The state child is gated with `O_DIRECTORY|O_NOFOLLOW` (symlinks
 // rejected) and its `dev`/`ino` is re-checked before each write group.
 // Creates exclusive-open then `fchmod` the handle; replacement is
-// rename of that inode (live mode travels with the temp). Residual: a
-// post-gate swap of the child under a group-writable parent can at
-// most create NEW fixed-basename 0600 files in a directory the
-// attacker chose; no existing file is truncated, written through, or
-// chmod'd through a pathname. Authority reads
-// (markers, live record, compare-before-unlink) use O_NOFOLLOW: a
-// symlink at a marker basename is skipped, not treated as live — a
-// genuine marker is never a symlink (`wx`), and counting one as live
-// would let a parent-writer suppress registration with one link.
-
-const STALE_MARKER_BODY = `${JSON.stringify({
-  schemaVersion: CLI_INVOCATION_RECORD_SCHEMA_VERSION,
-  kind: "stale",
-})}\n`;
+// rename of that inode (live mode travels with the temp). Every
+// operation below the gate is by pathname - Node has no `openat` family -
+// so a post-gate swap of the child under a group-writable parent can
+// redirect a create, a rename, or an unlink into a directory the attacker
+// chose. What that buys is bounded and stated in the protocol module's
+// header: creates make NEW fixed-basename 0600 files; a redirected record
+// rename lands a record whose label that directory's reader rejects; and
+// every unlink is compare-then-remove (live record by label, stale marker
+// by label, everything else by a per-transaction token), so no other
+// directory's file is removed. No existing file is truncated, written
+// through, or chmod'd through a pathname. Authority reads (markers, live
+// record, compare-before-unlink) use O_NOFOLLOW: a symlink at a marker
+// basename is skipped, not treated as live — a genuine marker is never a
+// symlink (`wx`), and counting one as live would let a parent-writer
+// suppress registration with one link.
 
 const NODE_FAMILY_BASENAMES: ReadonlySet<string> = new Set([
   "node",
@@ -191,9 +210,15 @@ export function __setCliInvocationPauseAfterExclusiveCreateForTest(
   return previous;
 }
 
+/**
+ * `cause` is whatever the state-directory check threw. Its errno code is
+ * carried in `details` so a plain `EACCES` or `ENOSPC` is diagnosable from a
+ * support report; `null` when the rejection was ours (an identity mismatch).
+ */
 function stateDirUnsafeError(
   serviceLabel: string,
   operation: CliInvocationTransactionOperation,
+  cause: unknown,
 ): Error {
   return cliError({
     code:
@@ -201,7 +226,11 @@ function stateDirUnsafeError(
         ? CLI_ERROR_CODES.SERVICE_UNINSTALL_FAILED
         : CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
     message: `CLI invocation state directory is not safe to hold a record for '${serviceLabel}'`,
-    details: { label: serviceLabel, phase: "invocation-state-dir" },
+    details: {
+      label: serviceLabel,
+      phase: "invocation-state-dir",
+      causeCode: isErrnoException(cause) ? (cause.code ?? null) : null,
+    },
     exitCode: 1,
   });
 }
@@ -227,7 +256,7 @@ async function ensureInvocationHostHome(
     ) {
       throw cause;
     }
-    throw stateDirUnsafeError(serviceLabel, operation);
+    throw stateDirUnsafeError(serviceLabel, operation, cause);
   }
 }
 
@@ -243,7 +272,7 @@ async function assertStateDirUnchanged(
   try {
     const current = await inspectCliInvocationStateDir(hostHomeDir, false);
     if (!cliInvocationStateDirIdentitiesMatch(expected, current)) {
-      throw stateDirUnsafeError(serviceLabel, operation);
+      throw stateDirUnsafeError(serviceLabel, operation, null);
     }
   } catch (cause) {
     if (
@@ -255,7 +284,7 @@ async function assertStateDirUnchanged(
     ) {
       throw cause;
     }
-    throw stateDirUnsafeError(serviceLabel, operation);
+    throw stateDirUnsafeError(serviceLabel, operation, cause);
   }
 }
 
@@ -319,7 +348,18 @@ export async function runServiceRegistrationWithInvocationRecord(
   try {
     await options.register();
   } catch (cause) {
-    await releaseOwnedTransaction(held);
+    // Not a rollback. The controllers mutate the OS in more than one step
+    // (write + `bootstrap` + `kickstart`; `/Create` + `/Run`), and a throw
+    // from a later step leaves the earlier ones in place - so the OS may now
+    // describe THIS registration while the live record still describes the
+    // previous one. Neither can be preferred over the OS definition, and the
+    // stale marker is what sends the host there.
+    logger.debug("OS registration threw; marking the cached invocation stale", {
+      environment: options.environment,
+      label: options.serviceLabel,
+      errorName: errorFromUnknown(cause).name,
+    });
+    await markStaleAndUnpreferLive(held);
     throw cause;
   }
 
@@ -366,9 +406,19 @@ export async function runServiceRegistrationWithInvocationRecord(
         errorName: errorFromUnknown(cause).name,
       },
     );
+    // The record is committed and correct, so it stays. What is missing is
+    // the generation, and without it a host that latched an answer under
+    // the OLD generation would serve it again the moment this owner's
+    // transaction marker is gone (an abandoned unique marker is reclaimed by
+    // the next CLI transaction, and nothing else in the key would have
+    // moved). The stale marker is the durable substitute: it outlives this
+    // process, bypasses the record on every read, and is cleared only by a
+    // later confirmed transaction - which writes the generation this one
+    // could not.
+    await markStaleKeepLive(held);
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
-      message: `service '${options.serviceLabel}' was registered, but the lifecycle generation could not be written`,
+      message: `service '${options.serviceLabel}' was registered, but the lifecycle generation could not be written; the cached invocation was marked stale so the host re-reads the OS registration`,
       details: { label: options.serviceLabel, phase: "lifecycle" },
       exitCode: 1,
     });
@@ -379,8 +429,25 @@ export async function runServiceRegistrationWithInvocationRecord(
     options.serviceLabel,
     "install",
   );
+  // Clear an earlier commit failure's stale marker BEFORE releasing, and
+  // report a marker that survives: the record just committed is authoritative,
+  // and a stale marker beside it keeps every host read on the OS definition
+  // until some later CLI transaction succeeds at this step. Silence here would
+  // report a registration as clean while npm/nvm maintenance stays degraded.
+  const staleOutcome = await removeStaleMarkerIfOwn(held);
   await releaseOwnedTransaction(held);
-  await removeBestEffort(held.stalePath);
+  if (staleOutcome === "failed" || staleOutcome === "foreign") {
+    throw cliError({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      message: `service '${options.serviceLabel}' was registered and its CLI invocation record committed, but an earlier stale marker could not be cleared (${staleOutcome}); the host re-reads the OS registration until a later service command clears it`,
+      details: {
+        label: options.serviceLabel,
+        phase: "stale-clear",
+        outcome: staleOutcome,
+      },
+      exitCode: 1,
+    });
+  }
   logger.debug("CLI invocation record committed after service registration", {
     environment: options.environment,
     label: options.serviceLabel,
@@ -433,8 +500,35 @@ export async function runServiceUninstallWithInvocationRecord(
     options.serviceLabel,
     "uninstall",
   );
-  await removeBestEffort(held.livePath);
-  await removeBestEffort(held.stalePath);
+  // Strict, not best-effort: `matching` above is the compare half of
+  // compare-then-unlink, and this is the unlink. A record that survives its
+  // own uninstall - a sharing violation on Windows is the realistic case -
+  // would be preferred again by the next host read, so it is marked stale
+  // (durable, bypasses it) and the uninstall is reported as failed rather
+  // than clean. `absent` unlinks nothing: whatever is at the name is not a
+  // record of this label, and the host's reader does not prefer it either.
+  try {
+    if (matching === "matching") {
+      await rm(held.livePath, { force: true });
+    }
+  } catch (cause) {
+    logger.debug("CLI invocation record could not be removed after uninstall", {
+      environment: options.environment,
+      label: options.serviceLabel,
+      errorName: errorFromUnknown(cause).name,
+    });
+    await markStaleKeepLive(held);
+    throw cliError({
+      code: CLI_ERROR_CODES.SERVICE_UNINSTALL_FAILED,
+      message: `service '${options.serviceLabel}' was uninstalled, but its CLI invocation record could not be removed; it was marked stale so it cannot be preferred`,
+      details: { label: options.serviceLabel, phase: "record-remove" },
+      exitCode: 1,
+    });
+  }
+  // Best effort HERE, unlike after a registration: with no record left, a
+  // stale marker that survives bypasses an empty cache, and the next
+  // registration's strict clear reports it if it is still there.
+  await removeStaleMarkerIfOwn(held);
   try {
     await assertStateDirUnchanged(
       options.hostHomeDir,
@@ -452,9 +546,14 @@ export async function runServiceUninstallWithInvocationRecord(
         errorName: errorFromUnknown(cause).name,
       },
     );
+    // Same durable substitute as the registration path: a host that latched
+    // under the old generation must not replay the pre-uninstall answer once
+    // this owner's marker is reclaimed, and the stale marker is what survives
+    // to stop it.
+    await markStaleKeepLive(held);
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_UNINSTALL_FAILED,
-      message: `service '${options.serviceLabel}' was uninstalled, but the lifecycle generation could not be written`,
+      message: `service '${options.serviceLabel}' was uninstalled, but the lifecycle generation could not be written; a stale marker was left so the cached invocation cannot be replayed`,
       details: { label: options.serviceLabel, phase: "lifecycle" },
       exitCode: 1,
     });
@@ -507,6 +606,12 @@ async function buildValidatedRegistrationRecord(input: {
         "a file-like leading argument is not a regular file",
       );
     }
+    // The FIRST argument, not the first absolute one after any flags. The
+    // record is a closed shape and `<interpreter> <absolute script>` is the
+    // only interpreter form any emitter writes; a vector whose script this
+    // CLI would have to guess at (`node --enable-source-maps /x.js`) is
+    // declined rather than re-interpreted, because a wrong guess here is a
+    // wrong program handed to `spawn` on every later maintenance call.
     if (index === 0 && isNodeFamilyCommand(command) && !isAbsolute(arg)) {
       throw invalidInvocation(
         input.serviceLabel,
@@ -932,8 +1037,12 @@ async function writeConfirmedLifecycle(
   }
 }
 
-async function markStaleAndUnpreferLive(held: HeldTransaction): Promise<void> {
-  let staleWritten = false;
+/**
+ * Write this label's stale marker. `false` when it could not be written, in
+ * which case the caller keeps its transaction marker: presence of either is a
+ * cache bypass, and marker I/O must never hide the failure being reported.
+ */
+async function writeStaleMarker(held: HeldTransaction): Promise<boolean> {
   try {
     await assertStateDirUnchanged(
       held.hostHomeDir,
@@ -943,22 +1052,94 @@ async function markStaleAndUnpreferLive(held: HeldTransaction): Promise<void> {
     );
     const temporary = `${held.stalePath}.${held.token}.tmp`;
     try {
-      await writeExclusiveAuthorityFile(temporary, STALE_MARKER_BODY);
+      await writeExclusiveAuthorityFile(
+        temporary,
+        serializeCliInvocationStaleMarker({ serviceLabel: held.serviceLabel }),
+      );
       await rename(temporary, held.stalePath);
-      staleWritten = true;
+      return true;
     } catch (cause) {
       await removeBestEffort(temporary);
       throw cause;
     }
   } catch {
-    // If the stale file cannot be written, keep the transaction marker:
-    // presence of either marker is cache bypass. Never let marker I/O hide
-    // the commit failure.
+    return false;
   }
-  await removeBestEffort(held.livePath);
+}
+
+/**
+ * Commit failure and OS-throw path: the live record may describe a
+ * registration that no longer exists, so it is unpreferred (stale marker) and
+ * removed - after its label matched, like every other removal of it.
+ */
+async function markStaleAndUnpreferLive(held: HeldTransaction): Promise<void> {
+  const staleWritten = await writeStaleMarker(held);
+  if (
+    (await liveRecordMatchesLabel(held.livePath, held.serviceLabel)) ===
+    "matching"
+  ) {
+    await removeBestEffort(held.livePath);
+  }
   await removeBestEffort(held.stagingPath);
   if (staleWritten) {
     await unlinkIfUnchanged(held.txnPath, held.rawMarker);
+  }
+}
+
+/**
+ * Lifecycle-write and record-removal failure path: what is on disk is
+ * correct but must not be preferred until a later transaction confirms it.
+ */
+async function markStaleKeepLive(held: HeldTransaction): Promise<void> {
+  const staleWritten = await writeStaleMarker(held);
+  await removeBestEffort(held.stagingPath);
+  if (staleWritten) {
+    await unlinkIfUnchanged(held.txnPath, held.rawMarker);
+  }
+}
+
+type StaleMarkerRemoval = "removed" | "absent" | "foreign" | "failed";
+
+/**
+ * Compare-then-unlink of `cli-invocation.stale`.
+ *
+ * The compare is on the marker's label through an `O_NOFOLLOW` read: a marker
+ * for another label - which, since a label has exactly one host home, means
+ * the state directory entry was re-pointed at another environment's
+ * directory - is `foreign` and left alone; a legacy marker without a label is
+ * anyone's. `failed` is a marker of ours that `unlink` refused (a Windows
+ * sharing violation is the realistic case), and it is distinct from `foreign`
+ * because the two want different diagnoses.
+ *
+ * A symlink, FIFO or directory at the name is `absent`, not `failed`: the
+ * host's marker reader opens `O_NOFOLLOW` and skips anything that is not a
+ * regular file, so such an entry bypasses nothing and there is nothing to
+ * clear. Reporting it would hand anyone who can plant a link in this
+ * directory a way to fail every `service install` while changing nothing.
+ */
+async function removeStaleMarkerIfOwn(
+  held: HeldTransaction,
+): Promise<StaleMarkerRemoval> {
+  const read = await readAuthorityUtf8(held.stalePath);
+  if (read === null) return "absent";
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(read.raw);
+  } catch {
+    return "foreign";
+  }
+  const marker = parseCliInvocationStaleMarker(parsed);
+  if (
+    marker === null ||
+    !cliInvocationStaleMarkerRemovableBy(marker, held.serviceLabel)
+  ) {
+    return "foreign";
+  }
+  try {
+    await rm(held.stalePath, { force: true });
+    return "removed";
+  } catch {
+    return "failed";
   }
 }
 
