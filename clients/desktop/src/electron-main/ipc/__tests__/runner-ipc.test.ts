@@ -577,7 +577,9 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.acknowledgeQuitRequest,
         RunnerHostInvoke.respondToQuitRequest,
         RunnerHostInvoke.freshUnsyncedSnapshotResponse,
-        RunnerHostInvoke.finalBrowserStateCaptured,
+        // H10: main captures the final browser state directly off the
+        // `BrowserSessionsRegistry` on quit - there is no renderer round
+        // trip left to ack, so this channel is gone.
         RunnerHostInvoke.unsyncableWorkAcrossWindows,
         RunnerHostInvoke.appUpdateCheck,
         RunnerHostInvoke.appUpdateDownload,
@@ -730,13 +732,17 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.zoomStepIn,
         RunnerHostInvoke.zoomStepOut,
         RunnerHostInvoke.zoomReset,
-        RunnerHostInvoke.browserViewEnsureTab,
-        RunnerHostInvoke.browserViewAcceptTab,
+        // H10: the jar/CDP plane moved into main's own `browser-sessions`
+        // owner. The renderer no longer ensures/accepts/releases native tabs,
+        // dispatches CDP, captures/applies profiles, wraps store keys or
+        // attests desktop identity directly - it opens/closes/sends onto the
+        // `browser.sessions` stream and main drives all of that itself.
+        RunnerHostInvoke.browserViewSessionsOpen,
+        RunnerHostInvoke.browserViewSessionsClose,
+        RunnerHostInvoke.browserViewSessionsSend,
         RunnerHostInvoke.browserViewAttachSurface,
         RunnerHostInvoke.browserViewDetachSurface,
-        RunnerHostInvoke.browserViewReleaseTab,
         RunnerHostInvoke.browserViewControlElectronTab,
-        RunnerHostInvoke.browserViewElectronTabCdpDispatch,
         RunnerHostInvoke.browserViewUpdateBounds,
         RunnerHostInvoke.browserViewOverlayPaintAck,
         RunnerHostInvoke.browserViewSetReservedChords,
@@ -752,24 +758,16 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.browserViewSetAnnotationTargetChatLabel,
         RunnerHostInvoke.browserViewAnnotationAttachResult,
         RunnerHostInvoke.browserViewGetDebugSnapshot,
-        RunnerHostInvoke.browserViewPrimaryProfileCapture,
         // Keychain refactor tickets 07 and 08: the tile-menu clear-site and
         // the whole-jar forget. The host-driven eviction of one site went with
         // the `primaryProfileEvict` frame (universal-sign-in ticket 08).
         RunnerHostInvoke.browserViewClearSite,
         RunnerHostInvoke.browserViewForgetLogins,
-        // Universal sign-in ticket 03: the host->jar write direction.
-        RunnerHostInvoke.browserViewApplyObservedProfile,
-        // Universal sign-in ticket 04: the forget ledger's read, ack and
-        // per-connection release.
-        RunnerHostInvoke.browserViewForgetLedgerRead,
-        RunnerHostInvoke.browserViewForgetLedgerAck,
-        RunnerHostInvoke.browserViewForgetLedgerRelease,
         RunnerHostInvoke.browserViewSaveLoginsGet,
         RunnerHostInvoke.browserViewSaveLoginsSet,
-        RunnerHostInvoke.browserViewStoreKeyWrap,
-        RunnerHostInvoke.browserViewStoreKeyUnwrap,
-        RunnerHostInvoke.browserViewDesktopIdentityAttest,
+        // H10: "Clear" on one Settings > Browser row. Main confirms and sends
+        // the `clearSite` frames itself.
+        RunnerHostInvoke.browserViewClearSavedLoginSite,
         RunnerHostInvoke.pipCaptureStart,
         RunnerHostInvoke.pipCaptureStop,
         // Selection authority (D16 / P1.1), plus P1.3's fleet-refresh edge.
@@ -3116,379 +3114,15 @@ describe("RunnerIpcBridge", () => {
     bridge.dispose();
   });
 
-  it("waits beyond 2.5 seconds for the matching final browser capture acknowledgement from every window", async () => {
-    vi.useFakeTimers();
-    try {
-      const mod = await import("../register-runner-ipc");
-      const { BrowserViewManager } =
-        await import("../../browser-view/browser-view-manager");
-      const hasNativeTabs = vi
-        .spyOn(BrowserViewManager.prototype, "hasNativeTabsForWindow")
-        .mockReturnValue(true);
-      const registry = new FakeWindowRegistry();
-      const windowA = buildWindow();
-      const windowB = buildWindow();
-      registry.add("window-a", 101, windowA);
-      registry.add("window-b", 202, windowB);
-      const bridge = new mod.RunnerIpcBridge({
-        host: new FakeHost(),
-        hostController: new FakeHostController(),
-        authnBaseUrl: "http://localhost:5005",
-        authRedirectUri: null,
-        tray: null,
-        zoomController: undefined,
-        authTokenStore: undefined,
-        windowRegistry: registry,
-        ownership: new EpicWindowOwnership(null),
-        perWindowState: new PerWindowState(null),
-        authSession: new DesktopAuthSession(),
-        quitState: undefined,
-      });
-      bridge.install();
-      bridge.appLifecycleReadyWindowIds.add("window-a");
-      bridge.appLifecycleReadyWindowIds.add("window-b");
-      windowA.sentMessages.length = 0;
-      windowB.sentMessages.length = 0;
-
-      try {
-        const drain = bridge.captureFinalBrowserState();
-        await vi.advanceTimersByTimeAsync(3_000);
-
-        const requestA = windowA.sentMessages.find(
-          (message) =>
-            message.channel === RunnerHostEvent.captureFinalBrowserState,
-        );
-        const requestB = windowB.sentMessages.find(
-          (message) =>
-            message.channel === RunnerHostEvent.captureFinalBrowserState,
-        );
-        const responseHandler = ipcMainState.handlers.get(
-          RunnerHostInvoke.finalBrowserStateCaptured,
-        );
-        if (requestA === undefined || requestB === undefined) {
-          throw new Error("final browser capture requests missing");
-        }
-        if (responseHandler === undefined) {
-          throw new Error("final browser capture response handler missing");
-        }
-        const requestIdA = (requestA.payload as { readonly requestId: string })
-          .requestId;
-        const requestIdB = (requestB.payload as { readonly requestId: string })
-          .requestId;
-
-        const pending = Symbol("pending");
-        await expect(
-          Promise.race([drain, Promise.resolve(pending)]),
-        ).resolves.toBe(pending);
-
-        await responseHandler(sender(202), { requestId: requestIdA });
-        await expect(
-          Promise.race([drain, Promise.resolve(pending)]),
-        ).resolves.toBe(pending);
-
-        await responseHandler(sender(101), { requestId: requestIdA });
-        await expect(
-          Promise.race([drain, Promise.resolve(pending)]),
-        ).resolves.toBe(pending);
-
-        await responseHandler(sender(202), { requestId: requestIdB });
-        await expect(drain).resolves.toBeUndefined();
-      } finally {
-        hasNativeTabs.mockRestore();
-        bridge.dispose();
-      }
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("keeps waiting for a reachable window's final browser capture after an undeliverable sibling", async () => {
-    vi.useFakeTimers();
-    try {
-      const mod = await import("../register-runner-ipc");
-      const { BrowserViewManager } =
-        await import("../../browser-view/browser-view-manager");
-      const hasNativeTabs = vi
-        .spyOn(BrowserViewManager.prototype, "hasNativeTabsForWindow")
-        .mockReturnValue(true);
-      const registry = new FakeWindowRegistry();
-      // The dead window is registered FIRST so its synchronous send failure is
-      // the first settled outcome of the fan-out.
-      const deadWindow = buildDestroyedWindow();
-      const liveWindow = buildWindow();
-      registry.add("window-a", 101, deadWindow);
-      registry.add("window-b", 202, liveWindow);
-      const bridge = new mod.RunnerIpcBridge({
-        host: new FakeHost(),
-        hostController: new FakeHostController(),
-        authnBaseUrl: "http://localhost:5005",
-        authRedirectUri: null,
-        tray: null,
-        zoomController: undefined,
-        authTokenStore: undefined,
-        windowRegistry: registry,
-        ownership: new EpicWindowOwnership(null),
-        perWindowState: new PerWindowState(null),
-        authSession: new DesktopAuthSession(),
-        quitState: undefined,
-      });
-      bridge.install();
-      bridge.appLifecycleReadyWindowIds.add("window-a");
-      bridge.appLifecycleReadyWindowIds.add("window-b");
-      liveWindow.sentMessages.length = 0;
-
-      try {
-        const drain = bridge.captureFinalBrowserState();
-        const settled = { value: false };
-        void drain.then(
-          () => {
-            settled.value = true;
-          },
-          () => {
-            settled.value = true;
-          },
-        );
-        await vi.advanceTimersByTimeAsync(0);
-
-        const request = liveWindow.sentMessages.find(
-          (message) =>
-            message.channel === RunnerHostEvent.captureFinalBrowserState,
-        );
-        const responseHandler = ipcMainState.handlers.get(
-          RunnerHostInvoke.finalBrowserStateCaptured,
-        );
-        if (request === undefined) {
-          throw new Error("final browser capture request missing");
-        }
-        if (responseHandler === undefined) {
-          throw new Error("final browser capture response handler missing");
-        }
-        // The undeliverable window must not end the fan-out: `window-b` has not
-        // reported yet, so quit is still blocked.
-        expect(settled.value).toBe(false);
-
-        await responseHandler(sender(202), {
-          requestId: (request.payload as { readonly requestId: string })
-            .requestId,
-        });
-        // Only now does the undeliverable window's failure surface.
-        await expect(drain).rejects.toThrow(
-          "Final browser capture request could not be delivered to window window-a",
-        );
-      } finally {
-        hasNativeTabs.mockRestore();
-        bridge.dispose();
-      }
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("resolves the final browser capture after the timeout when the renderer never acknowledges", async () => {
-    vi.useFakeTimers();
-    try {
-      const mod = await import("../register-runner-ipc");
-      const { FINAL_BROWSER_CAPTURE_TIMEOUT_MS } =
-        await import("../runner-ipc-bridge");
-      const { BrowserViewManager } =
-        await import("../../browser-view/browser-view-manager");
-      const hasNativeTabs = vi
-        .spyOn(BrowserViewManager.prototype, "hasNativeTabsForWindow")
-        .mockReturnValue(true);
-      const registry = new FakeWindowRegistry();
-      const window = buildWindow();
-      registry.add("window-a", 101, window);
-      const bridge = new mod.RunnerIpcBridge({
-        host: new FakeHost(),
-        hostController: new FakeHostController(),
-        authnBaseUrl: "http://localhost:5005",
-        authRedirectUri: null,
-        tray: null,
-        zoomController: undefined,
-        authTokenStore: undefined,
-        windowRegistry: registry,
-        ownership: new EpicWindowOwnership(null),
-        perWindowState: new PerWindowState(null),
-        authSession: new DesktopAuthSession(),
-        quitState: undefined,
-      });
-      bridge.install();
-      bridge.appLifecycleReadyWindowIds.add("window-a");
-      window.sentMessages.length = 0;
-
-      const drain = bridge.captureFinalBrowserState();
-      await vi.advanceTimersByTimeAsync(3_000);
-      expect(
-        window.sentMessages.some(
-          (message) =>
-            message.channel === RunnerHostEvent.captureFinalBrowserState,
-        ),
-      ).toBe(true);
-
-      const pending = Symbol("pending");
-      await expect(
-        Promise.race([drain, Promise.resolve(pending)]),
-      ).resolves.toBe(pending);
-
-      await vi.advanceTimersByTimeAsync(
-        FINAL_BROWSER_CAPTURE_TIMEOUT_MS - 3_000,
-      );
-
-      await expect(drain).resolves.toBeUndefined();
-      hasNativeTabs.mockRestore();
-      bridge.dispose();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("closes a window's native sessions only after its final capture is acknowledged", async () => {
-    const mod = await import("../register-runner-ipc");
-    const { BrowserViewManager } =
-      await import("../../browser-view/browser-view-manager");
-    const calls: string[] = [];
-    const hasNativeTabs = vi
-      .spyOn(BrowserViewManager.prototype, "hasNativeTabsForWindow")
-      .mockReturnValue(true);
-    const closeForWindow = vi
-      .spyOn(BrowserViewManager.prototype, "closeNativeSessionsForWindow")
-      .mockImplementation(() => {
-        calls.push("close");
-        return Promise.resolve();
-      });
-    const registry = new FakeWindowRegistry();
-    const window = buildWindow();
-    registry.add("window-a", 101, window);
-    const bridge = new mod.RunnerIpcBridge({
-      host: new FakeHost(),
-      hostController: new FakeHostController(),
-      authnBaseUrl: "http://localhost:5005",
-      authRedirectUri: null,
-      tray: null,
-      zoomController: undefined,
-      authTokenStore: undefined,
-      windowRegistry: registry,
-      ownership: new EpicWindowOwnership(null),
-      perWindowState: new PerWindowState(null),
-      authSession: new DesktopAuthSession(),
-      quitState: undefined,
-    });
-    bridge.install();
-    bridge.appLifecycleReadyWindowIds.add("window-a");
-    window.sentMessages.length = 0;
-
-    const close = bridge.prepareBrowserWindowClose("window-a");
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    // Nothing is torn down until the renderer reports its final capture.
-    expect(calls).toEqual([]);
-    const request = window.sentMessages.find(
-      (message) => message.channel === RunnerHostEvent.captureFinalBrowserState,
-    );
-    const responseHandler = ipcMainState.handlers.get(
-      RunnerHostInvoke.finalBrowserStateCaptured,
-    );
-    if (request === undefined || responseHandler === undefined) {
-      throw new Error("final browser capture request missing");
-    }
-    await responseHandler(sender(101), {
-      requestId: (request.payload as { readonly requestId: string }).requestId,
-    });
-
-    await expect(close).resolves.toBeUndefined();
-    expect(calls).toEqual(["close"]);
-    expect(bridge.needsFinalBrowserCaptureForWindow("window-a")).toBe(true);
-    bridge.markRendererUnavailable("window-a");
-    expect(bridge.needsFinalBrowserCaptureForWindow("window-a")).toBe(false);
-    closeForWindow.mockRestore();
-    hasNativeTabs.mockRestore();
-    bridge.dispose();
-  });
-
-  it("rejects a final browser capture when its renderer window closes before replying", async () => {
-    const mod = await import("../register-runner-ipc");
-    const { BrowserViewManager } =
-      await import("../../browser-view/browser-view-manager");
-    const hasNativeTabs = vi
-      .spyOn(BrowserViewManager.prototype, "hasNativeTabsForWindow")
-      .mockReturnValue(true);
-    const registry = new FakeWindowRegistry();
-    const window = buildWindow();
-    registry.add("window-a", 101, window);
-    const bridge = new mod.RunnerIpcBridge({
-      host: new FakeHost(),
-      hostController: new FakeHostController(),
-      authnBaseUrl: "http://localhost:5005",
-      authRedirectUri: null,
-      tray: null,
-      zoomController: undefined,
-      authTokenStore: undefined,
-      windowRegistry: registry,
-      ownership: new EpicWindowOwnership(null),
-      perWindowState: new PerWindowState(null),
-      authSession: new DesktopAuthSession(),
-      quitState: undefined,
-    });
-    bridge.install();
-    bridge.appLifecycleReadyWindowIds.add("window-a");
-    window.sentMessages.length = 0;
-
-    const drain = bridge.captureFinalBrowserState();
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    expect(
-      window.sentMessages.some(
-        (message) =>
-          message.channel === RunnerHostEvent.captureFinalBrowserState,
-      ),
-    ).toBe(true);
-
-    await registry.closeById("window-a");
-
-    await expect(drain).rejects.toThrow(
-      "Window closed before reporting its final browser capture",
-    );
-    hasNativeTabs.mockRestore();
-    bridge.dispose();
-  });
-
-  it("rejects an outstanding final browser capture when the IPC bridge is disposed", async () => {
-    const mod = await import("../register-runner-ipc");
-    const { BrowserViewManager } =
-      await import("../../browser-view/browser-view-manager");
-    const hasNativeTabs = vi
-      .spyOn(BrowserViewManager.prototype, "hasNativeTabsForWindow")
-      .mockReturnValue(true);
-    const window = buildWindow();
-    const bridge = new mod.RunnerIpcBridge({
-      host: new FakeHost(),
-      hostController: new FakeHostController(),
-      authnBaseUrl: "http://localhost:5005",
-      authRedirectUri: null,
-      tray: null,
-      zoomController: undefined,
-      authTokenStore: undefined,
-      window,
-    });
-    bridge.install();
-    bridge.appLifecycleReadyWindowIds.add("primary");
-    window.sentMessages.length = 0;
-
-    const drain = bridge.captureFinalBrowserState();
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    expect(
-      window.sentMessages.some(
-        (message) =>
-          message.channel === RunnerHostEvent.captureFinalBrowserState,
-      ),
-    ).toBe(true);
-
-    bridge.dispose();
-
-    await expect(drain).rejects.toThrow(
-      "Runner IPC bridge disposed before the final browser capture resolved",
-    );
-    hasNativeTabs.mockRestore();
-  });
-
+  // H10: main now captures the final browser state directly off the
+  // `BrowserSessionsRegistry` via `captureFinalPrimaryProfiles` - there is
+  // no renderer round trip, ack channel, or timeout left to drive from
+  // this bridge. The six arms that lived here (multi-window fan-out wait,
+  // undeliverable-sibling tolerance, ack timeout fallback,
+  // capture-then-close ordering, window-closed rejection, and
+  // dispose-time rejection) all existed only to pin that renderer round
+  // trip and were deleted rather than adapted; the `browser-sessions`
+  // owner's own suites cover the new direct-capture path.
   it("falls back to the cached ambient snapshot after the fresh-query timeout", async () => {
     vi.useFakeTimers();
     try {

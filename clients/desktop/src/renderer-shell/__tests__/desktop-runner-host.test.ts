@@ -532,22 +532,9 @@ function buildFakeBridge(
       onChange: (_handler) => ({ dispose: () => undefined }),
     },
     browserView: {
-      ensureTab: async (input) => ({
-        hostId: input.hostId,
-        sessionId: input.sessionId,
-        tabId: input.tabId,
-        registrationId: "registration-1",
-      }),
-      acceptTab: async () => undefined,
       attachSurface: async () => undefined,
       detachSurface: async () => undefined,
-      releaseTab: async () => true,
       controlElectronTab: async () => undefined,
-      dispatchElectronTabCdp: async () => ({
-        kind: "cdpGetFrameTree" as const,
-        ok: true as const,
-        frames: [],
-      }),
       setReservedChords: async () => undefined,
       overlayPaintAck: async () => undefined,
       updateBounds: async () => undefined,
@@ -573,38 +560,18 @@ function buildFakeBridge(
       setAnnotationTargetChatLabel: async () => undefined,
       occludeForOverlay: async () => ({ snapshots: [], restoredTiles: [] }),
       releaseOverlay: async () => ({ restoredTiles: [] }),
-      capturePrimaryProfile: async () => ({
-        status: "captured" as const,
-        storageState: { cookies: [], origins: [] },
-        reason: null,
-      }),
       clearSite: async () => undefined,
-      applyObservedProfile: async () => undefined,
+      // H10: the jar/CDP plane moved into main's own `browser-sessions`
+      // owner. This shell test has no live stream to open - the three
+      // methods below are called and simply no-op.
+      openSessionsStream: async () => undefined,
+      closeSessionsStream: async () => undefined,
+      sendSessionsFrame: async () => undefined,
+      onSessionsStreamEvent: (_handler) => ({ dispose: () => undefined }),
       getSaveLogins: async () => true,
       setSaveLogins: async (enabled) => enabled,
-      // This shell test has no OS keystore; the store-key handshake refuses
-      // the same way a machine without one does.
-      wrapStoreKey: async () => ({
-        ok: false as const,
-        reason: "no keystore in this test bridge",
-      }),
-      unwrapStoreKey: async () => ({
-        ok: false as const,
-        reason: "no keystore in this test bridge",
-      }),
-      // ...and with no keystore there is no identity to attest with either.
-      attestDesktopIdentity: async () => null,
       forgetLogins: async () => true,
-      // An empty ledger: nothing forgotten, so nothing is refused here.
-      readForgetLedger: async () => ({
-        forgetAllAt: null,
-        domains: [],
-        revision: 0,
-      }),
-      ackForgetLedger: async () => undefined,
-      releaseForgetLedgerConnection: async () => undefined,
-      onForgetLedgerChanged: (_handler) => ({ dispose: () => undefined }),
-      onPrimaryProfileDelta: (_handler) => ({ dispose: () => undefined }),
+      clearSavedLoginSite: async () => true,
       onFindChange: (_handler) => ({ dispose: () => undefined }),
       onDownloadChange: (_handler) => ({ dispose: () => undefined }),
       onCertificateError: (_handler) => ({ dispose: () => undefined }),

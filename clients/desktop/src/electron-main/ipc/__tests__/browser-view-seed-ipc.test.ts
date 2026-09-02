@@ -3,7 +3,7 @@ import type {
   BrowserStorageCookie,
   BrowserStorageState,
 } from "@traycer/protocol/host/browser/contracts";
-import type { BrowserViewEnsureTab } from "@traycer-clients/shared/platform/browser-view";
+import type { BrowserViewEnsureTab } from "../../browser-view/browser-view-port";
 
 /**
  * The `createElectronTab` storage seed, through the same lock as the observed
@@ -191,6 +191,23 @@ function makeBridge() {
     fanOut: vi.fn(),
     markRendererUnavailable: vi.fn(),
     resolveSenderWindowId: vi.fn(() => "window-1"),
+    // The jar-plane registry is built during registration (H10), so a bridge
+    // double now has to answer for the host snapshot it subscribes to and the
+    // auth session its bearer comes from. Nothing here dials: no stream is
+    // opened unless a renderer asks for one.
+    options: {
+      authnBaseUrl: "https://authn.test",
+      host: {
+        getSnapshot: () => null,
+        on: vi.fn(),
+        off: vi.fn(),
+      },
+    },
+    authSession: {
+      get: () => ({ status: "signed-out", token: null, profile: null }),
+      on: vi.fn(),
+      off: vi.fn(),
+    },
   };
 }
 

@@ -1,11 +1,7 @@
 import type {
-  BrowserDesktopIdentityAttestation,
-  BrowserForgetLedger,
-  BrowserForgetLedgerAckInput,
-  BrowserForgetLedgerChange,
-  BrowserPrimaryProfileDelta,
-  BrowserStoreKeyUnwrapResult,
-  BrowserStoreKeyWrapResult,
+  BrowserSessionsStreamEventEnvelope,
+  BrowserSessionsStreamKey,
+  BrowserSessionsStreamSend,
   BrowserViewBridge,
   BrowserViewCapturePageResult,
   BrowserViewCertificateErrorChange,
@@ -41,6 +37,16 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
    * there to catch it.
    */
   private nextSetSaveLoginsResult: (() => Promise<boolean>) | null = null;
+
+  readonly openSessionsStreamCalls: BrowserSessionsStreamKey[] = [];
+  readonly closeSessionsStreamCalls: BrowserSessionsStreamKey[] = [];
+  readonly sendSessionsFrameCalls: BrowserSessionsStreamSend[] = [];
+  readonly clearSavedLoginSiteCalls: string[] = [];
+
+  private sessionsStreamEventHandler:
+    | ((envelope: BrowserSessionsStreamEventEnvelope) => void)
+    | null = null;
+  private nextClearSavedLoginSiteResult: (() => Promise<boolean>) | null = null;
 
   constructor(input?: { readonly saveLogins?: boolean }) {
     this.saveLoginsValue = input?.saveLogins ?? true;
@@ -157,54 +163,8 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
     this.nextSetSaveLoginsResult = result;
   }
 
-  wrapStoreKey(rawKey: string): Promise<BrowserStoreKeyWrapResult> {
-    return Promise.resolve({ ok: true, wrappedKey: rawKey });
-  }
-
-  unwrapStoreKey(wrappedKey: string): Promise<BrowserStoreKeyUnwrapResult> {
-    return Promise.resolve({ ok: true, rawKey: wrappedKey });
-  }
-
-  attestDesktopIdentity(_input: {
-    readonly hostId: string;
-    readonly nonce: string;
-  }): Promise<BrowserDesktopIdentityAttestation | null> {
-    return Promise.resolve({
-      publicKey: "cHVibGlj",
-      keystoreId: "fake-keystore",
-      signature: "c2ln",
-    });
-  }
-
   forgetLogins(): Promise<boolean> {
     return Promise.resolve(true);
-  }
-
-  /** An empty ledger: nothing forgotten, so no observation is refused. */
-  readForgetLedger(_hostId: string): Promise<BrowserForgetLedger> {
-    return Promise.resolve({ forgetAllAt: null, domains: [], revision: 0 });
-  }
-
-  ackForgetLedger(_input: BrowserForgetLedgerAckInput): Promise<void> {
-    return Promise.resolve();
-  }
-
-  releaseForgetLedgerConnection(_connectionId: string): Promise<void> {
-    return Promise.resolve();
-  }
-
-  onForgetLedgerChanged(
-    _handler: (change: BrowserForgetLedgerChange) => void,
-  ): {
-    dispose: () => void;
-  } {
-    return { dispose: () => undefined };
-  }
-
-  onPrimaryProfileDelta(
-    _handler: (delta: BrowserPrimaryProfileDelta) => void,
-  ): { dispose: () => void } {
-    return { dispose: () => undefined };
   }
 
   overlayPaintAck(_overlayId: string): Promise<void> {
@@ -215,16 +175,52 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
     return Promise.resolve();
   }
 
-  applyObservedProfile(): Promise<void> {
+  openSessionsStream(input: BrowserSessionsStreamKey): Promise<void> {
+    this.openSessionsStreamCalls.push(input);
     return Promise.resolve();
   }
 
-  capturePrimaryProfile() {
-    return Promise.resolve({
-      status: "unavailable" as const,
-      storageState: null,
-      reason: "test",
-    });
+  closeSessionsStream(key: BrowserSessionsStreamKey): Promise<void> {
+    this.closeSessionsStreamCalls.push(key);
+    return Promise.resolve();
+  }
+
+  sendSessionsFrame(input: BrowserSessionsStreamSend): Promise<void> {
+    this.sendSessionsFrameCalls.push(input);
+    return Promise.resolve();
+  }
+
+  onSessionsStreamEvent(
+    handler: (envelope: BrowserSessionsStreamEventEnvelope) => void,
+  ): { dispose: () => void } {
+    this.sessionsStreamEventHandler = handler;
+    return {
+      dispose: () => {
+        if (this.sessionsStreamEventHandler === handler) {
+          this.sessionsStreamEventHandler = null;
+        }
+      },
+    };
+  }
+
+  /** Drives whatever suite is holding the coordinator's subscription. */
+  emitSessionsStreamEvent(envelope: BrowserSessionsStreamEventEnvelope): void {
+    this.sessionsStreamEventHandler?.(envelope);
+  }
+
+  clearSavedLoginSite(domain: string): Promise<boolean> {
+    this.clearSavedLoginSiteCalls.push(domain);
+    const forced = this.nextClearSavedLoginSiteResult;
+    if (forced !== null) {
+      this.nextClearSavedLoginSiteResult = null;
+      return forced();
+    }
+    return Promise.resolve(true);
+  }
+
+  /** Forces the NEXT `clearSavedLoginSite` call to settle with this instead. */
+  setNextClearSavedLoginSiteResult(result: () => Promise<boolean>): void {
+    this.nextClearSavedLoginSiteResult = result;
   }
 
   onFindChange(_handler: (change: BrowserViewFindChange) => void): {
@@ -269,19 +265,6 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
     return { dispose: () => undefined };
   }
 
-  ensureTab() {
-    return Promise.resolve({
-      hostId: "host-test",
-      sessionId: "session-test",
-      tabId: "tab-test",
-      registrationId: "registration-test",
-    });
-  }
-
-  acceptTab(): Promise<void> {
-    return Promise.resolve();
-  }
-
   attachSurface(): Promise<void> {
     return Promise.resolve();
   }
@@ -290,20 +273,8 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
     return Promise.resolve();
   }
 
-  releaseTab(): Promise<boolean> {
-    return Promise.resolve(true);
-  }
-
   controlElectronTab(): Promise<void> {
     return Promise.resolve();
-  }
-
-  dispatchElectronTabCdp() {
-    return Promise.resolve({
-      kind: "cdpGetFrameTree" as const,
-      ok: true as const,
-      frames: [],
-    });
   }
 
   startPipCapture(): Promise<void> {

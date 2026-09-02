@@ -1,6 +1,7 @@
 import {
   BrowserWindow,
   WebContentsView,
+  app,
   dialog,
   type BrowserWindowConstructorOptions,
   type IpcMainInvokeEvent,
@@ -50,10 +51,7 @@ import {
   unwrapStoreKey,
   wrapStoreKey,
 } from "../browser-view/storage/browser-saved-logins";
-import {
-  attestDesktopIdentity,
-  type DesktopIdentityAttestation,
-} from "../browser-view/storage/browser-desktop-identity";
+import { attestDesktopIdentity } from "../browser-view/storage/browser-desktop-identity";
 import {
   BrowserPrimaryProfileSnapshotCoordinator,
   captureBrowserOriginLocalStorage,
@@ -86,10 +84,13 @@ import {
 } from "../browser-view/storage/browser-forget-ledger";
 import { trustBrowserCertificate } from "../app/cert-trust";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
-import type {
-  BrowserStoreKeyUnwrapResult,
-  BrowserStoreKeyWrapResult,
-} from "@traycer-clients/shared/platform/browser-view";
+import { fetchRegisteredHostsViaHttp } from "@traycer-clients/shared/host-client/remote-fetcher";
+import { config } from "../../config";
+import { BrowserSessionsRegistry } from "../browser-sessions/browser-sessions-owner";
+import {
+  createBrowserSessionsHostDirectory,
+  openBrowserSessionsTransport,
+} from "../browser-sessions/browser-sessions-transport";
 
 /**
  * The whole-jar capture reads the one shared `primary` identity, so its
@@ -100,9 +101,14 @@ const PRIMARY_PROFILE_REQUEST: BrowserSessionProfileRequest = {
   sessionId: "primary",
 };
 
+export interface BrowserViewIpcRegistration {
+  readonly manager: BrowserViewManager;
+  readonly sessions: BrowserSessionsRegistry;
+}
+
 export function registerBrowserViewIpc(
   bridge: RunnerIpcBridge,
-): BrowserViewManager {
+): BrowserViewIpcRegistration {
   // One governor for the process, keyed inside by the host connection each
   // frame arrived on - so every stream's paced attach replay meets the budget
   // it was paced against, and no host can borrow another's.
@@ -331,6 +337,11 @@ export function registerBrowserViewIpc(
     },
     notifyHostWindowRendererReset: (windowId) => {
       bridge.markRendererUnavailable(windowId);
+      // The renderer's tab bindings die with it, so the host-side rebind is
+      // inevitable; keeping the streams warm would need a snapshot replay into
+      // the fresh renderer and new state every forget path must keep in step
+      // (H10 ruling 3). This reproduces what a renderer-owned socket did.
+      sessions.closeWindow(windowId);
     },
     send: (windowId, channel, payload) =>
       bridge.safeSendToWindow(windowId, channel, payload),
@@ -455,19 +466,135 @@ export function registerBrowserViewIpc(
     }
   })();
 
-  bridge.handleInvoke(RunnerHostInvoke.browserViewEnsureTab, (event, payload) =>
-    manager.ensureTab(
-      readSenderWindowId(bridge, event),
-      browserViewIpcPayload.ensureTab.parse(payload),
-    ),
+  /**
+   * The jar plane's own streams (H10). Everything cookie-bearing on
+   * `browser.sessions` is produced and consumed right here, beside the jar it
+   * is about; the renderer says which streams should exist and sees a
+   * cookie-free projection of them.
+   */
+  const browserSessionsDirectory = createBrowserSessionsHostDirectory({
+    authnBaseUrl: () => bridge.options.authnBaseUrl,
+    relayBaseUrl: config.relayBaseUrl,
+    localHost: () => {
+      const snapshot = bridge.options.host.getSnapshot();
+      if (snapshot === null) return null;
+      return {
+        hostId: snapshot.hostId,
+        websocketUrl: snapshot.websocketUrl,
+        version: snapshot.version,
+      };
+    },
+    bearerToken: () => bridge.authSession.get().token,
+    listRegisteredHosts: fetchRegisteredHostsViaHttp,
+    now: () => Date.now(),
+  });
+  const sessions = new BrowserSessionsRegistry({
+    directory: browserSessionsDirectory,
+    openTransport: (target, userId) =>
+      openBrowserSessionsTransport(target, userId, {
+        authnBaseUrl: () => bridge.options.authnBaseUrl,
+        endpoint: () => browserSessionsDirectory.endpoint(target.hostId),
+        bearer: () => {
+          const snapshot = bridge.authSession.get();
+          const token = snapshot.token;
+          const profile = snapshot.profile;
+          if (token === null || profile === null) return null;
+          return {
+            getBearerToken: () => token,
+            identity: { userId: profile.userId },
+          };
+        },
+        appVersion: app.getVersion(),
+      }),
+    jar: {
+      capturePrimaryProfile: async () => {
+        // Behind the boot reconciliation, and it is the ONE jar read that has
+        // to be: every write queues on the jar serializer, but a whole-jar
+        // capture does not, and a capture taken before an unfinished forget
+        // was re-run would upload to the host exactly the logins the user
+        // deleted (finding F7).
+        await forgetLedgerReconciled;
+        return await primaryProfileSnapshots.capture();
+      },
+      applyObservedProfile: async (observed) => {
+        await applyHostContributedCookies(
+          { source: "observed", ...observed },
+          primaryProfileTarget,
+        );
+      },
+      wrapStoreKey,
+      unwrapStoreKey,
+      attestDesktopIdentity,
+      readForgetLedger: browserForgetLedgerDigestForHost,
+      recordForgetLedgerAck,
+      releaseForgetLedgerConnection: releaseBrowserForgetLedgerConnection,
+      onForgetLedgerChanged: (listener) =>
+        onBrowserForgetLedgerChanged(() => {
+          listener();
+        }),
+      onPrimaryProfileDelta: (listener) => {
+        const stop = onBrowserPrimaryProfileDelta(listener);
+        return { dispose: stop };
+      },
+    },
+    tabs: manager,
+    // Main's own answer to "who is signed in", never the renderer's.
+    userId: () => bridge.authSession.get().profile?.userId ?? null,
+    localHostId: () => bridge.options.host.getSnapshot()?.hostId ?? null,
+    subscribeLocalHostChange: (listener) => {
+      bridge.options.host.on("change", listener);
+      return () => {
+        bridge.options.host.off("change", listener);
+      };
+    },
+    // Every bearer this process is handed. The renderer refreshes the
+    // credential and pushes the result here (`authSessionSet`), which is the
+    // only rotation signal main gets - and the only thing that reopens a jar
+    // stream the host closed at the old token's expiry.
+    subscribeBearerRotation: (listener) => {
+      const onChange = (): void => {
+        listener();
+      };
+      bridge.authSession.on("change", onChange);
+      return () => {
+        bridge.authSession.off("change", onChange);
+      };
+    },
+    emit: (windowId, envelope) => {
+      bridge.safeSendToWindow(
+        windowId,
+        RunnerHostEvent.browserViewSessionsEvent,
+        envelope,
+      );
+    },
+  });
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.browserViewSessionsOpen,
+    (event, payload) => {
+      sessions.open(
+        readSenderWindowId(bridge, event),
+        browserViewIpcPayload.sessionsStreamKey.parse(payload),
+      );
+    },
   );
 
   bridge.handleInvoke(
-    RunnerHostInvoke.browserViewAcceptTab,
-    (_event, payload) =>
-      manager.acceptTab(
-        browserViewIpcPayload.nativeTabCapability.parse(payload),
-      ),
+    RunnerHostInvoke.browserViewSessionsClose,
+    (event, payload) => {
+      sessions.close(
+        readSenderWindowId(bridge, event),
+        browserViewIpcPayload.sessionsStreamKey.parse(payload),
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.browserViewSessionsSend,
+    (event, payload) => {
+      const input = browserViewIpcPayload.sessionsStreamSend.parse(payload);
+      sessions.send(readSenderWindowId(bridge, event), input.key, input.frame);
+    },
   );
 
   bridge.handleInvoke(
@@ -492,14 +619,6 @@ export function registerBrowserViewIpc(
   );
 
   bridge.handleInvoke(
-    RunnerHostInvoke.browserViewReleaseTab,
-    (_event, payload) =>
-      manager.releaseTab(
-        browserViewIpcPayload.nativeTabCapability.parse(payload),
-      ),
-  );
-
-  bridge.handleInvoke(
     RunnerHostInvoke.browserViewControlElectronTab,
     async (event, payload) => {
       const controlled = await manager.controlElectronTab(
@@ -509,14 +628,6 @@ export function registerBrowserViewIpc(
       if (!controlled)
         throw new Error("Electron browser tab is not available.");
     },
-  );
-
-  bridge.handleInvoke(
-    RunnerHostInvoke.browserViewElectronTabCdpDispatch,
-    (_event, payload) =>
-      manager.dispatchElectronTabCdp(
-        browserViewIpcPayload.electronTabCdpDispatch.parse(payload),
-      ),
   );
 
   bridge.handleInvoke(
@@ -659,18 +770,6 @@ export function registerBrowserViewIpc(
     },
   );
 
-  // Behind the boot reconciliation, and it is the ONE jar read that has to be:
-  // every write queues on the jar serializer, but a whole-jar capture does not,
-  // and a capture taken before an unfinished forget was re-run would upload to
-  // the host exactly the logins the user deleted (finding F7).
-  bridge.handleInvoke(
-    RunnerHostInvoke.browserViewPrimaryProfileCapture,
-    async () => {
-      await forgetLedgerReconciled;
-      return await primaryProfileSnapshots.capture();
-    },
-  );
-
   // "Clear cookies for this site" (spec §6.5). The manager derives the site
   // from the tile's own current URL; the jars are the shared `primary` ones,
   // which are the only jars a tile menu may reach. A tile with no site to name
@@ -702,30 +801,6 @@ export function registerBrowserViewIpc(
       // Only once the jar is actually empty of it (finding F7).
       await markBrowserForgetLedgerCleared(revision);
       log.info("[browser-view] cleared cookies for one site", { domain });
-    },
-  );
-
-  // A sign-in one of the user's hosts witnessed inside a headless session
-  // (universal-sign-in decision 8) - the one direction in which a host writes
-  // this jar, and therefore the one handler that treats its whole payload as
-  // untrusted. Every check lives in `applyBrowserObservedProfile`; nothing is
-  // answered back, and the merged cookies leave again as an ordinary delta.
-  //
-  // The frame is applied to the jar `primary` guests are on right now, which is
-  // `persist:traycer-browser` whenever this machine saves logins. When the user
-  // turned saving OFF that is the ephemeral jar instead, which is the whole
-  // point: the sign-in still reaches their live tiles, and a machine told not
-  // to keep logins never writes one to disk on a remote host's say-so.
-  bridge.handleInvoke(
-    RunnerHostInvoke.browserViewApplyObservedProfile,
-    async (_event, payload) => {
-      await applyHostContributedCookies(
-        {
-          source: "observed",
-          ...browserViewIpcPayload.observedProfile.parse(payload),
-        },
-        primaryProfileTarget,
-      );
     },
   );
 
@@ -794,45 +869,6 @@ export function registerBrowserViewIpc(
     },
   );
 
-  // The host's store key, sealed with the same keystore Chromium's own jar
-  // uses (spec §6.2). Attempted whenever the host asks, on every backend; a
-  // refusal is reported as a result rather than a thrown IPC rejection, because
-  // the host has a defined answer for it - stay sealed, and the user signs in
-  // again.
-  bridge.handleInvoke(
-    RunnerHostInvoke.browserViewStoreKeyWrap,
-    (_event, payload): BrowserStoreKeyWrapResult => {
-      const rawKey = browserViewIpcPayload.storeKeyMaterial.parse(payload);
-      const wrappedKey = wrapStoreKey(rawKey);
-      return wrappedKey === null
-        ? { ok: false, reason: "keystore unavailable" }
-        : { ok: true, wrappedKey };
-    },
-  );
-
-  bridge.handleInvoke(
-    RunnerHostInvoke.browserViewStoreKeyUnwrap,
-    (_event, payload): BrowserStoreKeyUnwrapResult => {
-      const wrappedKey = browserViewIpcPayload.storeKeyMaterial.parse(payload);
-      const rawKey = unwrapStoreKey(wrappedKey);
-      return rawKey === null
-        ? { ok: false, reason: "keystore unavailable" }
-        : { ok: true, rawKey };
-    },
-  );
-
-  // The desktop's answer to one host `desktopIdentityChallenge` (H09). Main
-  // signs; the private key and the unwrapped PKCS8 never cross this boundary,
-  // and `null` is a defined answer the host has a behaviour for - it leaves
-  // this connection off the jar plane and keeps serving sessions.
-  bridge.handleInvoke(
-    RunnerHostInvoke.browserViewDesktopIdentityAttest,
-    (_event, payload): Promise<DesktopIdentityAttestation | null> =>
-      attestDesktopIdentity(
-        browserViewIpcPayload.desktopIdentityChallenge.parse(payload),
-      ),
-  );
-
   // The desktop half of "forget all browser logins" (spec §6.5). Driven by
   // Settings, alongside the `forgetLogins` frame each connected host answers by
   // shredding its own slice - and no longer by a fan-out from the host, which
@@ -868,67 +904,43 @@ export function registerBrowserViewIpc(
       // the forget, so a crash in between leaves the clear pending and the
       // next launch re-runs it (finding F7).
       await markBrowserForgetLedgerCleared(revision);
-      // The verdict, not just the completion: the caller fans `forgetLogins`
-      // out to every connected host, and a cancelled dialog must not shred a
-      // host's slice for a forget that did not happen here.
+      // The host frames go out from HERE, not from a renderer (H10): the
+      // stream is main's, and a `forgetLogins` frame shreds the sending
+      // account's whole slice on that host. A cancelled dialog therefore
+      // cannot reach a host at all, rather than relying on a renderer to
+      // honour the verdict it was told.
+      const hosts = sessions.forgetLoginsOnEveryHost();
+      log.info("[browser-view] told the connected hosts to forget", { hosts });
       return true;
     },
   );
 
-  // The digest one host still owes (universal-sign-in ticket 04). Read by the
-  // renderer holding that host's stream, which pushes it in the same burst as
-  // `electronTabLifecycleReady` - the frame that makes the stream jar-authorized
-  // - so the ledger reaches the host before anything cookie-related does.
+  // "Clear" on one row of Settings > Browser. Confirmed here for the same
+  // reason forget-all is, and this is H05's residual closed: a renderer
+  // looping the saved-sites list used to reproduce forget-all one domain at a
+  // time with no dialog at all. The frame is main's now, so the loop has
+  // nothing to send.
   bridge.handleInvoke(
-    RunnerHostInvoke.browserViewForgetLedgerRead,
-    (_event, payload) =>
-      browserForgetLedgerDigestForHost(
-        browserViewIpcPayload.forgetLedgerHost.parse(payload).hostId,
-      ),
-  );
-
-  // A host finished pruning through a revision. Two watermarks advance: the
-  // durable per-host one, which decides what the next digest still carries, and
-  // the per-connection one, which is what stops refusing that stream's
-  // observations for the sites it just cleared.
-  bridge.handleInvoke(
-    RunnerHostInvoke.browserViewForgetLedgerAck,
-    (_event, payload) =>
-      recordForgetLedgerAck(
-        browserViewIpcPayload.forgetLedgerAck.parse(payload),
-      ),
-  );
-
-  bridge.handleInvoke(
-    RunnerHostInvoke.browserViewForgetLedgerRelease,
-    (_event, payload) => {
-      releaseBrowserForgetLedgerConnection(
-        browserViewIpcPayload.forgetLedgerRelease.parse(payload).connectionId,
-      );
+    RunnerHostInvoke.browserViewClearSavedLoginSite,
+    (_event, payload): boolean => {
+      const domain = browserViewIpcPayload.savedLoginSite.parse(payload).domain;
+      if (!confirmInMain(clearSavedLoginSiteConfirmation(domain))) {
+        log.info("[browser-view] clearing one saved login was not confirmed");
+        return false;
+      }
+      const hosts = sessions.clearSiteOnEveryHost(domain);
+      log.info("[browser-view] told the connected hosts to clear one site", {
+        hosts,
+      });
+      return true;
     },
   );
 
-  // Coalesced cookie deltas from the durable `primary` jar (spec §6.3). The
-  // renderer that owns the host stream forwards them as `primaryProfileDelta`;
-  // windows without one simply drop them.
-  const stopDeltaFanOut = onBrowserPrimaryProfileDelta((delta) => {
-    bridge.fanOut(RunnerHostEvent.browserViewPrimaryProfileDelta, delta);
-  });
-
-  // A forget landed in the ledger. Fanned out to every window rather than
-  // answered to the one that asked, because a forget performed in one window's
-  // Settings has to reach every host stream this process holds - including the
-  // ones another window owns.
-  const stopForgetLedgerFanOut = onBrowserForgetLedgerChanged((change) => {
-    bridge.fanOut(RunnerHostEvent.browserViewForgetLedgerChanged, change);
-  });
-
   bridge.disposeFns.push(() => {
-    stopDeltaFanOut();
-    stopForgetLedgerFanOut.dispose();
+    sessions.dispose();
     manager.dispose();
   });
-  return manager;
+  return { manager, sessions };
 }
 
 function createElectronBrowserView(
@@ -1020,6 +1032,16 @@ const FORGET_ALL_LOGINS_CONFIRMATION: MainConfirmation = {
     "Every site you are signed in to in Traycer's browser is signed out, here and on every connected machine. This cannot be undone.",
   confirmLabel: "Forget all",
 };
+
+function clearSavedLoginSiteConfirmation(domain: string): MainConfirmation {
+  return {
+    title: "Clear this saved login?",
+    message: `Sign out of ${domain} everywhere?`,
+    detail:
+      "You will be signed out of this site on every machine this account is signed in to. Other sites are untouched.",
+    confirmLabel: "Clear",
+  };
+}
 
 /**
  * A destructive or trust-changing action confirmed by the process that owns

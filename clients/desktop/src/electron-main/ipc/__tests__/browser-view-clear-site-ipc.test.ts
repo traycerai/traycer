@@ -244,6 +244,23 @@ function makeBridge() {
     safeSendToWindow: vi.fn(),
     fanOut: vi.fn(),
     resolveSenderWindowId: vi.fn(() => "window-1"),
+    // The jar-plane registry is built during registration (H10), so a bridge
+    // double now has to answer for the host snapshot it subscribes to and the
+    // auth session its bearer comes from. Nothing here dials: no stream is
+    // opened unless a renderer asks for one.
+    options: {
+      authnBaseUrl: "https://authn.test",
+      host: {
+        getSnapshot: () => null,
+        on: vi.fn(),
+        off: vi.fn(),
+      },
+    },
+    authSession: {
+      get: () => ({ status: "signed-out", token: null, profile: null }),
+      on: vi.fn(),
+      off: vi.fn(),
+    },
   };
 }
 
@@ -277,17 +294,21 @@ const TILE_KEY = {
 
 async function invokeHandler(
   channel:
+    | "browserViewClearSavedLoginSite"
     | "browserViewClearSite"
     | "browserViewForgetLogins"
     | "browserViewTrustCertificate",
   payload: unknown,
-): Promise<void> {
+): Promise<unknown> {
   const { registerBrowserViewIpc } = await import("../browser-view-ipc");
   const { RunnerHostInvoke } =
     await import("../../../ipc-contracts/ipc-channels");
   const bridge = makeBridge();
   registerBrowserViewIpc(bridge as never);
-  await findInvokeHandler(bridge, RunnerHostInvoke[channel])({}, payload);
+  return await findInvokeHandler(bridge, RunnerHostInvoke[channel])(
+    {},
+    payload,
+  );
 }
 
 let ledgerRun = 0;
@@ -346,6 +367,31 @@ describe("clear-site IPC jar targeting", () => {
     // localStorage memory is dropped before the tiles come back.
     expect(fixture.suppressedAll).toBe(1);
     expect(fixture.forgetAllResets).toBe(1);
+  });
+
+  it("confirms in main before clearing ONE saved login, and refuses a cancelled dialog", async () => {
+    // H05's residual, closed by H10: a renderer looping the saved-sites list
+    // used to reproduce forget-all one domain at a time with no dialog, because
+    // it minted the `clearSite` frames itself. Main owns them now, so the ask
+    // and the act are separated by a native dialog the renderer cannot draw
+    // over.
+    fixture.confirmAnswer = 0;
+
+    const cancelled = await invokeHandler("browserViewClearSavedLoginSite", {
+      domain: "example.com",
+    });
+
+    expect(cancelled).toBe(false);
+    expect(fixture.confirmations).toEqual(["Clear this saved login?"]);
+  });
+
+  it("reports a confirmed saved-login clear so the settings row can hide", async () => {
+    const confirmed = await invokeHandler("browserViewClearSavedLoginSite", {
+      domain: "example.com",
+    });
+
+    expect(confirmed).toBe(true);
+    expect(fixture.confirmations).toEqual(["Clear this saved login?"]);
   });
 
   it("forgets from the one shared jar when saving is on", async () => {

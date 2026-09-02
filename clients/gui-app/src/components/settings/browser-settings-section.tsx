@@ -412,6 +412,7 @@ function SavedLoginSitesRow(props: {
   readonly data: BrowserSavedLoginSitesResponse | null;
   readonly onCleared: () => void;
 }): ReactNode {
+  const browserView = useRunnerHostOrNull()?.browserView ?? null;
   // Optimistic, and only for a frame that actually went out: the host merges
   // asynchronously, so the refetch right behind a clear can still read the
   // pre-merge slice and put the row back for a beat.
@@ -441,7 +442,9 @@ function SavedLoginSitesRow(props: {
         <div className="flex w-full min-w-0 max-w-[min(48vw,26rem)] flex-col gap-1.5 text-ui-sm">
           {data.kind === "sealed" ? (
             <p className="text-muted-foreground">
-              Connect this desktop to unlock saved logins.
+              Connect this desktop to unlock saved logins. If this machine has
+              no system keyring, Traycer will not encrypt them here, so they
+              stay locked and nothing new is saved.
             </p>
           ) : (
             <SavedLoginSiteList
@@ -449,11 +452,18 @@ function SavedLoginSitesRow(props: {
                 (site) => !activeCleared.includes(site.domain),
               )}
               onClear={(domain) => {
-                if (!clearSavedLoginSite(domain)) return;
-                // The pruned list, not the raw one: a domain the host has
-                // since dropped never comes back into it.
-                setCleared([...activeCleared, domain]);
-                props.onCleared();
+                // Awaited, because main raises a native dialog and a cancelled
+                // one must not hide the row: the answer is the confirmation,
+                // not the request (H10).
+                void clearSavedLoginSite(browserView, domain).then(
+                  (confirmed) => {
+                    if (!confirmed) return;
+                    // The pruned list, not the raw one: a domain the host has
+                    // since dropped never comes back into it.
+                    setCleared([...activeCleared, domain]);
+                    props.onCleared();
+                  },
+                );
               }}
             />
           )}

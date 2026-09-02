@@ -1,11 +1,5 @@
 import { z } from "zod";
-import {
-  browserCdpCommandSchema,
-  browserCdpTargetSchema,
-  browserSessionProfileKindSchema,
-  browserStorageCookieSchema,
-  browserStorageStateSchema,
-} from "@traycer/protocol/host/browser/contracts";
+import { browserSessionsClientFrameSchema } from "@traycer/protocol/host/browser/contracts";
 import type {
   BrowserAnnotationAttachResultInput,
   BrowserAnnotationSetTargetChatLabelInput,
@@ -13,14 +7,14 @@ import type {
 } from "../../ipc-contracts/browser-annotation-types";
 import { BROWSER_VIEW_VIEWPORT_PRESET_IDS } from "@traycer-clients/shared/platform/browser-view";
 import type {
+  BrowserSessionsStreamKey,
+  BrowserSessionsStreamSend,
   BrowserViewAttachSurface,
   BrowserViewBoundsUpdate,
   BrowserViewCertificateTrust,
   BrowserViewDetachSurface,
   BrowserViewDownloadCancel,
-  BrowserViewElectronTabCdpDispatch,
   BrowserViewElectronTabControl,
-  BrowserViewEnsureTab,
   BrowserViewFindRequest,
   BrowserViewFindStop,
   BrowserViewOverlayOcclusion,
@@ -127,16 +121,6 @@ const overlayReleaseSchema: z.ZodType<BrowserViewOverlayRelease> = z.object({
   overlayId: z.string(),
 });
 const overlayPaintAckSchema = z.object({ overlayId: z.string() });
-const ensureTabSchema: z.ZodType<BrowserViewEnsureTab> =
-  nativeTabKeySchema.extend({
-    requestedUrl: nonEmptyStringSchema,
-    // The renderer relays the host's frame verbatim; an older renderer that
-    // does not know about profiles can only mean the shared jar.
-    profile: browserSessionProfileKindSchema.default("primary"),
-    seedStorageState: browserStorageStateSchema.nullable().default(null),
-    // The provenance the seed is priced against.
-    connectionId: nonEmptyStringSchema.nullable(),
-  });
 const attachSurfaceSchema: z.ZodType<BrowserViewAttachSurface> =
   nativeTabCapabilitySchema.extend({
     bindingId: nonEmptyStringSchema,
@@ -146,11 +130,6 @@ const detachSurfaceSchema: z.ZodType<BrowserViewDetachSurface> =
   nativeTabCapabilitySchema.extend({ bindingId: nonEmptyStringSchema });
 const electronTabControlSchema: z.ZodType<BrowserViewElectronTabControl> =
   nativeTabCapabilitySchema.extend({ action: electronTabControlActionSchema });
-const electronTabCdpDispatchSchema: z.ZodType<BrowserViewElectronTabCdpDispatch> =
-  nativeTabCapabilitySchema.extend({
-    target: browserCdpTargetSchema,
-    command: browserCdpCommandSchema,
-  });
 const pipCaptureStartSchema: z.ZodType<PipCaptureStartInput> =
   nativeTabCapabilitySchema.extend({
     maxWidth: z.number().int().positive(),
@@ -158,72 +137,49 @@ const pipCaptureStartSchema: z.ZodType<PipCaptureStartInput> =
     quality: z.number().int().min(0).max(100),
   });
 
-/** Base64 key material crossing the store-key handshake (ticket 05). */
-const storeKeyMaterialSchema = z.base64();
-
-/**
- * One host `desktopIdentityChallenge` to sign (H09). Bounded like the wire
- * frame it came from: an unbounded renderer payload here would be signed
- * material this process produced on a length it never checked.
- */
-const desktopIdentityChallengeSchema = z.strictObject({
-  hostId: z.string().max(128),
-  nonce: z.base64().max(64),
-});
-
-/**
- * One `primaryProfileObserved` frame on its way to the jar (universal-sign-in
- * ticket 03).
- *
- * `connectionId` and `hostId` name the host stream that delivered it, which the
- * renderer knows and the frame never carries - the rate limiter is keyed by the
- * connection, so an identity taken from the payload would be an identity the
- * sender chose.
- *
- * The cookie array is deliberately NOT bounded here. A schema bound would turn
- * an over-bound frame into a parse failure at the IPC edge, where there is no
- * domain to key a WARN by and no `over-bound` trace to find afterwards; the
- * applier counts and rejects instead (see the bounds' own contract note).
- */
-const observedProfileSchema = z.object({
-  connectionId: nonEmptyStringSchema,
-  hostId: nonEmptyStringSchema,
-  domain: nonEmptyStringSchema,
-  cookies: z.array(browserStorageCookieSchema),
-});
-
 /** The saved-logins toggle's new value. */
 const saveLoginsSchema = z.boolean();
 
 /**
- * The host a renderer is asking the forget ledger about (universal-sign-in
- * ticket 04): its own coordinator's host id. The digest is per host, because
- * what one host still owes is not what another does.
+ * Which main-owned `browser.sessions` stream a renderer means.
+ *
+ * A host ID, never a directory row: the row carries the host's static Noise
+ * key, and accepting one from a renderer would let a compromised renderer aim
+ * main's jar stream at a host it controls (H10 ruling 1). Bounded because
+ * every field is echoed into a map key and a log line.
  */
-const forgetLedgerHostSchema = z.object({ hostId: nonEmptyStringSchema });
+const sessionsStreamKeySchema: z.ZodType<BrowserSessionsStreamKey> =
+  z.strictObject({
+    epicId: nonEmptyStringSchema.max(128),
+    hostId: nonEmptyStringSchema.max(128),
+    identityKey: nonEmptyStringSchema.max(512),
+  });
 
 /**
- * One host's confirmation that it pruned through `revision`. The connection is
- * named as well as the host because the two watermarks it advances have
- * different lifetimes, and only the connection's gates that stream's
- * observations.
+ * One user-initiated request onto that stream, parsed against the PROTOCOL's
+ * own client-frame schema and then narrowed to the three kinds a renderer may
+ * ask for.
+ *
+ * The narrowing is the gate, not the parse: `forgetLogins` and `clearSite`
+ * shred every connected host's slice of the user's logins, so they are
+ * produced in main behind its own confirmation and refused here.
  */
-const forgetLedgerAckSchema = z.object({
-  hostId: nonEmptyStringSchema,
-  connectionId: nonEmptyStringSchema,
-  revision: z.number().int().nonnegative(),
-  /**
-   * What that connection was actually sent, which is the ceiling the ack is
-   * worth (universal-sign-in ticket 09). Required rather than defaulted: a
-   * caller that cannot say what it sent has not established the binding, and a
-   * default would quietly restore the unsolicited ack this closes.
-   */
-  sentRevision: z.number().int().nonnegative(),
-});
+const sessionsStreamSendSchema = z
+  .strictObject({
+    key: sessionsStreamKeySchema,
+    frame: browserSessionsClientFrameSchema,
+  })
+  .refine(
+    (value): value is BrowserSessionsStreamSend =>
+      value.frame.kind === "openTab" ||
+      value.frame.kind === "closeTab" ||
+      value.frame.kind === "captureTabPreview",
+    { message: "Only tab requests may be sent from a renderer." },
+  );
 
-/** A closed stream incarnation, whose acked revision goes with it. */
-const forgetLedgerReleaseSchema = z.object({
-  connectionId: nonEmptyStringSchema,
+/** One saved-login row's domain, as Settings names it. */
+const savedLoginSiteSchema = z.strictObject({
+  domain: nonEmptyStringSchema.max(253),
 });
 
 export const browserViewIpcPayload = {
@@ -233,25 +189,20 @@ export const browserViewIpcPayload = {
   attachSurface: attachSurfaceSchema,
   boundsUpdate: boundsUpdateSchema,
   certificateTrust: certificateTrustSchema,
-  desktopIdentityChallenge: desktopIdentityChallengeSchema,
   detachSurface: detachSurfaceSchema,
   downloadCancel: downloadCancelSchema,
-  electronTabCdpDispatch: electronTabCdpDispatchSchema,
   electronTabControl: electronTabControlSchema,
-  ensureTab: ensureTabSchema,
   findRequest: findRequestSchema,
   findStop: findStopSchema,
-  forgetLedgerAck: forgetLedgerAckSchema,
-  forgetLedgerHost: forgetLedgerHostSchema,
-  forgetLedgerRelease: forgetLedgerReleaseSchema,
   nativeTabCapability: nativeTabCapabilitySchema,
-  observedProfile: observedProfileSchema,
   overlayOcclusion: overlayOcclusionSchema,
   overlayPaintAck: overlayPaintAckSchema,
   overlayRelease: overlayReleaseSchema,
   pipCaptureStart: pipCaptureStartSchema,
+  savedLoginSite: savedLoginSiteSchema,
   saveLogins: saveLoginsSchema,
-  storeKeyMaterial: storeKeyMaterialSchema,
+  sessionsStreamKey: sessionsStreamKeySchema,
+  sessionsStreamSend: sessionsStreamSendSchema,
   tileKey: tileKeySchema,
 } as const;
 

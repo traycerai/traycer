@@ -6,7 +6,7 @@ import { ElectronTabSurface } from "@/components/epic-canvas/renderers/agent-bro
 import type {
   ElectronTabBinding,
   ElectronTabSurfaceLease,
-} from "@/lib/browser-view/sessions/electron-tabs";
+} from "@/lib/browser-view/sessions/electron-tab-directory";
 import type { TileController } from "@/components/epic-canvas/renderers/tile-controller";
 
 const state = vi.hoisted(() => ({

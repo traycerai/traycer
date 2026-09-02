@@ -1,5 +1,11 @@
 import "../../../../__tests__/test-browser-apis";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BrowserSettingsSection } from "@/components/settings/browser-settings-section";
 import type { BrowserSaveLoginsController } from "@/lib/browser-view/use-browser-save-logins";
@@ -68,7 +74,9 @@ const hostBinding = vi.hoisted((): { current: object | null } => ({
 const forgetAllBrowserLogins = vi.hoisted(() =>
   vi.fn(() => Promise.resolve(1)),
 );
-const clearSavedLoginSite = vi.hoisted(() => vi.fn(() => true));
+const clearSavedLoginSite = vi.hoisted(() =>
+  vi.fn(() => Promise.resolve(true)),
+);
 
 function boundHostRuntime(): object {
   return {
@@ -253,8 +261,13 @@ describe("<BrowserSettingsSection /> saved logins", () => {
   it("says a sealed host is locked, not empty", () => {
     renderSection(controller({}), { kind: "sealed" });
 
+    // Substring: the sealed line also states the keystore reason (H03), and a
+    // machine whose keystore does not encrypt lands in exactly this state.
     expect(
-      screen.getByText("Connect this desktop to unlock saved logins."),
+      screen.getByText(/Connect this desktop to unlock saved logins\./),
+    ).not.toBeNull();
+    expect(
+      screen.getByText(/Traycer will not encrypt them here/),
     ).not.toBeNull();
     expect(screen.queryByText("No saved logins yet.")).toBeNull();
   });
@@ -265,7 +278,7 @@ describe("<BrowserSettingsSection /> saved logins", () => {
     expect(screen.getByText("No saved logins yet.")).not.toBeNull();
   });
 
-  it("holds the cleared row through the pre-merge window, then releases it", () => {
+  it("holds the cleared row through the pre-merge window, then releases it", async () => {
     const bothSites: SavedLoginSitesAnswer = {
       kind: "sites",
       sites: [savedSite("example.com"), savedSite("example.org")],
@@ -279,7 +292,9 @@ describe("<BrowserSettingsSection /> saved logins", () => {
         name: "Clear saved logins for example.com",
       }),
     );
-    expect(screen.queryByText("example.com")).toBeNull();
+    await waitFor(() => {
+      expect(screen.queryByText("example.com")).toBeNull();
+    });
 
     // The host merges asynchronously, so the answer behind the click can still
     // name the site. The row stays hidden - that is what the optimism is for.
@@ -301,7 +316,7 @@ describe("<BrowserSettingsSection /> saved logins", () => {
     expect(screen.getByText("example.com")).not.toBeNull();
   });
 
-  it("sends clearSite for one row and refetches the list", () => {
+  it("sends clearSite for one row, and hides it once main confirms", async () => {
     renderSection(controller({}), {
       kind: "sites",
       sites: [savedSite("example.com"), savedSite("example.org")],
@@ -313,12 +328,41 @@ describe("<BrowserSettingsSection /> saved logins", () => {
       }),
     );
 
-    expect(clearSavedLoginSite).toHaveBeenCalledWith("example.com");
-    expect(refetch).toHaveBeenCalledTimes(1);
-    // The row goes at once: the host merges asynchronously, so the refetch
-    // behind this click can still read the pre-clear slice.
+    expect(clearSavedLoginSite).toHaveBeenCalledWith(
+      expect.anything(),
+      "example.com",
+    );
+
+    await waitFor(() => {
+      expect(refetch).toHaveBeenCalledTimes(1);
+    });
+    // The row goes once main confirms: the host merges asynchronously, so the
+    // refetch behind this click can still read the pre-clear slice.
     expect(screen.queryByText("example.com")).toBeNull();
     expect(screen.queryByText("example.org")).not.toBeNull();
+  });
+
+  it("leaves the row in place when main declines the confirmation", async () => {
+    clearSavedLoginSite.mockResolvedValueOnce(false);
+    renderSection(controller({}), {
+      kind: "sites",
+      sites: [savedSite("example.com"), savedSite("example.org")],
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Clear saved logins for example.com",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(clearSavedLoginSite).toHaveBeenCalledWith(
+        expect.anything(),
+        "example.com",
+      );
+    });
+    expect(refetch).not.toHaveBeenCalled();
+    expect(screen.getByText("example.com")).not.toBeNull();
   });
 
   /**

@@ -4,12 +4,8 @@ import {
   RunnerHostInvoke,
 } from "../ipc-contracts/ipc-channels";
 import type {
+  BrowserSessionsStreamEventEnvelope,
   BrowserViewBridge,
-  BrowserDesktopIdentityAttestation,
-  BrowserForgetLedgerChange,
-  BrowserPrimaryProfileCaptureResult,
-  BrowserStoreKeyUnwrapResult,
-  BrowserStoreKeyWrapResult,
   BrowserViewCapturePageResult,
   BrowserViewCertificateErrorChange,
   BrowserViewDebugSnapshot,
@@ -19,14 +15,8 @@ import type {
   BrowserViewOverlayOcclusionResult,
   BrowserViewOverlayReleaseResult,
   BrowserViewSnapshotInvalidatedChange,
-  BrowserViewNativeTabCapability,
   BrowserViewNativeTabStatusChange,
 } from "@traycer-clients/shared/platform/browser-view";
-import type {
-  BrowserCdpResult,
-  BrowserForgetLedger,
-  BrowserPrimaryProfileDelta,
-} from "@traycer/protocol/host/browser/contracts";
 import type {
   BrowserAnnotationAttachedIpcEvent,
   BrowserAnnotationSessionIpcEvent,
@@ -38,16 +28,26 @@ import { subscribe } from "./subscribe";
 export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
   return {
     browserView: {
-      ensureTab: (input) =>
+      openSessionsStream: (input) =>
         ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewEnsureTab,
-          input,
-        ) as Promise<BrowserViewNativeTabCapability>,
-      acceptTab: (input) =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewAcceptTab,
+          RunnerHostInvoke.browserViewSessionsOpen,
           input,
         ) as Promise<void>,
+      closeSessionsStream: (key) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.browserViewSessionsClose,
+          key,
+        ) as Promise<void>,
+      sendSessionsFrame: (input) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.browserViewSessionsSend,
+          input,
+        ) as Promise<void>,
+      onSessionsStreamEvent: (handler) =>
+        subscribe<BrowserSessionsStreamEventEnvelope>(
+          RunnerHostEvent.browserViewSessionsEvent,
+          handler,
+        ),
       attachSurface: (input) =>
         ipcRenderer.invoke(
           RunnerHostInvoke.browserViewAttachSurface,
@@ -58,11 +58,6 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
           RunnerHostInvoke.browserViewDetachSurface,
           input,
         ) as Promise<void>,
-      releaseTab: (input) =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewReleaseTab,
-          input,
-        ) as Promise<boolean>,
       controlElectronTab: (input) =>
         ipcRenderer.invoke(
           RunnerHostInvoke.browserViewControlElectronTab,
@@ -153,65 +148,21 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
           RunnerHostInvoke.browserViewSaveLoginsSet,
           enabled,
         ) as Promise<boolean>,
-      wrapStoreKey: (rawKey) =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewStoreKeyWrap,
-          rawKey,
-        ) as Promise<BrowserStoreKeyWrapResult>,
-      unwrapStoreKey: (wrappedKey) =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewStoreKeyUnwrap,
-          wrappedKey,
-        ) as Promise<BrowserStoreKeyUnwrapResult>,
-      attestDesktopIdentity: (input) =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewDesktopIdentityAttest,
-          input,
-        ) as Promise<BrowserDesktopIdentityAttestation | null>,
       forgetLogins: () =>
         ipcRenderer.invoke(
           RunnerHostInvoke.browserViewForgetLogins,
         ) as Promise<boolean>,
-      readForgetLedger: (hostId) =>
-        ipcRenderer.invoke(RunnerHostInvoke.browserViewForgetLedgerRead, {
-          hostId,
-        }) as Promise<BrowserForgetLedger>,
-      ackForgetLedger: (input) =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewForgetLedgerAck,
-          input,
-        ) as Promise<void>,
-      releaseForgetLedgerConnection: (connectionId) =>
-        ipcRenderer.invoke(RunnerHostInvoke.browserViewForgetLedgerRelease, {
-          connectionId,
-        }) as Promise<void>,
-      onForgetLedgerChanged: (handler) =>
-        subscribe<BrowserForgetLedgerChange>(
-          RunnerHostEvent.browserViewForgetLedgerChanged,
-          handler,
-        ),
-      onPrimaryProfileDelta: (handler) =>
-        subscribe<BrowserPrimaryProfileDelta>(
-          RunnerHostEvent.browserViewPrimaryProfileDelta,
-          handler,
-        ),
-      capturePrimaryProfile: () =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewPrimaryProfileCapture,
-        ) as Promise<BrowserPrimaryProfileCaptureResult>,
+      // A domain, and main confirms it before a single frame leaves: the
+      // renderer may ask for one row to be cleared, and may not perform it.
+      clearSavedLoginSite: (domain) =>
+        ipcRenderer.invoke(RunnerHostInvoke.browserViewClearSavedLoginSite, {
+          domain,
+        }) as Promise<boolean>,
       // The tile key, not a domain: main derives the site from that tile's own
       // URL, so no renderer can name a site it is not looking at.
       clearSite: (input) =>
         ipcRenderer.invoke(
           RunnerHostInvoke.browserViewClearSite,
-          input,
-        ) as Promise<void>,
-      // Forwarded whole, unjudged: main is where an observed frame is validated
-      // and bounded, and the connection facts travel with it because the frame
-      // itself names no contributor.
-      applyObservedProfile: (input) =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewApplyObservedProfile,
           input,
         ) as Promise<void>,
       onFindChange: (handler) =>
@@ -249,11 +200,6 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
           RunnerHostEvent.browserViewAnnotationAttached,
           handler,
         ),
-      dispatchElectronTabCdp: (input) =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewElectronTabCdpDispatch,
-          input,
-        ) as Promise<BrowserCdpResult>,
       startPipCapture: (input) =>
         ipcRenderer.invoke(
           RunnerHostInvoke.pipCaptureStart,

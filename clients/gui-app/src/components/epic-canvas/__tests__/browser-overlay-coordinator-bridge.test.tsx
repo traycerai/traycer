@@ -26,13 +26,6 @@ import type {
   BrowserViewSnapshotInvalidatedChange,
   BrowserViewTileKey,
   BrowserViewBridge,
-  BrowserForgetLedger,
-  BrowserForgetLedgerAckInput,
-  BrowserForgetLedgerChange,
-  BrowserPrimaryProfileDelta,
-  BrowserDesktopIdentityAttestation,
-  BrowserStoreKeyUnwrapResult,
-  BrowserStoreKeyWrapResult,
 } from "@traycer-clients/shared/platform/browser-view";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 
@@ -192,54 +185,8 @@ class FakeBrowserViewBridge implements BrowserViewBridge {
     return Promise.resolve(enabled);
   }
 
-  wrapStoreKey(rawKey: string): Promise<BrowserStoreKeyWrapResult> {
-    return Promise.resolve({ ok: true, wrappedKey: rawKey });
-  }
-
-  unwrapStoreKey(wrappedKey: string): Promise<BrowserStoreKeyUnwrapResult> {
-    return Promise.resolve({ ok: true, rawKey: wrappedKey });
-  }
-
-  attestDesktopIdentity(_input: {
-    readonly hostId: string;
-    readonly nonce: string;
-  }): Promise<BrowserDesktopIdentityAttestation | null> {
-    return Promise.resolve({
-      publicKey: "cHVibGlj",
-      keystoreId: "fake-keystore",
-      signature: "c2ln",
-    });
-  }
-
   forgetLogins(): Promise<boolean> {
     return Promise.resolve(true);
-  }
-
-  /** An empty ledger: nothing forgotten, so no observation is refused. */
-  readForgetLedger(_hostId: string): Promise<BrowserForgetLedger> {
-    return Promise.resolve({ forgetAllAt: null, domains: [], revision: 0 });
-  }
-
-  ackForgetLedger(_input: BrowserForgetLedgerAckInput): Promise<void> {
-    return Promise.resolve();
-  }
-
-  releaseForgetLedgerConnection(_connectionId: string): Promise<void> {
-    return Promise.resolve();
-  }
-
-  onForgetLedgerChanged(
-    _handler: (change: BrowserForgetLedgerChange) => void,
-  ): {
-    dispose: () => void;
-  } {
-    return { dispose: () => undefined };
-  }
-
-  onPrimaryProfileDelta(
-    _handler: (delta: BrowserPrimaryProfileDelta) => void,
-  ): { dispose: () => void } {
-    return { dispose: () => undefined };
   }
 
   onFindChange(_handler: (change: BrowserViewFindChange) => void): {
@@ -297,31 +244,6 @@ class FakeBrowserViewBridge implements BrowserViewBridge {
     return Promise.resolve();
   }
 
-  applyObservedProfile(): Promise<void> {
-    return Promise.resolve();
-  }
-
-  capturePrimaryProfile() {
-    return Promise.resolve({
-      status: "unavailable" as const,
-      storageState: null,
-      reason: "test",
-    });
-  }
-
-  ensureTab() {
-    return Promise.resolve({
-      hostId: "host-test",
-      sessionId: "session-test",
-      tabId: "tab-test",
-      registrationId: "registration-test",
-    });
-  }
-
-  acceptTab(): Promise<void> {
-    return Promise.resolve();
-  }
-
   attachSurface(): Promise<void> {
     return Promise.resolve();
   }
@@ -330,20 +252,28 @@ class FakeBrowserViewBridge implements BrowserViewBridge {
     return Promise.resolve();
   }
 
-  releaseTab(): Promise<boolean> {
-    return Promise.resolve(true);
-  }
-
   controlElectronTab(): Promise<void> {
     return Promise.resolve();
   }
 
-  dispatchElectronTabCdp() {
-    return Promise.resolve({
-      kind: "cdpGetFrameTree" as const,
-      ok: true as const,
-      frames: [],
-    });
+  openSessionsStream(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  closeSessionsStream(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  sendSessionsFrame(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  onSessionsStreamEvent(): { dispose: () => void } {
+    return { dispose: () => undefined };
+  }
+
+  clearSavedLoginSite(): Promise<boolean> {
+    return Promise.resolve(true);
   }
 
   startPipCapture(): Promise<void> {

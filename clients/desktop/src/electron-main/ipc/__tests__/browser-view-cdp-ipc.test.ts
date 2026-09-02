@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
-  BrowserViewElectronTabCdpDispatch,
   BrowserViewElectronTabControl,
-  BrowserViewEnsureTab,
   BrowserViewNativeTabCapability,
 } from "@traycer-clients/shared/platform/browser-view";
+import type {
+  BrowserViewElectronTabCdpDispatch,
+  BrowserViewEnsureTab,
+} from "../../browser-view/browser-view-port";
 
 type DispatchElectronTabCdpCall = BrowserViewElectronTabCdpDispatch;
 
@@ -187,6 +189,23 @@ function makeBridge() {
     safeSendToWindow: vi.fn(),
     fanOut: vi.fn(),
     resolveSenderWindowId: vi.fn(() => "window-1"),
+    // The jar-plane registry is built during registration (H10), so a bridge
+    // double now has to answer for the host snapshot it subscribes to and the
+    // auth session its bearer comes from. Nothing here dials: no stream is
+    // opened unless a renderer asks for one.
+    options: {
+      authnBaseUrl: "https://authn.test",
+      host: {
+        getSnapshot: () => null,
+        on: vi.fn(),
+        off: vi.fn(),
+      },
+    },
+    authSession: {
+      get: () => ({ status: "signed-out", token: null, profile: null }),
+      on: vi.fn(),
+      off: vi.fn(),
+    },
   };
 }
 
@@ -221,60 +240,40 @@ describe("native browser tab IPC", () => {
     vi.clearAllMocks();
   });
 
+  // The renderer-facing CDP dispatch and ensure-tab invoke channels
+  // (`browserViewElectronTabCdpDispatch`, `browserViewEnsureTab`) were
+  // deleted under H10 - the jar/CDP plane moved into main's own
+  // `browser-sessions` owner, which calls the manager directly rather than
+  // crossing IPC. What is left to pin here is that `BrowserViewManager`
+  // still exposes `dispatchElectronTabCdp` / `ensureTab` with the same
+  // signatures, so it drives them directly instead of through a deleted
+  // sender-scoped handler.
   it("dispatches a curated command with its logical frame target", async () => {
-    const { registerBrowserViewIpc } = await import("../browser-view-ipc");
-    const { RunnerHostInvoke } =
-      await import("../../../ipc-contracts/ipc-channels");
-
-    const bridge = makeBridge();
-    registerBrowserViewIpc(bridge as never);
-    const handler = findInvokeHandler(
-      bridge,
-      RunnerHostInvoke.browserViewElectronTabCdpDispatch,
-    );
-    await handler(
-      {},
-      {
-        hostId: "host-1",
-        sessionId: "session-1",
-        tabId: "tab-1",
-        registrationId: "registration-1",
-        target: {
-          kind: "frame",
-          frameId: "frame-1",
-          parentFrameId: "root-frame",
-        },
-        command: { kind: "cdpInsertText", text: "hello" },
+    const { BrowserViewManager } =
+      await import("../../browser-view/browser-view-manager");
+    const manager = new BrowserViewManager({} as never);
+    const input: BrowserViewElectronTabCdpDispatch = {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      registrationId: "registration-1",
+      target: {
+        kind: "frame",
+        frameId: "frame-1",
+        parentFrameId: "root-frame",
       },
-    );
+      command: { kind: "cdpInsertText", text: "hello" },
+    };
 
-    expect(captured.dispatchedTabs).toEqual([
-      {
-        hostId: "host-1",
-        sessionId: "session-1",
-        tabId: "tab-1",
-        registrationId: "registration-1",
-        target: {
-          kind: "frame",
-          frameId: "frame-1",
-          parentFrameId: "root-frame",
-        },
-        command: { kind: "cdpInsertText", text: "hello" },
-      },
-    ]);
+    await manager.dispatchElectronTabCdp(input);
+
+    expect(captured.dispatchedTabs).toEqual([input]);
   });
 
-  it("passes the native tab storage seed through the IPC parser", async () => {
-    const { registerBrowserViewIpc } = await import("../browser-view-ipc");
-    const { RunnerHostInvoke } =
-      await import("../../../ipc-contracts/ipc-channels");
-
-    const bridge = makeBridge();
-    registerBrowserViewIpc(bridge as never);
-    const handler = findInvokeHandler(
-      bridge,
-      RunnerHostInvoke.browserViewEnsureTab,
-    );
+  it("passes the native tab storage seed through to the manager", async () => {
+    const { BrowserViewManager } =
+      await import("../../browser-view/browser-view-manager");
+    const manager = new BrowserViewManager({} as never);
     const seedStorageState = {
       cookies: [],
       origins: [
@@ -284,34 +283,20 @@ describe("native browser tab IPC", () => {
         },
       ],
     };
+    const input: BrowserViewEnsureTab = {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      requestedUrl: "https://example.com/background",
+      profile: "primary",
+      seedStorageState,
+      // The provenance main prices the seed's jar write against.
+      connectionId: "connection-1",
+    };
 
-    await handler(
-      {},
-      {
-        hostId: "host-1",
-        sessionId: "session-1",
-        tabId: "tab-1",
-        requestedUrl: "https://example.com/background",
-        seedStorageState,
-        connectionId: "connection-1",
-      },
-    );
+    await manager.ensureTab("window-1", input);
 
-    expect(captured.ensuredTabs).toEqual([
-      {
-        windowId: "window-1",
-        input: expect.objectContaining({
-          hostId: "host-1",
-          sessionId: "session-1",
-          tabId: "tab-1",
-          requestedUrl: "https://example.com/background",
-          seedStorageState,
-          // The provenance main prices the seed's jar write against; the edge
-          // carries it rather than inventing one.
-          connectionId: "connection-1",
-        }),
-      },
-    ]);
+    expect(captured.ensuredTabs).toEqual([{ windowId: "window-1", input }]);
   });
 
   it("parses native tab control without routing through a surface key", async () => {

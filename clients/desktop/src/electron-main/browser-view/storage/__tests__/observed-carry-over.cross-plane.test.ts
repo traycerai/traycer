@@ -20,7 +20,6 @@ import {
   observedFrame,
   type ObservedServerFrame,
 } from "@traycer/protocol/host/browser/__tests__/observed-carry-over-fixture";
-import { browserViewIpcPayload } from "../../../ipc/browser-view-ipc-payload";
 import {
   applyBrowserObservedProfile,
   BrowserObservedConnectionGovernor,
@@ -139,9 +138,12 @@ function expiredCookieFrame(expiredAt: number): ObservedServerFrame {
 
 /**
  * One desktop's receive path for an observed frame, wired exactly as
- * `browser-view-ipc.ts` wires it: the IPC payload schema, the real applier, the
- * real per-connection governor, the real jar serializer, and the real forget
- * ledger as the no-resurrection gate.
+ * `browser-sessions-owner.ts` wires it (H10: the jar plane moved into main,
+ * so the frame reaches the applier straight off the stream client's own
+ * server-frame narrowing - there is no second, renderer-facing IPC schema
+ * left to cross): the real applier, the real per-connection governor, the
+ * real jar serializer, and the real forget ledger as the no-resurrection
+ * gate.
  */
 class DesktopReceiveHarness {
   readonly jar = new FakeCookieJar();
@@ -160,16 +162,15 @@ class DesktopReceiveHarness {
     frame: ObservedServerFrame,
     connectionId: string,
   ): Promise<BrowserObservedProfileOutcome> {
-    // The renderer adds the connection provenance the frame never carries, and
-    // the main process narrows the whole thing again at the IPC edge.
+    // The stream owner adds the connection provenance the frame never
+    // carries - `frame` itself already came through the real server-frame
+    // union, the only narrowing layer left on this side of the wire.
     const observed = {
       source: "observed" as const,
-      ...browserViewIpcPayload.observedProfile.parse({
-        connectionId,
-        hostId: HOST_ID,
-        domain: frame.domain,
-        cookies: frame.cookies,
-      }),
+      connectionId,
+      hostId: HOST_ID,
+      domain: frame.domain,
+      cookies: frame.cookies,
     };
     const result = await applyBrowserObservedProfile(observed, {
       now: () => Date.now(),

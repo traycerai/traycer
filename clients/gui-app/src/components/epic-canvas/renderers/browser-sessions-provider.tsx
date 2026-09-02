@@ -31,9 +31,7 @@ import {
   type BrowserSessionsState,
 } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
-import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
 import { useRunnerHost } from "@/providers/use-runner-host";
-import { useWindowsBridge } from "@/providers/windows-bridge-context";
 import {
   BrowserSessionsContext,
   BrowserSessionsCoordinatorKeyContext,
@@ -73,15 +71,11 @@ export function BrowserSessionsHostProvider(props: {
 }) {
   const runnerHost = useRunnerHost();
   const browserView = runnerHost.browserView;
-  const localHostId = useReactiveLocalHostId();
-  const desktopWindowId = useWindowsBridge()?.windowId ?? null;
   const { state: sessions, coordinatorKey } = useBrowserSessions({
     hostId: props.hostId,
     hostClient: props.hostClient,
     epicId: props.epicId,
     browserView,
-    localHostId,
-    desktopWindowId,
   });
   return (
     <BrowserSessionsCoordinatorKeyContext.Provider value={coordinatorKey}>
@@ -128,14 +122,6 @@ interface UseBrowserSessionsArgs {
   readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly epicId: string;
   readonly browserView: BrowserViewBridge | null;
-  /** This machine's host id, declared as the Electron locality signal. */
-  readonly localHostId: string | null;
-  /**
-   * This renderer's desktop window id, or null off Electron. Declared on
-   * `electronTabLifecycleReady` so the host hands the Electron lifecycle over
-   * only to the incumbent owner's own window.
-   */
-  readonly desktopWindowId: string | null;
 }
 
 interface BrowserSessionsHookResult {
@@ -146,7 +132,7 @@ interface BrowserSessionsHookResult {
 function useBrowserSessions(
   args: UseBrowserSessionsArgs,
 ): BrowserSessionsHookResult {
-  const { hostId, epicId, browserView, localHostId, desktopWindowId } = args;
+  const { hostId, epicId, browserView } = args;
   const hostEntry = useHostDirectoryEntry(hostId ?? UNKNOWN_HOST_PLACEHOLDER);
   const transportReady =
     args.hostClient !== null &&
@@ -155,6 +141,9 @@ function useBrowserSessions(
     args.hostClient,
     hostEntry,
   );
+  // Main mints the relay attach grant for a remote host, so the stream it owns
+  // is opened for a named user rather than for whoever holds the bearer.
+  const userId = args.hostClient?.getRequestContextUserId() ?? null;
   const openTransport = useDurableStreamTransportFactory();
   const owner = useMemo<BrowserSessionsOwner | null>(
     () =>
@@ -178,7 +167,7 @@ function useBrowserSessions(
         consumerId,
         epicId,
         owner: selectedOwner,
-        runtime: { browserView, localHostId, desktopWindowId, openTransport },
+        runtime: { browserView, userId, openTransport },
         createIfMissing: transportReady,
       }),
   );
@@ -192,18 +181,10 @@ function useBrowserSessions(
     if (coordinatorKey === null) return;
     upsertBrowserSessionsCoordinatorConsumer(coordinatorKey, consumerId, {
       browserView,
-      localHostId,
-      desktopWindowId,
+      userId,
       openTransport,
     });
-  }, [
-    browserView,
-    consumerId,
-    coordinatorKey,
-    desktopWindowId,
-    localHostId,
-    openTransport,
-  ]);
+  }, [browserView, consumerId, coordinatorKey, openTransport, userId]);
 
   const subscribe = useCallback(
     (listener: () => void) =>

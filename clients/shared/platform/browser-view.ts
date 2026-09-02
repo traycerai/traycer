@@ -1,13 +1,11 @@
 import type {
-  BrowserCdpCommand,
-  BrowserCdpResult,
-  BrowserCdpTarget,
-  BrowserForgetLedger,
-  BrowserPrimaryProfileDelta,
+  StreamCloseReason,
+  StreamConnectionStatus,
+} from "../host-transport/i-stream-session";
+import type {
   BrowserScreencastServerFrame,
-  BrowserSessionProfileKind,
-  BrowserStorageCookie,
-  BrowserStorageState,
+  BrowserSessionsUxClientFrame,
+  BrowserSessionsUxServerFrame,
 } from "@traycer/protocol/host/browser/contracts";
 import type {
   BrowserAnnotationAttachResultInput,
@@ -31,26 +29,6 @@ export interface BrowserViewNativeTabKey {
 /** Exact authority for one live Electron-owned browser guest incarnation. */
 export interface BrowserViewNativeTabCapability extends BrowserViewNativeTabKey {
   readonly registrationId: string;
-}
-
-export interface BrowserViewEnsureTab extends BrowserViewNativeTabKey {
-  readonly requestedUrl: string;
-  /**
-   * Which jar the guest is born into. It travels from the host's
-   * `createElectronTab` frame; `isolated` selects the session's own in-memory
-   * partition and never carries a seed.
-   */
-  readonly profile: BrowserSessionProfileKind;
-  readonly seedStorageState: BrowserStorageState | null;
-  /**
-   * The live stream incarnation the `createElectronTab` frame arrived on -
-   * the SAME provenance `primaryProfileObserved` carries, and for the same
-   * reason: the seed is a host->jar write, so main prices it against the
-   * connection that sent it (the forget ledger's per-connection ack watermark
-   * and the observed rate budget both key on this). Null off-connection,
-   * which fails the ledger gate closed.
-   */
-  readonly connectionId: string | null;
 }
 
 export interface BrowserViewAttachSurface extends BrowserViewNativeTabCapability {
@@ -117,6 +95,16 @@ export interface BrowserViewNativeTabStatusChange extends BrowserViewNativeTabCa
   readonly canGoBack: boolean;
   readonly canGoForward: boolean;
   readonly zoomPercent: number;
+  /**
+   * Whether a tile is showing this guest right now.
+   *
+   * Read by main, which reports it to the host as `electronTabState.viewed`.
+   * It used to be the renderer's answer, because the renderer held the surface
+   * lease AND the stream; with the stream in main (H10) the attachment is
+   * read where it actually lives - the manager's own entry - rather than
+   * inferred from a lease object on the far side of an IPC boundary.
+   */
+  readonly viewed: boolean;
 }
 
 export interface BrowserViewFindRequest extends BrowserViewTileKey {
@@ -211,60 +199,6 @@ export interface BrowserViewSnapshotInvalidatedChange extends BrowserViewTileKey
   readonly reason: string;
 }
 
-/**
- * One coalesced cookie-change window from the durable `primary` jar. Re-exported
- * so renderer code sees the bridge and its payloads in one import.
- */
-export type { BrowserForgetLedger, BrowserPrimaryProfileDelta };
-
-export type BrowserPrimaryProfileCaptureResult =
-  | {
-      readonly status: "captured";
-      readonly storageState: BrowserStorageState;
-      readonly reason: null;
-    }
-  | {
-      readonly status: "unavailable";
-      readonly storageState: null;
-      readonly reason: string;
-    };
-
-export interface BrowserViewElectronTabCdpDispatch extends BrowserViewNativeTabCapability {
-  readonly target: BrowserCdpTarget;
-  readonly command: BrowserCdpCommand;
-}
-
-/**
- * Answer to one store-key wrap. `ok: false` is an expected outcome, not a bug:
- * the keystore may be unavailable on this machine, and the host then simply
- * stays sealed.
- */
-export type BrowserStoreKeyWrapResult =
-  | { readonly ok: true; readonly wrappedKey: string }
-  | { readonly ok: false; readonly reason: string };
-
-/**
- * Answer to one store-key unwrap. `ok: false` means this machine cannot open
- * the host's blob (keystore item ACL changed, or a different machine wrapped
- * it); the host is told so it can stay sealed instead of re-minting.
- */
-export type BrowserStoreKeyUnwrapResult =
-  | { readonly ok: true; readonly rawKey: string }
-  | { readonly ok: false; readonly reason: string };
-
-/**
- * One machine's answer to a host `desktopIdentityChallenge`
- * (browser-security-hardening H09): an Ed25519 signature made in the desktop's
- * MAIN process. `null` means this machine holds no identity and will get none
- * (its keystore does not encrypt), so the host leaves the connection off the
- * jar plane. There is no shape here that could carry the private key.
- */
-export type BrowserDesktopIdentityAttestation = {
-  readonly publicKey: string;
-  readonly keystoreId: string;
-  readonly signature: string;
-};
-
 export type BrowserViewConsoleLevel =
   | "log"
   | "info"
@@ -324,54 +258,97 @@ export type {
 } from "@traycer/protocol/persistence/epic/schemas";
 
 /**
- * One observed sign-in on its way to the desktop's jar, with the identity of
- * the host stream that delivered it.
- *
- * `connectionId` and `hostId` are read from the CONNECTION, never from the
- * frame: the frame carries no contributor field precisely because one could
- * only be forged. `connectionId` names a single stream incarnation and changes
- * on every reconnect, because a reconnect is what makes the host replay its
- * whole contributed set - and that replay is what the receive-side burst is
- * sized against.
+ * How far along one main-owned `browser.sessions` stream is, as the renderer
+ * renders it. Lives here rather than beside the renderer's reducer because
+ * main is what computes it now and this is the IPC payload's own contract.
  */
-export interface BrowserObservedProfileInput {
-  readonly connectionId: string;
-  readonly hostId: string;
-  readonly domain: string;
-  readonly cookies: readonly BrowserStorageCookie[];
+export type BrowserSessionsLifecycle =
+  | "connecting"
+  | "live"
+  | "reconnecting"
+  | "closed"
+  | "failed";
+
+/**
+ * The lifecycle a stream's connection status reads as, and the message that
+ * goes with it.
+ *
+ * Both sides compute it: main for every desktop stream, and the renderer for
+ * the direct one it still owns on a shell with no main process. One home, so
+ * the two cannot drift into disagreeing about what `reconnecting` looks like.
+ */
+export function browserSessionsLifecycle(
+  status: StreamConnectionStatus,
+  reason: StreamCloseReason | null,
+): BrowserSessionsLifecycle {
+  if (reason?.kind === "fatalError") return "failed";
+  if (status === "open") return "live";
+  if (status === "reconnecting") return "reconnecting";
+  if (status === "closed") return "closed";
+  return "connecting";
+}
+
+export function browserSessionsError(
+  status: StreamConnectionStatus,
+  reason: StreamCloseReason | null,
+): string | null {
+  if (reason?.kind === "fatalError") return reason.details.reason;
+  if (status === "reconnecting") return "Reconnecting browser sessions.";
+  if (status === "closed") return "Browser sessions stream closed.";
+  return null;
 }
 
 /**
- * One host confirming it finished pruning this machine's forget ledger through
- * `revision` (universal-sign-in ticket 04).
+ * The renderer's name for one stream. Main keys its own streams by this plus
+ * the sender's window id, and never dedupes across windows: one subscriber is
+ * one Electron lifecycle owner, so collapsing two windows onto one would put
+ * both windows' native tabs on a single route.
  *
- * Both identities are the renderer's account of the stream the ack arrived on,
- * never a field of the frame: `hostId` decides what the next digest to that
- * host still carries, and `connectionId` decides whose observations stop being
- * refused - a distinction that matters because a reconnect must re-earn the
- * second while keeping the first.
+ * `hostId` is an ID, not a directory row. Main resolves the row itself with
+ * the bearer it already holds, because that row carries the host's static
+ * Noise key - a renderer-supplied one would let a compromised renderer point
+ * main's jar stream at a host it controls.
  */
-export interface BrowserForgetLedgerAckInput {
+export interface BrowserSessionsStreamKey {
+  readonly epicId: string;
   readonly hostId: string;
-  readonly connectionId: string;
-  readonly revision: number;
   /**
-   * The highest revision this connection was actually SENT in a digest, which
-   * is the ceiling the ack is worth (universal-sign-in ticket 09).
-   *
-   * The ack is a host echo of a number this machine minted, so on its own it
-   * proves nothing: an unsolicited one on stream open would otherwise disable
-   * the no-resurrection gate for that connection and blind every future digest
-   * to that host. Only the sender knows which digest earned it, so the sender
-   * states it and the ledger clamps to it - `0` before any digest went out,
-   * which makes such an ack a no-op on both watermarks.
+   * The signed-in owner identity the renderer keys its coordinator by. Opaque
+   * to main, which only uses it to keep two identities' streams apart.
    */
-  readonly sentRevision: number;
+  readonly identityKey: string;
 }
 
-/** A forget landed in this machine's ledger; every host stream pushes anew. */
-export interface BrowserForgetLedgerChange {
-  readonly revision: number;
+export interface BrowserSessionsStreamSend {
+  readonly key: BrowserSessionsStreamKey;
+  readonly frame: BrowserSessionsUxClientFrame;
+}
+
+/**
+ * Everything main forwards to the window that opened a stream. `frame` is
+ * typed as the UX projection, so a jar frame cannot be forwarded by mistake -
+ * the protocol's `BrowserSessionsUxServerFrame` is an `Exclude` with a
+ * `never` assertion over every cookie-bearing field.
+ */
+export type BrowserSessionsStreamEvent =
+  | {
+      readonly kind: "status";
+      readonly lifecycle: BrowserSessionsLifecycle;
+      readonly errorMessage: string | null;
+    }
+  | { readonly kind: "frame"; readonly frame: BrowserSessionsUxServerFrame }
+  | {
+      readonly kind: "tabBound";
+      readonly capability: BrowserViewNativeTabCapability;
+    }
+  | {
+      readonly kind: "tabReleased";
+      readonly capability: BrowserViewNativeTabCapability;
+    };
+
+export interface BrowserSessionsStreamEventEnvelope {
+  readonly key: BrowserSessionsStreamKey;
+  readonly event: BrowserSessionsStreamEvent;
 }
 
 export interface BrowserViewBridge {
@@ -416,24 +393,6 @@ export interface BrowserViewBridge {
    */
   setSaveLogins(enabled: boolean): Promise<boolean>;
   /**
-   * Seals the host's freshly minted primary-profile store key with this
-   * machine's OS keystore (spec §6.2). The host keeps the returned blob; it
-   * never sees a key this machine cannot open again.
-   */
-  wrapStoreKey(rawKey: string): Promise<BrowserStoreKeyWrapResult>;
-  /** Opens a blob wrapped earlier on this machine, so the host can unseal. */
-  unwrapStoreKey(wrappedKey: string): Promise<BrowserStoreKeyUnwrapResult>;
-  /**
-   * Signs one host `desktopIdentityChallenge` with this installation's
-   * identity key, minting the keypair on first use (H09). It is what makes a
-   * stream jar-authorized; a script holding the CLI credentials file has no
-   * such key and cannot get one out of this call.
-   */
-  attestDesktopIdentity(input: {
-    readonly hostId: string;
-    readonly nonce: string;
-  }): Promise<BrowserDesktopIdentityAttestation | null>;
-  /**
    * "Forget all browser logins" (spec §6.5), this machine's half: record the
    * forget in the durable ledger, clear the `primary` jars - the durable
    * partition always, and the ephemeral one the live guests are on when saving
@@ -453,35 +412,8 @@ export interface BrowserViewBridge {
    * the caller must not send the host frames either.
    */
   forgetLogins(): Promise<boolean>;
-  /**
-   * The forget-ledger digest this host still owes: everything it has not acked
-   * pruning, plus the ledger's current revision. Read once per attach, and
-   * again on every ledger change, by the renderer that owns that host's stream.
-   */
-  readForgetLedger(hostId: string): Promise<BrowserForgetLedger>;
-  /** That host finished pruning through a revision; both watermarks advance. */
-  ackForgetLedger(input: BrowserForgetLedgerAckInput): Promise<void>;
-  /** A closed stream incarnation can ack nothing more. */
-  releaseForgetLedgerConnection(connectionId: string): Promise<void>;
-  /**
-   * Every forget recorded on this machine, whichever window performed it: the
-   * renderer holding a host stream answers by pushing that host's fresh digest.
-   */
-  onForgetLedgerChanged(handler: (change: BrowserForgetLedgerChange) => void): {
-    dispose: () => void;
-  };
-  /**
-   * Push for every coalesced cookie change in the durable `primary` jar (spec
-   * §6.3). Unsolicited and continuous: the renderer holding the host stream
-   * forwards each one as a `primaryProfileDelta` client frame, so a login
-   * reaches the store within a window instead of waiting for teardown.
-   */
-  onPrimaryProfileDelta(handler: (delta: BrowserPrimaryProfileDelta) => void): {
-    dispose: () => void;
-  };
   /** Renderer confirms the replacement frame is painted before main parks the view. */
   readonly overlayPaintAck: (overlayId: string) => Promise<void>;
-  capturePrimaryProfile(): Promise<BrowserPrimaryProfileCaptureResult>;
   /**
    * "Clear cookies for this site" (spec §6.5): removes the tile's registrable
    * domain from the shared `primary` jars - cookies and the localStorage of
@@ -493,38 +425,36 @@ export interface BrowserViewBridge {
    */
   clearSite(input: BrowserViewTileKey): Promise<void>;
   /**
-   * A sign-in a host witnessed inside one of its own headless sessions
-   * (`primaryProfileObserved`), offered to this machine's master jar
-   * (universal-sign-in decision 8). ADD-ONLY against the desktop's own
-   * browsing, and the unit of ownership is a cookie NAME within a registrable
-   * domain rather than the (name, domain, path) key Chromium replaces by: a
-   * host may introduce a name this jar holds no desktop-written cookie for,
-   * and update what its own earlier observation introduced, and nothing else.
-   * The coarser unit is what makes the claim true at the WIRE level - the
-   * `Cookie` header is ordered longest-path-first and read first-occurrence,
-   * so a `/app` cookie beside the desktop's `/` one, or a `.example.com` one
-   * beside a host-only `example.com` one, is that session for the user's real
-   * requests.
+   * Opens (or adopts) the main-owned `browser.sessions` stream for this
+   * window and this key. Idempotent per key: a second call from the same
+   * window is the same stream.
    *
-   * One stated limit: the jar is read through the same normalisation the
-   * capture path uses, so a cookie this shell cannot represent (an IDN domain
-   * form it refuses, say) reads as a name the jar does not hold - and is
-   * therefore addable. The same normalisation is what stops that cookie
-   * reaching a host in the first place.
+   * The stream lives in main because the jar does - every cookie-bearing
+   * frame on it is produced and consumed there, and this renderer sees only
+   * the UX projection (browser-security-hardening H10, root cause C).
    *
-   * The renderer forwards it without judging it. Main is the only place the
-   * frame is validated - independent domain re-derivation, the ownership rule,
-   * the per-frame bounds, expired-cookie rejection, the no-resurrection window
-   * and the rate limit all live there - because this is the one direction in
-   * which a host writes the user's jar, and the renderer holds no jar to check
-   * it against.
-   *
-   * Resolves once the frame has been applied or dropped; nothing is reported
-   * back to the host either way. The applied cookies leave through the normal
-   * cookie-change observer as a `primaryProfileDelta`, which is what converges
-   * every other attached host.
+   * A host id and an epic, and nothing else. The signed-in user is main's own
+   * (it holds the desktop auth session), for the same reason the directory row
+   * is: anything the renderer states here is something a compromised renderer
+   * could state differently.
    */
-  applyObservedProfile(input: BrowserObservedProfileInput): Promise<void>;
+  openSessionsStream(key: BrowserSessionsStreamKey): Promise<void>;
+  closeSessionsStream(key: BrowserSessionsStreamKey): Promise<void>;
+  /** One user-initiated request onto that stream. */
+  sendSessionsFrame(input: BrowserSessionsStreamSend): Promise<void>;
+  onSessionsStreamEvent(
+    handler: (envelope: BrowserSessionsStreamEventEnvelope) => void,
+  ): { dispose: () => void };
+  /**
+   * "Clear" on one row of Settings > Browser: signs the user out of that site
+   * on every host this process holds a stream to.
+   *
+   * Main confirms it and main sends the frames. It is forget-all one domain
+   * at a time as far as a host's slice is concerned, so it may not be a frame
+   * a renderer can mint (H05's residual for H10). Answers whether the user
+   * confirmed.
+   */
+  clearSavedLoginSite(domain: string): Promise<boolean>;
   onFindChange(handler: (change: BrowserViewFindChange) => void): {
     dispose: () => void;
   };
@@ -554,17 +484,9 @@ export interface BrowserViewBridge {
   ): {
     dispose: () => void;
   };
-  ensureTab(
-    input: BrowserViewEnsureTab,
-  ): Promise<BrowserViewNativeTabCapability>;
-  acceptTab(input: BrowserViewNativeTabCapability): Promise<void>;
   attachSurface(input: BrowserViewAttachSurface): Promise<void>;
   detachSurface(input: BrowserViewDetachSurface): Promise<void>;
-  releaseTab(input: BrowserViewNativeTabCapability): Promise<boolean>;
   controlElectronTab(input: BrowserViewElectronTabControl): Promise<void>;
-  dispatchElectronTabCdp(
-    input: BrowserViewElectronTabCdpDispatch,
-  ): Promise<BrowserCdpResult>;
   startPipCapture(input: PipCaptureStartInput): Promise<void>;
   stopPipCapture(): Promise<void>;
   onPipCaptureFrame(

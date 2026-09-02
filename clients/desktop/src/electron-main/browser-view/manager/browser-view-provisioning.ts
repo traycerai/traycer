@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
-import type {
-  BrowserViewEnsureTab,
-  BrowserViewNativeTabCapability,
-} from "@traycer-clients/shared/platform/browser-view";
+import type { BrowserViewNativeTabCapability } from "@traycer-clients/shared/platform/browser-view";
 import type { BrowserStorageState } from "@traycer/protocol/host/browser/contracts";
 import { describeLogError, log } from "../../app/logger";
 import type { BrowserSessionProfile } from "../browser-session";
-import type { ManagedBrowserView } from "../browser-view-port";
+import type {
+  BrowserViewEnsureTab,
+  ManagedBrowserView,
+} from "../browser-view-port";
 import { browserLocalStorageSeedScript } from "../storage/browser-storage-state";
 import type {
   BrowserViewEntry,

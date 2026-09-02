@@ -16,8 +16,24 @@ import {
   type BrowserStorageOrigin,
   type BrowserStorageState as ProtocolStorageState,
 } from "@traycer/protocol/host/browser/contracts";
-import type { BrowserPrimaryProfileCaptureResult } from "@traycer-clients/shared/platform/browser-view";
 import { cookieDomainInScope } from "@traycer/protocol/host/browser/registrable-domain";
+
+/**
+ * What a whole-jar read answers. Main-side only: the capture is produced and
+ * consumed in this process now (H10), and the storage state never crosses to
+ * a renderer.
+ */
+export type BrowserPrimaryProfileCaptureResult =
+  | {
+      readonly status: "captured";
+      readonly storageState: ProtocolStorageState;
+      readonly reason: null;
+    }
+  | {
+      readonly status: "unavailable";
+      readonly storageState: null;
+      readonly reason: string;
+    };
 
 type BrowserStorageCookieSameSite = ProtocolStorageCookie["sameSite"];
 const PRIMARY_PROFILE_LOCAL_STORAGE_ORIGIN_LIMIT = 8;

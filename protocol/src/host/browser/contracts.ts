@@ -627,6 +627,15 @@ export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
       // opens a second, opportunistic renderer request path during placement.
       kind: z.literal("capturePrimaryProfile"),
       ...requestFrameFields,
+      // A STANDING request (browser-security-hardening H02): capture nothing
+      // now, keep this `requestId`, and use it on the one capture the host
+      // cannot ask for - the flush the desktop pushes as it quits. Every
+      // `primaryProfileCaptured` the host stores is thereby solicited: the
+      // ordinary answer matches the outstanding request, the quit flush matches
+      // the standing one, and anything else is acked and dropped. Issued once
+      // per connection, at the point the host both knows the desktop holds the
+      // master jar and can read the slice it speaks for.
+      standing: z.boolean().default(false),
     })
     .strict(),
   z
@@ -862,13 +871,11 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
       // optimization, and this field is the sole locality signal it is
       // gated on.
       coLocatedHostId: z.string().nullable(),
-      // The desktop window this renderer is, or null off Electron. The host
-      // hands the Electron lifecycle over only to the incumbent owner's own
-      // window: a SECOND window announcing readiness would otherwise rip the
-      // first window's live native tabs onto a renderer that has no surface
-      // for them. `.default(null)` so an older GUI's readiness frame still
-      // parses on a `.strict()` variant.
-      desktopWindowId: z.string().nullable().default(null),
+      // There was a `desktopWindowId` here. It is gone: H02 retired the host's
+      // last reader (lifecycle hand-over now happens only through
+      // `detachBrowserSessionsSubscriber`), and with the jar plane in the
+      // desktop's main process (H10) the window a stream belongs to is a fact
+      // that process already holds - it never needed to travel.
     })
     .strict(),
   z
@@ -999,6 +1006,74 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
 ]);
 export type BrowserSessionsClientFrame = z.infer<
   typeof browserSessionsClientFrameSchema
+>;
+
+/**
+ * The `browser.sessions` server frames a desktop RENDERER may see
+ * (browser-security-hardening H10).
+ *
+ * The jar plane lives in the desktop main process, so every frame that
+ * carries cookies, a storage state, key material or a signing challenge is
+ * consumed there and never projected outward. This type is the compile-time
+ * half of that rule: the projection is typed as this, so a new jar frame that
+ * is not named in the exclusion below is a type error at the projection
+ * instead of a cookie array arriving in a renderer.
+ */
+export type BrowserSessionsUxServerFrame = Exclude<
+  BrowserSessionsServerFrame,
+  {
+    readonly kind:
+      | "createElectronTab"
+      | "electronTabAccepted"
+      | "releaseElectronTab"
+      | "cdpRequest"
+      | "capturePrimaryProfile"
+      | "primaryProfileObserved"
+      | "storeKeyWrapRequest"
+      | "storeKeyUnwrapRequest"
+      | "desktopIdentityChallenge"
+      | "primaryProfileCaptureAck"
+      | "primaryProfileForgetLedgerAck";
+  }
+>;
+
+/**
+ * The second half of the same rule, and the one the exclusion list cannot
+ * state: whatever the union is named, nothing renderer-reachable may carry a
+ * cookie array, a storage state or key material. A protocol addition that grows
+ * one of those fields on a UX frame fails the build here rather than at review.
+ */
+type BrowserSessionsUxFrameCarryingJarMaterial = Extract<
+  BrowserSessionsUxServerFrame,
+  | { readonly cookies: unknown }
+  | { readonly storageState: unknown }
+  | { readonly rawKey: unknown }
+  | { readonly wrappedKey: unknown }
+  | { readonly seedStorageState: unknown }
+>;
+const noJarMaterialReachesARenderer: BrowserSessionsUxFrameCarryingJarMaterial extends never
+  ? true
+  : never = true;
+void noJarMaterialReachesARenderer;
+
+/**
+ * The client frames a renderer may ASK for: the three user-initiated tab
+ * requests, and nothing else.
+ *
+ * `forgetLogins` and `clearSite` are deliberately NOT here even though a
+ * renderer button starts both. They shred every connected host's slice of the
+ * user's logins, so they are produced in main behind its own confirmation,
+ * triggered by an action invoke rather than by a frame a renderer could mint
+ * on its own (H05's per-site residual is exactly this hole one domain at a
+ * time). Everything else on this stream - the tab lifecycle, the jar plane,
+ * the forget-ledger digest and the readiness burst - is produced in main from
+ * state the renderer does not hold.
+ */
+export type BrowserSessionsUxClientFrame = Extract<
+  BrowserSessionsClientFrame,
+  {
+    readonly kind: "openTab" | "closeTab" | "captureTabPreview";
+  }
 >;
 
 /** Unreleased browser stream baseline. */

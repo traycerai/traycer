@@ -13,8 +13,7 @@ import type {
   BrowserViewDebugSnapshot,
   BrowserViewDebugSnapshotData,
   BrowserViewDetachSurface,
-  BrowserViewElectronTabCdpDispatch,
-  BrowserViewEnsureTab,
+  BrowserViewNativeTabStatusChange,
   BrowserViewStatus,
   BrowserViewElectronTabControl,
   BrowserViewNativeTabCapability,
@@ -36,6 +35,8 @@ import type {
   BrowserSessionProfileRequest,
 } from "./browser-session";
 import type {
+  BrowserViewElectronTabCdpDispatch,
+  BrowserViewEnsureTab,
   BrowserViewDevToolsWindow,
   BrowserViewNavigationHistory,
   BrowserViewPopupWebContents,
@@ -165,6 +166,9 @@ export class BrowserViewManager {
   private readonly offDownloadChange: () => void;
   private readonly offCertificateError: () => void;
   private readonly entries = new BrowserViewEntryRegistry<BrowserViewEntry>();
+  private readonly nativeTabStatusListeners = new Set<
+    (change: BrowserViewNativeTabStatusChange) => void
+  >();
   private readonly geometry: BrowserViewGeometry;
   private readonly popups: BrowserViewPopups;
   private readonly debugSessions: BrowserViewDebugSessions;
@@ -669,6 +673,11 @@ export class BrowserViewManager {
     entry.lastAppliedBounds = null;
     entry.rendererResetPending = false;
     this.windows.detachResetListenerIfUnused(surface.windowId);
+    // LAST, once every field the reading depends on has moved: `viewed` is
+    // read off the entry now (H10), so a detach that emitted nothing would
+    // leave the host believing a tile is still showing this guest. `attachSurface`
+    // emits for the same reason on the way in.
+    this.emitStatus(entry);
   }
 
   /**
@@ -901,21 +910,40 @@ export class BrowserViewManager {
     if (webContents === null) return;
     const readings = readNavigationReadings(webContents);
     if (readings === null) return;
+    const change: BrowserViewNativeTabStatusChange = {
+      ...entry.identity.key,
+      registrationId: entry.identity.registrationId,
+      url: entry.currentUrl,
+      title: entry.currentTitle === "" ? null : entry.currentTitle,
+      status: entry.status,
+      reason: entry.statusReason,
+      canGoBack: readings.canGoBack,
+      canGoForward: readings.canGoForward,
+      zoomPercent: readings.zoomPercent,
+      viewed: entry.surface !== null && entry.desiredVisible,
+    };
     this.send(
       entry.identity.lifecycleWindowId,
       RunnerHostEvent.browserViewNativeTabStatusChange,
-      {
-        ...entry.identity.key,
-        registrationId: entry.identity.registrationId,
-        url: entry.currentUrl,
-        title: entry.currentTitle === "" ? null : entry.currentTitle,
-        status: entry.status,
-        reason: entry.statusReason,
-        canGoBack: readings.canGoBack,
-        canGoForward: readings.canGoForward,
-        zoomPercent: readings.zoomPercent,
-      },
+      change,
     );
+    // The same reading, to the process that owns the host stream. It becomes
+    // `electronTabState` there (H10); the renderer's copy above is tile chrome.
+    for (const listener of this.nativeTabStatusListeners) listener(change);
+  }
+
+  /**
+   * Main-side subscription to the same status readings the renderer gets.
+   * Returns its own disposer, so a stream that closes stops hearing without
+   * touching another stream's subscription.
+   */
+  onNativeTabStatusChange(
+    listener: (change: BrowserViewNativeTabStatusChange) => void,
+  ): () => void {
+    this.nativeTabStatusListeners.add(listener);
+    return () => {
+      this.nativeTabStatusListeners.delete(listener);
+    };
   }
 
   private readLiveWebContents(
