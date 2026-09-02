@@ -1,6 +1,7 @@
 import {
   BrowserWindow,
   WebContentsView,
+  dialog,
   type BrowserWindowConstructorOptions,
   type IpcMainInvokeEvent,
   type Session,
@@ -54,13 +55,16 @@ import {
   captureBrowserOriginLocalStorage,
   captureBrowserPrimaryProfile,
   clearBrowserSite,
-  seedBrowserViewCookies,
 } from "../browser-view/storage/browser-storage-state";
 import {
   applyBrowserObservedProfile,
   BrowserObservedConnectionGovernor,
   traceBrowserObservedProfile,
+  type BrowserObservedProfile,
+  type BrowserObservedProfileResult,
+  type BrowserObservedProfileTarget,
 } from "../browser-view/storage/browser-observed-profile";
+import { registrableDomainForUrl } from "@traycer/protocol/host/browser/registrable-domain";
 import { BrowserJarSerializer } from "../browser-view/storage/browser-jar-serializer";
 import {
   browserForgetLedgerDigestForHost,
@@ -235,6 +239,66 @@ export function registerBrowserViewIpc(
     );
     log.info("[browser-view] forgot the saved browser logins");
   };
+  /**
+   * The ONE validated write path a host reaches this jar through (browser
+   * security review, root cause C).
+   *
+   * Both doors - the `primaryProfileObserved` frame and the
+   * `createElectronTab` storage seed - land here with the same dependencies,
+   * so there is exactly one place that decides what a host may write and one
+   * set of traces to read afterwards. Only the jar the write targets differs,
+   * which is why it is the argument: the observed frame always means the
+   * shared `primary` jar, while a seed means the guest's own.
+   */
+  const applyHostContributedCookies = async (
+    observed: BrowserObservedProfile,
+    getTargetJar: () => BrowserObservedProfileTarget,
+  ): Promise<BrowserObservedProfileResult> => {
+    const result = await applyBrowserObservedProfile(observed, {
+      now: () => Date.now(),
+      isForgottenPendingAck: isBrowserForgetLedgerPendingAck,
+      isHeadlessOriginKey: isHeadlessOriginCookieKey,
+      // The observer first, then the durable record: the observer is what
+      // stops this applier's own inserts from handing the keys straight back
+      // to the desktop, and the record is what lets the sending host update
+      // them again later.
+      //
+      // The applier calls neither for a write bound for the ephemeral jar,
+      // which is why both may write the durable ledger unconditionally.
+      claimHeadlessOriginKeys: async (keys) => {
+        noteBrowserPrimaryProfileAppliedKeys(keys);
+        await recordHeadlessOriginCookieKeys(keys);
+      },
+      // The mirror image, for the keys Chromium refused: the observer mark
+      // first (no insert is coming to spend it), then the durable claim.
+      releaseHeadlessOriginKeys: async (keys) => {
+        forgetBrowserPrimaryProfileAppliedKeys(keys);
+        await releaseHeadlessOriginCookieKeys(keys);
+      },
+      getTargetJar,
+      serializeOnDomain: (domain, action) =>
+        jarSerializer.runOnDomain(domain, action),
+      governor: observedConnections,
+    });
+    traceBrowserObservedProfile(result, {
+      source: observed.source,
+      hostId: observed.hostId,
+      connectionId: observed.connectionId,
+      governor: observedConnections,
+    });
+    return result;
+  };
+  /** The shared `primary` jar an observed frame always merges into. */
+  const primaryProfileTarget = (): BrowserObservedProfileTarget => {
+    const partition = partitionForProfile(
+      PRIMARY_PROFILE_REQUEST.profile,
+      PRIMARY_PROFILE_REQUEST.sessionId,
+    );
+    return {
+      session: ensureBrowserViewSessionForPartition(partition),
+      durableJar: partition === BROWSER_VIEW_PARTITION,
+    };
+  };
   const manager = new BrowserViewManager({
     createView: createElectronBrowserView,
     getWindow: (windowId) =>
@@ -266,14 +330,65 @@ export function registerBrowserViewIpc(
     },
     send: (windowId, channel, payload) =>
       bridge.safeSendToWindow(windowId, channel, payload),
-    seedStorageState: async (storageState, webContents) => {
-      // Retain BEFORE seeding: the jar the host just handed down is the only
-      // record of the origins this run may never navigate, and a quit capture
-      // replaces the host's whole jar with what it sends. Isolated guests are
-      // never seeded (the host forces `seedStorageState` to null at the
-      // placement seam), so nothing throwaway can enter this memory.
-      primaryProfileSnapshots.retainSeededOrigins(storageState);
-      await seedBrowserViewCookies(storageState, webContents);
+    seedStorageState: async (input, webContents) => {
+      if (input.seedStorageState === null) return null;
+      // The seed's CLAIM. An observed frame names the domain it speaks for and
+      // is checked against it; a seed names nothing, so the tab it is being
+      // handed to is the claim - the one fact about this write that no sender
+      // chose. A tab with no registrable site (`about:blank`, a bare IP form
+      // the list cannot place) has no scope to seed into.
+      const scope = registrableDomainForUrl(input.requestedUrl);
+      if (scope === null) return null;
+      // The localStorage half takes the SAME scope, and needs it more than the
+      // cookies do: the seed script does `localStorage.clear()` on any origin
+      // it matches, so an unfiltered seed hands one tab the authority to wipe
+      // and rewrite local state for every site in the host's snapshot.
+      const origins = input.seedStorageState.origins.filter(
+        (origin) => registrableDomainForUrl(origin.origin) === scope,
+      );
+      const result = await applyHostContributedCookies(
+        {
+          source: "seed",
+          // The STREAM's connection, same provenance an observed frame
+          // carries, because both watermarks the applier reads are keyed by
+          // it: the forget ledger's per-connection ack (a synthetic id has
+          // acked nothing, so one forget would refuse every later seed
+          // forever) and the observed replay budget. Off-connection there is
+          // no ack to find, and the gate refusing is the safe direction.
+          connectionId:
+            input.connectionId ?? `seed:${input.hostId}:${input.sessionId}`,
+          hostId: input.hostId,
+          domain: scope,
+          cookies: input.seedStorageState.cookies,
+        },
+        // The guest's OWN jar, not the resolved `primary` one: an isolated
+        // guest is on a throwaway partition, and the custody marks the applier
+        // records are only meaningful for the durable jar.
+        () => ({
+          session: webContents.session,
+          durableJar:
+            webContents.session ===
+            ensureBrowserViewSessionForPartition(BROWSER_VIEW_PARTITION),
+        }),
+      );
+      // One verdict for the whole seed. The frame-level refusals are the ones
+      // that mean "this write may not land at all" - above all `ledger-unacked`,
+      // where the user forgot this site and the sending connection has not
+      // acked pruning it. Seeding the localStorage of a site whose cookies were
+      // just refused would restore by another door exactly what the forget
+      // removed.
+      if (result.outcome !== "applied") return null;
+      // Retained only for a seed that LANDED, and after the verdict rather
+      // than before it. These origins are what a quit capture reads
+      // localStorage from and ships to the host, so retaining them for a
+      // refused seed hands the forgotten site straight back by the capture
+      // door - the one door the ledger gate cannot see. What it costs is
+      // nothing: a refused seed wrote no localStorage for the capture to find.
+      //
+      // Isolated guests are never seeded (the host forces `seedStorageState`
+      // to null at the placement seam), so nothing throwaway enters here.
+      primaryProfileSnapshots.retainSeededOrigins({ cookies: [], origins });
+      return { cookies: [], origins };
     },
     observePrimaryProfileOrigin: (url, webContents, profile) => {
       // The primary capture reads the shared jar only. An isolated partition's
@@ -477,6 +592,22 @@ export function registerBrowserViewIpc(
       if (pending === null) {
         throw new Error("Browser certificate error is no longer pending");
       }
+      // Trusting a certificate durably widens what this machine accepts as
+      // that hostname, so main asks rather than taking the renderer's word for
+      // it (browser security review, root cause C). The hostname is the
+      // pending record's, not the caller's - the caller named an error id.
+      if (
+        !confirmInMain({
+          title: "Trust this certificate?",
+          message: `Always trust the certificate for ${pending.hostname}?`,
+          detail:
+            "This machine will accept it for that site from now on, including in other apps that read the system trust store.",
+          confirmLabel: "Trust",
+        })
+      ) {
+        log.info("[browser-view] certificate trust was not confirmed");
+        return;
+      }
       await trustBrowserCertificate(pending.hostname, pending.certificate);
       clearBrowserViewPendingCertificateError(input.certificateErrorId);
       manager.clearCertificateError(windowId, input);
@@ -584,47 +715,13 @@ export function registerBrowserViewIpc(
   bridge.handleInvoke(
     RunnerHostInvoke.browserViewApplyObservedProfile,
     async (_event, payload) => {
-      const observed = browserViewIpcPayload.observedProfile.parse(payload);
-      const result = await applyBrowserObservedProfile(observed, {
-        now: () => Date.now(),
-        isForgottenPendingAck: isBrowserForgetLedgerPendingAck,
-        isHeadlessOriginKey: isHeadlessOriginCookieKey,
-        // The observer first, then the durable record: the observer is what
-        // stops this applier's own inserts from handing the keys straight back
-        // to the desktop, and the record is what lets the sending host update
-        // them again later.
-        //
-        // The applier calls neither for a write bound for the ephemeral jar,
-        // which is why both may write the durable ledger unconditionally.
-        claimHeadlessOriginKeys: async (keys) => {
-          noteBrowserPrimaryProfileAppliedKeys(keys);
-          await recordHeadlessOriginCookieKeys(keys);
+      await applyHostContributedCookies(
+        {
+          source: "observed",
+          ...browserViewIpcPayload.observedProfile.parse(payload),
         },
-        // The mirror image, for the keys Chromium refused: the observer mark
-        // first (no insert is coming to spend it), then the durable claim.
-        releaseHeadlessOriginKeys: async (keys) => {
-          forgetBrowserPrimaryProfileAppliedKeys(keys);
-          await releaseHeadlessOriginCookieKeys(keys);
-        },
-        getTargetJar: () => {
-          const partition = partitionForProfile(
-            PRIMARY_PROFILE_REQUEST.profile,
-            PRIMARY_PROFILE_REQUEST.sessionId,
-          );
-          return {
-            session: ensureBrowserViewSessionForPartition(partition),
-            durableJar: partition === BROWSER_VIEW_PARTITION,
-          };
-        },
-        serializeOnDomain: (domain, action) =>
-          jarSerializer.runOnDomain(domain, action),
-        governor: observedConnections,
-      });
-      traceBrowserObservedProfile(result, {
-        hostId: observed.hostId,
-        connectionId: observed.connectionId,
-        governor: observedConnections,
-      });
+        primaryProfileTarget,
+      );
     },
   );
 
@@ -735,14 +832,32 @@ export function registerBrowserViewIpc(
   // coordinator is reset before the tiles come back, so a recreated tile cannot
   // be re-seeded from an origin remembered pre-forget, and the tiles are
   // recreated last, at their current URLs.
-  bridge.handleInvoke(RunnerHostInvoke.browserViewForgetLogins, async () => {
-    const revision = await recordForgetAllBrowserLogins();
-    await forgetEveryBrowserLogin();
-    // Only once the jars are actually empty. Recorded after rather than with
-    // the forget, so a crash in between leaves the clear pending and the next
-    // launch re-runs it (finding F7).
-    await markBrowserForgetLedgerCleared(revision);
-  });
+  bridge.handleInvoke(
+    RunnerHostInvoke.browserViewForgetLogins,
+    async (): Promise<boolean> => {
+      // Main decides, not the renderer (browser security review, root cause
+      // C): this is the single most destructive action the browser surface
+      // has, and it was reachable from any code running in a renderer. The
+      // renderer may ASK; a native dialog the renderer cannot draw over or
+      // dismiss is what turns the ask into a decision. Before the ledger
+      // write, because that is the first irreversible step - it tells every
+      // host to prune.
+      if (!confirmInMain(FORGET_ALL_LOGINS_CONFIRMATION)) {
+        log.info("[browser-view] forget-all was not confirmed");
+        return false;
+      }
+      const revision = await recordForgetAllBrowserLogins();
+      await forgetEveryBrowserLogin();
+      // Only once the jars are actually empty. Recorded after rather than with
+      // the forget, so a crash in between leaves the clear pending and the
+      // next launch re-runs it (finding F7).
+      await markBrowserForgetLedgerCleared(revision);
+      // The verdict, not just the completion: the caller fans `forgetLogins`
+      // out to every connected host, and a cancelled dialog must not shred a
+      // host's slice for a forget that did not happen here.
+      return true;
+    },
+  );
 
   // The digest one host still owes (universal-sign-in ticket 04). Read by the
   // renderer holding that host's stream, which pushes it in the same burst as
@@ -873,6 +988,44 @@ function toBrowserViewWindow(
     isVisible: () => value.isVisible(),
     isMinimized: () => value.isMinimized(),
   };
+}
+
+interface MainConfirmation {
+  readonly title: string;
+  readonly message: string;
+  readonly detail: string;
+  readonly confirmLabel: string;
+}
+
+const FORGET_ALL_LOGINS_CONFIRMATION: MainConfirmation = {
+  title: "Forget browser logins?",
+  message: "Forget all saved browser logins?",
+  detail:
+    "Every site you are signed in to in Traycer's browser is signed out, here and on every connected machine. This cannot be undone.",
+  confirmLabel: "Forget all",
+};
+
+/**
+ * A destructive or trust-changing action confirmed by the process that owns
+ * the data, following `confirmDangerousDownload` in `browser-session.ts`.
+ *
+ * Cancel is both the default and the escape key's answer, so a dialog raced or
+ * dismissed refuses. Synchronous on purpose: nothing must be able to run
+ * between the answer and the action it authorises.
+ */
+function confirmInMain(confirmation: MainConfirmation): boolean {
+  return (
+    dialog.showMessageBoxSync({
+      type: "warning",
+      buttons: ["Cancel", confirmation.confirmLabel],
+      defaultId: 0,
+      cancelId: 0,
+      title: confirmation.title,
+      message: confirmation.message,
+      detail: confirmation.detail,
+      noLink: true,
+    }) === 1
+  );
 }
 
 function readSenderWindowId(

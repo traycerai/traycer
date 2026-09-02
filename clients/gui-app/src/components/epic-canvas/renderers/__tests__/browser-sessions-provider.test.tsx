@@ -10,6 +10,7 @@ import { useBrowserSessionsContext } from "@/components/epic-canvas/renderers/br
 import {
   captureFinalPrimaryProfiles,
   FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS,
+  forgetAllBrowserLogins,
 } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import type {
   BrowserForgetLedgerAckInput,
@@ -361,6 +362,11 @@ class FakeBridge {
   >(() => ({ dispose: () => {} }));
   readonly clearSite = vi.fn<BrowserViewBridge["clearSite"]>(() =>
     Promise.resolve(),
+  );
+  // Main's native confirmation, as the renderer sees it: `true` is the user
+  // saying yes, and it is what authorises the host fan-out below.
+  readonly forgetLogins = vi.fn<BrowserViewBridge["forgetLogins"]>(() =>
+    Promise.resolve(true),
   );
   readonly applyObservedProfile = vi.fn<
     BrowserViewBridge["applyObservedProfile"]
@@ -862,6 +868,57 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
     expect(ownerBTransport.closed).toBe(true);
   });
 
+  /**
+   * Browser security review, root cause C: main raises the native dialog for
+   * "forget all browser logins", so its answer has to gate the HOST half too.
+   * The local invoke used to be fired with `void`, and a cancel is
+   * indistinguishable from a completion on a `Promise<void>` - so cancelling
+   * the dialog still shredded every connected host's slice.
+   */
+  it("sends no forgetLogins frame when the main-process confirmation is declined", async () => {
+    const bridge = new FakeBridge();
+    bridge.forgetLogins.mockResolvedValue(false);
+    installNativeBridge(bridge);
+    renderProvider();
+    const stream = hookState.streamClient?.sessions[0];
+    if (stream === undefined) throw new Error("expected browser stream");
+
+    act(() => {
+      stream.emitStatus("open");
+      stream.emit(
+        { kind: "snapshot", hasBinaryPayload: false, sessions: [] },
+        null,
+      );
+    });
+    await flushMacrotask();
+
+    expect(await forgetAllBrowserLogins(bridge as never)).toBe(0);
+    expect(bridge.forgetLogins).toHaveBeenCalledTimes(1);
+    expect(framesOfKind(stream.sentFrames, "forgetLogins")).toEqual([]);
+  });
+
+  it("sends exactly one forgetLogins frame once the confirmation lands", async () => {
+    const bridge = new FakeBridge();
+    installNativeBridge(bridge);
+    renderProvider();
+    const stream = hookState.streamClient?.sessions[0];
+    if (stream === undefined) throw new Error("expected browser stream");
+
+    act(() => {
+      stream.emitStatus("open");
+      stream.emit(
+        { kind: "snapshot", hasBinaryPayload: false, sessions: [] },
+        null,
+      );
+    });
+    await flushMacrotask();
+
+    expect(await forgetAllBrowserLogins(bridge as never)).toBe(1);
+    // One per HOST, not one per coordinator: the frame speaks for the user's
+    // whole slice on that host.
+    expect(framesOfKind(stream.sentFrames, "forgetLogins")).toHaveLength(1);
+  });
+
   it("advertises native capability only after the stream snapshot", async () => {
     installNativeBridge(new FakeBridge());
     renderProvider();
@@ -1106,6 +1163,13 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
     const stream = hookState.streamClient?.sessions[0];
     expect(stream).toBeDefined();
     if (stream === undefined) throw new Error("expected browser stream");
+    // Opened first, because the frame carries the incarnation it arrived on:
+    // a `createElectronTab` cannot reach a stream that is not open, and the
+    // connection id is minted by that status.
+    act(() => {
+      stream.emitStatus("open");
+    });
+    await flushMacrotask();
     act(() => {
       stream.emit(
         {
@@ -1130,6 +1194,9 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
         requestedUrl: "https://app.example",
         profile: "primary",
         seedStorageState: null,
+        // The live stream incarnation, so main prices the seed's jar write
+        // against the connection that sent it.
+        connectionId: expect.any(String),
       });
       expect(stream.sentFrames).toContainEqual({
         kind: "electronTabProvisioned",

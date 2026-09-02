@@ -46,6 +46,13 @@ type CdpRequestFrame = Extract<
 interface ElectronTabsOptions {
   readonly hostId: string;
   readonly native: BrowserViewBridge | null;
+  /**
+   * The live stream incarnation, read at call time rather than captured: a
+   * birth outlives no connection, but the value is minted and dropped by the
+   * coordinator around this layer. Main prices the seed's jar write against
+   * it, exactly as it prices an observed frame.
+   */
+  readonly connectionId: () => string | null;
   readonly sendFrame: (frame: BrowserSessionsClientFrame) => void;
 }
 
@@ -322,6 +329,7 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
           // Relayed verbatim: the host owns which jar the guest is born into.
           profile: frame.profile,
           seedStorageState: frame.seedStorageState,
+          connectionId: options.connectionId(),
         })
         .then((provisioned) => {
           if (

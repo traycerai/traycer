@@ -134,6 +134,8 @@ const ensureTabSchema: z.ZodType<BrowserViewEnsureTab> =
     // does not know about profiles can only mean the shared jar.
     profile: browserSessionProfileKindSchema.default("primary"),
     seedStorageState: browserStorageStateSchema.nullable().default(null),
+    // The provenance the seed is priced against.
+    connectionId: nonEmptyStringSchema.nullable(),
   });
 const attachSurfaceSchema: z.ZodType<BrowserViewAttachSurface> =
   nativeTabCapabilitySchema.extend({

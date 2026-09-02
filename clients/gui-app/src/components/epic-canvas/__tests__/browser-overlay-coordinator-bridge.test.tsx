@@ -199,8 +199,8 @@ class FakeBrowserViewBridge implements BrowserViewBridge {
     return Promise.resolve({ ok: true, rawKey: wrappedKey });
   }
 
-  forgetLogins(): Promise<void> {
-    return Promise.resolve();
+  forgetLogins(): Promise<boolean> {
+    return Promise.resolve(true);
   }
 
   /** An empty ledger: nothing forgotten, so no observation is refused. */

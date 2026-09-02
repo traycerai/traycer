@@ -100,10 +100,6 @@ export interface BrowserSiteClearSession {
   clearStorageData(options: ClearStorageDataOptions): Promise<void>;
 }
 
-export interface BrowserStorageSeedWebContents {
-  readonly session: BrowserStorageSession;
-}
-
 export interface BrowserStorageCaptureWebContents {
   getURL(): string;
   executeJavaScript(script: string, userGesture: boolean): Promise<unknown>;
@@ -441,28 +437,16 @@ export function safeStorageCookie(cookie: Cookie): DesktopStorageCookie | null {
   }
 }
 
-export async function seedBrowserViewCookies(
-  storageState: ProtocolStorageState | null,
-  webContents: BrowserStorageSeedWebContents,
-): Promise<void> {
-  if (storageState === null) return;
-  const cookies = parseStorageState(storageState).cookies.filter(
-    isUnpartitionedCookie,
-  );
-  for (const cookie of cookies) {
-    await setStorageCookie(cookie, webContents.session);
-  }
-  await webContents.session.cookies.flushStore();
-}
-
 /** What one universal-sign-in observation did to the jar it was merged into. */
 export interface BrowserObservedCookieMergeResult {
   readonly applied: number;
   /**
    * Cookies that reached the jar and did not land: partitioned, unrepresentable
    * by this shell, or refused by Chromium's own `cookies.set` validation. They
-   * are counted rather than thrown on, which is the whole difference between
-   * this path and {@link seedBrowserViewCookies}.
+   * are counted rather than thrown on: this is untrusted remote input over a
+   * jar the user is browsing with, and losing the other twenty cookies of a
+   * sign-in to one Chromium refusal would turn a bounded fidelity loss into a
+   * failed login with nothing to point at.
    *
    * The KEYS rather than a count, because the applier claimed every one of
    * them as the sending host's before writing: a key the jar refused names a
@@ -474,19 +458,14 @@ export interface BrowserObservedCookieMergeResult {
 }
 
 /**
- * The universal-sign-in applier's half of the seed path (ticket 03): cookies a
- * host observed a sign-in producing, merged into one `primary` jar.
+ * The ONE way a host's cookies reach the `primary` jar (universal-sign-in
+ * ticket 03): what `applyBrowserObservedProfile` let through, merged in.
  *
- * It shares {@link setStorageCookie} with {@link seedBrowserViewCookies}, so an
- * observed cookie is normalised, scoped and validated by exactly the same code
- * - Chromium's own `cookies.set` is what decides whether the attributes are
- * acceptable, here as there. What differs is the failure policy, and it differs
- * on purpose: a SEED is the host's whole jar handed to a fresh tab, so one
- * unrepresentable cookie means the seed itself is wrong and the caller has to
- * hear about it. An OBSERVATION is untrusted remote input covering a domain the
- * user may be signing into right now, and losing the other twenty cookies of
- * that sign-in to one Chromium refusal would turn a bounded fidelity loss into
- * a failed login with nothing to point at.
+ * Both host->jar doors arrive here - the observed frame and the
+ * `createElectronTab` seed, which used to have a `seedBrowserViewCookies` loop
+ * of its own with none of the checks (browser security review, root cause C).
+ * Application goes through Chromium's own `cookies.set`, which is what
+ * normalises the attributes away from anything the sender chose.
  *
  * Merge-only: it sets and never removes. The caller has already dropped the
  * expired cookies that would otherwise reach `cookies.set` as deletes.

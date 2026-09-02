@@ -148,6 +148,7 @@ class ObservedApplyHarness {
     readonly connectionId: string;
   }): Promise<BrowserObservedProfileResult> {
     const observed = {
+      source: "observed" as const,
       connectionId: input.connectionId,
       hostId: "host-1",
       domain: input.domain,
@@ -182,6 +183,7 @@ class ObservedApplyHarness {
       governor: this.governor,
     }).then((result) => {
       traceBrowserObservedProfile(result, {
+        source: observed.source,
         hostId: observed.hostId,
         connectionId: observed.connectionId,
         governor: this.governor,
@@ -235,7 +237,7 @@ describe("observed sign-in apply", () => {
     // does not name it.
     expect(harness.jar.names()).toEqual(["kept", "sid", "sub"]);
     expect(log.info).toHaveBeenCalledWith(
-      "[browser-view] merged an observed sign-in",
+      "[browser-view] merged a host-contributed sign-in",
       expect.objectContaining({ domain: "example.com", reason: "applied" }),
     );
   });
@@ -258,7 +260,7 @@ describe("observed sign-in apply", () => {
     expect(result.domainMismatchCookies).toBe(2);
     expect(harness.jar.names()).toEqual(["sid"]);
     expect(log.warn).toHaveBeenCalledWith(
-      "[browser-view] refused an observed sign-in",
+      "[browser-view] refused a host-contributed sign-in",
       expect.objectContaining({ reason: "domain-mismatch", cookies: 2 }),
     );
   });
@@ -292,7 +294,7 @@ describe("observed sign-in apply", () => {
     expect(harness.jar.find("sid")?.value).toBe("live-session");
     expect(harness.jar.names()).toEqual(["csrf", "sid"]);
     expect(log.warn).toHaveBeenCalledWith(
-      "[browser-view] refused an observed sign-in",
+      "[browser-view] refused a host-contributed sign-in",
       expect.objectContaining({ reason: "expired-cookie", cookies: 1 }),
     );
   });
@@ -376,7 +378,7 @@ describe("observed sign-in apply", () => {
     // And the batch was made durable, which an escaped throw would have skipped.
     expect(harness.jar.flushes).toBe(1);
     expect(log.info).toHaveBeenCalledWith(
-      "[browser-view] merged an observed sign-in",
+      "[browser-view] merged a host-contributed sign-in",
       expect.objectContaining({ reason: "applied", cookies: 17, rejected: 3 }),
     );
   });
@@ -401,7 +403,7 @@ describe("observed sign-in apply", () => {
     expect(harness.jar.names()).toEqual([]);
     expect(harness.jar.flushes).toBe(0);
     expect(log.warn).toHaveBeenCalledWith(
-      "[browser-view] refused an observed sign-in",
+      "[browser-view] refused a host-contributed sign-in",
       expect.objectContaining({ reason: "over-bound" }),
     );
   });
@@ -418,7 +420,7 @@ describe("observed sign-in apply", () => {
     expect(harness.jar.names()).toEqual([]);
     expect(harness.jar.flushes).toBe(0);
     expect(log.warn).toHaveBeenCalledWith(
-      "[browser-view] refused an observed sign-in",
+      "[browser-view] refused a host-contributed sign-in",
       expect.objectContaining({ reason: "ledger-unacked" }),
     );
   });
@@ -621,7 +623,7 @@ describe("observed frame rate limiting", () => {
     expect((await frame("connection-1")).outcome).toBe("applied");
     expect((await frame("connection-1")).outcome).toBe("rate-limited");
     expect(log.warn).toHaveBeenCalledWith(
-      "[browser-view] refused an observed sign-in",
+      "[browser-view] refused a host-contributed sign-in",
       expect.objectContaining({ reason: "rate-limited" }),
     );
   });
@@ -659,7 +661,7 @@ describe("observed sign-in ownership rule", () => {
     expect(harness.jar.find("sid")?.value).toBe("desktop-session");
     expect(harness.jar.names()).toEqual(["csrf", "sid"]);
     expect(log.warn).toHaveBeenCalledWith(
-      "[browser-view] refused an observed sign-in",
+      "[browser-view] refused a host-contributed sign-in",
       expect.objectContaining({ reason: "owned-by-desktop", cookies: 1 }),
     );
   });
@@ -947,6 +949,7 @@ describe("observed rejection trace sampling", () => {
     const governor = new BrowserObservedConnectionGovernor(() => Date.now());
     for (let occurrence = 0; occurrence < 100; occurrence += 1) {
       traceBrowserObservedProfile(REFUSED, {
+        source: "observed",
         hostId: "host-1",
         connectionId: "connection-1",
         governor,
@@ -959,12 +962,12 @@ describe("observed rejection trace sampling", () => {
     expect(log.warn).toHaveBeenCalledTimes(3);
     expect(log.warn).toHaveBeenNthCalledWith(
       1,
-      "[browser-view] refused an observed sign-in",
+      "[browser-view] refused a host-contributed sign-in",
       expect.objectContaining({ reason: "ledger-unacked", occurrences: 1 }),
     );
     expect(log.warn).toHaveBeenNthCalledWith(
       3,
-      "[browser-view] refused an observed sign-in",
+      "[browser-view] refused a host-contributed sign-in",
       expect.objectContaining({ reason: "ledger-unacked", occurrences: 100 }),
     );
   });
@@ -972,21 +975,29 @@ describe("observed rejection trace sampling", () => {
   it("tallies each reason and each connection on its own", () => {
     const governor = new BrowserObservedConnectionGovernor(() => Date.now());
     traceBrowserObservedProfile(REFUSED, {
+      source: "observed",
       hostId: "host-1",
       connectionId: "connection-1",
       governor,
     });
     traceBrowserObservedProfile(
       { ...REFUSED, outcome: "over-bound" },
-      { hostId: "host-1", connectionId: "connection-1", governor },
+      {
+        source: "observed",
+        hostId: "host-1",
+        connectionId: "connection-1",
+        governor,
+      },
     );
     traceBrowserObservedProfile(REFUSED, {
+      source: "observed",
       hostId: "host-1",
       connectionId: "connection-2",
       governor,
     });
     // The second `ledger-unacked` on connection-1 is the coalesced one.
     traceBrowserObservedProfile(REFUSED, {
+      source: "observed",
       hostId: "host-1",
       connectionId: "connection-1",
       governor,

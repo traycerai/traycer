@@ -3,58 +3,66 @@ import { describe, expect, it, vi } from "vitest";
 import {
   BrowserPrimaryProfileSnapshotCoordinator,
   captureBrowserPrimaryProfile,
-  seedBrowserViewCookies,
+  mergeObservedProfileCookies,
   type BrowserPrimaryProfileCaptureDependencies,
   type BrowserPrimaryProfileOriginSnapshot,
   type BrowserStorageCaptureWebContents,
 } from "../browser-storage-state";
 
-describe("seedBrowserViewCookies", () => {
-  it("seeds supplied cookies without replacing unrelated cookies", async () => {
-    const unrelated: CookiesSetDetails = {
-      url: "https://unrelated.test/",
-      name: "unrelated",
-      value: "keep-me",
-      path: "/",
-      expirationDate: undefined,
-      httpOnly: false,
-      secure: true,
-      sameSite: "lax",
-    };
-    const storedCookies = new Map([[unrelated.name, unrelated]]);
-    const seededCookies: CookiesSetDetails[] = [];
-    const flushStore = vi.fn(async () => {});
+/**
+ * `setStorageCookie` is what every host->jar write goes through, and it is the
+ * normalisation the whole ownership model rests on: the shell decides the
+ * `url`, the scope and the expiry, so the sender's attributes are re-derived
+ * rather than trusted. `mergeObservedProfileCookies` is its one exported
+ * caller since H05 collapsed the seed onto it, so the case lives here.
+ */
+describe("host-contributed cookie normalisation", () => {
+  it("derives the url and scope from the cookie rather than the sender", async () => {
+    const written: CookiesSetDetails[] = [];
+    const flushStore = vi.fn(() => Promise.resolve());
 
-    await seedBrowserViewCookies(
+    const result = await mergeObservedProfileCookies(
+      [
+        {
+          name: "host-only",
+          value: "first",
+          domain: "example.test",
+          path: "/",
+          expires: -1,
+          httpOnly: false,
+          secure: false,
+          sameSite: "Lax",
+          partitionKey: null,
+        },
+        {
+          name: "domain-cookie",
+          value: "second",
+          domain: ".secure.test",
+          path: "/",
+          expires: 4_102_444_800,
+          httpOnly: false,
+          secure: true,
+          sameSite: "Lax",
+          partitionKey: null,
+        },
+      ],
       {
-        cookies: [
-          { ...storageCookie("host-only"), value: "first" },
-          {
-            ...storageCookie("domain-cookie"),
-            value: "second",
-            domain: ".secure.test",
-            secure: true,
-            expires: 4_102_444_800,
+        cookies: {
+          get: () => Promise.resolve([]),
+          set: (details: CookiesSetDetails) => {
+            written.push(details);
+            return Promise.resolve();
           },
-        ],
-        origins: [],
-      },
-      {
-        session: {
-          cookies: {
-            get: async (): Promise<Cookie[]> => [],
-            set: async (details: CookiesSetDetails): Promise<void> => {
-              seededCookies.push(details);
-              storedCookies.set(details.name, details);
-            },
-            flushStore,
-          },
+          flushStore,
         },
       },
     );
 
-    expect(seededCookies).toEqual([
+    expect(result).toEqual({ applied: 2, refused: [] });
+    expect(written).toEqual([
       {
+        // `http:` for an insecure cookie, `https:` for a secure one - the URL
+        // is built from the cookie, never sent by the host.
         url: "http://example.test/",
         name: "host-only",
         value: "first",
@@ -68,6 +76,9 @@ describe("seedBrowserViewCookies", () => {
         url: "https://secure.test/",
         name: "domain-cookie",
         value: "second",
+        // The leading dot survives only as the DOMAIN attribute; a host-only
+        // cookie carries none at all, which is what keeps the two forms
+        // distinguishable in the jar.
         domain: ".secure.test",
         path: "/",
         expirationDate: 4_102_444_800,
@@ -76,7 +87,6 @@ describe("seedBrowserViewCookies", () => {
         sameSite: "lax",
       },
     ]);
-    expect(storedCookies.get("unrelated")).toBe(unrelated);
     expect(flushStore).toHaveBeenCalledOnce();
   });
 
@@ -86,93 +96,42 @@ describe("seedBrowserViewCookies", () => {
     ["path syntax", "example.test/path"],
     ["whitespace", "example. test"],
     ["control character", "example.test\n"],
-    ["hostname normalization mismatch", "éxample.test"],
-  ])("rejects cookie domain with %s before writing", async (_label, domain) => {
-    const set = vi.fn();
+    ["hostname normalization mismatch", "\u00e9xample.test"],
+  ])(
+    "refuses a cookie domain with %s before writing",
+    async (_label, domain) => {
+      const set = vi.fn();
 
-    await expect(
-      seedBrowserViewCookies(
-        {
-          cookies: [{ ...storageCookie("sid"), domain }],
-          origins: [],
-        },
-        {
-          session: {
-            cookies: {
-              get: async () => [],
-              set,
-              flushStore: async () => {},
-            },
-          },
-        },
-      ),
-    ).rejects.toThrow("domain");
-
-    expect(set).not.toHaveBeenCalled();
-  });
-
-  it("skips partitioned cookies rather than merging them into the unpartitioned jar", async () => {
-    const seeded: string[] = [];
-
-    await seedBrowserViewCookies(
-      {
-        cookies: [
+      const result = await mergeObservedProfileCookies(
+        [
           {
-            ...storageCookie("partitioned"),
-            partitionKey: "https://top-level.test",
+            name: "sid",
+            value: "sid-value",
+            domain,
+            path: "/",
+            expires: -1,
+            httpOnly: false,
+            secure: false,
+            sameSite: "Lax",
+            partitionKey: null,
           },
-          storageCookie("unpartitioned"),
         ],
-        origins: [],
-      },
-      {
-        session: {
+        {
           cookies: {
-            get: async () => [],
-            flushStore: async () => {},
-            set: async (details) => {
-              seeded.push(details.name ?? "");
-            },
+            get: () => Promise.resolve([]),
+            set,
+            flushStore: () => Promise.resolve(),
           },
         },
-      },
-    );
+      );
 
-    expect(seeded).toEqual(["unpartitioned"]);
-  });
-
-  it("writes sequentially and stops on a cookie-store failure", async () => {
-    const written: string[] = [];
-
-    await expect(
-      seedBrowserViewCookies(
-        {
-          cookies: [
-            storageCookie("first"),
-            storageCookie("second"),
-            storageCookie("third"),
-          ],
-          origins: [],
-        },
-        {
-          session: {
-            cookies: {
-              get: async () => [],
-              flushStore: async () => {},
-              set: async (details) => {
-                written.push(details.name ?? "");
-                if (details.name === "second") {
-                  throw new Error("set failed for second");
-                }
-              },
-            },
-          },
-        },
-      ),
-    ).rejects.toThrow("set failed for second");
-
-    expect(written).toEqual(["first", "second"]);
-  });
+      // Counted, not thrown: this is untrusted remote input, and one
+      // unrepresentable cookie must not cost the rest of the frame.
+      expect(result.applied).toBe(0);
+      expect(result.refused).toEqual([{ domain, name: "sid", path: "/" }]);
+      expect(set).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("captureBrowserPrimaryProfile", () => {
@@ -698,30 +657,6 @@ describe("BrowserPrimaryProfileSnapshotCoordinator", () => {
     });
   });
 });
-
-function storageCookie(name: string): {
-  readonly name: string;
-  readonly value: string;
-  readonly domain: string;
-  readonly path: string;
-  readonly expires: number;
-  readonly httpOnly: boolean;
-  readonly secure: boolean;
-  readonly sameSite: "Lax";
-  readonly partitionKey: null;
-} {
-  return {
-    name,
-    value: `${name}-value`,
-    domain: "example.test",
-    path: "/",
-    expires: -1,
-    httpOnly: false,
-    secure: false,
-    sameSite: "Lax",
-    partitionKey: null,
-  };
-}
 
 function primaryCaptureDependencies(
   saveLogins: boolean,

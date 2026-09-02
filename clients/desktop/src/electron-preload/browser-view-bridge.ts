@@ -165,7 +165,7 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
       forgetLogins: () =>
         ipcRenderer.invoke(
           RunnerHostInvoke.browserViewForgetLogins,
-        ) as Promise<void>,
+        ) as Promise<boolean>,
       readForgetLedger: (hostId) =>
         ipcRenderer.invoke(RunnerHostInvoke.browserViewForgetLedgerRead, {
           hostId,

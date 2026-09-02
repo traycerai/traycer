@@ -373,44 +373,28 @@ function SavedLoginsToggleRow(props: {
  */
 function ForgetAllLoginsRow(): ReactNode {
   const browserView = useRunnerHostOrNull()?.browserView ?? null;
-  const [confirming, setConfirming] = useState(false);
   return (
-    <>
-      <SettingsRow
-        label="Forget all browser logins"
-        description="Deletes every saved cookie and login - on this machine and on the host that stores them. Open browser tabs reload signed out and agent sessions using them are suspended."
-        control={
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="text-destructive hover:text-destructive"
-            onClick={() => {
-              setConfirming(true);
-            }}
-          >
-            Forget all browser logins…
-          </Button>
-        }
-      />
-      <ConfirmDestructiveDialog
-        open={confirming}
-        onOpenChange={setConfirming}
-        title="Forget all browser logins?"
-        description="Traycer deletes every saved cookie and login - on this machine and on the host that stores them. Open browser tabs reload signed out, and agent sessions using them are suspended. This cannot be undone."
-        cascadeSummary={null}
-        actionLabel="Forget logins"
-        isPending={false}
-        blockedReason={null}
-        onConfirm={() => {
-          // Closed unconditionally: the local half runs whatever the streams
-          // do, so the work the dialog describes has begun even with no host
-          // attached - the ledger tells them when they return.
-          forgetAllBrowserLogins(browserView);
-          setConfirming(false);
-        }}
-      />
-    </>
+    <SettingsRow
+      label="Forget all browser logins"
+      description="Deletes every saved cookie and login - on this machine and on the host that stores them. Open browser tabs reload signed out and agent sessions using them are suspended."
+      control={
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="text-destructive hover:text-destructive"
+          onClick={() => {
+            // No renderer dialog: the main process raises a native one and is
+            // the authority on the answer (browser security review, root cause
+            // C). A second confirmation here would ask twice and, worse, would
+            // read as the gate while the real one lives elsewhere.
+            void forgetAllBrowserLogins(browserView);
+          }}
+        >
+          Forget all browser logins…
+        </Button>
+      }
+    />
   );
 }
 

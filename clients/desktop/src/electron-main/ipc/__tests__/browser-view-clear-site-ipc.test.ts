@@ -32,6 +32,19 @@ const fixture = vi.hoisted(() => ({
   forgetAllResets: 0,
   tabRecreations: 0,
   suppressedAll: 0,
+  /** What the main-process confirmation dialog answers: 1 confirms. */
+  confirmAnswer: 1,
+  /** Every confirmation main actually raised, by title. */
+  confirmations: [] as string[],
+  trustedCertificates: [] as string[],
+  /**
+   * A fresh userData directory per test. The forget ledger is the REAL module
+   * here, and it persists: a test that leaves a clear pending (the ones that
+   * make a jar fail) would otherwise have the NEXT test's registration re-run
+   * that forget as its boot reconciliation, and every count below would be
+   * measuring the previous test.
+   */
+  userDataDir: "/tmp/traycer-desktop-test-0",
 }));
 
 vi.mock("electron", () => {
@@ -44,7 +57,7 @@ vi.mock("electron", () => {
   }
   return {
     app: {
-      getPath: (_key: string): string => "/tmp/traycer-desktop-test",
+      getPath: (_key: string): string => fixture.userDataDir,
       relaunch: (): void => undefined,
       exit: (_code: number): void => undefined,
     },
@@ -52,7 +65,10 @@ vi.mock("electron", () => {
     WebContentsView,
     dialog: {
       showSaveDialogSync: () => undefined,
-      showMessageBoxSync: () => 0,
+      showMessageBoxSync: (options: { readonly title: string }): number => {
+        fixture.confirmations.push(options.title);
+        return fixture.confirmAnswer;
+      },
     },
     session: { fromPartition: () => ({}) },
     safeStorage: {
@@ -68,7 +84,10 @@ vi.mock("../../app/logger", () => ({
 }));
 
 vi.mock("../../app/cert-trust", () => ({
-  trustBrowserCertificate: vi.fn(() => Promise.resolve()),
+  trustBrowserCertificate: vi.fn((hostname: string) => {
+    fixture.trustedCertificates.push(hostname);
+    return Promise.resolve();
+  }),
 }));
 
 vi.mock("../../browser-view/browser-view-manager", () => ({
@@ -79,6 +98,12 @@ vi.mock("../../browser-view/browser-view-manager", () => ({
     readClearSiteTarget(): string {
       return "example.com";
     }
+
+    canTrustCertificateError(): boolean {
+      return true;
+    }
+
+    clearCertificateError(): void {}
 
     recreateNativeTabsOnCurrentPartition(): Promise<void> {
       fixture.tabRecreations += 1;
@@ -134,7 +159,10 @@ vi.mock("../../browser-view/browser-session", () => {
     onBrowserViewCertificateError: vi.fn(),
     onBrowserViewDownloadChange: vi.fn(),
     partitionForProfile: vi.fn(() => fixture.activePartition),
-    readBrowserViewPendingCertificateError: vi.fn(() => null),
+    readBrowserViewPendingCertificateError: vi.fn(() => ({
+      hostname: "expired.test",
+      certificate: { data: "pem" },
+    })),
     registerBrowserViewWebContents: vi.fn(),
     releaseBrowserViewSession: vi.fn(() => Promise.resolve()),
     suppressAllBrowserPrimaryProfileDeltas: vi.fn(
@@ -189,7 +217,6 @@ vi.mock("../../browser-view/storage/browser-storage-state", () => ({
         : Promise.resolve();
     },
   ),
-  seedBrowserViewCookies: vi.fn(() => Promise.resolve()),
   // The real one: the forget ledger keys its headless-origin custody set by it
   // (universal-sign-in ticket 08), and a stub id would make the set's own
   // behaviour untestable from here rather than merely unexercised.
@@ -249,7 +276,10 @@ const TILE_KEY = {
 };
 
 async function invokeHandler(
-  channel: "browserViewClearSite" | "browserViewForgetLogins",
+  channel:
+    | "browserViewClearSite"
+    | "browserViewForgetLogins"
+    | "browserViewTrustCertificate",
   payload: unknown,
 ): Promise<void> {
   const { registerBrowserViewIpc } = await import("../browser-view-ipc");
@@ -259,6 +289,8 @@ async function invokeHandler(
   registerBrowserViewIpc(bridge as never);
   await findInvokeHandler(bridge, RunnerHostInvoke[channel])({}, payload);
 }
+
+let ledgerRun = 0;
 
 describe("clear-site IPC jar targeting", () => {
   beforeEach(() => {
@@ -271,6 +303,14 @@ describe("clear-site IPC jar targeting", () => {
     fixture.tabRecreations = 0;
     fixture.suppressedAll = 0;
     fixture.activePartition = fixture.durablePartition;
+    fixture.confirmAnswer = 1;
+    fixture.confirmations = [];
+    fixture.trustedCertificates = [];
+    fixture.userDataDir = `/tmp/traycer-desktop-test-${ledgerRun}`;
+    ledgerRun += 1;
+    // With the directory, the ledger module's own in-memory state has to go
+    // too - it is loaded once per module registry, not once per directory.
+    vi.resetModules();
   });
 
   it("clears the durable jar as well as the live one when saving is off (tile menu)", async () => {
@@ -354,6 +394,42 @@ describe("clear-site IPC jar targeting", () => {
     // And the tiles are back before the failure is surfaced - they are sitting
     // on a jar the host no longer holds a key for.
     expect(fixture.tabRecreations).toBe(1);
+  });
+
+  // Root cause C: both of these were renderer-callable with nothing between
+  // the invoke and the irreversible act. Main asks now, and a refusal has to
+  // leave the world untouched - including the forget LEDGER, which is written
+  // before the first cookie goes and is what tells every host to prune.
+  it("forgets nothing, and records nothing, when the confirmation is declined", async () => {
+    fixture.confirmAnswer = 0;
+
+    await invokeHandler("browserViewForgetLogins", undefined);
+
+    expect(fixture.confirmations).toEqual(["Forget browser logins?"]);
+    expect(fixture.jarClears).toEqual([]);
+    expect(fixture.forgetAllResets).toBe(0);
+    expect(fixture.tabRecreations).toBe(0);
+  });
+
+  it("does not trust a certificate when the confirmation is declined", async () => {
+    fixture.confirmAnswer = 0;
+
+    await invokeHandler("browserViewTrustCertificate", {
+      ...TILE_KEY,
+      certificateErrorId: "certificate-error-1",
+    });
+
+    expect(fixture.confirmations).toEqual(["Trust this certificate?"]);
+    expect(fixture.trustedCertificates).toEqual([]);
+  });
+
+  it("trusts a certificate once the confirmation is accepted", async () => {
+    await invokeHandler("browserViewTrustCertificate", {
+      ...TILE_KEY,
+      certificateErrorId: "certificate-error-1",
+    });
+
+    expect(fixture.trustedCertificates).toEqual(["expired.test"]);
   });
 
   it("clears once when saving is on and the live jar IS the durable one", async () => {

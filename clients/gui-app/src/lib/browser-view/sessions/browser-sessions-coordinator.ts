@@ -270,25 +270,35 @@ function sendOncePerHost(
  * "Forget all browser logins" (spec §6.5, ticket 08).
  *
  * BOTH halves run, and the ORDER between them is the point. This machine's own
- * jar and forget ledger go first and unconditionally; telling the hosts to
- * shred their slices is best-effort on top. Universal-sign-in decision 6 is
- * exactly the claim that a forget survives disconnection - the ledger carries
- * it to every host that was not listening - so making the local half
- * conditional on a live stream would delete the premise: with no host attached,
- * nothing would be forgotten anywhere and the user would be told so by a dialog
- * that simply refused to close.
+ * jar and forget ledger go first; telling the hosts to shred their slices is
+ * best-effort on top. Universal-sign-in decision 6 is exactly the claim that a
+ * forget survives disconnection - the ledger carries it to every host that was
+ * not listening - so making the local half conditional on a live stream would
+ * delete the premise: with no host attached, nothing would be forgotten
+ * anywhere.
  *
- * Answers how many hosts were told, for the caller's own reporting. It is NOT
- * a success flag: zero hosts still means this machine forgot.
+ * The local half is AWAITED, and the host frames go out only when it answered
+ * confirmed (browser security review, root cause C). Main raises the native
+ * dialog, so cancelling it must not leave this process shredding every
+ * connected host's slice for a forget that never happened locally - the old
+ * fire-and-forget `void` could not tell those two apart. `false` when there is
+ * no desktop bridge at all, for the same reason: nothing local was forgotten,
+ * so nothing remote should be.
+ *
+ * Answers how many hosts were told. It is NOT a success flag: zero hosts still
+ * means this machine forgot.
  */
-export function forgetAllBrowserLogins(
+export async function forgetAllBrowserLogins(
   browserView: BrowserViewBridge | null,
-): number {
-  void browserView?.forgetLogins().catch((cause: unknown) => {
+): Promise<number> {
+  if (browserView === null) return 0;
+  const confirmed = await browserView.forgetLogins().catch((cause: unknown) => {
     appLogger.warn("[browser] clearing the browser partition failed", {
       cause: cause instanceof Error ? cause.message : String(cause),
     });
+    return false;
   });
+  if (!confirmed) return 0;
   let hostCount = 0;
   sendOncePerHost((coordinator) => {
     const sent = coordinator.forgetLogins();
@@ -582,6 +592,7 @@ function createBrowserSessionsCoordinator(args: {
     const electronTabs = createElectronTabs({
       hostId: args.owner.hostId,
       native: browserView,
+      connectionId: () => observedConnectionId,
       sendFrame: (frame) => {
         if (actionChannel !== channel) return;
         stream?.sendClientFrame(frame);

@@ -162,12 +162,15 @@ class DesktopReceiveHarness {
   ): Promise<BrowserObservedProfileOutcome> {
     // The renderer adds the connection provenance the frame never carries, and
     // the main process narrows the whole thing again at the IPC edge.
-    const observed = browserViewIpcPayload.observedProfile.parse({
-      connectionId,
-      hostId: HOST_ID,
-      domain: frame.domain,
-      cookies: frame.cookies,
-    });
+    const observed = {
+      source: "observed" as const,
+      ...browserViewIpcPayload.observedProfile.parse({
+        connectionId,
+        hostId: HOST_ID,
+        domain: frame.domain,
+        cookies: frame.cookies,
+      }),
+    };
     const result = await applyBrowserObservedProfile(observed, {
       now: () => Date.now(),
       isForgottenPendingAck: isBrowserForgetLedgerPendingAck,
@@ -272,13 +275,20 @@ describe("carry-over loop, desktop side of the wire", () => {
     // key, and the sending host loses the right to refresh the session it just
     // established. `ObservedApplyHarness` cannot see this - it wires no
     // observer - so the case lives here, with the real one.
+    // The observer's callback is fire-and-forget in production, so the
+    // ledger write it starts is collected here instead of raced: without
+    // this the assertion below reads the custody set before the release has
+    // landed, which passes only while the machine is idle.
+    const releases: Promise<void>[] = [];
     const observer = new BrowserCookieChangeObserver({
       cookies: harness.jar,
       emit: () => undefined,
       now: () => Date.now(),
       monotonicNow: () => Date.now(),
       coalesceWindowMs: BROWSER_COOKIE_DELTA_WINDOW_MS,
-      onLocalCookieWrite: (key) => void releaseHeadlessOriginCookieKeys([key]),
+      onLocalCookieWrite: (key) => {
+        releases.push(releaseHeadlessOriginCookieKeys([key]));
+      },
     });
     observer.attach();
     harness.observer = observer;
@@ -306,6 +316,7 @@ describe("carry-over loop, desktop side of the wire", () => {
       expirationDate: CARRY_OVER_PERSISTENT_EXPIRES,
     });
 
+    await Promise.all(releases);
     expect(isHeadlessOriginCookieKey(sid)).toBe(false);
 
     observer.dispose();

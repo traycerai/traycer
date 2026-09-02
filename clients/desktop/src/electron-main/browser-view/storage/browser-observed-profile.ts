@@ -92,6 +92,17 @@ export type BrowserObservedProfileOutcome = Exclude<
  * for.
  */
 export interface BrowserObservedProfile {
+  /**
+   * Which of the two host->jar doors this write came through: a
+   * `primaryProfileObserved` frame, or the `createElectronTab` storage seed.
+   *
+   * It changes NOTHING about the validation - that is the point of the field
+   * existing rather than a second applier existing (browser security review,
+   * root cause C: "the two doors into the same jar have the same lock"). It is
+   * carried so the trace can tell an investigator which door a refusal or an
+   * apply came off.
+   */
+  readonly source: "observed" | "seed";
   readonly connectionId: string;
   readonly hostId: string;
   readonly domain: string;
@@ -115,8 +126,9 @@ export interface BrowserObservedProfileResult {
   readonly rejectedCookies: number;
 }
 
-/** What the trace needs about the connection a result came off. */
+/** What the trace needs about the write a result came off. */
 export interface BrowserObservedProfileTraceContext {
+  readonly source: BrowserObservedProfile["source"];
   readonly hostId: string;
   readonly connectionId: string;
   readonly governor: BrowserObservedConnectionGovernor;
@@ -323,7 +335,16 @@ function refill(state: ObservedConnectionState, now: number): number {
 }
 
 /**
- * Validates one observation and merges what survives into the `primary` jar.
+ * Validates one host-contributed write and merges what survives into the
+ * `primary` jar.
+ *
+ * Both host->jar doors come through here: the `primaryProfileObserved` frame
+ * and the `createElectronTab` storage seed, which differ only in the `source`
+ * the trace records. The seed used to be an unvalidated `cookies.set` loop
+ * straight into `persist:traycer-browser` (browser security review, root cause
+ * C); it now declares the tab's own registrable domain as its claim and takes
+ * every check below, which is what makes "the two doors into the same jar have
+ * the same lock" true rather than aspirational.
  *
  * The checks run outermost-first, and the order is what the traced reason
  * reports when a frame trips more than one. The RATE comes first because it is
@@ -425,8 +446,9 @@ export function traceBrowserObservedProfile(
     return;
   }
   log.info(
-    "[browser-view] merged an observed sign-in",
+    "[browser-view] merged a host-contributed sign-in",
     sanitizeLogFields({
+      source: context.source,
       hostId: context.hostId,
       domain: result.domain,
       reason: "applied",
@@ -475,8 +497,9 @@ function traceRejection(
   );
   if (occurrences === null) return;
   log.warn(
-    "[browser-view] refused an observed sign-in",
+    "[browser-view] refused a host-contributed sign-in",
     sanitizeLogFields({
+      source: context.source,
       hostId: context.hostId,
       domain,
       reason,

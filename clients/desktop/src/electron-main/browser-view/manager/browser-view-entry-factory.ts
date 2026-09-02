@@ -1,6 +1,7 @@
 import type { Event, Input, RenderProcessGoneDetails, Result } from "electron";
 import type { BrowserViewStatus } from "@traycer-clients/shared/platform/browser-view";
 import { log } from "../../app/logger";
+import { guestNavigationGuards } from "../browser-guest-navigation";
 import type {
   BrowserViewPopupWindow,
   ManagedBrowserView,
@@ -134,6 +135,11 @@ export class BrowserViewEntryFactory {
         "did-navigate": (_event: Event, url: string): void => {
           this.handleCommittedNavigation(entry, url);
         },
+        // The page-initiated half of the guest scheme gate (browser security
+        // review, root cause C). `navigate` in the manager covers what this
+        // process asks for; these cover what the page asks for on its own -
+        // a link, a scripted `location =`, a server redirect, a subframe.
+        ...guestNavigationGuards(),
         "did-start-navigation": (
           _event: Event,
           _url: string,

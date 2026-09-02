@@ -25,6 +25,10 @@ import type {
 import type { PipCaptureIpcPayload } from "../../ipc-contracts/pip-capture-types";
 import { registrableDomainForUrl } from "@traycer/protocol/host/browser/registrable-domain";
 import { describeLogError, log } from "../app/logger";
+import {
+  isAllowedGuestNavigationUrl,
+  traceRefusedGuestNavigation,
+} from "./browser-guest-navigation";
 import type {
   BrowserSessionCertificateErrorChange,
   BrowserSessionDownloadChange,
@@ -109,10 +113,19 @@ interface BrowserViewManagerOptions {
   readonly onWindowChange: (listener: () => void) => () => void;
   readonly notifyHostWindowRendererReset: (windowId: string) => void;
   readonly send: BrowserViewSend;
+  /**
+   * Applies the host's storage seed for one guest. Takes the whole ensure-tab
+   * input rather than just the state, because the write is validated against
+   * the tab's OWN origin and attributed to the host that asked for it.
+   *
+   * Answers the part of the seed the JAR does not hold - the localStorage the
+   * caller may install as a document script - narrowed to what survived that
+   * validation, or `null` when nothing may be seeded at all.
+   */
   readonly seedStorageState: (
-    storageState: BrowserStorageState | null,
+    input: BrowserViewEnsureTab,
     webContents: ManagedBrowserView["webContents"],
-  ) => Promise<void>;
+  ) => Promise<BrowserStorageState | null>;
   readonly observePrimaryProfileOrigin: (
     url: string,
     webContents: ManagedBrowserView["webContents"],
@@ -512,6 +525,26 @@ export class BrowserViewManager {
         },
       };
     }
+    // The fourth navigation door, and the quietest: `cdpNavigate` reaches
+    // `Page.navigate` directly, so it bypasses both `navigate()` and
+    // `will-navigate`. The same predicate answers it - a curated command is
+    // still a navigation, and a guest's scheme policy does not depend on who
+    // asked.
+    if (
+      input.command.kind === "cdpNavigate" &&
+      !isAllowedGuestNavigationUrl(input.command.url)
+    ) {
+      traceRefusedGuestNavigation(input.command.url, "cdp-navigate");
+      return {
+        kind: input.command.kind,
+        ok: false,
+        error: {
+          kind: "cdp_error",
+          message: "Browser tabs can only open http, https or about:blank.",
+          code: null,
+        },
+      };
+    }
     const debugSession = this.debugSessions.ensure(entry);
     await debugSession.enableAfterCommit().catch(() => undefined);
     return debugSession.dispatch(input.target, input.command);
@@ -638,7 +671,20 @@ export class BrowserViewManager {
     this.windows.detachResetListenerIfUnused(surface.windowId);
   }
 
+  /**
+   * The one funnel for every navigation this process asks a guest to perform -
+   * the renderer's `navigate` control action and the initial navigation the
+   * host's accepted tab starts with - so the scheme gate sits here rather than
+   * at either caller.
+   *
+   * It refuses BEFORE any entry state moves: a blocked target must not leave
+   * the tile reporting `loading` for a page that will never commit.
+   */
   private async navigate(entry: BrowserViewEntry, url: string): Promise<void> {
+    if (!isAllowedGuestNavigationUrl(url)) {
+      traceRefusedGuestNavigation(url, "navigate");
+      throw new Error("Browser tabs can only open http, https or about:blank.");
+    }
     this.annotations.end(entry, "navigation");
     entry.requestedUrl = url;
     entry.status = "loading";

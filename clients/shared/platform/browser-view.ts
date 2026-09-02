@@ -42,6 +42,15 @@ export interface BrowserViewEnsureTab extends BrowserViewNativeTabKey {
    */
   readonly profile: BrowserSessionProfileKind;
   readonly seedStorageState: BrowserStorageState | null;
+  /**
+   * The live stream incarnation the `createElectronTab` frame arrived on -
+   * the SAME provenance `primaryProfileObserved` carries, and for the same
+   * reason: the seed is a host->jar write, so main prices it against the
+   * connection that sent it (the forget ledger's per-connection ack watermark
+   * and the observed rate budget both key on this). Null off-connection,
+   * which fails the ledger gate closed.
+   */
+  readonly connectionId: string | null;
 }
 
 export interface BrowserViewAttachSurface extends BrowserViewNativeTabCapability {
@@ -414,8 +423,13 @@ export interface BrowserViewBridge {
    * decision 6). The ledger is what reaches a host that was disconnected, and
    * it is written before a cookie moves so an in-flight observation for a
    * forgotten site cannot land behind the clear.
+   *
+   * Answers whether the user CONFIRMED. Main raises the native dialog (the
+   * renderer is not a trustworthy place to gate the most destructive action
+   * the browser surface has), so `false` means nothing was touched here and
+   * the caller must not send the host frames either.
    */
-  forgetLogins(): Promise<void>;
+  forgetLogins(): Promise<boolean>;
   /**
    * The forget-ledger digest this host still owes: everything it has not acked
    * pruning, plus the ledger's current revision. Read once per attach, and

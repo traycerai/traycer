@@ -592,7 +592,7 @@ function buildFakeBridge(
         ok: false as const,
         reason: "no keystore in this test bridge",
       }),
-      forgetLogins: async () => undefined,
+      forgetLogins: async () => true,
       // An empty ledger: nothing forgotten, so nothing is refused here.
       readForgetLedger: async () => ({
         forgetAllAt: null,

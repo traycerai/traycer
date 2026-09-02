@@ -674,6 +674,7 @@ describe("in-flight observation across a local clear", () => {
     const serializer = new BrowserJarSerializer();
     const governor = new BrowserObservedConnectionGovernor(() => Date.now());
     const observed = {
+      source: "observed" as const,
       connectionId: CONNECTION,
       hostId: HOST,
       domain: "example.com",

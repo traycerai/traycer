@@ -173,7 +173,6 @@ vi.mock("../../browser-view/storage/browser-storage-state", () => ({
       reason: null,
     }),
   ),
-  seedBrowserViewCookies: vi.fn(() => Promise.resolve()),
 }));
 
 function makeBridge() {
@@ -294,6 +293,7 @@ describe("native browser tab IPC", () => {
         tabId: "tab-1",
         requestedUrl: "https://example.com/background",
         seedStorageState,
+        connectionId: "connection-1",
       },
     );
 
@@ -306,6 +306,9 @@ describe("native browser tab IPC", () => {
           tabId: "tab-1",
           requestedUrl: "https://example.com/background",
           seedStorageState,
+          // The provenance main prices the seed's jar write against; the edge
+          // carries it rather than inventing one.
+          connectionId: "connection-1",
         }),
       },
     ]);

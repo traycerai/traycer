@@ -159,13 +159,20 @@ describe("ElectronTabs", () => {
     );
     const native = nativeWith(ensureTab, null);
     const sent: BrowserSessionsClientFrame[] = [];
+    // Set to the PREVIOUS incarnation at construction and reconnected before
+    // the frame arrives: a thunk captured at construction would price the seed
+    // against a connection that has acked nothing, which is the shape the
+    // synthetic id had.
+    let connectionId: string | null = "stale-connection";
     const tabs = trackElectronTabs(
       createElectronTabs({
         hostId: "host-1",
+        connectionId: () => connectionId,
         native: native,
         sendFrame: (frame) => sent.push(frame),
       }),
     );
+    connectionId = "connection-1";
 
     expect(tabs.handleFrame(CREATE)).toBe(true);
 
@@ -176,6 +183,10 @@ describe("ElectronTabs", () => {
       requestedUrl: "https://example.com/",
       profile: "primary",
       seedStorageState: null,
+      // The seed is a host->jar write, so main prices it against the stream
+      // incarnation that sent it - the same provenance an observed frame
+      // carries. Read at call time, not captured at construction.
+      connectionId: "connection-1",
     });
     expect(sent).toEqual([]);
 
@@ -222,6 +233,7 @@ describe("ElectronTabs", () => {
     const tabs = trackElectronTabs(
       createElectronTabs({
         hostId: "host-1",
+        connectionId: () => "connection-1",
         native: nativeWith(ensureTab, null),
         sendFrame: (frame) => sent.push(frame),
       }),
@@ -242,6 +254,7 @@ describe("ElectronTabs", () => {
     const tabs = trackElectronTabs(
       createElectronTabs({
         hostId: "host-1",
+        connectionId: () => "connection-1",
         native: nativeWith(ensureTab, null),
         sendFrame: (frame) => sent.push(frame),
       }),
@@ -282,6 +295,7 @@ describe("ElectronTabs", () => {
     const tabs = trackElectronTabs(
       createElectronTabs({
         hostId: "host-1",
+        connectionId: () => "connection-1",
         native: native,
         sendFrame: () => {},
       }),
@@ -325,6 +339,7 @@ describe("ElectronTabs", () => {
     const tabs = trackElectronTabs(
       createElectronTabs({
         hostId: "host-1",
+        connectionId: () => "connection-1",
         native: native,
         sendFrame: () => {},
       }),
@@ -346,6 +361,7 @@ describe("ElectronTabs", () => {
     const tabs = trackElectronTabs(
       createElectronTabs({
         hostId: "host-1",
+        connectionId: () => "connection-1",
         native,
         sendFrame: () => {},
       }),
@@ -374,6 +390,7 @@ describe("ElectronTabs", () => {
     const tabs = trackElectronTabs(
       createElectronTabs({
         hostId: "host-1",
+        connectionId: () => "connection-1",
         native: native,
         sendFrame: () => {},
       }),
@@ -400,6 +417,7 @@ describe("ElectronTabs", () => {
     const tabs = trackElectronTabs(
       createElectronTabs({
         hostId: "host-1",
+        connectionId: () => "connection-1",
         native: native,
         sendFrame: (frame) => sent.push(frame),
       }),
@@ -434,6 +452,7 @@ describe("ElectronTabs", () => {
     const tabs = trackElectronTabs(
       createElectronTabs({
         hostId: "host-1",
+        connectionId: () => "connection-1",
         native,
         sendFrame: (frame) => sent.push(frame),
       }),
@@ -480,6 +499,7 @@ describe("ElectronTabs", () => {
     const tabs = trackElectronTabs(
       createElectronTabs({
         hostId: "host-1",
+        connectionId: () => "connection-1",
         native: nativeWith(() => ready.promise, null),
         sendFrame: (frame) => sent.push(frame),
       }),
@@ -498,6 +518,7 @@ describe("ElectronTabs", () => {
     const tabs = trackElectronTabs(
       createElectronTabs({
         hostId: "host-1",
+        connectionId: () => "connection-1",
         native: native,
         sendFrame: () => {},
       }),
@@ -562,6 +583,7 @@ describe("ElectronTabs", () => {
     const tabs = trackElectronTabs(
       createElectronTabs({
         hostId: "host-1",
+        connectionId: () => "connection-1",
         native,
         sendFrame: (frame) => sent.push(frame),
       }),
@@ -666,6 +688,7 @@ describe("ElectronTabs", () => {
     const tabs = trackElectronTabs(
       createElectronTabs({
         hostId: "host-1",
+        connectionId: () => "connection-1",
         native,
         sendFrame: (frame) => sent.push(frame),
       }),
@@ -762,6 +785,7 @@ describe("ElectronTabs", () => {
     const tabs = trackElectronTabs(
       createElectronTabs({
         hostId: "host-1",
+        connectionId: () => "connection-1",
         native,
         sendFrame: () => {},
       }),
@@ -817,6 +841,7 @@ describe("ElectronTabs", () => {
     const tabs = trackElectronTabs(
       createElectronTabs({
         hostId: "host-1",
+        connectionId: () => "connection-1",
         native: native,
         sendFrame: () => {},
       }),
@@ -859,6 +884,7 @@ describe("ElectronTabs", () => {
     const tabs = trackElectronTabs(
       createElectronTabs({
         hostId: "host-1",
+        connectionId: () => "connection-1",
         native: native,
         sendFrame: () => {},
       }),
@@ -899,6 +925,7 @@ describe("ElectronTabs", () => {
     const tabs = trackElectronTabs(
       createElectronTabs({
         hostId: "host-1",
+        connectionId: () => "connection-1",
         native: native,
         sendFrame: (frame) => sent.push(frame),
       }),
@@ -947,6 +974,7 @@ describe("ElectronTabs", () => {
     const tabs = trackElectronTabs(
       createElectronTabs({
         hostId: "host-1",
+        connectionId: () => "connection-1",
         native: native,
         sendFrame: (frame) => sent.push(frame),
       }),
@@ -1002,6 +1030,7 @@ describe("ElectronTabs", () => {
     const tabs = trackElectronTabs(
       createElectronTabs({
         hostId: "host-1",
+        connectionId: () => "connection-1",
         native: native,
         sendFrame: (frame) => sent.push(frame),
       }),
@@ -1060,6 +1089,7 @@ describe("ElectronTabs", () => {
     const tabs = trackElectronTabs(
       createElectronTabs({
         hostId: "host-1",
+        connectionId: () => "connection-1",
         native: native,
         sendFrame: (frame) => sent.push(frame),
       }),

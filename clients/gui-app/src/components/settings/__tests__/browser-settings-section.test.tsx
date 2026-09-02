@@ -65,7 +65,9 @@ const hostDirectory = vi.hoisted(
 const hostBinding = vi.hoisted((): { current: object | null } => ({
   current: null,
 }));
-const forgetAllBrowserLogins = vi.hoisted(() => vi.fn(() => 1));
+const forgetAllBrowserLogins = vi.hoisted(() =>
+  vi.fn(() => Promise.resolve(1)),
+);
 const clearSavedLoginSite = vi.hoisted(() => vi.fn(() => true));
 
 function boundHostRuntime(): object {
@@ -202,37 +204,19 @@ describe("<BrowserSettingsSection /> saved logins", () => {
     expect(current.setEnabled).not.toHaveBeenCalled();
   });
 
-  it("forgets everything only after the destructive confirm", () => {
+  it("asks the main process directly, with no renderer confirmation of its own", () => {
     renderSection(controller({}), null);
 
     fireEvent.click(
       screen.getByRole("button", { name: "Forget all browser logins…" }),
     );
-    expect(forgetAllBrowserLogins).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByTestId("confirm-action"));
-
+    // Main raises a native dialog and is the authority on the answer (browser
+    // security review, root cause C). A second confirmation here would ask
+    // twice and, worse, would read as the gate while the real one is
+    // elsewhere - so the click goes straight through and no dialog opens.
     expect(forgetAllBrowserLogins).toHaveBeenCalledTimes(1);
-    expect(screen.queryByText("Forget all browser logins?")).toBeNull();
-  });
-
-  it("still forgets, and still closes, with no live stream to take it", () => {
-    // Unlike the per-row Clear, which needs a host to act on. This machine's
-    // own jar and forget ledger are emptied whatever the streams do, and the
-    // ledger is what carries the forget to hosts that were not listening
-    // (universal-sign-in decision 6) - so there is no "nothing happened" case
-    // left to hold the dialog open for. Making it conditional would delete the
-    // ledger's whole premise.
-    renderSection(controller({}), null);
-    forgetAllBrowserLogins.mockReturnValueOnce(0);
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Forget all browser logins…" }),
-    );
-    fireEvent.click(screen.getByTestId("confirm-action"));
-
-    expect(forgetAllBrowserLogins).toHaveBeenCalledTimes(1);
-    expect(screen.queryByText("Forget all browser logins?")).toBeNull();
+    expect(screen.queryByTestId("confirm-action")).toBeNull();
   });
 
   it("renders nothing at all without a host runtime", () => {
