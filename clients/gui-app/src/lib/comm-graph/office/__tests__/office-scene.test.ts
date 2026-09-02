@@ -714,6 +714,67 @@ describe("OfficeScene", () => {
     expect(crewAway(scene.frame())).not.toContain(busy);
   });
 
+  it("draws floor under every walkable tile that is not a doorway", () => {
+    // Three cabins over two bands: a corridor between the bands, a corridor
+    // between the two cabins sharing the lower one, and the building's own
+    // aisle down either side.
+    const crowd = [
+      agent({ id: "root-a", createdAt: 1 }),
+      agent({ id: "a1", parentId: "root-a", createdAt: 2 }),
+      agent({ id: "a2", parentId: "root-a", createdAt: 3 }),
+      agent({ id: "a3", parentId: "root-a", createdAt: 4 }),
+      agent({ id: "a4", parentId: "a1", createdAt: 5 }),
+      agent({ id: "a5", parentId: "a1", createdAt: 6 }),
+      agent({ id: "root-b", createdAt: 7 }),
+      agent({ id: "b1", parentId: "root-b", createdAt: 8 }),
+      agent({ id: "b2", parentId: "root-b", createdAt: 9 }),
+      agent({ id: "root-c", createdAt: 10 }),
+    ];
+    const scene = new OfficeScene(layoutOffice);
+    scene.sync(
+      sceneInput({
+        agents: crowd,
+        visibleAgentIds: new Set(crowd.map((person) => person.id)),
+      }),
+    );
+    const layout = scene.layout();
+    expect(layout.rooms).toHaveLength(3);
+
+    // The floor layer is painted in order, so the LAST tile-aligned sprite at
+    // a position is the one a viewer actually sees. (The rug is centred on its
+    // tile, so it is not tile-aligned and never masks the floor under it.)
+    const painted = new Map<string, OfficeSpriteName>();
+    for (const drawable of scene.frame().floor) {
+      if (drawable.kind !== "sprite") continue;
+      if (drawable.x % OFFICE_TILE !== 0) continue;
+      if (drawable.y % OFFICE_TILE !== 0) continue;
+      painted.set(
+        `${drawable.x / OFFICE_TILE},${drawable.y / OFFICE_TILE}`,
+        drawable.sprite.name,
+      );
+    }
+
+    const doorways = new Set<string>([
+      `${layout.doorTile.col},${layout.doorTile.row}`,
+      ...layout.rooms.map(
+        (room) => `${room.doorTile.col},${room.doorTile.row}`,
+      ),
+    ]);
+    for (let row = 0; row < layout.rows; row += 1) {
+      for (let col = 0; col < layout.cols; col += 1) {
+        if (!layout.walkable[row][col]) continue;
+        const key = `${col},${row}`;
+        if (doorways.has(key)) {
+          expect(painted.get(key), key).toBe("door");
+          continue;
+        }
+        // Somewhere a character can stand must look like somewhere a character
+        // can stand - a corridor painted as brick reads as a sealed room.
+        expect(painted.get(key), key).toMatch(/^floor-[ab]$/);
+      }
+    }
+  });
+
   it("produces identical frames from an identical sync/tick sequence", () => {
     const run = (): OfficeFrame => {
       const scene = new OfficeScene(layoutOffice);

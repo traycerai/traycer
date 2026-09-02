@@ -361,6 +361,55 @@ describe("layoutOffice", () => {
     }
   });
 
+  it("never overlaps two cabins, whatever the families look like", () => {
+    // Sizes chosen to span every cabin shape: a lone root, a wide one that
+    // fills a band, and enough of them to wrap into several bands.
+    const agents: OfficeAgentInput[] = [];
+    let createdAt = 0;
+    for (let family = 0; family < 7; family += 1) {
+      createdAt += 1;
+      const rootId = `root-${family}`;
+      agents.push(agent({ id: rootId, createdAt }));
+      for (let child = 0; child < family * 2; child += 1) {
+        createdAt += 1;
+        agents.push(
+          agent({ id: `${rootId}-c${child}`, parentId: rootId, createdAt }),
+        );
+      }
+    }
+    const layout = layoutOffice(agents);
+
+    // An overlap is invisible in the plan and catastrophic on screen: one
+    // cabin's wall ring would be painted straight through the other's floor.
+    for (const room of layout.rooms) {
+      for (const other of layout.rooms) {
+        if (other === room) continue;
+        const separated =
+          room.bounds.col + room.bounds.cols <= other.bounds.col ||
+          other.bounds.col + other.bounds.cols <= room.bounds.col ||
+          room.bounds.row + room.bounds.rows <= other.bounds.row ||
+          other.bounds.row + other.bounds.rows <= room.bounds.row;
+        expect(
+          separated,
+          `${room.rootAgentId} overlaps ${other.rootAgentId}`,
+        ).toBe(true);
+      }
+      // ...and no cabin may run off the building it stands in.
+      expect(room.bounds.col).toBeGreaterThan(0);
+      expect(room.bounds.row).toBeGreaterThan(1);
+      expect(room.bounds.col + room.bounds.cols).toBeLessThan(layout.cols);
+      expect(room.bounds.row + room.bounds.rows).toBeLessThan(layout.rows);
+    }
+    // Every agent still has a desk, and every desk is inside some cabin.
+    expect(layout.desks.size).toBe(agents.length);
+    for (const desk of layout.desks.values()) {
+      expect(
+        layout.rooms.some((room) => within(room.bounds, desk.deskTile)),
+        desk.agentId,
+      ).toBe(true);
+    }
+  });
+
   it("names each cabin after the agent whose room it is", () => {
     const layout = layoutOffice([
       agent({ id: "root-a", name: "Planner", createdAt: 1 }),

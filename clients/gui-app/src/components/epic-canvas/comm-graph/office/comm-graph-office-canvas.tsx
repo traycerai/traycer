@@ -106,6 +106,8 @@ const VIEW_PERSIST_DEBOUNCE_MS = 150;
 const LABEL_FONT_PX = 10;
 const HOVER_LABEL_FONT_PX = 11;
 const MONOSPACE_STACK = "ui-monospace, SFMono-Regular, Menlo, monospace";
+const DARK_LABEL_BACKING = "rgba(0, 0, 0, 0.85)";
+const LIGHT_LABEL_BACKING = "rgba(255, 255, 255, 0.85)";
 
 interface OfficeCamera {
   x: number;
@@ -408,11 +410,12 @@ function hitRegionFor(
 }
 
 /**
- * Screen-space text with a one-pixel dark backing.
+ * Screen-space text with a one-pixel backing behind it.
  *
  * The floor's own colors are arbitrary (a character's shirt may land on the
  * foreground color), so a name is outlined rather than trusted to contrast
- * with whatever it happens to sit on.
+ * with whatever it happens to sit on. The backing's colour is the CALLER's,
+ * because it has to contrast with the text rather than with the floor.
  */
 const LABEL_BACKING_OFFSETS: ReadonlyArray<readonly [number, number]> = [
   [-1, 0],
@@ -429,16 +432,18 @@ function drawScreenLabel(
     readonly screenY: number;
     readonly fontPx: number;
     readonly color: string;
+    /** Sits behind the glyphs; must contrast with `color`, not with the floor. */
+    readonly backing: string;
     readonly alpha: number;
   },
 ): void {
-  const { alpha, color, fontPx, screenX, screenY, text } = label;
+  const { alpha, backing, color, fontPx, screenX, screenY, text } = label;
   ctx.save();
   ctx.globalAlpha = alpha;
   ctx.font = `${fontPx}px ${MONOSPACE_STACK}`;
   ctx.textAlign = "center";
   ctx.textBaseline = "alphabetic";
-  ctx.fillStyle = "rgba(0, 0, 0, 0.85)";
+  ctx.fillStyle = backing;
   for (const [dx, dy] of LABEL_BACKING_OFFSETS) {
     ctx.fillText(text, screenX + dx, screenY + dy);
   }
@@ -576,6 +581,17 @@ function drawOfficeFrame(args: DrawFrameArgs): void {
     muted: palette.textMuted,
     bright: palette.bright,
   };
+  // The backing exists to separate glyphs from whatever they sit on, so it has
+  // to contrast with the TEXT. A fixed dark backing did that for the dark
+  // theme's light text and smeared the light theme's dark text into a bold
+  // blur. `bright` is the exception in both themes: it is the cabin sign's
+  // tone, light by definition, so it keeps the dark backing either way.
+  const darkTextLabel = theme === "light";
+  const labelBackings: Readonly<Record<OfficeLabelTone, string>> = {
+    default: darkTextLabel ? LIGHT_LABEL_BACKING : DARK_LABEL_BACKING,
+    muted: darkTextLabel ? LIGHT_LABEL_BACKING : DARK_LABEL_BACKING,
+    bright: DARK_LABEL_BACKING,
+  };
 
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.imageSmoothingEnabled = false;
@@ -639,6 +655,7 @@ function drawOfficeFrame(args: DrawFrameArgs): void {
       // both themes, so the room's own name needs a colour picked against the
       // SIGN rather than against the floor the other labels sit on.
       color: labelColors[label.tone],
+      backing: labelBackings[label.tone],
       alpha: 1,
     });
   }
@@ -668,6 +685,7 @@ function drawOfficeFrame(args: DrawFrameArgs): void {
         screenY: top - HOVER_LABEL_FONT_PX / 2,
         fontPx: HOVER_LABEL_FONT_PX,
         color: palette.text,
+        backing: labelBackings.default,
         alpha: 1,
       });
     }
