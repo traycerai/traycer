@@ -129,14 +129,55 @@ function packagedCliDir(appPath: string): string {
   return path.join(appPath, "Contents", "Resources", "cli");
 }
 
-function findPackagedApp(): string | null {
-  if (!existsSync(RELEASE_DIR)) return null;
+function findPackagedApps(): ReadonlyArray<string> {
+  if (!existsSync(RELEASE_DIR)) return [];
+  const apps: string[] = [];
   for (const entry of readdirSync(RELEASE_DIR, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     const candidate = path.join(RELEASE_DIR, entry.name, `${PRODUCT_NAME}.app`);
-    if (existsSync(candidate)) return candidate;
+    if (existsSync(candidate)) apps.push(candidate);
   }
-  return null;
+  return apps;
+}
+
+function findPackagedApp(): string | null {
+  return findPackagedApps()[0] ?? null;
+}
+
+// The two arches `build.mac.target` ships. Both are packed by ONE
+// `electron-builder --mac` in the release job.
+const MAC_PACK_ARCHES = ["arm64", "x64"] as const;
+type MacPackArch = (typeof MAC_PACK_ARCHES)[number];
+
+function cliArchDir(arch: MacPackArch): string {
+  return path.join(DESKTOP_ROOT, "resources", "cli", `darwin-${arch}`);
+}
+
+function twoArchMarker(arch: MacPackArch): string {
+  return `two-arch-pack-marker-${arch}`;
+}
+
+function twoArchVersion(arch: MacPackArch): string {
+  return `${PACKAGING_TEST_VERSION}-two-arch-${arch}`;
+}
+
+/**
+ * The arch of the app's OWN Mach-O, read with `lipo`. The two-arch assertions
+ * key each app's expected CLI off this rather than off the output directory
+ * name: electron-builder names the per-arch dirs `mac-arm64` and (for the
+ * default arch) a bare `mac`, which is an implementation detail that would
+ * make the test read as passing for the wrong reason if it ever changed.
+ * Matching binary-arch to CLI-arch is the property actually under test.
+ */
+function appArchOf(appPath: string): MacPackArch {
+  const raw = execFileSync(
+    "lipo",
+    ["-archs", path.join(appPath, "Contents", "MacOS", PRODUCT_NAME)],
+    { encoding: "utf8" },
+  ).trim();
+  if (raw === "arm64") return "arm64";
+  if (raw === "x86_64") return "x64";
+  throw new Error(`unexpected app arch '${raw}' for ${appPath}`);
 }
 
 describe.skipIf(process.platform !== "darwin")(
@@ -380,6 +421,132 @@ describe.skipIf(process.platform !== "darwin")(
         expect(statSync(resolvedHelperPath).mode & 0o111).not.toBe(0);
       } finally {
         rmSync(relocatedRoot, { recursive: true, force: true });
+      }
+    });
+  },
+);
+
+/**
+ * The release topology, which the block above does NOT cover: the macOS job
+ * stages `darwin-arm64` AND `darwin-x64`, then ONE `electron-builder --mac`
+ * packs both apps (`build.mac.target` lists both arches). `package:dir` above
+ * packs a single arch, so it can only prove the mapping picks the right dir -
+ * not that two packs inside one invocation resolve `${arch}` independently.
+ * That distinction is the whole fix for traycerai/traycer#1528: the arch-blind
+ * mapping it replaced put BOTH staged CLIs into BOTH apps, and the arm64 DMG
+ * shipping an x86_64 Mach-O is what made macOS 26 flag the app as Intel.
+ *
+ * Deliberately NOT production-stamped, unlike the block above: nothing here
+ * asserts on the LaunchAgent/helper that `afterPack` injects (that hook
+ * early-returns when unstamped), so this avoids a second window in which
+ * `src/config.ts` is mutated. It invokes electron-builder directly rather
+ * than through `package:dir`, because no package script packs two arches.
+ */
+describe.skipIf(process.platform !== "darwin")(
+  "real electron-builder --mac packaging, BOTH arches in one invocation (release topology)",
+  () => {
+    let buildError: unknown = null;
+
+    beforeAll(() => {
+      rmSync(RELEASE_DIR, { recursive: true, force: true });
+      for (const arch of MAC_PACK_ARCHES) {
+        const dir = cliArchDir(arch);
+        const backup = `${dir}.packaging-test-backup`;
+        // Same stale-backup recovery as the block above: a backup left by a
+        // crashed run holds the developer's real staged CLI, so it wins.
+        if (existsSync(backup)) {
+          rmSync(dir, { recursive: true, force: true });
+          renameSync(backup, dir);
+        }
+        if (existsSync(dir)) renameSync(dir, backup);
+        // Per-arch marker bytes: without them "the x64 app has a darwin-x64
+        // dir" would also be satisfied by the arm64 CLI copied under the x64
+        // name, which is precisely the bug class being gated.
+        stageFakeCli(
+          dir,
+          `#!/bin/sh\n# ${twoArchMarker(arch)}\nexit 0\n`,
+          twoArchVersion(arch),
+        );
+      }
+
+      try {
+        execFileSync("bun", ["run", "build:app"], {
+          cwd: DESKTOP_ROOT,
+          stdio: "inherit",
+        });
+        // electron-builder cannot resolve Bun's `catalog:` protocol from the
+        // package.json devDependency, and electron is hoisted, so its
+        // project-level lookup misses too - pin the installed version
+        // explicitly, exactly as `release-desktop.yml` does.
+        const electronVersion = execFileSync(
+          "node",
+          ["-p", "require('electron/package.json').version"],
+          { cwd: DESKTOP_ROOT, encoding: "utf8" },
+        ).trim();
+        execFileSync(
+          "bun",
+          [
+            "x",
+            "electron-builder",
+            "--mac",
+            "--dir",
+            "--arm64",
+            "--x64",
+            "--publish",
+            "never",
+            `-c.electronVersion=${electronVersion}`,
+          ],
+          {
+            cwd: DESKTOP_ROOT,
+            stdio: "inherit",
+            env: { ...process.env, CSC_IDENTITY_AUTO_DISCOVERY: "false" },
+          },
+        );
+      } catch (error) {
+        buildError = error;
+      }
+    }, 900_000);
+
+    afterAll(() => {
+      rmSync(RELEASE_DIR, { recursive: true, force: true });
+      for (const arch of MAC_PACK_ARCHES) {
+        const dir = cliArchDir(arch);
+        const backup = `${dir}.packaging-test-backup`;
+        rmSync(dir, { recursive: true, force: true });
+        if (existsSync(backup)) renameSync(backup, dir);
+      }
+    });
+
+    it("packs one app per arch", () => {
+      expect(buildError).toBeNull();
+      const apps = findPackagedApps();
+      // Guards the assertion below against passing vacuously: a single-arch
+      // (or zero-app) output would otherwise satisfy an empty loop.
+      expect(apps).toHaveLength(MAC_PACK_ARCHES.length);
+      expect(apps.map(appArchOf).sort()).toEqual([...MAC_PACK_ARCHES].sort());
+    });
+
+    it("gives each app only the CLI matching its own Mach-O arch", () => {
+      expect(buildError).toBeNull();
+      const apps = findPackagedApps();
+      expect(apps.length).toBeGreaterThan(0);
+
+      for (const app of apps) {
+        const arch = appArchOf(app);
+        const cliDir = packagedCliDir(app);
+        // Exactly one arch dir, and it is this app's own.
+        expect(readdirSync(cliDir).sort()).toEqual([`darwin-${arch}`]);
+
+        const archDir = path.join(cliDir, `darwin-${arch}`);
+        const binary = readFileSync(path.join(archDir, "traycer"), "utf8");
+        expect(binary).toContain(twoArchMarker(arch));
+        for (const other of MAC_PACK_ARCHES) {
+          if (other === arch) continue;
+          expect(binary).not.toContain(twoArchMarker(other));
+        }
+        expect(
+          JSON.parse(readFileSync(path.join(archDir, "version.json"), "utf8")),
+        ).toEqual({ version: twoArchVersion(arch) });
       }
     });
   },
