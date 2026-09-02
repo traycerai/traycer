@@ -120,6 +120,9 @@ function controllableSession(): ControllableSession {
     subscribe: vi.fn(() => {
       throw new Error("not exercised by this test");
     }),
+    subscribeAtVersion: vi.fn(() => {
+      throw new Error("not exercised by this test");
+    }),
     subscribeWithParamsProvider: vi.fn(() => {
       throw new Error("not exercised by this test");
     }),

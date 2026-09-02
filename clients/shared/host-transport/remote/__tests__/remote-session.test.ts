@@ -109,6 +109,8 @@ import type {
   StreamFrameEnvelope,
 } from "../../i-stream-session";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
+import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import { WorktreeDeleteBatchStreamClient } from "../../worktree-delete-batch-stream-client";
 
 // Integration-style tests for the session lifecycle edges a cold audit found
 // unrecoverable: an UNAUTHORIZED session fatal (the wake-time expired-bearer
@@ -1943,6 +1945,64 @@ describe("RemoteSession host_detached readiness evidence", () => {
 });
 
 describe("RemoteStreamClient dynamic subscribe params", () => {
+  it(
+    "routes a pinned remote incompatibility through the batch client's unsupported fallback seam",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.streamManifest = {
+        "worktree.deleteBatchByPath": { major: 1, minor: 0 },
+      };
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: hostStreamRpcRegistry,
+      });
+      const streamClient = new RemoteStreamClient<
+        VersionedRpcRegistry,
+        typeof hostStreamRpcRegistry
+      >(session);
+      const onUnsupported = vi.fn();
+      const onConnectionStatus = vi.fn();
+      const batch = new WorktreeDeleteBatchStreamClient({
+        wsStreamClient: streamClient,
+        commandId: "6f1a6a0e-1f0f-4a1e-9f0d-1b6f0c2c9f11",
+        source: "settings",
+        targets: [
+          { worktreePath: "/wt/force", scripts: null, stopOwners: true },
+        ],
+        callbacks: {
+          onTargetStarted: () => undefined,
+          onTargetPhase: () => undefined,
+          onTargetOutput: () => undefined,
+          onTargetComplete: () => undefined,
+          onTargetFailed: () => undefined,
+          onCommandComplete: () => undefined,
+          onCommandFailed: () => undefined,
+          onUnsupported,
+          onConnectionStatus,
+        },
+      });
+      try {
+        await vi.waitFor(
+          () => expect(onUnsupported).toHaveBeenCalledOnce(),
+          WAIT,
+        );
+        expect(onConnectionStatus).not.toHaveBeenCalledWith(
+          "closed",
+          expect.anything(),
+        );
+        // Admission failed inside `openSubscription`; no destructive subscribe
+        // was ever enqueued on the mux wire.
+        expect(relay.subscribeParams).toEqual([]);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        batch.close();
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
   it(
     "selects an installed older stream major advertised by an RC host",
     async () => {

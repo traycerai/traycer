@@ -516,6 +516,8 @@ export function acquireRemoteSession<
     sendUnary: (method, params, abortSignal, responseTimeoutMs) =>
       session.sendUnary(method, params, abortSignal, responseTimeoutMs),
     subscribe: (method, params) => session.subscribe(method, params),
+    subscribeAtVersion: (method, schemaVersion, params) =>
+      session.subscribeAtVersion(method, schemaVersion, params),
     subscribeWithParamsProvider: (method, paramsProvider) =>
       session.subscribeWithParamsProvider(method, paramsProvider),
     notifyBearerRotated: () => session.notifyBearerRotated(),

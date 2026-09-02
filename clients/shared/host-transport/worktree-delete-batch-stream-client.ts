@@ -1,13 +1,14 @@
 import type { WorktreeBusyHolder } from "@traycer/protocol/framework/worktree-busy-holders";
 import {
-  worktreeDeleteBatchByPathServerFrameSchema,
-  type WorktreeDeleteBatchByPathOpenRequest,
-  type WorktreeDeleteBatchByPathServerFrame,
+  worktreeDeleteBatchTargetSchemaV11,
+  worktreeDeleteBatchByPathServerFrameSchemaV11,
+  type WorktreeDeleteBatchByPathOpenRequestV11,
+  type WorktreeDeleteBatchByPathServerFrameV11,
   type WorktreeDeleteBatchOutputChannel,
   type WorktreeDeleteBatchPhase,
-  type WorktreeDeleteBatchTarget,
   type WorktreeDeletionSource,
 } from "@traycer/protocol/host/worktree-delete-batch-stream";
+import type { z } from "zod";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type {
   IStreamSession,
@@ -15,6 +16,7 @@ import type {
   StreamConnectionStatus,
   StreamFrameEnvelope,
 } from "./i-stream-session";
+import { isMethodIncompatibleClose } from "./i-stream-session";
 import type { IHostStreamClient } from "./host-stream-client";
 
 export const WORKTREE_DELETE_BATCH_STREAM_METHOD = "worktree.deleteBatchByPath";
@@ -45,6 +47,7 @@ export interface WorktreeDeleteBatchStreamCallbacks {
     worktreePath: string,
     reason: string,
     holders: readonly WorktreeBusyHolder[] | undefined,
+    code: "WORKTREE_BUSY" | undefined,
   ) => void;
   /** Terminal for the COMMAND, after every target settled. */
   readonly onCommandComplete: (counts: {
@@ -82,7 +85,9 @@ export interface WorktreeDeleteBatchStreamClientOptions {
   readonly commandId: string;
   readonly source: WorktreeDeletionSource;
   readonly epicId?: string;
-  readonly targets: ReadonlyArray<WorktreeDeleteBatchTarget>;
+  readonly targets: ReadonlyArray<
+    z.input<typeof worktreeDeleteBatchTargetSchemaV11>
+  >;
   readonly callbacks: WorktreeDeleteBatchStreamCallbacks;
 }
 
@@ -120,6 +125,8 @@ export class WorktreeDeleteBatchStreamClient {
   private readonly callbacks: WorktreeDeleteBatchStreamCallbacks;
   private readonly wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>;
   private readonly commandId: string;
+  /** Whether the start request carries safety-significant @1.1 consent. */
+  private readonly hasForceTargets: boolean;
   private mode: "start" | "observe";
   /**
    * True once a session reached `open`, which is the moment the subscribe
@@ -136,6 +143,9 @@ export class WorktreeDeleteBatchStreamClient {
     this.callbacks = options.callbacks;
     this.wsStreamClient = options.wsStreamClient;
     this.commandId = options.commandId;
+    this.hasForceTargets = options.targets.some(
+      (target) => target.stopOwners === true,
+    );
     this.mode = "start";
     this.reachedHost = false;
     this.swapping = false;
@@ -150,6 +160,7 @@ export class WorktreeDeleteBatchStreamClient {
       targets: options.targets.map((target) => ({
         worktreePath: target.worktreePath,
         scripts: target.scripts,
+        stopOwners: target.stopOwners ?? false,
       })),
     });
   }
@@ -164,12 +175,24 @@ export class WorktreeDeleteBatchStreamClient {
   }
 
   private openSession(
-    params: WorktreeDeleteBatchByPathOpenRequest,
+    params: WorktreeDeleteBatchByPathOpenRequestV11,
   ): IStreamSession {
-    const session = this.wsStreamClient.subscribe(
-      "worktree.deleteBatchByPath",
-      params,
-    );
+    let session: IStreamSession;
+    if (params.mode === "start" && this.hasForceTargets) {
+      if (this.wsStreamClient.subscribeAtVersion === undefined) {
+        throw new Error("This stream transport cannot pin a schema version");
+      }
+      session = this.wsStreamClient.subscribeAtVersion(
+        "worktree.deleteBatchByPath",
+        { major: 1, minor: 1 },
+        params,
+      );
+    } else {
+      session = this.wsStreamClient.subscribe(
+        "worktree.deleteBatchByPath",
+        params,
+      );
+    }
     session.onServerFrame((envelope, binaryPayload) => {
       this.handleServerFrame(envelope, binaryPayload);
     });
@@ -214,17 +237,16 @@ export class WorktreeDeleteBatchStreamClient {
       this.callbacks.onConnectionStatus(status, reason);
       return;
     }
-    // `getMethodSupport` is set to `unsupported` by the handshake immediately
-    // before it closes the session, so it is already authoritative here.
-    // Read it rather than pattern-matching the fatal-error details: support is
-    // the transport's own answer to "does this host have the method", while
-    // the details string is a human-readable summary that may change.
+    // Local transports cache unsupported-method evidence on the client. Remote
+    // mux sessions deliberately do not, so their only capability evidence is
+    // the incompatible close emitted before the subscribe frame is enqueued.
     if (
       status === "closed" &&
       reason !== null &&
-      this.wsStreamClient.getMethodSupport(
+      (this.wsStreamClient.getMethodSupport(
         WORKTREE_DELETE_BATCH_STREAM_METHOD,
-      ) === "unsupported"
+      ) === "unsupported" ||
+        isMethodIncompatibleClose(reason))
     ) {
       if (this.reportedUnsupported) return;
       this.reportedUnsupported = true;
@@ -250,11 +272,11 @@ export class WorktreeDeleteBatchStreamClient {
     _binaryPayload: Uint8Array | null,
   ): void {
     const parsed =
-      worktreeDeleteBatchByPathServerFrameSchema.safeParse(envelope);
+      worktreeDeleteBatchByPathServerFrameSchemaV11.safeParse(envelope);
     if (!parsed.success) {
       return;
     }
-    const frame: WorktreeDeleteBatchByPathServerFrame = parsed.data;
+    const frame: WorktreeDeleteBatchByPathServerFrameV11 = parsed.data;
     switch (frame.kind) {
       case "target.started": {
         this.callbacks.onTargetStarted(frame.worktreePath, frame.hasTeardown);
@@ -280,7 +302,8 @@ export class WorktreeDeleteBatchStreamClient {
         this.callbacks.onTargetFailed(
           frame.worktreePath,
           frame.reason,
-          undefined,
+          frame.holders,
+          frame.code,
         );
         return;
       }

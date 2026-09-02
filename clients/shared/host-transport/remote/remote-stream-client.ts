@@ -42,6 +42,14 @@ export class RemoteStreamClient<
     return this.subscribeWithParamsProvider(method, () => params);
   }
 
+  subscribeAtVersion<Method extends keyof StreamRegistry & string>(
+    method: Method,
+    schemaVersion: SchemaVersion,
+    params: ParamsOf<StreamRegistry, Method>,
+  ): IStreamSession {
+    return this.session.subscribeAtVersion(method, schemaVersion, params);
+  }
+
   subscribeWithParamsProvider<Method extends keyof StreamRegistry & string>(
     method: Method,
     paramsProvider: () => ParamsOf<StreamRegistry, Method>,

@@ -200,7 +200,6 @@ function sweepRow(worktreePath: string): EpicSweepWorktreeRow {
       note: "not-landed",
       holders: [],
       holdersStatus: "none",
-      holdersRevision: undefined,
     };
   }
   return {
@@ -211,7 +210,6 @@ function sweepRow(worktreePath: string): EpicSweepWorktreeRow {
     note: null,
     holders: [],
     holdersStatus: "none",
-    holdersRevision: undefined,
   };
 }
 
