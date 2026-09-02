@@ -20,11 +20,20 @@ concurrency:
 jobs:
   test:
     name: ${{ matrix.name }}
-    runs-on: ${{ matrix.project == 'traycer-clients-gui-app' && 'ubuntu-latest-8-cores' || 'ubuntu-latest' }}
+    # Every leg runs on the standard runner. This repository is public, and
+    # standard runners are free and unmetered on public repositories; larger
+    # runners (`ubuntu-latest-8-cores`) are billed even here. The GUI shards
+    # were the ONLY paid jobs in this repository: 122k 8-core minutes in
+    # August 2026, $2,690, for a suite whose vitest config caps itself at two
+    # fork workers (`MAX_TEST_WORKERS` in clients/gui-app/vitest.config.ts) —
+    # so the extra cores were never used. Public-repo standard runners are
+    # 4 vCPU / 16 GB, which covers two forks plus the parent comfortably.
+    runs-on: ubuntu-latest
     # The GUI suite deliberately runs isolated two-worker forks: disabling
-    # isolation makes tests leak state. Twelve deterministic Vitest shards run
-    # as parallel matrix jobs; the measured eight-shard bodies still reached
-    # 4m39, so the smaller units keep the full hosted path below five minutes.
+    # isolation makes tests leak state. Twenty deterministic Vitest shards run
+    # as parallel matrix jobs; the twelve-shard bodies measured 2m20–4m20 on
+    # the 8-core runner, so the narrower units hold wall-clock on the smaller
+    # runner. Shards are free here, so more of them costs only queue slots.
     strategy:
       # Run every project even if one fails, so a single red project doesn't
       # mask the others.
@@ -38,56 +47,91 @@ jobs:
             name: "test (@traycer/protocol)"
             test_args: ""
             cache_key: "@traycer/protocol"
+          # `test (traycer-clients-gui-app)` is the one gui-app context the
+          # `main` ruleset requires, so shard 1 keeps that name. The other
+          # shards carry no ruleset name of their own; the historical
+          # "shard N", "shard N of 8" and "shard N of 12" labels were kept only
+          # for that reason and are retired here in favour of one scheme.
           - project: traycer-clients-gui-app
             name: "test (traycer-clients-gui-app)"
-            test_args: "-- --shard=1/12"
-            cache_key: "traycer-clients-gui-app-1-of-12"
+            test_args: "-- --shard=1/20"
+            cache_key: "traycer-clients-gui-app-1-of-20"
           - project: traycer-clients-gui-app
-            name: "test (traycer-clients-gui-app shard 2 of 8)"
-            test_args: "-- --shard=2/12"
-            cache_key: "traycer-clients-gui-app-2-of-12"
-          # Keep the three historical required-check names while narrowing
-          # their work from quarter-shards to eighth-shards.
+            name: "test (traycer-clients-gui-app shard 2 of 20)"
+            test_args: "-- --shard=2/20"
+            cache_key: "traycer-clients-gui-app-2-of-20"
           - project: traycer-clients-gui-app
-            name: "test (traycer-clients-gui-app shard 2)"
-            test_args: "-- --shard=3/12"
-            cache_key: "traycer-clients-gui-app-3-of-12"
+            name: "test (traycer-clients-gui-app shard 3 of 20)"
+            test_args: "-- --shard=3/20"
+            cache_key: "traycer-clients-gui-app-3-of-20"
           - project: traycer-clients-gui-app
-            name: "test (traycer-clients-gui-app shard 4 of 8)"
-            test_args: "-- --shard=4/12"
-            cache_key: "traycer-clients-gui-app-4-of-12"
+            name: "test (traycer-clients-gui-app shard 4 of 20)"
+            test_args: "-- --shard=4/20"
+            cache_key: "traycer-clients-gui-app-4-of-20"
           - project: traycer-clients-gui-app
-            name: "test (traycer-clients-gui-app shard 3)"
-            test_args: "-- --shard=5/12"
-            cache_key: "traycer-clients-gui-app-5-of-12"
+            name: "test (traycer-clients-gui-app shard 5 of 20)"
+            test_args: "-- --shard=5/20"
+            cache_key: "traycer-clients-gui-app-5-of-20"
           - project: traycer-clients-gui-app
-            name: "test (traycer-clients-gui-app shard 6 of 8)"
-            test_args: "-- --shard=6/12"
-            cache_key: "traycer-clients-gui-app-6-of-12"
+            name: "test (traycer-clients-gui-app shard 6 of 20)"
+            test_args: "-- --shard=6/20"
+            cache_key: "traycer-clients-gui-app-6-of-20"
           - project: traycer-clients-gui-app
-            name: "test (traycer-clients-gui-app shard 4)"
-            test_args: "-- --shard=7/12"
-            cache_key: "traycer-clients-gui-app-7-of-12"
+            name: "test (traycer-clients-gui-app shard 7 of 20)"
+            test_args: "-- --shard=7/20"
+            cache_key: "traycer-clients-gui-app-7-of-20"
           - project: traycer-clients-gui-app
-            name: "test (traycer-clients-gui-app shard 8 of 8)"
-            test_args: "-- --shard=8/12"
-            cache_key: "traycer-clients-gui-app-8-of-12"
+            name: "test (traycer-clients-gui-app shard 8 of 20)"
+            test_args: "-- --shard=8/20"
+            cache_key: "traycer-clients-gui-app-8-of-20"
           - project: traycer-clients-gui-app
-            name: "test (traycer-clients-gui-app shard 9 of 12)"
-            test_args: "-- --shard=9/12"
-            cache_key: "traycer-clients-gui-app-9-of-12"
+            name: "test (traycer-clients-gui-app shard 9 of 20)"
+            test_args: "-- --shard=9/20"
+            cache_key: "traycer-clients-gui-app-9-of-20"
           - project: traycer-clients-gui-app
-            name: "test (traycer-clients-gui-app shard 10 of 12)"
-            test_args: "-- --shard=10/12"
-            cache_key: "traycer-clients-gui-app-10-of-12"
+            name: "test (traycer-clients-gui-app shard 10 of 20)"
+            test_args: "-- --shard=10/20"
+            cache_key: "traycer-clients-gui-app-10-of-20"
           - project: traycer-clients-gui-app
-            name: "test (traycer-clients-gui-app shard 11 of 12)"
-            test_args: "-- --shard=11/12"
-            cache_key: "traycer-clients-gui-app-11-of-12"
+            name: "test (traycer-clients-gui-app shard 11 of 20)"
+            test_args: "-- --shard=11/20"
+            cache_key: "traycer-clients-gui-app-11-of-20"
           - project: traycer-clients-gui-app
-            name: "test (traycer-clients-gui-app shard 12 of 12)"
-            test_args: "-- --shard=12/12"
-            cache_key: "traycer-clients-gui-app-12-of-12"
+            name: "test (traycer-clients-gui-app shard 12 of 20)"
+            test_args: "-- --shard=12/20"
+            cache_key: "traycer-clients-gui-app-12-of-20"
+          - project: traycer-clients-gui-app
+            name: "test (traycer-clients-gui-app shard 13 of 20)"
+            test_args: "-- --shard=13/20"
+            cache_key: "traycer-clients-gui-app-13-of-20"
+          - project: traycer-clients-gui-app
+            name: "test (traycer-clients-gui-app shard 14 of 20)"
+            test_args: "-- --shard=14/20"
+            cache_key: "traycer-clients-gui-app-14-of-20"
+          - project: traycer-clients-gui-app
+            name: "test (traycer-clients-gui-app shard 15 of 20)"
+            test_args: "-- --shard=15/20"
+            cache_key: "traycer-clients-gui-app-15-of-20"
+          - project: traycer-clients-gui-app
+            name: "test (traycer-clients-gui-app shard 16 of 20)"
+            test_args: "-- --shard=16/20"
+            cache_key: "traycer-clients-gui-app-16-of-20"
+          - project: traycer-clients-gui-app
+            name: "test (traycer-clients-gui-app shard 17 of 20)"
+            test_args: "-- --shard=17/20"
+            cache_key: "traycer-clients-gui-app-17-of-20"
+          - project: traycer-clients-gui-app
+            name: "test (traycer-clients-gui-app shard 18 of 20)"
+            test_args: "-- --shard=18/20"
+            cache_key: "traycer-clients-gui-app-18-of-20"
+          - project: traycer-clients-gui-app
+            name: "test (traycer-clients-gui-app shard 19 of 20)"
+            test_args: "-- --shard=19/20"
+            cache_key: "traycer-clients-gui-app-19-of-20"
+          - project: traycer-clients-gui-app
+            name: "test (traycer-clients-gui-app shard 20 of 20)"
+            test_args: "-- --shard=20/20"
+            cache_key: "traycer-clients-gui-app-20-of-20"
           - project: "@traycer-clients/desktop"
             name: "test (@traycer-clients/desktop)"
             test_args: ""
