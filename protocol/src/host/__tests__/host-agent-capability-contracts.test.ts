@@ -3,6 +3,7 @@ import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import { agentArchiveV10 } from "@traycer/protocol/host/agent/archive";
 import {
+  HOST_FILE_TRANSFER_UNREADABLE_MESSAGE_MAX_LENGTH,
   hostDirectoryListV10,
   hostFileCopyCancelV10,
   hostFileCopyStartV10,
@@ -173,13 +174,61 @@ describe("host-agent capability contracts", () => {
           sizeBytes: 3,
           bytesBase64: "YWJj",
         },
+        {
+          kind: "unreadable",
+          relativePath: "src/private.ts",
+          operation: "stat",
+          message: "permission denied",
+          bytesBase64: "YWJj",
+          content: "MUST-NOT-SURVIVE",
+        },
       ],
       nextCursor: null,
       content: "MUST-NOT-SURVIVE",
     });
 
     expect(parsed.entries[0]).not.toHaveProperty("bytesBase64");
+    expect(parsed.entries[1]).not.toHaveProperty("bytesBase64");
+    expect(parsed.entries[1]).not.toHaveProperty("content");
     expect(parsed).not.toHaveProperty("content");
+  });
+
+  it("preserves bounded per-entry enumeration failures", () => {
+    for (const operation of ["stat", "readlink", "readdir"] as const) {
+      const parsed = hostFileTransferEnumerateV10.responseSchema.parse({
+        entries: [
+          {
+            kind: "unreadable",
+            relativePath: "src/private.ts",
+            operation,
+            message: "permission denied",
+          },
+        ],
+        nextCursor: null,
+      });
+      expect(parsed.entries[0]).toEqual({
+        kind: "unreadable",
+        relativePath: "src/private.ts",
+        operation,
+        message: "permission denied",
+      });
+    }
+
+    expect(
+      hostFileTransferEnumerateV10.responseSchema.safeParse({
+        entries: [
+          {
+            kind: "unreadable",
+            relativePath: "src/private.ts",
+            operation: "stat",
+            message: "x".repeat(
+              HOST_FILE_TRANSFER_UNREADABLE_MESSAGE_MAX_LENGTH + 1,
+            ),
+          },
+        ],
+        nextCursor: null,
+      }).success,
+    ).toBe(false);
   });
 
   it("strips byte-carrying fields from the terminal manifest", () => {
@@ -195,8 +244,14 @@ describe("host-agent capability contracts", () => {
           replacements: 0,
           skippedExisting: 0,
         },
-        failureCount: 0,
-        failures: [],
+        failureCount: 1,
+        failures: [
+          {
+            relativePath: "src/private.ts",
+            operation: "stat",
+            message: "permission denied",
+          },
+        ],
         failuresOmitted: 0,
         skippedUnsafeSymlinkCount: 0,
         skippedUnsafeSymlinks: [],
@@ -209,6 +264,7 @@ describe("host-agent capability contracts", () => {
     if (parsed.state !== "completed") {
       throw new Error("expected completed copy status");
     }
+    expect(parsed.manifest.failures[0]?.operation).toBe("stat");
     expect(parsed.manifest).not.toHaveProperty("bytesBase64");
     expect(parsed.manifest).not.toHaveProperty("content");
   });

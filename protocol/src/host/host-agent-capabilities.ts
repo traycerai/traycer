@@ -185,6 +185,9 @@ export type HostFileCopyProgress = z.infer<typeof hostFileCopyProgressSchema>;
 
 export const hostFileCopyFailureOperationSchema = z.enum([
   "enumerate",
+  "stat",
+  "readlink",
+  "readdir",
   "open",
   "read",
   "create-directory",
@@ -345,6 +348,11 @@ const hostFileTransferEntryMetadataFields = {
   mtimeMs: z.number().finite(),
 } as const;
 
+const hostFileTransferUnreadableOperationSchema =
+  hostFileCopyFailureOperationSchema.extract(["stat", "readlink", "readdir"]);
+
+export const HOST_FILE_TRANSFER_UNREADABLE_MESSAGE_MAX_LENGTH = 1024;
+
 /**
  * The source walk computes symlink safety against the transferred tree's
  * boundary. `safety` is therefore an authoritative fact carried to the
@@ -367,6 +375,17 @@ export const hostFileTransferEntrySchema = z.discriminatedUnion("kind", [
     ...hostFileTransferEntryMetadataFields,
     target: z.string(),
     safety: z.enum(["safe", "unsafe"]),
+  }),
+  /**
+   * A source-authored per-entry failure keeps the page and later walk entries
+   * usable. `message` is bounded because it reaches the agent through the
+   * manifest and follows the same output discipline as manifest failure items.
+   */
+  z.object({
+    kind: z.literal("unreadable"),
+    relativePath: z.string(),
+    operation: hostFileTransferUnreadableOperationSchema,
+    message: z.string().max(HOST_FILE_TRANSFER_UNREADABLE_MESSAGE_MAX_LENGTH),
   }),
 ]);
 export type HostFileTransferEntry = z.infer<typeof hostFileTransferEntrySchema>;
