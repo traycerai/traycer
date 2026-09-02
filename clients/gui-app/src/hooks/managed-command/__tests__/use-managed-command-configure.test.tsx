@@ -35,6 +35,7 @@ vi.mock("@/lib/host", () => ({
 import {
   useManagedCommandConfigure,
   useManagedCommandConfigureIsPending,
+  useManagedCommandRelaunchOnHostRestart,
 } from "@/hooks/managed-command/use-managed-command-lifecycle-mutations";
 
 const EPIC_ID = "epic-1";
@@ -94,10 +95,13 @@ beforeEach(() => {
         const gate = makeGate();
         gates.push(gate);
         await gate.promise;
+        // The host bumps `updatedAtMs` on every live change, and that is
+        // what lets a surface tell an answered write from a stale stream.
         return {
           command: {
             ...COMMAND,
             relaunchOnHostRestart: request.relaunchOnHostRestart,
+            updatedAtMs: COMMAND.updatedAtMs + 1,
           },
         };
       },
@@ -219,6 +223,64 @@ describe("useManagedCommandConfigure", () => {
       expect(row.result.current.isSuccess).toBe(true);
       expect(header.result.current).toBe(false);
     });
+  });
+
+  it("reads an answered write's value over a stale streamed record until the stream catches up", async () => {
+    // After the write answers and before `managedCommandsChanged` lands, the
+    // streamed record still says `false`. Every surface must read `true`
+    // from the settled write, or the next press re-sends `true`.
+    const target = { hostId: mockLocalHostEntry.hostId, commandId: COMMAND_ID };
+    const row = renderHook(() => useManagedCommandConfigure(target), {
+      wrapper,
+    });
+    const header = renderHook(
+      () => useManagedCommandRelaunchOnHostRestart(target, COMMAND),
+      { wrapper },
+    );
+    expect(header.result.current).toBe(false);
+
+    act(() => {
+      row.result.current.mutate({
+        hostId: mockLocalHostEntry.hostId,
+        epicId: EPIC_ID,
+        commandId: COMMAND_ID,
+        relaunchOnHostRestart: true,
+      });
+    });
+    await waitFor(() => {
+      expect(gates).toHaveLength(1);
+    });
+    // Unanswered: still the streamed value.
+    expect(header.result.current).toBe(false);
+    act(() => {
+      gates[0].release();
+    });
+    await waitFor(() => {
+      expect(header.result.current).toBe(true);
+    });
+
+    // The stream catches up with a NEWER record: it wins again, whatever it
+    // says - here a later change turned the flag back off.
+    const caughtUp = renderHook(
+      () =>
+        useManagedCommandRelaunchOnHostRestart(target, {
+          ...COMMAND,
+          relaunchOnHostRestart: false,
+          updatedAtMs: COMMAND.updatedAtMs + 2,
+        }),
+      { wrapper },
+    );
+    expect(caughtUp.result.current).toBe(false);
+    // And an unrelated command never reads this command's write.
+    const other = renderHook(
+      () =>
+        useManagedCommandRelaunchOnHostRestart(
+          { hostId: mockLocalHostEntry.hostId, commandId: "cmd-other" },
+          COMMAND,
+        ),
+      { wrapper },
+    );
+    expect(other.result.current).toBe(false);
   });
 
   it("does not serialize writes to DIFFERENT commands behind each other", async () => {

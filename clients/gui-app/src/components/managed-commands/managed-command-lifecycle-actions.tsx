@@ -11,6 +11,7 @@ import {
   useManagedCommandConfigure,
   useManagedCommandConfigureIsPending,
   useManagedCommandDelete,
+  useManagedCommandRelaunchOnHostRestart,
   useManagedCommandStart,
   useManagedCommandStop,
   useManagedCommandStopAllIsPending,
@@ -70,6 +71,12 @@ export function ManagedCommandLifecycleActions(
     hostId,
     commandId: command.id,
   });
+  // The value to show and invert: a write that already answered beats a
+  // streamed record that has not caught up with it yet.
+  const relaunchOnHostRestart = useManagedCommandRelaunchOnHostRestart(
+    { hostId, commandId: command.id },
+    command,
+  );
   const supportsConfigure = useHostSupportsMethod(
     hostId,
     "managedCommand.configure",
@@ -107,27 +114,25 @@ export function ManagedCommandLifecycleActions(
       )}
       {supportsConfigure ? (
         <ManagedCommandActionButton
-          label={relaunchOnHostRestartLabel(command.relaunchOnHostRestart)}
-          ariaLabel={relaunchOnHostRestartLabel(command.relaunchOnHostRestart)}
+          label={relaunchOnHostRestartLabel(relaunchOnHostRestart)}
+          ariaLabel={relaunchOnHostRestartLabel(relaunchOnHostRestart)}
           icon={
             <RotateCcw
               aria-hidden
               className={cn(
                 "size-3.5",
-                command.relaunchOnHostRestart
-                  ? "text-foreground"
-                  : "opacity-50",
+                relaunchOnHostRestart ? "text-foreground" : "opacity-50",
               )}
             />
           }
           isPending={configure.isPending || configurePending}
           testId={`managed-command-relaunch-${command.id}`}
           className={undefined}
-          pressed={command.relaunchOnHostRestart}
+          pressed={relaunchOnHostRestart}
           onClick={() => {
             configure.mutate({
               ...variables,
-              relaunchOnHostRestart: !command.relaunchOnHostRestart,
+              relaunchOnHostRestart: !relaunchOnHostRestart,
             });
           }}
         />

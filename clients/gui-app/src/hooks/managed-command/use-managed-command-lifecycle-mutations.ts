@@ -1,6 +1,7 @@
 import {
   useIsMutating,
   useMutation,
+  useMutationState,
   type UseMutationResult,
 } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -11,9 +12,11 @@ import {
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
-import type {
-  ManagedCommandHeldReleaseFailure,
-  ManagedCommandHeldReleaseUnattributed,
+import {
+  managedCommandControlResponseSchema,
+  type ManagedCommand,
+  type ManagedCommandHeldReleaseFailure,
+  type ManagedCommandHeldReleaseUnattributed,
 } from "@traycer/protocol/host/managed-command/unary-schemas";
 import {
   useHostClient,
@@ -274,6 +277,47 @@ export function useManagedCommandConfigureIsPending(
       ),
     }) > 0
   );
+}
+
+/**
+ * The relaunch value a surface should SHOW and INVERT for this command: the
+ * streamed record's, unless a configure write for the command has already
+ * answered with a newer record. Between a write resolving and the chat stream
+ * carrying the resulting `managedCommandsChanged`, the streamed value is
+ * stale; a surface deriving its next press from it would send the same
+ * inverse again. The mutation cache holds every surface's settled writes, so
+ * this reads the newest one there and lets `updatedAtMs` decide - a later
+ * stream record (any change bumps it) wins again the moment it lands.
+ */
+export function useManagedCommandRelaunchOnHostRestart(
+  target: ManagedCommandConfigureTarget,
+  streamed: ManagedCommand,
+): boolean {
+  const settled = useMutationState({
+    filters: {
+      mutationKey: managedCommandMutationKeys.configure(
+        target.hostId,
+        target.commandId,
+      ),
+      status: "success",
+    },
+    select: (mutation) => mutation.state.data,
+  });
+  let newest: ManagedCommand | null = null;
+  for (const data of settled) {
+    const parsed = managedCommandControlResponseSchema.safeParse(data);
+    if (!parsed.success) continue;
+    if (
+      newest === null ||
+      parsed.data.command.updatedAtMs > newest.updatedAtMs
+    ) {
+      newest = parsed.data.command;
+    }
+  }
+  if (newest === null || newest.updatedAtMs < streamed.updatedAtMs) {
+    return streamed.relaunchOnHostRestart;
+  }
+  return newest.relaunchOnHostRestart;
 }
 
 /**

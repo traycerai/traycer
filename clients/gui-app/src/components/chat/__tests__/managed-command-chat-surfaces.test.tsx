@@ -83,6 +83,10 @@ vi.mock(
     useManagedCommandStopAllIsPending: () => stopAllSharedFlight.isPending,
     useManagedCommandDelete: () => ({ mutate: vi.fn(), isPending: false }),
     useManagedCommandConfigureIsPending: () => false,
+    useManagedCommandRelaunchOnHostRestart: (
+      _target: unknown,
+      streamed: { relaunchOnHostRestart: boolean },
+    ) => streamed.relaunchOnHostRestart,
     useManagedCommandConfigure: () => ({ mutate: vi.fn(), isPending: false }),
     useManagedCommandDeliverHeld: () => ({
       mutate: deliverHeldMutate,

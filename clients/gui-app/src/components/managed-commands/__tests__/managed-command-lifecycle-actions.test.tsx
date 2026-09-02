@@ -26,12 +26,23 @@ vi.mock(
       isPending: false,
     }),
     useManagedCommandConfigureIsPending: () => configureState.pendingElsewhere,
+    useManagedCommandRelaunchOnHostRestart: (
+      _target: unknown,
+      streamed: { relaunchOnHostRestart: boolean },
+    ) => configureState.settledValue ?? streamed.relaunchOnHostRestart,
     useManagedCommandStopAllIsPending: () => false,
   }),
 );
 
-/** A configure write in flight from ANOTHER surface for the same command. */
-const configureState = { pendingElsewhere: false };
+/**
+ * The shared per-command state other surfaces contribute: a write in flight
+ * elsewhere, and the value a write already answered with (null = none newer
+ * than the stream).
+ */
+const configureState: {
+  pendingElsewhere: boolean;
+  settledValue: boolean | null;
+} = { pendingElsewhere: false, settledValue: null };
 
 // The host's negotiated method set, as the relaunch switch reads it. A
 // primitive slot rather than a nullable one so the tests below can flip it
@@ -88,6 +99,7 @@ beforeEach(() => {
   supportsMethodSpy.mockClear();
   hostMethods.configure = true;
   configureState.pendingElsewhere = false;
+  configureState.settledValue = null;
 });
 
 afterEach(() => {
@@ -183,6 +195,30 @@ describe("managed-command lifecycle actions", () => {
     expect(
       screen.getByRole("button", { name: "Stop" }).hasAttribute("disabled"),
     ).toBe(false);
+  });
+
+  it("shows and inverts the value a write already answered with, not the stale streamed one", () => {
+    // Between a configure write resolving and the chat stream carrying the
+    // new record, the prop still says off. A surface that read the prop
+    // would show "stays down" and send `true` again - the duplicate write
+    // the shared pending read cannot catch once the write has answered.
+    configureState.settledValue = true;
+    renderActions(RUNNING);
+
+    const on = screen.getByRole("button", {
+      name: "Relaunches after a host restart",
+    });
+    expect(on.getAttribute("aria-pressed")).toBe("true");
+    expect(
+      screen.queryByRole("button", { name: "Stays down after a host restart" }),
+    ).toBeNull();
+    fireEvent.click(on);
+    expect(configureMutate).toHaveBeenCalledWith({
+      hostId: "host-1",
+      epicId: "epic-1",
+      commandId: "cmd-1",
+      relaunchOnHostRestart: false,
+    });
   });
 
   it("hides the relaunch switch on a host that did not negotiate managedCommand.configure", () => {
