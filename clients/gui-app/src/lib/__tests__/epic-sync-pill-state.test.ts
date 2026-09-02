@@ -815,6 +815,33 @@ describe("deriveEpicSyncPillState", () => {
       ).toBe("unprotected");
     });
 
+    it("warns over pending work for a LOCAL-homed session with no WAL, even while its local room reads connected", () => {
+      // A local home's `LocalRoomConnection` answers `connected`, and the host
+      // reports pending work - but there is no cloud task for that work to
+      // reach and no WAL holding it. Pre-fix the pending arm ran first and
+      // said "Saving changes" over the one state that means data loss.
+      expect(
+        deriveEpicSyncPillState({
+          ...HEALTHY_INPUTS,
+          hostDirtyState: "dirty",
+          durability: "local",
+          localProtection: "unavailable",
+          durabilityLegsNegotiated: true,
+        }),
+      ).toBe("unprotected");
+      // Non-vacuity: with the WAL armed the same pending work IS being kept,
+      // and the pending arm keeps its answer.
+      expect(
+        deriveEpicSyncPillState({
+          ...HEALTHY_INPUTS,
+          hostDirtyState: "dirty",
+          durability: "local",
+          localProtection: "armed",
+          durabilityLegsNegotiated: true,
+        }),
+      ).toBe("hostPending");
+    });
+
     it("stays quiet about protection while the cloud IS connected", () => {
       // The work is reaching the cloud, so the pill has nothing alarming to
       // say; the durability badge carries the protection warning instead.

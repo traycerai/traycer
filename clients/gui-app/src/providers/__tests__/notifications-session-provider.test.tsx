@@ -3785,16 +3785,17 @@ describe("<NotificationsSessionProvider />", () => {
     });
 
     await waitFor(() => {
-      // The two CLOUD-authorized lanes (collaboration room + cloud relay)
-      // close - this is the regression fix.
+      // The three CLOUD-authorized lanes (collaboration room, cloud relay,
+      // and agent activity - served from the cloud union in current host
+      // wiring) close - this is the regression fix.
       expect(collaborationSession.closeCount).toBe(1);
       expect(cloudFeedSession.closeCount).toBe(1);
+      expect(activitySession.closeCount).toBe(1);
     });
-    // The two HOST/local-plane lanes must survive the demotion untouched -
-    // this machine's own notifications and agent activity are local-plane
-    // truth an unverified session still has every right to. A test that only
-    // checked "something closed" would not catch a blanket `tearDown()` here.
-    expect(activitySession.closeCount).toBe(0);
+    // The HOST/local-plane lane must survive the demotion untouched - this
+    // machine's own notifications are local-plane truth an unverified session
+    // still has every right to. A test that only checked "something closed"
+    // would not catch a blanket `tearDown()` here.
     expect(hostFeedSession.closeCount).toBe(0);
 
     // Re-promotion: the same account regains the verdict.
@@ -3826,6 +3827,11 @@ describe("<NotificationsSessionProvider />", () => {
       expect(
         streamClient.subscribedMethods.filter(
           (method) => method === "notifications.subscribe",
+        ),
+      ).toHaveLength(2);
+      expect(
+        streamClient.subscribedMethods.filter(
+          (method) => method === "agent.activity.subscribe",
         ),
       ).toHaveLength(2);
     });
@@ -4391,7 +4397,7 @@ describe("<NotificationsSessionProvider />", () => {
   });
 
   describe("unverified session admission (#4764)", () => {
-    it("a cold start at unverified opens only the local lanes in LOCAL feed mode", async () => {
+    it("a cold start at unverified opens only the local lane in LOCAL feed mode", async () => {
       const queryClient = new QueryClient();
       const streamClient = new MockWsStreamClient();
       hostState.id = mockLocalHostEntry.hostId;
@@ -4411,15 +4417,18 @@ describe("<NotificationsSessionProvider />", () => {
       });
 
       // Exact equality, not `toContain`: the bug this guards against left
-      // BOTH local lanes shut for the whole unverified period (an early
-      // return before either could open), so a `toContain` here would still
-      // pass on the broken behavior for whichever lane happened to survive.
+      // the local lane shut for the whole unverified period (an early return
+      // before it could open), so a `toContain` here would still pass on the
+      // broken behavior. Agent activity is NOT in this set: the host serves
+      // it from the cloud union, so it is withheld with the other cloud lanes.
       await waitFor(() => {
         expect(streamClient.subscribedMethods).toEqual([
-          "agent.activity.subscribe",
           "host.notifications.feed.subscribe",
         ]);
       });
+      expect(streamClient.subscribedMethods).not.toContain(
+        "agent.activity.subscribe",
+      );
       expect(streamClient.subscribedMethods).not.toContain(
         "notifications.subscribe",
       );
@@ -4428,7 +4437,7 @@ describe("<NotificationsSessionProvider />", () => {
       );
     });
 
-    it("a cold start at unverified opens only the local lanes in CLOUD feed mode", async () => {
+    it("a cold start at unverified opens only the local lane in CLOUD feed mode", async () => {
       // Same admission edge as above, but negotiated into the cloud branch of
       // `openForCurrentUser` - a different `if` withholds the cloud-authorized
       // pair there than in local mode, so both branches need direct coverage.
@@ -4452,10 +4461,12 @@ describe("<NotificationsSessionProvider />", () => {
 
       await waitFor(() => {
         expect(streamClient.subscribedMethods).toEqual([
-          "agent.activity.subscribe",
           "host.notifications.feed.subscribe",
         ]);
       });
+      expect(streamClient.subscribedMethods).not.toContain(
+        "agent.activity.subscribe",
+      );
       expect(streamClient.subscribedMethods).not.toContain(
         "notifications.subscribe",
       );
@@ -4543,7 +4554,7 @@ describe("<NotificationsSessionProvider />", () => {
       expect(streamClient.subscribedMethods).toHaveLength(4);
     });
 
-    it("demoting signed-in to unverified closes only the cloud lanes, leaving the local pair open exactly once", async () => {
+    it("demoting signed-in to unverified closes only the cloud lanes, leaving the local lane open exactly once", async () => {
       const queryClient = new QueryClient();
       const streamClient = new MockWsStreamClient();
       hostState.id = mockLocalHostEntry.hostId;
@@ -4582,12 +4593,14 @@ describe("<NotificationsSessionProvider />", () => {
           streamClient.sessionFor("host.notifications.cloudFeed.subscribe")
             .closeCount,
         ).toBe(1);
+        // Agent activity is cloud-served on the wire, so it closes with the
+        // other cloud lanes.
+        expect(
+          streamClient.sessionFor("agent.activity.subscribe").closeCount,
+        ).toBe(1);
       });
-      // The local pair is untouched by the demotion: no close, and no
+      // The local lane is untouched by the demotion: no close, and no
       // duplicate re-subscription anywhere in the method log.
-      expect(
-        streamClient.sessionFor("agent.activity.subscribe").closeCount,
-      ).toBe(0);
       expect(
         streamClient.sessionFor("host.notifications.feed.subscribe").closeCount,
       ).toBe(0);
@@ -4599,7 +4612,7 @@ describe("<NotificationsSessionProvider />", () => {
       ]);
     });
 
-    it("regaining signed-in from unverified reopens the cloud lanes and does not double-subscribe the local pair", async () => {
+    it("regaining signed-in from unverified reopens the cloud lanes and does not double-subscribe the local lane", async () => {
       const queryClient = new QueryClient();
       const streamClient = new MockWsStreamClient();
       hostState.id = mockLocalHostEntry.hostId;
@@ -4619,13 +4632,9 @@ describe("<NotificationsSessionProvider />", () => {
       });
       await waitFor(() => {
         expect(streamClient.subscribedMethods).toEqual([
-          "agent.activity.subscribe",
           "host.notifications.feed.subscribe",
         ]);
       });
-      const priorActivitySession = streamClient.sessionFor(
-        "agent.activity.subscribe",
-      );
       const priorHostFeedSession = streamClient.sessionFor(
         "host.notifications.feed.subscribe",
       );
@@ -4636,13 +4645,13 @@ describe("<NotificationsSessionProvider />", () => {
 
       // The regain path is a full `tearDown()` + reopen (§ comment on
       // `settleCloudVerdictEdge`), not a partial reopen of just the cloud
-      // pair - so the local lanes blip for one pass rather than staying
-      // open underneath a second, concurrent subscription for the same
-      // lane. Exact equality catches either failure: a missing cloud lane,
-      // or a local lane left open twice.
+      // set - so the local lane blips for one pass rather than staying open
+      // underneath a second, concurrent subscription for the same lane.
+      // Exact equality catches either failure: a missing cloud lane (agent
+      // activity included, since it is withheld while unverified), or a
+      // local lane left open twice.
       await waitFor(() => {
         expect(streamClient.subscribedMethods).toEqual([
-          "agent.activity.subscribe",
           "host.notifications.feed.subscribe",
           "agent.activity.subscribe",
           "notifications.subscribe",
@@ -4650,7 +4659,6 @@ describe("<NotificationsSessionProvider />", () => {
           "host.notifications.feed.subscribe",
         ]);
       });
-      expect(priorActivitySession.closeCount).toBe(1);
       expect(priorHostFeedSession.closeCount).toBe(1);
     });
 

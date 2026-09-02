@@ -361,6 +361,22 @@ export function deriveEpicSyncPillState(
  * is a continuation of the contract stated there, not a separate policy.
  */
 function cloudUpState(inputs: EpicSyncPillInputs): EpicSyncPillState {
+  // Rule 5's precedence applies here too. "Saved on this device" is a
+  // DURABILITY claim, and a local-room connection satisfying
+  // `cloudSyncStatus === "connected"` says nothing about it: with
+  // `localProtection: "unavailable"` the protocol is explicit that edits live
+  // only in the document and are lost on process exit, graceful quit
+  // included. That is true whether or not the host also reports pending
+  // work - a local-homed epic has no cloud task for the pending bytes to
+  // reach, so `hostPending` ("Saving changes") over an unarmed session would
+  // mask the one state that means data loss. Checked BEFORE the pending arm
+  // for that reason, the same order `cloudDownState` already uses.
+  if (
+    (inputs.durability === "local" || inputs.durability === "promoting") &&
+    inputs.localProtection === "unavailable"
+  ) {
+    return "unprotected";
+  }
   if (inputs.hostDirtyState === "dirty") return "hostPending";
   if (syncedClaimIsHonest(inputs)) {
     // Rule 4's write-path leg (input v): a terminal verdict - refused or
@@ -378,13 +394,9 @@ function cloudUpState(inputs: EpicSyncPillInputs): EpicSyncPillState {
   if (inputs.durability !== "local" && inputs.durability !== "promoting") {
     return "connected";
   }
-  // "Saved on this device" is a DURABILITY claim, and the local-room
-  // connection satisfying `cloudSyncStatus === "connected"` says nothing
-  // about it: with `localProtection: "unavailable"` the protocol is explicit
-  // that edits live only in the document and are lost on process exit,
-  // graceful quit included. The rule stated at `syncedClaimIsHonest` applies
-  // here identically - a calm claim needs a POSITIVE statement behind it.
-  if (inputs.localProtection === "unavailable") return "unprotected";
+  // `unavailable` was answered above, before the pending arm. The rule stated
+  // at `syncedClaimIsHonest` applies here identically - a calm claim needs a
+  // POSITIVE statement behind it, and `unknown` is not one.
   if (inputs.localProtection === "unknown") return "connected";
   // An OMITTED key splits the same two ways `syncedClaimIsHonest` splits it,
   // and for the same reason: the probe-by-presence identifies a peer that

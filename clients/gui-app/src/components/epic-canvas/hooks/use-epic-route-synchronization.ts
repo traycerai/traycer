@@ -467,15 +467,30 @@ export function useEpicRouteSynchronization(
   // An UNVERIFIED session does not. Its list is disabled because it may not
   // spend the account's cloud capability, not because there is nothing to
   // learn - the cloud rows are there and this session simply cannot look - so
-  // the guard fails closed on the authorization arm and no tab is closed on
-  // that ignorance.
+  // the guard fails closed on the authorization arm and no CHAT tab is closed
+  // on that ignorance.
+  //
+  // Only the chat verdict is withheld, though, not the sweep. Artifacts are
+  // doc-shared and a same-host terminal agent is this host's own record, so
+  // their absence from the projection is evidence of deletion whatever the
+  // cloud list can or cannot say - and an unverified user deleting a record
+  // in a local-homed epic used to leave its tile open and stale until a
+  // verdict returned. The sweep therefore runs for an unauthorized session
+  // with chat absence marked NON-authoritative: `isTileRefRecordLive` keeps
+  // every record-less chat on that flag alone, and the cloud-known set is
+  // empty by construction. An authorized session whose list has not answered
+  // is a different ignorance and still stops the whole sweep, as before.
   const cloudChatsAuthorizeSweep = cloudChatListAuthorizesRecordSweep(
     cloudChats,
     cloudChatsCloudAuthorized,
   );
+  const recordSweepRuns =
+    cloudChatsAuthorizeSweep || !cloudChatsCloudAuthorized;
+  const chatAbsenceAuthoritative =
+    chatRecordListAuthoritative && cloudChatsAuthorizeSweep;
   useEffect(() => {
     if (!snapshotLoaded) return;
-    if (!cloudChatsAuthorizeSweep) return;
+    if (!recordSweepRuns) return;
     if (canvas.root === null) return;
     const liveIds = new Set(records.map((record) => record.id));
     const hasLiveRecord = (id: string) => liveIds.has(id);
@@ -502,7 +517,7 @@ export function useEpicRouteSynchronization(
             {
               hasLiveRecord,
               isCloudKnown,
-              recordListAuthorizesChatAbsence: chatRecordListAuthoritative,
+              recordListAuthorizesChatAbsence: chatAbsenceAuthoritative,
             },
             activeHostId,
           )
@@ -514,8 +529,8 @@ export function useEpicRouteSynchronization(
     }
   }, [
     snapshotLoaded,
-    cloudChatsAuthorizeSweep,
-    chatRecordListAuthoritative,
+    recordSweepRuns,
+    chatAbsenceAuthoritative,
     canvas,
     records,
     cloudChats.data,

@@ -570,16 +570,17 @@ function NotificationsSessionBody(
     }
   }, []);
 
-  // The CLOUD-AUTHORIZED half of the open lanes: the per-user Notifications
-  // room (collaboration) and the cloud feed relay. Both carry the account's
-  // server-side data, so both are a cloud CAPABILITY and may only run while a
-  // `/api/v3/user` verdict is held.
+  // The CLOUD-AUTHORIZED lanes: the per-user Notifications room
+  // (collaboration), the cloud feed relay, and the agent-activity stream. All
+  // three carry the account's server-side data - activity is served from the
+  // cloud union in current host wiring (`openForCurrentUser`'s doc) - so all
+  // three are a cloud CAPABILITY and may only run while a `/api/v3/user`
+  // verdict is held.
   //
-  // The host lanes (`hostDisposerRef`, `activityDisposerRef`) are deliberately
-  // untouched. They are this machine's own notifications and agent activity -
-  // local-plane truth an unverified session still has every right to, and
-  // closing them is the local-first regression this whole ticket exists to
-  // prevent.
+  // The host notification lane (`hostDisposerRef`) is deliberately untouched.
+  // It is this machine's own notifications - local-plane truth an unverified
+  // session still has every right to, and closing it is the local-first
+  // regression this whole ticket exists to prevent.
   const tearDownCloudLanes = useCallback((): void => {
     if (disposerRef.current !== null) {
       const disposer = disposerRef.current;
@@ -589,6 +590,11 @@ function NotificationsSessionBody(
     if (cloudDisposerRef.current !== null) {
       const disposer = cloudDisposerRef.current;
       cloudDisposerRef.current = null;
+      disposer();
+    }
+    if (activityDisposerRef.current !== null) {
+      const disposer = activityDisposerRef.current;
+      activityDisposerRef.current = null;
       disposer();
     }
   }, []);
@@ -670,11 +676,11 @@ function NotificationsSessionBody(
    * longer a STOP. Stopping the caller read as "there is nothing left to do",
    * which is only true of a session that had already opened its lanes. A cold
    * start admitted straight to `unverified` has opened none, so the stop left
-   * the LOCAL lanes - host notifications and agent activity - shut for the
-   * entire unverified period, withholding exactly the local-plane truth this
-   * state exists to preserve. The caller runs on and `openForCurrentUser`
-   * withholds the cloud lanes instead, so the withholding happens where lanes
-   * are opened rather than before any of them can open.
+   * the LOCAL lane - host notifications - shut for the entire unverified
+   * period, withholding exactly the local-plane truth this state exists to
+   * preserve. The caller runs on and `openForCurrentUser` withholds the cloud
+   * lanes instead, so the withholding happens where lanes are opened rather
+   * than before any of them can open.
    *
    * Latching the loss on the ref keeps the teardown on the transition:
    * `resetCloudRelaySession` discards a relay session's rows and its read
@@ -798,12 +804,22 @@ function NotificationsSessionBody(
 
   /**
    * `cloudAuthorized` is the CLOUD VERDICT, threaded in rather than read here
-   * so the whole lane set is decided in one place. `false` withholds the two
-   * cloud-authorized lanes - the per-user Notifications room and the cloud feed
-   * relay, the same pair `tearDownCloudLanes` closes - and opens the local ones
-   * regardless. An `unverified` session is admitted to the local plane and
-   * holds no cloud capability, so its host notifications and agent activity
-   * must open while its account-backed lanes stay shut.
+   * so the whole lane set is decided in one place. `false` withholds the three
+   * cloud-authorized lanes - the per-user Notifications room, the cloud feed
+   * relay and the agent-activity stream, the same set `tearDownCloudLanes`
+   * closes - and opens the host notification lane regardless. An `unverified`
+   * session is admitted to the local plane and holds no cloud capability, so
+   * its host notifications must open while its account-backed lanes stay
+   * shut.
+   *
+   * Agent activity is in the cloud set on the wire's word, not the lane's
+   * name: `agent.activity.subscribe` is served from the cloud union
+   * everywhere in current production wiring (`registry.ts`, "local remains
+   * dormant until an explicit host mode exists"), and the host connection
+   * carries no renderer verdict, so an open stream would keep reading
+   * cross-host activity on the retained bearer after the verdict was
+   * withdrawn. A negotiated local-only activity mode is what would move it
+   * back to the local set.
    */
   const openForCurrentUser = useCallback(
     (settledFeedMode: NotificationFeedMode, cloudAuthorized: boolean): void => {
@@ -872,7 +888,10 @@ function NotificationsSessionBody(
       // buckets a stream's whole payload under it, and `selectEpicAgentActivity`
       // reads `byHost.values()` and merges per EPIC, never reporting an agent
       // as belonging to the bucket's host.
-      if (servingStreamClient !== null) {
+      //
+      // Gated on the cloud verdict like the two lanes below (see the doc on
+      // this callback): the host serves this stream from the cloud union.
+      if (servingStreamClient !== null && cloudAuthorized) {
         activityDisposerRef.current = openAgentActivityStream(
           streamHostId,
           reconnect,
@@ -1044,9 +1063,9 @@ function NotificationsSessionBody(
     // Reconciling the cloud lanes above is about a lost CAPABILITY; stopping
     // here is about lost ADMISSION. Collapsing them into the single
     // `authorizesCloudCapability` test this used to run is what shut the local
-    // lanes on an unverified session - but dropping the stop altogether is the
-    // opposite mistake, and would open this machine's notification and
-    // agent-activity lanes for `signed-out` and `signing-in` too, which hold no
+    // lane on an unverified session - but dropping the stop altogether is the
+    // opposite mistake, and would open this machine's notification lane for
+    // `signed-out` and `signing-in` too, which hold no
     // plane at all. `signedOut` has already torn them down via
     // `onAuthTransition`; this keeps them from being reopened underneath it.
     if (!admitsLocalPlane(status)) {

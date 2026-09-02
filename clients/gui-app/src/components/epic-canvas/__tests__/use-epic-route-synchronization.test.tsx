@@ -1305,6 +1305,73 @@ describe("useEpicRouteSynchronization", () => {
     });
   });
 
+  // The withheld verdict withholds only the CHAT answer, not the sweep. An
+  // artifact is doc-shared, so its absence from the projection is evidence of
+  // deletion whatever the cloud list can say - an unverified user deleting a
+  // record in a local-homed epic must still see its tile close, while the
+  // record-less same-host chat beside it stays open on the non-authoritative
+  // chat-absence flag alone.
+  it("still closes a removed artifact tile for an unverified session while keeping its record-less chat", async () => {
+    testState.autoOpenTarget = null;
+    testState.records = [{ id: "live-artifact" }];
+    testState.cloudAuthorized = false;
+    const removedArtifact: EpicCanvasTileRef = {
+      id: "removed-artifact",
+      instanceId: "inst-removed-artifact",
+      type: "spec",
+      name: "Removed artifact",
+      hostId: "host-1",
+    };
+    const restoredChat: EpicCanvasTileRef = {
+      id: "restored-record-less-chat",
+      instanceId: "inst-restored-record-less-chat",
+      type: "chat",
+      name: "Restored, record-less chat",
+      hostId: "host-1",
+    };
+    testState.canvasRoot = {
+      kind: "pane",
+      id: "group-1",
+      tabInstanceIds: [removedArtifact.instanceId, restoredChat.instanceId],
+      activeTabId: removedArtifact.instanceId,
+      previewTabId: null,
+      activationHistory: [removedArtifact.instanceId],
+    };
+    testState.canvasTiles = {
+      [removedArtifact.instanceId]: removedArtifact,
+      [restoredChat.instanceId]: restoredChat,
+    };
+
+    renderHook(
+      (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
+      {
+        initialProps: {
+          epicId: EPIC_ID,
+          tabId: TAB_ID,
+          focusedAt: undefined,
+          focusArtifactId: undefined,
+          focusThreadId: undefined,
+          focusPaneId: undefined,
+          focusTileInstanceId: undefined,
+        },
+      },
+    );
+
+    await waitFor(() => {
+      expect(testState.canvasStore.closeCanvasTab).toHaveBeenCalledWith(
+        TAB_ID,
+        "group-1",
+        removedArtifact.instanceId,
+      );
+    });
+    expect(testState.canvasStore.closeCanvasTab).toHaveBeenCalledTimes(1);
+    expect(testState.canvasStore.closeCanvasTab).not.toHaveBeenCalledWith(
+      TAB_ID,
+      "group-1",
+      restoredChat.instanceId,
+    );
+  });
+
   // A COLLABORATOR's row with the same host-minted chatId is not evidence the
   // viewer's tab is alive: the substitution resolver refuses to serve rows the
   // viewer does not own, so keeping the tab open on that row's strength would
