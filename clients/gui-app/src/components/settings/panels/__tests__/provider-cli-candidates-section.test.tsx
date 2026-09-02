@@ -118,6 +118,7 @@ vi.mock("@/hooks/providers/use-providers-ensure-pack-mutation", () => ({
 // Capability gate for Manage versions — evaluated against the scoped hostId
 // prop, never an ambient active-host hook.
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
+  useHostMethodSchemaVersion: () => null,
   useHostSupportsMethod: (
     hostId: string | null,
     method: string,

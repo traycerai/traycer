@@ -17,6 +17,8 @@ import type { MentionCollaborator } from "@/hooks/comments/use-mention-collabora
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { usePanePortalContainer } from "@/components/epic-tabs/pane-visibility-context";
 import { cn } from "@/lib/utils";
+import { useComposedRefs } from "radix-ui/internal";
+import { useRegisterBrowserOverlay } from "@/lib/browser-view/tiles/use-register-browser-overlay";
 import { deriveInitials } from "./mention-utils";
 
 /**
@@ -76,6 +78,8 @@ function MentionSuggestionListContent({
 }: MentionSuggestionListProps) {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const floatingRef = useRef<HTMLDivElement | null>(null);
+  const registerOverlayRef = useRegisterBrowserOverlay<HTMLDivElement>();
+  const composedFloatingRef = useComposedRefs(floatingRef, registerOverlayRef);
   const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   // Render into the pane's portal host (not `document.body`), so a mention
   // list opened inside a background split pane's comment composer is hidden +
@@ -147,11 +151,10 @@ function MentionSuggestionListContent({
 
   return createPortal(
     <div
-      ref={floatingRef}
+      ref={composedFloatingRef}
       role="listbox"
       aria-label="Mention collaborator"
       data-slot="mention-suggestion"
-      data-browser-overlay="mention-suggestion"
       className={cn(
         "absolute top-0 left-0 z-50 w-[min(80vw,18rem)] max-h-[min(40vh,18rem)] overflow-y-auto rounded-md border border-border bg-popover p-1 text-ui-sm text-popover-foreground shadow-md outline-none",
       )}

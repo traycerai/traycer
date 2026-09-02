@@ -105,6 +105,16 @@ failures.
   there; do not add a focus check to a menu item instead. Electron ROLE items
   (reload, cut/copy/paste, select-all) already act on the focused web contents
   and are correct as they are - leave them alone.
+- **Browser-tile occlusion coordinator invariants** (`docs/adr/0001-browser-tile-rendering.md`,
+  `browser-view-overlay.ts`). Both swap edges are two-phase and pixel-atomic:
+  hide waits for the entry paint-ack before parking; restore keeps the stand-in
+  mounted until the un-parked view's first composited frame (the restore ack,
+  same shape as `paintAck`, with a frame-budget liveness escape for a view
+  that never delivers one). The stand-in's pixel source is `capturePage`,
+  gated by paint-ack; the rolling frame cache (`tile-frame-cache.ts`) is only
+  the deadline fallback, never the primary source. A tile must never be
+  un-parked while any registered rect still intersects it, including across
+  ownership handoff between two overlays - occlude before release, always.
 - Never build `Tray` from `nativeImage.createEmpty()` (invisible tray).
 - No Electron-native SQLite / `better-sqlite3` rebuilds in this shell — host owns
   app-assets DB.

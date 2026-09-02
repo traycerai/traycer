@@ -16,6 +16,7 @@ import type {
   BrowserViewOverlayReleaseResult,
   BrowserViewSnapshotInvalidatedChange,
   BrowserViewTileCommandEvent,
+  BrowserViewTileKey,
   BrowserViewNativeTabCapability,
   BrowserViewNativeTabStatusChange,
 } from "@traycer-clients/shared/platform/browser-view";
@@ -195,6 +196,11 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
       onSnapshotInvalidated: (handler) =>
         subscribe<BrowserViewSnapshotInvalidatedChange>(
           RunnerHostEvent.browserViewSnapshotInvalidated,
+          handler,
+        ),
+      onOverlayTileRestored: (handler) =>
+        subscribe<BrowserViewTileKey>(
+          RunnerHostEvent.browserViewOverlayRestored,
           handler,
         ),
       onAnnotationEvent: (handler) =>

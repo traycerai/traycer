@@ -124,6 +124,13 @@ interface TileFrameSlot {
   detach: () => void;
   lastAcceptedAtMs: number;
   frame: EncodedTileFrame | null;
+  /**
+   * Ticket 04 exit-edge handshake: one-shot resolvers for `awaitNextFrame`,
+   * fired on the next non-empty frame this slot's subscription delivers -
+   * ahead of (and regardless of) the `minIntervalMs` throttle below, since a
+   * throttled-out frame still proves the compositor painted.
+   */
+  nextFrameResolvers: Array<() => void>;
 }
 
 export class TileFrameCache {
@@ -150,16 +157,36 @@ export class TileFrameCache {
           // A destroyed guest can reject the unsubscribe; the subscription
           // dies with the process either way.
         }
+        this.resolvePendingFrame(slot);
         this.slots.delete(key);
       },
       lastAcceptedAtMs: Number.NEGATIVE_INFINITY,
       frame: null,
+      nextFrameResolvers: [],
     };
     this.slots.set(key, slot);
   }
 
   detach(key: string): void {
     this.slots.get(key)?.detach();
+  }
+
+  /**
+   * Ticket 04: resolves the next time `key`'s subscription composites a
+   * non-empty frame - the "restored view's first composited frame" signal
+   * the exit-edge handshake waits on, reusing this subscription rather than
+   * opening a second one. Null when no subscription is attached for the
+   * key, so a caller mid-detach (or never-attached) can skip straight to its
+   * own liveness escape instead of waiting on a promise nothing will ever
+   * settle. A subscription that detaches while a wait is pending also
+   * resolves it, so a torn-down tile cannot strand the wait either.
+   */
+  awaitNextFrame(key: string): Promise<void> | null {
+    const slot = this.slots.get(key);
+    if (slot === undefined) return null;
+    return new Promise((resolve) => {
+      slot.nextFrameResolvers.push(resolve);
+    });
   }
 
   detachAll(): void {
@@ -216,6 +243,15 @@ export class TileFrameCache {
     }
   }
 
+  private resolvePendingFrame(slot: TileFrameSlot): void {
+    if (slot.nextFrameResolvers.length === 0) return;
+    const resolvers = slot.nextFrameResolvers;
+    slot.nextFrameResolvers = [];
+    resolvers.forEach((resolve) => {
+      resolve();
+    });
+  }
+
   private handleFrame(key: string, image: TileFrameImage): void {
     const slot = this.slots.get(key);
     if (slot === undefined) return;
@@ -223,6 +259,7 @@ export class TileFrameCache {
       this.emptyFrames += 1;
       return;
     }
+    this.resolvePendingFrame(slot);
     const nowMs = this.options.now();
     if (
       slot.frame !== null &&

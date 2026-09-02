@@ -293,6 +293,12 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
     });
   }
 
+  onOverlayTileRestored(_handler: (tile: BrowserViewTileKey) => void): {
+    dispose: () => void;
+  } {
+    return { dispose: () => undefined };
+  }
+
   onAnnotationEvent() {
     return { dispose: () => undefined };
   }

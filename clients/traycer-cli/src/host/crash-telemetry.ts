@@ -6,6 +6,7 @@ import {
 import * as Sentry from "@sentry/node";
 import { resolveCliVersion } from "../cli-version";
 import type { Environment } from "../runner/environment";
+import { destroySentryTransportRequests } from "../sentry-transport";
 import { readHostPidMetadata } from "./pid-metadata";
 
 // Fleet visibility for host crashes.
@@ -95,6 +96,17 @@ export const HOST_CRASH_IDENTITY_TIMEOUT_MS = 1_000;
 // that normally fires; far below the relaunch backoff so a stall costs
 // nothing visible.
 export const HOST_CRASH_REPORT_TIMEOUT_MS = 1_500;
+
+// How long the queued envelope may take to actually leave the machine. The
+// CLI's Sentry transport installs no request timeout (see
+// sentry-transport.ts), and `host start` deliberately bypasses the
+// terminator in runner/exit.ts that would otherwise destroy stalled requests
+// at exit - the supervisor does not exit, it relaunches. So a DSN endpoint
+// that accepts the connection and then goes quiet would leave one live
+// socket per crash for as long as the supervisor lives. This budget is
+// generous enough for a slow but working upload and retires whatever is
+// still open past it.
+export const HOST_CRASH_TRANSPORT_TIMEOUT_MS = 10_000;
 
 /**
  * A stable token for the KIND of death, used to group events into one issue
@@ -224,5 +236,24 @@ export async function reportHostCrashToSentry(
     captureHostCrashEvent(buildHostCrashEvent(telemetry, identity));
   } catch {
     // Intentionally silent: see the module comment.
+    return;
   }
+  retireStalledTransportAfterBudget();
+}
+
+/**
+ * Give the transport {@link HOST_CRASH_TRANSPORT_TIMEOUT_MS} to deliver, then
+ * destroy any request still open. Not awaited by the caller: the supervisor
+ * has already moved on to the relaunch, and this only decides the fate of the
+ * socket. `flush` resolves early when the queue drains, so a healthy upload
+ * costs nothing; only a stalled one reaches the destroy.
+ */
+function retireStalledTransportAfterBudget(): void {
+  void Sentry.flush(HOST_CRASH_TRANSPORT_TIMEOUT_MS)
+    .then((drained) => {
+      if (!drained) destroySentryTransportRequests();
+    })
+    .catch(() => {
+      destroySentryTransportRequests();
+    });
 }
