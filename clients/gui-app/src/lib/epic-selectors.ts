@@ -299,6 +299,33 @@ function currentOrRetainedDurabilityStatement(
 }
 
 /**
+ * The local-home exemption, read from a session handle OUTSIDE React - the
+ * dispatch-time gates (`assertCommentWriteAuthorized`, the chat-attachment
+ * fetcher) and the registry accessor `useRegisteredEpicLocalHome`.
+ *
+ * Reads the SAME current-then-retained statement
+ * `useEpicCommentRoomAvailability` renders from, so a gate cannot disagree
+ * with the control that offered the write. During a reconnect the cycle's own
+ * status is cleared while the retained pair still stands; a gate reading only
+ * the raw status refused a local-homed epic's write for exactly the beat its
+ * surface still showed the control as available. `null` handle is "not
+ * provably local", the cloud direction.
+ */
+export function isLocalHomedEpicHandle(
+  handle: OpenEpicStoreHandle | null,
+): boolean {
+  if (handle === null) return false;
+  const state = handle.store.getState();
+  const statement = currentOrRetainedDurabilityStatement(
+    state.durabilityStatus ?? null,
+    state.durabilityPauseReason ?? null,
+    state.retainedDurabilityStatus ?? null,
+    state.retainedDurabilityPauseReason ?? null,
+  );
+  return isLocalHomedDurabilityStatus(statement.status);
+}
+
+/**
  * The comment-room gate together with the exact closed reason that justified
  * it. Consumers must switch on this value rather than interpret raw status
  * and pause fields independently: during a reconnect those raw fields are
@@ -838,7 +865,10 @@ export function useRegisteredEpicPermissionRole(
  *
  * `false` covers a cloud-homed epic AND an unknown or `paused` status: a
  * paused row says nothing about home, and a gate that must not spend the
- * retained credential reads "not provably local" as cloud.
+ * retained credential reads "not provably local" as cloud. Read through the
+ * current-then-retained statement ({@link isLocalHomedEpicHandle}), so a
+ * reconnect beat that clears the cycle's status does not flip the exemption
+ * off while the comment-room gate still shows the epic as available.
  */
 export function useRegisteredEpicLocalHome(epicId: string | null): boolean {
   const registry = getOpenEpicRegistry();
@@ -849,10 +879,7 @@ export function useRegisteredEpicLocalHome(epicId: string | null): boolean {
   );
   return useSyncExternalStore(
     (listener) => handle?.store.subscribe(listener) ?? noopSubscribe,
-    () =>
-      isLocalHomedDurabilityStatus(
-        handle?.store.getState().durabilityStatus ?? null,
-      ),
+    () => isLocalHomedEpicHandle(handle),
     () => false,
   );
 }

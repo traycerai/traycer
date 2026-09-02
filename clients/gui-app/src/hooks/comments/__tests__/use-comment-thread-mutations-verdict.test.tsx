@@ -155,6 +155,46 @@ describe("comment writes re-read the cloud verdict at dispatch", () => {
     expect(reached.count).toBe(1);
   });
 
+  it("keeps the local-home exemption through a reconnect beat, from the RETAINED statement", async () => {
+    // `startedSubscriptionCycle` clears the cycle's durability status and
+    // deliberately keeps the retained pair; the comment-room gate renders
+    // from current-then-retained, so the control stays offered. The dispatch
+    // gate must read the same selection, or the write it offers is refused.
+    demoteToUnverified();
+    epicHandle.store.setState({
+      durabilityStatus: null,
+      retainedDurabilityStatus: "local",
+    });
+    const { result } = renderHook(
+      () => useDeleteCommentThreadForClient(client),
+      { wrapper },
+    );
+
+    await expect(result.current.mutateAsync(REQUEST)).resolves.toEqual({
+      ok: true,
+    });
+    expect(reached.count).toBe(1);
+  });
+
+  it("lets the cycle's own statement outrank a retained local one", async () => {
+    // Non-vacuity for the order: a promoted epic reports `cloud` this cycle,
+    // and the stale retained `local` must not re-admit the write.
+    demoteToUnverified();
+    epicHandle.store.setState({
+      durabilityStatus: "cloud",
+      retainedDurabilityStatus: "local",
+    });
+    const { result } = renderHook(
+      () => useDeleteCommentThreadForClient(client),
+      { wrapper },
+    );
+
+    await expect(result.current.mutateAsync(REQUEST)).rejects.toThrow(
+      COMMENT_WRITE_UNAUTHORIZED_MESSAGE,
+    );
+    expect(reached.count).toBe(0);
+  });
+
   it("lets a cloud-backed room's write through under a verdict (non-vacuity)", async () => {
     signIn();
     epicHandle.store.setState({ durabilityStatus: "cloud" });

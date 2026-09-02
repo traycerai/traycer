@@ -16,7 +16,7 @@ import { base64ToBytes } from "@/lib/composer/image-base64";
 import { readHeldEpicAttachmentBytes } from "@/lib/epic-replica-reads";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
-import { isLocalHomedDurabilityStatus } from "@/lib/epic-selectors";
+import { isLocalHomedEpicHandle } from "@/lib/epic-selectors";
 import {
   authorizesCloudCapability,
   useAuthStore,
@@ -32,16 +32,16 @@ import {
  * verdict either. So for a session without a cloud verdict the leg is skipped
  * for a cloud-homed epic: the retained bearer must not read published bytes
  * after the verdict was withdrawn. A local-homed epic (`local` /
- * `promoting`, read LIVE from the session's durability status) has no cloud
- * task the host could fall back to, so its disk-served images keep rendering,
- * and the epic-doc replica leg below serves legacy hashes either way. The
- * cost - disk-served images of a cloud-homed epic while unverified - is the
- * follow-up a negotiated local-only selector would remove.
+ * `promoting`, read LIVE from the session's current-then-retained durability
+ * statement, the same selection every other local-home gate reads) has no
+ * cloud task the host could fall back to, so its disk-served images keep
+ * rendering, and the epic-doc replica leg below serves legacy hashes either
+ * way. The cost - disk-served images of a cloud-homed epic while unverified -
+ * is the follow-up a negotiated local-only selector would remove.
  */
 function chatPlaneLegAdmitted(handle: OpenEpicStoreHandle | null): boolean {
   if (authorizesCloudCapability(useAuthStore.getState().status)) return true;
-  const status = handle?.store.getState().durabilityStatus ?? null;
-  return isLocalHomedDurabilityStatus(status);
+  return isLocalHomedEpicHandle(handle);
 }
 
 /**

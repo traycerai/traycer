@@ -25,8 +25,12 @@ export type NegotiatedMethodVersion = SchemaVersion | false | null;
  * stable method set separates known absence. A name-only legacy record leaves
  * a present method's version unknown, which remains `null`, and every consumer
  * here shares this one composition rather than re-deriving it.
+ *
+ * Exported for DISPATCH-time reads: a callback a surface holds across a
+ * re-negotiation (History's `refetch`) must re-derive the gate from the live
+ * registry rather than trust the version its render captured.
  */
-function readNegotiatedMethodVersion(
+export function readNegotiatedMethodVersion(
   hostId: string,
   method: string,
 ): NegotiatedMethodVersion {

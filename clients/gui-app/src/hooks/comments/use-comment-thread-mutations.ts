@@ -11,7 +11,7 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { commentThreadsQueryKey } from "./use-epic-comment-threads";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
-import { isLocalHomedDurabilityStatus } from "@/lib/epic-selectors";
+import { isLocalHomedEpicHandle } from "@/lib/epic-selectors";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
@@ -43,13 +43,15 @@ function assertCommentWriteAuthorized(
 ): void {
   if (authorizesCloudCapability(useAuthStore.getState().status)) return;
   // The local-home exemption, read LIVE at dispatch from the epic session's
-  // durability status: the surrounding session tree's handle first (every
-  // comment surface mounts inside one), the registered session otherwise -
-  // the same seam `useRegisteredEpicLocalHome` reads. An epic with neither is
-  // not provably local and reads as cloud.
+  // current-then-retained durability statement - the selection
+  // `useEpicCommentRoomAvailability` rendered the control from, so a
+  // reconnect beat that clears the cycle's status cannot refuse a write the
+  // surface is still offering. The surrounding session tree's handle first
+  // (every comment surface mounts inside one), the registered session
+  // otherwise - the same seam `useRegisteredEpicLocalHome` reads. An epic
+  // with neither is not provably local and reads as cloud.
   const handle = sessionHandle ?? getOpenEpicRegistry().peek(epicId);
-  const status = handle?.store.getState().durabilityStatus ?? null;
-  if (isLocalHomedDurabilityStatus(status)) return;
+  if (isLocalHomedEpicHandle(handle)) return;
   throw new Error(COMMENT_WRITE_UNAUTHORIZED_MESSAGE);
 }
 

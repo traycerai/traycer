@@ -45,6 +45,8 @@ const docMocks = vi.hoisted(() => ({
   present: true,
   /** The session's durability status, read live by the verdict gate. */
   durabilityStatus: null as "local" | "promoting" | "cloud" | null,
+  /** The statement retained across a reconnect, consulted when the cycle's own is silent. */
+  retainedDurabilityStatus: null as "local" | "promoting" | "cloud" | null,
 }));
 
 vi.mock("@/providers/use-open-epic-handle", () => ({
@@ -57,6 +59,7 @@ vi.mock("@/providers/use-open-epic-handle", () => ({
               hasAttachmentBytes: docMocks.hasAttachmentBytes,
               readAttachmentBytes: docMocks.readAttachmentBytes,
               durabilityStatus: docMocks.durabilityStatus,
+              retainedDurabilityStatus: docMocks.retainedDurabilityStatus,
             }),
           },
         }
@@ -149,6 +152,7 @@ beforeEach(() => {
   // otherwise.
   useAuthStore.getState().setSignedIn(PROFILE, CONTEXT, []);
   docMocks.durabilityStatus = null;
+  docMocks.retainedDurabilityStatus = null;
   resetChatAttachmentHostSupportForTests();
   request.mockReset();
   docMocks.present = true;
@@ -407,6 +411,25 @@ describe("useChatImageFetcher", () => {
       mediaType: "image/png",
     });
     docMocks.durabilityStatus = "local";
+    useAuthStore.getState().setUnverifiedSession(PROFILE, CONTEXT);
+
+    await expect(bytesOnce(scopeValue("host-1", true))).resolves.toEqual(
+      CHAT_PLANE_BYTES,
+    );
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the chat-plane leg through a reconnect beat for a LOCAL-homed epic, from the retained statement", async () => {
+    // A reconnect clears the cycle's own durability status while the retained
+    // pair still stands; the gate reads current-then-retained like every
+    // other local-home gate, so the beat does not blank the epic's images.
+    request.mockResolvedValue({
+      ok: true,
+      bytesBase64: CHAT_PLANE_BASE64,
+      mediaType: "image/png",
+    });
+    docMocks.durabilityStatus = null;
+    docMocks.retainedDurabilityStatus = "local";
     useAuthStore.getState().setUnverifiedSession(PROFILE, CONTEXT);
 
     await expect(bytesOnce(scopeValue("host-1", true))).resolves.toEqual(

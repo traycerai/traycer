@@ -21,7 +21,10 @@ import {
   type AuthStatus,
 } from "@/stores/auth/auth-store";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
-import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
+import {
+  readNegotiatedMethodVersion,
+  useHostNegotiatedMethodVersion,
+} from "@/hooks/host/use-host-negotiated-method-version";
 import { negotiatedListTasksServesLocalFirst } from "@/lib/cloud-epic-tasks-query/local-first-admission";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import {
@@ -253,6 +256,19 @@ export function useCloudEpicTasksQuery(
     mayDispatchInitialLeg,
   });
   const initialLegRefused = initialLeg.refused;
+  // The same admission, re-derived at DISPATCH for the imperative legs below.
+  // `refetch` and `fetchNextPage` are callbacks a surface can hold across a
+  // demotion or a host re-negotiation, and a closure that captured `true` at
+  // render would spend the retained bearer after the verdict was withdrawn.
+  // Read from the stores, not the render: `authIdentity.status` and
+  // `listTasksVersion` above are this render's values by construction.
+  const mayDispatchInitialLegNow = useCallback((): boolean => {
+    if (authorizesCloudCapability(useAuthStore.getState().status)) return true;
+    if (hostId === null) return false;
+    return negotiatedListTasksServesLocalFirst(
+      readNegotiatedMethodVersion(hostId, "epic.listTasks"),
+    );
+  }, [hostId]);
 
   const query = useQuery<ListTasksResponse>(
     // The null re-checks are redundant with `dispatchable` and kept anyway:
@@ -558,7 +574,10 @@ export function useCloudEpicTasksQuery(
       isFetchingNextPage ||
       hostId === null ||
       userId === null ||
-      !authorizesCloudLeg
+      !authorizesCloudLeg ||
+      // ...and the verdict as it stands NOW: a sentinel or a held callback can
+      // fire after the demotion that the render-captured flag predates.
+      !authorizesCloudCapability(useAuthStore.getState().status)
     ) {
       return;
     }
@@ -592,9 +611,13 @@ export function useCloudEpicTasksQuery(
     // pull-to-refresh. Without this, the one gesture a user reaches for when
     // History looks wrong is the gesture that dispatches the very cloud
     // request the refusal exists to prevent.
-    if (initialLegRefused) return;
+    //
+    // Both the render's answer AND the dispatch-time one: the render-captured
+    // flag covers a surface that re-rendered, the live read covers a callback
+    // captured under a verdict (or a `1.6` negotiation) that no longer holds.
+    if (initialLegRefused || !mayDispatchInitialLegNow()) return;
     void queryRefetch();
-  }, [initialLegRefused, queryRefetch]);
+  }, [initialLegRefused, mayDispatchInitialLegNow, queryRefetch]);
 
   return {
     hostId,

@@ -1713,5 +1713,92 @@ describe("useCloudEpicTasksQuery", () => {
       expect(mockHostClient.request).not.toHaveBeenCalled();
       unmount();
     });
+
+    // The render-captured `initialLegRefused` covers a surface that
+    // re-rendered after the demotion. A refresh button holds the `refetch`
+    // closure it was given, and a sentinel can fire it after the store moved
+    // and before React re-rendered - so the callback re-reads the verdict and
+    // the negotiated version at DISPATCH, not only at render.
+    it("re-reads the verdict at dispatch: a refetch captured under a verdict is refused after the demotion", async () => {
+      // `signed-in` (from `beforeEach`) on a pre-1.6 host: the initial leg is
+      // admitted by the verdict alone, so withdrawing it is what closes it.
+      resetNegotiatedManifests();
+      recordNegotiatedHostManifest(HOST_ID, {
+        "epic.listTasks": { major: 1, minor: 5 },
+      });
+      mockHostClient.request.mockResolvedValue({ tasks: [], hasMore: false });
+      const queryClient = new QueryClient({
+        defaultOptions: {
+          queries: { retry: false },
+          mutations: { retry: false },
+        },
+      });
+      const { result, unmount } = renderHook(
+        () =>
+          useCloudEpicTasksQuery(LIST_CLOUD_TASKS_REQUEST, { enabled: true }),
+        { wrapper: makeWrapper(queryClient) },
+      );
+      await waitFor(() => {
+        expect(mockHostClient.request).toHaveBeenCalledTimes(1);
+      });
+      expect(result.current.initialLegRefused).toBe(false);
+
+      // Non-vacuity: the held closure dispatches while the verdict holds.
+      const refetchHeldUnderVerdict = result.current.refetch;
+      act(() => {
+        refetchHeldUnderVerdict();
+      });
+      await waitFor(() => {
+        expect(mockHostClient.request).toHaveBeenCalledTimes(2);
+      });
+
+      setUnverified();
+      act(() => {
+        refetchHeldUnderVerdict();
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(mockHostClient.request).toHaveBeenCalledTimes(2);
+      unmount();
+    });
+
+    it("re-reads the verdict at dispatch: a fetchNextPage captured under a verdict is refused after the demotion", async () => {
+      // "Show more" is a cloud-only leg with no local fallback, so a held
+      // callback firing after the demotion could only ever spend the retained
+      // bearer. The gate re-reads the store at dispatch, not the render.
+      mockHostClient.request.mockResolvedValue({
+        tasks: [taskLight("epic-first", "First page")],
+        hasMore: true,
+        nextCursor: "cursor-a",
+      });
+      const queryClient = new QueryClient({
+        defaultOptions: {
+          queries: { retry: false },
+          mutations: { retry: false },
+        },
+      });
+      const { result, unmount } = renderHook(
+        () =>
+          useCloudEpicTasksQuery(LIST_CLOUD_TASKS_REQUEST, { enabled: true }),
+        { wrapper: makeWrapper(queryClient) },
+      );
+      await waitFor(() => {
+        expect(result.current.hasNextPage).toBe(true);
+      });
+      expect(mockHostClient.request).toHaveBeenCalledTimes(1);
+
+      const fetchNextPageHeldUnderVerdict = result.current.fetchNextPage;
+      setUnverified();
+      act(() => {
+        fetchNextPageHeldUnderVerdict();
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(mockHostClient.request).toHaveBeenCalledTimes(1);
+      expect(result.current.isFetchingNextPage).toBe(false);
+      unmount();
+    });
   });
 });
