@@ -1,11 +1,11 @@
 import type {
-  BrowserCdpCommand,
-  BrowserCdpResult,
-  BrowserCdpTarget,
-  BrowserPrimaryProfileDelta,
+  StreamCloseReason,
+  StreamConnectionStatus,
+} from "../host-transport/i-stream-session";
+import type {
   BrowserScreencastServerFrame,
-  BrowserSessionProfileKind,
-  BrowserStorageState,
+  BrowserSessionsUxClientFrame,
+  BrowserSessionsUxServerFrame,
 } from "@traycer/protocol/host/browser/contracts";
 import type {
   BrowserAnnotationAttachResultInput,
@@ -29,17 +29,6 @@ export interface BrowserViewNativeTabKey {
 /** Exact authority for one live Electron-owned browser guest incarnation. */
 export interface BrowserViewNativeTabCapability extends BrowserViewNativeTabKey {
   readonly registrationId: string;
-}
-
-export interface BrowserViewEnsureTab extends BrowserViewNativeTabKey {
-  readonly requestedUrl: string;
-  /**
-   * Which jar the guest is born into. It travels from the host's
-   * `createElectronTab` frame; `isolated` selects the session's own in-memory
-   * partition and never carries a seed.
-   */
-  readonly profile: BrowserSessionProfileKind;
-  readonly seedStorageState: BrowserStorageState | null;
 }
 
 export interface BrowserViewAttachSurface extends BrowserViewNativeTabCapability {
@@ -106,6 +95,16 @@ export interface BrowserViewNativeTabStatusChange extends BrowserViewNativeTabCa
   readonly canGoBack: boolean;
   readonly canGoForward: boolean;
   readonly zoomPercent: number;
+  /**
+   * Whether a tile is showing this guest right now.
+   *
+   * Read by main, which reports it to the host as `electronTabState.viewed`.
+   * It used to be the renderer's answer, because the renderer held the surface
+   * lease AND the stream; with the stream in main (H10) the attachment is
+   * read where it actually lives - the manager's own entry - rather than
+   * inferred from a lease object on the far side of an IPC boundary.
+   */
+  readonly viewed: boolean;
 }
 
 export interface BrowserViewFindRequest extends BrowserViewTileKey {
@@ -230,47 +229,6 @@ export interface BrowserViewSnapshotInvalidatedChange extends BrowserViewTileKey
   readonly reason: string;
 }
 
-/**
- * One coalesced cookie-change window from the durable `primary` jar. Re-exported
- * so renderer code sees the bridge and its payloads in one import.
- */
-export type { BrowserPrimaryProfileDelta };
-
-export type BrowserPrimaryProfileCaptureResult =
-  | {
-      readonly status: "captured";
-      readonly storageState: BrowserStorageState;
-      readonly reason: null;
-    }
-  | {
-      readonly status: "unavailable";
-      readonly storageState: null;
-      readonly reason: string;
-    };
-
-export interface BrowserViewElectronTabCdpDispatch extends BrowserViewNativeTabCapability {
-  readonly target: BrowserCdpTarget;
-  readonly command: BrowserCdpCommand;
-}
-
-/**
- * Answer to one store-key wrap. `ok: false` is an expected outcome, not a bug:
- * the keystore may be unavailable on this machine, and the host then simply
- * stays sealed.
- */
-export type BrowserStoreKeyWrapResult =
-  | { readonly ok: true; readonly wrappedKey: string }
-  | { readonly ok: false; readonly reason: string };
-
-/**
- * Answer to one store-key unwrap. `ok: false` means this machine cannot open
- * the host's blob (keystore item ACL changed, or a different machine wrapped
- * it); the host is told so it can stay sealed instead of re-minting.
- */
-export type BrowserStoreKeyUnwrapResult =
-  | { readonly ok: true; readonly rawKey: string }
-  | { readonly ok: false; readonly reason: string };
-
 export type BrowserViewConsoleLevel =
   | "log"
   | "info"
@@ -324,11 +282,124 @@ export interface BrowserViewCapturePageResult extends BrowserViewTileKey {
 }
 
 export type {
-  BrowserViewElementAttribute,
   BrowserViewElementBoundingBox,
   BrowserViewElementCapture,
   BrowserViewElementStyle,
 } from "@traycer/protocol/persistence/epic/schemas";
+
+/**
+ * How far along one main-owned `browser.sessions` stream is, as the renderer
+ * renders it. Lives here rather than beside the renderer's reducer because
+ * main is what computes it now and this is the IPC payload's own contract.
+ */
+export type BrowserSessionsLifecycle =
+  | "connecting"
+  | "live"
+  | "reconnecting"
+  | "closed"
+  | "failed";
+
+/**
+ * The lifecycle a stream's connection status reads as, and the message that
+ * goes with it.
+ *
+ * Both sides compute it: main for every desktop stream, and the renderer for
+ * the direct one it still owns on a shell with no main process. One home, so
+ * the two cannot drift into disagreeing about what `reconnecting` looks like.
+ */
+export function browserSessionsLifecycle(
+  status: StreamConnectionStatus,
+  reason: StreamCloseReason | null,
+): BrowserSessionsLifecycle {
+  if (reason?.kind === "fatalError") return "failed";
+  if (status === "open") return "live";
+  if (status === "reconnecting") return "reconnecting";
+  if (status === "closed") return "closed";
+  return "connecting";
+}
+
+export function browserSessionsError(
+  status: StreamConnectionStatus,
+  reason: StreamCloseReason | null,
+): string | null {
+  if (reason?.kind === "fatalError") return reason.details.reason;
+  if (status === "reconnecting") return "Reconnecting browser sessions.";
+  if (status === "closed") return "Browser sessions stream closed.";
+  return null;
+}
+
+/**
+ * The renderer's name for one stream. Main keys its own streams by this plus
+ * the sender's window id, and never dedupes across windows: one subscriber is
+ * one Electron lifecycle owner, so collapsing two windows onto one would put
+ * both windows' native tabs on a single route.
+ *
+ * `hostId` is an ID, not a directory row. Main resolves the row itself with
+ * the bearer it already holds, because that row carries the host's static
+ * Noise key - a renderer-supplied one would let a compromised renderer point
+ * main's jar stream at a host it controls.
+ */
+export interface BrowserSessionsStreamKey {
+  readonly epicId: string;
+  readonly hostId: string;
+  /**
+   * The signed-in owner identity the renderer keys its coordinator by. Opaque
+   * to main, which only uses it to keep two identities' streams apart.
+   */
+  readonly identityKey: string;
+}
+
+/**
+ * The one map-key encoding for each of the two identities main and the renderer
+ * both index by. Both sides used to spell them separately - `JSON.stringify` in
+ * main, a joined string in the renderer - which is a silent-collision seam
+ * around a value that decides which live socket or native guest a request
+ * reaches. `JSON.stringify` over the fields in a fixed order is injective for
+ * arbitrary strings, which a separator join is not.
+ */
+export function browserSessionsStreamKeyId(
+  key: BrowserSessionsStreamKey,
+): string {
+  return JSON.stringify([key.epicId, key.hostId, key.identityKey]);
+}
+
+export function browserViewNativeTabKeyId(
+  key: BrowserViewNativeTabKey,
+): string {
+  return JSON.stringify([key.hostId, key.sessionId, key.tabId]);
+}
+
+export interface BrowserSessionsStreamSend {
+  readonly key: BrowserSessionsStreamKey;
+  readonly frame: BrowserSessionsUxClientFrame;
+}
+
+/**
+ * Everything main forwards to the window that opened a stream. `frame` is
+ * typed as the UX projection, so a jar frame cannot be forwarded by mistake -
+ * the protocol's `BrowserSessionsUxServerFrame` is an `Exclude` with a
+ * `never` assertion over every cookie-bearing field.
+ */
+export type BrowserSessionsStreamEvent =
+  | {
+      readonly kind: "status";
+      readonly lifecycle: BrowserSessionsLifecycle;
+      readonly errorMessage: string | null;
+    }
+  | { readonly kind: "frame"; readonly frame: BrowserSessionsUxServerFrame }
+  | {
+      readonly kind: "tabBound";
+      readonly capability: BrowserViewNativeTabCapability;
+    }
+  | {
+      readonly kind: "tabReleased";
+      readonly capability: BrowserViewNativeTabCapability;
+    };
+
+export interface BrowserSessionsStreamEventEnvelope {
+  readonly key: BrowserSessionsStreamKey;
+  readonly event: BrowserSessionsStreamEvent;
+}
 
 export interface BrowserViewBridge {
   updateBounds(input: BrowserViewBoundsUpdate): Promise<void>;
@@ -372,38 +443,27 @@ export interface BrowserViewBridge {
    */
   setSaveLogins(enabled: boolean): Promise<boolean>;
   /**
-   * Seals the host's freshly minted primary-profile store key with this
-   * machine's OS keystore (spec §6.2). The host keeps the returned blob; it
-   * never sees a key this machine cannot open again.
-   */
-  wrapStoreKey(rawKey: string): Promise<BrowserStoreKeyWrapResult>;
-  /** Opens a blob wrapped earlier on this machine, so the host can unseal. */
-  unwrapStoreKey(wrappedKey: string): Promise<BrowserStoreKeyUnwrapResult>;
-  /**
-   * "Forget all browser logins" (spec §6.5), this machine's half: clear the
-   * `primary` jars - the durable partition always, and the ephemeral one the
-   * live guests are on when saving is off, which otherwise keeps them signed
-   * in until the app restarts - drop the remembered localStorage origins, and
-   * recreate the open primary tiles at their URLs on the empty jar.
+   * "Forget all browser logins" (spec §6.5), this machine's half: record the
+   * forget in the durable ledger, clear the `primary` jars - the durable
+   * partition always, and the ephemeral one the live guests are on when saving
+   * is off, which otherwise keeps them signed in until the app restarts - drop
+   * the remembered localStorage origins, and recreate the open primary tiles at
+   * their URLs on the empty jar.
    *
-   * Called only in answer to the host's `primaryProfileForgotten`, so the key
-   * and the host's slice are already gone by the time the jar is cleared -
-   * never the other way round, which would leave the host holding logins the
-   * user believes are forgotten.
+   * Called by Settings alongside the `forgetLogins` frame that shreds each
+   * connected host's slice; there is no host fan-out any more (universal-sign-in
+   * decision 6). The ledger is what reaches a host that was disconnected, and
+   * it is written before a cookie moves so an in-flight observation for a
+   * forgotten site cannot land behind the clear.
+   *
+   * Answers whether the user CONFIRMED. Main raises the native dialog (the
+   * renderer is not a trustworthy place to gate the most destructive action
+   * the browser surface has), so `false` means nothing was touched here and
+   * the caller must not send the host frames either.
    */
-  forgetLogins(): Promise<void>;
-  /**
-   * Push for every coalesced cookie change in the durable `primary` jar (spec
-   * §6.3). Unsolicited and continuous: the renderer holding the host stream
-   * forwards each one as a `primaryProfileDelta` client frame, so a login
-   * reaches the store within a window instead of waiting for teardown.
-   */
-  onPrimaryProfileDelta(handler: (delta: BrowserPrimaryProfileDelta) => void): {
-    dispose: () => void;
-  };
+  forgetLogins(): Promise<boolean>;
   /** Renderer confirms the replacement frame is painted before main parks the view. */
   readonly overlayPaintAck: (overlayId: string) => Promise<void>;
-  capturePrimaryProfile(): Promise<BrowserPrimaryProfileCaptureResult>;
   /**
    * "Clear cookies for this site" (spec §6.5): removes the tile's registrable
    * domain from the shared `primary` jars - cookies and the localStorage of
@@ -415,12 +475,36 @@ export interface BrowserViewBridge {
    */
   clearSite(input: BrowserViewTileKey): Promise<void>;
   /**
-   * The receiving half of the same action: the host says one site was cleared
-   * somewhere else for this user (`primaryProfileEvict`), so this machine's
-   * `primary` jars drop it too. Emits **no** delta - the store already recorded the
-   * tombstones, and an echo would only re-assert what it just decided.
+   * Opens (or adopts) the main-owned `browser.sessions` stream for this
+   * window and this key. Idempotent per key: a second call from the same
+   * window is the same stream.
+   *
+   * The stream lives in main because the jar does - every cookie-bearing
+   * frame on it is produced and consumed there, and this renderer sees only
+   * the UX projection (browser-security-hardening H10, root cause C).
+   *
+   * A host id and an epic, and nothing else. The signed-in user is main's own
+   * (it holds the desktop auth session), for the same reason the directory row
+   * is: anything the renderer states here is something a compromised renderer
+   * could state differently.
    */
-  evictSite(domain: string): Promise<void>;
+  openSessionsStream(key: BrowserSessionsStreamKey): Promise<void>;
+  closeSessionsStream(key: BrowserSessionsStreamKey): Promise<void>;
+  /** One user-initiated request onto that stream. */
+  sendSessionsFrame(input: BrowserSessionsStreamSend): Promise<void>;
+  onSessionsStreamEvent(
+    handler: (envelope: BrowserSessionsStreamEventEnvelope) => void,
+  ): { dispose: () => void };
+  /**
+   * "Clear" on one row of Settings > Browser: signs the user out of that site
+   * on every host this process holds a stream to.
+   *
+   * Main confirms it and main sends the frames. It is forget-all one domain
+   * at a time as far as a host's slice is concerned, so it may not be a frame
+   * a renderer can mint (H05's residual for H10). Answers whether the user
+   * confirmed.
+   */
+  clearSavedLoginSite(domain: string): Promise<boolean>;
   onFindChange(handler: (change: BrowserViewFindChange) => void): {
     dispose: () => void;
   };
@@ -464,17 +548,9 @@ export interface BrowserViewBridge {
   ): {
     dispose: () => void;
   };
-  ensureTab(
-    input: BrowserViewEnsureTab,
-  ): Promise<BrowserViewNativeTabCapability>;
-  acceptTab(input: BrowserViewNativeTabCapability): Promise<void>;
   attachSurface(input: BrowserViewAttachSurface): Promise<void>;
   detachSurface(input: BrowserViewDetachSurface): Promise<void>;
-  releaseTab(input: BrowserViewNativeTabCapability): Promise<boolean>;
   controlElectronTab(input: BrowserViewElectronTabControl): Promise<void>;
-  dispatchElectronTabCdp(
-    input: BrowserViewElectronTabCdpDispatch,
-  ): Promise<BrowserCdpResult>;
   startPipCapture(input: PipCaptureStartInput): Promise<void>;
   stopPipCapture(): Promise<void>;
   onPipCaptureFrame(

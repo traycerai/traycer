@@ -18,6 +18,8 @@ import {
   streamAuthRevalidatorModule,
   tabHostIdModule,
   tileBodyVisibleModule,
+  runnerOpenExternalLinkModule,
+  tileRoleRunnerHostModule,
   type FakeStreamSession,
 } from "@/components/epic-canvas/renderers/__tests__/browser-peek-tile-stream-fixture";
 import { BrowserPeekTile } from "@/components/epic-canvas/renderers/browser-peek-tile";
@@ -26,6 +28,12 @@ const hookState = vi.hoisted(() => ({
   streamClient: null as FakeStreamClient | null,
   visible: true,
 }));
+
+vi.mock("@/providers/use-runner-host", () => tileRoleRunnerHostModule());
+
+vi.mock("@/hooks/runner/use-open-external-link-mutation", () =>
+  runnerOpenExternalLinkModule(),
+);
 
 vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn() },

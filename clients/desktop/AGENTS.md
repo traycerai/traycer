@@ -23,6 +23,18 @@ bundled CLI and read the on-disk install records the answers come from. The
 block comment there carries the full rationale; delete the lane when the
 fleet floor reaches 1.2.0.
 
+A second, permanent exception: the **`browser.sessions` stream is main's**
+(browser-security-hardening H10). Main opens it, answers every cookie-bearing
+frame on it, and forwards only the opaque UX projection to the renderer over
+`browserViewSessions*`. This is not transport proxying for its own sake - it is
+the whole point. That stream carries the master cookie jar: capture answers,
+seeded storage state, the store-key handshake, the forget ledger and its ack.
+A renderer that can read those frames is a fully trusted principal over every
+login on the machine, which is what root cause C of
+`specs/browser-security-review.md` found it to be; after H10 no cookie value
+exists in a renderer process at all. `gui-app` still talks to the host directly
+for everything else, including every other browser RPC.
+
 ## Commands
 
 ```bash

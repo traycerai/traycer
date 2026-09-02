@@ -595,7 +595,7 @@ function createDesktopWindowsBridgeForTests(
           token: null,
           profile: null,
         }),
-      set: () => Promise.resolve(),
+      set: () => Promise.resolve({ outcome: "accepted" as const }),
       onChange: (_handler) => ({ dispose: () => undefined }),
     },
   };

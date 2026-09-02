@@ -30,7 +30,6 @@ import {
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useDurableStreamTransportFactory } from "@/lib/host/use-durable-stream-transport";
 import { useRunnerHost } from "@/providers/use-runner-host";
-import { useWindowsBridge } from "@/providers/windows-bridge-context";
 
 function browserSessionsOwnerIdentityKey(
   hostClient: HostClient<HostRpcRegistry> | null,
@@ -52,14 +51,12 @@ export function useBrowserSessionsForHost(args: {
   const runnerHost = useRunnerHost();
   const hostClient = useHostClientForHostId(args.hostId);
   const localHostId = useReactiveLocalHostId();
-  const desktopWindowId = useWindowsBridge()?.windowId ?? null;
   return useBrowserSessions({
     hostId: args.hostId,
     hostClient,
     epicId: args.epicId,
     browserView: runnerHost.browserView,
     localHostId,
-    desktopWindowId,
   }).state;
 }
 
@@ -70,12 +67,6 @@ interface UseBrowserSessionsArgs {
   readonly browserView: BrowserViewBridge | null;
   /** This machine's host id, declared as the Electron locality signal. */
   readonly localHostId: string | null;
-  /**
-   * This renderer's desktop window id, or null off Electron. Declared on
-   * `electronTabLifecycleReady` so the host hands the Electron lifecycle over
-   * only to the incumbent owner's own window.
-   */
-  readonly desktopWindowId: string | null;
 }
 
 interface BrowserSessionsHookResult {
@@ -86,7 +77,7 @@ interface BrowserSessionsHookResult {
 export function useBrowserSessions(
   args: UseBrowserSessionsArgs,
 ): BrowserSessionsHookResult {
-  const { hostId, epicId, browserView, localHostId, desktopWindowId } = args;
+  const { hostId, epicId, browserView, localHostId } = args;
   const hostEntry = useHostDirectoryEntry(hostId ?? UNKNOWN_HOST_PLACEHOLDER);
   const transportReady =
     args.hostClient !== null &&
@@ -95,6 +86,9 @@ export function useBrowserSessions(
     args.hostClient,
     hostEntry,
   );
+  // Not sent to main, which reads the signed-in user from the desktop auth
+  // session it owns; it only decides whether asking is worth an IPC.
+  const userId = args.hostClient?.getRequestContextUserId() ?? null;
   const openTransport = useDurableStreamTransportFactory();
   const owner = useMemo<BrowserSessionsOwner | null>(
     () =>
@@ -118,7 +112,7 @@ export function useBrowserSessions(
         consumerId,
         epicId,
         owner: selectedOwner,
-        runtime: { browserView, localHostId, desktopWindowId, openTransport },
+        runtime: { browserView, userId, localHostId, openTransport },
         createIfMissing: transportReady,
       }),
   );
@@ -132,17 +126,17 @@ export function useBrowserSessions(
     if (coordinatorKey === null) return;
     upsertBrowserSessionsCoordinatorConsumer(coordinatorKey, consumerId, {
       browserView,
+      userId,
       localHostId,
-      desktopWindowId,
       openTransport,
     });
   }, [
     browserView,
     consumerId,
     coordinatorKey,
-    desktopWindowId,
     localHostId,
     openTransport,
+    userId,
   ]);
 
   const subscribe = useCallback(
