@@ -416,6 +416,16 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
       const lease = surfaceLeaseRef.current;
       surfaceLeaseRef.current = null;
       if (lease !== null) void lease.detach();
+      // The surface is gone in main the moment we detach, so the readiness
+      // this state feeds must go with it. Leaving it "ready" is what let the
+      // bounds bridge (declared ABOVE this effect, so it re-mounts first)
+      // fire its one mount-time `updateBounds` at a surface key main no
+      // longer maps - the send is dropped, the rAF dedupe never repeats it,
+      // and the re-attached tile stays at `bounds === null`, i.e. invisible
+      // until a window resize. Clearing here keeps the bridge unmounted until
+      // the NEXT attach resolves. The in-flight attach cannot resurrect it:
+      // `active` is already false, so its `.then`/`.catch` return early.
+      setSurfaceAttachment(null);
     };
   }, [bindSurface, bindingId, registrationId, showStartPage, tileKey, visible]);
 
