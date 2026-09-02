@@ -34,6 +34,7 @@
  */
 import type {
   OfficeAgentInput,
+  OfficeAmenityKind,
   OfficeAreaSign,
   OfficeDesk,
   OfficeErrandSpot,
@@ -130,63 +131,164 @@ const CLOCK_COL_OFFSET = 2;
 const STAIRS_TILES = 2;
 
 /**
- * The cafeteria: a walled break room in the storey's top-right corner, holding
- * everything an idle agent has a reason to walk to. Its footprint is RESERVED
- * out of the floor's width (see `buildFloors`) rather than fitted into whatever
- * gap the cabins happen to leave, because a break room that sometimes exists is
- * a break room the errand system cannot rely on.
+ * AMENITIES. Every one is a walled room standing in the columns RESERVED to the
+ * right of the cabin bands: a wall ring with a single door, its name on its own
+ * wall face, and fixtures inside that the errand engine has somewhere to send
+ * people. Their footprint is reserved out of the floor's width (see
+ * `buildFloors`) rather than fitted into whatever gap the cabins happen to
+ * leave, because a room that sometimes exists is a room the errand engine
+ * cannot rely on.
  *
- * Interior columns run `col + 1` to `col + 8` and interior rows `row + 2` to
- * `row + 5`, laid out as:
+ * WHICH rooms exist, and how big each one is, follows the floor's AGENT COUNT.
+ * A break room sized for two is a queue for twenty, and a gym on a floor of one
+ * is a corridor with a treadmill in it - so the amenities grow with the
+ * population instead of being fixed art that only reads right at one size.
+ *
+ * Every kind shares one row layout, so no room can drift into looking like a
+ * different sort of place and the scene can paint any of them with one ring:
  *
  * ```
- *   row + 1   wall face: the menu board, over the coffee machine
- *   row + 2   coffee machine .. water cooler .. vending machine
- *   row + 3   the aisle they are used from, and where two agents chat
- *   row + 4   two round tables
- *   row + 5   the seats under them, and the way to the door
+ *   row + 0   `wall-top` cap (the garden wears a `planter` hedge instead)
+ *   row + 1   wall face: the room's name sign, and anything wall-mounted
+ *   row + 2   fixtures standing against the back wall
+ *   row + 3   the aisle they are used from, and where two agents end up talking
+ *   row + 4   free-standing furniture: tables, benches, armchairs
+ *   row + 5   the seats under it, and the way to the door
+ *   row + 6   the bottom wall, with the door through it
  * ```
+ *
+ * A kind that needs fewer rows simply ENDS EARLIER rather than being padded to
+ * a common height: rooms are stacked into columns, so a row of padding in one
+ * of them costs the storey a row of depth for nothing.
  */
-const CAFETERIA_COLS = 10;
-const CAFETERIA_ROWS = 7;
-/** Left wall, three fixtures two apart, and the door's column clear of the stairs. */
+const ROOM_FACE_ROW = 1;
+const ROOM_FIXTURE_ROW = 2;
+const ROOM_AISLE_ROW = 3;
+const ROOM_TABLE_ROW = 4;
+const ROOM_SEAT_ROW = 5;
+/** A room with furniture on its table row: down to the seat row, plus its wall. */
+const FURNISHED_ROOM_ROWS = ROOM_SEAT_ROW + 2;
+/** A room whose fixtures all stand on the back wall: the aisle is its last row. */
+const SHALLOW_ROOM_ROWS = ROOM_AISLE_ROW + 2;
+/**
+ * Narrower than this a room reads as a cupboard, so every kind takes it as a
+ * floor whatever its own fixtures came to. It is also exactly what the break
+ * room has always been, which is what keeps a small epic's storey the one it
+ * has always had.
+ */
+const ROOM_MIN_COLS = 10;
+/** The door goes in the bottom wall, two columns short of the right wall. */
+const ROOM_DOOR_RIGHT_OFFSET = 3;
+/** Left tile of a room's own two-tile name sign, clear of the menu board. */
+const AREA_SIGN_COL_OFFSET = 4;
+/** One corridor tile between two rooms, stacked or side by side. */
+const ROOM_GAP_TILES = 1;
+/**
+ * Interior columns a storey keeps to the LEFT of its amenity columns, both
+ * outer walls included: enough that the lobby, the counter and the way out are
+ * never squeezed into the last few tiles of a floor that is all break room.
+ */
+const AMENITY_MIN_LEFT_COLS = 6;
+/** How many agents a floor needs before each optional room appears. */
+const NAP_MIN_AGENTS = 3;
+const GARDEN_MIN_AGENTS = 6;
+const GYM_MIN_AGENTS = 10;
+
+/** The break room's three back-wall fixtures, two columns apart. */
 const CAFETERIA_COFFEE_COL_OFFSET = 1;
 const CAFETERIA_COOLER_COL_OFFSET = 3;
 const CAFETERIA_VENDING_COL_OFFSET = 5;
-const CAFETERIA_DOOR_COL_OFFSET = 7;
-const CAFETERIA_TABLE_COL_OFFSETS: ReadonlyArray<number> = [1, 5];
-/** Rows inside the room, measured from its own top-left. */
-const CAFETERIA_FIXTURE_ROW = 2;
-const CAFETERIA_AISLE_ROW = 3;
-const CAFETERIA_TABLE_ROW = 4;
-const CAFETERIA_SEAT_ROW = 5;
-/**
- * Below this the storey is all cabin and corridor: dropping a ten-tile room into
- * it would seal the routes the cabins open onto. Such a floor keeps the older
- * corner fittings instead and reports `cafeteria: null`. After the widening
- * above, only the empty-epic room ever does.
- */
-const CAFETERIA_MIN_INTERIOR_COLS = 14;
-/**
- * The building width that interior minimum implies, counting both outer walls.
- * Every furnished storey is widened to at least this, so `planCafeteria` can
- * only fail on the empty-epic room.
- */
-const CAFETERIA_MIN_BUILDING_COLS = CAFETERIA_MIN_INTERIOR_COLS + 2;
-const CAFETERIA_MIN_FLOOR_ROWS = CAFETERIA_ROWS + 4;
-/** Fallback fittings, when there is no room for a cafeteria. */
-const CORNER_COFFEE_COL_OFFSET = 3;
-const CORNER_COOLER_COL_OFFSET = 5;
-
 /** A table is two tiles wide, and each of its tiles seats one agent. */
 const CAFE_TABLE_WIDTH_TILES = 2;
+const CAFETERIA_TABLE_COL_OFFSET = 1;
+/** Two clear columns between tables, so the seat row can still be walked. */
+const CAFE_TABLE_PITCH_TILES = 4;
 /**
- * The sofa stands against the break room's RIGHT wall, on the fixture row past
- * the vending machine, with its two seats on the aisle tiles in front of it.
- * Two tiles wide like the tables, so it seats a pair rather than one lounger.
+ * The sofas stand against the break room's back wall, past the vending machine,
+ * with their seats on the aisle tiles in front. Two tiles wide like the tables,
+ * so each seats a pair rather than one lounger.
  */
 const CAFETERIA_SOFA_COL_OFFSET = 7;
 const SOFA_WIDTH_TILES = 2;
+const SOFA_PITCH_TILES = SOFA_WIDTH_TILES + 1;
+/** Tables and sofas per head, floored and capped so neither runs off the wall. */
+const CAFE_TABLES_PER_AGENT = 3;
+const CAFE_MIN_TABLES = 2;
+const CAFE_MAX_TABLES = 6;
+const CAFE_SOFAS_PER_AGENT = 6;
+const CAFE_MIN_SOFAS = 1;
+const CAFE_MAX_SOFAS = 3;
+
+/**
+ * The game room. The ping-pong table and the arcade cabinet are always there;
+ * the rest arrives as the floor fills up, because a foosball table nobody has a
+ * second player for is furniture rather than a game.
+ *
+ * Its table row packs left to right, each piece with a standing column either
+ * side of it: those columns ARE the spots, which is what makes two players face
+ * each other across the thing they are playing.
+ */
+const GAME_FOOSBALL_MIN_AGENTS = 4;
+const GAME_CHESS_MIN_AGENTS = 8;
+const GAME_ARCADE_COL_OFFSET = 1;
+const PINGPONG_TABLE_WIDTH_TILES = 2;
+const FOOSBALL_WIDTH_TILES = 2;
+const CHESS_WIDTH_TILES = 1;
+/** First standing column of the table row, then one clear column per group. */
+const GAME_TABLE_FIRST_COL = 1;
+const GAME_TABLE_GROUP_GAP = 1;
+/** The dartboard hangs on the wall face; its throwing line is two rows below. */
+const GAME_DARTBOARD_COL_OFFSET = 7;
+const DARTS_SPOT_ROW_OFFSET = 2;
+/** The television, with its own sofa under it and the console seats in front. */
+const GAME_TV_COL_OFFSET = 9;
+
+/** The nap room: bags in a grid, a clear row under each so every one is reachable. */
+const NAP_BAGS_PER_AGENT = 3;
+const NAP_MIN_BAGS = 2;
+const NAP_MAX_BAGS = 6;
+const NAP_BAGS_PER_ROW = 3;
+const NAP_BAG_PITCH_TILES = 2;
+const NAP_BAG_COL_OFFSET = 1;
+
+/** The library: bookcases along the back wall, armchairs out on the floor. */
+const LIBRARY_BOOKCASES_PER_AGENT = 8;
+const LIBRARY_MIN_BOOKCASES = 3;
+const LIBRARY_MAX_BOOKCASES = 5;
+const LIBRARY_BOOKCASE_COL_OFFSET = 1;
+const LIBRARY_CHAIRS_PER_AGENT = 4;
+const LIBRARY_MIN_CHAIRS = 1;
+const LIBRARY_MAX_CHAIRS = 4;
+const LIBRARY_CHAIR_COL_OFFSET = 1;
+const LIBRARY_CHAIR_PITCH_TILES = 2;
+
+/** The garden: grass under a hedge, trees along the back, benches to sit on. */
+const GARDEN_TREES_PER_AGENT = 10;
+const GARDEN_MIN_TREES = 2;
+const GARDEN_MAX_TREES = 4;
+const GARDEN_TREE_COL_OFFSET = 1;
+const GARDEN_TREE_PITCH_TILES = 2;
+const GARDEN_BENCHES_PER_AGENT = 5;
+const GARDEN_MIN_BENCHES = 1;
+const GARDEN_MAX_BENCHES = 3;
+const GARDEN_BENCH_COL_OFFSET = 1;
+const BENCH_WIDTH_TILES = 2;
+const GARDEN_BENCH_PITCH_TILES = BENCH_WIDTH_TILES + 1;
+/** Places to simply stand on the grass, spread along the garden's own aisle. */
+const GARDEN_STROLL_COL_OFFSETS: ReadonlyArray<number> = [2, 5, 8];
+const GARDEN_THIRD_STROLL_MIN_AGENTS = 12;
+
+/** The gym: treadmills against the back wall, one clear row to step on from. */
+const GYM_TREADMILLS_PER_AGENT = 6;
+const GYM_MIN_TREADMILLS = 1;
+const GYM_MAX_TREADMILLS = 3;
+const GYM_TREADMILL_COL_OFFSET = 1;
+const GYM_TREADMILL_PITCH_TILES = 2;
+
+/** Fallback fittings, on a floor with no room for a cafeteria. */
+const CORNER_COFFEE_COL_OFFSET = 3;
+const CORNER_COOLER_COL_OFFSET = 5;
+
 /**
  * The waste bin, in the manager desk's own slot: the spare column past the
  * plant, on the desk row. Deliberately NOT the cabin's left aisle column -
@@ -197,54 +299,393 @@ const BIN_COL_OFFSET = 3;
 /** The bin's throwing line: the cabin aisle two rows under it, looking up. */
 const BIN_SPOT_ROW_OFFSET = 2;
 
-/**
- * The game room: a second walled room the same size as the cafeteria, holding
- * the ping-pong table, the arcade cabinet and a sofa.
- *
- * It goes DIRECTLY BELOW the break room where the storey is deep enough to
- * carry both, and BESIDE it where it is not - a tall thin building and a wide
- * flat one are both fine, but a room that only sometimes exists is a room the
- * errand engine cannot rely on. Which of the two happens is decided once, in
- * `buildFloors`, and carried on the storey so the reservation and the placement
- * can never disagree.
- *
- * ```
- *   row + 1   wall face: the room's own name sign
- *   row + 2   arcade cabinet .. .. .. .. sofa
- *   row + 3   the aisle they are used from
- *   row + 4   the ping-pong table, centred, with an end spot either side
- *   row + 5   the way to the door
- * ```
- */
-const GAME_ROOM_COLS = CAFETERIA_COLS;
-const GAME_ROOM_ROWS = CAFETERIA_ROWS;
-/** One corridor tile between the two rooms, whichever way they are stacked. */
-const ROOM_GAP_TILES = 1;
-const GAME_ARCADE_COL_OFFSET = 1;
-const GAME_SOFA_COL_OFFSET = 6;
-const GAME_TABLE_COL_OFFSET = 4;
-const GAME_FIXTURE_ROW = 2;
-const GAME_AISLE_ROW = 3;
-const GAME_TABLE_ROW = 4;
-const GAME_DOOR_COL_OFFSET = 7;
-/** The table is two tiles wide, and its ends are the tiles either side of it. */
-const PINGPONG_TABLE_WIDTH_TILES = 2;
-/**
- * Storey depth that fits the game room UNDER the break room: both rooms, the
- * corridor between them, and one more below for the lower room's door to open
- * onto. Short of it the pair goes side by side instead, which costs width.
- */
-const STACKED_ROOMS_MIN_FLOOR_ROWS =
-  BUILDING_TOP_WALL_ROWS + CAFETERIA_ROWS + ROOM_GAP_TILES + GAME_ROOM_ROWS + 2;
-/** The building width the side-by-side arrangement needs, both outer walls in. */
-const SIDE_BY_SIDE_MIN_BUILDING_COLS =
-  CAFETERIA_MIN_BUILDING_COLS + GAME_ROOM_COLS + ROOM_GAP_TILES;
-/** Left tile of a room's own two-tile name sign, clear of the menu board. */
-const AREA_SIGN_COL_OFFSET = 4;
 /** How many corridor spots one floor offers, and how wide the sample is. */
 const MAX_CORRIDOR_SPOTS = 4;
 /** More than three windows to stand at reads as a floor with nothing else to do. */
 const MAX_WINDOW_SPOTS = 3;
+
+// ---- Amenity sizing --------------------------------------------------- //
+
+/**
+ * How many of a thing a floor of this size gets: one per `perAgent` heads,
+ * never fewer than `low` and never more than `high`. Every amenity count is
+ * drawn through this one function so a floor cannot end up with a room that
+ * scales on a rule of its own.
+ */
+function scaledCount(
+  agents: number,
+  perAgent: number,
+  low: number,
+  high: number,
+): number {
+  return Math.min(high, Math.max(low, Math.ceil(agents / perAgent)));
+}
+
+/**
+ * The size and contents of one amenity, decided BEFORE anything is placed. The
+ * storey's width and depth are reserved from these, and the placement pass
+ * reads the same values back - a room that measured itself twice could land
+ * outside the wall that was widened for it.
+ */
+interface AmenitySpecBase {
+  readonly kind: OfficeAmenityKind;
+  /** Written on the room's sign and carried on `OfficeAmenity`. */
+  readonly name: string;
+  readonly cols: number;
+  readonly rows: number;
+}
+
+interface CafeteriaSpec extends AmenitySpecBase {
+  readonly kind: "cafeteria";
+  readonly tables: number;
+  readonly sofas: number;
+}
+
+interface GameSpec extends AmenitySpecBase {
+  readonly kind: "game";
+  readonly foosball: boolean;
+  readonly chess: boolean;
+}
+
+interface NapSpec extends AmenitySpecBase {
+  readonly kind: "nap";
+  readonly bags: number;
+}
+
+interface LibrarySpec extends AmenitySpecBase {
+  readonly kind: "library";
+  readonly bookcases: number;
+  readonly chairs: number;
+}
+
+interface GardenSpec extends AmenitySpecBase {
+  readonly kind: "garden";
+  readonly trees: number;
+  readonly benches: number;
+  readonly strolls: number;
+}
+
+interface GymSpec extends AmenitySpecBase {
+  readonly kind: "gym";
+  readonly treadmills: number;
+}
+
+type AmenitySpec =
+  | CafeteriaSpec
+  | GameSpec
+  | NapSpec
+  | LibrarySpec
+  | GardenSpec
+  | GymSpec;
+
+/** The width a room needs to hold a run of fixtures, plus its two walls. */
+function colsForLastFixture(lastCol: number): number {
+  return Math.max(ROOM_MIN_COLS, lastCol + 2);
+}
+
+/** Left column of the `index`th fixture in a run laid at a fixed pitch. */
+function pitchedCol(first: number, pitch: number, index: number): number {
+  return first + index * pitch;
+}
+
+function cafeteriaSpecFor(agents: number): CafeteriaSpec {
+  const tables = scaledCount(
+    agents,
+    CAFE_TABLES_PER_AGENT,
+    CAFE_MIN_TABLES,
+    CAFE_MAX_TABLES,
+  );
+  const sofas = scaledCount(
+    agents,
+    CAFE_SOFAS_PER_AGENT,
+    CAFE_MIN_SOFAS,
+    CAFE_MAX_SOFAS,
+  );
+  const lastTable =
+    pitchedCol(CAFETERIA_TABLE_COL_OFFSET, CAFE_TABLE_PITCH_TILES, tables - 1) +
+    CAFE_TABLE_WIDTH_TILES -
+    1;
+  const lastSofa =
+    pitchedCol(CAFETERIA_SOFA_COL_OFFSET, SOFA_PITCH_TILES, sofas - 1) +
+    SOFA_WIDTH_TILES -
+    1;
+  return {
+    kind: "cafeteria",
+    name: "Cafeteria",
+    tables,
+    sofas,
+    cols: colsForLastFixture(Math.max(lastTable, lastSofa)),
+    rows: FURNISHED_ROOM_ROWS,
+  };
+}
+
+/**
+ * Where each piece on the game room's table row starts, packed left to right
+ * with a standing column either side of every piece. Returned as one shape so
+ * the sizing pass and the placement pass can never disagree about the packing.
+ */
+interface GameTableColumns {
+  readonly pingpong: number;
+  readonly foosball: number | null;
+  readonly chess: number | null;
+  /** The right-hand standing column of the last piece. */
+  readonly last: number;
+}
+
+function gameTableColumnsOf(spec: GameSpec): GameTableColumns {
+  // A group is a standing column, the piece itself, and a second standing
+  // column: `width + 2`, and then a clear column before the next group.
+  const stride = (width: number): number => width + 2 + GAME_TABLE_GROUP_GAP;
+  let cursor = GAME_TABLE_FIRST_COL;
+  const pingpong = cursor + 1;
+  cursor += stride(PINGPONG_TABLE_WIDTH_TILES);
+  let foosball: number | null = null;
+  if (spec.foosball) {
+    foosball = cursor + 1;
+    cursor += stride(FOOSBALL_WIDTH_TILES);
+  }
+  let chess: number | null = null;
+  if (spec.chess) {
+    chess = cursor + 1;
+    cursor += stride(CHESS_WIDTH_TILES);
+  }
+  return {
+    pingpong,
+    foosball,
+    chess,
+    // The last group's right-hand standing column, the trailing gap undone.
+    last: cursor - GAME_TABLE_GROUP_GAP - 1,
+  };
+}
+
+function gameSpecFor(agents: number): GameSpec {
+  const sized: GameSpec = {
+    kind: "game",
+    name: "Game room",
+    foosball: agents >= GAME_FOOSBALL_MIN_AGENTS,
+    chess: agents >= GAME_CHESS_MIN_AGENTS,
+    cols: ROOM_MIN_COLS,
+    rows: FURNISHED_ROOM_ROWS,
+  };
+  const tables = gameTableColumnsOf(sized);
+  // The television is the right-most thing on the wall face and its sofa
+  // stands under it, so the room has to be wide enough for both. Everything
+  // mounted on that wall arrives with a table on the row below, so a room that
+  // has only the cabinet in it is measured on the cabinet.
+  const lastMounted = sized.chess
+    ? GAME_TV_COL_OFFSET + SOFA_WIDTH_TILES - 1
+    : GAME_DARTBOARD_COL_OFFSET;
+  const lastFixture = sized.foosball ? lastMounted : GAME_ARCADE_COL_OFFSET;
+  return {
+    ...sized,
+    cols: colsForLastFixture(Math.max(tables.last, lastFixture)),
+  };
+}
+
+function napSpecFor(agents: number): NapSpec {
+  const bags = scaledCount(
+    agents,
+    NAP_BAGS_PER_AGENT,
+    NAP_MIN_BAGS,
+    NAP_MAX_BAGS,
+  );
+  const bagRows = Math.ceil(bags / NAP_BAGS_PER_ROW);
+  const lastBag = pitchedCol(
+    NAP_BAG_COL_OFFSET,
+    NAP_BAG_PITCH_TILES,
+    Math.min(bags, NAP_BAGS_PER_ROW) - 1,
+  );
+  return {
+    kind: "nap",
+    name: "Nap room",
+    bags,
+    cols: colsForLastFixture(lastBag),
+    // A clear row under every row of bags, the last of them included: a bag is
+    // walked ONTO, and a row of them backed straight onto the wall would be
+    // reachable only across the bags beside it.
+    rows: ROOM_FIXTURE_ROW + bagRows * NAP_BAG_PITCH_TILES + 1,
+  };
+}
+
+function librarySpecFor(agents: number): LibrarySpec {
+  const bookcases = scaledCount(
+    agents,
+    LIBRARY_BOOKCASES_PER_AGENT,
+    LIBRARY_MIN_BOOKCASES,
+    LIBRARY_MAX_BOOKCASES,
+  );
+  const chairs = scaledCount(
+    agents,
+    LIBRARY_CHAIRS_PER_AGENT,
+    LIBRARY_MIN_CHAIRS,
+    LIBRARY_MAX_CHAIRS,
+  );
+  const lastCase = LIBRARY_BOOKCASE_COL_OFFSET + bookcases - 1;
+  const lastChair = pitchedCol(
+    LIBRARY_CHAIR_COL_OFFSET,
+    LIBRARY_CHAIR_PITCH_TILES,
+    chairs - 1,
+  );
+  return {
+    kind: "library",
+    name: "Library",
+    bookcases,
+    chairs,
+    cols: colsForLastFixture(Math.max(lastCase, lastChair)),
+    rows: FURNISHED_ROOM_ROWS,
+  };
+}
+
+function gardenSpecFor(agents: number): GardenSpec {
+  const trees = scaledCount(
+    agents,
+    GARDEN_TREES_PER_AGENT,
+    GARDEN_MIN_TREES,
+    GARDEN_MAX_TREES,
+  );
+  const benches = scaledCount(
+    agents,
+    GARDEN_BENCHES_PER_AGENT,
+    GARDEN_MIN_BENCHES,
+    GARDEN_MAX_BENCHES,
+  );
+  const lastTree = pitchedCol(
+    GARDEN_TREE_COL_OFFSET,
+    GARDEN_TREE_PITCH_TILES,
+    trees - 1,
+  );
+  const lastBench =
+    pitchedCol(GARDEN_BENCH_COL_OFFSET, GARDEN_BENCH_PITCH_TILES, benches - 1) +
+    BENCH_WIDTH_TILES -
+    1;
+  return {
+    kind: "garden",
+    name: "Garden",
+    trees,
+    benches,
+    strolls:
+      agents >= GARDEN_THIRD_STROLL_MIN_AGENTS
+        ? GARDEN_STROLL_COL_OFFSETS.length
+        : GARDEN_STROLL_COL_OFFSETS.length - 1,
+    cols: colsForLastFixture(Math.max(lastTree, lastBench)),
+    rows: FURNISHED_ROOM_ROWS,
+  };
+}
+
+function gymSpecFor(agents: number): GymSpec {
+  const treadmills = scaledCount(
+    agents,
+    GYM_TREADMILLS_PER_AGENT,
+    GYM_MIN_TREADMILLS,
+    GYM_MAX_TREADMILLS,
+  );
+  return {
+    kind: "gym",
+    name: "Gym",
+    treadmills,
+    cols: colsForLastFixture(
+      pitchedCol(
+        GYM_TREADMILL_COL_OFFSET,
+        GYM_TREADMILL_PITCH_TILES,
+        treadmills - 1,
+      ),
+    ),
+    rows: SHALLOW_ROOM_ROWS,
+  };
+}
+
+/**
+ * Which rooms this floor gets, in the order they stack down its columns.
+ *
+ * The cafeteria, the game room and the library are unconditional: a floor with
+ * nowhere to eat, nothing to play and nothing to read is the still office all
+ * of this exists to replace. The rest are earned, because a room whose whole
+ * point is that several agents use it reads as abandoned on a floor of two.
+ */
+function amenitySpecsFor(agents: number): ReadonlyArray<AmenitySpec> {
+  const specs: AmenitySpec[] = [cafeteriaSpecFor(agents), gameSpecFor(agents)];
+  if (agents >= NAP_MIN_AGENTS) specs.push(napSpecFor(agents));
+  specs.push(librarySpecFor(agents));
+  if (agents >= GARDEN_MIN_AGENTS) specs.push(gardenSpecFor(agents));
+  if (agents >= GYM_MIN_AGENTS) specs.push(gymSpecFor(agents));
+  return specs;
+}
+
+/** One room's slot in the reserved columns, before the building's width is known. */
+interface AmenityPlacement {
+  readonly spec: AmenitySpec;
+  /** Columns between this room's RIGHT edge and the storey's right interior edge. */
+  readonly rightOffset: number;
+  /** Absolute row of the room's own cap. */
+  readonly row: number;
+}
+
+interface AmenityPacking {
+  readonly placements: ReadonlyArray<AmenityPlacement>;
+  /** Total width the columns claim, gaps between them included. */
+  readonly width: number;
+}
+
+/** A run of rooms stacked one under the other, corridor rows included. */
+function stackedHeight(specs: ReadonlyArray<AmenitySpec>): number {
+  let height = 0;
+  for (const spec of specs) height += spec.rows + ROOM_GAP_TILES;
+  return Math.max(0, height - ROOM_GAP_TILES);
+}
+
+/**
+ * The shortest column that holds these rooms in at most TWO columns.
+ *
+ * Two is the cap because past it the building is wider than it is readable, so
+ * a storey is DEEPENED to fit its rooms rather than widened again - which costs
+ * a small floor some empty corridor along its bottom, and that is the cheaper
+ * of the two.
+ *
+ * Every split of the list into two contiguous runs is tried and the best one
+ * wins. Greedy packing at that height can only put MORE rooms in the first
+ * column than the winning split did, so whatever is left is a suffix of the
+ * split's second run and fits under the same ceiling - which is what makes one
+ * measurement here enough for the packer below.
+ */
+function minColumnHeight(specs: ReadonlyArray<AmenitySpec>): number {
+  let best = stackedHeight(specs);
+  for (let split = 1; split < specs.length; split += 1) {
+    const height = Math.max(
+      stackedHeight(specs.slice(0, split)),
+      stackedHeight(specs.slice(split)),
+    );
+    best = Math.min(best, height);
+  }
+  return best;
+}
+
+/**
+ * Stacks the rooms down the reserved columns, opening a NEW column to the left
+ * whenever the next one would run past the storey's last usable row. A column
+ * is as wide as its widest room, so a narrow gym does not reserve a break
+ * room's width for the whole storey.
+ */
+function packAmenities(
+  specs: ReadonlyArray<AmenitySpec>,
+  firstRow: number,
+  lastRow: number,
+): AmenityPacking {
+  const placements: AmenityPlacement[] = [];
+  let rightOffset = 0;
+  let columnCols = 0;
+  let row = firstRow;
+  for (const spec of specs) {
+    if (columnCols > 0 && row + spec.rows - 1 > lastRow) {
+      rightOffset += columnCols + ROOM_GAP_TILES;
+      columnCols = 0;
+      row = firstRow;
+    }
+    placements.push({ spec, rightOffset, row });
+    columnCols = Math.max(columnCols, spec.cols);
+    row += spec.rows + ROOM_GAP_TILES;
+  }
+  return { placements, width: rightOffset + columnCols };
+}
 
 interface Forest {
   /** Agents with no parent on this floor, in `(createdAt, id)` order. */
@@ -310,12 +751,11 @@ interface FloorBuild {
   /** Row this storey's `wall-top` cap lands on in the finished plan. */
   readonly originRow: number;
   /**
-   * Whether the game room goes under the break room rather than beside it.
-   * Decided with the storey's size, and carried rather than recomputed: the
-   * width reservation and the placement read the same answer or the room lands
-   * outside the wall that was widened for it.
+   * This storey's amenity rooms, already packed into their columns. Carried
+   * rather than recomputed: the width reservation and the placement read the
+   * same answer or a room lands outside the wall that was widened for it.
    */
-  readonly gameBelow: boolean;
+  readonly amenities: ReadonlyArray<AmenityPlacement>;
 }
 
 function compareByCreation(
@@ -573,37 +1013,36 @@ function buildFloors(
       contentRight = Math.max(contentRight, cabin.col + cabin.cols - 1);
       contentBottom = Math.max(contentBottom, cabin.row + cabin.rows - 1);
     }
-    // The cafeteria's width is reserved here rather than claimed later: it
-    // stands to the RIGHT of every cabin band, and a room fitted into leftover
+    // The amenities' footprint is reserved here rather than claimed later: they
+    // stand to the RIGHT of every cabin band, and a room fitted into leftover
     // space would move whenever a family grew.
-    // The break room is not a reward for having enough agents: a one-agent
-    // epic is exactly where an empty floor reads as broken, so the storey is
-    // widened and deepened to fit a cafeteria whatever the cabins came to.
-    // Only the EMPTY-epic room opts out - it has no floor to furnish.
+    //
+    // They are not a reward for having enough agents either: a one-agent epic
+    // is exactly where an empty floor reads as broken, so the storey is widened
+    // AND deepened to fit its rooms whatever the cabins came to. Only the
+    // EMPTY-epic room opts out - it has no floor to furnish.
+    const specs =
+      cabins.length === 0 ? [] : amenitySpecsFor(group.agents.length);
     const localRows =
       cabins.length === 0
         ? EMPTY_ROOM_ROWS
         : Math.max(
             contentBottom + BUILDING_BOTTOM_MARGIN_TILES,
-            CAFETERIA_MIN_FLOOR_ROWS,
+            // The cap, the wall face, the rooms, and the corridor row the
+            // lowest room's door opens onto.
+            BUILDING_TOP_WALL_ROWS + minColumnHeight(specs) + 2,
           );
-    // A storey the cabins already made deep enough carries the game room under
-    // the break room for nothing. A shallow one pays for it in width instead -
-    // deepening the building to stack them would leave a one-agent epic with a
-    // storey of empty corridor, which is worse than a wide one.
-    const gameBelow =
-      cabins.length > 0 && localRows >= STACKED_ROOMS_MIN_FLOOR_ROWS;
-    const roomsWidth = gameBelow
-      ? CAFETERIA_COLS
-      : CAFETERIA_COLS + ROOM_GAP_TILES + GAME_ROOM_COLS;
+    const packing = packAmenities(
+      specs,
+      originRow + BUILDING_TOP_WALL_ROWS,
+      originRow + localRows - 2,
+    );
     const localCols =
       cabins.length === 0
         ? EMPTY_ROOM_COLS
         : Math.max(
-            contentRight + BUILDING_RIGHT_MARGIN_TILES + roomsWidth,
-            gameBelow
-              ? CAFETERIA_MIN_BUILDING_COLS
-              : SIDE_BY_SIDE_MIN_BUILDING_COLS,
+            contentRight + BUILDING_RIGHT_MARGIN_TILES + packing.width,
+            packing.width + AMENITY_MIN_LEFT_COLS,
           );
     builds.push({
       hostId: group.hostId,
@@ -611,7 +1050,7 @@ function buildFloors(
       localCols,
       localRows,
       originRow,
-      gameBelow,
+      amenities: packing.placements,
     });
     // The storey below reuses this one's bottom wall as its own cap, so the
     // two buildings read as one block rather than as a seam of dead rows.
@@ -827,137 +1266,180 @@ function reachableFrom(
   return seen;
 }
 
-interface CafeteriaPlan {
+/**
+ * One amenity as PLACED: the spec that sized it, its outer bounds, its single
+ * door and the tile its name sign hangs on. Every fixture inside it is derived
+ * from the spec and these bounds on demand rather than stored, so the pass that
+ * stands the furniture up and the pass that lays the errand spots over it can
+ * only ever be reading the same arithmetic.
+ */
+interface AmenityPlan {
+  readonly spec: AmenitySpec;
   readonly bounds: OfficeTileRect;
   readonly doorTile: OfficeTilePos;
-  readonly coffeeTile: OfficeTilePos;
-  readonly coolerTile: OfficeTilePos;
-  readonly vendingTile: OfficeTilePos;
-  /** Left tile of each two-tile table. */
-  readonly tableTiles: ReadonlyArray<OfficeTilePos>;
-  /** Left tile of the two-tile sofa, against the room's right wall. */
-  readonly sofaTile: OfficeTilePos;
+  readonly signTile: OfficeTilePos;
 }
 
 /**
- * The corner fittings a floor with no cafeteria keeps instead.
+ * The corner fittings a floor with no amenities keeps instead.
  *
  * Reachable only by the EMPTY-epic room now that every furnished storey is
- * widened to fit a break room. Kept for exactly that case: a room with no
- * agents still wants something in the corner, and it has no cabins to widen
- * around.
+ * widened to fit its rooms. Kept for exactly that case: a room with no agents
+ * still wants something in the corner, and it has no cabins to widen around.
  */
 interface CornerFittings {
   readonly coffeeTile: OfficeTilePos;
   readonly coolerTile: OfficeTilePos | null;
 }
 
-function planCafeteria(
-  context: PlanContext,
-  build: FloorBuild,
-): CafeteriaPlan | null {
-  // Both guards now only fire for the empty-epic room; a furnished storey is
-  // sized to clear them - see `localCols` / `localRows`.
-  if (context.cols - 2 < CAFETERIA_MIN_INTERIOR_COLS) return null;
-  if (build.localRows < CAFETERIA_MIN_FLOOR_ROWS) return null;
-  const col = context.cols - 1 - CAFETERIA_COLS;
-  const row = build.originRow + BUILDING_TOP_WALL_ROWS;
-  if (col <= BUILDING_FIRST_CONTENT_COL) return null;
-  return {
-    bounds: { col, row, cols: CAFETERIA_COLS, rows: CAFETERIA_ROWS },
-    // In the BOTTOM wall, right of both tables and one column clear of the
-    // stairwell, so the way out is never the way past somebody eating.
-    doorTile: {
-      col: col + CAFETERIA_DOOR_COL_OFFSET,
-      row: row + CAFETERIA_ROWS - 1,
-    },
-    coffeeTile: {
-      col: col + CAFETERIA_COFFEE_COL_OFFSET,
-      row: row + CAFETERIA_FIXTURE_ROW,
-    },
-    coolerTile: {
-      col: col + CAFETERIA_COOLER_COL_OFFSET,
-      row: row + CAFETERIA_FIXTURE_ROW,
-    },
-    vendingTile: {
-      col: col + CAFETERIA_VENDING_COL_OFFSET,
-      row: row + CAFETERIA_FIXTURE_ROW,
-    },
-    tableTiles: CAFETERIA_TABLE_COL_OFFSETS.map((offset) => ({
-      col: col + offset,
-      row: row + CAFETERIA_TABLE_ROW,
-    })),
-    // On the fixture row past the vending machine, so it backs onto the same
-    // wall the machines do and its seats look out over the tables.
-    sofaTile: {
-      col: col + CAFETERIA_SOFA_COL_OFFSET,
-      row: row + CAFETERIA_FIXTURE_ROW,
-    },
-  };
-}
-
-interface GameRoomPlan {
-  readonly bounds: OfficeTileRect;
-  readonly doorTile: OfficeTilePos;
-  readonly arcadeTile: OfficeTilePos;
-  /** Left tile of the two-tile ping-pong table. */
-  readonly tableTile: OfficeTilePos;
-  readonly sofaTile: OfficeTilePos;
-}
-
 /**
- * Where the game room lands, given the break room it shares the storey with.
- * `null` only where there is no break room to place it against - the empty-epic
- * room, which has no floor to furnish.
+ * Turns a packed placement into real tiles, once the building's final width is
+ * known. Rooms hug the RIGHT interior edge, so the offset the packer recorded
+ * is measured from there rather than from the storey's own width - a narrow
+ * storey in a tall building still lines its rooms up with everyone else's.
  */
-function planGameRoom(
-  build: FloorBuild,
-  cafeteria: CafeteriaPlan | null,
-): GameRoomPlan | null {
-  if (cafeteria === null) return null;
-  const { col, row } = cafeteria.bounds;
-  const bounds: OfficeTileRect = build.gameBelow
-    ? {
-        col,
-        row: row + CAFETERIA_ROWS + ROOM_GAP_TILES,
-        cols: GAME_ROOM_COLS,
-        rows: GAME_ROOM_ROWS,
-      }
-    : {
-        col: col - GAME_ROOM_COLS - ROOM_GAP_TILES,
-        row,
-        cols: GAME_ROOM_COLS,
-        rows: GAME_ROOM_ROWS,
-      };
-  if (bounds.col <= BUILDING_FIRST_CONTENT_COL) return null;
-  if (bounds.row + bounds.rows > build.originRow + build.localRows - 1) {
-    return null;
-  }
+function planAmenity(placement: AmenityPlacement, cols: number): AmenityPlan {
+  const { spec } = placement;
+  const col = cols - 2 - placement.rightOffset - (spec.cols - 1);
+  const bounds: OfficeTileRect = {
+    col,
+    row: placement.row,
+    cols: spec.cols,
+    rows: spec.rows,
+  };
   return {
+    spec,
     bounds,
+    // In the bottom wall, two columns short of the right one, so the way out is
+    // never the way past somebody eating.
     doorTile: {
-      col: bounds.col + GAME_DOOR_COL_OFFSET,
-      row: bounds.row + GAME_ROOM_ROWS - 1,
+      col: col + spec.cols - ROOM_DOOR_RIGHT_OFFSET,
+      row: placement.row + spec.rows - 1,
     },
-    arcadeTile: {
-      col: bounds.col + GAME_ARCADE_COL_OFFSET,
-      row: bounds.row + GAME_FIXTURE_ROW,
-    },
-    tableTile: {
-      col: bounds.col + GAME_TABLE_COL_OFFSET,
-      row: bounds.row + GAME_TABLE_ROW,
-    },
-    sofaTile: {
-      col: bounds.col + GAME_SOFA_COL_OFFSET,
-      row: bounds.row + GAME_FIXTURE_ROW,
+    signTile: {
+      col: col + AREA_SIGN_COL_OFFSET,
+      row: placement.row + ROOM_FACE_ROW,
     },
   };
 }
 
+/** A run of `count` fixtures laid at a fixed pitch along one of a room's rows. */
+function pitchedTiles(
+  bounds: OfficeTileRect,
+  row: number,
+  first: number,
+  run: { readonly count: number; readonly pitch: number },
+): ReadonlyArray<OfficeTilePos> {
+  const tiles: OfficeTilePos[] = [];
+  for (let index = 0; index < run.count; index += 1) {
+    tiles.push({
+      col: bounds.col + pitchedCol(first, run.pitch, index),
+      row: bounds.row + row,
+    });
+  }
+  return tiles;
+}
+
+function cafeteriaTableTiles(
+  spec: CafeteriaSpec,
+  bounds: OfficeTileRect,
+): ReadonlyArray<OfficeTilePos> {
+  return pitchedTiles(bounds, ROOM_TABLE_ROW, CAFETERIA_TABLE_COL_OFFSET, {
+    count: spec.tables,
+    pitch: CAFE_TABLE_PITCH_TILES,
+  });
+}
+
+function cafeteriaSofaTiles(
+  spec: CafeteriaSpec,
+  bounds: OfficeTileRect,
+): ReadonlyArray<OfficeTilePos> {
+  return pitchedTiles(bounds, ROOM_FIXTURE_ROW, CAFETERIA_SOFA_COL_OFFSET, {
+    count: spec.sofas,
+    pitch: SOFA_PITCH_TILES,
+  });
+}
+
+function napBagTiles(
+  spec: NapSpec,
+  bounds: OfficeTileRect,
+): ReadonlyArray<OfficeTilePos> {
+  const tiles: OfficeTilePos[] = [];
+  for (let index = 0; index < spec.bags; index += 1) {
+    tiles.push({
+      col:
+        bounds.col +
+        pitchedCol(
+          NAP_BAG_COL_OFFSET,
+          NAP_BAG_PITCH_TILES,
+          index % NAP_BAGS_PER_ROW,
+        ),
+      // A clear row between rows of bags: a bag is walked ONTO, so the one
+      // behind it must not be the only way to reach it.
+      row:
+        bounds.row +
+        ROOM_FIXTURE_ROW +
+        Math.floor(index / NAP_BAGS_PER_ROW) * NAP_BAG_PITCH_TILES,
+    });
+  }
+  return tiles;
+}
+
+function libraryBookcaseTiles(
+  spec: LibrarySpec,
+  bounds: OfficeTileRect,
+): ReadonlyArray<OfficeTilePos> {
+  return pitchedTiles(bounds, ROOM_FIXTURE_ROW, LIBRARY_BOOKCASE_COL_OFFSET, {
+    count: spec.bookcases,
+    pitch: 1,
+  });
+}
+
+function libraryChairTiles(
+  spec: LibrarySpec,
+  bounds: OfficeTileRect,
+): ReadonlyArray<OfficeTilePos> {
+  return pitchedTiles(bounds, ROOM_TABLE_ROW, LIBRARY_CHAIR_COL_OFFSET, {
+    count: spec.chairs,
+    pitch: LIBRARY_CHAIR_PITCH_TILES,
+  });
+}
+
+function gardenTreeTiles(
+  spec: GardenSpec,
+  bounds: OfficeTileRect,
+): ReadonlyArray<OfficeTilePos> {
+  return pitchedTiles(bounds, ROOM_FIXTURE_ROW, GARDEN_TREE_COL_OFFSET, {
+    count: spec.trees,
+    pitch: GARDEN_TREE_PITCH_TILES,
+  });
+}
+
+function gardenBenchTiles(
+  spec: GardenSpec,
+  bounds: OfficeTileRect,
+): ReadonlyArray<OfficeTilePos> {
+  return pitchedTiles(bounds, ROOM_TABLE_ROW, GARDEN_BENCH_COL_OFFSET, {
+    count: spec.benches,
+    pitch: GARDEN_BENCH_PITCH_TILES,
+  });
+}
+
+function gymTreadmillTiles(
+  spec: GymSpec,
+  bounds: OfficeTileRect,
+): ReadonlyArray<OfficeTilePos> {
+  return pitchedTiles(bounds, ROOM_FIXTURE_ROW, GYM_TREADMILL_COL_OFFSET, {
+    count: spec.treadmills,
+    pitch: GYM_TREADMILL_PITCH_TILES,
+  });
+}
+
 /**
- * A walled room's own ring and its door, shared by the break room and the game
- * room. Mirrors a cabin's - cap, wall face, sides, one walkable door - so the
- * scene can paint either with the same two sprites.
+ * A walled room's own ring and its door, shared by every amenity. Mirrors a
+ * cabin's - cap, wall face, sides, one walkable door - so the scene can paint
+ * any of them with the same two sprites. The garden's hedge is the same ring;
+ * only the sprite the scene reaches for differs.
  */
 function buildRoomShell(
   context: PlanContext,
@@ -997,52 +1479,171 @@ function addWideProp(
   }
 }
 
-/** The table, the cabinet and the sofa, inside the ring the room already has. */
-function buildGameRoom(context: PlanContext, plan: GameRoomPlan): void {
-  buildRoomShell(context, plan.bounds, plan.doorTile);
-  addBlockingProp(context, {
-    sprite: { name: "arcade" },
-    tile: plan.arcadeTile,
-  });
-  addWideProp(
-    context,
-    "pingpong-table",
-    plan.tableTile,
-    PINGPONG_TABLE_WIDTH_TILES,
-  );
-  addWideProp(context, "sofa", plan.sofaTile, SOFA_WIDTH_TILES);
+/**
+ * Furniture a character stands or lies ON rather than beside: a sleeping bag,
+ * an armchair, a treadmill. Its tile stays WALKABLE, because the errand spot is
+ * that same tile - a spot the grid calls solid is a spot the flood cannot
+ * reach and `addSpot` refuses outright.
+ *
+ * Two agents never share one, because the scene claims a spot's tile for as
+ * long as its errand lasts.
+ */
+function addOccupiableProp(context: PlanContext, prop: OfficeProp): void {
+  context.props.push(prop);
 }
 
-/**
- * The break room's own fittings, inside the ring it shares with the game room.
- */
-function buildCafeteria(context: PlanContext, plan: CafeteriaPlan): void {
-  const { col, row } = plan.bounds;
-  buildRoomShell(context, plan.bounds, plan.doorTile);
+/** The break room's fittings: the machines on the back wall, tables to eat at. */
+function buildCafeteria(
+  context: PlanContext,
+  spec: CafeteriaSpec,
+  bounds: OfficeTileRect,
+): void {
+  const { col, row } = bounds;
+  const fixtureRow = row + ROOM_FIXTURE_ROW;
   // On the wall face over the coffee machine, exactly where a cabin hangs its
   // sign - the board is what says which of the three fixtures is the coffee.
   addBlockingProp(context, {
     sprite: { name: "menu-board" },
-    tile: { col: col + CAFETERIA_COFFEE_COL_OFFSET, row: row + 1 },
+    tile: { col: col + CAFETERIA_COFFEE_COL_OFFSET, row: row + ROOM_FACE_ROW },
   });
   addBlockingProp(context, {
     sprite: { name: "coffee-machine" },
-    tile: plan.coffeeTile,
+    tile: { col: col + CAFETERIA_COFFEE_COL_OFFSET, row: fixtureRow },
   });
   addBlockingProp(context, {
     sprite: { name: "water-cooler" },
-    tile: plan.coolerTile,
+    tile: { col: col + CAFETERIA_COOLER_COL_OFFSET, row: fixtureRow },
   });
   addBlockingProp(context, {
     sprite: { name: "vending" },
-    tile: plan.vendingTile,
+    tile: { col: col + CAFETERIA_VENDING_COL_OFFSET, row: fixtureRow },
   });
-  for (const tile of plan.tableTiles) {
+  for (const tile of cafeteriaTableTiles(spec, bounds)) {
     addWideProp(context, "cafe-table", tile, CAFE_TABLE_WIDTH_TILES);
   }
   // Two tiles wide like a table, and blocked across both: a sofa is furniture
   // you sit ON from the front, never a tile the room routes through.
-  addWideProp(context, "sofa", plan.sofaTile, SOFA_WIDTH_TILES);
+  for (const tile of cafeteriaSofaTiles(spec, bounds)) {
+    addWideProp(context, "sofa", tile, SOFA_WIDTH_TILES);
+  }
+}
+
+/**
+ * The game room's fittings. The cabinet and the ping-pong table are always
+ * there; the foosball table, the dartboard, the chess table and the television
+ * arrive with the floor's population.
+ */
+function buildGameRoom(
+  context: PlanContext,
+  spec: GameSpec,
+  bounds: OfficeTileRect,
+): void {
+  const { col, row } = bounds;
+  addBlockingProp(context, {
+    sprite: { name: "arcade" },
+    tile: { col: col + GAME_ARCADE_COL_OFFSET, row: row + ROOM_FIXTURE_ROW },
+  });
+  const tables = gameTableColumnsOf(spec);
+  const tableRow = row + ROOM_TABLE_ROW;
+  addWideProp(
+    context,
+    "pingpong-table",
+    { col: col + tables.pingpong, row: tableRow },
+    PINGPONG_TABLE_WIDTH_TILES,
+  );
+  const foosball = tables.foosball;
+  if (foosball !== null) {
+    addWideProp(
+      context,
+      "foosball",
+      { col: col + foosball, row: tableRow },
+      FOOSBALL_WIDTH_TILES,
+    );
+    addBlockingProp(context, {
+      sprite: { name: "dartboard" },
+      tile: { col: col + GAME_DARTBOARD_COL_OFFSET, row: row + ROOM_FACE_ROW },
+    });
+  }
+  const chess = tables.chess;
+  if (chess === null) return;
+  addWideProp(
+    context,
+    "chess-table",
+    { col: col + chess, row: tableRow },
+    CHESS_WIDTH_TILES,
+  );
+  addBlockingProp(context, {
+    sprite: { name: "tv" },
+    tile: { col: col + GAME_TV_COL_OFFSET, row: row + ROOM_FACE_ROW },
+  });
+  addWideProp(
+    context,
+    "sofa",
+    { col: col + GAME_TV_COL_OFFSET, row: row + ROOM_FIXTURE_ROW },
+    SOFA_WIDTH_TILES,
+  );
+}
+
+/** Bags in a grid, each one a tile an agent lies down ON. */
+function buildNapRoom(
+  context: PlanContext,
+  spec: NapSpec,
+  bounds: OfficeTileRect,
+): void {
+  for (const tile of napBagTiles(spec, bounds)) {
+    addOccupiableProp(context, { sprite: { name: "sleep-bag" }, tile });
+  }
+}
+
+/** Bookcases along the back wall, armchairs out in front of them. */
+function buildLibrary(
+  context: PlanContext,
+  spec: LibrarySpec,
+  bounds: OfficeTileRect,
+): void {
+  for (const tile of libraryBookcaseTiles(spec, bounds)) {
+    addBlockingProp(context, { sprite: { name: "bookcase" }, tile });
+  }
+  for (const tile of libraryChairTiles(spec, bounds)) {
+    addOccupiableProp(context, { sprite: { name: "armchair" }, tile });
+  }
+}
+
+/** Trees along the back of the garden, benches to sit on in front of them. */
+function buildGarden(
+  context: PlanContext,
+  spec: GardenSpec,
+  bounds: OfficeTileRect,
+): void {
+  for (const tile of gardenTreeTiles(spec, bounds)) {
+    addBlockingProp(context, { sprite: { name: "tree" }, tile });
+  }
+  for (const tile of gardenBenchTiles(spec, bounds)) {
+    addWideProp(context, "bench", tile, BENCH_WIDTH_TILES);
+  }
+}
+
+/** Treadmills against the back wall, each one a tile an agent runs ON. */
+function buildGym(
+  context: PlanContext,
+  spec: GymSpec,
+  bounds: OfficeTileRect,
+): void {
+  for (const tile of gymTreadmillTiles(spec, bounds)) {
+    addOccupiableProp(context, { sprite: { name: "treadmill" }, tile });
+  }
+}
+
+/** The ring every amenity wears, and then whatever that kind stands inside it. */
+function buildAmenity(context: PlanContext, plan: AmenityPlan): void {
+  buildRoomShell(context, plan.bounds, plan.doorTile);
+  const { spec } = plan;
+  if (spec.kind === "cafeteria") buildCafeteria(context, spec, plan.bounds);
+  else if (spec.kind === "game") buildGameRoom(context, spec, plan.bounds);
+  else if (spec.kind === "nap") buildNapRoom(context, spec, plan.bounds);
+  else if (spec.kind === "library") buildLibrary(context, spec, plan.bounds);
+  else if (spec.kind === "garden") buildGarden(context, spec, plan.bounds);
+  else buildGym(context, spec, plan.bounds);
 }
 
 /**
@@ -1089,8 +1690,7 @@ interface ErrandSpotRequest {
   readonly build: FloorBuild;
   readonly lobbyTile: OfficeTilePos;
   readonly blocked: ReadonlySet<string>;
-  readonly cafeteria: CafeteriaPlan | null;
-  readonly gameRoom: GameRoomPlan | null;
+  readonly amenities: ReadonlyArray<AmenityPlan>;
   readonly corner: CornerFittings | null;
   readonly rooms: ReadonlyArray<OfficeRoom>;
   readonly stairsTile: OfficeTilePos | null;
@@ -1120,38 +1720,35 @@ function addSpot(
   return true;
 }
 
-function addCafeteriaSpots(builder: SpotBuilder, plan: CafeteriaPlan): void {
-  const aisleRow = plan.bounds.row + CAFETERIA_AISLE_ROW;
-  addSpot(builder, "coffee", { col: plan.coffeeTile.col, row: aisleRow }, "up");
+function addCafeteriaSpots(
+  builder: SpotBuilder,
+  spec: CafeteriaSpec,
+  bounds: OfficeTileRect,
+): void {
+  const aisleRow = bounds.row + ROOM_AISLE_ROW;
+  addSpot(
+    builder,
+    "coffee",
+    { col: bounds.col + CAFETERIA_COFFEE_COL_OFFSET, row: aisleRow },
+    "up",
+  );
   // TWO cooler spots, side by side and turned toward each other: a water cooler
   // is where two people talk, and a single spot can only ever hold a monologue.
-  addSpot(
-    builder,
-    "cooler",
-    { col: plan.coolerTile.col, row: aisleRow },
-    "right",
-  );
-  addSpot(
-    builder,
-    "cooler",
-    { col: plan.coolerTile.col + 1, row: aisleRow },
-    "left",
-  );
+  const coolerCol = bounds.col + CAFETERIA_COOLER_COL_OFFSET;
+  addSpot(builder, "cooler", { col: coolerCol, row: aisleRow }, "right");
+  addSpot(builder, "cooler", { col: coolerCol + 1, row: aisleRow }, "left");
   addSpot(
     builder,
     "vending",
-    { col: plan.vendingTile.col, row: aisleRow },
+    { col: bounds.col + CAFETERIA_VENDING_COL_OFFSET, row: aisleRow },
     "up",
   );
-  for (const table of plan.tableTiles) {
+  for (const table of cafeteriaTableTiles(spec, bounds)) {
     for (let offset = 0; offset < CAFE_TABLE_WIDTH_TILES; offset += 1) {
       addSpot(
         builder,
         "cafe",
-        {
-          col: table.col + offset,
-          row: plan.bounds.row + CAFETERIA_SEAT_ROW,
-        },
+        { col: table.col + offset, row: bounds.row + ROOM_SEAT_ROW },
         "up",
       );
     }
@@ -1159,40 +1756,146 @@ function addCafeteriaSpots(builder: SpotBuilder, plan: CafeteriaPlan): void {
   // One seat per sofa tile, on the aisle in front of it. The facing looks AT
   // the sofa, as every spot's does; the scene turns whoever sits down back
   // toward the room, which is the way a person on a sofa actually faces.
+  for (const sofa of cafeteriaSofaTiles(spec, bounds)) {
+    for (let offset = 0; offset < SOFA_WIDTH_TILES; offset += 1) {
+      addSpot(builder, "sofa", { col: sofa.col + offset, row: aisleRow }, "up");
+    }
+  }
+}
+
+/**
+ * The two standing columns either side of a piece on the game room's table row,
+ * turned toward EACH OTHER rather than toward the table - the same arrangement
+ * the cooler pair uses, and for the same reason: these are the errands that are
+ * two people rather than one.
+ */
+function addFacingPair(
+  builder: SpotBuilder,
+  kind: OfficeErrandSpot["kind"],
+  tile: OfficeTilePos,
+  widthTiles: number,
+): void {
+  addSpot(builder, kind, { col: tile.col - 1, row: tile.row }, "right");
+  addSpot(builder, kind, { col: tile.col + widthTiles, row: tile.row }, "left");
+}
+
+function addGameRoomSpots(
+  builder: SpotBuilder,
+  spec: GameSpec,
+  bounds: OfficeTileRect,
+): void {
+  const tables = gameTableColumnsOf(spec);
+  const tableRow = bounds.row + ROOM_TABLE_ROW;
+  const aisleRow = bounds.row + ROOM_AISLE_ROW;
+  addFacingPair(
+    builder,
+    "pingpong",
+    { col: bounds.col + tables.pingpong, row: tableRow },
+    PINGPONG_TABLE_WIDTH_TILES,
+  );
+  addSpot(
+    builder,
+    "arcade",
+    { col: bounds.col + GAME_ARCADE_COL_OFFSET, row: aisleRow },
+    "up",
+  );
+  const foosball = tables.foosball;
+  if (foosball !== null) {
+    addFacingPair(
+      builder,
+      "foosball",
+      { col: bounds.col + foosball, row: tableRow },
+      FOOSBALL_WIDTH_TILES,
+    );
+    // The throwing line, back from the board and looking up at it - the same
+    // shape as a cabin's bin, so one toss reads like the other.
+    addSpot(
+      builder,
+      "darts",
+      {
+        col: bounds.col + GAME_DARTBOARD_COL_OFFSET,
+        row: bounds.row + ROOM_FACE_ROW + DARTS_SPOT_ROW_OFFSET,
+      },
+      "up",
+    );
+  }
+  const chess = tables.chess;
+  if (chess === null) return;
+  addFacingPair(
+    builder,
+    "chess",
+    { col: bounds.col + chess, row: tableRow },
+    CHESS_WIDTH_TILES,
+  );
+  // On the aisle in front of the sofa, looking up at the television over it.
   for (let offset = 0; offset < SOFA_WIDTH_TILES; offset += 1) {
     addSpot(
       builder,
-      "sofa",
-      { col: plan.sofaTile.col + offset, row: aisleRow },
+      "console",
+      { col: bounds.col + GAME_TV_COL_OFFSET + offset, row: aisleRow },
       "up",
     );
   }
 }
 
 /**
- * The game room's own spots: an end of the table each side, the aisle in front
- * of the cabinet, and a seat in front of each half of the sofa.
- *
- * The two table ends face EACH OTHER rather than the table, because a rally is
- * the only errand that is two people rather than one - the same reason the
- * cooler has a facing pair.
+ * A spot ON the fixture itself - the bag you lie on, the chair you read in, the
+ * treadmill you walk on. The tile is the furniture, so the facing is where the
+ * occupant ends up looking rather than what it is looking at.
  */
-function addGameRoomSpots(builder: SpotBuilder, plan: GameRoomPlan): void {
-  const table = plan.tableTile;
-  addSpot(builder, "pingpong", { col: table.col - 1, row: table.row }, "right");
-  addSpot(
-    builder,
-    "pingpong",
-    { col: table.col + PINGPONG_TABLE_WIDTH_TILES, row: table.row },
-    "left",
-  );
-  const aisleRow = plan.bounds.row + GAME_AISLE_ROW;
-  addSpot(builder, "arcade", { col: plan.arcadeTile.col, row: aisleRow }, "up");
-  for (let offset = 0; offset < SOFA_WIDTH_TILES; offset += 1) {
+function addOccupiedSpots(
+  builder: SpotBuilder,
+  kind: OfficeErrandSpot["kind"],
+  tiles: ReadonlyArray<OfficeTilePos>,
+  facing: OfficeFacing,
+): void {
+  for (const tile of tiles) addSpot(builder, kind, tile, facing);
+}
+
+function addGardenSpots(
+  builder: SpotBuilder,
+  spec: GardenSpec,
+  bounds: OfficeTileRect,
+): void {
+  // Sitting on a bench you face OUT over the garden, not into the backrest.
+  for (const bench of gardenBenchTiles(spec, bounds)) {
+    for (let offset = 0; offset < BENCH_WIDTH_TILES; offset += 1) {
+      addSpot(
+        builder,
+        "garden",
+        { col: bench.col + offset, row: bounds.row + ROOM_SEAT_ROW },
+        "down",
+      );
+    }
+  }
+  for (let index = 0; index < spec.strolls; index += 1) {
     addSpot(
       builder,
-      "sofa",
-      { col: plan.sofaTile.col + offset, row: aisleRow },
+      "garden",
+      {
+        col: bounds.col + GARDEN_STROLL_COL_OFFSETS[index],
+        row: bounds.row + ROOM_AISLE_ROW,
+      },
+      "down",
+    );
+  }
+}
+
+/** Whatever this kind of room gives an idle agent to do, once it is standing. */
+function addAmenitySpots(builder: SpotBuilder, plan: AmenityPlan): void {
+  const { spec, bounds } = plan;
+  if (spec.kind === "cafeteria") addCafeteriaSpots(builder, spec, bounds);
+  else if (spec.kind === "game") addGameRoomSpots(builder, spec, bounds);
+  else if (spec.kind === "nap") {
+    addOccupiedSpots(builder, "nap", napBagTiles(spec, bounds), "down");
+  } else if (spec.kind === "library") {
+    addOccupiedSpots(builder, "read", libraryChairTiles(spec, bounds), "down");
+  } else if (spec.kind === "garden") addGardenSpots(builder, spec, bounds);
+  else {
+    addOccupiedSpots(
+      builder,
+      "treadmill",
+      gymTreadmillTiles(spec, bounds),
       "up",
     );
   }
@@ -1344,10 +2047,11 @@ function addCorridorSpots(
       if (builder.used.has(key) || builder.blocked.has(key)) continue;
       if (!builder.reachable.has(key)) continue;
       if (request.rooms.some((room) => withinRect(room.bounds, tile))) continue;
-      const cafeteria = request.cafeteria;
-      if (cafeteria !== null && withinRect(cafeteria.bounds, tile)) continue;
-      const gameRoom = request.gameRoom;
-      if (gameRoom !== null && withinRect(gameRoom.bounds, tile)) continue;
+      // Inside an amenity you are AT that amenity; a corridor spot in the nap
+      // room would have somebody standing between the beds doing nothing.
+      if (request.amenities.some((plan) => withinRect(plan.bounds, tile))) {
+        continue;
+      }
       candidates.push(tile);
     }
   }
@@ -1373,12 +2077,9 @@ function errandSpotsFor(
     // so one flood answers for the whole storey.
     reachable: reachableFrom(request.context, request.lobbyTile),
   };
-  const cafeteria = request.cafeteria;
   const corner = request.corner;
-  if (cafeteria !== null) addCafeteriaSpots(builder, cafeteria);
-  else if (corner !== null) addCornerSpots(builder, corner);
-  const gameRoom = request.gameRoom;
-  if (gameRoom !== null) addGameRoomSpots(builder, gameRoom);
+  if (corner !== null) addCornerSpots(builder, corner);
+  for (const plan of request.amenities) addAmenitySpots(builder, plan);
   addWallSpots(builder, request.build);
   addPlantSpots(builder, request.build);
   addBinSpots(builder, request.build);
@@ -1718,12 +2419,14 @@ function fitFloor(request: FloorFitRequest): OfficeFloor {
   context.walkable[doorTile.row][doorTile.col] = true;
 
   const clockTile = addWallFittings(context, build.originRow + 1);
-  const cafeteria = planCafeteria(context, build);
+  // The rooms were sized and packed with the storey; all that is left here is
+  // to turn each slot into tiles and stand its furniture up.
+  const amenities = build.amenities.map((placement) =>
+    planAmenity(placement, context.cols),
+  );
   const corner =
-    cafeteria === null ? buildCornerFittings(context, build) : null;
-  if (cafeteria !== null) buildCafeteria(context, cafeteria);
-  const gameRoom = planGameRoom(build, cafeteria);
-  if (gameRoom !== null) buildGameRoom(context, gameRoom);
+    amenities.length === 0 ? buildCornerFittings(context, build) : null;
+  for (const plan of amenities) buildAmenity(context, plan);
 
   // Reception stands on the lobby row, one clear tile short of the door so
   // nobody has to squeeze past the counter to get out.
@@ -1782,17 +2485,23 @@ function fitFloor(request: FloorFitRequest): OfficeFloor {
       build,
       lobbyTile,
       blocked,
-      cafeteria,
-      gameRoom,
+      amenities,
       corner,
       rooms: request.rooms,
       stairsTile,
     }),
-    cafeteria: cafeteria === null ? null : cafeteria.bounds,
-    gameRoom: gameRoom === null ? null : gameRoom.bounds,
-    areaSigns: areaSignsFor(cafeteria, gameRoom),
-    // Placed by a later lane; carried now so every floor has one shape.
-    amenities: [],
+    // The two rooms that predate the amenity list stay MIRRORED on their own
+    // fields: everything that only knows about a break room keeps working.
+    cafeteria: amenityBoundsOf(amenities, "cafeteria"),
+    gameRoom: amenityBoundsOf(amenities, "game"),
+    areaSigns: areaSignsFor(amenities),
+    amenities: amenities.map((plan) => ({
+      kind: plan.spec.kind,
+      bounds: plan.bounds,
+      doorTile: plan.doorTile,
+      signTile: plan.signTile,
+      name: plan.spec.name,
+    })),
   };
 }
 
@@ -1803,29 +2512,21 @@ function fitFloor(request: FloorFitRequest): OfficeFloor {
  * over its coffee machine.
  */
 function areaSignsFor(
-  cafeteria: CafeteriaPlan | null,
-  gameRoom: GameRoomPlan | null,
+  amenities: ReadonlyArray<AmenityPlan>,
 ): ReadonlyArray<OfficeAreaSign> {
-  const signs: OfficeAreaSign[] = [];
-  if (cafeteria !== null) {
-    signs.push({
-      name: "Cafeteria",
-      signTile: {
-        col: cafeteria.bounds.col + AREA_SIGN_COL_OFFSET,
-        row: cafeteria.bounds.row + 1,
-      },
-    });
-  }
-  if (gameRoom !== null) {
-    signs.push({
-      name: "Game room",
-      signTile: {
-        col: gameRoom.bounds.col + AREA_SIGN_COL_OFFSET,
-        row: gameRoom.bounds.row + 1,
-      },
-    });
-  }
-  return signs;
+  return amenities.map((plan) => ({
+    name: plan.spec.name,
+    signTile: plan.signTile,
+  }));
+}
+
+/** The bounds of the one room of this kind, for the fields that predate the list. */
+function amenityBoundsOf(
+  amenities: ReadonlyArray<AmenityPlan>,
+  kind: OfficeAmenityKind,
+): OfficeTileRect | null {
+  const found = amenities.find((plan) => plan.spec.kind === kind);
+  return found === undefined ? null : found.bounds;
 }
 
 export function layoutOffice(

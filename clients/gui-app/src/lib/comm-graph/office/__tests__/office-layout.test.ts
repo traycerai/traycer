@@ -212,9 +212,13 @@ describe("layoutOffice", () => {
         false,
       );
     }
+    // Furniture blocks; the lobby rug and the things a character gets ON do
+    // not. A sleeping bag, an armchair and a treadmill each ARE their errand
+    // spot, so a grid that called them solid would put the spot behind a wall.
+    const occupiable = new Set(["rug", "sleep-bag", "armchair", "treadmill"]);
     for (const prop of layout.props) {
       const walkable = layout.walkable[prop.tile.row][prop.tile.col];
-      expect(walkable).toBe(prop.sprite.name === "rug");
+      expect(walkable, prop.sprite.name).toBe(occupiable.has(prop.sprite.name));
     }
     expect(layout.walkable[layout.doorTile.row][layout.doorTile.col]).toBe(
       true,
@@ -982,8 +986,8 @@ describe("layoutOffice floors", () => {
     const room = floor.cafeteria;
     if (room === null) throw new Error("no cafeteria");
 
-    // One in here and one in the game room, so the break room's is the one
-    // inside these bounds rather than simply the only one on the floor.
+    // Bounded to the room, not merely counted: a floor big enough for a
+    // television has a second sofa under it in the game room.
     const sofas = layout.props.filter(
       (prop) =>
         prop.sprite.name === "sofa" &&
@@ -1001,9 +1005,8 @@ describe("layoutOffice floors", () => {
     expect(layout.walkable[sofa.row][sofa.col]).toBe(false);
     expect(layout.walkable[sofa.row][sofa.col + 1]).toBe(false);
 
-    // Side by side, the game room sits on the SAME rows as the break room, so
-    // its sofa's seats share this one's row - the column is what tells the two
-    // rooms apart.
+    // The seats are the aisle tiles directly in front of the sofa's own two
+    // tiles, so the row and the columns together are what pick them out.
     const seats = floor.errandSpots.filter(
       (spot) =>
         spot.kind === "sofa" &&
@@ -1025,15 +1028,15 @@ describe("layoutOffice floors", () => {
     expect(allSeats).toHaveLength(allSofas.length * 2);
   });
 
-  it("walls a game room into every storey, with a table, a cabinet and a sofa", () => {
+  it("walls a game room into every storey, with a table and a cabinet", () => {
     const layout = layoutOffice(SINGLE_HOST);
     const floor = layout.floors[0];
     const room = floor.gameRoom;
     const cafeteria = floor.cafeteria;
     if (room === null || cafeteria === null) throw new Error("no rooms");
 
-    // Same footprint as the break room, and never overlapping it.
-    expect(room.cols).toBe(cafeteria.cols);
+    // Never overlapping the break room. Their WIDTHS are their own: each room
+    // is as wide as the fixtures a floor this size gives it.
     expect(room.rows).toBe(cafeteria.rows);
     const apart =
       room.col + room.cols <= cafeteria.col ||
@@ -1048,7 +1051,10 @@ describe("layoutOffice floors", () => {
       floor.bounds.row + floor.bounds.rows,
     );
 
-    for (const name of ["pingpong-table", "arcade", "sofa"]) {
+    // A two-agent floor gets the two fixtures every game room has. The rest -
+    // foosball, darts, chess, the television - are earned; see the scaling
+    // table below.
+    for (const name of ["pingpong-table", "arcade"]) {
       const inside = layout.props.filter(
         (prop) =>
           prop.sprite.name === name &&
@@ -1091,53 +1097,90 @@ describe("layoutOffice floors", () => {
     expect(arcade[0].facing).toBe("up");
   });
 
-  it("names the break room and the game room on their own wall faces", () => {
+  it("names every amenity on its own wall face", () => {
     const layout = layoutOffice(SINGLE_HOST);
     const floor = layout.floors[0];
+    // The three unconditional rooms, in the order they stack down the columns.
     expect(floor.areaSigns.map((sign) => sign.name)).toEqual([
       "Cafeteria",
       "Game room",
+      "Library",
     ]);
+    // The list and the signs are two views of the same rooms, never two sets.
+    expect(floor.amenities.map((room) => room.name)).toEqual(
+      floor.areaSigns.map((sign) => sign.name),
+    );
 
-    const rooms = [floor.cafeteria, floor.gameRoom];
     const board = layout.props.find(
       (prop) => prop.sprite.name === "menu-board",
     );
     if (board === undefined) throw new Error("no menu board");
-    floor.areaSigns.forEach((sign, index) => {
-      const room = rooms[index];
-      if (room === null) throw new Error(`no room for ${sign.name}`);
+    for (const room of floor.amenities) {
       // On the room's own wall face, the row a cabin hangs its sign on...
-      expect(sign.signTile.row).toBe(room.row + 1);
-      expect(sign.signTile.col).toBeGreaterThan(room.col);
+      expect(room.signTile.row).toBe(room.bounds.row + 1);
+      expect(room.signTile.col).toBeGreaterThan(room.bounds.col);
       // ...two tiles of it, so the far tile is still inside the room.
-      expect(sign.signTile.col + 1).toBeLessThan(room.col + room.cols - 1);
+      expect(room.signTile.col + 1).toBeLessThan(
+        room.bounds.col + room.bounds.cols - 1,
+      );
       // ...and never over the menu board, which is already hanging there.
       expect(
-        sign.signTile.col === board.tile.col ||
-          sign.signTile.col + 1 === board.tile.col,
+        room.signTile.col === board.tile.col ||
+          room.signTile.col + 1 === board.tile.col,
       ).toBe(false);
-    });
+    }
   });
 
-  it("stacks the game room under the break room once the storey is deep", () => {
-    // A tall family: enough cabin bands that the storey carries both rooms one
-    // above the other, which is the arrangement that costs no extra width.
+  it("stacks the amenities down one column while the storey is deep enough", () => {
+    // A tall family: enough cabin bands that every room this floor earns fits
+    // one above the other, which is the arrangement that costs no extra width.
     const deep = Array.from({ length: 14 }, (_, index) =>
       agent({ id: `deep-${index}`, createdAt: index }),
     );
-    const layout = layoutOffice(deep);
-    const floor = layout.floors[0];
-    const room = floor.gameRoom;
-    const cafeteria = floor.cafeteria;
-    if (room === null || cafeteria === null) throw new Error("no rooms");
+    const floor = layoutOffice(deep).floors[0];
+    const rooms = floor.amenities;
+    expect(rooms.map((room) => room.kind)).toEqual([
+      "cafeteria",
+      "game",
+      "nap",
+      "library",
+      "garden",
+      "gym",
+    ]);
 
-    expect(floor.bounds.rows).toBeGreaterThanOrEqual(19);
-    expect(room.col).toBe(cafeteria.col);
-    expect(room.row).toBeGreaterThan(cafeteria.row);
-    // A corridor row between them, so the upper room's door has somewhere to
-    // open onto rather than straight into the lower room's cap.
-    expect(room.row).toBe(cafeteria.row + cafeteria.rows + 1);
+    for (let index = 1; index < rooms.length; index += 1) {
+      const above = rooms[index - 1].bounds;
+      const here = rooms[index].bounds;
+      // A corridor row between them, so the upper room's door has somewhere to
+      // open onto rather than straight into the lower room's cap.
+      expect(here.row).toBe(above.row + above.rows + 1);
+      // One column: every room's RIGHT edge lines up on the storey's own.
+      expect(here.col + here.cols).toBe(above.col + above.cols);
+    }
+  });
+
+  it("opens a second amenity column when the storey runs out of rows", () => {
+    // Two agents make a shallow storey, so the rooms cannot all stack: the
+    // library goes beside the pair above it rather than below them.
+    const floor = layoutOffice(SINGLE_HOST).floors[0];
+    const rooms = new Map(floor.amenities.map((room) => [room.kind, room]));
+    const cafeteria = rooms.get("cafeteria");
+    const game = rooms.get("game");
+    const library = rooms.get("library");
+    if (cafeteria === undefined || game === undefined) {
+      throw new Error("no rooms");
+    }
+    if (library === undefined) throw new Error("no library");
+
+    expect(game.bounds.row).toBe(
+      cafeteria.bounds.row + cafeteria.bounds.rows + 1,
+    );
+    // A column of its own, left of the first and clear of it, starting back at
+    // the top of the storey.
+    expect(library.bounds.row).toBe(cafeteria.bounds.row);
+    expect(library.bounds.col + library.bounds.cols).toBeLessThan(
+      Math.min(cafeteria.bounds.col, game.bounds.col),
+    );
   });
 
   it("gives every cabin a bin with a throwing line under it", () => {
@@ -1259,6 +1302,7 @@ describe("layoutOffice floors", () => {
 
     // The empty building is six by eight; a ten-tile break room would seal it.
     expect(floor.cafeteria).toBeNull();
+    expect(floor.amenities).toEqual([]);
     expect(
       layout.props.some((prop) => prop.sprite.name === "coffee-machine"),
     ).toBe(true);
@@ -1269,6 +1313,393 @@ describe("layoutOffice floors", () => {
     expect(floor.errandSpots.length).toBeGreaterThan(0);
     for (const spot of floor.errandSpots) {
       expect(layout.walkable[spot.tile.row][spot.tile.col]).toBe(true);
+    }
+  });
+});
+
+/** A floor of `count` unrelated agents - one cabin each, and one storey. */
+function crew(count: number): ReadonlyArray<OfficeAgentInput> {
+  return Array.from({ length: count }, (_, index) =>
+    agent({ id: `a${index}`, createdAt: index }),
+  );
+}
+
+function propCount(layout: OfficeLayout, name: string): number {
+  return layout.props.filter((prop) => prop.sprite.name === name).length;
+}
+
+function spotCount(floor: OfficeFloor, kind: string): number {
+  return floor.errandSpots.filter((spot) => spot.kind === kind).length;
+}
+
+/** Whether two tile rectangles share any tile at all. */
+function overlaps(left: OfficeTileRect, right: OfficeTileRect): boolean {
+  return !(
+    left.col + left.cols <= right.col ||
+    right.col + right.cols <= left.col ||
+    left.row + left.rows <= right.row ||
+    right.row + right.rows <= left.row
+  );
+}
+
+describe("layoutOffice amenities", () => {
+  // The whole point of the round: the floor's facilities are a function of how
+  // many people are on it. A room that is always there reads as scenery on a
+  // floor of one and as a queue on a floor of twenty.
+  it.each([
+    { agents: 1, rooms: ["cafeteria", "game", "library"] },
+    { agents: 3, rooms: ["cafeteria", "game", "nap", "library"] },
+    { agents: 6, rooms: ["cafeteria", "game", "nap", "library", "garden"] },
+    {
+      agents: 10,
+      rooms: ["cafeteria", "game", "nap", "library", "garden", "gym"],
+    },
+    {
+      agents: 20,
+      rooms: ["cafeteria", "game", "nap", "library", "garden", "gym"],
+    },
+  ])("gives a $agents-agent floor $rooms", ({ agents, rooms }) => {
+    const floor = layoutOffice(crew(agents)).floors[0];
+    expect(floor.amenities.map((room) => room.kind)).toEqual(rooms);
+    // Every one of them is named, on the list and on its sign alike.
+    expect(floor.areaSigns.map((sign) => sign.name)).toEqual(
+      floor.amenities.map((room) => room.name),
+    );
+    for (const room of floor.amenities)
+      expect(room.name.length).toBeGreaterThan(0);
+  });
+
+  it.each([
+    {
+      agents: 1,
+      tables: 2,
+      sofas: 1,
+      bags: 0,
+      chairs: 1,
+      benches: 0,
+      mills: 0,
+    },
+    {
+      agents: 3,
+      tables: 2,
+      sofas: 1,
+      bags: 2,
+      chairs: 1,
+      benches: 0,
+      mills: 0,
+    },
+    {
+      agents: 6,
+      tables: 2,
+      sofas: 1,
+      bags: 2,
+      chairs: 2,
+      benches: 2,
+      mills: 0,
+    },
+    {
+      agents: 10,
+      tables: 4,
+      sofas: 2,
+      bags: 4,
+      chairs: 3,
+      benches: 2,
+      mills: 2,
+    },
+    {
+      agents: 20,
+      tables: 6,
+      sofas: 3,
+      bags: 6,
+      chairs: 4,
+      benches: 3,
+      mills: 3,
+    },
+  ])(
+    "scales the fixtures of a $agents-agent floor",
+    ({ agents, tables, sofas, bags, chairs, benches, mills }) => {
+      const layout = layoutOffice(crew(agents));
+
+      expect(propCount(layout, "cafe-table")).toBe(tables);
+      // The break room's sofas, plus the one under the television once the
+      // floor is big enough to have earned it.
+      const televisions = propCount(layout, "tv");
+      expect(propCount(layout, "sofa")).toBe(sofas + televisions);
+      expect(propCount(layout, "sleep-bag")).toBe(bags);
+      expect(propCount(layout, "armchair")).toBe(chairs);
+      expect(propCount(layout, "bench")).toBe(benches);
+      expect(propCount(layout, "treadmill")).toBe(mills);
+      // Bookcases and trees only ever come in their own small ranges.
+      const cases = propCount(layout, "bookcase");
+      expect(cases).toBeGreaterThanOrEqual(3);
+      expect(cases).toBeLessThanOrEqual(5);
+      if (benches > 0) {
+        const trees = propCount(layout, "tree");
+        expect(trees).toBeGreaterThanOrEqual(2);
+        expect(trees).toBeLessThanOrEqual(4);
+      }
+    },
+  );
+
+  it.each([
+    { agents: 2, foosball: 0, chess: 0, television: 0 },
+    { agents: 4, foosball: 1, chess: 0, television: 0 },
+    { agents: 8, foosball: 1, chess: 1, television: 1 },
+  ])(
+    "earns the game room's extra tables at $agents agents",
+    ({ agents, foosball, chess, television }) => {
+      const layout = layoutOffice(crew(agents));
+      const floor = layout.floors[0];
+
+      // Always: a table and a cabinet. The rest arrive with the population.
+      expect(propCount(layout, "pingpong-table")).toBe(1);
+      expect(propCount(layout, "arcade")).toBe(1);
+      expect(propCount(layout, "foosball")).toBe(foosball);
+      expect(propCount(layout, "dartboard")).toBe(foosball);
+      expect(propCount(layout, "chess-table")).toBe(chess);
+      expect(propCount(layout, "tv")).toBe(television);
+
+      // A two-player table gets a spot on each side; the board gets one line.
+      expect(spotCount(floor, "foosball")).toBe(foosball * 2);
+      expect(spotCount(floor, "chess")).toBe(chess * 2);
+      expect(spotCount(floor, "console")).toBe(television * 2);
+      expect(spotCount(floor, "darts")).toBe(foosball);
+    },
+  );
+
+  it("faces the two sides of every shared table at each other", () => {
+    const layout = layoutOffice(crew(8));
+    const floor = layout.floors[0];
+
+    for (const kind of ["pingpong", "foosball", "chess"]) {
+      const sides = floor.errandSpots.filter((spot) => spot.kind === kind);
+      expect(sides, kind).toHaveLength(2);
+      // The same row, looking ACROSS the table at each other rather than at
+      // it: two people playing, not two people watching.
+      expect(sides[0].tile.row, kind).toBe(sides[1].tile.row);
+      expect(sides[0].tile.col, kind).toBeLessThan(sides[1].tile.col);
+      expect(
+        sides.map((spot) => spot.facing),
+        kind,
+      ).toEqual(["right", "left"]);
+      for (const side of sides) {
+        expect(layout.walkable[side.tile.row][side.tile.col], kind).toBe(true);
+      }
+    }
+  });
+
+  it("stands the darts line back from the board, looking up at it", () => {
+    const layout = layoutOffice(crew(4));
+    const board = layout.props.find((prop) => prop.sprite.name === "dartboard");
+    const line = layout.floors[0].errandSpots.find(
+      (spot) => spot.kind === "darts",
+    );
+    if (board === undefined || line === undefined) {
+      throw new Error("no board or no line");
+    }
+
+    // On the wall face, with the throwing line two rows under it - the same
+    // shape as a cabin's bin, so one toss reads like the other.
+    expect(line.tile.col).toBe(board.tile.col);
+    expect(line.tile.row).toBe(board.tile.row + 2);
+    expect(line.facing).toBe("up");
+    expect(layout.walkable[line.tile.row][line.tile.col]).toBe(true);
+    expect(layout.walkable[board.tile.row][board.tile.col]).toBe(false);
+  });
+
+  it("puts the console seats in front of the sofa under the television", () => {
+    const layout = layoutOffice(crew(8));
+    const floor = layout.floors[0];
+    const television = layout.props.find((prop) => prop.sprite.name === "tv");
+    if (television === undefined) throw new Error("no television");
+    const sofa = layout.props.find(
+      (prop) =>
+        prop.sprite.name === "sofa" &&
+        prop.tile.col === television.tile.col &&
+        prop.tile.row === television.tile.row + 1,
+    );
+    expect(sofa, "no sofa under the television").toBeDefined();
+
+    const seats = floor.errandSpots.filter((spot) => spot.kind === "console");
+    expect(seats).toHaveLength(2);
+    for (const seat of seats) {
+      // On the aisle in front of the sofa, looking up at the screen over it.
+      expect(seat.tile.row).toBe(television.tile.row + 2);
+      expect(seat.tile.col).toBeGreaterThanOrEqual(television.tile.col);
+      expect(seat.tile.col).toBeLessThan(television.tile.col + 2);
+      expect(seat.facing).toBe("up");
+    }
+  });
+
+  it("lays the errand spot ON the bag, the armchair and the treadmill", () => {
+    const layout = layoutOffice(crew(12));
+    const floor = layout.floors[0];
+    const pairs: ReadonlyArray<{
+      readonly kind: string;
+      readonly sprite: string;
+      readonly facing: string;
+    }> = [
+      { kind: "nap", sprite: "sleep-bag", facing: "down" },
+      { kind: "read", sprite: "armchair", facing: "down" },
+      { kind: "treadmill", sprite: "treadmill", facing: "up" },
+    ];
+
+    for (const pair of pairs) {
+      const tiles = layout.props
+        .filter((prop) => prop.sprite.name === pair.sprite)
+        .map((prop) => `${prop.tile.col},${prop.tile.row}`);
+      const spots = floor.errandSpots.filter((spot) => spot.kind === pair.kind);
+      expect(spots.length, pair.kind).toBeGreaterThan(0);
+      expect(spots.length, pair.kind).toBe(tiles.length);
+      for (const spot of spots) {
+        const key = `${spot.tile.col},${spot.tile.row}`;
+        // The furniture IS the spot, so its tile has to stay walkable: a grid
+        // that called it solid would put the spot behind a wall.
+        expect(tiles, `${pair.kind} at ${key}`).toContain(key);
+        expect(layout.walkable[spot.tile.row][spot.tile.col], key).toBe(true);
+        expect(spot.facing, pair.kind).toBe(pair.facing);
+      }
+    }
+  });
+
+  it("seats a garden bench and leaves room to stand on the grass", () => {
+    const layout = layoutOffice(crew(12));
+    const floor = layout.floors[0];
+    const garden = floor.amenities.find((room) => room.kind === "garden");
+    if (garden === undefined) throw new Error("no garden");
+    const benches = layout.props.filter((prop) => prop.sprite.name === "bench");
+    const spots = floor.errandSpots.filter((spot) => spot.kind === "garden");
+
+    // Two seats per bench, plus the places to simply stand among the trees.
+    const seatKeys = new Set<string>();
+    for (const bench of benches) {
+      for (let offset = 0; offset < 2; offset += 1) {
+        seatKeys.add(`${bench.tile.col + offset},${bench.tile.row + 1}`);
+      }
+    }
+    const seats = spots.filter((spot) =>
+      seatKeys.has(`${spot.tile.col},${spot.tile.row}`),
+    );
+    expect(seats).toHaveLength(benches.length * 2);
+    const strolls = spots.length - seats.length;
+    expect(strolls).toBeGreaterThanOrEqual(2);
+    expect(strolls).toBeLessThanOrEqual(3);
+    for (const spot of spots) {
+      // Inside the hedge, never on it, and somewhere a person can stand.
+      expect(spot.tile.col).toBeGreaterThan(garden.bounds.col);
+      expect(spot.tile.col).toBeLessThan(
+        garden.bounds.col + garden.bounds.cols - 1,
+      );
+      expect(layout.walkable[spot.tile.row][spot.tile.col]).toBe(true);
+    }
+  });
+
+  it.each([1, 3, 6, 10, 20])(
+    "never overlaps a room with a room or a cabin at %i agents",
+    (count) => {
+      const layout = layoutOffice(crew(count));
+      const boxes: ReadonlyArray<{
+        readonly name: string;
+        readonly bounds: OfficeTileRect;
+      }> = [
+        ...layout.floors.flatMap((floor) =>
+          floor.amenities.map((room) => ({
+            name: room.kind,
+            bounds: room.bounds,
+          })),
+        ),
+        ...layout.rooms.map((room) => ({
+          name: room.rootAgentId,
+          bounds: room.bounds,
+        })),
+      ];
+
+      for (let left = 0; left < boxes.length; left += 1) {
+        for (let right = left + 1; right < boxes.length; right += 1) {
+          expect(
+            overlaps(boxes[left].bounds, boxes[right].bounds),
+            `${boxes[left].name} overlaps ${boxes[right].name}`,
+          ).toBe(false);
+        }
+      }
+      // ...and every one of them is inside the building it belongs to.
+      for (const box of boxes) {
+        expect(box.bounds.col).toBeGreaterThan(0);
+        expect(box.bounds.col + box.bounds.cols).toBeLessThan(layout.cols);
+      }
+    },
+  );
+
+  it.each([1, 3, 6, 10, 20])(
+    "keeps every spot walkable and reachable from every desk at %i agents",
+    (count) => {
+      const layout = layoutOffice(crew(count));
+      const floor = layout.floors[0];
+      const seen = new Set<string>();
+
+      for (const spot of floor.errandSpots) {
+        const key = `${spot.tile.col},${spot.tile.row}`;
+        expect(layout.walkable[spot.tile.row][spot.tile.col], key).toBe(true);
+        // One spot per tile: two agents sent to the same place stand inside
+        // each other.
+        expect(seen.has(key), key).toBe(false);
+        seen.add(key);
+        for (const desk of layout.desks.values()) {
+          expect(
+            findOfficePath(layout, desk.chairTile, spot.tile),
+            `${desk.agentId} cannot reach ${spot.kind} at ${key}`,
+          ).not.toBeNull();
+        }
+      }
+      // ...and every room can be walked into from the lobby.
+      for (const room of floor.amenities) {
+        expect(
+          findOfficePath(layout, floor.lobbyTile, room.doorTile),
+          `${room.kind} door unreachable`,
+        ).not.toBeNull();
+      }
+    },
+  );
+
+  it("plans the same amenities however the agent set is ordered", () => {
+    const agents = crew(12);
+    const forward = layoutOffice(agents);
+    const reversed = layoutOffice([...agents].reverse());
+
+    expect(reversed.cols).toBe(forward.cols);
+    expect(reversed.rows).toBe(forward.rows);
+    expect(reversed.floors).toEqual(forward.floors);
+    expect(reversed.props).toEqual(forward.props);
+    expect(reversed.walkable).toEqual(forward.walkable);
+  });
+
+  it("gives every storey of a stacked building its own amenities", () => {
+    const layout = layoutOffice([
+      ...Array.from({ length: 10 }, (_, index) =>
+        agent({ id: `a${index}`, hostId: "host-a", createdAt: index }),
+      ),
+      ...Array.from({ length: 4 }, (_, index) =>
+        agent({ id: `b${index}`, hostId: "host-b", createdAt: 100 + index }),
+      ),
+    ]);
+
+    expect(layout.floors).toHaveLength(2);
+    // Sized from the agents on THAT storey, not from the building's total: a
+    // ten-agent floor over a four-agent one gets a gym and the other does not.
+    expect(layout.floors[0].amenities.map((room) => room.kind)).toContain(
+      "gym",
+    );
+    expect(layout.floors[1].amenities.map((room) => room.kind)).not.toContain(
+      "gym",
+    );
+    for (const floor of layout.floors) {
+      for (const room of floor.amenities) {
+        // Each room stands inside the storey that owns it, walls included.
+        expect(room.bounds.row).toBeGreaterThan(floor.bounds.row);
+        expect(room.bounds.row + room.bounds.rows).toBeLessThan(
+          floor.bounds.row + floor.bounds.rows,
+        );
+      }
     }
   });
 });

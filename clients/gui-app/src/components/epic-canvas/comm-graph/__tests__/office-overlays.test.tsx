@@ -104,7 +104,11 @@ describe("OfficeLegend", () => {
       "one per host",
       "the time being shown",
       "break room; agents chat at the cooler and tables",
-      "ping-pong and arcade for idle agents",
+      // The amenity rooms and their fixtures appear as the team grows, so the
+      // key has to name the ones a reader may or may not be looking at.
+      "ping-pong, arcade, foosball, darts, chess and a console TV for idle agents",
+      "Nap room, library, garden, gym",
+      "more places for idle agents; rooms and fixtures grow with the team",
       "Envelope: reply",
       "Envelope: notice",
     ]) {

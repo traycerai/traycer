@@ -215,26 +215,66 @@ const ARCADE_LINGER_MIN_MS = 5_000;
 const ARCADE_LINGER_SPREAD_MS = 4_000;
 const ARCADE_SPARKLE_GAP_MS = 2_000;
 /**
- * Ping-pong. The one errand that needs TWO agents, so the first to arrive holds
- * an end open for a while and gives up if nobody comes - a character standing
- * alone at a table forever reads as a hang, not as a wait.
+ * The two-player games: ping-pong, foosball and chess. They are the errands
+ * that need somebody OPPOSITE, so the first to arrive holds their side open for
+ * a while and gives up if nobody comes - a character standing alone at a table
+ * forever reads as a hang, not as a wait.
+ *
+ * All three share one clock and one pairing rule. What differs is only what is
+ * drawn: a ball shuttling across the table, or two people thinking.
  */
-const PINGPONG_ALONE_MS = 6_000;
-const PINGPONG_RALLY_MIN_MS = 8_000;
-const PINGPONG_RALLY_SPREAD_MS = 6_000;
-/** One stroke of the rally: the ball crosses the table and comes back. */
-const PINGPONG_STROKE_MS = 500;
+const GAME_ALONE_MS = 6_000;
+const GAME_PLAY_MIN_MS = 8_000;
+const GAME_PLAY_SPREAD_MS = 6_000;
+/** One stroke: the ball crosses to the other side and comes back. */
+const GAME_STROKE_MS = 500;
+/** How often the thinking bubble passes between two players at the chess table. */
+const CHESS_THINK_MS = 2_000;
+/** The kinds two agents play together, in the order the pairing bias tries them. */
+const TWO_PLAYER_KINDS: ReadonlyArray<OfficeErrandTargetKind> = [
+  "pingpong",
+  "foosball",
+  "chess",
+];
+/** A game on the console: the television flashes while somebody is on the sofa. */
+const CONSOLE_LINGER_MIN_MS = 6_000;
+const CONSOLE_LINGER_SPREAD_MS = 5_000;
+const CONSOLE_SPARKLE_GAP_MS = 2_000;
+/**
+ * A nap: long, and the sleeping bubble comes up once the agent has settled.
+ * Anything shorter reads as lying down and getting straight back up.
+ */
+const NAP_LINGER_MIN_MS = 10_000;
+const NAP_LINGER_SPREAD_MS = 8_000;
+const NAP_SETTLE_MS = 2_000;
+/**
+ * Reading in the library. The thought bubble comes and goes on its own beat -
+ * a page turned - rather than standing for the whole sit like a status would.
+ */
+const READ_LINGER_MIN_MS = 8_000;
+const READ_LINGER_SPREAD_MS = 6_000;
+const READ_THOUGHT_CYCLE_MS = 3_000;
+const READ_THOUGHT_ON_MS = 1_500;
+/** A stint on a treadmill, and how fast the walking frames alternate on it. */
+const TREADMILL_LINGER_MIN_MS = 6_000;
+const TREADMILL_LINGER_SPREAD_MS = 5_000;
+const TREADMILL_FRAME_MS = 200;
 /** Tending a plant: the can is out for the whole beat, the sparkle ends it. */
 const WATER_PLANT_MS = 3_000;
 /**
  * A paper toss: a beat to line the shot up, then two or three throws a beat
  * apart. The gap is longer than the flight so the ball is seen to land before
  * the next one leaves.
+ *
+ * DARTS is the same throw against a different target, so it runs on the same
+ * clock. It takes a fixed three, and none of them miss: a dart is aimed, and a
+ * board full of floor-bound darts would read as the arc being broken.
  */
 const BIN_STAND_MS = 1_000;
 const BIN_THROW_GAP_MS = 800;
 const BIN_MIN_THROWS = 2;
 const BIN_THROW_SPREAD = 2;
+const DARTS_THROWS = 3;
 const PAPER_BALL_FLIGHT_MS = 500;
 /** A missed ball lies where it landed rather than vanishing mid-air. */
 const PAPER_BALL_REST_MS = 3_000;
@@ -276,17 +316,17 @@ const FILLER_SPIN_FACINGS: ReadonlyArray<OfficeFacing> = [
  * window is scenery, and a floor of scenery is the problem this solves.
  */
 const ERRAND_WEIGHTS: Readonly<Record<OfficeErrandTargetKind, number>> = {
-  // Zero until a lane places these spots: an errand kind with no spot on the
-  // floor can never be chosen, and weighting one that cannot happen would only
-  // skew the draw against the kinds that can.
-  foosball: 0,
-  darts: 0,
-  chess: 0,
-  console: 0,
-  nap: 0,
-  read: 0,
-  garden: 0,
-  treadmill: 0,
+  // The rooms that only appear once a floor is big enough. A kind with no spot
+  // on THIS floor can never be drawn whatever its weight, so these only ever
+  // compete where the room they belong to actually exists.
+  foosball: 3,
+  darts: 2,
+  chess: 2,
+  console: 2,
+  nap: 2,
+  read: 2,
+  garden: 2,
+  treadmill: 1,
   coffee: 3,
   cafe: 3,
   sofa: 2,
@@ -598,6 +638,97 @@ function tileKeyOf(tile: OfficeTilePos): string {
 function arrivalFacingOf(target: OfficeErrandTarget | null): OfficeFacing {
   if (target === null) return "up";
   return target.kind === "sofa" ? "down" : target.facing;
+}
+
+/** An errand two agents take TOGETHER, one on each side of the same table. */
+function isTwoPlayerKind(kind: OfficeErrandTargetKind): boolean {
+  return TWO_PLAYER_KINDS.includes(kind);
+}
+
+/**
+ * An errand taken SITTING DOWN. The spot's tile is the furniture itself for
+ * three of these - a sleeping bag, an armchair, a bench - and the sofa's is the
+ * aisle in front of it, but the character reads the same way in all of them:
+ * off its feet, and off its own chair.
+ *
+ * `seated` is deliberately still false throughout. It means "in its own chair",
+ * which is what every errand, delivery and hurry rule keys on.
+ */
+function isSeatedErrandKind(kind: OfficeErrandTargetKind): boolean {
+  return (
+    kind === "sofa" ||
+    kind === "nap" ||
+    kind === "read" ||
+    kind === "console" ||
+    kind === "garden"
+  );
+}
+
+/**
+ * What a thrower is aiming at, or `null` for an errand that throws nothing.
+ * A dart and a crumpled page fly the same arc at the same cadence; only the
+ * target prop and whether a shot can miss differ.
+ */
+function throwTargetSpriteOf(
+  kind: OfficeErrandTargetKind,
+): OfficeSpriteName | null {
+  if (kind === "bin") return "bin";
+  if (kind === "darts") return "dartboard";
+  return null;
+}
+
+/**
+ * Errands whose length is part of what they ARE - a two-second glance through a
+ * doorway, three seconds of watering - or `null` for the ones a per-agent seed
+ * decides. A game's beat is fixed for a third reason: it is not how long the
+ * game lasts but how long this agent will WAIT for somebody to take the other
+ * side, and play sets its own clock the moment one does.
+ */
+function fixedLingerMsFor(kind: OfficeErrandTargetKind): number | null {
+  if (kind === "corridor") return STROLL_PAUSE_MS;
+  if (kind === "peek") return PEEK_LINGER_MS;
+  if (kind === "stairs") return STAIRS_LINGER_MS;
+  if (kind === "water-plant") return WATER_PLANT_MS;
+  if (isTwoPlayerKind(kind)) return GAME_ALONE_MS;
+  return null;
+}
+
+interface LingerRange {
+  readonly minMs: number;
+  readonly spreadMs: number;
+}
+
+/**
+ * How long a seeded stint runs. A nap outlasts a coffee for the same reason a
+ * sofa outlasts a window: what the errand is worth is how long somebody would
+ * actually stay.
+ */
+function seededLingerRangeOf(kind: OfficeErrandTargetKind): LingerRange {
+  if (kind === "arcade") {
+    return { minMs: ARCADE_LINGER_MIN_MS, spreadMs: ARCADE_LINGER_SPREAD_MS };
+  }
+  if (kind === "sofa") {
+    return { minMs: SOFA_LINGER_MIN_MS, spreadMs: SOFA_LINGER_SPREAD_MS };
+  }
+  if (kind === "visit") {
+    return { minMs: VISIT_LINGER_MIN_MS, spreadMs: VISIT_LINGER_SPREAD_MS };
+  }
+  if (kind === "nap") {
+    return { minMs: NAP_LINGER_MIN_MS, spreadMs: NAP_LINGER_SPREAD_MS };
+  }
+  if (kind === "read") {
+    return { minMs: READ_LINGER_MIN_MS, spreadMs: READ_LINGER_SPREAD_MS };
+  }
+  if (kind === "console") {
+    return { minMs: CONSOLE_LINGER_MIN_MS, spreadMs: CONSOLE_LINGER_SPREAD_MS };
+  }
+  if (kind === "treadmill") {
+    return {
+      minMs: TREADMILL_LINGER_MIN_MS,
+      spreadMs: TREADMILL_LINGER_SPREAD_MS,
+    };
+  }
+  return { minMs: ERRAND_LINGER_MIN_MS, spreadMs: ERRAND_LINGER_SPREAD_MS };
 }
 
 function areAdjacent(left: OfficeTilePos, right: OfficeTilePos): boolean {
@@ -1533,23 +1664,23 @@ export class OfficeScene {
     this.advanceFiller(character, dtMs);
   }
 
-  // ---- Ping-pong -------------------------------------------------------- //
+  // ---- Two-player games -------------------------------------------------- //
 
   /**
-   * The agent at the OTHER end of this one's table, if somebody has taken it.
-   * Both ends are `pingpong` spots on the same row a couple of tiles apart, so
-   * the table they belong to is the one they share a row with - there is only
-   * ever one table per floor.
+   * The agent on the OTHER side of this one's table, if somebody has taken it.
+   * A game's two spots are laid on the same ROW a couple of tiles apart, so the
+   * table they belong to is the one they share a row with - and the kind has to
+   * match, because a floor with a foosball table has a ping-pong one beside it.
    */
   private rallyPartnerOf(character: OfficeCharacter): OfficeCharacter | null {
     const target = character.errandTarget;
-    if (target === null || target.kind !== "pingpong") return null;
+    if (target === null || !isTwoPlayerKind(target.kind)) return null;
     if (character.errand !== "errand-wait") return null;
     for (const other of this.orderedByAgentId()) {
       if (other.agentId === character.agentId) continue;
       if (other.errand !== "errand-wait") continue;
       const theirs = other.errandTarget;
-      if (theirs === null || theirs.kind !== "pingpong") continue;
+      if (theirs === null || theirs.kind !== target.kind) continue;
       if (theirs.tile.row !== target.tile.row) continue;
       return other;
     }
@@ -1557,9 +1688,9 @@ export class OfficeScene {
   }
 
   /**
-   * Play starts the moment the second end is taken, and both sides get the SAME
-   * clock - a rally where one player wandered off mid-point would read as the
-   * other one hitting to nobody. Only the lower id starts it, so which of the
+   * Play starts the moment the second side is taken, and both players get the
+   * SAME clock - a rally where one of them wandered off mid-point would read as
+   * the other hitting to nobody. Only the lower id starts it, so which of the
    * two the tick happens to reach first cannot change the game's length.
    */
   private advanceRally(character: OfficeCharacter): void {
@@ -1571,11 +1702,11 @@ export class OfficeScene {
       hashAgentId(character.agentId),
       Math.floor(this.nowMs / 1000),
     );
-    const rallyMs = PINGPONG_RALLY_MIN_MS + (seed % PINGPONG_RALLY_SPREAD_MS);
+    const playMs = GAME_PLAY_MIN_MS + (seed % GAME_PLAY_SPREAD_MS);
     for (const player of [character, partner]) {
       player.rallying = true;
-      player.waitMs = rallyMs;
-      player.lingerTotalMs = rallyMs;
+      player.waitMs = playMs;
+      player.lingerTotalMs = playMs;
     }
   }
 
@@ -1584,6 +1715,9 @@ export class OfficeScene {
    * shared by both players so they are always hitting the same ball. Derived
    * from the scene time rather than stored, which is what keeps it identical on
    * two machines replaying the same ticks.
+   *
+   * Ping-pong and foosball both have one; chess is played with the two players
+   * thinking at each other instead - see `errandBubbleFor`.
    */
   private pushRallyBall(
     overlay: OfficeDrawable[],
@@ -1592,7 +1726,7 @@ export class OfficeScene {
   ): void {
     const here = this.headPointOfCharacter(character);
     const there = this.headPointOfCharacter(partner);
-    const phase = (this.nowMs % (PINGPONG_STROKE_MS * 2)) / PINGPONG_STROKE_MS;
+    const phase = (this.nowMs % (GAME_STROKE_MS * 2)) / GAME_STROKE_MS;
     const progress = easeInOut(phase <= 1 ? phase : 2 - phase);
     overlay.push({
       kind: "sprite",
@@ -1608,14 +1742,15 @@ export class OfficeScene {
   // ---- Paper tosses ---------------------------------------------------- //
 
   /**
-   * The throws of a bin errand, while its owner stands at the line. Driven off
+   * The throws of a toss errand, while its owner stands at the line. Driven off
    * the same wait clock the linger runs on, so the errand can never end with a
-   * throw still owed.
+   * throw still owed. A bin and a dartboard are the same errand aimed at
+   * different furniture.
    */
   private advanceThrows(character: OfficeCharacter, dtMs: number): void {
     if (character.throwsLeft <= 0) return;
     const target = character.errandTarget;
-    if (target === null || target.kind !== "bin") return;
+    if (target === null || throwTargetSpriteOf(target.kind) === null) return;
     character.nextThrowMs -= dtMs;
     if (character.nextThrowMs > 0) return;
     character.nextThrowMs += BIN_THROW_GAP_MS;
@@ -1624,10 +1759,12 @@ export class OfficeScene {
   }
 
   /**
-   * One ball, from the thrower's head to the bin it is aimed at, and a miss
-   * lands beside the bin rather than in it.
+   * One ball, from the thrower's head to what it is aimed at, and a missed
+   * paper toss lands beside the bin rather than in it. A DART never misses:
+   * darts on the floor around a board read as the arc being broken rather than
+   * as somebody's aim.
    *
-   * The bin is LOOKED UP in the plan rather than derived from the spot by a
+   * The target is LOOKED UP in the plan rather than derived from the spot by a
    * fixed offset: how far back the throwing line stands is the layout's
    * business, and a scene that hard-coded that distance would sail balls into
    * empty floor the day the plan moved the line.
@@ -1636,23 +1773,25 @@ export class OfficeScene {
     character: OfficeCharacter,
     target: OfficeErrandTarget,
   ): void {
-    const binTile = this.propTileAbove(target.tile, "bin");
-    if (binTile === null) return;
+    const sprite = throwTargetSpriteOf(target.kind);
+    if (sprite === null) return;
+    const targetTile = this.propTileAbove(target.tile, sprite);
+    if (targetTile === null) return;
     const seed = mixSeed(
       hashAgentId(character.agentId),
       character.throwsLeft + Math.floor(this.nowMs / 1000),
     );
-    const missed = seed % 100 < PAPER_MISS_PERCENT;
-    const bin = officeTileCenter(binTile);
+    const missed = target.kind === "bin" && seed % 100 < PAPER_MISS_PERCENT;
+    const aim = officeTileCenter(targetTile);
     this.paperBalls.push({
       from: this.headPointOfCharacter(character),
       to: {
         // A miss carries past the bin to one side; which side is seeded too, so
         // a floor of missed shots is not a floor of balls in one tidy pile.
         x: missed
-          ? bin.x + (seed % 2 === 0 ? -PAPER_MISS_OFFSET : PAPER_MISS_OFFSET)
-          : bin.x,
-        y: missed ? bin.y + PAPER_MISS_OFFSET : bin.y,
+          ? aim.x + (seed % 2 === 0 ? -PAPER_MISS_OFFSET : PAPER_MISS_OFFSET)
+          : aim.x,
+        y: missed ? aim.y + PAPER_MISS_OFFSET : aim.y,
       },
       missed,
       elapsedMs: 0,
@@ -1766,11 +1905,21 @@ export class OfficeScene {
     );
   }
 
-  /** Settled on the cafeteria sofa: the one errand a character takes sitting down. */
-  private onSofa(character: OfficeCharacter): boolean {
+  /**
+   * Settled somewhere the character is OFF ITS FEET: a sofa, a sleeping bag, an
+   * armchair, a console seat, a garden bench.
+   *
+   * The garden is the one kind that is both. Its bench seats and its stroll
+   * spots are the same errand kind, so the layout is asked which this tile is by
+   * looking for the bench that would be standing over it - the same question
+   * the bin and the plant already put to it.
+   */
+  private onSeatedErrand(character: OfficeCharacter): boolean {
     const target = character.errandTarget;
-    if (target === null || target.kind !== "sofa") return false;
-    return character.errand === "errand-wait";
+    if (target === null || character.errand !== "errand-wait") return false;
+    if (!isSeatedErrandKind(target.kind)) return false;
+    if (target.kind !== "garden") return true;
+    return this.propTileAbove(target.tile, "bench") !== null;
   }
 
   /**
@@ -1880,31 +2029,33 @@ export class OfficeScene {
       Math.floor(this.nowMs / 1000),
     );
     const options = this.errandOptionsFor(character, claimed, seed);
-    // Somebody is holding an end of the table open. Taking the other one beats
-    // any roll: a rally needs two, and leaving it to the weights means the
+    // Somebody is holding a side of a table open. Taking the other one beats
+    // any roll: a game needs two, and leaving it to the weights means the
     // waiter usually gives up before a second player happens to choose it.
-    const table = options.find((option) => option.kind === "pingpong");
-    if (table !== undefined && this.someoneWaitingToRally()) return table;
+    for (const kind of TWO_PLAYER_KINDS) {
+      const table = options.find((option) => option.kind === kind);
+      if (table !== undefined && this.someoneWaitingToPlay(kind)) return table;
+    }
     return this.weightedPick(options, seed);
   }
 
   /**
-   * Somebody has an end of the table, or is on their way to one, with nobody
-   * opposite - an open invitation.
+   * Somebody has a side of THIS game's table, or is on their way to one, with
+   * nobody opposite - an open invitation.
    *
    * EN ROUTE counts, and has to. The game room is across the floor from the
    * desks, so a player spends far longer walking to the table than the few
    * seconds it will then wait at it: a bias that only answered an agent already
    * standing there would send the second player off a moment before the first
-   * gave up, and the rally would never happen on any floor big enough to have
-   * a game room.
+   * gave up, and no game would ever happen on a floor big enough to have a game
+   * room.
    */
-  private someoneWaitingToRally(): boolean {
+  private someoneWaitingToPlay(kind: OfficeErrandTargetKind): boolean {
     for (const character of this.characters.values()) {
       if (character.rallying) continue;
       if (!this.onCancellableErrand(character)) continue;
       const target = character.errandTarget;
-      if (target !== null && target.kind === "pingpong") return true;
+      if (target !== null && target.kind === kind) return true;
     }
     return false;
   }
@@ -2001,6 +2152,10 @@ export class OfficeScene {
       tileKeyOf(floor.doorTile),
       tileKeyOf(floor.lobbyTile),
       ...floor.receptionQueueTiles.map(tileKeyOf),
+      // A tile the plan already named is that errand's, not somewhere to
+      // stand about: a stroll that stopped on the peek spot outside a door
+      // would be paying somebody a visit it never chose.
+      ...floor.errandSpots.map((spot) => tileKeyOf(spot.tile)),
     ]);
     const first = floor.bounds.row + 2;
     const last = floor.lobbyTile.row - 1;
@@ -2015,10 +2170,11 @@ export class OfficeScene {
         if (layout.rooms.some((room) => withinTileRect(room.bounds, tile))) {
           continue;
         }
-        const cafeteria = floor.cafeteria;
-        if (cafeteria !== null && withinTileRect(cafeteria, tile)) continue;
-        const gameRoom = floor.gameRoom;
-        if (gameRoom !== null && withinTileRect(gameRoom, tile)) continue;
+        // Inside an amenity you are AT that amenity; a stroll that wandered
+        // through the nap room would be somebody standing between the beds.
+        if (floor.amenities.some((room) => withinTileRect(room.bounds, tile))) {
+          continue;
+        }
         tiles.push(tile);
       }
     }
@@ -2151,37 +2307,26 @@ export class OfficeScene {
   }
 
   /**
-   * How long this character stands where it has arrived. The fixed beats are
-   * the ones whose length is part of what the activity IS - a two-second glance
-   * through a doorway, three seconds of watering - and the rest are seeded so a
-   * pair at the cooler do not finish in lockstep.
+   * How long this character stands where it has arrived. Three answers, in
+   * order: a beat whose length is part of what the activity IS, a toss that
+   * lasts exactly as long as the throws it owes, or a seeded stint so a pair at
+   * the cooler do not finish in lockstep.
    */
   private lingerMsFor(
     character: OfficeCharacter,
     target: OfficeErrandTarget,
   ): number {
-    if (target.kind === "corridor") return STROLL_PAUSE_MS;
-    if (target.kind === "peek") return PEEK_LINGER_MS;
-    if (target.kind === "stairs") return STAIRS_LINGER_MS;
-    if (target.kind === "water-plant") return WATER_PLANT_MS;
-    if (target.kind === "bin") return this.binLingerMsFor(character);
-    // Not how long the game lasts - how long this agent will WAIT for somebody
-    // to take the other end. The rally sets its own clock when play starts.
-    if (target.kind === "pingpong") return PINGPONG_ALONE_MS;
+    const fixed = fixedLingerMsFor(target.kind);
+    if (fixed !== null) return fixed;
     const seed = mixSeed(
       hashAgentId(character.agentId),
       character.errandLegs + Math.floor(this.nowMs / 1000),
     );
-    if (target.kind === "arcade") {
-      return ARCADE_LINGER_MIN_MS + (seed % ARCADE_LINGER_SPREAD_MS);
+    if (throwTargetSpriteOf(target.kind) !== null) {
+      return this.armThrows(character, target.kind, seed);
     }
-    if (target.kind === "sofa") {
-      return SOFA_LINGER_MIN_MS + (seed % SOFA_LINGER_SPREAD_MS);
-    }
-    if (target.kind === "visit") {
-      return VISIT_LINGER_MIN_MS + (seed % VISIT_LINGER_SPREAD_MS);
-    }
-    return ERRAND_LINGER_MIN_MS + (seed % ERRAND_LINGER_SPREAD_MS);
+    const range = seededLingerRangeOf(target.kind);
+    return range.minMs + (seed % range.spreadMs);
   }
 
   /**
@@ -2189,12 +2334,17 @@ export class OfficeScene {
    * throw. Arming the counters here rather than in the walk is what keeps the
    * linger and the throws from ever disagreeing about how many are coming.
    */
-  private binLingerMsFor(character: OfficeCharacter): number {
-    const seed = mixSeed(
-      hashAgentId(character.agentId),
-      character.errandLegs + Math.floor(this.nowMs / 1000),
-    );
-    const throws = BIN_MIN_THROWS + (seed % BIN_THROW_SPREAD);
+  private armThrows(
+    character: OfficeCharacter,
+    kind: OfficeErrandTargetKind,
+    seed: number,
+  ): number {
+    // A dart player throws a fixed three; a paper toss varies, because two
+    // people lobbing exactly the same number of balls reads as a loop.
+    const throws =
+      kind === "darts"
+        ? DARTS_THROWS
+        : BIN_MIN_THROWS + (seed % BIN_THROW_SPREAD);
     character.throwsLeft = throws;
     character.nextThrowMs = BIN_STAND_MS;
     return BIN_STAND_MS + throws * BIN_THROW_GAP_MS;
@@ -2414,10 +2564,15 @@ export class OfficeScene {
 
   private poseFor(character: OfficeCharacter): OfficeCharacterPose {
     if (!character.seated) {
-      // The one place off a desk where a character is not on its feet: the
-      // sofa. It is `sit` without being `seated` - seated means "in its own
-      // chair", which is what every errand and delivery rule keys on.
-      if (this.onSofa(character)) return "sit";
+      // Off a desk and off its feet: a sofa, a sleeping bag, an armchair, a
+      // bench. `sit` without being `seated` - seated means "in its own chair",
+      // which is what every errand and delivery rule keys on.
+      if (this.onSeatedErrand(character)) return "sit";
+      // On a treadmill: walking, and going nowhere. The belt is the whole
+      // point, so the frames alternate even though the tile never changes.
+      if (this.onTreadmill(character)) {
+        return this.walkingPose(character.agentId, TREADMILL_FRAME_MS);
+      }
       // On foot but with nothing left to walk: standing at a spot or in the
       // queue.
       if (character.pathIndex >= character.path.length) return "stand";
@@ -2438,6 +2593,23 @@ export class OfficeScene {
   private typingPose(agentId: string, frameMs: number): OfficeCharacterPose {
     const phase = this.nowMs + phaseOffsetMs(agentId);
     return Math.floor(phase / frameMs) % 2 === 0 ? "type1" : "type2";
+  }
+
+  /**
+   * The walking frames for a character that is not going anywhere. Phased off
+   * the scene clock rather than off `walkPhaseMs`, which only advances while a
+   * path is being walked and would leave a treadmill runner frozen mid-stride.
+   */
+  private walkingPose(agentId: string, frameMs: number): OfficeCharacterPose {
+    const phase = this.nowMs + phaseOffsetMs(agentId);
+    return Math.floor(phase / frameMs) % 2 === 0 ? "walk1" : "walk2";
+  }
+
+  /** On a treadmill, walking in place: the one errand taken at a running pace. */
+  private onTreadmill(character: OfficeCharacter): boolean {
+    const target = character.errandTarget;
+    if (target === null || target.kind !== "treadmill") return false;
+    return character.errand === "errand-wait";
   }
 
   // ---- Frame assembly ------------------------------------------------ //
@@ -2549,13 +2721,13 @@ export class OfficeScene {
     }
     for (const room of layout.rooms) this.pushCabinWalls(floor, room);
     for (const room of layout.rooms) this.pushPodFloors(floor, room);
-    // The amenity rooms' rings are drawn with the cabins' own two sprites.
-    // Their doors are not carried in the plan and do not need to be: a wall
-    // tile the grid still says is walkable IS the door, by construction.
+    // Every amenity's ring is drawn with the cabins' own two sprites, and the
+    // garden's with a hedge instead. Their doors are not carried in the plan
+    // and do not need to be: a ring tile the grid still says is walkable IS
+    // the door, by construction.
     for (const floorPlan of layout.floors) {
-      for (const room of [floorPlan.cafeteria, floorPlan.gameRoom]) {
-        if (room === null) continue;
-        this.pushRoomRing(floor, room);
+      for (const room of floorPlan.amenities) {
+        this.pushRoomRing(floor, room.bounds, room.kind === "garden");
       }
     }
     // A stairwell is a hole in the FLOOR, not a thing standing on it, so it is
@@ -2586,28 +2758,42 @@ export class OfficeScene {
     return floor;
   }
 
-  /** One walled amenity's ring: cap, wall face, sides, and its own doorway. */
-  private pushRoomRing(floor: OfficeDrawable[], room: OfficeTileRect): void {
-    const layout = this.currentLayout;
+  /**
+   * One amenity's ring: cap, wall face, sides, and its own doorway.
+   *
+   * A HEDGE is the same ring in a different material - a garden is bounded, not
+   * built - so the two share every tile and differ only in the sprite. Its
+   * opening is still the one ring tile the grid says is walkable, exactly as a
+   * walled room's door is.
+   */
+  private pushRoomRing(
+    floor: OfficeDrawable[],
+    room: OfficeTileRect,
+    hedge: boolean,
+  ): void {
     const { col, row, cols, rows } = room;
     const right = col + cols - 1;
     const bottom = row + rows - 1;
-    const ringAt = (wallCol: number, wallRow: number): void => {
-      const open = layout.walkable[wallRow][wallCol];
+    const ringAt = (ringCol: number, ringRow: number): void => {
+      const name = this.ringSpriteAt(ringCol, ringRow, { hedge, cap: false });
+      if (name === null) return;
       floor.push({
         kind: "sprite",
-        sprite: { name: open ? "door" : "wall" },
-        x: wallCol * OFFICE_TILE,
-        y: wallRow * OFFICE_TILE,
+        sprite: { name },
+        x: ringCol * OFFICE_TILE,
+        y: ringRow * OFFICE_TILE,
       });
     };
     for (let scanCol = col; scanCol <= right; scanCol += 1) {
-      floor.push({
-        kind: "sprite",
-        sprite: { name: "wall-top" },
-        x: scanCol * OFFICE_TILE,
-        y: row * OFFICE_TILE,
-      });
+      const capName = this.ringSpriteAt(scanCol, row, { hedge, cap: true });
+      if (capName !== null) {
+        floor.push({
+          kind: "sprite",
+          sprite: { name: capName },
+          x: scanCol * OFFICE_TILE,
+          y: row * OFFICE_TILE,
+        });
+      }
       ringAt(scanCol, row + 1);
       ringAt(scanCol, bottom);
     }
@@ -2615,6 +2801,22 @@ export class OfficeScene {
       ringAt(col, scanRow);
       ringAt(right, scanRow);
     }
+  }
+
+  /**
+   * One tile of a room's boundary: its cap row, or the wall below and around
+   * it. `null` means draw nothing, which is what a gap in a hedge is - a garden
+   * is bounded rather than built, so its way in has no door hanging in it.
+   */
+  private ringSpriteAt(
+    col: number,
+    row: number,
+    style: { readonly hedge: boolean; readonly cap: boolean },
+  ): OfficeSpriteName | null {
+    const open = this.currentLayout.walkable[row][col];
+    if (style.hedge) return open ? null : "planter";
+    if (style.cap) return "wall-top";
+    return open ? "door" : "wall";
   }
 
   private floorSpriteAt(col: number, row: number): OfficeSpriteName {
@@ -2634,7 +2836,32 @@ export class OfficeScene {
       if (row === top + 1 || row === top + floor.bounds.rows - 1) return "wall";
     }
     if (col === 0 || col === layout.cols - 1) return "wall";
+    // A garden's ground is GRASS, and grass is floor rather than a thing
+    // standing on it: drawn here, under the hedge and under everyone in it.
+    if (this.inGarden(col, row)) {
+      return (col + row) % 2 === 0 ? "floor-grass-a" : "floor-grass-b";
+    }
     return (col + row) % 2 === 0 ? "floor-a" : "floor-b";
+  }
+
+  /**
+   * Inside a garden's hedge, the hedge itself excluded. The boundary is two
+   * rows deep at the top exactly as a wall is - the cap and the face under it -
+   * because it is the same ring in another material.
+   */
+  private inGarden(col: number, row: number): boolean {
+    for (const floor of this.currentLayout.floors) {
+      for (const room of floor.amenities) {
+        if (room.kind !== "garden") continue;
+        const { bounds } = room;
+        if (col <= bounds.col || col >= bounds.col + bounds.cols - 1) continue;
+        if (row <= bounds.row + 1 || row >= bounds.row + bounds.rows - 1) {
+          continue;
+        }
+        return true;
+      }
+    }
+    return false;
   }
 
   private buildProps(): ReadonlyArray<OfficeDrawable> {
@@ -3078,10 +3305,11 @@ export class OfficeScene {
         });
       }
       this.pushWateringDrawables(overlay, character, head);
-      this.pushArcadeDrawables(overlay, character);
+      this.pushScreenSparkle(overlay, character, "arcade");
+      this.pushScreenSparkle(overlay, character, "tv");
       // Once per PAIR, from the lower id, or the ball would be drawn twice on
-      // top of itself.
-      if (character.rallying) {
+      // top of itself. Chess is played without one - see `errandBubbleFor`.
+      if (character.rallying && character.errandTarget?.kind !== "chess") {
         const partner = this.rallyPartnerOf(character);
         if (partner !== null && character.agentId < partner.agentId) {
           this.pushRallyBall(overlay, character, partner);
@@ -3154,22 +3382,30 @@ export class OfficeScene {
   }
 
   /**
-   * The cabinet's screen, flashing every couple of seconds while somebody is
-   * playing it. On the CABINET rather than over the player's head: what is
-   * happening is on the screen, and the player is only standing there.
+   * A screen flashing every couple of seconds while somebody is at it: the
+   * arcade cabinet, and the television over the console sofa. On the SCREEN
+   * rather than over the player's head - what is happening is on the screen,
+   * and the player is only sitting or standing there.
+   *
+   * The screen is looked up above the spot rather than offset from it, so how
+   * far back the sofa stands stays the layout's business.
    */
-  private pushArcadeDrawables(
+  private pushScreenSparkle(
     overlay: OfficeDrawable[],
     character: OfficeCharacter,
+    screen: OfficeSpriteName,
   ): void {
     const target = character.errandTarget;
-    if (target === null || target.kind !== "arcade") return;
-    if (character.errand !== "errand-wait") return;
+    if (target === null || character.errand !== "errand-wait") return;
+    const wanted = screen === "arcade" ? "arcade" : "console";
+    if (target.kind !== wanted) return;
+    const gapMs =
+      screen === "arcade" ? ARCADE_SPARKLE_GAP_MS : CONSOLE_SPARKLE_GAP_MS;
     const played = character.lingerTotalMs - character.waitMs;
-    if (played % ARCADE_SPARKLE_GAP_MS >= SPARKLE_MS) return;
-    const cabinet = this.propTileAbove(target.tile, "arcade");
-    if (cabinet === null) return;
-    const point = officeTileCenter(cabinet);
+    if (played % gapMs >= SPARKLE_MS) return;
+    const tile = this.propTileAbove(target.tile, screen);
+    if (tile === null) return;
+    const point = officeTileCenter(tile);
     overlay.push({
       kind: "sprite",
       sprite: { name: "sparkle" },
@@ -3213,17 +3449,47 @@ export class OfficeScene {
     if (target.kind === "whiteboard" || target.kind === "peek") {
       return "bubble-awaiting";
     }
-    // Holding an end of the table open. Once somebody takes the other one the
-    // rally itself is what says the two are together, so the bubble goes.
-    if (target.kind === "pingpong" && !character.rallying) {
+    // Holding a side of a table open. Once somebody takes the other one the
+    // game itself is what says the two are together, so the bubble goes - for
+    // chess, which has no ball, the thinking bubble takes over instead.
+    if (isTwoPlayerKind(target.kind) && !character.rallying) {
       return "bubble-awaiting";
     }
+    if (target.kind === "chess") return this.chessThoughtFor(character);
     // A sofa is where an agent dozes off, on the long sits and in their second
-    // half - see `dozingOnSofa`.
+    // half - see `dozingOnSofa`. A bag is where one is asleep outright, once it
+    // has had a moment to settle onto it.
     if (target.kind === "sofa" && this.dozingOnSofa(character)) {
       return "bubble-sleep";
     }
+    if (target.kind === "nap") {
+      const settled = character.lingerTotalMs - character.waitMs;
+      return settled >= NAP_SETTLE_MS ? "bubble-sleep" : null;
+    }
+    // Reading: the thought comes and goes on its own beat, a page at a time,
+    // rather than standing for the whole sit the way a status bubble would.
+    if (target.kind === "read") {
+      const read = character.lingerTotalMs - character.waitMs;
+      return read % READ_THOUGHT_CYCLE_MS < READ_THOUGHT_ON_MS
+        ? "bubble-awaiting"
+        : null;
+    }
     return null;
+  }
+
+  /**
+   * Whose turn it is to think at the chess table. One bubble at a time, passed
+   * between the two players on a shared clock - the same shape as a
+   * conversation, because that is what a game without a ball looks like from
+   * above.
+   */
+  private chessThoughtFor(character: OfficeCharacter): OfficeSpriteName | null {
+    if (!character.rallying) return null;
+    const partner = this.rallyPartnerOf(character);
+    if (partner === null) return null;
+    const movesFirst = character.agentId < partner.agentId;
+    const onBeat = Math.floor(this.nowMs / CHESS_THINK_MS) % 2 === 0;
+    return movesFirst === onBeat ? "bubble-awaiting" : null;
   }
 
   private buildHitRegions(): ReadonlyArray<OfficeHitRegion> {

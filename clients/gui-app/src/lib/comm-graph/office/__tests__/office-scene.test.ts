@@ -283,16 +283,17 @@ function chatPairAt(scene: OfficeScene): ReadonlyArray<string> | null {
 }
 
 /**
- * Every amenity doorway on the plan - the break room's and the game room's. The
- * door is not carried as a field: it is the one tile of the room's wall ring the
- * grid still says is walkable, which is exactly what the scene paints it from.
+ * Every WALLED amenity's doorway on the plan. The door is not painted from a
+ * field: it is the one tile of the room's ring the grid still says is walkable,
+ * which is exactly what the scene reads. The garden is left out - its boundary
+ * is a hedge, so its way in is a gap with nothing drawn in it at all.
  */
-function cafeteriaDoorKeys(layout: OfficeLayout): ReadonlyArray<string> {
+function amenityDoorKeys(layout: OfficeLayout): ReadonlyArray<string> {
   const keys: string[] = [];
   for (const entry of layout.floors) {
-    for (const room of [entry.cafeteria, entry.gameRoom]) {
-      if (room === null) continue;
-      keys.push(...walkableRingKeys(layout, room));
+    for (const room of entry.amenities) {
+      if (room.kind === "garden") continue;
+      keys.push(...walkableRingKeys(layout, room.bounds));
     }
   }
   return keys;
@@ -697,7 +698,7 @@ describe("OfficeScene", () => {
     expect(roomLabel.text.endsWith("…")).toBe(true);
   });
 
-  it("signs the break room and the game room the way it signs a cabin", () => {
+  it("signs every amenity the way it signs a cabin", () => {
     const scene = new OfficeScene(layoutOffice);
     scene.sync(sceneInput({ agents: AGENTS, visibleAgentIds: BOTH }));
 
@@ -706,7 +707,14 @@ describe("OfficeScene", () => {
     const written = labels(frame.props);
     for (const area of scene.layout().floors[0].areaSigns) {
       const signX = area.signTile.col * OFFICE_TILE;
-      const plate = signs.find((drawable) => drawable.x === signX);
+      // Rooms in one column share a sign COLUMN, so the row is what tells two
+      // of them apart - the sprite is lifted onto its tile like every prop.
+      const signY =
+        area.signTile.row * OFFICE_TILE -
+        (officeSpriteSize({ name: "sign" }).height - OFFICE_TILE);
+      const plate = signs.find(
+        (drawable) => drawable.x === signX && drawable.y === signY,
+      );
       if (plate === undefined) throw new Error(`no sign for ${area.name}`);
       const label = written.find((drawable) => drawable.text === area.name);
       if (label === undefined) throw new Error(`no label for ${area.name}`);
@@ -1449,11 +1457,12 @@ describe("OfficeScene", () => {
     const scene = new OfficeScene(onlyKinds(["sofa"]));
     scene.sync(sceneInput({ agents: IDLE_CREW, visibleAgentIds: CREW_IDS }));
 
-    // One sofa in the break room and one in the game room, two seats each.
+    // One sofa in the break room on a floor this size, with a seat in front of
+    // each of its two tiles.
     const seats = scene
       .layout()
       .floors[0].errandSpots.filter((spot) => spot.kind === "sofa");
-    expect(seats).toHaveLength(4);
+    expect(seats).toHaveLength(2);
 
     let sat = false;
     let dozed = false;
@@ -1606,15 +1615,17 @@ describe("OfficeScene", () => {
     const scene = new OfficeScene(layoutOffice);
     scene.sync(sceneInput({ agents: IDLE_CREW, visibleAgentIds: CREW_IDS }));
 
-    // The sofa is the one place off a desk where sitting is the activity, so
-    // it is the one place `sit` does not mean a filler leaked onto the floor.
-    const sofaKeys = new Set(
+    // A sofa, a sleeping bag, an armchair, a console seat and a garden bench
+    // are the places off a desk where SITTING is the activity, so they are the
+    // ones where `sit` does not mean a filler leaked onto the floor.
+    const seatedKinds = new Set(["sofa", "nap", "read", "console", "garden"]);
+    const seatKeys = new Set(
       scene
         .layout()
-        .floors[0].errandSpots.filter((spot) => spot.kind === "sofa")
+        .floors[0].errandSpots.filter((spot) => seatedKinds.has(spot.kind))
         .map((spot) => `${spot.tile.col},${spot.tile.row}`),
     );
-    expect(sofaKeys.size).toBeGreaterThan(0);
+    expect(seatKeys.size).toBeGreaterThan(0);
 
     for (let step = 0; step < 1_500; step += 1) {
       scene.tick(100);
@@ -1624,7 +1635,7 @@ describe("OfficeScene", () => {
         const seated = crewSeatedRect(region.agentId);
         if (region.rect.x === seated.x && region.rect.y === seated.y) continue;
         const key = `${region.rect.x / OFFICE_TILE},${(region.rect.y + 4) / OFFICE_TILE}`;
-        if (sofaKeys.has(key)) continue;
+        if (seatKeys.has(key)) continue;
         const sprite = characterSpriteAt(frame, region.rect);
         if (sprite === null) continue;
         // A character off its chair is walking or standing at a spot. `sit` on
@@ -1860,7 +1871,7 @@ describe("OfficeScene", () => {
         (room) => `${room.doorTile.col},${room.doorTile.row}`,
       ),
     ]);
-    for (const key of cafeteriaDoorKeys(layout)) doorways.add(key);
+    for (const key of amenityDoorKeys(layout)) doorways.add(key);
     for (let row = 0; row < layout.rows; row += 1) {
       for (let col = 0; col < layout.cols; col += 1) {
         if (!layout.walkable[row][col]) continue;
@@ -1871,9 +1882,10 @@ describe("OfficeScene", () => {
         }
         // Somewhere a character can stand must look like somewhere a character
         // can stand - a corridor painted as brick reads as a sealed room. A pod
-        // floor counts: it is the same floor in a sub-team's own tint.
+        // floor counts, and so does the garden's grass: both are the same
+        // floor in another surface.
         expect(painted.get(key), key).toMatch(
-          /^(floor-[ab]|floor-pod-(warm-)?[ab])$/,
+          /^(floor-[ab]|floor-pod-(warm-)?[ab]|floor-grass-[ab])$/,
         );
       }
     }
@@ -1888,7 +1900,9 @@ describe("OfficeScene", () => {
         statusById: new Map<string, OfficeAgentStatus>([["alpha", "failure"]]),
       }),
     );
-    for (let step = 0; step < 60; step += 1) scene.tick(100);
+    // Long enough to cross a furnished storey at a walk: the lobby is at the
+    // bottom of the building and the desks are at the top of it.
+    for (let step = 0; step < 150; step += 1) scene.tick(100);
 
     const frame = scene.frame();
     const crashed = sprites(frame.props, "monitor-crash");
@@ -2373,15 +2387,14 @@ describe("OfficeScene", () => {
     );
 
     // Once the person has been, beta walks back - and the greeting fires as it
-    // sits, which is when the message is actually picked up.
+    // SITS, which is when the message is actually picked up. The seated pose is
+    // what says so: a walk can land on the chair's own tile with a step still
+    // owed, and the pile is still on the desk until the sitting down happens.
     scene.sync(sceneInput({ agents: AGENTS, visibleAgentIds: BOTH }));
-    for (let step = 0; step < 60; step += 1) {
+    for (let step = 0; step < 120; step += 1) {
       scene.tick(100);
       const frame = scene.frame();
-      if (
-        JSON.stringify(characterRect(frame, "beta")) ===
-        JSON.stringify(seatedRect("beta"))
-      ) {
+      if (characterSpriteAt(frame, seatedRect("beta"))?.pose === "sit") {
         expect(stacks(frame)).toHaveLength(0);
         expect(hasBubbleAt(frame, "bubble-hello", seatedHead("beta"))).toBe(
           true,
@@ -2569,6 +2582,473 @@ describe("OfficeScene", () => {
       );
       for (let step = 0; step < 7; step += 1) scene.tick(90);
       return scene.frame();
+    };
+
+    expect(run()).toEqual(run());
+  });
+});
+
+/**
+ * A floor big enough to have earned every amenity: a nap room, a library, a
+ * garden, a gym, and a game room with all four of its tables.
+ */
+const BIG_CREW: ReadonlyArray<OfficeAgentInput> = Array.from(
+  { length: 12 },
+  (_, index) => agent({ id: `big-${index}`, createdAt: index + 1 }),
+);
+const BIG_IDS: ReadonlySet<string> = new Set(BIG_CREW.map((one) => one.id));
+
+/** Ticks until `check` answers, and hands back that frame. */
+function frameWhere(
+  scene: OfficeScene,
+  check: (frame: OfficeFrame) => boolean,
+  steps: number,
+): OfficeFrame | null {
+  for (let step = 0; step < steps; step += 1) {
+    scene.tick(100);
+    const frame = scene.frame();
+    if (check(frame)) return frame;
+  }
+  return null;
+}
+
+function spotsOfKind(
+  scene: OfficeScene,
+  kind: string,
+): ReadonlyArray<OfficeTilePos> {
+  return scene
+    .layout()
+    .floors[0].errandSpots.filter((spot) => spot.kind === kind)
+    .map((spot) => spot.tile);
+}
+
+/** The character standing exactly on this tile, if one is. */
+function spriteOnTile(
+  frame: OfficeFrame,
+  tile: OfficeTilePos,
+): OfficeSpriteRef | null {
+  return characterSpriteAt(frame, {
+    x: tile.col * OFFICE_TILE,
+    y: tile.row * OFFICE_TILE - 4,
+    width: OFFICE_CHARACTER_WIDTH,
+    height: OFFICE_CHARACTER_HEIGHT,
+  });
+}
+
+/** Whether a bubble of this name is over whoever is standing on this tile. */
+function bubbleOnTile(
+  frame: OfficeFrame,
+  name: OfficeSpriteName,
+  tile: OfficeTilePos,
+): boolean {
+  return hasBubbleAt(frame, name, {
+    x: tile.col * OFFICE_TILE + OFFICE_CHARACTER_WIDTH / 2,
+    y: tile.row * OFFICE_TILE - 4,
+  });
+}
+
+/** The tile a prop of this name stands on, and there is exactly one. */
+function onlyPropTile(scene: OfficeScene, name: string): OfficeTilePos {
+  const found = scene
+    .layout()
+    .props.filter((prop) => prop.sprite.name === name);
+  if (found.length !== 1) throw new Error(`expected one ${name}`);
+  return found[0].tile;
+}
+
+function bothSidesTaken(
+  scene: OfficeScene,
+  sides: ReadonlyArray<OfficeTilePos>,
+): boolean {
+  const standing = standingByTile(scene);
+  return sides.every((tile) => standing.has(`${tile.col},${tile.row}`));
+}
+
+describe("OfficeScene amenities", () => {
+  it("pairs two agents across the foosball table and knocks a ball between them", () => {
+    const scene = new OfficeScene(onlyKinds(["foosball"]));
+    scene.sync(sceneInput({ agents: BIG_CREW, visibleAgentIds: BIG_IDS }));
+    const sides = spotsOfKind(scene, "foosball");
+    expect(sides).toHaveLength(2);
+
+    // A game needs two, so the second player has to be biased toward the seat
+    // the first is holding open rather than left to the weights.
+    const playing = frameWhere(
+      scene,
+      (frame) => bothSidesTaken(scene, sides) && paperBalls(frame).length > 0,
+      1_200,
+    );
+    expect(playing, "no foosball game started").not.toBeNull();
+    if (playing === null) return;
+
+    // The ball shuttles between the two players rather than sitting on one of
+    // them: side to side, across the table.
+    const [left, right] = sides;
+    const ball = paperBalls(playing)[0];
+    expect(ball.x).toBeGreaterThanOrEqual(left.col * OFFICE_TILE);
+    expect(ball.x).toBeLessThanOrEqual((right.col + 1) * OFFICE_TILE);
+    for (const side of sides) {
+      expect(spriteOnTile(playing, side)?.pose, `${side.col},${side.row}`).toBe(
+        "stand",
+      );
+    }
+
+    // ...and the game ends: a table nobody ever leaves is a hang.
+    const over = frameWhere(scene, () => !bothSidesTaken(scene, sides), 400);
+    expect(over, "the foosball game never ended").not.toBeNull();
+  });
+
+  it("plays chess with two thinkers and no ball at all", () => {
+    const scene = new OfficeScene(onlyKinds(["chess"]));
+    scene.sync(sceneInput({ agents: BIG_CREW, visibleAgentIds: BIG_IDS }));
+    const seats = spotsOfKind(scene, "chess");
+    expect(seats).toHaveLength(2);
+
+    const seated = frameWhere(scene, () => bothSidesTaken(scene, seats), 1_200);
+    expect(seated, "no chess game started").not.toBeNull();
+    if (seated === null) return;
+
+    // Thinking passes between the two of them, one bubble at a time - a game
+    // without a ball is two people taking turns.
+    const thinkers = new Set<string>();
+    let bothAtOnce = false;
+    let balls = 0;
+    for (let step = 0; step < 100; step += 1) {
+      scene.tick(100);
+      const frame = scene.frame();
+      if (!bothSidesTaken(scene, seats)) break;
+      balls += paperBalls(frame).length;
+      const up = seats.filter((tile) =>
+        bubbleOnTile(frame, "bubble-awaiting", tile),
+      );
+      if (up.length > 1) bothAtOnce = true;
+      for (const tile of up) thinkers.add(`${tile.col},${tile.row}`);
+    }
+    expect(balls, "chess is played with a ball").toBe(0);
+    expect(bothAtOnce, "both players thought at once").toBe(false);
+    expect(thinkers.size, "only one player ever thought").toBe(2);
+  });
+
+  it("throws three darts at the board and stops", () => {
+    const scene = new OfficeScene(onlyKinds(["darts"]));
+    scene.sync(sceneInput({ agents: BIG_CREW, visibleAgentIds: BIG_IDS }));
+    const line = spotsOfKind(scene, "darts")[0];
+    const board = onlyPropTile(scene, "dartboard");
+    expect(line).toBeDefined();
+
+    let throws = 0;
+    let inFlight = false;
+    let stray = 0;
+    let arrived = false;
+    for (let step = 0; step < 600; step += 1) {
+      scene.tick(100);
+      const frame = scene.frame();
+      const here = spriteOnTile(frame, line) !== null;
+      // ONE agent's turn at the board: the line frees up when it is done, and
+      // the next player's throws are not this one's.
+      if (arrived && !here) break;
+      arrived = arrived || here;
+      const balls = paperBalls(frame);
+      if (balls.length > 0 && !inFlight) throws += 1;
+      inFlight = balls.length > 0;
+      for (const ball of balls) {
+        // Every dart is aimed: none of them ends up on the floor beside the
+        // board the way a missed paper toss does.
+        if (Math.abs(ball.x - (board.col * OFFICE_TILE + 8)) > OFFICE_TILE) {
+          stray += 1;
+        }
+      }
+    }
+    expect(arrived, "nobody went to throw darts").toBe(true);
+    expect(throws).toBe(3);
+    expect(stray).toBe(0);
+  });
+
+  it("lies down on a sleeping bag and falls asleep on it", () => {
+    const scene = new OfficeScene(onlyKinds(["nap"]));
+    scene.sync(sceneInput({ agents: BIG_CREW, visibleAgentIds: BIG_IDS }));
+    const bags = spotsOfKind(scene, "nap");
+    expect(bags.length).toBeGreaterThan(0);
+
+    const lying = frameWhere(
+      scene,
+      (frame) => bags.some((tile) => spriteOnTile(frame, tile)?.pose === "sit"),
+      900,
+    );
+    expect(lying, "nobody lay down").not.toBeNull();
+    if (lying === null) return;
+    const bag = bags.find((tile) => spriteOnTile(lying, tile)?.pose === "sit");
+    if (bag === undefined) throw new Error("no occupied bag");
+    // Lying down faces the viewer, so the sprite reads as somebody on their
+    // back rather than as somebody at a desk.
+    expect(spriteOnTile(lying, bag)?.facing).toBe("down");
+
+    // Asleep a moment later - a bag you get straight back off is not a nap.
+    const asleep = frameWhere(
+      scene,
+      (frame) => bubbleOnTile(frame, "bubble-sleep", bag),
+      60,
+    );
+    expect(asleep, "the sleeper never dropped off").not.toBeNull();
+    const woke = frameWhere(
+      scene,
+      (frame) => spriteOnTile(frame, bag) === null,
+      400,
+    );
+    expect(woke, "the sleeper never got up").not.toBeNull();
+  });
+
+  it("reads in an armchair with a thought that comes and goes", () => {
+    const scene = new OfficeScene(onlyKinds(["read"]));
+    scene.sync(sceneInput({ agents: BIG_CREW, visibleAgentIds: BIG_IDS }));
+    const chairs = spotsOfKind(scene, "read");
+    expect(chairs.length).toBeGreaterThan(0);
+
+    const sitting = frameWhere(
+      scene,
+      (frame) =>
+        chairs.some((tile) => spriteOnTile(frame, tile)?.pose === "sit"),
+      900,
+    );
+    expect(sitting, "nobody sat down to read").not.toBeNull();
+    if (sitting === null) return;
+    const chair = chairs.find(
+      (tile) => spriteOnTile(sitting, tile)?.pose === "sit",
+    );
+    if (chair === undefined) throw new Error("no occupied armchair");
+
+    // The thought is a page being turned, not a standing state: it has to be
+    // seen both up and down while the same agent stays in the chair.
+    let up = 0;
+    let down = 0;
+    for (let step = 0; step < 60; step += 1) {
+      scene.tick(100);
+      const frame = scene.frame();
+      if (spriteOnTile(frame, chair)?.pose !== "sit") break;
+      if (bubbleOnTile(frame, "bubble-awaiting", chair)) up += 1;
+      else down += 1;
+    }
+    expect(up).toBeGreaterThan(0);
+    expect(down).toBeGreaterThan(0);
+  });
+
+  it("walks on the spot on a treadmill", () => {
+    const scene = new OfficeScene(onlyKinds(["treadmill"]));
+    scene.sync(sceneInput({ agents: BIG_CREW, visibleAgentIds: BIG_IDS }));
+    const mills = spotsOfKind(scene, "treadmill");
+    expect(mills.length).toBeGreaterThan(0);
+
+    const running = frameWhere(
+      scene,
+      (frame) => mills.some((tile) => spriteOnTile(frame, tile) !== null),
+      900,
+    );
+    expect(running, "nobody got on a treadmill").not.toBeNull();
+    if (running === null) return;
+    const mill = mills.find((tile) => spriteOnTile(running, tile) !== null);
+    if (mill === undefined) throw new Error("no occupied treadmill");
+
+    // The belt is the whole point: the walking frames alternate even though
+    // the tile under the runner never changes.
+    const poses = new Set<string>();
+    for (let step = 0; step < 40; step += 1) {
+      scene.tick(100);
+      const sprite = spriteOnTile(scene.frame(), mill);
+      if (sprite === null) break;
+      expect(sprite.facing).toBe("up");
+      if (sprite.pose !== undefined) poses.add(sprite.pose);
+    }
+    expect([...poses].sort()).toEqual(["walk1", "walk2"]);
+  });
+
+  it("flashes the television while somebody is on the console sofa", () => {
+    const scene = new OfficeScene(onlyKinds(["console"]));
+    scene.sync(sceneInput({ agents: BIG_CREW, visibleAgentIds: BIG_IDS }));
+    const seats = spotsOfKind(scene, "console");
+    expect(seats).toHaveLength(2);
+    const television = onlyPropTile(scene, "tv");
+
+    const watching = frameWhere(
+      scene,
+      (frame) =>
+        seats.some((tile) => spriteOnTile(frame, tile)?.pose === "sit"),
+      900,
+    );
+    expect(watching, "nobody sat down to play").not.toBeNull();
+    if (watching === null) return;
+    // Facing the screen: a console seat is the one sit that does not turn back
+    // toward the room the way a sofa does.
+    const seat = seats.find(
+      (tile) => spriteOnTile(watching, tile)?.pose === "sit",
+    );
+    if (seat === undefined) throw new Error("no occupied seat");
+    expect(spriteOnTile(watching, seat)?.facing).toBe("up");
+
+    // The sparkle lands on the TELEVISION, not over the player's head: what is
+    // happening is on the screen.
+    const centre: OfficePoint = {
+      x: television.col * OFFICE_TILE + OFFICE_TILE / 2,
+      y: television.row * OFFICE_TILE + OFFICE_TILE / 2,
+    };
+    const flashed = frameWhere(
+      scene,
+      (frame) =>
+        sprites(frame.overlay, "sparkle").some(
+          (drawable) => drawable.x === centre.x && drawable.y === centre.y,
+        ),
+      60,
+    );
+    expect(flashed, "the television never flashed").not.toBeNull();
+  });
+
+  it("sits on a garden bench and stands on the grass", () => {
+    const scene = new OfficeScene(onlyKinds(["garden"]));
+    scene.sync(sceneInput({ agents: BIG_CREW, visibleAgentIds: BIG_IDS }));
+    const benches = scene
+      .layout()
+      .props.filter((prop) => prop.sprite.name === "bench");
+    const seatKeys = new Set<string>();
+    for (const bench of benches) {
+      for (let offset = 0; offset < 2; offset += 1) {
+        seatKeys.add(`${bench.tile.col + offset},${bench.tile.row + 1}`);
+      }
+    }
+    const spots = spotsOfKind(scene, "garden");
+    const seats = spots.filter((tile) =>
+      seatKeys.has(`${tile.col},${tile.row}`),
+    );
+    const grass = spots.filter(
+      (tile) => !seatKeys.has(`${tile.col},${tile.row}`),
+    );
+    expect(seats.length).toBeGreaterThan(0);
+    expect(grass.length).toBeGreaterThan(0);
+
+    // The same errand kind, two postures: a bench is furniture you get onto, a
+    // patch of grass is somewhere you stand.
+    const sat = frameWhere(
+      scene,
+      (frame) =>
+        seats.some((tile) => spriteOnTile(frame, tile)?.pose === "sit"),
+      900,
+    );
+    expect(sat, "nobody sat on a bench").not.toBeNull();
+    const stood = frameWhere(
+      scene,
+      (frame) =>
+        grass.some((tile) => spriteOnTile(frame, tile)?.pose === "stand"),
+      900,
+    );
+    expect(stood, "nobody stood on the grass").not.toBeNull();
+  });
+
+  it("lays grass under the garden and a hedge around it", () => {
+    const scene = new OfficeScene(layoutOffice);
+    scene.sync(sceneInput({ agents: BIG_CREW, visibleAgentIds: BIG_IDS }));
+    const layout = scene.layout();
+    const garden = layout.floors[0].amenities.find(
+      (room) => room.kind === "garden",
+    );
+    if (garden === undefined) throw new Error("no garden");
+
+    // The floor layer is painted in order, so the LAST tile-aligned sprite at
+    // a position is the one a viewer sees.
+    const painted = new Map<string, OfficeSpriteName>();
+    for (const drawable of scene.frame().floor) {
+      if (drawable.kind !== "sprite") continue;
+      if (drawable.x % OFFICE_TILE !== 0) continue;
+      if (drawable.y % OFFICE_TILE !== 0) continue;
+      painted.set(
+        `${drawable.x / OFFICE_TILE},${drawable.y / OFFICE_TILE}`,
+        drawable.sprite.name,
+      );
+    }
+
+    const { bounds } = garden;
+    const right = bounds.col + bounds.cols - 1;
+    const bottom = bounds.row + bounds.rows - 1;
+    let openings = 0;
+    for (let row = bounds.row; row <= bottom; row += 1) {
+      for (let col = bounds.col; col <= right; col += 1) {
+        const key = `${col},${row}`;
+        // Two rows deep at the top, exactly as a wall is: the cap and the face
+        // under it. A hedge is the same ring in another material.
+        const onRing =
+          row <= bounds.row + 1 ||
+          row === bottom ||
+          col === bounds.col ||
+          col === right;
+        if (!onRing) {
+          // Inside the hedge it is grass, drawn as FLOOR so everything in the
+          // garden stands on top of it.
+          expect(painted.get(key), key).toMatch(/^floor-grass-[ab]$/);
+          continue;
+        }
+        if (layout.walkable[row][col]) {
+          // The way in is a gap in the hedge, so nothing is drawn in it - a
+          // garden is bounded rather than built, and a door hanging in a hedge
+          // would say otherwise.
+          openings += 1;
+          expect(painted.get(key), key).not.toBe("door");
+          expect(painted.get(key), key).not.toBe("planter");
+          continue;
+        }
+        expect(painted.get(key), key).toBe("planter");
+      }
+    }
+    expect(openings, "a garden with no way in").toBe(1);
+  });
+
+  it("keeps a stroll off the tiles the plan has already named", () => {
+    // Every named spot is somebody's errand. A stroll that stopped on one
+    // would have an agent standing at the dartboard having chosen nothing.
+    const scene = new OfficeScene(layoutOffice);
+    scene.sync(sceneInput({ agents: BIG_CREW, visibleAgentIds: BIG_IDS }));
+    const floor = scene.layout().floors[0];
+    const named = new Map<string, string>();
+    for (const spot of floor.errandSpots) {
+      if (spot.kind === "corridor") continue;
+      named.set(`${spot.tile.col},${spot.tile.row}`, spot.kind);
+    }
+
+    for (let step = 0; step < 600; step += 1) {
+      scene.tick(100);
+      for (const [key] of standingByTile(scene)) {
+        const kind = named.get(key);
+        if (kind === undefined) continue;
+        // Standing on a named spot is fine - it means that errand was chosen.
+        // What must never happen is a CORRIDOR spot landing on one, which is
+        // what the reserved set in `corridorTilesFor` prevents.
+        expect(
+          floor.errandSpots.some(
+            (spot) =>
+              spot.kind === "corridor" &&
+              `${spot.tile.col},${spot.tile.row}` === key,
+          ),
+          `${kind} at ${key} is also a corridor spot`,
+        ).toBe(false);
+      }
+    }
+  });
+
+  it("plays the same amenity round twice from the same ticks", () => {
+    const run = (): string => {
+      const scene = new OfficeScene(layoutOffice);
+      scene.sync(sceneInput({ agents: BIG_CREW, visibleAgentIds: BIG_IDS }));
+      const seen: string[] = [];
+      for (let step = 0; step < 400; step += 1) {
+        scene.tick(100);
+        const frame = scene.frame();
+        seen.push(
+          frame.actors
+            .filter((drawable) => drawable.kind === "sprite")
+            .map(
+              (drawable) =>
+                `${drawable.x},${drawable.y},${drawable.sprite.pose}`,
+            )
+            .join("|"),
+        );
+      }
+      return seen.join("\n");
     };
 
     expect(run()).toEqual(run());

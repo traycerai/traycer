@@ -73,7 +73,13 @@ const SECTIONS: ReadonlyArray<LegendSection> = [
       },
       {
         signal: "Game room",
-        meaning: "ping-pong and arcade for idle agents",
+        meaning:
+          "ping-pong, arcade, foosball, darts, chess and a console TV for idle agents",
+      },
+      {
+        signal: "Nap room, library, garden, gym",
+        meaning:
+          "more places for idle agents; rooms and fixtures grow with the team",
       },
     ],
   },
