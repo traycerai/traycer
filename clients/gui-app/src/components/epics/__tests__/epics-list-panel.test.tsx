@@ -99,7 +99,7 @@ function stubWindowsBridge(): DesktopWindowsBridge {
           profile: null,
         } as const),
       ),
-      set: vi.fn(() => Promise.resolve()),
+      set: vi.fn(() => Promise.resolve({ outcome: "accepted" as const })),
       onChange: vi.fn(() => disposable),
     },
   };

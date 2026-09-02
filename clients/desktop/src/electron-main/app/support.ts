@@ -1,6 +1,15 @@
 import { app, shell } from "electron";
 import { randomUUID } from "node:crypto";
-import { open, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import {
+  open,
+  mkdir,
+  mkdtemp,
+  readdir,
+  stat,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { arch, platform } from "node:process";
 import { dirname, join } from "node:path";
@@ -40,6 +49,13 @@ import {
   REPORT_LOG_TAIL_MAX_BYTES,
   reportImageMediaTypeForMimeType,
 } from "@traycer-clients/shared/support/image-attachment-guards";
+
+/**
+ * How long a saved diagnostic bundle survives a later save. Long enough that a
+ * user who saved one, opened the file manager, and then saved another still
+ * has the first: the bundle is revealed for them to attach somewhere.
+ */
+const DIAGNOSTIC_BUNDLE_RETENTION_MS = 60 * 60_000;
 
 const LOG_TAIL_LINES = 500;
 // Per attachment. Two logs stay well inside Sentry's envelope limits, and the
@@ -670,13 +686,64 @@ export class DesktopSupportService {
       },
     };
     const dir = await mkdtemp(join(tmpdir(), "traycer-diagnostic-bundle-"));
+    // Every save leaves an `mkdtemp` directory behind for the lifetime of the
+    // machine's `/tmp`, each one holding log tails and the browser trace. The
+    // bundle the user is looking at has to survive - it is the deliverable -
+    // so the sweep is of every OTHER one. Reading `/tmp` rather than
+    // remembering the last path is what makes the bound hold across relaunches:
+    // an in-memory field only ever cleans up within one process lifetime, and
+    // every restart used to orphan another bundle.
+    await this.removeOtherDiagnosticBundles(dir);
     const path = join(dir, `${frozen?.reportId ?? "report"}.json`);
-    await writeFile(path, JSON.stringify(bundle, null, 2), "utf8");
+    // Owner-only: this lands in a world-readable `/tmp` and holds whatever the
+    // consent panel's toggles admitted - the desktop and host log tails, and
+    // the browser trace. `mkdtemp` is already `0700`; the file inside it was
+    // taking the umask default.
+    await writeFile(path, JSON.stringify(bundle, null, 2), {
+      encoding: "utf8",
+      mode: 0o600,
+    });
     log.info("[support] diagnostic bundle written", { path });
     // Save-and-reveal is one action, same as `revealLog` - the whole point is
     // the user can immediately see and inspect what a "local file" means.
     shell.showItemInFolder(path);
     return { path };
+  }
+
+  /**
+   * Removes `traycer-diagnostic-bundle-*` directories in the temp dir, except
+   * `keep` and any written within {@link DIAGNOSTIC_BUNDLE_RETENTION_MS}.
+   *
+   * The age threshold is what makes this a sweep rather than a delete: a bundle
+   * is REVEALED to the user so they can attach it to an email or a ticket, so
+   * saving a second one while the first is still in an open file manager
+   * window must not pull it out from under them.
+   *
+   * Best-effort throughout: another user may own an entry we cannot remove or
+   * stat, the temp dir may not be listable, and a failed cleanup must never
+   * fail the save it is part of.
+   */
+  private async removeOtherDiagnosticBundles(keep: string): Promise<void> {
+    const root = tmpdir();
+    const entries = await readdir(root).catch(() => []);
+    const cutoff = Date.now() - DIAGNOSTIC_BUNDLE_RETENTION_MS;
+    await Promise.all(
+      entries
+        .filter((entry) => entry.startsWith("traycer-diagnostic-bundle-"))
+        .map((entry) => join(root, entry))
+        .filter((candidate) => candidate !== keep)
+        .map(async (candidate) => {
+          // A candidate we cannot stat is left alone: removing it would be
+          // acting on an age nothing established.
+          const modifiedAt = await stat(candidate)
+            .then((stats) => stats.mtimeMs)
+            .catch(() => null);
+          if (modifiedAt === null || modifiedAt > cutoff) return;
+          await rm(candidate, { recursive: true, force: true }).catch(
+            () => undefined,
+          );
+        }),
+    );
   }
 
   /**
