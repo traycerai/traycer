@@ -683,22 +683,53 @@ export async function removeBrowserSiteCookies(
   domain: string,
   cookies: BrowserSiteCookieRemover,
 ): Promise<number> {
+  const inScope = await listBrowserSiteCookies(domain, cookies);
+  for (const cookie of inScope) {
+    await removeBrowserCookie(cookie, cookies);
+  }
+  return inScope.length;
+}
+
+/**
+ * The jar's cookies for one site, through the same normalisation the capture
+ * path uses, so each names its own scope (host-only vs domain, path, secure)
+ * rather than a guess. A cookie that will not normalise has no URL to remove
+ * it by and no key to match it by, so it is left out: the login import and
+ * the site clear then act on the rest of the site instead of abandoning it
+ * on the first one.
+ */
+export async function listBrowserSiteCookies(
+  domain: string,
+  cookies: Pick<BrowserSiteCookieRemover, "get">,
+): Promise<readonly DesktopStorageCookie[]> {
   const inScope = (await cookies.get({ domain })).filter((cookie) =>
     cookieDomainInScope(cookie.domain ?? "", domain),
   );
-  let removed = 0;
-  for (const cookie of inScope) {
-    // Through the same normalisation the capture path uses, so the URL names
-    // the cookie's own scope (host-only vs domain, path, secure) rather than
-    // a guess - Electron removes by {url, name}. A cookie that will not
-    // normalise has no URL to remove it by; skipping it clears the rest of
-    // the site instead of abandoning the clear on the first one.
-    const scoped = safeStorageCookie(cookie);
-    if (scoped === null) continue;
-    await cookies.remove(cookieUrl(scoped), scoped.name);
-    removed += 1;
-  }
-  return removed;
+  return inScope
+    .map((cookie) => safeStorageCookie(cookie))
+    .filter((cookie) => cookie !== null);
+}
+
+/**
+ * Electron removes by `{url, name}`, and that pair is WIDER than one cookie:
+ * every cookie of that name the URL would be sent - a domain cookie and a
+ * host-only cookie of the same name both match. The login import writes
+ * before it removes for exactly this reason (see `import-logins.ts`).
+ */
+export async function removeBrowserCookie(
+  cookie: DesktopStorageCookie,
+  cookies: Pick<BrowserSiteCookieRemover, "remove">,
+): Promise<void> {
+  await cookies.remove(cookieUrl(cookie), cookie.name);
+}
+
+/** {@link cookieKeyId} for a cookie the jar or a reader produced. */
+export function storageCookieKeyId(cookie: DesktopStorageCookie): string {
+  return cookieKeyId({
+    domain: cookie.domain,
+    name: cookie.name,
+    path: cookie.path,
+  });
 }
 
 /**

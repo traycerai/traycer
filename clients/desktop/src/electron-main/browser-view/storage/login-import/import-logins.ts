@@ -2,6 +2,7 @@ import type { Cookie, CookiesGetFilter, CookiesSetDetails } from "electron";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { z } from "zod";
+import type { BrowserCookieKey } from "@traycer/protocol/host/browser/contracts";
 import type {
   LoginImportBlocked,
   LoginImportRequest,
@@ -12,7 +13,10 @@ import type {
 } from "@traycer-clients/shared/platform/browser-view";
 import { log } from "../../../app/logger";
 import {
-  removeBrowserSiteCookies,
+  cookieKeyId,
+  listBrowserSiteCookies,
+  removeBrowserCookie,
+  storageCookieKeyId,
   toCookieSetDetails,
   toElectronCookieSetDetails,
 } from "../browser-storage-state";
@@ -35,7 +39,6 @@ import {
   classifyImportCookie,
   normalizeImportCookie,
   type ImportCookieScope,
-  type NormalizedImportCookie,
 } from "./normalize";
 import { parseSafariBinaryCookies } from "./safari-binarycookies";
 import type { SecretReadResult } from "./secret-providers/secret-read-result";
@@ -66,10 +69,15 @@ import {
  *    service catches everything and reports a closed enum; the only thing it
  *    logs is an errno code.
  * 3. **The jar is written with the delta observer muted, per site, then
- *    flushed once.** Replacing a site removes its old cookies, and a removal
- *    the host heard about as `removedKeys` would evict that site from every
- *    live session. The one whole-jar capture main pushes afterwards says
- *    everything a dropped delta would have.
+ *    flushed once.** Replacing a site writes the source's cookies first and
+ *    only then removes what the source did not carry (never the other way
+ *    round, so a site whose every write fails is left as it was), and a
+ *    removal the host heard about as `removedKeys` would evict that site
+ *    from every live session. The one whole-jar capture main pushes
+ *    afterwards says everything a dropped delta would have.
+ *
+ * And one boundary: a decrypted value exists between the `readValue` inside
+ * the write loop and the `cookies.set` it feeds, never in a list.
  */
 
 /**
@@ -113,7 +121,25 @@ export interface LoginImportServiceDependencies extends LoginImportDiscoveryEnvi
   readonly readSaveLogins: () => boolean;
   /** The durable `persist:` jar, whatever the saved-logins pref says today. */
   readonly getDurableSession: () => LoginImportJarSession;
+  /**
+   * The jar serializer's whole-jar barrier: no host-observed merge, per-site
+   * clear or forget-all runs while the import writes, and a forget confirmed
+   * mid-import waits for it rather than being marked complete under a write
+   * that then puts the logins back.
+   */
+  readonly serializeJarWrite: <T>(action: () => Promise<T>) => Promise<T>;
   readonly suppressDeltas: <T>(action: () => Promise<T>) => Promise<T>;
+  /**
+   * Hands the desktop ownership of the keys the import wrote. Ordinarily the
+   * change observer does this on any local write (`onLocalCookieWrite`), but
+   * the import writes under `suppressDeltas`, where the observer returns
+   * before it gets there - so a key a host had seeded would stay host-owned
+   * and that host's next observation could overwrite the value the user just
+   * imported.
+   */
+  readonly releaseHostOwnedKeys: (
+    keys: readonly BrowserCookieKey[],
+  ) => Promise<void>;
   /**
    * How long to keep the observer muted after the last write. Chromium can
    * deliver a `removed` event on the listener pipe after `remove()` has
@@ -148,6 +174,8 @@ type SourceRead =
   | {
       readonly ok: true;
       readonly rows: readonly ImportCookieRow[];
+      /** Records the reader could not make a row of; Safari's parser counts them. */
+      readonly unreadable: number;
       readonly chromium: {
         readonly browser: ChromiumImportBrowser;
         readonly metaVersion: number;
@@ -172,9 +200,26 @@ interface ImportCandidate {
   readonly scope: ImportCookieScope;
 }
 
+/** The import's tallies, mutated per site inside the suppressed write. */
+interface WriteOutcome {
+  importedSites: number;
+  importedCookies: number;
+  replacedSites: number;
+  skippedInvalid: number;
+  /** Every key written, for the ownership release that follows the write. */
+  readonly writtenKeys: BrowserCookieKey[];
+}
+
 const localStateKeySchema = z.object({
   os_crypt: z.object({ encrypted_key: z.string() }),
 });
+
+/** One site's scan tally: its rows, and which key prefixes they carry. */
+interface SiteTally {
+  cookieCount: number;
+  needsV10: boolean;
+  needsV11: boolean;
+}
 
 /** What one successful scan listed, as the sets an import is checked against. */
 interface ScannedSites {
@@ -321,61 +366,183 @@ export class LoginImportService {
     const keys = await this.resolveKeys(read, candidates);
     if (!keys.ok) return { status: "blocked", reason: keys.reason };
 
-    let skippedInvalid = 0;
-    const bySite = new Map<string, NormalizedImportCookie[]>();
+    // Grouped as ROWS, still ciphertext: a value is decrypted inside the
+    // write loop, immediately before its `cookies.set`, and is unreferenced
+    // once that call returns. Materialising the plaintext jar up front would
+    // keep every value alive through the other sites' writes, the flush and
+    // the settle window.
+    const bySite = new Map<string, ImportCandidate[]>();
     for (const candidate of candidates) {
-      const value = this.readValue(candidate.row, read, keys);
-      const normalized =
-        value === null
-          ? null
-          : normalizeImportCookie(candidate.row, value, nowSeconds);
-      if (normalized === null) {
-        skippedInvalid += 1;
-        continue;
-      }
-      const siteCookies = bySite.get(normalized.site) ?? [];
-      siteCookies.push(normalized);
-      bySite.set(normalized.site, siteCookies);
+      const siteRows = bySite.get(candidate.scope.site) ?? [];
+      siteRows.push(candidate);
+      bySite.set(candidate.scope.site, siteRows);
     }
 
     const session = this.deps.getDurableSession();
-    const written = await this.deps.suppressDeltas(async () => {
-      let importedSites = 0;
-      let importedCookies = 0;
-      let replacedSites = 0;
-      // Only a site with something to write is replaced: clearing a chosen
-      // site whose every cookie failed would sign the user out of it with
-      // nothing to show for it.
-      for (const [site, siteCookies] of bySite) {
-        const removed = await removeBrowserSiteCookies(site, session.cookies);
-        if (removed > 0) replacedSites += 1;
-        let siteWritten = 0;
-        for (const entry of siteCookies) {
-          try {
-            await session.cookies.set(
-              toElectronCookieSetDetails(toCookieSetDetails(entry.cookie)),
+    // Under the serializer's barrier and, inside it, with the observer muted:
+    // the barrier orders this write against every other jar mutation, and
+    // the mute is what keeps the per-site removals from reaching the hosts.
+    const written = await this.deps.serializeJarWrite(() =>
+      this.deps.suppressDeltas(async () => {
+        const outcome: WriteOutcome = {
+          importedSites: 0,
+          importedCookies: 0,
+          replacedSites: 0,
+          skippedInvalid: 0,
+          writtenKeys: [],
+        };
+        try {
+          for (const [site, siteRows] of bySite) {
+            await this.writeSite(
+              site,
+              siteRows,
+              read,
+              keys,
+              nowSeconds,
+              session,
+              outcome,
             );
-            siteWritten += 1;
-          } catch {
-            // The rejection names the cookie; it is counted and dropped.
-            skippedInvalid += 1;
+          }
+        } finally {
+          // On the failure path too: a removal Chromium reports on the
+          // listener pipe after `remove()` resolved is what the settle window
+          // absorbs, and a throw mid-site must not let the observer wake
+          // before it has passed. The outer catch answers `blocked` and no
+          // capture follows, so a removal that escaped here would reach the
+          // host as `removedKeys` with nothing to reconcile it.
+          try {
+            await session.cookies.flushStore();
+          } finally {
+            await this.deps.sleep(this.deps.settleWindowMs);
           }
         }
-        if (siteWritten > 0) importedSites += 1;
-        importedCookies += siteWritten;
-      }
-      await session.cookies.flushStore();
-      await this.deps.sleep(this.deps.settleWindowMs);
-      return { importedSites, importedCookies, replacedSites };
-    });
+        return outcome;
+      }),
+    );
+    // Before the caller pushes the jar: the keys are the desktop's from here
+    // on, so no host's later observation of an older value can win them back.
+    await this.deps.releaseHostOwnedKeys(written.writtenKeys);
     log.info("[browser-view] imported browser logins", {
       browser: source.browser,
       sites: written.importedSites,
       cookies: written.importedCookies,
       replaced: written.replacedSites,
-      skipped: skippedInvalid,
+      skipped: written.skippedInvalid,
     });
-    return { status: "imported", ...written, skippedInvalid };
+    return {
+      status: "imported",
+      importedSites: written.importedSites,
+      importedCookies: written.importedCookies,
+      replacedSites: written.replacedSites,
+      skippedInvalid: written.skippedInvalid,
+    };
+  }
+
+  /**
+   * One site's replacement, in the order that never leaves the site empty:
+   *
+   * 1. WRITE every row, decrypting each immediately before its `set`. Same
+   *    key (name, domain scope, path) overwrites in place, which is what
+   *    Chromium does for a sign-in.
+   * 2. Nothing written means nothing touched: the slice the jar already held
+   *    stays as it was, so a source whose every row Electron rejects (a
+   *    hand-edited file with an invalid value) cannot sign the user out.
+   * 3. Otherwise REMOVE what the source did not carry - the jar's cookies for
+   *    the site whose key no written row re-set - so the slice is the
+   *    source's, not a union of two sign-ins.
+   * 4. Electron removes by `{url, name}`, which also catches a just-written
+   *    cookie of the same NAME under a different scope or path. Any written
+   *    row whose name a removal named is written once more, decrypted again
+   *    rather than held.
+   */
+  private async writeSite(
+    site: string,
+    siteRows: readonly ImportCandidate[],
+    read: SourceRead & { ok: true },
+    keys: ChromiumKeys & { ok: true },
+    nowSeconds: number,
+    session: LoginImportJarSession,
+    outcome: WriteOutcome,
+  ): Promise<void> {
+    const previous = await listBrowserSiteCookies(site, session.cookies);
+    const writtenKeyIds = new Set<string>();
+    const writtenRows: ImportCandidate[] = [];
+    for (const candidate of siteRows) {
+      const key = await this.writeRow(
+        candidate,
+        read,
+        keys,
+        nowSeconds,
+        session,
+      );
+      if (key === null) {
+        outcome.skippedInvalid += 1;
+        continue;
+      }
+      writtenKeyIds.add(cookieKeyId(key));
+      outcome.writtenKeys.push(key);
+      writtenRows.push(candidate);
+    }
+    if (writtenRows.length === 0) return;
+    outcome.importedSites += 1;
+    outcome.importedCookies += writtenRows.length;
+    if (previous.length > 0) outcome.replacedSites += 1;
+
+    const stale = previous.filter(
+      (cookie) => !writtenKeyIds.has(storageCookieKeyId(cookie)),
+    );
+    const removedNames = new Set(stale.map((cookie) => cookie.name));
+    for (const cookie of stale) {
+      await removeBrowserCookie(cookie, session.cookies);
+    }
+    for (const candidate of writtenRows) {
+      if (!removedNames.has(candidate.row.name)) continue;
+      const key = await this.writeRow(
+        candidate,
+        read,
+        keys,
+        nowSeconds,
+        session,
+      );
+      if (key === null) {
+        // Accepted a moment ago and refused now: counted as it stands.
+        outcome.importedCookies -= 1;
+        outcome.skippedInvalid += 1;
+      }
+    }
+  }
+
+  /**
+   * Decrypt, normalise and `set` one row; answers the cookie's key. The
+   * plaintext lives in this frame only. `null` is a row that could not be
+   * read, would not normalise, or that Electron rejected - the rejection
+   * names the cookie, so it is counted by the caller and dropped.
+   */
+  private async writeRow(
+    candidate: ImportCandidate,
+    read: SourceRead & { ok: true },
+    keys: ChromiumKeys & { ok: true },
+    nowSeconds: number,
+    session: LoginImportJarSession,
+  ): Promise<BrowserCookieKey | null> {
+    const value = this.readValue(candidate.row, read, keys);
+    const normalized =
+      value === null
+        ? null
+        : normalizeImportCookie(candidate.row, value, nowSeconds);
+    if (normalized === null) return null;
+    try {
+      await session.cookies.set(
+        toElectronCookieSetDetails(toCookieSetDetails(normalized.cookie)),
+      );
+    } catch {
+      return null;
+    }
+    return {
+      domain: normalized.cookie.domain,
+      name: normalized.cookie.name,
+      path: normalized.cookie.path,
+    };
   }
 
   private buildScan(
@@ -383,8 +550,8 @@ export class LoginImportService {
     read: SourceRead & { ok: true },
   ): LoginImportScan {
     const nowSeconds = Math.floor(this.deps.now() / 1000);
-    const sites = new Map<string, number>();
-    const excluded = new Map<string, number>();
+    const sites = new Map<string, SiteTally>();
+    const excluded = new Map<string, SiteTally>();
     let protectedCookieCount = 0;
     let partitionedCookieCount = 0;
     let needsV10 = false;
@@ -400,32 +567,45 @@ export class LoginImportService {
       }
       const scope = classifyImportCookie(row, nowSeconds);
       if (scope === null) continue;
-      // Counted before the Google split: an import of Google rows alone,
-      // opted into, opens the same keystore, so `unlock` must say so.
+      // Tallied per SITE as well as for the whole scan: the prompt the Import
+      // click raises depends on which sites are chosen - a plaintext-only
+      // selection opens nothing, and the Google rows sit behind an opt-in -
+      // so the dialog derives its explainer from the selection's sites.
+      const group = isGoogleDeviceBoundDomain(scope.site) ? excluded : sites;
+      const tally = group.get(scope.site) ?? {
+        cookieCount: 0,
+        needsV10: false,
+        needsV11: false,
+      };
+      tally.cookieCount += 1;
       if (row.secret.kind === "encrypted") {
-        if (row.secret.version === "v10") needsV10 = true;
-        else needsV11 = true;
+        if (row.secret.version === "v10") tally.needsV10 = true;
+        else tally.needsV11 = true;
+        needsV10 ||= tally.needsV10;
+        needsV11 ||= tally.needsV11;
       }
-      if (isGoogleDeviceBoundDomain(scope.site)) {
-        excluded.set(scope.site, (excluded.get(scope.site) ?? 0) + 1);
-        continue;
-      }
-      sites.set(scope.site, (sites.get(scope.site) ?? 0) + 1);
+      group.set(scope.site, tally);
     }
     return {
       sourceId,
       sites: [...sites]
-        .map(([domain, cookieCount]) => ({ domain, cookieCount }))
+        .map(([domain, tally]) => ({
+          domain,
+          cookieCount: tally.cookieCount,
+          unlock: this.unlockFor(tally.needsV10, tally.needsV11),
+        }))
         .sort((left, right) => left.domain.localeCompare(right.domain)),
       excluded: [...excluded]
-        .map(([domain, cookieCount]) => ({
+        .map(([domain, tally]) => ({
           domain,
-          cookieCount,
+          cookieCount: tally.cookieCount,
+          unlock: this.unlockFor(tally.needsV10, tally.needsV11),
           reason: "google-device-bound" as const,
         }))
         .sort((left, right) => left.domain.localeCompare(right.domain)),
       protectedCookieCount,
       partitionedCookieCount,
+      unreadableCookieCount: read.unreadable,
       unlock: this.unlockFor(needsV10, needsV11),
       blocked: null,
     };
@@ -462,6 +642,7 @@ export class LoginImportService {
         return {
           ok: true,
           rows: snapshot.value.rows,
+          unreadable: 0,
           chromium: {
             browser: location.browser,
             metaVersion: snapshot.value.metaVersion,
@@ -481,7 +662,12 @@ export class LoginImportService {
         );
         if (!snapshot.ok)
           return { ok: false, blocked: blockedFor(snapshot.reason) };
-        return { ok: true, rows: snapshot.value, chromium: null };
+        return {
+          ok: true,
+          rows: snapshot.value,
+          unreadable: 0,
+          chromium: null,
+        };
       }
       case "safari": {
         let bytes: Buffer;
@@ -497,9 +683,11 @@ export class LoginImportService {
                 : "unreadable",
           };
         }
+        const parsed = parseSafariBinaryCookies(bytes);
         return {
           ok: true,
-          rows: parseSafariBinaryCookies(bytes).rows,
+          rows: parsed.rows,
+          unreadable: parsed.malformed,
           chromium: null,
         };
       }
@@ -512,7 +700,7 @@ export class LoginImportService {
         }
         const parsed = parseCookieFile(text);
         if (!parsed.ok) return { ok: false, blocked: "unreadable" };
-        return { ok: true, rows: parsed.rows, chromium: null };
+        return { ok: true, rows: parsed.rows, unreadable: 0, chromium: null };
       }
     }
   }
@@ -666,6 +854,7 @@ function blockedScan(
     excluded: [],
     protectedCookieCount: 0,
     partitionedCookieCount: 0,
+    unreadableCookieCount: 0,
     unlock: null,
     blocked,
   };

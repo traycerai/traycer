@@ -57,9 +57,13 @@ async function assertWalFileHasData(sourcePath: string): Promise<void> {
 
 const snapshotRoots: string[] = [];
 const writers: DatabaseSync[] = [];
+const dirsToClean: string[] = [];
 
 afterEach(async () => {
   for (const writer of writers.splice(0)) writer.close();
+  for (const dir of dirsToClean.splice(0)) {
+    await rm(dir, { recursive: true, force: true });
+  }
   for (const dir of snapshotRoots.splice(0)) {
     await rm(dir, { recursive: true, force: true });
   }
@@ -91,6 +95,7 @@ describe("readFirefoxCookieRows - full schema", () => {
       withOptionalColumns: true,
     });
     writers.push(writer);
+    dirsToClean.push(dir);
     writer
       .prepare(
         `INSERT INTO moz_cookies
@@ -113,7 +118,6 @@ describe("readFirefoxCookieRows - full schema", () => {
     const rows = await readRows(path);
 
     expect(rows.map((row) => row.name)).toContain("wal_cookie");
-    await rm(dir, { recursive: true, force: true });
   });
 
   it("flags a partitioned row via a non-empty originAttributes, without dropping it", async () => {
@@ -121,6 +125,7 @@ describe("readFirefoxCookieRows - full schema", () => {
       withOptionalColumns: true,
     });
     writers.push(writer);
+    dirsToClean.push(dir);
     writer
       .prepare(
         `INSERT INTO moz_cookies
@@ -145,7 +150,6 @@ describe("readFirefoxCookieRows - full schema", () => {
     if (row === undefined)
       throw new Error("expected the partitioned row to survive the read");
     expect(row.partitioned).toBe(true);
-    await rm(dir, { recursive: true, force: true });
   });
 
   it("reads an absent/zero expiry as a session cookie (expires: -1)", async () => {
@@ -153,6 +157,7 @@ describe("readFirefoxCookieRows - full schema", () => {
       withOptionalColumns: true,
     });
     writers.push(writer);
+    dirsToClean.push(dir);
     writer
       .prepare(
         `INSERT INTO moz_cookies
@@ -177,7 +182,6 @@ describe("readFirefoxCookieRows - full schema", () => {
     if (row === undefined)
       throw new Error("expected the session row to survive the read");
     expect(row.expires).toBe(-1);
-    await rm(dir, { recursive: true, force: true });
   });
 
   it("reads a positive expiry as-is, in unix seconds", async () => {
@@ -185,6 +189,7 @@ describe("readFirefoxCookieRows - full schema", () => {
       withOptionalColumns: true,
     });
     writers.push(writer);
+    dirsToClean.push(dir);
     const expiry = 1_893_456_000; // 2030-01-01T00:00:00Z
     writer
       .prepare(
@@ -211,7 +216,6 @@ describe("readFirefoxCookieRows - full schema", () => {
       throw new Error("expected the expiring row to survive the read");
     expect(row.expires).toBe(expiry);
     expect(typeof row.expires).toBe("number");
-    await rm(dir, { recursive: true, force: true });
   });
 
   it.each([
@@ -223,6 +227,7 @@ describe("readFirefoxCookieRows - full schema", () => {
       withOptionalColumns: true,
     });
     writers.push(writer);
+    dirsToClean.push(dir);
     writer
       .prepare(
         `INSERT INTO moz_cookies
@@ -247,7 +252,6 @@ describe("readFirefoxCookieRows - full schema", () => {
     if (row === undefined)
       throw new Error("expected the samesite row to survive the read");
     expect(row.sameSite).toBe(expected);
-    await rm(dir, { recursive: true, force: true });
   });
 
   it("always reads the cookie value as plain, never encrypted", async () => {
@@ -255,6 +259,7 @@ describe("readFirefoxCookieRows - full schema", () => {
       withOptionalColumns: true,
     });
     writers.push(writer);
+    dirsToClean.push(dir);
     writer
       .prepare(
         `INSERT INTO moz_cookies
@@ -281,7 +286,6 @@ describe("readFirefoxCookieRows - full schema", () => {
     expect(row.secret).toEqual({ kind: "plain", value: "plaintext-value" });
     expect(row.secure).toBe(true);
     expect(row.httpOnly).toBe(true);
-    await rm(dir, { recursive: true, force: true });
   });
 
   it("returns actual numbers for expires, not bigints", async () => {
@@ -289,6 +293,7 @@ describe("readFirefoxCookieRows - full schema", () => {
       withOptionalColumns: true,
     });
     writers.push(writer);
+    dirsToClean.push(dir);
     writer
       .prepare(
         `INSERT INTO moz_cookies
@@ -313,7 +318,6 @@ describe("readFirefoxCookieRows - full schema", () => {
     if (row === undefined)
       throw new Error("expected the num row to survive the read");
     expect(typeof row.expires).toBe("number");
-    await rm(dir, { recursive: true, force: true });
   });
 });
 
@@ -323,6 +327,7 @@ describe("readFirefoxCookieRows - schema missing sameSite/originAttributes", () 
       withOptionalColumns: false,
     });
     writers.push(writer);
+    dirsToClean.push(dir);
     writer
       .prepare(
         `INSERT INTO moz_cookies (host, name, value, path, expiry, isSecure, isHttpOnly)
@@ -337,7 +342,6 @@ describe("readFirefoxCookieRows - schema missing sameSite/originAttributes", () 
       throw new Error("expected the old-schema row to survive the read");
     expect(row.partitioned).toBe(false);
     expect(row.sameSite).toBe("Lax");
-    await rm(dir, { recursive: true, force: true });
   });
 
   it("still reads a WAL-only row under the old schema", async () => {
@@ -345,6 +349,7 @@ describe("readFirefoxCookieRows - schema missing sameSite/originAttributes", () 
       withOptionalColumns: false,
     });
     writers.push(writer);
+    dirsToClean.push(dir);
     writer
       .prepare(
         `INSERT INTO moz_cookies (host, name, value, path, expiry, isSecure, isHttpOnly)
@@ -356,6 +361,5 @@ describe("readFirefoxCookieRows - schema missing sameSite/originAttributes", () 
     const rows = await readRows(path);
 
     expect(rows.map((row) => row.name)).toContain("old_wal_cookie");
-    await rm(dir, { recursive: true, force: true });
   });
 });

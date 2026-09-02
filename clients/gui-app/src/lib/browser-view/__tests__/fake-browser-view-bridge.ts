@@ -250,6 +250,7 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
       excluded: [],
       protectedCookieCount: 0,
       partitionedCookieCount: 0,
+      unreadableCookieCount: 0,
       unlock: null,
       blocked: null,
     });

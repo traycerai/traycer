@@ -1,10 +1,14 @@
 import { randomUUID } from "node:crypto";
 import {
+  appendFile,
   chmod,
+  copyFile,
   mkdir,
   mkdtemp,
   readdir,
   rm,
+  stat,
+  unlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -13,8 +17,11 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   classifyCopyFailure,
+  copySqliteFiles,
+  SQLITE_SNAPSHOT_COPY_ATTEMPTS,
   sweepSqliteSnapshots,
   withSqliteSnapshot,
+  type SqliteFileCopy,
 } from "../sqlite-snapshot";
 
 const dirsToClean: string[] = [];
@@ -228,5 +235,128 @@ describe("sweepSqliteSnapshots", () => {
     );
 
     await expect(sweepSqliteSnapshots(missingRoot)).resolves.toBeUndefined();
+  });
+});
+
+describe("copySqliteFiles - retry against a moving source", () => {
+  async function realSourceMain(dir: string): Promise<string> {
+    const path = join(dir, "cookies.sqlite");
+    const db = new DatabaseSync(path);
+    db.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)");
+    db.prepare("INSERT INTO t (v) VALUES (?)").run("hello");
+    db.close();
+    return path;
+  }
+
+  // Pins: a source that moves only during the FIRST attempt succeeds on the
+  // retry, and the copy on disk matches the source's FINAL (post-move) size.
+  it("retries once and succeeds when the source moves only during the first attempt", async () => {
+    const sourceDir = await mkdtemp(join(tmpdir(), "sqlite-snapshot-source-"));
+    dirsToClean.push(sourceDir);
+    const sourcePath = await realSourceMain(sourceDir);
+    const snapshotDir = await mkdtemp(join(tmpdir(), "sqlite-snapshot-dest-"));
+    dirsToClean.push(snapshotDir);
+    const snapshotPath = join(snapshotDir, "cookies.sqlite");
+
+    let mainCopyCount = 0;
+    const copy: SqliteFileCopy = async (from, to) => {
+      await copyFile(from, to);
+      if (from === sourcePath) {
+        mainCopyCount += 1;
+        if (mainCopyCount === 1) {
+          // The source "moves" right after the first attempt copies it -
+          // exactly the signal `copySqliteFiles` retries on.
+          await appendFile(sourcePath, "extra-bytes-after-first-copy");
+        }
+      }
+    };
+
+    const result = await copySqliteFiles(
+      sourcePath,
+      snapshotPath,
+      process.platform,
+      copy,
+    );
+
+    expect(result).toBeNull();
+    expect(mainCopyCount).toBe(2);
+    const [sourceStat, snapshotStat] = await Promise.all([
+      stat(sourcePath),
+      stat(snapshotPath),
+    ]);
+    expect(snapshotStat.size).toBe(sourceStat.size);
+  });
+
+  // Pins: a source that never holds still is reported "locked" after exactly
+  // SQLITE_SNAPSHOT_COPY_ATTEMPTS main-file copies, not fewer and not more.
+  it("returns 'locked' when the source keeps moving on every attempt", async () => {
+    const sourceDir = await mkdtemp(join(tmpdir(), "sqlite-snapshot-source-"));
+    dirsToClean.push(sourceDir);
+    const sourcePath = await realSourceMain(sourceDir);
+    const snapshotDir = await mkdtemp(join(tmpdir(), "sqlite-snapshot-dest-"));
+    dirsToClean.push(snapshotDir);
+    const snapshotPath = join(snapshotDir, "cookies.sqlite");
+
+    let mainCopyCount = 0;
+    const copy: SqliteFileCopy = async (from, to) => {
+      await copyFile(from, to);
+      if (from === sourcePath) {
+        mainCopyCount += 1;
+        await appendFile(sourcePath, `extra-bytes-${mainCopyCount}`);
+      }
+    };
+
+    const result = await copySqliteFiles(
+      sourcePath,
+      snapshotPath,
+      process.platform,
+      copy,
+    );
+
+    expect(result).toBe("locked");
+    expect(mainCopyCount).toBe(SQLITE_SNAPSHOT_COPY_ATTEMPTS);
+  });
+
+  // Pins: a -wal sibling copied on one attempt that the source no longer has
+  // on the next attempt is unlinked from the snapshot directory, not left
+  // there paired with a newer main file.
+  it("does not leave a stale -wal copy in the snapshot when the source's WAL disappears between attempts", async () => {
+    const sourceDir = await mkdtemp(join(tmpdir(), "sqlite-snapshot-source-"));
+    dirsToClean.push(sourceDir);
+    const sourcePath = await realSourceMain(sourceDir);
+    await writeFile(`${sourcePath}-wal`, "wal-bytes");
+    const snapshotDir = await mkdtemp(join(tmpdir(), "sqlite-snapshot-dest-"));
+    dirsToClean.push(snapshotDir);
+    const snapshotPath = join(snapshotDir, "cookies.sqlite");
+
+    // Overall call order within one attempt is [main, -wal, -shm]; the -shm
+    // copy fails "missing" on its own (no hook needed). After the SECOND
+    // call (the -wal copy of attempt 1, which lands on disk because the WAL
+    // still exists at that point), simulate a checkpoint: the WAL disappears
+    // and the main file's size changes, so the retry loop notices and starts
+    // a second attempt - on which the -wal copy now fails "missing" and the
+    // attempt-1 copy is unlinked.
+    let callCount = 0;
+    const copy: SqliteFileCopy = async (from, to) => {
+      callCount += 1;
+      const thisCall = callCount;
+      await copyFile(from, to);
+      if (thisCall === 2) {
+        await unlink(`${sourcePath}-wal`);
+        await appendFile(sourcePath, "checkpointed-bytes");
+      }
+    };
+
+    const result = await copySqliteFiles(
+      sourcePath,
+      snapshotPath,
+      process.platform,
+      copy,
+    );
+
+    expect(result).toBeNull();
+    await expect(stat(`${snapshotPath}-wal`)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 });

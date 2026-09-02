@@ -31,7 +31,7 @@ export interface ChromiumCookieDatabase {
   readonly rows: readonly ImportCookieRow[];
 }
 
-/** Microseconds between 1601-01-01 (Chromium's epoch) and 1970-01-01. */
+/** Seconds between 1601-01-01 (Chromium's epoch) and 1970-01-01. */
 const UNIX_TO_WINDOWS_EPOCH_SECONDS = 11_644_473_600n;
 const MICROSECONDS_PER_SECOND = 1_000_000n;
 

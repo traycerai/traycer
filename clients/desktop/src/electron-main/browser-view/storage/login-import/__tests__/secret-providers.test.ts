@@ -178,6 +178,7 @@ describe("unprotectChromiumWindowsKey", () => {
     const call = calls[0];
     if (call === undefined) throw new Error("expected one call");
     expect(call.stdin).toBe(sealedTail.toString("base64"));
+    expect(call.args.length).toBeGreaterThan(0);
     for (const arg of call.args) {
       expect(arg).not.toContain(sealedTail.toString("base64"));
       expect(arg).not.toContain("DPAPI");

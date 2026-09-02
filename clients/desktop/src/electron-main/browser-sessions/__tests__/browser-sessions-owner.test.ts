@@ -727,6 +727,80 @@ describe("the browser.sessions jar plane lives in main", () => {
     expect(await pushed).toBe(0);
   });
 
+  it("does not send a host's second stream after the first stream's capture left unacked", async () => {
+    const first = await openLiveStream(harness, registry, "window-1");
+    // A second window on the SAME host: the once-per-host rule tries this
+    // sibling only when the first stream sent nothing at all.
+    const second = await openLiveStream(harness, registry, "window-2");
+    for (const session of [first, second]) {
+      session.emit(
+        {
+          kind: "capturePrimaryProfile",
+          hasBinaryPayload: false,
+          requestId: "standing-1",
+          standing: true,
+        },
+        null,
+      );
+    }
+
+    const pushed = registry.capturePrimaryProfileOnEveryHost();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // The capture DID go out on the first stream - this is the "left but
+    // unacked" case, not the "nothing was sent" case the once-per-host rule
+    // treats differently.
+    expect(first.framesOfKind("primaryProfileCaptured")).toHaveLength(1);
+
+    // The connection dies before the host answers.
+    first.emitStatus("reconnecting");
+
+    expect(await pushed).toBe(0);
+    // The sibling stream on the SAME host was never tried: a frame that LEFT
+    // is this host's one capture, acked or not - trying a second stream
+    // would risk a second whole jar reaching the same host.
+    expect(second.framesOfKind("primaryProfileCaptured")).toHaveLength(0);
+  });
+
+  it("shares one frame and one ack between two overlapping captures on one stream", async () => {
+    const session = await openLiveStream(harness, registry, "window-1");
+    session.emit(
+      {
+        kind: "capturePrimaryProfile",
+        hasBinaryPayload: false,
+        requestId: "standing-1",
+        standing: true,
+      },
+      null,
+    );
+
+    // Two callers overlapping on the SAME stream - a login import's push
+    // beside the quit-path flush - share the capture in flight rather than
+    // each sending one.
+    const pushed = registry.capturePrimaryProfileOnEveryHost();
+    const flushed = registry.captureFinalPrimaryProfiles("window-1");
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(harness.jar.captures).toBe(1);
+    expect(session.framesOfKind("primaryProfileCaptured")).toHaveLength(1);
+
+    session.emit(
+      {
+        kind: "primaryProfileCaptureAck",
+        hasBinaryPayload: false,
+        requestId: "standing-1",
+      },
+      null,
+    );
+
+    expect(await pushed).toBe(1);
+    await flushed;
+  });
+
   it("counts no host for an import push when none issued a standing capture request", async () => {
     const session = await openLiveStream(harness, registry, "window-1");
 

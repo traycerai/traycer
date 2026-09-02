@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 import { registrableDomain } from "@traycer/protocol/host/browser/registrable-domain";
 import { toCookieSetDetails } from "../../browser-storage-state";
 import { isGoogleDeviceBoundDomain } from "../google-exclusion";
-import { classifyImportCookie, normalizeImportCookie } from "../normalize";
+import {
+  classifyImportCookie,
+  IMPORTED_SESSION_COOKIE_TTL_SECONDS,
+  normalizeImportCookie,
+} from "../normalize";
 import type { ImportCookieRow } from "../cookie-rows";
 
 /**
@@ -224,6 +228,35 @@ describe("registrableDomain: github.io tenant isolation", () => {
 
     expect(aliceScope?.site).toBe("alice.github.io");
     expect(bobScope?.site).toBe("bob.github.io");
+  });
+});
+
+describe("normalizeImportCookie: session vs persistent expiry", () => {
+  // Pins: a session cookie (expires: -1) is given a bounded TTL from the
+  // import, not left at -1 (which Electron's jar would drop at quit).
+  it("normalises a session cookie's expiry to nowSeconds + IMPORTED_SESSION_COOKIE_TTL_SECONDS", () => {
+    const normalized = normalizeImportCookie(
+      row({ name: "session-cookie", expires: -1 }),
+      "value",
+      NOW_SECONDS,
+    );
+    expect(normalized).not.toBeNull();
+    expect(normalized?.cookie.expires).toBe(
+      NOW_SECONDS + IMPORTED_SESSION_COOKIE_TTL_SECONDS,
+    );
+  });
+
+  // Pins: a persistent cookie's own expiry is left untouched - only a
+  // session cookie (expires: -1) is rewritten.
+  it("keeps a persistent cookie's own expires value", () => {
+    const persistentExpiry = NOW_SECONDS + 1_000;
+    const normalized = normalizeImportCookie(
+      row({ name: "persistent-cookie", expires: persistentExpiry }),
+      "value",
+      NOW_SECONDS,
+    );
+    expect(normalized).not.toBeNull();
+    expect(normalized?.cookie.expires).toBe(persistentExpiry);
   });
 });
 

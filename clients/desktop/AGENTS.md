@@ -125,12 +125,27 @@ failures.
   a rejected invoke's message reaches the WARN log and Sentry and a cookie,
   a profile path, or a keychain's answer must never travel that way (the
   service logs an errno code and a stage, nothing else); and the jar write
-  runs under `suppressAllBrowserPrimaryProfileDeltas` plus one coalescing
-  window, because the per-site removals would otherwise reach the host as
-  `removedKeys` and evict the site from every live session. Decrypted values
-  exist only between `importLogins` reading them and `cookies.set`
-  returning; SQLite snapshots live under a `0700` userData directory and are
-  unlinked the moment they are open on POSIX. `node:sqlite` is the reader:
+  runs under the `BrowserJarSerializer`'s whole-jar barrier (the one
+  forget-all takes, so a forget confirmed mid-import waits for it) and,
+  inside that, under `suppressAllBrowserPrimaryProfileDeltas` plus one
+  coalescing window - held through the failure path too - because the
+  per-site removals would otherwise reach the host as `removedKeys` and
+  evict the site from every live session. That mute also skips the
+  observer's `onLocalCookieWrite`, so the import hands the desktop
+  ownership of the keys it wrote by hand afterwards
+  (`releaseHeadlessOriginCookieKeys`), or a host that had seeded one of
+  them could observe an older value back over the import. A site is
+  written BEFORE anything of it is
+  removed: the source's cookies go in first, and only a site with at least
+  one written cookie has what the source did not carry removed after, so a
+  source whose every row Electron rejects leaves the jar's slice as it was.
+  A decrypted value exists only between the `readValue` inside that write
+  loop and the `cookies.set` it feeds, never in a list; an imported SESSION
+  cookie is given a bounded expiry, since a `persist:` partition drops one
+  without at quit. SQLite snapshots are copied with the source's size and
+  mtime checked before and after (a moving source retries, then reads as
+  `locked`), live under a `0700` userData directory and are unlinked the
+  moment they are open on POSIX. `node:sqlite` is the reader:
   it ships with Electron's Node and needs no native module, which is why the
   "no Electron-native SQLite" rule below is about REBUILDS, not the builtin.
   Because that suppression means no delta reaches a host on its own, the

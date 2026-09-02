@@ -131,7 +131,15 @@ vi.mock("@/lib/browser-view/use-browser-save-logins", () => ({
 }));
 
 vi.mock("@/hooks/browser/use-browser-saved-login-sites-query", () => ({
+  BROWSER_SAVED_LOGIN_SITES_METHOD: "browser.savedLoginSites",
   useBrowserSavedLoginSitesQuery: () => ({ data: sites.current, refetch }),
+}));
+
+// The import dialog's run mutation resolves the surface host to invalidate
+// the saved-sites list on success; the binding stub above has no client to
+// resolve through, and this suite asserts only that the dialog opens.
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => "host-1",
 }));
 
 function controller(
@@ -156,7 +164,9 @@ function renderSection(
 ): void {
   saveLogins.current = current;
   sites.current = data;
-  const client = new QueryClient();
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
   render(
     <QueryClientProvider client={client}>
       <BrowserSettingsSection />

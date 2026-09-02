@@ -1028,7 +1028,13 @@ export function registerBrowserViewIpc(
   // forwarded to Sentry, and nothing on this path - a profile path, a
   // keychain's answer, a cookie - may travel that way. The service holds the
   // paths; the renderer sees opaque ids and registrable domains only.
-  const loginImport = createLoginImportService();
+  // The import's jar write takes the same barrier forget-all does: it
+  // touches many sites at once, and a forget confirmed while it runs must
+  // wait for it rather than be marked complete under a write that then puts
+  // the logins back.
+  const loginImport = createLoginImportService({
+    serializeJarWrite: (action) => jarSerializer.runOnEveryDomain(action),
+  });
 
   bridge.handleInvoke(
     RunnerHostInvoke.browserViewLoginImportListSources,

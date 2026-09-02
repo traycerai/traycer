@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { copyFile, mkdir, rm, unlink } from "node:fs/promises";
+import { copyFile, mkdir, rm, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { errnoCode } from "./errno-code";
@@ -11,6 +11,17 @@ import { errnoCode } from "./errno-code";
  * WAL, and on Windows with a share mode that refuses a second opener. The main
  * file and its `-wal` / `-shm` siblings are copied together so the copy sees
  * the same rows the browser does, including the ones only the WAL holds yet.
+ *
+ * Three files copied one after another are one snapshot only if the browser
+ * held still in between: a checkpoint after the main file was copied resets
+ * the live WAL before its turn, and the copy then pairs a pre-checkpoint main
+ * file with post-checkpoint frames - or none - and silently lacks the newest
+ * rows. SQLite's own backup API would need the live file opened, which the
+ * browsers' exclusive locking refuses; so the copy is taken with the source's
+ * size and mtime read before and after, retried while they moved, and given
+ * up as `locked` when they never stopped - the answer that tells the user to
+ * quit the browser, which is what a jar being written that continuously
+ * needs.
  *
  * The copy lives under the app's own `0700` directory, never the system temp
  * dir - a Firefox jar is plaintext, so for the length of the read this copy IS
@@ -51,6 +62,7 @@ export async function withSqliteSnapshot<T>(
       options.sourcePath,
       snapshotPath,
       options.platform,
+      copyFile,
     );
     if (copied !== null) return { ok: false, reason: copied };
     let database: DatabaseSync;
@@ -103,37 +115,97 @@ export async function sweepSqliteSnapshots(
   );
 }
 
-async function copySqliteFiles(
+/** One file copy; `copyFile` in production, a hooked one in the suite. */
+export type SqliteFileCopy = (from: string, to: string) => Promise<void>;
+
+/**
+ * How many times the three-file copy is taken before a source that moved
+ * under every one of them is reported as `locked`. Each copy is a few
+ * milliseconds; a jar written more often than that is being written
+ * continuously.
+ */
+export const SQLITE_SNAPSHOT_COPY_ATTEMPTS = 3;
+
+const SQLITE_SIBLING_SUFFIXES = ["", "-wal", "-shm"] as const;
+
+/**
+ * Copies the database and its `-wal` / `-shm` siblings, and accepts the copy
+ * only when the source's size and mtime read the same before and after all
+ * three - the signal that no checkpoint or write landed between them.
+ * Exported for the suite, which hooks `copy` to move the source mid-copy.
+ */
+export async function copySqliteFiles(
   sourcePath: string,
   snapshotPath: string,
   platform: NodeJS.Platform,
+  copy: SqliteFileCopy,
 ): Promise<SqliteSnapshotFailure | null> {
-  const main = await copyOne(sourcePath, snapshotPath, platform);
+  for (let attempt = 0; attempt < SQLITE_SNAPSHOT_COPY_ATTEMPTS; attempt += 1) {
+    const before = await sourceSignature(sourcePath);
+    const failure = await copySqliteFilesOnce(
+      sourcePath,
+      snapshotPath,
+      platform,
+      copy,
+    );
+    if (failure !== null) return failure;
+    if ((await sourceSignature(sourcePath)) === before) return null;
+  }
+  return "locked";
+}
+
+async function copySqliteFilesOnce(
+  sourcePath: string,
+  snapshotPath: string,
+  platform: NodeJS.Platform,
+  copy: SqliteFileCopy,
+): Promise<SqliteSnapshotFailure | null> {
+  const main = await copyOne(sourcePath, snapshotPath, platform, copy);
   if (main !== null) return main;
   // A missing WAL or shm is the common case: the browser checkpointed and
-  // removed them, or never wrote them. Only the main file is required.
-  const wal = await copyOne(
-    `${sourcePath}-wal`,
-    `${snapshotPath}-wal`,
-    platform,
-  );
-  if (wal !== null && wal !== "missing") return wal;
-  const shm = await copyOne(
-    `${sourcePath}-shm`,
-    `${snapshotPath}-shm`,
-    platform,
-  );
-  if (shm !== null && shm !== "missing") return shm;
+  // removed them, or never wrote them. Only the main file is required. The
+  // copy of a sibling that is missing NOW is unlinked, so a retry after a
+  // checkpoint cannot pair this attempt's main file with the previous
+  // attempt's frames.
+  for (const suffix of SQLITE_SIBLING_SUFFIXES.slice(1)) {
+    const sibling = await copyOne(
+      `${sourcePath}${suffix}`,
+      `${snapshotPath}${suffix}`,
+      platform,
+      copy,
+    );
+    if (sibling === "missing") await unlinkQuietly(`${snapshotPath}${suffix}`);
+    else if (sibling !== null) return sibling;
+  }
   return null;
+}
+
+/**
+ * Size and mtime of the main file and both siblings, as one string. A
+ * sibling that is not there is part of the signature too: a WAL that
+ * appeared or was removed mid-copy is exactly a checkpoint.
+ */
+async function sourceSignature(sourcePath: string): Promise<string> {
+  const parts: string[] = [];
+  for (const suffix of SQLITE_SIBLING_SUFFIXES) {
+    try {
+      const info = await stat(`${sourcePath}${suffix}`);
+      parts.push(`${info.size}:${info.mtimeMs}`);
+    } catch {
+      parts.push("missing");
+    }
+  }
+  return parts.join("|");
 }
 
 async function copyOne(
   from: string,
   to: string,
   platform: NodeJS.Platform,
+  copy: SqliteFileCopy,
 ): Promise<SqliteSnapshotFailure | null> {
   try {
-    await copyFile(from, to);
+    await copy(from, to);
     return null;
   } catch (error) {
     return classifyCopyFailure(error, platform);

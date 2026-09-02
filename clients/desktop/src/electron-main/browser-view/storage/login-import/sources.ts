@@ -363,7 +363,10 @@ export function parseFirefoxProfilesIni(
     const path = section.Path;
     if (path !== undefined && path.length > 0) {
       profiles.push({
-        name: section.Name ?? path,
+        // The name becomes the picker's label, which crosses to the renderer.
+        // Without one the LAST segment stands in - never the path itself,
+        // which for `IsRelative=0` is absolute and starts at the home dir.
+        name: section.Name ?? profileDirectoryName(path),
         path,
         isRelative: section.IsRelative !== "0",
       });
@@ -384,6 +387,16 @@ export function parseFirefoxProfilesIni(
   }
   flush();
   return profiles;
+}
+
+/**
+ * The last segment of a `profiles.ini` path, whichever separator wrote it:
+ * an absolute `Path` on Windows carries backslashes even when this code runs
+ * elsewhere, so `node:path`'s platform basename would keep the whole thing.
+ */
+function profileDirectoryName(path: string): string {
+  const segments = path.split(/[\\/]+/u).filter((segment) => segment !== "");
+  return segments[segments.length - 1] ?? "Profile";
 }
 
 // --- Safari ----------------------------------------------------------------

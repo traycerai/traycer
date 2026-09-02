@@ -69,6 +69,7 @@ export const RunnerHostInvoke = {
   getRegisteredUrlSchemes: "runnerHost:getRegisteredUrlSchemes",
   requestMicrophoneAccess: "runnerHost:requestMicrophoneAccess",
   openMicrophoneSettings: "runnerHost:openMicrophoneSettings",
+  openFullDiskAccessSettings: "runnerHost:openFullDiskAccessSettings",
   notificationOpenSystemSettings: "runnerHost:notifications:openSystemSettings",
   notificationShow: "runnerHost:notifications:show",
   traySetEpics: "runnerHost:tray:setEpics",

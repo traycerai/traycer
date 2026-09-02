@@ -1,11 +1,17 @@
-import { useMutation, type UseMutationResult } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQueryClient,
+  type UseMutationResult,
+} from "@tanstack/react-query";
 import type {
   BrowserViewBridge,
   LoginImportRequest,
   LoginImportResult,
 } from "@traycer-clients/shared/platform/browser-view";
-import { browserMutationKeys } from "@/lib/query-keys";
+import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
+import { browserMutationKeys, queryKeys } from "@/lib/query-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
+import { BROWSER_SAVED_LOGIN_SITES_METHOD } from "./use-browser-saved-login-sites-query";
 
 /**
  * The Import click, which is ONE call: the desktop decrypts, writes its
@@ -22,10 +28,17 @@ import { toastFromRunnerError } from "@/lib/runner-error-toast";
  * keystore, and a retry after a denied Keychain prompt is a second prompt the
  * user did not ask for. The bridge answers every failure as a result value, so
  * the only way into `onError` is the IPC itself failing.
+ *
+ * On success the surface host's "Sites with saved logins" list is
+ * invalidated: it is read from the host, which has just been handed the jar,
+ * and its 30 s stale window would otherwise keep showing the pre-import list
+ * behind a Done step that names the sites just added.
  */
 export function useLoginImportRun(
   browserView: BrowserViewBridge | null,
 ): UseMutationResult<LoginImportResult, Error, LoginImportRequest> {
+  const queryClient = useQueryClient();
+  const hostId = useAddressableHostId();
   return useMutation<LoginImportResult, Error, LoginImportRequest>({
     mutationKey: browserMutationKeys.importLogins(),
     mutationFn: async (request) => {
@@ -35,6 +48,15 @@ export function useLoginImportRun(
       return browserView.importLogins(request);
     },
     retry: false,
+    onSuccess: (result) => {
+      if (result.status !== "imported") return;
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.hostMethodScope(
+          hostId,
+          BROWSER_SAVED_LOGIN_SITES_METHOD,
+        ),
+      });
+    },
     onError: (error) => toastFromRunnerError(error, "Couldn't import logins"),
   });
 }

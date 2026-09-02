@@ -529,16 +529,54 @@ describe("parseFirefoxProfilesIni", () => {
     ]);
   });
 
-  it("falls back to the path as the name when Name is missing", () => {
+  it("falls back to the last path segment as the name when Name is missing", () => {
     const ini = [
       "[Profile0]",
       "IsRelative=1",
-      "Path=nameless.default",
+      "Path=some/nested/nameless.default",
       "",
     ].join("\n");
 
     expect(parseFirefoxProfilesIni(ini)).toEqual([
-      { name: "nameless.default", path: "nameless.default", isRelative: true },
+      {
+        name: "nameless.default",
+        path: "some/nested/nameless.default",
+        isRelative: true,
+      },
+    ]);
+  });
+
+  it("falls back to the last segment of an absolute POSIX path when Name is missing", () => {
+    const ini = [
+      "[Profile0]",
+      "IsRelative=0",
+      "Path=/Users/someone/Library/Application Support/Firefox/Profiles/abcd.default",
+      "",
+    ].join("\n");
+
+    expect(parseFirefoxProfilesIni(ini)).toEqual([
+      {
+        name: "abcd.default",
+        path: "/Users/someone/Library/Application Support/Firefox/Profiles/abcd.default",
+        isRelative: false,
+      },
+    ]);
+  });
+
+  it("falls back to the last segment of a Windows-style absolute path when Name is missing", () => {
+    const ini = [
+      "[Profile0]",
+      "IsRelative=0",
+      "Path=C:\\Users\\someone\\AppData\\Roaming\\Mozilla\\Firefox\\Profiles\\abcd.default",
+      "",
+    ].join("\n");
+
+    expect(parseFirefoxProfilesIni(ini)).toEqual([
+      {
+        name: "abcd.default",
+        path: "C:\\Users\\someone\\AppData\\Roaming\\Mozilla\\Firefox\\Profiles\\abcd.default",
+        isRelative: false,
+      },
     ]);
   });
 

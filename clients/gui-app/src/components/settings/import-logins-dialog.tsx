@@ -17,7 +17,7 @@ import { useLoginImportPickFile } from "@/hooks/browser/use-login-import-pick-fi
 import { useLoginImportRun } from "@/hooks/browser/use-login-import-run-mutation";
 import { useLoginImportScanQuery } from "@/hooks/browser/use-login-import-scan-query";
 import { useLoginImportSourcesQuery } from "@/hooks/browser/use-login-import-sources-query";
-import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
+import { useRunnerOpenFullDiskAccessSettings } from "@/hooks/runner/use-open-full-disk-access-settings-mutation";
 import { formatRelativeTimestamp, useSampledNow } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
 import type {
@@ -53,9 +53,19 @@ import type {
 
 type ImportStep =
   | { readonly kind: "pick" }
-  | { readonly kind: "choose"; readonly source: LoginImportSource }
+  | {
+      readonly kind: "choose";
+      readonly source: LoginImportSource;
+      /**
+       * The choice a blocked import was made with, restored when the user
+       * retries from Done: a retry after a denied Keychain prompt must not
+       * come back with every site ticked again. `null` on the first visit.
+       */
+      readonly previousChoice: ImportChoice | null;
+    }
   | {
       readonly kind: "done";
+      readonly choice: ImportChoice;
       readonly source: LoginImportSource;
       readonly result: LoginImportResult;
     };
@@ -72,9 +82,6 @@ const BROWSER_LABELS: Readonly<Record<LoginImportBrowser, string>> = {
   safari: "Safari",
   file: "Cookie file",
 };
-
-const FULL_DISK_ACCESS_PANE =
-  "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles";
 
 export function ImportLoginsDialog(props: {
   readonly open: boolean;
@@ -100,7 +107,7 @@ export function ImportLoginsDialog(props: {
           browserView={props.browserView}
           enabled={props.open}
           onPick={(source) => {
-            setStep({ kind: "choose", source });
+            setStep({ kind: "choose", source, previousChoice: null });
           }}
         />
       );
@@ -111,6 +118,7 @@ export function ImportLoginsDialog(props: {
         <ChooseStep
           browserView={props.browserView}
           source={source}
+          previousChoice={step.previousChoice}
           pending={pending}
           onBack={() => {
             importRun.reset();
@@ -125,7 +133,7 @@ export function ImportLoginsDialog(props: {
               },
               {
                 onSuccess: (result) => {
-                  setStep({ kind: "done", source, result });
+                  setStep({ kind: "done", source, choice, result });
                 },
               },
             );
@@ -139,7 +147,11 @@ export function ImportLoginsDialog(props: {
         result={step.result}
         onRetry={() => {
           importRun.reset();
-          setStep({ kind: "choose", source: step.source });
+          setStep({
+            kind: "choose",
+            source: step.source,
+            previousChoice: step.choice,
+          });
         }}
         onClose={close}
       />
@@ -266,6 +278,7 @@ function PickStep(props: {
 function ChooseStep(props: {
   readonly browserView: BrowserViewBridge;
   readonly source: LoginImportSource;
+  readonly previousChoice: ImportChoice | null;
   readonly pending: boolean;
   readonly onBack: () => void;
   readonly onImport: (choice: ImportChoice) => void;
@@ -300,6 +313,7 @@ function ChooseStep(props: {
       <SiteChecklist
         scan={scan.data}
         browser={props.source.browser}
+        previousChoice={props.previousChoice}
         pending={props.pending}
         onImport={props.onImport}
         onBack={props.onBack}
@@ -354,20 +368,28 @@ interface ImportChoice {
 function SiteChecklist(props: {
   readonly scan: LoginImportScan;
   readonly browser: LoginImportBrowser;
+  readonly previousChoice: ImportChoice | null;
   readonly pending: boolean;
   readonly onImport: (choice: ImportChoice) => void;
   readonly onBack: () => void;
 }): ReactNode {
   const [filter, setFilter] = useState("");
   // Unticked rather than ticked: every site starts selected, so the state
-  // is the exceptions and a fresh scan never has to be copied into it.
-  const [unticked, setUnticked] = useState<ReadonlySet<string>>(new Set());
-  // Off by default and never remembered: Google binds its sessions to the
-  // device, so an imported one can end on its own. Turning this on moves the
-  // Google rows from the disabled tail into the checklist, ticked like any
-  // other site, and the request carries the opt-in so the desktop honours
-  // them; turning it off again drops them from the count and the request.
-  const [includeDeviceBound, setIncludeDeviceBound] = useState(false);
+  // is the exceptions and a fresh scan never has to be copied into it. A
+  // retry from a blocked import starts from that import's choice instead,
+  // so the sites the user excluded stay excluded.
+  const [unticked, setUnticked] = useState<ReadonlySet<string>>(() =>
+    untickedFor(props.scan, props.previousChoice),
+  );
+  // Off by default and never remembered past this dialog: Google binds its
+  // sessions to the device, so an imported one can end on its own. Turning
+  // this on moves the Google rows from the disabled tail into the checklist,
+  // ticked like any other site, and the request carries the opt-in so the
+  // desktop honours them; turning it off again drops them from the count and
+  // the request. A retry keeps the opt-in the blocked import was made with.
+  const [includeDeviceBound, setIncludeDeviceBound] = useState(
+    props.previousChoice !== null && props.previousChoice.includeDeviceBound,
+  );
   const deviceBound = new Set(props.scan.excluded.map((site) => site.domain));
   const sites = includeDeviceBound
     ? [...props.scan.sites, ...props.scan.excluded]
@@ -510,15 +532,11 @@ function SiteChecklist(props: {
           }}
         />
       ) : null}
-      {props.scan.partitionedCookieCount > 0 ? (
-        <p className="text-ui-xs text-muted-foreground">
-          {props.scan.partitionedCookieCount}{" "}
-          {props.scan.partitionedCookieCount === 1 ? "cookie" : "cookies"}{" "}
-          scoped to embedded contexts{" "}
-          {props.scan.partitionedCookieCount === 1 ? "is" : "are"} left out.
-        </p>
-      ) : null}
-      <UnlockExplainer unlock={props.scan.unlock} browser={props.browser} />
+      <LeftOutNotes scan={props.scan} />
+      <UnlockExplainer
+        unlock={unlockForSelection(selected)}
+        browser={props.browser}
+      />
       <DialogFooter>
         <Button
           type="button"
@@ -596,6 +614,67 @@ function DeviceBoundOptIn(props: {
       )}
     </div>
   );
+}
+
+/**
+ * What the scan could see but the import cannot carry, each with its count:
+ * cookies scoped to embedded contexts, and records the reader could not
+ * parse. (Windows' protected rows get a warning notice above the list.)
+ */
+function LeftOutNotes(props: { readonly scan: LoginImportScan }): ReactNode {
+  const partitioned = props.scan.partitionedCookieCount;
+  const unreadable = props.scan.unreadableCookieCount;
+  return (
+    <>
+      {partitioned > 0 ? (
+        <p className="text-ui-xs text-muted-foreground">
+          {partitioned} {partitioned === 1 ? "cookie" : "cookies"} scoped to
+          embedded contexts {partitioned === 1 ? "is" : "are"} left out.
+        </p>
+      ) : null}
+      {unreadable > 0 ? (
+        <p className="text-ui-xs text-muted-foreground">
+          {unreadable} {unreadable === 1 ? "record" : "records"} in this profile
+          couldn't be read and {unreadable === 1 ? "is" : "are"} left out.
+        </p>
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * The exceptions a retry starts from: every site the blocked import listed
+ * and did not name. Computed against the CURRENT scan, since Try again
+ * re-reads the source and a site may have come or gone in between, and only
+ * over the sites that choice could see - the Google rows join the checklist
+ * ticked, as on a first visit, if the opt-in is turned on later.
+ */
+function untickedFor(
+  scan: LoginImportScan,
+  previousChoice: ImportChoice | null,
+): ReadonlySet<string> {
+  if (previousChoice === null) return new Set();
+  const chosen = new Set(previousChoice.domains);
+  const listed = previousChoice.includeDeviceBound
+    ? [...scan.sites, ...scan.excluded]
+    : scan.sites;
+  return new Set(
+    listed.map((site) => site.domain).filter((domain) => !chosen.has(domain)),
+  );
+}
+
+/**
+ * Which keystore the Import click will open for THESE sites, so the explainer
+ * promises a prompt only when one is coming: a plaintext-only selection opens
+ * nothing, however many encrypted rows the profile holds elsewhere.
+ */
+function unlockForSelection(
+  selected: readonly { readonly unlock: LoginImportUnlock | null }[],
+): LoginImportUnlock | null {
+  for (const site of selected) {
+    if (site.unlock !== null) return site.unlock;
+  }
+  return null;
 }
 
 /**
@@ -716,12 +795,14 @@ function describePush(notifiedHosts: number): string {
 /**
  * One explainer per closed reason, each naming the thing the user can do.
  * Full Disk Access gets a deep link: the pane lists Traycer only after a
- * denied attempt, which the scan that produced this reason just made.
+ * denied attempt, which the scan that produced this reason just made. The
+ * link is a RunnerHost method of its own, because the generic external-link
+ * path only opens http(s).
  */
 function BlockedExplainer(props: {
   readonly reason: LoginImportBlocked | "keychain-denied" | "saved-logins-off";
 }): ReactNode {
-  const openExternal = useRunnerOpenExternalLink();
+  const openFullDiskAccess = useRunnerOpenFullDiskAccessSettings();
   switch (props.reason) {
     case "needs-full-disk-access":
       return (
@@ -736,9 +817,9 @@ function BlockedExplainer(props: {
             variant="outline"
             size="xs"
             className="mt-2"
-            disabled={openExternal.isPending}
+            disabled={openFullDiskAccess.isPending}
             onClick={() => {
-              openExternal.mutate(FULL_DISK_ACCESS_PANE);
+              openFullDiskAccess.mutate();
             }}
           >
             Open Full Disk Access settings
@@ -782,6 +863,12 @@ function BlockedExplainer(props: {
           cookies with an extension and import the file.
         </Notice>
       );
+    default: {
+      // A reason added to the closed set without an explainer is a compile
+      // error here, not a title with no cause and no action under it.
+      const unhandled: never = props.reason;
+      return unhandled;
+    }
   }
 }
 
@@ -789,9 +876,12 @@ function Notice(props: {
   readonly tone: "info" | "warning";
   readonly children: ReactNode;
 }): ReactNode {
+  // `note`, whatever the tone: these are part of the step's content, present
+  // as it renders, so an assertive live region would interrupt a screen
+  // reader mid-dialog - and re-announce the Google warning on every toggle.
   return (
     <div
-      role={props.tone === "warning" ? "alert" : "note"}
+      role="note"
       className={cn(
         "flex items-start gap-2 rounded-md px-3 py-2 text-ui-sm",
         props.tone === "warning"

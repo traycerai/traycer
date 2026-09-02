@@ -64,9 +64,13 @@ async function assertWalFileHasData(sourcePath: string): Promise<void> {
 
 const snapshotRoots: string[] = [];
 const writers: DatabaseSync[] = [];
+const dirsToClean: string[] = [];
 
 afterEach(async () => {
   for (const writer of writers.splice(0)) writer.close();
+  for (const dir of dirsToClean.splice(0)) {
+    await rm(dir, { recursive: true, force: true });
+  }
   for (const dir of snapshotRoots.splice(0)) {
     await rm(dir, { recursive: true, force: true });
   }
@@ -98,6 +102,7 @@ describe("readChromiumCookieDatabase - full schema", () => {
       withPartitionColumns: true,
     });
     writers.push(writer);
+    dirsToClean.push(dir);
     writer
       .prepare(
         `INSERT INTO cookies
@@ -122,7 +127,6 @@ describe("readChromiumCookieDatabase - full schema", () => {
     const database = await readDatabase(path);
 
     expect(database.rows.map((row) => row.name)).toContain("wal_cookie");
-    await rm(dir, { recursive: true, force: true });
   });
 
   it("flags a partitioned row via a non-empty top_frame_site_key, without dropping it", async () => {
@@ -130,6 +134,7 @@ describe("readChromiumCookieDatabase - full schema", () => {
       withPartitionColumns: true,
     });
     writers.push(writer);
+    dirsToClean.push(dir);
     writer
       .prepare(
         `INSERT INTO cookies
@@ -156,7 +161,6 @@ describe("readChromiumCookieDatabase - full schema", () => {
     if (row === undefined)
       throw new Error("expected the partitioned row to survive the read");
     expect(row.partitioned).toBe(true);
-    await rm(dir, { recursive: true, force: true });
   });
 
   it("reads has_expires = 0 as a session cookie (expires: -1), not an epoch-1601 date", async () => {
@@ -164,6 +168,7 @@ describe("readChromiumCookieDatabase - full schema", () => {
       withPartitionColumns: true,
     });
     writers.push(writer);
+    dirsToClean.push(dir);
     writer
       .prepare(
         `INSERT INTO cookies
@@ -191,7 +196,6 @@ describe("readChromiumCookieDatabase - full schema", () => {
     if (row === undefined)
       throw new Error("expected the session row to survive the read");
     expect(row.expires).toBe(-1);
-    await rm(dir, { recursive: true, force: true });
   });
 
   it("converts expires_utc microseconds-since-1601 to unix seconds", async () => {
@@ -199,6 +203,7 @@ describe("readChromiumCookieDatabase - full schema", () => {
       withPartitionColumns: true,
     });
     writers.push(writer);
+    dirsToClean.push(dir);
     const unixSeconds = 1_893_456_000; // 2030-01-01T00:00:00Z
     const windowsEpochOffsetSeconds = 11_644_473_600;
     const expiresUtcMicroseconds =
@@ -230,7 +235,6 @@ describe("readChromiumCookieDatabase - full schema", () => {
       throw new Error("expected the expiring row to survive the read");
     expect(row.expires).toBe(unixSeconds);
     expect(typeof row.expires).toBe("number");
-    await rm(dir, { recursive: true, force: true });
   });
 
   it.each([
@@ -243,6 +247,7 @@ describe("readChromiumCookieDatabase - full schema", () => {
       withPartitionColumns: true,
     });
     writers.push(writer);
+    dirsToClean.push(dir);
     writer
       .prepare(
         `INSERT INTO cookies
@@ -271,7 +276,6 @@ describe("readChromiumCookieDatabase - full schema", () => {
     if (row === undefined)
       throw new Error("expected the samesite row to survive the read");
     expect(row.sameSite).toBe(expected);
-    await rm(dir, { recursive: true, force: true });
   });
 
   it.each([
@@ -285,6 +289,7 @@ describe("readChromiumCookieDatabase - full schema", () => {
         withPartitionColumns: true,
       });
       writers.push(writer);
+      dirsToClean.push(dir);
       const encryptedValue = Buffer.concat([
         Buffer.from(prefix, "latin1"),
         Buffer.from([1, 2, 3, 4]),
@@ -323,7 +328,6 @@ describe("readChromiumCookieDatabase - full schema", () => {
           prefix,
         );
       }
-      await rm(dir, { recursive: true, force: true });
     },
   );
 
@@ -332,6 +336,7 @@ describe("readChromiumCookieDatabase - full schema", () => {
       withPartitionColumns: true,
     });
     writers.push(writer);
+    dirsToClean.push(dir);
     writer
       .prepare(
         `INSERT INTO cookies
@@ -358,7 +363,6 @@ describe("readChromiumCookieDatabase - full schema", () => {
     if (row === undefined)
       throw new Error("expected the plain row to survive the read");
     expect(row.secret).toEqual({ kind: "plain", value: "plaintext-value" });
-    await rm(dir, { recursive: true, force: true });
   });
 
   it("reads a real BLOB encrypted_value as bytes the byte reader accepts, not bigint or string", async () => {
@@ -366,6 +370,7 @@ describe("readChromiumCookieDatabase - full schema", () => {
       withPartitionColumns: true,
     });
     writers.push(writer);
+    dirsToClean.push(dir);
     const blob = Buffer.from("v10secretbytes", "latin1");
     writer
       .prepare(
@@ -398,7 +403,6 @@ describe("readChromiumCookieDatabase - full schema", () => {
     if (row.secret.kind === "encrypted") {
       expect(Buffer.from(row.secret.bytes).equals(blob)).toBe(true);
     }
-    await rm(dir, { recursive: true, force: true });
   });
 
   it("returns actual numbers, never bigints, for expires even though the statement reads with setReadBigInts(true)", async () => {
@@ -406,6 +410,7 @@ describe("readChromiumCookieDatabase - full schema", () => {
       withPartitionColumns: true,
     });
     writers.push(writer);
+    dirsToClean.push(dir);
     writer
       .prepare(
         `INSERT INTO cookies
@@ -433,7 +438,6 @@ describe("readChromiumCookieDatabase - full schema", () => {
       throw new Error("expected the bigint row to survive the read");
     expect(typeof row.expires).toBe("number");
     expect(Number.isFinite(row.expires)).toBe(true);
-    await rm(dir, { recursive: true, force: true });
   });
 });
 
@@ -443,6 +447,7 @@ describe("readChromiumCookieDatabase - schema missing partition/expiry/samesite 
       withPartitionColumns: false,
     });
     writers.push(writer);
+    dirsToClean.push(dir);
     writer
       .prepare(
         `INSERT INTO cookies
@@ -470,7 +475,6 @@ describe("readChromiumCookieDatabase - schema missing partition/expiry/samesite 
     // Without `has_expires`, an expires_utc of 0 (or unset) reads as no expiry
     // at all, per readExpires' fallback to the raw microseconds check.
     expect(row.expires).toBe(-1);
-    await rm(dir, { recursive: true, force: true });
   });
 
   it("still reads a WAL-only row under the old schema", async () => {
@@ -478,6 +482,7 @@ describe("readChromiumCookieDatabase - schema missing partition/expiry/samesite 
       withPartitionColumns: false,
     });
     writers.push(writer);
+    dirsToClean.push(dir);
     writer
       .prepare(
         `INSERT INTO cookies
@@ -499,7 +504,6 @@ describe("readChromiumCookieDatabase - schema missing partition/expiry/samesite 
     const database = await readDatabase(path);
 
     expect(database.rows.map((row) => row.name)).toContain("old_wal_cookie");
-    await rm(dir, { recursive: true, force: true });
   });
 });
 
@@ -509,10 +513,10 @@ describe("readChromiumCookieDatabase - meta version", () => {
       withPartitionColumns: true,
     });
     writers.push(writer);
+    dirsToClean.push(dir);
 
     const database = await readDatabase(path);
 
     expect(database.metaVersion).toBe(24);
-    await rm(dir, { recursive: true, force: true });
   });
 });

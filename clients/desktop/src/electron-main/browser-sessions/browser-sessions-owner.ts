@@ -48,6 +48,16 @@ import type {
 export const FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS = 5_000;
 
 /**
+ * What became of one capture on one stream. `unacked` is a frame that LEFT
+ * and drew no ack in time; it is kept apart from `not-sent` because to the
+ * once-per-host rule a frame that left is the host's capture, ack or no ack.
+ */
+export type BrowserPrimaryProfileCaptureOutcome =
+  | "acked"
+  | "unacked"
+  | "not-sent";
+
+/**
  * How many `browser.sessions` streams one window may hold.
  *
  * The renderer names the stream, and every distinct `identityKey` it names
@@ -339,7 +349,11 @@ export class BrowserSessionsRegistry {
     const captured = await Promise.all(
       [...streamsByHost.values()].map(async (streams) => {
         for (const stream of streams) {
-          if (await stream.capturePrimaryProfileNow()) return true;
+          const outcome = await stream.capturePrimaryProfileNow();
+          // A frame that LEFT is this host's one capture, acked or not: a
+          // sibling stream is tried only when nothing was sent, never after
+          // a timeout, or the host would get a second whole jar per stream.
+          if (outcome !== "not-sent") return outcome === "acked";
         }
         return false;
       }),
@@ -435,6 +449,9 @@ class BrowserSessionsStream {
    * the connection, because a reconnect brings a new one.
    */
   private standingCaptureRequestId: string | null = null;
+  /** The capture two overlapping callers share; see `capturePrimaryProfileNow`. */
+  private captureInFlight: Promise<BrowserPrimaryProfileCaptureOutcome> | null =
+    null;
   /**
    * The account this stream was OPENED for, captured at `start()`.
    *
@@ -677,24 +694,41 @@ class BrowserSessionsStream {
   }
 
   /**
-   * One capture on this stream, answering whether the host ACKED it.
+   * One capture on this stream, answering what became of it: `acked` by the
+   * host, `unacked` (sent, but no ack within
+   * {@link FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS}, or the connection went
+   * before one), or `not-sent` (the connection is not open, or the host holds
+   * no standing capture request). The registry's once-per-host rule needs
+   * the middle one told apart from the last: a frame that left is the host's
+   * one capture even if the ack never came.
    *
-   * `false` covers every way a host can fail to take the jar - the connection
-   * is not open, it holds no standing capture request, or it never acked
-   * within {@link FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS} - because to a
-   * caller reporting what was placed they are the same outcome.
+   * Two callers overlapping - a login import beside the quit-path flush, or
+   * two Settings windows importing - SHARE the capture in flight rather than
+   * each sending one: the standing request id is the same for both, and
+   * one ack waiter per id means the second would have overwritten the
+   * first's, leaving it to time out and report `unacked` for a jar the host
+   * did take.
    */
-  async capturePrimaryProfileNow(): Promise<boolean> {
-    if (this.connectionStatus !== "open") return false;
+  capturePrimaryProfileNow(): Promise<BrowserPrimaryProfileCaptureOutcome> {
+    if (this.captureInFlight !== null) return this.captureInFlight;
+    const capture = this.capturePrimaryProfileOnce().finally(() => {
+      this.captureInFlight = null;
+    });
+    this.captureInFlight = capture;
+    return capture;
+  }
+
+  private async capturePrimaryProfileOnce(): Promise<BrowserPrimaryProfileCaptureOutcome> {
+    if (this.connectionStatus !== "open") return "not-sent";
     const requestId = this.standingCaptureRequestId;
     // No standing id means this host either never authorized the jar plane for
     // this connection or never unsealed the store, so a capture would be
     // refused and dropped there. Sending nothing is the same outcome without
     // the jar read.
-    if (requestId === null) return false;
+    if (requestId === null) return "not-sent";
     const acked = this.awaitCaptureAck(requestId);
     await this.answerCaptureRequest(requestId);
-    return await acked;
+    return (await acked) ? "acked" : "unacked";
   }
 
   dispose(): void {

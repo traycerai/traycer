@@ -1,10 +1,23 @@
-import { createCipheriv, pbkdf2Sync, randomBytes } from "node:crypto";
+import {
+  createCipheriv,
+  pbkdf2Sync,
+  randomBytes,
+  randomUUID,
+} from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import type { Cookie, CookiesGetFilter, CookiesSetDetails } from "electron";
-import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 import {
   CHROMIUM_LINUX_BASIC_PASSPHRASE,
   CHROMIUM_PBKDF2_ITERATIONS,
@@ -19,6 +32,7 @@ import {
   type LoginImportServiceDependencies,
 } from "../import-logins";
 import type { SecretReadResult } from "../secret-providers/secret-read-result";
+import type { BrowserCookieKey } from "@traycer/protocol/host/browser/contracts";
 import type { LoginImportScan } from "@traycer-clients/shared/platform/browser-view";
 import { matchesDomainFilter } from "../../__tests__/cookie-jar-fixture";
 
@@ -275,14 +289,16 @@ class FakeLoginImportSession implements LoginImportJarSession {
   private readonly jar: Cookie[] = [];
   readonly setCalls: CookiesSetDetails[] = [];
   flushes = 0;
-  private rejectSetName: string | null = null;
+  private readonly rejectSetNames = new Set<string>();
 
   constructor(initial: readonly Cookie[]) {
     this.jar.push(...initial);
   }
 
+  /** Callable more than once to reject several names; existing single-name
+   * callers are unaffected. */
   rejectSet(name: string): void {
-    this.rejectSetName = name;
+    this.rejectSetNames.add(name);
   }
 
   readonly cookies: LoginImportJarCookies = {
@@ -298,7 +314,7 @@ class FakeLoginImportSession implements LoginImportJarSession {
     },
     set: (details: CookiesSetDetails): Promise<void> => {
       this.setCalls.push(details);
-      if (details.name === this.rejectSetName) {
+      if (details.name !== undefined && this.rejectSetNames.has(details.name)) {
         return Promise.reject(new Error("cookies.set rejected"));
       }
       const host = new URL(details.url).hostname;
@@ -325,13 +341,24 @@ class FakeLoginImportSession implements LoginImportJarSession {
       return Promise.resolve();
     },
     remove: (url: string, name: string): Promise<void> => {
+      // Electron removes by {url, name}, which is WIDER than one cookie:
+      // every cookie of that name whose domain matches the URL's host is
+      // caught, not just the first one found - a domain cookie and a
+      // host-only cookie of the same name both match. Removing only the
+      // first match would hide exactly the collision `writeSite` is written
+      // to recover from (see `import-logins.ts`'s point 4), so this mimics
+      // Electron's wider removal rather than a single-item delete.
       const host = new URL(url).hostname;
-      const index = this.jar.findIndex(
-        (cookie) =>
+      for (let index = this.jar.length - 1; index >= 0; index -= 1) {
+        const cookie = this.jar[index];
+        if (
+          cookie !== undefined &&
           cookie.name === name &&
-          matchesDomainFilter(cookie.domain ?? "", host),
-      );
-      if (index !== -1) this.jar.splice(index, 1);
+          matchesDomainFilter(cookie.domain ?? "", host)
+        ) {
+          this.jar.splice(index, 1);
+        }
+      }
       return Promise.resolve();
     },
     flushStore: (): Promise<void> => {
@@ -349,6 +376,14 @@ class FakeLoginImportSession implements LoginImportJarSession {
       .filter((cookie) => matchesDomainFilter(cookie.domain ?? "", domain))
       .map((cookie) => cookie.name)
       .sort();
+  }
+
+  /** The whole Cookie objects under a domain, so a caller can check more
+   * than the name - e.g. which scope (host-only vs domain) survived. */
+  cookiesUnderDomain(domain: string): readonly Cookie[] {
+    return this.jar.filter((cookie) =>
+      matchesDomainFilter(cookie.domain ?? "", domain),
+    );
   }
 }
 
@@ -374,6 +409,21 @@ interface ServiceHarness {
   };
 }
 
+// A per-suite temp dir rather than a bogus path: every test that never
+// overrides `snapshotRoot` still gets somewhere real and writable, instead
+// of a path this process may have no permission to create ("/unused-…").
+// `buildHarness` stays synchronous - `join`/`randomUUID` are, and the
+// directory itself is created lazily by `withSqliteSnapshot`/
+// `sweepSqliteSnapshots` on first use, never by this module.
+const DEFAULT_SNAPSHOT_ROOT = join(
+  tmpdir(),
+  `login-import-default-snap-${randomUUID()}`,
+);
+
+afterAll(async () => {
+  await rm(DEFAULT_SNAPSHOT_ROOT, { recursive: true, force: true });
+});
+
 function buildHarness(
   overrides: Partial<LoginImportServiceDependencies>,
   session: FakeLoginImportSession,
@@ -392,10 +442,12 @@ function buildHarness(
     platform: "darwin",
     homeDir: "/unused-home",
     env: {},
-    snapshotRoot: "/unused-snapshot-root",
+    snapshotRoot: DEFAULT_SNAPSHOT_ROOT,
     readSaveLogins: () => true,
     getDurableSession: () => session,
+    serializeJarWrite: async (action) => action(),
     suppressDeltas: async (action) => action(),
+    releaseHostOwnedKeys: async () => undefined,
     settleWindowMs: 5,
     sleep: () => Promise.resolve(),
     secrets,
@@ -527,11 +579,16 @@ describe("scan", () => {
 
     expect(scan.blocked).toBeNull();
     expect(scan.sites).toEqual([
-      { domain: "secure-site.com", cookieCount: 1 },
-      { domain: "site-one.com", cookieCount: 2 },
+      { domain: "secure-site.com", cookieCount: 1, unlock: "macos-keychain" },
+      { domain: "site-one.com", cookieCount: 2, unlock: null },
     ]);
     expect(scan.excluded).toEqual([
-      { domain: "google.com", cookieCount: 1, reason: "google-device-bound" },
+      {
+        domain: "google.com",
+        cookieCount: 1,
+        unlock: null,
+        reason: "google-device-bound",
+      },
     ]);
     expect(scan.protectedCookieCount).toBe(1);
     expect(scan.partitionedCookieCount).toBe(1);
@@ -639,7 +696,12 @@ describe("scan", () => {
     // every non-excluded site is empty.
     expect(scan.sites).toEqual([]);
     expect(scan.excluded).toEqual([
-      { domain: "google.com", cookieCount: 1, reason: "google-device-bound" },
+      {
+        domain: "google.com",
+        cookieCount: 1,
+        unlock: "macos-keychain",
+        reason: "google-device-bound",
+      },
     ]);
     expect(scan.unlock).toBe("macos-keychain");
     expect(harness.secrets.macosKeychain).not.toHaveBeenCalled();
@@ -736,7 +798,9 @@ describe("import - source and scan bookkeeping", () => {
       session,
     );
     const { sourceId, scan } = await scanChromeSource(service);
-    expect(scan.sites).toEqual([{ domain: "relist-site.com", cookieCount: 1 }]);
+    expect(scan.sites).toEqual([
+      { domain: "relist-site.com", cookieCount: 1, unlock: null },
+    ]);
 
     // The service is one per main process: a second window opening Settings
     // re-lists while this window is still choosing. The profile is still
@@ -907,7 +971,8 @@ describe("import - a domain with only invalid cookies is not cleared", () => {
     expect(result.importedSites).toBe(1);
     expect(result.skippedInvalid).toBe(1);
     // The broken domain's pre-existing cookie survives: nothing was written
-    // for it, so `import-logins.ts` never calls `removeBrowserSiteCookies`.
+    // for it, so nothing is removed for that domain either - `writeSite`
+    // returns before computing what is stale when `writtenRows` is empty.
     expect(session.namesUnderDomain("broken-site.com")).toEqual([
       "existing-broken",
     ]);
@@ -1070,6 +1135,354 @@ describe("import - a cookies.set rejection is counted, not fatal", () => {
 });
 
 // =================================================================================
+// 8b. Every write for a site is rejected: the site is left untouched
+// =================================================================================
+
+describe("import - a site whose every write is rejected is left untouched", () => {
+  // Pins: a domain whose every `cookies.set` fails writes nothing and
+  // removes nothing - the jar's pre-existing slice for that site survives
+  // exactly as it was.
+  it("a site whose every cookies.set rejects keeps the cookies the jar already had", async () => {
+    const homeDir = await makeTempDir("login-import-all-rejected-");
+    await createDarwinChromeSource(
+      homeDir,
+      [
+        domainCookieRow(".reject-site.com", "one", {
+          kind: "plain",
+          value: "1",
+        }),
+        domainCookieRow(".reject-site.com", "two", {
+          kind: "plain",
+          value: "2",
+        }),
+      ],
+      23,
+    );
+    const session = new FakeLoginImportSession([
+      cookieFixture("existing", ".reject-site.com"),
+    ]);
+    session.rejectSet("one");
+    session.rejectSet("two");
+    const { service } = buildHarness(
+      { platform: "darwin", homeDir, snapshotRoot: await makeTempDir("snap-") },
+      session,
+    );
+    const { sourceId } = await scanChromeSource(service);
+
+    const result = await service.import({
+      sourceId,
+      domains: ["reject-site.com"],
+      includeDeviceBound: false,
+    });
+
+    expect(result).toEqual({
+      status: "imported",
+      importedSites: 0,
+      importedCookies: 0,
+      replacedSites: 0,
+      skippedInvalid: 2,
+    });
+    expect(session.namesUnderDomain("reject-site.com")).toEqual(["existing"]);
+  });
+});
+
+// =================================================================================
+// 8c. A removal that catches a same-name cookie under another scope is undone
+// =================================================================================
+
+describe("import - a same-name cookie under another scope is re-written after the removal that caught it", () => {
+  // Pins: Electron's `remove(url, name)` also catches a just-written cookie
+  // of the same name under a different scope; `writeSite` detects that via
+  // `removedNames` and re-writes the row, so the site ends with the SOURCE's
+  // scope (a domain cookie), not silently missing it.
+  it("ends with exactly one 'sid' cookie, under the domain-cookie scope the source wrote", async () => {
+    const homeDir = await makeTempDir("login-import-scope-collision-");
+    await createDarwinChromeSource(
+      homeDir,
+      [
+        domainCookieRow(".example.com", "sid", {
+          kind: "plain",
+          value: "new-value",
+        }),
+      ],
+      23,
+    );
+    const session = new FakeLoginImportSession([
+      // Host-only: no leading dot, exactly what `cookieFixture` produces for
+      // a domain with no leading dot.
+      cookieFixture("sid", "example.com"),
+    ]);
+    const { service } = buildHarness(
+      { platform: "darwin", homeDir, snapshotRoot: await makeTempDir("snap-") },
+      session,
+    );
+    const { sourceId } = await scanChromeSource(service);
+
+    const result = await service.import({
+      sourceId,
+      domains: ["example.com"],
+      includeDeviceBound: false,
+    });
+
+    expect(result).toEqual({
+      status: "imported",
+      importedSites: 1,
+      importedCookies: 1,
+      replacedSites: 1,
+      skippedInvalid: 0,
+    });
+    const cookies = session.cookiesUnderDomain("example.com");
+    expect(cookies.map((cookie) => cookie.name)).toEqual(["sid"]);
+    expect(cookies[0]?.domain).toBe(".example.com");
+  });
+});
+
+// =================================================================================
+// 8d. The settle window still runs when the write loop throws
+// =================================================================================
+
+describe("import - the settle window still runs when the write loop throws", () => {
+  async function waitForCondition(predicate: () => boolean): Promise<void> {
+    for (let attempt = 0; attempt < 400; attempt += 1) {
+      if (predicate()) return;
+      await new Promise<void>((resolve) => setTimeout(resolve, 5));
+    }
+    throw new Error("timed out waiting for condition");
+  }
+
+  // Pins: the `finally` around the flush+sleep runs on the FAILURE path too
+  // (see `import-logins.ts`'s point 3 in the module doc comment) - the
+  // settle sleep still has to fire, and still has to fire BEFORE the
+  // suppressed action settles, even though the write loop itself threw.
+  it("runs the settle sleep before the suppressed action settles, even when the write loop throws", async () => {
+    const homeDir = await makeTempDir("login-import-throw-settle-");
+    await createDarwinChromeSource(
+      homeDir,
+      [
+        domainCookieRow(".throw-site.com", "sid", {
+          kind: "plain",
+          value: "v",
+        }),
+      ],
+      23,
+    );
+    const events: string[] = [];
+    const settleWindowMs = 5;
+    const session = new FakeLoginImportSession([]);
+    // Simulates a jar read failing mid-write: `writeSite` calls
+    // `listBrowserSiteCookies`, which calls `cookies.get` before any
+    // `cookies.set` - so the write loop throws before writing anything.
+    session.cookies.get = (): Promise<Cookie[]> =>
+      Promise.reject(new Error("jar read failed"));
+    const sleepGate: { release: (() => void) | null } = { release: null };
+    const { service } = buildHarness(
+      {
+        platform: "darwin",
+        homeDir,
+        snapshotRoot: await makeTempDir("snap-"),
+        settleWindowMs,
+        suppressDeltas: async <T>(action: () => Promise<T>): Promise<T> => {
+          events.push("suppress-start");
+          try {
+            return await action();
+          } finally {
+            events.push("suppress-end");
+          }
+        },
+        sleep: (ms: number) => {
+          expect(ms).toBe(settleWindowMs);
+          return new Promise<void>((resolve) => {
+            sleepGate.release = () => {
+              events.push("sleep-resolved");
+              resolve();
+            };
+          });
+        },
+      },
+      session,
+    );
+    const { sourceId } = await scanChromeSource(service);
+
+    const pending = service.import({
+      sourceId,
+      domains: ["throw-site.com"],
+      includeDeviceBound: false,
+    });
+    await waitForCondition(() => sleepGate.release !== null);
+    // The write loop already threw, but the settle sleep it triggered from
+    // `finally` has not resolved yet - the suppressed action is still open.
+    expect(events).toEqual(["suppress-start"]);
+
+    const release = sleepGate.release;
+    if (release === null) throw new Error("expected a pending sleep");
+    release();
+    const result = await pending;
+
+    expect(result).toEqual({ status: "blocked", reason: "unreadable" });
+    expect(events).toEqual([
+      "suppress-start",
+      "sleep-resolved",
+      "suppress-end",
+    ]);
+  });
+});
+
+// =================================================================================
+// 8e. serializeJarWrite wraps suppressDeltas, in that nesting order
+// =================================================================================
+
+describe("import - the jar write runs inside serializeJarWrite, and suppressDeltas inside that", () => {
+  // Pins: the whole-jar barrier has to be OUTSIDE the delta-mute, not beside
+  // it or inside it - a mutation another caller queues behind the barrier
+  // must never land while this write's deltas are still suppressed.
+  it("nests suppressDeltas inside serializeJarWrite, in that order", async () => {
+    const homeDir = await makeTempDir("login-import-nesting-");
+    await createDarwinChromeSource(
+      homeDir,
+      [
+        domainCookieRow(".nested-site.com", "sid", {
+          kind: "plain",
+          value: "v",
+        }),
+      ],
+      23,
+    );
+    const events: string[] = [];
+    const session = new FakeLoginImportSession([]);
+    const { service } = buildHarness(
+      {
+        platform: "darwin",
+        homeDir,
+        snapshotRoot: await makeTempDir("snap-"),
+        serializeJarWrite: async <T>(action: () => Promise<T>): Promise<T> => {
+          events.push("serialize-start");
+          try {
+            return await action();
+          } finally {
+            events.push("serialize-end");
+          }
+        },
+        suppressDeltas: async <T>(action: () => Promise<T>): Promise<T> => {
+          events.push("suppress-start");
+          try {
+            return await action();
+          } finally {
+            events.push("suppress-end");
+          }
+        },
+      },
+      session,
+    );
+    const { sourceId } = await scanChromeSource(service);
+
+    const result = await service.import({
+      sourceId,
+      domains: ["nested-site.com"],
+      includeDeviceBound: false,
+    });
+
+    expect(result.status).toBe("imported");
+    // `serialize-start` before `suppress-start`: the barrier is entered
+    // first. `suppress-end` before `serialize-end`: the mute lifts before the
+    // barrier's own action resolves, so the barrier's queue never sees the
+    // write mid-mute.
+    expect(events).toEqual([
+      "serialize-start",
+      "suppress-start",
+      "suppress-end",
+      "serialize-end",
+    ]);
+  });
+});
+
+// =================================================================================
+// 8f. releaseHostOwnedKeys releases exactly the keys that were written
+// =================================================================================
+
+describe("import - releases host ownership of exactly the keys it wrote", () => {
+  // Pins: only a row that actually landed in the jar is released - a
+  // rejected `cookies.set` names no key at all, so a host that owned it stays
+  // the owner until a real write supersedes it. And the release runs AFTER
+  // the suppressed write has fully resolved, never inside it.
+  it("calls releaseHostOwnedKeys once, after the write, with only the written key", async () => {
+    const homeDir = await makeTempDir("login-import-release-keys-");
+    await createDarwinChromeSource(
+      homeDir,
+      [
+        domainCookieRow(".release-site.com", "good", {
+          kind: "plain",
+          value: "ok",
+        }),
+        domainCookieRow(".release-site.com", "bad", {
+          kind: "plain",
+          value: "no",
+        }),
+      ],
+      23,
+    );
+    const session = new FakeLoginImportSession([]);
+    session.rejectSet("bad");
+    const events: string[] = [];
+    const releaseHostOwnedKeys = vi.fn(
+      async (_keys: readonly BrowserCookieKey[]): Promise<void> => {
+        events.push("release");
+      },
+    );
+    const { service } = buildHarness(
+      {
+        platform: "darwin",
+        homeDir,
+        snapshotRoot: await makeTempDir("snap-"),
+        releaseHostOwnedKeys,
+        suppressDeltas: async <T>(action: () => Promise<T>): Promise<T> => {
+          events.push("suppress-start");
+          try {
+            return await action();
+          } finally {
+            events.push("suppress-end");
+          }
+        },
+      },
+      session,
+    );
+    const { sourceId } = await scanChromeSource(service);
+
+    const result = await service.import({
+      sourceId,
+      domains: ["release-site.com"],
+      includeDeviceBound: false,
+    });
+
+    expect(result.status).toBe("imported");
+    expect(releaseHostOwnedKeys).toHaveBeenCalledTimes(1);
+    const releasedKeys = releaseHostOwnedKeys.mock.calls[0]?.[0];
+    // The domain keeps its leading dot: this row is a domain cookie, and the
+    // key travels exactly as `normalizeImportCookie` spelled it.
+    expect(releasedKeys).toEqual([
+      { domain: ".release-site.com", name: "good", path: "/" },
+    ]);
+    expect(events).toEqual(["suppress-start", "suppress-end", "release"]);
+  });
+
+  it("never calls releaseHostOwnedKeys for an all-blocked import", async () => {
+    const releaseHostOwnedKeys = vi.fn(async (): Promise<void> => undefined);
+    const { service } = buildHarness(
+      { readSaveLogins: () => false, releaseHostOwnedKeys },
+      new FakeLoginImportSession([]),
+    );
+
+    const result = await service.import({
+      sourceId: "never-registered",
+      domains: ["example.com"],
+      includeDeviceBound: false,
+    });
+
+    expect(result).toEqual({ status: "blocked", reason: "saved-logins-off" });
+    expect(releaseHostOwnedKeys).not.toHaveBeenCalled();
+  });
+});
+
+// =================================================================================
 // 9. Keychain denied / unavailable
 // =================================================================================
 
@@ -1208,7 +1621,9 @@ describe("import - a domain outside the last scan is dropped", () => {
       session,
     );
     const { sourceId, scan } = await scanChromeSource(service);
-    expect(scan.sites).toEqual([{ domain: "steady.com", cookieCount: 1 }]);
+    expect(scan.sites).toEqual([
+      { domain: "steady.com", cookieCount: 1, unlock: null },
+    ]);
 
     // A cookie for a brand-new site lands in the live jar after the scan
     // ran but before the user clicks Import.
@@ -1255,7 +1670,7 @@ describe("import - every requested domain is outside the last scan", () => {
     );
     const { sourceId, scan } = await scanChromeSource(service);
     expect(scan.sites).toEqual([
-      { domain: "scanned-site.com", cookieCount: 1 },
+      { domain: "scanned-site.com", cookieCount: 1, unlock: null },
     ]);
 
     // If the import fell through to reading the source anyway, this would
@@ -1379,6 +1794,7 @@ describe("import - failures never throw, and the log is shape-limited", () => {
       excluded: [],
       protectedCookieCount: 0,
       partitionedCookieCount: 0,
+      unreadableCookieCount: 0,
       unlock: null,
       blocked: "unreadable",
     });

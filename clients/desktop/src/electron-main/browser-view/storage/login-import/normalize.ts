@@ -38,6 +38,20 @@ export interface NormalizedImportCookie {
 const HOST_PREFIX = "__Host-";
 const SECURE_PREFIX = "__Secure-";
 
+/**
+ * How long an imported SESSION cookie is kept, as seconds from the import.
+ *
+ * A session cookie (`expires: -1`) is one the source browser keeps for as
+ * long as it runs - and, with session restore, across its own restarts. Set
+ * into Electron's jar without an expiry it is dropped at quit, so a login
+ * that rides on one (many SSO sessions do) would be gone the first time
+ * Traycer restarts, while the Done step had called it saved on this machine.
+ * It is given a bounded expiry instead: still the site's session to end,
+ * still shorter than a source browser that restores its session, and long
+ * enough that "saved" is true.
+ */
+export const IMPORTED_SESSION_COOKIE_TTL_SECONDS = 30 * 24 * 60 * 60;
+
 export function classifyImportCookie(
   row: ImportCookieRow,
   nowSeconds: number,
@@ -88,7 +102,10 @@ export function normalizeImportCookie(
       domain: scope.domain,
       canonicalDomain: scope.canonicalDomain,
       path: scope.path,
-      expires: row.expires,
+      expires:
+        row.expires < 0
+          ? nowSeconds + IMPORTED_SESSION_COOKIE_TTL_SECONDS
+          : row.expires,
       httpOnly: row.httpOnly,
       // `SameSite=None` without `Secure` is rejected by Chromium's setter;
       // the source browser only ever stored it secure, so this restates a

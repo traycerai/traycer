@@ -26,14 +26,11 @@ import type {
  * here is that the Done step reports the `notifiedHosts` it was handed.
  */
 
-const FULL_DISK_ACCESS_PANE =
-  "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles";
+const openFullDiskAccessMocks = vi.hoisted(() => ({ mutate: vi.fn() }));
 
-const openExternalMocks = vi.hoisted(() => ({ mutate: vi.fn() }));
-
-vi.mock("@/hooks/runner/use-open-external-link-mutation", () => ({
-  useRunnerOpenExternalLink: () => ({
-    mutate: openExternalMocks.mutate,
+vi.mock("@/hooks/runner/use-open-full-disk-access-settings-mutation", () => ({
+  useRunnerOpenFullDiskAccessSettings: () => ({
+    mutate: openFullDiskAccessMocks.mutate,
     isPending: false,
   }),
 }));
@@ -86,6 +83,7 @@ function scan(overrides: Partial<LoginImportScan>): LoginImportScan {
     excluded: [],
     protectedCookieCount: 0,
     partitionedCookieCount: 0,
+    unreadableCookieCount: 0,
     unlock: null,
     blocked: null,
     ...overrides,
@@ -96,7 +94,9 @@ function renderDialog(bridge: TestBridge): {
   readonly onOpenChange: ReturnType<typeof vi.fn>;
 } {
   const onOpenChange = vi.fn();
-  const client = new QueryClient();
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
   render(
     <QueryClientProvider client={client}>
       <ImportLoginsDialog
@@ -120,7 +120,7 @@ function importConfirmButton(): HTMLElement {
 
 afterEach(() => {
   cleanup();
-  openExternalMocks.mutate.mockReset();
+  openFullDiskAccessMocks.mutate.mockReset();
 });
 
 describe("<ImportLoginsDialog /> pick step", () => {
@@ -155,8 +155,8 @@ describe("<ImportLoginsDialog /> choose-sites step", () => {
       "source-1",
       scan({
         sites: [
-          { domain: "example.com", cookieCount: 3 },
-          { domain: "example.org", cookieCount: 1 },
+          { domain: "example.com", cookieCount: 3, unlock: null },
+          { domain: "example.org", cookieCount: 1, unlock: null },
         ],
       }),
     );
@@ -186,11 +186,12 @@ describe("<ImportLoginsDialog /> choose-sites step", () => {
     bridge.scanBySourceId.set(
       "source-1",
       scan({
-        sites: [{ domain: "example.com", cookieCount: 2 }],
+        sites: [{ domain: "example.com", cookieCount: 2, unlock: null }],
         excluded: [
           {
             domain: "google.com",
             cookieCount: 5,
+            unlock: null,
             reason: "google-device-bound",
           },
         ],
@@ -213,7 +214,9 @@ describe("<ImportLoginsDialog /> choose-sites step", () => {
       name: "Import Google logins anyway",
     });
     expect(optIn.getAttribute("aria-checked")).toBe("false");
-    expect(screen.queryByRole("alert")).toBeNull();
+    expect(
+      screen.queryByText(/An imported Google login can stop working/),
+    ).toBeNull();
   });
 
   it("has no opt-in switch when the scan lists no excluded rows", async () => {
@@ -221,7 +224,9 @@ describe("<ImportLoginsDialog /> choose-sites step", () => {
     bridge.sources = [source({})];
     bridge.scanBySourceId.set(
       "source-1",
-      scan({ sites: [{ domain: "example.com", cookieCount: 1 }] }),
+      scan({
+        sites: [{ domain: "example.com", cookieCount: 1, unlock: null }],
+      }),
     );
     renderDialog(bridge);
     await pickSource(/Google Chrome/);
@@ -238,11 +243,12 @@ describe("<ImportLoginsDialog /> choose-sites step", () => {
     bridge.scanBySourceId.set(
       "source-1",
       scan({
-        sites: [{ domain: "example.com", cookieCount: 2 }],
+        sites: [{ domain: "example.com", cookieCount: 2, unlock: null }],
         excluded: [
           {
             domain: "google.com",
             cookieCount: 5,
+            unlock: null,
             reason: "google-device-bound",
           },
         ],
@@ -260,8 +266,13 @@ describe("<ImportLoginsDialog /> choose-sites step", () => {
     fireEvent.click(optIn);
 
     expect(optIn.getAttribute("aria-checked")).toBe("true");
-    const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain(
+    // Plain content (`note`), not an assertive live region: it re-renders on
+    // every toggle and must not interrupt a screen reader each time.
+    const warning = await screen.findByText(
+      /An imported Google login can stop working/,
+    );
+    expect(warning.closest("[role='note']")).not.toBeNull();
+    expect(warning.textContent).toContain(
       "Google binds sign-ins to the device they were made on.",
     );
     expect(
@@ -283,26 +294,47 @@ describe("<ImportLoginsDialog /> choose-sites step", () => {
     ).not.toBeNull();
   });
 
+  it("shows the unreadable-records notice when unreadableCookieCount > 0", async () => {
+    const bridge = new TestBridge();
+    bridge.sources = [source({})];
+    bridge.scanBySourceId.set(
+      "source-1",
+      scan({
+        sites: [{ domain: "example.com", cookieCount: 1, unlock: null }],
+        unreadableCookieCount: 2,
+      }),
+    );
+    renderDialog(bridge);
+    await pickSource(/Google Chrome/);
+
+    await screen.findByText(
+      /2 records in this profile couldn't be read and are left out/,
+    );
+  });
+
   it("shows the protected-cookie banner when protectedCookieCount > 0", async () => {
     const bridge = new TestBridge();
     bridge.sources = [source({})];
     bridge.scanBySourceId.set(
       "source-1",
       scan({
-        sites: [{ domain: "example.com", cookieCount: 1 }],
+        sites: [{ domain: "example.com", cookieCount: 1, unlock: null }],
         protectedCookieCount: 2,
       }),
     );
     renderDialog(bridge);
     await pickSource(/Google Chrome/);
 
-    const banner = await screen.findByRole("alert");
+    const banner = await screen.findByText(
+      /protected by the browser on Windows and can't be imported/,
+    );
     expect(banner.textContent).toContain(
       "2 logins are protected by the browser on Windows and can't be imported.",
     );
+    expect(banner.closest("[role='note']")).not.toBeNull();
   });
 
-  it("renders the needs-full-disk-access explainer, whose button opens the exact Full Disk Access URL", async () => {
+  it("renders the needs-full-disk-access explainer, whose button opens the pane through its own RunnerHost method", async () => {
     const bridge = new TestBridge();
     bridge.sources = [source({})];
     bridge.scanBySourceId.set(
@@ -317,9 +349,7 @@ describe("<ImportLoginsDialog /> choose-sites step", () => {
     });
     fireEvent.click(openButton);
 
-    expect(openExternalMocks.mutate).toHaveBeenCalledExactlyOnceWith(
-      FULL_DISK_ACCESS_PANE,
-    );
+    expect(openFullDiskAccessMocks.mutate).toHaveBeenCalledOnce();
   });
 
   it.each<LoginImportBlocked>([
@@ -333,17 +363,19 @@ describe("<ImportLoginsDialog /> choose-sites step", () => {
     renderDialog(bridge);
     await pickSource(/Google Chrome/);
 
-    await screen.findByRole("alert");
+    await screen.findAllByRole("note");
     expect(screen.getByRole("button", { name: "Try again" })).not.toBeNull();
   });
 
-  it("renders the macOS-keychain unlock hint when unlock is macos-keychain", async () => {
+  it("renders the macOS-keychain unlock hint when the selected site's unlock is macos-keychain", async () => {
     const bridge = new TestBridge();
     bridge.sources = [source({ browser: "chrome" })];
     bridge.scanBySourceId.set(
       "source-1",
       scan({
-        sites: [{ domain: "example.com", cookieCount: 1 }],
+        sites: [
+          { domain: "example.com", cookieCount: 1, unlock: "macos-keychain" },
+        ],
         unlock: "macos-keychain",
       }),
     );
@@ -356,12 +388,50 @@ describe("<ImportLoginsDialog /> choose-sites step", () => {
     );
   });
 
+  it("shows no keychain hint when only plaintext sites are selected", async () => {
+    const bridge = new TestBridge();
+    bridge.sources = [source({ browser: "chrome" })];
+    bridge.scanBySourceId.set(
+      "source-1",
+      scan({
+        sites: [
+          { domain: "encrypted.com", cookieCount: 1, unlock: "macos-keychain" },
+          { domain: "plain.com", cookieCount: 1, unlock: null },
+        ],
+        unlock: "macos-keychain",
+      }),
+    );
+    renderDialog(bridge);
+    await pickSource(/Google Chrome/);
+
+    await screen.findByText("encrypted.com");
+    expect(screen.getByText(/macOS will ask whether/)).not.toBeNull();
+
+    fireEvent.click(
+      screen.getByRole("checkbox", {
+        name: "Import logins for encrypted.com",
+      }),
+    );
+
+    expect(screen.queryByText(/macOS will ask whether/)).toBeNull();
+
+    fireEvent.click(
+      screen.getByRole("checkbox", {
+        name: "Import logins for encrypted.com",
+      }),
+    );
+
+    expect(screen.getByText(/macOS will ask whether/)).not.toBeNull();
+  });
+
   it("disables the Import button with 0 sites selected", async () => {
     const bridge = new TestBridge();
     bridge.sources = [source({})];
     bridge.scanBySourceId.set(
       "source-1",
-      scan({ sites: [{ domain: "example.com", cookieCount: 1 }] }),
+      scan({
+        sites: [{ domain: "example.com", cookieCount: 1, unlock: null }],
+      }),
     );
     renderDialog(bridge);
     await pickSource(/Google Chrome/);
@@ -381,8 +451,8 @@ describe("<ImportLoginsDialog /> import", () => {
       "source-1",
       scan({
         sites: [
-          { domain: "example.com", cookieCount: 1 },
-          { domain: "example.org", cookieCount: 1 },
+          { domain: "example.com", cookieCount: 1, unlock: null },
+          { domain: "example.org", cookieCount: 1, unlock: null },
         ],
       }),
     );
@@ -411,11 +481,12 @@ describe("<ImportLoginsDialog /> import", () => {
     bridge.scanBySourceId.set(
       "source-1",
       scan({
-        sites: [{ domain: "example.com", cookieCount: 1 }],
+        sites: [{ domain: "example.com", cookieCount: 1, unlock: null }],
         excluded: [
           {
             domain: "google.com",
             cookieCount: 3,
+            unlock: null,
             reason: "google-device-bound",
           },
         ],
@@ -449,11 +520,12 @@ describe("<ImportLoginsDialog /> import", () => {
     bridge.scanBySourceId.set(
       "source-1",
       scan({
-        sites: [{ domain: "example.com", cookieCount: 1 }],
+        sites: [{ domain: "example.com", cookieCount: 1, unlock: null }],
         excluded: [
           {
             domain: "google.com",
             cookieCount: 3,
+            unlock: null,
             reason: "google-device-bound",
           },
         ],
@@ -493,7 +565,9 @@ describe("<ImportLoginsDialog /> import", () => {
     bridge.sources = [source({})];
     bridge.scanBySourceId.set(
       "source-1",
-      scan({ sites: [{ domain: "example.com", cookieCount: 2 }] }),
+      scan({
+        sites: [{ domain: "example.com", cookieCount: 2, unlock: null }],
+      }),
     );
     bridge.importResult = {
       status: "imported",
@@ -526,7 +600,9 @@ describe("<ImportLoginsDialog /> import", () => {
     bridge.sources = [source({})];
     bridge.scanBySourceId.set(
       "source-1",
-      scan({ sites: [{ domain: "example.com", cookieCount: 1 }] }),
+      scan({
+        sites: [{ domain: "example.com", cookieCount: 1, unlock: null }],
+      }),
     );
     bridge.importResult = {
       status: "imported",
@@ -555,7 +631,9 @@ describe("<ImportLoginsDialog /> import", () => {
     bridge.sources = [source({})];
     bridge.scanBySourceId.set(
       "source-1",
-      scan({ sites: [{ domain: "example.com", cookieCount: 1 }] }),
+      scan({
+        sites: [{ domain: "example.com", cookieCount: 1, unlock: null }],
+      }),
     );
     bridge.importResult = { status: "blocked", reason: "browser-locked" };
     renderDialog(bridge);
@@ -566,5 +644,101 @@ describe("<ImportLoginsDialog /> import", () => {
 
     await screen.findByText("Nothing was imported");
     expect(screen.getByRole("button", { name: "Try again" })).not.toBeNull();
+  });
+
+  it("keeps the previous selection after a retry from a blocked import", async () => {
+    const bridge = new TestBridge();
+    bridge.sources = [source({})];
+    bridge.scanBySourceId.set(
+      "source-1",
+      scan({
+        sites: [
+          { domain: "site-a.com", cookieCount: 1, unlock: null },
+          { domain: "site-b.com", cookieCount: 1, unlock: null },
+          { domain: "site-c.com", cookieCount: 1, unlock: null },
+        ],
+      }),
+    );
+    bridge.importResult = { status: "blocked", reason: "keychain-denied" };
+    renderDialog(bridge);
+    await pickSource(/Google Chrome/);
+
+    await screen.findByText("site-a.com");
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Import logins for site-b.com" }),
+    );
+    fireEvent.click(importConfirmButton());
+
+    await screen.findByText("Nothing was imported");
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+
+    await screen.findByText("site-a.com");
+    expect(
+      screen
+        .getByRole("checkbox", { name: "Import logins for site-a.com" })
+        .getAttribute("data-state"),
+    ).toBe("checked");
+    expect(
+      screen
+        .getByRole("checkbox", { name: "Import logins for site-b.com" })
+        .getAttribute("data-state"),
+    ).toBe("unchecked");
+    expect(
+      screen
+        .getByRole("checkbox", { name: "Import logins for site-c.com" })
+        .getAttribute("data-state"),
+    ).toBe("checked");
+    expect(
+      screen.getByRole("button", { name: "Import 2 sites" }),
+    ).not.toBeNull();
+  });
+
+  it("keeps the Google opt-in switch on after a retry from a blocked import", async () => {
+    const bridge = new TestBridge();
+    bridge.sources = [source({})];
+    bridge.scanBySourceId.set(
+      "source-1",
+      scan({
+        sites: [{ domain: "example.com", cookieCount: 1, unlock: null }],
+        excluded: [
+          {
+            domain: "google.com",
+            cookieCount: 1,
+            unlock: null,
+            reason: "google-device-bound",
+          },
+        ],
+      }),
+    );
+    bridge.importResult = { status: "blocked", reason: "keychain-denied" };
+    renderDialog(bridge);
+    await pickSource(/Google Chrome/);
+
+    await screen.findByText("example.com");
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Import Google logins anyway" }),
+    );
+    await screen.findByRole("checkbox", {
+      name: "Import logins for google.com",
+    });
+    fireEvent.click(importConfirmButton());
+
+    await screen.findByText("Nothing was imported");
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+
+    await screen.findByText("example.com");
+    // `previousChoice.includeDeviceBound` restores the opt-in exactly as the
+    // blocked import was made with it - the retry does not fall back to the
+    // off-by-default state.
+    expect(
+      screen
+        .getByRole("switch", { name: "Import Google logins anyway" })
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+    expect(
+      screen
+        .getByRole("checkbox", { name: "Import logins for google.com" })
+        .getAttribute("data-state"),
+    ).toBe("checked");
   });
 });

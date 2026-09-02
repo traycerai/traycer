@@ -125,6 +125,7 @@ function buildFakeBridge(
     getRegisteredUrlSchemes: async () => [],
     requestMicrophoneAccess: async () => "granted" as const,
     openMicrophoneSettings: async () => undefined,
+    openFullDiskAccessSettings: async () => undefined,
     beginAuthAttempt: () => undefined,
     onAuthCallback: (_handler: () => void) => ({
       dispose: () => undefined,
@@ -583,6 +584,7 @@ function buildFakeBridge(
         excluded: [],
         protectedCookieCount: 0,
         partitionedCookieCount: 0,
+        unreadableCookieCount: 0,
         unlock: null,
         blocked: null,
       }),

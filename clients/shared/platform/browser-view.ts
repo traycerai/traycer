@@ -287,11 +287,18 @@ export interface LoginImportSite {
   /** Registrable domain (eTLD+1); never a cookie name, never a value. */
   readonly domain: string;
   readonly cookieCount: number;
+  /**
+   * The keystore importing THIS site opens, or `null` for a site whose rows
+   * are all plaintext. The dialog's pre-prompt explainer is derived from the
+   * selected sites' values, so a plaintext-only selection promises no prompt.
+   */
+  readonly unlock: LoginImportUnlock | null;
 }
 
 export interface LoginImportExcludedSite {
   readonly domain: string;
   readonly cookieCount: number;
+  readonly unlock: LoginImportUnlock | null;
   readonly reason: "google-device-bound";
 }
 
@@ -311,6 +318,13 @@ export interface LoginImportScan {
    * CHIPS / container cookies, which have no unpartitioned home in the jar.
    */
   readonly partitionedCookieCount: number;
+  /**
+   * Records the reader could not make a row of (a Safari record that fails
+   * its bounds check). They belong to no site, so they are neither listed
+   * nor counted under `skippedInvalid`; the dialog names them so the scan
+   * does not claim to account for everything.
+   */
+  readonly unreadableCookieCount: number;
   readonly unlock: LoginImportUnlock | null;
   readonly blocked: LoginImportBlocked | null;
 }
