@@ -583,6 +583,15 @@ export const OFFICE_LOGO_SIZE = 12;
  */
 export interface OfficeFrame {
   readonly size: OfficeSize;
+  /**
+   * Changes only when `floor` does, so a renderer can cache what it drew from
+   * it instead of re-drawing thousands of identical tiles every frame.
+   *
+   * The floor is a pure function of the LAYOUT - walls, pod tints, stairwells
+   * and rugs - and the layout is rebuilt only when the set of agents changes.
+   * Everything that moves is in `actors` or `overlay`.
+   */
+  readonly staticVersion: number;
   readonly floor: ReadonlyArray<OfficeDrawable>;
   readonly props: ReadonlyArray<OfficeDrawable>;
   readonly actors: ReadonlyArray<OfficeDrawable>;

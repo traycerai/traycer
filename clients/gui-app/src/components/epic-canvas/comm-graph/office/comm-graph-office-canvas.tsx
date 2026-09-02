@@ -60,6 +60,10 @@ import { OfficeAgentHover } from "@/components/epic-canvas/comm-graph/office/off
 import { OfficeHoverSupplement } from "@/components/epic-canvas/comm-graph/office/office-hover-supplement";
 import { OfficeLegend } from "@/components/epic-canvas/comm-graph/office/office-legend";
 import {
+  createOfficeStaticSurface,
+  OfficeStaticLayer,
+} from "@/components/epic-canvas/comm-graph/office/office-static-layer";
+import {
   isElementVisible,
   officeCatchUpMs,
   OfficeFrameGate,
@@ -101,6 +105,7 @@ import {
   type OfficeDrawable,
   type OfficeFloor,
   type OfficeFrame,
+  type OfficeEnvelopeHitRegion,
   type OfficeHitRegion,
   type OfficeLayout,
   type OfficePoint,
@@ -130,6 +135,9 @@ const VIEW_PERSIST_DEBOUNCE_MS = 150;
 const LABEL_FONT_PX = 10;
 const HOVER_LABEL_FONT_PX = 11;
 const MONOSPACE_STACK = "ui-monospace, SFMono-Regular, Menlo, monospace";
+/** The name-tag font, prebuilt: the width cache keys on text alone only
+ * because this never varies. */
+const LABEL_FONT = `${LABEL_FONT_PX}px ${MONOSPACE_STACK}`;
 const SIGN_FONT_PX = 10;
 const SIGN_PADDING_X = 4;
 const SIGN_PADDING_Y = 2;
@@ -233,6 +241,28 @@ interface OfficeRuntime {
   /** Rebuilt every frame from the scene, so hit-testing follows the drawing. */
   readonly getHitRegions: () => ReadonlyArray<OfficeHitRegion>;
   readonly setHitRegions: (next: ReadonlyArray<OfficeHitRegion>) => void;
+  /**
+   * The envelopes drawn on the last frame.
+   *
+   * A pointer move is answered from these rather than by asking the scene,
+   * which would rebuild the whole overlay to find out - once per pointermove,
+   * which is once per mouse event. What the person is pointing at is what they
+   * can SEE, so the frame they are looking at is the right thing to ask.
+   */
+  readonly getEnvelopeRegions: () => ReadonlyArray<OfficeEnvelopeHitRegion>;
+  readonly setEnvelopeRegions: (
+    next: ReadonlyArray<OfficeEnvelopeHitRegion>,
+  ) => void;
+  /**
+   * Whether a frame has ever been drawn.
+   *
+   * Distinguishes "the last frame had no envelopes" - the common case, and the
+   * one the cache exists to answer without work - from "there has been no
+   * frame", where the cached list is empty because nothing has filled it. An
+   * empty list alone cannot tell those apart, and treating the second as the
+   * first would drop a click on a floor that has not painted yet.
+   */
+  readonly hasDrawnFrame: () => boolean;
   readonly getSearchMatchIds: () => ReadonlySet<string>;
   readonly setSearchMatchIds: (next: ReadonlySet<string>) => void;
   readonly takePanRequest: () => PanRequest | null;
@@ -276,6 +306,8 @@ function createOfficeRuntime(view: CommGraphTileViewState): OfficeRuntime {
   };
   let viewport: ScreenSize = { width: 0, height: 0 };
   let hitRegions: ReadonlyArray<OfficeHitRegion> = [];
+  let envelopeRegions: ReadonlyArray<OfficeEnvelopeHitRegion> = [];
+  let drawnFrame = false;
   let searchMatchIds: ReadonlySet<string> = EMPTY_MATCH_IDS;
   let pendingPan: PanRequest | null = null;
   let agents: ReadonlyArray<CommGraphAgentNode> = [];
@@ -297,6 +329,12 @@ function createOfficeRuntime(view: CommGraphTileViewState): OfficeRuntime {
     setHitRegions: (next) => {
       hitRegions = next;
     },
+    getEnvelopeRegions: () => envelopeRegions,
+    setEnvelopeRegions: (next) => {
+      envelopeRegions = next;
+      drawnFrame = true;
+    },
+    hasDrawnFrame: () => drawnFrame,
     getSearchMatchIds: () => searchMatchIds,
     setSearchMatchIds: (next) => {
       searchMatchIds = next;
@@ -527,6 +565,12 @@ interface DrawFrameArgs {
   readonly hostNameById: ReadonlyMap<string, string>;
   readonly awayAgentIds: ReadonlySet<string>;
   readonly hoveredAgentId: string | null;
+  /**
+   * The floor, already painted in sprite space. `null` where no offscreen
+   * surface could be made, in which case the floor is drawn tile by tile as it
+   * always was - the fast path is an optimization, never a requirement.
+   */
+  readonly staticFloor: HTMLCanvasElement | null;
 }
 
 /**
@@ -583,7 +627,7 @@ function drawHarnessLogo(
  */
 function drawClockHands(
   ctx: CanvasRenderingContext2D,
-  drawable: Extract<OfficeDrawable, { kind: "clock" }>,
+  drawable: OfficeClockDrawable,
   inkColor: string,
 ): void {
   const angles = officeClockAngles(drawable.timeMs);
@@ -759,7 +803,7 @@ function drawSignPlate(
  * plate label matches nothing - correctly, since a desk is not away.
  */
 function nameTagOwner(
-  label: Extract<OfficeDrawable, { kind: "label" }>,
+  label: OfficeLabelDrawable,
   hitRegions: ReadonlyArray<OfficeHitRegion>,
 ): string | null {
   for (const region of hitRegions) {
@@ -779,11 +823,176 @@ function nameTagOwner(
  * a region's bottom edge sits exactly on the bottom of the tile the character
  * stands on, so the tile falls out of the rect with no offset to keep in step.
  */
+type OfficeLabelDrawable = Extract<OfficeDrawable, { kind: "label" }>;
+type OfficeClockDrawable = Extract<OfficeDrawable, { kind: "clock" }>;
+
+/**
+ * Per-frame scratch, module-scoped and reused.
+ *
+ * Every allocation in the draw path is paid thirty times a second for as long
+ * as an office is open, and these three collections are pure intermediates:
+ * nothing outside `drawOfficeFrame` ever holds one, and each is fully
+ * overwritten before it is read. Module scope rather than per-canvas because
+ * the draw is synchronous and re-entrant only through itself, so two mounted
+ * offices cannot be inside it at once.
+ */
+const labelScratch: OfficeLabelDrawable[] = [];
+const clockScratch: OfficeClockDrawable[] = [];
+const nameTagScratch: OfficeNameTagCandidate[] = [];
+
+function resetScratch<T>(buffer: T[]): T[] {
+  buffer.length = 0;
+  return buffer;
+}
+
+/** The two label backings, per theme. Constant, so not rebuilt per frame. */
+const LABEL_BACKINGS: Readonly<
+  Record<OfficeTheme, Readonly<Record<OfficeLabelTone, string>>>
+> = {
+  light: {
+    default: LIGHT_LABEL_BACKING,
+    muted: LIGHT_LABEL_BACKING,
+    // `bright` is the cabin sign's tone, light by definition, so it keeps the
+    // dark backing in both themes.
+    bright: DARK_LABEL_BACKING,
+  },
+  dark: {
+    default: DARK_LABEL_BACKING,
+    muted: DARK_LABEL_BACKING,
+    bright: DARK_LABEL_BACKING,
+  },
+};
+
+/**
+ * Measured text widths, by string.
+ *
+ * `measureText` shapes the run and allocates a `TextMetrics` for every tag on
+ * every frame, and an agent's name does not change width between two frames.
+ * The font is a module constant, so the text alone is the whole key. Bounded
+ * because a long session can meet a lot of names.
+ */
+const MEASURE_CACHE_LIMIT = 512;
+const measuredWidths = new Map<string, number>();
+
+function measuredWidth(ctx: CanvasRenderingContext2D, text: string): number {
+  const cached = measuredWidths.get(text);
+  if (cached !== undefined) return cached;
+  const width = ctx.measureText(text).width;
+  if (measuredWidths.size >= MEASURE_CACHE_LIMIT) {
+    const oldest = measuredWidths.keys().next();
+    if (oldest.done !== true) measuredWidths.delete(oldest.value);
+  }
+  measuredWidths.set(text, width);
+  return width;
+}
+
+interface DrawLayerArgs {
+  readonly ctx: CanvasRenderingContext2D;
+  readonly drawables: ReadonlyArray<OfficeDrawable>;
+  readonly anchor: SpriteAnchor;
+  readonly theme: OfficeTheme;
+  readonly palette: OfficePalette;
+  /** Drawables set aside for a later pass, in screen space. */
+  readonly labels: OfficeLabelDrawable[];
+  readonly clocks: OfficeClockDrawable[];
+}
+
+/**
+ * Draws one layer of the frame, setting aside the drawables that belong to a
+ * later pass. A function rather than a loop over an array of layer descriptors
+ * - four object literals a frame to say what four call sites already say.
+ */
+function drawDrawableLayer(args: DrawLayerArgs): void {
+  const { anchor, clocks, ctx, drawables, labels, palette, theme } = args;
+  for (const drawable of drawables) {
+    if (drawable.kind === "label") {
+      labels.push(drawable);
+      continue;
+    }
+    if (drawable.kind === "envelope") {
+      drawEnvelope(ctx, drawable, theme, palette.shadow);
+      continue;
+    }
+    if (drawable.kind === "logo") {
+      drawHarnessLogo(ctx, drawable, palette.wallDark);
+      continue;
+    }
+    if (drawable.kind === "clock") {
+      clocks.push(drawable);
+      continue;
+    }
+    drawAnchoredSprite(ctx, drawable, anchor, theme);
+  }
+}
+
+/**
+ * Paints the floor into the static layer, in sprite space with no camera.
+ *
+ * Only sprites: the floor carries no labels, clocks, envelopes or logos, and
+ * anything that ever appeared there would be silently dropped rather than
+ * baked at the wrong moment - which is why it is asserted rather than assumed.
+ */
+function drawStaticFloor(
+  ctx: CanvasRenderingContext2D,
+  floor: ReadonlyArray<OfficeDrawable>,
+  theme: OfficeTheme,
+): void {
+  for (const drawable of floor) {
+    if (drawable.kind !== "sprite") continue;
+    drawAnchoredSprite(ctx, drawable, "top-left", theme);
+  }
+}
+
+/** Reused across frames; see the scratch note above. */
+const awayScratch = new Set<string>();
+
+/**
+ * The pair edge of the envelope under a point, topmost first.
+ *
+ * The scene can answer this too, but only by rebuilding its whole overlay to
+ * do it - and the regions it would rebuild are the ones already drawn.
+ */
+function envelopeEdgeAt(
+  regions: ReadonlyArray<OfficeEnvelopeHitRegion>,
+  point: OfficePoint,
+): string | null {
+  for (let index = regions.length - 1; index >= 0; index -= 1) {
+    const region = regions[index];
+    const rect = region.rect;
+    if (
+      point.x >= rect.x &&
+      point.x < rect.x + rect.width &&
+      point.y >= rect.y &&
+      point.y < rect.y + rect.height
+    ) {
+      return region.edgeId;
+    }
+  }
+  return null;
+}
+
+/**
+ * The envelope under a point, from the last drawn frame where there is one.
+ *
+ * Falling back to the scene rebuilds its entire overlay to answer, which is
+ * why it happens once at most: before the first frame. After that the drawn
+ * regions ARE the answer, and they are what the person is pointing at.
+ */
+function envelopeEdgeFor(
+  runtime: OfficeRuntime,
+  scene: OfficeScene,
+  point: OfficePoint,
+): string | null {
+  if (!runtime.hasDrawnFrame()) return scene.hitTestEnvelope(point);
+  return envelopeEdgeAt(runtime.getEnvelopeRegions(), point);
+}
+
 function awayAgentIdsIn(
   frame: OfficeFrame,
   layout: OfficeLayout,
 ): ReadonlySet<string> {
-  const away = new Set<string>();
+  const away = awayScratch;
+  away.clear();
   for (const region of frame.hitRegions) {
     const desk = layout.desks.get(region.agentId);
     if (desk === undefined) continue;
@@ -803,7 +1012,7 @@ function awayAgentIdsIn(
  */
 function drawSignLabels(
   ctx: CanvasRenderingContext2D,
-  labels: ReadonlyArray<Extract<OfficeDrawable, { kind: "label" }>>,
+  labels: ReadonlyArray<OfficeLabelDrawable>,
   camera: OfficeCamera,
   palette: OfficePalette,
 ): void {
@@ -829,7 +1038,7 @@ function drawSignLabels(
  */
 function drawNameTags(args: {
   readonly ctx: CanvasRenderingContext2D;
-  readonly labels: ReadonlyArray<Extract<OfficeDrawable, { kind: "label" }>>;
+  readonly labels: ReadonlyArray<OfficeLabelDrawable>;
   readonly camera: OfficeCamera;
   readonly palette: OfficePalette;
   readonly backings: Readonly<Record<OfficeLabelTone, string>>;
@@ -847,8 +1056,8 @@ function drawNameTags(args: {
     labels,
     palette,
   } = args;
-  const candidates: OfficeNameTagCandidate[] = [];
-  ctx.font = `${LABEL_FONT_PX}px ${MONOSPACE_STACK}`;
+  const candidates = resetScratch(nameTagScratch);
+  ctx.font = LABEL_FONT;
   for (const label of labels) {
     if (label.tone === "bright") continue;
     const owner = nameTagOwner(label, hitRegions);
@@ -860,7 +1069,7 @@ function drawNameTags(args: {
       tone: label.tone,
       centerX: label.x * camera.zoom + camera.x,
       baselineY: label.y * camera.zoom + camera.y,
-      width: ctx.measureText(label.text).width,
+      width: measuredWidth(ctx, label.text),
     });
   }
   for (const placed of layoutNameTags(candidates, NAME_TAG_LINE_HEIGHT)) {
@@ -888,6 +1097,7 @@ function drawOfficeFrame(args: DrawFrameArgs): void {
     hoveredAgentId,
     nameById,
     searchMatchIds,
+    staticFloor,
     theme,
     viewport,
   } = args;
@@ -897,12 +1107,7 @@ function drawOfficeFrame(args: DrawFrameArgs): void {
   // theme's light text and smeared the light theme's dark text into a bold
   // blur. `bright` is the exception in both themes: it is the cabin sign's
   // tone, light by definition, so it keeps the dark backing either way.
-  const darkTextLabel = theme === "light";
-  const labelBackings: Readonly<Record<OfficeLabelTone, string>> = {
-    default: darkTextLabel ? LIGHT_LABEL_BACKING : DARK_LABEL_BACKING,
-    muted: darkTextLabel ? LIGHT_LABEL_BACKING : DARK_LABEL_BACKING,
-    bright: DARK_LABEL_BACKING,
-  };
+  const labelBackings = LABEL_BACKINGS[theme];
 
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.imageSmoothingEnabled = false;
@@ -921,42 +1126,30 @@ function drawOfficeFrame(args: DrawFrameArgs): void {
 
   // Labels are collected rather than drawn inline: they belong to screen space,
   // and switching the transform per label would cost more than one pass.
-  const labels: Array<Extract<OfficeDrawable, { kind: "label" }>> = [];
+  // Collected into SCRATCH buffers reused across frames - a fresh array per
+  // layer per frame is garbage the collector has to walk thirty times a
+  // second, and nothing outside this function ever sees them.
+  const labels = resetScratch(labelScratch);
   // Collected so the hands land ON TOP of the face sprite regardless of which
   // layer the scene emitted the clock in.
-  const clocks: Array<Extract<OfficeDrawable, { kind: "clock" }>> = [];
-  const layers: ReadonlyArray<{
-    readonly drawables: ReadonlyArray<OfficeDrawable>;
-    readonly anchor: SpriteAnchor;
-  }> = [
-    { drawables: frame.floor, anchor: "top-left" },
-    { drawables: frame.props, anchor: "top-left" },
-    { drawables: frame.actors, anchor: "top-left" },
-    // Bubbles and sparkles hang over whatever they belong to, so the scene
-    // anchors them at their bottom centre rather than a corner.
-    { drawables: frame.overlay, anchor: "bottom-center" },
-  ];
-  for (const layer of layers) {
-    for (const drawable of layer.drawables) {
-      if (drawable.kind === "label") {
-        labels.push(drawable);
-        continue;
-      }
-      if (drawable.kind === "envelope") {
-        drawEnvelope(ctx, drawable, theme, palette.shadow);
-        continue;
-      }
-      if (drawable.kind === "logo") {
-        drawHarnessLogo(ctx, drawable, palette.wallDark);
-        continue;
-      }
-      if (drawable.kind === "clock") {
-        clocks.push(drawable);
-        continue;
-      }
-      drawAnchoredSprite(ctx, drawable, layer.anchor, theme);
-    }
+  const clocks = resetScratch(clockScratch);
+  // The floor is either one blit or, where no offscreen surface exists, the
+  // tile-by-tile walk it has always been.
+  const layer = { ctx, theme, palette, labels, clocks };
+  if (staticFloor === null) {
+    drawDrawableLayer({ ...layer, drawables: frame.floor, anchor: "top-left" });
+  } else {
+    ctx.drawImage(staticFloor, 0, 0);
   }
+  drawDrawableLayer({ ...layer, drawables: frame.props, anchor: "top-left" });
+  drawDrawableLayer({ ...layer, drawables: frame.actors, anchor: "top-left" });
+  // Bubbles and sparkles hang over whatever they belong to, so the scene
+  // anchors them at their bottom centre rather than a corner.
+  drawDrawableLayer({
+    ...layer,
+    drawables: frame.overlay,
+    anchor: "bottom-center",
+  });
 
   for (const clock of clocks) drawClockHands(ctx, clock, palette.ink);
 
@@ -1395,6 +1588,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     let lastClockSecond = -1;
     let pausedAt: number | null = null;
     const gate = new OfficeFrameGate();
+    const staticLayer = new OfficeStaticLayer(createOfficeStaticSurface);
 
     // A wall clock only has to be right to the minute, but it must not be
     // right only at mount. Re-syncing the SAME input with a fresh `clockMs`
@@ -1501,6 +1695,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
 
       const frame = scene.frame();
       runtime.setHitRegions(frame.hitRegions);
+      runtime.setEnvelopeRegions(frame.envelopeHitRegions);
       // A DPR change does not resize anything in CSS pixels, so no resize
       // event is guaranteed to arrive - a browser zoom on a secondary display
       // moves it silently. The compare is two property reads a frame.
@@ -1526,10 +1721,24 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       requestPlaybackPan(frame.focus, viewport);
       advanceCamera(now, viewport);
 
+      // Repainted only when the floor's version, the theme or its size moves;
+      // every other frame this is a single `drawImage`.
+      const staticFloor = staticLayer.sync(
+        {
+          staticVersion: frame.staticVersion,
+          theme: resolvedTheme,
+          width: frame.size.width,
+          height: frame.size.height,
+        },
+        (floorCtx) => {
+          drawStaticFloor(floorCtx, frame.floor, resolvedTheme);
+        },
+      );
       const hoveredId = runtime.getHoveredAgentId();
       drawOfficeFrame({
         ctx,
         frame,
+        staticFloor,
         camera,
         viewport,
         dpr: appliedDprRef.current,
@@ -1588,6 +1797,8 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       document.removeEventListener("visibilitychange", onVisibility);
       observer.disconnect();
       stop();
+      // A floor's worth of pixels is real memory; it goes with the tile.
+      staticLayer.release();
     };
   }, [applyCanvasSize, nameById, readScene, resolvedTheme, runtime]);
 
@@ -1642,7 +1853,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       }
       const point = toSpritePoint(event.clientX, event.clientY);
       const overEnvelope =
-        point !== null && readScene().hitTestEnvelope(point) !== null;
+        point !== null && envelopeEdgeFor(runtime, readScene(), point) !== null;
       const region =
         point === null ? null : hitRegionFor(runtime.getHitRegions(), point);
       const camera = runtime.getCamera();
@@ -1713,7 +1924,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       // Envelopes first: a message in flight over a desk is drawn on top of
       // it, so it has to be the thing a click on those pixels resolves to.
       const scene = readScene();
-      const edgeId = scene.hitTestEnvelope(point);
+      const edgeId = envelopeEdgeFor(runtime, scene, point);
       if (edgeId !== null) {
         setSelectedDetail({ kind: "pair", edgeId });
         return;
@@ -1721,7 +1932,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       const agentId = scene.hitTest(point);
       if (agentId !== null) setSelectedAgentId(agentId);
     },
-    [persistView, readScene, setSelectedAgentId, toSpritePoint],
+    [persistView, readScene, runtime, setSelectedAgentId, toSpritePoint],
   );
 
   // A native listener, because a passive React `onWheel` cannot call

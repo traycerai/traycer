@@ -960,6 +960,35 @@ export class OfficeScene {
   /** Agents needing a person, in the order they were first seen needing one. */
   private queueOrder: string[] = [];
 
+  /**
+   * Bumped on every layout replacement, and on nothing else.
+   *
+   * It is the renderer's cache key for the floor, so it has to move whenever
+   * `buildFloor` would produce something different and stay put otherwise -
+   * which is exactly the lifetime of `currentLayout`, the only thing that
+   * function reads.
+   */
+  private layoutVersion = 0;
+  /**
+   * Bumped whenever a character is ADDED or REMOVED, and on nothing else.
+   *
+   * `orderedByAgentId` sorts by identity alone, so movement cannot reorder it
+   * - only membership can. That matters because the partner lookups call it
+   * once per character per tick, which without a cache is a sort per character
+   * per tick to answer a question whose answer did not change.
+   */
+  private membershipVersion = 0;
+  private byAgentIdCache: ReadonlyArray<OfficeCharacter> | null = null;
+  private byAgentIdVersion = -1;
+  /**
+   * Cleared around every mutation, since draw order depends on POSITION and
+   * every character moves. Within one `frame()` nothing mutates, so the three
+   * passes that need it share one sort.
+   */
+  private orderedCache: ReadonlyArray<OfficeCharacter> | null = null;
+  private cachedFloor: ReadonlyArray<OfficeDrawable> | null = null;
+  private cachedFloorVersion = -1;
+
   /** `layoutOffice` in production; injected so tests can pin a floor plan. */
   constructor(layoutOf: OfficeLayoutFn) {
     this.layoutOf = layoutOf;
@@ -973,6 +1002,7 @@ export class OfficeScene {
   sync(input: OfficeSceneInput): void {
     const firstSync = !this.synced;
     this.synced = true;
+    this.orderedCache = null;
     this.visibleAgentIds = input.visibleAgentIds;
     this.statusById = input.statusById;
     this.openRequestsByReceiver = input.openRequestsByReceiver;
@@ -989,6 +1019,7 @@ export class OfficeScene {
     if (layoutChanged) {
       this.agentSignature = signature;
       this.currentLayout = this.layoutOf(input.agents);
+      this.layoutVersion += 1;
       // Before reconciling, so a newly spawned walker is not immediately
       // re-pathed to the destination it was just given.
       this.rehomeCharacters();
@@ -1011,10 +1042,15 @@ export class OfficeScene {
       // replay the row the cursor happens to be sitting on.
       if (!firstSync) this.applyPulse(input.pulse);
     }
+    this.orderedCache = null;
   }
 
   tick(dtMs: number): void {
     if (dtMs <= 0) return;
+    // Cleared on the way IN as well as out: the errand logic below reads the
+    // ordering while it is moving characters, so a cache built before the tick
+    // would be handed to it stale.
+    this.orderedCache = null;
     this.nowMs += dtMs;
     for (const character of this.characters.values()) {
       this.advanceCharacter(character, dtMs);
@@ -1022,6 +1058,7 @@ export class OfficeScene {
     this.updateErrandStarts();
     this.advanceEnvelopes(dtMs);
     this.advancePaperBalls(dtMs);
+    this.orderedCache = null;
   }
 
   frame(): OfficeFrame {
@@ -1031,7 +1068,8 @@ export class OfficeScene {
         width: this.currentLayout.cols * OFFICE_TILE,
         height: this.currentLayout.rows * OFFICE_TILE,
       },
-      floor: this.buildFloor(),
+      staticVersion: this.layoutVersion,
+      floor: this.floorDrawables(),
       props: this.buildProps(),
       actors: this.buildActors(),
       overlay,
@@ -1144,6 +1182,7 @@ export class OfficeScene {
       }
       if (instant) {
         this.characters.delete(agentId);
+        this.membershipVersion += 1;
         this.departedIds.add(agentId);
         continue;
       }
@@ -1196,16 +1235,19 @@ export class OfficeScene {
       const announced = !firstSync && !input.reducedMotion && revealed;
       if (announced && !fastPlayback) {
         this.characters.set(agent.id, this.spawnAtDoor(agent.id, desk));
+        this.membershipVersion += 1;
         continue;
       }
       const character = seatedCharacter(agent.id, desk);
       if (announced) character.sparkleMs = SPARKLE_MS;
       this.characters.set(agent.id, character);
+      this.membershipVersion += 1;
     }
   }
 
   private removeCharacter(agentId: string): void {
     this.characters.delete(agentId);
+    this.membershipVersion += 1;
     this.envelopes = this.envelopes.filter(
       (envelope) =>
         envelope.fromAgentId !== agentId && envelope.toAgentId !== agentId,
@@ -2706,6 +2748,26 @@ export class OfficeScene {
     return false;
   }
 
+  /**
+   * The floor, built once per layout.
+   *
+   * A floor is one sprite per TILE - thousands of them on a large office - and
+   * rebuilding that array sixty, or even thirty, times a second to produce the
+   * identical thing was the single largest source of garbage the office made.
+   */
+  private floorDrawables(): ReadonlyArray<OfficeDrawable> {
+    if (
+      this.cachedFloor !== null &&
+      this.cachedFloorVersion === this.layoutVersion
+    ) {
+      return this.cachedFloor;
+    }
+    const floor = this.buildFloor();
+    this.cachedFloor = floor;
+    this.cachedFloorVersion = this.layoutVersion;
+    return floor;
+  }
+
   private buildFloor(): ReadonlyArray<OfficeDrawable> {
     const layout = this.currentLayout;
     const floor: OfficeDrawable[] = [];
@@ -3544,10 +3606,19 @@ export class OfficeScene {
    * WHO is visited are facts about their ids rather than about insertion order.
    */
   private orderedByAgentId(): ReadonlyArray<OfficeCharacter> {
-    return Array.from(this.characters.values()).sort((left, right) => {
+    if (
+      this.byAgentIdCache !== null &&
+      this.byAgentIdVersion === this.membershipVersion
+    ) {
+      return this.byAgentIdCache;
+    }
+    const ordered = Array.from(this.characters.values()).sort((left, right) => {
       if (left.agentId === right.agentId) return 0;
       return left.agentId < right.agentId ? -1 : 1;
     });
+    this.byAgentIdCache = ordered;
+    this.byAgentIdVersion = this.membershipVersion;
+    return ordered;
   }
 
   /** The cabin an agent's desk stands in, or `null` for a desk-less record. */
@@ -3562,12 +3633,16 @@ export class OfficeScene {
 
   /** Baseline order: a character lower on the floor overlaps one above it. */
   private orderedCharacters(): ReadonlyArray<OfficeCharacter> {
-    return Array.from(this.characters.values()).sort((left, right) => {
+    const cached = this.orderedCache;
+    if (cached !== null) return cached;
+    const ordered = Array.from(this.characters.values()).sort((left, right) => {
       if (left.row !== right.row) return left.row - right.row;
       if (left.col !== right.col) return left.col - right.col;
       if (left.agentId === right.agentId) return 0;
       return left.agentId < right.agentId ? -1 : 1;
     });
+    this.orderedCache = ordered;
+    return ordered;
   }
 
   private headPointOf(agentId: string): OfficePoint | null {

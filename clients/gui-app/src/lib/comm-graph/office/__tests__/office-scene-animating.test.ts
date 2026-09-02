@@ -108,3 +108,56 @@ describe("OfficeScene.isAnimating", () => {
     expect(scene.isAnimating()).toBe(true);
   });
 });
+
+/**
+ * The renderer caches an entire painted floor against this number, so a
+ * version that moves when the floor did not costs a full repaint, and one that
+ * stays put when the floor changed leaves the old floor on screen.
+ */
+describe("OfficeScene frame().staticVersion", () => {
+  it("holds still across ticks while nothing about the floor changes", () => {
+    const scene = settledScene();
+    const before = scene.frame().staticVersion;
+
+    for (let step = 0; step < 40; step += 1) scene.tick(100);
+    scene.sync(
+      input({
+        statusById: new Map<string, OfficeAgentStatus>([["alpha", "working"]]),
+      }),
+    );
+    scene.tick(500);
+
+    // Characters walked, a status changed, envelopes may have flown - none of
+    // that is the FLOOR.
+    expect(scene.frame().staticVersion).toBe(before);
+  });
+
+  it("moves when the set of agents relaid the floor out", () => {
+    const scene = settledScene();
+    const before = scene.frame().staticVersion;
+
+    scene.sync(input({ agents: [...AGENTS, agent("gamma")] }));
+
+    expect(scene.frame().staticVersion).not.toBe(before);
+  });
+
+  it("hands back the very same floor array while the version holds", () => {
+    const scene = settledScene();
+    const first = scene.frame().floor;
+
+    scene.tick(200);
+
+    // Identity, not equality: rebuilding thousands of tile drawables to
+    // produce an identical array was the largest allocation the office made.
+    expect(scene.frame().floor).toBe(first);
+  });
+
+  it("builds a new floor once the layout is replaced", () => {
+    const scene = settledScene();
+    const first = scene.frame().floor;
+
+    scene.sync(input({ agents: [...AGENTS, agent("gamma")] }));
+
+    expect(scene.frame().floor).not.toBe(first);
+  });
+});
