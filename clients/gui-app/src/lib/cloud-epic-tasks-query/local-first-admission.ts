@@ -1,4 +1,7 @@
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcRegistry } from "@/lib/host";
+import { readNegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
 
 /**
  * The minor at which `epic.listTasks` gained `localFirstPhase` - the directive
@@ -50,4 +53,42 @@ export function negotiatedListTasksServesLocalFirst(
 ): boolean {
   if (version === null || version === false) return false;
   return version.major === 1 && version.minor >= LIST_TASKS_LOCAL_FIRST_MINOR;
+}
+
+/**
+ * The DISPATCH-time form of {@link negotiatedListTasksServesLocalFirst}: the
+ * same question, answered by the host process that is live right now rather
+ * than by what the registry remembers about `hostId`.
+ *
+ * The registry retains a host's last handshake indefinitely and is refreshed
+ * by traffic alone (`negotiated-manifest-registry.ts`). So a host that
+ * advertised `@1.6`, then restarted or rolled back to an older release under
+ * the SAME id, still reads as local-first from the moment it went away until
+ * the next handshake lands - and the request an unverified session is about
+ * to send is what would produce that handshake. Read at submit, the stale
+ * `1.6` admits a create that the older process then serves on its
+ * cloud-backed path, on the retained credential. A render-time read cannot
+ * close that window; only a handshake can.
+ *
+ * So this forces one: a bounded read of a released-floor method, on the
+ * caller's own client, whose `openAck` re-records the manifest as a side
+ * effect (the response is unused - the handshake is the point, as
+ * `use-host-capability-probe.ts` documents for the parked-surface case).
+ * Then the predicate is re-derived from the registry that handshake just
+ * wrote. A probe that fails - unreachable host, refused dial - answers
+ * `false`: no live evidence, no admission. Only an unverified session pays
+ * the round trip; a `signed-in` session never asks.
+ */
+export async function liveHostServesLocalFirst(
+  client: HostClient<HostRpcRegistry>,
+  hostId: string,
+): Promise<boolean> {
+  try {
+    await client.request("host.status", {});
+  } catch {
+    return false;
+  }
+  return negotiatedListTasksServesLocalFirst(
+    readNegotiatedMethodVersion(hostId, "epic.listTasks"),
+  );
 }

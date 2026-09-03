@@ -1191,6 +1191,13 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         }
         // Only `global` remains once the three cases above return.
         if (feedMode === "upgrade-required") return;
+        // The Notifications room is account-backed Yjs state. Its stream is
+        // closed on verdict loss but the replica stays rendered, so a local
+        // transaction made now is an offline delta the reopen reconciles
+        // upstream - a cloud write deferred past the authorization that
+        // withheld it. Same rule as the cloud-feed leg above, and the same
+        // dispatch-time read.
+        if (!cloudAuthorizedNow()) return;
         globalMarkAsRead(parsed.sourceId);
       },
       markAllAsRead: () => {
@@ -1200,7 +1207,9 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
           // must be acknowledged alongside it rather than hidden behind the
           // cloud-only early return below.
           appLocalMarkAllAsRead(Date.now());
-          globalMarkAllAsRead();
+          // The Notifications-room leg is a cloud write in waiting (see
+          // `markAsRead`'s `global` arm), so it takes the verdict gate too.
+          if (cloudAuthorizedNow()) globalMarkAllAsRead();
           // The HOST leg runs before that early return too, and for the same
           // independence reason: the host plane is a separate origin store
           // whose liveness is the notification host's, not the relay's. A
@@ -1264,7 +1273,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
           return;
         }
         if (feedMode !== "local") return;
-        globalMarkAllAsRead();
+        if (cloudAuthorizedNow()) globalMarkAllAsRead();
         appLocalMarkAllAsRead(Date.now());
         // The host mutation applies only against a LIVE notification host. A
         // disconnect keeps the runtime binding (`client !== null`) and the
@@ -1322,7 +1331,9 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         // The renderer-local lanes are pure client state, so they clear
         // whatever the relay and the host are doing.
         appLocalClearAll();
-        globalClearAll();
+        // Verdict-gated like every other Notifications-room write: a clear
+        // made without one is a deferred cloud delete, not a local act.
+        if (cloudAuthorizedNow()) globalClearAll();
         // The host plane is a separate origin store whose liveness is the
         // NOTIFICATION host's, not the relay's - the same gate mark-all uses,
         // and deliberately not `client !== null`, which survives a disconnect

@@ -216,7 +216,11 @@ function UpgradeButton() {
       data-testid="snapshot-error-upgrade"
       disabled={isPending}
       onClick={() => {
-        void openLink(resolvePlatformBaseUrl(runnerHost.signInUrl), "auth", null);
+        void openLink(
+          resolvePlatformBaseUrl(runnerHost.signInUrl),
+          "auth",
+          null,
+        );
       }}
     >
       Upgrade

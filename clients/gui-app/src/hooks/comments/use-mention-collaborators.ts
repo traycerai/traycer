@@ -45,7 +45,12 @@ export function useMentionCollaboratorsForClient(
     staleTime: undefined,
   });
   return useMemo<ReadonlyArray<MentionCollaborator>>(() => {
-    if (data === undefined) return [];
+    // The verdict gates the PROJECTION as well as the request. `enabled:
+    // false` stops the next fetch, but TanStack keeps the last `data` on the
+    // shared cache entry, so a picker that read only `data` kept offering the
+    // names and email addresses it loaded under the verdict the session has
+    // since lost. Withheld means empty, whatever the cache still holds.
+    if (!cloudAuthorized || data === undefined) return [];
     const seen = new Set<string>();
     const rows: MentionCollaborator[] = [];
     for (const entry of data.flatRows) {
@@ -59,5 +64,5 @@ export function useMentionCollaboratorsForClient(
       });
     }
     return rows;
-  }, [data]);
+  }, [cloudAuthorized, data]);
 }

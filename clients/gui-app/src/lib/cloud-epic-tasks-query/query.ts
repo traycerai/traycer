@@ -12,10 +12,9 @@ import {
   CURRENT_PHASE_VERSION,
 } from "@traycer-clients/shared/epic/epic-version";
 import type { HostRpcRegistry } from "@/lib/host";
-import { readNegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
 import { queryKeys } from "@/lib/query-keys";
 import { getCloudEpicTasksClient } from "@/lib/cloud-epic-tasks-query/client-registry";
-import { negotiatedListTasksServesLocalFirst } from "@/lib/cloud-epic-tasks-query/local-first-admission";
+import { liveHostServesLocalFirst } from "@/lib/cloud-epic-tasks-query/local-first-admission";
 import {
   authorizesCloudCapability,
   useAuthStore,
@@ -365,19 +364,17 @@ function waitForMatchingRequestContext(
  * Both request policies converge here: `wait` may resume after an identity
  * transition, while `require-current` must never wait at all.
  */
-function dispatchScopedPageWithCurrentRequestContext(
+async function dispatchScopedPageWithCurrentRequestContext(
   client: HostClient<HostRpcRegistry>,
   options: FetchCloudEpicTasksScopedPageOptions,
 ): Promise<ListTasksResponse> {
   if (!hasMatchingRequestContext(client, options.expectedUserId)) {
-    return Promise.reject(
-      new Error(
-        "Cloud epic tasks request context no longer matches its cache user.",
-      ),
+    throw new Error(
+      "Cloud epic tasks request context no longer matches its cache user.",
     );
   }
-  if (!cloudLegAdmittedAtDispatch(client, options)) {
-    return Promise.reject(new CloudEpicTasksVerdictWithdrawnError());
+  if (!(await cloudLegAdmittedAtDispatch(client, options))) {
+    throw new CloudEpicTasksVerdictWithdrawnError();
   }
   const request = buildListTasksRequest(options.request, options.cursor);
   if (options.localFirstPhase === undefined) {
@@ -426,17 +423,19 @@ function hasMatchingRequestContext(
  * verdict is withdrawn mid-run, and its combiner reads any error as "do not
  * close anything": the refusal is the fail-closed outcome that path wants.
  */
-function cloudLegAdmittedAtDispatch(
+async function cloudLegAdmittedAtDispatch(
   client: HostClient<HostRpcRegistry>,
   options: FetchCloudEpicTasksScopedPageOptions,
-): boolean {
+): Promise<boolean> {
   if (authorizesCloudCapability(useAuthStore.getState().status)) return true;
   if (options.localFirstPhase === undefined) return false;
   const hostId = client.getActiveHostId();
   if (hostId === null) return false;
-  return negotiatedListTasksServesLocalFirst(
-    readNegotiatedMethodVersion(hostId, "epic.listTasks"),
-  );
+  // The live host's answer, not the registry's memory of it: the initial leg
+  // is the one page an unverified session may send, and a stale `1.6` from a
+  // host since rolled back under the same id would send it to that older
+  // process's cloud-backed list. See `liveHostServesLocalFirst`.
+  return liveHostServesLocalFirst(client, hostId);
 }
 
 function createAbortError(): Error {

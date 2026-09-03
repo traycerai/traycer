@@ -405,6 +405,7 @@ function buildFakeBridge(
           profile: null,
         }),
         set: async () => ({ outcome: "accepted" as const }),
+        revoke: async () => undefined,
         onChange: (_handler) => ({ dispose: () => undefined }),
       },
     },

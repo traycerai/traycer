@@ -31,6 +31,7 @@ import {
   useCloudNotificationsStore,
 } from "@/stores/notifications/cloud-notifications-store";
 import {
+  globalFeedId,
   useAttentionNotificationIds,
   useMergedNotificationRow,
   useMergedNotificationsActions,
@@ -813,6 +814,51 @@ describe("useMergedNotificationsActions indicator invalidation", () => {
         cloudNotificationFeedId("entry-a")
       ]?.entry.readAt,
     ).toBeNull();
+  });
+
+  it("does not write the Notifications room after the session is demoted to unverified", async () => {
+    // The room is account-backed Yjs state. Its stream closes on verdict
+    // loss, but the replica stays rendered, and a local transaction made now
+    // is an offline delta the reopen reconciles upstream - a cloud write the
+    // withdrawn verdict never authorized. Every room mutation re-reads the
+    // verdict at dispatch, like the cloud-feed legs above.
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    seedGlobal([
+      {
+        id: "epic-invite",
+        createdAt: 2,
+        readAt: null,
+        event: {
+          kind: NOTIFICATION_EVENT_TYPES.INVITED,
+          epicId: "epic-1",
+          actorName: "Alice",
+        },
+      },
+    ]);
+    const { result } = renderHook(
+      () => ({
+        actions: useMergedNotificationsActions(),
+        row: useMergedNotificationRow(globalFeedId("epic-invite")),
+      }),
+      { wrapper: createWrapper() },
+    );
+    const captured = result.current.row;
+    if (captured === null) throw new Error("expected global row");
+
+    demoteToUnverified();
+    act(() => {
+      result.current.actions.markAsRead(captured);
+      result.current.actions.markAllAsRead();
+      result.current.actions.clearAll();
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const entries = useNotificationsStore.getState().entries;
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.readAt).toBeNull();
   });
 
   it("captures clear-all at the observed version while a newer entry survives", async () => {

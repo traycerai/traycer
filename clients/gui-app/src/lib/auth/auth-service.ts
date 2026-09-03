@@ -501,6 +501,7 @@ export class AuthService {
   private readonly contextProvider: DefaultRequestContextProvider;
   private readonly listeners = new Set<AuthListener>();
   private readonly errorListeners = new Set<AuthErrorListener>();
+  private readonly cloudAuthorizationRevokedListeners = new Set<() => void>();
   private readonly sessionSnapshotListeners =
     new Set<AuthSessionSnapshotListener>();
   private readonly authStoreUnsubscribe: () => void;
@@ -2149,6 +2150,26 @@ export class AuthService {
     return {
       dispose: () => {
         this.sessionSnapshotListeners.delete(handler);
+      },
+    };
+  }
+
+  /**
+   * Fires when a session that HELD a cloud verdict loses it on a terminal
+   * server rejection (`demoteVerifiedSessionToUnverified`) - never for the
+   * `unverified` a cold start or an unreachable authn lands in, which is no
+   * transition at all. The snapshot listeners cannot carry this edge: an
+   * `unverified` snapshot is deliberately never projected cross-window, and
+   * the status it would flatten to signs sibling windows out. Consumers that
+   * hold their own copy of the session outside this renderer (the desktop
+   * main process, whose jar plane speaks for the account on it) subscribe
+   * here to withdraw it. Edge only: no replay on subscribe.
+   */
+  onCloudAuthorizationRevoked(handler: () => void): Disposable {
+    this.cloudAuthorizationRevokedListeners.add(handler);
+    return {
+      dispose: () => {
+        this.cloudAuthorizationRevokedListeners.delete(handler);
       },
     };
   }
@@ -4739,6 +4760,21 @@ export class AuthService {
       { userId: session.user.id },
     );
     retireAllRemoteSessions();
+    // The copies of this session held OUTSIDE the renderer - the desktop main
+    // process above all, whose jar plane keeps speaking for the account on
+    // the bearer it verified until told otherwise. See
+    // `onCloudAuthorizationRevoked`.
+    for (const listener of Array.from(
+      this.cloudAuthorizationRevokedListeners,
+    )) {
+      try {
+        listener();
+      } catch (error) {
+        appLogger.warn("[auth] a cloud-authorization-revoked listener failed", {
+          cause: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
     return projected;
   }
 

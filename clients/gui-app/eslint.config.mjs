@@ -969,7 +969,13 @@ export default tseslint.config(
     // configured while doing nothing. That is not hypothetical - this block WAS
     // written higher up, lint stayed red on the five sites it names, and only
     // running it found out. It restates the same `nestedFocus` / `tabNavigation`
-    // shape the test block sets so moving it down costs those files nothing.
+    // shape the test block sets so moving it down costs those files nothing -
+    // and the three test-scaffolding exemptions too (`tileOpen` /
+    // `linkEgressBridge` / `linkEgressHook`): `auth-service.test.ts` stubs
+    // `runnerHost.openExternalLink` to observe the sign-in ordering, and a
+    // from-scratch value here that dropped them re-banned exactly the
+    // test-double reading the block above lifts. Same overwrite, other
+    // direction.
     files: cloudBearerFenceGuiAllowlist,
     rules: {
       "no-restricted-syntax": syntaxRestrictions({
@@ -979,6 +985,9 @@ export default tseslint.config(
           "forwardRef",
           "selectById",
           "selectionAuthority",
+          "tileOpen",
+          "linkEgressBridge",
+          "linkEgressHook",
         ],
         nestedFocus: null,
         tabNavigation: [

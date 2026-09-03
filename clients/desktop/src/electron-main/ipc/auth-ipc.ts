@@ -357,6 +357,13 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
     },
   );
 
+  // The renderer's terminal verdict loss. Not a session transition - the
+  // session main holds stays as it is and fans out unchanged - only the
+  // verification behind it goes, which is what the jar plane reads.
+  bridge.handleInvoke(RunnerHostInvoke.authSessionRevoke, () => {
+    bridge.authSession.revokeVerification();
+  });
+
   const onAuthSessionChange = (snapshot: DesktopAuthSessionSnapshot): void => {
     retainedStepUpCredential = null;
     bridge.fanOut(RunnerHostEvent.authSessionChange, snapshot);

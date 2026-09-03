@@ -277,6 +277,8 @@ function NotificationsSessionBody(
   const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
   const disposerRef = useRef<(() => void) | null>(null);
   const activityDisposerRef = useRef<(() => void) | null>(null);
+  /** The host whose lane `activityDisposerRef` holds - the slice a verdict loss clears. */
+  const activityStreamHostIdRef = useRef<string | null>(null);
   const hostDisposerRef = useRef<(() => void) | null>(null);
   const cloudDisposerRef = useRef<(() => void) | null>(null);
   // Set when a cloud-verdict loss closed the cloud lanes while the host lanes
@@ -558,6 +560,7 @@ function NotificationsSessionBody(
       activityDisposerRef.current = null;
       disposer();
     }
+    activityStreamHostIdRef.current = null;
     if (hostDisposerRef.current !== null) {
       const disposer = hostDisposerRef.current;
       hostDisposerRef.current = null;
@@ -596,6 +599,19 @@ function NotificationsSessionBody(
       const disposer = activityDisposerRef.current;
       activityDisposerRef.current = null;
       disposer();
+    }
+    // The stream's own disposer keeps `byEpic` on purpose: a same-host client
+    // swap or a reopenable close is a RECONNECT, and the replacement epoch's
+    // first frame reconciles the snapshot. This close is not one. The lane
+    // stays shut until the verdict returns and nothing refreshes the slice
+    // meanwhile, so an agent the last frame reported as working would spin -
+    // and keep answering "running" to the command palette - for as long as the
+    // session stays unverified. The slice goes with the lane; the regain edge
+    // reopens it and the new epoch's frame repopulates it.
+    const activityHostId = activityStreamHostIdRef.current;
+    activityStreamHostIdRef.current = null;
+    if (activityHostId !== null) {
+      useAgentActivityStore.getState().resetHost(activityHostId);
     }
   }, []);
 
@@ -898,6 +914,7 @@ function NotificationsSessionBody(
           servingStreamClient,
           onAuthError,
         );
+        activityStreamHostIdRef.current = streamHostId;
       }
       // Both cloud-lane bail-outs below are `if` bodies rather than early
       // returns from `openForCurrentUser`, and that is the whole point: the

@@ -49,6 +49,24 @@ export class DesktopAuthSession {
     this.store(snapshot, true);
   }
 
+  /**
+   * Withdraws main's verification of the session it holds, leaving the
+   * session itself in place. The renderer calls this on a TERMINAL verdict
+   * loss (authn rejected the refresh credential): the bearer it verified may
+   * still be inside its expiry, so nothing about the token tells main, and
+   * the renderer's own `unverified` is deliberately never projected here -
+   * the status it would flatten to signs sibling windows out.
+   *
+   * Everything that speaks for the account reads `verified`, so this is the
+   * whole of the teardown: the jar plane's principal reads `null` from the
+   * next change, and the status the change fans out is unchanged, so no
+   * renderer applies a transition it did not make. A no-op when nothing was
+   * verified.
+   */
+  revokeVerification(): void {
+    this.store(this.snapshotValue, false);
+  }
+
   private store(snapshot: DesktopAuthSessionSnapshot, verified: boolean): void {
     const base = normalizeDesktopAuthSession(snapshot);
     const normalized: VerifiedDesktopAuthSessionSnapshot = {

@@ -781,6 +781,16 @@ export interface DesktopWindowsBridge {
     set(
       snapshot: DesktopAuthSessionSnapshot,
     ): Promise<DesktopAuthSessionSetResult>;
+    /**
+     * Withdraws main's verification of the session it holds - the renderer's
+     * TERMINAL verdict loss, which `set` cannot carry because the status an
+     * `unverified` flattens to signs sibling windows out. Optional +
+     * capability-probed like `perWindowState.clear`: a desktop shell built
+     * before the channel existed has no `revoke`, and the bridge degrades to
+     * the pre-channel behaviour (main keeps its verification until the
+     * bearer expires) rather than failing the `isDesktopWindowsBridge` guard.
+     */
+    revoke?(): Promise<void>;
     onChange(handler: (snapshot: DesktopAuthSessionSnapshot) => void): {
       dispose(): void;
     };

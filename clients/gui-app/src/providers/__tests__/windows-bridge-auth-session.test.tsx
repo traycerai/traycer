@@ -35,9 +35,12 @@ const SIGNED_IN_SNAPSHOT: AuthSessionSnapshot = {
  */
 function renderWithFakes(setResult: DesktopAuthSessionSetResult): {
   emitOutbound: (snapshot: AuthSessionSnapshot) => void;
+  emitRevoked: () => void;
   set: Mock<(snapshot: DesktopAuthSessionSnapshot) => Promise<unknown>>;
+  revoke: Mock<() => Promise<void>>;
 } {
   let outboundListener: ((snapshot: AuthSessionSnapshot) => void) | null = null;
+  let revokedListener: (() => void) | null = null;
 
   mockUseAuthService.mockReturnValue({
     onSessionSnapshotChange: (
@@ -50,6 +53,14 @@ function renderWithFakes(setResult: DesktopAuthSessionSetResult): {
         },
       };
     },
+    onCloudAuthorizationRevoked: (handler: () => void) => {
+      revokedListener = handler;
+      return {
+        dispose: () => {
+          revokedListener = null;
+        },
+      };
+    },
     getIdentityGeneration: () => 0,
     ingestProjectedSessionSnapshot: vi.fn().mockResolvedValue(undefined),
   });
@@ -57,6 +68,7 @@ function renderWithFakes(setResult: DesktopAuthSessionSetResult): {
   const set = vi.fn((_snapshot: DesktopAuthSessionSnapshot) =>
     Promise.resolve<unknown>(setResult),
   );
+  const revoke = vi.fn(() => Promise.resolve());
   mockUseWindowsBridge.mockReturnValue({
     authSession: {
       get: vi.fn().mockResolvedValue({
@@ -65,6 +77,7 @@ function renderWithFakes(setResult: DesktopAuthSessionSetResult): {
         profile: null,
       }),
       set,
+      revoke,
       onChange: () => ({ dispose: () => undefined }),
     },
   });
@@ -77,9 +90,14 @@ function renderWithFakes(setResult: DesktopAuthSessionSetResult): {
 
   return {
     set,
+    revoke,
     emitOutbound: (snapshot) => {
       if (outboundListener === null) throw new Error("no outbound listener");
       act(() => outboundListener?.(snapshot));
+    },
+    emitRevoked: () => {
+      if (revokedListener === null) throw new Error("no revoke listener");
+      act(() => revokedListener?.());
     },
   };
 }
@@ -88,6 +106,27 @@ describe("<WindowsBridgeAuthSessionBridge />", () => {
   afterEach(() => {
     cleanup();
     toast.warning.mockClear();
+  });
+
+  it("asks main to drop its verification on a terminal verdict loss, without projecting a session transition", async () => {
+    const { emitOutbound, emitRevoked, set, revoke } = renderWithFakes({
+      outcome: "accepted",
+    });
+    await act(async () => {
+      emitOutbound(SIGNED_IN_SNAPSHOT);
+      await Promise.resolve();
+    });
+    expect(set).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      emitRevoked();
+      await Promise.resolve();
+    });
+
+    // The revoke, and ONLY the revoke: no `signed-out` (which siblings apply
+    // unconditionally) and no `unverified` (which main has no shape for).
+    expect(revoke).toHaveBeenCalledTimes(1);
+    expect(set).toHaveBeenCalledTimes(1);
   });
 
   it("surfaces a toast naming the reason when main refuses the pushed session", async () => {

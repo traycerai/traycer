@@ -219,6 +219,8 @@ export interface IpcDesktopAuthSession {
    * which runs the verification, calls it.
    */
   setVerified(snapshot: DesktopAuthSessionSnapshot): void;
+  /** Drops the verification alone; see `DesktopAuthSession.revokeVerification`. */
+  revokeVerification(): void;
   on(event: "change", listener: IpcAuthSessionChangeListener): void;
   off(event: "change", listener: IpcAuthSessionChangeListener): void;
 }

@@ -277,6 +277,14 @@ export interface UseHostMutationOptions<
     response: ResponseOfMethod<Registry, Method>,
     variables: TVariables,
   ) => void;
+  /**
+   * An ASYNC pre-flight, awaited inside the same error boundary as
+   * `mapVariables` and before the request goes out. For a check whose
+   * evidence has to come from the live host - a probe RPC and a re-read -
+   * rather than from what the renderer already holds. A throw refuses the
+   * mutation as a `HostRpcError`, exactly like a `mapVariables` throw.
+   */
+  readonly preflight?: (variables: TVariables) => Promise<void>;
 }
 
 /**
@@ -313,6 +321,7 @@ export function useHostMutation<
             hostClientUnavailableError(args.method),
           );
         }
+        await args.preflight?.(variables);
         const response = await args.client.request(
           args.method,
           args.mapVariables(variables),
@@ -361,6 +370,7 @@ export function useHostMutationWithResponseTimeout<
             hostClientUnavailableError(args.method),
           );
         }
+        await args.preflight?.(variables);
         const response = await args.client.requestWithResponseTimeout(
           args.method,
           args.mapVariables(variables),

@@ -397,11 +397,21 @@ describe("AuthService authorization-loss remote-session sweep", () => {
       return status(500);
     });
 
+    // The copies held outside this renderer (desktop main's jar-plane
+    // principal) learn of the terminal loss through this edge and nothing
+    // else - an `unverified` snapshot is never projected cross-window.
+    let revokedSignals = 0;
+    const revokedSubscription = service.onCloudAuthorizationRevoked(() => {
+      revokedSignals += 1;
+    });
+
     const outcome = await service.revalidateCurrentContext();
     expect(outcome?.kind).toBe("rejected");
     // The demotion this fix targets: a session that HELD a verdict lost it.
     expect(useAuthStore.getState().status).toBe("unverified");
     expect(service.getLastError()).toBe(AUTH_ERROR_SESSION_EXPIRED);
+    expect(revokedSignals).toBe(1);
+    revokedSubscription.dispose();
 
     // THE FIX: the previously-established remote session was closed by the
     // sweep, on the underlying session the cache entry wraps - not on the

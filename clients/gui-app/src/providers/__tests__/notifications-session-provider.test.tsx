@@ -3763,6 +3763,21 @@ describe("<NotificationsSessionProvider />", () => {
     const cloudFeedSession = streamClient.sessionFor(
       "host.notifications.cloudFeed.subscribe",
     );
+    // An agent the activity lane reported as working BEFORE the demotion. The
+    // lane's own disposer keeps the snapshot (a reconnect's first frame
+    // reconciles it); the assertion after the close pins that this close is
+    // not treated as one.
+    act(() => {
+      activitySession.emitServerFrame({
+        kind: "state",
+        servedBy: "cloud",
+        byEpic: {
+          "epic-1": { working: ["agent-1"], turn: ["agent-1"] },
+        },
+        hasBinaryPayload: false,
+      });
+    });
+    expect([...getEpicAgentActivity("epic-1").working]).toEqual(["agent-1"]);
 
     // The identity is CONTINUOUS across this demotion (same account, same
     // userId) - `useAuthIdentityTransition` fires nothing for it, so nothing
@@ -3797,6 +3812,12 @@ describe("<NotificationsSessionProvider />", () => {
     // still has every right to. A test that only checked "something closed"
     // would not catch a blanket `tearDown()` here.
     expect(hostFeedSession.closeCount).toBe(0);
+    // The reported agent does not outlive the lane that reported it: the lane
+    // stays shut until the verdict returns and nothing refreshes the slice
+    // meanwhile, so a retained "working" would spin indefinitely. The whole
+    // slice goes, not only the epic's bucket.
+    expect(getEpicAgentActivity("epic-1").working.size).toBe(0);
+    expect(useAgentActivityStore.getState().byHost.size).toBe(0);
 
     // Re-promotion: the same account regains the verdict.
     act(() => {

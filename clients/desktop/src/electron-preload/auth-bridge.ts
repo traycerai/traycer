@@ -258,6 +258,12 @@ export interface AuthSessionBridgeSurface {
   set(
     snapshot: DesktopAuthSessionSnapshot,
   ): Promise<DesktopAuthSessionSetResult>;
+  /**
+   * Withdraws main's verification of the held session without replacing it -
+   * the renderer's terminal verdict loss, which `set` cannot carry: the
+   * nearest status it flattens to would sign sibling windows out.
+   */
+  revoke(): Promise<void>;
   onChange(handler: Listener<DesktopAuthSessionSnapshot>): Disposable;
 }
 
@@ -272,6 +278,8 @@ export function buildAuthSessionBridge(): AuthSessionBridgeSurface {
         RunnerHostInvoke.authSessionSet,
         snapshot,
       ) as Promise<DesktopAuthSessionSetResult>,
+    revoke: () =>
+      ipcRenderer.invoke(RunnerHostInvoke.authSessionRevoke) as Promise<void>,
     onChange: (handler) =>
       subscribe<DesktopAuthSessionSnapshot>(
         RunnerHostEvent.authSessionChange,

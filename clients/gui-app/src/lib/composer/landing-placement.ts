@@ -93,8 +93,16 @@ export function refuseCreateWithoutCloudVerdict(input: {
   }
   return {
     kind: "refused",
-    message: `Traycer couldn't confirm your sign-in, and ${input.hostLabel} can't create epics on this device without it. Sign in again, or update the device and try again.`,
+    message: createWithoutCloudVerdictMessage(input.hostLabel),
   };
+}
+
+/**
+ * The refusal's copy, shared with the create mutation's own pre-flight (the
+ * dispatch-time re-check against the LIVE host) so the two say one thing.
+ */
+export function createWithoutCloudVerdictMessage(hostLabel: string): string {
+  return `Traycer couldn't confirm your sign-in, and ${hostLabel} can't create epics on this device without it. Sign in again, or update the device and try again.`;
 }
 
 /**
