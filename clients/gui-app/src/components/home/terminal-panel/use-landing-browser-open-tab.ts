@@ -163,6 +163,17 @@ export function landingBrowserCapMessage(): string {
 /** Where a popup the page raised should land relative to the reader. */
 export type LandingBrowserLinkDisposition = "foreground" | "background";
 
+/**
+ * How many unanswered popup asks the panel will hold.
+ *
+ * {@link LANDING_BROWSER_TAB_CAP}, because that is the ceiling on what could
+ * ever land: a device holds eight panel tabs, so a ninth queued open is one the
+ * cap re-check would refuse anyway. Overflow is dropped rather than queued
+ * behind asks that cannot succeed - a page emitting popups faster than a device
+ * can answer them is not a reader making eight requests.
+ */
+const MAX_PENDING_LINK_OPENS = LANDING_BROWSER_TAB_CAP;
+
 interface LandingBrowserLinkRequest {
   readonly hostId: string;
   readonly sessionId: string;
@@ -199,12 +210,15 @@ export function useLandingBrowserOpenLink(args: {
   readonly browserSessions: LandingBrowserSessionEntries;
 }): LandingBrowserOpenLink {
   const { browserSessions } = args;
-  const [request, setRequest] = useState<LandingBrowserLinkRequest | null>(
-    null,
-  );
+  // A QUEUE and not a slot: a page can emit two `window.open` calls in one
+  // tick, and a single slot would let the second overwrite the first before
+  // either was dispatched - losing a popup silently, which is worse than
+  // opening it late.
+  const [queue, setQueue] = useState<readonly LandingBrowserLinkRequest[]>([]);
+  const head = queue.at(0) ?? null;
   const dispatchedRef = useRef<string | null>(null);
   const openMutation = useMutation({
-    mutationKey: browserMutationKeys.openTab(request?.hostId ?? null),
+    mutationKey: browserMutationKeys.openTab(head?.hostId ?? null),
     mutationFn: async (
       pending: LandingBrowserLinkRequest,
     ): Promise<LandingBrowserTabRef> => {
@@ -255,32 +269,41 @@ export function useLandingBrowserOpenLink(args: {
       toast.error(cause.message);
     },
     onSettled: () => {
-      setRequest(null);
+      // Only the head is ever in flight, so the settled ask is the one that
+      // leaves - and the render that follows dispatches the next.
+      setQueue((current) => current.slice(1));
     },
   });
   const mutate = openMutation.mutate;
   useEffect(() => {
-    if (request === null) {
+    if (head === null) {
       dispatchedRef.current = null;
       return;
     }
-    if (dispatchedRef.current === request.requestId) return;
-    dispatchedRef.current = request.requestId;
-    mutate(request);
-  }, [mutate, request]);
+    if (dispatchedRef.current === head.requestId) return;
+    dispatchedRef.current = head.requestId;
+    mutate(head);
+  }, [mutate, head]);
   const open = useCallback(
     (
       tab: LandingBrowserTabRef,
       url: string,
       disposition: LandingBrowserLinkDisposition,
     ): void => {
-      setRequest({
-        hostId: tab.hostId,
-        sessionId: tab.sessionId,
-        url,
-        disposition,
-        requestId: uuidv4(),
-      });
+      setQueue((current) =>
+        current.length >= MAX_PENDING_LINK_OPENS
+          ? current
+          : [
+              ...current,
+              {
+                hostId: tab.hostId,
+                sessionId: tab.sessionId,
+                url,
+                disposition,
+                requestId: uuidv4(),
+              },
+            ],
+      );
     },
     [],
   );

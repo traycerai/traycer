@@ -627,6 +627,18 @@ export function LandingTerminalPanel(): ReactNode {
   // invocation time: keyboard handlers can fire after a host switch but before
   // React re-renders, so the captured `routing.hostId` alone is not enough to
   // satisfy the host-identity guardrail.
+  /**
+   * The gesture generation that asked for a TERMINAL and could not be served
+   * synchronously, or `null`.
+   *
+   * `capture()` cannot say what it was captured for: `app.terminal.toggle`, the
+   * phone header's toggle and the open-transition effect all capture too, and a
+   * settlement that treated every captured gesture as a create spawned a
+   * terminal on a strip holding only browser tabs - nothing to reuse, and not
+   * empty enough for the chooser to cover it. Keyed by generation so it can
+   * never leak onto the next gesture.
+   */
+  const deferredCreateGenerationRef = useRef<number | null>(null);
   const createTerminalTab = useCallback(
     (routing: LandingTerminalTarget): string | null => {
       if (routing.hostId === null || routing.availability !== "supported") {
@@ -686,7 +698,14 @@ export function LandingTerminalPanel(): ReactNode {
       return;
     }
     const instanceId = createTerminalTab(captured);
-    if (instanceId !== null) focusTerminalInstance(instanceId);
+    if (instanceId !== null) {
+      focusTerminalInstance(instanceId);
+      return;
+    }
+    // Refused for now - a host whose context has not reconciled yet has no
+    // launch directory to spawn into. This chord asked for a terminal, so the
+    // settlement finishes it; nothing else may.
+    deferredCreateGenerationRef.current = captured.generation;
   }, [
     capture,
     createTerminalTab,
@@ -891,6 +910,9 @@ export function LandingTerminalPanel(): ReactNode {
       // `+`/workspace projection follow the newly focused draft after settling.
       const clearIfPending = (): void => {
         if (pending) clearPending();
+        if (deferredCreateGenerationRef.current === generation) {
+          deferredCreateGenerationRef.current = null;
+        }
       };
       // Host may have switched after this generation began; never spawn with
       // a home path whose hostId no longer matches the routing target.
@@ -918,6 +940,22 @@ export function LandingTerminalPanel(): ReactNode {
         return;
       }
       if (!pending) return;
+      // A strip with no TERMINAL row is being REVEALED, not added to. The
+      // empty-panel branch above cannot cover this one: a browser-only strip is
+      // not empty, so the chooser does not claim it, and reuse-or-create then
+      // found nothing to reuse and spawned a shell the reader never asked for -
+      // a state this feature created by making the strip mixed.
+      //
+      // `⇧⌘J` is exempt, because it asks for a terminal in as many words. It
+      // reaches here only when it could not create synchronously (a host whose
+      // context has not reconciled yet), which is exactly what the ref records.
+      if (
+        landingTerminalTabs(state.tabs).length === 0 &&
+        deferredCreateGenerationRef.current !== generation
+      ) {
+        clearIfPending();
+        return;
+      }
       const existing = terminalForTarget(
         landingTerminalTabs(state.tabs),
         state.activeInstanceId,
@@ -2140,14 +2178,36 @@ function LandingTerminalPanelBody(props: {
   const placeholderActive =
     props.placeholder !== null &&
     props.placeholder.instanceId === props.activeInstanceId;
+  // The picker is a layer OVER the body, so nothing under it is on screen. The
+  // strip already resolves its active row this way (one id, two readers); the
+  // rows need it too, and for a reason CSS cannot serve: a browser tile's
+  // pixels are a native `WebContentsView` the desktop paints over the window,
+  // which `invisible` on an ancestor does not touch. Visibility there is an
+  // explicit prop by design, and this is the value it must carry.
+  //
+  // `placeholderActive` deliberately keeps reading the RAW id: picking Terminal
+  // raises the picker from the chooser, which stays mounted underneath it, and
+  // nulling the id here would unmount the surface the picker was opened from.
+  const visibleInstanceId =
+    props.directoryPicker === null ? props.activeInstanceId : null;
+  const activeTab =
+    props.tabs.find((tab) => tab.instanceId === props.activeInstanceId) ?? null;
   // The chooser outranks the connecting status line, and deliberately: the
   // core flows want a device that is still connecting to show the chooser with
   // DISABLED cards carrying that same message, not a blank body that never
   // explains what the panel is waiting to offer.
+  //
+  // So does a browser row, for a different reason: `availability` is the
+  // TERMINAL target host's, and the panel's rows name several devices. A
+  // browser tab is maintained through its own device's coordinator and its tile
+  // renders that device's own reconnecting / dormant state, so blanking it
+  // while an unrelated host resolves takes a working page off screen and
+  // replaces it with a sentence about a machine it has nothing to do with.
   if (
     props.availability === "unknown" &&
     props.directoryPicker === null &&
-    !placeholderActive
+    !placeholderActive &&
+    activeTab?.kind !== "browser"
   ) {
     return (
       <div
@@ -2208,7 +2268,7 @@ function LandingTerminalPanelBody(props: {
                 <LandingBrowserTile
                   landingPageId={props.landingPageId}
                   tab={tab}
-                  active={tab.instanceId === props.activeInstanceId}
+                  active={tab.instanceId === visibleInstanceId}
                   panelOpen={props.panelOpen}
                   onRequestClose={() => props.onCloseTab(tab)}
                   onOpenLinkInNewTile={(url, disposition) => {
@@ -2220,7 +2280,7 @@ function LandingTerminalPanelBody(props: {
                 <LandingTerminalTile
                   landingPageId={props.landingPageId}
                   tab={tab}
-                  active={tab.instanceId === props.activeInstanceId}
+                  active={tab.instanceId === visibleInstanceId}
                   createEnabled={Boolean(
                     props.availability === "supported" &&
                     props.panelOpen &&

@@ -244,6 +244,7 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
             scope={props.scope}
             hostId={node.hostId}
             browserRunsOnHost
+            visible={visible}
             onNavigate={chrome.navigateToUrl}
           />
         ) : null}

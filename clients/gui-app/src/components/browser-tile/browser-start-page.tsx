@@ -11,6 +11,15 @@ interface BrowserStartPageProps {
   readonly scope: HostResourceScope;
   readonly hostId: string;
   readonly browserRunsOnHost: boolean;
+  /**
+   * Whether the tile this start page fills is actually on screen.
+   *
+   * The tile's own three-axis answer, passed straight down rather than
+   * re-derived: a start page has no view of the panel, the pane, or which tab
+   * is active, and a fourth spelling of "visible" is a fourth thing to keep in
+   * agreement.
+   */
+  readonly visible: boolean;
   readonly onNavigate: (url: string) => void;
 }
 
@@ -29,7 +38,13 @@ export function BrowserStartPage(props: BrowserStartPageProps) {
     params: { scope: props.scope },
     cacheKeyIdentity: undefined,
     options: {
-      enabled: localServersReachable,
+      // Visibility is part of the GATE, not just of the rendering: this query
+      // polls, the surfaces that host it keep every tab mounted while it is
+      // inactive / the panel is collapsed / the pane is backgrounded, and a
+      // blank tab is what the panel opens by default. Without this term every
+      // retained start page keeps asking a device for its listening ports on
+      // the poll cadence with nothing able to show the answer.
+      enabled: localServersReachable && props.visible,
       poll: true,
       retry: false,
     },

@@ -193,9 +193,26 @@ class TestBridge {
 
   /** A browser-scoped chord main claimed from the focused guest page. */
   emitTileCommand(command: BrowserViewTileCommand): void {
+    this.emitTileCommandForTile(
+      { viewTabId: "view-1", paneId: "pane-1" },
+      command,
+    );
+  }
+
+  /**
+   * The same chord addressed to a tile at other coordinates. The surface
+   * filters every event on its own tile key, and a Start Page tile's key is
+   * `{landingPageId, "landing-panel"}` rather than `{viewTabId, paneId}` - so a
+   * canvas-shaped event would be discarded before any arm saw it, and a test
+   * that emitted one would pass by never reaching the code it names.
+   */
+  emitTileCommandForTile(
+    tile: { readonly viewTabId: string; readonly paneId: string },
+    command: BrowserViewTileCommand,
+  ): void {
     this.tileCommandHandler?.({
-      viewTabId: "view-1",
-      paneId: "pane-1",
+      viewTabId: tile.viewTabId,
+      paneId: tile.paneId,
       tileInstanceId: "tile-1",
       pageSessionId: "browser-session:session-1:tab-1",
       command,
@@ -601,6 +618,45 @@ describe("ElectronTabSurface browser-scoped chords", () => {
     await waitFor(() => {
       expect(state.closeCanvasTile).toHaveBeenCalledOnce();
     });
+  });
+
+  // The Start Page shape. Its panel close is a whole sequence - host close,
+  // store removal, tombstone, neighbour promotion - so a tile that ALSO sent
+  // the close would issue two for one gesture, the second racing a tab the host
+  // has already removed and surfacing its refusal as a toast nobody earned.
+  it("asks the host surface to close on Cmd+W under a landing placement, and sends nothing itself", async () => {
+    render(
+      <ElectronTabSurface
+        node={NODE}
+        binding={createBinding(
+          vi.fn(() => Promise.resolve({ detach: () => Promise.resolve() })),
+        )}
+        placement={{ kind: "landing", landingPageId: "landing-1" }}
+        visible={state.visible}
+        pageSessionId={PAGE_SESSION_ID}
+        onRequestClose={state.closeCanvasTile}
+        persistViewportPreset={state.persistViewportPreset}
+        onOpenLinkInNewTile={state.onOpenLinkInNewTile}
+        onRequestNewTab={null}
+        onConvertToPip={() => undefined}
+      />,
+    );
+    const bridge = state.bridge;
+    expect(bridge).not.toBeNull();
+
+    act(() =>
+      bridge?.emitTileCommandForTile(
+        { viewTabId: "landing-1", paneId: "landing-panel" },
+        "closeTab",
+      ),
+    );
+
+    await waitFor(() => {
+      expect(state.closeCanvasTile).toHaveBeenCalledOnce();
+    });
+    // The canvas arm above still sends it; this one must not, or one Cmd+W is
+    // two closes.
+    expect(state.closeTab).not.toHaveBeenCalled();
   });
 
   it("forwards Cmd+T to onOpenLinkInNewTile as a foreground open of the default URL", () => {
