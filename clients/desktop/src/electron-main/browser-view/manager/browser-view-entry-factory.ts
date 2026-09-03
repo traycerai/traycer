@@ -49,6 +49,7 @@ interface BrowserViewEntryFactoryOptions {
     reason: string | null,
   ) => void;
   readonly emitStatus: (entry: BrowserViewEntry) => void;
+  readonly emitFocus: (entry: BrowserViewEntry) => void;
   readonly closeEntry: (entry: BrowserViewEntry) => void;
 }
 
@@ -81,6 +82,7 @@ export class BrowserViewEntryFactory {
     reason: string | null,
   ) => void;
   private readonly emitStatus: (entry: BrowserViewEntry) => void;
+  private readonly emitFocus: (entry: BrowserViewEntry) => void;
   private readonly closeEntry: (entry: BrowserViewEntry) => void;
 
   constructor(options: BrowserViewEntryFactoryOptions) {
@@ -96,6 +98,7 @@ export class BrowserViewEntryFactory {
     this.observePrimaryProfileOrigin = options.observePrimaryProfileOrigin;
     this.setStatus = options.setStatus;
     this.emitStatus = options.emitStatus;
+    this.emitFocus = options.emitFocus;
     this.closeEntry = options.closeEntry;
   }
 
@@ -157,6 +160,9 @@ export class BrowserViewEntryFactory {
         },
         "found-in-page": (_event: Event, result: Result): void => {
           this.find.handleFoundInPage(entry, result);
+        },
+        focus: (): void => {
+          this.emitFocus(entry);
         },
         "page-title-updated": (): void => {
           if (entry.internalNavigation) return;

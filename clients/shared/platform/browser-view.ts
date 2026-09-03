@@ -841,6 +841,10 @@ export interface BrowserViewBridge {
   onTileCommand(handler: (event: BrowserViewTileCommandEvent) => void): {
     dispose: () => void;
   };
+  /** The native guest received focus, which bypasses the renderer DOM. */
+  onTileFocused(handler: (tile: BrowserViewTileKey) => void): {
+    dispose: () => void;
+  };
   onSnapshotInvalidated(
     handler: (change: BrowserViewSnapshotInvalidatedChange) => void,
   ): {

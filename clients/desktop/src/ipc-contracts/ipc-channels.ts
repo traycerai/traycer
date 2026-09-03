@@ -454,6 +454,7 @@ export const RunnerHostEvent = {
   browserViewCertificateError: "runnerHost:event:browserView:certificateError",
   browserViewOpenTileRequest: "runnerHost:event:browserView:openTileRequest",
   browserViewTileCommand: "runnerHost:event:browserView:tileCommand",
+  browserViewTileFocused: "runnerHost:event:browserView:tileFocused",
   browserViewSnapshotInvalidated:
     "runnerHost:event:browserView:snapshotInvalidated",
   // Ticket 04 exit-edge handshake: fired once the un-parked native view's

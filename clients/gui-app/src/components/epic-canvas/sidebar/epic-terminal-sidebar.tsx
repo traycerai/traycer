@@ -18,6 +18,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -84,6 +85,14 @@ import {
 } from "@/components/epic-canvas/sidebar/terminal-list-states";
 import { epicTerminalUiIdentityKey } from "@/lib/terminals/pending-create-identity";
 import { makeListedEpicTerminalRef } from "@/lib/terminals/listed-epic-terminal-ref";
+import {
+  SIDEBAR_REVEAL_HIGHLIGHT_CLASS,
+  revealSidebarNode,
+} from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
+import {
+  clearSidebarNodeRevealRequest,
+  useSidebarNodeRevealRequest,
+} from "@/stores/epics/sidebar-node-reveal-store";
 import type {
   ListedTerminalSidebarSession,
   TerminalSidebarSessionRow,
@@ -191,6 +200,21 @@ interface TerminalSidebarBodyProps {
 
 function TerminalSidebarBody(props: TerminalSidebarBodyProps) {
   const { panel } = props;
+  const listRef = useRef<HTMLUListElement>(null);
+  const revealRequest = useSidebarNodeRevealRequest(props.tabId);
+  useLayoutEffect(() => {
+    if (revealRequest === null || listRef.current === null) return;
+    if (
+      !revealSidebarNode(
+        listRef.current,
+        revealRequest.nodeId,
+        revealRequest.nonce,
+      )
+    ) {
+      return;
+    }
+    clearSidebarNodeRevealRequest(props.tabId, revealRequest.nonce);
+  }, [panel.rows, props.tabId, revealRequest]);
   if (panel.isLoading) {
     return <TerminalsLoadingState testIdPrefix={TERMINALS_TEST_ID_PREFIX} />;
   }
@@ -209,6 +233,7 @@ function TerminalSidebarBody(props: TerminalSidebarBodyProps) {
   }
   return (
     <ul
+      ref={listRef}
       aria-label="Epic terminals"
       className="space-y-0.5"
       data-testid="epic-terminal-sidebar-list"
@@ -387,7 +412,17 @@ function TerminalRow(props: TerminalRowProps) {
     <li>
       <ContextMenu>
         <ContextMenuTrigger asChild disabled={isRenaming}>
-          <div className="group/term-row relative">
+          <div
+            data-sidebar-node-id={epicTerminalUiIdentityKey(
+              "session",
+              hostId,
+              session.sessionId,
+            )}
+            className={cn(
+              "group/term-row relative",
+              SIDEBAR_REVEAL_HIGHLIGHT_CLASS,
+            )}
+          >
             {isRenaming ? (
               <div
                 className={cn(
