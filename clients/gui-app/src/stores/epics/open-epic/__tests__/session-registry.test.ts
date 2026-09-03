@@ -1,14 +1,17 @@
 import * as Y from "yjs";
 import { INERT_ROOT_STATE_PORT } from "@/stores/epics/open-epic/test-support/root-state-port-fixture";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
+import type { CommandRecord } from "@traycer-clients/shared/replica-runtime";
 import {
   publishAgentActivity,
   resetAgentActivity,
 } from "@/__tests__/agent-activity-harness";
+import { useAgentActivityStore } from "@/stores/agent-activity-store";
 import { OpenEpicSessionRegistry } from "@/stores/epics/open-epic/session-registry";
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
+import type { EpicWriteCommandIntent } from "@/stores/epics/open-epic/runtime/epic-write-command";
 import { createArtifactInDocForTests } from "@/stores/epics/open-epic/__tests__/projection-helpers-test-shims";
 import {
   openStoreForTest,
@@ -16,8 +19,11 @@ import {
 } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 
 // ── No-op stream-client factory ───────────────────────────────────────────────
-// Honestly-typed, zero-implementation factory. No snapshots arrive; the
-// registry only calls handle.isClean(), store.subscribe(), and dispose().
+// Honestly-typed, zero-implementation factory. No snapshots arrive - the
+// registry no longer reads `handle.isClean()` for its cap decision (see
+// `holdsNothingToLose` in the production module); it reads `store.subscribe()`
+// and the store's own `isDirty` / `unsyncedQueueSize` / `writeCommands`
+// fields, plus `dispose()`.
 
 const noopStreamClientFactory: EpicStreamClientFactory = () => ({
   applyUpdate: () => undefined,
@@ -31,18 +37,23 @@ const noopStreamClientFactory: EpicStreamClientFactory = () => ({
 // ── TestHandle ────────────────────────────────────────────────────────────────
 // Wraps a real OpenedStoreForTest so the registry tests can:
 //   - observe dispose() calls via the `disposed` flag
-//   - override isClean() via the `clean` flag (simulates dirty / reconnecting
-//     without actually needing a live Y.Doc update cycle)
 //   - fire store subscribers via notify() to exercise auto-prune
+//
+// Eviction no longer reads `isClean()` (see `holdsNothingToLose` in the
+// production module), so "clean" / "dirty" are driven on the real store via
+// `base.store.setState(...)` rather than through a fake override. The second
+// constructor argument sets `isDirty` at build time as the simplest way to
+// make a handle non-evictable; a test that needs a more specific reason (a
+// nonzero `unsyncedQueueSize`, a pending `writeCommands` entry, a
+// `hostTransportStatus`) sets it explicitly afterward through `th.handle.store`.
 
 interface TestHandle {
   readonly handle: OpenedStoreForTest;
   disposed: boolean;
-  clean: boolean;
   notify: () => void;
 }
 
-function buildTestHandle(id: string, clean: boolean): TestHandle {
+function buildTestHandle(id: string, dirty: boolean): TestHandle {
   const base = openStoreForTest({
     epicId: id,
     userId: null,
@@ -65,9 +76,6 @@ function buildTestHandle(id: string, clean: boolean): TestHandle {
     realDispose();
   };
 
-  // Wrap isClean so tests can flip `clean` independently of Y.Doc state.
-  let isCleanOverride = clean;
-
   const wrappedHandle: OpenedStoreForTest = {
     // SPREAD, rather than a member-by-member forward. The comment below has
     // always said every other member must be the harness's own; a spread is
@@ -89,12 +97,19 @@ function buildTestHandle(id: string, clean: boolean): TestHandle {
     get store() {
       return base.store;
     },
-    // The two the wrapper actually exists to change.
+    // The one member the wrapper actually exists to change.
     dispose: testDispose,
-    isClean: () => isCleanOverride,
     hotArtifactRoomIdsForTests: () => [],
     ...INERT_ROOT_STATE_PORT,
   };
+
+  // `isDirty` is the simplest lever on `holdsNothingToLose`: setting it makes
+  // the session non-evictable regardless of queue size or write commands, and
+  // leaving it false keeps the store's defaults (isDirty / unsyncedQueueSize /
+  // writeCommands all empty), which is already evictable.
+  if (dirty) {
+    base.store.setState({ isDirty: true });
+  }
 
   const testHandle: TestHandle = {
     handle: wrappedHandle,
@@ -103,12 +118,6 @@ function buildTestHandle(id: string, clean: boolean): TestHandle {
     },
     set disposed(value: boolean) {
       disposed = value;
-    },
-    get clean() {
-      return isCleanOverride;
-    },
-    set clean(value: boolean) {
-      isCleanOverride = value;
     },
     // Fire the store's subscribers so the registry's auto-prune subscription
     // triggers, mirroring what production's store-update cycle does.
@@ -127,6 +136,21 @@ function h(t: TestHandle): OpenedStoreForTest {
   return t.handle;
 }
 
+// The cap's `epicIsBusy` guard fails CLOSED when the activity plane cannot
+// vouch for "no agent is working": every epic reads busy until the plane
+// answers. Puts the plane into the answering state before each test so the
+// existing cap/prune fixtures (which never touch agent activity) exercise
+// `holdsNothingToLose` rather than being blocked by a blind plane from the
+// store's own "connecting" default. Tests that need the plane blind, or that
+// mark agents working, override this afterward.
+beforeEach(() => {
+  useAgentActivityStore.setState({
+    connectionStatus: "open",
+    servedBy: "local",
+    cloudSyncStatus: null,
+  });
+});
+
 afterEach(() => {
   workingByEpic.clear();
   resetAgentActivity();
@@ -137,14 +161,14 @@ describe("OpenEpicSessionRegistry", () => {
     const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
     const handles: TestHandle[] = [];
     for (let i = 0; i < 5; i += 1) {
-      const th = buildTestHandle(`e${i}`, true);
+      const th = buildTestHandle(`e${i}`, false);
       handles.push(th);
       registry.acquire(`e${i}`, () => h(th));
     }
 
     registry.get("e0");
 
-    const th5 = buildTestHandle("e5", true);
+    const th5 = buildTestHandle("e5", false);
     registry.acquire("e5", () => h(th5));
 
     expect(registry.size()).toBe(5);
@@ -154,8 +178,8 @@ describe("OpenEpicSessionRegistry", () => {
 
   it("does not prune mounted clean sessions until their provider unmounts", () => {
     const registry = new OpenEpicSessionRegistry({ maxLive: 1 });
-    const mountedA = buildTestHandle("mounted-a", true);
-    const mountedB = buildTestHandle("mounted-b", true);
+    const mountedA = buildTestHandle("mounted-a", false);
+    const mountedB = buildTestHandle("mounted-b", false);
 
     registry.acquireMounted("mounted-a", () => h(mountedA));
     registry.acquireMounted("mounted-b", () => h(mountedB));
@@ -173,9 +197,9 @@ describe("OpenEpicSessionRegistry", () => {
 
   it("does not evict clean sessions with active agent work", () => {
     const registry = new OpenEpicSessionRegistry({ maxLive: 2 });
-    const active = buildTestHandle("active", true);
-    const inactiveA = buildTestHandle("inactive-a", true);
-    const inactiveB = buildTestHandle("inactive-b", true);
+    const active = buildTestHandle("active", false);
+    const inactiveA = buildTestHandle("inactive-a", false);
+    const inactiveB = buildTestHandle("inactive-b", false);
 
     markAgentWorking(active, "chat-active");
     registry.acquire("active", () => h(active));
@@ -191,8 +215,8 @@ describe("OpenEpicSessionRegistry", () => {
 
   it("auto-prunes overflow when active agent work clears", () => {
     const registry = new OpenEpicSessionRegistry({ maxLive: 1 });
-    const activeA = buildTestHandle("active-a", true);
-    const activeB = buildTestHandle("active-b", true);
+    const activeA = buildTestHandle("active-a", false);
+    const activeB = buildTestHandle("active-b", false);
 
     markAgentWorking(activeA, "chat-a");
     markAgentWorking(activeB, "chat-b");
@@ -214,6 +238,43 @@ describe("OpenEpicSessionRegistry", () => {
     const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
     const handles: TestHandle[] = [];
     for (let i = 0; i < 5; i += 1) {
+      const th = buildTestHandle(`e${i}`, true);
+      handles.push(th);
+      registry.acquire(`e${i}`, () => h(th));
+    }
+
+    const th5 = buildTestHandle("e5", true);
+    registry.acquire("e5", () => h(th5));
+
+    expect(registry.size()).toBe(6);
+    for (const th of handles) {
+      expect(th.disposed).toBe(false);
+    }
+
+    handles[0].handle.store.setState({ isDirty: false });
+    registry.prune();
+    expect(registry.size()).toBe(5);
+    expect(handles[0].disposed).toBe(true);
+  });
+
+  it("evicts a clean, loaded, unmounted session whose transport is reconnecting", () => {
+    // The transport is NOT part of the cap's data-loss gate
+    // (`holdsNothingToLose` reads `isDirty` / `writeCommands` /
+    // `unsyncedQueueSize` only) - a `reconnecting` transport on an otherwise
+    // clean, loaded session must not block eviction, unlike the old
+    // `isClean()`-based gate, which also required an OPEN transport and left
+    // every reconnecting epic un-evictable forever (the field report this
+    // change exists to fix).
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const reconnecting = buildTestHandle("e0", false);
+    reconnecting.handle.store.setState({
+      hostTransportStatus: "reconnecting",
+      snapshotLoaded: true,
+    });
+    registry.acquire("e0", () => h(reconnecting));
+
+    const handles: TestHandle[] = [reconnecting];
+    for (let i = 1; i < 5; i += 1) {
       const th = buildTestHandle(`e${i}`, false);
       handles.push(th);
       registry.acquire(`e${i}`, () => h(th));
@@ -222,38 +283,15 @@ describe("OpenEpicSessionRegistry", () => {
     const th5 = buildTestHandle("e5", false);
     registry.acquire("e5", () => h(th5));
 
-    expect(registry.size()).toBe(6);
-    for (const th of handles) {
-      expect(th.disposed).toBe(false);
-    }
-
-    handles[0].clean = true;
-    registry.prune();
     expect(registry.size()).toBe(5);
-    expect(handles[0].disposed).toBe(true);
-  });
-
-  it("treats reconnecting sessions as ineligible for eviction even with empty queue", () => {
-    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
-    const handles: TestHandle[] = [];
-    for (let i = 0; i < 5; i += 1) {
-      const th = buildTestHandle(`e${i}`, i !== 2);
-      handles.push(th);
-      registry.acquire(`e${i}`, () => h(th));
-    }
-
-    const th5 = buildTestHandle("e5", true);
-    registry.acquire("e5", () => h(th5));
-
-    expect(registry.size()).toBe(5);
-    expect(handles[2].disposed).toBe(false);
+    expect(reconnecting.disposed).toBe(true);
   });
 
   it("keeps overflow while every session stays dirty and no subscription fires a clean state", () => {
     const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
     const handles: TestHandle[] = [];
     for (let i = 0; i < 6; i += 1) {
-      const th = buildTestHandle(`e${i}`, false);
+      const th = buildTestHandle(`e${i}`, true);
       handles.push(th);
       registry.acquire(`e${i}`, () => h(th));
     }
@@ -274,7 +312,7 @@ describe("OpenEpicSessionRegistry", () => {
     const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
     const handles: TestHandle[] = [];
     for (let i = 0; i < 6; i += 1) {
-      const th = buildTestHandle(`e${i}`, false);
+      const th = buildTestHandle(`e${i}`, true);
       handles.push(th);
       registry.acquire(`e${i}`, () => h(th));
     }
@@ -283,7 +321,7 @@ describe("OpenEpicSessionRegistry", () => {
 
     // Toggle the LRU session to clean and fire the store's subscriber so the
     // registry's acquire-time subscription triggers prune() and collapses overflow.
-    handles[0].clean = true;
+    handles[0].handle.store.setState({ isDirty: false });
     handles[0].notify();
 
     expect(registry.size()).toBe(5);
@@ -295,8 +333,8 @@ describe("OpenEpicSessionRegistry", () => {
 
   it("does not evict dirty queue-zero sessions during prune", () => {
     const registry = new OpenEpicSessionRegistry({ maxLive: 1 });
-    const dirty = buildTestHandle("dirty", false);
-    const clean = buildTestHandle("clean", true);
+    const dirty = buildTestHandle("dirty", true);
+    const clean = buildTestHandle("clean", false);
 
     registry.acquire("dirty", () => h(dirty));
     registry.acquire("clean", () => h(clean));
@@ -311,7 +349,7 @@ describe("OpenEpicSessionRegistry", () => {
     const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
     const handles: TestHandle[] = [];
     for (let i = 0; i < 3; i += 1) {
-      const th = buildTestHandle(`e${i}`, true);
+      const th = buildTestHandle(`e${i}`, false);
       handles.push(th);
       registry.acquire(`e${i}`, () => h(th));
     }
@@ -326,11 +364,110 @@ describe("OpenEpicSessionRegistry", () => {
 
   it("release forcibly disposes regardless of cap or cleanliness", () => {
     const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
-    const th = buildTestHandle("e0", false);
+    const th = buildTestHandle("e0", true);
     registry.acquire("e0", () => h(th));
     registry.release("e0", "discard", null);
     expect(th.disposed).toBe(true);
     expect(registry.get("e0")).toBeNull();
+  });
+
+  it("does not evict a dirty session even while its transport is reconnecting", () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 1 });
+    const dirty = buildTestHandle("dirty", true);
+    dirty.handle.store.setState({ hostTransportStatus: "reconnecting" });
+    const clean = buildTestHandle("clean", false);
+
+    registry.acquire("dirty", () => h(dirty));
+    registry.acquire("clean", () => h(clean));
+
+    expect(registry.size()).toBe(1);
+    expect(dirty.disposed).toBe(false);
+    expect(clean.disposed).toBe(true);
+  });
+
+  it("does not evict a session with a nonzero unsynced queue, even on a clean transport", () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 1 });
+    const queued = buildTestHandle("queued", false);
+    queued.handle.store.setState({
+      hostTransportStatus: "open",
+      unsyncedQueueSize: 1,
+    });
+    const clean = buildTestHandle("clean", false);
+
+    registry.acquire("queued", () => h(queued));
+    registry.acquire("clean", () => h(clean));
+
+    expect(registry.size()).toBe(1);
+    expect(queued.disposed).toBe(false);
+    expect(clean.disposed).toBe(true);
+  });
+
+  it("does not evict a session with a pending write command", () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 1 });
+    const pendingWrite = buildTestHandle("pending-write", false);
+    const record: CommandRecord<EpicWriteCommandIntent> = {
+      commandId: "cmd-1",
+      intent: {
+        kind: "update-epic-title",
+        title: "New title",
+        updatedAt: 0,
+      },
+      state: "pending",
+      delivery: "queued",
+      issuedAtMs: 0,
+      attempts: 0,
+      expectedEntityVersion: null,
+      resolution: null,
+    };
+    pendingWrite.handle.store.setState({ writeCommands: [record] });
+    const clean = buildTestHandle("clean", false);
+
+    registry.acquire("pending-write", () => h(pendingWrite));
+    registry.acquire("clean", () => h(clean));
+
+    expect(registry.size()).toBe(1);
+    expect(pendingWrite.disposed).toBe(false);
+    expect(clean.disposed).toBe(true);
+  });
+
+  it("evicts a never-loaded, unmounted, empty session", () => {
+    // `snapshotLoaded` defaults to false and is deliberately not part of
+    // `holdsNothingToLose` - a session that never received a snapshot has
+    // nothing to lose either.
+    const registry = new OpenEpicSessionRegistry({ maxLive: 1 });
+    const neverLoaded = buildTestHandle("never-loaded", false);
+    const other = buildTestHandle("other", false);
+
+    registry.acquire("never-loaded", () => h(neverLoaded));
+    registry.acquire("other", () => h(other));
+
+    expect(registry.size()).toBe(1);
+    expect(neverLoaded.disposed).toBe(true);
+  });
+
+  it("re-reads maxLive on every cap walk when given as a function", () => {
+    let cap = 2;
+    const registry = new OpenEpicSessionRegistry({ maxLive: () => cap });
+    const handles: TestHandle[] = [];
+    for (let i = 0; i < 3; i += 1) {
+      const th = buildTestHandle(`e${i}`, false);
+      handles.push(th);
+      registry.acquire(`e${i}`, () => h(th));
+    }
+
+    // Cap is 2: the LRU entry (e0) was evicted immediately on the third acquire.
+    expect(registry.size()).toBe(2);
+    expect(handles[0].disposed).toBe(true);
+
+    cap = 3;
+    const th3 = buildTestHandle("e3", false);
+    registry.acquire("e3", () => h(th3));
+
+    // The new cap is read on THIS walk: nothing further is evicted.
+    expect(registry.size()).toBe(3);
+    expect(handles[1].disposed).toBe(false);
+    expect(handles[2].disposed).toBe(false);
+    expect(th3.disposed).toBe(false);
   });
 });
 
@@ -363,6 +500,87 @@ function clearAgentWorking(handle: TestHandle): void {
   workingByEpic.set(handle.handle.epicId, []);
   publishWorkingSet();
 }
+
+describe("cap eviction defers to the activity plane's own health", () => {
+  // `epicIsBusy` fails CLOSED when `agentActivityPlaneAnswers()` is false: a
+  // blind plane must read every epic as busy, or an outage that closes the
+  // activity stream (which also empties `byEpic`) would look identical to
+  // "no agent anywhere is working" and evict a session whose agent is
+  // actually mid-turn. These fixtures override the file's own `beforeEach`
+  // (which puts the plane into an answering state) to exercise that gate
+  // directly.
+  function acquireOverflowing(
+    registry: OpenEpicSessionRegistry,
+    count: number,
+  ): TestHandle[] {
+    const handles: TestHandle[] = [];
+    for (let i = 0; i < count; i += 1) {
+      const th = buildTestHandle(`e${i}`, false);
+      handles.push(th);
+      registry.acquire(`e${i}`, () => h(th));
+    }
+    return handles;
+  }
+
+  it("evicts nothing while the activity plane's stream is closed, even though every entry is clean", () => {
+    useAgentActivityStore.setState({ connectionStatus: "closed" });
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const handles = acquireOverflowing(registry, 6);
+
+    expect(registry.size()).toBe(6);
+    for (const th of handles) {
+      expect(th.disposed).toBe(false);
+    }
+  });
+
+  it("evicts nothing while the stream is open but has not yet delivered a served-by state frame", () => {
+    useAgentActivityStore.setState({
+      connectionStatus: "open",
+      servedBy: null,
+    });
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const handles = acquireOverflowing(registry, 6);
+
+    expect(registry.size()).toBe(6);
+    for (const th of handles) {
+      expect(th.disposed).toBe(false);
+    }
+  });
+
+  it("evicts nothing while the host's cloud link is reconnecting", () => {
+    useAgentActivityStore.setState({
+      connectionStatus: "open",
+      servedBy: "cloud",
+      cloudSyncStatus: "reconnecting",
+    });
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const handles = acquireOverflowing(registry, 6);
+
+    expect(registry.size()).toBe(6);
+    for (const th of handles) {
+      expect(th.disposed).toBe(false);
+    }
+  });
+
+  it("prunes overflow the moment the plane starts answering again, with no new acquire", () => {
+    useAgentActivityStore.setState({ connectionStatus: "closed" });
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const handles = acquireOverflowing(registry, 6);
+    expect(registry.size()).toBe(6);
+
+    // No acquire follows: the flip fires through
+    // `subscribeAgentActivityPlaneHealth`, which every session subscribes to
+    // independently of the working-set subscription.
+    useAgentActivityStore.setState({
+      connectionStatus: "open",
+      servedBy: "local",
+      cloudSyncStatus: null,
+    });
+
+    expect(registry.size()).toBe(5);
+    expect(handles[0].disposed).toBe(true);
+  });
+});
 
 // ── F10: dirty sessions retained across a host re-point ───────────────────────
 // Below protocol `@1.2` the host sends no `roomId`, so the cross-host document

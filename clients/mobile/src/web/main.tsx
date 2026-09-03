@@ -10,10 +10,13 @@ import {
   NativeSettings,
 } from "capacitor-native-settings";
 import {
+  DESKTOP_RETENTION_PROFILE,
+  MOBILE_RETENTION_PROFILE,
   TraycerApp,
   hostRpcRegistry,
   setMobileApp,
   setMobileAppPlatform,
+  setRetentionProfile,
 } from "@traycer-clients/gui-app";
 import type {
   RemoteHostFetcher,
@@ -163,6 +166,17 @@ function bootstrap(): void {
   // inherit phone-only affordances like "Scan from desktop", which on the
   // desktop side of that loop is a nonsense offer.
   setMobileApp(Capacitor.isNativePlatform());
+  // MEMORY, not product: the installed app runs under iOS's 2 GB WebContent
+  // ceiling, so it keeps fewer hidden tabs mounted and fewer epic / chat /
+  // terminal sessions warm than the desktop does. Gated on the same native
+  // check: the dev browser tab has a desktop's memory and gets the desktop
+  // numbers. Read lazily by every registry, so ordering against their
+  // module evaluation does not matter.
+  setRetentionProfile(
+    Capacitor.isNativePlatform()
+      ? MOBILE_RETENTION_PROFILE
+      : DESKTOP_RETENTION_PROFILE,
+  );
   // The shell's platform, for copy that must name the right update channel
   // (TestFlight / the App Store vs Google Play). Gated on the same native
   // check as the flag above: the dev browser tab reports platform "web" and

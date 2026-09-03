@@ -1742,14 +1742,15 @@ export function createOpenEpicStore(
             // F10 data loss.
             //
             // Gated on `isDirty` + pending writes rather than on `isClean()`,
-            // deliberately, and for the reason the registry gives at its own
-            // re-point gate: `isClean()` ALSO requires an open transport,
+            // deliberately: `isClean()` ALSO requires an open transport,
             // which a plan-denied one has by definition lost - so it reads
             // false for every session this can ever be called about and the
             // rebuild would never once fire. `snapshotLoaded` is excluded for
             // the same shape of reason: a session that never loaded has
             // nothing to lose, and requiring it would block exactly the
-            // sessions this exists to recover.
+            // sessions this exists to recover. The registry's cap predicate
+            // (`holdsNothingToLose`) and its re-point gate read the same
+            // three work fields for the same reason.
             if (state.isDirty || state.writeCommands.length > 0) return;
             options.onRetryTransport();
           },

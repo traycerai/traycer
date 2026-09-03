@@ -186,6 +186,51 @@ export function subscribeAgentActivity(listener: () => void): () => void {
   });
 }
 
+/**
+ * Whether the activity plane can currently vouch for "no agent is working in
+ * this epic". False while the stream is not open, while an open stream has
+ * not yet delivered its first `state` frame in this epoch (`servedBy` is
+ * `null` until then - a raw transport open proves nothing about the union),
+ * and while the host stamped the union with a cloud link that was
+ * `reconnecting` / `disconnected` (other hosts' agents are dropped from the
+ * union the instant that socket closes, so an epic served elsewhere reads
+ * idle). `null` cloud status is NO CLAIM and is trusted, as the presence pill
+ * trusts it.
+ *
+ * Read by the epic session registry's cap-eviction guard: an unreadable plane
+ * must answer "busy" for every epic, because the alternative is evicting an
+ * epic whose agent is mid-turn on the strength of an empty map that only
+ * says the stream closed.
+ */
+export function agentActivityPlaneAnswers(): boolean {
+  const state = useAgentActivityStore.getState();
+  return (
+    state.connectionStatus === "open" &&
+    state.servedBy !== null &&
+    state.cloudSyncStatus !== "reconnecting" &&
+    state.cloudSyncStatus !== "disconnected"
+  );
+}
+
+/**
+ * Fires when {@link agentActivityPlaneAnswers} flips, in either direction.
+ * Separate from {@link subscribeAgentActivity} because the two move on
+ * different fields: a stream close empties `byEpic` (which that subscription
+ * sees) but a stream re-open with an empty union keeps the same empty map and
+ * moves only the health fields.
+ */
+export function subscribeAgentActivityPlaneHealth(
+  listener: () => void,
+): () => void {
+  let previous = agentActivityPlaneAnswers();
+  return useAgentActivityStore.subscribe(() => {
+    const next = agentActivityPlaneAnswers();
+    if (next === previous) return;
+    previous = next;
+    listener();
+  });
+}
+
 export function __setAgentActivityStateForTests(
   byEpic: Parameters<typeof reconcileAgentActivityByEpic>[0],
   servedBy: AgentActivityServedBy,
