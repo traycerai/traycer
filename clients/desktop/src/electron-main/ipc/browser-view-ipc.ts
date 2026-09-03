@@ -590,6 +590,13 @@ export function registerBrowserViewIpc(
         await forgetLedgerReconciled;
         return await primaryProfileSnapshots.capture();
       },
+      // A HOST-issued whole-jar read waits for any whole-jar barrier: taken
+      // while the login import writes site by site, it would carry some
+      // sites imported and some not, and the host would hold that hybrid
+      // until the next capture. Only the host's own asks wait here - the
+      // pushes main makes (the import's, inside its barrier; the final
+      // capture at quit) go straight to the jar.
+      awaitJarBarrier: () => jarSerializer.barrierSettled(),
       applyObservedProfile: async (observed) => {
         await applyHostContributedCookies(
           { source: "observed", ...observed },
@@ -1063,13 +1070,35 @@ export function registerBrowserViewIpc(
     // without it the next capture ships the origins just emptied back to
     // the host. The durable jar only: the import refuses when saving is
     // off, and with it on the durable jar IS the jar the tiles are on.
-    clearSiteLocalStorage: async (site) => {
+    clearSiteLocalStorage: async (site, signal) => {
       await clearBrowserSiteLocalStorage(
         site,
         ensureBrowserViewSessionForPartition(BROWSER_VIEW_PARTITION),
         rememberedClearSiteOrigins,
+        signal,
       );
       primaryProfileSnapshots.forgetOriginsUnder(site);
+    },
+    // The push is main's, exactly like forget-all's frames: a renderer may
+    // not mint a jar frame at all. It is needed at all because the import
+    // writes with the delta observer muted - the coalesced deltas that carry
+    // an ordinary sign-in never fire for it, so without this capture the
+    // hosts would not see the imported logins until something else asked
+    // for one. Made by the import INSIDE its barrier, so a saved-logins
+    // toggle queued behind the import cannot move the capture's jar first.
+    // Never rejects: a stream whose capture threw must not turn a committed
+    // import into a rejected invoke that the user retries and Sentry
+    // records. Zero hosts is an honest answer here - the next capture
+    // carries the logins.
+    pushJarToHosts: async () => {
+      try {
+        return await sessions.capturePrimaryProfileOnEveryHost();
+      } catch (error) {
+        log.warn("[browser-view] pushing the imported logins failed", {
+          error: describeLogError(error),
+        });
+        return 0;
+      }
     },
   });
 
@@ -1124,11 +1153,13 @@ export function registerBrowserViewIpc(
     },
   );
 
+  // The service's answer is the whole answer, the push to the hosts included:
+  // it is made inside the import's barrier (see `pushJarToHosts` above).
   bridge.handleInvoke(
     RunnerHostInvoke.browserViewLoginImportRun,
-    async (_event, payload): Promise<LoginImportResult> => {
+    (_event, payload): Promise<LoginImportResult> => {
       const parsed = browserViewIpcPayload.loginImportRun.safeParse(payload);
-      const written = await loginImport.import(
+      return loginImport.import(
         parsed.success
           ? parsed.data
           : {
@@ -1138,29 +1169,6 @@ export function registerBrowserViewIpc(
               includeDeviceBound: false,
             },
       );
-      if (written.status !== "imported") return written;
-      // The push is main's, exactly like forget-all's frames: a renderer may
-      // not mint a jar frame at all. It is needed at all because the import
-      // writes with the delta observer muted - the coalesced deltas that carry
-      // an ordinary sign-in never fire for it, so without this capture the
-      // hosts would not see the imported logins until something else asked
-      // for one.
-      // Best-effort, because the cookies are already written: a stream whose
-      // capture threw must not turn a committed import into a rejected
-      // invoke that the user retries and Sentry records. Zero hosts is an
-      // honest answer here - the next capture carries the logins.
-      let notifiedHosts = 0;
-      try {
-        notifiedHosts = await sessions.capturePrimaryProfileOnEveryHost();
-      } catch (error) {
-        log.warn("[browser-view] pushing the imported logins failed", {
-          error: describeLogError(error),
-        });
-      }
-      log.info("[browser-view] pushed the imported logins to the hosts", {
-        notifiedHosts,
-      });
-      return { ...written, notifiedHosts };
     },
   );
 

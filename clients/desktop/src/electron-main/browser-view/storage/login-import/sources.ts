@@ -39,11 +39,38 @@ export interface LoginImportDiscoveryEnvironment {
   readonly env: Readonly<Record<string, string | undefined>>;
 }
 
+/**
+ * Where an install came from, when a machine can hold more than one of the
+ * same browser: on Linux a distribution package, a Flatpak and a Snap each
+ * keep their own profiles, and two of them show the same `Default`. The
+ * flavour is part of the label so the picker and the confirmation name one
+ * install, not two indistinguishably.
+ */
+type BrowserInstall = "native" | "flatpak" | "snap";
+
 interface ChromiumRoot {
   readonly browser: ChromiumImportBrowser;
   readonly userDataDir: string;
+  readonly install: BrowserInstall;
   /** Opera keeps its one profile directly under the root, with no `Default`. */
   readonly profileless: boolean;
+}
+
+interface FirefoxRoot {
+  readonly directory: string;
+  readonly install: BrowserInstall;
+}
+
+/** `Default` for a packaged install, `Default (Flatpak)` for a Flatpak one. */
+function labelForInstall(label: string, install: BrowserInstall): string {
+  switch (install) {
+    case "native":
+      return label;
+    case "flatpak":
+      return `${label} (Flatpak)`;
+    case "snap":
+      return `${label} (Snap)`;
+  }
 }
 
 const BROWSER_ORDER: readonly LoginImportBrowser[] = [
@@ -132,15 +159,20 @@ function chromiumRoots(
   const config = environment.env.XDG_CONFIG_HOME ?? join(home, ".config");
   return [
     root("chrome", join(config, "google-chrome")),
-    root(
+    packagedRoot(
       "chrome",
       join(home, ".var", "app", "com.google.Chrome", "config", "google-chrome"),
+      "flatpak",
     ),
     root("chromium", join(config, "chromium")),
-    root("chromium", join(home, "snap", "chromium", "common", "chromium")),
+    packagedRoot(
+      "chromium",
+      join(home, "snap", "chromium", "common", "chromium"),
+      "snap",
+    ),
     root("edge", join(config, "microsoft-edge")),
     root("brave", join(config, "BraveSoftware", "Brave-Browser")),
-    root(
+    packagedRoot(
       "brave",
       join(
         home,
@@ -151,6 +183,7 @@ function chromiumRoots(
         "BraveSoftware",
         "Brave-Browser",
       ),
+      "flatpak",
     ),
     root("vivaldi", join(config, "vivaldi")),
     profilelessRoot("opera", join(config, "opera")),
@@ -161,14 +194,22 @@ function root(
   browser: ChromiumImportBrowser,
   userDataDir: string,
 ): ChromiumRoot {
-  return { browser, userDataDir, profileless: false };
+  return { browser, userDataDir, install: "native", profileless: false };
+}
+
+function packagedRoot(
+  browser: ChromiumImportBrowser,
+  userDataDir: string,
+  install: BrowserInstall,
+): ChromiumRoot {
+  return { browser, userDataDir, install, profileless: false };
 }
 
 function profilelessRoot(
   browser: ChromiumImportBrowser,
   userDataDir: string,
 ): ChromiumRoot {
-  return { browser, userDataDir, profileless: true };
+  return { browser, userDataDir, install: "native", profileless: true };
 }
 
 const localStateSchema = z.object({
@@ -195,7 +236,7 @@ async function discoverChromiumProfiles(
     return [
       {
         browser: chromiumRoot.browser,
-        profileLabel: "Default",
+        profileLabel: labelForInstall("Default", chromiumRoot.install),
         lastUsedAt: jar.mtimeMs,
         location: {
           kind: "chromium",
@@ -219,7 +260,7 @@ async function discoverChromiumProfiles(
         if (jar === null) return null;
         return {
           browser: chromiumRoot.browser,
-          profileLabel: profile.label,
+          profileLabel: labelForInstall(profile.label, chromiumRoot.install),
           lastUsedAt: jar.mtimeMs,
           location: {
             kind: "chromium",
@@ -322,39 +363,61 @@ async function newestCookieDatabase(
 
 function firefoxRoots(
   environment: LoginImportDiscoveryEnvironment,
-): readonly string[] {
+): readonly FirefoxRoot[] {
   const home = environment.homeDir;
   if (environment.platform === "darwin") {
-    return [join(home, "Library", "Application Support", "Firefox")];
+    return [
+      {
+        directory: join(home, "Library", "Application Support", "Firefox"),
+        install: "native",
+      },
+    ];
   }
   if (environment.platform === "win32") {
     const roaming = environment.env.APPDATA ?? join(home, "AppData", "Roaming");
-    return [join(roaming, "Mozilla", "Firefox")];
+    return [
+      { directory: join(roaming, "Mozilla", "Firefox"), install: "native" },
+    ];
   }
   return [
-    join(home, ".mozilla", "firefox"),
-    join(home, "snap", "firefox", "common", ".mozilla", "firefox"),
-    join(home, ".var", "app", "org.mozilla.firefox", ".mozilla", "firefox"),
+    { directory: join(home, ".mozilla", "firefox"), install: "native" },
+    {
+      directory: join(home, "snap", "firefox", "common", ".mozilla", "firefox"),
+      install: "snap",
+    },
+    {
+      directory: join(
+        home,
+        ".var",
+        "app",
+        "org.mozilla.firefox",
+        ".mozilla",
+        "firefox",
+      ),
+      install: "flatpak",
+    },
   ];
 }
 
 async function discoverFirefoxProfiles(
-  firefoxRoot: string,
+  firefoxRoot: FirefoxRoot,
 ): Promise<readonly DiscoveredLoginImportSource[]> {
-  const ini = await readTextQuietly(join(firefoxRoot, "profiles.ini"));
+  const ini = await readTextQuietly(
+    join(firefoxRoot.directory, "profiles.ini"),
+  );
   if (ini === null) return [];
   const sources = await Promise.all(
     parseFirefoxProfilesIni(ini).map(
       async (profile): Promise<DiscoveredLoginImportSource | null> => {
         const profileDir = profile.isRelative
-          ? join(firefoxRoot, profile.path)
+          ? join(firefoxRoot.directory, profile.path)
           : profile.path;
         const cookiesPath = join(profileDir, "cookies.sqlite");
         const mtime = await statMtime(cookiesPath);
         if (mtime.kind !== "found") return null;
         return {
           browser: "firefox",
-          profileLabel: profile.name,
+          profileLabel: labelForInstall(profile.name, firefoxRoot.install),
           lastUsedAt: mtime.mtimeMs,
           location: { kind: "firefox", cookiesPath },
         };

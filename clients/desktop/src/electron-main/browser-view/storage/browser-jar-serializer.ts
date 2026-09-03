@@ -93,6 +93,25 @@ export class BrowserJarSerializer {
    */
   private barrierGate: Promise<void> = Promise.resolve();
 
+  /**
+   * Resolves once no whole-jar barrier is pending or running - for a READ
+   * that must not see a jar mid-barrier, which is the one thing a barrier's
+   * action cannot promise its per-site steps add up to at every instant: a
+   * host-issued whole-jar capture taken while the login import is writing
+   * site by site would carry some sites imported and some not, and a host
+   * that took it would hold that hybrid until the next capture. Looped,
+   * because a barrier requested while this waited publishes a new gate; it
+   * returns only when the gate it awaited is still the current one. Never
+   * called by a barrier's own action - that would wait on itself.
+   */
+  async barrierSettled(): Promise<void> {
+    for (;;) {
+      const gate = this.barrierGate;
+      await gate;
+      if (this.barrierGate === gate) return;
+    }
+  }
+
   /** Runs `action` with no other jar work for the same registrable domain. */
   runOnDomain<T>(domain: string, action: () => Promise<T>): Promise<T> {
     const key = registrableDomain(domain) ?? domain;

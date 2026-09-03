@@ -424,7 +424,15 @@ export type LoginImportResult =
       readonly reason:
         | LoginImportBlocked
         | "keychain-denied"
-        | "saved-logins-off";
+        | "saved-logins-off"
+        /**
+         * The write stopped part-way - the jar barrier's budget ran out, a
+         * removal or a site's localStorage clear failed - AFTER at least one
+         * cookie had reached the jar. What was written is kept, and the jar
+         * was pushed to the hosts as it stands; importing again finishes the
+         * rest. Nothing written is one of the reasons above instead.
+         */
+        | "incomplete";
     }
   /**
    * The desktop's own confirmation - a native dialog main draws over every

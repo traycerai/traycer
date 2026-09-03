@@ -302,26 +302,50 @@ export async function recordForgetAllBrowserLogins(): Promise<number> {
 export async function recordForgottenBrowserSite(
   domain: string,
 ): Promise<number> {
-  const scope = registrableDomain(domain);
-  if (scope === null) {
-    log.warn("[browser-view] not recording a forget for an underivable site");
-    return ledger.revision;
+  return (await recordForgottenBrowserSites([domain])) ?? ledger.revision;
+}
+
+/**
+ * Several sites forgotten under ONE revision: the login import, which
+ * replaces every site it writes and records them all before its first write.
+ * One revision rather than one per site because a host is sent every entry
+ * above its acked watermark on every push, so an import of hundreds of sites
+ * recorded one at a time would push a digest that grows with each - and
+ * because the sites are one action of the user's, cleared together.
+ *
+ * A domain that does not collapse to a registrable one is left out, as
+ * above; a list with none left records nothing and answers `null`, so a
+ * caller cannot mark as cleared a revision that is somebody else's.
+ */
+export async function recordForgottenBrowserSites(
+  domains: readonly string[],
+): Promise<number | null> {
+  const scopes = new Set<string>();
+  for (const domain of domains) {
+    const scope = registrableDomain(domain);
+    if (scope === null) {
+      log.warn("[browser-view] not recording a forget for an underivable site");
+      continue;
+    }
+    scopes.add(scope);
   }
+  if (scopes.size === 0) return null;
   const revision = ledger.revision + 1;
+  const forgottenAt = Date.now();
   mutate({
     revision,
     clearedThrough: ledger.clearedThrough,
     forgetAll: ledger.forgetAll,
     domains: trimDomains([
-      ...ledger.domains.filter((entry) => entry.domain !== scope),
-      { domain: scope, forgottenAt: Date.now(), revision },
+      ...ledger.domains.filter((entry) => !scopes.has(entry.domain)),
+      ...[...scopes].map((domain) => ({ domain, forgottenAt, revision })),
     ]),
     ackedByHost: ledger.ackedByHost,
     // The custody marks go with the cookies they describe. Leaving them would
     // let a host re-add the key AND keep the right to overwrite it later, on
     // the strength of a contribution the user has since deleted.
     headlessOriginKeys: ledger.headlessOriginKeys.filter(
-      (key) => registrableDomain(key.domain) !== scope,
+      (key) => !scopes.has(registrableDomain(key.domain) ?? ""),
     ),
   });
   await persist();

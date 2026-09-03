@@ -257,6 +257,77 @@ describe("the browser.sessions jar plane lives in main", () => {
     expect(session.framesOfKind("primaryProfileCaptured")).toHaveLength(0);
   });
 
+  it("a host-issued capture waits for the jar barrier before reading", async () => {
+    const session = await openLiveStream(harness, registry, "window-1");
+    harness.jar.deferBarrier = true;
+
+    session.emit(
+      {
+        kind: "capturePrimaryProfile",
+        hasBinaryPayload: false,
+        requestId: "capture-1",
+        standing: false,
+      },
+      null,
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // The barrier is held open: the read has not even started, so nothing
+    // left yet.
+    expect(harness.jar.captures).toBe(0);
+    expect(session.framesOfKind("primaryProfileCaptured")).toHaveLength(0);
+
+    harness.jar.releaseBarrier();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(harness.jar.captures).toBe(1);
+    const captured = session.framesOfKind("primaryProfileCaptured");
+    expect(captured).toHaveLength(1);
+    expect(captured[0]?.status).toBe("captured");
+  });
+
+  it("the desktop's own push does not wait for the barrier", async () => {
+    const session = await openLiveStream(harness, registry, "window-1");
+    session.emit(
+      {
+        kind: "capturePrimaryProfile",
+        hasBinaryPayload: false,
+        requestId: "standing-1",
+        standing: true,
+      },
+      null,
+    );
+
+    harness.jar.deferBarrier = true;
+    const pushed = registry.capturePrimaryProfileOnEveryHost();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Main's own push quotes "now" ordering, which never awaits the barrier -
+    // the read runs and the frame leaves while the barrier is still held.
+    expect(harness.jar.captures).toBe(1);
+    const captured = session.framesOfKind("primaryProfileCaptured");
+    expect(captured).toHaveLength(1);
+
+    session.emit(
+      {
+        kind: "primaryProfileCaptureAck",
+        hasBinaryPayload: false,
+        requestId: "standing-1",
+      },
+      null,
+    );
+    expect(await pushed).toBe(1);
+
+    // Nothing left held for a later test in this file.
+    harness.jar.releaseBarrier();
+  });
+
   it("hands the createElectronTab seed straight to the native manager, and the renderer only learns a tab exists", async () => {
     const session = await openLiveStream(harness, registry, "window-1");
 
@@ -1114,6 +1185,69 @@ describe("the browser.sessions jar plane lives in main", () => {
         /primary profile capture failed/.test(String(call[0])),
       ),
     ).toBe(true);
+  });
+
+  it("a capture whose jar read failed is sent but counts no host", async () => {
+    const session = await openLiveStream(harness, registry, "window-1");
+    session.emit(
+      {
+        kind: "capturePrimaryProfile",
+        hasBinaryPayload: false,
+        requestId: "standing-1",
+        standing: true,
+      },
+      null,
+    );
+
+    harness.jar.failNextCapture = new Error("EACCES /Users/x/Library/Cookies");
+    const firstPushed = registry.capturePrimaryProfileOnEveryHost();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // The frame LEFT - this is not the "nothing was sent" case - but it
+    // carried no jar: the read failed, so it answers `failed` rather than
+    // `captured`.
+    const firstCaptured = session.framesOfKind("primaryProfileCaptured");
+    expect(firstCaptured).toHaveLength(1);
+    expect(firstCaptured[0]?.status).toBe("failed");
+
+    session.emit(
+      {
+        kind: "primaryProfileCaptureAck",
+        hasBinaryPayload: false,
+        requestId: "standing-1",
+      },
+      null,
+    );
+
+    // Acked or not, a frame with no jar in it never counts as a host that
+    // took the jar - `sent-no-jar` is not `acked`.
+    expect(await firstPushed).toBe(0);
+
+    // A second capture on the SAME standing id, this time with a healthy jar
+    // read: its own ack must satisfy its own slot - proving the first
+    // frame's ack did not spuriously satisfy this next slot in the
+    // ack-in-send-order sequence.
+    const secondPushed = registry.capturePrimaryProfileOnEveryHost();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const captured = session.framesOfKind("primaryProfileCaptured");
+    expect(captured).toHaveLength(2);
+    expect(captured[1]?.status).toBe("captured");
+
+    session.emit(
+      {
+        kind: "primaryProfileCaptureAck",
+        hasBinaryPayload: false,
+        requestId: "standing-1",
+      },
+      null,
+    );
+
+    expect(await secondPushed).toBe(1);
   });
 
   it("runs overlapping captures on one stream one at a time, the later one after the first's ack", async () => {

@@ -675,6 +675,7 @@ export async function clearBrowserSite(
       domain,
       browserSession,
       rememberedOrigins,
+      null,
     );
   } finally {
     // Cookie removals are held in memory until the store is flushed; without
@@ -702,12 +703,19 @@ export interface BrowserSiteStorageClearer {
  * An origin named only after the first listing would otherwise keep its live
  * localStorage - `forgetOriginsUnder` discards the READ of it, not the
  * storage - for the next observation to capture back. Each origin is cleared
- * once, so the loop ends when the listing stops growing.
+ * once, so the loop ends when the listing stops growing - which a tile that
+ * keeps landing on origins the site has never shown can hold off for as long
+ * as it likes. The `signal` is the caller's bound on that: the login import
+ * passes its barrier's, read between origins, so an import the barrier has
+ * given up on stops clearing before the jar work queued behind it is
+ * admitted rather than overlapping it. A site clear has no such bound and
+ * passes `null`.
  */
 export async function clearBrowserSiteLocalStorage(
   domain: string,
   browserSession: BrowserSiteStorageClearer,
   rememberedOrigins: () => readonly string[],
+  signal: AbortSignal | null,
 ): Promise<void> {
   const cleared = new Set<string>();
   for (;;) {
@@ -716,6 +724,11 @@ export async function clearBrowserSiteLocalStorage(
     );
     if (pending.length === 0) return;
     for (const origin of pending) {
+      if (signal?.aborted === true) {
+        throw new Error(
+          "The jar barrier expired before the site's localStorage was cleared",
+        );
+      }
       cleared.add(origin);
       await browserSession.clearStorageData({
         origin,

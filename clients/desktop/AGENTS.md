@@ -171,21 +171,48 @@ failures.
   source did not CARRY removed after - keyed by EVERY source row for the
   site, not by what was written, so a row that fails to decrypt or to set,
   or that the reader never opens (an app-bound `v20` row, a partitioned
-  one), leaves the jar's cookie at that key alone, and a kept cookie that a
-  same-name
-  removal reached anyway is put back from the pre-write listing - so a
-  source whose every row Electron rejects leaves the jar's slice as it was.
-  Those two recovery passes run whatever ended the removals - a `remove`
-  Electron rejected, the barrier giving up between two - over every name a
-  removal REACHED, and only then is the failure thrown; they read no abort
-  signal, since the serializer holds the gate through the action's
-  settlement and a site left half-removed is a sign-out.
+  one), leaves the jar's cookie at that key alone; one step wider, BY NAME,
+  a source row that did not land and whose name no landed row shares leaves
+  the jar's cookies of that name alone under any scope (the host-only `sid`
+  beside the source's failed domain `sid` is the sign-in that row would have
+  replaced); and a kept cookie that a same-name removal reached anyway is
+  put back from the pre-write listing - every prior cookie of a name whose
+  re-write was refused with no landed row left of that name, carried or
+  not, and every reached cookie at all when NO written row survived its
+  re-write, which also uncounts the site and skips its localStorage clear -
+  so a source whose every row Electron rejects, on the first write or the
+  re-write, leaves the jar's slice as it was. Those recovery passes run
+  whatever ended the removals - a `remove` Electron rejected, the barrier
+  giving up between two - over every name a removal REACHED, and only then
+  is the failure thrown; they read no abort signal, since the serializer
+  holds the gate through the action's settlement and a site left
+  half-removed is a sign-out.
   A written site's localStorage goes too (`clearBrowserSiteLocalStorage`
   plus the coordinator's prune, the same pair the site clear runs, over
   `clearableOrigins()`, which names an origin whose read is still in flight
-  as well): the source carries cookies only, and a site that keeps account
-  state in localStorage would otherwise run the previous identity on the
-  imported cookies. The import is CONFIRMED IN MAIN like a site clear and
+  as well, re-enumerated until nothing new turns up and reading the
+  barrier's signal between origins so a tile that keeps landing on new
+  origins cannot hold an expired import past its gate): the source carries
+  cookies only, and a site that keeps account state in localStorage would
+  otherwise run the previous identity on the imported cookies. Before the
+  first cookie any site REMOVES - and not at all for an import that removes
+  nothing, which must not have every host prune sites this machine still
+  holds - every site the write touches is recorded in the FORGET LEDGER
+  under one revision (`recordForgottenBrowserSites`) - the entry a site
+  clear records, for its two effects: a host prunes the site and then
+  takes the capture pushed after the write, so a host away for the import
+  still ends with the source's slice rather than a union; and until a host
+  has acked that revision its observations for the site are refused, since
+  an observation of a cookie the import REMOVED would find the name free in
+  the jar and put it straight back for the next capture to sync everywhere
+  (the written keys' release covers only what the import wrote). The
+  ledger's local side is marked cleared once the writes have ended, however
+  they ended. A write that ends early AFTER a cookie has reached the jar -
+  the barrier's budget, a refused removal, a failed localStorage clear - is
+  answered `incomplete`, not `unreadable`: what landed is kept, counted (per
+  row, so a site stopped mid-way counts what it has) and pushed, and Import
+  again finishes the rest; only a write that put nothing in the jar answers
+  with what stopped it. The import is CONFIRMED IN MAIN like a site clear and
   forget-all (`confirmDestructiveInMain`, naming the registered source and
   the validated site count) before anything is read: a compromised renderer
   can list, scan and import every site a profile holds, and a plaintext
@@ -208,15 +235,24 @@ failures.
   it ships with Electron's Node and needs no native module, which is why the
   "no Electron-native SQLite" rule below is about REBUILDS, not the builtin.
   Because that suppression means no delta reaches a host on its own, the
-  import handler pushes the jar itself — `capturePrimaryProfileOnEveryHost()`
+  import pushes the jar itself — `capturePrimaryProfileOnEveryHost()`
   on the sessions registry, beside `forgetLoginsOnEveryHost()` and for the
-  same reason: a jar frame is main's to send, never a renderer's. That
-  capture is tri-state per stream (`acked` / `unacked` / `not-sent`), and
-  `not-sent` is decided AFTER the asynchronous jar read: a frame the stream
-  could not send (it closed underneath the read) or that quotes a standing
-  id the host has since re-issued never left, so the registry tries the
-  host's sibling stream; only a frame that left and drew no ack is
-  `unacked`. The ack budget starts when the frame leaves, and acks are
+  same reason: a jar frame is main's to send, never a renderer's — and
+  pushes it INSIDE its barrier, after the mute lifts and the written keys
+  are released, because a saved-logins toggle queued behind the import
+  would otherwise run first and move the capture's session to the ephemeral
+  jar. A HOST-issued one-off capture waits for any whole-jar barrier before
+  its read (`BrowserJarSerializer.barrierSettled`), so a host never takes a
+  jar with some sites imported and some not; main's own pushes do not wait,
+  the import's being the barrier holder. That capture is four-state per
+  stream (`acked` / `unacked` / `sent-no-jar` / `not-sent`), and `not-sent`
+  is decided AFTER the asynchronous jar read: a frame the stream could not
+  send (it closed underneath the read) or that quotes a standing id the host
+  has since re-issued never left, so the registry tries the host's sibling
+  stream; a frame that left with no jar in it (the read failed, the jar was
+  unavailable) is `sent-no-jar`, its ack awaited for the slot order but
+  counting for no host; only a frame that left WITH the jar and drew no ack
+  is `unacked`. The ack budget starts when the frame leaves, and acks are
   attributed in SEND order under the standing id (the host acks every
   captured frame it receives, once, in order): a frame whose budget ran out
   keeps its slot until its late ack absorbs it, so that ack cannot satisfy

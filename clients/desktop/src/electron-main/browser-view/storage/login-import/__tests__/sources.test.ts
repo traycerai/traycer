@@ -377,7 +377,10 @@ describe("discoverLoginImportSources: linux snap/flatpak roots", () => {
       .map((source) => source.profileLabel)
       .sort();
 
-    expect(labels).toEqual(["Flatpak", "Snap"]);
+    // The install flavour is appended to the profile's own label - "Flatpak"
+    // becomes "Flatpak (Flatpak)" and "Snap" becomes "Snap (Snap)" - so a
+    // shared profile name from two install kinds still disambiguates.
+    expect(labels).toEqual(["Flatpak (Flatpak)", "Snap (Snap)"]);
   });
 
   it("discovers Chromium under a snap root and Brave under a flatpak root", async () => {

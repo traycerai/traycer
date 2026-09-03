@@ -52,9 +52,16 @@ export const FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS = 5_000;
  * and drew no ack in time; it is kept apart from `not-sent` because to the
  * once-per-host rule a frame that left is the host's capture, ack or no ack.
  */
+/**
+ * `acked`: the host took a jar. `unacked`: a jar left and drew no ack in time.
+ * `sent-no-jar`: a frame left, but it carried no jar - the read failed or the
+ * jar was unavailable - so whatever the host acked, it was not this machine's
+ * logins. `not-sent`: nothing left at all.
+ */
 export type BrowserPrimaryProfileCaptureOutcome =
   | "acked"
   | "unacked"
+  | "sent-no-jar"
   | "not-sent";
 
 /**
@@ -87,6 +94,14 @@ const MAX_STREAMS_PER_WINDOW = 12;
  */
 export interface BrowserSessionsJarPort {
   capturePrimaryProfile(): Promise<BrowserPrimaryProfileCaptureResult>;
+  /**
+   * Resolves once no whole-jar barrier (a forget-all, a login import) is
+   * pending or running. A HOST-issued capture waits on it before the read,
+   * so the frame it answers with is a jar before or after such a write, never
+   * one mid-way through it. Main's own pushes do not wait: the import's is
+   * made inside its own barrier.
+   */
+  awaitJarBarrier(): Promise<void>;
   applyObservedProfile(input: {
     readonly connectionId: string;
     readonly hostId: string;
@@ -359,9 +374,12 @@ export class BrowserSessionsRegistry {
       [...streamsByHost.values()].map(async (streams) => {
         for (const stream of streams) {
           const outcome = await stream.capturePrimaryProfileNow();
-          // A frame that LEFT is this host's one capture, acked or not: a
-          // sibling stream is tried only when nothing was sent, never after
-          // a timeout, or the host would get a second whole jar per stream.
+          // A frame that LEFT is this host's one capture, acked or not - and
+          // whether or not it carried a jar: a sibling stream is tried only
+          // when nothing was sent, never after a timeout or a failed read
+          // (the sibling reads the same jar), or the host would get a second
+          // whole jar per stream. Only a host that acked a frame WITH the
+          // jar in it is counted.
           if (outcome !== "not-sent") return outcome === "acked";
         }
         return false;
@@ -719,10 +737,12 @@ class BrowserSessionsStream {
    * One capture on this stream, answering what became of it: `acked` by the
    * host, `unacked` (sent, but no ack within
    * {@link FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS}, or the connection went
-   * before one), or `not-sent` (the connection is not open, or the host holds
-   * no standing capture request). The registry's once-per-host rule needs
-   * the middle one told apart from the last: a frame that left is the host's
-   * one capture even if the ack never came.
+   * before one), `sent-no-jar` (a frame left, but the jar read failed or the
+   * jar was unavailable, so it carried none), or `not-sent` (the connection
+   * is not open, or the host holds no standing capture request). The
+   * registry's once-per-host rule needs the last told apart from the rest: a
+   * frame that left is the host's one capture even if the ack never came or
+   * the frame was empty-handed.
    *
    * Captures on one stream run ONE AT A TIME, and a caller that arrives while
    * one is in flight gets the NEXT one, never the current one: the one in
@@ -774,13 +794,19 @@ class BrowserSessionsStream {
     const sent = await this.answerCaptureRequest(
       requestId,
       () => this.standingCaptureRequestId === requestId,
+      "now",
     );
-    if (!sent) return "not-sent";
+    if (sent === "not-sent") return "not-sent";
     // The ack waiter - and its timeout - start once the frame has LEFT, not
-    // before the jar read, which can queue behind the jar barrier for longer
-    // than the ack budget. No ack can be missed: the send was synchronous,
-    // and this continuation runs before any socket delivery.
-    return (await this.awaitCaptureAck(requestId)) ? "acked" : "unacked";
+    // before the jar read. No ack can be missed: the send was synchronous,
+    // and this continuation runs before any socket delivery. Awaited for a
+    // frame that carried no jar too - the host acks every captured frame it
+    // receives, in order, and this frame's slot must absorb its own ack
+    // rather than leave it for the next capture's - but that ack counts for
+    // nothing: whatever the host took, it was not the jar.
+    const acked = await this.awaitCaptureAck(requestId);
+    if (sent === "sent-no-jar") return "sent-no-jar";
+    return acked ? "acked" : "unacked";
   }
 
   dispose(): void {
@@ -911,8 +937,13 @@ class BrowserSessionsStream {
           return;
         }
         // A one-off request the host is waiting on: answered whatever the
-        // standing id does meanwhile.
-        void this.answerCaptureRequest(frame.requestId, () => true);
+        // standing id does meanwhile - and behind any whole-jar barrier, so
+        // the host is never handed a jar mid-import.
+        void this.answerCaptureRequest(
+          frame.requestId,
+          () => true,
+          "behind-barrier",
+        );
         return;
       case "primaryProfileCaptureAck":
         this.resolveCaptureAckWaiter(frame.requestId);
@@ -1052,18 +1083,30 @@ class BrowserSessionsStream {
    * Both callers use it: a host-issued `capturePrimaryProfile`, and the final
    * capture before a desktop route disappears. It always sends exactly one
    * `primaryProfileCaptured` and never rejects. Answers whether that frame
-   * left: the read is asynchronous, and a stream that closed underneath it
-   * drops the frame silently - and `stillWanted`, read once the jar has been
-   * read, says whether the request is still the host's to answer (a standing
-   * id the host re-issued meanwhile is not), in which case nothing is sent.
+   * left, and whether it carried a jar: the read is asynchronous, and a
+   * stream that closed underneath it drops the frame silently - and
+   * `stillWanted`, read once the jar has been read, says whether the request
+   * is still the host's to answer (a standing id the host re-issued meanwhile
+   * is not), in which case nothing is sent. A frame that left with no jar -
+   * the read failed, or the jar was unavailable - is told apart from one that
+   * carried one, so a caller counting the hosts that TOOK the jar cannot
+   * count a host that acked an empty-handed frame.
+   *
+   * `behind-barrier` is the host's own ask: it waits for any whole-jar
+   * barrier first, so the jar it reads is whole. `now` is main's own push,
+   * which may itself be the barrier holder.
    */
   private async answerCaptureRequest(
     requestId: string,
     stillWanted: () => boolean,
-  ): Promise<boolean> {
+    ordering: "now" | "behind-barrier",
+  ): Promise<"not-sent" | "sent" | "sent-no-jar"> {
     let frame: BrowserSessionsClientFrame;
+    let carriesJar = false;
     try {
+      if (ordering === "behind-barrier") await this.deps.jar.awaitJarBarrier();
       const result = await this.deps.jar.capturePrimaryProfile();
+      carriesJar = result.status === "captured";
       frame =
         result.status === "captured"
           ? {
@@ -1098,8 +1141,9 @@ class BrowserSessionsStream {
         reason: "capture-failed",
       };
     }
-    if (!stillWanted()) return false;
-    return this.sendClientFrameIfOpen(frame);
+    if (!stillWanted()) return "not-sent";
+    if (!this.sendClientFrameIfOpen(frame)) return "not-sent";
+    return carriesJar ? "sent" : "sent-no-jar";
   }
 
   /**

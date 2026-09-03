@@ -59,12 +59,24 @@ export interface JarRecorder {
    * one bad file read is.
    */
   failNextCapture: Error | null;
+  /**
+   * When true, `awaitJarBarrier` returns a promise that only settles once a
+   * suite calls {@link releaseBarrier} - a way to pin what a HOST-issued
+   * capture does while a whole-jar barrier (a forget-all, a login import) is
+   * still pending. Unlike {@link deferCaptures}, a barrier is not a per-call
+   * queue: every awaiter blocked on it is released together, because that is
+   * what a barrier is - one gate, not one slot per caller.
+   */
+  deferBarrier: boolean;
+  /** Releases every awaiter currently blocked on the held barrier. */
+  releaseBarrier: () => void;
 }
 
 export function createJarRecorder(): JarRecorder {
   const ledgerListeners = new Set<() => void>();
   const deltaListeners = new Set<(delta: BrowserPrimaryProfileDelta) => void>();
   const pendingCaptures: Array<() => void> = [];
+  let barrierWaiters: Array<() => void> = [];
   const recorder: JarRecorder = {
     observed: [],
     acks: [],
@@ -75,12 +87,18 @@ export function createJarRecorder(): JarRecorder {
     captures: 0,
     deferCaptures: false,
     failNextCapture: null,
+    deferBarrier: false,
     resolvePendingCapture: () => {
       const resolve = pendingCaptures.shift();
       if (resolve === undefined) {
         throw new Error("no pending capture to resolve");
       }
       resolve();
+    },
+    releaseBarrier: () => {
+      const waiters = barrierWaiters;
+      barrierWaiters = [];
+      for (const resolve of waiters) resolve();
     },
     ledger: { forgetAllAt: null, domains: [], revision: 0 },
     emitLedgerChange: () => {
@@ -90,6 +108,15 @@ export function createJarRecorder(): JarRecorder {
       for (const listener of deltaListeners) listener(delta);
     },
     port: {
+      // No barrier held by default: a host-issued capture reads at once. A
+      // suite that sets `deferBarrier` holds every awaiter open until it
+      // calls `releaseBarrier`.
+      awaitJarBarrier: () => {
+        if (!recorder.deferBarrier) return Promise.resolve();
+        return new Promise<void>((resolve) => {
+          barrierWaiters.push(resolve);
+        });
+      },
       capturePrimaryProfile: () => {
         recorder.captures += 1;
         if (recorder.failNextCapture !== null) {

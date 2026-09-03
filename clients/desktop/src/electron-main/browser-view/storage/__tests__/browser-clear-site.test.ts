@@ -170,11 +170,16 @@ describe("clearBrowserSiteLocalStorage", () => {
   it("clears localStorage for the remembered origins in scope, and no others", async () => {
     const session = new FakeClearSiteSession(SITE_JAR);
 
-    await clearBrowserSiteLocalStorage("example.com", session, () => [
-      "https://app.example.com",
-      "https://example.com",
-      "https://other.org",
-    ]);
+    await clearBrowserSiteLocalStorage(
+      "example.com",
+      session,
+      () => [
+        "https://app.example.com",
+        "https://example.com",
+        "https://other.org",
+      ],
+      null,
+    );
 
     expect(session.clearedStorage).toEqual([
       { origin: "https://app.example.com", storages: ["localstorage"] },
@@ -202,6 +207,7 @@ describe("clearBrowserSiteLocalStorage", () => {
       "example.com",
       session,
       rememberedOrigins,
+      null,
     );
 
     expect(
@@ -219,6 +225,37 @@ describe("clearBrowserSiteLocalStorage", () => {
         (options) => options.origin === "https://other.org",
       ),
     ).toBe(false);
+  });
+
+  it("stops clearing between origins once the signal is aborted", async () => {
+    const session = new FakeClearSiteSession(SITE_JAR);
+    const controller = new AbortController();
+    const originalClearStorageData = session.clearStorageData.bind(session);
+    session.clearStorageData = (
+      options: ClearStorageDataOptions,
+    ): Promise<void> => {
+      // Aborts right after the first origin's clear starts, so the loop's
+      // between-origin check is what has to catch it - not just its entry
+      // check.
+      if (session.clearedStorage.length === 0) controller.abort();
+      return originalClearStorageData(options);
+    };
+
+    await expect(
+      clearBrowserSiteLocalStorage(
+        "example.com",
+        session,
+        () => [
+          "https://app.example.com",
+          "https://example.com",
+          "https://sub.example.com",
+        ],
+        controller.signal,
+      ),
+    ).rejects.toThrow();
+
+    // Stopped before reaching the second or third origin.
+    expect(session.clearedStorage).toHaveLength(1);
   });
 });
 

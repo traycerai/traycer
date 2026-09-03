@@ -10,7 +10,11 @@ import {
   suppressAllBrowserPrimaryProfileDeltas,
 } from "../../browser-session";
 import { BROWSER_COOKIE_DELTA_WINDOW_MS } from "../browser-cookie-change-observer";
-import { releaseHeadlessOriginCookieKeys } from "../browser-forget-ledger";
+import {
+  markBrowserForgetLedgerCleared,
+  recordForgottenBrowserSites,
+  releaseHeadlessOriginCookieKeys,
+} from "../browser-forget-ledger";
 import { isBrowserSavedLoginsEnabled } from "../browser-saved-logins";
 import { LoginImportService } from "./import-logins";
 import { unprotectChromiumWindowsKey } from "./secret-providers/dpapi-windows";
@@ -38,9 +42,19 @@ export interface LoginImportJarCoordination {
    * The localStorage half of a site clear on the durable jar, plus the
    * capture coordinator's prune for the site - what the IPC layer's own
    * site clear does after its cookie half, borrowed so a site the import
-   * writes does not keep the previous account's localStorage.
+   * writes does not keep the previous account's localStorage. Reads the
+   * barrier's signal between origins.
    */
-  readonly clearSiteLocalStorage: (site: string) => Promise<void>;
+  readonly clearSiteLocalStorage: (
+    site: string,
+    signal: AbortSignal,
+  ) => Promise<void>;
+  /**
+   * `BrowserSessionsRegistry.capturePrimaryProfileOnEveryHost`: the jar
+   * pushed to every host, made by the import inside its barrier. Answers the
+   * hosts that acked; never rejects.
+   */
+  readonly pushJarToHosts: () => Promise<number>;
 }
 
 /**
@@ -71,6 +85,11 @@ export function createLoginImportService(
       ensureBrowserViewSessionForPartition(BROWSER_VIEW_PARTITION),
     serializeJarWrite: jar.serializeJarWrite,
     clearSiteLocalStorage: jar.clearSiteLocalStorage,
+    // The site clear's own ledger entry, for every site the import will
+    // write, and the same "cleared" mark once the writes have ended.
+    recordReplacedSites: recordForgottenBrowserSites,
+    markReplacementCleared: markBrowserForgetLedgerCleared,
+    pushJarToHosts: jar.pushJarToHosts,
     // The same native dialog forget-all and a site clear go through: the
     // copy names the registered source and the validated count, and Cancel
     // is the default, so a raced or dismissed dialog refuses.

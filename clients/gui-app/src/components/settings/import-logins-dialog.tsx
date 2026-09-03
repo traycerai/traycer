@@ -728,7 +728,11 @@ function DoneStep(props: {
     return (
       <>
         <DialogHeader>
-          <DialogTitle>Nothing was imported</DialogTitle>
+          <DialogTitle>
+            {result.reason === "incomplete"
+              ? "The import stopped part-way"
+              : "Nothing was imported"}
+          </DialogTitle>
         </DialogHeader>
         <BlockedExplainer reason={result.reason} />
         <DialogFooter>
@@ -812,7 +816,11 @@ function describePush(notifiedHosts: number): string {
  * path only opens http(s).
  */
 function BlockedExplainer(props: {
-  readonly reason: LoginImportBlocked | "keychain-denied" | "saved-logins-off";
+  readonly reason:
+    | LoginImportBlocked
+    | "keychain-denied"
+    | "saved-logins-off"
+    | "incomplete";
 }): ReactNode {
   const openFullDiskAccess = useRunnerOpenFullDiskAccessSettings();
   switch (props.reason) {
@@ -889,6 +897,14 @@ function BlockedExplainer(props: {
           This source is larger than Traycer reads in one go. A cookie export is
           normally a few kilobytes; check that you picked the right file, or
           export only the sites you need and import that.
+        </Notice>
+      );
+    case "incomplete":
+      return (
+        <Notice tone="warning">
+          Traycer stopped before every site was written. The logins it did
+          import are kept and have been sent to your hosts; import again to
+          finish the rest.
         </Notice>
       );
     default: {

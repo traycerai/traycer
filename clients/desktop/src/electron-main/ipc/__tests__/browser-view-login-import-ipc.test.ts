@@ -3,29 +3,34 @@ import type {
   LoginImportRequest,
   LoginImportResult,
 } from "@traycer-clients/shared/platform/browser-view";
+import type { LoginImportJarCoordination } from "../../browser-view/storage/login-import/login-import-runtime";
 
 /**
  * The one link between a committed import and the hosts: main pushes the
  * freshly imported jar itself, because the import writes with the delta
- * observer muted, so no ordinary capture fires for it. The push is
- * best-effort - the cookies are already durably written - so a host-push
- * failure must not turn a completed import into a rejected invoke.
+ * observer muted, so no ordinary capture fires for it. That push now lives
+ * entirely inside `pushJarToHosts`, the coordination member
+ * `registerBrowserViewIpc` passes to `createLoginImportService` - it is
+ * best-effort there (the cookies are already durably written), catching any
+ * rejection and answering 0 rather than turning a committed import into a
+ * rejected invoke.
  *
  * `LoginImportService` itself is exercised end to end by
- * `import-logins.test.ts`; this suite is only the IPC handler's OWN
- * behaviour around the result it gets back, so the service is a stub that
- * hands back whatever result the test queues.
+ * `import-logins.test.ts`; the service is stubbed out here entirely, so this
+ * suite covers two separate things: the IPC handler is now a pure passthrough
+ * of whatever the (stubbed) service's `import` answers, and `pushJarToHosts`
+ * - captured off the coordination object handed to the stub - is exercised
+ * directly against its own real implementation.
  */
 
-type ImportOutcome = Omit<
-  Extract<LoginImportResult, { status: "imported" }>,
-  "notifiedHosts"
->;
+type ImportedResult = Extract<LoginImportResult, { status: "imported" }>;
 
 const fixture = vi.hoisted(() => ({
-  importResult: null as ImportOutcome | null,
+  importResult: null as ImportedResult | null,
   captureShouldReject: false,
+  captureResolvedHosts: 0,
   captureCalls: 0,
+  coordination: null as LoginImportJarCoordination | null,
 }));
 
 vi.mock("electron", () => {
@@ -119,8 +124,9 @@ vi.mock("../../browser-view/browser-session", () => {
 
 /**
  * The jar-plane registry. Only `capturePrimaryProfileOnEveryHost` matters
- * here - it is the call the import handler wraps in try/catch - so it is the
- * one method whose outcome the test controls.
+ * here - it is the call `pushJarToHosts` wraps in try/catch - so it is the
+ * one method whose outcome the test controls, both the count it resolves
+ * with and whether it rejects.
  */
 vi.mock("../../browser-sessions/browser-sessions-owner", () => ({
   BrowserSessionsRegistry: class {
@@ -138,7 +144,7 @@ vi.mock("../../browser-sessions/browser-sessions-owner", () => ({
       fixture.captureCalls += 1;
       return fixture.captureShouldReject
         ? Promise.reject(new Error("push to hosts failed"))
-        : Promise.resolve(0);
+        : Promise.resolve(fixture.captureResolvedHosts);
     }
 
     dispose(): void {}
@@ -182,19 +188,29 @@ vi.mock("../../browser-view/storage/browser-storage-state", () => ({
   }) => `${key.domain} ${key.name} ${key.path}`,
 }));
 
+/**
+ * The service itself is a stub - `LoginImportService` is covered end to end
+ * by `import-logins.test.ts` - but the coordination object this module is
+ * called with is real: `registerBrowserViewIpc` builds it (including the
+ * `pushJarToHosts` closure this suite exercises directly), and this mock's
+ * only job is to capture that object before handing back a canned service.
+ */
 vi.mock("../../browser-view/storage/login-import/login-import-runtime", () => ({
   LOGIN_IMPORT_JAR_BARRIER_TIMEOUT_MS: 10 * 60_000,
-  createLoginImportService: () => ({
-    listSources: vi.fn(() => Promise.resolve([])),
-    registerFile: vi.fn(() => Promise.resolve(null)),
-    scan: vi.fn(),
-    import: vi.fn((): Promise<ImportOutcome> => {
-      if (fixture.importResult === null) {
-        throw new Error("test did not queue an import result");
-      }
-      return Promise.resolve(fixture.importResult);
-    }),
-  }),
+  createLoginImportService: (coordination: LoginImportJarCoordination) => {
+    fixture.coordination = coordination;
+    return {
+      listSources: vi.fn(() => Promise.resolve([])),
+      registerFile: vi.fn(() => Promise.resolve(null)),
+      scan: vi.fn(),
+      import: vi.fn((): Promise<LoginImportResult> => {
+        if (fixture.importResult === null) {
+          throw new Error("test did not queue an import result");
+        }
+        return Promise.resolve(fixture.importResult);
+      }),
+    };
+  },
 }));
 
 type InvokeHandler = (
@@ -256,12 +272,29 @@ function findInvokeHandler(
   return handler as InvokeHandler;
 }
 
-async function runLoginImport(payload: LoginImportRequest): Promise<unknown> {
+/**
+ * Registers the IPC handlers, which is also what calls
+ * `createLoginImportService` and so populates `fixture.coordination`.
+ */
+async function registerBridge() {
   const { registerBrowserViewIpc } = await import("../browser-view-ipc");
-  const { RunnerHostInvoke } =
-    await import("../../../ipc-contracts/ipc-channels");
   const bridge = makeBridge();
   registerBrowserViewIpc(bridge as never);
+  return bridge;
+}
+
+function requireCoordination(): LoginImportJarCoordination {
+  const coordination = fixture.coordination;
+  if (coordination === null) {
+    throw new Error("createLoginImportService was not called");
+  }
+  return coordination;
+}
+
+async function runLoginImport(payload: LoginImportRequest): Promise<unknown> {
+  const bridge = await registerBridge();
+  const { RunnerHostInvoke } =
+    await import("../../../ipc-contracts/ipc-channels");
   const handler = findInvokeHandler(
     bridge,
     RunnerHostInvoke.browserViewLoginImportRun,
@@ -273,19 +306,21 @@ describe("browserViewLoginImportRun IPC handler", () => {
   beforeEach(() => {
     fixture.importResult = null;
     fixture.captureShouldReject = false;
+    fixture.captureResolvedHosts = 0;
     fixture.captureCalls = 0;
+    fixture.coordination = null;
     vi.resetModules();
   });
 
-  it("answers the committed import with zero notified hosts when the push to the hosts throws", async () => {
+  it("returns the login import service's result untouched, notifiedHosts included", async () => {
     fixture.importResult = {
       status: "imported",
       importedSites: 1,
       importedCookies: 3,
       replacedSites: 0,
       skippedInvalid: 0,
+      notifiedHosts: 2,
     };
-    fixture.captureShouldReject = true;
 
     const result = await runLoginImport({
       sourceId: "source-1",
@@ -294,14 +329,41 @@ describe("browserViewLoginImportRun IPC handler", () => {
       includeDeviceBound: false,
     });
 
-    expect(result).toEqual({
-      status: "imported",
-      importedSites: 1,
-      importedCookies: 3,
-      replacedSites: 0,
-      skippedInvalid: 0,
-      notifiedHosts: 0,
-    });
+    expect(result).toEqual(fixture.importResult);
+    // The handler is a pure passthrough now - the push to the hosts already
+    // happened inside the (stubbed) service's own `import`, so nothing on
+    // this path should call the host push a second time.
+    expect(fixture.captureCalls).toBe(0);
+  });
+});
+
+describe("the pushJarToHosts coordination member handed to createLoginImportService", () => {
+  beforeEach(() => {
+    fixture.importResult = null;
+    fixture.captureShouldReject = false;
+    fixture.captureResolvedHosts = 0;
+    fixture.captureCalls = 0;
+    fixture.coordination = null;
+    vi.resetModules();
+  });
+
+  it("resolves 0 when the underlying host push rejects", async () => {
+    fixture.captureShouldReject = true;
+    await registerBridge();
+
+    const result = await requireCoordination().pushJarToHosts();
+
+    expect(result).toBe(0);
+    expect(fixture.captureCalls).toBe(1);
+  });
+
+  it("resolves the acked host count when the underlying host push resolves", async () => {
+    fixture.captureResolvedHosts = 3;
+    await registerBridge();
+
+    const result = await requireCoordination().pushJarToHosts();
+
+    expect(result).toBe(3);
     expect(fixture.captureCalls).toBe(1);
   });
 });

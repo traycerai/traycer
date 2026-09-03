@@ -137,8 +137,12 @@ async function pickSource(name: RegExp | string): Promise<void> {
   fireEvent.click(button);
 }
 
-function importConfirmButton(): HTMLElement {
-  return screen.getByTestId("import-logins-confirm");
+function importConfirmButton(): HTMLButtonElement {
+  const button = screen.getByTestId("import-logins-confirm");
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error("the import confirm control is not a button");
+  }
+  return button;
 }
 
 afterEach(() => {
@@ -258,11 +262,14 @@ describe("<ImportLoginsDialog /> choose-sites step", () => {
     renderDialog(bridge);
     await pickSource(/Google Chrome/);
 
-    const excludedCheckbox = await screen.findByRole("checkbox", {
-      name: "google.com can't be imported",
-    });
+    const excludedCheckbox = await screen.findByRole<HTMLButtonElement>(
+      "checkbox",
+      {
+        name: "google.com can't be imported",
+      },
+    );
     expect(excludedCheckbox.getAttribute("data-state")).toBe("unchecked");
-    expect(excludedCheckbox.hasAttribute("disabled")).toBe(true);
+    expect(excludedCheckbox.disabled).toBe(true);
     expect(
       screen.getByText(
         "Google accounts are left out: Google binds sign-ins to the device they were made on. Sign in to Google inside Traycer once, or import them anyway and accept that they can stop working.",
@@ -508,7 +515,7 @@ describe("<ImportLoginsDialog /> choose-sites step", () => {
     await screen.findByText("example.com");
     fireEvent.click(screen.getByRole("button", { name: "Select none" }));
 
-    expect(importConfirmButton().hasAttribute("disabled")).toBe(true);
+    expect(importConfirmButton().disabled).toBe(true);
   });
 
   it("freezes Select all and Select none while the import is pending", async () => {
@@ -538,19 +545,20 @@ describe("<ImportLoginsDialog /> choose-sites step", () => {
     // "Select all" to be findable (rather than reading the DOM synchronously)
     // rides past that re-render instead of racing it.
     expect(
-      (await screen.findByRole("button", { name: "Select all" })).hasAttribute(
-        "disabled",
-      ),
+      (
+        await screen.findByRole<HTMLButtonElement>("button", {
+          name: "Select all",
+        })
+      ).disabled,
     ).toBe(true);
     expect(
-      screen
-        .getByRole("button", { name: "Select none" })
-        .hasAttribute("disabled"),
+      screen.getByRole<HTMLButtonElement>("button", { name: "Select none" })
+        .disabled,
     ).toBe(true);
     expect(
-      screen
-        .getByRole("checkbox", { name: "Import logins for example.com" })
-        .hasAttribute("disabled"),
+      screen.getByRole<HTMLButtonElement>("checkbox", {
+        name: "Import logins for example.com",
+      }).disabled,
     ).toBe(true);
 
     const release = bridge.releaseImport;
@@ -792,6 +800,27 @@ describe("<ImportLoginsDialog /> import", () => {
     fireEvent.click(importConfirmButton());
 
     await screen.findByText("Nothing was imported");
+    expect(screen.getByRole("button", { name: "Try again" })).not.toBeNull();
+  });
+
+  it("shows the part-way title and explainer for an incomplete import", async () => {
+    const bridge = new TestBridge();
+    bridge.sources = [source({})];
+    bridge.scanBySourceId.set(
+      "source-1",
+      scan({
+        sites: [{ domain: "example.com", cookieCount: 1, unlock: null }],
+      }),
+    );
+    bridge.importResult = { status: "blocked", reason: "incomplete" };
+    renderDialog(bridge);
+    await pickSource(/Google Chrome/);
+
+    await screen.findByText("example.com");
+    fireEvent.click(importConfirmButton());
+
+    await screen.findByText("The import stopped part-way");
+    expect(screen.getByText(/import again to finish the rest/)).not.toBeNull();
     expect(screen.getByRole("button", { name: "Try again" })).not.toBeNull();
   });
 
