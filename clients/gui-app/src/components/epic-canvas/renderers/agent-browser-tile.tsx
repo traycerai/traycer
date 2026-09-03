@@ -476,7 +476,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
         <div
           hidden={showStartPage}
           className={cn(
-            "absolute inset-0 flex min-h-0 flex-col items-center justify-center gap-3 px-4 text-center",
+            "absolute inset-0 z-20 flex min-h-0 flex-col items-center justify-center gap-3 px-4 text-center",
             effectiveStatus === "ready" && "pointer-events-none opacity-0",
           )}
           role={effectiveStatus === "dead" ? "alert" : "status"}

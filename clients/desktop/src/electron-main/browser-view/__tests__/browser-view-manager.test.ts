@@ -18,7 +18,6 @@ import type {
   BrowserViewDownloadChange,
   BrowserViewFindChange,
   BrowserViewNativeTabCapability,
-  BrowserViewNativeTabKey,
   BrowserViewOpenTileRequest,
   BrowserViewNativeTabStatusChange,
   BrowserViewTileKey,
@@ -229,9 +228,7 @@ class FakeWebContents extends EventEmitter implements BrowserViewWebContents {
   readonly navigationHistory = {
     canGoBack: () => this.canGoBackValue,
     canGoForward: () => this.canGoForwardValue,
-    clear: () => {
-      this.clearNavigationHistoryCalls += 1;
-    },
+    clear: () => {},
     goBack: () => {
       this.goBackCalls += 1;
     },
@@ -241,7 +238,6 @@ class FakeWebContents extends EventEmitter implements BrowserViewWebContents {
   };
   readonly loadUrls: string[] = [];
   readonly executedJavaScript: string[] = [];
-  readonly captureVisibleStates: boolean[] = [];
   readonly findInPageCalls: Array<{
     readonly requestId: number;
     readonly text: string;
@@ -255,8 +251,6 @@ class FakeWebContents extends EventEmitter implements BrowserViewWebContents {
   reloadCalls = 0;
   goBackCalls = 0;
   goForwardCalls = 0;
-  clearNavigationHistoryCalls = 0;
-  stopFindCalls = 0;
   readonly backgroundThrottlingStates: boolean[] = [];
   canGoBackValue = false;
   canGoForwardValue = false;
@@ -321,7 +315,6 @@ class FakeWebContents extends EventEmitter implements BrowserViewWebContents {
 
   capturePage(): Promise<BrowserViewCapturedImage> {
     this.lifecycle.push("capturePage");
-    this.captureVisibleStates.push(false);
     if (this.deferCaptures) {
       return new Promise((resolve) => {
         this.captureResolvers.push(resolve);
@@ -411,9 +404,7 @@ class FakeWebContents extends EventEmitter implements BrowserViewWebContents {
     return requestId;
   }
 
-  stopFindInPage(_action: "clearSelection"): void {
-    this.stopFindCalls += 1;
-  }
+  stopFindInPage(_action: "clearSelection"): void {}
 
   getZoomFactor(): number {
     return this.zoomFactor;
@@ -450,20 +441,6 @@ class FakeWebContents extends EventEmitter implements BrowserViewWebContents {
         },
   ): void {
     this.windowOpenHandler = handler;
-  }
-}
-
-class FakeBrowserView {
-  readonly webContents: FakeWebContents;
-
-  constructor(
-    webContentsId: number,
-    requireLoadedTargetForPageCommands: boolean,
-  ) {
-    this.webContents = new FakeWebContents(
-      webContentsId,
-      requireLoadedTargetForPageCommands,
-    );
   }
 }
 
@@ -559,14 +536,13 @@ interface GuestAttachMint {
   readonly windowId: string;
   readonly registrationId: string;
   readonly partition: string;
-  readonly identity: BrowserViewNativeTabKey;
   readonly requestKeys: readonly string[];
 }
 
 interface Harness {
   readonly manager: BrowserViewManager;
   readonly windows: Map<string, FakeWindow>;
-  readonly guests: FakeBrowserView[];
+  readonly guests: FakeWebContents[];
   readonly attachMints: GuestAttachMint[];
   readonly releasedRendererGuests: string[];
   readonly seededWebContents: BrowserViewWebContents[];
@@ -646,7 +622,7 @@ function createHarnessWithOptions(
     ["window-1", new FakeWindow()],
     ["window-2", new FakeWindow()],
   ]);
-  const guests: FakeBrowserView[] = [];
+  const guests: FakeWebContents[] = [];
   const attachMints: GuestAttachMint[] = [];
   const releasedRendererGuests: string[] = [];
   const seededWebContents: BrowserViewWebContents[] = [];
@@ -670,7 +646,7 @@ function createHarnessWithOptions(
     (change: BrowserSessionCertificateErrorChange) => void
   >();
   let nextWebContentsId = 1;
-  const guestByRegistrationId = new Map<string, FakeBrowserView>();
+  const guestByRegistrationId = new Map<string, FakeWebContents>();
   let pendingAttachHold: Promise<void> | null = null;
   let pendingSeedHold: Promise<void> | null = null;
   let pendingAttachThrow: Error | null = null;
@@ -690,7 +666,6 @@ function createHarnessWithOptions(
       windowId,
       registrationId,
       partition: request.partition,
-      identity: request.identity,
       requestKeys: Object.keys(request).sort(),
     });
     if (pendingReadyReject !== null) {
@@ -700,7 +675,7 @@ function createHarnessWithOptions(
       void ready.catch(() => undefined);
       return { registrationId, ready };
     }
-    const guest = new FakeBrowserView(
+    const guest = new FakeWebContents(
       nextWebContentsId,
       harnessOptions?.requireLoadedTargetForPageCommands ?? false,
     );
@@ -719,7 +694,7 @@ function createHarnessWithOptions(
         const hold = pendingAttachHold;
         pendingAttachHold = null;
         if (hold !== null) await hold;
-        await request.onAttached(guest.webContents);
+        await request.onAttached(guest);
       })().then(
         () => {
           readySettlement.resolve();
@@ -731,11 +706,14 @@ function createHarnessWithOptions(
     });
     return { registrationId, ready: readySettlement.promise };
   };
-  const releaseRendererGuest = (registrationId: string): void => {
+  const releaseRendererGuest = (
+    registrationId: string,
+    _windowId: string,
+  ): void => {
     releasedRendererGuests.push(registrationId);
     const guest = guestByRegistrationId.get(registrationId);
-    if (guest !== undefined && !guest.webContents.isDestroyed()) {
-      guest.webContents.close();
+    if (guest !== undefined && !guest.isDestroyed()) {
+      guest.close();
     }
   };
   const options: BrowserViewManagerOptions = {
@@ -921,7 +899,7 @@ function emitHostWindowNavigation(harness: Harness, windowId: string): void {
 interface AttachedNativeTab {
   readonly bindingId: string;
   readonly capability: BrowserViewNativeTabCapability;
-  readonly view: FakeBrowserView;
+  readonly view: FakeWebContents;
 }
 
 async function attachNativeTab(
@@ -952,7 +930,7 @@ async function attachNativeTab(
   }
   const view = harness.guests.at(-1);
   if (view === undefined) throw new Error("expected renderer guest");
-  view.webContents.emit("did-navigate", {}, requestedUrl, 200, "OK");
+  view.emit("did-navigate", {}, requestedUrl, 200, "OK");
   await Promise.resolve();
   return { bindingId, capability, view };
 }
@@ -970,16 +948,10 @@ describe("BrowserViewManager primary profile observation", () => {
     // `did-navigate` is the event the entry factory actually registers for a
     // committed main-frame navigation - the only path into the observation
     // plane.
-    view.webContents.emit(
-      "did-navigate",
-      {},
-      "https://second.example/",
-      200,
-      "OK",
-    );
+    view.emit("did-navigate", {}, "https://second.example/", 200, "OK");
     await Promise.resolve();
     // A load finishing is not a commit and adds nothing.
-    view.webContents.emit("did-finish-load");
+    view.emit("did-finish-load");
     await Promise.resolve();
 
     expect(harness.primaryProfileObservedUrls).toEqual([
@@ -1025,13 +997,7 @@ describe("BrowserViewManager isolated sessions", () => {
     // A real committed navigation, through the event the factory registers -
     // so what this pins is the profile filter, not a listener that was never
     // there.
-    view.webContents.emit(
-      "did-navigate",
-      {},
-      "https://private.example/",
-      200,
-      "OK",
-    );
+    view.emit("did-navigate", {}, "https://private.example/", 200, "OK");
     await Promise.resolve();
     // The private jar is invisible to the primary-profile capture plane.
     expect(harness.primaryProfileObservedUrls).toEqual([]);
@@ -1092,8 +1058,8 @@ describe("BrowserViewManager native tab lifecycle", () => {
 
     const view = harness.guests[0];
     if (view === undefined) throw new Error("expected native guest");
-    expect(view.webContents.loadUrls).toEqual(["about:blank"]);
-    expect(view.webContents.lifecycle).toEqual([
+    expect(view.loadUrls).toEqual(["about:blank"]);
+    expect(view.lifecycle).toEqual([
       "loadURL",
       "Page.addScriptToEvaluateOnNewDocument",
       "Page.enable",
@@ -1106,11 +1072,11 @@ describe("BrowserViewManager native tab lifecycle", () => {
     await harness.manager.acceptTab(provisioned);
     await Promise.resolve();
 
-    expect(view.webContents.loadUrls).toEqual([
+    expect(view.loadUrls).toEqual([
       "about:blank",
       "https://example.com/target",
     ]);
-    expect(view.webContents.lifecycle).toEqual([
+    expect(view.lifecycle).toEqual([
       "loadURL",
       "Page.addScriptToEvaluateOnNewDocument",
       "Page.enable",
@@ -1136,7 +1102,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
     });
     const view = harness.guests[0];
     if (view === undefined) throw new Error("expected native guest");
-    view.webContents.debugger.deferCommands = true;
+    view.debugger.deferCommands = true;
 
     let settled = false;
     void ensure.finally(() => {
@@ -1145,9 +1111,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
     await flushCloseEntry();
 
     expect(settled).toBe(false);
-    expect(
-      view.webContents.debugger.commands.map(({ method }) => method),
-    ).toEqual([
+    expect(view.debugger.commands.map(({ method }) => method)).toEqual([
       "Page.enable",
       "Runtime.enable",
       "Log.enable",
@@ -1155,9 +1119,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
       "DOM.enable",
     ]);
 
-    for (const resolve of view.webContents.debugger.commandResolvers.splice(
-      0,
-    )) {
+    for (const resolve of view.debugger.commandResolvers.splice(0)) {
       resolve(null);
     }
     await expect(ensure).resolves.toMatchObject({
@@ -1182,14 +1144,8 @@ describe("BrowserViewManager native tab lifecycle", () => {
     const view = harness.guests[0];
     if (view === undefined) throw new Error("expected native guest");
 
-    view.webContents.emit(
-      "did-navigate",
-      {},
-      "https://example.com/next",
-      200,
-      "OK",
-    );
-    view.webContents.debugger.emitDetach("target closed");
+    view.emit("did-navigate", {}, "https://example.com/next", 200, "OK");
+    view.debugger.emitDetach("target closed");
 
     expect(harness.nativeTabStatuses.at(-1)).toMatchObject({
       hostId: "host-1",
@@ -1201,9 +1157,9 @@ describe("BrowserViewManager native tab lifecycle", () => {
       ready,
     );
     expect(harness.guests).toHaveLength(1);
-    expect(view.webContents.debugger.isAttached()).toBe(true);
+    expect(view.debugger.isAttached()).toBe(true);
     expect(
-      view.webContents.debugger.commands.filter(
+      view.debugger.commands.filter(
         ({ method, sessionId }) =>
           method === "Page.enable" && sessionId === undefined,
       ),
@@ -1226,7 +1182,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
     });
     const view = harness.guests[0];
     if (view === undefined) throw new Error("expected native guest");
-    view.webContents.debugger.emitDetach("target closed");
+    view.debugger.emitDetach("target closed");
 
     await expect(
       harness.manager.dispatchElectronTabCdp({
@@ -1237,7 +1193,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
       }),
     ).resolves.toMatchObject({ kind: "cdpGetFrameTree", ok: true });
     expect(
-      view.webContents.debugger.commands.filter(
+      view.debugger.commands.filter(
         ({ method, sessionId }) =>
           method === "Page.enable" && sessionId === undefined,
       ),
@@ -1272,7 +1228,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
       await harness.manager.acceptTab(ready);
       const view = harness.guests[0];
       if (view === undefined) throw new Error("expected native guest");
-      const loadedBefore = [...view.webContents.loadUrls];
+      const loadedBefore = [...view.loadUrls];
 
       await expect(
         harness.manager.controlElectronTab("window-1", {
@@ -1282,7 +1238,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
         }),
       ).rejects.toThrow("http, https or about:blank");
 
-      expect(view.webContents.loadUrls).toEqual(loadedBefore);
+      expect(view.loadUrls).toEqual(loadedBefore);
     },
   );
 
@@ -1310,10 +1266,10 @@ describe("BrowserViewManager native tab lifecycle", () => {
       },
     };
 
-    view.webContents.emit("will-navigate", event, url);
+    view.emit("will-navigate", event, url);
     expect(prevented).toBe(1);
 
-    view.webContents.emit("will-navigate", event, "https://example.com/next");
+    view.emit("will-navigate", event, "https://example.com/next");
     expect(prevented).toBe(1);
   });
 
@@ -1350,9 +1306,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
       error: { kind: "cdp_error" },
     });
     expect(
-      view.webContents.debugger.commands.filter(
-        ({ method }) => method === "Page.navigate",
-      ),
+      view.debugger.commands.filter(({ method }) => method === "Page.navigate"),
     ).toEqual([]);
 
     // And an allowed one still reaches CDP, so the gate is a scheme check and
@@ -1364,9 +1318,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
       command: { kind: "cdpNavigate", url: "https://example.com/next" },
     });
     expect(
-      view.webContents.debugger.commands.filter(
-        ({ method }) => method === "Page.navigate",
-      ),
+      view.debugger.commands.filter(({ method }) => method === "Page.navigate"),
     ).toMatchObject([{ params: { url: "https://example.com/next" } }]);
   });
 
@@ -1378,7 +1330,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
       BASE_TILE_KEY,
       "https://example.com/",
     );
-    const open = view.webContents.windowOpenHandler;
+    const open = view.windowOpenHandler;
     if (open === undefined || open === null) {
       throw new Error("expected a window-open handler");
     }
@@ -1421,7 +1373,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
     );
     const popup = new FakePopupWindow(999);
 
-    view.webContents.emit("did-create-window", popup);
+    view.emit("did-create-window", popup);
 
     // A popup shares the opener's jar, so `window.open()` then
     // `location = "file:///..."` would otherwise walk around every gate.
@@ -1464,8 +1416,8 @@ describe("BrowserViewManager native tab lifecycle", () => {
     const view = harness.guests[0];
     if (view === undefined) throw new Error("expected native guest");
     await harness.manager.acceptTab(ready);
-    view.webContents.canGoBackValue = true;
-    view.webContents.canGoForwardValue = true;
+    view.canGoBackValue = true;
+    view.canGoForwardValue = true;
 
     await expect(
       harness.manager.controlElectronTab("window-1", {
@@ -1512,16 +1464,16 @@ describe("BrowserViewManager native tab lifecycle", () => {
       action: { kind: "openDevTools" },
     });
 
-    expect(view.webContents.loadUrls).toEqual([
+    expect(view.loadUrls).toEqual([
       "about:blank",
       "https://example.com/",
       "https://example.com/next",
     ]);
-    expect(view.webContents.reloadCalls).toBe(1);
-    expect(view.webContents.goBackCalls).toBe(1);
-    expect(view.webContents.goForwardCalls).toBe(1);
-    expect(view.webContents.zoomFactor).toBe(1);
-    expect(view.webContents.openDevToolsCalls).toHaveLength(1);
+    expect(view.reloadCalls).toBe(1);
+    expect(view.goBackCalls).toBe(1);
+    expect(view.goForwardCalls).toBe(1);
+    expect(view.zoomFactor).toBe(1);
+    expect(view.openDevToolsCalls).toHaveLength(1);
 
     await expect(
       harness.manager.controlElectronTab("window-1", {
@@ -1570,7 +1522,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
         action: { kind: "reload" },
       }),
     ).resolves.toBe(false);
-    expect(view.webContents.reloadCalls).toBe(0);
+    expect(view.reloadCalls).toBe(0);
 
     await expect(
       harness.manager.startPipCapture(
@@ -1585,7 +1537,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
         () => undefined,
       ),
     ).resolves.toBe(false);
-    expect(view.webContents.lifecycle).not.toContain("capturePage");
+    expect(view.lifecycle).not.toContain("capturePage");
 
     expect(
       harness.manager.attachSurface("window-1", {
@@ -1648,7 +1600,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
 
     harness.manager.dispose();
     await flushCloseEntry();
-    expect(view.webContents.closeCalls).toBe(1);
+    expect(view.closeCalls).toBe(1);
   });
 
   it("transfers a provisioning tab's lifecycle lease before awaiting readiness", async () => {
@@ -1665,7 +1617,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
     const firstEnsure = harness.manager.ensureTab("window-1", ensureInput);
     const view = harness.guests[0];
     if (view === undefined) throw new Error("expected native guest");
-    view.webContents.debugger.deferCommands = true;
+    view.debugger.deferCommands = true;
     await flushCloseEntry();
 
     const reclaimedEnsure = harness.manager.ensureTab("window-2", ensureInput);
@@ -1681,9 +1633,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
       1,
     );
 
-    for (const resolve of view.webContents.debugger.commandResolvers.splice(
-      0,
-    )) {
+    for (const resolve of view.debugger.commandResolvers.splice(0)) {
       resolve(null);
     }
     const [firstReady, reclaimedReady] = await Promise.all([
@@ -1692,7 +1642,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
     ]);
 
     expect(reclaimedReady).toEqual(firstReady);
-    expect(view.webContents.closeCalls).toBe(0);
+    expect(view.closeCalls).toBe(0);
     expect(harness.guests).toHaveLength(1);
   });
 
@@ -1756,7 +1706,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
     if (window2Guest === undefined) throw new Error("expected window-2 guest");
     await expect(harness.manager.releaseTab(window2Ready)).resolves.toBe(true);
     await flushCloseEntry();
-    expect(window2Guest.webContents.closeCalls).toBe(1);
+    expect(window2Guest.closeCalls).toBe(1);
     expect(harness.releasedRendererGuests.at(-1)).toBe(
       window2Ready.registrationId,
     );
@@ -1808,15 +1758,9 @@ describe("BrowserViewManager native tab lifecycle", () => {
     const view = harness.guests[0];
     if (view === undefined) throw new Error("expected native guest");
     await harness.manager.acceptTab(provisioned);
-    view.webContents.emit(
-      "did-navigate",
-      {},
-      "https://example.com/",
-      200,
-      "OK",
-    );
-    view.webContents.title = "Example Domain";
-    view.webContents.emit("page-title-updated", {}, "Example Domain");
+    view.emit("did-navigate", {}, "https://example.com/", 200, "OK");
+    view.title = "Example Domain";
+    view.emit("page-title-updated", {}, "Example Domain");
     harness.nativeTabStatuses.length = 0;
 
     await harness.manager.ensureTab("window-1", input);
@@ -1855,14 +1799,8 @@ describe("BrowserViewManager native tab lifecycle", () => {
     expect(harness.guests).toHaveLength(1);
     const view = harness.guests[0];
     if (view === undefined) throw new Error("expected native guest");
-    view.webContents.title = "Example Domain";
-    view.webContents.emit(
-      "did-navigate",
-      {},
-      "https://example.com/",
-      200,
-      "OK",
-    );
+    view.title = "Example Domain";
+    view.emit("did-navigate", {}, "https://example.com/", 200, "OK");
 
     const [firstReady, replayedReady] = await Promise.all([
       firstEnsure,
@@ -1938,7 +1876,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
         bindingId: "binding-2",
       }),
     ).toBe(true);
-    expect(view.webContents.closeCalls).toBe(0);
+    expect(view.closeCalls).toBe(0);
 
     await expect(
       harness.manager.dispatchElectronTabCdp({
@@ -1967,7 +1905,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
         registrationId: "stale-registration",
       }),
     ).resolves.toBe(false);
-    expect(view.webContents.closeCalls).toBe(0);
+    expect(view.closeCalls).toBe(0);
 
     await expect(
       harness.manager.releaseTab({
@@ -1975,7 +1913,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
         registrationId: firstReady.registrationId,
       }),
     ).resolves.toBe(true);
-    expect(view.webContents.closeCalls).toBe(1);
+    expect(view.closeCalls).toBe(1);
     expect(
       harness.windows
         .get("window-1")
@@ -2034,7 +1972,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
     // A re-ensure that restored the destroyed guest is the failure this
     // guards - the entry must be gone from the registry, not merely marked.
     expect(replaced.registrationId).not.toBe(ready.registrationId);
-    expect(firstView.webContents.closeCalls).toBe(1);
+    expect(firstView.closeCalls).toBe(1);
     expect(harness.guests).toHaveLength(2);
   });
 
@@ -2065,8 +2003,8 @@ describe("BrowserViewManager native tab lifecycle", () => {
     expect(harness.manager.hasNativeTabsForWindow("window-2")).toBe(true);
 
     await harness.manager.closeNativeSessionsForWindow("window-1");
-    expect(harness.guests[0]?.webContents.closeCalls).toBe(1);
-    expect(harness.guests[1]?.webContents.closeCalls).toBe(0);
+    expect(harness.guests[0]?.closeCalls).toBe(1);
+    expect(harness.guests[1]?.closeCalls).toBe(0);
     expect(harness.manager.hasNativeTabsForWindow("window-1")).toBe(false);
     expect(harness.manager.hasNativeTabsForWindow("window-2")).toBe(true);
     harness.manager.dispose();
@@ -2116,9 +2054,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
     await flushCloseEntry();
 
     expect(migrated).toHaveLength(1);
-    expect(harness.guests.map((view) => view.webContents.closeCalls)).toEqual([
-      1, 0, 0,
-    ]);
+    expect(harness.guests.map((view) => view.closeCalls)).toEqual([1, 0, 0]);
     harness.manager.dispose();
   });
 
@@ -2149,9 +2085,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
 
     // Native teardown only: the host suspends the session to dormant when the
     // route goes away, so nothing here reports a durable tab as closed.
-    expect(harness.guests.map((view) => view.webContents.closeCalls)).toEqual([
-      1, 1,
-    ]);
+    expect(harness.guests.map((view) => view.closeCalls)).toEqual([1, 1]);
   });
 
   it("closes provisional guests but retains accepted guests when their renderer crashes", async () => {
@@ -2181,9 +2115,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
       ?.webContents.emit("render-process-gone", {}, { reason: "crashed" });
     await flushCloseEntry();
 
-    expect(harness.guests.map((view) => view.webContents.closeCalls)).toEqual([
-      1, 0,
-    ]);
+    expect(harness.guests.map((view) => view.closeCalls)).toEqual([1, 0]);
   });
 
   it("starts PiP on an unbound guest without a compositor window", async () => {
@@ -2216,10 +2148,10 @@ describe("BrowserViewManager native tab lifecycle", () => {
         () => undefined,
       ),
     ).resolves.toBe(true);
-    expect(view.webContents.backgroundThrottlingStates).toEqual([false]);
+    expect(view.backgroundThrottlingStates).toEqual([false]);
 
     harness.manager.pip.stop();
-    expect(view.webContents.backgroundThrottlingStates).toEqual([false, true]);
+    expect(view.backgroundThrottlingStates).toEqual([false, true]);
   });
 
   it("starts PiP on a bound guest and restores throttling on stop", async () => {
@@ -2243,10 +2175,10 @@ describe("BrowserViewManager native tab lifecycle", () => {
         () => undefined,
       ),
     ).resolves.toBe(true);
-    expect(view.webContents.backgroundThrottlingStates.at(-1)).toBe(false);
+    expect(view.backgroundThrottlingStates.at(-1)).toBe(false);
 
     harness.manager.pip.stop();
-    expect(view.webContents.backgroundThrottlingStates.at(-1)).toBe(true);
+    expect(view.backgroundThrottlingStates.at(-1)).toBe(true);
   });
 });
 
@@ -2263,12 +2195,12 @@ describe("BrowserViewManager host window renderer reset", () => {
       BASE_KEY,
       "https://example.com",
     );
-    expect(view.webContents.closeCalls).toBe(0);
+    expect(view.closeCalls).toBe(0);
 
     emitHostReset(harness);
 
     expect(harness.rendererResetWindowIds).toEqual(["window-1"]);
-    expect(view.webContents.closeCalls).toBe(0);
+    expect(view.closeCalls).toBe(0);
     expect(harness.releasedRendererGuests).toEqual([]);
     expect(
       harness.manager.attachSurface("window-1", {
@@ -2298,7 +2230,7 @@ describe("BrowserViewManager host window renderer reset", () => {
     await flushCloseEntry();
 
     expect(harness.rendererResetWindowIds).toEqual(["window-1"]);
-    expect(view.webContents.closeCalls).toBe(1);
+    expect(view.closeCalls).toBe(1);
     expect(harness.releasedRendererGuests).toEqual([ready.registrationId]);
   });
 
@@ -2331,7 +2263,7 @@ describe("BrowserViewManager host window renderer reset", () => {
       2,
     );
     expect(harness.rendererResetWindowIds).toEqual([]);
-    expect(view.webContents.closeCalls).toBe(0);
+    expect(view.closeCalls).toBe(0);
   });
 
   it("notifies on host renderer crash and keeps an accepted guest", async () => {
@@ -2346,7 +2278,7 @@ describe("BrowserViewManager host window renderer reset", () => {
     if (hostWebContents === undefined) throw new Error("expected host window");
     hostWebContents.emit("render-process-gone", {}, { reason: "crashed" });
     expect(harness.rendererResetWindowIds).toEqual(["window-1"]);
-    expect(view.webContents.closeCalls).toBe(0);
+    expect(view.closeCalls).toBe(0);
   });
 
   it("reattaching after a renderer reset echoes the entry's current status", async () => {
@@ -2357,7 +2289,7 @@ describe("BrowserViewManager host window renderer reset", () => {
       BASE_KEY,
       "https://example.com",
     );
-    view.webContents.emit("did-navigate", {}, "https://example.com", 200, "OK");
+    view.emit("did-navigate", {}, "https://example.com", 200, "OK");
     expect(harness.nativeTabStatuses.at(-1)).toMatchObject({
       ...capability,
       status: "ready",
@@ -2395,7 +2327,7 @@ describe("BrowserViewManager host window renderer reset", () => {
     );
     emitHostReset(harness);
     harness.emitWindowChange();
-    expect(view.webContents.closeCalls).toBe(0);
+    expect(view.closeCalls).toBe(0);
     expect(harness.releasedRendererGuests).toEqual([]);
   });
 });
@@ -2423,8 +2355,8 @@ describe("BrowserViewManager annotation session", () => {
     ).resolves.toBe(true);
   }
 
-  function annotationBindingCommands(view: FakeBrowserView): string[] {
-    return view.webContents.debugger.commands
+  function annotationBindingCommands(view: FakeWebContents): string[] {
+    return view.debugger.commands
       .filter(
         (command) =>
           (command.method === "Runtime.addBinding" ||
@@ -2443,13 +2375,13 @@ describe("BrowserViewManager annotation session", () => {
   it("starts an annotation session after a committed navigation", async () => {
     const harness = createHarness();
     const { view } = await attachAnnotationTab(harness);
-    expect(view.webContents.debugger.attached).toBe(true);
+    expect(view.debugger.attached).toBe(true);
 
     await expect(
       harness.manager.annotations.start("window-1", BASE_KEY),
     ).resolves.toEqual({ ok: true });
     expect(
-      harness.guests[0]?.webContents.debugger.commands.some(
+      harness.guests[0]?.debugger.commands.some(
         (command) =>
           command.method === "Runtime.evaluate" &&
           String(command.params.expression).includes(
@@ -2503,7 +2435,7 @@ describe("BrowserViewManager annotation session", () => {
     const navHarness = createHarness();
     const { view: navView } = await attachAnnotationTab(navHarness);
     await navHarness.manager.annotations.start("window-1", BASE_KEY);
-    navView.webContents.emit(
+    navView.emit(
       "did-navigate-in-page",
       {},
       "http://localhost:3000/#step",
@@ -2522,11 +2454,7 @@ describe("BrowserViewManager annotation session", () => {
     const crashHarness = createHarness();
     const { view: crashView } = await attachAnnotationTab(crashHarness);
     await crashHarness.manager.annotations.start("window-1", BASE_KEY);
-    crashView.webContents.emit(
-      "render-process-gone",
-      {},
-      { reason: "crashed" },
-    );
+    crashView.emit("render-process-gone", {}, { reason: "crashed" });
     expect(annotationBindingCommands(crashView)).toEqual([
       "Runtime.addBinding",
       "Runtime.removeBinding",
@@ -2539,7 +2467,7 @@ describe("BrowserViewManager annotation session", () => {
     const detachHarness = createHarness();
     const { view: detachView } = await attachAnnotationTab(detachHarness);
     await detachHarness.manager.annotations.start("window-1", BASE_KEY);
-    detachView.webContents.debugger.emitDetach("target closed");
+    detachView.debugger.emitDetach("target closed");
     expect(annotationBindingCommands(detachView)).toEqual([
       "Runtime.addBinding",
     ]);
@@ -2625,7 +2553,7 @@ describe("BrowserViewManager annotation session", () => {
   }
 
   function emitAnnotationBinding(
-    view: FakeBrowserView,
+    view: FakeWebContents,
     payload: unknown,
     executionContextId: number | undefined,
   ): void {
@@ -2636,11 +2564,7 @@ describe("BrowserViewManager annotation session", () => {
     if (executionContextId !== undefined) {
       params.executionContextId = executionContextId;
     }
-    view.webContents.debugger.emitMessage(
-      "Runtime.bindingCalled",
-      params,
-      undefined,
-    );
+    view.debugger.emitMessage("Runtime.bindingCalled", params, undefined);
   }
 
   it("forwards a successful attachRequested capture as annotationAttached and does not emit the guest event", async () => {
@@ -2668,7 +2592,7 @@ describe("BrowserViewManager annotation session", () => {
   it("emits no annotationAttached on empty capture and leaves the session cancellable", async () => {
     const harness = createHarness();
     const { view } = await attachAnnotationTab(harness);
-    view.webContents.emptyCapture = true;
+    view.emptyCapture = true;
     await expect(
       harness.manager.annotations.start("window-1", BASE_KEY),
     ).resolves.toEqual({ ok: true });
@@ -2693,7 +2617,7 @@ describe("BrowserViewManager annotation session", () => {
       harness.manager.annotations.start("window-1", BASE_KEY),
     ).resolves.toEqual({ ok: true });
 
-    view.webContents.emit(
+    view.emit(
       "did-start-navigation",
       {},
       "http://localhost:3000/next",
@@ -2711,13 +2635,7 @@ describe("BrowserViewManager annotation session", () => {
       { type: "ended", reason: "navigation" },
     ]);
 
-    view.webContents.emit(
-      "did-navigate",
-      {},
-      "http://localhost:3000/next",
-      200,
-      "OK",
-    );
+    view.emit("did-navigate", {}, "http://localhost:3000/next", 200, "OK");
     expect(annotationEventTypes(harness)).toEqual([
       { type: "ended", reason: "navigation" },
     ]);
@@ -2726,7 +2644,7 @@ describe("BrowserViewManager annotation session", () => {
   it("does not emit annotationAttached when navigation starts during capturePage", async () => {
     const harness = createHarness();
     const { view } = await attachAnnotationTab(harness);
-    view.webContents.deferCaptures = true;
+    view.deferCaptures = true;
     await expect(
       harness.manager.annotations.start("window-1", BASE_KEY),
     ).resolves.toEqual({ ok: true });
@@ -2738,10 +2656,10 @@ describe("BrowserViewManager annotation session", () => {
     );
     await flush();
     expect(
-      view.webContents.lifecycle.filter((item) => item === "capturePage"),
+      view.lifecycle.filter((item) => item === "capturePage"),
     ).toHaveLength(1);
 
-    view.webContents.emit(
+    view.emit(
       "did-start-navigation",
       {},
       "http://localhost:3000/away",
@@ -2750,7 +2668,7 @@ describe("BrowserViewManager annotation session", () => {
       1,
       2,
     );
-    view.webContents.resolveNextCapture();
+    view.resolveNextCapture();
     await flush();
 
     expect(harness.annotationAttached).toEqual([]);
@@ -2773,12 +2691,12 @@ describe("BrowserViewManager annotation session", () => {
     );
     const preventDefault = vi.fn();
     await controlAnnotationZoom(harness, capability, "zoomIn");
-    view.webContents.emit(
+    view.emit(
       "before-input-event",
       { preventDefault },
       { type: "keyDown", key: "+", meta: true },
     );
-    expect(view.webContents.zoomFactor).toBe(1);
+    expect(view.zoomFactor).toBe(1);
     expect(preventDefault).toHaveBeenCalledTimes(1);
 
     emitAnnotationBinding(
@@ -2787,7 +2705,7 @@ describe("BrowserViewManager annotation session", () => {
       77,
     );
     await controlAnnotationZoom(harness, capability, "zoomIn");
-    expect(view.webContents.zoomFactor).toBe(1.1);
+    expect(view.zoomFactor).toBe(1.1);
 
     emitAnnotationBinding(
       view,
@@ -2795,7 +2713,7 @@ describe("BrowserViewManager annotation session", () => {
       77,
     );
     await controlAnnotationZoom(harness, capability, "resetZoom");
-    expect(view.webContents.zoomFactor).toBe(1.1);
+    expect(view.zoomFactor).toBe(1.1);
 
     emitAnnotationBinding(
       view,
@@ -2807,7 +2725,7 @@ describe("BrowserViewManager annotation session", () => {
     reportAttachResult(harness, "window-1", "attached");
     await flush();
     await controlAnnotationZoom(harness, capability, "resetZoom");
-    expect(view.webContents.zoomFactor).toBe(1);
+    expect(view.zoomFactor).toBe(1);
   });
 
   it("keeps the bundle when attachResult reports failed", async () => {
@@ -2831,7 +2749,7 @@ describe("BrowserViewManager annotation session", () => {
     reportAttachResult(harness, "window-1", "failed");
     await flush();
     await controlAnnotationZoom(harness, capability, "zoomIn");
-    expect(view.webContents.zoomFactor).toBe(1);
+    expect(view.zoomFactor).toBe(1);
   });
 
   it("resets the overlay when attachResult reports attached", async () => {
@@ -2855,7 +2773,7 @@ describe("BrowserViewManager annotation session", () => {
     reportAttachResult(harness, "window-1", "attached");
     await flush();
     await controlAnnotationZoom(harness, capability, "zoomIn");
-    expect(view.webContents.zoomFactor).toBe(1.1);
+    expect(view.zoomFactor).toBe(1.1);
   });
 
   it("keeps the bundle when the attach ack times out", async () => {
@@ -2879,14 +2797,14 @@ describe("BrowserViewManager annotation session", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(harness.annotationAttached).toHaveLength(1);
       await controlAnnotationZoom(harness, capability, "zoomIn");
-      expect(view.webContents.zoomFactor).toBe(1);
+      expect(view.zoomFactor).toBe(1);
       await vi.runAllTimersAsync();
       await controlAnnotationZoom(harness, capability, "zoomIn");
-      expect(view.webContents.zoomFactor).toBe(1);
+      expect(view.zoomFactor).toBe(1);
       reportAttachResult(harness, "window-1", "attached");
       await vi.advanceTimersByTimeAsync(0);
       await controlAnnotationZoom(harness, capability, "zoomIn");
-      expect(view.webContents.zoomFactor).toBe(1);
+      expect(view.zoomFactor).toBe(1);
     } finally {
       vi.useRealTimers();
     }
@@ -2923,7 +2841,7 @@ describe("BrowserViewManager annotation session", () => {
     });
     await flush();
     await controlAnnotationZoom(harness, capability, "zoomIn");
-    expect(view.webContents.zoomFactor).toBe(1);
+    expect(view.zoomFactor).toBe(1);
     reportAttachResult(harness, "window-1", "failed");
     await flush();
     harness.manager.annotations.reportAttachResult("window-1", {
@@ -2932,7 +2850,7 @@ describe("BrowserViewManager annotation session", () => {
     });
     await flush();
     await controlAnnotationZoom(harness, capability, "zoomIn");
-    expect(view.webContents.zoomFactor).toBe(1);
+    expect(view.zoomFactor).toBe(1);
   });
 
   it("fails a pending attach ack when the session ends", async () => {
@@ -2967,7 +2885,7 @@ describe("BrowserViewManager annotation session", () => {
     });
     await flush();
     await controlAnnotationZoom(harness, capability, "zoomIn");
-    expect(view.webContents.zoomFactor).toBe(1);
+    expect(view.zoomFactor).toBe(1);
   });
 
   it("ends an annotation session when its native guest moves to another surface", async () => {
@@ -3041,7 +2959,7 @@ describe("BrowserViewManager visibility reconcile on window loss", () => {
     expect(harness.nativeTabStatuses.at(-1)?.viewed).toBe(true);
 
     // The window this tile was parented to is gone (closed/destroyed) -
-    // reconcileVisibility must notice on the very next window-change pass.
+    // reconcileBoundWindows must notice on the very next window-change pass.
     harness.windows.delete("window-1");
     harness.emitWindowChange();
 
@@ -3090,7 +3008,7 @@ describe("BrowserViewManager in-page window.open (Decision #22)", () => {
       BASE_KEY,
       "https://opener.example/",
     );
-    const handler = view.webContents.windowOpenHandler;
+    const handler = view.windowOpenHandler;
     if (handler === null) throw new Error("expected a window-open handler");
     const result = handler({
       url,
@@ -3174,7 +3092,7 @@ describe("BrowserViewManager in-page window.open (Decision #22)", () => {
       "https://opener.example/",
     );
     const popup = new FakePopupWindow(101);
-    view.webContents.emit("did-create-window", popup);
+    view.emit("did-create-window", popup);
 
     const popupHandler = popup.webContents.windowOpenHandler;
     expect(popupHandler).toEqual(expect.any(Function));
@@ -3209,7 +3127,7 @@ describe("BrowserViewManager in-page window.open (Decision #22)", () => {
 
     // A repeated did-create-window delivery for the same native child must
     // not register another handler or closed listener.
-    view.webContents.emit("did-create-window", popup);
+    view.emit("did-create-window", popup);
     expect(popup.webContents.listenerCount("did-create-window")).toBe(
       popupOpenTileListeners,
     );
@@ -3217,7 +3135,7 @@ describe("BrowserViewManager in-page window.open (Decision #22)", () => {
   });
 });
 
-function requireGuest(harness: Harness): FakeBrowserView {
+function requireGuest(harness: Harness): FakeWebContents {
   const guest = harness.guests.at(-1);
   if (guest === undefined) throw new Error("expected renderer guest");
   return guest;
@@ -3261,14 +3179,13 @@ describe("BrowserViewManager renderer guest capability", () => {
         windowId: "window-1",
         registrationId: provisioned.registrationId,
         partition: expect.any(String),
-        identity: nativeKey,
-        requestKeys: ["identity", "onAttached", "partition"],
+        requestKeys: ["onAttached", "partition"],
       },
     ]);
     const guest = requireGuest(harness);
-    expect(harness.seededWebContents).toEqual([guest.webContents]);
-    expect(guest.webContents.loadUrls).toEqual(["about:blank"]);
-    expect(guest.webContents.lifecycle).toEqual([
+    expect(harness.seededWebContents).toEqual([guest]);
+    expect(guest.loadUrls).toEqual(["about:blank"]);
+    expect(guest.lifecycle).toEqual([
       "loadURL",
       "Page.addScriptToEvaluateOnNewDocument",
       "Page.enable",
@@ -3281,11 +3198,11 @@ describe("BrowserViewManager renderer guest capability", () => {
     await harness.manager.acceptTab(provisioned);
     await Promise.resolve();
 
-    expect(guest.webContents.loadUrls).toEqual([
+    expect(guest.loadUrls).toEqual([
       "about:blank",
       "https://example.com/target",
     ]);
-    expect(guest.webContents.lifecycle).toEqual([
+    expect(guest.lifecycle).toEqual([
       "loadURL",
       "Page.addScriptToEvaluateOnNewDocument",
       "Page.enable",
@@ -3314,14 +3231,8 @@ describe("BrowserViewManager renderer guest capability", () => {
     });
     await harness.manager.acceptTab(ready);
     const guest = requireGuest(harness);
-    guest.webContents.title = "Example Domain";
-    guest.webContents.emit(
-      "did-navigate",
-      {},
-      "https://example.com/",
-      200,
-      "OK",
-    );
+    guest.title = "Example Domain";
+    guest.emit("did-navigate", {}, "https://example.com/", 200, "OK");
     await Promise.resolve();
 
     expect(statuses.at(-1)).toMatchObject({
@@ -3332,7 +3243,7 @@ describe("BrowserViewManager renderer guest capability", () => {
       status: "ready",
     });
 
-    guest.webContents.emit("render-process-gone", {}, { reason: "crashed" });
+    guest.emit("render-process-gone", {}, { reason: "crashed" });
     await flushCloseEntry();
 
     expect(statuses.at(-1)).toMatchObject({
@@ -3342,7 +3253,7 @@ describe("BrowserViewManager renderer guest capability", () => {
       reason: "crashed",
     });
     expect(harness.releasedRendererGuests).toEqual([ready.registrationId]);
-    expect(guest.webContents.closeCalls).toBe(1);
+    expect(guest.closeCalls).toBe(1);
     expect(harness.manager.hasNativeTabsForWindow("window-1")).toBe(false);
     expectRendererGuestMint(harness);
   });
@@ -3367,7 +3278,7 @@ describe("BrowserViewManager renderer guest capability", () => {
       }),
     ).resolves.toMatchObject({ kind: "cdpGetFrameTree", ok: true });
     expect(
-      guest.webContents.debugger.commands.some(
+      guest.debugger.commands.some(
         ({ method }) => method === "Page.getFrameTree",
       ),
     ).toBe(true);
@@ -3392,19 +3303,13 @@ describe("BrowserViewManager renderer guest capability", () => {
       }),
     ).toBe(true);
     const guest = requireGuest(harness);
-    guest.webContents.emit(
-      "did-navigate",
-      {},
-      "https://example.com/",
-      200,
-      "OK",
-    );
+    guest.emit("did-navigate", {}, "https://example.com/", 200, "OK");
     await Promise.resolve();
 
     const capture = await harness.manager.capturePage("window-1", BASE_KEY);
     expect(capture.mediaType).toBe("image/png");
     expect(capture.byteLength).toBe(3);
-    expect(guest.webContents.lifecycle).toContain("capturePage");
+    expect(guest.lifecycle).toContain("capturePage");
     expectRendererGuestMint(harness);
   });
 
@@ -3425,12 +3330,12 @@ describe("BrowserViewManager renderer guest capability", () => {
     const second = await harness.manager.ensureTab("window-1", input);
     expect(second.registrationId).not.toBe(first.registrationId);
     const live = requireGuest(harness);
-    expect(live.webContents.loadUrls).toEqual(["about:blank"]);
+    expect(live.loadUrls).toEqual(["about:blank"]);
 
     await expect(harness.manager.acceptTab(first)).rejects.toThrow(
       "Electron browser tab is not provisioned.",
     );
-    expect(live.webContents.loadUrls).toEqual(["about:blank"]);
+    expect(live.loadUrls).toEqual(["about:blank"]);
     await expect(
       harness.manager.controlElectronTab("window-1", {
         ...nativeKey,
@@ -3438,7 +3343,7 @@ describe("BrowserViewManager renderer guest capability", () => {
         action: { kind: "reload" },
       }),
     ).resolves.toBe(false);
-    expect(live.webContents.reloadCalls).toBe(0);
+    expect(live.reloadCalls).toBe(0);
     await expect(
       harness.manager.dispatchElectronTabCdp({
         ...nativeKey,
@@ -3452,15 +3357,12 @@ describe("BrowserViewManager renderer guest capability", () => {
       error: { kind: "tab_not_found" },
     });
     await expect(harness.manager.releaseTab(first)).resolves.toBe(false);
-    expect(live.webContents.closeCalls).toBe(0);
+    expect(live.closeCalls).toBe(0);
     expect(harness.manager.hasNativeTabsForWindow("window-1")).toBe(true);
 
     await harness.manager.acceptTab(second);
     await Promise.resolve();
-    expect(live.webContents.loadUrls).toEqual([
-      "about:blank",
-      "https://example.com/",
-    ]);
+    expect(live.loadUrls).toEqual(["about:blank", "https://example.com/"]);
   });
 
   it("releaseTab of a live guest calls releaseRendererGuest and does not leak the entry", async () => {
@@ -3479,7 +3381,7 @@ describe("BrowserViewManager renderer guest capability", () => {
     await flushCloseEntry();
 
     expect(harness.releasedRendererGuests).toEqual([ready.registrationId]);
-    expect(guest.webContents.closeCalls).toBe(1);
+    expect(guest.closeCalls).toBe(1);
     expect(harness.manager.hasNativeTabsForWindow("window-1")).toBe(false);
     expect(harness.guests).toHaveLength(1);
     expectRendererGuestMint(harness);
@@ -3556,17 +3458,17 @@ describe("BrowserViewManager renderer guest capability", () => {
       }),
     ).rejects.toThrow("Electron browser tab is not provisioned.");
     const guest = requireGuest(harness);
-    expect(guest.webContents.loadUrls).toEqual([]);
-    expect(guest.webContents.loadUrls).not.toContain(requestedUrl);
+    expect(guest.loadUrls).toEqual([]);
+    expect(guest.loadUrls).not.toContain(requestedUrl);
 
     latch.resolve();
     const provisioned = await ensure;
     expect(provisioned.registrationId).toBe(mint.registrationId);
-    expect(guest.webContents.loadUrls).toEqual(["about:blank"]);
+    expect(guest.loadUrls).toEqual(["about:blank"]);
 
     await harness.manager.acceptTab(provisioned);
     await Promise.resolve();
-    expect(guest.webContents.loadUrls).toEqual(["about:blank", requestedUrl]);
+    expect(guest.loadUrls).toEqual(["about:blank", requestedUrl]);
     expectRendererGuestMint(harness);
   });
 
@@ -3669,11 +3571,11 @@ describe("BrowserViewManager renderer guest capability", () => {
     await harness.manager.acceptTab(ready);
     const guest = requireGuest(harness);
 
-    guest.webContents.emit("destroyed");
+    guest.emit("destroyed");
     await flushCloseEntry();
 
     expect(harness.releasedRendererGuests).toEqual([ready.registrationId]);
-    expect(guest.webContents.closeCalls).toBe(1);
+    expect(guest.closeCalls).toBe(1);
     expect(harness.manager.hasNativeTabsForWindow("window-1")).toBe(false);
     expectRendererGuestMint(harness);
   });

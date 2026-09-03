@@ -87,15 +87,6 @@ export class BrowserViewEntryFactory {
     profile: BrowserSessionProfile,
     webContents: BrowserViewWebContents,
   ): BrowserViewEntry {
-    return this.bindGuest(requestedUrl, identity, profile, webContents);
-  }
-
-  private bindGuest(
-    requestedUrl: string,
-    identity: BrowserViewNativeIdentity,
-    profile: BrowserSessionProfile,
-    webContents: BrowserViewWebContents,
-  ): BrowserViewEntry {
     const entry: BrowserViewEntry = {
       surface: null,
       surfaceBindingId: null,

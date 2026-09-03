@@ -83,7 +83,10 @@ interface BrowserViewManagerOptions {
     windowId: string,
     request: BrowserViewGuestAttachRequest,
   ) => BrowserViewGuestAttachResult;
-  readonly releaseRendererGuest: (registrationId: string) => void;
+  readonly releaseRendererGuest: (
+    registrationId: string,
+    windowId: string,
+  ) => void;
   readonly getWindow: (windowId: string) => BrowserViewWindow | null;
   readonly createPopupWindowOptions: (
     request: BrowserSessionProfileRequest,
@@ -145,7 +148,10 @@ export class BrowserViewManager {
     windowId: string,
   ) => BrowserViewDevToolsWindow;
   private readonly send: BrowserViewSend;
-  private readonly releaseRendererGuest: (registrationId: string) => void;
+  private readonly releaseRendererGuest: (
+    registrationId: string,
+    windowId: string,
+  ) => void;
   private readonly releaseSessionStorage: (
     request: BrowserSessionProfileRequest,
   ) => void;
@@ -257,7 +263,7 @@ export class BrowserViewManager {
       },
     });
     this.offWindowChange = options.onWindowChange(() => {
-      this.windows.reconcileVisibility();
+      this.windows.reconcileBoundWindows();
     });
     this.offDownloadChange = options.onDownloadChange((change) => {
       this.handleDownloadChange(change);
@@ -324,7 +330,7 @@ export class BrowserViewManager {
     }
     entry.desiredVisible = true;
     entry.rendererResetPending = false;
-    this.windows.attachToCurrentWindow(entry);
+    this.windows.ensureResetListener(surface.windowId);
     this.emitStatus(entry);
     return true;
   }
@@ -423,7 +429,7 @@ export class BrowserViewManager {
   ): Promise<boolean> {
     const entry = this.findExactNativeEntry(input);
     if (entry === null) return false;
-    return this.pip.start(entry, windowId, input, onFrame);
+    return this.pip.start(entry, input, onFrame);
   }
 
   async capturePage(
@@ -438,7 +444,11 @@ export class BrowserViewManager {
     if (entry.webContents.isDestroyed()) {
       throw new Error("Browser view tile is not available for capture");
     }
-    const bytes = Buffer.from((await entry.webContents.capturePage()).toPNG());
+    const image = await entry.webContents.capturePage();
+    if (image.isEmpty()) {
+      throw new Error("Browser view tile is not available for capture");
+    }
+    const bytes = Buffer.from(image.toPNG());
     return {
       ...toTileKey(surface),
       mediaType: "image/png",
@@ -943,7 +953,10 @@ export class BrowserViewManager {
     this.pip.forget(entry);
     entry.debugSession?.dispose();
     entry.debugSession = null;
-    this.releaseRendererGuest(entry.identity.registrationId);
+    this.releaseRendererGuest(
+      entry.identity.registrationId,
+      entry.identity.lifecycleWindowId,
+    );
     this.entries.remove(entry);
     this.releaseIsolatedSessionStorage(entry);
     this.windows.detachResetListenerIfUnused(entry.identity.lifecycleWindowId);

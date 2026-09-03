@@ -61,7 +61,6 @@ vi.mock("../browser-session", () => ({
 import { ensureBrowserViewSessionForPartition } from "../browser-session";
 import {
   clearAllAttachmentGrants,
-  guestAttachResultFromMint,
   installWebviewAttachGuards,
   mintAttachmentGrant,
   releaseAttachmentGrant,
@@ -70,11 +69,6 @@ import {
 const WINDOW_A = "window-a";
 const WINDOW_B = "window-b";
 const PARTITION = "persist:traycer-test";
-const IDENTITY = {
-  hostId: "host-1",
-  sessionId: "session-1",
-  tabId: "tab-1",
-};
 
 type TestPrefs = WebPreferences & { disablePopups?: boolean };
 
@@ -138,7 +132,6 @@ function mintGranted(
   return mintAttachmentGrant({
     windowId,
     partition: PARTITION,
-    identity: IDENTITY,
     onAttached,
     onExpired,
   });
@@ -156,6 +149,7 @@ function prefs(): TestPrefs {
   return {
     preload: "file:///evil.js",
     additionalArguments: ["--evil"],
+    enableBlinkFeatures: "Evil",
     nodeIntegration: true,
     nodeIntegrationInSubFrames: true,
     sandbox: false,
@@ -174,8 +168,7 @@ function willAttach(
 ) {
   const webPreferences = { ...prefs(), ...extraPrefs };
   const params = {
-    name: registrationId,
-    src: "about:blank",
+    src: `about:blank#${registrationId}`,
     partition: PARTITION,
     ...extraParams,
   };
@@ -228,35 +221,10 @@ describe("webview guest birth", () => {
     );
     expect(webPreferences.preload).toBeUndefined();
     expect(webPreferences.additionalArguments).toBeUndefined();
+    expect(webPreferences.enableBlinkFeatures).toBeUndefined();
   });
 
-  it("flattens mint.mount.registrationId onto the attach result provisioning reads", () => {
-    const granted = mintGranted(WINDOW_A, attachedOk, null);
-    const attach = guestAttachResultFromMint(granted);
-    expect(attach.registrationId).toBe(granted.mount.registrationId);
-    expect(attach.ready).toBe(granted.ready);
-    expect(
-      Object.prototype.hasOwnProperty.call(granted, "registrationId"),
-    ).toBe(false);
-  });
-
-  it("correlates a grant through about:blank#registrationId when name is absent", () => {
-    const host = hostFor(1, WINDOW_A);
-    const mount = mint(WINDOW_A, attachedOk, null);
-    const { event } = willAttach(
-      host,
-      mount.registrationId,
-      {},
-      {
-        name: "",
-        src: `about:blank#${mount.registrationId}`,
-      },
-    );
-
-    expect(event.preventDefault).not.toHaveBeenCalled();
-  });
-
-  it("consumes src, partition, and did-attach type/host/session mismatch; does not consume no-grant or wrong-window", () => {
+  it("consumes partition and did-attach type/host/session mismatch; does not consume no-grant, wrong-window or an unnamed src", () => {
     const hostA = hostFor(1, WINDOW_A);
     const hostB = hostFor(2, WINDOW_B);
 
@@ -284,7 +252,12 @@ describe("webview guest birth", () => {
       willAttach(hostA, badSrc.registrationId, {}, { src: "https://evil/" })
         .event.preventDefault,
     ).toHaveBeenCalledOnce();
-    expect(releaseAttachmentGrant(badSrc.registrationId)).toBeNull();
+    // A src outside `about:blank#…` names no grant at all, so the mint the
+    // renderer was handed is still live until its TTL.
+    expect(releaseAttachmentGrant(badSrc.registrationId)).toEqual({
+      registrationId: badSrc.registrationId,
+      windowId: WINDOW_A,
+    });
 
     const badPartition = mint(WINDOW_A, attachedOk, null);
     expect(

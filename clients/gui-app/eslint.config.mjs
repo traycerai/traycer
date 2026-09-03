@@ -646,18 +646,9 @@ export default tseslint.config(
     },
   },
   {
-    // Reasoned raw-primitive consumers, per FILE.
-    // These predate/parallel the shadcn wrapper layer: the promotable-modal
-    // family builds custom dialog chrome the shadcn Dialog wrapper does not
-    // support, so it constructs `DialogPrimitive` directly.
-    // `system-tab-modal-host.tsx` imports `Dialog.Root` only - its
-    // painted surface registers via `PromotableModalFrame`, not itself; it
-    // is exempted here so that composition (Root wrapping a frame that
-    // already registers) is not mistaken for a raw, unregistered portal.
-    // Their partition (boundary + posthog + kernel) minus `overlayPortal` -
-    // `readPath` never applied to this directory (it is inside
-    // `hostSelectionReadAllowlist`'s `src/components/layout/**`), so it is
-    // not restated here.
+    // The promotable-modal family builds custom dialog chrome the shadcn
+    // Dialog wrapper does not support, so it constructs `DialogPrimitive`
+    // directly.
     files: [
       "src/components/layout/dialogs/promotable-modal-frame.tsx",
       "src/components/layout/dialogs/window-host-modal.tsx",
@@ -750,17 +741,9 @@ export default tseslint.config(
     },
   },
   {
-    // Two more reasoned raw-primitive consumers, same natural partition as
-    // `src/components/ui/**` above (neither directory is in
-    // `hostSelectionReadAllowlist`, so both carry readPath): restated here
-    // minus `overlayPortal` rather than folded into the block above, so
-    // neither file inherits the shadcn-only rule turn-offs by accident.
-    // `epic-migration-modal.tsx`'s raw `DialogPrimitive` follows the
-    // promotable-modal family's pattern (contrast the `layout/dialogs` block
-    // above, whose directory IS in the allowlist and so carries no
-    // `readPath` to begin with). `palette-item-row.tsx` renders cmdk's
-    // `Command` row internals for the command palette's own list, predating
-    // this ticket.
+    // Two more raw-primitive consumers, restated here minus `overlayPortal`
+    // rather than folded into the block above so neither file inherits the
+    // shadcn-only rule turn-offs by accident.
     files: [
       "src/components/epic-canvas/dialogs/epic-migration-modal.tsx",
       "src/components/command-palette/palette-item-row.tsx",

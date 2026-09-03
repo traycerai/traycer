@@ -9,7 +9,6 @@ import {
 } from "@/components/epic-canvas/surface-host/hosted-top-level-activation";
 import {
   startPersistentBrowserGuestHost,
-  stopPersistentBrowserGuestHost,
   type BrowserGuestActivateEvent,
 } from "@/lib/browser-view/guest/persistent-browser-guest-host";
 import { useRunnerHost } from "@/providers/use-runner-host";
@@ -43,11 +42,10 @@ export function PersistentBrowserGuestHost(): null {
   const { browserView } = useRunnerHost();
   useLayoutEffect(() => {
     if (browserView === null) return undefined;
-    startPersistentBrowserGuestHost(browserView, {
+    return startPersistentBrowserGuestHost(browserView, {
       pointerDown: activateGuestPointer,
       focus: activateGuestFocus,
     });
-    return stopPersistentBrowserGuestHost;
   }, [browserView]);
   return null;
 }

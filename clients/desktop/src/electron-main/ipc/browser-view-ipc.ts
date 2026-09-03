@@ -105,14 +105,12 @@ import {
   openBrowserSessionsTransport,
 } from "../browser-sessions/browser-sessions-transport";
 import type {
-  BrowserViewNativeTabKey,
   LoginImportResult,
   LoginImportScan,
   LoginImportSource,
 } from "@traycer-clients/shared/platform/browser-view";
 import {
   clearAllAttachmentGrants,
-  guestAttachResultFromMint,
   mintAttachmentGrant,
   releaseAttachmentGrant,
 } from "../browser-view/webview-guest-birth";
@@ -339,8 +337,8 @@ export function registerBrowserViewIpc(
   const manager = new BrowserViewManager({
     attachRendererGuest: (windowId, request) =>
       requestRendererGuestMount(bridge, windowId, request),
-    releaseRendererGuest: (registrationId) => {
-      requestRendererGuestRelease(bridge, registrationId);
+    releaseRendererGuest: (registrationId, windowId) => {
+      requestRendererGuestRelease(bridge, registrationId, windowId);
     },
     getWindow: (windowId) =>
       toBrowserViewWindow(
@@ -1203,14 +1201,12 @@ export function requestRendererGuestMount(
   windowId: string,
   input: {
     readonly partition: string;
-    readonly identity: BrowserViewNativeTabKey;
     readonly onAttached: (guest: WebContents) => Promise<void>;
   },
 ): BrowserViewGuestAttachResult {
   const granted = mintAttachmentGrant({
     windowId,
     partition: input.partition,
-    identity: input.identity,
     onAttached: input.onAttached,
     onExpired: (release) => {
       bridge.safeSendToWindow(
@@ -1225,19 +1221,25 @@ export function requestRendererGuestMount(
     RunnerHostEvent.browserViewGuestMountRequested,
     granted.mount,
   );
-  return guestAttachResultFromMint(granted);
+  return {
+    registrationId: granted.mount.registrationId,
+    ready: granted.ready,
+  };
 }
 
 export function requestRendererGuestRelease(
   bridge: RunnerIpcBridge,
   registrationId: string,
+  windowId: string,
 ): void {
-  const release = releaseAttachmentGrant(registrationId);
-  if (release === null) return;
+  // The grant may already be gone (the guest's own `destroyed` listener drops
+  // it first), so the release IPC is sent unconditionally - the renderer's
+  // handler is idempotent, and without it the `<webview>` wrapper leaks.
+  releaseAttachmentGrant(registrationId);
   bridge.safeSendToWindow(
-    release.windowId,
+    windowId,
     RunnerHostEvent.browserViewGuestReleaseRequested,
-    { registrationId: release.registrationId },
+    { registrationId },
   );
 }
 

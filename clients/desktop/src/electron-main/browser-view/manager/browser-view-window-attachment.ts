@@ -57,14 +57,6 @@ export class BrowserViewWindowAttachment {
     this.closeEntry = options.closeEntry;
   }
 
-  /** Records the window the bound tile currently names. */
-  attachToCurrentWindow(entry: BrowserViewEntry): void {
-    const surface = entry.surface;
-    if (surface === null) return;
-    const targetWindow = this.getWindow(surface.windowId);
-    if (targetWindow !== null) this.ensureResetListener(surface.windowId);
-  }
-
   /**
    * The host window itself (not any browser tile's own `webContents`) can
    * reload or crash - a vite HMR full reload in dev, a renderer crash in
@@ -119,22 +111,22 @@ export class BrowserViewWindowAttachment {
    * changed. A capturing unbound tab does not need a compositor lease: the
    * renderer guest stays in the persistent DOM host.
    */
-  reconcileVisibility(): void {
+  reconcileBoundWindows(): void {
     for (const entry of Array.from(this.entries.guestValues())) {
       const surface = entry.surface;
       if (
         surface === null ||
         this.entries.getSurfaceByKey(entryKeyId(surface)) !== entry
       ) {
-        this.hideDetached(entry);
+        this.markDetached(entry);
         continue;
       }
       const window = this.getWindow(surface.windowId);
       if (window === null || window.isDestroyed()) {
-        this.hideDetached(entry);
+        this.markDetached(entry);
         continue;
       }
-      this.attachToCurrentWindow(entry);
+      this.ensureResetListener(surface.windowId);
     }
   }
 
@@ -146,7 +138,7 @@ export class BrowserViewWindowAttachment {
    * for the rest of the session. Emitted only on the edge, because this runs
    * over every entry on every visibility reconcile.
    */
-  private hideDetached(entry: BrowserViewEntry): void {
+  private markDetached(entry: BrowserViewEntry): void {
     const wasVisible = entry.desiredVisible;
     entry.desiredVisible = false;
     if (wasVisible) this.emitStatus(entry);

@@ -38,7 +38,10 @@ interface BrowserViewProvisioningOptions {
     windowId: string,
     request: BrowserViewGuestAttachRequest,
   ) => BrowserViewGuestAttachResult;
-  readonly releaseRendererGuest: (registrationId: string) => void;
+  readonly releaseRendererGuest: (
+    registrationId: string,
+    windowId: string,
+  ) => void;
   readonly seedStorageState: (
     input: BrowserViewEnsureTab,
     webContents: BrowserViewWebContents,
@@ -68,7 +71,10 @@ export class BrowserViewProvisioning {
     windowId: string,
     request: BrowserViewGuestAttachRequest,
   ) => BrowserViewGuestAttachResult;
-  private readonly releaseRendererGuest: (registrationId: string) => void;
+  private readonly releaseRendererGuest: (
+    registrationId: string,
+    windowId: string,
+  ) => void;
   private readonly seedStorageState: (
     input: BrowserViewEnsureTab,
     webContents: BrowserViewWebContents,
@@ -166,7 +172,7 @@ export class BrowserViewProvisioning {
         });
       });
     } else if (inFlight.registrationId !== null) {
-      this.releaseRendererGuest(inFlight.registrationId);
+      this.releaseRendererGuest(inFlight.registrationId, inFlight.windowId);
     }
     inFlight.lifecycle.failProvisioning(
       new Error("native tab ensure superseded by another window"),
@@ -179,7 +185,7 @@ export class BrowserViewProvisioning {
     lifecycle: NativeBrowserViewLifecycle,
     startedAt: number,
     record: InFlightEnsure,
-  ): Promise<BrowserViewNativeTabCapability> {
+  ): void {
     const key = {
       hostId: input.hostId,
       sessionId: input.sessionId,
@@ -191,7 +197,6 @@ export class BrowserViewProvisioning {
     } | null = null;
     const mount = this.attachRendererGuest(windowId, {
       partition: partitionForProfile(input.profile, input.sessionId),
-      identity: key,
       onAttached: async (guest) => {
         const identity: BrowserViewNativeIdentity = {
           key,
@@ -260,7 +265,6 @@ export class BrowserViewProvisioning {
         });
       },
     );
-    return lifecycle.provisioned;
   }
 
   /**
@@ -301,8 +305,9 @@ export class BrowserViewProvisioning {
     try {
       await this.debugSessions.ensure(entry).enableAfterCommit();
       const provisioned = this.resolveNativeTabProvisioned(entry);
-      // A renderer reload reuses the guest without causing navigation, so
-      // replay the state that the new renderer could not have observed.
+      // A renderer reload destroys the guest, so the availability check above
+      // re-ensures a dead one and a surviving entry only needs the state the
+      // new renderer could not have observed replayed.
       this.emitStatus(entry);
       return provisioned;
     } catch (error) {

@@ -3,10 +3,7 @@ import type { ComponentProps } from "react";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ElectronTabSurface } from "@/components/epic-canvas/renderers/agent-browser-tile";
-import {
-  startPersistentBrowserGuestHost,
-  stopPersistentBrowserGuestHost,
-} from "@/lib/browser-view/guest/persistent-browser-guest-host";
+import { startPersistentBrowserGuestHost } from "@/lib/browser-view/guest/persistent-browser-guest-host";
 import { FakeBrowserViewBridge } from "@/lib/browser-view/__tests__/fake-browser-view-bridge";
 import type {
   ElectronTabBinding,
@@ -283,13 +280,15 @@ function liveSessions(): BrowserSessionsState {
   };
 }
 
+let stopGuestHost: (() => void) | null = null;
+
 function mountGuestForTile(): void {
   const bridge = new FakeBrowserViewBridge();
-  startPersistentBrowserGuestHost(bridge, null);
+  stopGuestHost = startPersistentBrowserGuestHost(bridge, {
+    pointerDown: () => {},
+    focus: () => {},
+  });
   bridge.emitGuestMountRequested({
-    hostId: "host-1",
-    sessionId: "session-1",
-    tabId: "tab-1",
     registrationId: "registration-1",
     partition: "persist:primary",
   });
@@ -330,7 +329,8 @@ describe("ElectronTabSurface", () => {
 
   afterEach(() => {
     cleanup();
-    stopPersistentBrowserGuestHost();
+    stopGuestHost?.();
+    stopGuestHost = null;
   });
 
   it("attaches the accepted native incarnation before enabling tile chrome", async () => {
@@ -604,7 +604,8 @@ describe("ElectronTabSurface browser-scoped chords", () => {
 
   afterEach(() => {
     cleanup();
-    stopPersistentBrowserGuestHost();
+    stopGuestHost?.();
+    stopGuestHost = null;
   });
 
   it("closes THIS tile's browser tab on Cmd+W, then retires the tile", async () => {

@@ -26,7 +26,6 @@ export class BrowserViewPipCapture {
 
   async start(
     entry: BrowserViewEntry,
-    _windowId: string,
     input: PipCaptureStartInput,
     onFrame: (payload: PipCaptureIpcPayload) => void,
   ): Promise<boolean> {

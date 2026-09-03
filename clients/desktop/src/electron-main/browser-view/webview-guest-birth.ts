@@ -8,7 +8,6 @@ import {
 import type {
   BrowserViewGuestMountRequested,
   BrowserViewGuestReleaseRequested,
-  BrowserViewNativeTabKey,
 } from "@traycer-clients/shared/platform/browser-view";
 import { log } from "../app/logger";
 import {
@@ -26,10 +25,22 @@ const ATTACHMENT_GRANT_TTL_MS = 10_000;
 const BLANK_GUEST_SRC = "about:blank";
 const BLANK_GUEST_SRC_PREFIX = `${BLANK_GUEST_SRC}#`;
 
+/** Every `webPreferences` key `hardenGuestPreferences` assigns; the rest go. */
+const HARDENED_GUEST_PREFERENCE_KEYS = new Set([
+  "disablePopups",
+  "nodeIntegration",
+  "nodeIntegrationInSubFrames",
+  "sandbox",
+  "contextIsolation",
+  "webSecurity",
+  "allowRunningInsecureContent",
+  "webviewTag",
+  "partition",
+]);
+
 interface MintAttachmentGrantInput {
   readonly windowId: string;
   readonly partition: string;
-  readonly identity: BrowserViewNativeTabKey;
   readonly onAttached: (guest: WebContents) => Promise<void>;
   readonly onExpired:
     | ((release: BrowserViewGuestReleaseRequested) => void)
@@ -63,23 +74,6 @@ const births = new Map<string, GuestBirth>();
 const awaitingCreateByEmbedderId = new Map<number, string>();
 let watchingGuestCreation = false;
 
-/**
- * `mintAttachmentGrant` returns `{ mount, ready }` because the IPC send
- * needs the full renderer payload. Provisioning reads a flat
- * `{ registrationId, ready }`. Passing the mint result through as
- * `attachRendererGuest` leaves `registrationId` undefined, and the host
- * then drops `electronTabProvisioned`.
- */
-export function guestAttachResultFromMint(granted: {
-  readonly mount: { readonly registrationId: string };
-  readonly ready: Promise<void>;
-}): { readonly registrationId: string; readonly ready: Promise<void> } {
-  return {
-    registrationId: granted.mount.registrationId,
-    ready: granted.ready,
-  };
-}
-
 export function mintAttachmentGrant(input: MintAttachmentGrantInput): {
   readonly mount: BrowserViewGuestMountRequested;
   readonly ready: Promise<void>;
@@ -106,13 +100,7 @@ export function mintAttachmentGrant(input: MintAttachmentGrantInput): {
     disposeGate: null,
   });
   return {
-    mount: {
-      registrationId,
-      partition: input.partition,
-      hostId: input.identity.hostId,
-      sessionId: input.identity.sessionId,
-      tabId: input.identity.tabId,
-    },
+    mount: { registrationId, partition: input.partition },
     ready: settlement.promise,
   };
 }
@@ -222,29 +210,24 @@ function handleWillAttach(
   const partition = webPreferences.partition || params.partition || "";
   const birth = births.get(registrationId);
   if (birth === undefined) {
-    denyAttach(event, "no-grant", src, params.name ?? "");
+    denyAttach(event, "no-grant", src);
     return;
   }
   if (birth.windowId !== windowId) {
-    denyAttach(event, "window", src, params.name ?? "");
+    denyAttach(event, "window", src);
     return;
   }
   if (birth.guest !== null) {
-    denyAttach(event, "replay", src, params.name ?? "");
-    return;
-  }
-  if (!isBlankGuestSrc(src, registrationId)) {
-    denyAttach(event, "src", src, params.name ?? "");
-    dropBirth(registrationId);
+    denyAttach(event, "replay", src);
     return;
   }
   if (partition !== birth.partition) {
-    denyAttach(event, "partition", src, params.name ?? "");
+    denyAttach(event, "partition", src);
     dropBirth(registrationId);
     return;
   }
   if (awaitingCreateByEmbedderId.get(host.id) !== undefined) {
-    denyAttach(event, "busy", src, params.name ?? "");
+    denyAttach(event, "busy", src);
     return;
   }
   hardenGuestPreferences(webPreferences, birth.partition);
@@ -291,13 +274,21 @@ function finishReady(birth: GuestBirth): void {
   birth.settlement.resolve();
 }
 
+/**
+ * The renderer picks `<webview webpreferences="...">`, so every key main does
+ * not itself assign below is deleted first: a deny-list would miss whatever
+ * key Electron gains next.
+ */
 function hardenGuestPreferences(
   webPreferences: WebPreferences,
   partition: string,
 ): void {
   const prefs: WebPreferences & { disablePopups?: boolean } = webPreferences;
-  delete prefs.preload;
-  delete prefs.additionalArguments;
+  for (const key of Object.keys(prefs)) {
+    if (!HARDENED_GUEST_PREFERENCE_KEYS.has(key)) {
+      delete prefs[key as keyof typeof prefs];
+    }
+  }
   prefs.disablePopups = true;
   prefs.nodeIntegration = false;
   prefs.nodeIntegrationInSubFrames = false;
@@ -310,37 +301,21 @@ function hardenGuestPreferences(
 }
 
 /**
- * Electron 42.11's `<webview>` attribute map does not include `name`, so
- * `will-attach-webview` params never carry it. The renderer puts the
- * registration id in the `about:blank#…` fragment, which `src` does forward.
- * `params.name` is still accepted for a later Electron that restores it.
+ * The renderer puts the registration id in the `about:blank#…` fragment, the
+ * one attribute `will-attach-webview` params forward.
  */
 function registrationIdFromAttachParams(
   params: Record<string, string>,
 ): string {
-  const named = params.name ?? "";
-  if (named !== "") return named;
   const src = params.src ?? "";
   if (!src.startsWith(BLANK_GUEST_SRC_PREFIX)) return "";
   return src.slice(BLANK_GUEST_SRC_PREFIX.length);
 }
 
-function isBlankGuestSrc(src: string, registrationId: string): boolean {
-  return (
-    src === BLANK_GUEST_SRC || src === `${BLANK_GUEST_SRC}#${registrationId}`
-  );
-}
-
-function denyAttach(
-  event: Event,
-  reason: string,
-  src: string,
-  name: string,
-): void {
+function denyAttach(event: Event, reason: string, src: string): void {
   event.preventDefault();
   log.warn("[webview-birth] attach denied", {
     reason,
-    hasName: name !== "",
     blankSrc: src === BLANK_GUEST_SRC || src.startsWith(BLANK_GUEST_SRC_PREFIX),
   });
 }

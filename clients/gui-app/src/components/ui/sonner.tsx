@@ -11,9 +11,9 @@ import {
 import { ProgressToastIcon } from "@/components/ui/progress-toast-icon";
 import { cn } from "@/lib/utils";
 import {
-  listBrowserOverlayTiles,
-  subscribeBrowserOverlayLayout,
-} from "@/lib/browser-view/tiles/browser-overlay-coordinator";
+  listTileRects,
+  subscribeTileRects,
+} from "@/lib/browser-view/tiles/tile-rect-registry";
 import {
   DEFAULT_TOASTER_ANCHOR,
   pickToasterAnchor,
@@ -70,7 +70,7 @@ const Toaster = ({ ...props }: ToasterProps) => {
       pickToasterAnchor({
         toasterSize: toasterSizeRef.current,
         viewport: { width: window.innerWidth, height: window.innerHeight },
-        tileRects: listBrowserOverlayTiles().map((tile) => tile.rect),
+        tileRects: listTileRects(),
       }),
     );
   }, []);
@@ -96,10 +96,7 @@ const Toaster = ({ ...props }: ToasterProps) => {
     };
   }, []);
 
-  useEffect(
-    () => subscribeBrowserOverlayLayout(recomputeAnchor),
-    [recomputeAnchor],
-  );
+  useEffect(() => subscribeTileRects(recomputeAnchor), [recomputeAnchor]);
 
   return (
     <DismissableLayer.Branch

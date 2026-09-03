@@ -33,9 +33,11 @@ export interface BrowserViewNativeTabCapability extends BrowserViewNativeTabKey 
 
 /**
  * Main asks the trusted renderer to create a blank `<webview>` for this grant.
- * Identity and partition only - never seed or cookie material.
+ * The grant and its partition only - no tab identity, never seed or cookie
+ * material.
  */
-export interface BrowserViewGuestMountRequested extends BrowserViewNativeTabCapability {
+export interface BrowserViewGuestMountRequested {
+  readonly registrationId: string;
   readonly partition: string;
 }
 

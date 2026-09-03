@@ -4,10 +4,32 @@ import { afterEach, describe, expect, it } from "vitest";
 import { usePublishBrowserGuestTile } from "@/components/epic-canvas/browser-guest/use-publish-browser-guest-tile";
 import {
   startPersistentBrowserGuestHost,
-  stopPersistentBrowserGuestHost,
+  type BrowserGuestActivate,
 } from "@/lib/browser-view/guest/persistent-browser-guest-host";
+import { listTileRects } from "@/lib/browser-view/tiles/tile-rect-registry";
 import { FakeBrowserViewBridge } from "@/lib/browser-view/__tests__/fake-browser-view-bridge";
-import type { BrowserViewGuestMountRequested } from "@traycer-clients/shared/platform/browser-view";
+import type {
+  BrowserViewGuestMountRequested,
+  BrowserViewTileKey,
+} from "@traycer-clients/shared/platform/browser-view";
+
+const NOOP_ACTIVATE: BrowserGuestActivate = {
+  pointerDown: () => {},
+  focus: () => {},
+};
+
+const TILE_KEY: BrowserViewTileKey = {
+  viewTabId: "view-1",
+  paneId: "pane-1",
+  tileInstanceId: "tile-1",
+  pageSessionId: "page-1",
+};
+
+let stopHost: (() => void) | null = null;
+
+function startHost(bridge: FakeBrowserViewBridge): void {
+  stopHost = startPersistentBrowserGuestHost(bridge, NOOP_ACTIVATE);
+}
 
 const REGISTRATION_A = "reg-a";
 const REGISTRATION_B = "reg-b";
@@ -21,9 +43,6 @@ function mountRequest(
   partition: string,
 ): BrowserViewGuestMountRequested {
   return {
-    hostId: "host-1",
-    sessionId: "session-1",
-    tabId: "tab-1",
     registrationId,
     partition,
   };
@@ -49,6 +68,7 @@ function TileProbe(props: {
   readonly instanceId: string;
   readonly registrationId: string;
   readonly presented: boolean;
+  readonly tileKey: BrowserViewTileKey | null;
 }) {
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   usePublishBrowserGuestTile({
@@ -58,7 +78,7 @@ function TileProbe(props: {
     viewTabId: props.viewTabId,
     paneId: props.paneId,
     presented: props.presented,
-    tileKey: null,
+    tileKey: props.tileKey,
   });
   return (
     <div
@@ -72,15 +92,15 @@ afterEach(() => {
   // Probe unmount clears that owner's placement. Host stop must not be
   // what wipes the map.
   cleanup();
-  stopPersistentBrowserGuestHost();
+  stopHost?.();
+  stopHost = null;
 });
 
 describe("usePublishBrowserGuestTile", () => {
-  it("sets registration-id anchor-name on the tile surface and follows the presented flag", () => {
+  it("keeps the registration-id anchor-name on the tile surface across pane and presentation changes", () => {
     const bridge = new FakeBrowserViewBridge();
-    startPersistentBrowserGuestHost(bridge, null);
+    startHost(bridge);
     bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
-    expect(wrapperState(REGISTRATION_A)).toBe("unbound");
 
     const view = render(
       <TileProbe
@@ -89,28 +109,11 @@ describe("usePublishBrowserGuestTile", () => {
         instanceId="tile-1"
         registrationId={REGISTRATION_A}
         presented
+        tileKey={null}
       />,
     );
     const surface = screen.getByTestId(`tile-surface-${REGISTRATION_A}`);
     expect(surface.style.getPropertyValue("anchor-name")).toBe(ANCHOR_A);
-    expect(wrapperState(REGISTRATION_A)).toBe("presented");
-    const wrapper = queryWrapper(REGISTRATION_A);
-    if (wrapper === null) throw new Error("expected guest wrapper");
-    expect(wrapper.style.getPropertyValue("position-anchor")).toBe(ANCHOR_A);
-    expect(wrapper.style.position).toBe("fixed");
-
-    view.rerender(
-      <TileProbe
-        viewTabId="view-1"
-        paneId="pane-1"
-        instanceId="tile-1"
-        registrationId={REGISTRATION_A}
-        presented={false}
-      />,
-    );
-    expect(surface.style.getPropertyValue("anchor-name")).toBe(ANCHOR_A);
-    expect(wrapperState(REGISTRATION_A)).toBe("retained");
-    expect(wrapper).toBe(queryWrapper(REGISTRATION_A));
 
     view.rerender(
       <TileProbe
@@ -118,18 +121,37 @@ describe("usePublishBrowserGuestTile", () => {
         paneId="pane-2"
         instanceId="tile-1"
         registrationId={REGISTRATION_A}
-        presented
+        presented={false}
+        tileKey={null}
       />,
     );
     expect(surface.style.getPropertyValue("anchor-name")).toBe(ANCHOR_A);
-    expect(wrapperState(REGISTRATION_A)).toBe("presented");
-    expect(wrapper.style.getPropertyValue("position-anchor")).toBe(ANCHOR_A);
-    expect(queryWrapper(REGISTRATION_A)).toBe(wrapper);
+  });
+
+  it("registers the surface in the tile-rect registry and unregisters on unmount", () => {
+    const bridge = new FakeBrowserViewBridge();
+    startHost(bridge);
+    bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
+
+    const view = render(
+      <TileProbe
+        viewTabId="view-1"
+        paneId="pane-1"
+        instanceId="tile-1"
+        registrationId={REGISTRATION_A}
+        presented
+        tileKey={TILE_KEY}
+      />,
+    );
+    expect(listTileRects()).toHaveLength(1);
+
+    view.unmount();
+    expect(listTileRects()).toEqual([]);
   });
 
   it("clears only that owner's placement on unmount", () => {
     const bridge = new FakeBrowserViewBridge();
-    startPersistentBrowserGuestHost(bridge, null);
+    startHost(bridge);
     bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
     bridge.emitGuestMountRequested(mountRequest(REGISTRATION_B, PARTITION_B));
 
@@ -143,6 +165,7 @@ describe("usePublishBrowserGuestTile", () => {
               instanceId="tile-a"
               registrationId={REGISTRATION_A}
               presented
+              tileKey={null}
             />
           ) : null}
           <TileProbe
@@ -151,6 +174,7 @@ describe("usePublishBrowserGuestTile", () => {
             instanceId="tile-b"
             registrationId={REGISTRATION_B}
             presented
+            tileKey={null}
           />
         </>
       );

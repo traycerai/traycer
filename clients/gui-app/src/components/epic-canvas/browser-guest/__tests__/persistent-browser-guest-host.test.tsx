@@ -3,7 +3,6 @@ import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { PersistentBrowserGuestHost } from "@/components/epic-canvas/browser-guest/persistent-browser-guest-host";
 import { usePublishBrowserGuestTile } from "@/components/epic-canvas/browser-guest/use-publish-browser-guest-tile";
-import { stopPersistentBrowserGuestHost } from "@/lib/browser-view/guest/persistent-browser-guest-host";
 import { FakeBrowserViewBridge } from "@/lib/browser-view/__tests__/fake-browser-view-bridge";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { createFakeRunnerHost } from "../../../../../__tests__/create-fake-runner-host";
@@ -19,9 +18,6 @@ function mountRequest(
   partition: string,
 ): BrowserViewGuestMountRequested {
   return {
-    hostId: "host-1",
-    sessionId: "session-1",
-    tabId: "tab-1",
     registrationId,
     partition,
   };
@@ -72,10 +68,9 @@ function HostApp(props: { readonly bridge: FakeBrowserViewBridge }) {
 }
 
 afterEach(() => {
-  // Unmount publishers first so their owners clear placements. Host stop
-  // no longer wipes the map.
+  // Unmount tears the host down through the component's own disposer;
+  // publisher owners clear their placements on the same pass.
   cleanup();
-  stopPersistentBrowserGuestHost();
 });
 
 describe("PersistentBrowserGuestHost", () => {

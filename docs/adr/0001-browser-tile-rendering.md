@@ -1,7 +1,6 @@
 # ADR 0001 — Browser tile rendering architecture
 
 Status: accepted, 2026-09-03 (supersedes the 2026-09-02 native-view record).
-Companion: [0001-browser-tile-rendering-tickets.md](0001-browser-tile-rendering-tickets.md) cites historical requirement ids from the previous native-view record.
 Source spec: `specs/browser-overlay-coexistence/browser-overlay-coexistence.md` (internal repo).
 
 ## Context
@@ -22,6 +21,7 @@ Guest birth is still main-owned for security.
 The renderer receives identity and the granted partition only.
 Main mints a one-use window-scoped attach grant, admits the blank guest at `will-attach-webview` / `did-attach-webview`, seeds cookies and localStorage, installs policy/CDP, then navigates.
 `seedStorageState` never crosses into the renderer heap.
+A guest's lifetime is bounded by its birth window, so a host-owned tab whose birth window closes is re-created, never migrated.
 
 Placement is CSS, not bounds IPC.
 Each tile surface publishes `anchor-name: --traycer-bv-<registrationId>`.
@@ -31,7 +31,7 @@ The guest is never reparented; pane and tile movement change only the assigned a
 Presentation states:
 
 - selected and visible: anchored, opaque, interactive;
-- retained (mounted tile, not presented): `display: none`, inert;
+- retained (mounted tile, not presented): offscreen fixed viewport, `opacity: 0`, inert, still composited;
 - live but surface-less (agent/CDP/PiP): fixed offscreen viewport, opacity 0, inert, still composited.
 
 Electron documents `<webview>` as a tag Chromium may change.
@@ -64,7 +64,7 @@ Both planes use Chromium's network/session stack.
 | R2  | DOM overlays paint and receive input above the guest through ordinary stacking. There is no `capturePage` stand-in, paint-ack, or park/restore handshake for overlay coexistence.                                      |
 | R3  | Guest identity (`webContentsId` and DOM parent) survives pane reorder, split reversal, tab selection, and tile transfer. Only the CSS `position-anchor` assignment changes.                                            |
 | R4  | Focusing or clicking the guest activates its owning canvas pane. App and browser shortcuts target that pane.                                                                                                           |
-| R5  | A presented guest is interactive. A retained guest is inert and not displayed. An unbound paintable guest cannot appear or receive user input, but remains composited for CDP/capture.                                 |
+| R5  | A presented guest is interactive. A retained guest is inert, offscreen and still composited. An unbound paintable guest cannot appear or receive user input, but remains composited for CDP/capture.                   |
 | R6  | Main admits only a blank guest matching a pending one-use grant for the same window, partition, and registration. Privilege stripping, request gating, and seed secrecy are unchanged.                                 |
 | R7  | Host-local, headless, and remote JPEG/WebRTC selection plus `browser.sessions` protocol behavior remain unchanged.                                                                                                     |
 | R8  | Toast placement may prefer positions that avoid live tile rects. That is UX, not native occlusion.                                                                                                                     |

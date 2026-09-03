@@ -176,7 +176,6 @@ export interface BrowserViewWebContents {
  */
 export interface BrowserViewGuestAttachRequest {
   readonly partition: string;
-  readonly identity: BrowserViewNativeTabKey;
   readonly onAttached: (guest: BrowserViewWebContents) => Promise<void>;
 }
 

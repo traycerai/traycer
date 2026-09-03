@@ -15,7 +15,6 @@ import {
   clearBrowserGuestTilePlacement,
   setBrowserGuestTilePlacement,
   startPersistentBrowserGuestHost,
-  stopPersistentBrowserGuestHost,
 } from "@/lib/browser-view/guest/persistent-browser-guest-host";
 import { FakeBrowserViewBridge } from "@/lib/browser-view/__tests__/fake-browser-view-bridge";
 import type { BrowserViewGuestMountRequested } from "@traycer-clients/shared/platform/browser-view";
@@ -48,9 +47,6 @@ function mountRequest(
   partition: string,
 ): BrowserViewGuestMountRequested {
   return {
-    hostId: "host-1",
-    sessionId: "session-1",
-    tabId: "tab-1",
     registrationId,
     partition,
   };
@@ -75,6 +71,22 @@ function recordingActivate(): {
       },
     },
   };
+}
+
+const NOOP_ACTIVATE: BrowserGuestActivate = {
+  pointerDown: () => {},
+  focus: () => {},
+};
+
+let hostDisposers: Array<() => void> = [];
+
+function startHost(
+  bridge: FakeBrowserViewBridge,
+  activate: BrowserGuestActivate,
+): () => void {
+  const dispose = startPersistentBrowserGuestHost(bridge, activate);
+  hostDisposers.push(dispose);
+  return dispose;
 }
 
 function queryHost(): HTMLElement | null {
@@ -140,7 +152,8 @@ afterEach(() => {
     clearBrowserGuestTilePlacement(owned.owner, owned.registrationId);
   }
   ownedPlacements.length = 0;
-  stopPersistentBrowserGuestHost();
+  hostDisposers.forEach((dispose) => dispose());
+  hostDisposers = [];
 });
 
 describe("browserGuestCssAnchorName", () => {
@@ -154,10 +167,10 @@ describe("browserGuestCssAnchorName", () => {
 
 describe("persistent browser guest host", () => {
   describe("guest identity", () => {
-    it("keeps the same wrapper parent, webview node, name, and partition across placement and pane changes", () => {
+    it("keeps the same wrapper parent, webview node, and partition across placement and pane changes", () => {
       const bridge = new FakeBrowserViewBridge();
       const first = recordingActivate();
-      startPersistentBrowserGuestHost(bridge, first.activate);
+      startHost(bridge, first.activate);
       bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
 
       const created = guestNodes(REGISTRATION_A);
@@ -167,7 +180,6 @@ describe("persistent browser guest host", () => {
       expect(created.webview.getAttribute("src")).toBe(
         `about:blank#${REGISTRATION_A}`,
       );
-      expect(created.webview.getAttribute("name")).toBe(REGISTRATION_A);
       expect(created.webview.getAttribute("partition")).toBe(PARTITION_A);
       expect(created.webview.style.display).toBe("flex");
       expect(created.wrapper.getAttribute("data-browser-guest-state")).toBe(
@@ -191,16 +203,6 @@ describe("persistent browser guest host", () => {
         ANCHOR_A,
       );
 
-      // A second start while running only replaces activate handlers.
-      // React unmount / browserView replacement is stop-then-start and is
-      // covered by the component suite.
-      const second = recordingActivate();
-      startPersistentBrowserGuestHost(bridge, second.activate);
-      expect(queryHost()).toBe(created.host);
-      expect(
-        document.querySelectorAll(`[data-testid="${HOST_TEST_ID}"]`),
-      ).toHaveLength(1);
-
       setOwnedPlacement(owner, {
         registrationId: REGISTRATION_A,
         instanceId: INSTANCE_A,
@@ -213,7 +215,6 @@ describe("persistent browser guest host", () => {
       expect(moved.webview).toBe(created.webview);
       expect(moved.wrapper.parentNode).toBe(created.host);
       expect(moved.webview.parentNode).toBe(created.wrapper);
-      expect(moved.webview.getAttribute("name")).toBe(REGISTRATION_A);
       expect(moved.webview.getAttribute("partition")).toBe(PARTITION_A);
       expect(moved.wrapper.style.getPropertyValue("position-anchor")).toBe(
         ANCHOR_A,
@@ -223,12 +224,10 @@ describe("persistent browser guest host", () => {
       );
 
       dispatchPointerDown(moved.wrapper);
-      expect(first.pointerDowns).toEqual([]);
       expect(first.focuses).toEqual([]);
-      expect(second.pointerDowns).toHaveLength(1);
-      expect(second.focuses).toEqual([]);
-      expect(second.pointerDowns[0]?.viewTabId).toBe("view-1");
-      expect(second.pointerDowns[0]?.paneId).toBe("pane-2");
+      expect(first.pointerDowns).toHaveLength(1);
+      expect(first.pointerDowns[0]?.viewTabId).toBe("view-1");
+      expect(first.pointerDowns[0]?.paneId).toBe("pane-2");
 
       setOwnedPlacement(owner, {
         registrationId: REGISTRATION_A,
@@ -245,7 +244,7 @@ describe("persistent browser guest host", () => {
 
     it("applies a placement that arrived before the matching mount without recreating later", () => {
       const bridge = new FakeBrowserViewBridge();
-      startPersistentBrowserGuestHost(bridge, null);
+      startHost(bridge, NOOP_ACTIVATE);
       const owner = Symbol("tile");
       setOwnedPlacement(owner, {
         registrationId: REGISTRATION_A,
@@ -278,7 +277,7 @@ describe("persistent browser guest host", () => {
   describe("mount and release incarnation", () => {
     it("treats a duplicate mount of the same registrationId as a no-op", () => {
       const bridge = new FakeBrowserViewBridge();
-      startPersistentBrowserGuestHost(bridge, null);
+      startHost(bridge, NOOP_ACTIVATE);
       bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
       const first = guestNodes(REGISTRATION_A);
 
@@ -292,7 +291,7 @@ describe("persistent browser guest host", () => {
 
     it("releases only the matching registration and ignores a stale unknown id", () => {
       const bridge = new FakeBrowserViewBridge();
-      startPersistentBrowserGuestHost(bridge, null);
+      startHost(bridge, NOOP_ACTIVATE);
       bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
       bridge.emitGuestMountRequested(mountRequest(REGISTRATION_B, PARTITION_B));
       const guestA = guestNodes(REGISTRATION_A);
@@ -309,7 +308,6 @@ describe("persistent browser guest host", () => {
       const remaining = guestNodes(REGISTRATION_B);
       expect(remaining.wrapper).toBe(guestB.wrapper);
       expect(remaining.webview).toBe(guestB.webview);
-      expect(remaining.webview.getAttribute("name")).toBe(REGISTRATION_B);
       expect(remaining.webview.getAttribute("partition")).toBe(PARTITION_B);
 
       bridge.emitGuestReleaseRequested({ registrationId: REGISTRATION_A });
@@ -319,7 +317,7 @@ describe("persistent browser guest host", () => {
 
     it("blurs a focused presented guest through presentation-loss on matching release", () => {
       const bridge = new FakeBrowserViewBridge();
-      startPersistentBrowserGuestHost(bridge, null);
+      startHost(bridge, NOOP_ACTIVATE);
       bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
       const { webview } = guestNodes(REGISTRATION_A);
       const owner = Symbol("tile");
@@ -348,7 +346,7 @@ describe("persistent browser guest host", () => {
 
     it("keeps a live placement across stop and start so remount is presented", () => {
       const bridge = new FakeBrowserViewBridge();
-      startPersistentBrowserGuestHost(bridge, null);
+      const stop = startHost(bridge, NOOP_ACTIVATE);
       const owner = Symbol("tile");
       setOwnedPlacement(owner, {
         registrationId: REGISTRATION_A,
@@ -363,11 +361,11 @@ describe("persistent browser guest host", () => {
         "presented",
       );
 
-      stopPersistentBrowserGuestHost();
+      stop();
       expect(queryHost()).toBeNull();
       expect(queryWrapper(REGISTRATION_A)).toBeNull();
 
-      startPersistentBrowserGuestHost(bridge, null);
+      startHost(bridge, NOOP_ACTIVATE);
       bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
       const remounted = guestNodes(REGISTRATION_A);
       expect(remounted.wrapper).not.toBe(first.wrapper);
@@ -375,12 +373,26 @@ describe("persistent browser guest host", () => {
         "presented",
       );
     });
+
+    it("ignores a superseded host's disposer", () => {
+      const bridge = new FakeBrowserViewBridge();
+      const stale = startHost(bridge, NOOP_ACTIVATE);
+      // The superseded host element is unreachable once replaced; drop it so
+      // `queryHost` names exactly the live one.
+      queryHost()?.remove();
+      startHost(bridge, NOOP_ACTIVATE);
+      const live = queryHost();
+
+      stale();
+
+      expect(queryHost()).toBe(live);
+    });
   });
 
   describe("presentation states", () => {
     it("maps presented, retained, and unbound onto visibility and interactivity", () => {
       const bridge = new FakeBrowserViewBridge();
-      startPersistentBrowserGuestHost(bridge, null);
+      startHost(bridge, NOOP_ACTIVATE);
       bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
       const { wrapper } = guestNodes(REGISTRATION_A);
 
@@ -434,7 +446,11 @@ describe("persistent browser guest host", () => {
         presented: false,
       });
       expect(wrapper.getAttribute("data-browser-guest-state")).toBe("retained");
-      expect(wrapper.style.display).toBe("none");
+      // Retained keeps the unbound offscreen posture: a `display: none` guest
+      // stops compositing, and CDP/PiP frames go blank with it.
+      expect(wrapper.style.display).toBe("block");
+      expect(wrapper.style.position).toBe("fixed");
+      expect(wrapper.style.insetInlineStart).toBe("-10000px");
       expect(wrapper.style.pointerEvents).toBe("none");
       expect(wrapper.style.opacity).toBe("0");
       expect(wrapper.style.getPropertyValue("position-anchor")).toBe("");
@@ -459,7 +475,7 @@ describe("persistent browser guest host", () => {
 
     it("blurs an active guest through presentation-loss before leaving presented", () => {
       const bridge = new FakeBrowserViewBridge();
-      startPersistentBrowserGuestHost(bridge, null);
+      startHost(bridge, NOOP_ACTIVATE);
       bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
       const { wrapper, webview } = guestNodes(REGISTRATION_A);
       const owner = Symbol("tile");
@@ -498,7 +514,7 @@ describe("persistent browser guest host", () => {
     it("routes pointerdown only to pointerDown and capture-phase focus only to focus while presented", () => {
       const bridge = new FakeBrowserViewBridge();
       const recorded = recordingActivate();
-      startPersistentBrowserGuestHost(bridge, recorded.activate);
+      startHost(bridge, recorded.activate);
       bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
       const { wrapper, webview } = guestNodes(REGISTRATION_A);
 
@@ -542,25 +558,6 @@ describe("persistent browser guest host", () => {
       expect(recorded.focuses[0]?.paneId).toBe("pane-1");
       expect(recorded.focuses[0]?.event.scope).toBe(wrapper);
       expect(recorded.focuses[0]?.event.target).toBe(webview);
-    });
-
-    it("does not throw when started without an activate callback", () => {
-      const bridge = new FakeBrowserViewBridge();
-      startPersistentBrowserGuestHost(bridge, null);
-      bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
-      const owner = Symbol("tile");
-      setOwnedPlacement(owner, {
-        registrationId: REGISTRATION_A,
-        instanceId: INSTANCE_A,
-        viewTabId: "view-1",
-        paneId: "pane-1",
-        presented: true,
-      });
-      const { wrapper, webview } = guestNodes(REGISTRATION_A);
-      expect(() => {
-        dispatchPointerDown(wrapper);
-        dispatchFocus(webview);
-      }).not.toThrow();
     });
   });
 });

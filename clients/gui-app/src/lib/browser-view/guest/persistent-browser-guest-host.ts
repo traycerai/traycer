@@ -44,9 +44,19 @@ export function browserGuestCssAnchorName(registrationId: string): string {
 }
 
 const BLANK_GUEST_SRC = "about:blank";
-const UNBOUND_VIEWPORT_WIDTH_PX = 1280;
-const UNBOUND_VIEWPORT_HEIGHT_PX = 800;
-const UNBOUND_OFFSET_PX = 10_000;
+const OFFSCREEN_VIEWPORT_WIDTH_PX = 1280;
+const OFFSCREEN_VIEWPORT_HEIGHT_PX = 800;
+const OFFSCREEN_OFFSET_PX = 10_000;
+const OFFSCREEN_CSS_TEXT = [
+  "position: fixed",
+  `inset-inline-start: -${OFFSCREEN_OFFSET_PX}px`,
+  "inset-block-start: 0",
+  `width: ${OFFSCREEN_VIEWPORT_WIDTH_PX}px`,
+  `height: ${OFFSCREEN_VIEWPORT_HEIGHT_PX}px`,
+  "opacity: 0",
+  "pointer-events: none",
+  "display: block",
+].join(";");
 
 interface PlacementRecord {
   readonly owner: symbol;
@@ -60,8 +70,6 @@ interface GuestRecord {
 }
 
 interface RunningHost {
-  readonly disposeMount: () => void;
-  readonly disposeRelease: () => void;
   readonly hostElement: HTMLElement;
 }
 
@@ -70,42 +78,30 @@ const placements = new Map<string, PlacementRecord>();
 let running: RunningHost | null = null;
 let onActivate: BrowserGuestActivate | null = null;
 
-/**
- * Arm the window-level host. Idempotent while already running: later
- * calls only replace the activate callbacks. The React owner returns
- * `stopPersistentBrowserGuestHost` from its layout effect so unmount
- * and bridge replacement tear down and resubscribe.
- */
+/** Arm the window-level host; the returned disposer tears it down. */
 export function startPersistentBrowserGuestHost(
   bridge: BrowserViewBridge,
-  nextOnActivate: BrowserGuestActivate | null,
-): void {
+  nextOnActivate: BrowserGuestActivate,
+): () => void {
   onActivate = nextOnActivate;
-  if (running !== null) return;
-  const body = document.body;
   const hostElement = createHostElement();
-  body.appendChild(hostElement);
+  document.body.appendChild(hostElement);
   const mountSub = bridge.onGuestMountRequested(handleMount);
   const releaseSub = bridge.onGuestReleaseRequested(handleRelease);
-  running = {
-    disposeMount: mountSub.dispose,
-    disposeRelease: releaseSub.dispose,
-    hostElement,
+  const host: RunningHost = { hostElement };
+  running = host;
+  return () => {
+    if (running !== host) return;
+    running = null;
+    onActivate = null;
+    mountSub.dispose();
+    releaseSub.dispose();
+    for (const registrationId of [...guests.keys()]) {
+      removeGuest(registrationId);
+    }
+    hostElement.remove();
+    // Live tile publishers still own `placements`; do not clear them here.
   };
-}
-
-export function stopPersistentBrowserGuestHost(): void {
-  const current = running;
-  running = null;
-  onActivate = null;
-  if (current === null) return;
-  current.disposeMount();
-  current.disposeRelease();
-  for (const registrationId of [...guests.keys()]) {
-    removeGuest(registrationId);
-  }
-  current.hostElement.remove();
-  // Live tile publishers still own `placements`; do not clear them here.
 }
 
 export function setBrowserGuestTilePlacement(
@@ -211,13 +207,10 @@ function createGuestWebview(
   partition: string,
 ): HTMLElement {
   const webview = document.createElement("webview");
-  // Electron 42.11 does not forward the `name` attribute to
-  // `will-attach-webview`. The fragment is the grant correlation main
-  // actually receives (`params.src`). Keep `name` for a later Electron
-  // that restores it.
+  // The fragment is the grant correlation main actually receives
+  // (`params.src`).
   webview.setAttribute("src", `${BLANK_GUEST_SRC}#${registrationId}`);
   webview.setAttribute("partition", partition);
-  webview.setAttribute("name", registrationId);
   webview.style.display = "flex";
   webview.style.width = "100%";
   webview.style.height = "100%";
@@ -236,15 +229,26 @@ function applyGuestPresentation(
   ) {
     relinquishGuestFocus(guest);
   }
-  if (placement === null) {
-    applyUnbound(guest.wrapper);
+  if (placement !== null && placement.presented) {
+    applyGuestPosture(
+      guest.wrapper,
+      "presented",
+      presentedCssText(guest.registrationId),
+      placement,
+    );
     return;
   }
-  if (placement.presented) {
-    applyPresented(guest, placement);
-    return;
-  }
-  applyRetained(guest.wrapper);
+  // Independently composited <webview> can leak under visibility:hidden, and
+  // display:none stops it compositing altogether (CDP/PiP frames go blank).
+  // Opacity makes one compositor group; the offscreen inset keeps it out of
+  // the window even if that group still produces pixels. Retained and unbound
+  // share that posture - only the state attribute differs.
+  applyGuestPosture(
+    guest.wrapper,
+    placement === null ? "unbound" : "retained",
+    OFFSCREEN_CSS_TEXT,
+    null,
+  );
 }
 
 function relinquishGuestFocus(guest: GuestRecord): void {
@@ -257,13 +261,9 @@ function relinquishGuestFocus(guest: GuestRecord): void {
   });
 }
 
-function applyPresented(
-  guest: GuestRecord,
-  placement: BrowserGuestTilePlacement,
-): void {
-  const anchorName = browserGuestCssAnchorName(guest.registrationId);
-  const { wrapper } = guest;
-  wrapper.style.cssText = [
+function presentedCssText(registrationId: string): string {
+  const anchorName = browserGuestCssAnchorName(registrationId);
+  return [
     "position: fixed",
     `position-anchor: ${anchorName}`,
     `top: anchor(${anchorName} top)`,
@@ -274,40 +274,26 @@ function applyPresented(
     "pointer-events: auto",
     "display: block",
   ].join(";");
-  wrapper.inert = false;
+}
+
+function applyGuestPosture(
+  wrapper: HTMLElement,
+  state: "presented" | "retained" | "unbound",
+  cssText: string,
+  ownership: BrowserGuestTilePlacement | null,
+): void {
+  wrapper.style.cssText = cssText;
+  wrapper.inert = ownership === null;
+  wrapper.setAttribute(BROWSER_GUEST_STATE_ATTRIBUTE, state);
+  if (ownership === null) {
+    wrapper.setAttribute("aria-hidden", "true");
+    clearHostedTileOwnership(wrapper);
+    return;
+  }
   wrapper.removeAttribute("aria-hidden");
-  wrapper.setAttribute(BROWSER_GUEST_STATE_ATTRIBUTE, "presented");
-  wrapper.setAttribute(HOSTED_TILE_INSTANCE_ID_ATTRIBUTE, placement.instanceId);
-  wrapper.setAttribute(HOSTED_TILE_PANE_ID_ATTRIBUTE, placement.paneId);
-  wrapper.setAttribute(HOSTED_TILE_VIEW_TAB_ID_ATTRIBUTE, placement.viewTabId);
-}
-
-function applyRetained(wrapper: HTMLElement): void {
-  wrapper.style.cssText = "display: none; pointer-events: none; opacity: 0";
-  wrapper.inert = true;
-  wrapper.setAttribute("aria-hidden", "true");
-  wrapper.setAttribute(BROWSER_GUEST_STATE_ATTRIBUTE, "retained");
-  clearHostedTileOwnership(wrapper);
-}
-
-function applyUnbound(wrapper: HTMLElement): void {
-  // Independently composited <webview> can leak under visibility:hidden.
-  // Opacity makes one compositor group; the offscreen inset keeps it
-  // out of the window even if that group still produces pixels.
-  wrapper.style.cssText = [
-    "position: fixed",
-    `inset-inline-start: -${UNBOUND_OFFSET_PX}px`,
-    "inset-block-start: 0",
-    `width: ${UNBOUND_VIEWPORT_WIDTH_PX}px`,
-    `height: ${UNBOUND_VIEWPORT_HEIGHT_PX}px`,
-    "opacity: 0",
-    "pointer-events: none",
-    "display: block",
-  ].join(";");
-  wrapper.inert = true;
-  wrapper.setAttribute("aria-hidden", "true");
-  wrapper.setAttribute(BROWSER_GUEST_STATE_ATTRIBUTE, "unbound");
-  clearHostedTileOwnership(wrapper);
+  wrapper.setAttribute(HOSTED_TILE_INSTANCE_ID_ATTRIBUTE, ownership.instanceId);
+  wrapper.setAttribute(HOSTED_TILE_PANE_ID_ATTRIBUTE, ownership.paneId);
+  wrapper.setAttribute(HOSTED_TILE_VIEW_TAB_ID_ATTRIBUTE, ownership.viewTabId);
 }
 
 function clearHostedTileOwnership(wrapper: HTMLElement): void {
