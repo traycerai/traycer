@@ -2054,6 +2054,7 @@ export class AuthService {
     }
     // Invalidate any sign-in finalization that already passed its epoch fence
     // and is now awaiting its token save - the sign-out wins.
+    const priorStatus = useAuthStore.getState().status;
     this.identityGeneration += 1;
     // Stop the proactive refresh timer up front so a timer firing during the
     // delete can't race a `rotate` against the credential removal; the
@@ -2081,6 +2082,19 @@ export class AuthService {
         "[auth] sign-out could not delete the credentials file; staying signed in",
         { error: describeLogError(deleteError) },
       );
+      // Restore what the sign-out stood down, BY THE STATE IT STOOD DOWN
+      // FROM. A verified session had the proactive scheduler; an unverified
+      // one had the stored-session recovery loop (re-armed from the floor -
+      // the settle above reset it) unless authn's verdict was terminal, in
+      // which case nothing was running and nothing may start: starting the
+      // scheduler there would spend the refused refresh credential again at
+      // expiry or on wake, the exact spend `unverified` exists to prevent.
+      if (priorStatus === "unverified") {
+        if (!this.sessionRecoveryTerminallyRejected) {
+          this.scheduleSessionRecovery("sign-out-delete-failed");
+        }
+        return;
+      }
       // The session is still live - re-arm the proactive refresh we paused.
       this.refreshScheduler.start();
       return;
@@ -4738,6 +4752,19 @@ export class AuthService {
     readonly token: string;
     readonly user: StoredCredentials["user"];
   }): boolean {
+    // THE TERMINAL LATCH, set here because this is the terminal arm: every
+    // live-path intake that reaches a refresh-rejected / account-rejected
+    // verdict demotes through this method. The stored-session paths set the
+    // latch beside their own `applyUnverifiedSession`; without it here, the
+    // next `online` or resume event passed `nudgeSessionRecoveryOnWake`'s
+    // guard and re-spent the credential authn had just refused - and, with
+    // the access token still inside its TTL after a PROACTIVE rejection,
+    // that recovery could promote the session back to `signed-in` and restart
+    // the scheduler, undoing the server's verdict on a network event. Any
+    // recovery loop already running is stood down for the same reason.
+    // `applySignedIn` clears the latch when authn accepts something again.
+    this.sessionRecoveryTerminallyRejected = true;
+    this.settleSessionRecovery("terminal-verdict");
     // Read BEFORE the projection commits: this is the only moment the two
     // states are distinguishable, and only a session that HELD a verdict is
     // losing one.

@@ -64,6 +64,7 @@ const notificationFeedModeRef = vi.hoisted(() => ({
 
 vi.mock("@/lib/notifications/notification-feed-mode", () => ({
   useNotificationFeedMode: () => notificationFeedModeRef.value,
+  useNotificationFeedModeSettling: () => false,
 }));
 
 const activeHostIdRef = vi.hoisted(() => ({

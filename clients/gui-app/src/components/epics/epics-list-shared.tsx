@@ -169,7 +169,7 @@ export function EpicsListHostRequiresCloudToList(): ReactNode {
       <p className="max-w-full">
         It&apos;s running a version that can&apos;t list Epics from this device
         alone, and your sign-in couldn&apos;t be confirmed. Update the host, or
-        reconnect your account, to see them.
+        sign in again, to see them.
       </p>
     </div>
   );

@@ -158,6 +158,7 @@ vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => {
 
 vi.mock("@/lib/notifications/notification-feed-mode", () => ({
   useNotificationFeedMode: () => notificationFeedMode.value,
+  useNotificationFeedModeSettling: () => false,
 }));
 
 /**

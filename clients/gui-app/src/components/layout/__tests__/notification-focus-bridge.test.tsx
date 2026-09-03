@@ -89,6 +89,7 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
 
 vi.mock("@/lib/notifications/notification-feed-mode", () => ({
   useNotificationFeedMode: () => notificationFeedModeRef.value,
+  useNotificationFeedModeSettling: () => false,
 }));
 
 import { NotificationFocusBridge } from "@/components/layout/bridges/notification-focus-bridge";

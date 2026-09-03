@@ -328,7 +328,7 @@ describe("useEpicSetPinned", () => {
       "epic-1": false,
     });
     expect(toast.error).toHaveBeenCalledWith(
-      "Your sign-in couldn't be confirmed, so cloud changes are paused. Pinning will work again once it reconnects.",
+      "Your sign-in couldn't be confirmed, so cloud changes are paused. Pinning will work again once your sign-in is confirmed.",
     );
   });
 

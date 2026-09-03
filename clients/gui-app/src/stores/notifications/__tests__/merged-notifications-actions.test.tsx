@@ -45,6 +45,10 @@ const hostRequestMock = vi.hoisted(() => vi.fn());
 const notificationFeedMode = vi.hoisted<{ value: "local" | "cloud" }>(() => ({
   value: "local",
 }));
+/** The provider's settling hold: a held `cloud` whose host is re-negotiating. */
+const notificationFeedModeSettling = vi.hoisted<{ value: boolean }>(() => ({
+  value: false,
+}));
 
 interface StubHostClient {
   readonly request: typeof hostRequestMock;
@@ -81,6 +85,7 @@ vi.mock("@/lib/host-error-toast", async (importActual) => {
 
 vi.mock("@/lib/notifications/notification-feed-mode", () => ({
   useNotificationFeedMode: () => notificationFeedMode.value,
+  useNotificationFeedModeSettling: () => notificationFeedModeSettling.value,
 }));
 
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
@@ -367,6 +372,7 @@ describe("useMergedNotificationsActions markAllAsRead composition", () => {
     hostRequestMock.mockImplementation(defaultHostRequest);
     hostBindingState.current = null;
     notificationFeedMode.value = "local";
+    notificationFeedModeSettling.value = false;
     // The cloud-feed mutations re-read the live verdict at dispatch; a
     // `cloud` feed mode below stands for a session that holds one.
     signInForActions();
@@ -388,6 +394,7 @@ describe("useMergedNotificationsActions markAllAsRead composition", () => {
     cleanup();
     hostBindingState.current = null;
     notificationFeedMode.value = "local";
+    notificationFeedModeSettling.value = false;
     useAuthStore.getState().setSignedOut();
     __resetHostNotificationsStoreForTests();
     useCloudNotificationsStore.getState().reset();
@@ -448,6 +455,49 @@ describe("useMergedNotificationsActions markAllAsRead composition", () => {
     }
   });
 
+  it("holds mark-all and pagination while a held cloud mode's host is re-negotiating, then dispatches", async () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    notificationFeedModeSettling.value = true;
+    applyHostSnapshot([hostPrompt("prompt-a", 200, null)], {
+      unreadCount: 1,
+      attentionCount: 1,
+    });
+
+    const { result, rerender } = renderHook(
+      () => useMergedNotificationsActions(),
+      { wrapper: createWrapper() },
+    );
+
+    // The host `markAllRead` would carry `home: "local"` to a host that may
+    // come back below the floor and strip it; the gesture waits instead.
+    act(() => {
+      result.current.markAllAsRead();
+    });
+    expect(
+      hostRequestMock.mock.calls.some(
+        (call) => call[0] === "host.notifications.markAllRead",
+      ),
+    ).toBe(false);
+    expect(result.current.canLoadMoreHost).toBe(false);
+    expect(result.current.canLoadMoreUnreadRecent).toBe(false);
+
+    // Non-vacuity: the handshake landed and reconfirmed `cloud`; the same
+    // gesture now dispatches with the selector.
+    notificationFeedModeSettling.value = false;
+    rerender();
+    act(() => {
+      result.current.markAllAsRead();
+    });
+    await waitFor(() => {
+      expect(
+        hostRequestMock.mock.calls.find(
+          (call) => call[0] === "host.notifications.markAllRead",
+        )?.[1],
+      ).toMatchObject({ home: "local" });
+    });
+  });
+
   it("does not need a resolve call when no Attention rows exist", async () => {
     bindHostClient();
     applyHostSnapshot([hostDone("done-only", 100, null)], {
@@ -481,6 +531,7 @@ describe("useMergedNotificationsActions indicator invalidation", () => {
     hostRequestMock.mockImplementation(defaultHostRequest);
     hostBindingState.current = null;
     notificationFeedMode.value = "local";
+    notificationFeedModeSettling.value = false;
     // The cloud-feed mutations re-read the live verdict at dispatch; a
     // `cloud` feed mode below stands for a session that holds one.
     signInForActions();
@@ -500,6 +551,7 @@ describe("useMergedNotificationsActions indicator invalidation", () => {
     cleanup();
     hostBindingState.current = null;
     notificationFeedMode.value = "local";
+    notificationFeedModeSettling.value = false;
     useAuthStore.getState().setSignedOut();
     __resetHostNotificationsStoreForTests();
     useCloudNotificationsStore.getState().reset();

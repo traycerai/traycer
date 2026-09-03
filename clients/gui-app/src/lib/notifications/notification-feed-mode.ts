@@ -10,7 +10,10 @@ import {
   useStreamMethodSchemaVersionFor,
   useStreamMethodSupportFor,
 } from "@/lib/host/stream-runtime-context";
-import { NotificationFeedModeContext } from "@/lib/notifications/notification-feed-mode-context";
+import {
+  NotificationFeedModeContext,
+  NotificationFeedModeSettlingContext,
+} from "@/lib/notifications/notification-feed-mode-context";
 
 export type NotificationFeedMode = "local" | "cloud" | "upgrade-required";
 
@@ -78,11 +81,35 @@ export function useNotificationFeedMode(): NotificationFeedMode {
   return use(NotificationFeedModeContext);
 }
 
+/** See `NotificationFeedModeSettlingContext`. */
+export function useNotificationFeedModeSettling(): boolean {
+  return use(NotificationFeedModeSettlingContext);
+}
+
 interface HeldNotificationFeedMode {
   readonly servingHostId: string | null;
   readonly negotiated: NotificationFeedMode;
   readonly cloudFeedSupport: StreamMethodSupport | null;
   readonly settled: NotificationFeedMode;
+  readonly settling: boolean;
+}
+
+export interface HeldNotificationFeedModeResult {
+  /** The mode consumers render and decide on. */
+  readonly mode: NotificationFeedMode;
+  /**
+   * `true` while `mode` is a held `cloud` and the same host's handshake has
+   * not landed. The hold keeps the rows and the lanes; it must NOT keep
+   * sending the `home: "local"` partition selector, because the host coming
+   * back can be a ROLLBACK to a release below the five-method floor - one
+   * that negotiates lower per-method versions and strips the selector, so a
+   * `list` merges whole-origin rows into the cloud lane and a mark-all reaches
+   * cloud-home rows the user never saw. So partition-dependent unary calls
+   * (`useMergedNotificationsActions`' pagination and mark-all, the mixed-mode
+   * indicator queries) wait for this to clear; the new handshake either
+   * reconfirms `cloud` or settles to `local`, and both resume them.
+   */
+  readonly settling: boolean;
 }
 
 /**
@@ -123,12 +150,13 @@ export function useHeldNotificationFeedMode(
   negotiated: NotificationFeedMode,
   cloudFeedSupport: StreamMethodSupport | null,
   servingHostId: string | null,
-): NotificationFeedMode {
+): HeldNotificationFeedModeResult {
   const [held, setHeld] = useState<HeldNotificationFeedMode>({
     servingHostId,
     negotiated,
     cloudFeedSupport,
     settled: negotiated,
+    settling: false,
   });
   if (
     held.servingHostId !== servingHostId ||
@@ -136,12 +164,14 @@ export function useHeldNotificationFeedMode(
     held.cloudFeedSupport !== cloudFeedSupport
   ) {
     const sameHost = held.servingHostId === servingHostId;
-    const settled =
-      sameHost && cloudFeedSupport === "unknown" ? held.settled : negotiated;
-    setHeld({ servingHostId, negotiated, cloudFeedSupport, settled });
-    return settled;
+    const holding = sameHost && cloudFeedSupport === "unknown";
+    const settled = holding ? held.settled : negotiated;
+    // Only a held `cloud` is a liability: a held `local` sends no selector.
+    const settling = holding && settled === "cloud";
+    setHeld({ servingHostId, negotiated, cloudFeedSupport, settled, settling });
+    return { mode: settled, settling };
   }
-  return held.settled;
+  return { mode: held.settled, settling: held.settling };
 }
 
 /**

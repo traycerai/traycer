@@ -1,7 +1,10 @@
 import { useContext, useMemo, type ReactNode } from "react";
 import type { HostNotificationsIndicatorStateResponse } from "@traycer/protocol/host/notifications/contracts";
 import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
-import { useNotificationFeedMode } from "@/lib/notifications/notification-feed-mode";
+import {
+  useNotificationFeedMode,
+  useNotificationFeedModeSettling,
+} from "@/lib/notifications/notification-feed-mode";
 import { NotificationIndicatorsContext } from "@/components/notifications/notification-indicator-context";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 import type { ChatIndicatorHostScope } from "@/lib/notifications/chat-indicator-scopes";
@@ -153,13 +156,16 @@ function ChatIndicatorHostLayer(props: {
   readonly isCloud: boolean;
   readonly children: ReactNode;
 }): ReactNode {
+  // Same wait as `useNotificationIndicators`: a held `cloud` mode whose host
+  // is re-negotiating must not ask for the `home: local` partition.
+  const feedModeSettling = useNotificationFeedModeSettling();
   const host = useHostNotificationIndicators({
     hostId: props.hostId,
     epicIds: NO_EPIC_IDS,
     chatIds: props.chatIds,
     chatEpicIds: props.chatEpicIds,
     home: props.isCloud ? "local" : undefined,
-    enabled: props.chatIds.length > 0,
+    enabled: props.chatIds.length > 0 && !(props.isCloud && feedModeSettling),
   });
   const inherited = useContext(NotificationIndicatorsContext);
   const merged: SurfaceNotificationIndicators = useMemo(

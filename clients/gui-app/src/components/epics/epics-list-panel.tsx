@@ -145,9 +145,11 @@ const PRESERVED_ORPHAN_DELETE_TOOLTIP =
   "This epic's cloud copy was already deleted. Only this device's edits remain, so there is nothing left to delete.";
 // States the CONDITION rather than predicting a reconnect, for the same reason
 // the pin tooltip does: the session may be unverified because authn refused the
-// credential, which no amount of waiting fixes.
+// credential, which no amount of waiting fixes - only signing in again does.
+// "Once your sign-in is confirmed" covers both the transient recovery and
+// the re-sign-in without promising either.
 const UNVERIFIED_SESSION_DELETE_TOOLTIP =
-  "Your sign-in couldn't be confirmed, so cloud changes are paused. Deleting this task will work again once it reconnects.";
+  "Your sign-in couldn't be confirmed, so cloud changes are paused. Deleting this task will work again once your sign-in is confirmed.";
 const HISTORY_REFRESH_TIMEOUT_MS = 10_000;
 
 export type EpicsListPanelVariant = "page" | "embedded" | "picker";

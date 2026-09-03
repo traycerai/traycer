@@ -52,6 +52,7 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
 
 vi.mock("@/lib/notifications/notification-feed-mode", () => ({
   useNotificationFeedMode: () => feedMode.value,
+  useNotificationFeedModeSettling: () => false,
 }));
 
 vi.mock("sonner", () => ({

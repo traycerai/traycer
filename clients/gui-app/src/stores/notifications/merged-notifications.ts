@@ -63,7 +63,10 @@ import {
   useCloudNotificationsStore,
 } from "@/stores/notifications/cloud-notifications-store";
 import { requestCloudEntityRead } from "@/lib/notifications/cloud-entity-read-driver";
-import { useNotificationFeedMode } from "@/lib/notifications/notification-feed-mode";
+import {
+  useNotificationFeedMode,
+  useNotificationFeedModeSettling,
+} from "@/lib/notifications/notification-feed-mode";
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
 import {
   useNotificationEntries,
@@ -724,6 +727,9 @@ function cloudAuthorizedNow(): boolean {
 
 export function useMergedNotificationsActions(): MergedNotificationsActions {
   const feedMode = useNotificationFeedMode();
+  // See `HeldNotificationFeedModeResult.settling`: partition-dependent unary
+  // calls wait while a held `cloud` host is re-negotiating.
+  const feedModeSettling = useNotificationFeedModeSettling();
   // Bound to the host that OWNS the notification streams, not the app-wide
   // active host. Every mutation below addresses a row that came from that
   // host's origin store (or its relayed cloud lane), so routing them anywhere
@@ -1201,6 +1207,11 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         globalMarkAsRead(parsed.sourceId);
       },
       markAllAsRead: () => {
+        // A held `cloud` whose host is re-negotiating: the host `markAllRead`
+        // below would carry `home: "local"` to a host that may come back
+        // below the floor and strip it, reaching cloud-home rows. The whole
+        // gesture waits rather than half of it landing.
+        if (feedModeSettling) return;
         if (feedMode === "cloud") {
           // Renderer-local failures never replicate into the cloud feed, so
           // they (and the collaboration entries in the Notifications room)
@@ -1368,23 +1379,25 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         cloudClearAll.mutate({ observedVersion: cloudVersion });
       },
       loadMoreHost: () => {
-        if (feedMode === "upgrade-required") return;
+        if (feedMode === "upgrade-required" || feedModeSettling) return;
         if (hostNextCursor === null || client === null) return;
         loadMoreHost.mutate({ cursor: hostNextCursor });
       },
       canLoadMoreHost:
         feedMode !== "upgrade-required" &&
+        !feedModeSettling &&
         hostNextCursor !== null &&
         client !== null,
       isLoadingMoreHost: loadMoreHost.isPending,
       hasHostLoadError,
       loadMoreAttention: () => {
-        if (feedMode === "upgrade-required") return;
+        if (feedMode === "upgrade-required" || feedModeSettling) return;
         if (hostAttentionCursor === null || client === null) return;
         loadMoreAttention.mutate({ cursor: hostAttentionCursor });
       },
       canLoadMoreAttention:
         feedMode !== "upgrade-required" &&
+        !feedModeSettling &&
         hostAttentionCursor !== null &&
         client !== null,
       isLoadingMoreAttention: loadMoreAttention.isPending,
@@ -1396,12 +1409,13 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       // it: only once a page has actually loaded does a `null` cursor mean
       // genuine exhaustion.
       loadMoreUnreadRecent: () => {
-        if (feedMode === "upgrade-required") return;
+        if (feedMode === "upgrade-required" || feedModeSettling) return;
         if (client === null) return;
         loadMoreUnreadRecent.mutate({ cursor: hostUnreadRecentCursor });
       },
       canLoadMoreUnreadRecent:
         feedMode !== "upgrade-required" &&
+        !feedModeSettling &&
         client !== null &&
         (hostUnreadRecentCursor !== null || !unreadRecentHasLoadedOnce),
       isLoadingMoreUnreadRecent: loadMoreUnreadRecent.isPending,
@@ -1430,6 +1444,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       client,
       notificationHostId,
       feedMode,
+      feedModeSettling,
       cloudVersion,
       cloudConnectionState,
       captureCloudMutationContext,

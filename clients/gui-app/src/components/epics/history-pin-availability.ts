@@ -84,7 +84,7 @@ export function historyPinUnavailableTooltip(
     return "This epic is stored on this device. Pinning needs cloud sync.";
   }
   if (reason === "unverified-session") {
-    return "Your sign-in couldn't be confirmed, so cloud changes are paused. Pinning will work again once it reconnects.";
+    return "Your sign-in couldn't be confirmed, so cloud changes are paused. Pinning will work again once your sign-in is confirmed.";
   }
   return "Phases cannot be pinned.";
 }

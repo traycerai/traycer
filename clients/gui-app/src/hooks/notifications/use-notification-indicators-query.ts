@@ -1,5 +1,8 @@
 import { useMemo } from "react";
-import { useNotificationFeedMode } from "@/lib/notifications/notification-feed-mode";
+import {
+  useNotificationFeedMode,
+  useNotificationFeedModeSettling,
+} from "@/lib/notifications/notification-feed-mode";
 import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
 import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
 import {
@@ -75,13 +78,19 @@ export function useNotificationIndicators(
 ): SurfaceNotificationIndicators {
   const feedMode = useNotificationFeedMode();
   const isMixed = feedMode === "cloud";
+  // A held `cloud` whose host is re-negotiating sends no `home: "local"`
+  // request: an older host coming back drops the optional selector and
+  // answers for the whole origin, which the per-flag OR below would then
+  // read as an exact local partition. The query resumes when the mode
+  // settles either way; its last data stays rendered meanwhile.
+  const feedModeSettling = useNotificationFeedModeSettling();
   const hostIndicators = useHostNotificationIndicators({
     hostId: args.hostId,
     epicIds: args.epicIds,
     chatIds: args.chatIds,
     chatEpicIds: args.chatEpicIds,
     home: isMixed ? "local" : undefined,
-    enabled: args.enabled,
+    enabled: args.enabled && !(isMixed && feedModeSettling),
   });
   // The SAME owner as the RPC, read off the response rather than looked up
   // again: the query resolved the host it ASKED (the caller-named owner, or

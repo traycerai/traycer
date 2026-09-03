@@ -94,6 +94,7 @@ vi.mock("@/lib/host/runtime", async (importActual) => {
 
 vi.mock("@/lib/notifications/notification-feed-mode", () => ({
   useNotificationFeedMode: () => feedMode.value,
+  useNotificationFeedModeSettling: () => false,
 }));
 
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({

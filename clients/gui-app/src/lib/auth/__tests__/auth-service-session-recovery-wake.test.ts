@@ -32,6 +32,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
  */
 
 const VALIDATION_URL = "http://localhost:5005/api/v3/user";
+const REFRESH_URL = "http://localhost:5005/api/v3/auth/refresh";
 
 type FetchHandler = (
   input: unknown,
@@ -235,5 +236,189 @@ describe("AuthService session recovery - wake mid-probe", () => {
 
     await vi.advanceTimersByTimeAsync(1);
     expect(validationCalls).toBe(callsAfterProbeSettled + 1);
+  });
+});
+
+describe("AuthService terminal verdicts and the recovery loop", () => {
+  let restoreFetch: () => void = () => undefined;
+
+  beforeEach(() => {
+    useAuthStore.getState().setSignedOut();
+    restoreFetch = installFetch(() => status(500));
+  });
+
+  afterEach(() => {
+    while (trackedServices.length > 0) {
+      const service = trackedServices.pop();
+      if (service !== undefined) {
+        service.dispose();
+      }
+    }
+    useAuthStore.getState().setSignedOut();
+    vi.useRealTimers();
+    restoreFetch();
+  });
+
+  /** Signs the stored session in through startup with authn answering `ok`. */
+  async function startSignedIn(
+    service: AuthService,
+    host: MockRunnerHost,
+  ): Promise<void> {
+    await host.tokenStore.signIn(
+      { token: "live-token", refreshToken: "live-refresh" },
+      { ...DEFAULT_IDENTITY },
+    );
+    await service.start();
+    expect(useAuthStore.getState().status).toBe("signed-in");
+  }
+
+  /** The `/api/v3/user` body startup validation accepts (auth-service.test.ts's shape). */
+  function okUser(): Promise<Response> {
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          user: {
+            id: DEFAULT_IDENTITY.id,
+            name: DEFAULT_IDENTITY.name,
+            providerId: "gh-1",
+            providerHandle: "test-user",
+            providerType: "GITHUB",
+            email: DEFAULT_IDENTITY.email,
+            avatarUrl: null,
+            activatedAt: null,
+            createdAt: "2024-01-01T00:00:00.000Z",
+            updatedAt: "2024-01-01T00:00:00.000Z",
+            lastSeenAt: null,
+            privacyMode: false,
+            isLearningEnabled: true,
+          },
+          userSubscription: {
+            id: "sub-1",
+            userID: DEFAULT_IDENTITY.id,
+            orgID: null,
+            teamID: null,
+            customerId: "cus-1",
+            createdAt: "2024-01-01T00:00:00.000Z",
+            updatedAt: "2024-01-01T00:00:00.000Z",
+            subscriptionExpiry: null,
+            trialEndsAt: null,
+            subscriptionStatus: "FREE",
+            hasPaymentMethod: false,
+            isInTrial: false,
+            rechargeRateSeconds: 0,
+          },
+          teamSubscriptions: [],
+          payAsYouGoUsage: { allowPayAsYouGo: false },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+  }
+
+  it("does not re-spend the refused credential on wake after a LIVE terminal rejection", async () => {
+    vi.useFakeTimers();
+    const { service, host } = makeService();
+    restoreFetch();
+    restoreFetch = installFetch(() => okUser());
+    await startSignedIn(service, host);
+
+    // The live session's reactive rotation: validation and refresh both
+    // reject. The stored-session paths latch this as terminal; the live arm
+    // demotes through the same terminal arm and must latch too.
+    let refreshCalls = 0;
+    let validationCalls = 0;
+    restoreFetch();
+    restoreFetch = installFetch((input) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (url === VALIDATION_URL) {
+        validationCalls += 1;
+        return status(401);
+      }
+      if (url === REFRESH_URL) {
+        refreshCalls += 1;
+        return status(401);
+      }
+      return status(500);
+    });
+    const outcome = await service.revalidateCurrentContext();
+    expect(outcome?.kind).toBe("rejected");
+    expect(useAuthStore.getState().status).toBe("unverified");
+    const refreshCallsAtVerdict = refreshCalls;
+    const validationCallsAtVerdict = validationCalls;
+    expect(refreshCallsAtVerdict).toBeGreaterThan(0);
+
+    // A wake is evidence about the network, and this session did not stop
+    // for the network. Past the recovery floor and its retries, nothing was
+    // asked again - the server's verdict stands until a sign-in clears it.
+    host.emitSystemResumed({ backgroundedForMs: null });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await advancePastAuthRetries();
+    expect(useAuthStore.getState().status).toBe("unverified");
+    expect(refreshCalls).toBe(refreshCallsAtVerdict);
+    expect(validationCalls).toBe(validationCallsAtVerdict);
+  });
+
+  it("re-arms stored-session recovery, not proactive refresh, when signOut's delete fails on a transiently unverified session", async () => {
+    vi.useFakeTimers();
+    const { service, host } = makeService();
+    await host.tokenStore.signIn(
+      { token: "stale-token", refreshToken: "stale-refresh" },
+      { ...DEFAULT_IDENTITY },
+    );
+    let validationCalls = 0;
+    restoreFetch();
+    restoreFetch = installFetch((input) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (url === VALIDATION_URL) validationCalls += 1;
+      return status(500);
+    });
+    const start = service.start();
+    await advancePastAuthRetries();
+    await start;
+    expect(useAuthStore.getState().status).toBe("unverified");
+
+    host.tokenStore.delete = (): Promise<void> =>
+      Promise.reject(new Error("EACCES: credentials locked"));
+    await service.signOut();
+    expect(useAuthStore.getState().status).toBe("unverified");
+
+    // The sign-out stood the recovery loop down; the failed delete must put
+    // it back (from the floor), because the session it left in place is one
+    // authn has not refused - only not reached.
+    const callsAfterSignOut = validationCalls;
+    await vi.advanceTimersByTimeAsync(1_000);
+    await advancePastAuthRetries();
+    expect(validationCalls).toBeGreaterThan(callsAfterSignOut);
+  });
+
+  it("restarts nothing when signOut's delete fails on a terminally rejected session", async () => {
+    vi.useFakeTimers();
+    const { service, host } = makeService();
+    await host.tokenStore.signIn(
+      { token: "dead-token", refreshToken: "dead-refresh" },
+      { ...DEFAULT_IDENTITY },
+    );
+    let calls = 0;
+    restoreFetch();
+    restoreFetch = installFetch((input) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (url === VALIDATION_URL || url === REFRESH_URL) calls += 1;
+      return status(401);
+    });
+    await service.start();
+    expect(useAuthStore.getState().status).toBe("unverified");
+
+    host.tokenStore.delete = (): Promise<void> =>
+      Promise.reject(new Error("EACCES: credentials locked"));
+    await service.signOut();
+    expect(useAuthStore.getState().status).toBe("unverified");
+
+    // Neither the recovery loop nor the proactive scheduler: the credential
+    // on disk is one authn refused, and a failed sign-out is not a reason to
+    // spend it again.
+    const callsAfterSignOut = calls;
+    await vi.advanceTimersByTimeAsync(60_000);
+    await advancePastAuthRetries();
+    expect(calls).toBe(callsAfterSignOut);
   });
 });

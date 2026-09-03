@@ -44,7 +44,10 @@ import {
   type NotificationFeedMode,
 } from "@/lib/notifications/notification-feed-mode";
 import { useStreamMethodSupportFor } from "@/lib/host/stream-runtime-context";
-import { NotificationFeedModeContext } from "@/lib/notifications/notification-feed-mode-context";
+import {
+  NotificationFeedModeContext,
+  NotificationFeedModeSettlingContext,
+} from "@/lib/notifications/notification-feed-mode-context";
 import { resetCloudEntityReadDriver } from "@/lib/notifications/cloud-entity-read-driver";
 import {
   readFocusedHostNotificationPresence,
@@ -222,13 +225,15 @@ export function NotificationsSessionProvider(
     servingStreamClient,
     "host.notifications.cloudFeed.subscribe",
   );
-  const notificationFeedMode = useHeldNotificationFeedMode(
-    negotiatedFeedMode,
-    cloudFeedSupport,
-    // The hold is per serving host: a switch to another host settles to that
-    // host's own negotiation instead of carrying the previous host's mode.
-    servingHostEntry?.hostId ?? null,
-  );
+  const { mode: notificationFeedMode, settling: notificationFeedModeSettling } =
+    useHeldNotificationFeedMode(
+      negotiatedFeedMode,
+      cloudFeedSupport,
+      // The hold is per serving host: a switch to another host settles to
+      // that host's own negotiation instead of carrying the previous host's
+      // mode.
+      servingHostEntry?.hostId ?? null,
+    );
   // The session body itself consumes the mode (through
   // `useMergedNotificationsActions`), and a component cannot read a context it
   // renders. So the outer shell owns the negotiation and the provider, and the
@@ -236,14 +241,18 @@ export function NotificationsSessionProvider(
   // transient stream client is built exactly once.
   return (
     <NotificationFeedModeContext.Provider value={notificationFeedMode}>
-      <NotificationsSessionBody
-        navigate={props.navigate}
-        servingHostEntry={servingHostEntry}
-        servingStreamClient={servingStreamClient}
-        notificationFeedMode={notificationFeedMode}
+      <NotificationFeedModeSettlingContext.Provider
+        value={notificationFeedModeSettling}
       >
-        {props.children}
-      </NotificationsSessionBody>
+        <NotificationsSessionBody
+          navigate={props.navigate}
+          servingHostEntry={servingHostEntry}
+          servingStreamClient={servingStreamClient}
+          notificationFeedMode={notificationFeedMode}
+        >
+          {props.children}
+        </NotificationsSessionBody>
+      </NotificationFeedModeSettlingContext.Provider>
     </NotificationFeedModeContext.Provider>
   );
 }
