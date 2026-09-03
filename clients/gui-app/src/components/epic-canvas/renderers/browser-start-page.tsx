@@ -22,7 +22,10 @@ export function BrowserStartPage(props: BrowserStartPageProps) {
   const query = useHostQuery({
     client,
     method: "resources.listLocalServers",
-    params: { epicId: props.epicId },
+    // The canvas start page is always inside a task. The Start Page panel
+    // renders the same surface under `{ kind: "independent" }`, which lists the
+    // ports that device's own terminals own rather than any epic's.
+    params: { scope: { kind: "epic", epicId: props.epicId } },
     cacheKeyIdentity: undefined,
     options: {
       enabled: localServersReachable,

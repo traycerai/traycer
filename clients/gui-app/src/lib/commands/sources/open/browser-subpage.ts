@@ -132,7 +132,7 @@ export function useBrowserOpenerItems(
   const targetHostId = hasTarget ? hostPin.resolvedHostId : null;
   const sessions = useBrowserSessionsForHost({
     hostId: targetHostId,
-    epicId: ctx.activeEpicId ?? "",
+    scope: { kind: "epic", epicId: ctx.activeEpicId ?? "" },
   });
   const hostEntry = useHostDirectoryEntryForHostId(targetHostId);
 

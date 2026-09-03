@@ -15,6 +15,7 @@ import {
   browserSessionsError,
   browserSessionsLifecycle,
 } from "@traycer-clients/shared/platform/browser-view";
+import type { HostResourceScope } from "@traycer/protocol/host/resource-scope";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import { appLogger } from "@/lib/logger";
 
@@ -143,7 +144,7 @@ function openDirectSession(
   try {
     stream = new BrowserSessionsStreamClient({
       wsStreamClient: transport.wsStreamClient,
-      epicId: args.key.epicId,
+      scope: args.key.scope,
       callbacks: {
         onServerFrame: (frame) => {
           const ux = asUxServerFrame(frame);
@@ -207,10 +208,15 @@ function sameStreamKey(
   right: BrowserSessionsStreamKey,
 ): boolean {
   return (
-    left.epicId === right.epicId &&
+    sameScope(left.scope, right.scope) &&
     left.hostId === right.hostId &&
     left.identityKey === right.identityKey
   );
+}
+
+function sameScope(left: HostResourceScope, right: HostResourceScope): boolean {
+  if (left.kind === "independent") return right.kind === "independent";
+  return right.kind === "epic" && right.epicId === left.epicId;
 }
 
 function ignoreSendError(cause: unknown): void {

@@ -21,6 +21,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import type { HostResourceScope } from "@traycer/protocol/host/resource-scope";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import {
   EMPTY_SCREENCAST_NAV_STATE,
@@ -188,7 +189,12 @@ type ScreencastStatePatch =
 
 export interface ScreencastSessionOptions {
   readonly client: ScreencastHostClient | null;
-  readonly epicId: string;
+  /**
+   * The subscription's authorization scope: the epic whose canvas this tab is
+   * on, or the device's `independent` inventory for a Start Page tile. May be
+   * built inline - {@link useStableScope} takes the identity hazard out.
+   */
+  readonly scope: HostResourceScope;
   /** Identity half of the video plane's media key (with session + tab). */
   readonly hostId: string;
   readonly sessionId: string;
@@ -222,6 +228,25 @@ export interface ScreencastSessionOptions {
  * declaration is what the host acts on, so a modified client can still claim
  * `"tile"` - the tier bounds a cooperating viewer, it does not authorize one.
  */
+/**
+ * One referentially stable scope, so the subscribe effect below can depend on
+ * it directly.
+ *
+ * A scope is an object, and every caller builds it from an epic id it already
+ * holds - inline, because there is nothing else to build it from. Depending on
+ * that object would tear the stream down and rebuild it on every render of the
+ * tile. The epic id (or its absence) is the whole of the value, so memoizing on
+ * that primitive is exact rather than merely convenient.
+ */
+function useStableScope(scope: HostResourceScope): HostResourceScope {
+  const epicId = scope.kind === "epic" ? scope.epicId : null;
+  return useMemo(
+    () =>
+      epicId === null ? { kind: "independent" } : { kind: "epic", epicId },
+    [epicId],
+  );
+}
+
 export function screencastRoleForShell(
   runnerHost: Pick<IRunnerHost, "browserView"> | null,
 ): BrowserScreencastViewerRole {
@@ -240,7 +265,8 @@ export function screencastRoleForShell(
 export function useScreencastSession(
   options: ScreencastSessionOptions,
 ): ScreencastSession {
-  const { client, epicId, hostId, sessionId, tabId, visible } = options;
+  const { client, hostId, sessionId, tabId, visible } = options;
+  const scope = useStableScope(options.scope);
   // A module constant chosen by the shell this bundle booted into, so the
   // reference is stable across renders and safe to depend on below.
   const profile = screencastProfile();
@@ -649,7 +675,7 @@ export function useScreencastSession(
 
     stream = new BrowserScreencastStreamClient({
       wsStreamClient: client,
-      epicId,
+      scope,
       sessionId,
       tabId,
       maxWidth: profile.maxWidth,
@@ -682,7 +708,7 @@ export function useScreencastSession(
   }, [
     client,
     controller,
-    epicId,
+    scope,
     hostId,
     patchStreamState,
     profile,

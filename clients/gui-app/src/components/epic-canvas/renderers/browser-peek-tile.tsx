@@ -127,7 +127,7 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
   const frameCacheKey = browserPeekFrameKey(node);
   const session = useScreencastSession({
     client,
-    epicId,
+    scope: { kind: "epic", epicId },
     hostId: node.hostId,
     sessionId: node.sessionId,
     tabId: node.tabId,

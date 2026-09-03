@@ -216,7 +216,7 @@ export function renderTile(args: TileRenderArgs<EpicCanvasTileRef>): ReactNode {
     <TabHostProvider hostId={args.node.hostId}>
       <BrowserSessionsHostBoundary
         hostId={args.node.hostId}
-        epicId={args.epicId}
+        scope={{ kind: "epic", epicId: args.epicId }}
       >
         <LinkTargetProvider epicId={args.epicId} viewTabId={args.viewTabId}>
           <TileFindScope

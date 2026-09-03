@@ -10,6 +10,7 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
+import type { HostResourceScope } from "@traycer/protocol/host/resource-scope";
 import {
   usePaneFocused,
   usePaneVisible,
@@ -52,7 +53,7 @@ function browserSessionsOwnerIdentityKey(
  */
 export function useBrowserSessionsForHost(args: {
   readonly hostId: string | null;
-  readonly epicId: string;
+  readonly scope: HostResourceScope;
 }): BrowserSessionsState {
   const runnerHost = useRunnerHost();
   const hostClient = useHostClientForHostId(args.hostId);
@@ -60,7 +61,7 @@ export function useBrowserSessionsForHost(args: {
   return useBrowserSessions({
     hostId: args.hostId,
     hostClient,
-    epicId: args.epicId,
+    scope: args.scope,
     browserView: runnerHost.browserView,
     localHostId,
   }).state;
@@ -69,7 +70,13 @@ export function useBrowserSessionsForHost(args: {
 interface UseBrowserSessionsArgs {
   readonly hostId: string | null;
   readonly hostClient: HostClient<HostRpcRegistry> | null;
-  readonly epicId: string;
+  /**
+   * Which inventory to read: one epic's, or the device's `independent` one.
+   * Passed by value and never used as an effect dependency - the coordinator
+   * KEY is the identity everything below keys on, so a caller may build this
+   * inline without re-acquiring on every render.
+   */
+  readonly scope: HostResourceScope;
   readonly browserView: BrowserViewBridge | null;
   /** This machine's host id, declared as the Electron locality signal. */
   readonly localHostId: string | null;
@@ -83,7 +90,7 @@ interface BrowserSessionsHookResult {
 export function useBrowserSessions(
   args: UseBrowserSessionsArgs,
 ): BrowserSessionsHookResult {
-  const { hostId, epicId, browserView, localHostId } = args;
+  const { hostId, scope, browserView, localHostId } = args;
   const navigateNested = useEpicNestedFocusNavigation();
   const viewTabId = useEpicViewTabId();
   const surfaceVisible = usePaneVisible();
@@ -119,7 +126,7 @@ export function useBrowserSessions(
     [hostId, ownerIdentityKey],
   );
   const ownerCoordinatorKey =
-    owner === null ? null : browserSessionsCoordinatorKey(epicId, owner);
+    owner === null ? null : browserSessionsCoordinatorKey(scope, owner);
   const coordinatorKey =
     ownerCoordinatorKey !== null &&
     (transportReady || hasBrowserSessionsCoordinator(ownerCoordinatorKey))
@@ -131,7 +138,7 @@ export function useBrowserSessions(
       acquireBrowserSessionsCoordinator({
         key,
         consumerId,
-        epicId,
+        scope,
         owner: selectedOwner,
         runtime: {
           browserView,
@@ -148,7 +155,12 @@ export function useBrowserSessions(
   useEffect(() => {
     if (coordinatorKey === null || owner === null) return;
     return acquireCoordinator(coordinatorKey, owner);
-  }, [consumerId, coordinatorKey, epicId, owner]);
+    // The scope is NOT a dependency: it is an object, so an inline
+    // `{ kind: "epic", epicId }` would be a new identity every render and this
+    // effect would release and re-acquire the coordinator each time. Its
+    // serialized form IS `coordinatorKey`, which changes exactly when the
+    // scope does.
+  }, [consumerId, coordinatorKey, owner]);
 
   useEffect(() => {
     if (coordinatorKey === null) return;
@@ -206,5 +218,6 @@ function unavailableBrowserSessionsState(
     retry: () => undefined,
     openTab: unavailable,
     closeTab: unavailable,
+    attachTab: unavailable,
   };
 }
