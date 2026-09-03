@@ -17,14 +17,36 @@ describe("DesktopAuthSession.revokeVerification", () => {
       changes += 1;
     });
 
-    session.revokeVerification();
+    session.revokeVerification(SIGNED_IN.token);
 
     // Same session, same status: nothing a renderer applies as a transition.
     expect(session.get()).toEqual({ ...SIGNED_IN, verified: false });
     expect(changes).toBe(1);
     // Idempotent: nothing left to withdraw, so nothing to announce.
-    session.revokeVerification();
+    session.revokeVerification(SIGNED_IN.token);
     expect(changes).toBe(1);
+  });
+
+  it("drops a revoke naming a bearer the session no longer holds", () => {
+    // Window A's terminal demotion of `bearer-1` reaches main AFTER window B
+    // signed in and main verified `bearer-2`: IPC across renderers is
+    // unordered. The stale revoke must not strip the new session.
+    const session = new DesktopAuthSession();
+    session.setVerified(SIGNED_IN);
+    session.setVerified({ ...SIGNED_IN, token: "bearer-2" });
+    let changes = 0;
+    session.on("change", () => {
+      changes += 1;
+    });
+
+    session.revokeVerification(SIGNED_IN.token);
+
+    expect(session.get()).toEqual({
+      ...SIGNED_IN,
+      token: "bearer-2",
+      verified: true,
+    });
+    expect(changes).toBe(0);
   });
 
   it("is a no-op on a session main never verified", () => {
@@ -35,7 +57,7 @@ describe("DesktopAuthSession.revokeVerification", () => {
       changes += 1;
     });
 
-    session.revokeVerification();
+    session.revokeVerification(SIGNED_IN.token);
 
     expect(session.get().verified).toBe(false);
     expect(changes).toBe(0);

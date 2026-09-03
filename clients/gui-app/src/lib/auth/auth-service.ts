@@ -495,13 +495,21 @@ function linkResultForTokenApplication(
  *      (or a `network-error`) surfaces `AUTH_ERROR_SIGN_IN_FAILED` ("Sign-in
  *      failed - please try again") and clears any persisted token.
  */
+/** The session a terminal verdict loss is about; see `onCloudAuthorizationRevoked`. */
+export interface RevokedCloudAuthorization {
+  /** The bearer the cloud rejected - the fence a copy held elsewhere applies. */
+  readonly token: string;
+}
+
 export class AuthService {
   private readonly runnerHost: IRunnerHost;
   private readonly tokenStore: AuthTokenStore;
   private readonly contextProvider: DefaultRequestContextProvider;
   private readonly listeners = new Set<AuthListener>();
   private readonly errorListeners = new Set<AuthErrorListener>();
-  private readonly cloudAuthorizationRevokedListeners = new Set<() => void>();
+  private readonly cloudAuthorizationRevokedListeners = new Set<
+    (revoked: RevokedCloudAuthorization) => void
+  >();
   private readonly sessionSnapshotListeners =
     new Set<AuthSessionSnapshotListener>();
   private readonly authStoreUnsubscribe: () => void;
@@ -2163,9 +2171,14 @@ export class AuthService {
    * the status it would flatten to signs sibling windows out. Consumers that
    * hold their own copy of the session outside this renderer (the desktop
    * main process, whose jar plane speaks for the account on it) subscribe
-   * here to withdraw it. Edge only: no replay on subscribe.
+   * here to withdraw it. Edge only: no replay on subscribe. Carries the
+   * rejected bearer so a copy can fence the withdrawal to THAT session: the
+   * desktop main process serves every window, and a demotion here can reach
+   * it after a sibling window's fresh sign-in did.
    */
-  onCloudAuthorizationRevoked(handler: () => void): Disposable {
+  onCloudAuthorizationRevoked(
+    handler: (revoked: RevokedCloudAuthorization) => void,
+  ): Disposable {
     this.cloudAuthorizationRevokedListeners.add(handler);
     return {
       dispose: () => {
@@ -4768,7 +4781,7 @@ export class AuthService {
       this.cloudAuthorizationRevokedListeners,
     )) {
       try {
-        listener();
+        listener({ token: session.token });
       } catch (error) {
         appLogger.warn("[auth] a cloud-authorization-revoked listener failed", {
           cause: error instanceof Error ? error.message : String(error),

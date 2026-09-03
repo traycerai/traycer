@@ -635,7 +635,7 @@ export interface DesktopWindowsBridge {
       snapshot: DesktopAuthSessionSnapshot,
     ): Promise<DesktopAuthSessionSetResult>;
     /** See `AuthSessionBridgeSurface.revoke` in the preload. */
-    revoke(): Promise<void>;
+    revoke(rejectedToken: string): Promise<void>;
     onChange(handler: (snapshot: DesktopAuthSessionSnapshot) => void): {
       dispose: () => void;
     };

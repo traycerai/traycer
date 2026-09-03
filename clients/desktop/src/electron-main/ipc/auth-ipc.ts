@@ -359,10 +359,18 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
 
   // The renderer's terminal verdict loss. Not a session transition - the
   // session main holds stays as it is and fans out unchanged - only the
-  // verification behind it goes, which is what the jar plane reads.
-  bridge.handleInvoke(RunnerHostInvoke.authSessionRevoke, () => {
-    bridge.authSession.revokeVerification();
-  });
+  // verification behind it goes, which is what the jar plane reads. The
+  // revoke names the bearer it is about: windows' IPC is unordered, so one
+  // that arrives after a sibling's fresh sign-in must not strip THAT session
+  // (`DesktopAuthSession.revokeVerification`). A revoke without a bearer
+  // names nothing and is dropped.
+  bridge.handleInvoke(
+    RunnerHostInvoke.authSessionRevoke,
+    (_event, rejectedToken: unknown) => {
+      if (typeof rejectedToken !== "string") return;
+      bridge.authSession.revokeVerification(rejectedToken);
+    },
+  );
 
   const onAuthSessionChange = (snapshot: DesktopAuthSessionSnapshot): void => {
     retainedStepUpCredential = null;

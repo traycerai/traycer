@@ -125,8 +125,8 @@ export function WindowsBridgeAuthSessionBridge(
     // for the same reason: a later sign-in carries a new bearer, so it is a
     // new serialization and is written. A desktop shell built before the
     // channel existed has no `revoke`; it keeps the pre-channel behaviour.
-    const revokeSubscription = auth.onCloudAuthorizationRevoked(() => {
-      const pending = bridge.authSession.revoke?.();
+    const revokeSubscription = auth.onCloudAuthorizationRevoked((revoked) => {
+      const pending = bridge.authSession.revoke?.(revoked.token);
       if (pending === undefined) return;
       void pending.catch((cause: unknown) => {
         appLogger.warn("[auth] could not revoke the desktop auth session", {

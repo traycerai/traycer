@@ -789,8 +789,11 @@ export interface DesktopWindowsBridge {
      * before the channel existed has no `revoke`, and the bridge degrades to
      * the pre-channel behaviour (main keeps its verification until the
      * bearer expires) rather than failing the `isDesktopWindowsBridge` guard.
+     * Names the rejected bearer: main applies it only while that is still
+     * the session it holds, so a revoke racing a sibling window's fresh
+     * sign-in cannot strip the new session.
      */
-    revoke?(): Promise<void>;
+    revoke?(rejectedToken: string): Promise<void>;
     onChange(handler: (snapshot: DesktopAuthSessionSnapshot) => void): {
       dispose(): void;
     };

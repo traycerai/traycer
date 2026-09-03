@@ -62,8 +62,17 @@ export class DesktopAuthSession {
    * next change, and the status the change fans out is unchanged, so no
    * renderer applies a transition it did not make. A no-op when nothing was
    * verified.
+   *
+   * FENCED to the bearer the renderer is rejecting. IPC from different
+   * renderers is unordered, so a terminal demotion in one window can land
+   * after a sibling window's fresh sign-in was verified here; an unfenced
+   * revoke would then strip the NEW session's verification and tear the jar
+   * plane down for an account the cloud still vouches for. A revoke naming a
+   * bearer this session no longer holds is stale by construction and is
+   * dropped.
    */
-  revokeVerification(): void {
+  revokeVerification(rejectedToken: string): void {
+    if (this.snapshotValue.token !== rejectedToken) return;
     this.store(this.snapshotValue, false);
   }
 

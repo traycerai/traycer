@@ -84,6 +84,12 @@ function EpicRouteTabSync(props: {
     // re-runs on the next open anyway. So the decision is made ONCE per epic,
     // whichever way it goes: the marker is set before the verdict is
     // consulted, and a later verdict change finds it already set.
+    //
+    // This gate is the render-time one. React can flush a committed effect
+    // before rendering the store update that withdrew the verdict, so the
+    // mutation re-reads the live verdict at dispatch
+    // (`EPIC_RECORD_VIEWED_UNAUTHORIZED_MESSAGE`) and refuses what this
+    // captured `true` would otherwise let through.
     if (recencyDecidedForEpicId.current === epicId) return;
     recencyDecidedForEpicId.current = epicId;
     if (!cloudAuthorized) return;

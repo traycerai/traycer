@@ -263,7 +263,7 @@ export interface AuthSessionBridgeSurface {
    * the renderer's terminal verdict loss, which `set` cannot carry: the
    * nearest status it flattens to would sign sibling windows out.
    */
-  revoke(): Promise<void>;
+  revoke(rejectedToken: string): Promise<void>;
   onChange(handler: Listener<DesktopAuthSessionSnapshot>): Disposable;
 }
 
@@ -278,8 +278,11 @@ export function buildAuthSessionBridge(): AuthSessionBridgeSurface {
         RunnerHostInvoke.authSessionSet,
         snapshot,
       ) as Promise<DesktopAuthSessionSetResult>,
-    revoke: () =>
-      ipcRenderer.invoke(RunnerHostInvoke.authSessionRevoke) as Promise<void>,
+    revoke: (rejectedToken) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.authSessionRevoke,
+        rejectedToken,
+      ) as Promise<void>,
     onChange: (handler) =>
       subscribe<DesktopAuthSessionSnapshot>(
         RunnerHostEvent.authSessionChange,
