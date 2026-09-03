@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
-import { useRef } from "react";
+import { useRef, type ReactElement } from "react";
 import {
   statusBarDensityForWidth,
+  useStatusBarContentOverflow,
   useStatusBarDensity,
 } from "@/components/layout/status-bar/status-bar-density";
 import {
@@ -184,6 +185,171 @@ describe("useStatusBarDensity", () => {
     view.unmount();
 
     expect(instance.disconnectCount).toBe(1);
+  });
+});
+
+function OverflowProbe() {
+  const measureRef = useStatusBarContentOverflow();
+  return <div ref={measureRef} data-testid="overflow-probe" />;
+}
+
+/**
+ * Renders whichever element type `variant` names at the same tree position,
+ * so switching `variant` forces React to discard the old DOM node and mount a
+ * fresh one under the same callback ref - the same shape `PopoverTrigger`'s
+ * anchor swap produces in production, without depending on Radix internals.
+ */
+function SwappableOverflowProbe(props: { readonly variant: "div" | "span" }) {
+  const measureRef = useStatusBarContentOverflow();
+  return props.variant === "div" ? (
+    <div ref={measureRef} data-testid="overflow-probe" />
+  ) : (
+    <span ref={measureRef} data-testid="overflow-probe" />
+  );
+}
+
+describe("useStatusBarContentOverflow", () => {
+  afterEach(() => {
+    cleanup();
+    resizeObserverInstances.length = 0;
+  });
+
+  function probeElement(): HTMLElement {
+    return screen.getByTestId("overflow-probe");
+  }
+
+  function clipped(): string | null {
+    return probeElement().getAttribute("data-clipped");
+  }
+
+  // jsdom reports both as 0 by default, so every case sets its own pair
+  // rather than relying on a real layout to produce them.
+  function setBoxWidths(
+    target: HTMLElement,
+    scrollWidth: number,
+    clientWidth: number,
+  ): void {
+    Object.defineProperty(target, "scrollWidth", {
+      configurable: true,
+      value: scrollWidth,
+    });
+    Object.defineProperty(target, "clientWidth", {
+      configurable: true,
+      value: clientWidth,
+    });
+  }
+
+  // No dependency array on the underlying `useLayoutEffect` - re-rendering the
+  // SAME element is what re-triggers the measurement, mirroring a content
+  // change that alters `scrollWidth` without touching the box.
+  function remeasure(view: { rerender: (node: ReactElement) => void }): void {
+    act(() => {
+      view.rerender(<OverflowProbe />);
+    });
+  }
+
+  // The observer currently watching `node` - never assumed to be the
+  // last-created instance, so a reattachment bug (an old observer left on a
+  // stale node) fails this lookup instead of silently passing against the
+  // wrong instance.
+  function observerFor(node: Element): ControllableResizeObserver {
+    const instance = resizeObserverInstances.find((candidate) =>
+      candidate.observed.has(node),
+    );
+    if (instance === undefined) {
+      throw new Error("no ResizeObserver is currently observing this node");
+    }
+    return instance;
+  }
+
+  it("reads no overflow when content fits its box", () => {
+    const view = render(<OverflowProbe />);
+
+    setBoxWidths(probeElement(), 100, 100);
+    remeasure(view);
+
+    expect(clipped()).toBe("false");
+  });
+
+  it("flags overflow once scrollWidth exceeds the box by more than the 1px slack", () => {
+    const view = render(<OverflowProbe />);
+
+    setBoxWidths(probeElement(), 102, 100);
+    remeasure(view);
+
+    expect(clipped()).toBe("true");
+  });
+
+  it("treats exactly 1px over as within the deliberate slack", () => {
+    const view = render(<OverflowProbe />);
+
+    setBoxWidths(probeElement(), 101, 100);
+    remeasure(view);
+
+    expect(clipped()).toBe("false");
+  });
+
+  it("re-measures from a resize observation alone, with no render in between", () => {
+    const view = render(<OverflowProbe />);
+    setBoxWidths(probeElement(), 100, 100);
+    remeasure(view);
+    expect(clipped()).toBe("false");
+
+    // A box shrink with no re-render: only the observer can catch this, since
+    // nothing about the component's own output changed.
+    setBoxWidths(probeElement(), 200, 100);
+    const instance = observerFor(probeElement());
+    act(() => {
+      instance.callback([], instance);
+    });
+
+    expect(clipped()).toBe("true");
+  });
+
+  it("disconnects its observer on unmount", () => {
+    const view = render(<OverflowProbe />);
+    const instance = observerFor(probeElement());
+
+    view.unmount();
+
+    expect(instance.disconnectCount).toBe(1);
+  });
+
+  it("follows the node when the probe swaps its underlying DOM element", () => {
+    // Regression guard for the detached-node bug: `PopoverTrigger` wraps its
+    // child in a Popper anchor only from its second commit onward, replacing
+    // the DOM node the hook measures. A callback ref has to notice and
+    // re-attach, or the observer is left watching a node nothing renders
+    // anymore.
+    const view = render(<SwappableOverflowProbe variant="div" />);
+    const firstNode = probeElement();
+    setBoxWidths(firstNode, 100, 100);
+    act(() => {
+      view.rerender(<SwappableOverflowProbe variant="div" />);
+    });
+    expect(clipped()).toBe("false");
+    const firstObserver = observerFor(firstNode);
+
+    act(() => {
+      view.rerender(<SwappableOverflowProbe variant="span" />);
+    });
+
+    // The old node is gone from the DOM and its observer was told to let go.
+    expect(document.body.contains(firstNode)).toBe(false);
+    expect(firstObserver.disconnectCount).toBe(1);
+
+    const currentNode = probeElement();
+    expect(currentNode).not.toBe(firstNode);
+    setBoxWidths(currentNode, 300, 100);
+    // Looked up by which node it actually observes, not by creation order -
+    // this is what makes the assertion below fail against an implementation
+    // that left the old observer running instead of reattaching.
+    const currentObserver = observerFor(currentNode);
+    act(() => {
+      currentObserver.callback([], currentObserver);
+    });
+
+    expect(clipped()).toBe("true");
   });
 });
 

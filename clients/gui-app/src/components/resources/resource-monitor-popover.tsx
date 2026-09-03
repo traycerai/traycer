@@ -1164,7 +1164,10 @@ function ResourceMonitorPanel(props: {
   const sortTriggerRef = useRef<HTMLButtonElement | null>(null);
   const dismissingSortMenuRef = useRef(false);
   const streamedProjection = useGlobalResourceProjection();
-  const localDesktopApp = useDesktopAppResourceUsage();
+  // `true`, not the scope: this panel is mounted only while it is OPEN, and it
+  // shows both scopes' readings at once — the shell row is drawn beside the
+  // host tree, not instead of it.
+  const localDesktopApp = useDesktopAppResourceUsage(true);
   const reading = resolveResourceMonitorHostReading({
     scope,
     hasExplicitPick: props.hasExplicitPick,

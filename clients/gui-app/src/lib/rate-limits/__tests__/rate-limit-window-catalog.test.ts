@@ -589,4 +589,88 @@ describe("providerWindowEntries", () => {
       expect(new Set(keys).size).toBe(keys.length);
     }
   });
+
+  // `labelIsDuration` exists for one reason: a live countdown may only REPLACE
+  // a label that says nothing but the window's length. Every window whose name
+  // also carries identity - a model, a qualified weekly, a Cursor bucket, a
+  // named Codex limit, a Grok billing period - must keep that name beside the
+  // countdown instead, because several of them are guaranteed to share one
+  // reset instant with a sibling.
+  describe("labelIsDuration", () => {
+    it("is true for Claude Code's plain-duration windows, false for the qualified weeklies and every model window", () => {
+      const byKey = new Map(
+        providerWindowEntries(CLAUDE_CODE).map((entry) => [
+          entry.windowKey,
+          entry.labelIsDuration,
+        ]),
+      );
+      expect(byKey.get("claude-code:fiveHour")).toBe(true);
+      expect(byKey.get("claude-code:sevenDay")).toBe(true);
+      expect(byKey.get("claude-code:sevenDayOpus")).toBe(false);
+      expect(byKey.get("claude-code:sevenDaySonnet")).toBe(false);
+      expect(byKey.get("claude-code:model:Fable")).toBe(false);
+      expect(byKey.get("claude-code:model:Opus 5")).toBe(false);
+    });
+
+    it("is true for Codex's base windows, false for a named extra, true for an extra whose limit went unnamed", () => {
+      const byKey = new Map(
+        providerWindowEntries(CODEX).map((entry) => [
+          entry.windowKey,
+          entry.labelIsDuration,
+        ]),
+      );
+      expect(byKey.get("codex:primary")).toBe(true);
+      expect(byKey.get("codex:secondary")).toBe(true);
+      expect(byKey.get("codex:extra:gpt-5-codex:primary")).toBe(false);
+      expect(byKey.get("codex:extra:gpt-5-codex:secondary")).toBe(false);
+
+      const unnamedExtra = providerWindowEntries(
+        wire({
+          provider: "codex",
+          available: true,
+          planType: null,
+          limitId: null,
+          limitName: null,
+          primary: null,
+          secondary: null,
+          extraWindows: [
+            {
+              limitId: "unnamed",
+              limitName: null,
+              primary: windowOf(1, 1_800_000, 360),
+              secondary: null,
+            },
+          ],
+          credits: null,
+          individualLimit: null,
+          resetCredits: null,
+          rateLimitReachedType: null,
+        }),
+      );
+      expect(unnamedExtra).toEqual([
+        expect.objectContaining({
+          windowKey: "codex:extra:unnamed:primary",
+          labelIsDuration: true,
+        }),
+      ]);
+    });
+
+    it("is true for every OpenCode window", () => {
+      const entries = providerWindowEntries(OPENCODE);
+      expect(entries.length).toBeGreaterThan(0);
+      expect(entries.every((entry) => entry.labelIsDuration)).toBe(true);
+    });
+
+    it("is false for grok's billing period - there is no generic short form for a duration the payload never states", () => {
+      const entries = providerWindowEntries(GROK);
+      expect(entries.length).toBeGreaterThan(0);
+      expect(entries.every((entry) => !entry.labelIsDuration)).toBe(true);
+    });
+
+    it("is false for both of Cursor's spending buckets - the wire requires them to share one reset instant", () => {
+      const entries = providerWindowEntries(CURSOR);
+      expect(entries.length).toBeGreaterThan(0);
+      expect(entries.every((entry) => !entry.labelIsDuration)).toBe(true);
+    });
+  });
 });

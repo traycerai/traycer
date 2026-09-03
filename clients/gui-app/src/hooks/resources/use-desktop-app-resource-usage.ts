@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from "react";
+import { useCallback, useSyncExternalStore } from "react";
 import {
   desktopAppResourceUsageFromMetrics,
   getDesktopDiagnosticsBridge,
@@ -24,12 +24,30 @@ let desktopAppResourceSnapshot: DesktopAppResourceUsage | null = null;
 let desktopAppResourceTimer: number | null = null;
 let desktopAppResourceInFlight = false;
 
-export function useDesktopAppResourceUsage(): DesktopAppResourceUsage | null {
-  return useSyncExternalStore(
-    subscribeDesktopAppResourceUsage,
-    getDesktopAppResourceSnapshot,
-    getDesktopAppResourceSnapshot,
+/**
+ * `enabled` is required and is not a convenience: a subscriber is what STARTS
+ * the sampler, and the sampler is a real IPC round trip every second. A surface
+ * that mounts for the life of the window and reads this number only under one
+ * of its two scopes — the status bar's resource segment — would otherwise poll
+ * the shell forever for a value nothing renders. Pass what the surface actually
+ * needs, not whether it might.
+ *
+ * A disabled call reads `null` rather than the last sample, so a caller cannot
+ * quietly render a figure that stopped being refreshed.
+ */
+export function useDesktopAppResourceUsage(
+  enabled: boolean,
+): DesktopAppResourceUsage | null {
+  const subscribe = useCallback(
+    (listener: () => void) =>
+      enabled ? subscribeDesktopAppResourceUsage(listener) : () => undefined,
+    [enabled],
   );
+  const getSnapshot = useCallback(
+    () => (enabled ? getDesktopAppResourceSnapshot() : null),
+    [enabled],
+  );
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
 function subscribeDesktopAppResourceUsage(listener: () => void): () => void {

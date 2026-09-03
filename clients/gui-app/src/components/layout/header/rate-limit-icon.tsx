@@ -157,6 +157,8 @@ function ScopedRateLimitIconButton({
         </PopoverTrigger>
       </TooltipWrapper>
       <RateLimitPopover
+        side="bottom"
+        align="end"
         onClose={() => setOpen(false)}
         profileSelection={profileSelection}
         scope={scope}

@@ -37,8 +37,10 @@ vi.mock("@/stores/resources/resources-registry", async (importOriginal) => {
   };
 });
 
+const desktopAppResourceUsageMock = vi.hoisted(() => vi.fn(() => null));
+
 vi.mock("@/hooks/resources/use-desktop-app-resource-usage", () => ({
-  useDesktopAppResourceUsage: () => null,
+  useDesktopAppResourceUsage: desktopAppResourceUsageMock,
 }));
 
 vi.mock("@/hooks/resources/use-global-resources-unsupported", () => ({
@@ -97,11 +99,38 @@ describe("<StatusBarResourceSegment />", () => {
     registry.projection = EMPTY_GLOBAL_RESOURCE_PROJECTION;
     registry.unsupported = false;
     useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
+    desktopAppResourceUsageMock.mockClear();
   });
 
   afterEach(() => {
     cleanup();
     useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
+    desktopAppResourceUsageMock.mockClear();
+  });
+
+  it("subscribes desktop-app usage only under the desktop-app scope, never host-tree", () => {
+    // The sampler starts a once-a-second IPC poll on its first subscriber, so
+    // asking for it under the default host-tree scope - where the strip never
+    // renders it - would run that poll all session for a number nothing shows.
+    renderSegment({ hasExplicitPick: false });
+
+    expect(desktopAppResourceUsageMock).toHaveBeenCalledWith(false);
+  });
+
+  it("enables the sampler under the desktop-app scope", () => {
+    useLayoutStore.setState({
+      statusBar: {
+        ...DEFAULT_STATUS_BAR_LAYOUT,
+        resources: {
+          ...DEFAULT_STATUS_BAR_LAYOUT.resources,
+          scope: "desktop-app",
+        },
+      },
+    });
+
+    renderSegment({ hasExplicitPick: false });
+
+    expect(desktopAppResourceUsageMock).toHaveBeenCalledWith(true);
   });
 
   it("renders the watched host's numbers", () => {

@@ -623,6 +623,8 @@ function renderPopoverWithScope(scope: HostScope, hasExplicitPick: boolean) {
         <Popover open>
           <PopoverTrigger>trigger</PopoverTrigger>
           <RateLimitPopover
+            side="bottom"
+            align="end"
             onClose={onClose}
             profileSelection={mocks.profileSelection}
             scope={scope}
@@ -1830,6 +1832,8 @@ describe("<RateLimitPopover /> Overview progressive reveal", () => {
           <Popover open>
             <PopoverTrigger>trigger</PopoverTrigger>
             <RateLimitPopover
+              side="bottom"
+              align="end"
               onClose={onClose}
               profileSelection={mocks.profileSelection}
               scope={SINGLE_HOST_SCOPE}
