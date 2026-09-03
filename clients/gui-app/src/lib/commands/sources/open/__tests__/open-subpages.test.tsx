@@ -640,7 +640,7 @@ describe("Agents opener sub-page", () => {
     expect(useNewConversationModalOpenStore.getState().request).toEqual({
       epicId: "epic-1",
       tabId: "tab-1",
-      placement: { kind: "target-group", groupId: "group-1" },
+      placement: { kind: "tab", paneId: "group-1", index: null },
       parentId: null,
       hostId: null,
     });
@@ -697,7 +697,7 @@ describe("Agents opener sub-page", () => {
     expect(useNewConversationModalOpenStore.getState().request).toEqual({
       epicId: "epic-1",
       tabId: "tab-1",
-      placement: { kind: "target-group", groupId: "group-1" },
+      placement: { kind: "tab", paneId: "group-1", index: null },
       parentId: null,
       hostId: null,
     });

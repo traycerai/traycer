@@ -18,6 +18,13 @@ import {
   tabNavigationStoreActionRestrictions,
 } from "../../eslint/traycer-nested-focus-boundary-rules.mjs";
 import {
+  LINK_EGRESS_BRIDGE_RESTRICTIONS,
+  LINK_EGRESS_DOM_RESTRICTIONS,
+  LINK_EGRESS_HOOK_RESTRICTIONS,
+  LINK_EGRESS_RESTRICTIONS,
+  TILE_OPEN_RESTRICTIONS,
+} from "../../eslint/traycer-tile-open-boundary-rules.mjs";
+import {
   hostSelectionReadAllowlist,
   hostSelectionReadImportRestrictions,
   selectByIdRestrictions,
@@ -361,6 +368,8 @@ const generalCustomSyntaxRestrictions = [
   epicTabRouteConstructionBan,
   ...selectByIdRestrictions,
   ...selectionAuthorityRestrictions,
+  ...LINK_EGRESS_RESTRICTIONS,
+  ...TILE_OPEN_RESTRICTIONS,
 ];
 
 // ── `no-restricted-syntax` IS COMPOSED FROM DIMENSIONS TOO. ──
@@ -398,6 +407,12 @@ const syntaxExemptions = {
   epicTabRoute: [epicTabRouteConstructionBan],
   selectById: selectByIdRestrictions,
   selectionAuthority: selectionAuthorityRestrictions,
+  // Two groups, not one: tests lift the bridge half (they stub
+  // `{ openExternalLink: vi.fn() }` and assert on it) and keep the DOM half.
+  linkEgressBridge: LINK_EGRESS_BRIDGE_RESTRICTIONS,
+  linkEgressHook: LINK_EGRESS_HOOK_RESTRICTIONS,
+  linkEgressDom: LINK_EGRESS_DOM_RESTRICTIONS,
+  tileOpen: TILE_OPEN_RESTRICTIONS,
 };
 
 /**
@@ -894,6 +909,18 @@ export default tseslint.config(
       // to mean "inside a `vi.mock` callback" is not expressible, and one that
       // tried would be the fails-by-passing shape this file keeps out.
       //
+      // `tileOpen` / `linkEgressBridge`: DELIBERATE, and the same shape as
+      // `selectById` above. A canvas test stubs the store it drives
+      // (`{ prepareOpenTileInTabFocusTarget: vi.fn(), ... }`) and a
+      // runner-host test stubs the bridge (`{ openExternalLink: vi.fn() }`);
+      // in both, the property name IS the observation the assertion reads, so
+      // applying the ban would edit away the mechanism of the test.
+      // `linkEgressHook` too: the bridge hook's OWN test has to import it to
+      // exercise the null-host and rejection paths.
+      // `linkEgressDom` is NOT lifted: `window.open` and `target="_blank"`
+      // are shipped-surface bans with no test-double reading, and a test that
+      // opens one is asserting the app has a door it is not allowed to have.
+      //
       // Residual, precisely: a component DEFINED in a test file and then
       // imported by product code would escape both bans. That is pathological,
       // would not survive review, and no rule in this file is the right place to
@@ -905,6 +932,9 @@ export default tseslint.config(
           "forwardRef",
           "selectById",
           "selectionAuthority",
+          "tileOpen",
+          "linkEgressBridge",
+          "linkEgressHook",
         ],
         nestedFocus: null,
         tabNavigation: [
@@ -1022,6 +1052,79 @@ export default tseslint.config(
       }),
     },
   },
+  // ── Link-egress boundary allowlist (A6) ─────────────────────────────────────
+  // See eslint/traycer-tile-open-boundary-rules.mjs. Two files, both of which
+  // are BELOW the `useOpenLink` seam rather than bypassing it.
+  {
+    // The desktop bridge itself - the one door out of the app, and the thing
+    // `useOpenLink` calls once it has decided the link goes external.
+    files: ["src/lib/links/open-external-link.ts"],
+    rules: {
+      "no-restricted-syntax": syntaxRestrictions({
+        exempt: ["linkEgressBridge"],
+        nestedFocus: [],
+        tabNavigation: null,
+      }),
+    },
+  },
+  {
+    // The only two files allowed to hold the bridge HOOK: `open-link.ts`
+    // decides in-app vs external, and `open-browser-url.ts` owns the A5
+    // failure toast's explicit "Open in browser" action.
+    files: ["src/lib/links/open-link.ts", "src/lib/links/open-browser-url.ts"],
+    rules: {
+      "no-restricted-syntax": syntaxRestrictions({
+        exempt: ["linkEgressHook"],
+        nestedFocus: [],
+        tabNavigation: null,
+      }),
+    },
+  },
+  {
+    // Device-grant and provider-reauth verification URLs. Hard-external by A2
+    // (an OAuth grant has no in-app meaning), and this module runs outside
+    // React, so the hook form is not available to it.
+    files: ["src/lib/auth/auth-service.ts"],
+    rules: {
+      "no-restricted-syntax": syntaxRestrictions({
+        exempt: ["linkEgressBridge"],
+        nestedFocus: [],
+        tabNavigation: null,
+      }),
+    },
+  },
+
+  // ── Tile-open boundary allowlist (C1) ───────────────────────────────────────
+  // The seam's own implementation, plus the store that defines the actions and
+  // the two reasoned callers that sit below it. Test files lift this dimension
+  // in the block above; these globs are single-level on purpose so they do not
+  // shadow it for `tile-open/__tests__/`.
+  {
+    files: [
+      "src/lib/canvas/tile-open/*.{ts,tsx}",
+      "src/hooks/epic/use-epic-tile-navigation.ts",
+    ],
+    rules: {
+      "no-restricted-syntax": syntaxRestrictions({
+        exempt: ["tileOpen"],
+        nestedFocus: [],
+        tabNavigation: null,
+      }),
+    },
+  },
+  {
+    // Defines every `prepare*FocusTarget` and calls its own actions through
+    // `get()`; the store is what the seam is a boundary AROUND.
+    files: ["src/stores/epics/canvas/store.ts"],
+    rules: {
+      "no-restricted-syntax": syntaxRestrictions({
+        exempt: ["tileOpen"],
+        nestedFocus: [],
+        tabNavigation: null,
+      }),
+    },
+  },
+
   // Oxlint runs first and owns every compatible rule represented in its
   // generated config, including the type-aware rules. Keep this last so ESLint
   // retains the repository-specific boundaries and selector-based invariants

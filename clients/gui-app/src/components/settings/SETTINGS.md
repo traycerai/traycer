@@ -24,6 +24,7 @@ SettingsLayout
     └── settings panel route
         ├── GeneralSettingsPanel
         ├── AppearanceSettingsPanel
+        ├── OpeningBehaviorPanel
         ├── ProvidersSettingsPanel
         ├── NotificationsSettingsPanel
         ├── AgentsSettingsPanel
@@ -199,6 +200,9 @@ Supporting pieces, all viewport-agnostic where possible:
   aware (see below).
 - `settings-touch-targets.css` Coarse-pointer hit-area rules for the route
   shell (see below).
+- `settings-row-description.ts` The `SettingsRow` description-id context and
+  its `useSettingsRowDescriptionId()` reader - what lets a control name the
+  description beside it through `aria-describedby`.
 - `settings-row-layout.ts` The `max-md:` label floor shared by every
   label-beside-control row, `SettingsRow`'s and the bespoke ones alike - what
   decides, per row width, which controls stack and which stay inline.
@@ -206,6 +210,20 @@ Supporting pieces, all viewport-agnostic where possible:
   The label owns the flexible width; controls stay pinned to the trailing edge.
   If a wide control wraps, it remains right-aligned on its new line instead of
   falling under the label at the leading edge.
+  The description `<p>` carries a `useId()` id and a `max-w-[72ch] text-pretty`
+  reading measure, and the row publishes that id to its control through
+  `settings-row-description.ts`'s context - `useSettingsRowDescriptionId()`,
+  passed straight into `aria-describedby`, so a screen reader gets the row's
+  second line instead of a bare label. It reads `undefined` when the row has
+  no description, which DROPS the attribute rather than pointing it at
+  nothing. A context and not a `control` render prop for two reasons: the
+  control arrives already built, so the row cannot reach into it; and a
+  function prop returning JSX reads as a component definition during render to
+  `react/no-unstable-nested-components`. `control` therefore stays a plain
+  `ReactNode` and no existing call site changed. The context lives in its own
+  module so `settings-row.tsx` keeps exporting only a component (fast refresh
+  / `react(only-export-components)`), the same split `settings-row-layout.ts`
+  already makes.
 - `settings-group.tsx` A named group of rows: a small, quiet label OUTSIDE a
   bordered card (never a row-shaped band inside one). Used by General; `tone:
 "danger"` gives Danger Zone its restrained-red card without a separate
@@ -495,28 +513,13 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
     for rebinding), Pin context usage breakdown (global toggle for the
     always-visible agent context-window breakdown, default off).
   - **Browser**: the in-app browser has no toggle - it is always on, and the
-    group carries no master switch.
-    Web link default + per-kind terminal/markdown link open-mode selects are
-    always active (no `disabled` state).
-    Agent tab surfacing (`agentTabSurfacingMode`: `pip` | `tile` | `off`,
-    default `off` - what the GUI does when the AGENT opens a browser tab via
-    its REPL `openTab` tool) governs suppressing host-driven opens that
-    previously always split the canvas.
-    `pip` floats the tab picture-in-picture unless a user-converted PiP is
-    showing or the epic surface is hidden; `tile` places a canvas tile
-    grouped by session - same-session opens become tabs of one pane - even
-    in hidden epics; `off` answers electron foreground creates with a hidden
-    off-screen view so the agent's open still succeeds, and leaves headless
-    tabs in the sidebar.
-    Disposition decisions live in `lib/browser-view/agent-tab-surfacing.ts`;
-    headless-origin tabs are diffed from `browser.sessions` lifecycle frames
-    in the dock, seeded snapshot-only so surfacing stays ephemeral across
-    reloads.
-    A conditional Detected dev origins row follows.
-    There is no standing risk disclosure in this group - the master toggle
-    row that carried one was deleted along with the toggle, and the
-    `SettingsRow` `risk` prop it was the sole consumer of was deleted with
-    it.
+    group carries no master switch. What is left of the group is the
+    conditional **Detected dev origins** row (terminal URLs with local hosts
+    or explicit ports, kept for browser-origin classification), so the whole
+    `SettingsGroup` is skipped when none were detected rather than drawing a
+    heading over an empty card. The link-open and agent-tab-surfacing selects
+    that used to lead this group live in **Opening behavior** now - see that
+    section for the fields and their semantics.
   - **Saved logins** (`browser-settings-section.tsx`'s second group,
     `data-testid="settings-saved-logins"`): where website logins in the in-app
     browser are kept, and the only place they can be turned off, forgotten, or
@@ -539,6 +542,70 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
       `persist:` jar on disk untouched - that is what Forget is for - so a
       confirm stands in front of it and turning it back on returns to the same
       logins. Nothing is copied in either direction.
+    - **Import logins from another browser** (`import-logins-dialog.tsx`) is
+      the row between the toggle and Forget-all. It opens a three-step dialog
+      over four desktop bridge calls: `listLoginImportSources` (Pick: the
+      browsers and profiles found on this machine, plus "Import from a
+      file…", whose native picker runs in main so the renderer never names a
+      path), `scanLoginImportSource` (Choose sites: a filterable checklist of
+      registrable domains with cookie counts, read from METADATA only so no
+      OS prompt fires yet), and `importLogins` (the one call that opens the
+      keychain / keyring and writes the durable jar). Google rows are listed
+      unchecked and disabled - Google binds sessions to the device (DBSC), so
+      a copied cookie can stop being a login at Google's next check - behind
+      an "Import Google logins anyway" switch that is off by default and
+      never remembered; turning it on moves them into the checklist ticked,
+      shows the warning beside the switch, and sends
+      `includeDeviceBound: true`, which is the only way the desktop honours
+      a Google domain. The dialog says which prompt the Import click will
+      raise before it does ("Allow, not Always Allow" on macOS). Windows'
+      app-bound (`v20`) cookies are reported under a banner
+      as protected, never silently dropped; the cookie-file path is the way
+      through there. The push to the hosts is MAIN's, like forget-all's
+      frames and for the same reason - a jar frame speaks for the user's
+      whole slice on a host, so a renderer may ask for one and may not send
+      one. `importLogins` writes the jar and then calls
+      `capturePrimaryProfileOnEveryHost()`, one whole-jar
+      `primaryProfileCaptured` per host with a live browser stream, and rides
+      the ack count back as `notifiedHosts`; `useLoginImportRun` is one call
+      with nothing to chain. Done reports "sent to N hosts" from that count -
+      never "saved", because a host acks a jar it may still drop. Zero live
+      streams is the documented opportunistic outcome, not a failure. The
+      capture is needed at all because the write mutes the delta observer, so
+      the coalesced deltas that carry an ordinary sign-in never fire for an
+      import. The row is disabled
+      with a hint when saving is off, since the import writes the durable
+      jar the tiles are not on then. Every failure is a result value with a
+      closed reason and one explainer (Full Disk Access deep-links to the
+      pane; "quit the browser fully" for a locked database); nothing retries
+      on its own, because a retry after a denied Keychain prompt is a second
+      prompt. The steps themselves are the headless `ImportLoginsFlow`
+      (`import-logins-flow.tsx`), which the dialog wraps and the tour's
+      login-import act renders on its stage; the surface supplies the
+      FRAME (header / title / description / footer) because the dialog's
+      are Radix parts that throw outside a `Dialog`. The dialog reads
+      "an import is in flight" off the mutation cache (`useIsMutating` on
+      `browserMutationKeys.importLogins()`), since the mutation is the
+      flow's. The row also opens on a ONE-SHOT INTENT
+      (`stores/settings/browser-focus-store.ts`, the `providers-focus-store`
+      shape): the login-import announcement toast
+      (`login-import-announcement-controller.tsx`, mounted beside the
+      app-update toast) arms `openImportLogins` and navigates to General,
+      the row derives `open` from its own state OR the intent, and closing
+      - or mounting with saving off, when the row would refuse - consumes
+        it. The toast shows once per install, for a user who has already
+        finished onboarding (a fresh user meets the feature as a tour act
+        instead); either surface consumes the `login-import` id in the
+        persisted `feature-announcements` store, so exactly one of them ever
+        shows. The toast CLAIMS the id rather than consuming it (`claim`
+        re-reads localStorage before writing, synchronously), because the
+        store is per renderer and two windows restored together would each
+        hydrate it empty; the tour consumes it on the act's mount AND on the
+        tour's finish unconditionally (the availability read is still pending
+        on an immediate Skip, and an act the list held can be dropped again),
+        so leaving the tour never resurrects the toast. The toast also holds
+        until the system-tab modal API is published, since its action
+        navigates through it and would otherwise no-op on a cold launch.
     - **Forget all browser logins** (destructive confirm) moved here from the
       tile shield popover, which was ticket 08's temporary home. It calls the
       bridge's `forgetLogins()` directly and so speaks for EVERY host the user has a live browser stream to; that is
@@ -602,6 +669,71 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
     distinct restrained-red card/label tone is unchanged from before the
     reorg, just carried by the shared group component instead of bespoke
     markup.
+- `Opening behavior` (`panels/opening-behavior-panel.tsx`,
+  `/settings/opening-behavior`, third in the Application group) Where a click
+  LANDS. TWO `SettingsGroup`s - Links and Tile placement - each one enum
+  select per store field, written through the store's single patch setters -
+  no local state, no disabled states. Store keys are unchanged from the
+  three-group layout (`content` / `conversation` / `browser`, `per-kind` /
+  `per-category`); only the labels are product vocabulary now.
+  - Options are named for the DESTINATION, not the container: `In this pane`,
+    `In a new split`, `Per tile type` - and for links, `In Traycer`,
+    `In default browser`, `Per link type`. A user asks "where does this
+    open", so the answer belongs in the option, not in the reader's head.
+  - Every `EnumSelect`'s `ariaLabel` is its visible label VERBATIM
+    (`Open links`, `Markdown`, `Open new tiles`, `Files, diffs & artifacts`,
+    ...). Destination-shaped option copy only reads correctly under a control
+    the user can find by the name they can see; a spoken name that says
+    something else ("Content tiles") breaks voice control, which types what is
+    on screen.
+  - One `TRIGGER_CLASS` (`w-[min(60vw,12rem)]`) for every trigger: two widths
+    made the override rows look like a different KIND of control rather than a
+    narrower one.
+  - A revealed per-type fragment is wrapped in one `bg-foreground/3` div, so
+    the override rows read as subordinate to the row that revealed them. An
+    alpha of the foreground, not `bg-muted` - see the raised-surface rule in
+    `clients/gui-app/AGENTS.md`.
+  - The four unconfigurable modifiers get ONE platform-aware legend under the
+    groups (`modLabel()` / `altLabel()` / `shiftLabel()` from
+    `lib/keybindings/platform`), not a clause in each row's copy: repeating
+    them per row spent description space the row's own scope needed.
+  - **Links**: "Open links" (no description - the legend carries the
+    modifiers) writes `linkOpen.default` (`in-app | external | per-kind`,
+    default `in-app`); `per-kind` reveals Markdown / Terminal / GitHub /
+    Images, each `in-app | external`, each described by WHERE those links are
+    encountered. `linkOpenModeForKind` resolves a kind against the default.
+  - **Tile placement**: "Open new tiles" writes `tilePlacement.default`
+    (`tab | split | per-category`, default `per-category`); `per-category`
+    reveals **Files, diffs & artifacts** (`content`), **Agents & terminals**
+    (`conversation`) and **Browsers** (`browser`) - product nouns for what the
+    user opens, not the store's category words. Browser alone adds **Picture
+    in picture** (`BrowserTilePlacement`) because the other two have no PiP
+    host. Defaults content=tab, conversation=tab, browser=split;
+    `tilePlacementForCategory` resolves a category against the default. On a
+    single-tile viewport (`useIsMobileViewport()`) the row gains the
+    DESCRIPTION "Narrow windows show one tile at a time, so everything opens
+    in this pane." - a description, not the amber `hint`, because nothing is
+    wrong and nothing was overridden: the window is simply narrow.
+  - **Agent-opened tabs** lives in Tile placement too (after the per-type
+    fragment, unconditional - it is a placement question wearing another
+    name, and a group of one row read like a third topic). `agentTabSurfacing`
+    (`surface | off`, default `off`) - what the GUI does when a HOST opens a
+    browser tab (the agent's REPL `openTab` tool, or a headless page popup),
+    described as "when an agent or a page opens a browser tab without you
+    clicking anything". `surface` ("Like any browser tile") places the tab
+    using the Browsers placement above: `pip` floats it unless a
+    user-converted PiP is showing or the epic surface is hidden, and
+    `tab`/`split` place a canvas tile grouped by session - same-session opens
+    become tabs of one pane - even in hidden epics. `off` ("Leave in the
+    sidebar") answers Electron foreground creates with a hidden off-screen
+    view so the open still succeeds, and leaves headless tabs in the sidebar.
+    Disposition decisions live in
+    `lib/browser-view/tiles/surface-host-opened-tab.ts`; headless-origin tabs
+    are diffed from `browser.sessions` lifecycle frames in the dock, seeded
+    snapshot-only so surfacing stays ephemeral across reloads.
+  - The pre-refactor keys (`browserLinkDefaultMode`,
+    `{terminal,markdown}BrowserLinkOpenMode`, `agentTabSurfacingMode`) are
+    migrated once in the store's persist `merge` and then dropped.
 - `Appearance` Five preference groups via `settings-group.tsx`, broad-to-
   specialized in one column: **Theme**, **Interface**, **Typography**,
   **Terminal**, **Artifact icons** - each a quiet `<h2>` label outside its own
@@ -891,7 +1023,7 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     the tabs that were supposed to hold its settings (and hid the fact that
     Cursor's General tab rendered nothing). Nothing renders between the provider
     header and the tab rail now. Also a "Create an API key" link
-    that opens the provider dashboard via `runnerHost.openExternalLink`
+    that opens the provider dashboard via `openLink(url, "docs")`
     (`API_KEY_DASHBOARD_URL`). The key is stored AES-256-GCM encrypted in
     `provider-overrides.json` and never returned over RPC - `state.apiKey` only
     reports `configured` + `source` (`stored` | `env`). When unset, the host
@@ -1590,7 +1722,7 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
         wrong thing to open a tab on, so the dialog carries an explicit policy
         (`applyStartResult` vs `applyPollResult`) instead of inferring one from
         the arm: a tick refreshes the panel and the resume record, and only a
-        user action reaches `openExternalLink`. Handling both in one place
+        user action reaches `openLink`. Handling both in one place
         reopened the sign-in page every 1.5s, on a flow the user was already in.
       - **Polling is single-flight**, scheduled from the previous tick's
         settlement rather than on a `setInterval`: an interval keeps firing

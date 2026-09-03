@@ -56,7 +56,6 @@ export function DesktopDialogHost(): ReactNode {
           if (!open) close();
         }}
         support={support}
-        openExternalLink={(url) => runnerHost.openExternalLink(url)}
       />
       <LogsChooserDialog
         open={activeDialog === "logs"}

@@ -22,6 +22,10 @@ import type {
   BrowserViewSnapshotInvalidatedChange,
   BrowserViewTileCommandEvent,
   BrowserViewTileKey,
+  LoginImportRequest,
+  LoginImportResult,
+  LoginImportScan,
+  LoginImportSource,
 } from "@traycer-clients/shared/platform/browser-view";
 
 /**
@@ -229,6 +233,39 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
 
   clearSavedLoginSite(): Promise<boolean> {
     return Promise.resolve(true);
+  }
+
+  listLoginImportSources(): Promise<readonly LoginImportSource[]> {
+    return Promise.resolve([]);
+  }
+
+  pickLoginImportFile(): Promise<LoginImportSource | null> {
+    return Promise.resolve(null);
+  }
+
+  scanLoginImportSource(sourceId: string): Promise<LoginImportScan> {
+    return Promise.resolve({
+      sourceId,
+      scanId: `scan-${sourceId}`,
+      sites: [],
+      excluded: [],
+      protectedCookieCount: 0,
+      partitionedCookieCount: 0,
+      unreadableCookieCount: 0,
+      unlock: null,
+      blocked: null,
+    });
+  }
+
+  importLogins(_input: LoginImportRequest): Promise<LoginImportResult> {
+    return Promise.resolve({
+      status: "imported",
+      importedSites: 0,
+      importedCookies: 0,
+      replacedSites: 0,
+      skippedInvalid: 0,
+      notifiedHosts: 0,
+    });
   }
 
   onFindChange(_handler: (change: BrowserViewFindChange) => void): {

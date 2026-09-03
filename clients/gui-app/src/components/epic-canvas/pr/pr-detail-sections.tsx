@@ -1,4 +1,4 @@
-import { useCallback, type ReactNode } from "react";
+import { useCallback, type MouseEvent, type ReactNode } from "react";
 import {
   ArrowRight,
   CheckCircle2,
@@ -35,6 +35,7 @@ import {
   type PrCheckGroup,
   type PrCheckOutcome,
 } from "@/lib/pr/pr-check-groups";
+import type { LinkClickEvent } from "@/lib/links/open-link";
 import { cn } from "@/lib/utils";
 
 /**
@@ -228,7 +229,7 @@ function PrFileQuoteButton(props: {
 export function PrDetailChecks(props: {
   readonly checks: PrChecksSection;
   readonly counts: PrCheckCounts;
-  readonly onOpenDetails: (url: string) => void;
+  readonly onOpenDetails: (url: string, event: LinkClickEvent) => void;
 }): ReactNode {
   if (props.checks.contexts.length === 0) {
     return (
@@ -279,7 +280,7 @@ export function PrDetailChecks(props: {
  */
 function PrCheckGroupSection(props: {
   readonly group: PrCheckGroup;
-  readonly onOpenDetails: (url: string) => void;
+  readonly onOpenDetails: (url: string, event: LinkClickEvent) => void;
 }): ReactNode {
   const { group } = props;
   return (
@@ -336,15 +337,18 @@ const OUTCOME_GLYPH: Record<
 function PrCheckRow(props: {
   readonly context: PrCheckContext;
   readonly outcome: PrCheckOutcome;
-  readonly onOpenDetails: (url: string) => void;
+  readonly onOpenDetails: (url: string, event: LinkClickEvent) => void;
 }): ReactNode {
   const { context, outcome } = props;
   const glyph = OUTCOME_GLYPH[outcome];
   const label = formatPrCheckName(context);
   const { onOpenDetails } = props;
-  const open = useCallback((): void => {
-    if (context.detailsUrl !== null) onOpenDetails(context.detailsUrl);
-  }, [context.detailsUrl, onOpenDetails]);
+  const open = useCallback(
+    (event: MouseEvent<HTMLButtonElement>): void => {
+      if (context.detailsUrl !== null) onOpenDetails(context.detailsUrl, event);
+    },
+    [context.detailsUrl, onOpenDetails],
+  );
 
   return (
     <li className="flex min-w-0 items-center gap-2 px-3 py-2 text-ui-xs">

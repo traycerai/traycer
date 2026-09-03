@@ -35,6 +35,16 @@ import type {
   BrowserSessionProfileRequest,
 } from "../browser-session";
 
+// The popup path hands non-http(s) targets to the OS through the app's
+// scheme allowlist; mocking the seam keeps the assertion on "we delegated"
+// rather than on Electron's `shell`.
+const safelyOpenExternalMock = vi.hoisted(() =>
+  vi.fn((_url: string) => Promise.resolve(true)),
+);
+vi.mock("../../app/security", () => ({
+  safelyOpenExternal: safelyOpenExternalMock,
+}));
+
 type BrowserViewManagerOptions = ConstructorParameters<
   typeof BrowserViewManager
 >[0];
@@ -566,7 +576,7 @@ class FakeWindow implements BrowserViewWindow {
 
 class FakePopupWebContents extends EventEmitter {
   windowOpenHandler:
-    | ((details: { readonly url: string }) => { readonly action: string })
+    | Parameters<BrowserViewPopupWebContents["setWindowOpenHandler"]>[0]
     | null = null;
 
   constructor(readonly id: number) {
@@ -578,7 +588,7 @@ class FakePopupWebContents extends EventEmitter {
   }
 
   setWindowOpenHandler(
-    handler: (details: { readonly url: string }) => { readonly action: string },
+    handler: Parameters<BrowserViewPopupWebContents["setWindowOpenHandler"]>[0],
   ): void {
     this.windowOpenHandler = handler;
   }
@@ -1354,11 +1364,15 @@ describe("BrowserViewManager native tab lifecycle", () => {
       disposition: "foreground-tab",
     });
     expect(harness.openTileRequests).toEqual([
-      { ...BASE_TILE_KEY, url: "https://example.com/next" },
+      {
+        ...BASE_TILE_KEY,
+        url: "https://example.com/next",
+        disposition: "foreground",
+      },
     ]);
   });
 
-  it("guards a popup's own navigation and denies its window.open", async () => {
+  it("guards a popup's own navigation and window.open", async () => {
     const harness = createHarness();
     const { view } = await attachNativeTab(
       harness,
@@ -1384,8 +1398,14 @@ describe("BrowserViewManager native tab lifecycle", () => {
     );
     expect(prevented).toBe(1);
     expect(
-      popup.webContents.windowOpenHandler?.({ url: "https://ok.test/" }),
+      popup.webContents.windowOpenHandler?.({
+        url: "file:///etc/passwd",
+        frameName: "_blank",
+        features: "",
+        disposition: "foreground-tab",
+      }),
     ).toEqual({ action: "deny" });
+    expect(harness.openTileRequests).toEqual([]);
   });
 
   it("controls an unbound tab through its native identity", async () => {
@@ -3241,5 +3261,150 @@ describe("BrowserViewManager tile geometry under page zoom", () => {
 
     expect(view.bounds).toHaveLength(boundsBefore);
     expect(view.visible).toBe(false);
+  });
+});
+
+describe("BrowserViewManager in-page window.open (Decision #22)", () => {
+  interface OpenedWindow {
+    readonly result: { readonly action: string };
+    readonly openTileRequests: readonly BrowserViewOpenTileRequest[];
+  }
+
+  async function openWindow(
+    disposition: string,
+    url: string,
+    features: string,
+  ): Promise<OpenedWindow> {
+    const harness = createHarness();
+    const { view } = await attachNativeTab(
+      harness,
+      "window-1",
+      BASE_KEY,
+      "https://opener.example/",
+    );
+    const handler = view.webContents.windowOpenHandler;
+    if (handler === null) throw new Error("expected a window-open handler");
+    const result = handler({
+      url,
+      frameName: features.length > 0 ? "popup" : "_blank",
+      features,
+      disposition,
+    });
+    return { result, openTileRequests: harness.openTileRequests };
+  }
+
+  beforeEach(() => {
+    safelyOpenExternalMock.mockClear();
+  });
+
+  it("maps Chromium's background-tab disposition onto the tile request", async () => {
+    const opened = await openWindow(
+      "background-tab",
+      "https://target.example/a",
+      "",
+    );
+    expect(opened.result.action).toBe("deny");
+    expect(opened.openTileRequests).toEqual([
+      {
+        ...BASE_TILE_KEY,
+        url: "https://target.example/a",
+        disposition: "background",
+      },
+    ]);
+  });
+
+  it("treats every other disposition as foreground", async () => {
+    const opened = await openWindow(
+      "foreground-tab",
+      "https://target.example/b",
+      "",
+    );
+    expect(opened.openTileRequests[0]?.disposition).toBe("foreground");
+  });
+
+  it("rejects a non-http(s) target and sends no tile request", async () => {
+    const opened = await openWindow("foreground-tab", "mailto:a@b.example", "");
+    expect(opened.result.action).toBe("deny");
+    expect(opened.openTileRequests).toEqual([]);
+    expect(safelyOpenExternalMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps an about:blank open in the session as a tile", async () => {
+    // A page can mint a blank tab and navigate it itself.
+    const opened = await openWindow("foreground-tab", "", "");
+    expect(opened.result.action).toBe("deny");
+    expect(opened.openTileRequests).toEqual([
+      {
+        ...BASE_TILE_KEY,
+        url: "about:blank",
+        disposition: "foreground",
+      },
+    ]);
+    expect(safelyOpenExternalMock).not.toHaveBeenCalled();
+  });
+
+  it("leaves a real popup (non-empty features) as a native window", async () => {
+    const opened = await openWindow(
+      "new-window",
+      "https://target.example/popup",
+      "width=400,height=300",
+    );
+    expect(opened.result).toMatchObject({
+      action: "allow",
+      outlivesOpener: false,
+    });
+    expect(opened.openTileRequests).toEqual([]);
+    expect(safelyOpenExternalMock).not.toHaveBeenCalled();
+  });
+
+  it("reapplies the popup policy recursively without duplicate listeners", async () => {
+    const harness = createHarness();
+    const { view } = await attachNativeTab(
+      harness,
+      "window-1",
+      BASE_KEY,
+      "https://opener.example/",
+    );
+    const popup = new FakePopupWindow(101);
+    view.webContents.emit("did-create-window", popup);
+
+    const popupHandler = popup.webContents.windowOpenHandler;
+    expect(popupHandler).toEqual(expect.any(Function));
+    const popupOpenTileListeners =
+      popup.webContents.listenerCount("did-create-window");
+    expect(popupOpenTileListeners).toBe(1);
+
+    const nestedPopup = new FakePopupWindow(102);
+    popup.webContents.emit("did-create-window", nestedPopup);
+    expect(nestedPopup.webContents.windowOpenHandler).toEqual(
+      expect.any(Function),
+    );
+    expect(nestedPopup.webContents.listenerCount("did-create-window")).toBe(1);
+
+    const nestedPopupHandler = nestedPopup.webContents.windowOpenHandler;
+    if (nestedPopupHandler === null) {
+      throw new Error("expected recursive popup window-open handler");
+    }
+    expect(
+      nestedPopupHandler({
+        url: "https://target.example/tile",
+        frameName: "_blank",
+        features: "",
+        disposition: "foreground-tab",
+      }),
+    ).toEqual({ action: "deny" });
+    expect(harness.openTileRequests).toContainEqual({
+      ...BASE_TILE_KEY,
+      url: "https://target.example/tile",
+      disposition: "foreground",
+    });
+
+    // A repeated did-create-window delivery for the same native child must
+    // not register another handler or closed listener.
+    view.webContents.emit("did-create-window", popup);
+    expect(popup.webContents.listenerCount("did-create-window")).toBe(
+      popupOpenTileListeners,
+    );
+    expect(popup.webContents.windowOpenHandler).toBe(popupHandler);
   });
 });

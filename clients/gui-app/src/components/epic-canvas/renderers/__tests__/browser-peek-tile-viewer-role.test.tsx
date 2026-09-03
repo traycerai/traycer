@@ -1,5 +1,6 @@
 import "../../../../../__tests__/test-browser-apis";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderPeekTile } from "@/components/epic-canvas/renderers/__tests__/browser-peek-tile-render";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearScreencastOwner,
@@ -71,8 +72,8 @@ const PASSIVE_FRAME_KINDS = [
   "reload",
 ];
 
-function renderPeekTile(): void {
-  render(
+function renderTile(): void {
+  renderPeekTile(
     <BrowserPeekTile
       viewTabId="view-tab-1"
       paneId="pane-1"
@@ -123,7 +124,7 @@ describe("BrowserPeekTile viewer role", () => {
   });
 
   it("renders no arm or input affordance", () => {
-    renderPeekTile();
+    renderTile();
 
     expect(subscribedRole()).toBe("viewer");
     expect(
@@ -143,7 +144,7 @@ describe("BrowserPeekTile viewer role", () => {
   });
 
   it("sends nothing and shows nothing when a gesture lands on the surface", () => {
-    renderPeekTile();
+    renderTile();
     const stream = liveStream();
     const surface = readOnlySurface();
 
@@ -160,7 +161,7 @@ describe("BrowserPeekTile viewer role", () => {
 
   it("keeps the tile role's affordances and its arm claim", () => {
     hookState.browserView = {};
-    renderPeekTile();
+    renderTile();
     const stream = liveStream();
 
     expect(subscribedRole()).toBe("tile");

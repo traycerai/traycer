@@ -38,18 +38,49 @@ import {
 
 export type ThemeMode = "system" | "light" | "dark";
 export type EpicNodeIconColorMode = "byType" | "none";
-export type BrowserLinkOpenMode = "in-app" | "external";
-export type BrowserLinkDefaultMode = BrowserLinkOpenMode | "per-kind";
+export type LinkOpenMode = "in-app" | "external";
+export type LinkKindSetting = "markdown" | "terminal" | "github" | "image";
+/** Global default plus per-kind overrides for where an app link opens. */
+export interface LinkOpenSettings {
+  default: LinkOpenMode | "per-kind";
+  markdown: LinkOpenMode;
+  terminal: LinkOpenMode;
+  github: LinkOpenMode;
+  image: LinkOpenMode;
+}
+export type TilePlacement = "tab" | "split";
+/** Browser tiles can additionally float picture-in-picture. */
+export type BrowserTilePlacement = TilePlacement | "pip";
+export interface TilePlacementSettings {
+  default: TilePlacement | "per-category";
+  content: TilePlacement;
+  conversation: TilePlacement;
+  browser: BrowserTilePlacement;
+}
 /**
- * How a tab the AGENT opens via its browser REPL (`openTab`) is surfaced.
- * `pip` floats it picture-in-picture, `tile` places it on the epic canvas,
- * `off` keeps it fully in the background (hidden view + sidebar listing).
+ * Whether a tab the AGENT opens via its browser REPL (`openTab`) reaches the
+ * canvas at all. `surface` places it using the browser tile placement; `off`
+ * keeps it fully in the background (hidden view + sidebar listing).
  * Deliberately default-off: surfacing is opt-in, unlike the pre-setting
  * behavior which always split the canvas.
  */
-export type AgentTabSurfacingMode = "pip" | "tile" | "off";
-export const DEFAULT_AGENT_TAB_SURFACING_MODE: AgentTabSurfacingMode = "off";
-const DEFAULT_BROWSER_LINK_OPEN_MODE: BrowserLinkOpenMode = "in-app";
+export type AgentTabSurfacing = "off" | "surface";
+
+const DEFAULT_LINK_OPEN_MODE: LinkOpenMode = "in-app";
+export const DEFAULT_LINK_OPEN_SETTINGS: LinkOpenSettings = {
+  default: DEFAULT_LINK_OPEN_MODE,
+  markdown: DEFAULT_LINK_OPEN_MODE,
+  terminal: DEFAULT_LINK_OPEN_MODE,
+  github: DEFAULT_LINK_OPEN_MODE,
+  image: DEFAULT_LINK_OPEN_MODE,
+};
+export const DEFAULT_TILE_PLACEMENT_SETTINGS: TilePlacementSettings = {
+  default: "per-category",
+  content: "tab",
+  conversation: "tab",
+  browser: "split",
+};
+const DEFAULT_AGENT_TAB_SURFACING: AgentTabSurfacing = "off";
 export type MinimapSide = "left" | "right";
 export type MinimapPlacement = MinimapSide | "hide";
 // Mirrors xterm's `cursorStyle` union; kept as our own type so the settings
@@ -150,20 +181,18 @@ export interface SettingsState {
    * the chat composer as a blockquote.
    */
   quoteReplyEnabled: boolean;
-  /** Global default for http(s) links. */
-  browserLinkDefaultMode: BrowserLinkDefaultMode;
-  /** Terminal plain URL / OSC-8 default used when global mode is per-kind. */
-  terminalBrowserLinkOpenMode: BrowserLinkOpenMode;
-  /** Markdown anchor default used when global mode is per-kind. */
-  markdownBrowserLinkOpenMode: BrowserLinkOpenMode;
+  /** Where app-rendered http(s) links open: default plus per-kind overrides. */
+  linkOpen: LinkOpenSettings;
   /** Origins designated from terminal URL output for the host classifier. */
   browserDevOrigins: ReadonlyArray<string>;
+  /** Where a tile lands on the canvas: default plus per-category overrides. */
+  tilePlacement: TilePlacementSettings;
   /**
    * What happens visually when the agent opens a browser tab. The agent's
    * REPL tabs are a host capability, separate from link routing, and this
    * preference also governs suppressing them.
    */
-  agentTabSurfacingMode: AgentTabSurfacingMode;
+  agentTabSurfacing: AgentTabSurfacing;
   /**
    * Cmd/Ctrl+Enter mid-turn steering. Opt-out (default ON): when enabled,
    * pressing Cmd+Enter while a turn is running on a steer-capable harness sends
@@ -218,12 +247,11 @@ export interface SettingsState {
   setVoiceLanguage: (value: string) => void;
   setWorktreeBranchPrefix: (value: string) => void;
   setQuoteReplyEnabled: (value: boolean) => void;
-  setBrowserLinkDefaultMode: (mode: BrowserLinkDefaultMode) => void;
-  setTerminalBrowserLinkOpenMode: (mode: BrowserLinkOpenMode) => void;
-  setMarkdownBrowserLinkOpenMode: (mode: BrowserLinkOpenMode) => void;
+  setLinkOpen: (patch: Partial<LinkOpenSettings>) => void;
   addBrowserDevOrigin: (origin: string) => void;
   removeBrowserDevOrigin: (origin: string) => void;
-  setAgentTabSurfacingMode: (mode: AgentTabSurfacingMode) => void;
+  setTilePlacement: (patch: Partial<TilePlacementSettings>) => void;
+  setAgentTabSurfacing: (mode: AgentTabSurfacing) => void;
   setSteerOnModEnterEnabled: (value: boolean) => void;
   setDiffViewerPreferences: (preferences: DiffViewerPreferences) => void;
   patchDiffViewerPreferences: (patch: DiffViewerPreferencesPatch) => void;
@@ -264,11 +292,10 @@ type PersistedSettingsState = Pick<
   | "voiceLanguage"
   | "worktreeBranchPrefix"
   | "quoteReplyEnabled"
-  | "browserLinkDefaultMode"
-  | "terminalBrowserLinkOpenMode"
-  | "markdownBrowserLinkOpenMode"
+  | "linkOpen"
   | "browserDevOrigins"
-  | "agentTabSurfacingMode"
+  | "tilePlacement"
+  | "agentTabSurfacing"
   | "steerOnModEnterEnabled"
   | "diffViewerPreferences"
   | "workspaceFileWordWrap"
@@ -339,11 +366,10 @@ function partializeSettingsState(state: SettingsState): PersistedSettingsState {
     voiceLanguage: state.voiceLanguage,
     worktreeBranchPrefix: state.worktreeBranchPrefix,
     quoteReplyEnabled: state.quoteReplyEnabled,
-    browserLinkDefaultMode: state.browserLinkDefaultMode,
-    terminalBrowserLinkOpenMode: state.terminalBrowserLinkOpenMode,
-    markdownBrowserLinkOpenMode: state.markdownBrowserLinkOpenMode,
+    linkOpen: state.linkOpen,
     browserDevOrigins: state.browserDevOrigins,
-    agentTabSurfacingMode: state.agentTabSurfacingMode,
+    tilePlacement: state.tilePlacement,
+    agentTabSurfacing: state.agentTabSurfacing,
     steerOnModEnterEnabled: state.steerOnModEnterEnabled,
     diffViewerPreferences: state.diffViewerPreferences,
     workspaceFileWordWrap: state.workspaceFileWordWrap,
@@ -382,11 +408,10 @@ export const useSettingsStore = create<SettingsState>()(
       voiceLanguage: "auto",
       worktreeBranchPrefix: DEFAULT_WORKTREE_BRANCH_PREFIX,
       quoteReplyEnabled: true,
-      browserLinkDefaultMode: DEFAULT_BROWSER_LINK_OPEN_MODE,
-      terminalBrowserLinkOpenMode: DEFAULT_BROWSER_LINK_OPEN_MODE,
-      markdownBrowserLinkOpenMode: DEFAULT_BROWSER_LINK_OPEN_MODE,
+      linkOpen: DEFAULT_LINK_OPEN_SETTINGS,
       browserDevOrigins: [],
-      agentTabSurfacingMode: DEFAULT_AGENT_TAB_SURFACING_MODE,
+      tilePlacement: DEFAULT_TILE_PLACEMENT_SETTINGS,
+      agentTabSurfacing: DEFAULT_AGENT_TAB_SURFACING,
       steerOnModEnterEnabled: true,
       diffViewerPreferences: DEFAULT_DIFF_VIEWER_PREFERENCES,
       workspaceFileWordWrap: null,
@@ -456,15 +481,9 @@ export const useSettingsStore = create<SettingsState>()(
       setVoiceLanguage: makeSetter(set, "voiceLanguage"),
       setWorktreeBranchPrefix: makeSetter(set, "worktreeBranchPrefix"),
       setQuoteReplyEnabled: makeSetter(set, "quoteReplyEnabled"),
-      setBrowserLinkDefaultMode: makeSetter(set, "browserLinkDefaultMode"),
-      setTerminalBrowserLinkOpenMode: makeSetter(
-        set,
-        "terminalBrowserLinkOpenMode",
-      ),
-      setMarkdownBrowserLinkOpenMode: makeSetter(
-        set,
-        "markdownBrowserLinkOpenMode",
-      ),
+      setLinkOpen: (patch) => {
+        set((s) => ({ linkOpen: { ...s.linkOpen, ...patch } }));
+      },
       addBrowserDevOrigin: (origin) => {
         set((s) => {
           if (s.browserDevOrigins.includes(origin)) return s;
@@ -483,7 +502,10 @@ export const useSettingsStore = create<SettingsState>()(
             : { browserDevOrigins };
         });
       },
-      setAgentTabSurfacingMode: makeSetter(set, "agentTabSurfacingMode"),
+      setTilePlacement: (patch) => {
+        set((s) => ({ tilePlacement: { ...s.tilePlacement, ...patch } }));
+      },
+      setAgentTabSurfacing: makeSetter(set, "agentTabSurfacing"),
       setSteerOnModEnterEnabled: makeSetter(set, "steerOnModEnterEnabled"),
       setDiffViewerPreferences: makeSetter(set, "diffViewerPreferences"),
       patchDiffViewerPreferences: (patch) => {
@@ -521,7 +543,10 @@ export const useSettingsStore = create<SettingsState>()(
       // chosen"), and any non-boolean that rehydrated verbatim would be
       // neither `true`, `false`, nor that third state - a truthy string would
       // read as "wrap on, chosen deliberately" and the pointer-type default
-      // could never be reached again. Every other field keeps the default
+      // could never be reached again. `linkOpen`, `tilePlacement` and
+      // `agentTabSurfacing` are resolved from the persisted record rather than
+      // from `merged` because this is also where the one-shot migration off
+      // their pre-refactor keys runs. Every other field keeps the default
       // shallow merge behavior.
       merge: (persistedState, currentState) => {
         const persisted: Record<string, unknown> = isRecord(persistedState)
@@ -542,26 +567,9 @@ export const useSettingsStore = create<SettingsState>()(
             persistedMinimapSide === "hide"
               ? persistedMinimapSide
               : DEFAULT_MINIMAP_SIDE,
-          agentTabSurfacingMode: isAgentTabSurfacingMode(
-            merged.agentTabSurfacingMode,
-          )
-            ? merged.agentTabSurfacingMode
-            : DEFAULT_AGENT_TAB_SURFACING_MODE,
-          browserLinkDefaultMode: isBrowserLinkDefaultMode(
-            merged.browserLinkDefaultMode,
-          )
-            ? merged.browserLinkDefaultMode
-            : DEFAULT_BROWSER_LINK_OPEN_MODE,
-          terminalBrowserLinkOpenMode: isBrowserLinkOpenMode(
-            merged.terminalBrowserLinkOpenMode,
-          )
-            ? merged.terminalBrowserLinkOpenMode
-            : DEFAULT_BROWSER_LINK_OPEN_MODE,
-          markdownBrowserLinkOpenMode: isBrowserLinkOpenMode(
-            merged.markdownBrowserLinkOpenMode,
-          )
-            ? merged.markdownBrowserLinkOpenMode
-            : DEFAULT_BROWSER_LINK_OPEN_MODE,
+          agentTabSurfacing: resolvePersistedAgentTabSurfacing(persisted),
+          linkOpen: resolvePersistedLinkOpen(persisted),
+          tilePlacement: resolvePersistedTilePlacement(persisted),
           browserDevOrigins: Array.isArray(merged.browserDevOrigins)
             ? merged.browserDevOrigins.filter(
                 (origin) => typeof origin === "string",
@@ -613,20 +621,142 @@ function resolvePersistedNotificationChimeSounds(
   return resolved;
 }
 
-export function isBrowserLinkOpenMode(
-  value: unknown,
-): value is BrowserLinkOpenMode {
+export function isLinkOpenMode(value: unknown): value is LinkOpenMode {
   return value === "in-app" || value === "external";
 }
 
-export function isBrowserLinkDefaultMode(
+export function isLinkOpenDefault(
   value: unknown,
-): value is BrowserLinkDefaultMode {
-  return isBrowserLinkOpenMode(value) || value === "per-kind";
+): value is LinkOpenSettings["default"] {
+  return isLinkOpenMode(value) || value === "per-kind";
 }
 
-export function isAgentTabSurfacingMode(
+export function isTilePlacement(value: unknown): value is TilePlacement {
+  return value === "tab" || value === "split";
+}
+
+export function isBrowserTilePlacement(
   value: unknown,
-): value is AgentTabSurfacingMode {
-  return value === "pip" || value === "tile" || value === "off";
+): value is BrowserTilePlacement {
+  return isTilePlacement(value) || value === "pip";
+}
+
+export function isTilePlacementDefault(
+  value: unknown,
+): value is TilePlacementSettings["default"] {
+  return isTilePlacement(value) || value === "per-category";
+}
+
+export function isAgentTabSurfacing(
+  value: unknown,
+): value is AgentTabSurfacing {
+  return value === "off" || value === "surface";
+}
+
+/** The configured mode for one link kind; the global default wins unless it
+ * defers to the per-kind overrides. */
+export function linkOpenModeForKind(
+  settings: LinkOpenSettings,
+  kind: LinkKindSetting,
+): LinkOpenMode {
+  return settings.default === "per-kind" ? settings[kind] : settings.default;
+}
+
+/** Same shape for tiles: the global default wins unless it defers per
+ * category. Only `browser` can answer `pip`. */
+export function tilePlacementForCategory(
+  settings: TilePlacementSettings,
+  category: "content" | "conversation" | "browser",
+): BrowserTilePlacement {
+  return settings.default === "per-category"
+    ? settings[category]
+    : settings.default;
+}
+
+/**
+ * Rehydration for the link/tile/agent settings, which doubles as the one-shot
+ * migration off the pre-refactor keys (`browserLinkDefaultMode`,
+ * `{terminal,markdown}BrowserLinkOpenMode`, `agentTabSurfacingMode`). The old
+ * keys are read here and nowhere else; `partialize` does not list them, so the
+ * next write drops them. `github` and `image` are new kinds with no legacy
+ * value - they take the default.
+ */
+function resolvePersistedLinkOpen(
+  persisted: Record<string, unknown>,
+): LinkOpenSettings {
+  const stored: Record<string, unknown> = isRecord(persisted.linkOpen)
+    ? persisted.linkOpen
+    : {};
+  return {
+    default: resolveLinkOpenDefault(
+      stored.default,
+      persisted.browserLinkDefaultMode,
+    ),
+    markdown: resolveLinkOpenMode(
+      stored.markdown,
+      persisted.markdownBrowserLinkOpenMode,
+    ),
+    terminal: resolveLinkOpenMode(
+      stored.terminal,
+      persisted.terminalBrowserLinkOpenMode,
+    ),
+    github: resolveLinkOpenMode(stored.github, null),
+    image: resolveLinkOpenMode(stored.image, null),
+  };
+}
+
+function resolveLinkOpenDefault(
+  value: unknown,
+  legacy: unknown,
+): LinkOpenSettings["default"] {
+  if (isLinkOpenDefault(value)) return value;
+  if (isLinkOpenDefault(legacy)) return legacy;
+  return DEFAULT_LINK_OPEN_SETTINGS.default;
+}
+
+function resolveLinkOpenMode(value: unknown, legacy: unknown): LinkOpenMode {
+  if (isLinkOpenMode(value)) return value;
+  if (isLinkOpenMode(legacy)) return legacy;
+  return DEFAULT_LINK_OPEN_MODE;
+}
+
+/**
+ * The retired `agentTabSurfacingMode` migrates into `agentTabSurfacing` ONLY
+ * (see `resolvePersistedAgentTabSurfacing`). It described what an
+ * AGENT-opened tab did, and the new browser placement governs every browser
+ * open - so carrying `pip` across would float every link the user clicks,
+ * which is not what the old setting ever said. Both legacy values leave the
+ * browser placement at its default.
+ */
+function resolvePersistedTilePlacement(
+  persisted: Record<string, unknown>,
+): TilePlacementSettings {
+  const stored: Record<string, unknown> = isRecord(persisted.tilePlacement)
+    ? persisted.tilePlacement
+    : {};
+  return {
+    default: isTilePlacementDefault(stored.default)
+      ? stored.default
+      : DEFAULT_TILE_PLACEMENT_SETTINGS.default,
+    content: isTilePlacement(stored.content)
+      ? stored.content
+      : DEFAULT_TILE_PLACEMENT_SETTINGS.content,
+    conversation: isTilePlacement(stored.conversation)
+      ? stored.conversation
+      : DEFAULT_TILE_PLACEMENT_SETTINGS.conversation,
+    browser: isBrowserTilePlacement(stored.browser)
+      ? stored.browser
+      : DEFAULT_TILE_PLACEMENT_SETTINGS.browser,
+  };
+}
+
+function resolvePersistedAgentTabSurfacing(
+  persisted: Record<string, unknown>,
+): AgentTabSurfacing {
+  if (isAgentTabSurfacing(persisted.agentTabSurfacing)) {
+    return persisted.agentTabSurfacing;
+  }
+  const legacy = persisted.agentTabSurfacingMode;
+  if (legacy === "pip" || legacy === "tile") return "surface";
+  return DEFAULT_AGENT_TAB_SURFACING;
 }

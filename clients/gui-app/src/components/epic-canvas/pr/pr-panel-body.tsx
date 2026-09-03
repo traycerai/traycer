@@ -33,6 +33,7 @@ import {
   useLeftPanelSectionCollapsed,
   useMainPanelCollapsed,
 } from "@/stores/epics/left-panel-store";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 /**
  * Pull Requests panel body. Subscribes in foreground mode on the canvas host
@@ -116,7 +117,7 @@ function PrPanelBodyContent(props: {
   readonly isPending: boolean;
   readonly hasCachedData: boolean;
 }): ReactNode {
-  const tileNavigation = useEpicTileNavigation();
+  const { openTile } = useEpicTileNavigation();
   const groups = useMemo(() => groupPrItemsByRepo(props.items), [props.items]);
   const [collapsedRepos, setCollapsedRepos] = useState<ReadonlySet<string>>(
     new Set<string>(),
@@ -131,7 +132,6 @@ function PrPanelBodyContent(props: {
 
   const hostId = props.hostId;
   const epicId = props.epicId;
-  const openTileInEpic = tileNavigation.openTileInEpic;
   const buildEntry = useCallback(
     (item: PrLightItem): PrRowEntry => {
       const identified = fullyIdentifiedPrBase(item);
@@ -158,17 +158,21 @@ function PrPanelBodyContent(props: {
           tileArgs === null
             ? null
             : () => {
-                openTileInEpic(
-                  epicId,
-                  makePrDetailTile({
-                    ...tileArgs,
-                    name: formatPrRowTitle(item),
-                  }),
+                openTile(
+                  tileIntent(
+                    makePrDetailTile({
+                      ...tileArgs,
+                      name: formatPrRowTitle(item),
+                    }),
+                    { epicId },
+                    "explicit",
+                    "direct_ui",
+                  ),
                 );
               },
       };
     },
-    [epicId, hostId, openTileInEpic],
+    [epicId, hostId, openTile],
   );
 
   if (props.isPending && !props.hasCachedData) {

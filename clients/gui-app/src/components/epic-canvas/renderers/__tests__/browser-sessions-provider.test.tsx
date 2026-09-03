@@ -2,6 +2,11 @@ import "../../../../../__tests__/test-browser-apis";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useState, type ReactNode } from "react";
+import { EpicViewTabContext } from "@/components/epic-canvas/view-tab-context";
+import {
+  PaneSurfaceActivityContext,
+  PaneVisibilityContext,
+} from "@/components/epic-tabs/pane-visibility-context";
 import {
   BrowserSessionsHostProvider,
   BrowserSessionsProvider,
@@ -39,6 +44,17 @@ const hookState = vi.hoisted(() => ({
   },
   transportKey: "authenticated-host-test",
   ownerIdentityKey: "local\u0000host-test\u0000user-test",
+  localHostId: "host-test" as string | null,
+}));
+
+const surfaceHostOpenedTabMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@/lib/browser-view/tiles/surface-host-opened-tab", () => ({
+  surfaceHostOpenedTab: surfaceHostOpenedTabMock,
+}));
+
+vi.mock("@/hooks/host/use-reactive-local-host-id", () => ({
+  useReactiveLocalHostId: () => hookState.localHostId,
 }));
 
 vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
@@ -339,6 +355,27 @@ function SharedProbe(props: { readonly id: string }): ReactNode {
   );
 }
 
+function PresentedBrowserSessionsProvider(props: {
+  readonly viewTabId: string;
+  readonly visible: boolean;
+  readonly focused: boolean;
+  readonly id: string;
+}): ReactNode {
+  return (
+    <EpicViewTabContext.Provider value={props.viewTabId}>
+      <PaneSurfaceActivityContext.Provider
+        value={{ visible: props.visible, focused: props.focused }}
+      >
+        <PaneVisibilityContext.Provider value={props.visible}>
+          <BrowserSessionsProvider epicId="epic-1">
+            <SharedProbe id={props.id} />
+          </BrowserSessionsProvider>
+        </PaneVisibilityContext.Provider>
+      </PaneSurfaceActivityContext.Provider>
+    </EpicViewTabContext.Provider>
+  );
+}
+
 function renderProvider(): void {
   render(
     <BrowserSessionsProvider epicId="epic-1">
@@ -414,6 +451,8 @@ function browserSessionFixture(
 
 describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
   beforeEach(() => {
+    surfaceHostOpenedTabMock.mockClear();
+    surfaceHostOpenedTabMock.mockReturnValue(true);
     hookState.ownerIdentityKey = "local\u0000host-test\u0000user-test";
     installTransport(false);
   });
@@ -487,6 +526,106 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
     rendered.unmount();
     expect(transport.closed).toBe(true);
     expect(stream.closed).toBe(true);
+  });
+
+  it("presents a host-opened tab in the focused retained view, not the first coordinator consumer", async () => {
+    render(
+      <>
+        <PresentedBrowserSessionsProvider
+          viewTabId="view-background"
+          visible={false}
+          focused={false}
+          id="background"
+        />
+        <PresentedBrowserSessionsProvider
+          viewTabId="view-focused"
+          visible
+          focused
+          id="focused"
+        />
+      </>,
+    );
+    const client = hookState.streamClient;
+    await waitFor(() => {
+      expect(client?.subscribes).toHaveLength(1);
+    });
+    const stream = client?.sessions[0];
+    if (stream === undefined) throw new Error("expected shared stream");
+
+    act(() => {
+      stream.emitStatus("open");
+      stream.emit(
+        {
+          kind: "tabOpened",
+          hasBinaryPayload: false,
+          sessionId: "session-popup",
+          tabId: "tab-popup",
+          source: "page",
+        },
+        null,
+      );
+    });
+
+    expect(surfaceHostOpenedTabMock).toHaveBeenCalledOnce();
+    expect(surfaceHostOpenedTabMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        epicId: "epic-1",
+        viewTabId: "view-focused",
+        sessionId: "session-popup",
+        tabId: "tab-popup",
+        source: "page",
+      }),
+    );
+  });
+
+  it("falls back when the preferred presenter was closed before delivery", async () => {
+    surfaceHostOpenedTabMock
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true);
+    render(
+      <>
+        <PresentedBrowserSessionsProvider
+          viewTabId="view-focused-stale"
+          visible
+          focused
+          id="focused-stale"
+        />
+        <PresentedBrowserSessionsProvider
+          viewTabId="view-visible-fallback"
+          visible
+          focused={false}
+          id="visible-fallback"
+        />
+      </>,
+    );
+    const client = hookState.streamClient;
+    await waitFor(() => {
+      expect(client?.subscribes).toHaveLength(1);
+    });
+    const stream = client?.sessions[0];
+    if (stream === undefined) throw new Error("expected shared stream");
+
+    act(() => {
+      stream.emitStatus("open");
+      stream.emit(
+        {
+          kind: "tabOpened",
+          hasBinaryPayload: false,
+          sessionId: "session-popup",
+          tabId: "tab-popup",
+          source: "page",
+        },
+        null,
+      );
+    });
+
+    expect(surfaceHostOpenedTabMock).toHaveBeenCalledTimes(2);
+    expect(surfaceHostOpenedTabMock.mock.calls[0]?.[0]).toMatchObject({
+      viewTabId: "view-focused-stale",
+    });
+    expect(surfaceHostOpenedTabMock.mock.calls[1]?.[0]).toMatchObject({
+      viewTabId: "view-visible-fallback",
+    });
   });
 
   it("keeps different hosts separate for the same owner identity", async () => {

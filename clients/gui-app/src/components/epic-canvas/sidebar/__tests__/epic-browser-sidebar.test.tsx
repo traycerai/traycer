@@ -31,8 +31,8 @@ import {
   findOpenArtifactInTab,
   useEpicCanvasStore,
 } from "@/stores/epics/canvas/store";
-import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import { findPaneById } from "@/stores/epics/canvas/tile-tree";
+import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import { BROWSER_TAB_AGENT_ACTIVITY_MS } from "@/lib/browser-view/browser-tab-display";
 import { BROWSERS_UNSUPPORTED_MESSAGE } from "@traycer-clients/shared/platform/browser-view";
 import { dismissPip } from "@/lib/browser-view/pip/pip-store";
@@ -930,6 +930,38 @@ describe("BrowsersPanelBody", () => {
     expect(screen.getByTestId("epic-browsers-panel-empty")).toBeTruthy();
     expect(screen.getByText("No browsers yet.")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Add browser" })).toBeTruthy();
+  });
+
+  // B3: closing the last tab leaves the session dormant on the host. The panel
+  // lists tabs, not sessions, so a dormant one contributes no row and no header
+  // - and a surface holding only dormant sessions reads as empty.
+  it("renders nothing for a session with no tabs", () => {
+    replaceSessions([
+      session({ sessionId: "sess-dormant", profile: "primary", tabs: [] }),
+      session({
+        sessionId: "sess-live",
+        profile: "primary",
+        tabs: [tab({ tabId: "tab-live", url: "https://example.com" })],
+      }),
+    ]);
+    render(wrapper(<BrowsersPanelBody epicId="epic-1" tabId="view-tab-1" />));
+
+    expect(
+      screen.getByTestId("epic-browsers-panel-list").children,
+    ).toHaveLength(1);
+    expect(
+      screen.getByTestId("epic-browser-sidebar-row-tab-live"),
+    ).toBeTruthy();
+    expect(screen.queryByText(/sess-dormant/)).toBeNull();
+
+    cleanup();
+    replaceSessions([
+      session({ sessionId: "sess-dormant", profile: "primary", tabs: [] }),
+    ]);
+    render(wrapper(<BrowsersPanelBody epicId="epic-1" tabId="view-tab-1" />));
+
+    expect(screen.queryByTestId("epic-browsers-panel-list")).toBeNull();
+    expect(screen.getByTestId("epic-browsers-panel-empty")).toBeTruthy();
   });
 
   it("holds settled row identity through navigating and provisioning, and never regresses a document title", () => {

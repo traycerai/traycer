@@ -9,11 +9,11 @@ import {
 } from "@testing-library/react";
 import { useState, type ReactNode } from "react";
 import type {
-  ImageAssetMeta,
-  ImageAssetRequest,
-  ImageAssetState,
-  ImageAssetStatus,
-} from "@/hooks/assets/use-image-asset";
+  FileAssetMeta,
+  FileAssetRequest,
+  FileAssetState,
+  FileAssetStatus,
+} from "@/hooks/assets/use-file-asset";
 import type { WorkspaceFileRef } from "@/stores/epics/canvas/types";
 
 interface ReadFileState {
@@ -32,14 +32,14 @@ interface ReadFileState {
 
 const state = vi.hoisted(() => ({
   asset: {
-    status: "ready" as ImageAssetStatus,
+    status: "ready" as FileAssetStatus,
     url: "blob:image" as string | null,
-    meta: null as ImageAssetMeta | null,
+    meta: null as FileAssetMeta | null,
     reason: null as string | null,
     totalBytes: null as number | null,
     servedFromCache: false,
-  } satisfies ImageAssetState,
-  assetRequests: [] as ImageAssetRequest[],
+  } satisfies FileAssetState,
+  assetRequests: [] as FileAssetRequest[],
   readFileCalls: 0,
   readFile: {
     data: {
@@ -68,8 +68,8 @@ const state = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("@/hooks/assets/use-image-asset", () => ({
-  useImageAsset: (request: ImageAssetRequest) => {
+vi.mock("@/hooks/assets/use-file-asset", () => ({
+  useFileAsset: (request: FileAssetRequest) => {
     state.assetRequests.push(request);
     // `state.asset` stays the module-level source of truth (tests mutate it
     // directly before a `rerender()`, as before); this counter exists only
@@ -105,6 +105,7 @@ vi.mock("@/hooks/host/use-tab-host-client", () => ({
 }));
 
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
+  useHostMethodSchemaVersion: () => null,
   useHostSupportsMethod: () => false,
 }));
 
@@ -221,7 +222,7 @@ vi.mock("@tanstack/react-query", () => ({
 vi.mock("@/components/epic-canvas/image-preview/image-preview", () => ({
   DEFAULT_ANIMATION_MS: 200,
   ImagePreview: (props: {
-    readonly status: ImageAssetStatus;
+    readonly status: FileAssetStatus;
     readonly url: string | null;
     readonly fileName: string;
     readonly onDecodeError: (() => void) | null;
