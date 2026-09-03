@@ -26,6 +26,7 @@ import { Route as SettingsDiagnosticsRouteImport } from "./routes/settings.diagn
 import { Route as SettingsGeneralRouteImport } from "./routes/settings.general";
 import { Route as SettingsHostRouteImport } from "./routes/settings.host";
 import { Route as SettingsKeybindingsRouteImport } from "./routes/settings.keybindings";
+import { Route as SettingsLayoutRouteImport } from "./routes/settings.layout";
 import { Route as SettingsLinkPhoneRouteImport } from "./routes/settings.link-phone";
 import { Route as SettingsNotificationsRouteImport } from "./routes/settings.notifications";
 import { Route as SettingsOpeningBehaviorRouteImport } from "./routes/settings.opening-behavior";
@@ -122,6 +123,11 @@ const SettingsKeybindingsRoute = SettingsKeybindingsRouteImport.update({
   path: "/keybindings",
   getParentRoute: () => SettingsRoute,
 } as any);
+const SettingsLayoutRoute = SettingsLayoutRouteImport.update({
+  id: "/layout",
+  path: "/layout",
+  getParentRoute: () => SettingsRoute,
+} as any);
 const SettingsLinkPhoneRoute = SettingsLinkPhoneRouteImport.update({
   id: "/link-phone",
   path: "/link-phone",
@@ -184,6 +190,7 @@ export interface FileRoutesByFullPath {
   "/settings/general": typeof SettingsGeneralRoute;
   "/settings/host": typeof SettingsHostRoute;
   "/settings/keybindings": typeof SettingsKeybindingsRoute;
+  "/settings/layout": typeof SettingsLayoutRoute;
   "/settings/link-phone": typeof SettingsLinkPhoneRoute;
   "/settings/notifications": typeof SettingsNotificationsRoute;
   "/settings/opening-behavior": typeof SettingsOpeningBehaviorRoute;
@@ -210,6 +217,7 @@ export interface FileRoutesByTo {
   "/settings/general": typeof SettingsGeneralRoute;
   "/settings/host": typeof SettingsHostRoute;
   "/settings/keybindings": typeof SettingsKeybindingsRoute;
+  "/settings/layout": typeof SettingsLayoutRoute;
   "/settings/link-phone": typeof SettingsLinkPhoneRoute;
   "/settings/notifications": typeof SettingsNotificationsRoute;
   "/settings/opening-behavior": typeof SettingsOpeningBehaviorRoute;
@@ -239,6 +247,7 @@ export interface FileRoutesById {
   "/settings/general": typeof SettingsGeneralRoute;
   "/settings/host": typeof SettingsHostRoute;
   "/settings/keybindings": typeof SettingsKeybindingsRoute;
+  "/settings/layout": typeof SettingsLayoutRoute;
   "/settings/link-phone": typeof SettingsLinkPhoneRoute;
   "/settings/notifications": typeof SettingsNotificationsRoute;
   "/settings/opening-behavior": typeof SettingsOpeningBehaviorRoute;
@@ -269,6 +278,7 @@ export interface FileRouteTypes {
     | "/settings/general"
     | "/settings/host"
     | "/settings/keybindings"
+    | "/settings/layout"
     | "/settings/link-phone"
     | "/settings/notifications"
     | "/settings/opening-behavior"
@@ -295,6 +305,7 @@ export interface FileRouteTypes {
     | "/settings/general"
     | "/settings/host"
     | "/settings/keybindings"
+    | "/settings/layout"
     | "/settings/link-phone"
     | "/settings/notifications"
     | "/settings/opening-behavior"
@@ -323,6 +334,7 @@ export interface FileRouteTypes {
     | "/settings/general"
     | "/settings/host"
     | "/settings/keybindings"
+    | "/settings/layout"
     | "/settings/link-phone"
     | "/settings/notifications"
     | "/settings/opening-behavior"
@@ -466,6 +478,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof SettingsKeybindingsRouteImport;
       parentRoute: typeof SettingsRoute;
     };
+    "/settings/layout": {
+      id: "/settings/layout";
+      path: "/layout";
+      fullPath: "/settings/layout";
+      preLoaderRoute: typeof SettingsLayoutRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
     "/settings/link-phone": {
       id: "/settings/link-phone";
       path: "/link-phone";
@@ -554,6 +573,7 @@ interface SettingsRouteChildren {
   SettingsGeneralRoute: typeof SettingsGeneralRoute;
   SettingsHostRoute: typeof SettingsHostRoute;
   SettingsKeybindingsRoute: typeof SettingsKeybindingsRoute;
+  SettingsLayoutRoute: typeof SettingsLayoutRoute;
   SettingsLinkPhoneRoute: typeof SettingsLinkPhoneRoute;
   SettingsNotificationsRoute: typeof SettingsNotificationsRoute;
   SettingsOpeningBehaviorRoute: typeof SettingsOpeningBehaviorRoute;
@@ -575,6 +595,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsGeneralRoute: SettingsGeneralRoute,
   SettingsHostRoute: SettingsHostRoute,
   SettingsKeybindingsRoute: SettingsKeybindingsRoute,
+  SettingsLayoutRoute: SettingsLayoutRoute,
   SettingsLinkPhoneRoute: SettingsLinkPhoneRoute,
   SettingsNotificationsRoute: SettingsNotificationsRoute,
   SettingsOpeningBehaviorRoute: SettingsOpeningBehaviorRoute,

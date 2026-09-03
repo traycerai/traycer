@@ -14,6 +14,7 @@ import type {
   ProviderRateLimits,
   ProviderRateLimitWindow,
 } from "@traycer/protocol/host";
+import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
 
 /**
  * What a window IS, independent of how any one provider names it. Rendering
@@ -54,6 +55,31 @@ export interface RateLimitWindowEntry {
   readonly label: string;
   readonly kind: RateLimitWindowKind;
   readonly window: ProviderRateLimitWindow;
+}
+
+/**
+ * Whether a provider reports ROLLING WINDOWS at all, as opposed to a credit
+ * balance. Answerable without a reading, which is what the difference is for: a
+ * surface that lists providers before any data has arrived (the Settings
+ * toggle list) must not offer a row for a provider whose entries would be empty
+ * no matter what it reports. `providerWindowEntries` returns `[]` for the same
+ * three, but only once a snapshot exists to ask.
+ */
+export function isWindowedRateLimitProvider(
+  providerId: RateLimitProviderId,
+): boolean {
+  switch (providerId) {
+    case "claude-code":
+    case "codex":
+    case "opencode":
+    case "grok":
+    case "cursor":
+      return true;
+    case "openrouter":
+    case "kilocode":
+    case "huggingface":
+      return false;
+  }
 }
 
 const MINUTES_PER_HOUR = 60;

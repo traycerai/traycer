@@ -69,6 +69,17 @@ export function isPreventSleepRowAvailable(
   return !context.mobileApp;
 }
 
+/**
+ * Layout › Status bar's footer controls — the installed mobile app never
+ * draws the footer (its header keeps the usage gauge and the resource
+ * monitor), so the group collapses to a note and the one header row there.
+ */
+export function isStatusBarControlsAvailable(
+  context: SettingsAvailabilityContext,
+): boolean {
+  return !context.mobileApp;
+}
+
 /** General › Experimental — the desktop feature-settings bridge. */
 export function isExperimentalGroupAvailable(
   context: SettingsAvailabilityContext,

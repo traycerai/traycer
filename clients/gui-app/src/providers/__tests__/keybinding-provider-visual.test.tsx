@@ -14,6 +14,7 @@ import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import { findPaneById } from "@/stores/epics/canvas/tile-tree";
 import type { KeybindingRouterSource } from "@/lib/keybindings/router-adapter";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
+import { StatusBarKeybindingBridge } from "@/components/layout/status-bar/status-bar-keybinding-bridge";
 import {
   useCanvasTabLeaderModifierForIndex,
   useLeaderState,
@@ -26,6 +27,10 @@ import { usePickerLeaderScope } from "@/components/home/pickers/use-picker-leade
 import type { ReasoningFooterConfig } from "@/components/home/pickers/harness-model-picker-footers";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import {
+  DEFAULT_STATUS_BAR_LAYOUT,
+  useLayoutStore,
+} from "@/stores/settings/layout-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import type { ReactNode } from "react";
@@ -307,6 +312,7 @@ function advance(ms: number): void {
 function resetStores(): void {
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useTabsStore.setState(useTabsStore.getInitialState(), true);
+  useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
   __resetTabNavigationControllerForTesting();
 }
 
@@ -441,6 +447,42 @@ describe("<KeybindingProvider /> visual leader hints", () => {
     // One dispatch per physical press: the OS repeat is swallowed, but the
     // chord stays reserved so the browser default can't run on it either.
     expect(calls).toHaveLength(1);
+    expect(first.defaultPrevented).toBe(true);
+    expect(repeated.defaultPrevented).toBe(true);
+  });
+
+  it("flips the status-bar placement once while its rebound chord is held", () => {
+    // Unbound by default, so the held-chord case only exists once a user has
+    // rebound it - which is exactly the state this covers.
+    useKeybindingStore.setState({
+      bindings: {
+        ...getDefaultBindings(),
+        "app.status-bar.toggle": "mod+alt+u",
+      },
+    });
+    renderProbeWithExtra(
+      createAppRouter(normalizeProbeRoute("/epics/e1"), null),
+      <StatusBarKeybindingBridge />,
+    );
+
+    const first = keyDown({
+      code: "KeyU",
+      key: "u",
+      metaKey: true,
+      altKey: true,
+    });
+    const repeated = keyDown({
+      code: "KeyU",
+      key: "u",
+      metaKey: true,
+      altKey: true,
+      repeat: true,
+    });
+
+    // One flip per physical press. Without the repeat guard the OS would walk
+    // the bar between header and footer for as long as the chord is held and
+    // leave it wherever the last repeat landed.
+    expect(useLayoutStore.getState().statusBar.placement).toBe("status-bar");
     expect(first.defaultPrevented).toBe(true);
     expect(repeated.defaultPrevented).toBe(true);
   });

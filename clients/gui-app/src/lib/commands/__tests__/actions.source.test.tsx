@@ -3,6 +3,7 @@ import { cleanup, render } from "@testing-library/react";
 import { actionsSource } from "@/lib/commands/sources/actions.source";
 import type { CommandContext, CommandItem } from "@/lib/commands/types";
 import { ACTION_META, getDefaultBindings } from "@/lib/keybindings/actions";
+import { setMobileApp } from "@/lib/mobile-app";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 
 function ctx(): CommandContext {
@@ -48,6 +49,7 @@ describe("actionsSource", () => {
 
   afterEach(() => {
     cleanup();
+    setMobileApp(false);
     useKeybindingStore.setState({ bindings: getDefaultBindings() });
   });
 
@@ -73,6 +75,30 @@ describe("actionsSource", () => {
   it("skips composer.stash (owned by the context-gated composer source)", () => {
     const ids = captureItems().map((item) => item.id);
     expect(ids).not.toContain("action:composer.stash");
+  });
+
+  it("lists the desktop-only status-bar toggle on desktop", () => {
+    const ids = captureItems().map((item) => item.id);
+    expect(ids).toContain("action:app.status-bar.toggle");
+  });
+
+  it("omits desktop-only actions in the installed mobile app", () => {
+    setMobileApp(true);
+
+    const items = captureItems();
+    const ids = items.map((item) => item.id);
+
+    // The footer the toggle moves the usage controls into is never drawn on
+    // the phone, and `AppShell` registers no handler there - so the row would
+    // offer a command that cannot run.
+    expect(ids).not.toContain("action:app.status-bar.toggle");
+    for (const item of items) {
+      if (item.actionId === null) continue;
+      expect(ACTION_META[item.actionId].desktopOnly).toBe(false);
+    }
+    // The flag drops the desktop-only rows, not the source: everything else
+    // still lists.
+    expect(ids).toContain("action:app.settings.open");
   });
 
   it("reads the live shortcut from the keybinding store", () => {

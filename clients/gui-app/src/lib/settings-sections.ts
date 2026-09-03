@@ -8,6 +8,7 @@ import {
   Keyboard,
   LineChart,
   Palette,
+  PanelBottom,
   PanelsTopLeft,
   QrCode,
   Server,
@@ -21,6 +22,7 @@ import { isMobileApp } from "@/lib/mobile-app";
 export type SettingsSectionId =
   | "general"
   | "appearance"
+  | "layout"
   | "opening-behavior"
   | "app-notifications"
   | "providers"
@@ -101,10 +103,11 @@ export interface SettingsSection {
  * stay contiguous per group or the sidebar renders a group heading twice.
  *
  * Only the first ten entries can carry a digit
- * (`SINGLE_DIGIT_LEADER_INDEX_LIMIT`), and there are now sixteen. Providers,
- * Worktrees, the host's Notifications, Agent selection, Shell and Diagnostics
- * are the eleventh through sixteenth and go without. Providers is the newest
- * to lose one, to Opening behavior taking the third Application slot.
+ * (`SINGLE_DIGIT_LEADER_INDEX_LIMIT`), and there are now seventeen. The whole
+ * host group - Overview, Providers, Worktrees, the host's Notifications, Agent
+ * selection, Shell and Diagnostics - is the eleventh through seventeenth and
+ * goes without. Overview is the newest to lose one, to Layout taking the
+ * seventh Application slot.
  *
  * Worktrees is the one that lost a digit to the app-scoped Sounds
  * entry below. That follows from keeping Application entries together at the
@@ -170,6 +173,17 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     id: "app-diagnostics",
     label: "Diagnostics",
     icon: Activity,
+    group: "app",
+  },
+  // Where the app's own chrome SITS and how much of it shows - the status bar
+  // first, the composer and the sidebar's own layout beside it later. It is a
+  // page rather than a group inside Appearance because the controls answer
+  // "where does this live", not "what does it look like", and because a
+  // per-window rate-limit list needs room Appearance does not have.
+  {
+    id: "layout",
+    label: "Layout",
+    icon: PanelBottom,
     group: "app",
   },
   {

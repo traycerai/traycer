@@ -112,6 +112,29 @@ export const SETTINGS_SEARCH_FIXTURES = [
       },
     ],
   },
+  // Layout's one shell-level gate is the BUILD: the installed mobile app draws
+  // no status bar, so every footer control is withheld there and the group
+  // collapses to its note plus the header row. Everything else on the page is
+  // always available, which the desktop shell covers.
+  {
+    section: "layout",
+    // Both shells carry a runner host: the page's host-scoped provider list
+    // reads one to resolve the watched host, and no Layout gate turns on it.
+    shells: [
+      {
+        name: "a desktop build",
+        context: { ...NO_BRIDGES, runnerHost: createFakeRunnerHost({}) },
+      },
+      {
+        name: "the installed mobile app",
+        context: {
+          ...NO_BRIDGES,
+          runnerHost: createFakeRunnerHost({}),
+          mobileApp: true,
+        },
+      },
+    ],
+  },
   {
     section: "opening-behavior",
     shells: [{ name: "every bridge absent", context: NO_BRIDGES }],

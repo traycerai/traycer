@@ -12,6 +12,7 @@ import { SWIPE_NAV_SCREEN_ATTRIBUTE } from "@/components/layout/shell/screen-sna
 import { useDragToDismissKeyboard } from "@/components/layout/shell/use-drag-to-dismiss-keyboard";
 import { SessionConnectivityStrip } from "@/components/layout/session-connectivity-strip";
 import { useHostSessionConnectivity } from "@/lib/host/session-connectivity";
+import { StatusBarKeybindingBridge } from "@/components/layout/status-bar/status-bar-keybinding-bridge";
 import { ClockSkewBanner } from "@/components/layout/clock-skew-banner";
 import { useMobileHistorySwipes } from "@/components/layout/shell/use-mobile-history-swipes";
 import { useSystemBack } from "@/components/layout/shell/use-system-back";
@@ -129,6 +130,10 @@ export function AppShell(props: AppShellProps) {
               <OpenFolderDialog />
               <RemoteFolderPickerDialog />
               <QuitInterceptBridge />
+              {/* Mounted unconditionally: the bridge itself reads the action's
+                `desktopOnly` flag and registers nothing in the installed
+                mobile app, the same fact the palette reads to drop its row. */}
+              <StatusBarKeybindingBridge />
               <MigrationRunController />
               <MigrationBlockingModalHost />
               {isMobile ? <MobileNavDrawer /> : null}

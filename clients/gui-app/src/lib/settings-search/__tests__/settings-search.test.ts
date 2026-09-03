@@ -155,6 +155,67 @@ describe("settings search", () => {
     expect(searchSettings("e", DESKTOP).length).toBeLessThanOrEqual(12);
   });
 
+  describe("Layout", () => {
+    it("lands the relocated rows under Layout and nowhere else", () => {
+      // Four rows moved off General and Appearance onto the Layout page. A
+      // query for the new name lands on the row; a query for the OLD name
+      // reaches it through the keywords; neither old page offers it any more.
+      expect(landingFor("minimap side", DESKTOP)).toBe(
+        "layout#layout-minimap-side",
+      );
+      expect(landingFor("pin context breakdown", DESKTOP)).toBe(
+        "layout#layout-pin-context-breakdown",
+      );
+      expect(landingsFor("pin context usage breakdown", DESKTOP)).toContain(
+        "layout#layout-pin-context-breakdown",
+      );
+      expect(landingsFor("navigator resource stats", DESKTOP)).toContain(
+        "layout#layout-sidebar-resource-chips",
+      );
+      // The header resource-monitor row renders only under header placement,
+      // so its old name reaches the Status bar group rather than a row.
+      expect(landingsFor("global resources button", DESKTOP)).toContain(
+        "layout#layout-status-bar",
+      );
+      for (const label of [
+        "Pin context usage breakdown",
+        "Show global resources button",
+        "Show navigator resource stats",
+      ]) {
+        expect(labelsFor(label, DESKTOP), label).not.toContain(label);
+      }
+      // Appearance no longer offers the row at all. Asserted on the LABEL
+      // rather than on "no appearance hit for this query": the threshold is
+      // loose enough that a two-word query weak-matches unrelated rows on the
+      // page, which says nothing about where the minimap lives.
+      expect(
+        searchSettings("minimap position", DESKTOP).filter(
+          (result) =>
+            result.entry.section === "appearance" &&
+            result.entry.label === "Minimap position",
+        ),
+      ).toEqual([]);
+    });
+
+    it("still lets the page win on its own name", () => {
+      expect(labelsFor("layout", DESKTOP)[0]).toBe("Layout");
+    });
+
+    it("offers the footer controls on desktop and withholds them in the mobile app", () => {
+      for (const label of [
+        "Placement",
+        "Show rate limits",
+        "Show resource monitor",
+      ]) {
+        expect(labelsFor(label, DESKTOP), label).toContain(label);
+        expect(labelsFor(label, MOBILE), label).not.toContain(label);
+      }
+      // The group itself stays: the mobile build collapses it to a note, and
+      // the page's first heading is the same on every build.
+      expect(labelsFor("status bar", MOBILE)).toContain("Status bar");
+    });
+  });
+
   describe("availability", () => {
     // Each case is a row the OTHER shell would have offered — so a filter
     // that ignored the context entirely would fail every one of them.

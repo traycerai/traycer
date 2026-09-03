@@ -181,8 +181,8 @@ describe("<SettingsSearch /> selection", () => {
     fireEvent.keyDown(combobox(), { key: "Enter" });
 
     expect(useSettingsSearchStore.getState().pendingReveal).toMatchObject({
-      section: "appearance",
-      anchor: "appearance-minimap-side",
+      section: "layout",
+      anchor: "layout-minimap-side",
     });
   });
 });
