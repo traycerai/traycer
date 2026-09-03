@@ -247,6 +247,8 @@ export type LoginImportBrowser =
   | "arc"
   | "vivaldi"
   | "opera"
+  | "aside"
+  | "helium"
   | "firefox"
   | "safari"
   | "file";
@@ -262,6 +264,8 @@ export const LOGIN_IMPORT_BROWSER_LABELS: Readonly<
   arc: "Arc",
   vivaldi: "Vivaldi",
   opera: "Opera",
+  aside: "Aside",
+  helium: "Helium",
   firefox: "Firefox",
   safari: "Safari",
   file: "Cookie file",

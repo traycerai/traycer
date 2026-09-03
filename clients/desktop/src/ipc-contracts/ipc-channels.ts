@@ -190,6 +190,7 @@ export const RunnerHostInvoke = {
   windowSetContentProtection: "runnerHost:window:setContentProtection",
   diagnosticsGetMetrics: "runnerHost:diagnostics:getMetrics",
   diagnosticsTakeHeapSnapshot: "runnerHost:diagnostics:takeHeapSnapshot",
+  diagnosticsMeasureJsHeaps: "runnerHost:diagnostics:measureJsHeaps",
   diagnosticsTraceStart: "runnerHost:diagnostics:trace:start",
   diagnosticsTraceStop: "runnerHost:diagnostics:trace:stop",
   appUpdateGetSnapshot: "runnerHost:appUpdate:getSnapshot",
