@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import { toast } from "sonner";
 import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
+import { browserSessionsRefusal } from "@traycer-clients/shared/platform/browser-view";
 import {
   useMaybeBrowserSessionsSnapshot,
   type BrowserSessionsSnapshot,
@@ -73,7 +74,11 @@ export function useOpenBrowserUrl(): (input: OpenBrowserUrlInput) => void {
         sessions.lifecycle !== "live" ||
         hostId === null
       ) {
-        failed("Browsers aren't connected on this host yet.");
+        failed(
+          sessions?.lifecycle === "unsupported"
+            ? browserSessionsRefusal(sessions)
+            : "Browsers aren't connected on this host yet.",
+        );
         return;
       }
 

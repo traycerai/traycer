@@ -570,7 +570,7 @@ describe("clear-site IPC jar targeting", () => {
     });
 
     expect(cancelled).toBe(false);
-    expect(fixture.confirmations).toEqual(["Clear this saved login?"]);
+    expect(fixture.confirmations).toEqual(["Remove this website session?"]);
   });
 
   it("reports a confirmed saved-login clear so the settings row can hide", async () => {
@@ -579,7 +579,7 @@ describe("clear-site IPC jar targeting", () => {
     });
 
     expect(confirmed).toBe(true);
-    expect(fixture.confirmations).toEqual(["Clear this saved login?"]);
+    expect(fixture.confirmations).toEqual(["Remove this website session?"]);
   });
 
   it("forgets from the one shared jar when saving is on", async () => {
@@ -639,7 +639,7 @@ describe("clear-site IPC jar targeting", () => {
 
     await invokeHandler("browserViewForgetLogins", undefined);
 
-    expect(fixture.confirmations).toEqual(["Forget browser logins?"]);
+    expect(fixture.confirmations).toEqual(["Remove all website sessions?"]);
     expect(fixture.jarClears).toEqual([]);
     expect(fixture.forgetAllResets).toBe(0);
     expect(fixture.tabRecreations).toBe(0);
@@ -817,9 +817,9 @@ describe("clear-site IPC jar targeting", () => {
 
     await invokeHandler("browserViewClearSite", TILE_KEY);
 
-    expect(fixture.confirmations).toEqual(["Clear this saved login?"]);
+    expect(fixture.confirmations).toEqual(["Remove this website session?"]);
     expect(fixture.confirmationMessages).toEqual([
-      "Sign out of example.com everywhere?",
+      "Remove the saved session for example.com?",
     ]);
     expect(fixture.clears).toEqual([]);
     expect(ledger.revision()).toBe(before);
@@ -834,7 +834,7 @@ describe("clear-site IPC jar targeting", () => {
     await invokeHandler("browserViewClearSite", TILE_KEY);
 
     expect(fixture.confirmationMessages).toEqual([
-      "Sign out of example.com everywhere?",
+      "Remove the saved session for example.com?",
     ]);
     expect(fixture.clears).toEqual([
       { domain: "example.com", partition: fixture.durablePartition },
@@ -859,7 +859,7 @@ describe("clear-site IPC jar targeting", () => {
     await flushMicrotasks();
 
     // The dialog is up - the handler reached the ask...
-    expect(fixture.confirmations).toEqual(["Forget browser logins?"]);
+    expect(fixture.confirmations).toEqual(["Remove all website sessions?"]);
     // ...and nothing moved behind it. The ledger revision is the first
     // irreversible step: it is what tells every host to prune.
     expect(ledger.revision()).toBe(before);

@@ -32,12 +32,12 @@ describe("<BrowserSettingsSection /> without a host runtime", () => {
     useSettingsStore.setState({ browserDevOrigins: [] });
   });
 
-  it("renders the panel instead of throwing, and leaves the saved-logins group out", () => {
+  it("renders the panel instead of throwing, and leaves the website-session group out", () => {
     useSettingsStore.setState({ browserDevOrigins: ["http://localhost:5173"] });
     render(<BrowserSettingsSection />);
 
     expect(screen.getByText("Detected dev origins")).not.toBeNull();
-    expect(screen.queryByText("Saved logins")).toBeNull();
+    expect(screen.queryByText("Website sessions")).toBeNull();
     expect(screen.queryByRole("switch")).toBeNull();
   });
 });
