@@ -1,5 +1,6 @@
 import type { Query, QueryClient } from "@tanstack/react-query";
 import type { IHostQueryInvalidator } from "@traycer-clients/shared/host-client/host-client";
+import { appLogger } from "@/lib/logger";
 import { isCloudEpicTasksQueryKey, queryKeys } from "@/lib/query-keys";
 import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 
@@ -113,6 +114,16 @@ export function createHostQueryInvalidator(
             .findAll({ queryKey })
             .filter((query) => !isActiveRefetchExempt(query)),
         );
+        // The one line that counts SWEEPS. The per-stream-client recovery
+        // wiring logs at debug, once per client, which over-reported the
+        // sweep count by the number of live stream clients in the window -
+        // that reading is what turned two sweeps a minute into a reported
+        // "1056 refetch storms a day" in the 2026-09-03 field investigation.
+        // A sweep is worth an info line; a wiring reporting one is not.
+        appLogger.info("[stream] host-scope sweep", {
+          hostId: hostId ?? "all",
+          refetching: affectedQueries.size,
+        });
         const predicate = (query: Query): boolean => affectedQueries.has(query);
         // A query waiting in TanStack's retry backoff is still `fetchStatus:
         // "fetching"`. Invalidating it alone only marks it stale; it does not

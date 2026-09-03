@@ -1333,11 +1333,17 @@ interface StreamSessionOptions<Registry extends VersionedStreamRpcRegistry> {
  * come back. Kept well under `pongTimeoutMs - pingIntervalMs` so this
  * detects the stalls the drop cutoff deliberately tolerates.
  *
- * Known benign false positive: a backgrounded renderer throttles timers, so
- * pings go out late and the measured gap stretches without any host stall.
- * The resulting notify fires as the tab foregrounds and costs one refetch of
- * active host-scoped queries - freshness on return, not churn - so it is
- * accepted rather than special-cased with visibility heuristics.
+ * The gap alone is not enough, and this used to be the accepted "benign
+ * false positive": a renderer whose timers ran late (throttled, busy, or
+ * paused) sends its ping late, so the gap between two pongs stretches while
+ * the host answered every ping within milliseconds. Each such pong reported a
+ * host recovery, every stream client in the window reported it independently,
+ * and the resulting host-scope sweep re-issued every active host query. On a
+ * desktop with a dozen tabs that was a sweep a minute all day (2026-09-03
+ * field measurement: 489 sweeps in 10.5 h, none of them a real outage). The
+ * pong handler therefore also requires that the HOST took at least this long
+ * to answer the oldest unanswered ping - a stall is the host's delay, and a
+ * late ping is the client's own.
  */
 const PONG_GAP_RECOVERY_SLACK_MS = 5_000;
 
@@ -1463,6 +1469,15 @@ class StreamSession<
   private preProbePongBaselineAt: number | null = null;
   /** Monotonic count of pongs received; the wake probe's liveness signal. */
   private pongSeq = 0;
+  /**
+   * When the OLDEST ping still awaiting a pong was written, or `null` while
+   * every ping has been answered. The pong handler reads it to tell a host
+   * that answered late (recovery evidence) from a client that asked late (no
+   * evidence) - see {@link PONG_GAP_RECOVERY_SLACK_MS}. Oldest rather than
+   * latest, because a stalled host can leave two pings hanging and the first
+   * pong then answers the first of them.
+   */
+  private oldestUnansweredPingSentAt: number | null = null;
   private backoffTimer: TimerHandle | null = null;
   /**
    * Armed when the subscribe completes; fires after
@@ -1621,6 +1636,7 @@ class StreamSession<
       this.forceReconnect(reason);
       return;
     }
+    this.notePingSent(Date.now());
     // Rebase the heartbeat deadline onto the probe we just sent. After a sleep
     // longer than `pongTimeoutMs`, `lastPongAt` still holds a PRE-sleep
     // timestamp, so the already-armed interval's very next tick takes the
@@ -1991,16 +2007,26 @@ class StreamSession<
       // a round trip, and a sleep-length outage would emit no recovery at all.
       const answersWakeProbe = this.preProbePongBaselineAt !== null;
       const pongGapMs = now - (this.preProbePongBaselineAt ?? this.lastPongAt);
+      // How long the host sat on the oldest ping it had not yet answered.
+      // `null` when a pong arrives with nothing outstanding (a host-initiated
+      // extra pong, or a pong racing the handshake reset) - that carries no
+      // stall evidence either way.
+      const hostAnswerMs =
+        this.oldestUnansweredPingSentAt === null
+          ? null
+          : now - this.oldestUnansweredPingSentAt;
+      this.oldestUnansweredPingSentAt = null;
       this.preProbePongBaselineAt = null;
       this.lastPongAt = now;
       // Counted, not timestamped: a wake probe has to know whether a pong
       // ARRIVED, and two pongs inside the same millisecond are
       // indistinguishable by `lastPongAt` alone.
       this.pongSeq += 1;
-      if (
-        answersWakeProbe ||
-        pongGapMs >= this.config.pingIntervalMs + PONG_GAP_RECOVERY_SLACK_MS
-      ) {
+      const stallLengthGap =
+        pongGapMs >= this.config.pingIntervalMs + PONG_GAP_RECOVERY_SLACK_MS;
+      const hostAnsweredLate =
+        hostAnswerMs !== null && hostAnswerMs >= PONG_GAP_RECOVERY_SLACK_MS;
+      if (answersWakeProbe || (stallLengthGap && hostAnsweredLate)) {
         // Two distinct recovery edges share this emission. A probe-answering
         // pong is one unconditionally: probes are sent only on a device-wake /
         // network-online signal, an epoch in which host-scoped queries may
@@ -2010,8 +2036,16 @@ class StreamSession<
         // disabled) never recovered. A big gap WITHOUT a probe is the other:
         // the host answered after leaving at least one ping hanging (an
         // event-loop stall), again with no socket drop, so the reconnect
-        // path's recovery emission never fires for either.
+        // path's recovery emission never fires for either. The gap arm needs
+        // BOTH halves: a stall-length gap whose ping the host answered at
+        // once was the client's late ping, not a host outage (see
+        // `PONG_GAP_RECOVERY_SLACK_MS`), and a sweep on it refetches queries
+        // nothing stranded.
         this.config.onAvailabilityRecovered();
+      } else if (stallLengthGap) {
+        console.debug(
+          `[stream] pong gap of ${pongGapMs}ms was the client's own late ping (host answered in ${hostAnswerMs ?? -1}ms) - no recovery`,
+        );
       }
       return;
     }
@@ -2198,8 +2232,10 @@ class StreamSession<
     this.lastPongAt = Date.now();
     // A fresh handshake supersedes any wake-probe baseline: this path emits
     // its own recovery edge below, and a stale baseline would double-count
-    // the outage on the first post-handshake pong.
+    // the outage on the first post-handshake pong. Same for a ping the OLD
+    // socket never answered - the new socket owes nothing for it.
     this.preProbePongBaselineAt = null;
+    this.oldestUnansweredPingSentAt = null;
     this.startHeartbeat();
     this.armHealthyDwell();
     this.transitionTo("open", null);
@@ -2703,8 +2739,17 @@ class StreamSession<
       );
       if (!sent) {
         this.onSendFailure(activeSocket);
+        return;
       }
+      this.notePingSent(now);
     }, this.config.pingIntervalMs);
+  }
+
+  /** Records a ping on the wire; only the oldest unanswered one is kept. */
+  private notePingSent(at: number): void {
+    if (this.oldestUnansweredPingSentAt === null) {
+      this.oldestUnansweredPingSentAt = at;
+    }
   }
 
   private clearHeartbeat(): void {

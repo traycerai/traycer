@@ -55,6 +55,7 @@ function createHandle(state: FakeState): OpenEpicStoreHandle {
   return {
     epicId: "epic-1",
     userId: "user-1",
+    hostId: "test-host",
     // No `doc` / `awareness`: a production handle has neither, because the
     // replica lives on the worker thread and a `Y.Doc` cannot cross a
     // structured clone. A fake that offered them would let a test reach for a

@@ -1912,6 +1912,83 @@ describe("WsStreamClient", () => {
     vi.useRealTimers();
   });
 
+  it("does not emit availability recovery when the stall-length gap is the client's own late ping", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "t",
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+    const recovered = vi.fn();
+    client.subscribeAvailabilityRecovered(recovered);
+
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    const socket = sockets[0].socket;
+    completeHandshake(socket);
+
+    // Healthy cadence: the t=25s ping is answered the moment it lands.
+    vi.advanceTimersByTime(25_000);
+    socket.fireText({ kind: "pong", hasBinaryPayload: false });
+    expect(recovered).not.toHaveBeenCalled();
+
+    // The client's OWN heartbeat timer fires late - a backgrounded or busy
+    // renderer, not a host stall: the wall clock jumps 10s before the next
+    // ping is actually written, so the gap since the last pong (35s) clears
+    // the stall-length threshold even though the host answers instantly.
+    vi.setSystemTime(Date.now() + 10_000);
+    vi.advanceTimersByTime(25_000);
+    socket.fireText({ kind: "pong", hasBinaryPayload: false });
+
+    expect(recovered).not.toHaveBeenCalled();
+    expect(socket.closed).toBeNull();
+
+    session.close();
+    vi.useRealTimers();
+  });
+
+  it("emits availability recovery when the host answers the ping late even though the client sent it on time", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "t",
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+    const recovered = vi.fn();
+    client.subscribeAvailabilityRecovered(recovered);
+
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    const socket = sockets[0].socket;
+    completeHandshake(socket);
+
+    // t=25s ping, answered promptly - healthy cadence, no emission.
+    vi.advanceTimersByTime(25_000);
+    socket.fireText({ kind: "pong", hasBinaryPayload: false });
+    expect(recovered).not.toHaveBeenCalled();
+
+    // t=50s ping, sent exactly on schedule, but the HOST takes 7s to answer
+    // it (t=57s): the client's own ping was on time, so the gap is genuine
+    // host-side recovery evidence.
+    vi.advanceTimersByTime(25_000);
+    vi.advanceTimersByTime(7_000);
+    socket.fireText({ kind: "pong", hasBinaryPayload: false });
+
+    expect(recovered).toHaveBeenCalledTimes(1);
+    expect(socket.closed).toBeNull();
+
+    session.close();
+    vi.useRealTimers();
+  });
+
   it("requestReconnect drops the live socket and redials through existing backoff without disposing the session", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: false });
 

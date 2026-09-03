@@ -6,7 +6,10 @@ import * as Y from "yjs";
 import type { Awareness } from "y-protocols/awareness";
 import type { CollabUser } from "../awareness/derive-collab-user";
 import { FencePromotionExtension } from "../nodes/shared/fence-promotion-extension";
-import { artifactDocumentBundle } from "../artifact-document-bundle";
+import {
+  artifactDocumentBundle,
+  createArtifactMarkdownExtension,
+} from "../artifact-document-bundle";
 import { CommentDecorationsExtension } from "./comment-decorations-extension";
 import { CommentShortcutExtension } from "./comment-shortcut-extension";
 import { MarkdownClipboard } from "./markdown-clipboard-extension";
@@ -135,9 +138,13 @@ export function buildArtifactExtensions(
     }),
   ];
 
+  // The template's bare `Markdown` is replaced by one configured with a
+  // private `marked`: this function runs once per editor, so each editor's
+  // tokenizer registrations live and die with it instead of accumulating on
+  // the module singleton (see `createArtifactMarkdownExtension`).
   return artifactDocumentBundle.extensions.flatMap((extension) =>
     extension.name === "markdown"
-      ? [extension, ...editorOnlyExtensions]
+      ? [createArtifactMarkdownExtension(), ...editorOnlyExtensions]
       : [extension],
   );
 }
