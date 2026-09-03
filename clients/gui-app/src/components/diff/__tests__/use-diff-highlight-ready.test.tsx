@@ -295,7 +295,10 @@ describe("useDiffs highlight gates", () => {
     expect(screen.getByTestId("ready").textContent).toBe("pending");
   });
 
-  it("does not request the pool from a disabled gate", () => {
+  it("requests the pool from a disabled gate that has work, but holds release until the pool reaches context", () => {
+    // The file gate's demand signal is `useDiffWorkerPoolAvailability(true)` -
+    // always has work, independent of `enabled` - so a disabled gate still
+    // asks for the pool instead of skipping the request.
     const manager = asWorkerPoolManager(fakeWorkerPoolManager());
     registerDiffWorkerPoolCreator(() => manager);
 
@@ -307,7 +310,49 @@ describe("useDiffs highlight gates", () => {
       />,
     );
 
-    expect(getDiffWorkerPool()).toBeUndefined();
+    expect(getDiffWorkerPool()).toBe(manager);
+    // Only the store built a manager; no pool has reached React context yet,
+    // so the gate holds rather than releasing instantly for being disabled.
+    expect(screen.getByTestId("ready").textContent).toBe("pending");
+  });
+
+  it("holds a disabled gate until the pool reaches context, releases once it does, and never re-closes when enabled later flips true", () => {
+    const manager = fakeWorkerPoolManager();
+    registerDiffWorkerPoolCreator(() => asWorkerPoolManager(manager));
+
+    const rendered = render(
+      <FileReadyProbe
+        file={sampleFile()}
+        theme="pierre-dark"
+        enabled={false}
+      />,
+    );
+    // The store already built the manager (the file gate always has work),
+    // but the provider has not carried it into context yet - the gate holds.
+    expect(screen.getByTestId("ready").textContent).toBe("pending");
+
+    // The provider re-renders and the pool reaches context. Still disabled.
+    poolState.pool = manager;
+    rendered.rerender(
+      <FileReadyProbe
+        file={sampleFile()}
+        theme="pierre-dark"
+        enabled={false}
+      />,
+    );
+
+    // Releases because `!enabled`, not because a cache prime resolved - a
+    // disabled gate never waits on one.
+    expect(screen.getByTestId("ready").textContent).toBe("ready");
+    expect(manager.primeFileHighlightCache).not.toHaveBeenCalled();
+
+    // The regression this pins: an editor that mounted disabled (an edit
+    // session in progress) and is later enabled (the session ends) must stay
+    // released - never close the gate again and replace the mounted editor
+    // with DiffHighlightLoading.
+    rendered.rerender(
+      <FileReadyProbe file={sampleFile()} theme="pierre-dark" enabled />,
+    );
     expect(screen.getByTestId("ready").textContent).toBe("ready");
   });
 

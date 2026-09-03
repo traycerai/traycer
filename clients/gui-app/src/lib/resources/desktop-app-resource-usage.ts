@@ -43,6 +43,10 @@ export interface DesktopJsHeapIsolate {
   readonly url: string;
   readonly usedBytes: number;
   readonly totalBytes: number;
+  /** Blink-held memory for this isolate; `null` when the build omits it. */
+  readonly embedderBytes: number | null;
+  /** `ArrayBuffer` / WebAssembly backing stores, outside the JS heap. */
+  readonly backingStorageBytes: number | null;
 }
 
 export interface DesktopJsHeapBreakdown {

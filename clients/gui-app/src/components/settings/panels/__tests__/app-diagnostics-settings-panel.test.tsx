@@ -471,18 +471,24 @@ describe("<AppDiagnosticsSettingsPanel />", () => {
           url: "app://renderer/index.html",
           usedBytes: 40 * 1024 * 1024,
           totalBytes: 60 * 1024 * 1024,
+          embedderBytes: null,
+          backingStorageBytes: null,
         },
         {
           kind: "worker",
           url: "app://renderer/assets/epic-runtime-worker-entry-BKyjY2bC.js",
           usedBytes: 10 * 1024 * 1024,
           totalBytes: 15 * 1024 * 1024,
+          embedderBytes: null,
+          backingStorageBytes: null,
         },
         {
           kind: "worker",
           url: "app://renderer/assets/worker-DMI2JaPh.js",
           usedBytes: 5 * 1024 * 1024,
           totalBytes: 8 * 1024 * 1024,
+          embedderBytes: null,
+          backingStorageBytes: null,
         },
       ],
     };
@@ -526,6 +532,77 @@ describe("<AppDiagnosticsSettingsPanel />", () => {
     expect(
       within(table).getByText(formatMemoryBytes(committedTotal)),
     ).toBeTruthy();
+  });
+
+  it("renders the Embedder and Backing columns, using — for a null isolate value and a null column total", async () => {
+    installLogLevelsBridge(defaultSnapshot());
+    installHeapSnapshotBridge(() => Promise.resolve(null));
+    const breakdown: DesktopJsHeapBreakdown = {
+      capturedAt: 1_700_000_000_000,
+      workingSetBytes: null,
+      isolates: [
+        {
+          kind: "page",
+          url: "app://renderer/index.html",
+          usedBytes: 40 * 1024 * 1024,
+          totalBytes: 60 * 1024 * 1024,
+          embedderBytes: 5 * 1024 * 1024,
+          backingStorageBytes: null,
+        },
+        {
+          kind: "worker",
+          url: "app://renderer/assets/worker-DMI2JaPh.js",
+          usedBytes: 3 * 1024 * 1024,
+          totalBytes: 4 * 1024 * 1024,
+          embedderBytes: null,
+          backingStorageBytes: null,
+        },
+      ],
+    };
+    const measureJsHeaps = vi.fn(() =>
+      Promise.resolve<DesktopJsHeapBreakdown | null>(breakdown),
+    );
+    installJsHeapBridge(measureJsHeaps);
+    renderPanel(makeHost(makeSupportBridge({})));
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Measure JS heaps" }),
+    );
+    await waitFor(() => {
+      expect(measureJsHeaps).toHaveBeenCalled();
+    });
+
+    const table = await screen.findByRole("table");
+    expect(
+      within(table).getByRole("columnheader", { name: "Live" }),
+    ).toBeTruthy();
+    expect(
+      within(table).getByRole("columnheader", { name: "Committed" }),
+    ).toBeTruthy();
+    expect(
+      within(table).getByRole("columnheader", { name: "Embedder" }),
+    ).toBeTruthy();
+    expect(
+      within(table).getByRole("columnheader", { name: "Backing" }),
+    ).toBeTruthy();
+
+    const [pageRow, workerRow, footerRow] = within(table)
+      .getAllByRole("row")
+      .slice(1);
+    const pageCells = within(pageRow).getAllByRole("cell");
+    const workerCells = within(workerRow).getAllByRole("cell");
+    const footerCells = within(footerRow).getAllByRole("cell");
+
+    // Page row: Embedder carries a real number, Backing is null.
+    expect(pageCells[3].textContent).toBe(formatMemoryBytes(5 * 1024 * 1024));
+    expect(pageCells[4].textContent).toBe("—");
+    // Worker row: both out-of-heap columns are null.
+    expect(workerCells[3].textContent).toBe("—");
+    expect(workerCells[4].textContent).toBe("—");
+    // Footer: Embedder totals the one isolate that reported a number;
+    // Backing stays — because every isolate reported null for it.
+    expect(footerCells[3].textContent).toBe(formatMemoryBytes(5 * 1024 * 1024));
+    expect(footerCells[4].textContent).toBe("—");
   });
 
   it("toasts when measuring JS heaps returns null", async () => {

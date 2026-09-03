@@ -53,6 +53,8 @@ type MessageListener = (
 interface HeapUsageResult {
   readonly usedSize: number;
   readonly totalSize: number;
+  readonly embedderHeapUsedSize: number | null;
+  readonly backingStorageSize: number | null;
 }
 
 interface FakeWorkerFixture {
@@ -221,13 +223,23 @@ describe("handleMeasureJsHeaps", () => {
         sessionId: "session-epic",
         type: "worker",
         url: "app://renderer/assets/epic-runtime-worker-entry-abc.js",
-        heapUsage: { usedSize: 5_000_000, totalSize: 8_000_000 },
+        heapUsage: {
+          usedSize: 5_000_000,
+          totalSize: 8_000_000,
+          embedderHeapUsedSize: 1_500_000,
+          backingStorageSize: 2_500_000,
+        },
       },
       {
         sessionId: "session-service",
         type: "service_worker",
         url: "app://renderer/service-worker.js",
-        heapUsage: { usedSize: 1, totalSize: 1 },
+        heapUsage: {
+          usedSize: 1,
+          totalSize: 1,
+          embedderHeapUsedSize: null,
+          backingStorageSize: null,
+        },
       },
       {
         sessionId: "session-flaky",
@@ -237,7 +249,12 @@ describe("handleMeasureJsHeaps", () => {
       },
     ];
     const debuggerApi = buildFakeDebugger({
-      pageHeapUsage: { usedSize: 40_000_000, totalSize: 60_000_000 },
+      pageHeapUsage: {
+        usedSize: 40_000_000,
+        totalSize: 60_000_000,
+        embedderHeapUsedSize: 9_000_000,
+        backingStorageSize: 3_000_000,
+      },
       workers,
       isAttachedInitially: false,
       attachThrows: false,
@@ -263,12 +280,16 @@ describe("handleMeasureJsHeaps", () => {
         url: "app://renderer/index.html",
         usedBytes: 40_000_000,
         totalBytes: 60_000_000,
+        embedderBytes: 9_000_000,
+        backingStorageBytes: 3_000_000,
       },
       {
         kind: "worker",
         url: "app://renderer/assets/epic-runtime-worker-entry-abc.js",
         usedBytes: 5_000_000,
         totalBytes: 8_000_000,
+        embedderBytes: 1_500_000,
+        backingStorageBytes: 2_500_000,
       },
     ]);
     // The service-worker target and the worker whose heap read rejected are
@@ -304,9 +325,72 @@ describe("handleMeasureJsHeaps", () => {
     expect(sender.getOSProcessId).toHaveBeenCalled();
   });
 
+  it("carries null for embedder and backing storage when the protocol result omits them, and still returns the row", async () => {
+    // `embedderHeapUsedSize` / `backingStorageSize` are experimental CDP
+    // fields - a build that does not report them (or reports something that
+    // is not a number) must not drop the isolate row, only those two fields.
+    const workers: ReadonlyArray<FakeWorkerFixture> = [
+      {
+        sessionId: "session-worker",
+        type: "worker",
+        url: "app://renderer/assets/worker-DMI2JaPh.js",
+        heapUsage: {
+          usedSize: 2_000_000,
+          totalSize: 3_000_000,
+          embedderHeapUsedSize: null,
+          backingStorageSize: null,
+        },
+      },
+    ];
+    const debuggerApi = buildFakeDebugger({
+      pageHeapUsage: {
+        usedSize: 10_000_000,
+        totalSize: 20_000_000,
+        embedderHeapUsedSize: null,
+        backingStorageSize: null,
+      },
+      workers,
+      isAttachedInitially: false,
+      attachThrows: false,
+    });
+    const { event } = buildFakeEvent({
+      isDestroyed: false,
+      pageUrl: "app://renderer/index.html",
+      pid: 99,
+      debuggerApi,
+    });
+
+    const result = await handleMeasureJsHeaps(event);
+
+    expect(result).not.toBeNull();
+    expect(result?.isolates).toEqual([
+      {
+        kind: "page",
+        url: "app://renderer/index.html",
+        usedBytes: 10_000_000,
+        totalBytes: 20_000_000,
+        embedderBytes: null,
+        backingStorageBytes: null,
+      },
+      {
+        kind: "worker",
+        url: "app://renderer/assets/worker-DMI2JaPh.js",
+        usedBytes: 2_000_000,
+        totalBytes: 3_000_000,
+        embedderBytes: null,
+        backingStorageBytes: null,
+      },
+    ]);
+  });
+
   it("returns null without attaching when a debugger is already attached to this window", async () => {
     const debuggerApi = buildFakeDebugger({
-      pageHeapUsage: { usedSize: 1, totalSize: 1 },
+      pageHeapUsage: {
+        usedSize: 1,
+        totalSize: 1,
+        embedderHeapUsedSize: null,
+        backingStorageSize: null,
+      },
       workers: [],
       isAttachedInitially: true,
       attachThrows: false,
@@ -327,7 +411,12 @@ describe("handleMeasureJsHeaps", () => {
 
   it("returns null and never touches the message listener when attach() throws", async () => {
     const debuggerApi = buildFakeDebugger({
-      pageHeapUsage: { usedSize: 1, totalSize: 1 },
+      pageHeapUsage: {
+        usedSize: 1,
+        totalSize: 1,
+        embedderHeapUsedSize: null,
+        backingStorageSize: null,
+      },
       workers: [],
       isAttachedInitially: false,
       attachThrows: true,
@@ -371,7 +460,12 @@ describe("handleMeasureJsHeaps", () => {
 
   it("returns null when the sender is destroyed, without reading the debugger at all", async () => {
     const debuggerApi = buildFakeDebugger({
-      pageHeapUsage: { usedSize: 1, totalSize: 1 },
+      pageHeapUsage: {
+        usedSize: 1,
+        totalSize: 1,
+        embedderHeapUsedSize: null,
+        backingStorageSize: null,
+      },
       workers: [],
       isAttachedInitially: false,
       attachThrows: false,

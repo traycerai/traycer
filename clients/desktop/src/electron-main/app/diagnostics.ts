@@ -82,15 +82,33 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+function readOptionalSize(value: unknown): number | null {
+  return typeof value === "number" ? value : null;
+}
+
+/**
+ * `usedSize` / `totalSize` are the JS heap. `embedderHeapUsedSize` and
+ * `backingStorageSize` are the memory attributed to the isolate that sits
+ * OUTSIDE it - Blink's own objects, and `ArrayBuffer`/WASM backing stores such
+ * as a diff highlighter worker's Oniguruma engine. Both are experimental
+ * protocol fields, so each is carried only when the build answers with it;
+ * dropping them would undercount precisely the workers this readout measures.
+ */
 function readHeapUsage(
   result: unknown,
-): { readonly usedBytes: number; readonly totalBytes: number } | null {
+): Omit<RendererJsHeapIsolate, "kind" | "url"> | null {
   if (!isRecord(result)) return null;
-  const { usedSize, totalSize } = result;
+  const { usedSize, totalSize, embedderHeapUsedSize, backingStorageSize } =
+    result;
   if (typeof usedSize !== "number" || typeof totalSize !== "number") {
     return null;
   }
-  return { usedBytes: usedSize, totalBytes: totalSize };
+  return {
+    usedBytes: usedSize,
+    totalBytes: totalSize,
+    embedderBytes: readOptionalSize(embedderHeapUsedSize),
+    backingStorageBytes: readOptionalSize(backingStorageSize),
+  };
 }
 
 /**
@@ -194,6 +212,14 @@ export async function handleMeasureJsHeaps(
       usedBytes: isolates.reduce((sum, isolate) => sum + isolate.usedBytes, 0),
       totalBytes: isolates.reduce(
         (sum, isolate) => sum + isolate.totalBytes,
+        0,
+      ),
+      embedderBytes: isolates.reduce(
+        (sum, isolate) => sum + (isolate.embedderBytes ?? 0),
+        0,
+      ),
+      backingStorageBytes: isolates.reduce(
+        (sum, isolate) => sum + (isolate.backingStorageBytes ?? 0),
         0,
       ),
     });

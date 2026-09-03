@@ -29,14 +29,16 @@ import {
  * (no provider mounted at all) releases a surface without one.
  */
 function useDiffWorkerPoolAvailability(
-  wanted: boolean,
+  hasWork: boolean,
 ): DiffWorkerPoolAvailability {
-  // Only a gate that is enabled and has something to highlight asks: a
-  // disabled gate or an empty diff list would otherwise build the pool for
-  // a surface that will never send it work.
+  // Having work to highlight is the demand signal, NOT being the enabled gate:
+  // a surface that mounts with its read gate disabled (`WorkspaceFileRenderer`
+  // straight into an edit session) still mounts a Diffs component, and one
+  // that mounts pool-less highlights on the main thread for life. An empty
+  // diff list is the only case with genuinely nothing to send a worker.
   useEffect(() => {
-    if (wanted) requestDiffWorkerPool();
-  }, [wanted]);
+    if (hasWork) requestDiffWorkerPool();
+  }, [hasWork]);
   return useSyncExternalStore(
     subscribeDiffWorkerPool,
     getDiffWorkerPoolAvailability,
@@ -56,7 +58,15 @@ function useInitialHighlightReady(props: {
   readonly poolAvailability: DiffWorkerPoolAvailability;
 }): boolean {
   const { enabled, hasWork, prepare, poolAvailability } = props;
-  const [released, setReleased] = useState(false);
+  // A gate that mounts with nothing to wait for is released for the surface's
+  // life. `WorkspaceFileRenderer` mounted mid-edit and `DiffContentPrimitive`
+  // mounted with an edit session both start disabled and enable later; without
+  // this, enabling would close the gate under an already-mounted editor and
+  // replace it with a loader. Deliberately NOT seeded from `prepare === null`
+  // the way it was before the pool became lazy - that is now the ordinary
+  // first-render state, and seeding from it would release every surface before
+  // the pool it is waiting for exists.
+  const [released, setReleased] = useState(!enabled || !hasWork);
 
   useEffect(() => {
     if (!enabled || !hasWork || prepare === null) return;
@@ -76,13 +86,15 @@ function useInitialHighlightReady(props: {
     };
   }, [enabled, hasWork, prepare]);
 
-  if (!enabled || !hasWork || released) return true;
+  if (!hasWork) return true;
   // No pool in context to prewarm with. "unavailable" means no provider at
   // all - render on the main thread, as this surface always did outside the
   // desktop shell. Anything else means the pool exists or is about to, and
-  // the context will carry it on the next render - hold the gate.
+  // the context will carry it on the next render - hold the gate. This holds
+  // for a DISABLED gate too: `enabled` says whether to wait for the cache
+  // prime, never whether the component about to mount needs a worker.
   if (prepare === null) return poolAvailability === "unavailable";
-  return false;
+  return !enabled || released;
 }
 
 export function useDiffsFileHighlightReady(props: {
@@ -91,7 +103,8 @@ export function useDiffsFileHighlightReady(props: {
   readonly enabled: boolean;
 }): boolean {
   const pool = useWorkerPool();
-  const poolAvailability = useDiffWorkerPoolAvailability(props.enabled);
+  // A file surface always has its one file to highlight, editing or not.
+  const poolAvailability = useDiffWorkerPoolAvailability(true);
   const { file, theme } = props;
   const prepareHighlight = useCallback(async (): Promise<void> => {
     // The provider owns render options; theme makes this callback a distinct
@@ -114,7 +127,7 @@ export function useDiffsDiffHighlightReady(props: {
 }): boolean {
   const pool = useWorkerPool();
   const poolAvailability = useDiffWorkerPoolAvailability(
-    props.enabled && props.fileDiffs.length > 0,
+    props.fileDiffs.length > 0,
   );
   const { fileDiffs, theme } = props;
   const prepareHighlight = useCallback(async (): Promise<void> => {
@@ -146,7 +159,7 @@ export function useDiffsDiffEditHighlightReady(props: {
 }): boolean {
   const pool = useWorkerPool();
   const poolAvailability = useDiffWorkerPoolAvailability(
-    props.enabled && props.fileDiffs.length > 0,
+    props.fileDiffs.length > 0,
   );
   const { enabled, fileDiffs, theme } = props;
   const [preparedTarget, setPreparedTarget] =

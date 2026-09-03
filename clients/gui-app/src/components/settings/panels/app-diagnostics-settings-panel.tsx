@@ -22,6 +22,7 @@ import {
   getDesktopHeapSnapshotBridge,
   getDesktopJsHeapBridge,
   type DesktopJsHeapBreakdown,
+  type DesktopJsHeapIsolate,
 } from "@/lib/resources/desktop-app-resource-usage";
 import { formatMemoryBytes } from "@/lib/resources/format-resource-usage";
 import { getLogLevelsBridge } from "@/lib/desktop-log-levels";
@@ -247,6 +248,43 @@ function MemoryDiagnosticsGroup(): ReactNode {
   );
 }
 
+interface JsHeapTotals {
+  readonly usedBytes: number;
+  readonly totalBytes: number;
+  readonly embedderBytes: number | null;
+  readonly backingStorageBytes: number | null;
+}
+
+/**
+ * Column totals. The two out-of-heap columns stay `null` until some isolate
+ * reports one, so a build whose protocol omits those experimental fields shows
+ * an empty column rather than a confident zero.
+ */
+function sumJsHeapIsolates(
+  isolates: ReadonlyArray<DesktopJsHeapIsolate>,
+): JsHeapTotals {
+  let usedBytes = 0;
+  let totalBytes = 0;
+  let embedderBytes: number | null = null;
+  let backingStorageBytes: number | null = null;
+  for (const isolate of isolates) {
+    usedBytes += isolate.usedBytes;
+    totalBytes += isolate.totalBytes;
+    if (isolate.embedderBytes !== null) {
+      embedderBytes = (embedderBytes ?? 0) + isolate.embedderBytes;
+    }
+    if (isolate.backingStorageBytes !== null) {
+      backingStorageBytes =
+        (backingStorageBytes ?? 0) + isolate.backingStorageBytes;
+    }
+  }
+  return { usedBytes, totalBytes, embedderBytes, backingStorageBytes };
+}
+
+function formatOptionalMemoryBytes(value: number | null): string {
+  return value === null ? "—" : formatMemoryBytes(value);
+}
+
 /**
  * The per-isolate companion to the heap snapshot. A snapshot walks the page's
  * own V8 isolate and nothing else; the renderer also runs one isolate per
@@ -285,17 +323,7 @@ function JsHeapReadout(): ReactNode {
 
   if (bridge === null) return null;
 
-  const usedTotal =
-    breakdown === null
-      ? 0
-      : breakdown.isolates.reduce((sum, isolate) => sum + isolate.usedBytes, 0);
-  const committedTotal =
-    breakdown === null
-      ? 0
-      : breakdown.isolates.reduce(
-          (sum, isolate) => sum + isolate.totalBytes,
-          0,
-        );
+  const totals = sumJsHeapIsolates(breakdown?.isolates ?? []);
 
   return (
     <>
@@ -303,7 +331,9 @@ function JsHeapReadout(): ReactNode {
         <span className="min-w-0 flex-1 text-ui-xs text-muted-foreground">
           Lists every JS heap in this window: the page and each worker it runs.
           A heap snapshot covers the page only, so this is what accounts for the
-          rest.
+          rest. Embedder and backing sit outside the JS heap — Blink&apos;s own
+          objects, and ArrayBuffer/WebAssembly stores such as a highlighter
+          worker&apos;s regex engine.
         </span>
         <Button
           type="button"
@@ -335,8 +365,14 @@ function JsHeapReadout(): ReactNode {
                 <th scope="col" className="py-1 pr-3 text-right font-normal">
                   Live
                 </th>
-                <th scope="col" className="py-1 text-right font-normal">
+                <th scope="col" className="py-1 pr-3 text-right font-normal">
                   Committed
+                </th>
+                <th scope="col" className="py-1 pr-3 text-right font-normal">
+                  Embedder
+                </th>
+                <th scope="col" className="py-1 text-right font-normal">
+                  Backing
                 </th>
               </tr>
             </thead>
@@ -357,8 +393,14 @@ function JsHeapReadout(): ReactNode {
                   <td className="py-1 pr-3 text-right font-mono tabular-nums">
                     {formatMemoryBytes(isolate.usedBytes)}
                   </td>
-                  <td className="py-1 text-right font-mono tabular-nums">
+                  <td className="py-1 pr-3 text-right font-mono tabular-nums">
                     {formatMemoryBytes(isolate.totalBytes)}
+                  </td>
+                  <td className="py-1 pr-3 text-right font-mono tabular-nums">
+                    {formatOptionalMemoryBytes(isolate.embedderBytes)}
+                  </td>
+                  <td className="py-1 text-right font-mono tabular-nums">
+                    {formatOptionalMemoryBytes(isolate.backingStorageBytes)}
                   </td>
                 </tr>
               ))}
@@ -374,10 +416,16 @@ function JsHeapReadout(): ReactNode {
                     : ` · process working set ${formatMemoryBytes(breakdown.workingSetBytes)}`}
                 </td>
                 <td className="py-1 pr-3 text-right font-mono tabular-nums">
-                  {formatMemoryBytes(usedTotal)}
+                  {formatMemoryBytes(totals.usedBytes)}
+                </td>
+                <td className="py-1 pr-3 text-right font-mono tabular-nums">
+                  {formatMemoryBytes(totals.totalBytes)}
+                </td>
+                <td className="py-1 pr-3 text-right font-mono tabular-nums">
+                  {formatOptionalMemoryBytes(totals.embedderBytes)}
                 </td>
                 <td className="py-1 text-right font-mono tabular-nums">
-                  {formatMemoryBytes(committedTotal)}
+                  {formatOptionalMemoryBytes(totals.backingStorageBytes)}
                 </td>
               </tr>
             </tfoot>

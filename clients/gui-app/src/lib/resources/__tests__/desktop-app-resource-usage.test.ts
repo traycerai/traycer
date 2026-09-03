@@ -165,7 +165,14 @@ describe("getDesktopJsHeapBridge", () => {
 
 describe("describeDesktopJsHeapIsolate", () => {
   function isolate(kind: "page" | "worker", url: string): DesktopJsHeapIsolate {
-    return { kind, url, usedBytes: 0, totalBytes: 0 };
+    return {
+      kind,
+      url,
+      usedBytes: 0,
+      totalBytes: 0,
+      embedderBytes: null,
+      backingStorageBytes: null,
+    };
   }
 
   it("labels the page isolate as This window regardless of its URL", () => {

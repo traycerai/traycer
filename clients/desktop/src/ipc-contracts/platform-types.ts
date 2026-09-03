@@ -42,6 +42,19 @@ export interface RendererJsHeapIsolate {
   readonly usedBytes: number;
   /** `Runtime.getHeapUsage` - pages V8 has committed for this isolate. */
   readonly totalBytes: number;
+  /**
+   * `Runtime.getHeapUsage` - memory the embedder (Blink) holds for this
+   * isolate, outside the JS heap the two fields above measure. `null` when the
+   * protocol build does not report it (both fields are experimental).
+   */
+  readonly embedderBytes: number | null;
+  /**
+   * `Runtime.getHeapUsage` - backing stores for `ArrayBuffer`s and WebAssembly
+   * memory. A diff highlighter worker's Oniguruma engine lives here, not in
+   * `usedBytes`, so a row without it undercounts exactly the off-main-thread
+   * memory this readout exists to attribute.
+   */
+  readonly backingStorageBytes: number | null;
 }
 
 /**
