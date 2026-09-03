@@ -17,6 +17,7 @@ import {
   bundledBuildReloadClient,
   resolveBundledDevelopment,
 } from "./scripts/bundled-build-reload";
+import { sentryDsnFromEnv } from "./scripts/sentry-dsn";
 
 // Dev-server endpoint that re-reads the host's pid.json on every request. The
 // baked define config only captures the host port as of Vite startup; the dev
@@ -71,35 +72,6 @@ const SHIPPED_RETURN_SCHEMES = {
 } as const;
 
 type MobileEnvironment = "dev" | keyof typeof SHIPPED_ENVIRONMENTS;
-
-/**
- * Sentry DSN to bake, or `""` for crash reporting OFF. One env var for every
- * environment: absent by default (every local build reports nothing), exported
- * by the release lanes. Read at BUILD time and baked as a literal - the same
- * posture as the backend URLs above, and as the desktop's deploy script
- * stamping `sentryRendererDsn` - so an installed app cannot be repointed by a
- * runtime environment variable. A garbage value fails the build here rather
- * than shipping a client that silently reports nowhere.
- */
-function sentryDsnFromEnv(env: NodeJS.ProcessEnv): string {
-  const raw = env.TRAYCER_MOBILE_SENTRY_DSN;
-  if (raw === undefined || raw.trim().length === 0) {
-    return "";
-  }
-  const trimmed = raw.trim();
-  let parsed: URL;
-  try {
-    parsed = new URL(trimmed);
-  } catch {
-    throw new Error("TRAYCER_MOBILE_SENTRY_DSN is not a URL");
-  }
-  if (parsed.protocol !== "https:" || parsed.username.length === 0) {
-    throw new Error(
-      "TRAYCER_MOBILE_SENTRY_DSN must be an https Sentry DSN (with public key)",
-    );
-  }
-  return trimmed;
-}
 
 interface SentrySourcemapUpload {
   readonly org: string;
