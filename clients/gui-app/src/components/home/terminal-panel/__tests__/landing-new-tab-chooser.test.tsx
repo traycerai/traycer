@@ -1,6 +1,8 @@
 import type { ReactElement } from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import {
   LandingNewTabChooser,
   type LandingNewTabKind,
@@ -65,12 +67,18 @@ function browserCard(): HTMLElement {
 
 describe("<LandingNewTabChooser />", () => {
   afterEach(() => {
+    useKeybindingStore.getState().resetAll();
     cleanup();
   });
 
-  // Verbatim against the core flows' Copy table: this is the first thing the
-  // panel says about there being two kinds of tab, so a paraphrase here is a
-  // product change, not a wording tweak.
+  // Against the core flows' Copy table: this is the first thing the panel says
+  // about there being two kinds of tab, so a paraphrase here is a product
+  // change, not a wording tweak. The two card blurbs are still verbatim; the
+  // hint line's SHAPE is the spec and its chords are read from the bindings,
+  // because the table's literal was Mac-only.
+  //
+  // This suite runs on jsdom's non-Mac user agent, which is the reader the old
+  // literal was wrong for.
   it("renders both cards and the hint line in the core-flows copy", () => {
     openChooser();
 
@@ -83,9 +91,27 @@ describe("<LandingNewTabChooser />", () => {
     expect(browserCard().textContent).toContain(
       "Signed-in browser on this device",
     );
+    // The chords the default bindings actually resolve to on THIS platform -
+    // `⇧⌘J` / `⇧⌘B` was a Mac literal, and these are the same two actions as
+    // a Windows or Linux reader sees them.
     expect(
-      screen.getByText("Enter opens Terminal · ⇧⌘J terminal · ⇧⌘B browser"),
-    ).toBeTruthy();
+      screen.getByTestId("landing-new-tab-chooser-shortcuts").textContent,
+    ).toBe(
+      "Enter opens Terminal · Ctrl+Shift+J terminal · Ctrl+Shift+B browser",
+    );
+  });
+
+  // Both actions are rebindable, and either can be left with no chord at all -
+  // so the line has to follow the store rather than restate a default.
+  it("follows a rebind and omits an action the reader has unbound", () => {
+    useKeybindingStore.getState().setBinding("app.terminal.new", "mod+alt+t");
+    useKeybindingStore.getState().clearBinding("app.browser.new");
+    openChooser();
+
+    // Nothing to press for the browser, so nothing is claimed about it.
+    expect(
+      screen.getByTestId("landing-new-tab-chooser-shortcuts").textContent,
+    ).toBe("Enter opens Terminal · Ctrl+Alt+T terminal");
   });
 
   // The chooser owns the keyboard when it opens, and Enter is the BROWSER's

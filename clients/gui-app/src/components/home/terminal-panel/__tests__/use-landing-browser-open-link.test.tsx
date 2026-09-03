@@ -29,6 +29,7 @@ import {
   useLandingBrowserOpenLink,
   useLandingBrowserOpenTab,
   type LandingBrowserOpenLink,
+  type LandingBrowserOpenRequest,
 } from "../use-landing-browser-open-tab";
 
 const HOST_ID = "host-a";
@@ -506,9 +507,9 @@ describe("useLandingBrowserOpenLink", () => {
     const resultRef: { current: LandingBrowserOpenLink } = {
       current: { open: () => undefined, openers: null },
     };
-    const chooserOpenRef: { current: () => void } = {
-      current: () => undefined,
-    };
+    const chooserOpenRef: {
+      current: (request: LandingBrowserOpenRequest) => void;
+    } = { current: () => undefined };
     function Harness(): ReactNode {
       const link = useLandingBrowserOpenLink({
         browserSessions: { [HOST_ID]: popupSessions },
@@ -532,7 +533,7 @@ describe("useLandingBrowserOpenLink", () => {
     );
 
     await act(async () => {
-      chooserOpenRef.current();
+      chooserOpenRef.current({ placeholderInstanceId: null });
       await Promise.resolve();
     });
     await waitFor(() => {

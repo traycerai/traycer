@@ -6,9 +6,11 @@ import type { LandingBrowserTabRef } from "@/stores/home/landing-panel-store";
 import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
 import { LandingBrowserTile } from "../landing-browser-tile";
 
-const captured = vi.hoisted<{ props: BrowserTabTileProps | null }>(() => ({
-  props: null,
-}));
+const captured = vi.hoisted<{
+  props: BrowserTabTileProps | null;
+  /** The host the tile put on a browser-sessions stream, `null` for none. */
+  sessionsHostId: string | null;
+}>(() => ({ props: null, sessionsHostId: null }));
 
 vi.mock("@/components/browser-tile/browser-tab-tile", () => ({
   BrowserTabTile: (props: BrowserTabTileProps) => {
@@ -30,8 +32,13 @@ vi.mock("@/components/epic-canvas/tab-host-provider", () => ({
 vi.mock("@/components/epic-canvas/renderers/browser-sessions-provider", () => ({
   BrowserSessionsProvider: (props: { readonly children: ReactNode }) =>
     props.children,
-  BrowserSessionsHostProvider: (props: { readonly children: ReactNode }) =>
-    props.children,
+  BrowserSessionsHostProvider: (props: {
+    readonly hostId: string | null;
+    readonly children: ReactNode;
+  }) => {
+    captured.sessionsHostId = props.hostId;
+    return props.children;
+  },
   BrowserSessionsHostBoundary: (props: { readonly children: ReactNode }) =>
     props.children,
   BrowserSessionsSnapshotProvider: (props: { readonly children: ReactNode }) =>
@@ -73,10 +80,50 @@ function tileElement(
 describe("<LandingBrowserTile />", () => {
   beforeEach(() => {
     captured.props = null;
+    captured.sessionsHostId = null;
   });
 
   afterEach(() => {
     cleanup();
+  });
+
+  // A browser-sessions stream is a socket, a relay attach, a desktop identity
+  // attestation and a contributed-set replay, and the desktop caps a window's
+  // streams and refuses whichever is asked for LAST. A tile in a collapsed
+  // panel or a backgrounded Start Page shows nothing, so it must not be the
+  // reason a visible tile's device is the one refused.
+  //
+  // Two terms, not the three the `visible` prop takes: `active` is left out on
+  // purpose, because the strip renders a row for EVERY tab and those rows read
+  // their title and dormancy from this inventory.
+  it.each([
+    [true, true, "host-1"],
+    [true, false, null],
+    [false, true, null],
+    [false, false, null],
+  ])(
+    "holds a stream with panelOpen=%s paneVisible=%s: %s",
+    (panelOpen, paneVisible, expected) => {
+      render(
+        <PaneVisibilityContext.Provider value={paneVisible}>
+          {tileElement({ panelOpen, active: false })}
+        </PaneVisibilityContext.Provider>,
+      );
+
+      expect(captured.sessionsHostId).toBe(expected);
+    },
+  );
+
+  // The inactive tab's device is still on the stream: its strip row is on
+  // screen and reads from this inventory.
+  it("holds a stream for a tab that is not the active one", () => {
+    render(
+      <PaneVisibilityContext.Provider value>
+        {tileElement({ active: false, panelOpen: true })}
+      </PaneVisibilityContext.Provider>,
+    );
+
+    expect(captured.sessionsHostId).toBe("host-1");
   });
 
   it("translates placement to the landing kind with this tile's own page id", () => {

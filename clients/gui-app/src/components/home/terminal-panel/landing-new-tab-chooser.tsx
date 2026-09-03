@@ -6,6 +6,8 @@ import {
   type RefObject,
 } from "react";
 import { Globe, TerminalSquare } from "lucide-react";
+import { formatChordForDisplay } from "@/lib/keybindings/chord";
+import { useBindingForAction } from "@/stores/settings/keybinding-store";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { cn } from "@/lib/utils";
 
@@ -106,6 +108,25 @@ export function LandingNewTabChooser(
   // the key. It is attached natively rather than as an `onKeyDown` prop because
   // `group` is a non-interactive role and the a11y rule forbids the prop there;
   // the role is correct for two cards, so the listener moves instead.
+  // Read from the ACTIVE bindings, not written into the copy: the chords are
+  // `Ctrl+Shift+…` off a Mac, and either can be rebound or unbound entirely -
+  // so a literal is wrong for most readers and goes stale for the rest. The
+  // line's shape is still the core-flows spec; only the symbols were.
+  const terminalChord = useBindingForAction("app.terminal.new");
+  const browserChord = useBindingForAction("app.browser.new");
+  const shortcutHint = [
+    // Not a binding: focus starts on a card and Enter activates it.
+    "Enter opens Terminal",
+    // An unbound action is omitted rather than shown blank - there is nothing
+    // to press, so there is nothing to tell the reader.
+    ...(terminalChord === null
+      ? []
+      : [`${formatChordForDisplay(terminalChord)} terminal`]),
+    ...(browserChord === null
+      ? []
+      : [`${formatChordForDisplay(browserChord)} browser`]),
+  ].join(" · ");
+
   const containerRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const container = containerRef.current;
@@ -172,8 +193,11 @@ export function LandingNewTabChooser(
           onKeyDown={handleKeyDown}
         />
       </div>
-      <p className="text-center text-ui-xs text-muted-foreground">
-        Enter opens Terminal · ⇧⌘J terminal · ⇧⌘B browser
+      <p
+        className="text-center text-ui-xs text-muted-foreground"
+        data-testid="landing-new-tab-chooser-shortcuts"
+      >
+        {shortcutHint}
       </p>
     </div>
   );

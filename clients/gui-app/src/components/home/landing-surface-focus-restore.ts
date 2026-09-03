@@ -24,16 +24,16 @@ export function restoreLandingSurfaceFocus(
   surface: HTMLDivElement | null,
   previous: HTMLElement | null,
 ): void {
-  const terminalState = useLandingPanelStore.getState();
+  const panelState = useLandingPanelStore.getState();
   const layout = landingPanelLayoutFor(
-    terminalState,
+    panelState,
     draftId ?? "unbound-landing-page",
   );
   if (layout.panelOpen && layout.maximized) {
     // The maximized panel's active row is not necessarily a terminal - the
     // strip is mixed - and only a terminal claims a terminal focus request, so
     // a browser row or the chooser falls through to the restore below.
-    const instanceId = activeLandingTerminalInstanceId(terminalState);
+    const instanceId = activeLandingTerminalInstanceId(panelState);
     if (instanceId !== null) {
       focusTerminalInstance(instanceId);
       return;
