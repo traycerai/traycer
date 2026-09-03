@@ -6,6 +6,7 @@ import type {
 } from "@traycer/protocol/host/browser/contracts";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { usePublishBrowserGuestTile } from "@/components/epic-canvas/browser-guest/use-publish-browser-guest-tile";
 import { useTileBodyVisible } from "@/components/epic-canvas/hooks/use-tile-body-visible";
 import { useRegisterVisibleBrowserTile } from "@/lib/browser-view/tiles/visible-tile-registry";
 import { BrowserTileFindAdapterBridge } from "@/components/epic-canvas/renderers/browser-tile-find-adapter";
@@ -164,6 +165,14 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
   );
   const bindSurface = props.binding.bindSurface;
   const registrationId = props.binding.registrationId;
+  usePublishBrowserGuestTile({
+    surfaceRef,
+    registrationId,
+    instanceId: props.node.instanceId,
+    viewTabId: props.viewTabId,
+    paneId: props.paneId,
+    presented: shouldAttachSurface(visible, showStartPage),
+  });
   const currentSurfaceAttachment = resolveCurrentSurfaceAttachment(
     surfaceAttachment,
     bindingId,

@@ -19,6 +19,8 @@ import type {
   BrowserViewOverlayReleaseResult,
   BrowserViewAttachSurface,
   BrowserViewDetachSurface,
+  BrowserViewGuestMountRequested,
+  BrowserViewGuestReleaseRequested,
   BrowserViewSnapshotInvalidatedChange,
   BrowserViewTileCommandEvent,
   BrowserViewTileKey,
@@ -61,6 +63,12 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
   private sessionsStreamEventHandler:
     | ((envelope: BrowserSessionsStreamEventEnvelope) => void)
     | null = null;
+  private readonly guestMountHandlers = new Set<
+    (request: BrowserViewGuestMountRequested) => void
+  >();
+  private readonly guestReleaseHandlers = new Set<
+    (request: BrowserViewGuestReleaseRequested) => void
+  >();
 
   constructor(input?: { readonly saveLogins?: boolean }) {
     this.saveLoginsValue = input?.saveLogins ?? true;
@@ -377,11 +385,33 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
     return { dispose: () => undefined };
   }
 
-  onGuestMountRequested() {
-    return { dispose: () => undefined };
+  onGuestMountRequested(
+    handler: (request: BrowserViewGuestMountRequested) => void,
+  ): { dispose: () => void } {
+    this.guestMountHandlers.add(handler);
+    return {
+      dispose: () => {
+        this.guestMountHandlers.delete(handler);
+      },
+    };
   }
 
-  onGuestReleaseRequested() {
-    return { dispose: () => undefined };
+  onGuestReleaseRequested(
+    handler: (request: BrowserViewGuestReleaseRequested) => void,
+  ): { dispose: () => void } {
+    this.guestReleaseHandlers.add(handler);
+    return {
+      dispose: () => {
+        this.guestReleaseHandlers.delete(handler);
+      },
+    };
+  }
+
+  emitGuestMountRequested(request: BrowserViewGuestMountRequested): void {
+    for (const handler of this.guestMountHandlers) handler(request);
+  }
+
+  emitGuestReleaseRequested(request: BrowserViewGuestReleaseRequested): void {
+    for (const handler of this.guestReleaseHandlers) handler(request);
   }
 }

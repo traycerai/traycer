@@ -281,8 +281,12 @@ export const TabGroupView = memo(function TabGroupView(
   );
 
   useLayoutEffect(
-    () => registerHostedPaneActivationClaim(tabId, pane.id, claimPointerDown),
-    [claimPointerDown, pane.id, tabId],
+    () =>
+      registerHostedPaneActivationClaim(tabId, pane.id, {
+        claimFocus,
+        claimPointerDown,
+      }),
+    [claimFocus, claimPointerDown, pane.id, tabId],
   );
 
   useEffect(() => {

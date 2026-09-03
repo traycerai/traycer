@@ -65,3 +65,41 @@ export function activateHostedTopLevelSurface(
   if (tab === undefined || refIsFocused(context.activeItem, tab)) return;
   context.activate(tab);
 }
+
+type HostedTopLevelActivationClaim = (
+  target: EventTarget | null,
+  defaultPrevented: boolean,
+) => void;
+
+interface HostedTopLevelActivationClaims {
+  readonly claimFocus: HostedTopLevelActivationClaim;
+  readonly claimPointerDown: HostedTopLevelActivationClaim;
+}
+
+let hostedTopLevelActivationClaims: HostedTopLevelActivationClaims | null =
+  null;
+
+export function registerHostedTopLevelActivationClaims(
+  claims: HostedTopLevelActivationClaims,
+): () => void {
+  hostedTopLevelActivationClaims = claims;
+  return () => {
+    if (hostedTopLevelActivationClaims === claims) {
+      hostedTopLevelActivationClaims = null;
+    }
+  };
+}
+
+export function claimHostedTopLevelActivationFocus(
+  target: EventTarget | null,
+  defaultPrevented: boolean,
+): void {
+  hostedTopLevelActivationClaims?.claimFocus(target, defaultPrevented);
+}
+
+export function claimHostedTopLevelActivationPointerDown(
+  target: EventTarget | null,
+  defaultPrevented: boolean,
+): void {
+  hostedTopLevelActivationClaims?.claimPointerDown(target, defaultPrevented);
+}
