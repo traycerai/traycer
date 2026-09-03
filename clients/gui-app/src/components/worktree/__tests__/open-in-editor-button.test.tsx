@@ -283,6 +283,68 @@ describe("<OpenInEditorButton />", () => {
     });
   });
 
+  // The chevron itself disables while a launch is in flight, so the menu is
+  // opened first and the pending state applied on a re-render - the same
+  // sequence a user sees when an open starts from an already-open menu.
+  it("swaps each launching item's icon for the spinner while opening, labels unchanged", () => {
+    editorState.finderAvailable = true;
+    const view = render(
+      <OpenInEditorButton
+        openTarget={{ workspacePath: "/repo", hostId: "host-1" }}
+        hostClient={null}
+      />,
+    );
+
+    fireEvent.pointerDown(
+      screen.getByTestId("workspace-open-in-editor-chevron"),
+      { button: 0 },
+    );
+
+    editorState.isPending = true;
+    view.rerender(
+      <OpenInEditorButton
+        openTarget={{ workspacePath: "/repo", hostId: "host-1" }}
+        hostClient={null}
+      />,
+    );
+
+    screen.getByTestId("workspace-open-in-editor-vscode-spinner");
+    screen.getByTestId("workspace-open-in-editor-finder-spinner");
+    // The label is the half that must NOT move.
+    expect(
+      screen.getByTestId("workspace-open-in-editor-vscode").textContent,
+    ).toContain("VS Code");
+    expect(
+      screen.getByTestId("workspace-open-in-editor-finder").textContent,
+    ).toContain("Open in Finder");
+    // Copy path reaches no host, so it neither disables nor spins.
+    expect(
+      screen.queryByTestId("workspace-open-in-editor-copy-path-spinner"),
+    ).toBeNull();
+  });
+
+  it("shows no spinner in the menu while idle", () => {
+    editorState.finderAvailable = true;
+    render(
+      <OpenInEditorButton
+        openTarget={{ workspacePath: "/repo", hostId: "host-1" }}
+        hostClient={null}
+      />,
+    );
+
+    fireEvent.pointerDown(
+      screen.getByTestId("workspace-open-in-editor-chevron"),
+      { button: 0 },
+    );
+
+    expect(
+      screen.queryByTestId("workspace-open-in-editor-vscode-spinner"),
+    ).toBeNull();
+    expect(
+      screen.queryByTestId("workspace-open-in-editor-finder-spinner"),
+    ).toBeNull();
+  });
+
   it("hides Open in Finder when the gate is closed, without hiding the rest of the menu", () => {
     editorState.finderAvailable = false;
     render(

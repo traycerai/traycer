@@ -214,6 +214,9 @@ interface EditorChooserMenuItemsProps {
   readonly onOpenInFinder: () => void;
 }
 
+// The launching items swap their leading icon for the spinner and keep their
+// label, so a disabled item reads as work in progress. Copy path is untouched:
+// it reaches no host and never disables.
 function EditorChooserMenuItems(props: EditorChooserMenuItemsProps) {
   const { availableEditors, openingEditor } = props;
   return (
@@ -227,7 +230,15 @@ function EditorChooserMenuItems(props: EditorChooserMenuItemsProps) {
             disabled={openingEditor}
             onSelect={() => props.onSelectEditor(editor.id)}
           >
-            <Icon className="size-3.5" aria-hidden />
+            {openingEditor ? (
+              <AgentSpinningDots
+                className="size-3.5"
+                testId={`workspace-open-in-editor-${editor.id}-spinner`}
+                variant={undefined}
+              />
+            ) : (
+              <Icon className="size-3.5" aria-hidden />
+            )}
             <span>{editor.label}</span>
           </DropdownMenuItem>
         );
@@ -246,7 +257,15 @@ function EditorChooserMenuItems(props: EditorChooserMenuItemsProps) {
           disabled={openingEditor}
           onSelect={props.onOpenInFinder}
         >
-          <FolderOpen className="size-3.5" aria-hidden />
+          {openingEditor ? (
+            <AgentSpinningDots
+              className="size-3.5"
+              testId="workspace-open-in-editor-finder-spinner"
+              variant={undefined}
+            />
+          ) : (
+            <FolderOpen className="size-3.5" aria-hidden />
+          )}
           <span>Open in Finder</span>
         </DropdownMenuItem>
       ) : null}
