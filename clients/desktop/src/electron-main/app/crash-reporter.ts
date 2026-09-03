@@ -5,10 +5,10 @@ import { log } from "./logger";
 import { isSentryEnabled, markSentryEnabled } from "./crash-reporter-state";
 import { desktopSentryBeforeSend } from "./crash-reporter-guest-scope";
 import {
-  scrubDesktopBreadcrumbInPlace,
-  scrubDesktopSentrySpanInPlace,
-  scrubDesktopSentryTransactionInPlace,
-} from "../../shared/sentry-scrub";
+  scrubSentryBreadcrumbInPlace,
+  scrubSentrySpanInPlace,
+  scrubSentryTransactionInPlace,
+} from "@traycer-clients/shared/platform/sentry-scrub";
 
 export { isSentryEnabled } from "./crash-reporter-state";
 
@@ -68,17 +68,17 @@ export function initCrashReporter(): void {
     // are persisted to `scope_v3.json` as they accumulate and a native crash
     // event is assembled from that persisted scope on the next launch.
     beforeBreadcrumb: (breadcrumb) => {
-      scrubDesktopBreadcrumbInPlace(breadcrumb);
+      scrubSentryBreadcrumbInPlace(breadcrumb);
       return breadcrumb;
     },
     // `beforeSend` never sees a transaction, and child spans travel outside
     // the transaction event.
     beforeSendTransaction: (event) => {
-      scrubDesktopSentryTransactionInPlace(event);
+      scrubSentryTransactionInPlace(event);
       return event;
     },
     beforeSendSpan: (span) => {
-      scrubDesktopSentrySpanInPlace(span);
+      scrubSentrySpanInPlace(span);
       return span;
     },
   });

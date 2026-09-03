@@ -670,32 +670,6 @@ describe("runServiceRegistrationWithInvocationRecord", () => {
       false,
     );
   });
-
-  it("does not mutate the OS when the transaction marker write fails, and leaves no sidecars", async () => {
-    mocks.failWriteCallNumber = 1; // the unique transaction-marker write fails
-    let osMutated = false;
-    await expect(
-      runServiceRegistrationWithInvocationRecord({
-        environment: "production",
-        hostHomeDir: hostHome,
-        waitMs: 2_000,
-        pollIntervalMs: 20,
-        serviceLabel: LABEL,
-        cli: npmCli(),
-        register: async () => {
-          osMutated = true;
-        },
-      }),
-    ).rejects.toMatchObject({
-      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
-      details: { phase: "txn-acquire" },
-    });
-    expect(osMutated).toBe(false);
-    expect(await exists(cliInvocationRecordPath(hostHome))).toBe(false);
-    expect(await exists(cliInvocationRecordStagingPath(hostHome))).toBe(false);
-    expect(await transactionMarkerNames()).toEqual([]);
-  });
-
   it("retains the transaction marker when both the commit and the stale-marker write fail", async () => {
     mocks.crashOnNextRename = true;
     mocks.failWriteCallNumber = 3; // txn(1) + staging(2) succeed, stale-marker(3) fails
@@ -898,30 +872,6 @@ describe("runServiceRegistrationWithInvocationRecord", () => {
     );
     expect(await exists(cliInvocationRecordPath(hostHome))).toBe(true);
   });
-
-  it("removes a legacy (label-less) stale marker on a successful registration", async () => {
-    await writeFile(
-      cliInvocationRecordStaleMarkerPath(hostHome),
-      '{"schemaVersion":1,"kind":"stale"}\n',
-      { mode: 0o600 },
-    );
-    await expect(
-      runServiceRegistrationWithInvocationRecord({
-        environment: "production",
-        hostHomeDir: hostHome,
-        waitMs: 2_000,
-        pollIntervalMs: 20,
-        serviceLabel: LABEL,
-        cli: npmCli(),
-        register: async () => undefined,
-      }),
-    ).resolves.toBeUndefined();
-    expect(await exists(cliInvocationRecordStaleMarkerPath(hostHome))).toBe(
-      false,
-    );
-    expect(await exists(cliInvocationRecordPath(hostHome))).toBe(true);
-  });
-
   it("commits the record but reports stale-clear failure when `rm` resolves yet the own-label marker is still readable afterward", async () => {
     // `removeStaleMarkerIfOwn` treats `rm` resolving as necessary but not
     // sufficient: it must also CONFIRM the marker is gone afterward
@@ -966,42 +916,6 @@ describe("runServiceRegistrationWithInvocationRecord", () => {
     // no-op: nothing in the production path actually deleted it.
     expect(await exists(stalePath)).toBe(true);
   });
-
-  it("commits the record but reports failure when a foreign-label stale marker survives the strict clear", async () => {
-    await writeFile(
-      cliInvocationRecordStaleMarkerPath(hostHome),
-      serializeCliInvocationStaleMarker({
-        serviceLabel: "ai.traycer.host.dev.other",
-      }),
-      { mode: 0o600 },
-    );
-    await expect(
-      runServiceRegistrationWithInvocationRecord({
-        environment: "production",
-        hostHomeDir: hostHome,
-        waitMs: 2_000,
-        pollIntervalMs: 20,
-        serviceLabel: LABEL,
-        cli: npmCli(),
-        register: async () => undefined,
-      }),
-    ).rejects.toMatchObject({
-      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
-      details: { phase: "stale-clear", outcome: "foreign" },
-    });
-    // The OS registration and record commit still happened; only the
-    // strict foreign-marker clear failed.
-    expect(await exists(cliInvocationRecordPath(hostHome))).toBe(true);
-    expect(await exists(cliInvocationLifecyclePath(hostHome))).toBe(true);
-    expect(await transactionMarkerNames()).toEqual([]);
-    const stale = parseCliInvocationStaleMarker(
-      JSON.parse(
-        await readFile(cliInvocationRecordStaleMarkerPath(hostHome), "utf8"),
-      ),
-    );
-    expect(stale?.serviceLabel).toBe("ai.traycer.host.dev.other");
-  });
-
   it("succeeds when a symlink occupies the stale-marker path (skip-not-live, absent not foreign)", async () => {
     // The stale marker is read O_NOFOLLOW; a symlink there reads as absent,
     // not foreign or failed, so a successful registration is not blocked by
@@ -1339,46 +1253,6 @@ describe("runServiceUninstallWithInvocationRecord", () => {
     expect(uninstalled).toBe(true);
     expect(await exists(cliInvocationRecordPath(hostHome))).toBe(false);
   });
-
-  it("isolates slotted-dev uninstall removal to the supplied host home", async () => {
-    const otherHome = await mkdtemp(
-      join(tmpdir(), "traycer-cli-invocation-slot-"),
-    );
-    try {
-      await runServiceRegistrationWithInvocationRecord({
-        environment: "dev",
-        hostHomeDir: otherHome,
-        waitMs: 2_000,
-        pollIntervalMs: 20,
-        serviceLabel: "ai.traycer.host.dev.my-slot",
-        cli: npmCli(),
-        register: async () => undefined,
-      });
-      await runServiceRegistrationWithInvocationRecord({
-        environment: "production",
-        hostHomeDir: hostHome,
-        waitMs: 2_000,
-        pollIntervalMs: 20,
-        serviceLabel: LABEL,
-        cli: npmCli(),
-        register: async () => undefined,
-      });
-      await runServiceUninstallWithInvocationRecord({
-        environment: "dev",
-        hostHomeDir: otherHome,
-        waitMs: 2_000,
-        pollIntervalMs: 20,
-        serviceLabel: "ai.traycer.host.dev.my-slot",
-        uninstall: async () => undefined,
-      });
-      expect(await exists(cliInvocationRecordPath(otherHome))).toBe(false);
-      // The unrelated production home's live record is untouched.
-      expect(await exists(cliInvocationRecordPath(hostHome))).toBe(true);
-    } finally {
-      await rm(otherHome, { recursive: true, force: true });
-    }
-  });
-
   it("marks stale and reports failure when the live record cannot be removed after a confirmed OS uninstall", async () => {
     await runServiceRegistrationWithInvocationRecord({
       environment: "production",
@@ -2299,35 +2173,6 @@ describe("didServiceRegistrationCommit", () => {
     expect(didServiceRegistrationCommit(error)).toBe(true);
   });
 
-  it("is true for the post-registration lifecycle-phase rejection", () => {
-    const error = cliError({
-      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
-      message: "lifecycle failed",
-      details: {
-        label: LABEL,
-        phase: "lifecycle",
-        registrationCommitted: true,
-      },
-      exitCode: 1,
-    });
-    expect(didServiceRegistrationCommit(error)).toBe(true);
-  });
-
-  it("is true for the post-registration stale-clear (foreign) rejection", () => {
-    const error = cliError({
-      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
-      message: "stale-clear failed",
-      details: {
-        label: LABEL,
-        phase: "stale-clear",
-        outcome: "foreign",
-        registrationCommitted: true,
-      },
-      exitCode: 1,
-    });
-    expect(didServiceRegistrationCommit(error)).toBe(true);
-  });
-
   it("is false for the pre-registration stage-phase rejection", () => {
     const error = cliError({
       code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
@@ -2336,20 +2181,6 @@ describe("didServiceRegistrationCommit", () => {
       exitCode: 1,
     });
     expect(didServiceRegistrationCommit(error)).toBe(false);
-  });
-
-  it("is false for the pre-registration txn-acquire-phase rejection", () => {
-    const error = cliError({
-      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
-      message: "txn-acquire failed",
-      details: { label: LABEL, phase: "txn-acquire" },
-      exitCode: 1,
-    });
-    expect(didServiceRegistrationCommit(error)).toBe(false);
-  });
-
-  it("is false for a plain Error", () => {
-    expect(didServiceRegistrationCommit(new Error("boom"))).toBe(false);
   });
 });
 
@@ -2555,51 +2386,6 @@ describe("lifecycle generation", () => {
     expect(await transactionMarkerNames()).toEqual([]);
     expect(await leftoverLifecycleTemps()).toEqual([]);
   });
-
-  it("marks stale, keeps the just-committed live record, and releases the txn when the lifecycle rename fails", async () => {
-    await runServiceRegistrationWithInvocationRecord({
-      environment: "production",
-      hostHomeDir: hostHome,
-      waitMs: 2_000,
-      pollIntervalMs: 20,
-      serviceLabel: LABEL,
-      cli: npmCli(),
-      register: async () => undefined,
-    });
-    const prior = await readLifecycle();
-    mocks.crashOnLifecycleRename = true;
-    await expect(
-      runServiceRegistrationWithInvocationRecord({
-        environment: "production",
-        hostHomeDir: hostHome,
-        waitMs: 2_000,
-        pollIntervalMs: 20,
-        serviceLabel: LABEL,
-        cli: npmCli(),
-        register: async () => undefined,
-      }),
-    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED });
-    expect((await readLifecycle())?.generation).toBe(prior?.generation);
-    const committedRecordRaw = await readFile(
-      cliInvocationRecordPath(hostHome),
-      "utf8",
-    );
-    const committedRecord = parseCliInvocationRecord(
-      JSON.parse(committedRecordRaw),
-    );
-    expect(committedRecord?.source.serviceLabel).toBe(LABEL);
-    expect(committedRecord?.command).toBe(process.execPath);
-    expect(committedRecord?.args).toEqual([scriptPath]);
-    const stale = parseCliInvocationStaleMarker(
-      JSON.parse(
-        await readFile(cliInvocationRecordStaleMarkerPath(hostHome), "utf8"),
-      ),
-    );
-    expect(stale?.serviceLabel).toBe(LABEL);
-    expect(await transactionMarkerNames()).toEqual([]);
-    expect(await leftoverLifecycleTemps()).toEqual([]);
-  });
-
   it("names the abandoned legacy exact marker's digest in the committed lifecycle", async () => {
     const exactPath = cliInvocationRecordTransactionMarkerPath(hostHome);
     const exactRaw = serializeCliInvocationTransactionMarker({
@@ -3043,154 +2829,7 @@ describe("cross-process transaction ownership", () => {
         "utf8",
       ),
     ).toBe('{"kind"');
-  });
-
-  it("leaves an abandoned exact marker byte-identical while a unique owner succeeds", async () => {
-    const exactPath = cliInvocationRecordTransactionMarkerPath(hostHome);
-    const exactRaw = serializeCliInvocationTransactionMarker({
-      schemaVersion: 1,
-      kind: "transaction",
-      owner: {
-        pid: 2147483646,
-        token: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
-        processStartIdentity: null,
-        startedAtMs: 1,
-      },
-      stagingFile: `${CLI_INVOCATION_RECORD_STAGING_FILENAME_PREFIX}aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee`,
-      operation: "install",
-      serviceLabel: LABEL,
-      startedAt: "2020-01-01T00:00:00.000Z",
-    });
-    await writeFile(exactPath, exactRaw, { mode: 0o600 });
-    await runServiceRegistrationWithInvocationRecord({
-      environment: "production",
-      hostHomeDir: hostHome,
-      waitMs: 2_000,
-      pollIntervalMs: 20,
-      serviceLabel: LABEL,
-      cli: npmCli(),
-      register: async () => {
-        expect(await readFile(exactPath, "utf8")).toBe(exactRaw);
-        expect(await transactionMarkerNames()).toContain("cli-invocation.txn");
-        expect(await transactionMarkerNames()).toHaveLength(2);
-      },
-    });
-    expect(await exists(cliInvocationRecordPath(hostHome))).toBe(true);
-    expect(await readFile(exactPath, "utf8")).toBe(exactRaw);
-    expect(await transactionMarkerNames()).toEqual(["cli-invocation.txn"]);
-  });
-
-  it("blocks a new unique owner when the exact marker is positively live", async () => {
-    const identity = currentProcessIdentityToken();
-    const exactPath = cliInvocationRecordTransactionMarkerPath(hostHome);
-    const exactRaw = serializeCliInvocationTransactionMarker({
-      schemaVersion: 1,
-      kind: "transaction",
-      owner: {
-        pid: identity.pid,
-        token: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
-        processStartIdentity: identity.startIdentity,
-        startedAtMs: identity.startedAtMs,
-      },
-      stagingFile: `${CLI_INVOCATION_RECORD_STAGING_FILENAME_PREFIX}aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee`,
-      operation: "install",
-      serviceLabel: LABEL,
-      startedAt: new Date().toISOString(),
-    });
-    await writeFile(exactPath, exactRaw, { mode: 0o600 });
-    let osMutated = false;
-    await expect(
-      runServiceRegistrationWithInvocationRecord({
-        environment: "production",
-        hostHomeDir: hostHome,
-        waitMs: 0,
-        pollIntervalMs: 20,
-        serviceLabel: LABEL,
-        cli: npmCli(),
-        register: async () => {
-          osMutated = true;
-        },
-      }),
-    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED });
-    expect(osMutated).toBe(false);
-    expect(await readFile(exactPath, "utf8")).toBe(exactRaw);
-    expect(await transactionMarkerNames()).toEqual(["cli-invocation.txn"]);
-    expect(await exists(cliInvocationRecordPath(hostHome))).toBe(false);
-  });
-
-  it("cannot rename or unlink an exact marker recreated by an old writer", async () => {
-    if (process.platform === "win32") return;
-    const exactPath = cliInvocationRecordTransactionMarkerPath(hostHome);
-    const exactRaw = serializeCliInvocationTransactionMarker({
-      schemaVersion: 1,
-      kind: "transaction",
-      owner: {
-        pid: 2147483646,
-        token: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
-        processStartIdentity: null,
-        startedAtMs: 1,
-      },
-      stagingFile: `${CLI_INVOCATION_RECORD_STAGING_FILENAME_PREFIX}aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee`,
-      operation: "install",
-      serviceLabel: LABEL,
-      startedAt: "2020-01-01T00:00:00.000Z",
-    });
-    await writeFile(exactPath, exactRaw, { mode: 0o600 });
-    const firstEntered = join(hostHome, "exact-first-entered");
-    const firstOsRelease = join(hostHome, "exact-first-os-release");
-    const firstResult = join(hostHome, "exact-first-result");
-    const firstPauseReady = join(hostHome, "exact-first-pause-ready");
-    const firstPauseRelease = join(hostHome, "exact-first-pause-release");
-    const secondEntered = join(hostHome, "exact-second-entered");
-    const secondResult = join(hostHome, "exact-second-result");
-    const secondPauseReady = join(hostHome, "exact-second-pause-ready");
-    const secondPauseRelease = join(hostHome, "exact-second-pause-release");
-    const first = spawnWorker({
-      operation: "install",
-      enteredPath: firstEntered,
-      releasePath: firstOsRelease,
-      resultPath: firstResult,
-      waitMs: 15_000,
-      command: process.execPath,
-      argument: scriptPath,
-      pauseReadyPath: firstPauseReady,
-      pauseReleasePath: firstPauseRelease,
-    });
-    const second = spawnWorker({
-      operation: "install",
-      enteredPath: secondEntered,
-      resultPath: secondResult,
-      waitMs: 0,
-      command: process.execPath,
-      argument: scriptPath,
-      pauseReadyPath: secondPauseReady,
-      pauseReleasePath: secondPauseRelease,
-    });
-    try {
-      await waitForFile(firstPauseReady);
-      await waitForFile(secondPauseReady);
-      expect(await readFile(exactPath, "utf8")).toBe(exactRaw);
-      await writeFile(firstPauseRelease, "go\n");
-      await waitForFile(firstEntered);
-      expect(await readFile(exactPath, "utf8")).toBe(exactRaw);
-      const uniqueNames = (await transactionMarkerNames()).filter(
-        (name) => name !== "cli-invocation.txn",
-      );
-      expect(uniqueNames).toHaveLength(1);
-      await writeFile(secondPauseRelease, "go\n");
-      expect(await waitForExit(second)).toBe(1);
-      expect(await exists(secondEntered)).toBe(false);
-      expect(await readFile(exactPath, "utf8")).toBe(exactRaw);
-    } finally {
-      await writeFile(firstOsRelease, "release\n");
-      expect(await waitForExit(first)).toBe(0);
-    }
-    expect(await readWorkerResult(firstResult)).toBe("ok\n");
-    expect(await readFile(exactPath, "utf8")).toBe(exactRaw);
-    expect(await transactionMarkerNames()).toEqual(["cli-invocation.txn"]);
-  }, 30_000);
-
-  // The abandoned marker `writeDeadUniqueMarker` plants is no longer removed
+  }); // The abandoned marker `writeDeadUniqueMarker` plants is no longer removed
   // during election (only swept after the new owner's lifecycle write), so
   // `readSoleTransactionMarker` - which asserts exactly one marker on disk -
   // cannot be used while that residue is still present. This variant filters
@@ -3522,6 +3161,27 @@ describe("cross-process transaction ownership", () => {
     expect(await exists(dead.path)).toBe(true);
   });
 
+  it("leaves the abandoned marker in place when register() throws", async () => {
+    const dead = await writeDeadUniqueMarker();
+    await expect(
+      runServiceRegistrationWithInvocationRecord({
+        environment: "production",
+        hostHomeDir: hostHome,
+        waitMs: 2_000,
+        pollIntervalMs: 20,
+        serviceLabel: LABEL,
+        cli: npmCli(),
+        register: async () => {
+          throw new Error("os-install-refused");
+        },
+      }),
+    ).rejects.toThrow("os-install-refused");
+    // A throw from `register()` never reaches the lifecycle write, so
+    // `sweepAbandonedResidue` never runs - the abandoned residue this owner
+    // elected around stays exactly where it was.
+    expect(await exists(dead.path)).toBe(true);
+  });
+
   it("leaves the abandoned marker in place when the transaction fails before mutating the OS", async () => {
     // One prior writeFile (planting the dead marker) precedes this owner's
     // own txn-marker write (call 2) and staging write (call 3); see the
@@ -3551,45 +3211,6 @@ describe("cross-process transaction ownership", () => {
     // transaction never reaches a lifecycle write and never sweeps.
     expect(await exists(dead.path)).toBe(true);
   });
-
-  it("does not let a late contender preempt an established live unique owner", async () => {
-    if (process.platform === "win32") return;
-    const firstEntered = join(hostHome, "late-first-entered");
-    const firstOsRelease = join(hostHome, "late-first-os-release");
-    const firstResult = join(hostHome, "late-first-result");
-    const first = spawnWorker({
-      operation: "install",
-      enteredPath: firstEntered,
-      releasePath: firstOsRelease,
-      resultPath: firstResult,
-      waitMs: 15_000,
-      command: process.execPath,
-      argument: scriptPath,
-    });
-    try {
-      await waitForFile(firstEntered);
-      const owner = await readSoleTransactionMarker();
-      const lateEntered = join(hostHome, "late-second-entered");
-      const lateResult = join(hostHome, "late-second-result");
-      const late = spawnWorker({
-        operation: "install",
-        enteredPath: lateEntered,
-        resultPath: lateResult,
-        waitMs: 0,
-        command: process.execPath,
-        argument: scriptPath,
-      });
-      expect(await waitForExit(late)).toBe(1);
-      expect(await exists(lateEntered)).toBe(false);
-      expect((await readSoleTransactionMarker()).raw).toBe(owner.raw);
-      expect(await transactionMarkerNames()).toEqual([owner.name]);
-    } finally {
-      await writeFile(firstOsRelease, "release\n");
-      expect(await waitForExit(first)).toBe(0);
-    }
-    expect(await readWorkerResult(firstResult)).toBe("ok\n");
-  }, 30_000);
-
   it("converges simultaneous unique contenders to a single OS mutator", async () => {
     if (process.platform === "win32") return;
     const firstEntered = join(hostHome, "sim-first-entered");

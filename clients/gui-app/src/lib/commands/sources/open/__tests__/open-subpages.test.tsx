@@ -6,6 +6,7 @@ import type {
 } from "@traycer/protocol/host/worktree-schemas";
 import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
 import type { BrowserSessionsLifecycle } from "@traycer-clients/shared/platform/browser-view";
+import { BROWSERS_UNSUPPORTED_MESSAGE } from "@traycer-clients/shared/platform/browser-view";
 import type { CommandContext, CommandItem } from "@/lib/commands/types";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
 import type { OpenTileIntoTargetGroupArgs } from "@/lib/commands/actions/open-into-target";
@@ -1140,6 +1141,21 @@ describe("Browser opener sub-page", () => {
     });
     runById(failed, "open:browser:retry");
     expect(spies.retryBrowserSessions).toHaveBeenCalledOnce();
+  });
+
+  it("names the host update, with nothing to retry, when the host has no browsers", () => {
+    browserLifecycleMock.current = "unsupported";
+    browserInventoryReadyMock.current = false;
+    const items = renderBrowserItems([]);
+    expect(items.map((item) => item.id)).toEqual([
+      "open:browser:host",
+      "open:browser:new",
+      "open:browser:unsupported",
+    ]);
+    expect(items[2]).toMatchObject({
+      label: BROWSERS_UNSUPPORTED_MESSAGE,
+      disabled: true,
+    });
   });
 
   it("opens New browser through the host and places its session pointer", async () => {

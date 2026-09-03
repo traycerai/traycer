@@ -30,14 +30,8 @@ type SweepKickoff = {
   worktrees: Array<{
     readonly worktreePath: string;
     readonly stopOwners: boolean;
-    readonly expectedHoldersRevision: string | undefined;
   }>;
 };
-
-const REV_A =
-  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-const REV_B =
-  "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
 type TestRow = {
   entry: WorktreeHostEntryV14;
@@ -47,7 +41,6 @@ type TestRow = {
   note: "in-use" | "not-landed" | "shared" | null;
   holders: readonly WorktreeBusyHolder[];
   holdersStatus: "none" | "loading" | "ready" | "unknown";
-  holdersRevision?: string | undefined;
 };
 
 const testState = vi.hoisted(() => {
@@ -64,7 +57,6 @@ const testState = vi.hoisted(() => {
           return {
             worktreePath: "",
             stopOwners: false,
-            expectedHoldersRevision: undefined,
           };
         }
         const worktreePath =
@@ -72,12 +64,7 @@ const testState = vi.hoisted(() => {
             ? target.worktreePath
             : "";
         const stopOwners = "stopOwners" in target && target.stopOwners === true;
-        const expectedHoldersRevision =
-          "expectedHoldersRevision" in target &&
-          typeof target.expectedHoldersRevision === "string"
-            ? target.expectedHoldersRevision
-            : undefined;
-        return { worktreePath, stopOwners, expectedHoldersRevision };
+        return { worktreePath, stopOwners };
       }),
     };
   };
@@ -87,13 +74,10 @@ const testState = vi.hoisted(() => {
     lastVariables: {
       worktrees: [] as SweepKickoff["worktrees"],
     },
-    holdersChanged: [] as Array<{
-      worktreePath: string;
-      holders: readonly WorktreeBusyHolder[];
-      holdersRevision: string | undefined;
-    }>,
     removed: [] as string[],
-    failed: [] as string[],
+    // Structured since the cleanup runner started keeping the host's reason for
+    // the toast. The dialog's own row state is still per-path.
+    failed: [] as Array<{ worktreePath: string; reason: string }>,
     uncertain: [] as string[],
     rows: [] as TestRow[],
     hostId: "host-1",
@@ -137,7 +121,6 @@ vi.mock("@/hooks/epic/use-epic-sweep-worktrees-mutation", () => ({
         removed: testState.removed,
         failed: testState.failed,
         uncertain: testState.uncertain,
-        holdersChanged: testState.holdersChanged,
       });
     },
   }),
@@ -206,7 +189,6 @@ describe("SweepWorktreesDialog ergonomics", () => {
     useSweepSessionStore.getState().reset();
     testState.mutate.mockReset();
     testState.lastVariables = { worktrees: [] };
-    testState.holdersChanged = [];
     testState.removed = [];
     testState.failed = [];
     testState.uncertain = [];
@@ -418,7 +400,6 @@ describe("SweepWorktreesDialog ergonomics", () => {
         note: "in-use",
         holders: HOLDERS,
         holdersStatus: "ready",
-        holdersRevision: REV_A,
       },
     ];
     renderDialog();
@@ -484,7 +465,6 @@ describe("SweepWorktreesDialog ergonomics", () => {
         note: "in-use",
         holders: HOLDERS,
         holdersStatus: "ready",
-        holdersRevision: REV_A,
       },
     ];
     renderDialog();
@@ -495,6 +475,11 @@ describe("SweepWorktreesDialog ergonomics", () => {
     if (retriedBusy.getAttribute("aria-checked") === "false") {
       fireEvent.click(retriedBusy);
     }
+    expect(
+      screen.getByTestId("teardown-disclosure-inline").textContent,
+    ).toContain(
+      "Anything working in this worktree when the delete runs will be stopped.",
+    );
     expect(
       screen.getByTestId("teardown-disclosure-inline").textContent,
     ).toContain(
@@ -594,7 +579,6 @@ describe("SweepWorktreesDialog ergonomics", () => {
         note: "in-use",
         holders: HOLDERS,
         holdersStatus: "ready",
-        holdersRevision: REV_A,
       },
       {
         entry: worktreeEntry({
@@ -710,7 +694,6 @@ describe("SweepWorktreesDialog ergonomics", () => {
         note: "in-use" as const,
         holders: HOLDERS,
         holdersStatus: "ready" as const,
-        holdersRevision: REV_A,
       },
     ];
     testState.rows = mixed;
@@ -749,7 +732,6 @@ describe("SweepWorktreesDialog ergonomics", () => {
         {
           worktreePath: "/wt/busy",
           stopOwners: true,
-          expectedHoldersRevision: REV_A,
         },
       ]),
     );
@@ -883,45 +865,6 @@ describe("SweepWorktreesDialog ergonomics", () => {
     });
   });
 
-  it("returns to Choose when holders change so the next sweep gets a fresh review", async () => {
-    testState.holdersChanged = [
-      {
-        worktreePath: "/wt/busy",
-        holders: HOLDERS,
-        holdersRevision: REV_B,
-      },
-    ];
-    testState.rows = [
-      {
-        entry: worktreeEntry({
-          worktreePath: "/wt/busy",
-          branch: "feat-busy",
-          inUse: true,
-        }),
-        tier: "in-use",
-        defaultChecked: false,
-        disabled: false,
-        note: "in-use",
-        holders: HOLDERS,
-        holdersStatus: "ready",
-        holdersRevision: REV_A,
-      },
-    ];
-    renderDialog();
-    fireEvent.click(
-      screen.getByRole("checkbox", { name: "Sweep worktree feat-busy" }),
-    );
-    fireEvent.click(screen.getByTestId("sweep-worktrees-confirm"));
-    await waitFor(() => {
-      expect(screen.getByText("Review this sweep")).toBeTruthy();
-    });
-    fireEvent.click(screen.getByTestId("sweep-worktrees-confirm"));
-    await waitFor(() => {
-      expect(screen.queryByText("Review this sweep")).toBeNull();
-    });
-    expect(screen.getByTestId("sweep-worktrees-confirm")).toBeTruthy();
-  });
-
   it("Back from review preserves selection; Escape is owned by the dialog", async () => {
     testState.rows = [
       {
@@ -936,7 +879,6 @@ describe("SweepWorktreesDialog ergonomics", () => {
         note: "in-use",
         holders: HOLDERS,
         holdersStatus: "ready",
-        holdersRevision: REV_A,
       },
     ];
     renderDialog();
@@ -953,40 +895,6 @@ describe("SweepWorktreesDialog ergonomics", () => {
         .getByRole("checkbox", { name: "Sweep worktree feat-busy" })
         .getAttribute("aria-checked"),
     ).toBe("true");
-  });
-
-  it("echoes expectedHoldersRevision on the in-use kickoff", async () => {
-    testState.rows = [
-      {
-        entry: worktreeEntry({
-          worktreePath: "/wt/busy",
-          branch: "feat-busy",
-          inUse: true,
-        }),
-        tier: "in-use",
-        defaultChecked: false,
-        disabled: false,
-        note: "in-use",
-        holders: HOLDERS,
-        holdersStatus: "ready",
-        holdersRevision: REV_A,
-      },
-    ];
-    renderDialog();
-    fireEvent.click(
-      screen.getByRole("checkbox", { name: "Sweep worktree feat-busy" }),
-    );
-    fireEvent.click(screen.getByTestId("sweep-worktrees-confirm"));
-    // The Choose and Review primaries share a testid, so the barrier is the
-    // Review heading - false until the proof has landed and opened review.
-    await waitFor(() => {
-      expect(screen.getByText("Review this sweep")).toBeTruthy();
-    });
-    fireEvent.click(screen.getByTestId("sweep-worktrees-confirm"));
-    expect(testState.mutate).toHaveBeenCalledTimes(1);
-    expect(testState.lastVariables.worktrees[0]?.expectedHoldersRevision).toBe(
-      REV_A,
-    );
   });
 
   it("shows the safe-summary copy for a proven-idle selection", () => {
@@ -1036,7 +944,6 @@ describe("SweepWorktreesDialog ergonomics", () => {
         note: "in-use",
         holders: [first],
         holdersStatus: "ready",
-        holdersRevision: REV_A,
       },
     ];
     testState.refresh.mockImplementation(() => {
@@ -1044,7 +951,6 @@ describe("SweepWorktreesDialog ergonomics", () => {
         {
           ...testState.rows[0],
           holders: nextHolders,
-          holdersRevision: REV_B,
         },
       ];
       return Promise.resolve(testState.rows);
@@ -1064,9 +970,6 @@ describe("SweepWorktreesDialog ergonomics", () => {
       "old command",
     );
     fireEvent.click(screen.getByTestId("sweep-worktrees-confirm"));
-    expect(testState.lastVariables.worktrees[0]?.expectedHoldersRevision).toBe(
-      REV_B,
-    );
   });
 
   it("returns partial results to Choose instead of a stale review receipt", async () => {
@@ -1095,7 +998,6 @@ describe("SweepWorktreesDialog ergonomics", () => {
       note: "in-use" as const,
       holders: HOLDERS,
       holdersStatus: "ready" as const,
-      holdersRevision: REV_A,
     };
     const refuseBusy = {
       entry: worktreeEntry({
@@ -1109,17 +1011,9 @@ describe("SweepWorktreesDialog ergonomics", () => {
       note: "in-use" as const,
       holders: HOLDERS,
       holdersStatus: "ready" as const,
-      holdersRevision: REV_A,
     };
     testState.rows = [idle, okBusy, refuseBusy];
     testState.removed = ["/wt/ok"];
-    testState.holdersChanged = [
-      {
-        worktreePath: "/wt/busy",
-        holders: HOLDERS,
-        holdersRevision: REV_B,
-      },
-    ];
     renderDialog();
     fireEvent.click(
       screen.getByRole("checkbox", { name: "Sweep worktree feat-ok" }),
@@ -1251,7 +1145,6 @@ describe("SweepWorktreesDialog ergonomics", () => {
         note: "in-use",
         holders: [HOLDERS[0], shell],
         holdersStatus: "ready",
-        holdersRevision: REV_A,
       },
     ];
     renderDialog();
@@ -1283,7 +1176,6 @@ describe("SweepWorktreesDialog ergonomics", () => {
         note: "in-use",
         holders: HOLDERS,
         holdersStatus: "ready",
-        holdersRevision: REV_A,
       },
       {
         entry: worktreeEntry({
@@ -1309,7 +1201,7 @@ describe("SweepWorktreesDialog ergonomics", () => {
     fireEvent.click(screen.getByTestId("sweep-worktrees-confirm"));
     await waitFor(() => {
       expect(screen.getByTestId("sweep-review-stops").textContent).toContain(
-        "unidentified background work",
+        "cannot identify it",
       );
     });
   });
@@ -1403,7 +1295,6 @@ describe("SweepWorktreesDialog ergonomics", () => {
         note: "in-use",
         holders: [runCwd],
         holdersStatus: "ready",
-        holdersRevision: REV_A,
       },
     ];
     renderDialog();
@@ -1453,7 +1344,6 @@ describe("SweepWorktreesDialog ergonomics", () => {
         note: "in-use",
         holders: [idleChat, workingRun],
         holdersStatus: "ready",
-        holdersRevision: REV_A,
       },
     ];
     renderDialog();
@@ -1477,7 +1367,6 @@ describe("SweepWorktreesDialog ergonomics", () => {
       {
         worktreePath: "/wt/busy",
         stopOwners: true,
-        expectedHoldersRevision: REV_A,
       },
     ]);
   });
@@ -1495,7 +1384,6 @@ describe("SweepWorktreesDialog ergonomics", () => {
       note: "in-use" as const,
       holders: HOLDERS,
       holdersStatus: "ready" as const,
-      holdersRevision: REV_A,
     };
     const refuseBusy = {
       entry: worktreeEntry({
@@ -1509,17 +1397,9 @@ describe("SweepWorktreesDialog ergonomics", () => {
       note: "in-use" as const,
       holders: HOLDERS,
       holdersStatus: "ready" as const,
-      holdersRevision: REV_A,
     };
     testState.rows = [uncertainBusy, refuseBusy];
     testState.uncertain = ["/wt/maybe"];
-    testState.holdersChanged = [
-      {
-        worktreePath: "/wt/busy",
-        holders: HOLDERS,
-        holdersRevision: REV_B,
-      },
-    ];
     renderDialog();
     fireEvent.click(
       screen.getByRole("checkbox", { name: "Sweep worktree feat-maybe" }),
@@ -1556,7 +1436,6 @@ describe("SweepWorktreesDialog ergonomics", () => {
         note: "in-use",
         holders: HOLDERS,
         holdersStatus: "ready",
-        holdersRevision: REV_A,
       },
     ];
     testState.refresh.mockImplementation(() =>
@@ -1589,7 +1468,6 @@ describe("SweepWorktreesDialog ergonomics", () => {
         note: "in-use",
         holders: HOLDERS,
         holdersStatus: "ready",
-        holdersRevision: REV_A,
       },
     ];
     let release: ((rows: TestRow[]) => void) | undefined;
@@ -1625,7 +1503,6 @@ describe("SweepWorktreesDialog ergonomics", () => {
       note: "in-use" as const,
       holders: HOLDERS,
       holdersStatus: "ready" as const,
-      holdersRevision: REV_A,
     };
     const failedBusy = {
       entry: worktreeEntry({
@@ -1639,7 +1516,6 @@ describe("SweepWorktreesDialog ergonomics", () => {
       note: "in-use" as const,
       holders: HOLDERS,
       holdersStatus: "ready" as const,
-      holdersRevision: REV_A,
     };
     const refuseBusy = {
       entry: worktreeEntry({
@@ -1653,17 +1529,11 @@ describe("SweepWorktreesDialog ergonomics", () => {
       note: "in-use" as const,
       holders: HOLDERS,
       holdersStatus: "ready" as const,
-      holdersRevision: REV_A,
     };
     testState.rows = [uncertainBusy, failedBusy, refuseBusy];
     testState.uncertain = ["/wt/maybe"];
-    testState.failed = ["/wt/fail"];
-    testState.holdersChanged = [
-      {
-        worktreePath: "/wt/busy",
-        holders: HOLDERS,
-        holdersRevision: REV_B,
-      },
+    testState.failed = [
+      { worktreePath: "/wt/fail", reason: "Removing it failed." },
     ];
     renderDialog();
     fireEvent.click(
@@ -1720,7 +1590,6 @@ describe("SweepWorktreesDialog ergonomics", () => {
       note: "in-use" as const,
       holders: HOLDERS,
       holdersStatus: "ready" as const,
-      holdersRevision: REV_A,
     };
     const refuseBusy = {
       entry: worktreeEntry({
@@ -1734,17 +1603,9 @@ describe("SweepWorktreesDialog ergonomics", () => {
       note: "in-use" as const,
       holders: HOLDERS,
       holdersStatus: "ready" as const,
-      holdersRevision: REV_A,
     };
     testState.rows = [uncertainBusy, refuseBusy];
     testState.uncertain = ["/wt/maybe"];
-    testState.holdersChanged = [
-      {
-        worktreePath: "/wt/busy",
-        holders: HOLDERS,
-        holdersRevision: REV_B,
-      },
-    ];
     renderDialog();
     fireEvent.click(
       screen.getByRole("checkbox", { name: "Sweep worktree feat-maybe" }),
@@ -1778,7 +1639,6 @@ describe("SweepWorktreesDialog ergonomics", () => {
       note: "in-use" as const,
       holders: HOLDERS,
       holdersStatus: "ready" as const,
-      holdersRevision: REV_A,
     };
     const refuseBusy = {
       entry: worktreeEntry({
@@ -1792,17 +1652,9 @@ describe("SweepWorktreesDialog ergonomics", () => {
       note: "in-use" as const,
       holders: HOLDERS,
       holdersStatus: "ready" as const,
-      holdersRevision: REV_A,
     };
     testState.rows = [uncertainBusy, refuseBusy];
     testState.uncertain = ["/wt/maybe"];
-    testState.holdersChanged = [
-      {
-        worktreePath: "/wt/busy",
-        holders: HOLDERS,
-        holdersRevision: REV_B,
-      },
-    ];
     const { rerender } = render(
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
@@ -1859,7 +1711,6 @@ describe("SweepWorktreesDialog ergonomics", () => {
       note: "in-use" as const,
       holders: HOLDERS,
       holdersStatus: "ready" as const,
-      holdersRevision: REV_A,
     };
     const refuseBusy = {
       entry: worktreeEntry({
@@ -1873,17 +1724,9 @@ describe("SweepWorktreesDialog ergonomics", () => {
       note: "in-use" as const,
       holders: HOLDERS,
       holdersStatus: "ready" as const,
-      holdersRevision: REV_A,
     };
     testState.rows = [uncertainBusy, refuseBusy];
     testState.uncertain = ["/wt/maybe"];
-    testState.holdersChanged = [
-      {
-        worktreePath: "/wt/busy",
-        holders: HOLDERS,
-        holdersRevision: REV_B,
-      },
-    ];
     renderDialog();
     fireEvent.click(
       screen.getByRole("checkbox", { name: "Sweep worktree feat-maybe" }),
@@ -1931,7 +1774,6 @@ describe("SweepWorktreesDialog ergonomics", () => {
       note: "in-use" as const,
       holders: HOLDERS,
       holdersStatus: "ready" as const,
-      holdersRevision: REV_A,
     };
     const sibling = {
       entry: worktreeEntry({
@@ -1945,18 +1787,10 @@ describe("SweepWorktreesDialog ergonomics", () => {
       note: "in-use" as const,
       holders: HOLDERS,
       holdersStatus: "ready" as const,
-      holdersRevision: REV_A,
     };
     testState.hostId = "host-a";
     testState.rows = [onA, sibling];
     testState.uncertain = [path];
-    testState.holdersChanged = [
-      {
-        worktreePath: "/repo/other",
-        holders: HOLDERS,
-        holdersRevision: REV_B,
-      },
-    ];
     const view = render(
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
@@ -1989,7 +1823,6 @@ describe("SweepWorktreesDialog ergonomics", () => {
     testState.hostId = "host-b";
     testState.rows = [onA];
     testState.uncertain = [];
-    testState.holdersChanged = [];
     view.rerender(
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
@@ -2085,9 +1918,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
     testState.deferredOutcome?.({
       hostId: "host-a",
       removed: [],
-      failed: [path],
+      failed: [{ worktreePath: path, reason: "Removing it failed." }],
       uncertain: [],
-      holdersChanged: [],
     });
 
     const onB = screen.getByRole("checkbox", {
@@ -2111,7 +1943,6 @@ describe("SweepWorktreesDialog ergonomics", () => {
         note: "in-use",
         holders: HOLDERS,
         holdersStatus: "ready",
-        holdersRevision: REV_A,
       },
     ];
     testState.refresh.mockImplementation(() => {
@@ -2145,7 +1976,6 @@ describe("SweepWorktreesDialog ergonomics", () => {
       {
         worktreePath: "/wt/busy",
         stopOwners: false,
-        expectedHoldersRevision: undefined,
       },
     ]);
   });
@@ -2164,7 +1994,6 @@ describe("SweepWorktreesDialog ergonomics", () => {
         note: "in-use",
         holders: HOLDERS,
         holdersStatus: "ready",
-        holdersRevision: REV_A,
       },
     ];
     renderDialog();
