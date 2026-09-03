@@ -22,6 +22,8 @@ import type {
   ListGuiAgentCommandsResponse,
   ListGuiAgentModelsResponse,
 } from "@traycer/protocol/host/index";
+import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import {
@@ -29,7 +31,11 @@ import {
   HARNESS_PENDING_POLL_LANE,
 } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { createAppQueryClient } from "@/lib/query-client";
-import { hostQueryKeys } from "@/lib/query-keys";
+import {
+  hostQueryKeys,
+  providersListQueryKey,
+  providersNativeQueryKeys,
+} from "@/lib/query-keys";
 import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import {
@@ -838,7 +844,7 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
     return spine.createRequester(entry);
   }
 
-  it("useRefreshHarnessCatalogForClient invalidates only the target host's three catalog methods, leaving another host's cache untouched", async () => {
+  it("useRefreshHarnessCatalogForClient invalidates the target host's three catalog methods and its exact classic providers.list key, leaving another host's cache and native-scoped providers.list keys untouched", async () => {
     const queryClient = createAppQueryClient();
     const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
       <QueryClientProvider client={queryClient}>
@@ -890,6 +896,25 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
       expect(hostBCalls).toEqual({ harnesses: 1, models: 1, commands: 1 });
     });
 
+    // Seed the classic `providers.list` cache slot on both hosts, plus a
+    // native-scoped `providers.list` entry on host B - the mock host client
+    // has no `providers.list` handler, so these are written directly into the
+    // query cache rather than fetched.
+    const classicProvidersListResponse: ResponseOfMethod<
+      HostRpcRegistry,
+      "providers.list"
+    > = { providers: [] as ProviderCliState[], native: null };
+    const hostAClassicKey = providersListQueryKey("host-a");
+    const hostBClassicKey = providersListQueryKey("host-b");
+    const hostBNativeMcpKey = providersNativeQueryKeys.mcpList("host-b", {
+      providerId: "claude-code",
+      scope: "global",
+      workspaceRoot: null,
+    });
+    queryClient.setQueryData(hostAClassicKey, classicProvidersListResponse);
+    queryClient.setQueryData(hostBClassicKey, classicProvidersListResponse);
+    queryClient.setQueryData(hostBNativeMcpKey, classicProvidersListResponse);
+
     const { result } = renderHook(
       () => useRefreshHarnessCatalogForClient(clientB),
       { wrapper: Wrapper },
@@ -907,6 +932,23 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
     // target through the app-wide default (rather than the `client`
     // argument) would either refresh the wrong host or refresh both.
     expect(hostACalls).toEqual({ harnesses: 1, models: 1, commands: 1 });
+
+    // Host B's exact classic `providers.list` key was invalidated by the
+    // refresh...
+    expect(queryClient.getQueryState(hostBClassicKey)?.isInvalidated).toBe(
+      true,
+    );
+    // ...a native-scoped `providers.list` key on the SAME host was not - the
+    // refresh says nothing about MCP/plugins/skills discovery, only the
+    // classic catalog carrier (`native: null`)...
+    expect(
+      queryClient.getQueryState(hostBNativeMcpKey)?.isInvalidated,
+    ).not.toBe(true);
+    // ...and host A's classic `providers.list` key - a different host,
+    // never passed to the refresh - was left untouched too.
+    expect(queryClient.getQueryState(hostAClassicKey)?.isInvalidated).not.toBe(
+      true,
+    );
   });
 
   it("returns unavailable without retaining invalidation while the target has no RPC endpoint", async () => {

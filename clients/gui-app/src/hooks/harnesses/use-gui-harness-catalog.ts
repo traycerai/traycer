@@ -2,7 +2,7 @@ import { useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { useCallback, useMemo } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import { hostQueryKeys } from "@/lib/query-keys";
+import { hostQueryKeys, providersListQueryKey } from "@/lib/query-keys";
 import { useHostBinding, useHostClient } from "@/lib/host";
 import { resolveSubtreeHostClient } from "@/lib/host/binding-host-client";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
@@ -522,10 +522,11 @@ const REFRESHABLE_CATALOG_METHODS = [
 
 /**
  * Returns a function that force-refreshes the harness catalog (availability +
- * model lists + commands) for the active host, bypassing the long catalog
- * cache. Wired to the picker's refresh button so users can re-fetch on demand
- * without waiting out the 15-min stale window - e.g. to pick up provider
- * enable/disable changes or an updated models.dev catalog. (It re-queries the
+ * model lists + commands) and the provider list for the active host, bypassing
+ * the long caches. Wired to the picker's refresh button so users can re-fetch
+ * on demand without waiting out the 15-min stale window - e.g. to pick up
+ * provider enable/disable changes, an updated models.dev catalog, or a
+ * credential they just configured in the provider's own store. (It re-queries the
  * existing provider servers; a brand-new shell API key exported after the
  * host started still needs a host restart, since the server's env is fixed
  * at spawn.)
@@ -573,13 +574,26 @@ export function useRefreshHarnessCatalogForClient(
     // `invalidateQueries` resolves once the refetches it triggers on active
     // queries settle, so awaiting all of them lets the caller drive a spinner
     // that reflects real refetch progress (not just fire-and-forget).
-    await Promise.all(
-      REFRESHABLE_CATALOG_METHODS.map((method) =>
+    await Promise.all([
+      ...REFRESHABLE_CATALOG_METHODS.map((method) =>
         queryClient.invalidateQueries({
           queryKey: hostQueryKeys.methodScope(hostId, method),
         }),
       ),
-    );
+      // The picker's auth line and its degraded-tab set read `providers.list`,
+      // which is otherwise held for fifteen minutes. The catalog row's own
+      // `authStatus` cannot stand in for it: the host fills that field from a
+      // thirty-second cache and OMITS it once that expires, so a refresh
+      // pressed a minute after the user fixed their credential re-fetched the
+      // catalog and still rendered the stale signed-out verdict. Exact classic
+      // key, not the method scope - `providers.list` is also the carrier for
+      // the native (MCP/plugins/skills) queries, and a catalog refresh says
+      // nothing about those (same rule as `useRefreshProvidersListOnTurn`).
+      queryClient.invalidateQueries({
+        queryKey: providersListQueryKey(hostId),
+        exact: true,
+      }),
+    ]);
     return { kind: "refreshed" };
   }, [client, queryClient]);
 }
