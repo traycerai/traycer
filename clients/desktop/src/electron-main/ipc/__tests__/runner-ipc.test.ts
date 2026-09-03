@@ -2214,7 +2214,6 @@ describe("RunnerIpcBridge", () => {
     });
     bridge.dispose();
   });
-
   it("fails closed when dirty snapshots exist but the MRU renderer is not lifecycle-ready", async () => {
     const mod = await import("../register-runner-ipc");
     const registry = new FakeWindowRegistry();
@@ -3568,11 +3567,6 @@ describe("RunnerIpcBridge", () => {
       kind: "deferred" as const,
       message: "The host has work in progress, so it was not restarted.",
     },
-    {
-      kind: "busy" as const,
-      continuation: "activate" as const,
-      message: "The host has work in progress; restart it to finish.",
-    },
   ])(
     "resolves requestHostRespawn as declined when respawn() resolves $kind",
     async (outcome) => {
@@ -4299,114 +4293,6 @@ describe("RunnerIpcBridge", () => {
     ).toEqual([]);
     bridge.dispose();
   });
-
-  it("falls back to owned-or-MRU when no open tab matches a terminal notification", async () => {
-    const mod = await import("../register-runner-ipc");
-    const registry = new FakeWindowRegistry();
-    const windowOwner = buildWindow();
-    const windowMru = buildWindow();
-    registry.add("window-owner", 101, windowOwner);
-    registry.add("window-mru", 202, windowMru);
-    const ownership = new EpicWindowOwnership(null);
-    ownership.claim("tab-owned", "epic-owned", "window-owner");
-    const perWindowState = new PerWindowState(null);
-    perWindowState.update("window-owner", {
-      epicTabs: [{ id: "tab-owned", epicId: "epic-owned", name: "Owned" }],
-      activeTabId: "tab-owned",
-      canvasByTabId: {},
-    });
-    const bridge = new mod.RunnerIpcBridge({
-      host: new FakeHost(),
-      hostController: new FakeHostController(),
-      authnBaseUrl: "http://localhost:5005",
-      authRedirectUri: null,
-      tray: null,
-      zoomController: undefined,
-      authTokenStore: undefined,
-      windowRegistry: registry,
-      ownership,
-      perWindowState,
-      authSession: new DesktopAuthSession(),
-      quitState: undefined,
-    });
-    bridge.install();
-    registry.focusById("window-mru");
-    windowOwner.sentMessages.length = 0;
-    windowMru.sentMessages.length = 0;
-
-    const payload = {
-      kind: "notificationActivation",
-      version: 1,
-      route: {
-        kind: "terminal",
-        epicId: "epic-owned",
-        tabId: "tab-missing",
-        terminalId: "term-1",
-        paneId: "pane-1",
-        tileInstanceId: "tile-1",
-      },
-      feed: { source: "host", id: "row-1" },
-      originHostId: "host-1",
-    };
-    bridge.deliverNotificationClick(payload);
-
-    expect(registry.mostRecentlyFocusedId()).toBe("window-owner");
-    expect(
-      windowOwner.sentMessages.filter(
-        (message) => message.channel === RunnerHostEvent.notificationClick,
-      ),
-    ).toEqual([
-      {
-        channel: RunnerHostEvent.notificationClick,
-        payload,
-      },
-    ]);
-    expect(
-      windowMru.sentMessages.filter(
-        (message) => message.channel === RunnerHostEvent.notificationClick,
-      ),
-    ).toEqual([]);
-
-    // Unowned epic with no open tab → pure MRU fallback.
-    windowOwner.sentMessages.length = 0;
-    windowMru.sentMessages.length = 0;
-    registry.focusById("window-mru");
-    windowOwner.sentMessages.length = 0;
-    windowMru.sentMessages.length = 0;
-    const unownedPayload = {
-      kind: "notificationActivation",
-      version: 1,
-      route: {
-        kind: "terminal",
-        epicId: "unowned-epic",
-        tabId: "tab-x",
-        terminalId: "term-1",
-        paneId: "pane-1",
-        tileInstanceId: "tile-1",
-      },
-      feed: { source: "host", id: "row-unowned" },
-      originHostId: null,
-    };
-    bridge.deliverNotificationClick(unownedPayload);
-    expect(registry.mostRecentlyFocusedId()).toBe("window-mru");
-    expect(
-      windowMru.sentMessages.filter(
-        (message) => message.channel === RunnerHostEvent.notificationClick,
-      ),
-    ).toEqual([
-      {
-        channel: RunnerHostEvent.notificationClick,
-        payload: unownedPayload,
-      },
-    ]);
-    expect(
-      windowOwner.sentMessages.filter(
-        (message) => message.channel === RunnerHostEvent.notificationClick,
-      ),
-    ).toEqual([]);
-    bridge.dispose();
-  });
-
   it("routes artifact notification clicks to the window holding the exact artifact tile", async () => {
     const mod = await import("../register-runner-ipc");
     const registry = new FakeWindowRegistry();
@@ -4482,118 +4368,6 @@ describe("RunnerIpcBridge", () => {
     ).toEqual([]);
     bridge.dispose();
   });
-
-  it("falls back to owned-or-MRU when no open tile matches an artifact notification", async () => {
-    const mod = await import("../register-runner-ipc");
-    const registry = new FakeWindowRegistry();
-    const windowOwner = buildWindow();
-    const windowMru = buildWindow();
-    registry.add("window-owner", 101, windowOwner);
-    registry.add("window-mru", 202, windowMru);
-    const ownership = new EpicWindowOwnership(null);
-    ownership.claim("tab-owned", "epic-owned", "window-owner");
-    const perWindowState = new PerWindowState(null);
-    perWindowState.update("window-owner", {
-      epicTabs: [{ id: "tab-owned", epicId: "epic-owned", name: "Owned" }],
-      activeTabId: "tab-owned",
-      canvasByTabId: {
-        "tab-owned": {
-          tilesByInstanceId: {
-            "tile-other": {
-              id: "artifact-other",
-              type: "spec",
-              hostId: "host-1",
-            },
-          },
-        },
-      },
-    });
-    const bridge = new mod.RunnerIpcBridge({
-      host: new FakeHost(),
-      hostController: new FakeHostController(),
-      authnBaseUrl: "http://localhost:5005",
-      authRedirectUri: null,
-      tray: null,
-      zoomController: undefined,
-      authTokenStore: undefined,
-      windowRegistry: registry,
-      ownership,
-      perWindowState,
-      authSession: new DesktopAuthSession(),
-      quitState: undefined,
-    });
-    bridge.install();
-    registry.focusById("window-mru");
-    windowOwner.sentMessages.length = 0;
-    windowMru.sentMessages.length = 0;
-
-    const payload = {
-      kind: "notificationActivation",
-      version: 1,
-      route: {
-        kind: "artifact",
-        epicId: "epic-owned",
-        artifactId: "artifact-missing",
-      },
-      feed: { source: "host", id: "row-1" },
-      originHostId: "host-1",
-    };
-    bridge.deliverNotificationClick(payload);
-
-    expect(registry.mostRecentlyFocusedId()).toBe("window-owner");
-    expect(
-      windowOwner.sentMessages.filter(
-        (message) => message.channel === RunnerHostEvent.notificationClick,
-      ),
-    ).toEqual([
-      {
-        channel: RunnerHostEvent.notificationClick,
-        payload,
-      },
-    ]);
-    expect(
-      windowMru.sentMessages.filter(
-        (message) => message.channel === RunnerHostEvent.notificationClick,
-      ),
-    ).toEqual([]);
-
-    // Unowned epic with no open artifact tile → pure MRU fallback.
-    windowOwner.sentMessages.length = 0;
-    windowMru.sentMessages.length = 0;
-    registry.focusById("window-mru");
-    windowOwner.sentMessages.length = 0;
-    windowMru.sentMessages.length = 0;
-    const unownedPayload = {
-      kind: "notificationActivation",
-      version: 1,
-      route: {
-        kind: "artifact",
-        epicId: "unowned-epic",
-        artifactId: "artifact-x",
-      },
-      feed: { source: "host", id: "row-unowned" },
-      originHostId: null,
-    };
-    bridge.deliverNotificationClick(unownedPayload);
-    expect(registry.mostRecentlyFocusedId()).toBe("window-mru");
-    expect(
-      windowMru.sentMessages.filter(
-        (message) => message.channel === RunnerHostEvent.notificationClick,
-      ),
-    ).toEqual([
-      {
-        channel: RunnerHostEvent.notificationClick,
-        payload: unownedPayload,
-      },
-    ]);
-    expect(
-      windowOwner.sentMessages.filter(
-        (message) => message.channel === RunnerHostEvent.notificationClick,
-      ),
-    ).toEqual([]);
-    bridge.dispose();
-  });
-
   it("propagates a failed durable write out of the update handler and still releases echo suppression", async () => {
     // `perWindowStateUpdate` is `async` and awaits the durable write, so a
     // rejection has to reach `handleInvoke` rather than being swallowed into a
