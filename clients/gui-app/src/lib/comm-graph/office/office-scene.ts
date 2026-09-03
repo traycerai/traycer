@@ -1747,6 +1747,8 @@ export class OfficeScene {
    */
   private dropTransientMotion(): void {
     this.envelopes = [];
+    // Thrown balls are live-only motion too; a historical floor has none.
+    this.paperBalls = [];
     for (const character of this.characters.values()) {
       character.pending = [];
       character.bubble = null;
