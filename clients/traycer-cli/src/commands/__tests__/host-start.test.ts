@@ -1384,6 +1384,39 @@ describe("runHostStart - signal/exit propagation", () => {
     expect(String(crashed?.fields.stderrTail)).toContain("partial fatal text");
   });
 
+  it("does not hold the relaunch decision on a reportHostCrash that never resolves", async () => {
+    // The reporter is dispatched WITHOUT awaiting it: the relaunch decision
+    // and its backoff must start the moment the marker is written, not after
+    // HOST_CRASH_REPORT_TIMEOUT_MS. Real timers, so the elapsed-time bound
+    // below is the invariant itself - a run that waited on the reporter's
+    // 1.5 s race would fail it.
+    const exec = "/opt/traycer/host/install/traycer-host";
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    recorded.reportHostCrashHangs = true;
+
+    const startedAtMs = Date.now();
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          withChildExit(deps, child, 7, null),
+        ),
+      recorded,
+    );
+    const elapsedMs = Date.now() - startedAtMs;
+
+    expect(recorded.exited).toBe(7);
+    const crashed = recorded.markers.find((m) => m.phase === "crashed");
+    expect(crashed).toBeDefined();
+    expect(crashed?.fields.exitCode).toBe(7);
+    // Dispatched (after the marker) but never landed: the hang is real.
+    expect(recorded.sequence.indexOf("report-host-crash")).toBeGreaterThan(
+      recorded.sequence.indexOf("terminal-marker:crashed"),
+    );
+    expect(recorded.crashReports).toHaveLength(0);
+    expect(elapsedMs).toBeLessThan(HOST_CRASH_REPORT_TIMEOUT_MS);
+  }, 10_000);
+
   it("spawn() throw is translated into HOST_SPAWN_FAILED + exit 66", async () => {
     const exec = "/opt/traycer/host/install/traycer-host";
     const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);

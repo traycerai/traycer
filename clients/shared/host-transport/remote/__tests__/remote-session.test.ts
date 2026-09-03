@@ -6458,6 +6458,36 @@ describe("RemoteSession reconnect backoff ladder (T5, B6)", () => {
       session.close();
     }
   }, 12_000);
+
+  it("a session that has NEVER reached ready keeps the original ladder - its first failure waits RECONNECT_INITIAL_BACKOFF_MS, not 0ms", async () => {
+    // The other half of the gate, and the one with real consequences: a
+    // never-connected session's retries feed the host-liveness evidence
+    // machinery, so granting them the immediate rung would both hammer a
+    // host that is legitimately down and accelerate the death-streak logic
+    // that reads those attempts. Two evidence-classification tests in this
+    // file fail if this regresses, which is the coupling that makes this
+    // behaviour load-bearing rather than cosmetic.
+    const relay = new FakeRelayHost();
+    const lease = new MutableBearerLease("valid-token", "user-1");
+    const createTimestamps: number[] = [];
+    const session = new RemoteSession({
+      ...buildSessionOptions(relay, lease, null),
+      webSocketFactory: alwaysFailFactory(() => {
+        createTimestamps.push(Date.now());
+      }),
+    });
+    try {
+      session.start();
+      await vi.waitFor(
+        () => expect(createTimestamps.length).toBeGreaterThanOrEqual(2),
+        { timeout: 8_000, interval: 20 },
+      );
+      const firstGap = createTimestamps[1] - createTimestamps[0];
+      expect(firstGap).toBeGreaterThanOrEqual(RECONNECT_INITIAL_BACKOFF_MS);
+    } finally {
+      session.close();
+    }
+  }, 10_000);
   it("the ladder resets to rung 0 only after RECONNECT_STABLE_RESET_MS of sustained ready - a session that already climbed the ladder once and drops again soon after reaching ready does NOT get rung 0 a second time", async () => {
     // The flapping case, stated explicitly and set up honestly: rung 0 is
     // legitimately available to a session's very FIRST-ever failure (that

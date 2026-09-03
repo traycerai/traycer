@@ -5080,6 +5080,39 @@ describe("selection authority dial-evidence instrumentation", () => {
 
     authority.dispose();
   });
+
+  it("warns ONCE per stall episode, not once per dial past the threshold", () => {
+    const log = createRecordingAuthorityLog();
+    const { authority, incarnationId } = attachedAuthority(log);
+    const { engine } = authority;
+
+    // The test above stops exactly AT the threshold, so it cannot tell "fire
+    // at the crossing" from "fire at or above it". This one runs well past it:
+    // a prolonged outage is when this warn fires and also when dials are most
+    // frequent, so warning on every subsequent report would bury the
+    // transition under its own repetitions, in the logs of the very incident
+    // it exists to mark.
+    engine.ingestEvidence(
+      "A",
+      incarnationId,
+      sessionEvidence("H", "s1", "established", 0),
+    );
+    const dials = CONFIRMED_DEATH_REFUSAL_STREAK * 4;
+    for (let i = 0; i < dials; i += 1) {
+      engine.ingestEvidence(
+        "A",
+        incarnationId,
+        dialRefusal("H", `attempt-${i}`, null, i),
+      );
+    }
+
+    expect(stallWarnings(log.records)).toHaveLength(1);
+    // Every report is still individually recorded - the `debug` channel keeps
+    // the full history, so quieting the warn costs no evidence.
+    expect(dialLogs(log.records)).toHaveLength(dials);
+
+    authority.dispose();
+  });
   it("names the crossing ONCE - later refusals stay ordinary `counted`", () => {
     const log = createRecordingAuthorityLog();
     const { authority, incarnationId } = attachedAuthority(log);

@@ -2977,6 +2977,31 @@ describe("accumulateEvent", () => {
     expect(block.workflowMeta).not.toBeNull();
   });
 
+  it("a workflow.started re-emit without parentBlockId does not clear a nested parentBlockId", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "workflow.started",
+      blockId: "wf-1",
+      timestamp: 1,
+      name: "review",
+      intent: "Review the diff",
+      parentBlockId: "parent-block",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "workflow.started",
+      blockId: "wf-1",
+      timestamp: 2,
+      name: "review",
+      intent: null,
+    });
+
+    const block = blocks[0] as SubAgentBlock;
+    expect(block.parentBlockId).toBe("parent-block");
+    // A null re-emit intent does not clobber the previously known intent.
+    expect(block.task).toBe("Review the diff");
+    expect(block.workflowMeta?.intent).toBe("Review the diff");
+  });
+
   it("workflow.started with a differing non-null spawnToolCallId reopens a terminal workflow card as a new run", () => {
     let blocks = makeBlocks();
     blocks = accumulateEvent(blocks, {

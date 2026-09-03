@@ -2951,6 +2951,216 @@ describe("cross-process transaction ownership", () => {
     expect(await readFile(path, "utf8")).toBe(raw);
   });
 
+  it("does not let a paused reclaimer delete a unique owner acquired from the same abandoned marker", async () => {
+    if (process.platform === "win32") return;
+    const dead = await writeDeadUniqueMarker();
+    const firstEntered = join(hostHome, "reclaim-first-entered");
+    const firstOsRelease = join(hostHome, "reclaim-first-os-release");
+    const firstResult = join(hostHome, "reclaim-first-result");
+    const firstPauseReady = join(hostHome, "reclaim-first-pause-ready");
+    const firstPauseRelease = join(hostHome, "reclaim-first-pause-release");
+    const secondEntered = join(hostHome, "reclaim-second-entered");
+    const secondResult = join(hostHome, "reclaim-second-result");
+    const secondPauseReady = join(hostHome, "reclaim-second-pause-ready");
+    const secondPauseRelease = join(hostHome, "reclaim-second-pause-release");
+    const first = spawnWorker({
+      operation: "install",
+      enteredPath: firstEntered,
+      releasePath: firstOsRelease,
+      resultPath: firstResult,
+      waitMs: 15_000,
+      command: process.execPath,
+      argument: scriptPath,
+      pauseReadyPath: firstPauseReady,
+      pauseReleasePath: firstPauseRelease,
+    });
+    const second = spawnWorker({
+      operation: "install",
+      enteredPath: secondEntered,
+      resultPath: secondResult,
+      waitMs: 0,
+      command: process.execPath,
+      argument: scriptPath,
+      pauseReadyPath: secondPauseReady,
+      pauseReleasePath: secondPauseRelease,
+    });
+    try {
+      await waitForFile(firstPauseReady);
+      await waitForFile(secondPauseReady);
+      expect(await exists(dead.path)).toBe(true);
+      await writeFile(firstPauseRelease, "go\n");
+      await waitForFile(firstEntered);
+      const deadBasename = basename(dead.path);
+      const owner = await readSoleTransactionMarkerExcluding(deadBasename);
+      expect(owner.name).not.toBe("cli-invocation.txn");
+      // Elected AROUND, not unlinked: the abandoned marker this owner
+      // observed is only swept after ITS lifecycle write, which has not
+      // happened yet - `first` is still parked inside `register()`.
+      expect(await exists(dead.path)).toBe(true);
+      await writeFile(secondPauseRelease, "go\n");
+      expect(await waitForExit(second)).toBe(1);
+      expect(await readWorkerResult(secondResult)).toContain(
+        '"code":"E_SERVICE_INSTALL_FAILED"',
+      );
+      expect(await exists(secondEntered)).toBe(false);
+      expect((await readSoleTransactionMarkerExcluding(deadBasename)).raw).toBe(
+        owner.raw,
+      );
+      // The losing reclaimer's failed election must not have swept it either.
+      expect(await exists(dead.path)).toBe(true);
+    } finally {
+      await writeFile(firstOsRelease, "release\n");
+      expect(await waitForExit(first)).toBe(0);
+    }
+    expect(await readWorkerResult(firstResult)).toBe("ok\n");
+    expect(await transactionMarkerNames()).toEqual([]);
+    // Swept only now, after the winning owner's lifecycle write succeeded.
+    expect(await exists(dead.path)).toBe(false);
+    expect(await exists(cliInvocationLifecyclePath(hostHome))).toBe(true);
+  }, 30_000);
+
+  it("keeps a newly live owner safe from two other paused reclaimers", async () => {
+    if (process.platform === "win32") return;
+    const dead = await writeDeadUniqueMarker();
+    const firstEntered = join(hostHome, "three-first-entered");
+    const firstOsRelease = join(hostHome, "three-first-os-release");
+    const firstResult = join(hostHome, "three-first-result");
+    const firstPauseReady = join(hostHome, "three-first-pause-ready");
+    const firstPauseRelease = join(hostHome, "three-first-pause-release");
+    const secondEntered = join(hostHome, "three-second-entered");
+    const secondResult = join(hostHome, "three-second-result");
+    const secondPauseReady = join(hostHome, "three-second-pause-ready");
+    const secondPauseRelease = join(hostHome, "three-second-pause-release");
+    const thirdEntered = join(hostHome, "three-third-entered");
+    const thirdResult = join(hostHome, "three-third-result");
+    const thirdPauseReady = join(hostHome, "three-third-pause-ready");
+    const thirdPauseRelease = join(hostHome, "three-third-pause-release");
+    const first = spawnWorker({
+      operation: "install",
+      enteredPath: firstEntered,
+      releasePath: firstOsRelease,
+      resultPath: firstResult,
+      waitMs: 15_000,
+      command: process.execPath,
+      argument: scriptPath,
+      pauseReadyPath: firstPauseReady,
+      pauseReleasePath: firstPauseRelease,
+    });
+    const second = spawnWorker({
+      operation: "install",
+      enteredPath: secondEntered,
+      resultPath: secondResult,
+      waitMs: 0,
+      command: process.execPath,
+      argument: scriptPath,
+      pauseReadyPath: secondPauseReady,
+      pauseReleasePath: secondPauseRelease,
+    });
+    const third = spawnWorker({
+      operation: "install",
+      enteredPath: thirdEntered,
+      resultPath: thirdResult,
+      waitMs: 0,
+      command: process.execPath,
+      argument: scriptPath,
+      pauseReadyPath: thirdPauseReady,
+      pauseReleasePath: thirdPauseRelease,
+    });
+    let firstExited = false;
+    let secondExited = false;
+    let thirdExited = false;
+    try {
+      // All three actors must hold the same abandoned snapshot before any one
+      // is allowed to clean it. This is the interleaving that used to let a
+      // delayed compare/unlink reach a pathname after its replacement.
+      await waitForFile(firstPauseReady);
+      await waitForFile(secondPauseReady);
+      await waitForFile(thirdPauseReady);
+      expect(await exists(dead.path)).toBe(true);
+
+      await writeFile(firstPauseRelease, "go\n");
+      await waitForFile(firstEntered);
+      const deadBasename = basename(dead.path);
+      const owner = await readSoleTransactionMarkerExcluding(deadBasename);
+      expect(owner.name).not.toBe("cli-invocation.txn");
+      // Elected AROUND, not unlinked: nothing has swept it yet - `first` is
+      // still parked inside `register()`, and its lifecycle has not been
+      // written.
+      expect(await exists(dead.path)).toBe(true);
+
+      // Each delayed reclaimer still has the abandoned marker in its local
+      // snapshot. Releasing it now must not remove the first actor's newly
+      // live unique marker or enter the OS mutation itself.
+      await writeFile(secondPauseRelease, "go\n");
+      expect(await waitForExit(second)).toBe(1);
+      secondExited = true;
+      expect(await exists(secondEntered)).toBe(false);
+      expect((await readSoleTransactionMarkerExcluding(deadBasename)).raw).toBe(
+        owner.raw,
+      );
+      expect(await exists(dead.path)).toBe(true);
+
+      await writeFile(thirdPauseRelease, "go\n");
+      expect(await waitForExit(third)).toBe(1);
+      thirdExited = true;
+      expect(await exists(thirdEntered)).toBe(false);
+      expect((await readSoleTransactionMarkerExcluding(deadBasename)).raw).toBe(
+        owner.raw,
+      );
+      // Neither losing reclaimer's failed election swept it either.
+      expect(await exists(dead.path)).toBe(true);
+    } finally {
+      await writeFile(firstPauseRelease, "go\n");
+      await writeFile(secondPauseRelease, "go\n");
+      await writeFile(thirdPauseRelease, "go\n");
+      await writeFile(firstOsRelease, "release\n");
+      if (!firstExited) {
+        expect(await waitForExit(first)).toBe(0);
+        firstExited = true;
+      }
+      if (!secondExited) {
+        await waitForExit(second);
+        secondExited = true;
+      }
+      if (!thirdExited) {
+        await waitForExit(third);
+        thirdExited = true;
+      }
+    }
+    expect(await readWorkerResult(firstResult)).toBe("ok\n");
+    expect(await readWorkerResult(secondResult)).toContain(
+      '"code":"E_SERVICE_INSTALL_FAILED"',
+    );
+    expect(await readWorkerResult(thirdResult)).toContain(
+      '"code":"E_SERVICE_INSTALL_FAILED"',
+    );
+    expect(await transactionMarkerNames()).toEqual([]);
+    // Swept only now, after the winning owner's lifecycle write succeeded.
+    expect(await exists(dead.path)).toBe(false);
+    expect(await exists(cliInvocationLifecyclePath(hostHome))).toBe(true);
+  }, 30_000);
+
+  it("leaves the abandoned marker in place when register() throws", async () => {
+    const dead = await writeDeadUniqueMarker();
+    await expect(
+      runServiceRegistrationWithInvocationRecord({
+        environment: "production",
+        hostHomeDir: hostHome,
+        waitMs: 2_000,
+        pollIntervalMs: 20,
+        serviceLabel: LABEL,
+        cli: npmCli(),
+        register: async () => {
+          throw new Error("os-install-refused");
+        },
+      }),
+    ).rejects.toThrow("os-install-refused");
+    // A throw from `register()` never reaches the lifecycle write, so
+    // `sweepAbandonedResidue` never runs - the abandoned residue this owner
+    // elected around stays exactly where it was.
+    expect(await exists(dead.path)).toBe(true);
+  });
+
   it("leaves the abandoned marker in place when register() throws", async () => {
     const dead = await writeDeadUniqueMarker();
     await expect(

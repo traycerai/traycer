@@ -2151,6 +2151,21 @@ describe("compat recovery: RC probe", () => {
     expect(autoUpdater.setFeedURL).not.toHaveBeenCalled();
   });
 
+  it("skips an RC that clears the floor but is not newer than the running build", async () => {
+    // The running build is `1.0.0` (see `STABLE_APP_VERSION`). A sufficient
+    // RC that is OLDER by SemVer is a real shape - a release line predating an
+    // epoch backport produces one - and this updater never sets
+    // `allowDowngrade`, so electron-updater would report it as not available
+    // AFTER the user had already consented to the RC channel. Offering it is
+    // therefore a promise that cannot be kept.
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    const plan = await probe(updater, autoUpdater, [
+      { tag: "desktop-v1.0.0-rc.1", prerelease: true, epoch: 2 },
+    ]);
+    expect(plan.route).toBe("manual");
+    expect(plan.rcCandidateVersion).toBeNull();
+  });
+
   it("does not offer the RC hop while a download is in flight", async () => {
     // `performChannelChange` refuses unconditionally while a transfer is
     // active - no CancellationToken is plumbed - so an `enable-rc` button here

@@ -654,6 +654,48 @@ printf '%s\\n' "$@" > ${JSON.stringify(args)}
       "bootout",
     ]);
   });
+
+  it("treats a second 'already loaded' after the reload bootout as a concurrent installer's fresh definition - install succeeds and kickstarts it", async () => {
+    // Every path that bootstraps this label rewrites the manifest first, so
+    // a racer that re-bootstrapped between our bootout and bootstrap loaded
+    // a freshly regenerated plist - NOT the stale cache the reload evicts.
+    // This used to be misreported as SERVICE_INSTALL_FAILED.
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (args[0] === "bootstrap") {
+        throw buildLaunchctlError({
+          command,
+          cmdArgs: args,
+          stderr: "Bootstrap failed: 37: Service is already loaded\n",
+          stdout: "",
+          exitCode: 37,
+        });
+      }
+      return buildSuccessResult();
+    };
+    const controller = createMacosController(runner);
+    createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
+
+    await expect(
+      controller.install({
+        label,
+        cli: { command: "/usr/local/bin/traycer", args: [] },
+        enableLinger: false,
+      }),
+    ).resolves.toBeUndefined();
+    expect(calls.map((c) => c.args[0])).toEqual([
+      "print",
+      "print",
+      "bootout",
+      "bootstrap",
+      "print",
+      "bootout",
+      "bootstrap",
+      "print",
+      "kickstart",
+    ]);
+  });
   it("refuses to bootout Desktop's SMAppService job when it wins the reload race before the recovery bootout", async () => {
     // A competing registrar that re-loads the label between the CLI's
     // failed first bootstrap and the reload recovery's own bootout may be

@@ -2313,6 +2313,28 @@ describe("canonical status: localAttempt retention (Ticket 07 §5.2.7)", () => {
 
     expect(status.localAttempt).toBeNull();
   });
+
+  it("still surfaces a terminal `failed` record stamped recently", async () => {
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    removePidMetadata("production");
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    writeTerminalAttemptRecord({ updatedAt: oneHourAgo });
+
+    const status = await newController("production").getStatus();
+
+    expect(status.localAttempt).toEqual({
+      attemptId: "local-attempt-1",
+      generation: 1,
+      sequence: 1,
+      targetVersion: "2.0.0",
+      phase: "failed",
+      continuation: null,
+      updatedAt: oneHourAgo,
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
