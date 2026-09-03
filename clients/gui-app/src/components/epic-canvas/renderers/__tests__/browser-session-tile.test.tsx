@@ -15,6 +15,7 @@ import {
   tabInfo,
 } from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
 import { BrowserSessionTile } from "@/components/epic-canvas/renderers/browser-session-tile";
+import { TabBodySelectedContext } from "@/components/epic-canvas/canvas/tab-body-selected-context";
 import type { BrowserPeekCompleteMeaning } from "@/components/browser-tile/browser-peek-tile";
 import type { ElectronTabBinding } from "@/lib/browser-view/sessions/electron-tab-directory";
 import type {
@@ -43,6 +44,16 @@ const harness = vi.hoisted(() => ({
     Promise.resolve({ sessionId: "session-1", tabId: "tab-2" }),
   ),
   closeTab: vi.fn(),
+  attachTab: vi.fn(() => Promise.resolve()),
+}));
+
+/**
+ * This renderer's desktop window id, as `BrowserTabTile` reads it via
+ * `useDesktopWindowId()`. Mocked at the module rather than routed through a
+ * real `<RunnerHostProvider>`, since this suite never stands one up.
+ */
+const desktopWindowIdHarness = vi.hoisted(() => ({
+  windowId: "window-a" as string | null,
 }));
 
 /**
@@ -121,11 +132,19 @@ function sessionsContextValue() {
     retry: vi.fn(),
     openTab: harness.openTab,
     closeTab: harness.closeTab,
+    // This literal is untyped (no `BrowserSessionsState` annotation), so a
+    // missing `attachTab` member is invisible to the type-check - only a
+    // render of `BrowserTabTile` (which destructures `sessions.attachTab`)
+    // would ever have caught its absence.
+    attachTab: harness.attachTab,
   };
 }
 vi.mock("@/components/epic-canvas/renderers/browser-sessions-context", () => ({
   useBrowserSessionsContext: () => sessionsContextValue(),
   useMaybeBrowserSessionsContext: () => sessionsContextValue(),
+}));
+vi.mock("@/lib/windows/desktop-window-id", () => ({
+  useDesktopWindowId: () => desktopWindowIdHarness.windowId,
 }));
 vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   useEpicTileNavigation: () => ({ openTile: canvasState.openTile }),
@@ -259,6 +278,23 @@ function session(
   });
 }
 
+/**
+ * A ready Electron session whose tab records the desktop window route holding
+ * its binding - the fact the multi-window branch reads.
+ *
+ * A separate builder rather than a third parameter on `session()` with a
+ * default: defaulted parameters are banned repo-wide (the type-safety table in
+ * the root AGENTS.md), and threading a required one would touch all 35 of this
+ * suite's existing `session(...)` call sites for two tests' worth of state.
+ */
+function sessionBoundTo(boundWindowId: string | null): BrowserSessionInfo {
+  const base = session("ready", "electron");
+  return {
+    ...base,
+    tabs: base.tabs.map((tab) => ({ ...tab, boundWindowId })),
+  };
+}
+
 function binding(): ElectronTabBinding {
   return {
     hostId: "host-test",
@@ -295,6 +331,8 @@ describe("BrowserSessionTile lifecycle projection", () => {
     harness.closeCanvasTile.mockClear();
     harness.openTab.mockClear();
     harness.closeTab.mockClear();
+    harness.attachTab.mockClear();
+    desktopWindowIdHarness.windowId = "window-a";
     reachabilityHarness.status = "reachable";
     reachabilityHarness.hostLabel = "host-test";
     peekFrameHarness.frame = null;
@@ -847,6 +885,219 @@ describe("BrowserSessionTile lifecycle projection", () => {
       hostId: "host-remote",
     });
   });
+
+  it("fires attachTab once on activation for a capable, visible client with no binding", () => {
+    harness.items = [session("ready", "electron")];
+
+    renderTile();
+
+    expect(harness.attachTab).toHaveBeenCalledTimes(1);
+    expect(harness.attachTab).toHaveBeenCalledWith("tab-1");
+  });
+
+  it("fires attachTab again on Reopen tab, on top of the activation send", () => {
+    vi.useFakeTimers();
+    try {
+      harness.items = [session("ready", "electron")];
+
+      renderTile();
+      expect(harness.attachTab).toHaveBeenCalledTimes(1);
+
+      act(() => {
+        vi.advanceTimersByTime(10_000);
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Reopen tab" }));
+
+      expect(harness.attachTab).toHaveBeenCalledTimes(2);
+      expect(harness.attachTab).toHaveBeenNthCalledWith(1, "tab-1");
+      expect(harness.attachTab).toHaveBeenNthCalledWith(2, "tab-1");
+      // The screencast wake path itself is unchanged by this send: the peek
+      // branch still renders, which is what actually re-attaches the tab.
+      expect(screen.getByTestId("headless-browser-tab").dataset.tab).toBe(
+        "tab-1",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("never fires attachTab on the viewer path, even past the reconnect deadline", () => {
+    vi.useFakeTimers();
+    try {
+      harness.canMaterializeElectron = false;
+      harness.items = [session("ready", "electron")];
+
+      renderTile();
+      act(() => {
+        vi.advanceTimersByTime(10_000);
+      });
+
+      expect(harness.attachTab).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not fire attachTab when a native binding is already present", () => {
+    harness.binding = binding();
+    harness.items = [session("ready", "electron")];
+
+    renderTile();
+
+    expect(harness.attachTab).not.toHaveBeenCalled();
+  });
+
+  it("does not fire attachTab for a mounted but concealed body, then fires when it is revealed", () => {
+    // The ask is "attach this tab on MY route", so it is keyed to the body
+    // being ON SCREEN, not merely mounted. Canvas tabs are keep-alive: every
+    // unselected browser tile in the window stays mounted with
+    // `display:none`, and without the visibility term each one would ask the
+    // host to route its tab here on every reconnect - which is the
+    // wrong-window behavior this whole ticket exists to remove.
+    harness.items = [session("ready", "electron")];
+
+    const view = render(
+      <TabBodySelectedContext.Provider value={false}>
+        <BrowserSessionTile
+          node={NODE}
+          viewTabId="view-1"
+          paneId="pane-1"
+          epicId="epic-1"
+        />
+      </TabBodySelectedContext.Provider>,
+    );
+
+    expect(harness.attachTab).not.toHaveBeenCalled();
+
+    // Revealing the same mounted body is the activation edge.
+    view.rerender(
+      <TabBodySelectedContext.Provider value>
+        <BrowserSessionTile
+          node={NODE}
+          viewTabId="view-1"
+          paneId="pane-1"
+          epicId="epic-1"
+        />
+      </TabBodySelectedContext.Provider>,
+    );
+
+    expect(harness.attachTab).toHaveBeenCalledTimes(1);
+    expect(harness.attachTab).toHaveBeenCalledWith("tab-1");
+  });
+
+  it("sends attachTab only once per activation when the ack rejects", async () => {
+    harness.attachTab.mockImplementationOnce(() =>
+      Promise.reject(new Error("attach rejected")),
+    );
+    harness.items = [session("ready", "electron")];
+
+    const view = render(
+      <BrowserSessionTile
+        node={NODE}
+        viewTabId="view-1"
+        paneId="pane-1"
+        epicId="epic-1"
+      />,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(harness.attachTab).toHaveBeenCalledTimes(1);
+
+    view.rerender(
+      <BrowserSessionTile
+        node={NODE}
+        viewTabId="view-1"
+        paneId="pane-1"
+        epicId="epic-1"
+      />,
+    );
+
+    expect(harness.attachTab).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Reconnecting browser tab…")).toBeTruthy();
+  });
+
+  it("sends attachTab only once per activation when the ack never settles", () => {
+    vi.useFakeTimers();
+    try {
+      harness.attachTab.mockImplementationOnce(() => new Promise(() => {}));
+      harness.items = [session("ready", "electron")];
+
+      renderTile();
+      expect(harness.attachTab).toHaveBeenCalledTimes(1);
+
+      act(() => {
+        vi.advanceTimersByTime(10_000);
+      });
+
+      expect(harness.attachTab).toHaveBeenCalledTimes(1);
+      const timedOut = screen.getByTestId("browser-tab-rebind-timeout");
+      expect(timedOut.getAttribute("role")).toBe("alert");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows the other-window copy when the tab is bound to a different desktop window", () => {
+    harness.items = [sessionBoundTo("window-b")];
+
+    renderTile();
+
+    const note = screen.getByTestId("browser-tab-other-window");
+    expect(note.getAttribute("role")).toBe("status");
+    expect(note.textContent).toBe("Open in your other window");
+  });
+
+  it("takes the ordinary reconnect wait when boundWindowId names THIS window", () => {
+    harness.items = [sessionBoundTo("window-a")];
+
+    renderTile();
+
+    expect(screen.getByText("Reconnecting browser tab…")).toBeTruthy();
+    expect(screen.queryByTestId("browser-tab-other-window")).toBeNull();
+  });
+
+  it("takes the ordinary reconnect wait when boundWindowId is null", () => {
+    harness.items = [sessionBoundTo(null)];
+
+    renderTile();
+
+    expect(screen.getByText("Reconnecting browser tab…")).toBeTruthy();
+    expect(screen.queryByTestId("browser-tab-other-window")).toBeNull();
+  });
+
+  it("keeps the other-window copy up past the reconnect deadline, pre-empting the rebind alert", () => {
+    vi.useFakeTimers();
+    try {
+      harness.items = [sessionBoundTo("window-b")];
+
+      renderTile();
+      expect(screen.getByTestId("browser-tab-other-window")).toBeTruthy();
+
+      act(() => {
+        vi.advanceTimersByTime(10_000);
+      });
+
+      expect(screen.getByTestId("browser-tab-other-window")).toBeTruthy();
+      expect(screen.queryByTestId("browser-tab-rebind-timeout")).toBeNull();
+      expect(screen.queryByText("Reconnecting browser tab…")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("never shows the other-window copy on the viewer path", () => {
+    harness.canMaterializeElectron = false;
+    harness.items = [sessionBoundTo("window-b")];
+
+    renderTile();
+
+    expect(screen.getByTestId("headless-browser-tab").dataset.tab).toBe(
+      "tab-1",
+    );
+    expect(screen.queryByTestId("browser-tab-other-window")).toBeNull();
+  });
 });
 
 /**
@@ -870,6 +1121,11 @@ describe("BrowserSessionTile open-link routing", () => {
   beforeEach(() => {
     harness.binding = binding();
     harness.items = [session("ready", "electron")];
+    // Restated rather than relying on the previous describe block's own
+    // teardown: it is the harness's default, but a case there that flips it
+    // to exercise the viewer path must not leak into this suite depending on
+    // run order.
+    harness.canMaterializeElectron = true;
     harness.openTab.mockClear();
     harness.closeTab.mockClear();
     canvasState.tabsById = { "view-1": { epicId: "epic-1" } };
