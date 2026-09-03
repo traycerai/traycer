@@ -7157,6 +7157,27 @@ describe("RemoteSession clock-skew park", () => {
     },
     TEST_BUDGET_MS,
   );
+
+  it(
+    "still reaches the terminal bound for a host config mismatch, which looks identical on the wire",
+    async () => {
+      // The reason the park keys on the tracker's verdict and never on the
+      // rejection shape: a misconfigured host produces the very same
+      // no-progress streak, and retrying that forever helps nobody.
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("mismatched-token", "user-1");
+      const clock = makeClockSignal("ok");
+      const session = buildNoProgressSession(relay, lease, clock.signal);
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
+        expect(clock.recoverySubscribers()).toBe(0);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
   it(
     "does NOT park on a clock running BEHIND, and still reaches the terminal bound",
     async () => {
