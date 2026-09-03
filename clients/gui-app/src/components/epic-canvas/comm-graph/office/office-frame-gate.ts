@@ -119,6 +119,21 @@ export class OfficeFrameGate {
    */
   resume(): void {
     this.sinceLastFrame = OFFICE_FRAME_INTERVAL_MS;
+    this.invalidate();
+  }
+
+  /**
+   * Forgets what was last painted, so the next frame is drawn whatever the
+   * floor is doing.
+   *
+   * The idle skip's premise is that the canvas still HOLDS the last frame.
+   * Anything that erases the bitmap breaks that premise, and assigning to a
+   * canvas's `width` or `height` - which a resize or a device-pixel-ratio
+   * change both do - clears it to transparent. On a still floor the skip would
+   * then refuse every frame and the tile would stay blank until something
+   * happened to move.
+   */
+  invalidate(): void {
     this.lastDrawnMinute = -1;
   }
 }

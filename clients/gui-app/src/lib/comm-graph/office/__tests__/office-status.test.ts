@@ -29,9 +29,11 @@ function event(
   };
 }
 
-const ALPHA = { id: "alpha", archived: false };
-const BETA = { id: "beta", archived: false };
-const ARCHIVED_ALPHA = { id: "alpha", archived: true };
+const ALPHA = { id: "alpha", archivedAt: null };
+const BETA = { id: "beta", archivedAt: null };
+/** Archived at a moment on the timeline, not merely "archived now". */
+const ARCHIVED_AT = 500;
+const ARCHIVED_ALPHA = { id: "alpha", archivedAt: ARCHIVED_AT };
 
 const NO_TIERS: ReadonlyMap<string, AgentActivityTier> = new Map();
 const NO_ATTENTION: ReadonlySet<string> = new Set<string>();
@@ -42,6 +44,7 @@ describe("officeAgentStatuses", () => {
   it("reports idle for an agent with nothing going on", () => {
     const statuses = officeAgentStatuses({
       agents: [ALPHA, BETA],
+      cursorMs: null,
       events: [],
       visibleAgentIds: BOTH_VISIBLE,
       activityTiers: NO_TIERS,
@@ -56,6 +59,7 @@ describe("officeAgentStatuses", () => {
   it("marks the SENDER of an unanswered request as awaiting", () => {
     const statuses = officeAgentStatuses({
       agents: [ALPHA, BETA],
+      cursorMs: null,
       events: [event({ id: 1, timestamp: 10, expectReply: true })],
       visibleAgentIds: BOTH_VISIBLE,
       activityTiers: NO_TIERS,
@@ -71,6 +75,7 @@ describe("officeAgentStatuses", () => {
   it("clears awaiting once the thread is answered", () => {
     const statuses = officeAgentStatuses({
       agents: [ALPHA, BETA],
+      cursorMs: null,
       events: [
         event({ id: 1, timestamp: 10, expectReply: true }),
         event({
@@ -93,6 +98,7 @@ describe("officeAgentStatuses", () => {
   it("re-opens awaiting when the thread is asked again after a reply", () => {
     const statuses = officeAgentStatuses({
       agents: [ALPHA, BETA],
+      cursorMs: null,
       events: [
         event({ id: 1, timestamp: 10, expectReply: true }),
         event({
@@ -116,6 +122,7 @@ describe("officeAgentStatuses", () => {
   it("puts a failure above every other reading, attention included", () => {
     const statuses = officeAgentStatuses({
       agents: [ARCHIVED_ALPHA],
+      cursorMs: null,
       events: [event({ id: 1, timestamp: 10, expectReply: true })],
       visibleAgentIds: BOTH_VISIBLE,
       activityTiers: new Map<string, AgentActivityTier>([["alpha", "turn"]]),
@@ -131,6 +138,7 @@ describe("officeAgentStatuses", () => {
   it("has nothing to say about a failure on an agent off the floor", () => {
     const statuses = officeAgentStatuses({
       agents: [ALPHA, BETA],
+      cursorMs: null,
       events: [],
       visibleAgentIds: new Set(["beta"]),
       activityTiers: NO_TIERS,
@@ -145,6 +153,7 @@ describe("officeAgentStatuses", () => {
   it("puts attention above every other reading", () => {
     const statuses = officeAgentStatuses({
       agents: [ALPHA],
+      cursorMs: null,
       events: [event({ id: 1, timestamp: 10, expectReply: true })],
       visibleAgentIds: BOTH_VISIBLE,
       activityTiers: new Map<string, AgentActivityTier>([["alpha", "turn"]]),
@@ -158,6 +167,7 @@ describe("officeAgentStatuses", () => {
   it("ranks awaiting above an active turn", () => {
     const statuses = officeAgentStatuses({
       agents: [ALPHA],
+      cursorMs: null,
       events: [event({ id: 1, timestamp: 10, expectReply: true })],
       visibleAgentIds: BOTH_VISIBLE,
       activityTiers: new Map<string, AgentActivityTier>([["alpha", "turn"]]),
@@ -171,6 +181,7 @@ describe("officeAgentStatuses", () => {
   it("separates a turn from background work", () => {
     const statuses = officeAgentStatuses({
       agents: [ALPHA, BETA],
+      cursorMs: null,
       events: [],
       visibleAgentIds: BOTH_VISIBLE,
       activityTiers: new Map<string, AgentActivityTier>([
@@ -188,6 +199,7 @@ describe("officeAgentStatuses", () => {
   it("shows archived over background and idle, but never over a turn", () => {
     const quiet = officeAgentStatuses({
       agents: [ARCHIVED_ALPHA],
+      cursorMs: null,
       events: [],
       visibleAgentIds: BOTH_VISIBLE,
       activityTiers: NO_TIERS,
@@ -198,6 +210,7 @@ describe("officeAgentStatuses", () => {
 
     const background = officeAgentStatuses({
       agents: [ARCHIVED_ALPHA],
+      cursorMs: null,
       events: [],
       visibleAgentIds: BOTH_VISIBLE,
       activityTiers: new Map<string, AgentActivityTier>([
@@ -212,6 +225,7 @@ describe("officeAgentStatuses", () => {
     // floor shows what the record says rather than hiding it.
     const working = officeAgentStatuses({
       agents: [ARCHIVED_ALPHA],
+      cursorMs: null,
       events: [],
       visibleAgentIds: BOTH_VISIBLE,
       activityTiers: new Map<string, AgentActivityTier>([["alpha", "turn"]]),
@@ -221,9 +235,85 @@ describe("officeAgentStatuses", () => {
     expect(working.get("alpha")).toBe("working");
   });
 
+  /**
+   * Archival is a MOMENT on the timeline the cursor scrubs, not a property of
+   * the record as it stands today. Reading the present-day flag gave a
+   * scrubbed-back floor an agent with a dead monitor and no idle life, sitting
+   * at a desk the scene had correctly seated it at - the two halves of the
+   * same floor disagreeing about the same agent.
+   */
+  it("does not call an agent archived before it was archived", () => {
+    const statuses = officeAgentStatuses({
+      agents: [ARCHIVED_ALPHA],
+      cursorMs: ARCHIVED_AT - 1,
+      events: [],
+      visibleAgentIds: BOTH_VISIBLE,
+      activityTiers: NO_TIERS,
+      attentionAgentIds: NO_ATTENTION,
+      failureAgentIds: NO_FAILURE,
+    });
+
+    expect(statuses.get("alpha")).toBe("idle");
+  });
+
+  it("calls it archived from the moment it was archived", () => {
+    const atTheMoment = officeAgentStatuses({
+      agents: [ARCHIVED_ALPHA],
+      cursorMs: ARCHIVED_AT,
+      events: [],
+      visibleAgentIds: BOTH_VISIBLE,
+      activityTiers: NO_TIERS,
+      attentionAgentIds: NO_ATTENTION,
+      failureAgentIds: NO_FAILURE,
+    });
+    // The boundary is inclusive, the same way the scene's is.
+    expect(atTheMoment.get("alpha")).toBe("archived");
+
+    const after = officeAgentStatuses({
+      agents: [ARCHIVED_ALPHA],
+      cursorMs: ARCHIVED_AT + 1,
+      events: [],
+      visibleAgentIds: BOTH_VISIBLE,
+      activityTiers: NO_TIERS,
+      attentionAgentIds: NO_ATTENTION,
+      failureAgentIds: NO_FAILURE,
+    });
+    expect(after.get("alpha")).toBe("archived");
+  });
+
+  it("calls it archived on a live floor, where there is no cursor", () => {
+    const statuses = officeAgentStatuses({
+      agents: [ARCHIVED_ALPHA],
+      cursorMs: null,
+      events: [],
+      visibleAgentIds: BOTH_VISIBLE,
+      activityTiers: NO_TIERS,
+      attentionAgentIds: NO_ATTENTION,
+      failureAgentIds: NO_FAILURE,
+    });
+
+    expect(statuses.get("alpha")).toBe("archived");
+  });
+
+  it("never calls a live record archived, wherever the cursor is", () => {
+    for (const cursorMs of [null, 0, ARCHIVED_AT, Number.MAX_SAFE_INTEGER]) {
+      const statuses = officeAgentStatuses({
+        agents: [ALPHA],
+        cursorMs,
+        events: [],
+        visibleAgentIds: BOTH_VISIBLE,
+        activityTiers: NO_TIERS,
+        attentionAgentIds: NO_ATTENTION,
+        failureAgentIds: NO_FAILURE,
+      });
+      expect(statuses.get("alpha"), String(cursorMs)).toBe("idle");
+    }
+  });
+
   it("has nothing to say about an agent that does not exist yet", () => {
     const statuses = officeAgentStatuses({
       agents: [ALPHA, BETA],
+      cursorMs: null,
       events: [event({ id: 1, timestamp: 10, expectReply: true })],
       visibleAgentIds: new Set(["beta"]),
       activityTiers: new Map<string, AgentActivityTier>([["alpha", "turn"]]),

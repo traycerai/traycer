@@ -61,6 +61,7 @@ import { OfficeHoverSupplement } from "@/components/epic-canvas/comm-graph/offic
 import { OfficeLegend } from "@/components/epic-canvas/comm-graph/office/office-legend";
 import {
   createOfficeStaticSurface,
+  officeBakesIntoStaticFloor,
   OfficeStaticLayer,
 } from "@/components/epic-canvas/comm-graph/office/office-static-layer";
 import {
@@ -263,6 +264,15 @@ interface OfficeRuntime {
    * first would drop a click on a floor that has not painted yet.
    */
   readonly hasDrawnFrame: () => boolean;
+  /**
+   * Asks the frame loop to paint the next frame unconditionally.
+   *
+   * Routed through the runtime because the gate lives inside the loop's effect
+   * and the sizing callback does not - and the sizing callback is precisely
+   * what erases the pixels the skip is counting on.
+   */
+  readonly invalidateFrame: () => void;
+  readonly onInvalidateFrame: (listener: () => void) => void;
   readonly getSearchMatchIds: () => ReadonlySet<string>;
   readonly setSearchMatchIds: (next: ReadonlySet<string>) => void;
   readonly takePanRequest: () => PanRequest | null;
@@ -308,6 +318,9 @@ function createOfficeRuntime(view: CommGraphTileViewState): OfficeRuntime {
   let hitRegions: ReadonlyArray<OfficeHitRegion> = [];
   let envelopeRegions: ReadonlyArray<OfficeEnvelopeHitRegion> = [];
   let drawnFrame = false;
+  // Replaced by the frame loop on mount; a no-op before it and after unmount,
+  // when there is no frame to ask for.
+  let invalidateListener: () => void = () => undefined;
   let searchMatchIds: ReadonlySet<string> = EMPTY_MATCH_IDS;
   let pendingPan: PanRequest | null = null;
   let agents: ReadonlyArray<CommGraphAgentNode> = [];
@@ -328,6 +341,12 @@ function createOfficeRuntime(view: CommGraphTileViewState): OfficeRuntime {
     getHitRegions: () => hitRegions,
     setHitRegions: (next) => {
       hitRegions = next;
+    },
+    invalidateFrame: () => {
+      invalidateListener();
+    },
+    onInvalidateFrame: (listener) => {
+      invalidateListener = listener;
     },
     getEnvelopeRegions: () => envelopeRegions,
     setEnvelopeRegions: (next) => {
@@ -895,6 +914,12 @@ interface DrawLayerArgs {
   /** Drawables set aside for a later pass, in screen space. */
   readonly labels: OfficeLabelDrawable[];
   readonly clocks: OfficeClockDrawable[];
+  /**
+   * `skip` for the floor when its sprites are already on screen from the
+   * static layer. Everything that layer does NOT bake still comes through
+   * here, so the blitted floor and the drawn one contain the same things.
+   */
+  readonly sprites: "draw" | "skip";
 }
 
 /**
@@ -903,8 +928,10 @@ interface DrawLayerArgs {
  * - four object literals a frame to say what four call sites already say.
  */
 function drawDrawableLayer(args: DrawLayerArgs): void {
-  const { anchor, clocks, ctx, drawables, labels, palette, theme } = args;
+  const { anchor, clocks, ctx, drawables, labels, palette, sprites, theme } =
+    args;
   for (const drawable of drawables) {
+    if (sprites === "skip" && officeBakesIntoStaticFloor(drawable)) continue;
     if (drawable.kind === "label") {
       labels.push(drawable);
       continue;
@@ -926,11 +953,8 @@ function drawDrawableLayer(args: DrawLayerArgs): void {
 }
 
 /**
- * Paints the floor into the static layer, in sprite space with no camera.
- *
- * Only sprites: the floor carries no labels, clocks, envelopes or logos, and
- * anything that ever appeared there would be silently dropped rather than
- * baked at the wrong moment - which is why it is asserted rather than assumed.
+ * Paints the bakeable half of the floor into the static layer, in sprite space
+ * with no camera. Its complement is drawn per frame by the caller.
  */
 function drawStaticFloor(
   ctx: CanvasRenderingContext2D,
@@ -938,6 +962,7 @@ function drawStaticFloor(
   theme: OfficeTheme,
 ): void {
   for (const drawable of floor) {
+    if (!officeBakesIntoStaticFloor(drawable)) continue;
     if (drawable.kind !== "sprite") continue;
     drawAnchoredSprite(ctx, drawable, "top-left", theme);
   }
@@ -1135,11 +1160,27 @@ function drawOfficeFrame(args: DrawFrameArgs): void {
   const clocks = resetScratch(clockScratch);
   // The floor is either one blit or, where no offscreen surface exists, the
   // tile-by-tile walk it has always been.
-  const layer = { ctx, theme, palette, labels, clocks };
+  const layer = {
+    ctx,
+    theme,
+    palette,
+    labels,
+    clocks,
+    sprites: "draw",
+  } as const;
   if (staticFloor === null) {
     drawDrawableLayer({ ...layer, drawables: frame.floor, anchor: "top-left" });
   } else {
     ctx.drawImage(staticFloor, 0, 0);
+    // The layer baked the sprites and nothing else, so the rest of the floor
+    // takes the ordinary path - otherwise a label on the floor would appear
+    // only on hosts that could not make an offscreen surface.
+    drawDrawableLayer({
+      ...layer,
+      drawables: frame.floor,
+      anchor: "top-left",
+      sprites: "skip",
+    });
   }
   drawDrawableLayer({ ...layer, drawables: frame.props, anchor: "top-left" });
   drawDrawableLayer({ ...layer, drawables: frame.actors, anchor: "top-left" });
@@ -1372,6 +1413,9 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     () =>
       officeAgentStatuses({
         agents: officeAgents,
+        // The cursor, so a scrub back BEFORE an agent was archived reads it as
+        // live - which is the desk the scene draws it at.
+        cursorMs,
         events,
         visibleAgentIds: agentIds,
         activityTiers,
@@ -1382,6 +1426,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       activityTiers,
       agentIds,
       attentionAgentIds,
+      cursorMs,
       events,
       failureAgentIds,
       officeAgents,
@@ -1543,8 +1588,13 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     runtime.setViewport({ width: rect.width, height: rect.height });
     const width = Math.max(1, Math.round(rect.width * dpr));
     const height = Math.max(1, Math.round(rect.height * dpr));
-    if (canvas.width !== width) canvas.width = width;
-    if (canvas.height !== height) canvas.height = height;
+    if (canvas.width === width && canvas.height === height) return;
+    canvas.width = width;
+    canvas.height = height;
+    // Assigning either dimension CLEARS the bitmap, which is exactly the thing
+    // the idle skip assumes is still there. Without this a resize of a still
+    // floor leaves the tile blank until something happens to move.
+    runtime.invalidateFrame();
   }, [runtime]);
 
   useEffect(() => {
@@ -1589,6 +1639,9 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     let pausedAt: number | null = null;
     const gate = new OfficeFrameGate();
     const staticLayer = new OfficeStaticLayer(createOfficeStaticSurface);
+    runtime.onInvalidateFrame(() => {
+      gate.invalidate();
+    });
 
     // A wall clock only has to be right to the minute, but it must not be
     // right only at mount. Re-syncing the SAME input with a fresh `clockMs`
@@ -1797,6 +1850,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       document.removeEventListener("visibilitychange", onVisibility);
       observer.disconnect();
       stop();
+      runtime.onInvalidateFrame(() => undefined);
       // A floor's worth of pixels is real memory; it goes with the tile.
       staticLayer.release();
     };

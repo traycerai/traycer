@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OfficeDrawable } from "@/lib/comm-graph/office/office-types";
 import {
+  officeBakesIntoStaticFloor,
   officeStaticLayerKeysMatch,
   OfficeStaticLayer,
   type OfficeStaticLayerKey,
@@ -190,4 +192,48 @@ describe("OfficeStaticLayer", () => {
     expect(layer.sync(KEY, paint)).toBeNull();
     expect(paint).not.toHaveBeenCalled();
   });
+});
+
+/**
+ * One drawable of every kind the scene can emit. Written as a record keyed by
+ * the kind so the compiler rejects a kind added to `OfficeDrawable` and
+ * forgotten here - the partition below is only a partition if it covers all
+ * of them.
+ */
+const ONE_OF_EACH: Readonly<Record<OfficeDrawable["kind"], OfficeDrawable>> = {
+  sprite: { kind: "sprite", sprite: { name: "desk" }, x: 0, y: 0 },
+  label: { kind: "label", text: "Reviewer", x: 0, y: 0, tone: "default" },
+  clock: { kind: "clock", x: 0, y: 0, timeMs: 0 },
+  envelope: {
+    kind: "envelope",
+    x: 0,
+    y: 0,
+    pulseKind: "request",
+    progress: 0.5,
+    edgeId: "a|b",
+  },
+  logo: { kind: "logo", harnessId: "claude", x: 0, y: 0 },
+};
+
+/**
+ * The two floor paths - blitted and drawn - have to contain the same things.
+ * The offscreen paints exactly what this admits and the per-frame path draws
+ * exactly what it does not, so anything it got wrong would be a drawable that
+ * appears on one kind of host and not the other.
+ */
+describe("officeBakesIntoStaticFloor", () => {
+  it("bakes a sprite, which is what a floor is made of", () => {
+    expect(officeBakesIntoStaticFloor(ONE_OF_EACH.sprite)).toBe(true);
+  });
+
+  it.each(["label", "clock", "envelope", "logo"] as const)(
+    "leaves a %s to the per-frame path",
+    (kind) => {
+      // A label on the floor is drawn in SCREEN space, a clock needs hands
+      // over it, and neither an envelope nor a logo is static by nature. Each
+      // would have been silently dropped by a blitted floor that baked
+      // everything, and silently duplicated by one that baked nothing.
+      expect(officeBakesIntoStaticFloor(ONE_OF_EACH[kind])).toBe(false);
+    },
+  );
 });

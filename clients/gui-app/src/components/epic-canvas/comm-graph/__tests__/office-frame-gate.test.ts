@@ -161,6 +161,20 @@ describe("OfficeFrameGate idle skip", () => {
     expect(gate.shouldDraw({ ...STILL, panning: true })).toBe(true);
   });
 
+  it("paints again after the bitmap was cleared under it", () => {
+    const gate = new OfficeFrameGate();
+    gate.shouldDraw(STILL);
+    expect(gate.shouldDraw(STILL)).toBe(false);
+
+    gate.invalidate();
+
+    // A resize, or a device-pixel-ratio change, assigns to the canvas's
+    // dimensions - which clears it. The skip's whole premise is that the last
+    // frame is still up there, so a still floor would otherwise stay blank.
+    expect(gate.shouldDraw(STILL)).toBe(true);
+    expect(gate.shouldDraw(STILL)).toBe(false);
+  });
+
   it("resumes drawing when the floor starts moving again", () => {
     const gate = new OfficeFrameGate();
     gate.shouldDraw(STILL);

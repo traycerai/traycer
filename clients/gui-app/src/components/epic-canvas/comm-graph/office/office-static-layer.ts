@@ -14,7 +14,26 @@
  *
  * ONE per mounted office canvas, released on unmount.
  */
-import type { OfficeTheme } from "@/lib/comm-graph/office/office-types";
+import type {
+  OfficeDrawable,
+  OfficeTheme,
+} from "@/lib/comm-graph/office/office-types";
+
+/**
+ * Whether a floor drawable is baked into the static layer.
+ *
+ * THE partition, used by both halves: the offscreen paints exactly the
+ * drawables this admits, and the per-frame path draws exactly the ones it
+ * does not. Sharing one predicate is what makes the two routes the same
+ * floor - a label emitted onto the floor is drawn either way, rather than
+ * appearing only when there is no offscreen surface to bake into.
+ *
+ * Only sprites qualify. Labels are drawn later in SCREEN space, clocks need
+ * hands over them, and an envelope or a logo is not static by nature.
+ */
+export function officeBakesIntoStaticFloor(drawable: OfficeDrawable): boolean {
+  return drawable.kind === "sprite";
+}
 
 /** Everything that changes what the static layer should contain. */
 export interface OfficeStaticLayerKey {

@@ -41,6 +41,7 @@ import type {
   CommGraphPulseKind,
 } from "@/lib/comm-graph/comm-graph-timeline";
 import { officeSpriteSize } from "@/lib/comm-graph/office/office-pixel-art";
+import { officeArchivedAsOf } from "@/lib/comm-graph/office/office-status";
 import { findOfficePath } from "@/lib/comm-graph/office/office-path";
 import {
   OFFICE_CHARACTER_HEIGHT,
@@ -1132,9 +1133,7 @@ export class OfficeScene {
    * so a record archived after the cursor is still at its desk in that view.
    */
   private isArchivedAsOf(agent: OfficeAgentInput): boolean {
-    const archivedAt = agent.archivedAt;
-    if (archivedAt === null) return false;
-    return this.cursorMs === null || archivedAt <= this.cursorMs;
+    return officeArchivedAsOf(agent.archivedAt, this.cursorMs);
   }
 
   /**

@@ -12,11 +12,33 @@ import { openCommGraphRequests } from "@/lib/comm-graph/comm-graph-model";
 import type { OfficeAgentStatus } from "@/lib/comm-graph/office/office-types";
 import type { AgentActivityTier } from "@/lib/agent-activity";
 
+/**
+ * Whether a record is archived AS OF a cursor.
+ *
+ * `archivedAt` is a moment on the same timeline the cursor sits on, so a
+ * record archived AFTER the cursor is still at its desk in that view. The
+ * present-day boolean cannot answer this: it is true from the moment the
+ * archive happens, for every point in history the person scrubs back to.
+ *
+ * Shared with the scene rather than restated there, so the desk a floor draws
+ * and the status the floor reads cannot disagree about the same agent.
+ */
+export function officeArchivedAsOf(
+  archivedAt: number | null,
+  cursorMs: number | null,
+): boolean {
+  if (archivedAt === null) return false;
+  return cursorMs === null || archivedAt <= cursorMs;
+}
+
 export interface OfficeAgentStatusInput {
   readonly agents: ReadonlyArray<{
     readonly id: string;
-    readonly archived: boolean;
+    /** `null` for a live record; a timeline moment for an archived one. */
+    readonly archivedAt: number | null;
   }>;
+  /** Where the transport bar is; `null` means live. */
+  readonly cursorMs: number | null;
   /** The as-of-cursor prefix, already sliced by the timeline. */
   readonly events: ReadonlyArray<CommGraphEvent>;
   readonly visibleAgentIds: ReadonlySet<string>;
@@ -93,15 +115,16 @@ interface OfficeStatusSources {
  * floor shows what the data says instead of hiding it behind the archive flag.
  */
 function statusFor(
-  agent: { readonly id: string; readonly archived: boolean },
+  agent: { readonly id: string; readonly archivedAt: number | null },
   sources: OfficeStatusSources,
+  cursorMs: number | null,
 ): OfficeAgentStatus {
   if (sources.failureAgentIds.has(agent.id)) return "failure";
   if (sources.attentionAgentIds.has(agent.id)) return "attention";
   if (sources.awaiting.has(agent.id)) return "awaiting";
   const tier = sources.activityTiers.get(agent.id);
   if (tier === "turn") return "working";
-  if (agent.archived) return "archived";
+  if (officeArchivedAsOf(agent.archivedAt, cursorMs)) return "archived";
   if (tier === "background") return "background";
   return "idle";
 }
@@ -119,7 +142,7 @@ export function officeAgentStatuses(
   const statuses = new Map<string, OfficeAgentStatus>();
   for (const agent of args.agents) {
     if (!args.visibleAgentIds.has(agent.id)) continue;
-    statuses.set(agent.id, statusFor(agent, sources));
+    statuses.set(agent.id, statusFor(agent, sources, args.cursorMs));
   }
   return statuses;
 }
