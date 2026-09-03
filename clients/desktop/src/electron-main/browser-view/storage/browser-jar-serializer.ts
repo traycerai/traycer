@@ -31,8 +31,11 @@ import { registrableDomain } from "@traycer/protocol/host/browser/registrable-do
  *
  * NOT an ordering decision, and not an estimate of how long a forget takes:
  * ordering here rests on a fact - the gate opens when the barrier's own work
- * settles, and every path through `runOnEveryDomain` already opens it in a
- * `finally`, success or failure. That fact covers everything except the one
+ * settles, and every path through `runOnEveryDomain` opens it on settlement,
+ * success or failure, expired or not (an expired barrier keeps the gate for
+ * its action's in-flight call to land, up to `BARRIER_SETTLE_GRACE_MS`, since
+ * an abort cancels no Electron call already made). That fact covers
+ * everything except the one
  * case no fact can: a Chromium call that never settles at all (a wedged CDP
  * attach inside "forget all browser logins"). A promise that never resolves
  * emits no event to order against, so the only way to bound it is elapsed
@@ -46,13 +49,34 @@ import { registrableDomain } from "@traycer/protocol/host/browser/registrable-do
  * Two things it is NOT. It is not a per-action budget: the bound is armed
  * before the wait for the work ahead, so a barrier queued behind another
  * shares the elapsed time with it and a chain of them is bounded in total
- * rather than each getting a fresh 30s to act in. And it is not what orders a
+ * rather than each getting a fresh 30s to act in - and a barrier whose time
+ * runs out while it is still waiting GIVES UP (its caller learns so, its
+ * action never runs) rather than running late under no barrier; a forget-all
+ * confirmed while a login import reads a large jar or sits on a minutes-long
+ * keystore prompt (both inside the import's barrier, from its confirmation
+ * on) fails and is retried after, it does not empty the jar behind the
+ * user's back. And it is not what orders a
  * forget against a host's observations - that is the forget ledger's revision
  * and its ack (`browser-forget-ledger.ts`), which decide on facts and would
  * still hold if this bound fired mid-forget. This only stops a wedged call
  * from freezing every cookie operation in the process for its lifetime.
  */
-const BARRIER_ACTION_TIMEOUT_MS = 30_000;
+/**
+ * The whole-jar barrier's budget for forget-all: a clear that has not settled
+ * in this long is wedged, and the per-domain work queued behind it is let
+ * through. A caller with a longer bounded action (the login import, which
+ * writes every chosen site) passes its own budget and reads the abort signal.
+ */
+export const BARRIER_ACTION_TIMEOUT_MS = 30_000;
+
+/**
+ * How long an expired barrier's gate stays closed for its action to settle.
+ * A cooperative action (the login import) reads the aborted signal between
+ * Electron calls and settles as soon as the call in flight lands - well under
+ * this. A call that has not landed in this long is the wedge the timer is
+ * for, and the gate is forced open rather than frozen behind it.
+ */
+export const BARRIER_SETTLE_GRACE_MS = BARRIER_ACTION_TIMEOUT_MS;
 
 export class BrowserJarSerializer {
   /**
@@ -68,6 +92,25 @@ export class BrowserJarSerializer {
    * requested from slipping in front of it.
    */
   private barrierGate: Promise<void> = Promise.resolve();
+
+  /**
+   * Resolves once no whole-jar barrier is pending or running - for a READ
+   * that must not see a jar mid-barrier, which is the one thing a barrier's
+   * action cannot promise its per-site steps add up to at every instant: a
+   * host-issued whole-jar capture taken while the login import is writing
+   * site by site would carry some sites imported and some not, and a host
+   * that took it would hold that hybrid until the next capture. Looped,
+   * because a barrier requested while this waited publishes a new gate; it
+   * returns only when the gate it awaited is still the current one. Never
+   * called by a barrier's own action - that would wait on itself.
+   */
+  async barrierSettled(): Promise<void> {
+    for (;;) {
+      const gate = this.barrierGate;
+      await gate;
+      if (this.barrierGate === gate) return;
+    }
+  }
 
   /** Runs `action` with no other jar work for the same registrable domain. */
   runOnDomain<T>(domain: string, action: () => Promise<T>): Promise<T> {
@@ -95,52 +138,103 @@ export class BrowserJarSerializer {
    *
    * The gate is published SYNCHRONOUSLY, before the first await, so a
    * `runOnDomain` call made while the barrier is still waiting for the work
-   * ahead of it queues behind the barrier rather than racing it.
+   * ahead of it queues behind the barrier rather than racing it. It is
+   * CHAINED behind the barrier ahead's gate: whatever this barrier's timer
+   * does, its gate cannot open while the one before it still holds the jar.
+   *
+   * A barrier whose time runs out while it is still WAITING gives up: the
+   * caller is answered with the expiry, and the action never starts. The one
+   * outcome worse than a forget-all that failed is one that reported failure
+   * and then emptied the jar minutes later, under no barrier at all. A
+   * barrier whose time runs out while its action is RUNNING aborts the
+   * signal and opens its gate; the action reads the signal between its steps
+   * and stops.
    */
-  runOnEveryDomain<T>(action: () => Promise<T>): Promise<T> {
+  runOnEveryDomain<T>(
+    action: (signal: AbortSignal) => Promise<T>,
+    timeoutMs: number,
+  ): Promise<T> {
     const previousBarrier = this.barrierGate;
     const ahead = [...this.inFlight];
     let openGate = (): void => undefined;
-    this.barrierGate = new Promise<void>((resolve) => {
+    const ownGate = new Promise<void>((resolve) => {
       openGate = resolve;
     });
+    this.barrierGate = previousBarrier.then(() => ownGate);
+    // Aborted the moment the barrier expires, BEFORE the gate opens: an
+    // action that is still running when its time is up (a long login import)
+    // must stop mutating the jar, since the work queued behind it is about to
+    // be admitted. The action reads the signal between its steps; the race
+    // below only stops the caller waiting, never the action itself.
+    const controller = new AbortController();
     return (async (): Promise<T> => {
       // Armed before the first await so it covers the whole barrier: the wait
       // for the work ahead can wedge on the same kind of hung call the action
       // can.
       let expire = (): void => undefined;
       const expired = new Promise<never>((_resolve, reject) => {
-        expire = (): void =>
-          reject(
-            new Error(
-              `The whole-jar barrier did not settle within ${BARRIER_ACTION_TIMEOUT_MS}ms; the jar gate was forced open.`,
-            ),
-          );
+        expire = (): void => reject(barrierExpiredError(timeoutMs));
       });
+      let running = false;
+      let gaveUp = false;
+      const run = (async (): Promise<T> => {
+        await previousBarrier;
+        await Promise.all(ahead);
+        // Expired during the wait: the caller has its answer and the gate is
+        // given up, so nothing may start now - least of all a forget-all the
+        // user was just told did not happen.
+        if (controller.signal.aborted) throw barrierExpiredError(timeoutMs);
+        running = true;
+        return await action(controller.signal);
+      })();
+      // The race answers the caller once. A `run` that settles after that -
+      // the cancel above, or an action rejecting past its expiry - has nobody
+      // left to answer, and must not surface as an unhandled rejection.
+      const settled = run.then(ignore, ignore);
       const timer = setTimeout(() => {
-        // The gate first: queued per-domain work must not stay blocked on a
-        // call that is never coming back.
-        openGate();
+        gaveUp = true;
+        // The signal first, then the caller: the action must learn to stop
+        // before anything queued behind it can be admitted.
+        controller.abort();
         expire();
-      }, BARRIER_ACTION_TIMEOUT_MS);
+        if (!running) {
+          // Still waiting: nothing of this barrier's is touching the jar, and
+          // the gate is chained behind the barrier ahead anyway.
+          openGate();
+          return;
+        }
+        // Mid-action: an Electron call already in flight is not cancelled by
+        // the abort, and admitting a forget-all under it would let that call
+        // land in the emptied jar afterwards. The action reads the signal
+        // between its calls, so one that is merely long settles as soon as
+        // the call in flight does, and the gate opens THEN; only one that
+        // never settles - a wedged call, the case the timer exists for - has
+        // the gate forced open after the grace.
+        const grace = setTimeout(openGate, BARRIER_SETTLE_GRACE_MS);
+        grace.unref();
+        void settled.then(() => {
+          clearTimeout(grace);
+          openGate();
+        });
+      }, timeoutMs);
       timer.unref();
       try {
-        return await Promise.race([
-          (async (): Promise<T> => {
-            await previousBarrier;
-            await Promise.all(ahead);
-            return await action();
-          })(),
-          expired,
-        ]);
+        return await Promise.race([run, expired]);
       } finally {
         // Clearing before `openGate` is what keeps `expired` from rejecting
-        // after the race has already settled.
+        // after the race has already settled. After an expiry the gate is
+        // the timer's to open, on the terms above.
         clearTimeout(timer);
-        openGate();
+        if (!gaveUp) openGate();
       }
     })();
   }
+}
+
+function barrierExpiredError(timeoutMs: number): Error {
+  return new Error(
+    `The whole-jar barrier did not settle within ${timeoutMs}ms; the jar gate was forced open.`,
+  );
 }
 
 function ignore(): void {

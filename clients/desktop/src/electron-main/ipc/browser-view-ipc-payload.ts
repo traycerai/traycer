@@ -21,6 +21,7 @@ import type {
   BrowserViewElectronTabControl,
   BrowserViewFindRequest,
   BrowserViewFindStop,
+  LoginImportRequest,
   BrowserViewOverlayOcclusion,
   BrowserViewOverlayRelease,
   BrowserViewReservedChord,
@@ -203,6 +204,32 @@ const savedLoginSiteSchema = z.strictObject({
     }),
 });
 
+/**
+ * A source id the desktop listed for this renderer: a 32-hex digest of the
+ * source's location (`sourceIdFor`). The bound is loose on purpose so a
+ * future id shape does not have to touch the IPC contract; the service still
+ * refuses any id it did not mint.
+ */
+const loginImportSourceIdSchema = nonEmptyStringSchema.max(128);
+const loginImportScanSchema = z.strictObject({
+  sourceId: loginImportSourceIdSchema,
+});
+
+/**
+ * The import request: registrable domains from the scan's own site list. A
+ * ceiling bounds the write; a real jar has a few hundred sites at most. Each
+ * entry is bounded like `savedLoginSiteSchema`'s domain (a DNS name is at
+ * most 253 characters); the service intersects the list with the scan the
+ * request quotes, so an unknown domain is dropped there, not narrowed here.
+ */
+const LOGIN_IMPORT_MAX_DOMAINS = 5_000;
+const loginImportRunSchema: z.ZodType<LoginImportRequest> = z.strictObject({
+  sourceId: loginImportSourceIdSchema,
+  // The scan's own token (32 hex), bounded like the source id.
+  scanId: loginImportSourceIdSchema,
+  domains: z.array(nonEmptyStringSchema.max(253)).max(LOGIN_IMPORT_MAX_DOMAINS),
+  includeDeviceBound: z.boolean(),
+});
 export const browserViewIpcPayload = {
   annotationAttachResult: annotationAttachResultSchema,
   annotationStart: annotationStartSchema,
@@ -215,6 +242,8 @@ export const browserViewIpcPayload = {
   electronTabControl: electronTabControlSchema,
   findRequest: findRequestSchema,
   findStop: findStopSchema,
+  loginImportRun: loginImportRunSchema,
+  loginImportScan: loginImportScanSchema,
   nativeTabCapability: nativeTabCapabilitySchema,
   overlayOcclusion: overlayOcclusionSchema,
   overlayPaintAck: overlayPaintAckSchema,

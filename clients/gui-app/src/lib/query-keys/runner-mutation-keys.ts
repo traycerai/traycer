@@ -94,6 +94,10 @@ export const runnerMutationKeys = {
   // The desktop link bridge (`useOpenExternalLink`) - every URL that leaves
   // the app goes through this one mutation.
   openExternalLink: () => ["runner.openExternalLink"] as const,
+  // Login import: the macOS Full Disk Access pane, via its own RunnerHost
+  // method (the http(s)-only external-link gate refuses the pane's scheme).
+  openFullDiskAccessSettings: () =>
+    ["runner.openFullDiskAccessSettings"] as const,
   // Re-open a file the desktop save dialog just wrote (`fileDrops.openSavedFile`).
   openSavedFile: () => ["runner.fileDrops.openSavedFile"] as const,
   // Windows frameless title-bar menu strip: pop up a top-level native submenu.

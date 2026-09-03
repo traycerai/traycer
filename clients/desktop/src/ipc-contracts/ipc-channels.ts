@@ -69,6 +69,7 @@ export const RunnerHostInvoke = {
   getRegisteredUrlSchemes: "runnerHost:getRegisteredUrlSchemes",
   requestMicrophoneAccess: "runnerHost:requestMicrophoneAccess",
   openMicrophoneSettings: "runnerHost:openMicrophoneSettings",
+  openFullDiskAccessSettings: "runnerHost:openFullDiskAccessSettings",
   notificationOpenSystemSettings: "runnerHost:notifications:openSystemSettings",
   notificationShow: "runnerHost:notifications:show",
   traySetEpics: "runnerHost:tray:setEpics",
@@ -366,6 +367,16 @@ export const RunnerHostInvoke = {
   // host's slice is concerned, so a renderer may ask for it and may not
   // perform it (H05's residual for H10).
   browserViewClearSavedLoginSite: "runnerHost:browserView:clearSavedLoginSite",
+  // Import logins from another browser on this machine. `listSources` and
+  // `scan` read metadata only; `pickFile` opens the native dialog from main
+  // so the renderer never names a path; `run` is the one call that opens the
+  // OS keystore and writes the durable jar, and the one that pushes it to the
+  // hosts. None of the four rejects.
+  browserViewLoginImportListSources:
+    "runnerHost:browserView:loginImport:listSources",
+  browserViewLoginImportPickFile: "runnerHost:browserView:loginImport:pickFile",
+  browserViewLoginImportScan: "runnerHost:browserView:loginImport:scan",
+  browserViewLoginImportRun: "runnerHost:browserView:loginImport:run",
   browserViewStartAnnotation: "runnerHost:browserView:annotation:start",
   browserViewCancelAnnotation: "runnerHost:browserView:annotation:cancel",
   browserViewSetAnnotationTargetChatLabel:

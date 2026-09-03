@@ -2,6 +2,7 @@ import {
   BrowserWindow,
   WebContentsView,
   app,
+  dialog,
   type BrowserWindowConstructorOptions,
   type IpcMainInvokeEvent,
   type Session,
@@ -60,6 +61,7 @@ import {
   captureBrowserOriginLocalStorage,
   captureBrowserPrimaryProfile,
   clearBrowserSite,
+  clearBrowserSiteLocalStorage,
 } from "../browser-view/storage/browser-storage-state";
 import {
   applyBrowserObservedProfile,
@@ -70,7 +72,10 @@ import {
   type BrowserObservedProfileTarget,
 } from "../browser-view/storage/browser-observed-profile";
 import { registrableDomainForUrl } from "@traycer/protocol/host/browser/registrable-domain";
-import { BrowserJarSerializer } from "../browser-view/storage/browser-jar-serializer";
+import {
+  BARRIER_ACTION_TIMEOUT_MS,
+  BrowserJarSerializer,
+} from "../browser-view/storage/browser-jar-serializer";
 import {
   browserForgetLedgerDigestForHost,
   browserForgetLedgerPendingClears,
@@ -86,6 +91,11 @@ import {
   releaseHeadlessOriginCookieKeys,
 } from "../browser-view/storage/browser-forget-ledger";
 import { trustBrowserCertificate } from "../app/cert-trust";
+import {
+  LOGIN_IMPORT_JAR_BARRIER_TIMEOUT_MS,
+  createLoginImportService,
+} from "../browser-view/storage/login-import/login-import-runtime";
+import { normalizePickedFilePath } from "../browser-view/storage/login-import/sources";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
 import { fetchRegisteredHostsViaHttp } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { config } from "../../config";
@@ -94,6 +104,11 @@ import {
   createBrowserSessionsHostDirectory,
   openBrowserSessionsTransport,
 } from "../browser-sessions/browser-sessions-transport";
+import type {
+  LoginImportResult,
+  LoginImportScan,
+  LoginImportSource,
+} from "@traycer-clients/shared/platform/browser-view";
 
 /**
  * The whole-jar capture reads the one shared `primary` identity, so its
@@ -131,11 +146,12 @@ export function registerBrowserViewIpc(
       }),
     captureBrowserOriginLocalStorage,
   );
-  // The remembered origins are the coordinator's: localStorage is not
+  // The origins a clear can name are the coordinator's: localStorage is not
   // enumerable from the session, so the origins this process has actually
-  // visited are the only ones a site clear can name.
+  // visited are the only ones a site clear can reach - including one whose
+  // read is still in flight, since the tile that read is from is live there.
   const rememberedClearSiteOrigins = (): readonly string[] =>
-    primaryProfileSnapshots.rememberedOrigins().map((origin) => origin.origin);
+    primaryProfileSnapshots.clearableOrigins();
   /**
    * Every jar a `primary` login can be sitting in right now, durable one first.
    *
@@ -222,33 +238,35 @@ export function registerBrowserViewIpc(
     // one of them: an observed merge for ANY domain that is mid-flight
     // finishes first, and one that arrives during the forget waits until the
     // jar is empty rather than writing into a clear.
-    await jarSerializer.runOnEveryDomain(async () =>
-      suppressAllBrowserPrimaryProfileDeltas(async () => {
-        let failure: { readonly error: unknown } | null = null;
-        for (const primarySession of jars) {
-          try {
-            await primarySession.clearStorageData();
-          } catch (error) {
-            // The tiles still have to be recreated: they are sitting on a jar
-            // the host no longer holds a key for, and leaving them there is
-            // worse. The other jar still gets its turn for the same reason.
-            failure ??= { error };
-            log.warn("[browser-view] primary session clear failed", {
-              error: describeLogError(error),
-            });
+    await jarSerializer.runOnEveryDomain(
+      async () =>
+        suppressAllBrowserPrimaryProfileDeltas(async () => {
+          let failure: { readonly error: unknown } | null = null;
+          for (const primarySession of jars) {
+            try {
+              await primarySession.clearStorageData();
+            } catch (error) {
+              // The tiles still have to be recreated: they are sitting on a jar
+              // the host no longer holds a key for, and leaving them there is
+              // worse. The other jar still gets its turn for the same reason.
+              failure ??= { error };
+              log.warn("[browser-view] primary session clear failed", {
+                error: describeLogError(error),
+              });
+            }
           }
-        }
-        // Unconditional, unlike `clearBrowserSiteEverywhere`'s prune, and for
-        // the reason that prune is conditional: a whole-jar clear names no
-        // origins, so dropping this memory starves no retry - while KEEPING it
-        // after a failed clear would let the next capture upload to the host
-        // the very localStorage it just shredded its slice for.
-        primaryProfileSnapshots.reset();
-        await manager.recreateNativeTabsOnCurrentPartition();
-        // Surfaced only once the tiles are back, and surfaced at all so the
-        // caller is not told the logins are gone when a jar still holds them.
-        if (failure !== null) throw failure.error;
-      }),
+          // Unconditional, unlike `clearBrowserSiteEverywhere`'s prune, and for
+          // the reason that prune is conditional: a whole-jar clear names no
+          // origins, so dropping this memory starves no retry - while KEEPING it
+          // after a failed clear would let the next capture upload to the host
+          // the very localStorage it just shredded its slice for.
+          primaryProfileSnapshots.reset();
+          await manager.recreateNativeTabsOnCurrentPartition();
+          // Surfaced only once the tiles are back, and surfaced at all so the
+          // caller is not told the logins are gone when a jar still holds them.
+          if (failure !== null) throw failure.error;
+        }),
+      BARRIER_ACTION_TIMEOUT_MS,
     );
     log.info("[browser-view] forgot the saved browser logins");
   };
@@ -572,6 +590,13 @@ export function registerBrowserViewIpc(
         await forgetLedgerReconciled;
         return await primaryProfileSnapshots.capture();
       },
+      // A HOST-issued whole-jar read waits for any whole-jar barrier: taken
+      // while the login import writes site by site, it would carry some
+      // sites imported and some not, and the host would hold that hybrid
+      // until the next capture. Only the host's own asks wait here - the
+      // pushes main makes (the import's, inside its barrier; the final
+      // capture at quit) go straight to the jar.
+      awaitJarBarrier: () => jarSerializer.barrierSettled(),
       applyObservedProfile: async (observed) => {
         await applyHostContributedCookies(
           { source: "observed", ...observed },
@@ -945,7 +970,17 @@ export function registerBrowserViewIpc(
     RunnerHostInvoke.browserViewSaveLoginsSet,
     async (_event, payload): Promise<boolean> => {
       const enabled = browserViewIpcPayload.saveLogins.parse(payload);
-      const settled = await setBrowserSavedLoginsEnabled(enabled);
+      // The pref flip takes the whole-jar barrier: the login import writes
+      // the durable jar only while saving is ON and re-reads the pref inside
+      // its own barrier, so a toggle can no longer slip between that read and
+      // the write. The pref only - the tab recreation below runs outside, as
+      // it must not queue jar work behind a gate it is itself holding. A
+      // toggle confirmed while an import holds the barrier waits its budget
+      // and then fails, and is retried after.
+      const settled = await jarSerializer.runOnEveryDomain(
+        () => setBrowserSavedLoginsEnabled(enabled),
+        BARRIER_ACTION_TIMEOUT_MS,
+      );
       // Open the target jar first, so the recreated guests attach to an
       // already-hardened session.
       ensureBrowserViewSession(PRIMARY_PROFILE_REQUEST);
@@ -1013,6 +1048,127 @@ export function registerBrowserViewIpc(
       }
       await clearOneSavedLoginSite(domain);
       return true;
+    },
+  );
+  // Import logins from another browser. Every handler answers a result value
+  // and never rejects: a rejected invoke's message is logged at WARN and
+  // forwarded to Sentry, and nothing on this path - a profile path, a
+  // keychain's answer, a cookie - may travel that way. The service holds the
+  // paths; the renderer sees opaque ids and registrable domains only.
+  // The import's jar write takes the same barrier forget-all does: it
+  // touches many sites at once, and a forget confirmed while it runs must
+  // wait for it rather than be marked complete under a write that then puts
+  // the logins back.
+  const loginImport = createLoginImportService({
+    serializeJarWrite: (action) =>
+      jarSerializer.runOnEveryDomain(
+        action,
+        LOGIN_IMPORT_JAR_BARRIER_TIMEOUT_MS,
+      ),
+    // The localStorage half of a site clear, on the durable jar the import
+    // writes, followed by the same coordinator prune the site clear does -
+    // without it the next capture ships the origins just emptied back to
+    // the host. The durable jar only: the import refuses when saving is
+    // off, and with it on the durable jar IS the jar the tiles are on.
+    clearSiteLocalStorage: async (site, signal) => {
+      await clearBrowserSiteLocalStorage(
+        site,
+        ensureBrowserViewSessionForPartition(BROWSER_VIEW_PARTITION),
+        rememberedClearSiteOrigins,
+        signal,
+      );
+      primaryProfileSnapshots.forgetOriginsUnder(site);
+    },
+    // The push is main's, exactly like forget-all's frames: a renderer may
+    // not mint a jar frame at all. It is needed at all because the import
+    // writes with the delta observer muted - the coalesced deltas that carry
+    // an ordinary sign-in never fire for it, so without this capture the
+    // hosts would not see the imported logins until something else asked
+    // for one. Made by the import INSIDE its barrier, so a saved-logins
+    // toggle queued behind the import cannot move the capture's jar first.
+    // Never rejects: a stream whose capture threw must not turn a committed
+    // import into a rejected invoke that the user retries and Sentry
+    // records. Zero hosts is an honest answer here - the next capture
+    // carries the logins.
+    pushJarToHosts: async () => {
+      try {
+        return await sessions.capturePrimaryProfileOnEveryHost();
+      } catch (error) {
+        log.warn("[browser-view] pushing the imported logins failed", {
+          error: describeLogError(error),
+        });
+        return 0;
+      }
+    },
+  });
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.browserViewLoginImportListSources,
+    (): Promise<readonly LoginImportSource[]> => loginImport.listSources(),
+  );
+
+  // The native file dialog runs in main so the renderer never names a path;
+  // the picked file is registered under an opaque id like every other source.
+  // A dialog that cannot be shown answers like a cancelled one: there is no
+  // file, and the OS's reason is not for the renderer or the log.
+  bridge.handleInvoke(
+    RunnerHostInvoke.browserViewLoginImportPickFile,
+    async (event): Promise<LoginImportSource | null> => {
+      try {
+        const windowId = bridge.resolveSenderWindowId(event);
+        const parentWindow =
+          windowId === null
+            ? undefined
+            : bridge.windowRegistry.getRecordById(windowId)?.window;
+        const options = {
+          title: "Import logins from a cookie file",
+          properties: ["openFile" as const],
+          filters: [
+            { name: "Cookie exports", extensions: ["txt", "json"] },
+            { name: "All files", extensions: ["*"] },
+          ],
+        };
+        const result = isElectronBrowserWindow(parentWindow)
+          ? await dialog.showOpenDialog(parentWindow, options)
+          : await dialog.showOpenDialog(options);
+        const picked = result.canceled ? undefined : result.filePaths[0];
+        if (picked === undefined) return null;
+        const path = normalizePickedFilePath(picked);
+        if (path === null) return null;
+        return await loginImport.registerFile(path);
+      } catch {
+        return null;
+      }
+    },
+  );
+
+  // Payloads are validated with `safeParse`, unlike the neighbours above: a
+  // malformed payload here must come back as a blocked result too, because
+  // the bridge promises these calls never reject.
+  bridge.handleInvoke(
+    RunnerHostInvoke.browserViewLoginImportScan,
+    (_event, payload): Promise<LoginImportScan> => {
+      const parsed = browserViewIpcPayload.loginImportScan.safeParse(payload);
+      return loginImport.scan(parsed.success ? parsed.data.sourceId : "");
+    },
+  );
+
+  // The service's answer is the whole answer, the push to the hosts included:
+  // it is made inside the import's barrier (see `pushJarToHosts` above).
+  bridge.handleInvoke(
+    RunnerHostInvoke.browserViewLoginImportRun,
+    (_event, payload): Promise<LoginImportResult> => {
+      const parsed = browserViewIpcPayload.loginImportRun.safeParse(payload);
+      return loginImport.import(
+        parsed.success
+          ? parsed.data
+          : {
+              sourceId: "",
+              scanId: "",
+              domains: [],
+              includeDeviceBound: false,
+            },
+      );
     },
   );
 

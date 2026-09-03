@@ -48,6 +48,32 @@ import type {
 export const FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS = 5_000;
 
 /**
+ * What became of one capture on one stream. `unacked` is a frame that LEFT
+ * and drew no ack in time; it is kept apart from `not-sent` because to the
+ * once-per-host rule a frame that left is the host's capture, ack or no ack.
+ */
+/**
+ * `acked`: the host took a jar. `unacked`: a jar left and drew no ack in time.
+ * `sent-no-jar`: a frame left, but it carried no jar - the read failed or the
+ * jar was unavailable - so whatever the host acked, it was not this machine's
+ * logins. `not-sent`: nothing left at all.
+ */
+export type BrowserPrimaryProfileCaptureOutcome =
+  | "acked"
+  | "unacked"
+  | "sent-no-jar"
+  | "not-sent";
+
+/**
+ * One sent frame's place in the ack order under its request id. `settle` is
+ * `null` once the slot is settled - acked, timed out, or torn down - and a
+ * settled slot stays queued only to absorb the ack it is still owed.
+ */
+interface CaptureAckSlot {
+  settle: ((acked: boolean) => void) | null;
+}
+
+/**
  * How many `browser.sessions` streams one window may hold.
  *
  * The renderer names the stream, and every distinct `identityKey` it names
@@ -68,6 +94,14 @@ const MAX_STREAMS_PER_WINDOW = 12;
  */
 export interface BrowserSessionsJarPort {
   capturePrimaryProfile(): Promise<BrowserPrimaryProfileCaptureResult>;
+  /**
+   * Resolves once no whole-jar barrier (a forget-all, a login import) is
+   * pending or running. A HOST-issued capture waits on it before the read,
+   * so the frame it answers with is a jar before or after such a write, never
+   * one mid-way through it. Main's own pushes do not wait: the import's is
+   * made inside its own barrier.
+   */
+  awaitJarBarrier(): Promise<void>;
   applyObservedProfile(input: {
     readonly connectionId: string;
     readonly hostId: string;
@@ -313,6 +347,47 @@ export class BrowserSessionsRegistry {
     });
   }
 
+  /**
+   * Pushes the jar as it stands to every host this process holds a live stream
+   * to - once per host, for the same reason a forget is - and answers how many
+   * ACKED, not how many were written to.
+   *
+   * The login import is the caller. It writes the durable jar with the
+   * cookie-delta observer muted, so the coalesced deltas that carry an
+   * ordinary sign-in never fire for it and a host would otherwise not see the
+   * imported logins until it asked for a capture of its own.
+   *
+   * Hosts are pushed in parallel and a host's streams in order: one capture
+   * per host, and a second stream is only tried when the first could not send
+   * at all - the rule {@link sendOncePerHost} applies to a jar action frame.
+   * Never rejects, like every other capture path: a host that cannot take the
+   * jar is reported by not being counted.
+   */
+  async capturePrimaryProfileOnEveryHost(): Promise<number> {
+    const streamsByHost = new Map<string, BrowserSessionsStream[]>();
+    for (const stream of this.streams.values()) {
+      const forHost = streamsByHost.get(stream.hostId);
+      if (forHost === undefined) streamsByHost.set(stream.hostId, [stream]);
+      else forHost.push(stream);
+    }
+    const captured = await Promise.all(
+      [...streamsByHost.values()].map(async (streams) => {
+        for (const stream of streams) {
+          const outcome = await stream.capturePrimaryProfileNow();
+          // A frame that LEFT is this host's one capture, acked or not - and
+          // whether or not it carried a jar: a sibling stream is tried only
+          // when nothing was sent, never after a timeout or a failed read
+          // (the sibling reads the same jar), or the host would get a second
+          // whole jar per stream. Only a host that acked a frame WITH the
+          // jar in it is counted.
+          if (outcome !== "not-sent") return outcome === "acked";
+        }
+        return false;
+      }),
+    );
+    return captured.filter((acked) => acked).length;
+  }
+
   dispose(): void {
     this.disposed = true;
     this.stopLocalHostChanges();
@@ -401,6 +476,12 @@ class BrowserSessionsStream {
    * the connection, because a reconnect brings a new one.
    */
   private standingCaptureRequestId: string | null = null;
+  /** The one capture running on this stream; see `capturePrimaryProfileNow`. */
+  private captureInFlight: Promise<BrowserPrimaryProfileCaptureOutcome> | null =
+    null;
+  /** The one capture queued behind it, shared by everyone who arrived meanwhile. */
+  private trailingCapture: Promise<BrowserPrimaryProfileCaptureOutcome> | null =
+    null;
   /**
    * The account this stream was OPENED for, captured at `start()`.
    *
@@ -420,7 +501,20 @@ class BrowserSessionsStream {
   get holdsConnection(): boolean {
     return this.openedUserId !== null;
   }
-  private readonly captureAckWaiters = new Map<string, () => void>();
+  /**
+   * Ack slots per request id, in SEND order.
+   *
+   * The standing id is reused by every capture on the connection and the
+   * host's ack quotes only that id, so an ack is attributed to the OLDEST
+   * frame still outstanding under it - which is sound because the host acks
+   * every `primaryProfileCaptured` it receives, once, in the order received.
+   * A slot whose budget ran out is SETTLED, not removed: its frame left, so
+   * its ack is still owed, and it must land on this slot rather than on the
+   * next frame's - a late ack that satisfied the next capture would count a
+   * host that never acked THAT jar. Cleared with the connection: the ids die
+   * with it, so nothing is left to absorb.
+   */
+  private readonly captureAckSlots = new Map<string, CaptureAckSlot[]>();
 
   constructor(
     windowId: string,
@@ -636,16 +730,83 @@ class BrowserSessionsStream {
   }
 
   async captureFinalPrimaryProfile(): Promise<void> {
-    if (this.connectionStatus !== "open") return;
+    await this.capturePrimaryProfileNow();
+  }
+
+  /**
+   * One capture on this stream, answering what became of it: `acked` by the
+   * host, `unacked` (sent, but no ack within
+   * {@link FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS}, or the connection went
+   * before one), `sent-no-jar` (a frame left, but the jar read failed or the
+   * jar was unavailable, so it carried none), or `not-sent` (the connection
+   * is not open, or the host holds no standing capture request). The
+   * registry's once-per-host rule needs the last told apart from the rest: a
+   * frame that left is the host's one capture even if the ack never came or
+   * the frame was empty-handed.
+   *
+   * Captures on one stream run ONE AT A TIME, and a caller that arrives while
+   * one is in flight gets the NEXT one, never the current one: the one in
+   * flight may have read the jar before this caller's write landed (two
+   * Settings windows importing in succession), so answering it with that
+   * capture would count a host as notified of a login it was never sent.
+   * Every caller that arrives during the same in-flight capture shares the
+   * one trailing capture, so a burst costs two frames, not one per caller.
+   * The frames all quote the standing id, and their acks are told apart by
+   * send order alone - see {@link captureAckSlots} for why a timed-out
+   * frame's ack cannot be taken for the next frame's.
+   */
+  capturePrimaryProfileNow(): Promise<BrowserPrimaryProfileCaptureOutcome> {
+    if (this.captureInFlight === null) return this.startCapture();
+    if (this.trailingCapture === null) {
+      this.trailingCapture = this.captureInFlight.then(() => {
+        this.trailingCapture = null;
+        // Through the public path, not `startCapture`: a caller that arrived
+        // in the microtask between the in-flight capture settling and this
+        // continuation may already have started the next one, and this
+        // trailing capture then queues behind it rather than beside it.
+        return this.capturePrimaryProfileNow();
+      });
+    }
+    return this.trailingCapture;
+  }
+
+  private startCapture(): Promise<BrowserPrimaryProfileCaptureOutcome> {
+    const capture = this.capturePrimaryProfileOnce().finally(() => {
+      this.captureInFlight = null;
+    });
+    this.captureInFlight = capture;
+    return capture;
+  }
+
+  private async capturePrimaryProfileOnce(): Promise<BrowserPrimaryProfileCaptureOutcome> {
+    if (this.connectionStatus !== "open") return "not-sent";
     const requestId = this.standingCaptureRequestId;
     // No standing id means this host either never authorized the jar plane for
     // this connection or never unsealed the store, so a capture would be
     // refused and dropped there. Sending nothing is the same outcome without
     // the jar read.
-    if (requestId === null) return;
-    const acked = this.awaitCaptureAck(requestId);
-    await this.answerCaptureRequest(requestId);
-    await acked;
+    if (requestId === null) return "not-sent";
+    // The jar read is asynchronous, and the stream can close - or the host
+    // can re-issue its standing id - while it runs. A frame that could not
+    // be sent, or that would quote an id the host no longer holds, never
+    // LEFT: the registry must be free to try this host's healthy sibling
+    // stream, which `unacked` would forbid.
+    const sent = await this.answerCaptureRequest(
+      requestId,
+      () => this.standingCaptureRequestId === requestId,
+      "now",
+    );
+    if (sent === "not-sent") return "not-sent";
+    // The ack waiter - and its timeout - start once the frame has LEFT, not
+    // before the jar read. No ack can be missed: the send was synchronous,
+    // and this continuation runs before any socket delivery. Awaited for a
+    // frame that carried no jar too - the host acks every captured frame it
+    // receives, in order, and this frame's slot must absorb its own ack
+    // rather than leave it for the next capture's - but that ack counts for
+    // nothing: whatever the host took, it was not the jar.
+    const acked = await this.awaitCaptureAck(requestId);
+    if (sent === "sent-no-jar") return "sent-no-jar";
+    return acked ? "acked" : "unacked";
   }
 
   dispose(): void {
@@ -681,6 +842,18 @@ class BrowserSessionsStream {
   private sendClientFrame(frame: BrowserSessionsClientFrame): void {
     if (this.disposed) return;
     this.client?.sendClientFrame(frame);
+  }
+
+  /**
+   * `sendClientFrame` that says whether the frame LEFT. The client drops a
+   * frame silently unless its stream is open, and a caller that counts what
+   * a host took - the whole-jar capture - must not mistake a drop for a send.
+   */
+  private sendClientFrameIfOpen(frame: BrowserSessionsClientFrame): boolean {
+    if (this.disposed || this.connectionStatus !== "open") return false;
+    if (this.client === null) return false;
+    this.client.sendClientFrame(frame);
+    return true;
   }
 
   private emit(event: BrowserSessionsStreamEventEnvelope["event"]): void {
@@ -763,7 +936,14 @@ class BrowserSessionsStream {
           this.standingCaptureRequestId = frame.requestId;
           return;
         }
-        void this.answerCaptureRequest(frame.requestId);
+        // A one-off request the host is waiting on: answered whatever the
+        // standing id does meanwhile - and behind any whole-jar barrier, so
+        // the host is never handed a jar mid-import.
+        void this.answerCaptureRequest(
+          frame.requestId,
+          () => true,
+          "behind-barrier",
+        );
         return;
       case "primaryProfileCaptureAck":
         this.resolveCaptureAckWaiter(frame.requestId);
@@ -902,12 +1082,32 @@ class BrowserSessionsStream {
    * The one code path that answers "what is in the primary profile right now".
    * Both callers use it: a host-issued `capturePrimaryProfile`, and the final
    * capture before a desktop route disappears. It always sends exactly one
-   * `primaryProfileCaptured` and never rejects.
+   * `primaryProfileCaptured` and never rejects. Answers whether that frame
+   * left, and whether it carried a jar: the read is asynchronous, and a
+   * stream that closed underneath it drops the frame silently - and
+   * `stillWanted`, read once the jar has been read, says whether the request
+   * is still the host's to answer (a standing id the host re-issued meanwhile
+   * is not), in which case nothing is sent. A frame that left with no jar -
+   * the read failed, or the jar was unavailable - is told apart from one that
+   * carried one, so a caller counting the hosts that TOOK the jar cannot
+   * count a host that acked an empty-handed frame.
+   *
+   * `behind-barrier` is the host's own ask: it waits for any whole-jar
+   * barrier first, so the jar it reads is whole. `now` is main's own push,
+   * which may itself be the barrier holder.
    */
-  private async answerCaptureRequest(requestId: string): Promise<void> {
+  private async answerCaptureRequest(
+    requestId: string,
+    stillWanted: () => boolean,
+    ordering: "now" | "behind-barrier",
+  ): Promise<"not-sent" | "sent" | "sent-no-jar"> {
+    let frame: BrowserSessionsClientFrame;
+    let carriesJar = false;
     try {
+      if (ordering === "behind-barrier") await this.deps.jar.awaitJarBarrier();
       const result = await this.deps.jar.capturePrimaryProfile();
-      this.sendClientFrame(
+      carriesJar = result.status === "captured";
+      frame =
         result.status === "captured"
           ? {
               kind: "primaryProfileCaptured",
@@ -924,47 +1124,73 @@ class BrowserSessionsStream {
               storageState: null,
               status: "unavailable",
               reason: result.reason,
-            },
-      );
+            };
     } catch (error: unknown) {
-      this.sendClientFrame({
+      // The cause stays in this process's log: a jar read's error can carry
+      // a filesystem path or an OS error string, and the frame travels to a
+      // host that may log it. The host gets a closed reason.
+      log.warn("[browser-sessions] primary profile capture failed", {
+        error: describeLogError(error),
+      });
+      frame = {
         kind: "primaryProfileCaptured",
         hasBinaryPayload: false,
         requestId,
         storageState: null,
         status: "failed",
-        reason: error instanceof Error ? error.message : String(error),
-      });
+        reason: "capture-failed",
+      };
     }
+    if (!stillWanted()) return "not-sent";
+    if (!this.sendClientFrameIfOpen(frame)) return "not-sent";
+    return carriesJar ? "sent" : "sent-no-jar";
   }
 
-  private awaitCaptureAck(requestId: string): Promise<void> {
-    return new Promise<void>((resolve) => {
+  /**
+   * Resolves `true` only on a real ack from the host. A timeout, a connection
+   * that is not open, and a teardown all resolve `false`, so a caller counting
+   * what a host took cannot count a capture that merely left.
+   */
+  private awaitCaptureAck(requestId: string): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
       if (this.connectionStatus !== "open") {
-        resolve();
+        resolve(false);
         return;
       }
+      const slot: CaptureAckSlot = { settle: null };
       const timer = setTimeout(() => {
-        this.captureAckWaiters.delete(requestId);
-        resolve();
+        // Settled in place, still queued: see `captureAckSlots`.
+        slot.settle = null;
+        resolve(false);
       }, FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS);
-      this.captureAckWaiters.set(requestId, () => {
+      slot.settle = (acked) => {
         clearTimeout(timer);
-        resolve();
-      });
+        slot.settle = null;
+        resolve(acked);
+      };
+      const queue = this.captureAckSlots.get(requestId) ?? [];
+      queue.push(slot);
+      this.captureAckSlots.set(requestId, queue);
     });
   }
 
+  /** One ack absorbs the oldest slot under its id, live or already timed out. */
   private resolveCaptureAckWaiter(requestId: string): void {
-    const settle = this.captureAckWaiters.get(requestId);
-    if (settle === undefined) return;
-    this.captureAckWaiters.delete(requestId);
-    settle();
+    const queue = this.captureAckSlots.get(requestId);
+    if (queue === undefined) return;
+    const slot = queue.shift();
+    if (queue.length === 0) this.captureAckSlots.delete(requestId);
+    if (slot !== undefined && slot.settle !== null) slot.settle(true);
   }
 
   private resolveCaptureAckWaiters(): void {
-    for (const settle of [...this.captureAckWaiters.values()]) settle();
-    this.captureAckWaiters.clear();
+    const queues = [...this.captureAckSlots.values()];
+    this.captureAckSlots.clear();
+    for (const queue of queues) {
+      for (const slot of queue) {
+        if (slot.settle !== null) slot.settle(false);
+      }
+    }
   }
 
   /**

@@ -688,7 +688,10 @@ describe("observed sign-in serialization", () => {
     const forgetRunning = new Promise<void>((resolve) => {
       releaseForget = resolve;
     });
-    const forget = harness.serializer.runOnEveryDomain(() => forgetRunning);
+    const forget = harness.serializer.runOnEveryDomain(
+      () => forgetRunning,
+      30_000,
+    );
 
     const applied = harness.applyFrame(LIVE_COOKIE);
     await vi.advanceTimersByTimeAsync(0);

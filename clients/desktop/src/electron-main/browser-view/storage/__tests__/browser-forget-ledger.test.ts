@@ -16,6 +16,7 @@ import {
   recordForgetAllBrowserLogins,
   recordForgetLedgerAck,
   recordForgottenBrowserSite,
+  recordForgottenBrowserSites,
   recordHeadlessOriginCookieKeys,
   releaseBrowserForgetLedgerConnection,
 } from "../browser-forget-ledger";
@@ -280,6 +281,57 @@ describe("forget ledger mutations", () => {
 
     expect(notifications).toBe(2);
     subscription.dispose();
+  });
+});
+
+describe("forget ledger batch forgets", () => {
+  beforeEach(loadEmptyLedger);
+
+  it("records several sites under one revision", async () => {
+    const sid = { domain: "example.com", name: "sid", path: "/" };
+    const other = { domain: "other.test", name: "sid", path: "/" };
+    await recordHeadlessOriginCookieKeys([sid, other]);
+    const previous = browserForgetLedgerDigestForHost(HOST).revision;
+
+    const revision = await recordForgottenBrowserSites([
+      "a.example.com",
+      "www.b.example.org",
+      "b.example.org",
+      "not a domain",
+    ]);
+
+    // One revision for the whole batch, not one per site.
+    expect(revision).toBe(previous + 1);
+    const digest = browserForgetLedgerDigestForHost(HOST);
+    expect(digest.revision).toBe(revision);
+    expect([...digest.domains.map((entry) => entry.domain)].sort()).toEqual([
+      "example.com",
+      "example.org",
+    ]);
+    // The custody marks under the forgotten scopes go with them.
+    expect(isHeadlessOriginCookieKey(cookieKeyId(sid))).toBe(false);
+    expect(isHeadlessOriginCookieKey(cookieKeyId(other))).toBe(true);
+    expect(
+      isBrowserForgetLedgerPendingAck({
+        connectionId: CONNECTION,
+        domain: "sub.example.org",
+      }),
+    ).toBe(true);
+  });
+
+  it("answers the current revision for a list with no derivable domain", async () => {
+    const previous = browserForgetLedgerDigestForHost(HOST).revision;
+
+    const revision = await recordForgottenBrowserSites(["not a domain"]);
+
+    // Nothing was left to record, so nothing was recorded: the ledger's own
+    // revision is unchanged, and the caller is told `null` rather than a
+    // revision it could go on to mark as cleared - one that would actually
+    // belong to whatever the ledger's top happens to be.
+    expect(revision).toBeNull();
+    const digest = browserForgetLedgerDigestForHost(HOST);
+    expect(digest.revision).toBe(previous);
+    expect(digest.domains).toEqual([]);
   });
 });
 

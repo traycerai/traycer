@@ -242,6 +242,7 @@ function createBaseRunnerHost(): IRunnerHost {
     getRegisteredUrlSchemes: () => Promise.resolve([]),
     requestMicrophoneAccess: () => Promise.resolve("granted" as const),
     openMicrophoneSettings: () => Promise.resolve(),
+    openFullDiskAccessSettings: () => Promise.resolve(),
     beginAuthAttempt: () => undefined,
     onAuthCallback: () => ({ dispose: () => undefined }),
     deviceFlow: { start: () => Promise.resolve(null) },

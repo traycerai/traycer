@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { Switch } from "@/components/ui/switch";
+import { ImportLoginsDialog } from "@/components/settings/import-logins-dialog";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
 import {
@@ -152,6 +153,10 @@ function BrowserSavedLoginsRows(props: {
         saveLogins={props.saveLogins}
         enabled={props.enabled}
       />
+      <ImportLoginsRow
+        browserView={props.browserView}
+        enabled={props.enabled}
+      />
       <ForgetAllLoginsRow browserView={props.browserView} />
       <SavedLoginSitesRow
         browserView={props.browserView}
@@ -209,6 +214,51 @@ function SavedLoginsToggleRow(props: {
           setConfirming(false);
         }}
       />
+    </>
+  );
+}
+
+/**
+ * "Import logins from another browser": the way to be signed into the sites
+ * the user already uses, without signing into each one again inside Traycer.
+ * The dialog owns the three steps; this row only opens it.
+ *
+ * Disabled with saving off rather than hidden: the import writes the durable
+ * jar, which is not the one the tiles are on then, so the row would import
+ * into a jar that dies at quit. The hint names the toggle to flip.
+ */
+function ImportLoginsRow(props: {
+  readonly browserView: BrowserViewBridge;
+  readonly enabled: boolean;
+}): ReactNode {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <SettingsRow
+        label="Import logins from another browser"
+        description="Bring the sites you're signed into in Chrome, Edge, Brave, Firefox, Safari, or a cookie file into Traycer's browser. Google accounts are left out unless you opt in, because Google binds sign-ins to the device."
+        hint={props.enabled ? null : "Turn on Save website logins first."}
+        control={
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={!props.enabled}
+            onClick={() => {
+              setOpen(true);
+            }}
+          >
+            Import logins…
+          </Button>
+        }
+      />
+      {open ? (
+        <ImportLoginsDialog
+          open={open}
+          onOpenChange={setOpen}
+          browserView={props.browserView}
+        />
+      ) : null}
     </>
   );
 }
