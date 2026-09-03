@@ -43,7 +43,7 @@ import { useProvidersAwaitLogin } from "@/hooks/providers/use-providers-await-lo
 import { useProvidersSubmitLoginCode } from "@/hooks/providers/use-providers-submit-login-code-mutation";
 import { useProvidersTouchLogin } from "@/hooks/providers/use-providers-touch-login-mutation";
 import { useTabRefreshProviders } from "@/hooks/providers/use-tab-refresh-providers";
-import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
+import { useOpenLink } from "@/lib/links/open-link";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { HostRuntimeContext, useHostBinding } from "@/lib/host/runtime";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
@@ -624,7 +624,7 @@ function OAuthWaitingRow({
   readonly cancelDisabled: boolean;
   readonly onCancel: () => void;
 }) {
-  const openExternalLink = useRunnerOpenExternalLink();
+  const openLink = useOpenLink();
   const { copied, copy } = useClipboardCopy({
     resetMs: 1600,
     onSuccess: null,
@@ -657,7 +657,9 @@ function OAuthWaitingRow({
           <Button
             size="sm"
             variant="secondary"
-            onClick={() => openExternalLink.mutate(loginUrl)}
+            onClick={() => {
+              void openLink(loginUrl, "auth", null);
+            }}
           >
             <ExternalLink className="size-3.5" />
             Open browser again

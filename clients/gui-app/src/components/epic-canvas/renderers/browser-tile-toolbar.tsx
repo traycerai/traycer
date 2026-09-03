@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import type { TileController } from "@/components/epic-canvas/renderers/tile-controller";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { Badge } from "@/components/ui/badge";
 import type { BrowserAnnotationSessionController } from "@/hooks/browser/use-browser-annotation-session";
 import { Button } from "@/components/ui/button";
 import {
@@ -29,7 +30,7 @@ import {
 } from "@/components/ui/input-group";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
+import { useOpenLink } from "@/lib/links/open-link";
 import { cn } from "@/lib/utils";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import {
@@ -147,6 +148,8 @@ export function BrowserTileToolbar(props: {
 export function BrowserTileToolbarCompact(props: {
   readonly controller: TileController;
   readonly loading: boolean;
+  /** A read-only tier says so here: a finger cannot reach a tooltip (H12). */
+  readonly readOnly: boolean;
 }) {
   const url = props.controller.url;
   return (
@@ -162,6 +165,11 @@ export function BrowserTileToolbarCompact(props: {
           {url === "" ? "New tab" : url}
         </div>
       )}
+      {props.readOnly ? (
+        <Badge variant="outline" className="shrink-0">
+          View only
+        </Badge>
+      ) : null}
       {props.loading ? (
         <span role="status" aria-label="Page loading" className="shrink-0">
           <AgentSpinningDots
@@ -239,9 +247,10 @@ function BrowserTileToolbarAddress(props: {
       <InputGroup className="group/address h-7 border-transparent bg-transparent shadow-none transition-[background-color,border-color,box-shadow] hover:border-input hover:bg-input/20 focus-within:bg-input/20 motion-reduce:transition-none dark:bg-transparent">
         <InputGroupInput
           ref={setAddressInput}
-          // The compact toolbar is shown on peek tiles too, where a missing
-          // host client disables the whole controller - an editable field
-          // there would submit a navigation nothing can carry.
+          // The rest of the toolbar already honours `disabled`; the address
+          // field is where a `viewer` (H12), a peek tile with no host client,
+          // or any other clientless tile would otherwise submit a nav frame
+          // nothing can carry.
           disabled={disabled}
           aria-label="Browser address"
           value={addressValue}
@@ -264,7 +273,7 @@ function BrowserTileToolbarAddress(props: {
 }
 
 function BrowserOpenExternalButton(props: { readonly url: string }) {
-  const openExternalLink = useRunnerOpenExternalLink();
+  const openLink = useOpenLink();
   return (
     <TooltipWrapper
       label="Open in default browser"
@@ -276,9 +285,10 @@ function BrowserOpenExternalButton(props: { readonly url: string }) {
         type="button"
         size="icon-xs"
         aria-label="Open in default browser"
-        disabled={openExternalLink.isPending}
         className="pointer-events-none text-muted-foreground opacity-0 transition-[color,opacity] duration-150 group-hover/address:pointer-events-auto group-hover/address:opacity-100 group-focus-within/address:pointer-events-auto group-focus-within/address:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100 motion-reduce:transition-none"
-        onClick={() => openExternalLink.mutate(props.url)}
+        onClick={() => {
+          void openLink(props.url, "app", null);
+        }}
       >
         <ExternalLink aria-hidden />
       </InputGroupButton>

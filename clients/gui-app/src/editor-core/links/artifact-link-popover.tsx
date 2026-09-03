@@ -30,7 +30,6 @@ import {
 import { createPortal } from "react-dom";
 import * as Y from "yjs";
 import { Button } from "@/components/ui/button";
-import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { HOVER_PREVIEW_SURFACE_CLASS } from "@/components/ui/hover-preview-surface";
 import {
   isPresentationLossBlur,
@@ -42,8 +41,11 @@ import {
   classifyHref,
   type ClassifiedHref,
 } from "@/markdown/links/classify-href";
+import type { LinkClickEvent } from "@/lib/links/open-link";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { cn } from "@/lib/utils";
+import { useComposedRefs } from "radix-ui/internal";
+import { useRegisterBrowserOverlay } from "@/lib/browser-view/tiles/use-register-browser-overlay";
 import { isSingleTextblockLinkRange } from "./artifact-link-selection";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -57,12 +59,28 @@ export type OpenableArtifactLink = Extract<
   { readonly kind: "external" | "file" }
 >;
 
+/** A keyboard or card activation, which carries no mouse button (R7). */
+const PLAIN_ACTIVATION: LinkClickEvent = {
+  altKey: false,
+  ctrlKey: false,
+  metaKey: false,
+  shiftKey: false,
+  button: 0,
+};
+
 export interface ArtifactLinkPopoverProps {
   readonly editor: Editor;
   readonly editable: boolean;
   readonly scrollContainer: HTMLElement | null;
-  readonly openLink: (link: OpenableArtifactLink) => void;
-  readonly openLinkPending: boolean;
+  /**
+   * The activating event travels with the link: `ctrl`/`meta` forces the OS
+   * browser and `alt` inverts the configured mode, and both are decided by
+   * the link seam, not here (A3, R7).
+   */
+  readonly openLink: (
+    link: OpenableArtifactLink,
+    event: LinkClickEvent,
+  ) => void;
   readonly onOpenChange: (open: boolean) => void;
 }
 
@@ -573,7 +591,6 @@ interface LinkPreviewProps {
   readonly copied: boolean;
   readonly editable: boolean;
   readonly href: string;
-  readonly openLinkPending: boolean;
   readonly onCopy: () => void;
   readonly onEdit: () => void;
   readonly onOpen: () => void;
@@ -583,8 +600,6 @@ function LinkPreview(props: LinkPreviewProps) {
   const openable =
     props.classifiedHref.kind === "external" ||
     props.classifiedHref.kind === "file";
-  const externalOpenPending =
-    props.classifiedHref.kind === "external" && props.openLinkPending;
   return (
     <>
       <LinkKindIndicator
@@ -605,17 +620,10 @@ function LinkPreview(props: LinkPreviewProps) {
               variant="ghost"
               aria-label={`Open link: ${props.href}`}
               className="min-w-0 max-w-[min(55vw,16rem)] justify-start px-1.5 font-normal text-muted-foreground hover:text-foreground"
-              disabled={props.href.trim().length === 0 || externalOpenPending}
+              disabled={props.href.trim().length === 0}
               onClick={props.onOpen}
             >
               <span className="truncate">{props.href}</span>
-              {externalOpenPending ? (
-                <AgentSpinningDots
-                  className={undefined}
-                  testId="artifact-link-open-pending"
-                  variant={undefined}
-                />
-              ) : null}
             </Button>
           </span>
         </TooltipWrapper>
@@ -680,14 +688,7 @@ function LinkPreview(props: LinkPreviewProps) {
  * fields.
  */
 export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
-  const {
-    editor,
-    editable,
-    scrollContainer,
-    openLink,
-    openLinkPending,
-    onOpenChange,
-  } = props;
+  const { editor, editable, scrollContainer, openLink, onOpenChange } = props;
   const [target, setTargetState] = useState<LinkTarget | null>(null);
   const [href, setHref] = useState("");
   const [displayText, setDisplayText] = useState("");
@@ -715,6 +716,8 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
   // (unreliable under jsdom synthetic pointer events).
   const pointerOverHoverSurfaceRef = useRef(false);
   const cardRef = useRef<HTMLDivElement | null>(null);
+  const registerOverlayRef = useRegisterBrowserOverlay<HTMLDivElement>();
+  const composedCardRef = useComposedRefs(cardRef, registerOverlayRef);
   const urlInputRef = useRef<HTMLInputElement | null>(null);
   const showTimerRef = useRef<number | null>(null);
   const hideTimerRef = useRef<number | null>(null);
@@ -844,16 +847,15 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
   }, []);
 
   const routeHref = useCallback(
-    (rawHref: string): "default" | "handled" => {
+    (rawHref: string, event: LinkClickEvent): "default" | "handled" => {
       const classified = classifyHref(rawHref);
       if (classified.kind === "default") return "default";
       if (classified.kind === "external" || classified.kind === "file") {
-        if (classified.kind === "external" && openLinkPending) return "handled";
-        openLink(classified);
+        openLink(classified, event);
       }
       return "handled";
     },
-    [openLink, openLinkPending],
+    [openLink],
   );
 
   const handlePointerOver = useEffectEvent((event: PointerEvent): void => {
@@ -945,7 +947,7 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
       // (unrecognized scheme) is deliberately suppressed instead: clicks
       // neither navigate nor move the caret, and the link stays reachable
       // for editing through the hover card.
-      const result = routeHref(rawHref);
+      const result = routeHref(rawHref, event);
       if (result === "default") {
         const normalizedHref = rawHref.trim();
         if (
@@ -1016,7 +1018,12 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
         anchorPosition(editor, anchor),
       );
       if (rawHref === null) return;
-      if (routeHref(rawHref) === "default") return;
+      if (
+        routeHref(rawHref, { ...PLAIN_ACTIVATION, ...modifiersOf(event) }) ===
+        "default"
+      ) {
+        return;
+      }
       event.preventDefault();
       event.stopPropagation();
       return;
@@ -1436,7 +1443,7 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
 
   return createPortal(
     <div
-      ref={cardRef}
+      ref={composedCardRef}
       role="dialog"
       aria-label={surfaceLabel}
       data-slot="artifact-link-popover"
@@ -1456,10 +1463,9 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
           copied={copied}
           editable={editable}
           href={href}
-          openLinkPending={openLinkPending}
           onCopy={() => copy(href.trim())}
           onEdit={beginEditing}
-          onOpen={() => routeHref(href)}
+          onOpen={() => routeHref(href, PLAIN_ACTIVATION)}
         />
       ) : (
         <form
@@ -1530,4 +1536,14 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
     </div>,
     paneContainer ?? document.body,
   );
+}
+
+/** The modifier half of a keyboard activation - no button, no mouse. */
+function modifiersOf(event: KeyboardEvent): Omit<LinkClickEvent, "button"> {
+  return {
+    altKey: event.altKey,
+    ctrlKey: event.ctrlKey,
+    metaKey: event.metaKey,
+    shiftKey: event.shiftKey,
+  };
 }

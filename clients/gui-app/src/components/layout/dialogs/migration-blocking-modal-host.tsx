@@ -10,6 +10,7 @@ import {
   useMigrationRunStore,
   type MigrationRunState,
 } from "@/stores/migration/migration-run-store";
+import { useRegisterBrowserOverlay } from "@/lib/browser-view/tiles/use-register-browser-overlay";
 
 const MIGRATION_PROGRESS_LABEL = "Migrating tasks";
 
@@ -20,6 +21,7 @@ export function MigrationBlockingModalHost(): ReactNode {
   const finalSuccess = useMigrationRunStore((s) => s.finalSuccess);
   const remoteRunning = useMigrationRunStore((s) => s.remoteRunning);
   const reset = useMigrationRunStore((s) => s.reset);
+  const registerOverlayRef = useRegisterBrowserOverlay<HTMLDivElement>();
 
   const isErrorAck = status === "error";
   const isRunning = status === "running" || remoteRunning;
@@ -38,6 +40,7 @@ export function MigrationBlockingModalHost(): ReactNode {
           className="fixed inset-0 isolate z-[60] bg-black/40 duration-100 supports-backdrop-filter:backdrop-blur-sm data-open:animate-in data-open:fade-in-0"
         />
         <DialogPrimitive.Content
+          ref={registerOverlayRef}
           data-slot="dialog-content"
           data-testid="migration-blocking-modal"
           aria-describedby={undefined}

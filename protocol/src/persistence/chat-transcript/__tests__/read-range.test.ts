@@ -862,3 +862,44 @@ describe("a row's records are enumerated, not inferred", () => {
     expect(slice.messages).toEqual([]);
   });
 });
+
+describe("imported-chat marker rows", () => {
+  it("hydrates the marker's event and nothing else - the row the windowed line used to lose", () => {
+    const imported = chatEventSchema.parse({
+      eventId: "e-import",
+      type: "chat.imported",
+      timestamp: 9_000,
+      clientActionId: null,
+      actor: null,
+      message: null,
+      turnId: null,
+      messageId: null,
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: "info",
+      metadata: {
+        sourceProvider: "claude",
+        nativeSessionId: "native-1",
+        importedAt: 9_000,
+        sourceCwd: "/repo",
+      },
+    });
+    const marker: TranscriptRowDescriptor = {
+      rowId: "imported-chat-marker:e-import",
+      createdAt: imported.timestamp,
+      source: { kind: "imported-chat-marker", eventId: imported.eventId },
+      context: {},
+    };
+
+    const result = slice([marker, userRow(M0)], [M0], [imported], {
+      fromOrdinal: 0,
+      toOrdinal: 0,
+      maxBytes: 100_000,
+    });
+
+    expect(result.rowIds).toEqual(["imported-chat-marker:e-import"]);
+    expect(result.messages).toEqual([]);
+    expect(result.events.map((e) => e.eventId)).toEqual(["e-import"]);
+  });
+});

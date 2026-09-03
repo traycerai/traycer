@@ -1,5 +1,4 @@
 import {
-  use,
   memo,
   useCallback,
   useDeferredValue,
@@ -130,8 +129,7 @@ import {
   navigateToTabIntent,
   openOrFocusEpicIntent,
 } from "@/lib/tab-navigation";
-import { RunnerHostContext } from "@/providers/runner-host-context";
-import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
+import { useOpenLink } from "@/lib/links/open-link";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
@@ -144,6 +142,7 @@ import {
   useWorktreesSettingsSelectionStore,
   type SelectedWorktreePathsUpdate,
 } from "@/stores/settings/worktrees-settings-selection-store";
+import { onMiddleClick } from "@/lib/dom/on-middle-click";
 
 type WorktreeRowDeleteStatus = "deleting";
 // Per-row activity-enrichment state, driving ONLY the tier pill's presentation:
@@ -2874,29 +2873,24 @@ function WorktreePrAnchor(props: {
   readonly prState: WorktreeDisplayedPrState | undefined;
   readonly children: ReactNode;
 }): ReactNode {
-  const runnerHost = use(RunnerHostContext);
-  const openExternalLink = useRunnerOpenExternalLink();
+  const openLink = useOpenLink();
   const openExternal = useCallback(
     (event: MouseEvent<HTMLAnchorElement>): void => {
       event.stopPropagation();
-      // No RunnerHost bound (e.g. web): let the browser handle the anchor
-      // natively, preserving modifier-click/middle-click tab semantics.
-      if (runnerHost === null) return;
       event.preventDefault();
-      openExternalLink.mutate(props.href);
+      void openLink(props.href, "github", event);
     },
-    [props.href, runnerHost, openExternalLink],
+    [openLink, props.href],
   );
   return (
     <a
       href={props.href}
-      target="_blank"
-      rel="noreferrer"
       aria-label={props.ariaLabel}
       className={props.className}
       data-testid={props.testId}
       data-pr-state={props.prState}
       onClick={openExternal}
+      onAuxClick={onMiddleClick(openExternal)}
     >
       {props.children}
     </a>

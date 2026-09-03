@@ -81,9 +81,22 @@ vi.mock(
     useManagedCommandStart: () => ({ mutate: vi.fn(), isPending: false }),
     useManagedCommandStop: () => ({ mutate: vi.fn(), isPending: false }),
     useManagedCommandDelete: () => ({ mutate: vi.fn(), isPending: false }),
+    useManagedCommandConfigureIsPending: () => false,
+    useManagedCommandRelaunchOnHostRestart: (
+      _target: unknown,
+      streamed: { relaunchOnHostRestart: boolean },
+    ) => derivedRelaunch.value ?? streamed.relaunchOnHostRestart,
+    useManagedCommandConfigure: () => ({ mutate: vi.fn(), isPending: false }),
     useManagedCommandStopAllIsPending: () => false,
   }),
 );
+
+/**
+ * The value an answered configure write derived for this command (null: none
+ * newer than the stream). The details row must read the SAME derivation the
+ * switch beside it does, or the two disagree until the stream catches up.
+ */
+const derivedRelaunch: { value: boolean | null } = { value: null };
 
 vi.mock("@/lib/host/stream-runtime-context", () => ({
   useWsStreamClient: () => null,
@@ -137,6 +150,7 @@ const COMMAND: ManagedCommand = {
   cadence: { debounceMs: 500, maxWaitMs: 15_000, throttleMs: 5_000 },
   status: { state: "running", pid: 4410, startedAtMs: 10 },
   chatId: "chat-1",
+  relaunchOnHostRestart: false,
   createdAtMs: 10,
   updatedAtMs: 10,
 };
@@ -493,6 +507,31 @@ describe("managed-command output window", () => {
     ).toBe("On output · 500ms quiet · 15s max wait · 5s min gap");
     // Withheld by decision: which shell binary resolved describes the machine.
     expect(screen.queryByText("/bin/sh")).toBeNull();
+    // The streamed record says off; nothing newer has answered.
+    expect(
+      screen.getByTestId("managed-command-output-details-relaunch").textContent,
+    ).toBe("Stays down after a host restart");
+  });
+
+  it("shows the relaunch value an answered write derived, not the stale streamed one", () => {
+    // A configure write answered "on" before the stream carried its status
+    // frame (or while the stream is down). The switch beside the popover
+    // already shows "Relaunches"; the row must agree rather than read the
+    // stale prop.
+    derivedRelaunch.value = true;
+    try {
+      const stub = installOutputStub();
+      renderTile();
+      openAtTail(stub.emit, [line("stdout", "watching src/")]);
+      fireEvent.click(screen.getByTestId("managed-command-output-details"));
+
+      expect(
+        screen.getByTestId("managed-command-output-details-relaunch")
+          .textContent,
+      ).toBe("Relaunches after a host restart");
+    } finally {
+      derivedRelaunch.value = null;
+    }
   });
 
   it("drops the pid once the shell is no longer running", () => {

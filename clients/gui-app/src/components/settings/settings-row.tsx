@@ -1,5 +1,6 @@
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 import { SETTINGS_ROW_STACK } from "@/components/settings/settings-row-layout";
+import { SettingsRowDescriptionContext } from "@/components/settings/settings-row-description";
 import { cn } from "@/lib/utils";
 import { useSettingsDensity } from "@/providers/settings-density-context";
 
@@ -13,6 +14,7 @@ interface SettingsRowProps {
 export function SettingsRow(props: SettingsRowProps) {
   const { label, description, hint, control } = props;
   const compact = useSettingsDensity() === "compact";
+  const descriptionId = useId();
   return (
     <div
       className={cn(
@@ -26,7 +28,12 @@ export function SettingsRow(props: SettingsRowProps) {
       >
         <div className="font-medium text-foreground">{label}</div>
         {description ? (
-          <p className="text-ui-sm text-muted-foreground">{description}</p>
+          <p
+            id={descriptionId}
+            className="max-w-[72ch] text-pretty text-ui-sm text-muted-foreground"
+          >
+            {description}
+          </p>
         ) : null}
         {hint ? (
           <p className="text-ui-sm font-medium text-amber-700 dark:text-amber-300">
@@ -40,7 +47,11 @@ export function SettingsRow(props: SettingsRowProps) {
           SETTINGS_ROW_STACK.control,
         )}
       >
-        {control}
+        <SettingsRowDescriptionContext.Provider
+          value={description ? descriptionId : undefined}
+        >
+          {control}
+        </SettingsRowDescriptionContext.Provider>
       </div>
     </div>
   );

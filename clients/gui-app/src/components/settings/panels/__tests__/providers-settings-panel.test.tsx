@@ -188,7 +188,7 @@ const providerMocks = vi.hoisted(() => ({
     hostClient: { getActiveHostId: () => string };
   } | null,
   refreshUsageLimits: vi.fn(() => Promise.resolve()),
-  openExternalLink: vi.fn(),
+  openLink: vi.fn(),
 }));
 
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
@@ -531,22 +531,15 @@ vi.mock("@/hooks/providers/use-refresh-providers", async () => {
   };
 });
 
-vi.mock("@/hooks/runner/use-open-external-link-mutation", () => ({
-  useRunnerOpenExternalLink: () => ({
-    mutate: providerMocks.openExternalLink,
-  }),
+vi.mock("@/lib/links/open-link", () => ({
+  useOpenLink: () => providerMocks.openLink,
 }));
 
+// The subscription section still reads the bridge for `signInUrl` (only its
+// URL EGRESS moved to `openLink`), and most cases here render the panel with
+// no `<RunnerHostProvider>` above it.
 vi.mock("@/providers/use-runner-host", () => ({
-  useRunnerHost: () => ({
-    openExternalLink: providerMocks.openExternalLink,
-  }),
-}));
-
-vi.mock("@/hooks/runner/use-open-external-link-mutation", () => ({
-  useRunnerOpenExternalLink: () => ({
-    mutate: providerMocks.openExternalLink,
-  }),
+  useRunnerHost: () => ({ signInUrl: "https://auth.example/sign-in" }),
 }));
 
 // MCP Project scope resolves workspaces via host query; this harness has no
@@ -1303,8 +1296,8 @@ function firstRemoveProfileCall(): readonly [
   return call;
 }
 
-// A non-null runner host so the desktop external-link path (preventDefault +
-// openExternalLink) runs; host-less renders fall back to native anchor nav.
+// A runner host binding some tests still render with; openLink no longer
+// branches on it, but other rendered surfaces may still read it.
 function createRunnerHost(): MockRunnerHost {
   return new MockRunnerHost({
     signInUrl: "https://auth.example/sign-in",
@@ -1473,7 +1466,7 @@ describe("<ProvidersSettingsPanel />", () => {
     });
     providerMocks.touchLoginMutate.mockReset();
     providerMocks.touchLoginReset.mockClear();
-    providerMocks.openExternalLink.mockClear();
+    providerMocks.openLink.mockClear();
     providerMocks.renameProfileMutate.mockReset();
     providerMocks.renameProfilePending = false;
     providerMocks.renameProfileError = null;
@@ -2015,8 +2008,10 @@ describe("<ProvidersSettingsPanel />", () => {
       "https://hermes-agent.nousresearch.com/docs/getting-started/installation",
     );
     fireEvent.click(guide);
-    expect(providerMocks.openExternalLink).toHaveBeenCalledWith(
+    expect(providerMocks.openLink).toHaveBeenCalledWith(
       "https://hermes-agent.nousresearch.com/docs/getting-started/installation",
+      "docs",
+      null,
     );
     expect(
       screen.getByRole("button", { name: "Add custom path" }),
@@ -3960,8 +3955,10 @@ describe("<ProvidersSettingsPanel />", () => {
       screen.getByRole("button", { name: "Open browser again" }),
     ).toBeDefined();
     fireEvent.click(screen.getByRole("button", { name: "Open browser again" }));
-    expect(providerMocks.openExternalLink).toHaveBeenCalledWith(
+    expect(providerMocks.openLink).toHaveBeenCalledWith(
       "https://login.example.test",
+      "auth",
+      null,
     );
 
     fireEvent.paste(input, {

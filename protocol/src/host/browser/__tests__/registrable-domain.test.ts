@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  canonicalCookieHost,
   cookieDomainInScope,
   registrableDomain,
   registrableDomainForUrl,
@@ -66,6 +67,65 @@ describe("registrableDomain", () => {
       "example.unknowntld",
     );
   });
+
+  // H11: the two ends of the wire have to derive one scope for an
+  // international domain however it is spelled. `tldts` alone treats the two
+  // spellings as different names, so a scope derived from the Unicode form
+  // rejected every cookie the jar spelled in A-labels.
+  it("collapses a Unicode IDN onto its punycode form", () => {
+    expect(registrableDomain("m\u00fcnchen.de")).toBe("xn--mnchen-3ya.de");
+    expect(registrableDomain("a.M\u00dcNCHEN.de")).toBe("xn--mnchen-3ya.de");
+    expect(registrableDomain("xn--mnchen-3ya.de")).toBe("xn--mnchen-3ya.de");
+    expect(registrableDomain(".m\u00fcnchen.de.")).toBe("xn--mnchen-3ya.de");
+  });
+
+  // R3-8: a host is refused rather than parsed as a URL. Handing
+  // `evil.com/../good.com` or `user@good.com` to the URL parser would answer
+  // with the host it decided the string meant, and a caller asking "what is
+  // this cookie's host" would take that as the sender's claim.
+  it.each([
+    ["userinfo", "user@evil.example"],
+    ["path traversal", "good.example/../evil.example"],
+    ["port", "good.example:8080"],
+    ["query", "good.example?x"],
+    ["fragment", "good.example#f"],
+  ])("refuses a host carrying URL structure (%s)", (_label, host) => {
+    expect(registrableDomain(host)).toBeNull();
+  });
+
+  it("still derives an IPv6 literal despite the colon refusal above", () => {
+    // The colon is what URL_SYNTAX_PATTERN refuses everywhere else, so an
+    // IPv6 literal has to be recognised whole, ahead of that gate.
+    expect(registrableDomain("[::1]")).toBe("::1");
+    expect(registrableDomain("::1")).toBe("::1");
+  });
+});
+
+describe("canonicalCookieHost", () => {
+  it.each([
+    ["userinfo", "user@evil.example"],
+    ["path traversal", "good.example/../evil.example"],
+    ["port", "good.example:8080"],
+    ["query", "good.example?x"],
+    ["fragment", "good.example#f"],
+  ])("refuses a host carrying URL structure (%s)", (_label, host) => {
+    expect(canonicalCookieHost(host)).toBeNull();
+  });
+
+  it("answers both IPv6 spellings with the same canonical literal", () => {
+    expect(canonicalCookieHost("[::1]")).toBe("::1");
+    expect(canonicalCookieHost("::1")).toBe("::1");
+  });
+
+  it("punycodes a Unicode IDN", () => {
+    expect(canonicalCookieHost("m\u00fcnchen.de")).toBe("xn--mnchen-3ya.de");
+  });
+
+  it("strips a leading dot", () => {
+    // The RFC 6265 wire form of a domain cookie. The POLICY of what a leading
+    // dot means is the desktop callers' - this is just the stripping.
+    expect(canonicalCookieHost(".example.com")).toBe("example.com");
+  });
 });
 
 describe("registrableDomainForUrl", () => {
@@ -103,5 +163,14 @@ describe("cookieDomainInScope", () => {
 
   it("is case-insensitive", () => {
     expect(cookieDomainInScope(".EXAMPLE.com", "Example.COM")).toBe(true);
+  });
+
+  it("matches across IDN spellings (H11)", () => {
+    expect(cookieDomainInScope(".xn--mnchen-3ya.de", "m\u00fcnchen.de")).toBe(
+      true,
+    );
+    expect(cookieDomainInScope("a.m\u00fcnchen.de", "xn--mnchen-3ya.de")).toBe(
+      true,
+    );
   });
 });

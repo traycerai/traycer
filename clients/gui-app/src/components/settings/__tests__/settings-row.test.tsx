@@ -1,6 +1,7 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { SettingsRow } from "@/components/settings/settings-row";
+import { useSettingsRowDescriptionId } from "@/components/settings/settings-row-description";
 
 describe("SettingsRow", () => {
   afterEach(() => {
@@ -143,4 +144,53 @@ describe("SettingsRow", () => {
     expect(controlWrapper.className).toContain("ml-auto");
     expect(controlWrapper.className).toContain("justify-end");
   });
+
+  it("hands its description's id to a control that asks for one", () => {
+    // The description is the row's real second line of copy, so the control
+    // should be DESCRIBED by it rather than leaving a screen reader with a
+    // bare label. The context is the whole mechanism - `control` stays a
+    // plain ReactNode, so no existing call site changes shape.
+    render(
+      <SettingsRow
+        label="Open new tiles"
+        description="Narrow windows show one tile at a time."
+        control={<DescribedControl>In this pane</DescribedControl>}
+      />,
+    );
+
+    const control = screen.getByRole("button", { name: "In this pane" });
+    const describedBy = control.getAttribute("aria-describedby");
+    if (describedBy === null) throw new Error("expected aria-describedby");
+    const description = document.getElementById(describedBy);
+    expect(description?.textContent).toBe(
+      "Narrow windows show one tile at a time.",
+    );
+    // Long descriptions get a reading measure rather than the full row width.
+    expect(description?.className).toContain("max-w-[72ch]");
+    expect(description?.className).toContain("text-pretty");
+  });
+
+  it("describes nothing when the row has no description", () => {
+    render(
+      <SettingsRow
+        label="Open links"
+        control={<DescribedControl>In Traycer</DescribedControl>}
+      />,
+    );
+
+    expect(
+      screen
+        .getByRole("button", { name: "In Traycer" })
+        .getAttribute("aria-describedby"),
+    ).toBeNull();
+  });
 });
+
+/** Stands in for a real settings control that opts into the description. */
+function DescribedControl(props: { readonly children: string }) {
+  return (
+    <button type="button" aria-describedby={useSettingsRowDescriptionId()}>
+      {props.children}
+    </button>
+  );
+}
