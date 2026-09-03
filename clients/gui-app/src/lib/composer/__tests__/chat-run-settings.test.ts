@@ -7,12 +7,21 @@ import {
   selectedModelRejectsImageAttachments,
 } from "@/lib/composer/chat-run-settings";
 import type { ModelOption } from "@/components/home/data/landing-options";
+import type { GuiHarnessId } from "@traycer/protocol/host/agent/shared";
 
 function model(metadata: Record<string, unknown>): ModelOption {
+  return modelOption(metadata, "codex", "gpt-test");
+}
+
+function modelOption(
+  metadata: Record<string, unknown>,
+  harnessId: GuiHarnessId,
+  slug: string,
+): ModelOption {
   return {
-    harnessId: "codex",
-    slug: "gpt-test",
-    label: "GPT Test",
+    harnessId,
+    slug,
+    label: "Test model",
     description: null,
     contextWindow: null,
     maxOutputTokens: null,
@@ -133,5 +142,29 @@ describe("chat run settings", () => {
     );
     expect(selectedModelRejectsImageAttachments(model({}))).toBe(true);
     expect(selectedModelRejectsImageAttachments(null)).toBe(false);
+  });
+
+  it("treats kimi vision models as image-capable", () => {
+    for (const slug of [
+      "kimi-code/k3",
+      "kimi-code/kimi-for-coding",
+      "kimi-code/kimi-for-coding-highspeed",
+    ]) {
+      expect(modelSupportsImageAttachments(modelOption({}, "kimi", slug))).toBe(
+        true,
+      );
+      expect(
+        selectedModelRejectsImageAttachments(modelOption({}, "kimi", slug)),
+      ).toBe(false);
+    }
+  });
+
+  it("still rejects non-vision kimi models", () => {
+    expect(
+      modelSupportsImageAttachments(modelOption({}, "kimi", "kimi-code/k3-256k")),
+    ).toBe(false);
+    expect(
+      modelSupportsImageAttachments(modelOption({}, "kimi", "kimi-code/k2")),
+    ).toBe(false);
   });
 });
