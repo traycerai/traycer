@@ -34,10 +34,10 @@ describe("onboardingActsFor", () => {
       "navigation",
       "task-context",
       "providers",
-      "session-import",
       "login-import",
       "agent-guide",
       "command-theme",
+      "session-import",
     ]);
     expect(onboardingActsFor(FULL_TOUR)).toBe(ONBOARDING_ACTS);
   });
@@ -86,11 +86,11 @@ describe("onboardingActsFor", () => {
   });
 
   it("numbers the eyebrow off the tour being shown, not the catalog", () => {
-    // On a host that cannot scan, delegation is the tour's fifth act even
-    // though it sits sixth in the catalog.
+    // On a host with neither import, the tour ends on flow as its sixth act;
+    // the catalog goes on to an eighth, the session-import last act.
     const shorterTour = onboardingActsFor(NO_IMPORTS);
-    expect(actEyebrow(shorterTour[4], 4)).toBe("ACT 05 - DELEGATION");
-    expect(actEyebrow(ONBOARDING_ACTS[4], 4)).toBe("ACT 05 - YOUR WORK");
+    expect(actEyebrow(shorterTour[5], 5)).toBe("ACT 06 - FLOW");
+    expect(actEyebrow(ONBOARDING_ACTS[7], 7)).toBe("ACT 08 - YOUR WORK");
 
     setMobileApp(true);
     const mobileTour = onboardingActsFor(FULL_TOUR);
@@ -132,15 +132,15 @@ describe("onboardingActsFor", () => {
     });
   });
 
-  it("adds the login-import act right after session-import when the machine can import logins", () => {
+  it("adds the login-import act after providers when the machine can import logins", () => {
     const acts = onboardingActsFor({
       sessionImportAvailable: true,
       loginImportAvailable: true,
     });
-    const sessionImportIndex = acts.findIndex(
-      (act) => act.id === "session-import",
-    );
-    expect(acts[sessionImportIndex + 1].id).toBe("login-import");
+    // Login-import follows providers; session-import is the tour's last act.
+    const providersIndex = acts.findIndex((act) => act.id === "providers");
+    expect(acts[providersIndex + 1].id).toBe("login-import");
+    expect(acts[acts.length - 1].id).toBe("session-import");
   });
 
   it("drops the login-import act entirely when the machine cannot import logins", () => {

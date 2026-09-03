@@ -38,6 +38,10 @@ import {
 import { OnboardingLoginImportStage } from "@/components/onboarding/onboarding-login-import-stage";
 import { OnboardingSessionImportStage } from "@/components/onboarding/onboarding-session-import-stage";
 import { OnboardingThemePicker } from "@/components/onboarding/onboarding-theme-picker";
+import {
+  useSessionImportScan,
+  type SessionImportScanHandle,
+} from "@/components/session-import/use-session-import-scan";
 import { useAgentSelectionGuideGlobalOnboardingDraftQuery } from "@/hooks/agent/use-agent-selection-guide-global-onboarding-draft-query";
 import { useAgentSelectionGuideSetGlobalMutation } from "@/hooks/agent/use-agent-selection-guide-set-global-mutation";
 import { useLoginImportAvailable } from "@/hooks/browser/use-login-import-available";
@@ -54,6 +58,7 @@ import {
   useOnboardingStore,
 } from "@/stores/onboarding/onboarding-store";
 import { useOnboardingTourOpenStore } from "@/stores/onboarding/onboarding-tour-open-store";
+import { useSessionImportRunStore } from "@/stores/session-import/session-import-run-store";
 import { useFeatureAnnouncementsStore } from "@/stores/settings/feature-announcements-store";
 import { cn } from "@/lib/utils";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
@@ -640,21 +645,16 @@ function OnboardingMiniatureColumn(props: {
   readonly addon: OnboardingAct["addon"];
   readonly miniature: OnboardingMiniature;
   readonly agentGuide: OnboardingAgentGuideState;
-  readonly registerSessionImportSubmit: (submit: () => void) => void;
+  readonly sessionImportScan: SessionImportScanHandle;
 }) {
-  const { actId, addon, miniature, agentGuide, registerSessionImportSubmit } =
-    props;
+  const { actId, addon, miniature, agentGuide, sessionImportScan } = props;
   if (miniature.kind === "none") return null;
   const phone = miniature.kind === "phone";
   let content: ReactNode;
   if (miniature.kind === "phone") {
     content = <OnboardingPhoneDiorama scene={miniature.scene} />;
   } else if (miniature.kind === "session-import") {
-    content = (
-      <OnboardingSessionImportStage
-        registerSubmit={registerSessionImportSubmit}
-      />
-    );
+    content = <OnboardingSessionImportStage scan={sessionImportScan} />;
   } else if (miniature.kind === "login-import") {
     content = <OnboardingLoginImportStage />;
   } else {
@@ -830,6 +830,28 @@ function OnboardingWordmark() {
   );
 }
 
+/**
+ * The session scan starts with the tour, not with its last act: reading every
+ * session on the machine takes a while, and the acts before the import one are
+ * exactly that while. Only a tour that will actually show the act pays for it -
+ * the phone tour never lists it, capability or not - and it pauses while a run
+ * is in flight. A finished run does not hold it back: a replayed tour after an
+ * earlier import would otherwise wait for the whole scan at the last act.
+ */
+function useOnboardingSessionImportScan(
+  acts: ReadonlyArray<OnboardingAct>,
+): SessionImportScanHandle {
+  const tourShowsSessionImport = acts.some(
+    (act) => act.id === "session-import",
+  );
+  const sessionImportRunInFlight = useSessionImportRunStore(
+    (state) => state.status === "starting" || state.status === "running",
+  );
+  return useSessionImportScan(
+    tourShowsSessionImport && !sessionImportRunInFlight,
+  );
+}
+
 export function OnboardingPage(props: { readonly replay: boolean }) {
   // Draft + provider-derived default live in one state object so the
   // query-sync effect mirrors them through a single trailing setState call
@@ -845,13 +867,6 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
   const agentGuideInitializedRef = useRef(false);
   const agentGuideAutoDefaultRef = useRef(false);
   const agentGuideLastDefaultRef = useRef("");
-  // The live wizard's submit, handed over while the session-import act is on
-  // screen. A ref rather than state: it changes on every render of a streaming
-  // scan, and nothing renders off it - Continue only reads it when pressed.
-  const sessionImportSubmitRef = useRef<(() => void) | null>(null);
-  const registerSessionImportSubmit = useCallback((submit: () => void) => {
-    sessionImportSubmitRef.current = submit;
-  }, []);
   const stageRef = useRef<HTMLDivElement | null>(null);
   // The page's other platform read (`miniatureForAct` has the first): the
   // interaction polish the installed app gets and a desktop window must not -
@@ -874,6 +889,7 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
     () => onboardingActsFor({ sessionImportAvailable, loginImportAvailable }),
     [loginImportAvailable, sessionImportAvailable],
   );
+  const sessionImportScan = useOnboardingSessionImportScan(acts);
   // An import the login-import act started is a desktop write that may be
   // sitting on a keystore prompt; Continue holds until it settles so the
   // stage is there to show the outcome. Skip does not: the write finishes
@@ -1129,11 +1145,6 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
 
   const advance = useCallback((): void => {
     if (advanceDisabled) return;
-    // The session-import act has one forward control, and it does both jobs:
-    // start the import for whatever is ticked (nothing ticked is a no-op), then
-    // move on. The run is owned by the app-wide controller, so it outlives this
-    // act and keeps going while the user finishes the tour.
-    if (act.addon === "session-import") sessionImportSubmitRef.current?.();
     const advancePastCurrent = (): void => {
       if (isLastAct) {
         finish("completed");
@@ -1282,7 +1293,7 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
                 addon={act.addon}
                 miniature={miniature}
                 agentGuide={agentGuideState}
-                registerSessionImportSubmit={registerSessionImportSubmit}
+                sessionImportScan={sessionImportScan}
               />
             </div>
             <OnboardingStageEdgeFade

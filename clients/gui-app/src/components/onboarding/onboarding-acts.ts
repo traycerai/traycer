@@ -10,10 +10,10 @@ export type DesktopOnboardingActId =
   | "navigation"
   | "task-context"
   | "providers"
-  | "session-import"
   | "login-import"
   | "agent-guide"
-  | "command-theme";
+  | "command-theme"
+  | "session-import";
 
 /**
  * The acts the mobile tour plays. Three ids are shared with desktop on purpose:
@@ -123,13 +123,6 @@ export const ONBOARDING_ACTS: ReadonlyArray<OnboardingAct> = [
   TASK_CONTEXT_ACT,
   PROVIDERS_ACT,
   {
-    id: "session-import",
-    eyebrowLabel: "YOUR WORK",
-    title: "Bring your\nwork with you",
-    body: "Work you started in Claude Code, Codex, or OpenCode comes with you as tasks. Pick what to bring; the import runs while you carry on.",
-    addon: "session-import",
-  },
-  {
     id: "login-import",
     eyebrowLabel: "YOUR LOGINS",
     title: "Stay signed in\neverywhere",
@@ -141,8 +134,19 @@ export const ONBOARDING_ACTS: ReadonlyArray<OnboardingAct> = [
     id: "command-theme",
     eyebrowLabel: "FLOW",
     title: "Move fast.\nMake it yours.",
-    body: "Use Cmd+K to create, jump, launch, and switch without breaking flow. Pick a theme before you enter; terminals and app surfaces follow it together.",
+    body: "Use Cmd+K to create, jump, launch, and switch without breaking flow. Pick a theme; terminals and app surfaces follow it together.",
     addon: "theme",
+  },
+  // Last on purpose: the wizard's Import button is the only thing that starts
+  // an import, and the tour's own forward control ends the tour. An earlier
+  // placement made Continue do both, which read as importing without asking.
+  // Being last also gives the scan the whole tour to fill the list in.
+  {
+    id: "session-import",
+    eyebrowLabel: "YOUR WORK",
+    title: "Bring your\nwork with you",
+    body: "Bring over existing work you started in Claude Code, Codex, or OpenCode into Traycer.",
+    addon: "session-import",
   },
 ];
 
