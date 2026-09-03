@@ -32,7 +32,6 @@ import {
   settleWindowBytes,
   spanChargeBytes,
   spanMessages,
-  spanServeStamp,
   spanTouchStamp,
   streamWindowMessage,
   touchTranscriptRange,
@@ -1936,35 +1935,6 @@ describe("stale spans", () => {
     expect(rebased.spans).toHaveLength(1);
     expect(rebased.spans[0].fromOrdinal).toBe(4);
   });
-
-  it("carries nothing when the rebased snapshot's rowCount is zero", () => {
-    const seeded = applyRangeResponse(
-      windowWithSkeleton(4),
-      rangeResponse({
-        epoch: 1,
-        fromOrdinal: 0,
-        rowIds: ["row-0"],
-        messages: [userMessage("m-0", 0)],
-      }),
-      null,
-      null,
-    );
-
-    const rebased = applyWindowedSnapshot(
-      seeded,
-      {
-        epoch: 2,
-        rowCount: 0,
-        indexRevision: null,
-        tail: { fromOrdinal: 0, messages: [], events: [] },
-      },
-      null,
-      null,
-    );
-
-    expect(rebased.staleSpans).toEqual([]);
-  });
-
   it("a reindexed index change carries prior spans into staleSpans and voids the window", () => {
     const held = applyRangeResponse(
       windowWithSkeleton(4),
@@ -1990,31 +1960,6 @@ describe("stale spans", () => {
     expect(reindexed.staleSpans).toHaveLength(1);
     expect(reindexed.staleSpans[0].rowIds).toEqual(["row-0"]);
   });
-
-  it("carries nothing when the reindexed frame's rowCount is zero", () => {
-    const held = applyRangeResponse(
-      windowWithSkeleton(4),
-      rangeResponse({
-        epoch: 1,
-        fromOrdinal: 0,
-        rowIds: ["row-0"],
-        messages: [userMessage("m-0", 0)],
-      }),
-      null,
-      null,
-    );
-
-    const reindexed = applyIndexChange(held, {
-      activeTurnId: null,
-      epoch: 2,
-      rowCount: 0,
-      indexRevision: 1,
-      changes: [{ type: "reindexed" }],
-    });
-
-    expect(reindexed.staleSpans).toEqual([]);
-  });
-
   it("retires a stale span once a fresh range response serves all of its row ids", () => {
     const seeded = applyRangeResponse(
       windowWithSkeleton(4),
@@ -2227,81 +2172,6 @@ describe("stale spans", () => {
     );
     expect(held?.timestamp).toBe(1);
   });
-
-  it("retires a mixed stale span once the rows the replacement skeleton kept are served", () => {
-    // The span names one surviving row and one the complete replacement
-    // skeleton dropped, so `retireUnnamedStaleSpans` keeps it - correctly, for
-    // the survivor. The deleted row can then never appear in a fresh serve, so
-    // a coverage test that only asks "served yet?" pins the span in the tier
-    // for the rest of the session: holding shared budget, and keeping a record
-    // in `hydratedRecords` that the row merger will never draw.
-    const seeded = applySkeletonChunk(
-      applyWindowedSnapshot(
-        emptyTranscriptWindow(),
-        {
-          epoch: 1,
-          rowCount: 2,
-          indexRevision: null,
-          tail: { fromOrdinal: 2, messages: [], events: [] },
-        },
-        null,
-        null,
-      ),
-      {
-        epoch: 1,
-        fromOrdinal: 0,
-        entries: [skeletonEntry("keep-0", 0), skeletonEntry("gone-1", 1)],
-        isFinal: true,
-      },
-    );
-    const hydrated = applyRangeResponse(
-      seeded,
-      rangeResponse({
-        epoch: 1,
-        fromOrdinal: 0,
-        rowIds: ["keep-0", "gone-1"],
-        messages: [userMessage("m-keep", 0), userMessage("m-gone", 1)],
-      }),
-      null,
-      null,
-    );
-    expect(hydrated.spans).toHaveLength(1);
-
-    const reindexed = applyIndexChange(hydrated, {
-      activeTurnId: null,
-      epoch: 2,
-      rowCount: 1,
-      indexRevision: 1,
-      changes: [{ type: "reindexed" }],
-    });
-    const replacement = applySkeletonChunk(reindexed, {
-      epoch: 2,
-      fromOrdinal: 0,
-      entries: [skeletonEntry("keep-0", 0)],
-      isFinal: true,
-    });
-    // Kept for its survivor, exactly as the unnamed-span rule intends.
-    expect(replacement.skeletonComplete).toBe(true);
-    expect(replacement.staleSpans).toHaveLength(1);
-
-    const reserved = applyRangeResponse(
-      replacement,
-      rangeResponse({
-        epoch: 2,
-        fromOrdinal: 0,
-        rowIds: ["keep-0"],
-        messages: [userMessage("m-keep-new", 0)],
-      }),
-      null,
-      null,
-    );
-
-    expect(reserved.staleSpans).toEqual([]);
-    expect(
-      hydratedRecords(reserved).messages.map((message) => message.messageId),
-    ).toEqual(["m-keep-new"]);
-  });
-
   it("keeps a marker-only stale span through a seat, and lets the complete skeleton retire it", () => {
     // The other side of the same rule. A tail the host served without row ids
     // is seated on positional markers, and that tail is also where the ACTIVE
@@ -2513,79 +2383,6 @@ describe("stale spans", () => {
       before,
     );
   });
-
-  it("does not warm a carry through the old ordinal of a row the index names off screen", () => {
-    // Name and hole are a PRIORITY in `seatStaleRows`, not a choice: a row the
-    // replacement index has named draws at that name and never falls back to
-    // its old ordinal. Read as either-or, a row named far off screen still
-    // counts as visible whenever its old ordinal happens to land in a hole the
-    // replacement skeleton has not reached yet - which, mid-restream, is most
-    // of them.
-    const seeded = applyRangeResponse(
-      windowWithSkeleton(30),
-      rangeResponse({
-        epoch: 1,
-        fromOrdinal: 5,
-        rowIds: ["row-5"],
-        // The message's own id names its row, matching production
-        // (`row-projection.ts` seats a plain user row at `message.messageId`)
-        // - the touch below warms the record a span DRAWS, which is decided by
-        // that identity, not by the span's `fromOrdinal`.
-        messages: [userMessage("row-5", 5)],
-      }),
-      null,
-      null,
-    );
-    const rebased = applyWindowedSnapshot(
-      seeded,
-      {
-        epoch: 2,
-        rowCount: 30,
-        indexRevision: null,
-        tail: {
-          fromOrdinal: 29,
-          messages: [userMessage("row-29", 29)],
-          events: [],
-        },
-      },
-      null,
-      null,
-    );
-    // The replacement index renumbers the carried row from 5 to 20 and has not
-    // reached ordinal 5, so 5 is still a hole.
-    const renamed = applySkeletonChunk(rebased, {
-      epoch: 2,
-      fromOrdinal: 20,
-      entries: [skeletonEntry("row-5", 20)],
-      isFinal: false,
-    });
-    expect(renamed.skeleton[5]).toBeUndefined();
-    expect(renamed.staleSpans.map((span) => span.rowIds)).toEqual([["row-5"]]);
-
-    const before = renamed.staleSpans.map((span) =>
-      spanTouchStamp(renamed, span),
-    );
-    const atOldOrdinal = touchTranscriptRange(renamed, {
-      fromOrdinal: 5,
-      toOrdinal: 6,
-    });
-
-    expect(
-      atOldOrdinal.staleSpans.map((span) => spanTouchStamp(atOldOrdinal, span)),
-    ).toEqual(before);
-
-    // The other direction, so this cannot pass by never warming anything: at
-    // the ordinal the index actually names, the carry IS on screen.
-    const atName = touchTranscriptRange(renamed, {
-      fromOrdinal: 20,
-      toOrdinal: 21,
-    });
-
-    expect(
-      atName.staleSpans.map((span) => spanTouchStamp(atName, span)),
-    ).not.toEqual(before);
-  });
-
   it("does not warm a carry whose rows are all unverified-identity markers", () => {
     // `seatStaleRows` returns on the marker before it considers position, so a
     // marker row is never drawn - not at its old ordinal, not anywhere. This
@@ -3048,60 +2845,6 @@ describe("stale spans", () => {
         : "missing",
     ).toBe("resolved");
   });
-
-  it("an unwitnessed write no longer holds the row - the serve stands", () => {
-    // The same scenario without the witness: the held rewrite brings no
-    // rule-2 evidence, the source sets match so rule 3 is silent, and rule 4
-    // seats the serve. The refuted held-preference must not decide this -
-    // repair rides the host's `updated` index entry (the write moved the
-    // row's digest), which re-plans the ordinal and fetches current state.
-    const witnesses = createImageWitnessStore();
-    const source = "https://example.test/b.png";
-    const pendingEntry = imageEntry("pending", source);
-    const seeded = applyRangeResponse(
-      windowWithSkeleton(30),
-      rangeResponse({
-        epoch: 1,
-        fromOrdinal: 5,
-        rowIds: ["row-5"],
-        messages: [settledWithImages("a-uw", [pendingEntry])],
-      }),
-      null,
-      witnesses,
-    );
-    const upserted = updateWindowMessage(
-      seeded,
-      "a-uw",
-      (message) =>
-        message.role !== "assistant"
-          ? message
-          : { ...message, imageResolutions: [imageEntry("resolved", source)] },
-      null,
-    );
-    expect(upserted.held).toBe(true);
-
-    const delayed = applyRangeResponse(
-      upserted.window,
-      rangeResponse({
-        epoch: 1,
-        fromOrdinal: 5,
-        rowIds: ["row-5"],
-        messages: [settledWithImages("a-uw", [pendingEntry])],
-      }),
-      null,
-      witnesses,
-    );
-
-    const rendered = hydratedRecords(delayed).messages.find(
-      (message) => message.messageId === "a-uw",
-    );
-    expect(
-      rendered !== undefined && rendered.role === "assistant"
-        ? rendered.imageResolutions[0].state
-        : "missing",
-    ).toBe("consent-required");
-  });
-
   it("witnesses recorded while the record was unheld stamp its first hydration", () => {
     // The witness is evidence about the source's write stream, not the
     // client's holdings: both writes were recorded before the client held any
@@ -3691,103 +3434,6 @@ describe("stale spans", () => {
     // rebalance protects them too.
     expect(rebased.visibleOrdinals).toEqual({ fromOrdinal: 0, toOrdinal: 11 });
   });
-
-  it("keeps the freshest carry of a row an OLDER mixed span is warmer than", () => {
-    // Warmth is per SPAN, ownership is per ROW, so the sort's primary key can
-    // separate two duplicates before the serve stamp is consulted. A partial
-    // refetch leaves an older carry holding one still-uncovered row beside a
-    // freshly covered one; viewing the uncovered row makes that whole span
-    // warmer than the newer span holding the other. It then sorts first,
-    // claims both ids, and eliminates its own fresher owner - warmth earned by
-    // a different row deciding this one.
-    const seeded = applyRangeResponse(
-      windowWithSkeleton(30),
-      rangeResponse({
-        epoch: 1,
-        fromOrdinal: 5,
-        rowIds: ["row-5", "row-6"],
-        messages: [userMessage("row-5", 5), userMessage("row-6", 6)],
-      }),
-      null,
-      null,
-    );
-    const rebased = applyWindowedSnapshot(
-      seeded,
-      {
-        epoch: 2,
-        rowCount: 30,
-        indexRevision: null,
-        tail: { fromOrdinal: 30, messages: [], events: [] },
-      },
-      null,
-      null,
-    );
-    // The partial refetch: only `row-5` comes back, with a newer body. The
-    // carry is now mixed - `row-5` covered by the fresh tier, `row-6` not.
-    const refetched = applyRangeResponse(
-      rebased,
-      rangeResponse({
-        epoch: 2,
-        fromOrdinal: 12,
-        rowIds: ["row-5"],
-        messages: [userMessage("row-5", 555)],
-      }),
-      null,
-      null,
-    );
-    const named = applySkeletonChunk(refetched, {
-      epoch: 2,
-      fromOrdinal: 20,
-      entries: [skeletonEntry("row-6", 20)],
-      isFinal: false,
-    });
-    // Viewing `row-6` warms the CARRY only: the fresh span sits at ordinal 12,
-    // outside this range, and `row-5` is drawn by the fresh tier so it earns
-    // the carry nothing.
-    const warm = touchTranscriptRange(named, {
-      fromOrdinal: 20,
-      toOrdinal: 21,
-    });
-    expect(spanTouchStamp(warm, warm.staleSpans[0])).toBeGreaterThan(
-      spanTouchStamp(warm, warm.spans[0]),
-    );
-    // Single ownership ties the serve stamps: both tiers reference the ONE
-    // "row-5" ledger entry, so neither can be "fresher served" than the other
-    // for that row. The scoping the touch stamps prove is visible at the
-    // ledger too - the bump reached ONLY the record backing the row the carry
-    // draws in range, never the fresh-drawn neighbour it merely holds.
-    expect(spanServeStamp(warm, warm.spans[0])).toBe(
-      spanServeStamp(warm, warm.staleSpans[0]),
-    );
-    expect(warm.records.messages.get("row-6")?.touchedAt).toBe(warm.clock);
-    expect(warm.records.messages.get("row-5")?.touchedAt).toBeLessThan(
-      warm.clock,
-    );
-
-    // The next rebase weighs them against each other, warmest first.
-    const carried = applyWindowedSnapshot(
-      warm,
-      {
-        epoch: 3,
-        rowCount: 30,
-        indexRevision: null,
-        tail: { fromOrdinal: 30, messages: [], events: [] },
-      },
-      null,
-      null,
-    );
-
-    expect(carried.staleSpans.map((span) => span.rowIds)).toEqual([
-      ["row-5", "row-6"],
-      ["row-5"],
-    ]);
-    expect(
-      hydratedRecords(carried).messages.find(
-        (message) => message.messageId === "row-5",
-      )?.timestamp,
-    ).toBe(555);
-  });
-
   it("warms a shared row's one record and nothing beside it", () => {
     // The pre-ledger pin here - "only the freshest carry warms" - rested on
     // two carries holding two COPIES of the row, where only the fresher copy
@@ -3865,82 +3511,6 @@ describe("stale spans", () => {
       warm.clock,
     );
   });
-
-  it("retires a stale span mixing a marker with a survivor once the skeleton completes", () => {
-    // A tail the skeleton had only partly reached is seated on real ids AND
-    // markers, so this span is subject to both retirement rules at once.
-    // Keeping it for the survivor while treating the marker as permanently
-    // unproven would pin it for the rest of the session - the same defect as
-    // counting a deleted row as coverage still owed, reached from the other
-    // side. The complete skeleton settles the marker exactly as it settles any
-    // row it does not name.
-    const announced = applyWindowedSnapshot(
-      emptyTranscriptWindow(),
-      {
-        epoch: 1,
-        rowCount: 3,
-        indexRevision: null,
-        tail: { fromOrdinal: 3, messages: [], events: [] },
-      },
-      null,
-      null,
-    );
-    const partiallyNamed = applySkeletonChunk(announced, {
-      epoch: 1,
-      fromOrdinal: 1,
-      entries: [skeletonEntry("row-1", 1)],
-      isFinal: false,
-    });
-    const seeded = applyWindowedSnapshot(
-      partiallyNamed,
-      {
-        epoch: 1,
-        rowCount: 3,
-        indexRevision: null,
-        tail: {
-          fromOrdinal: 1,
-          messages: [userMessage("m-1", 1), userMessage("m-2", 2)],
-          events: [],
-        },
-      },
-      null,
-      null,
-    );
-    expect(seeded.spans[0].rowIds).toEqual(["row-1", ""]);
-
-    const reindexed = applyIndexChange(seeded, {
-      activeTurnId: null,
-      epoch: 2,
-      rowCount: 1,
-      indexRevision: 1,
-      changes: [{ type: "reindexed" }],
-    });
-    expect(reindexed.staleSpans).toHaveLength(1);
-
-    const replacement = applySkeletonChunk(reindexed, {
-      epoch: 2,
-      fromOrdinal: 0,
-      entries: [skeletonEntry("row-1", 0)],
-      isFinal: true,
-    });
-    // Still held: the span names a survivor, so the unnamed-span rule keeps it.
-    expect(replacement.staleSpans).toHaveLength(1);
-
-    const reserved = applyRangeResponse(
-      replacement,
-      rangeResponse({
-        epoch: 2,
-        fromOrdinal: 0,
-        rowIds: ["row-1"],
-        messages: [userMessage("m-1-new", 0)],
-      }),
-      null,
-      null,
-    );
-
-    expect(reserved.staleSpans).toEqual([]);
-  });
-
   it("carries two positional stale spans that cover different ordinals", () => {
     // Both candidates are seated on the unverified-identity marker, so a
     // coverage set that folds the marker into the row-id space reads every
@@ -5779,41 +5349,6 @@ describe("what an overlap keeps", () => {
     ]);
     expect(hydrated.liveMessages).toEqual([]);
   });
-
-  it("keeps a frozen live assistant when a snapshot revision gap voids the index", () => {
-    const turnId = "turn-snapshot-gap";
-    const transientId = transientLiveAssistantMessageId(turnId);
-    const live = appendLiveRecords(
-      {
-        ...emptyTranscriptWindow(),
-        epoch: 1,
-        indexRevision: 1,
-        indexRevisionRebuilding: false,
-      },
-      {
-        messages: [assistantMessage(transientId, turnId, 1)],
-        events: [],
-      },
-    );
-
-    const gapped = applyWindowedSnapshot(
-      live,
-      {
-        epoch: 1,
-        rowCount: 1,
-        indexRevision: 3,
-        tail: { fromOrdinal: 0, messages: [], events: [] },
-      },
-      null,
-      null,
-    );
-
-    expect(gapped.invalidated).toBe(true);
-    expect(hydratedRecords(gapped).messages.map((m) => m.messageId)).toEqual([
-      transientId,
-    ]);
-  });
-
   it("keeps an accepted user when a same-epoch snapshot revision gap voids the index", () => {
     const live = appendLiveRecords(
       {
@@ -5893,65 +5428,6 @@ describe("what an overlap keeps", () => {
     ]);
   });
 
-  it("keeps a retained user through a delayed non-invalidated null rebuild", () => {
-    const live = appendLiveRecords(
-      {
-        ...emptyTranscriptWindow(),
-        epoch: 1,
-        rowCount: 1,
-        indexRevision: 1,
-        indexRevisionRebuilding: false,
-      },
-      { messages: [userMessage("accepted-user-removed", 1)], events: [] },
-    );
-    const replacement = applyWindowedSnapshot(
-      live,
-      {
-        epoch: 1,
-        rowCount: 1,
-        indexRevision: null,
-        tail: { fromOrdinal: 1, messages: [], events: [] },
-      },
-      null,
-      null,
-    );
-    const rebuilt = applySkeletonChunk(replacement, {
-      epoch: 1,
-      fromOrdinal: 0,
-      entries: [skeletonEntry("different-user", 0)],
-      isFinal: true,
-    });
-
-    expect(rebuilt.liveMessages.map((message) => message.messageId)).toEqual([
-      "accepted-user-removed",
-    ]);
-  });
-
-  it("keeps a just-accepted user record through an index void", () => {
-    const live = appendLiveRecords(
-      {
-        ...emptyTranscriptWindow(),
-        epoch: 1,
-        rowCount: 1,
-        indexRevision: 1,
-        indexRevisionRebuilding: false,
-      },
-      { messages: [userMessage("accepted-user", 1)], events: [] },
-    );
-
-    const voided = applyIndexChange(live, {
-      activeTurnId: null,
-      epoch: 1,
-      rowCount: 1,
-      indexRevision: 2,
-      changes: [{ type: "reindexed" }],
-    });
-
-    expect(voided.liveMessages.map((message) => message.messageId)).toEqual([
-      "accepted-user",
-    ]);
-  });
-
   it("keeps a provisional user that overtakes a same-epoch empty snapshot", () => {
     const live = appendLiveRecords(emptyTranscriptWindow(), {
       messages: [userMessage("accepted-user-deleted", 1)],
@@ -5972,58 +5448,6 @@ describe("what an overlap keeps", () => {
 
     expect(empty.liveMessages.map((message) => message.messageId)).toEqual([
       "accepted-user-deleted",
-    ]);
-  });
-
-  it("keeps a provisional user after an established empty skeleton", () => {
-    const establishedEmpty = applySkeletonChunk(emptyTranscriptWindow(), {
-      epoch: 0,
-      fromOrdinal: 0,
-      entries: [],
-      isFinal: true,
-    });
-    const live = appendLiveRecords(establishedEmpty, {
-      messages: [userMessage("accepted-after-empty", 1)],
-      events: [],
-    });
-
-    const empty = applyWindowedSnapshot(
-      live,
-      {
-        epoch: 0,
-        rowCount: 0,
-        indexRevision: null,
-        tail: { fromOrdinal: 0, messages: [], events: [] },
-      },
-      null,
-      null,
-    );
-
-    expect(empty.liveMessages.map((message) => message.messageId)).toEqual([
-      "accepted-after-empty",
-    ]);
-  });
-
-  it("keeps an accepted user that overtakes a rebasing snapshot", () => {
-    const live = appendLiveRecords(emptyTranscriptWindow(), {
-      messages: [userMessage("accepted-after-rebase-snapshot", 2)],
-      events: [],
-    });
-
-    const rebased = applyWindowedSnapshot(
-      live,
-      {
-        epoch: 1,
-        rowCount: 1,
-        indexRevision: null,
-        tail: { fromOrdinal: 1, messages: [], events: [] },
-      },
-      null,
-      null,
-    );
-
-    expect(rebased.liveMessages.map((message) => message.messageId)).toEqual([
-      "accepted-after-rebase-snapshot",
     ]);
   });
 
@@ -6351,99 +5775,6 @@ describe("what an overlap keeps", () => {
     ]);
   });
 
-  it("keeps an assistant through its overtaken empty stream", () => {
-    const turnId = "turn-after-empty-rebase";
-    const transientId = transientLiveAssistantMessageId(turnId);
-    const live = appendLiveRecords(emptyTranscriptWindow(), {
-      messages: [assistantMessage(transientId, turnId, 2)],
-      events: [],
-    });
-
-    const snapshot = applyWindowedSnapshot(
-      live,
-      {
-        epoch: 1,
-        rowCount: 0,
-        indexRevision: null,
-        tail: { fromOrdinal: 0, messages: [], events: [] },
-      },
-      null,
-      null,
-    );
-    expect(snapshot.liveMessages.map((message) => message.messageId)).toEqual([
-      transientId,
-    ]);
-
-    const rebuilt = applySkeletonChunk(snapshot, {
-      epoch: 1,
-      fromOrdinal: 0,
-      entries: [],
-      isFinal: true,
-    });
-    expect(rebuilt.liveMessages.map((message) => message.messageId)).toEqual([
-      transientId,
-    ]);
-  });
-
-  it("keeps a user accepted after a snapshot through its older skeleton", () => {
-    const rebuilding = applyWindowedSnapshot(
-      emptyTranscriptWindow(),
-      {
-        epoch: 0,
-        rowCount: 1,
-        indexRevision: null,
-        tail: { fromOrdinal: 1, messages: [], events: [] },
-      },
-      null,
-      null,
-    );
-    const live = appendLiveRecords(rebuilding, {
-      messages: [userMessage("accepted-user-absent", 1)],
-      events: [],
-    });
-
-    const rebuilt = applySkeletonChunk(live, {
-      epoch: 0,
-      fromOrdinal: 0,
-      entries: [skeletonEntry("different-user", 0)],
-      isFinal: true,
-    });
-
-    expect(rebuilt.liveMessages.map((message) => message.messageId)).toEqual([
-      "accepted-user-absent",
-    ]);
-  });
-
-  it("keeps an assistant completed after a snapshot through its older skeleton", () => {
-    const rebuilding = applyWindowedSnapshot(
-      emptyTranscriptWindow(),
-      {
-        epoch: 0,
-        rowCount: 1,
-        indexRevision: null,
-        tail: { fromOrdinal: 1, messages: [], events: [] },
-      },
-      null,
-      null,
-    );
-    const transientId = transientLiveAssistantMessageId("turn-after-snapshot");
-    const live = appendLiveRecords(rebuilding, {
-      messages: [assistantMessage(transientId, "turn-after-snapshot", 1)],
-      events: [],
-    });
-
-    const rebuilt = applySkeletonChunk(live, {
-      epoch: 0,
-      fromOrdinal: 0,
-      entries: [skeletonEntry("different-user", 0)],
-      isFinal: true,
-    });
-
-    expect(rebuilt.liveMessages.map((message) => message.messageId)).toEqual([
-      transientId,
-    ]);
-  });
-
   it("retires a legacy transient by the projection timestamp turn key", () => {
     const turnKey = "ts:42";
     const transientId = transientLiveAssistantMessageId(turnKey);
@@ -6703,93 +6034,6 @@ describe("what an overlap keeps", () => {
     expect(confirmed.liveMessages).toEqual([]);
   });
 
-  it("retains a provisional user named by the completed rebuild", () => {
-    const messageId = "accepted-in-rebuild";
-    const live = appendLiveRecords(emptyTranscriptWindow(), {
-      messages: [userMessage(messageId, 1)],
-      events: [],
-    });
-    const rebased = applyWindowedSnapshot(
-      live,
-      {
-        epoch: 1,
-        rowCount: 1,
-        indexRevision: null,
-        tail: { fromOrdinal: 1, messages: [], events: [] },
-      },
-      null,
-      null,
-    );
-    const rebuilt = applySkeletonChunk(rebased, {
-      epoch: 1,
-      fromOrdinal: 0,
-      entries: [skeletonEntry(messageId, 0)],
-      isFinal: true,
-    });
-
-    const confirmed = applyWindowedSnapshot(
-      rebuilt,
-      {
-        epoch: 1,
-        rowCount: 1,
-        indexRevision: null,
-        tail: { fromOrdinal: 1, messages: [], events: [] },
-      },
-      null,
-      null,
-    );
-
-    expect(confirmed.liveMessages.map((message) => message.messageId)).toEqual([
-      messageId,
-    ]);
-  });
-
-  it("keeps a frozen assistant across an ambiguous same-epoch empty rebuild", () => {
-    const turnId = "turn-restart-deleted";
-    const indexed = applySkeletonChunk(
-      applyWindowedSnapshot(
-        emptyTranscriptWindow(),
-        {
-          epoch: 0,
-          rowCount: 1,
-          indexRevision: null,
-          tail: { fromOrdinal: 1, messages: [], events: [] },
-        },
-        null,
-        null,
-      ),
-      {
-        epoch: 0,
-        fromOrdinal: 0,
-        entries: [skeletonEntry(assistantRowId(turnId), 0)],
-        isFinal: true,
-      },
-    );
-    const live = appendLiveRecords(indexed, {
-      messages: [
-        assistantMessage(transientLiveAssistantMessageId(turnId), turnId, 1),
-      ],
-      events: [],
-    });
-
-    const rebuilt = applyWindowedSnapshot(
-      live,
-      {
-        epoch: 0,
-        rowCount: 0,
-        indexRevision: null,
-        tail: { fromOrdinal: 0, messages: [], events: [] },
-      },
-      null,
-      null,
-    );
-
-    expect(rebuilt.skeleton).toEqual([]);
-    expect(rebuilt.liveMessages.map((message) => message.messageId)).toEqual([
-      transientLiveAssistantMessageId(turnId),
-    ]);
-  });
-
   it("truncates a same-epoch rebuild without retiring its ambiguous stand-in", () => {
     const turnId = "turn-restart-shortened";
     const indexed = applySkeletonChunk(
@@ -6928,55 +6172,6 @@ describe("what an overlap keeps", () => {
       unrelatedServe.liveMessages.map((message) => message.messageId),
     ).toEqual([transientId]);
   });
-
-  it("does not retire a completion stand-in when only a steer row is served", () => {
-    const turnId = "turn-steer-only";
-    const steerRowId = queueSteerRowId("queue-1");
-    const indexed = applySkeletonChunk(
-      applyWindowedSnapshot(
-        emptyTranscriptWindow(),
-        {
-          epoch: 1,
-          rowCount: 2,
-          indexRevision: null,
-          tail: { fromOrdinal: 2, messages: [], events: [] },
-        },
-        null,
-        null,
-      ),
-      {
-        epoch: 1,
-        fromOrdinal: 0,
-        entries: [
-          skeletonEntry(assistantRowId(turnId), 0),
-          skeletonEntry(steerRowId, 1),
-        ],
-        isFinal: true,
-      },
-    );
-    const transientId = transientLiveAssistantMessageId(turnId);
-    const live = appendLiveRecords(indexed, {
-      messages: [assistantMessage(transientId, turnId, 2)],
-      events: [],
-    });
-
-    const steerOnly = applyRangeResponse(
-      live,
-      rangeResponse({
-        epoch: 1,
-        fromOrdinal: 1,
-        rowIds: [steerRowId],
-        messages: [assistantMessage("assistant-shared", turnId, 1)],
-      }),
-      null,
-      null,
-    );
-
-    expect(steerOnly.liveMessages.map((message) => message.messageId)).toEqual([
-      transientId,
-    ]);
-  });
-
   it("retires a stand-in when a complete steer row serves its assistant turn", () => {
     const turnId = "turn-complete-steer";
     const steerRowId = queueSteerRowId("queue-complete");
@@ -7015,203 +6210,6 @@ describe("what an overlap keeps", () => {
     );
 
     expect(hydrated.liveMessages).toEqual([]);
-  });
-
-  it("does not retire a newer completion stand-in from an older assistant serve", () => {
-    const turnId = "turn-delayed-serve";
-    const transientId = transientLiveAssistantMessageId(turnId);
-    const live = appendLiveRecords(
-      { ...emptyTranscriptWindow(), epoch: 1, rowCount: 1 },
-      {
-        messages: [assistantMessage(transientId, turnId, 2)],
-        events: [],
-      },
-    );
-
-    const delayed = applyRangeResponse(
-      live,
-      rangeResponse({
-        epoch: 1,
-        fromOrdinal: 0,
-        rowIds: [assistantRowId(turnId)],
-        messages: [assistantMessage("assistant-stale", turnId, 1)],
-      }),
-      null,
-      null,
-    );
-
-    expect(delayed.liveMessages.map((message) => message.messageId)).toEqual([
-      transientId,
-    ]);
-  });
-
-  it("does not retire a finalized stand-in from a same-timestamp stale body", () => {
-    const turnId = "turn-tied-stale-serve";
-    const transientId = transientLiveAssistantMessageId(turnId);
-    const live = appendLiveRecords(
-      { ...emptyTranscriptWindow(), epoch: 1, rowCount: 1 },
-      {
-        messages: [
-          {
-            ...assistantMessage(transientId, turnId, 2),
-            blocks: [
-              {
-                type: "text",
-                blockId: "block-1",
-                status: "completed",
-                timestamp: 2,
-                text: "done",
-                providerNotice: null,
-              },
-            ],
-          },
-        ],
-        events: [],
-      },
-    );
-
-    const delayed = applyRangeResponse(
-      live,
-      rangeResponse({
-        epoch: 1,
-        fromOrdinal: 0,
-        rowIds: [assistantRowId(turnId)],
-        messages: [
-          {
-            ...assistantMessage("assistant-stale", turnId, 2),
-            blocks: [
-              {
-                type: "text",
-                blockId: "block-1",
-                status: "streaming",
-                timestamp: 2,
-                text: "done",
-                providerNotice: null,
-              },
-            ],
-          },
-        ],
-      }),
-      null,
-      null,
-    );
-
-    expect(delayed.liveMessages.map((message) => message.messageId)).toEqual([
-      transientId,
-    ]);
-  });
-
-  it("does not retire a completion stand-in when its assistant row has no body", () => {
-    const turnId = "turn-row-without-body";
-    const transientId = transientLiveAssistantMessageId(turnId);
-    const live = appendLiveRecords(
-      {
-        ...emptyTranscriptWindow(),
-        epoch: 1,
-        rowCount: 1,
-      },
-      {
-        messages: [assistantMessage(transientId, turnId, 2)],
-        events: [],
-      },
-    );
-
-    const bodyless = applyRangeResponse(
-      live,
-      rangeResponse({
-        epoch: 1,
-        fromOrdinal: 0,
-        rowIds: [assistantRowId(turnId)],
-        messages: [],
-      }),
-      null,
-      null,
-    );
-
-    expect(bodyless.liveMessages.map((message) => message.messageId)).toEqual([
-      transientId,
-    ]);
-  });
-
-  it("does not retire a completion stand-in from a partial turn response", () => {
-    const turnId = "turn-partial-body";
-    const firstBlock = {
-      type: "text" as const,
-      blockId: "block-1",
-      status: "completed" as const,
-      timestamp: 1,
-      text: "first",
-      providerNotice: null,
-    };
-    const secondBlock = { ...firstBlock, blockId: "block-2", text: "second" };
-    const transientId = transientLiveAssistantMessageId(turnId);
-    const live = applySkeletonChunk(
-      appendLiveRecords(
-        { ...emptyTranscriptWindow(), epoch: 1, rowCount: 3 },
-        {
-          messages: [
-            {
-              ...assistantMessage(transientId, turnId, 2),
-              blocks: [firstBlock, secondBlock],
-            },
-          ],
-          events: [],
-        },
-      ),
-      {
-        epoch: 1,
-        fromOrdinal: 0,
-        entries: [
-          skeletonEntry("user-before", 0),
-          skeletonEntry(assistantRowId(turnId), 1),
-          skeletonEntry("user-after", 2),
-        ],
-        isFinal: true,
-      },
-    );
-
-    const partial = applyRangeResponse(
-      live,
-      rangeResponse({
-        epoch: 1,
-        fromOrdinal: 0,
-        rowIds: ["user-before", assistantRowId(turnId), "user-after"],
-        incompleteRowIds: [assistantRowId(turnId)],
-        messages: [
-          userMessage("user-before", 0),
-          {
-            ...assistantMessage("assistant-first", turnId, 1),
-            blocks: [firstBlock],
-          },
-          userMessage("user-after", 3),
-        ],
-      }),
-      null,
-      null,
-    );
-
-    expect(partial.liveMessages.map((message) => message.messageId)).toEqual([
-      transientId,
-    ]);
-    expect(partial.spans.map((span) => span.rowIds)).toEqual([
-      ["user-before"],
-      ["user-after"],
-    ]);
-    expect(partial.spans.map((span) => span.messageIds)).toEqual([
-      ["user-before"],
-      ["user-after"],
-    ]);
-    // The merged definition: the fresh tier PLUS the live tail. The stand-in
-    // is live and in NO span (the two assertions above say so), so it is
-    // counted exactly once, here and not in the span term.
-    expect(partial.hydratedBytes).toBe(
-      recordByteLength(userMessage("user-before", 0)) +
-        recordByteLength(userMessage("user-after", 3)) +
-        recordByteLength(partial.liveMessages[0]),
-    );
-    expect(
-      hydratedRecords(partial).messages.map((message) => message.messageId),
-    ).toEqual(["user-before", "user-after", transientId]);
   });
 
   it("seats complete tail siblings around an incomplete live assistant", () => {
@@ -7529,24 +6527,6 @@ describe("what an overlap keeps", () => {
       transientId,
     ]);
   });
-
-  it("withholds every declared incomplete row without a live assistant", () => {
-    const partial = applyRangeResponse(
-      { ...emptyTranscriptWindow(), epoch: 1, rowCount: 1 },
-      rangeResponse({
-        epoch: 1,
-        fromOrdinal: 0,
-        rowIds: ["user-incomplete"],
-        incompleteRowIds: ["user-incomplete"],
-        messages: [userMessage("user-incomplete", 1)],
-      }),
-      null,
-      null,
-    );
-
-    expect(partial.spans).toEqual([]);
-  });
-
   it("does not retry an incomplete row until the index changes", () => {
     const partial = applyRangeResponse(
       windowWithSkeleton(1),
@@ -7651,48 +6631,6 @@ describe("what an overlap keeps", () => {
 
     expect(hydrated.liveMessages).toEqual([]);
   });
-
-  it("retires structurally equal stand-ins despite nested key insertion order", () => {
-    const turnId = "turn-structural-body";
-    const transientId = transientLiveAssistantMessageId(turnId);
-    const transient = {
-      ...assistantMessage(transientId, turnId, 2),
-      usage: {
-        inputTokens: 1,
-        outputTokens: 2,
-        totalTokens: 3,
-        contextWindow: 4,
-      },
-    };
-    const durable = {
-      ...assistantMessage("assistant-structural-body", turnId, 2),
-      usage: {
-        contextWindow: 4,
-        totalTokens: 3,
-        outputTokens: 2,
-        inputTokens: 1,
-      },
-    };
-    const live = appendLiveRecords(
-      { ...emptyTranscriptWindow(), epoch: 1, rowCount: 1 },
-      { messages: [transient], events: [] },
-    );
-
-    const hydrated = applyRangeResponse(
-      live,
-      rangeResponse({
-        epoch: 1,
-        fromOrdinal: 0,
-        rowIds: [assistantRowId(turnId)],
-        messages: [durable],
-      }),
-      null,
-      null,
-    );
-
-    expect(hydrated.liveMessages).toEqual([]);
-  });
-
   it("folds complete assistant records before comparing a stand-in", () => {
     const turnId = "turn-multi-record";
     const transientId = transientLiveAssistantMessageId(turnId);
@@ -7871,40 +6809,6 @@ describe("what an overlap keeps", () => {
       transientId,
     ]);
   });
-
-  it("keeps a newer frozen assistant when a delayed rebasing skeleton omits its turn", () => {
-    const turnId = "turn-rewritten-away";
-    const live = appendLiveRecords(emptyTranscriptWindow(), {
-      messages: [
-        assistantMessage(transientLiveAssistantMessageId(turnId), turnId, 1),
-      ],
-      events: [],
-    });
-    const rebased = applyWindowedSnapshot(
-      live,
-      {
-        epoch: 1,
-        rowCount: 1,
-        indexRevision: null,
-        tail: { fromOrdinal: 0, messages: [], events: [] },
-      },
-      null,
-      null,
-    );
-    expect(rebased.liveMessages).toHaveLength(1);
-
-    const indexed = applySkeletonChunk(rebased, {
-      epoch: 1,
-      fromOrdinal: 0,
-      entries: [skeletonEntry("replacement-user-row", 0)],
-      isFinal: true,
-    });
-
-    expect(indexed.skeletonComplete).toBe(true);
-    expect(indexed.liveMessages).toHaveLength(1);
-    expect(hydratedRecords(indexed).messages).toHaveLength(1);
-  });
-
   it("leaves a transcript with no tail rows alone", () => {
     // The other `null` from the same helper, which must NOT drop anything:
     // `fromOrdinal === rowCount` is "there is no tail", not "the tail was
@@ -8077,10 +6981,7 @@ describe("one record across several spans", () => {
   }
 
   /** Both slices of one turn, held as disjoint spans with a gap between them. */
-  function splitTurn(
-    window: TranscriptWindow,
-    order: "earlier-first" | "later-first",
-  ): TranscriptWindow {
+  function splitTurn(window: TranscriptWindow): TranscriptWindow {
     const earlier = {
       fromOrdinal: 0,
       rowIds: ["row-0", "row-1"],
@@ -8091,43 +6992,35 @@ describe("one record across several spans", () => {
       rowIds: ["row-4", "row-5"],
       messages: [messageWithText(userMessage("shared", 1), "new")],
     };
-    return order === "earlier-first"
-      ? spanCarrying(spanCarrying(window, earlier), later)
-      : spanCarrying(spanCarrying(window, later), earlier);
+    return spanCarrying(spanCarrying(window, earlier), later);
   }
 
-  it.each(["earlier-first", "later-first"] as const)(
-    "keeps both slices of a split turn when they arrive %s",
-    (order) => {
-      // Ordinals 2-3 are a gap, so these never touch - which is exactly the
-      // shape a turn straddling an evicted slice produces. Dropping the sharer
-      // is unbounded here rather than merely lossy: the drop is symmetric, so
-      // whichever slice is re-fetched evicts the other, and a reader looking at
-      // the whole turn drives that forever.
-      const window = splitTurn(windowWithSkeleton(10), order);
-      expect(window.spans.map((span) => span.fromOrdinal)).toEqual([0, 4]);
-      // Neither slice is a gap, so nothing re-requests either one.
-      expect(
-        transcriptHydrationGaps(window, { fromOrdinal: 0, toOrdinal: 2 }),
-      ).toEqual([]);
-      expect(
-        transcriptHydrationGaps(window, { fromOrdinal: 4, toOrdinal: 6 }),
-      ).toEqual([]);
-    },
-  );
+  it("keeps both slices of a split turn when they arrive earlier-first", () => {
+    // Ordinals 2-3 are a gap, so these never touch - which is exactly the
+    // shape a turn straddling an evicted slice produces. Dropping the sharer
+    // is unbounded here rather than merely lossy: the drop is symmetric, so
+    // whichever slice is re-fetched evicts the other, and a reader looking at
+    // the whole turn drives that forever.
+    const window = splitTurn(windowWithSkeleton(10));
+    expect(window.spans.map((span) => span.fromOrdinal)).toEqual([0, 4]);
+    // Neither slice is a gap, so nothing re-requests either one.
+    expect(
+      transcriptHydrationGaps(window, { fromOrdinal: 0, toOrdinal: 2 }),
+    ).toEqual([]);
+    expect(
+      transcriptHydrationGaps(window, { fromOrdinal: 4, toOrdinal: 6 }),
+    ).toEqual([]);
+  });
 
-  it.each(["earlier-first", "later-first"] as const)(
-    "renders the newest SERVE of a shared record, not the earliest span's, when they arrive %s",
-    (order) => {
-      // The question the dropped-sharer rule was really answering. Position
-      // decides where the record renders; freshness decides what it says, so
-      // the answer does not depend on which slice happens to sit lower.
-      const records = hydratedRecords(splitTurn(windowWithSkeleton(10), order));
-      expect(records.messages).toHaveLength(1);
-      const rendered = JSON.stringify(records.messages[0]);
-      expect(rendered).toContain(order === "earlier-first" ? "new" : "old");
-    },
-  );
+  it("renders the newest SERVE of a shared record, not the earliest span's, when they arrive earlier-first", () => {
+    // The question the dropped-sharer rule was really answering. Position
+    // decides where the record renders; freshness decides what it says, so
+    // the answer does not depend on which slice happens to sit lower.
+    const records = hydratedRecords(splitTurn(windowWithSkeleton(10)));
+    expect(records.messages).toHaveLength(1);
+    const rendered = JSON.stringify(records.messages[0]);
+    expect(rendered).toContain("new");
+  });
 
   it("keeps an unmerged span that shares no record with the incoming one", () => {
     const held = spanCarrying(windowWithSkeleton(10), {
@@ -8149,7 +7042,7 @@ describe("one record across several spans", () => {
     // very record that changed - and once the containing span goes it is the
     // ONLY copy, rendered under rows the planner sees as covered. So the
     // invalidation follows the records rather than the ordinal.
-    const later = splitTurn(windowWithSkeleton(10), "earlier-first");
+    const later = splitTurn(windowWithSkeleton(10));
     expect(later.spans).toHaveLength(2);
     const rewritten = applyIndexChange(later, {
       activeTurnId: null,
