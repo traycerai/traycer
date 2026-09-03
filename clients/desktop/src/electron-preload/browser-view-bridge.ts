@@ -213,6 +213,11 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
           RunnerHostEvent.browserViewTileCommand,
           handler,
         ),
+      onTileFocused: (handler) =>
+        subscribe<BrowserViewTileKey>(
+          RunnerHostEvent.browserViewTileFocused,
+          handler,
+        ),
       onSnapshotInvalidated: (handler) =>
         subscribe<BrowserViewSnapshotInvalidatedChange>(
           RunnerHostEvent.browserViewSnapshotInvalidated,

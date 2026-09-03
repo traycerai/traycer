@@ -22,7 +22,10 @@ import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversatio
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { useAppDialogStore } from "@/stores/dialogs/app-dialog-store";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
-import { usePanelHeaderSearchStore } from "@/stores/epics/panel-header-search-store";
+import {
+  panelHeaderSearchSurfaceKey,
+  usePanelHeaderSearchStore,
+} from "@/stores/epics/panel-header-search-store";
 import {
   ChatTreeSurfaceContext,
   type ChatTreeSurface,
@@ -1139,7 +1142,10 @@ describe("epic sidebar selection mode", () => {
       usePanelHeaderSearchStore.getInitialState(),
       true,
     );
-    useSidebarNodeRevealStore.setState({ requestsByViewTabId: {} }, true);
+    useSidebarNodeRevealStore.setState(
+      { requestsByViewTabId: {}, visibleByViewTabId: {} },
+      true,
+    );
   });
 
   it("scrolls a requested agent row into view and consumes the request", async () => {
@@ -1159,9 +1165,71 @@ describe("epic sidebar selection mode", () => {
       });
     });
     expect(scrollIntoView.mock.instances).toContain(row);
+    expect(row.dataset.sidebarRevealHighlighted).toBe("true");
     expect(
       useSidebarNodeRevealStore.getState().requestsByViewTabId[TAB_ID],
     ).toBeUndefined();
+  });
+
+  it("scrolls to and flash-highlights a requested artifact row", async () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+    testState.artifactFilterKinds = ["review"];
+    usePanelHeaderSearchStore
+      .getState()
+      .openSearch(TAB_ID, "artifacts", "no match");
+    const scrollIntoView = vi
+      .spyOn(Element.prototype, "scrollIntoView")
+      .mockImplementation(() => undefined);
+    requestSidebarNodeReveal(TAB_ID, "ticket-child");
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    const row = screen.getByRole("button", { name: /^Child ticket/ });
+    await waitFor(() => {
+      expect(scrollIntoView.mock.instances).toContain(row);
+    });
+    expect(row.dataset.sidebarRevealHighlighted).toBe("true");
+    expect(screen.getByRole("button", { name: /^Child ticket/ })).toBe(row);
+    expect(
+      usePanelHeaderSearchStore.getState().openBySurfaceKey[
+        panelHeaderSearchSurfaceKey(TAB_ID, "artifacts")
+      ],
+    ).toBeUndefined();
+    expect(
+      useSidebarNodeRevealStore.getState().requestsByViewTabId[TAB_ID],
+    ).toBeUndefined();
+  });
+
+  it("flash-highlights an artifact row while it is being renamed", async () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+    fireEvent.click(screen.getByTestId("epic-sidebar-rename-ticket-child"));
+
+    act(() => requestSidebarNodeReveal(TAB_ID, "ticket-child"));
+
+    const row = document.querySelector<HTMLElement>(
+      '[data-sidebar-node-id="ticket-child"]',
+    );
+    await waitFor(() => {
+      expect(row?.dataset.sidebarRevealHighlighted).toBe("true");
+    });
+  });
+
+  it("flash-highlights a chat row while it is being renamed", async () => {
+    seedChatTree();
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+    fireEvent.click(screen.getByTestId("epic-sidebar-rename-chat-child"));
+
+    act(() => requestSidebarNodeReveal(TAB_ID, "chat-child"));
+
+    const row = document.querySelector<HTMLElement>(
+      '[data-sidebar-node-id="chat-child"]',
+    );
+    await waitFor(() => {
+      expect(row?.dataset.sidebarRevealHighlighted).toBe("true");
+    });
   });
 
   it("selects chat rows explicitly and bulk-deletes topmost selected chat roots", async () => {

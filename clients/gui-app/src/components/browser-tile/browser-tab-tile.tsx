@@ -84,6 +84,15 @@ export interface BrowserTabTileProps {
    * this replaced, so the canvas adapter passes `null` and is unchanged.
    */
   readonly onRequestNewTab: (() => void) | null;
+  /**
+   * The native view for this tile took focus.
+   *
+   * A host-shaped consequence of a browser fact, in the same shape as the two
+   * above: the canvas claims its pane's activation so the focus leaves
+   * whatever pane held it, and the Start Page panel - which has no panes -
+   * passes `null`.
+   */
+  readonly onNativeTileFocused: (() => void) | null;
   readonly onConvertToPip: (() => void) | null;
 }
 
@@ -288,6 +297,7 @@ function BrowserTabTileSurface(props: BrowserTabTileSurfaceProps) {
       onOpenLinkInNewTile={props.onOpenLinkInNewTile}
       onRequestNewTab={props.onRequestNewTab}
       onConvertToPip={props.onConvertToPip}
+      onNativeTileFocused={props.onNativeTileFocused}
     />
   );
 }

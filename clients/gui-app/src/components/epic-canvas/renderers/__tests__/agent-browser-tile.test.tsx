@@ -15,6 +15,7 @@ import type {
   BrowserViewBoundsUpdate,
   BrowserViewTileCommand,
   BrowserViewTileCommandEvent,
+  BrowserViewTileKey,
 } from "@traycer-clients/shared/platform/browser-view";
 
 const state = vi.hoisted(() => ({
@@ -24,6 +25,7 @@ const state = vi.hoisted(() => ({
   sessions: null as BrowserSessionsState | null,
   onOpenLinkInNewTile:
     vi.fn<(url: string, disposition: "foreground" | "background") => void>(),
+  onNativeTileFocused: vi.fn<() => void>(),
   /** Attach/detach/bounds in the order they actually happened. */
   events: [] as string[],
   closeTab: vi.fn((_sessionId: string, _tabId: string) => Promise.resolve()),
@@ -158,6 +160,40 @@ interface NativeStatusChange {
 }
 
 class TestBridge {
+  private tileFocusedHandler: ((tile: BrowserViewTileKey) => void) | null =
+    null;
+
+  onTileFocused(handler: (tile: BrowserViewTileKey) => void): {
+    dispose: () => void;
+  } {
+    this.tileFocusedHandler = handler;
+    return { dispose: () => (this.tileFocusedHandler = null) };
+  }
+
+  /** This suite's canvas `PLACEMENT`, which is the tile the surface matches. */
+  emitTileFocused(): void {
+    this.emitTileFocusedForTile({
+      viewTabId: "view-1",
+      paneId: "pane-1",
+      tileInstanceId: "tile-1",
+      pageSessionId: "browser-session:session-1:tab-1",
+    });
+  }
+
+  /**
+   * The identity is an ARGUMENT here, because the surface filters every tile
+   * report by its OWN key - so a helper that only ever emits this tile's
+   * identity cannot show that the filter does anything.
+   */
+  emitTileFocusedForTile(tile: {
+    readonly viewTabId: string;
+    readonly paneId: string;
+    readonly tileInstanceId: string;
+    readonly pageSessionId: string;
+  }): void {
+    this.tileFocusedHandler?.(tile);
+  }
+
   private statusHandler: ((change: NativeStatusChange) => void) | null = null;
 
   onNativeTabStatusChange(handler: (change: NativeStatusChange) => void): {
@@ -321,6 +357,7 @@ function surfaceElement(
       onOpenLinkInNewTile={state.onOpenLinkInNewTile}
       onRequestNewTab={null}
       onConvertToPip={() => undefined}
+      onNativeTileFocused={state.onNativeTileFocused}
     />
   );
 }
@@ -413,6 +450,7 @@ describe("ElectronTabSurface", () => {
         onOpenLinkInNewTile={state.onOpenLinkInNewTile}
         onRequestNewTab={null}
         onConvertToPip={null}
+        onNativeTileFocused={null}
       />,
     );
 
@@ -430,6 +468,39 @@ describe("ElectronTabSurface", () => {
     render(surfaceElement(NODE, createRecordingBinding()));
 
     expect(state.annotationInputs.at(-1)?.browserView).not.toBeNull();
+  });
+
+  /**
+   * `onTileFocused` is a browser fact only this surface hears - the desktop
+   * reports it per tile, and nothing above knows which tile a report is for.
+   * What it MEANS is the host's: the canvas claims its pane's activation
+   * (covered in `browser-session-tile.test.tsx`), and the Start Page panel has
+   * no pane to claim. So what this surface owes is the forward, and the
+   * identity filter in front of it.
+   */
+  it("forwards native focus for its own tile to the host", () => {
+    renderTile(createRecordingBinding());
+
+    act(() => {
+      state.bridge?.emitTileFocused();
+    });
+
+    expect(state.onNativeTileFocused).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores native focus reported for a different tile", () => {
+    renderTile(createRecordingBinding());
+
+    act(() => {
+      state.bridge?.emitTileFocusedForTile({
+        viewTabId: "view-9",
+        paneId: "pane-9",
+        tileInstanceId: "tile-9",
+        pageSessionId: "browser-session:other-session:other-tab",
+      });
+    });
+
+    expect(state.onNativeTileFocused).not.toHaveBeenCalled();
   });
 
   it("detaches the native surface when the tile becomes hidden", async () => {
@@ -639,6 +710,7 @@ describe("ElectronTabSurface browser-scoped chords", () => {
         onOpenLinkInNewTile={state.onOpenLinkInNewTile}
         onRequestNewTab={null}
         onConvertToPip={() => undefined}
+        onNativeTileFocused={null}
       />,
     );
     const bridge = state.bridge;
@@ -706,6 +778,7 @@ describe("ElectronTabSurface browser-scoped chords", () => {
         onOpenLinkInNewTile={state.onOpenLinkInNewTile}
         onRequestNewTab={onRequestNewTab}
         onConvertToPip={() => undefined}
+        onNativeTileFocused={null}
       />,
     );
 

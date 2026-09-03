@@ -265,6 +265,14 @@ export class BrowserViewManager {
       emitStatus: (entry) => {
         this.emitStatus(entry);
       },
+      emitFocus: (entry) => {
+        if (entry.surface === null) return;
+        this.send(
+          entry.surface.windowId,
+          RunnerHostEvent.browserViewTileFocused,
+          toTileKey(entry.surface),
+        );
+      },
       closeEntry: (entry) => {
         void this.closeEntry(entry);
       },

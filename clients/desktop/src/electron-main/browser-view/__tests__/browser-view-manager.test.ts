@@ -637,6 +637,7 @@ interface Harness {
   readonly views: FakeBrowserView[];
   readonly nativeTabStatuses: BrowserViewNativeTabStatusChange[];
   readonly nativeTabStatusWindowIds: string[];
+  readonly focusedTiles: BrowserViewTileKey[];
   readonly finds: BrowserViewFindChange[];
   readonly downloads: BrowserViewDownloadChange[];
   readonly certificateErrors: BrowserViewCertificateErrorChange[];
@@ -709,6 +710,7 @@ function createHarnessWithOptions(
   const views: FakeBrowserView[] = [];
   const nativeTabStatuses: BrowserViewNativeTabStatusChange[] = [];
   const nativeTabStatusWindowIds: string[] = [];
+  const focusedTiles: BrowserViewTileKey[] = [];
   const finds: BrowserViewFindChange[] = [];
   const downloads: BrowserViewDownloadChange[] = [];
   const certificateErrors: BrowserViewCertificateErrorChange[] = [];
@@ -798,6 +800,9 @@ function createHarnessWithOptions(
         case RunnerHostEvent.browserViewOpenTileRequest:
           record(openTileRequests, payload);
           return true;
+        case RunnerHostEvent.browserViewTileFocused:
+          record(focusedTiles, payload);
+          return true;
         case RunnerHostEvent.browserViewSnapshotInvalidated:
           record(snapshotInvalidations, payload);
           return true;
@@ -833,6 +838,7 @@ function createHarnessWithOptions(
     views,
     nativeTabStatuses,
     nativeTabStatusWindowIds,
+    focusedTiles,
     finds,
     downloads,
     certificateErrors,
@@ -1029,6 +1035,20 @@ describe("BrowserViewManager isolated sessions", () => {
 });
 
 describe("BrowserViewManager native tab lifecycle", () => {
+  it("notifies the owning renderer when an attached native guest receives focus", async () => {
+    const harness = createHarness();
+    const { view } = await attachNativeTab(
+      harness,
+      "window-1",
+      BASE_KEY,
+      "https://example.com/",
+    );
+
+    view.webContents.emit("focus");
+
+    expect(harness.focusedTiles).toEqual([BASE_TILE_KEY]);
+  });
+
   it("provisions CDP before acceptance and starts navigation only after acceptance", async () => {
     const harness = createHarnessWithOptions({
       requireLoadedTargetForPageCommands: true,

@@ -148,6 +148,16 @@ describe("<LandingBrowserTile />", () => {
     expect(captured.props?.onConvertToPip).toBeNull();
   });
 
+  // Pane activation is a canvas concept. The panel shows one tab at a time in
+  // a surface with no panes, so there is nothing for the native view taking
+  // focus to claim - and the capability is declined rather than pointed at
+  // something that would do nothing.
+  it("claims no pane activation when the native view takes focus", () => {
+    render(tileElement({}));
+
+    expect(captured.props?.onNativeTileFocused).toBeNull();
+  });
+
   // Three terms, not two. `paneVisible` is the one a DOM assertion cannot
   // reach: the panel stays mounted behind a backgrounded header tab to keep its
   // PTYs warm, and a browser tile's pixels are native, so without it a

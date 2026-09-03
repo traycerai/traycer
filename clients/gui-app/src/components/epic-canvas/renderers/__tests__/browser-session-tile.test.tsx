@@ -25,6 +25,7 @@ import type {
 } from "@/components/browser-tile/browser-tile-placement";
 import type { BrowserSessionTileRef } from "@/stores/epics/canvas/types";
 import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
+import { registerHostedPaneActivationClaim } from "@/components/epic-canvas/pane-activation";
 
 const harness = vi.hoisted(() => ({
   binding: null as ElectronTabBinding | null,
@@ -91,6 +92,7 @@ const surfaceCapture = vi.hoisted(() => ({
     | null,
   onRequestClose: null as (() => void) | null,
   onConvertToPip: null as (() => void) | null,
+  onNativeTileFocused: null as (() => void) | null,
   persistViewportPreset: null as ((preset: string) => void) | null,
   visible: null as boolean | null,
   placement: null as BrowserTilePlacement | null,
@@ -205,6 +207,7 @@ vi.mock("@/components/browser-tile/agent-browser-tile", () => ({
     readonly node: BrowserTileNode;
     readonly onRequestClose: () => void;
     readonly onConvertToPip: (() => void) | null;
+    readonly onNativeTileFocused: (() => void) | null;
     readonly persistViewportPreset: ((preset: string) => void) | null;
     readonly onOpenLinkInNewTile:
       | ((url: string, disposition: "foreground" | "background") => void)
@@ -213,6 +216,7 @@ vi.mock("@/components/browser-tile/agent-browser-tile", () => ({
     surfaceCapture.onOpenLinkInNewTile = props.onOpenLinkInNewTile;
     surfaceCapture.onRequestClose = props.onRequestClose;
     surfaceCapture.onConvertToPip = props.onConvertToPip;
+    surfaceCapture.onNativeTileFocused = props.onNativeTileFocused;
     surfaceCapture.persistViewportPreset = props.persistViewportPreset;
     surfaceCapture.visible = props.visible;
     surfaceCapture.placement = props.placement;
@@ -357,6 +361,7 @@ function renderTile(): void {
 
 describe("BrowserSessionTile lifecycle projection", () => {
   beforeEach(() => {
+    surfaceCapture.onNativeTileFocused = null;
     harness.binding = null;
     harness.items = [session("dormant", "dormant")];
     harness.lifecycle = "live";
@@ -1379,10 +1384,63 @@ describe("BrowserSessionTile adapter props", () => {
     surfaceCapture.node = null;
     surfaceCapture.visible = null;
     surfaceCapture.onConvertToPip = null;
+    surfaceCapture.onNativeTileFocused = null;
     surfaceCapture.persistViewportPreset = null;
     surfaceCapture.onRequestClose = null;
     canvasState.updateBrowserTileViewportPresetInTab.mockClear();
     harness.closeCanvasTile.mockClear();
+  });
+
+  /**
+   * Clicking into the native guest moves the OS focus into it, and the pane it
+   * sits in has to claim activation or the previously active pane keeps it and
+   * the next pane-scoped gesture goes to the wrong tile.
+   *
+   * The surface hears the desktop's report - it is the only layer that knows
+   * which tile a report names - and hands it up. The claim itself is here,
+   * because `viewTabId` and `paneId` are canvas facts the shared body has no
+   * business carrying: it is also the Start Page panel's body, and a panel has
+   * no panes.
+   */
+  it("claims its pane's activation when the native guest takes focus", () => {
+    const claim = vi.fn();
+    const unregister = registerHostedPaneActivationClaim(
+      "view-1",
+      "pane-1",
+      claim,
+    );
+    renderTile();
+
+    expect(surfaceCapture.onNativeTileFocused).not.toBeNull();
+    act(() => {
+      surfaceCapture.onNativeTileFocused?.();
+    });
+
+    expect(claim).toHaveBeenCalledExactlyOnceWith({
+      defaultPrevented: false,
+      scope: null,
+      target: null,
+    });
+    unregister();
+  });
+
+  // The claim is for THIS tile's pane, not the tab's first: two tiles in one
+  // view tab would otherwise activate the same pane.
+  it("claims the pane it was rendered in", () => {
+    const otherPane = vi.fn();
+    const unregister = registerHostedPaneActivationClaim(
+      "view-1",
+      "pane-1",
+      otherPane,
+    );
+    render(tileElement("pane-2"));
+
+    act(() => {
+      surfaceCapture.onNativeTileFocused?.();
+    });
+
+    expect(otherPane).not.toHaveBeenCalled();
+    unregister();
   });
 
   it("derives every prop the body needs from canvas context", () => {
