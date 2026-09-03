@@ -473,6 +473,55 @@ describe("createSessionConnectivityStore", () => {
   });
 });
 
+/**
+ * The fake's own terminal transition, driven through `close(reason)` rather
+ * than the `fireClosed()` shortcut every case above uses.
+ *
+ * The shortcut pokes one listener set; `close` is what an owner actually
+ * performs, and the two disagreed while the fake only flipped its flag - a
+ * client closed that way delivered no `onClosed` at all, so nothing here
+ * exercised the cleanup a production close runs.
+ */
+describe("fake host stream client close", () => {
+  it("records the reason, notifies once, and stays closed on a second call", () => {
+    const ready = createReadyControl(true);
+    const clock = createControllableClock();
+    const client = createFakeHostStreamClient(ready.isReady);
+    const store = createSessionConnectivityStore({
+      streamClient: client,
+      isReady: ready.isReady,
+      now: clock.now,
+      pollMs: POLL_NEVER_MS,
+      announceAfterMs: SESSION_CONNECTIVITY_ANNOUNCE_AFTER_MS,
+      escalateAfterMs: SESSION_CONNECTIVITY_ESCALATE_AFTER_MS,
+    });
+    const listener = vi.fn();
+    const dispose = store.subscribe(listener);
+
+    expect(client.isClosed()).toBe(false);
+    expect(client.getClosedReason()).toBeNull();
+
+    ready.setReady(false);
+    client.close("host went away");
+
+    expect(client.isClosed()).toBe(true);
+    expect(client.getClosedReason()).toBe("host went away");
+    // The store learned of the closure through the `onClosed` registration it
+    // made for itself - the half a flag-only fake left unexercised.
+    expect(store.getSnapshot()).toBe("settling");
+    const callsAfterClose = listener.mock.calls.length;
+    expect(callsAfterClose).toBeGreaterThan(0);
+
+    // Idempotent, and the reason recorded first is the one that stands.
+    client.close("a second, later reason");
+
+    expect(client.getClosedReason()).toBe("host went away");
+    expect(listener.mock.calls.length).toBe(callsAfterClose);
+
+    dispose();
+  });
+});
+
 describe("isAnnouncedInterruption", () => {
   it.each([
     ["ready", false] as const,

@@ -7,6 +7,8 @@ import {
   getTabSplitCompatibility,
   setTabSplitCompatibility,
 } from "@/stores/tabs/tab-split-compatibility";
+import { setTabsLocalPersistenceEnabled } from "@/stores/tabs/store";
+import { resetTabsLocalRestorePolicyForTests } from "@/stores/tabs/tabs-local-restore-policy";
 import { createFakeRunnerHost } from "../../../__tests__/create-fake-runner-host";
 
 /**
@@ -37,7 +39,13 @@ describe("windows bridge tab posture", () => {
 
   afterEach(() => {
     cleanup();
+    // The single-context posture is THREE module-level writes, not one, and
+    // all three are process-wide: leaving the writer off and the restore
+    // suppressed would hand every later suite in this worker a tab store that
+    // silently persists nothing and reads nothing back.
     setTabSplitCompatibility(true);
+    setTabsLocalPersistenceEnabled(true);
+    resetTabsLocalRestorePolicyForTests();
   });
 
   it("permits splits for a bridgeless shell that draws its own tabs", () => {

@@ -69,7 +69,10 @@ import { appLogger, describeLogError } from "@/lib/logger";
 // by a busy main thread are visible directly. Gated to dev / opt-in.
 startMainThreadBlockProbe();
 import { QueryClientProvider } from "@tanstack/react-query";
-import { RouterProvider } from "@tanstack/react-router";
+import {
+  RouterProvider,
+  type NotFoundRouteComponent,
+} from "@tanstack/react-router";
 import type { RemoteHostFetcher } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { LazyMotion, domMax } from "motion/react";
@@ -134,7 +137,7 @@ export interface TraycerAppProps {
    * library's bare fallback, which is unreachable where there is no address
    * bar. See `createAppRouter`.
    */
-  readonly notFoundComponent?: (() => ReactNode) | null;
+  readonly notFoundComponent?: NotFoundRouteComponent | null;
   /**
    * Dev-runner / test injection seam for the host messenger.
    *

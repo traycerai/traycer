@@ -42,17 +42,28 @@ export function createFakeHostStreamClient(
   const recoveredListeners = new Set<() => void>();
   const closedListeners = new Set<() => void>();
   let closed = false;
+  let closedReason: string | null = null;
   const client: FakeHostStreamClient = {
     subscribe: () => fakeStreamSession(),
     subscribeWithParamsProvider: () => {
       throw new Error("not exercised by this test");
     },
-    close: () => {
+    // The real client's terminal close, in the order the contract states it:
+    // idempotent, the reason recorded before anything observes the closure,
+    // and the listener set drained exactly once so no `onClosed` handler can
+    // run twice. A fake that only flipped the flag would let a test close a
+    // client and never exercise the cleanup its owner registered.
+    close: (reason: string) => {
+      if (closed) return;
       closed = true;
+      closedReason = reason;
+      const listeners = [...closedListeners];
+      closedListeners.clear();
+      for (const listener of listeners) listener();
     },
     isClosed: () => closed,
     isReady,
-    getClosedReason: () => null,
+    getClosedReason: () => closedReason,
     notifyBearerRotated: () => undefined,
     reconnectAll: () => undefined,
     getMethodSupport: () => "unknown",

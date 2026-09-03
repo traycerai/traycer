@@ -1,6 +1,7 @@
 import {
   createMemoryHistory,
   createRouter,
+  type NotFoundRouteComponent,
   type Router,
   type RouterHistory,
 } from "@tanstack/react-router";
@@ -12,7 +13,6 @@ import { RoutePendingScreen } from "@/components/loading/route-pending-screen";
 import { RouteErrorComponent } from "@/components/errors/route-error-component";
 import { warmRouteChunks } from "@/lib/warm-route-chunks";
 import { routeTree } from "@/routeTree.gen";
-import type { ReactNode } from "react";
 import type { QueryClient } from "@tanstack/react-query";
 import { useAuthStore, type AuthState } from "@/stores/auth/auth-store";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -50,12 +50,15 @@ export type AppRouter = Router<typeof routeTree>;
  * shell whose URLs a stranger can type needs one, and only the shell knows
  * where "back to the app" lives once its own prefix is in play. `null` keeps
  * the library default, which is right where the address bar is unreachable.
+ * Its type is the router's own, so a shell that wants the props the router
+ * passes a not-found component (`data`, `isNotFound`, `routeId`) can read
+ * them; a zero-argument component stays assignable and ignores them.
  */
 export function createAppRouter(
   initialRoute: string | null,
   windowId: string | null,
   basepath: string | null,
-  notFoundComponent: (() => ReactNode) | null,
+  notFoundComponent: NotFoundRouteComponent | null,
 ): AppRouter {
   const history = createAppHistory(initialRoute, windowId);
   const router = createRouter({
