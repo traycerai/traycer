@@ -11,9 +11,10 @@ import {
   isProviderAmbientSignedOut,
 } from "@/lib/providers/provider-ambient-auth";
 import {
-  type ProviderSetupGuidance,
+  providerSetupActionPlacement,
   providerSetupSteps,
   resolveProviderTerminalSetup,
+  type ProviderTerminalSetup,
 } from "@/lib/providers/provider-setup-guidance";
 import { isProviderSignedOutCatalogError } from "@/lib/providers/provider-signed-out-catalog-error";
 import type { ProviderTerminalLoginSurface } from "@/lib/providers/provider-terminal-login-surface";
@@ -78,7 +79,7 @@ export function PickerProviderAuthLine(props: {
       return (
         <SetupGuidanceRow
           providerId={verdict.providerId}
-          guidance={verdict.guidance}
+          setup={verdict.setup}
           terminalLoginSurface={props.terminalLoginSurface}
           runTargetHostId={props.runTargetHostId}
           onClosePicker={props.onClosePicker}
@@ -97,7 +98,7 @@ type PickerAuthLineVerdict =
   | {
       readonly kind: "setup";
       readonly providerId: ProviderId;
-      readonly guidance: ProviderSetupGuidance;
+      readonly setup: ProviderTerminalSetup;
     }
   | {
       readonly kind: "account";
@@ -123,14 +124,14 @@ function pickerAuthLineVerdict(
   if (catalogSignedOut || isSignedOut(state, harness)) {
     // Whether a terminal sign-in applies is the host's call, read from the
     // `providers.list` row; a row that has not resolved reads as "not yet".
-    const guidance = resolveProviderTerminalSetup(
+    const setup = resolveProviderTerminalSetup(
       providerId,
       state?.loginCapability,
     );
     // Compact when the model list is showing the setup CTA for the same
     // verdict, so the popover never says it twice.
-    if (guidance === null || catalogSignedOut) return { kind: "signed-out" };
-    return { kind: "setup", providerId, guidance };
+    if (setup === null || catalogSignedOut) return { kind: "signed-out" };
+    return { kind: "setup", providerId, setup };
   }
   if (state === null) return { kind: "hidden" };
   const auth = state.auth;
@@ -194,12 +195,14 @@ function AuthLineRow(props: {
 
 function SetupGuidanceRow(props: {
   readonly providerId: ProviderId;
-  readonly guidance: ProviderSetupGuidance;
+  readonly setup: ProviderTerminalSetup;
   readonly terminalLoginSurface: ProviderTerminalLoginSurface | null;
   readonly runTargetHostId: string | null;
   readonly onClosePicker: () => void;
 }): ReactNode {
-  const { guidance, terminalLoginSurface } = props;
+  const { setup, terminalLoginSurface } = props;
+  const { guidance } = setup;
+  const surface = setup.canStartTerminal ? terminalLoginSurface : null;
   return (
     <div
       role="note"
@@ -211,16 +214,17 @@ function SetupGuidanceRow(props: {
       <ProviderSetupTerminalAction
         providerId={props.providerId}
         guidance={guidance}
-        surface={terminalLoginSurface}
+        surface={surface}
         runTargetHostId={props.runTargetHostId}
         onBeforeStart={props.onClosePicker}
       />
       <ol className="list-decimal space-y-0.5 pl-4">
-        {providerSetupSteps(guidance, terminalLoginSurface !== null).map(
-          (step) => (
-            <li key={step}>{step}</li>
-          ),
-        )}
+        {providerSetupSteps(
+          guidance,
+          providerSetupActionPlacement(setup, terminalLoginSurface !== null),
+        ).map((step) => (
+          <li key={step}>{step}</li>
+        ))}
       </ol>
       {guidance.manualCommand === null ? null : (
         <ProviderSetupManualCommand command={guidance.manualCommand} />

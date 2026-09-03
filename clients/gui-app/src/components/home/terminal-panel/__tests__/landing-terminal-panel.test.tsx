@@ -13,6 +13,7 @@ import type { PlainTerminalCollection } from "@/lib/terminals/plain-terminal-aut
 import {
   landingTerminalLayoutFor,
   useLandingTerminalStore,
+  type LandingTerminalTabRef,
 } from "@/stores/home/landing-terminal-store";
 import {
   landingTerminalRightActionsKey,
@@ -1377,6 +1378,57 @@ describe("<LandingTerminalPanel />", () => {
       expect(useLandingTerminalStore.getState().pendingKills).toEqual([]);
     });
     expect(mocks.kill).not.toHaveBeenCalled();
+  });
+
+  it("blocks rename and routes close through the kill path (not mutations.close) for a provider-login tab, even on a capable host", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    mocks.plainAuthorityStatus = "capable";
+    mocks.plainCanMutate = true;
+    const signInTab: LandingTerminalTabRef = {
+      instanceId: "sign-in-instance",
+      sessionId: "term-sign-in",
+      hostId: "host-a",
+      cwd: "~",
+      name: "Reasonix sign-in",
+      titleSource: "manual",
+      origin: "provider-login",
+      originProviderId: "reasonix",
+    };
+    useLandingTerminalStore.getState().addTab(signInTab);
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    // Rename is disabled - the tab strip does not even attempt an inline
+    // edit, since `terminal.plain.rename` would reject a manager-owned
+    // session with no plain-terminal row.
+    fireEvent.contextMenu(
+      await screen.findByTestId("landing-terminal-tab-sign-in-instance"),
+    );
+    const renameItem = await screen.findByText("Rename");
+    expect(
+      renameItem.closest('[role="menuitem"]')?.getAttribute("data-disabled"),
+    ).not.toBeNull();
+
+    // `fireEvent.click` targets the node directly (no pointer hit-testing),
+    // and the strip's `ContextMenu` is `modal={false}` (see
+    // `landing-terminal-tab-strip.tsx`), so the still-open menu blocks
+    // nothing here - closing it first would only add noise.
+    fireEvent.click(
+      screen.getByRole("button", { name: "Close Reasonix sign-in" }),
+    );
+    await waitFor(() => {
+      expect(mocks.killAsync).toHaveBeenCalledWith({
+        hostId: "host-a",
+        sessionId: "term-sign-in",
+      });
+    });
+    // The capable arm's shared mutation never sees a provider-login close -
+    // it has no plain-terminal row to require, and would reject.
+    expect(mocks.plainCloseAsync).not.toHaveBeenCalled();
   });
 
   it("leaves the tombstone to the owner when its close merely joins one", async () => {

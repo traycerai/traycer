@@ -117,37 +117,85 @@ export function defaultTerminalSignInGuidance(
 }
 
 /**
- * The guidance to show for this provider, or `null` when the terminal action
- * does not apply to it.
+ * What to say and whether the button applies, or `null` when this provider has
+ * nothing to say at all.
  *
- * Gated on the HOST's capability, not on the copy table: the table cannot
- * know which providers the connected host can open a terminal login for,
- * and a provider that gains the capability on the host gets the button here
- * without a renderer change. `loginCapability` comes from `providers.list`;
- * while that has not resolved (`undefined`/`null` state) the answer is "not
- * yet", never "no" - the caller shows the compact signed-out line and this
- * re-resolves when the state lands.
+ * The two answers come from ONE call because they are separately sourced and a
+ * caller that derived them apart got them wrong: whether the ACTION applies is
+ * the host's call (`terminalLogin`), while whether there is guidance to SHOW is
+ * the copy table's. A host predating the capability - or any host at all, for a
+ * provider the table knows and the host does not - can still be told where its
+ * credentials go, which is how Reasonix's `reasonix setup` instructions
+ * survived before this button existed. Gating the copy on the capability
+ * dropped them and left a signed-out Reasonix at the generic error state with
+ * no way forward.
+ *
+ * `loginCapability` comes from `providers.list`; while that has not resolved
+ * (`undefined`/`null` state) the capability answer is "not yet", never "no" -
+ * it re-resolves when the state lands.
  */
+export interface ProviderTerminalSetup {
+  readonly guidance: ProviderSetupGuidance;
+  /** Whether the connected host can open the sign-in terminal itself. */
+  readonly canStartTerminal: boolean;
+}
+
 export function resolveProviderTerminalSetup(
   providerId: ProviderId,
   loginCapability: ProviderCliState["loginCapability"] | undefined,
-): ProviderSetupGuidance | null {
-  if (!providerSupportsTerminalLogin(loginCapability)) return null;
-  return (
-    providerSetupGuidance(providerId) ??
-    defaultTerminalSignInGuidance(providerId)
-  );
+): ProviderTerminalSetup | null {
+  const override = providerSetupGuidance(providerId);
+  if (!providerSupportsTerminalLogin(loginCapability)) {
+    // No host-run terminal, so only a provider with its own manual route has
+    // anything left to offer; the generic sign-in copy is all button.
+    return override === null
+      ? null
+      : { guidance: override, canStartTerminal: false };
+  }
+  return {
+    guidance: override ?? defaultTerminalSignInGuidance(providerId),
+    canStartTerminal: true,
+  };
+}
+
+/**
+ * Where the terminal action is, from this surface's point of view - what the
+ * steps have to lead with.
+ */
+export type ProviderSetupActionPlacement =
+  /** A button right here, so the steps are what follows it. */
+  | "here"
+  /** A button, but on another surface (a fork dialog's picker). */
+  | "other-surface"
+  /** No button anywhere on this host - the manual command is the route. */
+  | "unsupported-host";
+
+/**
+ * Where this surface's action is, from the two facts that decide it. Shared so
+ * the auth line and the model list cannot classify the same state differently -
+ * the reason they were wrong about old hosts in the first place.
+ */
+export function providerSetupActionPlacement(
+  setup: ProviderTerminalSetup,
+  hasSurface: boolean,
+): ProviderSetupActionPlacement {
+  if (!setup.canStartTerminal) return "unsupported-host";
+  return hasSurface ? "here" : "other-surface";
 }
 
 /**
  * The ordered steps for a surface: the post-action steps alone where a button
- * precedes them, or led by the sentence naming where the button lives.
+ * precedes them, led by the sentence naming where the button lives, or - on a
+ * host that cannot open one at all - by neither, since pointing at a button
+ * this host never draws is the misdirection this copy exists to remove. The
+ * manual command renders under the steps and carries that case.
  */
 export function providerSetupSteps(
   guidance: ProviderSetupGuidance,
-  hasTerminalAction: boolean,
+  placement: ProviderSetupActionPlacement,
 ): ReadonlyArray<string> {
-  return hasTerminalAction
-    ? guidance.stepsAfterAction
-    : [guidance.noSurfaceStep, ...guidance.stepsAfterAction];
+  if (placement === "other-surface") {
+    return [guidance.noSurfaceStep, ...guidance.stepsAfterAction];
+  }
+  return guidance.stepsAfterAction;
 }

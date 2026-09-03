@@ -10,12 +10,13 @@ import {
   useTerminalTileBootstrap,
   type TerminalCreatePayload,
 } from "@/hooks/agent/use-terminal-tile-bootstrap";
+import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import {
   useHostReachability,
   resolvedHostLabel,
 } from "@/hooks/agent/use-host-reachability";
 import { useBoundedHostLoad } from "@/hooks/host/use-bounded-host-load";
-import { useLandingProviderTerminalLogin } from "@/hooks/providers/use-landing-provider-terminal-login";
+import { useLandingProviderStartTerminalLogin } from "@/hooks/providers/use-landing-provider-terminal-login";
 import {
   LandingTerminalTileLive,
   TerminalDeadState,
@@ -52,9 +53,14 @@ export function LandingSignInTerminalTile(
 ): ReactNode {
   const { tab, landingPageId } = props;
   const providerId = tab.originProviderId ?? null;
-  const reachability = useHostReachability(tab.hostId);
+  // `LandingTerminalTile` wraps this in `<TabHostProvider hostId={tab.hostId}>`,
+  // and a tab's host is bound for life, so the provider is the sanctioned read
+  // for every host-scoped path below (gui-app AGENTS.md). Same value as
+  // `tab.hostId`; reading it through the provider is what keeps it that way.
+  const hostId = useTabHostId();
+  const reachability = useHostReachability(hostId);
   const hostLoad = useBoundedHostLoad({
-    hostId: tab.hostId,
+    hostId,
     hostLabel: resolvedHostLabel(reachability),
     pending:
       reachability.status === "checking" ||
@@ -67,7 +73,7 @@ export function LandingSignInTerminalTile(
     [],
   );
   const bootstrap = useTerminalTileBootstrap({
-    hostId: tab.hostId,
+    hostId,
     scope: INDEPENDENT_SCOPE,
     sessionId: tab.sessionId,
     instanceId: tab.instanceId,
@@ -115,7 +121,7 @@ export function LandingSignInTerminalTile(
     return (
       <LandingSignInTerminalEnded
         providerId={providerId}
-        hostId={tab.hostId}
+        hostId={hostId}
         landingPageId={landingPageId}
         sessionId={tab.sessionId}
         closeSelf={closeSelf}
@@ -130,7 +136,7 @@ export function LandingSignInTerminalTile(
         <div className="relative min-h-0 flex-1">
           <TerminalGridMeasureProbe
             sessionId={tab.sessionId}
-            hostId={tab.hostId}
+            hostId={hostId}
             instanceId={tab.instanceId}
             tileKind="terminal"
             chrome="flush"
@@ -200,22 +206,24 @@ function LandingSignInRestartButton(props: {
   readonly landingPageId: string;
   readonly sessionId: string;
 }): ReactNode {
-  const login = useLandingProviderTerminalLogin({
+  const login = useLandingProviderStartTerminalLogin({
     providerId: props.providerId,
     hostId: props.hostId,
-    landingPageId: props.landingPageId,
     // After a host restart the coordinator has no pointer, so it reports
     // `replacedSessionId: null` and nothing else would retire this dead tab -
     // it would accumulate one per press.
     launchedFromSessionId: props.sessionId,
   });
+  // This tile only exists inside a panel that is already mounted on a bound
+  // page, so the id is known rather than resolved: there is no draft to mint.
+  const landingPageId = props.landingPageId;
   return (
     <Button
       type="button"
       variant="outline"
       size="sm"
       disabled={login.isPending}
-      onClick={login.start}
+      onClick={() => login.start(landingPageId)}
     >
       Start again
       {login.isPending ? <MutedAgentSpinner /> : null}

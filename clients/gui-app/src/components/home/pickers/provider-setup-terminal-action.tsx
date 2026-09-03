@@ -3,7 +3,7 @@ import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { Button } from "@/components/ui/button";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { useProviderTerminalLogin } from "@/hooks/providers/use-provider-terminal-login";
-import { useLandingProviderTerminalLogin } from "@/hooks/providers/use-landing-provider-terminal-login";
+import { useLandingProviderStartTerminalLogin } from "@/hooks/providers/use-landing-provider-terminal-login";
 import type { ProviderSetupGuidance } from "@/lib/providers/provider-setup-guidance";
 import type { ProviderTerminalLoginSurface } from "@/lib/providers/provider-terminal-login-surface";
 
@@ -46,7 +46,7 @@ export function ProviderSetupTerminalAction(
     <LandingSetupTerminalButton
       providerId={props.providerId}
       guidance={props.guidance}
-      landingPageId={surface.landingPageId}
+      resolveLandingPageId={surface.resolveLandingPageId}
       runTargetHostId={props.runTargetHostId}
       onBeforeStart={props.onBeforeStart}
     />
@@ -81,14 +81,13 @@ function EpicSetupTerminalButton(props: {
 function LandingSetupTerminalButton(props: {
   readonly providerId: ProviderId;
   readonly guidance: ProviderSetupGuidance;
-  readonly landingPageId: string;
+  readonly resolveLandingPageId: () => string;
   readonly runTargetHostId: string | null;
   readonly onBeforeStart: () => void;
 }): ReactNode {
-  const login = useLandingProviderTerminalLogin({
+  const login = useLandingProviderStartTerminalLogin({
     providerId: props.providerId,
     hostId: props.runTargetHostId,
-    landingPageId: props.landingPageId,
     launchedFromSessionId: null,
   });
   return (
@@ -96,8 +95,12 @@ function LandingSetupTerminalButton(props: {
       guidance={props.guidance}
       isPending={login.isPending}
       onStart={() => {
+        // Binds the start page BEFORE the request: the panel this terminal
+        // opens into is mounted per bound draft, so resolving after the host
+        // answered would open it into a page that does not exist yet.
+        const landingPageId = props.resolveLandingPageId();
         props.onBeforeStart();
-        login.start();
+        login.start(landingPageId);
       }}
     />
   );

@@ -21,7 +21,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@/hooks/providers/use-landing-provider-terminal-login", () => ({
-  useLandingProviderTerminalLogin: () => ({
+  useLandingProviderStartTerminalLogin: () => ({
     start: mocks.start,
     isPending: false,
   }),
@@ -228,7 +228,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
     });
   });
 
-  it("falls back to the plain host reason row when the providers.list row has not resolved yet (activeProviderState: null)", () => {
+  it("renders the setup guidance (steps + manual command, no button) for reasonix even though the providers.list row has not resolved yet (activeProviderState: null) - capability-absent now preserves the override instead of hiding it", () => {
     act(() => {
       useDesktopDialogStore.setState({ reportIssueAvailable: true });
     });
@@ -247,17 +247,40 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
         activeProviderState: null,
         rowsCount: 0,
         onOpenProviderSettings: () => undefined,
-        terminalLoginSurface: { kind: "landing", landingPageId: "draft-1" },
+        // A landing surface IS available here, to prove the button's absence
+        // comes from `canStartTerminal: false` (the host never declared the
+        // capability), not merely from having nowhere to open a terminal.
+        terminalLoginSurface: {
+          kind: "landing",
+          resolveLandingPageId: () => "draft-1",
+        },
         runTargetHostId: null,
         onClosePicker: () => undefined,
       }),
     );
 
-    expect(screen.queryByText("Set up Reasonix")).toBeNull();
+    expect(screen.getByText("Set up Reasonix")).toBeDefined();
     expect(
-      screen.queryByRole("button", { name: /Set up in terminal/ }),
+      screen.getByText(
+        "Reasonix keeps provider API keys in its own store, not in your shell environment.",
+      ),
+    ).toBeDefined();
+    const code = screen.getByText("reasonix setup", { selector: "code" });
+    expect(code).toBeDefined();
+    // "unsupported-host" placement: the post-action steps alone, never the
+    // no-surface sentence naming a button this host cannot draw.
+    const steps = screen.getAllByRole("listitem");
+    expect(steps.map((step) => step.textContent)).toEqual([
+      "Paste your provider API key when asked (DeepSeek by default).",
+      "Refresh this list.",
+    ]);
+    expect(
+      screen.queryByText(
+        "Choose “Set up in terminal” from a chat's model picker or the start page's. It opens Reasonix's setup wizard on the host that composer runs on.",
+      ),
     ).toBeNull();
-    screen.getByRole("option", { name: providerSignedOutMessage("reasonix") });
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(mocks.start).not.toHaveBeenCalled();
   });
 
   it("renders the terminal action and post-action steps when a landing terminalLoginSurface is provided", () => {
@@ -277,7 +300,10 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
         activeProviderState: terminalLoginCapableState("reasonix", ["setup"]),
         rowsCount: 0,
         onOpenProviderSettings: () => undefined,
-        terminalLoginSurface: { kind: "landing", landingPageId: "draft-1" },
+        terminalLoginSurface: {
+          kind: "landing",
+          resolveLandingPageId: () => "draft-1",
+        },
         runTargetHostId: null,
         onClosePicker,
       }),
@@ -302,6 +328,51 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
     fireEvent.click(button);
     expect(onClosePicker).toHaveBeenCalledTimes(1);
     expect(mocks.start).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves the landing page id via resolveLandingPageId() BEFORE calling start, and passes the resolved id through to it", () => {
+    const provider = harnessEntry({
+      id: "reasonix",
+      label: "Reasonix",
+      modelsError: catalogErrorFor(providerSignedOutMessage("reasonix")),
+    });
+    const resolveLandingPageId = vi.fn(() => "resolved-draft-7");
+    const onClosePicker = vi.fn();
+    render(
+      ModelRowsState({
+        catalogLoading: false,
+        catalogError: false,
+        hostUnavailableLabel: null,
+        hasQuery: false,
+        activeProvider: provider,
+        activeProviderState: terminalLoginCapableState("reasonix", ["setup"]),
+        rowsCount: 0,
+        onOpenProviderSettings: () => undefined,
+        terminalLoginSurface: { kind: "landing", resolveLandingPageId },
+        runTargetHostId: null,
+        onClosePicker,
+      }),
+    );
+
+    expect(resolveLandingPageId).not.toHaveBeenCalled();
+    expect(mocks.start).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: /Set up in terminal/ }));
+
+    expect(resolveLandingPageId).toHaveBeenCalledTimes(1);
+    expect(mocks.start).toHaveBeenCalledTimes(1);
+    // The resolver's return - not the surface literal, not a stale id - is
+    // exactly what reaches `start`, which is what the landing hook opens the
+    // panel with (see `useLandingProviderStartTerminalLogin`'s own tests).
+    expect(mocks.start).toHaveBeenCalledWith("resolved-draft-7");
+    // And it ran BEFORE start, per `LandingSetupTerminalButton`'s ordering:
+    // the draft has to be bound before the host can be asked to open a
+    // terminal against it.
+    const resolveOrder = resolveLandingPageId.mock.invocationCallOrder[0];
+    const startOrder = mocks.start.mock.invocationCallOrder[0];
+    expect(resolveOrder).toBeDefined();
+    expect(startOrder).toBeDefined();
+    expect(resolveOrder).toBeLessThan(startOrder);
   });
 
   it("with no terminalLoginSurface, renders no button and leads with the guidance's noSurfaceStep", () => {
@@ -352,7 +423,10 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
         activeProviderState: terminalLoginCapableState("copilot", ["login"]),
         rowsCount: 0,
         onOpenProviderSettings: () => undefined,
-        terminalLoginSurface: { kind: "landing", landingPageId: "draft-1" },
+        terminalLoginSurface: {
+          kind: "landing",
+          resolveLandingPageId: () => "draft-1",
+        },
         runTargetHostId: null,
         onClosePicker,
       }),
@@ -370,5 +444,34 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
     fireEvent.click(button);
     expect(onClosePicker).toHaveBeenCalledTimes(1);
     expect(mocks.start).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders the plain host reason row, not the setup CTA, for copilot with capability absent (no guidance override to fall back on)", () => {
+    const provider = harnessEntry({
+      id: "copilot",
+      label: "Copilot",
+      modelsError: catalogErrorFor(providerSignedOutMessage("copilot")),
+    });
+    render(
+      ModelRowsState({
+        catalogLoading: false,
+        catalogError: false,
+        hostUnavailableLabel: null,
+        hasQuery: false,
+        activeProvider: provider,
+        activeProviderState: null,
+        rowsCount: 0,
+        onOpenProviderSettings: () => undefined,
+        terminalLoginSurface: {
+          kind: "landing",
+          resolveLandingPageId: () => "draft-1",
+        },
+        runTargetHostId: null,
+        onClosePicker: () => undefined,
+      }),
+    );
+
+    expect(screen.queryByText(/^Set up /)).toBeNull();
+    screen.getByRole("option", { name: providerSignedOutMessage("copilot") });
   });
 });

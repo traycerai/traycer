@@ -64,6 +64,7 @@ import {
   DEFAULT_LANDING_TERMINAL_PANEL_WIDTH_FRACTION,
   MAX_LANDING_TERMINAL_PANEL_WIDTH_FRACTION,
   MIN_LANDING_TERMINAL_PANEL_WIDTH_FRACTION,
+  isProviderLoginLandingTab,
   landingTerminalLayoutFor,
   useLandingTerminalStore,
   type LandingTerminalTabRef,
@@ -180,7 +181,17 @@ function dispatchLandingTerminalClose(args: {
 }): void {
   const { entry, closed, killTerminal } = args;
   if (!landingTerminalAuthorityReady(entry)) return;
-  if (entry.authority.capability.status !== "capable") {
+  // A provider-login session is MANAGER-owned on every host capability - the
+  // host made it for `providers.startTerminalLogin`, never through
+  // `terminal.plain.create` - so it has no plain-terminal row. The capable arm
+  // below requires one (`requireOwnerRow`) and would reject before sending,
+  // raising "Couldn't close the terminal." over a sign-in shell that is still
+  // running, with a tombstone the plain reconciliation cannot drain. Session
+  // level is the only level this session exists at.
+  if (
+    isProviderLoginLandingTab(closed) ||
+    entry.authority.capability.status !== "capable"
+  ) {
     // Same boundary as the capable arm below, for the same reason. `terminal.kill`
     // is scheduled `fifo`, and `selectJob` returns null for fifo rather than
     // joining an identical queued job - so an unmediated duplicate is two real
@@ -863,6 +874,12 @@ export function LandingTerminalPanel(): ReactNode {
   // host that cannot be asked right now.
   const canRenameTab = useCallback(
     (tab: LandingTerminalTabRef): boolean =>
+      // A provider-login tab is never renameable: `terminal.plain.rename` is
+      // the only rename there is here, and it rejects for a manager-owned
+      // session that has no plain-terminal row - so the action could only ever
+      // raise an error and change nothing. Its title is `manual` and host-set
+      // ("<Provider> sign-in") for the same reason.
+      !isProviderLoginLandingTab(tab) &&
       landingTerminalAuthorityReady(authorityEntries[tab.hostId]),
     [authorityEntries],
   );

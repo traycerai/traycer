@@ -2,6 +2,11 @@ import { v4 as uuidv4 } from "uuid";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { PROVIDER_DISPLAY_NAMES } from "@traycer/protocol/host/provider-schemas";
 import { useLandingTerminalStore } from "@/stores/home/landing-terminal-store";
+import { useTabsStore } from "@/stores/tabs/store";
+import {
+  selectHostActiveSurfaceRefs,
+  selectHostFocusedRef,
+} from "@/stores/tabs/selectors";
 import { recordProviderLoginTerminal } from "@/stores/providers/provider-login-terminals";
 import { focusTerminalInstance } from "@/lib/terminals/terminal-focus-registry";
 
@@ -74,7 +79,34 @@ export function openLandingSignInTerminal(args: {
     origin: "provider-login",
     originProviderId: providerId,
   });
-  store.setPanelOpen(landingPageId, true);
+  // Both the page this started from and the one actually hosting the panel
+  // right now. They differ when focus moved while the host was answering (to
+  // another draft, or to an epic and back to a different start page): there is
+  // ONE panel per window and it is portaled into the hosted page's anchor, so
+  // opening only the initiating page's layout leaves a live sign-in terminal -
+  // and the code that only exists in it - behind a closed panel. Tabs are
+  // shared across landing pages, so the tab is already there to show; the open
+  // flag is the only per-page part. The initiating page is still opened so the
+  // panel is up when the user returns to it.
+  for (const pageId of new Set([landingPageId, hostedLandingPageId()])) {
+    if (pageId !== null) store.setPanelOpen(pageId, true);
+  }
   const activeInstanceId = useLandingTerminalStore.getState().activeInstanceId;
   if (activeInstanceId !== null) focusTerminalInstance(activeInstanceId);
+}
+
+/**
+ * The start page whose anchor the single landing panel is portaled into, or
+ * `null` when no start page is in play (the user is on an epic tab). The same
+ * resolution `LandingTerminalHost` binds to, read outside React because this
+ * runs from a mutation's `onSuccess`.
+ */
+function hostedLandingPageId(): string | null {
+  const state = useTabsStore.getState();
+  const focused = selectHostFocusedRef(state);
+  if (focused?.kind === "draft") return focused.id;
+  return (
+    selectHostActiveSurfaceRefs(state).find((ref) => ref.kind === "draft")
+      ?.id ?? null
+  );
 }

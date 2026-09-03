@@ -1,5 +1,5 @@
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   ProviderAuthStatus,
   ProviderCliState,
@@ -10,6 +10,24 @@ import { providerSignedOutMessage } from "@traycer/protocol/host/provider-displa
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { GuiHarnessCatalogEntry } from "@/hooks/harnesses/use-gui-harness-catalog";
 import { PickerProviderAuthLine } from "../harness-model-picker-auth-line";
+
+// The auth line's "setup" verdict renders the picker's terminal action button
+// through this hook for a landing surface. Mocked away (same seam
+// `harness-model-picker-empty-setup-cta.test.tsx` uses) so a button-rendering
+// test here needs neither a QueryClientProvider nor a host client - only the
+// wiring between the resolved setup and the button being ASKED to render is
+// this file's concern; the hook's own request/response behaviour is covered
+// in `use-landing-provider-terminal-login.test.tsx`.
+const mocks = vi.hoisted(() => ({
+  start: vi.fn(),
+}));
+
+vi.mock("@/hooks/providers/use-landing-provider-terminal-login", () => ({
+  useLandingProviderStartTerminalLogin: () => ({
+    start: mocks.start,
+    isPending: false,
+  }),
+}));
 
 function baseProviderState(providerId: ProviderId): ProviderCliState {
   return {
@@ -122,6 +140,7 @@ function catalogErrorFor(
 describe("<PickerProviderAuthLine />", () => {
   afterEach(() => {
     cleanup();
+    mocks.start.mockClear();
   });
 
   it("renders nothing when both state and harness are null (no provider identity to resolve)", () => {
@@ -163,20 +182,22 @@ describe("<PickerProviderAuthLine />", () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it("renders the compact signed-out line when state is null (no loginCapability to resolve guidance from), even though identity/enabled resolve from the harness", () => {
+  it("renders the compact signed-out line when state is null for a provider with NO guidance override (claude-code), even though identity/enabled resolve from the harness", () => {
     render(
       <PickerProviderAuthLine
         state={null}
-        harness={harnessOption("reasonix", true, "unauthenticated", null)}
+        harness={harnessOption("claude", true, "unauthenticated", null)}
         terminalLoginSurface={null}
         runTargetHostId={null}
         onClosePicker={() => undefined}
       />,
     );
 
-    // No `providers.list` row means no `loginCapability` to resolve the
-    // terminal-login guidance from, so this stays the compact line rather
-    // than the full "Setup required" note.
+    // No `providers.list` row and no copy-table override for this provider,
+    // so `resolveProviderTerminalSetup` has nothing to preserve and this
+    // stays the compact line rather than the full "Setup required" note.
+    // (Reasonix is the one exception - see the capability-absent test below,
+    // which covers exactly that provider on this same state:null path.)
     expect(screen.queryByRole("note", { name: "Setup required" })).toBeNull();
     expect(screen.getByText("Not authenticated")).toBeDefined();
   });
@@ -218,6 +239,71 @@ describe("<PickerProviderAuthLine />", () => {
     );
 
     expect(screen.queryByRole("button", { name: "Open Settings" })).toBeNull();
+  });
+
+  it("renders the setup-guidance row with steps + manual command but NO button when the capability is absent (loginCapability: null) - reasonix's override survives an old/unresolved host even with a surface available", () => {
+    render(
+      <PickerProviderAuthLine
+        state={baseProviderState("reasonix")}
+        harness={null}
+        // A landing surface IS supplied, to prove the missing button is
+        // `canStartTerminal: false`'s doing, not merely a null surface.
+        terminalLoginSurface={{
+          kind: "landing",
+          resolveLandingPageId: () => "draft-1",
+        }}
+        runTargetHostId={null}
+        onClosePicker={() => undefined}
+      />,
+    );
+
+    const note = screen.getByRole("note", { name: "Setup required" });
+    expect(
+      screen.getByText(
+        "Reasonix keeps provider API keys in its own store, not in your shell environment.",
+      ),
+    ).toBeDefined();
+
+    // "unsupported-host" placement: the post-action steps alone, never the
+    // no-surface sentence naming a button this host never declared.
+    const list = note.querySelector("ol");
+    const items = Array.from(list?.querySelectorAll("li") ?? []);
+    expect(items.map((item) => item.textContent)).toEqual([
+      "Paste your provider API key when asked (DeepSeek by default).",
+      "Refresh this list.",
+    ]);
+
+    const code = note.querySelector("code");
+    expect(code?.textContent).toBe("reasonix setup");
+
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(mocks.start).not.toHaveBeenCalled();
+  });
+
+  it("renders the terminal action button when the capability is present and a landing surface is available", () => {
+    render(
+      <PickerProviderAuthLine
+        state={withTerminalLoginCapability(baseProviderState("reasonix"))}
+        harness={null}
+        terminalLoginSurface={{
+          kind: "landing",
+          resolveLandingPageId: () => "draft-1",
+        }}
+        runTargetHostId={null}
+        onClosePicker={() => undefined}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: /Set up in terminal/ }),
+    ).toBeDefined();
+    // Capability present + a real surface here means "here" placement - the
+    // no-surface sentence must not also render beside a real button.
+    expect(
+      screen.queryByText(
+        "Choose “Set up in terminal” from a chat's model picker or the start page's. It opens Reasonix's setup wizard on the host that composer runs on.",
+      ),
+    ).toBeNull();
   });
 
   it("renders the bare 'Not authenticated' label for a signed-out provider without guidance", () => {

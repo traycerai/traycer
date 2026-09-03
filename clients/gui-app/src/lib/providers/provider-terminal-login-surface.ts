@@ -24,7 +24,20 @@ export type ProviderTerminalLoginSurface =
     }
   | {
       readonly kind: "landing";
-      /** The start page whose panel layout opens - the draft id, or the
-       *  panel's own unbound sentinel while the draft has no id yet. */
-      readonly landingPageId: string;
+      /**
+       * Binds the start page and answers the draft id its panel is keyed by,
+       * called once per press.
+       *
+       * A function rather than an id because an UNBOUND start page has no
+       * panel at all: `LandingDraftSurface` renders the pane anchor only for a
+       * non-null draft id, and `LandingTerminalHost` portals the panel into an
+       * anchor - so a sign-in opened against the unbound sentinel mints a real
+       * host PTY, stores its tab, and shows the user nothing. The composer
+       * mints the draft on the first substantive edit anyway; this runs the
+       * same mint, so pressing the button is that first gesture. It also
+       * settles the layout key: the panel reads the layout of the FOCUSED
+       * page, so opening under the sentinel and letting the draft appear
+       * afterwards would strand the open flag under a key nothing reads again.
+       */
+      readonly resolveLandingPageId: () => string;
     };

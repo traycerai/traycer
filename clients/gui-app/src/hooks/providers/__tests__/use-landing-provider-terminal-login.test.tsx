@@ -16,7 +16,7 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   }),
 }));
 
-import { useLandingProviderTerminalLogin } from "@/hooks/providers/use-landing-provider-terminal-login";
+import { useLandingProviderStartTerminalLogin } from "@/hooks/providers/use-landing-provider-terminal-login";
 import {
   landingTerminalLayoutFor,
   useLandingTerminalStore,
@@ -58,17 +58,16 @@ function renderStarter(
 ) {
   return renderHook(
     () =>
-      useLandingProviderTerminalLogin({
+      useLandingProviderStartTerminalLogin({
         providerId: "reasonix",
         hostId: HOST_ID,
-        landingPageId: LANDING_PAGE_ID,
         launchedFromSessionId,
       }),
     { wrapper },
   );
 }
 
-describe("useLandingProviderTerminalLogin", () => {
+describe("useLandingProviderStartTerminalLogin", () => {
   beforeEach(() => {
     useLandingTerminalStore.getState().resetForTests();
     useProviderLoginTerminalsStore.setState(
@@ -91,7 +90,7 @@ describe("useLandingProviderTerminalLogin", () => {
     const { result } = renderStarter(wrapper, null);
 
     act(() => {
-      result.current.start();
+      result.current.start(LANDING_PAGE_ID);
     });
     await waitFor(() => expect(result.current.isPending).toBe(false));
 
@@ -115,7 +114,7 @@ describe("useLandingProviderTerminalLogin", () => {
     const { result } = renderStarter(wrapper, null);
 
     act(() => {
-      result.current.start();
+      result.current.start(LANDING_PAGE_ID);
     });
     await waitFor(() => expect(result.current.isPending).toBe(false));
 
@@ -139,6 +138,31 @@ describe("useLandingProviderTerminalLogin", () => {
     );
   });
 
+  it("opens the panel for whichever landingPageId is passed to start() at press time, not a fixed hook-level id - the hook takes no landingPageId argument", async () => {
+    mocks.startTerminalLoginRequest.mockResolvedValue({
+      sessionId: "term-new",
+      replacedSessionId: null,
+    });
+    const { wrapper } = makeWrapper();
+    const { result } = renderStarter(wrapper, null);
+    const otherLandingPageId = "draft-second";
+
+    act(() => {
+      result.current.start(otherLandingPageId);
+    });
+    await waitFor(() => expect(result.current.isPending).toBe(false));
+
+    const state = useLandingTerminalStore.getState();
+    expect(landingTerminalLayoutFor(state, otherLandingPageId).panelOpen).toBe(
+      true,
+    );
+    // Never opened for a page nobody asked for - the id genuinely comes from
+    // the call-time argument rather than some hook-bound default.
+    expect(landingTerminalLayoutFor(state, LANDING_PAGE_ID).panelOpen).toBe(
+      false,
+    );
+  });
+
   it("removes the replaced tab's session without adding a pendingKills entry", async () => {
     useLandingTerminalStore.getState().addTab(OLD_TAB);
     mocks.startTerminalLoginRequest.mockResolvedValue({
@@ -149,7 +173,7 @@ describe("useLandingProviderTerminalLogin", () => {
     const { result } = renderStarter(wrapper, null);
 
     act(() => {
-      result.current.start();
+      result.current.start(LANDING_PAGE_ID);
     });
     await waitFor(() => expect(result.current.isPending).toBe(false));
 
@@ -180,7 +204,7 @@ describe("useLandingProviderTerminalLogin", () => {
     const { result } = renderStarter(wrapper, deadTab.sessionId);
 
     act(() => {
-      result.current.start();
+      result.current.start(LANDING_PAGE_ID);
     });
     await waitFor(() => expect(result.current.isPending).toBe(false));
 
@@ -205,13 +229,13 @@ describe("useLandingProviderTerminalLogin", () => {
 
     const first = renderStarter(wrapper, null);
     act(() => {
-      first.result.current.start();
+      first.result.current.start(LANDING_PAGE_ID);
     });
     await waitFor(() => expect(first.result.current.isPending).toBe(false));
 
     const second = renderStarter(wrapper, null);
     act(() => {
-      second.result.current.start();
+      second.result.current.start(LANDING_PAGE_ID);
     });
     await waitFor(() => expect(second.result.current.isPending).toBe(false));
 

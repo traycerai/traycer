@@ -1,9 +1,23 @@
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
-import { useProvidersStartTerminalLoginForClient } from "@/hooks/providers/use-providers-start-terminal-login-mutation";
-import type { ProviderTerminalLoginStarter } from "@/hooks/providers/use-provider-terminal-login";
+import {
+  useProvidersStartTerminalLoginForClient,
+  type StartTerminalLoginMutationResult,
+} from "@/hooks/providers/use-providers-start-terminal-login-mutation";
 import { openLandingSignInTerminal } from "@/lib/terminals/landing-sign-in-terminal";
+
+/**
+ * The landing counterpart of `ProviderTerminalLoginStarter`. `start` takes the
+ * start page to open into, resolved by the caller AT PRESS TIME rather than
+ * held as a hook argument: an unbound start page has to be bound (its draft
+ * minted) before it has a panel to open into, and doing that during render
+ * would mint a draft for merely showing the button.
+ */
+export type LandingProviderTerminalLoginStarter =
+  StartTerminalLoginMutationResult & {
+    readonly start: (landingPageId: string) => void;
+  };
 
 /**
  * The landing page's terminal sign-in gesture: ask the host for a fresh
@@ -23,16 +37,19 @@ import { openLandingSignInTerminal } from "@/lib/terminals/landing-sign-in-termi
  * the same reason the epic hook's does: the picker closes on click, so the
  * button that started this is gone before the host answers, and a live
  * sign-in PTY with no tab in front of it is exactly the failure to avoid.
+ * That is also why the target page is held in a ref rather than closed over:
+ * the id is only known once the press has bound the page, and the mutation's
+ * own `onSuccess` cannot read a per-`mutate` variable. One press is in flight
+ * at a time - the picker closes on the first - so the ref names this gesture.
  *
  * Against an old host that only speaks `providers.startTerminalLogin@1.0`
  * the client's downgrade path refuses the independent scope as
  * `DOWNGRADE_UNSUPPORTED`; the mutation's error toast reports it, and the
  * guidance's manual command remains the way through.
  */
-export function useLandingProviderTerminalLogin(args: {
+export function useLandingProviderStartTerminalLogin(args: {
   readonly providerId: ProviderId;
   readonly hostId: string | null;
-  readonly landingPageId: string;
   /**
    * The dead sign-in tab this gesture was launched FROM (its "Start again"
    * button), retired on success unless the host already reported it as the
@@ -41,9 +58,10 @@ export function useLandingProviderTerminalLogin(args: {
    * dead tab - every press would add another.
    */
   readonly launchedFromSessionId: string | null;
-}): ProviderTerminalLoginStarter {
-  const { providerId, hostId, landingPageId, launchedFromSessionId } = args;
+}): LandingProviderTerminalLoginStarter {
+  const { providerId, hostId, launchedFromSessionId } = args;
   const client = useHostClientForHostId(hostId);
+  const pendingLandingPageIdRef = useRef<string | null>(null);
 
   const onSuccess = useCallback(
     (result: {
@@ -54,7 +72,8 @@ export function useLandingProviderTerminalLogin(args: {
       // it rather than from `hostId`, which is `null` while following the
       // app-wide default.
       const resolvedHostId = client?.getActiveHostId() ?? null;
-      if (resolvedHostId === null) return;
+      const landingPageId = pendingLandingPageIdRef.current;
+      if (resolvedHostId === null || landingPageId === null) return;
       openLandingSignInTerminal({
         landingPageId,
         hostId: resolvedHostId,
@@ -64,7 +83,7 @@ export function useLandingProviderTerminalLogin(args: {
         launchedFromSessionId,
       });
     },
-    [client, landingPageId, launchedFromSessionId, providerId],
+    [client, launchedFromSessionId, providerId],
   );
 
   const startTerminalLogin = useProvidersStartTerminalLoginForClient(
@@ -72,16 +91,20 @@ export function useLandingProviderTerminalLogin(args: {
     onSuccess,
   );
 
-  const start = useCallback((): void => {
-    startTerminalLogin.mutate({
-      providerId,
-      scope: { kind: "independent" },
-      // An initial size only; the panel tile resizes on mount. Same fixed
-      // geometry the epic hook sends, for the same reason.
-      cols: 80,
-      rows: 24,
-    });
-  }, [providerId, startTerminalLogin]);
+  const start = useCallback(
+    (landingPageId: string): void => {
+      pendingLandingPageIdRef.current = landingPageId;
+      startTerminalLogin.mutate({
+        providerId,
+        scope: { kind: "independent" },
+        // An initial size only; the panel tile resizes on mount. Same fixed
+        // geometry the epic hook sends, for the same reason.
+        cols: 80,
+        rows: 24,
+      });
+    },
+    [providerId, startTerminalLogin],
+  );
 
-  return { start, isPending: startTerminalLogin.isPending };
+  return { ...startTerminalLogin, start };
 }

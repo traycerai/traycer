@@ -8,9 +8,10 @@ import { guiHarnessIdToProviderId } from "@/lib/provider-ordering";
 import { ProviderSetupManualCommand } from "@/components/home/pickers/harness-model-picker-auth-line";
 import { ProviderSetupTerminalAction } from "@/components/home/pickers/provider-setup-terminal-action";
 import {
-  type ProviderSetupGuidance,
+  providerSetupActionPlacement,
   providerSetupSteps,
   resolveProviderTerminalSetup,
+  type ProviderTerminalSetup,
 } from "@/lib/providers/provider-setup-guidance";
 import { isProviderSignedOutCatalogError } from "@/lib/providers/provider-signed-out-catalog-error";
 import type { ProviderTerminalLoginSurface } from "@/lib/providers/provider-terminal-login-surface";
@@ -154,7 +155,7 @@ export function ModelRowsState(props: ModelRowsStateProps): ReactNode | null {
         <ProviderSetupCta
           providerId={setup.providerId}
           label={activeProvider.label}
-          guidance={setup.guidance}
+          setup={setup.setup}
           terminalLoginSurface={terminalLoginSurface}
           runTargetHostId={runTargetHostId}
           onClosePicker={onClosePicker}
@@ -246,17 +247,17 @@ function providerSetupCta(
   state: ProviderCliState | null,
 ): {
   readonly providerId: ProviderId;
-  readonly guidance: ProviderSetupGuidance;
+  readonly setup: ProviderTerminalSetup;
 } | null {
   const providerId = guiHarnessIdToProviderId(provider.id);
   if (providerId === null) return null;
-  const guidance = resolveProviderTerminalSetup(
+  const setup = resolveProviderTerminalSetup(
     providerId,
     state?.loginCapability,
   );
-  if (guidance === null) return null;
+  if (setup === null) return null;
   return isProviderSignedOutCatalogError(providerId, provider.modelsError)
-    ? { providerId, guidance }
+    ? { providerId, setup }
     : null;
 }
 
@@ -271,12 +272,13 @@ function providerSetupCta(
 function ProviderSetupCta(props: {
   readonly providerId: ProviderId;
   readonly label: string;
-  readonly guidance: ProviderSetupGuidance;
+  readonly setup: ProviderTerminalSetup;
   readonly terminalLoginSurface: ProviderTerminalLoginSurface | null;
   readonly runTargetHostId: string | null;
   readonly onClosePicker: () => void;
 }): ReactNode {
-  const { guidance, terminalLoginSurface } = props;
+  const { setup, terminalLoginSurface } = props;
+  const { guidance } = setup;
   return (
     <div className="flex flex-col items-center gap-2 px-4 py-6 text-center">
       <span className="flex size-9 items-center justify-center rounded-full bg-primary/10 text-primary">
@@ -292,17 +294,18 @@ function ProviderSetupCta(props: {
         <ProviderSetupTerminalAction
           providerId={props.providerId}
           guidance={guidance}
-          surface={terminalLoginSurface}
+          surface={setup.canStartTerminal ? terminalLoginSurface : null}
           runTargetHostId={props.runTargetHostId}
           onBeforeStart={props.onClosePicker}
         />
       </div>
       <ol className="max-w-[min(90vw,18rem)] list-decimal space-y-0.5 pl-4 text-left text-ui-xs text-muted-foreground">
-        {providerSetupSteps(guidance, terminalLoginSurface !== null).map(
-          (step) => (
-            <li key={step}>{step}</li>
-          ),
-        )}
+        {providerSetupSteps(
+          guidance,
+          providerSetupActionPlacement(setup, terminalLoginSurface !== null),
+        ).map((step) => (
+          <li key={step}>{step}</li>
+        ))}
       </ol>
       {guidance.manualCommand === null ? null : (
         <p className="max-w-[min(90vw,18rem)] text-left text-ui-xs text-muted-foreground">

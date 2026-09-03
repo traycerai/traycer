@@ -9,7 +9,7 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { providersMutationKeys } from "@/lib/query-keys";
 
-type StartTerminalLoginMutationResult = UseMutationResult<
+export type StartTerminalLoginMutationResult = UseMutationResult<
   ResponseOfMethod<HostRpcRegistry, "providers.startTerminalLogin">,
   HostRpcError,
   RequestOfMethod<HostRpcRegistry, "providers.startTerminalLogin">,
