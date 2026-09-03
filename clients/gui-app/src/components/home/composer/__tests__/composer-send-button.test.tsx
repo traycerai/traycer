@@ -2,15 +2,19 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatActiveTurn } from "@traycer/protocol/host/agent/gui/subscribe";
 
-import {
-  ComposerSendButton,
-  type ComposerStopPlacement,
-} from "../composer-send-button";
+import { ComposerSendButton } from "../composer-send-button";
 
-afterEach(() => cleanup());
+const viewport = { mobile: false };
+vi.mock("@/hooks/ui/use-mobile-viewport", () => ({
+  useIsMobileViewport: () => viewport.mobile,
+}));
+
+afterEach(() => {
+  cleanup();
+  viewport.mobile = false;
+});
 
 interface RenderOptions {
-  readonly stopPlacement: ComposerStopPlacement;
   readonly activeTurnStatus: ChatActiveTurn["status"] | null;
   readonly canSubmit: boolean;
   readonly onSubmit: () => void;
@@ -27,7 +31,6 @@ function renderButton(options: RenderOptions) {
       stopDisabled={false}
       onStopTurn={options.onStopTurn}
       disabledHint={null}
-      stopPlacement={options.stopPlacement}
     />,
   );
 }
@@ -43,7 +46,6 @@ describe("ComposerSendButton attachment preparation", () => {
         stopDisabled
         onStopTurn={null}
         disabledHint={null}
-        stopPlacement="replace"
       />,
     );
 
@@ -54,10 +56,10 @@ describe("ComposerSendButton attachment preparation", () => {
   });
 });
 
-describe("ComposerSendButton stop placement", () => {
-  it("idle renders Send alone under either placement", () => {
+describe("ComposerSendButton mid-turn", () => {
+  it("idle renders Send alone on any viewport", () => {
+    viewport.mobile = true;
     renderButton({
-      stopPlacement: "beside",
       activeTurnStatus: null,
       canSubmit: true,
       onSubmit: vi.fn(),
@@ -67,9 +69,8 @@ describe("ComposerSendButton stop placement", () => {
     expect(screen.queryByTestId("chat-stop-button")).toBeNull();
   });
 
-  it("'replace' morphs Send into Stop while a turn runs", () => {
+  it("desktop morphs Send into Stop while a turn runs", () => {
     renderButton({
-      stopPlacement: "replace",
       activeTurnStatus: "running",
       canSubmit: true,
       onSubmit: vi.fn(),
@@ -80,11 +81,13 @@ describe("ComposerSendButton stop placement", () => {
     expect(screen.queryByRole("button", { name: "Queue" })).toBeNull();
   });
 
-  it("'beside' keeps a Queue button next to Stop while a turn runs", () => {
+  it("phone keeps a Queue button beside Stop while a turn runs", () => {
+    // Return is a newline on a phone, so without this button there would be
+    // no way to queue a message mid-turn.
+    viewport.mobile = true;
     const onSubmit = vi.fn();
     const onStopTurn = vi.fn();
     renderButton({
-      stopPlacement: "beside",
       activeTurnStatus: "running",
       canSubmit: true,
       onSubmit,
@@ -109,9 +112,9 @@ describe("ComposerSendButton stop placement", () => {
     expect(onSubmit).toHaveBeenCalledTimes(1);
   });
 
-  it("'beside' disables Queue when there is nothing to send", () => {
+  it("phone disables Queue when there is nothing to send", () => {
+    viewport.mobile = true;
     renderButton({
-      stopPlacement: "beside",
       activeTurnStatus: "running",
       canSubmit: false,
       onSubmit: vi.fn(),
@@ -125,9 +128,9 @@ describe("ComposerSendButton stop placement", () => {
     ).toBe(false);
   });
 
-  it("'beside' disables both buttons while the turn is stopping", () => {
+  it("phone disables both buttons while the turn is stopping", () => {
+    viewport.mobile = true;
     renderButton({
-      stopPlacement: "beside",
       activeTurnStatus: "stopping",
       canSubmit: true,
       onSubmit: vi.fn(),
