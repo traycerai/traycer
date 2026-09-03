@@ -23,7 +23,22 @@ const listeners = new Set<() => void>();
 
 function startIfNeeded(): void {
   if (intervalHandle !== null) return;
+  // A restart after idling re-samples - and a re-sample the subscribers cannot
+  // see is worse than none. The component that woke the clock has ALREADY
+  // rendered against the old `sampledNow`, which is as stale as the idle
+  // period (hours, in a long-open app), and nothing would repaint it for a
+  // full minute: a countdown to a check 30s away read as hours away until the
+  // first tick. Bumping `tick` is what lets `useSyncExternalStore` notice the
+  // fresh sample and re-render every subscriber - a one-time cost paid only
+  // when the clock comes back from idle.
+  const previous = sampledNow;
   sampledNow = Date.now();
+  if (sampledNow !== previous) {
+    tick += 1;
+    for (const listener of listeners) {
+      listener();
+    }
+  }
   intervalHandle = window.setInterval(() => {
     tick += 1;
     sampledNow = Date.now();
