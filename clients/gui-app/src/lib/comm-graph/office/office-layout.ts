@@ -1046,7 +1046,11 @@ function buildFloors(
             // was measured for.
             BUILDING_TOP_WALL_ROWS + minColumnHeight(specs) + 2 + stairsRows,
           );
-    const lastRoomRow = originRow + localRows - 2;
+    // The lowest room's bottom wall must sit ABOVE the lobby row, or its door
+    // would open onto the storey's outer wall: the last row a room may
+    // occupy is the one over the corridor, which is what the height floor
+    // above was measured for.
+    const lastRoomRow = originRow + localRows - 3;
     const packing = packAmenities(
       specs,
       originRow + BUILDING_TOP_WALL_ROWS,
