@@ -36,6 +36,7 @@ import type {
   BrowserViewTileKey,
   BrowserViewViewportPresetId,
 } from "@traycer-clients/shared/platform/browser-view";
+import { browserSessionsRefusal } from "@traycer-clients/shared/platform/browser-view";
 import type {
   ElectronTabBinding,
   ElectronTabSurfaceLease,
@@ -231,7 +232,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
         browserSessions.lifecycle !== "live" ||
         browserSessions.hostId !== props.node.hostId
       ) {
-        toast.error("Browsers are not connected yet.");
+        toast.error(browserSessionsRefusal(browserSessions));
         return;
       }
       void browserSessions
