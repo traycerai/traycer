@@ -285,6 +285,41 @@ describe("agent activity stream epoch handoff", () => {
     expect(agentActivityPlaneAnswers()).toBe(true);
   });
 
+  it("an in-place reconnect withdraws the attestation but keeps the union", () => {
+    const session = new StubSession();
+    const client = new StubHostStreamClient(session, "host-stream-1");
+    const reconnectEngine = createStubReconnectEngine();
+
+    openAgentActivityStream(reconnectEngine, client, null);
+    driveToOpenAndConnected(session);
+    expect(agentActivityPlaneAnswers()).toBe(true);
+
+    // A dropped socket never reports `closed`: the client goes `open` ->
+    // `reconnecting` -> `open` in place and keeps redialing, so no epoch
+    // boundary runs and the union stays on record. What must NOT stay is the
+    // claim that it describes now - an agent can start on the other side of
+    // that gap, and the cap would evict its Epic on the old map's silence.
+    session.emitStatus("reconnecting", null);
+    expect(agentActivityPlaneAnswers()).toBe(false);
+    expect(
+      useAgentActivityStore.getState().byEpic.get(EPIC_ID)?.working,
+    ).toEqual(new Set([AGENT_ID]));
+
+    // Back on the wire, still unattested: the socket is not the answer.
+    session.emitStatus("open", null);
+    expect(useAgentActivityStore.getState().connectionStatus).toBe("open");
+    expect(agentActivityPlaneAnswers()).toBe(false);
+
+    session.emitFrame({
+      kind: "state",
+      servedBy: "cloud",
+      byEpic: { [EPIC_ID]: { working: [AGENT_ID], turn: [AGENT_ID] } },
+      cloudSyncStatus: "connected",
+      hasBinaryPayload: false,
+    });
+    expect(agentActivityPlaneAnswers()).toBe(true);
+  });
+
   it("the per-user cloud union survives a stream replacement", () => {
     const firstSession = new StubSession();
     const firstClient = new StubHostStreamClient(firstSession, "host-stream-1");

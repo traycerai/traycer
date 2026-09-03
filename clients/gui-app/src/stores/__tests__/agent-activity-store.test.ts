@@ -148,13 +148,17 @@ describe("subscribeAgentActivityPlaneHealth", () => {
 });
 
 describe("agentActivityPlaneSpansFleet", () => {
-  it("is true for a cloud-served union", () => {
+  it("is false for a cloud-served frame that carries no stamp", () => {
+    // `agent.activity.subscribe@1.0` predates `cloudSyncStatus`, so a host on
+    // that minor sends `servedBy: "cloud"` with an absent stamp whether or
+    // not its cloud link is up - reading `servedBy` as fleet-wide would trust
+    // exactly the frame that cannot report the loss.
     useAgentActivityStore.setState({
       servedBy: "cloud",
       cloudSyncStatus: null,
     });
 
-    expect(agentActivityPlaneSpansFleet()).toBe(true);
+    expect(agentActivityPlaneSpansFleet()).toBe(false);
   });
 
   it("is true for a local plane whose host attests a connected cloud link", () => {
