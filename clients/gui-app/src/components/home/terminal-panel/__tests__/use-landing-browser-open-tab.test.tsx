@@ -382,6 +382,72 @@ describe("useLandingBrowserOpenTab", () => {
     expect(openTab).not.toHaveBeenCalled();
   });
 
+  // Two devices can be in flight at once - the panel's target host moves while
+  // an open is unanswered - and the settle of ONE of them must not release the
+  // other's latch. `useIsMutating` cannot cover the gap: it is rendered state,
+  // so between the render that dispatched B and the render that publishes B's
+  // pending count, the ref is the only guard standing.
+  it("keeps a device's latch when a DIFFERENT device's open settles", async () => {
+    const settles: Array<(identity: BrowserTabIdentity) => void> = [];
+    /** Which device each ask actually went to, in order. */
+    const asked: string[] = [];
+    const hostRef = { current: "host-a" };
+    const openTab = vi.fn(() => {
+      asked.push(hostRef.current);
+      return new Promise<BrowserTabIdentity>((resolve) => {
+        settles.push(resolve);
+      });
+    });
+    const { result, rerender } = renderHook(
+      () =>
+        useLandingBrowserOpenTab({
+          canDriveTabs: true,
+          hostId: hostRef.current,
+          sessions: sessionsState({ openTab }),
+          onOpened: vi.fn(),
+        }),
+      { wrapper: QueryWrapper },
+    );
+
+    // A is asked, and does not answer.
+    act(() => {
+      result.current.open({ placeholderInstanceId: null });
+    });
+    await waitFor(() => {
+      expect(asked).toEqual(["host-a"]);
+    });
+
+    // The panel's target moves to B while A is still out.
+    hostRef.current = "host-b";
+    rerender();
+    // Captured from the render B is dispatched in, which is where a chord and
+    // a card click both read their guard from. `isOpening` is `false` there:
+    // nothing is pending on B's key yet.
+    const openFromDispatchRender = result.current.open;
+
+    await act(async () => {
+      openFromDispatchRender({ placeholderInstanceId: null });
+      // A answers while B is still out. A settle that clears the whole latch
+      // rather than A's entry leaves B unguarded.
+      settles[0]?.({ sessionId: "session-a", tabId: "tab-a" });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      openFromDispatchRender({ placeholderInstanceId: null });
+    });
+
+    // B answers, which is what RELEASES a duplicate rather than causing one:
+    // both openers on a device share `openTabScope`, so a second mutation that
+    // got past the guards is paused by the mutation cache and runs when the
+    // first settles. The duplicate tab is deferred, not concurrent - so
+    // asserting before this settle would pass with the bug in place.
+    await act(async () => {
+      settles[1]?.({ sessionId: "session-b", tabId: "tab-b" });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    // One ask for B, not two: A's settle released A's latch and only A's.
+    expect(asked).toEqual(["host-a", "host-b"]);
+  });
+
   // The in-flight guard above is `useIsMutating`, which is RENDERED state:
   // both calls in one tick read the value from the render they were dispatched
   // in. The chord and a click on the chooser's card can land in the same tick.
@@ -411,11 +477,17 @@ describe("useLandingBrowserOpenTab", () => {
     expect(openTab).toHaveBeenCalledTimes(1);
     await act(async () => {
       settle?.({ sessionId: "session-1", tabId: "tab-1" });
-      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 0));
     });
-    await waitFor(() => {
-      expect(onOpened).toHaveBeenCalledTimes(1);
-    });
+
+    // Asserted AFTER the first settles, and on the device rather than on
+    // `onOpened`. Both openers on a device share `openTabScope`, so a second
+    // dispatch that got past the guards is PAUSED by the mutation cache and
+    // released by this settle - the duplicate is deferred, not concurrent.
+    // Counting before the settle, or waiting for `onOpened` to reach one,
+    // passes with no latch at all.
+    expect(openTab).toHaveBeenCalledTimes(1);
+    expect(onOpened).toHaveBeenCalledTimes(1);
   });
 
   // The latch is released when the mutation settles, so the NEXT ask opens.
