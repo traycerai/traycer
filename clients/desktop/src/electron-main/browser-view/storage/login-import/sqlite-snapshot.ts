@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { copyFile, mkdir, rm, stat, unlink } from "node:fs/promises";
+import { createReadStream, createWriteStream } from "node:fs";
+import { mkdir, rm, stat, unlink } from "node:fs/promises";
+import { pipeline } from "node:stream/promises";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { errnoCode } from "./errno-code";
@@ -83,7 +85,7 @@ export async function withSqliteSnapshot<T>(
       options.sourcePath,
       snapshotPath,
       options.platform,
-      copyFile,
+      copySqliteFileBounded,
     );
     if (copied !== null) return { ok: false, reason: copied };
     let database: DatabaseSync;
@@ -141,8 +143,43 @@ export async function sweepSqliteSnapshots(
   );
 }
 
-/** One file copy; `copyFile` in production, a hooked one in the suite. */
-export type SqliteFileCopy = (from: string, to: string) => Promise<void>;
+/**
+ * One file copy of at most `maxBytes` - it may read ONE byte past that, and
+ * answers with the bytes it copied, so a caller learns the source ran over
+ * from the answer rather than from a copy it had to finish first. Throws the
+ * file system's own error for a source that is missing or refused.
+ * {@link copySqliteFileBounded} in production; a hooked one in the suite.
+ */
+export type SqliteFileCopy = (
+  from: string,
+  to: string,
+  maxBytes: number,
+) => Promise<number>;
+
+/**
+ * A streamed copy rather than `copyFile`: the pre-copy size check reads the
+ * source at one instant, and a source still being written can grow between
+ * that instant and the copy. `copyFile` would follow it to wherever it ends
+ * up; a read stream with `end` set asks the kernel for at most `maxBytes + 1`
+ * bytes however far the file has grown, so the snapshot on disk can never be
+ * larger than the budget plus one byte, and that one byte is the signal.
+ */
+export async function copySqliteFileBounded(
+  from: string,
+  to: string,
+  maxBytes: number,
+): Promise<number> {
+  // `end` is inclusive: the stream reads bytes 0..maxBytes, one past the
+  // budget, and stops there whatever the file's length.
+  const source = createReadStream(from, { end: maxBytes });
+  await pipeline(source, createWriteStream(to, { mode: 0o600 }));
+  return source.bytesRead;
+}
+
+/** What one attempt may still copy; shared by the main file and its siblings. */
+interface CopyBudget {
+  remaining: number;
+}
 
 /**
  * How many times the three-file copy is taken before a source that moved
@@ -175,11 +212,16 @@ export async function copySqliteFiles(
       return "too-large";
     }
     const before = await sourceSignature(sourcePath);
+    // And DURING the copy, under one budget for the three files: the check
+    // above read the sizes at an instant, and a source written between that
+    // instant and its copy is copied only up to what the budget has left.
+    // Per attempt, since a retry starts a fresh snapshot.
     const failure = await copySqliteFilesOnce(
       sourcePath,
       snapshotPath,
       platform,
       copy,
+      { remaining: MAX_SQLITE_SNAPSHOT_BYTES },
     );
     if (failure !== null) return failure;
     if ((await sourceSignature(sourcePath)) === before) return null;
@@ -192,8 +234,9 @@ async function copySqliteFilesOnce(
   snapshotPath: string,
   platform: NodeJS.Platform,
   copy: SqliteFileCopy,
+  budget: CopyBudget,
 ): Promise<SqliteSnapshotFailure | null> {
-  const main = await copyOne(sourcePath, snapshotPath, platform, copy);
+  const main = await copyOne(sourcePath, snapshotPath, platform, copy, budget);
   if (main !== null) return main;
   // A missing WAL or shm is the common case: the browser checkpointed and
   // removed them, or never wrote them. Only the main file is required. The
@@ -206,6 +249,7 @@ async function copySqliteFilesOnce(
       `${snapshotPath}${suffix}`,
       platform,
       copy,
+      budget,
     );
     if (sibling === "missing") await unlinkQuietly(`${snapshotPath}${suffix}`);
     else if (sibling !== null) return sibling;
@@ -252,13 +296,20 @@ async function copyOne(
   to: string,
   platform: NodeJS.Platform,
   copy: SqliteFileCopy,
+  budget: CopyBudget,
 ): Promise<SqliteSnapshotFailure | null> {
+  let copied: number;
   try {
-    await copy(from, to);
-    return null;
+    copied = await copy(from, to, budget.remaining);
   } catch (error) {
     return classifyCopyFailure(error, platform);
   }
+  // One byte past what was left is the copy reporting the source ran over
+  // the bound; the partial file it wrote goes with the snapshot directory,
+  // which the caller removes whatever the outcome.
+  if (copied > budget.remaining) return "too-large";
+  budget.remaining -= copied;
+  return null;
 }
 
 export function classifyCopyFailure(

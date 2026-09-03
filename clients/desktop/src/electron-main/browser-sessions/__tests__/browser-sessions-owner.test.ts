@@ -415,6 +415,61 @@ describe("the browser.sessions jar plane lives in main", () => {
     expect(settled).toBe(true);
   });
 
+  it("gives the final capture's ack the REMAINDER of its one shared deadline, not a fresh budget once the barrier releases", async () => {
+    vi.useFakeTimers();
+    try {
+      const session = await openLiveStream(harness, registry, "window-1");
+      session.emit(
+        {
+          kind: "capturePrimaryProfile",
+          hasBinaryPayload: false,
+          requestId: "standing-1",
+          standing: true,
+        },
+        null,
+      );
+
+      harness.jar.deferBarrier = true;
+      let settled = false;
+      const flushed = registry
+        .captureFinalPrimaryProfiles("window-1")
+        .then(() => {
+          settled = true;
+        });
+
+      // 4 of the 5-second shutdown budget spent waiting on the barrier.
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(harness.jar.captures).toBe(0);
+      expect(settled).toBe(false);
+
+      harness.jar.releaseBarrier();
+      // Same extra-hop reasoning as the sibling test above: the bounded-wait
+      // promise adopts `readPrimaryProfile()`'s own promise, which costs a
+      // few more microtask ticks than the frame needs to leave.
+      for (let tick = 0; tick < 8; tick += 1) {
+        await Promise.resolve();
+      }
+
+      expect(harness.jar.captures).toBe(1);
+      expect(session.framesOfKind("primaryProfileCaptured")).toHaveLength(1);
+      // Sent, but the ack has not arrived - and this budget is what is under
+      // test, not a socket write.
+      expect(settled).toBe(false);
+
+      // ONE budget for the whole capture: only the second left of the
+      // original five is what the ack gets, not a fresh
+      // FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS on top of the barrier wait it
+      // just spent four of. Advancing by exactly that remainder is enough to
+      // time the flush out with no ack ever sent.
+      await vi.advanceTimersByTimeAsync(1_000);
+      await flushed;
+      expect(settled).toBe(true);
+    } finally {
+      vi.useRealTimers();
+      harness.jar.releaseBarrier();
+    }
+  });
+
   it("the import's own push still reads and sends immediately while the barrier is deferred, unblocked by a final capture waiting on the same gate", async () => {
     const session = await openLiveStream(harness, registry, "window-1");
     session.emit(

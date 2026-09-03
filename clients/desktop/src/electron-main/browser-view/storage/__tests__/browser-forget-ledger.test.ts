@@ -7,6 +7,7 @@ import type { BrowserStorageCookie } from "@traycer/protocol/host/browser/contra
 import {
   browserForgetLedgerDigestForHost,
   browserForgetLedgerPendingClears,
+  browserForgetLedgerUnclearedForgets,
   deferBrowserForgetLedgerNotifications,
   initBrowserForgetLedger,
   markBrowserForgetLedgerCleared,
@@ -21,11 +22,15 @@ import {
   recordForgottenBrowserSites,
   recordHeadlessOriginCookieKeys,
   releaseBrowserForgetLedgerConnection,
+  withoutUnclearedForgets,
 } from "../browser-forget-ledger";
 import { applyBrowserObservedProfile } from "../browser-observed-profile";
 import { BrowserObservedConnectionGovernor } from "../browser-observed-profile";
 import { BrowserJarSerializer } from "../browser-jar-serializer";
-import { cookieKeyId } from "../browser-storage-state";
+import {
+  cookieKeyId,
+  type BrowserPrimaryProfileCaptureResult,
+} from "../browser-storage-state";
 import { matchesDomainFilter } from "./cookie-jar-fixture";
 
 /**
@@ -974,6 +979,162 @@ describe("forget ledger clear reconciliation, several revisions at once", () => 
 
     await markBrowserForgetLedgerClearedMany([1]);
     expect(browserForgetLedgerPendingClears().domains).toEqual([]);
+  });
+});
+
+describe("forget ledger uncleared forgets", () => {
+  beforeEach(loadEmptyLedger);
+
+  it("reports a domain uncleared once forgotten, and clear once its jar clear is marked", async () => {
+    expect(
+      browserForgetLedgerUnclearedForgets().domains.has("example.com"),
+    ).toBe(false);
+
+    const revision = await recordForgottenBrowserSite("example.com");
+    expect(
+      browserForgetLedgerUnclearedForgets().domains.has("example.com"),
+    ).toBe(true);
+
+    await markBrowserForgetLedgerCleared(revision);
+    expect(
+      browserForgetLedgerUnclearedForgets().domains.has("example.com"),
+    ).toBe(false);
+  });
+
+  it("tells a completed out-of-order clear apart from the CONTIGUOUS watermark pendingClears reads", async () => {
+    // Two sites, two revisions. Only the newer one's clear finishes - the
+    // older one's is still queued behind it, the same race the jar
+    // serializer allows between two different domains.
+    await recordForgottenBrowserSite("a.test");
+    const revisionB = await recordForgottenBrowserSite("b.test");
+
+    await markBrowserForgetLedgerCleared(revisionB);
+
+    // The in-memory completion set already knows B's clear finished, even
+    // though the CONTIGUOUS watermark cannot step past A yet - this is
+    // exactly what distinguishes this function from the durable,
+    // boot-time-only read below.
+    const uncleared = browserForgetLedgerUnclearedForgets();
+    expect(uncleared.domains.has("b.test")).toBe(false);
+    expect(uncleared.domains.has("a.test")).toBe(true);
+
+    // `browserForgetLedgerPendingClears` has no memory of the completion -
+    // it still lists B as pending, because `clearedThrough` itself never
+    // moved past the gap A left open (it stayed at 0).
+    expect(
+      browserForgetLedgerPendingClears().domains.map((entry) => entry.domain),
+    ).toEqual(["a.test", "b.test"]);
+  });
+
+  it("reports forgetAll true once recorded, false once its clear is marked", async () => {
+    expect(browserForgetLedgerUnclearedForgets().forgetAll).toBe(false);
+
+    const revision = await recordForgetAllBrowserLogins();
+    expect(browserForgetLedgerUnclearedForgets().forgetAll).toBe(true);
+
+    await markBrowserForgetLedgerCleared(revision);
+    expect(browserForgetLedgerUnclearedForgets().forgetAll).toBe(false);
+  });
+});
+
+describe("withoutUnclearedForgets", () => {
+  function cookie(domain: string): BrowserStorageCookie {
+    return {
+      name: "sid",
+      value: "v",
+      domain,
+      path: "/",
+      expires: -1,
+      httpOnly: false,
+      secure: true,
+      sameSite: "Lax",
+      partitionKey: null,
+    };
+  }
+
+  it("drops a dotted or subdomain cookie and origin under a forgotten domain, keeping the rest", () => {
+    const result: BrowserPrimaryProfileCaptureResult = {
+      status: "captured",
+      storageState: {
+        cookies: [
+          cookie(".example.com"),
+          cookie("app.example.com"),
+          cookie("kept.test"),
+        ],
+        origins: [
+          { origin: "https://app.example.com", localStorage: [] },
+          { origin: "https://kept.test", localStorage: [] },
+        ],
+      },
+      reason: null,
+    };
+
+    const filtered = withoutUnclearedForgets(result, {
+      forgetAll: false,
+      domains: new Set(["example.com"]),
+    });
+
+    if (filtered.status !== "captured") {
+      throw new Error("expected a captured result");
+    }
+    expect(filtered.storageState.cookies.map((entry) => entry.domain)).toEqual([
+      "kept.test",
+    ]);
+    expect(filtered.storageState.origins.map((entry) => entry.origin)).toEqual([
+      "https://kept.test",
+    ]);
+  });
+
+  it("empties a captured result under an uncleared forget-all", () => {
+    const result: BrowserPrimaryProfileCaptureResult = {
+      status: "captured",
+      storageState: {
+        cookies: [cookie("example.com")],
+        origins: [{ origin: "https://example.com", localStorage: [] }],
+      },
+      reason: null,
+    };
+
+    const filtered = withoutUnclearedForgets(result, {
+      forgetAll: true,
+      domains: new Set(),
+    });
+
+    expect(filtered).toEqual({
+      status: "captured",
+      storageState: { cookies: [], origins: [] },
+      reason: null,
+    });
+  });
+
+  it("passes an unavailable result through untouched", () => {
+    const result: BrowserPrimaryProfileCaptureResult = {
+      status: "unavailable",
+      storageState: null,
+      reason: "no-window",
+    };
+
+    const filtered = withoutUnclearedForgets(result, {
+      forgetAll: true,
+      domains: new Set(["example.com"]),
+    });
+
+    expect(filtered).toBe(result);
+  });
+
+  it("returns the SAME object when nothing is uncleared", () => {
+    const result: BrowserPrimaryProfileCaptureResult = {
+      status: "captured",
+      storageState: { cookies: [cookie("example.com")], origins: [] },
+      reason: null,
+    };
+
+    const filtered = withoutUnclearedForgets(result, {
+      forgetAll: false,
+      domains: new Set(),
+    });
+
+    expect(filtered).toBe(result);
   });
 });
 

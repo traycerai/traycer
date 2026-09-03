@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { ActionToastContent } from "@/components/layout/bridges/action-toast-content";
 import {
@@ -25,8 +25,9 @@ const LOGIN_IMPORT_ANNOUNCEMENT_TOAST_ID = "traycer-login-import-announcement";
  * their browser logins - once, ever, per install.
  *
  * The toast shows on the first launch where ALL of these hold, and showing
- * it consumes the `login-import` announcement (`feature-announcements-store`)
- * so it never shows again and the tour act never follows it:
+ * it claims the `login-import` announcement (`feature-announcements-store`)
+ * so it never shows again - in this window or another - and the tour act
+ * never follows it:
  *
  * - the import is available here: a desktop with a browser bridge and saved
  *   logins ON (web and mobile have no jar to import into; with saving off
@@ -44,7 +45,9 @@ const LOGIN_IMPORT_ANNOUNCEMENT_TOAST_ID = "traycer-login-import-announcement";
  *
  * The primary action arms the one-shot intent BEFORE navigating, so the row
  * that mounts on the General section finds it armed and opens the dialog;
- * "Later" just dismisses - the announcement is consumed either way.
+ * "Later" just dismisses - the announcement is consumed either way. A gate
+ * that closes while the toast is up - saving off, sign-out, the tour opening
+ * - dismisses it, since it is permanent otherwise; see the effect.
  */
 export function LoginImportAnnouncementController(): null {
   const available = useLoginImportAvailable();
@@ -56,7 +59,7 @@ export function LoginImportAnnouncementController(): null {
   const consumed = useFeatureAnnouncementsStore((state) =>
     isFeatureAnnouncementConsumed(state.consumed, "login-import"),
   );
-  const consume = useFeatureAnnouncementsStore((state) => state.consume);
+  const claim = useFeatureAnnouncementsStore((state) => state.claim);
   const readiness = useSurfaceReadiness("default-host", null);
   const { hasBeenDefaultHostReady } = useHostReadinessController();
   const narrated =
@@ -68,10 +71,33 @@ export function LoginImportAnnouncementController(): null {
       bypassed: false,
     });
 
+  // Whether THIS controller put the toast up. `consumed` cannot stand in
+  // for it: the claim flips it the moment the toast shows, and another
+  // window's claim flips it with no toast here at all.
+  const shownRef = useRef(false);
+
   useEffect(() => {
+    // The toast is permanent, so a gate that closes after it is up takes it
+    // down: saving turned off (the row its action leads to is disabled),
+    // a sign-out, or the tour opening (a replay from Settings, which shows
+    // the same feature as an act, and a toast over the stage is noise). Not
+    // the narrator: that gate is transient, and a toast under its dialog is
+    // inert rather than wrong - it comes back live when the dialog goes, the
+    // same standing the app-update toast has. Gone is gone: the id is
+    // claimed, so nothing re-shows it.
+    if (shownRef.current && (!available || !signedIn || tourOpen)) {
+      shownRef.current = false;
+      toast.dismiss(LOGIN_IMPORT_ANNOUNCEMENT_TOAST_ID);
+      return;
+    }
     if (consumed || !available || !signedIn || !onboardingComplete) return;
     if (tourOpen || narrated) return;
-    consume("login-import");
+    // A claim, not a consume: `consumed` above is this window's copy, and a
+    // second window restored alongside this one holds its own. The claim
+    // re-reads the install's record, so of two windows that both get here
+    // exactly one shows the toast.
+    if (!claim("login-import")) return;
+    shownRef.current = true;
     toast(
       <ActionToastContent
         toastId={LOGIN_IMPORT_ANNOUNCEMENT_TOAST_ID}
@@ -94,7 +120,7 @@ export function LoginImportAnnouncementController(): null {
     );
   }, [
     available,
-    consume,
+    claim,
     consumed,
     narrated,
     onboardingComplete,

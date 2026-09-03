@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import {
   appendFile,
   chmod,
-  copyFile,
   mkdir,
   mkdtemp,
   readdir,
@@ -19,6 +18,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { SqliteRowBudgetError } from "../sqlite-columns";
 import {
   classifyCopyFailure,
+  copySqliteFileBounded,
   copySqliteFiles,
   MAX_SQLITE_SNAPSHOT_BYTES,
   SQLITE_SNAPSHOT_COPY_ATTEMPTS,
@@ -278,8 +278,8 @@ describe("copySqliteFiles - retry against a moving source", () => {
     const snapshotPath = join(snapshotDir, "cookies.sqlite");
 
     let mainCopyCount = 0;
-    const copy: SqliteFileCopy = async (from, to) => {
-      await copyFile(from, to);
+    const copy: SqliteFileCopy = async (from, to, maxBytes) => {
+      const copied = await copySqliteFileBounded(from, to, maxBytes);
       if (from === sourcePath) {
         mainCopyCount += 1;
         if (mainCopyCount === 1) {
@@ -288,6 +288,7 @@ describe("copySqliteFiles - retry against a moving source", () => {
           await appendFile(sourcePath, "extra-bytes-after-first-copy");
         }
       }
+      return copied;
     };
 
     const result = await copySqliteFiles(
@@ -317,12 +318,13 @@ describe("copySqliteFiles - retry against a moving source", () => {
     const snapshotPath = join(snapshotDir, "cookies.sqlite");
 
     let mainCopyCount = 0;
-    const copy: SqliteFileCopy = async (from, to) => {
-      await copyFile(from, to);
+    const copy: SqliteFileCopy = async (from, to, maxBytes) => {
+      const copied = await copySqliteFileBounded(from, to, maxBytes);
       if (from === sourcePath) {
         mainCopyCount += 1;
         await appendFile(sourcePath, `extra-bytes-${mainCopyCount}`);
       }
+      return copied;
     };
 
     const result = await copySqliteFiles(
@@ -356,14 +358,15 @@ describe("copySqliteFiles - retry against a moving source", () => {
     // a second attempt - on which the -wal copy now fails "missing" and the
     // attempt-1 copy is unlinked.
     let callCount = 0;
-    const copy: SqliteFileCopy = async (from, to) => {
+    const copy: SqliteFileCopy = async (from, to, maxBytes) => {
       callCount += 1;
       const thisCall = callCount;
-      await copyFile(from, to);
+      const copied = await copySqliteFileBounded(from, to, maxBytes);
       if (thisCall === 2) {
         await unlink(`${sourcePath}-wal`);
         await appendFile(sourcePath, "checkpointed-bytes");
       }
+      return copied;
     };
 
     const result = await copySqliteFiles(
@@ -394,9 +397,9 @@ describe("copySqliteFiles - too-large refusal by size alone, before any byte is 
     const snapshotPath = join(snapshotDir, "cookies.sqlite");
 
     let copyCallCount = 0;
-    const copy: SqliteFileCopy = async (from, to) => {
+    const copy: SqliteFileCopy = async (from, to, maxBytes) => {
       copyCallCount += 1;
-      await copyFile(from, to);
+      return copySqliteFileBounded(from, to, maxBytes);
     };
 
     const result = await copySqliteFiles(
@@ -410,21 +413,23 @@ describe("copySqliteFiles - too-large refusal by size alone, before any byte is 
     expect(copyCallCount).toBe(0);
   });
 
-  it("refuses when the main file is small but the -wal sibling pushes the sum over the bound", async () => {
+  it("refuses when neither file is over the bound alone but the main file plus the -wal sibling is", async () => {
     const sourceDir = await mkdtemp(join(tmpdir(), "sqlite-snapshot-source-"));
     dirsToClean.push(sourceDir);
     const sourcePath = join(sourceDir, "cookies.sqlite");
     await writeFile(sourcePath, "small main file");
     await writeFile(`${sourcePath}-wal`, "");
-    await truncate(`${sourcePath}-wal`, MAX_SQLITE_SNAPSHOT_BYTES + 1);
+    // EXACTLY the bound, so a per-file check would pass it: only the sum
+    // with the non-empty main file is what is over.
+    await truncate(`${sourcePath}-wal`, MAX_SQLITE_SNAPSHOT_BYTES);
     const snapshotDir = await mkdtemp(join(tmpdir(), "sqlite-snapshot-dest-"));
     dirsToClean.push(snapshotDir);
     const snapshotPath = join(snapshotDir, "cookies.sqlite");
 
     let copyCallCount = 0;
-    const copy: SqliteFileCopy = async (from, to) => {
+    const copy: SqliteFileCopy = async (from, to, maxBytes) => {
       copyCallCount += 1;
-      await copyFile(from, to);
+      return copySqliteFileBounded(from, to, maxBytes);
     };
 
     const result = await copySqliteFiles(
@@ -436,5 +441,87 @@ describe("copySqliteFiles - too-large refusal by size alone, before any byte is 
 
     expect(result).toBe("too-large");
     expect(copyCallCount).toBe(0);
+  });
+});
+
+describe("copySqliteFiles - TOCTOU: a source that grows AFTER the pre-check but DURING the copy", () => {
+  // The pre-check reads the source's size at an instant, before any byte is
+  // copied. A source that grows between that instant and the copy itself -
+  // the exact gap `copySqliteFileBounded`'s bounded read stream exists to
+  // close - must still be caught, on the SAME attempt, with no retry.
+  it("fails 'too-large' on the attempt that catches the mid-copy growth, with no retry", async () => {
+    const sourceDir = await mkdtemp(join(tmpdir(), "sqlite-snapshot-source-"));
+    dirsToClean.push(sourceDir);
+    const sourcePath = join(sourceDir, "cookies.sqlite");
+    // Small enough to pass the pre-check.
+    await writeFile(sourcePath, "small main file");
+    const snapshotDir = await mkdtemp(join(tmpdir(), "sqlite-snapshot-dest-"));
+    dirsToClean.push(snapshotDir);
+    const snapshotPath = join(snapshotDir, "cookies.sqlite");
+
+    let copyCallCount = 0;
+    const copy: SqliteFileCopy = async (from, to, maxBytes) => {
+      copyCallCount += 1;
+      if (copyCallCount === 1) {
+        // Grows the SOURCE, not the copy - a sparse truncate is instant, so
+        // this is not writing MAX_SQLITE_SNAPSHOT_BYTES real bytes.
+        await truncate(sourcePath, MAX_SQLITE_SNAPSHOT_BYTES + 1);
+      }
+      return copySqliteFileBounded(from, to, maxBytes);
+    };
+
+    const result = await copySqliteFiles(
+      sourcePath,
+      snapshotPath,
+      process.platform,
+      copy,
+    );
+
+    expect(result).toBe("too-large");
+    // The main file's own copy caught the growth: no retry, and no sibling
+    // copy was attempted either.
+    expect(copyCallCount).toBe(1);
+    const snapshotStat = await stat(snapshotPath);
+    expect(snapshotStat.size).toBeLessThanOrEqual(
+      MAX_SQLITE_SNAPSHOT_BYTES + 1,
+    );
+  });
+});
+
+describe("copySqliteFileBounded", () => {
+  it("copies at most maxBytes + 1 bytes and answers the bytes it copied", async () => {
+    const sourceDir = await mkdtemp(join(tmpdir(), "sqlite-snapshot-source-"));
+    dirsToClean.push(sourceDir);
+    const sourcePath = join(sourceDir, "ten-bytes.bin");
+    await writeFile(sourcePath, "0123456789");
+    const destDir = await mkdtemp(join(tmpdir(), "sqlite-snapshot-dest-"));
+    dirsToClean.push(destDir);
+
+    const boundedPath = join(destDir, "bounded.bin");
+    const boundedCopied = await copySqliteFileBounded(
+      sourcePath,
+      boundedPath,
+      4,
+    );
+    expect(boundedCopied).toBe(5);
+    expect((await stat(boundedPath)).size).toBe(5);
+
+    const wholePath = join(destDir, "whole.bin");
+    const wholeCopied = await copySqliteFileBounded(sourcePath, wholePath, 100);
+    expect(wholeCopied).toBe(10);
+    expect((await stat(wholePath)).size).toBe(10);
+  });
+
+  it("rejects with an ENOENT-coded error for a missing source", async () => {
+    const destDir = await mkdtemp(join(tmpdir(), "sqlite-snapshot-dest-"));
+    dirsToClean.push(destDir);
+
+    await expect(
+      copySqliteFileBounded(
+        join(destDir, "does-not-exist.bin"),
+        join(destDir, "out.bin"),
+        100,
+      ),
+    ).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

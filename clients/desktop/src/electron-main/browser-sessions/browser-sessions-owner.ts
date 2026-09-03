@@ -39,7 +39,11 @@ import type {
 } from "./browser-sessions-transport";
 
 /**
- * Bound on the round trip that proves one final capture reached the host.
+ * Bound on one final capture at a window's close or at quit, end to end: the
+ * wait for a whole-jar barrier to release, the jar read, and the round trip
+ * that proves the frame reached the host, all under ONE deadline - never
+ * this much for the barrier and this much again for the ack. Also the ack
+ * budget of every other capture.
  *
  * A liveness escape from a host that never acks, not an ordering device: the
  * quit path is already bounded by the shell's own budget, and this only has to
@@ -753,7 +757,10 @@ class BrowserSessionsStream {
    * - which the close then makes permanent by tearing the stream down before
    * the import's own push. A barrier still held past the budget skips the
    * capture instead: the import pushes what it committed to every stream
-   * still live, and the jar and ledger are on disk for the next attach.
+   * still live, and the jar and ledger are on disk for the next attach. The
+   * budget is one deadline over the barrier wait, the read and the ack
+   * ({@link FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS}), so a close during an
+   * import costs at most that, not that plus a whole ack wait.
    *
    * Not through {@link capturePrimaryProfileNow}'s lane, deliberately: the
    * import's own push takes that lane from INSIDE its barrier, and a final
@@ -814,6 +821,16 @@ class BrowserSessionsStream {
   private async capturePrimaryProfileOnce(
     ordering: CaptureOrdering,
   ): Promise<BrowserPrimaryProfileCaptureOutcome> {
+    // A bounded barrier wait is the shutdown budget, and it is ONE budget
+    // for the whole capture: whatever the barrier wait and the jar read
+    // leave of it is what the ack may take. Window close and quit await this
+    // method directly, and a barrier that releases at the end of the wait
+    // must not buy the ack a fresh budget on top.
+    const startedAt = Date.now();
+    const ackTimeoutMs = (): number =>
+      ordering === "now" || ordering.behindBarrierFor === null
+        ? FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS
+        : Math.max(0, ordering.behindBarrierFor - (Date.now() - startedAt));
     if (this.connectionStatus !== "open") return "not-sent";
     const requestId = this.standingCaptureRequestId;
     // No standing id means this host either never authorized the jar plane for
@@ -839,7 +856,7 @@ class BrowserSessionsStream {
     // receives, in order, and this frame's slot must absorb its own ack
     // rather than leave it for the next capture's - but that ack counts for
     // nothing: whatever the host took, it was not the jar.
-    const acked = await this.awaitCaptureAck(requestId);
+    const acked = await this.awaitCaptureAck(requestId, ackTimeoutMs());
     if (sent === "sent-no-jar") return "sent-no-jar";
     return acked ? "acked" : "unacked";
   }
@@ -1194,8 +1211,15 @@ class BrowserSessionsStream {
    * Resolves `true` only on a real ack from the host. A timeout, a connection
    * that is not open, and a teardown all resolve `false`, so a caller counting
    * what a host took cannot count a capture that merely left.
+   *
+   * `timeoutMs` is what remains of the caller's budget; the slot is queued
+   * even for a budget already spent, since the frame left and its ack must
+   * still be absorbed by its own slot rather than the next capture's.
    */
-  private awaitCaptureAck(requestId: string): Promise<boolean> {
+  private awaitCaptureAck(
+    requestId: string,
+    timeoutMs: number,
+  ): Promise<boolean> {
     return new Promise<boolean>((resolve) => {
       if (this.connectionStatus !== "open") {
         resolve(false);
@@ -1206,7 +1230,7 @@ class BrowserSessionsStream {
         // Settled in place, still queued: see `captureAckSlots`.
         slot.settle = null;
         resolve(false);
-      }, FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS);
+      }, timeoutMs);
       slot.settle = (acked) => {
         clearTimeout(timer);
         slot.settle = null;

@@ -21,6 +21,7 @@ import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { useOnboardingTourOpenStore } from "@/stores/onboarding/onboarding-tour-open-store";
 import { useBrowserFocusStore } from "@/stores/settings/browser-focus-store";
 import { useFeatureAnnouncementsStore } from "@/stores/settings/feature-announcements-store";
+import { persistKey, STORE_KEYS } from "@/lib/persist";
 
 // Typed to the two sonner calls the controller makes, so `mock.lastCall`
 // destructures to a real tuple and not `any`.
@@ -127,6 +128,12 @@ describe("<LoginImportAnnouncementController />", () => {
   afterEach(() => {
     cleanup();
     resetStores();
+    // "the primary action..." test spies on the real
+    // useBrowserFocusStore.getState().requestImportLogins with
+    // mockImplementation; nothing here auto-restores it, so a leaked spy
+    // would silently swallow that store's real action in every later test.
+    vi.restoreAllMocks();
+    navigateToSettingsSectionMock.mockReset();
   });
 
   it("shows once and consumes, so a second mount shows nothing", () => {
@@ -222,6 +229,29 @@ describe("<LoginImportAnnouncementController />", () => {
     );
   });
 
+  it("does not show when another window already claimed the announcement", () => {
+    // Written straight into localStorage, as another renderer's own
+    // claim()/consume() would have - never through THIS window's store.
+    window.localStorage.setItem(
+      persistKey(STORE_KEYS.featureAnnouncements),
+      JSON.stringify({
+        state: { consumed: { "login-import": 123 } },
+        version: 1,
+      }),
+    );
+    // This window's in-memory copy still starts out empty.
+    expect(useFeatureAnnouncementsStore.getState().consumed).toEqual({});
+
+    render(<LoginImportAnnouncementController />);
+
+    // claim()'s own rehydrate adopts the other window's record before the
+    // controller decides whether to show anything.
+    expect(toastMock).not.toHaveBeenCalled();
+    expect(
+      useFeatureAnnouncementsStore.getState().consumed["login-import"],
+    ).toBe(123);
+  });
+
   it("Later dismisses and the announcement stays consumed", () => {
     render(<LoginImportAnnouncementController />);
 
@@ -240,5 +270,61 @@ describe("<LoginImportAnnouncementController />", () => {
     toastMock.mockClear();
     render(<LoginImportAnnouncementController />);
     expect(toastMock).not.toHaveBeenCalled();
+  });
+
+  it("dismisses the toast once the tour opens after it showed", () => {
+    render(<LoginImportAnnouncementController />);
+    expect(toastMock).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      useOnboardingTourOpenStore.getState().setOpen(true);
+    });
+
+    expect(toastMock.dismiss).toHaveBeenCalledWith(
+      "traycer-login-import-announcement",
+    );
+  });
+
+  it("dismisses the toast once availability flips to false after it showed", () => {
+    const { rerender } = render(<LoginImportAnnouncementController />);
+    expect(toastMock).toHaveBeenCalledTimes(1);
+
+    loginImportAvailableMock.value = false;
+    rerender(<LoginImportAnnouncementController />);
+
+    expect(toastMock.dismiss).toHaveBeenCalledWith(
+      "traycer-login-import-announcement",
+    );
+  });
+
+  it("does NOT dismiss the toast when only the window narrator gate closes over it", () => {
+    const harness = renderWithReadiness(
+      <LoginImportAnnouncementController />,
+      READY_READINESS,
+    );
+    expect(toastMock).toHaveBeenCalledTimes(1);
+
+    // The narrator gate is transient - a toast under its dialog is inert
+    // rather than wrong, and comes back live when the dialog goes. It must
+    // not take the toast down the way saving-off, sign-out and the tour do.
+    harness.rerenderReadiness(LOADING_HOST_READINESS);
+
+    expect(toastMock.dismiss).not.toHaveBeenCalled();
+  });
+
+  it("does not dismiss on the tour opening when THIS controller never showed the toast", () => {
+    // Already consumed - by another window, or a prior mount - so this
+    // controller's own shown-tracking never flips true.
+    useFeatureAnnouncementsStore.setState({
+      consumed: { "login-import": Date.now() },
+    });
+    render(<LoginImportAnnouncementController />);
+    expect(toastMock).not.toHaveBeenCalled();
+
+    act(() => {
+      useOnboardingTourOpenStore.getState().setOpen(true);
+    });
+
+    expect(toastMock.dismiss).not.toHaveBeenCalled();
   });
 });

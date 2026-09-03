@@ -6,13 +6,19 @@ import {
   type BrowserCookieKey,
   type BrowserForgetLedger,
 } from "@traycer/protocol/host/browser/contracts";
-import { registrableDomain } from "@traycer/protocol/host/browser/registrable-domain";
+import {
+  registrableDomain,
+  registrableDomainForUrl,
+} from "@traycer/protocol/host/browser/registrable-domain";
 import { describeLogError, log } from "../../app/logger";
 import {
   createJsonFileStore,
   type StrictJsonFileStore,
 } from "../../app/json-file-store";
-import { cookieKeyId } from "./browser-storage-state";
+import {
+  cookieKeyId,
+  type BrowserPrimaryProfileCaptureResult,
+} from "./browser-storage-state";
 
 /**
  * The durable forget ledger: this machine's record of every login the user
@@ -481,6 +487,89 @@ export function browserForgetLedgerPendingClears(): {
     domains: ledger.domains
       .filter((entry) => entry.revision > cleared)
       .map((entry) => ({ domain: entry.domain, revision: entry.revision })),
+  };
+}
+
+/**
+ * What is recorded as forgotten but not yet CLEARED from this machine's jar,
+ * right now: the forgets whose local jar operation is still queued or
+ * running. Unlike {@link browserForgetLedgerPendingClears} - the boot-time
+ * read, which has no memory of completions - this consults the in-memory
+ * completions too, so a clear that finished ahead of an older one still
+ * waiting is not reported as uncleared.
+ */
+export interface BrowserForgetLedgerUnclearedForgets {
+  /** A forget-all is recorded and its jar clear has not finished. */
+  readonly forgetAll: boolean;
+  /** Registrable domains whose site clear is recorded and not finished. */
+  readonly domains: ReadonlySet<string>;
+}
+
+export function browserForgetLedgerUnclearedForgets(): BrowserForgetLedgerUnclearedForgets {
+  const uncleared = (revision: number): boolean =>
+    revision > ledger.clearedThrough && !completedClears.has(revision);
+  const forgetAll = ledger.forgetAll;
+  return {
+    forgetAll: forgetAll !== null && uncleared(forgetAll.revision),
+    domains: new Set(
+      ledger.domains
+        .filter((entry) => uncleared(entry.revision))
+        .map((entry) => entry.domain),
+    ),
+  };
+}
+
+/**
+ * A capture with every UNCLEARED forget's site taken out of it - the cookies
+ * under the site and the origins under it - and nothing at all under an
+ * uncleared forget-all.
+ *
+ * Every whole-jar capture goes through this, and the reason is ordering. A
+ * forget records its ledger revision FIRST and then queues its jar clear on
+ * the serializer; a host prunes the site the moment it takes the digest. A
+ * capture read between the record and the clear still carries the site,
+ * and a host that takes it re-learns what it just pruned - until the clear's
+ * own removals reach it, or, if the clear never runs (an expired barrier, a
+ * crash), until nothing does. The gap is real whenever a forget lands
+ * behind a whole-jar barrier: a login import holds one for as long as a
+ * keystore prompt takes, and its own push reads the jar from INSIDE it, so
+ * a Clear site or Forget all confirmed meanwhile has been recorded and told
+ * to every host while its clear is still queued behind the import. The
+ * push must therefore carry the jar as the ledger says it WILL be, not as
+ * it momentarily is. Deferring the digest (see
+ * {@link deferBrowserForgetLedgerNotifications}) does not change this, nor
+ * would sending it at once: the push follows the digest either way.
+ *
+ * An `unavailable` capture passes through untouched; a capture that has
+ * nothing left stays `captured` and empty, since under a pending forget an
+ * empty jar is exactly what the host should hold.
+ */
+export function withoutUnclearedForgets(
+  result: BrowserPrimaryProfileCaptureResult,
+  uncleared: BrowserForgetLedgerUnclearedForgets,
+): BrowserPrimaryProfileCaptureResult {
+  if (result.status !== "captured") return result;
+  if (uncleared.forgetAll) {
+    return {
+      status: "captured",
+      storageState: { cookies: [], origins: [] },
+      reason: null,
+    };
+  }
+  if (uncleared.domains.size === 0) return result;
+  const forgotten = (scope: string | null): boolean =>
+    scope !== null && uncleared.domains.has(scope);
+  return {
+    status: "captured",
+    storageState: {
+      cookies: result.storageState.cookies.filter(
+        (cookie) => !forgotten(registrableDomain(cookie.domain)),
+      ),
+      origins: result.storageState.origins.filter(
+        (origin) => !forgotten(registrableDomainForUrl(origin.origin)),
+      ),
+    },
+    reason: null,
   };
 }
 

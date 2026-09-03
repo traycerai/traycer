@@ -15,7 +15,9 @@ import { useFeatureAnnouncementsStore } from "@/stores/settings/feature-announce
  *
  * Showing this act is the announcement: the feature id is consumed on mount
  * so the release toast never follows for a user who has seen the act, whether
- * or not they imported anything. The act is only ever in the tour when the
+ * or not they imported anything. A user who leaves the tour BEFORE reaching
+ * it is covered by the tour's own finish (`OnboardingPage`), which consumes
+ * the id whenever this act was in the tour. The act is only ever in the tour when the
  * import is available (`onboardingActsFor`), so the bridge is expected; the
  * null branch is for the render between a bridge going away and the act list
  * following it.

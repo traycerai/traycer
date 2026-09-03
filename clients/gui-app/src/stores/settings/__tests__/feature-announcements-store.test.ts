@@ -131,4 +131,77 @@ describe("useFeatureAnnouncementsStore", () => {
       ),
     ).toBe(true);
   });
+
+  it("claim() answers true once, then false, and records the id", () => {
+    const first = useFeatureAnnouncementsStore.getState().claim("login-import");
+    expect(first).toBe(true);
+
+    const second = useFeatureAnnouncementsStore
+      .getState()
+      .claim("login-import");
+    expect(second).toBe(false);
+
+    expect(
+      isFeatureAnnouncementConsumed(
+        useFeatureAnnouncementsStore.getState().consumed,
+        "login-import",
+      ),
+    ).toBe(true);
+  });
+
+  it("claim() loses to another window's record already in localStorage, and adopts it", () => {
+    // The other window's write, straight into storage - exactly what a
+    // second renderer's own `consume()`/`claim()` would have produced,
+    // without going through THIS window's store at all.
+    window.localStorage.setItem(
+      PERSIST_KEY,
+      JSON.stringify({
+        state: { consumed: { "login-import": 123 } },
+        version: 1,
+      }),
+    );
+    // This window's in-memory copy still says nothing was consumed.
+    expect(
+      isFeatureAnnouncementConsumed(
+        useFeatureAnnouncementsStore.getState().consumed,
+        "login-import",
+      ),
+    ).toBe(false);
+
+    const claimed = useFeatureAnnouncementsStore
+      .getState()
+      .claim("login-import");
+
+    expect(claimed).toBe(false);
+    // The synchronous rehydrate inside claim() is what adopted the other
+    // window's record before the id check ran.
+    expect(
+      useFeatureAnnouncementsStore.getState().consumed["login-import"],
+    ).toBe(123);
+  });
+
+  it("a storage event for this store's key rehydrates the store", async () => {
+    window.localStorage.setItem(
+      PERSIST_KEY,
+      JSON.stringify({
+        state: { consumed: { "login-import": 456 } },
+        version: 1,
+      }),
+    );
+    expect(
+      isFeatureAnnouncementConsumed(
+        useFeatureAnnouncementsStore.getState().consumed,
+        "login-import",
+      ),
+    ).toBe(false);
+
+    window.dispatchEvent(new StorageEvent("storage", { key: PERSIST_KEY }));
+    // The listener's rehydrate is asynchronous.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(
+      useFeatureAnnouncementsStore.getState().consumed["login-import"],
+    ).toBe(456);
+  });
 });

@@ -597,7 +597,12 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
         finished onboarding (a fresh user meets the feature as a tour act
         instead); either surface consumes the `login-import` id in the
         persisted `feature-announcements` store, so exactly one of them ever
-        shows.
+        shows. The toast CLAIMS the id rather than consuming it (`claim`
+        re-reads localStorage before writing, synchronously), because the
+        store is per renderer and two windows restored together would each
+        hydrate it empty; the tour consumes it on the act's mount AND on the
+        tour's finish whenever the act was in the tour, so skipping the intro
+        before reaching the act does not resurrect the toast.
     - **Forget all browser logins** (destructive confirm) moved here from the
       tile shield popover, which was ticket 08's temporary home. It calls the
       bridge's `forgetLogins()` directly and so speaks for EVERY host the user has a live browser stream to; that is

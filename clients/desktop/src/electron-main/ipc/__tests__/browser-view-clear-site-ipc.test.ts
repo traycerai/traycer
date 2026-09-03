@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { BrowserPrimaryProfileCaptureResult } from "../../browser-view/storage/browser-storage-state";
 
 /**
  * Which jars "clear cookies for this site" and its host-driven twin reach.
@@ -48,6 +49,27 @@ const fixture = vi.hoisted(() => ({
   /** Frames the handlers asked the jar-plane registry to put on a host. */
   hostFrames: [] as string[],
   trustedCertificates: [] as string[],
+  /**
+   * The `jar.capturePrimaryProfile` callback registration handed the jar-plane
+   * registry - the ledgered wrapper under test is otherwise unreachable from
+   * here, since the registry mock below does not drive it on its own.
+   */
+  capturePrimaryProfile: null as
+    | (() => Promise<BrowserPrimaryProfileCaptureResult>)
+    | null,
+  /** What `primaryProfileSnapshots.capture()` answers, settable per test. */
+  captureResult: {
+    status: "captured",
+    storageState: { cookies: [], origins: [] },
+    reason: null,
+  } as BrowserPrimaryProfileCaptureResult,
+  /**
+   * Holds a site's jar clear open, so a test can read a capture from INSIDE
+   * the window between the ledger write and the clear actually finishing.
+   */
+  deferSiteClears: false,
+  /** Resolves the site clear currently held open, when there is one. */
+  releaseSiteClear: null as (() => void) | null,
   /**
    * A fresh userData directory per test. The forget ledger is the REAL module
    * here, and it persists: a test that leaves a clear pending (the ones that
@@ -223,7 +245,13 @@ vi.mock("../../browser-view/browser-session", () => {
  */
 vi.mock("../../browser-sessions/browser-sessions-owner", () => ({
   BrowserSessionsRegistry: class {
-    constructor(_options: unknown) {}
+    constructor(options: {
+      readonly jar: {
+        readonly capturePrimaryProfile: () => Promise<BrowserPrimaryProfileCaptureResult>;
+      };
+    }) {
+      fixture.capturePrimaryProfile = options.jar.capturePrimaryProfile;
+    }
 
     open(): void {}
 
@@ -272,6 +300,10 @@ vi.mock("../../browser-view/storage/browser-storage-state", () => ({
     reset(): void {
       fixture.forgetAllResets += 1;
     }
+
+    capture(): Promise<BrowserPrimaryProfileCaptureResult> {
+      return Promise.resolve(fixture.captureResult);
+    }
   },
   captureBrowserOriginLocalStorage: vi.fn(() => Promise.resolve(null)),
   captureBrowserPrimaryProfile: vi.fn(() =>
@@ -284,11 +316,17 @@ vi.mock("../../browser-view/storage/browser-storage-state", () => ({
   clearBrowserSite: vi.fn(
     (domain: string, browserSession: { readonly partition: string }) => {
       fixture.clears.push({ domain, partition: browserSession.partition });
-      return fixture.failingSiteClears.includes(browserSession.partition)
-        ? Promise.reject(
-            new Error(`site clear failed on ${browserSession.partition}`),
-          )
-        : Promise.resolve();
+      if (fixture.failingSiteClears.includes(browserSession.partition)) {
+        return Promise.reject(
+          new Error(`site clear failed on ${browserSession.partition}`),
+        );
+      }
+      if (fixture.deferSiteClears) {
+        return new Promise<void>((resolve) => {
+          fixture.releaseSiteClear = resolve;
+        });
+      }
+      return Promise.resolve();
     },
   ),
   // The real one: the forget ledger keys its headless-origin custody set by it
@@ -458,6 +496,14 @@ describe("clear-site IPC jar targeting", () => {
     fixture.releaseConfirmation = null;
     fixture.hostFrames = [];
     fixture.trustedCertificates = [];
+    fixture.capturePrimaryProfile = null;
+    fixture.captureResult = {
+      status: "captured",
+      storageState: { cookies: [], origins: [] },
+      reason: null,
+    };
+    fixture.deferSiteClears = false;
+    fixture.releaseSiteClear = null;
     fixture.userDataDir = `/tmp/traycer-desktop-test-${ledgerRun}`;
     ledgerRun += 1;
     // With the directory, the ledger module's own in-memory state has to go
@@ -648,6 +694,87 @@ describe("clear-site IPC jar targeting", () => {
     expect(fixture.hostFrames).toEqual([]);
 
     ledger.dispose();
+  });
+
+  // The gap `withoutUnclearedForgets` exists for: the ledger write is the
+  // FIRST step of a clear, well before the jar operation it queues actually
+  // finishes, so a whole-jar capture taken from inside that window must not
+  // carry the site back to a host - it would re-teach exactly the login the
+  // clear is in the middle of removing.
+  it("omits a site's cookies from a whole-jar capture taken while its clear is recorded but still queued", async () => {
+    fixture.deferSiteClears = true;
+    const clearHandler = await handlerFor("browserViewClearSavedLoginSite");
+    fixture.captureResult = {
+      status: "captured",
+      storageState: {
+        cookies: [
+          {
+            name: "sid",
+            value: "v",
+            domain: "example.com",
+            path: "/",
+            expires: -1,
+            httpOnly: false,
+            secure: true,
+            sameSite: "Lax",
+            partitionKey: null,
+          },
+          {
+            name: "sid",
+            value: "v",
+            domain: "kept.test",
+            path: "/",
+            expires: -1,
+            httpOnly: false,
+            secure: true,
+            sameSite: "Lax",
+            partitionKey: null,
+          },
+        ],
+        origins: [],
+      },
+      reason: null,
+    };
+
+    const pending = clearHandler({}, { domain: "example.com" });
+    // The ledger write, the serializer queue and the jar call each add their
+    // own microtask hops before `clearBrowserSite` is reached and held open -
+    // polled rather than counted, since that hop count is an implementation
+    // detail of the serializer, not a contract of this test.
+    for (let i = 0; i < 50 && fixture.clears.length === 0; i += 1) {
+      await flushMicrotasks();
+    }
+
+    // The ledger write has landed - the site is recorded as forgotten - but
+    // the site's own jar clear is still held open below.
+    expect(fixture.clears).toEqual([
+      { domain: "example.com", partition: fixture.durablePartition },
+    ]);
+
+    const capturePrimaryProfile = fixture.capturePrimaryProfile;
+    if (capturePrimaryProfile === null) {
+      throw new Error(
+        "registration never captured the jar.capturePrimaryProfile callback",
+      );
+    }
+    const captured = await capturePrimaryProfile();
+    expect(captured.status).toBe("captured");
+    if (captured.status !== "captured") {
+      throw new Error("expected a captured result");
+    }
+    // The site whose clear is still queued is filtered out even though the
+    // jar operation itself has not resolved; the site the clear never named
+    // survives untouched.
+    expect(
+      captured.storageState.cookies.map((cookie) => cookie.domain),
+    ).toEqual(["kept.test"]);
+
+    const release = fixture.releaseSiteClear;
+    if (release === null) {
+      throw new Error("no site clear was queued to release");
+    }
+    release();
+    await pending;
   });
 
   it("leaves the jar, the ledger and the hosts untouched when Settings' clear is cancelled", async () => {

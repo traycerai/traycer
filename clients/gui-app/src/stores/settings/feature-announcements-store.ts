@@ -31,6 +31,14 @@ interface FeatureAnnouncementsState {
   readonly consumed: ConsumedAnnouncements;
   /** Record that `id` has been shown on some surface. Idempotent. */
   readonly consume: (id: FeatureAnnouncementId) => void;
+  /**
+   * Take `id` for THIS surface, answering whether it got it: `true` exactly
+   * once per install, `false` when some surface - in this window or another
+   * - already has. A surface that shows something only on `true` holds the
+   * once-per-install guarantee across windows, which {@link consume} alone
+   * does not: it records on this window's copy of the store.
+   */
+  readonly claim: (id: FeatureAnnouncementId) => boolean;
 }
 
 const FEATURE_ANNOUNCEMENTS_PERSIST_KEY = persistKey(
@@ -64,15 +72,39 @@ function persistedConsumed(persistedState: unknown): ConsumedAnnouncements {
   return next;
 }
 
+function consumeInto(
+  consumed: ConsumedAnnouncements,
+  id: FeatureAnnouncementId,
+): ConsumedAnnouncements {
+  if (Object.hasOwn(consumed, id)) return consumed;
+  return { ...consumed, [id]: Date.now() };
+}
+
 export const useFeatureAnnouncementsStore = create<FeatureAnnouncementsState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       consumed: {},
       consume: (id) => {
         set((state) => {
-          if (Object.hasOwn(state.consumed, id)) return state;
-          return { consumed: { ...state.consumed, [id]: Date.now() } };
+          const consumed = consumeInto(state.consumed, id);
+          return consumed === state.consumed ? state : { consumed };
         });
+      },
+      claim: (id) => {
+        // The store is one per renderer and hydrates once, at module load;
+        // the install's record is localStorage, shared by every window. Two
+        // windows restored together each hydrate `consumed` empty, and each
+        // would show the announcement on its own copy. So the claim re-reads
+        // storage first: `rehydrate` applies synchronously for a synchronous
+        // storage (zustand wraps `getItem` in a thenable that runs inline
+        // when it is not a promise), so the state below is what the other
+        // window wrote, if it wrote. The `storage` listener at the bottom
+        // keeps a window that did NOT claim in step afterwards; it is not
+        // what makes this exclusive, since that event is asynchronous.
+        void useFeatureAnnouncementsStore.persist.rehydrate();
+        if (Object.hasOwn(get().consumed, id)) return false;
+        set({ consumed: consumeInto(get().consumed, id) });
+        return true;
       },
     }),
     {
@@ -86,6 +118,19 @@ export const useFeatureAnnouncementsStore = create<FeatureAnnouncementsState>()(
     },
   ),
 );
+
+// Another window consumed an announcement: follow it, so this window's
+// surfaces read the install's record rather than their own hydration. The
+// `storage` event only fires in OTHER same-origin windows, never the one that
+// wrote, so this cannot loop with `consume` / `claim`. `event.key === null`
+// covers an explicit `localStorage.clear()`.
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", (event) => {
+    if (event.key === null || event.key === FEATURE_ANNOUNCEMENTS_PERSIST_KEY) {
+      void useFeatureAnnouncementsStore.persist.rehydrate();
+    }
+  });
+}
 
 export function isFeatureAnnouncementConsumed(
   consumed: ConsumedAnnouncements,

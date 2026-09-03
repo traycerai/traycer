@@ -54,6 +54,7 @@ import {
   useOnboardingStore,
 } from "@/stores/onboarding/onboarding-store";
 import { useOnboardingTourOpenStore } from "@/stores/onboarding/onboarding-tour-open-store";
+import { useFeatureAnnouncementsStore } from "@/stores/settings/feature-announcements-store";
 import { cn } from "@/lib/utils";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { onMiddleClick } from "@/lib/dom/on-middle-click";
@@ -888,7 +889,11 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
   const advanceStep = useOnboardingStore((state) => state.advance);
   const retreat = useOnboardingStore((state) => state.retreat);
   const complete = useOnboardingStore((state) => state.complete);
+  const consumeAnnouncement = useFeatureAnnouncementsStore(
+    (state) => state.consume,
+  );
   const restart = useOnboardingStore((state) => state.restart);
+  const reseat = useOnboardingStore((state) => state.reseat);
   const agentGuideQuery = useAgentSelectionGuideGlobalOnboardingDraftQuery();
   const agentGuideSetMutation = useAgentSelectionGuideSetGlobalMutation();
   const {
@@ -899,6 +904,30 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
   } = agentGuideSetMutation;
 
   const act = acts[step];
+  // The act list can change under the user: session import resolving
+  // `unsupported` drops its act, and login import resolving available
+  // inserts one right after it (`useLoginImportAvailable` is false until the
+  // save-logins read answers). The store's position is an INDEX, so either
+  // would move a user past that point onto whichever act now sits at their
+  // index - a user on the agent guide would find themselves on the login
+  // import. Re-seated by act id instead: the ref carries the act of the
+  // previous commit, and the layout effect below runs before this commit
+  // paints, so the user stays on the act they can see. An act that vanished
+  // under the user leaves the clamped index in place, as before.
+  const seatedActIdRef = useRef<OnboardingAct["id"]>(act.id);
+  useLayoutEffect(() => {
+    const seated = seatedActIdRef.current;
+    const index = acts.findIndex((entry) => entry.id === seated);
+    if (index < 0) return;
+    const current = clampOnboardingStep(
+      useOnboardingStore.getState().step,
+      acts.length,
+    );
+    if (acts[current]?.id !== seated) reseat(index);
+  }, [acts, reseat]);
+  useLayoutEffect(() => {
+    seatedActIdRef.current = act.id;
+  });
   const miniature = miniatureForAct(act.id);
   const isAgentGuideAct = act.id === "agent-guide";
   const agentGuideQueryData = agentGuideQuery.data;
@@ -1052,6 +1081,12 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
             : AnalyticsEvent.OnboardingSkipped,
           { last_step: act.id },
         );
+        // The login-import act was in this tour, so the tour was the
+        // surface that announced the feature - reached or skipped past.
+        // Consumed before `complete()`, which is what makes the release
+        // toast eligible: a user who skipped the intro must not meet the
+        // feature they skipped as an announcement the moment they leave.
+        if (loginImportAvailable) consumeAnnouncement("login-import");
         complete();
         if (replay) {
           router.history.back();
@@ -1060,7 +1095,16 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
         void navigate({ to: "/draft/new", replace: true });
       });
     },
-    [act.id, complete, navigate, replay, router, saveAgentGuideDraft],
+    [
+      act.id,
+      complete,
+      consumeAnnouncement,
+      loginImportAvailable,
+      navigate,
+      replay,
+      router,
+      saveAgentGuideDraft,
+    ],
   );
 
   const retreatWithAnalytics = useCallback((): void => {

@@ -11,6 +11,7 @@ import { LazyMotion, domAnimation } from "motion/react";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { traycerInfo } from "@traycer-clients/shared/platform/traycer-info";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
+import { useFeatureAnnouncementsStore } from "@/stores/settings/feature-announcements-store";
 import {
   ONBOARDING_ACTS,
   onboardingActsFor,
@@ -211,6 +212,8 @@ async function advanceToAct(actId: OnboardingActId): Promise<void> {
 describe("OnboardingPage", () => {
   beforeEach(() => {
     useOnboardingStore.setState({ completedAt: null, step: 0 });
+    useFeatureAnnouncementsStore.setState({ consumed: {} });
+    window.localStorage.clear();
     sessionImportAvailableMock.value = true;
     navigateMock.mockReset();
     historyBackMock.mockReset();
@@ -230,6 +233,8 @@ describe("OnboardingPage", () => {
   afterEach(() => {
     cleanup();
     useOnboardingStore.setState({ completedAt: null, step: 0 });
+    useFeatureAnnouncementsStore.setState({ consumed: {} });
+    window.localStorage.clear();
   });
 
   it("renders act 1 copy and the live miniature on initial mount", () => {
@@ -738,5 +743,83 @@ describe("OnboardingPage", () => {
       to: "/draft/new",
       replace: true,
     });
+  });
+
+  it("consumes the login-import announcement on Skip when the import is available", async () => {
+    loginImportAvailableMock.value = true;
+    renderPage({ replay: false });
+
+    fireEvent.click(screen.getByTestId("onboarding-skip"));
+
+    await waitFor(() => {
+      expect(useOnboardingStore.getState().completedAt).not.toBeNull();
+    });
+    expect(
+      useFeatureAnnouncementsStore.getState().consumed["login-import"],
+    ).toBeDefined();
+  });
+
+  it("does not consume the login-import announcement on Skip when the import is unavailable", async () => {
+    loginImportAvailableMock.value = false;
+    renderPage({ replay: false });
+
+    fireEvent.click(screen.getByTestId("onboarding-skip"));
+
+    await waitFor(() => {
+      expect(useOnboardingStore.getState().completedAt).not.toBeNull();
+    });
+    expect(
+      useFeatureAnnouncementsStore.getState().consumed["login-import"],
+    ).toBeUndefined();
+  });
+
+  it("keeps the user on the SAME act by id when the act list changes under them", async () => {
+    // The shorter tour: login import starts unavailable, so agent-guide
+    // sits one index earlier than it does in the full catalog.
+    loginImportAvailableMock.value = false;
+    const view = renderPage({ replay: false });
+
+    await advanceToAct("agent-guide");
+    expect(currentActId()).toBe("agent-guide");
+
+    // Login import resolves available mid-tour and a new act is inserted
+    // ahead of agent-guide, which shifts its index by one.
+    loginImportAvailableMock.value = true;
+    view.rerender(
+      <LazyMotion features={domAnimation}>
+        <OnboardingPage replay={false} />
+      </LazyMotion>,
+    );
+
+    await waitFor(() => {
+      expect(currentActId()).toBe("agent-guide");
+    });
+    // The store's own position moved WITH the act, to wherever agent-guide
+    // now sits in the longer tour - never left pointing at the login-import
+    // act that took its old index.
+    const agentGuideIndex = visibleActs().findIndex(
+      (entry) => entry.id === "agent-guide",
+    );
+    expect(useOnboardingStore.getState().step).toBe(agentGuideIndex);
+  });
+
+  it("a normal Continue still advances to the next act after a re-seat", async () => {
+    loginImportAvailableMock.value = false;
+    const view = renderPage({ replay: false });
+    await advanceToAct("agent-guide");
+
+    loginImportAvailableMock.value = true;
+    view.rerender(
+      <LazyMotion features={domAnimation}>
+        <OnboardingPage replay={false} />
+      </LazyMotion>,
+    );
+    await waitFor(() => {
+      expect(currentActId()).toBe("agent-guide");
+    });
+
+    await advanceToAct("command-theme");
+
+    expect(currentActId()).toBe("command-theme");
   });
 });
