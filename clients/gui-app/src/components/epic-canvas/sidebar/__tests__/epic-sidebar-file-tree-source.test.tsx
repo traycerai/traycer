@@ -201,6 +201,7 @@ const scrollToPathCalls: Array<{
   readonly options: { readonly offset: string };
 }> = [];
 const fileTreeContainer = document.createElement("div");
+let fileTreeContainerAvailable = true;
 const modelListeners = new Set<() => void>();
 // Captured from the real `useFileTree(options)` call the panel makes - the
 // mocked hook below stashes `options.onSelectionChange` here so a test can
@@ -356,7 +357,8 @@ const mockModel = {
   scrollToPath: (path: string, options: { readonly offset: string }) => {
     scrollToPathCalls.push({ path, options });
   },
-  getFileTreeContainer: () => fileTreeContainer,
+  getFileTreeContainer: () =>
+    fileTreeContainerAvailable ? fileTreeContainer : undefined,
 };
 
 vi.mock("@pierre/trees/react", () => ({
@@ -610,6 +612,7 @@ describe("sidebar file tree source selection", () => {
     expandedAtLastReset.clear();
     selectedInModel.clear();
     scrollToPathCalls.length = 0;
+    fileTreeContainerAvailable = true;
     delete fileTreeContainer.dataset.sidebarRevealHighlighted;
     delete fileTreeContainer.dataset.sidebarRevealNonce;
     modelListeners.clear();
@@ -784,6 +787,7 @@ describe("sidebar file tree filter source", () => {
     expandedAtLastReset.clear();
     selectedInModel.clear();
     scrollToPathCalls.length = 0;
+    fileTreeContainerAvailable = true;
     modelListeners.clear();
     capturedOnSelectionChange = null;
     __resetWorkspaceFileListSubscriptionsForTesting();
@@ -1178,6 +1182,7 @@ describe("reveal in sidebar", () => {
     const client = new MockWsStreamClient("unknown");
     renderPanel(client);
 
+    fileTreeContainerAvailable = false;
     act(() => {
       client.sessions[0].emitFrame({
         kind: "listing",
@@ -1247,13 +1252,33 @@ describe("reveal in sidebar", () => {
     await waitFor(() => {
       expect(selectedInModel.has("src/lib/a.ts")).toBe(true);
     });
+    expect(
+      useFileTreeRevealStore.getState().requestsByViewTabId[REVEAL_TAB_ID],
+    ).toBeDefined();
+
+    scrollToPathCalls.length = 0;
+    fileTreeContainerAvailable = true;
+    act(() => {
+      client.sessions[0].emitFrame({
+        kind: "listing",
+        directoryPath: "src/lib/",
+        entries: [
+          { path: "src/lib/a.ts", name: "a.ts", kind: "file", ignored: false },
+        ],
+        truncated: false,
+        hasBinaryPayload: false,
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        useFileTreeRevealStore.getState().requestsByViewTabId[REVEAL_TAB_ID],
+      ).toBeUndefined();
+    });
     expect(scrollToPathCalls).toEqual([
       { path: "src/lib/a.ts", options: { offset: "nearest" } },
     ]);
     expect(fileTreeContainer.dataset.sidebarRevealHighlighted).toBe("true");
-    expect(
-      useFileTreeRevealStore.getState().requestsByViewTabId[REVEAL_TAB_ID],
-    ).toBeUndefined();
     expect(openPreviewSpy).not.toHaveBeenCalled();
   });
 

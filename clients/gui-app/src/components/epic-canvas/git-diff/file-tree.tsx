@@ -223,6 +223,7 @@ function GitTreeSectionBody(props: GitTreeSectionBodyProps): ReactNode {
     if (tile?.id !== revealRequest.nodeId) return;
     const container = model.getFileTreeContainer();
     if (container === undefined) return;
+    model.scrollToPath(activeFilePath, { offset: "nearest" });
     flashSidebarElement(container, revealRequest.nonce);
     clearSidebarNodeRevealRequest(props.viewTabId, revealRequest.nonce);
   }, [activeFilePath, model, props.viewTabId, revealRequest, tileForTreePath]);

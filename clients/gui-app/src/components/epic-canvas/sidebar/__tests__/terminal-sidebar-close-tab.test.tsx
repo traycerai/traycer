@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   createEvent,
   fireEvent,
@@ -439,18 +440,27 @@ describe("terminal sidebar Close", () => {
     const scrollIntoView = vi
       .spyOn(Element.prototype, "scrollIntoView")
       .mockImplementation(() => undefined);
-    requestSidebarNodeReveal(
-      TAB_ID,
-      epicTerminalUiIdentityKey("session", "host-1", SESSION_ID),
+    const { getByTestId, findByTestId } = render(
+      wrapper(<TerminalsPanelBody epicId="epic-1" tabId={TAB_ID} />),
     );
+    fireEvent.click(getByTestId(`epic-terminal-sidebar-rename-${SESSION_ID}`));
+    const renameInput = await findByTestId(
+      `epic-terminal-sidebar-rename-input-${SESSION_ID}`,
+    );
+    const row = renameInput.closest<HTMLElement>("[data-sidebar-node-id]");
+    expect(row).not.toBeNull();
 
-    render(wrapper(<TerminalsPanelBody epicId="epic-1" tabId={TAB_ID} />));
+    act(() => {
+      requestSidebarNodeReveal(
+        TAB_ID,
+        epicTerminalUiIdentityKey("session", "host-1", SESSION_ID),
+      );
+    });
 
-    const row = screen.getByTestId(`epic-terminal-sidebar-item-${SESSION_ID}`);
     await waitFor(() => {
       expect(scrollIntoView.mock.instances).toContain(row);
     });
-    expect(row.dataset.sidebarRevealHighlighted).toBe("true");
+    expect(row?.dataset.sidebarRevealHighlighted).toBe("true");
     expect(
       useSidebarNodeRevealStore.getState().requestsByViewTabId[TAB_ID],
     ).toBeUndefined();

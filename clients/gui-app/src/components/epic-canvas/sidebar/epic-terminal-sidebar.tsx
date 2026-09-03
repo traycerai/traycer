@@ -412,7 +412,17 @@ function TerminalRow(props: TerminalRowProps) {
     <li>
       <ContextMenu>
         <ContextMenuTrigger asChild disabled={isRenaming}>
-          <div className="group/term-row relative">
+          <div
+            data-sidebar-node-id={epicTerminalUiIdentityKey(
+              "session",
+              hostId,
+              session.sessionId,
+            )}
+            className={cn(
+              "group/term-row relative",
+              SIDEBAR_REVEAL_HIGHLIGHT_CLASS,
+            )}
+          >
             {isRenaming ? (
               <div
                 className={cn(
@@ -441,15 +451,9 @@ function TerminalRow(props: TerminalRowProps) {
                   data-testid={`epic-terminal-sidebar-item-${session.sessionId}`}
                   data-terminal-host-id={hostId}
                   data-terminal-status={runtimeStatus}
-                  data-sidebar-node-id={epicTerminalUiIdentityKey(
-                    "session",
-                    hostId,
-                    session.sessionId,
-                  )}
                   className={cn(
                     "flex h-7 w-full items-center gap-1.5 rounded-md pl-2 pr-8 text-left text-ui-sm transition-colors",
                     "focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2",
-                    SIDEBAR_REVEAL_HIGHLIGHT_CLASS,
                     isDragging && "cursor-grabbing opacity-60",
                     isActive
                       ? "bg-accent font-medium text-accent-foreground"

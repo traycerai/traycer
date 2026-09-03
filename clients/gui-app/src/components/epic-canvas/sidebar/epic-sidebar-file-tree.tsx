@@ -1059,9 +1059,8 @@ function useWorkspaceFileTreeReveal(args: {
     }
     model.scrollToPath(filePath, { offset: "nearest" });
     const container = model.getFileTreeContainer();
-    if (container !== undefined) {
-      flashSidebarElement(container, request.nonce);
-    }
+    if (container === undefined) return;
+    flashSidebarElement(container, request.nonce);
     clearFileTreeRevealRequest(viewTabId, request.nonce);
   }, [
     browsing,

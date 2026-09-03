@@ -33,7 +33,9 @@ export function requestSidebarNodeReveal(
   nodeId: string,
 ): void {
   useSidebarNodeRevealStore.setState((state) => {
-    const previous = state.requestsByViewTabId[viewTabId];
+    const previous =
+      state.requestsByViewTabId[viewTabId] ??
+      state.visibleByViewTabId[viewTabId];
     const nonce = previous === undefined ? 1 : previous.nonce + 1;
     return {
       requestsByViewTabId: {
