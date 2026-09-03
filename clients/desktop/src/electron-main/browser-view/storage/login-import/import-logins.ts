@@ -164,34 +164,45 @@ export interface LoginImportServiceDependencies extends LoginImportDiscoveryEnvi
     signal: AbortSignal,
   ) => Promise<void>;
   /**
-   * The forget ledger's record that these sites are being REPLACED, taken
-   * once, before the first cookie any site removes, and answering the ledger
-   * revision it made (`null` when it recorded nothing). Taken then rather
-   * than before the first write because it is the removals it covers, and
-   * an import that removes nothing - every row refused, or every jar cookie
-   * carried - must not have every host prune sites this machine still
-   * holds. The same entry a site clear records, and for the same two reasons. A
-   * host that hears it prunes the site and then takes the capture pushed
-   * after the write - so a host that was away for the import still ends
-   * with the source's slice, not a union of it and what it held. And until
-   * a host has acked that revision, its observations for the site are
-   * refused (`isBrowserForgetLedgerPendingAck`): an observation of a cookie
-   * the import removed - one the source did not carry - would otherwise
-   * find the name free in the jar and put it straight back, and the next
-   * capture would sync that union to every host. The written keys' release
-   * covers only keys the import WROTE; this is what covers the ones it
-   * removed.
+   * The forget ledger's record that ONE site is being REPLACED, taken
+   * immediately before the first cookie that site removes, and answering the
+   * ledger revision it made (`null` when it recorded nothing). Per site and
+   * at that moment, never for the batch up front: it is the removals it
+   * covers, so a site that removes nothing - every row refused, or every jar
+   * cookie carried - and, above all, a site the write never REACHES (the
+   * barrier's budget, a refused removal or a failed clear ending the import
+   * on an earlier site) must not have every host prune a site this machine
+   * still holds whole, since a host away for the import would then lose a
+   * login only it had and be handed nothing in its place. The same entry a
+   * site clear records, and for the same two reasons. A host that hears it
+   * prunes the site and then takes the capture pushed after the write - so
+   * a host that was away for the import still ends with the source's slice,
+   * not a union of it and what it held. And until a host has acked that
+   * revision, its observations for the site are refused
+   * (`isBrowserForgetLedgerPendingAck`): an observation of a cookie the
+   * import removed - one the source did not carry - would otherwise find the
+   * name free in the jar and put it straight back, and the next capture
+   * would sync that union to every host. The written keys' release covers
+   * only keys the import WROTE; this is what covers the ones it removed.
    */
-  readonly recordReplacedSites: (
-    sites: readonly string[],
-  ) => Promise<number | null>;
+  readonly recordReplacedSite: (site: string) => Promise<number | null>;
   /**
-   * The local side of that record is done: `markBrowserForgetLedgerCleared`
-   * for the revision above, once the writes have ended - however they
+   * The local side of those records is done: `markBrowserForgetLedgerCleared`
+   * for every revision above, once the writes have ended - however they
    * ended - so the boot reconciliation does not re-run a clear of these
    * sites at the next launch over the cookies the import put there.
    */
-  readonly markReplacementCleared: (revision: number) => Promise<void>;
+  readonly markReplacementCleared: (
+    revisions: readonly number[],
+  ) => Promise<void>;
+  /**
+   * Holds the ledger's "tell every stream" edge until `end()`, so the sites
+   * recorded one at a time above cost each host one digest when the write
+   * ends rather than one per site; the records themselves land as they are
+   * made. Ended in the write's `finally`, BEFORE the push, so a host prunes
+   * and then takes the capture.
+   */
+  readonly deferLedgerDigests: () => { readonly end: () => void };
   /**
    * The push of the jar to every host, INSIDE the barrier, after the mute
    * has lifted and the written keys are the desktop's. Inside, because a
@@ -649,20 +660,16 @@ export class LoginImportService {
         // keeps, and for the same reason: the revision is what refuses a
         // host's in-flight observation of what is about to be removed, and
         // what a host that is away prunes from when it comes back. One
-        // revision for every site the write touches, taken by the first site
-        // that reaches its removals, and none at all for an import that
-        // removes nothing.
-        const ledger: { revision: number | null; recorded: boolean } = {
-          revision: null,
-          recorded: false,
+        // revision per site, taken by that site as it reaches its removals,
+        // so the ledger never names a site the write did not reach - and
+        // none at all for an import that removes nothing. The streams are
+        // told once, when the write ends.
+        const ledger: { readonly revisions: number[] } = { revisions: [] };
+        const recordReplacement = async (site: string): Promise<void> => {
+          const revision = await this.deps.recordReplacedSite(site);
+          if (revision !== null) ledger.revisions.push(revision);
         };
-        const recordReplacement = async (): Promise<void> => {
-          if (ledger.recorded) return;
-          ledger.recorded = true;
-          ledger.revision = await this.deps.recordReplacedSites([
-            ...bySite.keys(),
-          ]);
-        };
+        const digests = this.deps.deferLedgerDigests();
         // What ended the write early, if anything: a row past the barrier's
         // budget, a removal Chromium refused, a localStorage clear that
         // failed. Never re-thrown once a key is in the jar - see below.
@@ -719,12 +726,19 @@ export class LoginImportService {
           // already open and this runs late, which still beats a key left
           // host-owned for good, which the host's next observation would put
           // the old value back over.
+          // The streams' one digest per host goes out here, before the push
+          // below: a host prunes the sites the ledger names and THEN takes
+          // the capture, the order a site clear keeps.
           try {
-            if (ledger.revision !== null) {
-              await this.deps.markReplacementCleared(ledger.revision);
-            }
+            digests.end();
           } finally {
-            await this.deps.releaseHostOwnedKeys(tally.writtenKeys);
+            try {
+              if (ledger.revisions.length > 0) {
+                await this.deps.markReplacementCleared(ledger.revisions);
+              }
+            } finally {
+              await this.deps.releaseHostOwnedKeys(tally.writtenKeys);
+            }
           }
         }
         // The jar is the hosts' to hear about once anything of the import's
@@ -732,7 +746,8 @@ export class LoginImportService {
         // one the write then put back as it was: a host that pruned and was
         // never captured would hold LESS than this machine until something
         // else asked for a capture. Nothing of either is nothing to hear.
-        const jarTouched = tally.writtenKeys.length > 0 || ledger.recorded;
+        const jarTouched =
+          tally.writtenKeys.length > 0 || ledger.revisions.length > 0;
         if (!jarTouched) {
           if (ending.failure !== null) throw ending.failure.error;
           return { ok: true, outcome: tally, notifiedHosts: 0 };
@@ -835,9 +850,10 @@ export class LoginImportService {
     nowSeconds: number,
     session: LoginImportJarSession,
     signal: AbortSignal,
-    // The import's one forget-ledger record for every site it touches,
-    // taken here by the first site that reaches its removals.
-    recordReplacement: () => Promise<void>,
+    // This site's forget-ledger record, taken here as the site reaches its
+    // removals - and only then, so a site the write never reaches is never
+    // in the ledger.
+    recordReplacement: (site: string) => Promise<void>,
     outcome: WriteOutcome,
   ): Promise<void> {
     throwIfBarrierExpired(signal);
@@ -900,7 +916,7 @@ export class LoginImportService {
     let removalFailure: { readonly error: unknown } | null = null;
     // Recorded before the first `remove`, never after: a removal the ledger
     // does not yet cover is one a host's in-flight observation can undo.
-    if (stale.length > 0) await recordReplacement();
+    if (stale.length > 0) await recordReplacement(site);
     for (const cookie of stale) {
       if (signal.aborted) {
         if (removalFailure === null) {
@@ -1345,6 +1361,7 @@ function candidateKeyId(candidate: ImportCandidate): string {
 
 function blockedFor(reason: SqliteSnapshotFailure): LoginImportBlocked {
   if (reason === "locked") return "browser-locked";
+  if (reason === "too-large") return "profile-too-large";
   return "unreadable";
 }
 

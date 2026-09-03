@@ -209,10 +209,11 @@ const THEME_DOCK_SWATCHES = [
 
 /**
  * `null` is an act that shows no mini-app at all (session import, whose stage
- * is the live wizard). The page does not render the diorama for it, and this
- * map is where that fact is stated: defaulting to a scene instead would mount
- * the command-theme mini-app - animations and all - behind an act that
- * deliberately hides the diorama.
+ * is the live wizard; login import, whose stage is the live import flow). The
+ * page does not render the diorama for them, and this map is where that fact
+ * is stated: defaulting to a scene instead would mount the command-theme
+ * mini-app - animations and all - behind an act that deliberately hides the
+ * diorama.
  */
 const SCENE_FOR_ACT: Readonly<Record<DesktopOnboardingActId, SceneId | null>> =
   {
@@ -221,6 +222,7 @@ const SCENE_FOR_ACT: Readonly<Record<DesktopOnboardingActId, SceneId | null>> =
     "task-context": "task-context",
     providers: "providers",
     "session-import": null,
+    "login-import": null,
     "agent-guide": "agent-guide",
     "command-theme": "command-theme",
   };

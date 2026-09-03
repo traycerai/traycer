@@ -196,19 +196,46 @@ failures.
   origins cannot hold an expired import past its gate): the source carries
   cookies only, and a site that keeps account state in localStorage would
   otherwise run the previous identity on the imported cookies. Before the
-  first cookie any site REMOVES - and not at all for an import that removes
-  nothing, which must not have every host prune sites this machine still
-  holds - every site the write touches is recorded in the FORGET LEDGER
-  under one revision (`recordForgottenBrowserSites`) - the entry a site
-  clear records, for its two effects: a host prunes the site and then
-  takes the capture pushed after the write, so a host away for the import
-  still ends with the source's slice rather than a union; and until a host
-  has acked that revision its observations for the site are refused, since
-  an observation of a cookie the import REMOVED would find the name free in
-  the jar and put it straight back for the next capture to sync everywhere
-  (the written keys' release covers only what the import wrote). The
-  ledger's local side is marked cleared once the writes have ended, however
-  they ended; an import of more sites than the ledger keeps at once
+  first cookie a site REMOVES - and not at all for a site that removes
+  nothing, nor for one the write never REACHES, since a host away for the
+  import would prune a site this machine still holds whole and lose a
+  login only it had - THAT site is recorded in the FORGET LEDGER under its
+  own revision (`recordForgottenBrowserSites([site])`, per site, never the
+  batch up front) - the entry a site clear records, for its two effects: a
+  host prunes the site and then takes the capture pushed after the write,
+  so a host away for the import still ends with the source's slice rather
+  than a union; and until a host has acked that revision its observations
+  for the site are refused, since an observation of a cookie the import
+  REMOVED would find the name free in the jar and put it straight back for
+  the next capture to sync everywhere (the written keys' release covers
+  only what the import wrote). The streams are told ONCE, when the write
+  ends and before the push (`deferBrowserForgetLedgerNotifications` holds
+  the per-record digest edge; the records themselves land in memory and on
+  disk as they are made), and the ledger's local side is marked cleared for
+  every revision together (`markBrowserForgetLedgerClearedMany`) once the
+  writes have ended, however they ended. That deferral is process-wide, so
+  a Clear site or Forget all confirmed in another window during the import
+  rides the same digest - which is fine, because prune-then-capture is
+  kept by the CAPTURE, not by the digest's timing: every whole-jar capture
+  is read as the ledger says the jar will be (`withoutUnclearedForgets`
+  over `browserForgetLedgerUnclearedForgets()`, applied on both capture
+  lanes in `browser-view-ipc.ts`), with an uncleared site's cookies and
+  origins left out and nothing at all under an uncleared forget-all. The
+  mask BRACKETS the asynchronous cookie read, which does not queue on the
+  serializer (`bracketUnclearedForgets()` before the read, `close()`
+  after): the uncleared set at open, the uncleared set at close, and
+  every forget recorded in between from the bracket's own accumulator -
+  not the ledger's rows, which `trimDomains` bounds for the wire and a
+  forget-all drops, so no burst of clears during a read can push a record
+  out of the mask. A site clear that records, clears and marks itself
+  during the read is otherwise in neither mask while the read still holds
+  the cookie it removed. The
+  forget recorded its revision before queueing its clear behind the
+  import's barrier, and the import's own push reads from INSIDE that
+  barrier, so without the filter the push would re-teach every host the
+  site it had just pruned - deferred digest or not, since the push follows
+  the digest either way; an import of more sites than the
+  ledger keeps at once
   (`BROWSER_FORGET_LEDGER_MAX_DOMAINS`) is refused as `too-many-sites`
   before the keystore is opened, since a trimmed scope never reaches a
   host's digest. A row refused on its re-write leaves `writtenKeys` too, so
@@ -220,7 +247,13 @@ failures.
   answered `incomplete`, not `unreadable`: what landed is kept, counted (per
   row, so a site stopped mid-way counts what it has) and pushed, and Import
   again finishes the rest; only a write that put nothing in the jar answers
-  with what stopped it. The import is CONFIRMED IN MAIN like a site clear and
+  with what stopped it. The serializer keeps that answer reachable: a
+  barrier whose timer fires MID-ACTION aborts the signal and then waits,
+  within its settle grace, for the action to settle, answering the caller
+  with the action's own result - only a barrier still waiting for the work
+  ahead, or an action that has not settled by the end of the grace (the
+  wedge the timer exists for), is answered with the expiry. The import is
+  CONFIRMED IN MAIN like a site clear and
   forget-all (`confirmDestructiveInMain`, naming the registered source and
   the validated site count) before anything is read: a compromised renderer
   can list, scan and import every site a profile holds, and a plaintext
@@ -238,8 +271,20 @@ failures.
   cookie is given a bounded expiry, since a `persist:` partition drops one
   without at quit. SQLite snapshots are copied with the source's size and
   mtime checked before and after (a moving source retries, then reads as
-  `locked`), live under a `0700` userData directory and are unlinked the
-  moment they are open on POSIX. `node:sqlite` is the reader:
+  `locked`), refused by size before a byte is copied (main file plus WAL
+  over `MAX_SQLITE_SNAPSHOT_BYTES`) AND capped during the copy (a streamed
+  `copySqliteFileBounded` under one per-attempt budget across the three
+  files, one byte past it being the signal, so a source that grows between
+  the size check and its copy cannot be followed past the bound; the
+  source is opened non-blocking and refused by kind on the HANDLE, as
+  `readBoundedFile` does, so a FIFO at a sibling path cannot hold the open
+  and wedge the import service's queue) and by
+  row count before a row is
+  selected (`assertRowBudget`, many times any browser's cookie ceiling) -
+  both `profile-too-large`, with an explainer that names the browser's
+  own jar rather than a picked file - live under a `0700` userData
+  directory and are unlinked the moment they are open on POSIX.
+  `node:sqlite` is the reader:
   it ships with Electron's Node and needs no native module, which is why the
   "no Electron-native SQLite" rule below is about REBUILDS, not the builtin.
   Because that suppression means no delta reaches a host on its own, the
@@ -249,10 +294,26 @@ failures.
   pushes it INSIDE its barrier, after the mute lifts and the written keys
   are released, because a saved-logins toggle queued behind the import
   would otherwise run first and move the capture's session to the ephemeral
-  jar. A HOST-issued one-off capture waits for any whole-jar barrier before
-  its read (`BrowserJarSerializer.barrierSettled`), so a host never takes a
-  jar with some sites imported and some not; main's own pushes do not wait,
-  the import's being the barrier holder. That capture is four-state per
+  jar. A HOST-issued one-off capture reads behind any whole-jar barrier AND
+  holds the serializer's read lease through its read
+  (`BrowserJarSerializer.readBehindBarrier`: the gate captured and the read
+  registered synchronously, the `runOnDomain` shape, so a barrier requested
+  after the call waits behind the read rather than writing under it), so a
+  host never takes a jar with some sites imported and some not. The FINAL
+  capture at a window's close or at quit reads the same way, for at most
+  its flush budget (`FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS`, ONE deadline
+  over the barrier wait, the read and the ack - the ack gets what the
+  barrier and the read left, never a fresh budget, and a read still running
+  at the deadline is raced: the capture answers `not-sent` and the read,
+  which holds the lease until it settles, sends nothing when it does): a
+  barrier still held past it skips the capture rather
+  than shipping a hybrid the close would make permanent, the import's own
+  push inside its barrier being the capture of record - and it takes the
+  direct path, not `capturePrimaryProfileNow`'s lane, since the import's
+  push takes that lane from inside its barrier and a final capture queued
+  ahead of it there would have the push wait on a capture that waits on
+  the push. Main's own push does not wait, the import's being the barrier
+  holder. That capture is four-state per
   stream (`acked` / `unacked` / `sent-no-jar` / `not-sent`), and `not-sent`
   is decided AFTER the asynchronous jar read: a frame the stream could not
   send (it closed underneath the read) or that quotes a standing id the host

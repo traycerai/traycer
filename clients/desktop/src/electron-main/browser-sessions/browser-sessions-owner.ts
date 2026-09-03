@@ -39,13 +39,46 @@ import type {
 } from "./browser-sessions-transport";
 
 /**
- * Bound on the round trip that proves one final capture reached the host.
+ * Bound on one final capture at a window's close or at quit, end to end: the
+ * wait for a whole-jar barrier to release, the jar read, and the round trip
+ * that proves the frame reached the host, all under ONE deadline - never
+ * this much for the barrier and this much again for the ack. Also the ack
+ * budget of every other capture.
  *
  * A liveness escape from a host that never acks, not an ordering device: the
  * quit path is already bounded by the shell's own budget, and this only has to
  * be shorter so a lost socket costs a beat rather than the whole wait.
  */
 export const FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS = 5_000;
+
+/**
+ * `promise`'s own value if it settles within `waitMs`, else `fallback` - the
+ * promise itself is left to settle on its own, its result unread. A settle
+ * in the same turn as the timer cannot be mistaken: the value's continuation
+ * is a microtask, the timer a macrotask after it.
+ */
+function settledWithin<T, F>(
+  promise: Promise<T>,
+  waitMs: number,
+  fallback: F,
+): Promise<T | F> {
+  return new Promise<T | F>((resolve) => {
+    const timer = setTimeout(() => {
+      resolve(fallback);
+    }, waitMs);
+    timer.unref();
+    void promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      () => {
+        clearTimeout(timer);
+        resolve(fallback);
+      },
+    );
+  });
+}
 
 /**
  * What became of one capture on one stream. `unacked` is a frame that LEFT
@@ -85,6 +118,14 @@ interface CaptureAckSlot {
 const MAX_STREAMS_PER_WINDOW = 12;
 
 /**
+ * How a capture's jar read is ordered against the whole-jar barriers: main's
+ * own push reads `now` (it may be the barrier holder); a host's ask and the
+ * final capture read behind any barrier, the latter for at most its
+ * shutdown budget (`null` waits however long the barrier holds).
+ */
+type CaptureOrdering = "now" | { readonly behindBarrierFor: number | null };
+
+/**
  * Everything the jar plane needs, in the process that owns the jar.
  *
  * Declared as a port rather than imported module-by-module so the suites drive
@@ -95,13 +136,19 @@ const MAX_STREAMS_PER_WINDOW = 12;
 export interface BrowserSessionsJarPort {
   capturePrimaryProfile(): Promise<BrowserPrimaryProfileCaptureResult>;
   /**
-   * Resolves once no whole-jar barrier (a forget-all, a login import) is
-   * pending or running. A HOST-issued capture waits on it before the read,
-   * so the frame it answers with is a jar before or after such a write, never
-   * one mid-way through it. Main's own pushes do not wait: the import's is
-   * made inside its own barrier.
+   * The same read, taken behind any whole-jar barrier (a forget-all, a login
+   * import) and holding the serializer's read lease through it, so the jar
+   * it answers with is one before or after such a write, never one mid-way
+   * through it - and no barrier requested during the read can open under
+   * it. A HOST-issued capture reads this way, unbounded (`null`); the final
+   * capture at a window's close or quit reads this way for at most its
+   * shutdown budget, and `null` is the answer when the barrier still held at
+   * the end of it: nothing was read, and nothing is sent. Main's own push
+   * inside the import's barrier reads `capturePrimaryProfile` directly.
    */
-  awaitJarBarrier(): Promise<void>;
+  capturePrimaryProfileBehindBarrier(
+    waitMs: number | null,
+  ): Promise<BrowserPrimaryProfileCaptureResult | null>;
   applyObservedProfile(input: {
     readonly connectionId: string;
     readonly hostId: string;
@@ -729,8 +776,30 @@ class BrowserSessionsStream {
     this.start();
   }
 
+  /**
+   * The last capture before this stream's window closes or the app quits.
+   *
+   * Behind any whole-jar barrier, like a host's own ask, but only for as
+   * long as the shutdown budget allows: a login import in another window
+   * may hold the jar for minutes (a keystore prompt), and a final capture
+   * taken under it would ship a jar with some sites imported and some not
+   * - which the close then makes permanent by tearing the stream down before
+   * the import's own push. A barrier still held past the budget skips the
+   * capture instead: the import pushes what it committed to every stream
+   * still live, and the jar and ledger are on disk for the next attach. The
+   * budget is one deadline over the barrier wait, the read and the ack
+   * ({@link FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS}), so a close during an
+   * import costs at most that, not that plus a whole ack wait.
+   *
+   * Not through {@link capturePrimaryProfileNow}'s lane, deliberately: the
+   * import's own push takes that lane from INSIDE its barrier, and a final
+   * capture queued ahead of it there, waiting on the barrier, would have the
+   * push wait on the capture that waits on the push.
+   */
   async captureFinalPrimaryProfile(): Promise<void> {
-    await this.capturePrimaryProfileNow();
+    await this.capturePrimaryProfileOnce({
+      behindBarrierFor: FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS,
+    });
   }
 
   /**
@@ -771,14 +840,34 @@ class BrowserSessionsStream {
   }
 
   private startCapture(): Promise<BrowserPrimaryProfileCaptureOutcome> {
-    const capture = this.capturePrimaryProfileOnce().finally(() => {
+    const capture = this.capturePrimaryProfileOnce("now").finally(() => {
       this.captureInFlight = null;
     });
     this.captureInFlight = capture;
     return capture;
   }
 
-  private async capturePrimaryProfileOnce(): Promise<BrowserPrimaryProfileCaptureOutcome> {
+  private async capturePrimaryProfileOnce(
+    ordering: CaptureOrdering,
+  ): Promise<BrowserPrimaryProfileCaptureOutcome> {
+    // A bounded barrier wait is the shutdown budget, and it is ONE deadline
+    // for the whole capture: the barrier wait, the jar read AND the ack.
+    // Window close and quit await this method directly, so a barrier that
+    // releases at the end of the wait must not buy the read a fresh run or
+    // the ack a fresh budget on top. The read cannot be cancelled - it holds
+    // the serializer's lease until it settles - so past the deadline it is
+    // raced: this method answers `not-sent`, and `stillWanted` below, read
+    // once the jar HAS been read, refuses to send a frame the deadline
+    // already gave up on.
+    const deadline =
+      ordering === "now" || ordering.behindBarrierFor === null
+        ? null
+        : Date.now() + ordering.behindBarrierFor;
+    const remainingMs = (): number =>
+      deadline === null
+        ? FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS
+        : Math.max(0, deadline - Date.now());
+    const expired = (): boolean => deadline !== null && Date.now() >= deadline;
     if (this.connectionStatus !== "open") return "not-sent";
     const requestId = this.standingCaptureRequestId;
     // No standing id means this host either never authorized the jar plane for
@@ -791,11 +880,15 @@ class BrowserSessionsStream {
     // be sent, or that would quote an id the host no longer holds, never
     // LEFT: the registry must be free to try this host's healthy sibling
     // stream, which `unacked` would forbid.
-    const sent = await this.answerCaptureRequest(
+    const answer = this.answerCaptureRequest(
       requestId,
-      () => this.standingCaptureRequestId === requestId,
-      "now",
+      () => this.standingCaptureRequestId === requestId && !expired(),
+      ordering,
     );
+    const sent =
+      deadline === null
+        ? await answer
+        : await settledWithin(answer, remainingMs(), "not-sent");
     if (sent === "not-sent") return "not-sent";
     // The ack waiter - and its timeout - start once the frame has LEFT, not
     // before the jar read. No ack can be missed: the send was synchronous,
@@ -804,7 +897,7 @@ class BrowserSessionsStream {
     // receives, in order, and this frame's slot must absorb its own ack
     // rather than leave it for the next capture's - but that ack counts for
     // nothing: whatever the host took, it was not the jar.
-    const acked = await this.awaitCaptureAck(requestId);
+    const acked = await this.awaitCaptureAck(requestId, remainingMs());
     if (sent === "sent-no-jar") return "sent-no-jar";
     return acked ? "acked" : "unacked";
   }
@@ -939,11 +1032,9 @@ class BrowserSessionsStream {
         // A one-off request the host is waiting on: answered whatever the
         // standing id does meanwhile - and behind any whole-jar barrier, so
         // the host is never handed a jar mid-import.
-        void this.answerCaptureRequest(
-          frame.requestId,
-          () => true,
-          "behind-barrier",
-        );
+        void this.answerCaptureRequest(frame.requestId, () => true, {
+          behindBarrierFor: null,
+        });
         return;
       case "primaryProfileCaptureAck":
         this.resolveCaptureAckWaiter(frame.requestId);
@@ -1092,20 +1183,31 @@ class BrowserSessionsStream {
    * carried one, so a caller counting the hosts that TOOK the jar cannot
    * count a host that acked an empty-handed frame.
    *
-   * `behind-barrier` is the host's own ask: it waits for any whole-jar
-   * barrier first, so the jar it reads is whole. `now` is main's own push,
-   * which may itself be the barrier holder.
+   * `behindBarrierFor` is the host's own ask and the final capture: the read
+   * is taken behind any whole-jar barrier and holds the serializer's lease
+   * through it, so the jar it reads is whole - unbounded for the host, for
+   * the shutdown budget at close or quit, where a barrier still held at the
+   * end of it means nothing is read and `not-sent`. `now` is main's own
+   * push, which may itself be the barrier holder.
    */
   private async answerCaptureRequest(
     requestId: string,
     stillWanted: () => boolean,
-    ordering: "now" | "behind-barrier",
+    ordering: CaptureOrdering,
   ): Promise<"not-sent" | "sent" | "sent-no-jar"> {
     let frame: BrowserSessionsClientFrame;
     let carriesJar = false;
     try {
-      if (ordering === "behind-barrier") await this.deps.jar.awaitJarBarrier();
-      const result = await this.deps.jar.capturePrimaryProfile();
+      const result =
+        ordering === "now"
+          ? await this.deps.jar.capturePrimaryProfile()
+          : await this.deps.jar.capturePrimaryProfileBehindBarrier(
+              ordering.behindBarrierFor,
+            );
+      // The barrier held past the budget: no jar was read, so there is no
+      // frame to send - a frame saying "unavailable" would have the host
+      // treat a jar it will be pushed in a moment as gone.
+      if (result === null) return "not-sent";
       carriesJar = result.status === "captured";
       frame =
         result.status === "captured"
@@ -1150,8 +1252,15 @@ class BrowserSessionsStream {
    * Resolves `true` only on a real ack from the host. A timeout, a connection
    * that is not open, and a teardown all resolve `false`, so a caller counting
    * what a host took cannot count a capture that merely left.
+   *
+   * `timeoutMs` is what remains of the caller's budget; the slot is queued
+   * even for a budget already spent, since the frame left and its ack must
+   * still be absorbed by its own slot rather than the next capture's.
    */
-  private awaitCaptureAck(requestId: string): Promise<boolean> {
+  private awaitCaptureAck(
+    requestId: string,
+    timeoutMs: number,
+  ): Promise<boolean> {
     return new Promise<boolean>((resolve) => {
       if (this.connectionStatus !== "open") {
         resolve(false);
@@ -1162,7 +1271,7 @@ class BrowserSessionsStream {
         // Settled in place, still queued: see `captureAckSlots`.
         slot.settle = null;
         resolve(false);
-      }, FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS);
+      }, timeoutMs);
       slot.settle = (acked) => {
         clearTimeout(timer);
         slot.settle = null;

@@ -1,8 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { copyFile, mkdir, rm, stat, unlink } from "node:fs/promises";
+import { constants, createWriteStream, type ReadStream } from "node:fs";
+import { mkdir, open, rm, stat, unlink } from "node:fs/promises";
+import { pipeline } from "node:stream/promises";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { errnoCode } from "./errno-code";
+import { SqliteRowBudgetError } from "./sqlite-columns";
 
 /**
  * Reads a browser's SQLite cookie database through a private copy.
@@ -29,13 +32,33 @@ import { errnoCode } from "./errno-code";
  * first read has opened them, so they exist only as descriptors and a crash
  * mid-read leaves nothing behind; Windows cannot unlink an open file, so there
  * the directory is removed after close and swept by the next call.
+ *
+ * BOUNDED before it is copied and before it is read. A browser's cookie
+ * database is megabytes - every browser caps its jar at a few thousand
+ * cookies - but the path is a file on the user's disk, and a corrupt or
+ * runaway one (a WAL that never checkpointed) could be gigabytes: copied
+ * whole it would fill the disk, and materialised whole (`.all()`, in main)
+ * it would take the process with it. So the main file and its WAL together
+ * must be under {@link MAX_SQLITE_SNAPSHOT_BYTES} at every copy attempt, and
+ * the reader refuses a table past {@link SqliteRowBudgetError}'s budget
+ * before it selects a row; either answers `too-large`.
  */
+
+/**
+ * The most bytes of cookie database - the main file plus its WAL - one
+ * snapshot copies. A real jar is single-digit megabytes (Chromium keeps at
+ * most a few thousand cookies, Firefox likewise); the headroom is for a
+ * database whose free pages or WAL have grown, never for one that holds
+ * more logins than a browser can.
+ */
+export const MAX_SQLITE_SNAPSHOT_BYTES = 256 * 1024 * 1024;
 
 export type SqliteSnapshotFailure =
   | "missing"
   | "locked"
   | "permission"
-  | "unreadable";
+  | "unreadable"
+  | "too-large";
 
 export type SqliteSnapshotResult<T> =
   | { readonly ok: true; readonly value: T }
@@ -62,7 +85,7 @@ export async function withSqliteSnapshot<T>(
       options.sourcePath,
       snapshotPath,
       options.platform,
-      copyFile,
+      copySqliteFileBounded,
     );
     if (copied !== null) return { ok: false, reason: copied };
     let database: DatabaseSync;
@@ -88,7 +111,12 @@ export async function withSqliteSnapshot<T>(
         await unlinkQuietly(`${snapshotPath}-shm`);
       }
       return { ok: true, value: read(database) };
-    } catch {
+    } catch (error) {
+      // The reader's own refusal of a table past its row budget, told apart
+      // from a database it could not read at all.
+      if (error instanceof SqliteRowBudgetError) {
+        return { ok: false, reason: "too-large" };
+      }
       return { ok: false, reason: "unreadable" };
     } finally {
       database.close();
@@ -115,8 +143,74 @@ export async function sweepSqliteSnapshots(
   );
 }
 
-/** One file copy; `copyFile` in production, a hooked one in the suite. */
-export type SqliteFileCopy = (from: string, to: string) => Promise<void>;
+/**
+ * One file copy of at most `maxBytes` - it may read ONE byte past that, and
+ * answers with the bytes it copied, so a caller learns the source ran over
+ * from the answer rather than from a copy it had to finish first. Throws the
+ * file system's own error for a source that is missing or refused.
+ * {@link copySqliteFileBounded} in production; a hooked one in the suite.
+ */
+export type SqliteFileCopy = (
+  from: string,
+  to: string,
+  maxBytes: number,
+) => Promise<number>;
+
+/**
+ * A streamed copy rather than `copyFile`: the pre-copy size check reads the
+ * source at one instant, and a source still being written can grow between
+ * that instant and the copy. `copyFile` would follow it to wherever it ends
+ * up; a read stream with `end` set asks the kernel for at most `maxBytes + 1`
+ * bytes however far the file has grown, so the snapshot on disk can never be
+ * larger than the budget plus one byte, and that one byte is the signal.
+ *
+ * Opened the way `readBoundedFile` opens a picked export: non-blocking, so a
+ * FIFO at the path - which an ordinary read-only open waits on until a
+ * writer appears, and the import service serialises every scan and import
+ * behind this promise - opens at once, and then refused by KIND on the open
+ * handle, never on the path beforehand, since a path checked and then opened
+ * is two files if anything moves in between. A non-regular file is
+ * {@link SqliteNotRegularFileError}, which the copy classifies as
+ * `unreadable`; the flag changes nothing about a regular file.
+ */
+export async function copySqliteFileBounded(
+  from: string,
+  to: string,
+  maxBytes: number,
+): Promise<number> {
+  const handle = await open(from, constants.O_RDONLY | constants.O_NONBLOCK);
+  let source: ReadStream;
+  try {
+    if (!(await handle.stat()).isFile()) {
+      throw new SqliteNotRegularFileError();
+    }
+    // `end` is inclusive: the stream reads bytes 0..maxBytes, one past the
+    // budget, and stops there whatever the file's length. The stream owns
+    // the handle from here and closes it when it ends.
+    source = handle.createReadStream({ end: maxBytes, autoClose: true });
+  } catch (error) {
+    await handle.close().catch(() => undefined);
+    throw error;
+  }
+  await pipeline(source, createWriteStream(to, { mode: 0o600 }));
+  return source.bytesRead;
+}
+
+/**
+ * The source at a path is not a regular file: a FIFO, a device, a directory.
+ * Carries no path: an error's message travels to wherever it is later logged.
+ */
+export class SqliteNotRegularFileError extends Error {
+  constructor() {
+    super("sqlite snapshot source is not a regular file");
+    this.name = "SqliteNotRegularFileError";
+  }
+}
+
+/** What one attempt may still copy; shared by the main file and its siblings. */
+interface CopyBudget {
+  remaining: number;
+}
 
 /**
  * How many times the three-file copy is taken before a source that moved
@@ -141,12 +235,24 @@ export async function copySqliteFiles(
   copy: SqliteFileCopy,
 ): Promise<SqliteSnapshotFailure | null> {
   for (let attempt = 0; attempt < SQLITE_SNAPSHOT_COPY_ATTEMPTS; attempt += 1) {
+    // Refused by size BEFORE a byte is copied, and on every attempt, since a
+    // source that grew past the bound between two is the retry's to catch.
+    // A main file that cannot be stat'ed is left to the copy to classify
+    // (`missing`, `permission`); a sibling that cannot be counts as absent.
+    if ((await sourceBytes(sourcePath)) > MAX_SQLITE_SNAPSHOT_BYTES) {
+      return "too-large";
+    }
     const before = await sourceSignature(sourcePath);
+    // And DURING the copy, under one budget for the three files: the check
+    // above read the sizes at an instant, and a source written between that
+    // instant and its copy is copied only up to what the budget has left.
+    // Per attempt, since a retry starts a fresh snapshot.
     const failure = await copySqliteFilesOnce(
       sourcePath,
       snapshotPath,
       platform,
       copy,
+      { remaining: MAX_SQLITE_SNAPSHOT_BYTES },
     );
     if (failure !== null) return failure;
     if ((await sourceSignature(sourcePath)) === before) return null;
@@ -159,8 +265,9 @@ async function copySqliteFilesOnce(
   snapshotPath: string,
   platform: NodeJS.Platform,
   copy: SqliteFileCopy,
+  budget: CopyBudget,
 ): Promise<SqliteSnapshotFailure | null> {
-  const main = await copyOne(sourcePath, snapshotPath, platform, copy);
+  const main = await copyOne(sourcePath, snapshotPath, platform, copy, budget);
   if (main !== null) return main;
   // A missing WAL or shm is the common case: the browser checkpointed and
   // removed them, or never wrote them. Only the main file is required. The
@@ -173,6 +280,7 @@ async function copySqliteFilesOnce(
       `${snapshotPath}${suffix}`,
       platform,
       copy,
+      budget,
     );
     if (sibling === "missing") await unlinkQuietly(`${snapshotPath}${suffix}`);
     else if (sibling !== null) return sibling;
@@ -198,24 +306,51 @@ async function sourceSignature(sourcePath: string): Promise<string> {
   return parts.join("|");
 }
 
+/**
+ * The bytes a copy would take: the main file plus its WAL. The shm is a
+ * fixed-size index and is left out; a file that is not there weighs nothing.
+ */
+async function sourceBytes(sourcePath: string): Promise<number> {
+  let total = 0;
+  for (const suffix of ["", "-wal"] as const) {
+    try {
+      total += (await stat(`${sourcePath}${suffix}`)).size;
+    } catch {
+      // Absent, or unreadable: the copy answers for it either way.
+    }
+  }
+  return total;
+}
+
 async function copyOne(
   from: string,
   to: string,
   platform: NodeJS.Platform,
   copy: SqliteFileCopy,
+  budget: CopyBudget,
 ): Promise<SqliteSnapshotFailure | null> {
+  let copied: number;
   try {
-    await copy(from, to);
-    return null;
+    copied = await copy(from, to, budget.remaining);
   } catch (error) {
     return classifyCopyFailure(error, platform);
   }
+  // One byte past what was left is the copy reporting the source ran over
+  // the bound; the partial file it wrote goes with the snapshot directory,
+  // which the caller removes whatever the outcome.
+  if (copied > budget.remaining) return "too-large";
+  budget.remaining -= copied;
+  return null;
 }
 
 export function classifyCopyFailure(
   error: unknown,
   platform: NodeJS.Platform,
 ): SqliteSnapshotFailure {
+  // A FIFO, a device or a directory where a database file should be: not a
+  // database this reader can read, and said with the closed reason the
+  // caller already has for that.
+  if (error instanceof SqliteNotRegularFileError) return "unreadable";
   const code = errnoCode(error);
   if (code === "ENOENT" || code === "ENOTDIR") return "missing";
   // Windows reports a file another process holds with a denying share mode

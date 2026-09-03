@@ -188,6 +188,7 @@ export type AnalyticsResourcePressureTier = "elevated" | "high" | "critical";
 export type AnalyticsOnboardingStep =
   | "agent-guide"
   | "command-theme"
+  | "login-import"
   | "mobile-switcher"
   | "mobile-tasks"
   | "navigation"

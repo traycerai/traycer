@@ -62,6 +62,7 @@ import {
   captureBrowserPrimaryProfile,
   clearBrowserSite,
   clearBrowserSiteLocalStorage,
+  type BrowserPrimaryProfileCaptureResult,
 } from "../browser-view/storage/browser-storage-state";
 import {
   applyBrowserObservedProfile,
@@ -81,6 +82,7 @@ import {
   browserForgetLedgerPendingClears,
   isBrowserForgetLedgerPendingAck,
   isHeadlessOriginCookieKey,
+  bracketUnclearedForgets,
   markBrowserForgetLedgerCleared,
   onBrowserForgetLedgerChanged,
   recordForgetAllBrowserLogins,
@@ -89,6 +91,7 @@ import {
   recordHeadlessOriginCookieKeys,
   releaseBrowserForgetLedgerConnection,
   releaseHeadlessOriginCookieKeys,
+  withoutUnclearedForgets,
 } from "../browser-view/storage/browser-forget-ledger";
 import { trustBrowserCertificate } from "../app/cert-trust";
 import {
@@ -520,6 +523,42 @@ export function registerBrowserViewIpc(
   })();
 
   /**
+   * Every whole-jar capture, read as the ledger says the jar WILL be: a site
+   * whose forget is recorded but whose clear has not run yet is left out,
+   * and an uncleared forget-all empties it. The boot reconciliation above
+   * closes the gap a crash leaves; this closes the one a queue leaves, which
+   * the reconciliation cannot reach: the clear a forget queued behind a
+   * login import's barrier runs after the import's own push, and that push
+   * reads from inside the barrier. See `withoutUnclearedForgets`.
+   *
+   * The reconciliation itself is NOT awaited in here, and the two lanes
+   * below await it before calling this. The behind-barrier lane holds the
+   * serializer's read lease for as long as its callback runs, and the
+   * reconciliation drives its own clears through that serializer: a lease
+   * parked on the reconciliation would have a forget-all requested
+   * meanwhile wait on the read, the read wait on the reconciliation, and
+   * the reconciliation's `runOnDomain` wait on the forget-all's gate - a
+   * cycle only the barrier timer would break.
+   */
+  const captureLedgeredPrimaryProfile =
+    async (): Promise<BrowserPrimaryProfileCaptureResult> => {
+      // Bracketing the read, which does not queue on the serializer: a site
+      // clear that records, clears and marks itself while the cookies are
+      // being read would be in neither a mask taken before (not recorded
+      // yet) nor one taken after (already cleared), while the read still
+      // holds the cookie it removed. The bracket accumulates every forget
+      // recorded while it is open, apart from the ledger's trimmed rows.
+      const bracket = bracketUnclearedForgets();
+      try {
+        const captured = await primaryProfileSnapshots.capture();
+        return withoutUnclearedForgets(captured, bracket.close());
+      } finally {
+        // A read that threw still ends its bracket (`close` is idempotent).
+        bracket.close();
+      }
+    };
+
+  /**
    * The jar plane's own streams. Everything cookie-bearing on
    * `browser.sessions` is produced and consumed right here, beside the jar it
    * is about; the renderer says which streams should exist and sees a
@@ -581,22 +620,43 @@ export function registerBrowserViewIpc(
         appVersion: app.getVersion(),
       }),
     jar: {
+      // Behind the boot reconciliation, and it is the ONE jar read that has
+      // to be: every write queues on the jar serializer, but a whole-jar
+      // capture does not, and a capture taken before an unfinished forget
+      // was re-run would upload to the host exactly the logins the user
+      // deleted. The same hole exists at runtime for a forget recorded
+      // while its clear is still queued (behind a login import's barrier,
+      // typically), and the reconciliation cannot close that one - the
+      // import's own push reads from inside the barrier the clear waits
+      // on - so the capture is read as the ledger says the jar will be:
+      // `captureLedgeredPrimaryProfile`.
       capturePrimaryProfile: async () => {
-        // Behind the boot reconciliation, and it is the ONE jar read that has
-        // to be: every write queues on the jar serializer, but a whole-jar
-        // capture does not, and a capture taken before an unfinished forget
-        // was re-run would upload to the host exactly the logins the user
-        // deleted.
         await forgetLedgerReconciled;
-        return await primaryProfileSnapshots.capture();
+        return await captureLedgeredPrimaryProfile();
       },
-      // A HOST-issued whole-jar read waits for any whole-jar barrier: taken
-      // while the login import writes site by site, it would carry some
-      // sites imported and some not, and the host would hold that hybrid
-      // until the next capture. Only the host's own asks wait here - the
-      // pushes main makes (the import's, inside its barrier; the final
-      // capture at quit) go straight to the jar.
-      awaitJarBarrier: () => jarSerializer.barrierSettled(),
+      // A HOST-issued whole-jar read - and the final capture at a window's
+      // close or quit - runs behind any whole-jar barrier, holding the
+      // serializer's read lease through the read so no barrier can open
+      // under it: taken while the login import writes site by site, it
+      // would carry some sites imported and some not, and the host would
+      // hold that hybrid until the next capture. The import's own push,
+      // inside its barrier, goes straight to the jar.
+      //
+      // The reconciliation is awaited BEFORE the lease, never under it: it
+      // re-runs unfinished forgets through this same serializer, and a
+      // lease held across it is a cycle with any barrier requested
+      // meanwhile (see `captureLedgeredPrimaryProfile`). `waitMs` bounds
+      // the barrier wait alone; the reconciliation is boot work that is
+      // over long before a close or a host's ask, and a quit that lands
+      // during it waits for it, which is the shell's own budget's to bound.
+      capturePrimaryProfileBehindBarrier: async (waitMs) => {
+        await forgetLedgerReconciled;
+        const read = await jarSerializer.readBehindBarrier(
+          captureLedgeredPrimaryProfile,
+          waitMs,
+        );
+        return read.ok ? read.value : null;
+      },
       applyObservedProfile: async (observed) => {
         await applyHostContributedCookies(
           { source: "observed", ...observed },

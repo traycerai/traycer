@@ -6,13 +6,19 @@ import {
   type BrowserCookieKey,
   type BrowserForgetLedger,
 } from "@traycer/protocol/host/browser/contracts";
-import { registrableDomain } from "@traycer/protocol/host/browser/registrable-domain";
+import {
+  registrableDomain,
+  registrableDomainForUrl,
+} from "@traycer/protocol/host/browser/registrable-domain";
 import { describeLogError, log } from "../../app/logger";
 import {
   createJsonFileStore,
   type StrictJsonFileStore,
 } from "../../app/json-file-store";
-import { cookieKeyId } from "./browser-storage-state";
+import {
+  cookieKeyId,
+  type BrowserPrimaryProfileCaptureResult,
+} from "./browser-storage-state";
 
 /**
  * The durable forget ledger: this machine's record of every login the user
@@ -206,6 +212,15 @@ const completedClears = new Set<number>();
  */
 let headlessOriginKeyIds = new Set<string>();
 const changeListeners = new Set<() => void>();
+/**
+ * Open {@link deferBrowserForgetLedgerNotifications} scopes, and whether a
+ * bump happened inside one. The ledger itself is never deferred - every
+ * record lands in memory and on disk as it is made - only the "tell every
+ * stream" edge is, so a caller recording many sites one at a time costs
+ * each host one digest rather than one per site.
+ */
+let deferredNotificationDepth = 0;
+let notificationPending = false;
 
 export function browserForgetLedgerFilePath(): string {
   return join(app.getPath("userData"), FORGET_LEDGER_FILE_NAME);
@@ -225,6 +240,9 @@ export async function initBrowserForgetLedger(filePath: string): Promise<void> {
     (value) => recordSchema.safeParse(value).data ?? EMPTY_RECORD,
   );
   completedClears.clear();
+  openBrackets.clear();
+  deferredNotificationDepth = 0;
+  notificationPending = false;
   const loaded = await store.load();
   // Clamped to the SAME bounds the write path applies. The schema puts none on
   // these three lists, and every limit in this file lives on a mutation
@@ -235,7 +253,7 @@ export async function initBrowserForgetLedger(filePath: string): Promise<void> {
   // than of the last mutation to touch it.
   ledger = {
     ...loaded,
-    domains: trimDomains(loaded.domains),
+    domains: trimDomains(normalizedLoadedDomains(loaded.domains)),
     ackedByHost: loaded.ackedByHost.slice(-MAX_ACKED_HOSTS),
     headlessOriginKeys: loaded.headlessOriginKeys.slice(
       -MAX_HEADLESS_ORIGIN_KEYS,
@@ -247,6 +265,32 @@ export async function initBrowserForgetLedger(filePath: string): Promise<void> {
     domains: ledger.domains.length,
     forgetAll: ledger.forgetAll !== null,
   });
+}
+
+/**
+ * The write path records a site under its REGISTRABLE domain, and every read
+ * that matches a site against the ledger - a capture's uncleared-forget
+ * filter, an observation's refusal window - derives the same scope from what
+ * it holds. The schema does not enforce that on the file, so a row written
+ * by hand or by a build that predates the rule (`login.example.com`) would
+ * sit in the ledger matching nothing, and a login the user forgot would ride
+ * a capture back to every host. Loaded rows are put under the rule here: a
+ * row that collapses to a scope another row already holds keeps the newer
+ * revision (the same collapse a re-forget performs on the write path), and
+ * one that collapses to nothing is dropped, as the write path drops it.
+ */
+function normalizedLoadedDomains(
+  rows: readonly ForgetLedgerRecord["domains"][number][],
+): ForgetLedgerRecord["domains"][number][] {
+  const byScope = new Map<string, ForgetLedgerRecord["domains"][number]>();
+  for (const row of rows) {
+    const scope = registrableDomain(row.domain);
+    if (scope === null) continue;
+    const held = byScope.get(scope);
+    if (held !== undefined && held.revision >= row.revision) continue;
+    byScope.set(scope, { ...row, domain: scope });
+  }
+  return [...byScope.values()];
 }
 
 /**
@@ -282,6 +326,7 @@ export async function recordForgetAllBrowserLogins(): Promise<number> {
     // machine wakes up with holds nothing a host contributed.
     headlessOriginKeys: [],
   });
+  noteRecordedForgets([], true);
   await persist();
   return revision;
 }
@@ -306,12 +351,15 @@ export async function recordForgottenBrowserSite(
 }
 
 /**
- * Several sites forgotten under ONE revision: the login import, which
- * replaces every site it writes and records them all before its first write.
- * One revision rather than one per site because a host is sent every entry
- * above its acked watermark on every push, so an import of hundreds of sites
- * recorded one at a time would push a digest that grows with each - and
- * because the sites are one action of the user's, cleared together.
+ * Several sites forgotten under ONE revision - the shape a caller that knows
+ * its whole batch up front records with. The login import is NOT such a
+ * caller: it records each site on its own, immediately before that site's
+ * first removal, so a site the write never reaches is never in the ledger
+ * (a host away for the import would otherwise prune a site this machine
+ * still holds whole, losing a login only that host had). It wraps those
+ * records in {@link deferBrowserForgetLedgerNotifications} so a host is
+ * still pushed one digest, and marks every revision cleared together with
+ * {@link markBrowserForgetLedgerClearedMany}.
  *
  * A domain that does not collapse to a registrable one is left out, as
  * above; a list with none left records nothing and answers `null`, so a
@@ -348,6 +396,7 @@ export async function recordForgottenBrowserSites(
       (key) => !scopes.has(registrableDomain(key.domain) ?? ""),
     ),
   });
+  noteRecordedForgets(scopes, false);
   await persist();
   return revision;
 }
@@ -364,7 +413,23 @@ export async function recordForgottenBrowserSites(
 export async function markBrowserForgetLedgerCleared(
   revision: number,
 ): Promise<void> {
-  if (revision <= ledger.clearedThrough || revision > ledger.revision) return;
+  await markBrowserForgetLedgerClearedMany([revision]);
+}
+
+/**
+ * Several revisions' local clears finished at once - the login import's,
+ * one per site it replaced. One watermark computation and at most one
+ * write, where marking them one at a time in ascending order would advance
+ * the watermark - and write the file - once per site.
+ */
+export async function markBrowserForgetLedgerClearedMany(
+  revisions: readonly number[],
+): Promise<void> {
+  const completed = revisions.filter(
+    (revision) =>
+      revision > ledger.clearedThrough && revision <= ledger.revision,
+  );
+  if (completed.length === 0) return;
   // A CONTIGUOUS watermark, not a high-water mark, because two clears of
   // different sites run in parallel through the jar serializer and can
   // complete out of order. Advancing straight to the newest completed
@@ -372,7 +437,7 @@ export async function markBrowserForgetLedgerCleared(
   // reconciliation would never re-run it - the exact gap this field exists to
   // close. Held in memory only: a completion the process did not live to
   // record is one the next launch re-runs anyway.
-  completedClears.add(revision);
+  for (const revision of completed) completedClears.add(revision);
   // A revision the ledger no longer REPRESENTS can never be completed, and the
   // watermark must step over it rather than wedge on it. That happens whenever
   // a row is superseded before its clear finishes - forget a site twice and
@@ -451,6 +516,170 @@ export function browserForgetLedgerPendingClears(): {
     domains: ledger.domains
       .filter((entry) => entry.revision > cleared)
       .map((entry) => ({ domain: entry.domain, revision: entry.revision })),
+  };
+}
+
+/**
+ * What is recorded as forgotten but not yet CLEARED from this machine's jar,
+ * right now: the forgets whose local jar operation is still queued or
+ * running. Unlike {@link browserForgetLedgerPendingClears} - the boot-time
+ * read, which has no memory of completions - this consults the in-memory
+ * completions too, so a clear that finished ahead of an older one still
+ * waiting is not reported as uncleared.
+ */
+export interface BrowserForgetLedgerUnclearedForgets {
+  /** A forget-all is recorded and its jar clear has not finished. */
+  readonly forgetAll: boolean;
+  /** Registrable domains whose site clear is recorded and not finished. */
+  readonly domains: ReadonlySet<string>;
+}
+
+export function browserForgetLedgerUnclearedForgets(): BrowserForgetLedgerUnclearedForgets {
+  const uncleared = (revision: number): boolean =>
+    revision > ledger.clearedThrough && !completedClears.has(revision);
+  const forgetAll = ledger.forgetAll;
+  return {
+    forgetAll: forgetAll !== null && uncleared(forgetAll.revision),
+    domains: new Set(
+      ledger.domains
+        .filter((entry) => uncleared(entry.revision))
+        .map((entry) => entry.domain),
+    ),
+  };
+}
+
+/** The forgets in either answer. */
+export function unionUnclearedForgets(
+  a: BrowserForgetLedgerUnclearedForgets,
+  b: BrowserForgetLedgerUnclearedForgets,
+): BrowserForgetLedgerUnclearedForgets {
+  return {
+    forgetAll: a.forgetAll || b.forgetAll,
+    domains: new Set([...a.domains, ...b.domains]),
+  };
+}
+
+/**
+ * Every forget recorded while a bracket is open, kept APART from the
+ * ledger's rows: `trimDomains` bounds those for the wire and a forget-all
+ * drops them, so a mask read off the rows alone could lose a record made
+ * during the read to either. Bounded by what is recorded while a read is
+ * in flight, and gone when the bracket closes.
+ */
+interface OpenUnclearedForgetsBracket {
+  forgetAll: boolean;
+  readonly domains: Set<string>;
+}
+const openBrackets = new Set<OpenUnclearedForgetsBracket>();
+
+function noteRecordedForgets(
+  scopes: Iterable<string>,
+  forgetAll: boolean,
+): void {
+  for (const bracket of openBrackets) {
+    if (forgetAll) bracket.forgetAll = true;
+    for (const scope of scopes) bracket.domains.add(scope);
+  }
+}
+
+export interface UnclearedForgetsBracket {
+  /**
+   * The mask for a jar read that ran between `bracketUnclearedForgets()` and
+   * this call. Idempotent; the first call ends the bracket.
+   */
+  readonly close: () => BrowserForgetLedgerUnclearedForgets;
+}
+
+/**
+ * The mask for an ASYNCHRONOUS jar read, which does not queue on the
+ * serializer. A site clear can record, clear and mark itself between the
+ * cookie read and the mask, and a mask taken only afterwards would let the
+ * cookie the read still holds through. So the mask brackets the read: what
+ * is uncleared when it opens, what is uncleared when it closes, and every
+ * forget recorded in between - the last from its own accumulator rather
+ * than the ledger's rows, which are trimmed for the wire and dropped by a
+ * forget-all, so no burst of clears during the read can push a record out
+ * of the mask.
+ */
+export function bracketUnclearedForgets(): UnclearedForgetsBracket {
+  const before = browserForgetLedgerUnclearedForgets();
+  const recorded: OpenUnclearedForgetsBracket = {
+    forgetAll: false,
+    domains: new Set(),
+  };
+  openBrackets.add(recorded);
+  let closed: BrowserForgetLedgerUnclearedForgets | null = null;
+  return {
+    close: () => {
+      if (closed !== null) return closed;
+      openBrackets.delete(recorded);
+      closed = unionUnclearedForgets(
+        unionUnclearedForgets(before, browserForgetLedgerUnclearedForgets()),
+        recorded,
+      );
+      return closed;
+    },
+  };
+}
+
+/**
+ * A capture with every UNCLEARED forget's site taken out of it - the cookies
+ * under the site and the origins under it - and nothing at all under an
+ * uncleared forget-all.
+ *
+ * Every whole-jar capture goes through this, and the reason is ordering. A
+ * forget records its ledger revision FIRST and then queues its jar clear on
+ * the serializer; a host prunes the site the moment it takes the digest. A
+ * capture read between the record and the clear still carries the site,
+ * and a host that takes it re-learns what it just pruned - until the clear's
+ * own removals reach it, or, if the clear never runs (an expired barrier, a
+ * crash), until nothing does. The gap is real whenever a forget lands
+ * behind a whole-jar barrier: a login import holds one for as long as a
+ * keystore prompt takes, and its own push reads the jar from INSIDE it, so
+ * a Clear site or Forget all confirmed meanwhile has been recorded and told
+ * to every host while its clear is still queued behind the import. The
+ * push must therefore carry the jar as the ledger says it WILL be, not as
+ * it momentarily is. Deferring the digest (see
+ * {@link deferBrowserForgetLedgerNotifications}) does not change this, nor
+ * would sending it at once: the push follows the digest either way.
+ *
+ * The mask has to bracket the READ, which is asynchronous and does not
+ * queue on the serializer: a site clear can record, clear and mark itself
+ * between the cookie read and the mask, and a mask taken only afterwards
+ * would then let the cookie the read still holds through. The caller
+ * opens {@link bracketUnclearedForgets} before the read and masks with
+ * what `close()` answers after it.
+ *
+ * An `unavailable` capture passes through untouched; a capture that has
+ * nothing left stays `captured` and empty, since under a pending forget an
+ * empty jar is exactly what the host should hold.
+ */
+export function withoutUnclearedForgets(
+  result: BrowserPrimaryProfileCaptureResult,
+  uncleared: BrowserForgetLedgerUnclearedForgets,
+): BrowserPrimaryProfileCaptureResult {
+  if (result.status !== "captured") return result;
+  if (uncleared.forgetAll) {
+    return {
+      status: "captured",
+      storageState: { cookies: [], origins: [] },
+      reason: null,
+    };
+  }
+  if (uncleared.domains.size === 0) return result;
+  const forgotten = (scope: string | null): boolean =>
+    scope !== null && uncleared.domains.has(scope);
+  return {
+    status: "captured",
+    storageState: {
+      cookies: result.storageState.cookies.filter(
+        (cookie) => !forgotten(registrableDomain(cookie.domain)),
+      ),
+      origins: result.storageState.origins.filter(
+        (origin) => !forgotten(registrableDomainForUrl(origin.origin)),
+      ),
+    },
+    reason: null,
   };
 }
 
@@ -690,6 +919,38 @@ export function onBrowserForgetLedgerChanged(listener: () => void): {
   };
 }
 
+/**
+ * Holds the "tell every stream" edge until `end()`, for a caller that records
+ * sites one at a time (the login import, one revision per site as each
+ * reaches its removals): the records themselves land in memory and on disk
+ * as they are made - the gate on in-flight observations closes with each,
+ * and a crash between them loses nothing recorded - and the streams push ONE
+ * digest per host when the scope ends, which carries every revision above
+ * that host's watermark anyway. Scopes nest; the outermost `end()` releases.
+ * `end()` is idempotent, so a scope can be ended from a `finally` that may
+ * run twice.
+ */
+export function deferBrowserForgetLedgerNotifications(): {
+  readonly end: () => void;
+} {
+  deferredNotificationDepth += 1;
+  let ended = false;
+  return {
+    end: () => {
+      if (ended) return;
+      ended = true;
+      deferredNotificationDepth -= 1;
+      if (deferredNotificationDepth > 0 || !notificationPending) return;
+      notificationPending = false;
+      notifyChanged();
+    },
+  };
+}
+
+function notifyChanged(): void {
+  for (const listener of [...changeListeners]) listener();
+}
+
 function ackedRevisionForHost(hostId: string): number {
   return (
     ledger.ackedByHost.find((entry) => entry.hostId === hostId)?.revision ?? 0
@@ -705,7 +966,11 @@ function mutate(next: ForgetLedgerRecord): void {
   ledger = next;
   reindexHeadlessOriginKeys();
   if (!bumped) return;
-  for (const listener of [...changeListeners]) listener();
+  if (deferredNotificationDepth > 0) {
+    notificationPending = true;
+    return;
+  }
+  notifyChanged();
 }
 
 /**

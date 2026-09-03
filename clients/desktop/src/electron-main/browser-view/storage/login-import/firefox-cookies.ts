@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { ImportCookieRow, ImportCookieSameSite } from "./cookie-rows";
 import {
+  assertRowBudget,
   readFlag,
   readInteger,
   readText,
@@ -17,6 +18,7 @@ import {
 export function readFirefoxCookieRows(
   database: DatabaseSync,
 ): readonly ImportCookieRow[] {
+  assertRowBudget(database, "moz_cookies");
   const columns = tableColumns(database, "moz_cookies");
   const selected = [
     "host",

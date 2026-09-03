@@ -5,6 +5,7 @@ import type {
   ImportCookieSecret,
 } from "./cookie-rows";
 import {
+  assertRowBudget,
   readBigInteger,
   readBytes,
   readFlag,
@@ -60,6 +61,7 @@ function readMetaVersion(database: DatabaseSync): number {
 }
 
 function readRows(database: DatabaseSync): readonly ImportCookieRow[] {
+  assertRowBudget(database, "cookies");
   const columns = tableColumns(database, "cookies");
   const selected = [
     "host_key",

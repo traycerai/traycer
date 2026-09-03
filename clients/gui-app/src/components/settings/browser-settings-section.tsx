@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { Switch } from "@/components/ui/switch";
@@ -21,6 +21,7 @@ import type {
   BrowserSavedLoginSite,
   BrowserSavedLoginSitesResponse,
 } from "@traycer/protocol/host/browser/contracts";
+import { useBrowserFocusStore } from "@/stores/settings/browser-focus-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
 export function BrowserSettingsSection(): ReactNode {
@@ -226,12 +227,33 @@ function SavedLoginsToggleRow(props: {
  * Disabled with saving off rather than hidden: the import writes the durable
  * jar, which is not the one the tiles are on then, so the row would import
  * into a jar that dies at quit. The hint names the toggle to flip.
+ *
+ * Opened by the button, or by the one-shot intent the release toast arms
+ * before it navigates here (`browser-focus-store`). `open` is DERIVED from
+ * the two rather than synced into state - gui-app lint bans a setState in
+ * an effect body - and closing consumes the intent, so a later Settings
+ * visit does not reopen the dialog. An intent that arrives with saving off
+ * is dropped the same way: the row would refuse the import, and an intent
+ * kept armed would open the dialog out of nowhere on a later visit.
  */
 function ImportLoginsRow(props: {
   readonly browserView: BrowserViewBridge;
   readonly enabled: boolean;
 }): ReactNode {
-  const [open, setOpen] = useState(false);
+  const [opened, setOpened] = useState(false);
+  const requested = useBrowserFocusStore((state) => state.openImportLogins);
+  const consumeImportLogins = useBrowserFocusStore(
+    (state) => state.consumeImportLogins,
+  );
+  const enabled = props.enabled;
+  useEffect(() => {
+    if (requested && !enabled) consumeImportLogins();
+  }, [consumeImportLogins, enabled, requested]);
+  const open = opened || (requested && enabled);
+  const setOpen = (next: boolean): void => {
+    setOpened(next);
+    if (!next && requested) consumeImportLogins();
+  };
   return (
     <>
       <SettingsRow

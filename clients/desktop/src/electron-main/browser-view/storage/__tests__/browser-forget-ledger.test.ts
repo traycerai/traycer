@@ -3,12 +3,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Cookie, CookiesSetDetails } from "electron";
-import type { BrowserStorageCookie } from "@traycer/protocol/host/browser/contracts";
 import {
+  BROWSER_FORGET_LEDGER_MAX_DOMAINS,
+  type BrowserStorageCookie,
+} from "@traycer/protocol/host/browser/contracts";
+import {
+  bracketUnclearedForgets,
   browserForgetLedgerDigestForHost,
   browserForgetLedgerPendingClears,
+  browserForgetLedgerUnclearedForgets,
+  deferBrowserForgetLedgerNotifications,
   initBrowserForgetLedger,
   markBrowserForgetLedgerCleared,
+  markBrowserForgetLedgerClearedMany,
   isBrowserForgetLedgerPendingAck,
   isHeadlessOriginCookieKey,
   releaseHeadlessOriginCookieKeys,
@@ -19,11 +26,16 @@ import {
   recordForgottenBrowserSites,
   recordHeadlessOriginCookieKeys,
   releaseBrowserForgetLedgerConnection,
+  unionUnclearedForgets,
+  withoutUnclearedForgets,
 } from "../browser-forget-ledger";
 import { applyBrowserObservedProfile } from "../browser-observed-profile";
 import { BrowserObservedConnectionGovernor } from "../browser-observed-profile";
 import { BrowserJarSerializer } from "../browser-jar-serializer";
-import { cookieKeyId } from "../browser-storage-state";
+import {
+  cookieKeyId,
+  type BrowserPrimaryProfileCaptureResult,
+} from "../browser-storage-state";
 import { matchesDomainFilter } from "./cookie-jar-fixture";
 
 /**
@@ -210,6 +222,128 @@ describe("forget ledger durability", () => {
     expect(digest.domains.map((entry) => entry.domain)).toEqual(["other.test"]);
     const stored: unknown = JSON.parse(await readFile(path, "utf8"));
     expect(stored).toMatchObject({ revision: 2 });
+  });
+});
+
+describe("forget ledger loaded-domain normalization", () => {
+  it("normalizes a loaded row to its registrable domain", async () => {
+    const file = pathIn("normalize-single.json");
+    await writeFile(
+      file,
+      JSON.stringify({
+        revision: 1,
+        clearedThrough: 0,
+        forgetAll: null,
+        domains: [{ domain: "login.example.com", forgottenAt: 5, revision: 1 }],
+        ackedByHost: [],
+        headlessOriginKeys: [],
+      }),
+      "utf8",
+    );
+
+    await initBrowserForgetLedger(file);
+
+    expect(
+      browserForgetLedgerDigestForHost(HOST).domains.map(
+        (entry) => entry.domain,
+      ),
+    ).toEqual(["example.com"]);
+  });
+
+  it("keeps the higher-revision row when two loaded rows collapse to the same scope", async () => {
+    const file = pathIn("normalize-collapse.json");
+    await writeFile(
+      file,
+      JSON.stringify({
+        revision: 3,
+        clearedThrough: 0,
+        forgetAll: null,
+        domains: [
+          { domain: "login.example.com", forgottenAt: 5, revision: 1 },
+          { domain: "app.example.com", forgottenAt: 9, revision: 3 },
+        ],
+        ackedByHost: [],
+        headlessOriginKeys: [],
+      }),
+      "utf8",
+    );
+
+    await initBrowserForgetLedger(file);
+
+    // One row survives under the shared scope, carrying the newer row's
+    // data - the same collapse a re-forget performs on the write path.
+    expect(browserForgetLedgerDigestForHost(HOST).domains).toEqual([
+      { domain: "example.com", forgottenAt: 9 },
+    ]);
+  });
+
+  it("drops a loaded row whose domain collapses to nothing", async () => {
+    const file = pathIn("normalize-drop.json");
+    await writeFile(
+      file,
+      JSON.stringify({
+        revision: 1,
+        clearedThrough: 0,
+        forgetAll: null,
+        domains: [{ domain: "not a domain", forgottenAt: 5, revision: 1 }],
+        ackedByHost: [],
+        headlessOriginKeys: [],
+      }),
+      "utf8",
+    );
+
+    await initBrowserForgetLedger(file);
+
+    // A row nothing can match would be a forget that never fires - the same
+    // rule the write path applies, applied here to a row a build that
+    // predates it could still have written.
+    expect(browserForgetLedgerDigestForHost(HOST).domains).toEqual([]);
+  });
+
+  it("makes a normalized loaded domain match a capture's uncleared-forget filter", async () => {
+    const file = pathIn("normalize-uncleared.json");
+    await writeFile(
+      file,
+      JSON.stringify({
+        revision: 1,
+        clearedThrough: 0,
+        forgetAll: null,
+        domains: [{ domain: "login.example.com", forgottenAt: 5, revision: 1 }],
+        ackedByHost: [],
+        headlessOriginKeys: [],
+      }),
+      "utf8",
+    );
+
+    await initBrowserForgetLedger(file);
+
+    const uncleared = browserForgetLedgerUnclearedForgets();
+    expect(uncleared.domains.has("example.com")).toBe(true);
+
+    const cookie: BrowserStorageCookie = {
+      name: "sid",
+      value: "v",
+      domain: "login.example.com",
+      path: "/",
+      expires: -1,
+      httpOnly: false,
+      secure: true,
+      sameSite: "Lax",
+      partitionKey: null,
+    };
+    const result: BrowserPrimaryProfileCaptureResult = {
+      status: "captured",
+      storageState: { cookies: [cookie], origins: [] },
+      reason: null,
+    };
+
+    const filtered = withoutUnclearedForgets(result, uncleared);
+    if (filtered.status !== "captured") {
+      throw new Error("expected a captured result");
+    }
+    // The normalized scope is what the filter matches against, so the
+    // login's own cookie - still spelled under the subdomain - is caught.
+    expect(filtered.storageState.cookies).toEqual([]);
   });
 });
 
@@ -831,6 +965,405 @@ describe("forget ledger acked-revision gate", () => {
         domain: "example.com",
       }),
     ).toBe(true);
+  });
+});
+
+describe("forget ledger notification deferral", () => {
+  beforeEach(loadEmptyLedger);
+
+  it("holds the digest edge open across several deferred records, then fires once", async () => {
+    let notifications = 0;
+    const subscription = onBrowserForgetLedgerChanged(() => {
+      notifications += 1;
+    });
+
+    const scope = deferBrowserForgetLedgerNotifications();
+    await recordForgottenBrowserSites(["first.test"]);
+    await recordForgottenBrowserSites(["second.test"]);
+    await recordForgottenBrowserSites(["third.test"]);
+    // Each record lands in memory and bumps the revision, but the "tell every
+    // stream" edge is held until the scope ends.
+    expect(notifications).toBe(0);
+    expect(browserForgetLedgerDigestForHost(HOST).revision).toBe(3);
+
+    scope.end();
+
+    expect(notifications).toBe(1);
+    subscription.dispose();
+  });
+
+  it("persists every deferred record though only the notification is held", async () => {
+    const file = pathIn("deferred-persist.json");
+    await initBrowserForgetLedger(file);
+
+    const scope = deferBrowserForgetLedgerNotifications();
+    await recordForgottenBrowserSites(["first.test"]);
+    await recordForgottenBrowserSites(["second.test"]);
+    await recordForgottenBrowserSites(["third.test"]);
+    scope.end();
+
+    const persisted: unknown = JSON.parse(await readFile(file, "utf8"));
+    expect(persisted).toMatchObject({
+      revision: 3,
+      domains: expect.arrayContaining([
+        expect.objectContaining({ domain: "first.test" }),
+        expect.objectContaining({ domain: "second.test" }),
+        expect.objectContaining({ domain: "third.test" }),
+      ]),
+    });
+  });
+
+  it("closes idempotently: a second end() call notifies no further", async () => {
+    let notifications = 0;
+    const subscription = onBrowserForgetLedgerChanged(() => {
+      notifications += 1;
+    });
+
+    const scope = deferBrowserForgetLedgerNotifications();
+    await recordForgottenBrowserSites(["only.test"]);
+    scope.end();
+    scope.end();
+
+    expect(notifications).toBe(1);
+    subscription.dispose();
+  });
+
+  it("only releases on the outermost end(), leaving an inner end() a no-op", async () => {
+    let notifications = 0;
+    const subscription = onBrowserForgetLedgerChanged(() => {
+      notifications += 1;
+    });
+
+    const outer = deferBrowserForgetLedgerNotifications();
+    const inner = deferBrowserForgetLedgerNotifications();
+    await recordForgottenBrowserSites(["nested.test"]);
+
+    inner.end();
+    expect(notifications).toBe(0);
+
+    outer.end();
+    expect(notifications).toBe(1);
+    subscription.dispose();
+  });
+
+  it("notifies immediately when no scope is open, as the control", async () => {
+    let notifications = 0;
+    const subscription = onBrowserForgetLedgerChanged(() => {
+      notifications += 1;
+    });
+
+    await recordForgottenBrowserSites(["immediate.test"]);
+
+    expect(notifications).toBe(1);
+    subscription.dispose();
+  });
+});
+
+describe("forget ledger clear reconciliation, several revisions at once", () => {
+  beforeEach(loadEmptyLedger);
+
+  it("advances the watermark to the newest of several revisions marked together", async () => {
+    await recordForgottenBrowserSite("first.test");
+    await recordForgottenBrowserSite("second.test");
+    await recordForgottenBrowserSite("third.test");
+
+    await markBrowserForgetLedgerClearedMany([1, 2, 3]);
+
+    expect(browserForgetLedgerPendingClears()).toEqual({
+      forgetAll: null,
+      domains: [],
+    });
+  });
+
+  it("ignores a revision already cleared or above the ledger's top, without throwing", async () => {
+    await recordForgottenBrowserSite("example.com");
+    await markBrowserForgetLedgerCleared(1);
+
+    await expect(
+      markBrowserForgetLedgerClearedMany([1, 999]),
+    ).resolves.toBeUndefined();
+
+    expect(browserForgetLedgerPendingClears()).toEqual({
+      forgetAll: null,
+      domains: [],
+    });
+  });
+
+  it("holds the watermark back on an out-of-order older pending revision, the same contiguity rule the single-clear function enforces", async () => {
+    await recordForgottenBrowserSite("first.test");
+    await recordForgottenBrowserSite("second.test");
+    await recordForgottenBrowserSite("third.test");
+
+    // Only the newer two are marked; the oldest (revision 1) is still
+    // pending, so the watermark must not step past it.
+    await markBrowserForgetLedgerClearedMany([2, 3]);
+
+    expect(browserForgetLedgerPendingClears().domains).toEqual([
+      { domain: "first.test", revision: 1 },
+      { domain: "second.test", revision: 2 },
+      { domain: "third.test", revision: 3 },
+    ]);
+
+    await markBrowserForgetLedgerClearedMany([1]);
+    expect(browserForgetLedgerPendingClears().domains).toEqual([]);
+  });
+});
+
+describe("forget ledger uncleared forgets", () => {
+  beforeEach(loadEmptyLedger);
+
+  it("reports a domain uncleared once forgotten, and clear once its jar clear is marked", async () => {
+    expect(
+      browserForgetLedgerUnclearedForgets().domains.has("example.com"),
+    ).toBe(false);
+
+    const revision = await recordForgottenBrowserSite("example.com");
+    expect(
+      browserForgetLedgerUnclearedForgets().domains.has("example.com"),
+    ).toBe(true);
+
+    await markBrowserForgetLedgerCleared(revision);
+    expect(
+      browserForgetLedgerUnclearedForgets().domains.has("example.com"),
+    ).toBe(false);
+  });
+
+  it("tells a completed out-of-order clear apart from the CONTIGUOUS watermark pendingClears reads", async () => {
+    // Two sites, two revisions. Only the newer one's clear finishes - the
+    // older one's is still queued behind it, the same race the jar
+    // serializer allows between two different domains.
+    await recordForgottenBrowserSite("a.test");
+    const revisionB = await recordForgottenBrowserSite("b.test");
+
+    await markBrowserForgetLedgerCleared(revisionB);
+
+    // The in-memory completion set already knows B's clear finished, even
+    // though the CONTIGUOUS watermark cannot step past A yet - this is
+    // exactly what distinguishes this function from the durable,
+    // boot-time-only read below.
+    const uncleared = browserForgetLedgerUnclearedForgets();
+    expect(uncleared.domains.has("b.test")).toBe(false);
+    expect(uncleared.domains.has("a.test")).toBe(true);
+
+    // `browserForgetLedgerPendingClears` has no memory of the completion -
+    // it still lists B as pending, because `clearedThrough` itself never
+    // moved past the gap A left open (it stayed at 0).
+    expect(
+      browserForgetLedgerPendingClears().domains.map((entry) => entry.domain),
+    ).toEqual(["a.test", "b.test"]);
+  });
+
+  it("reports forgetAll true once recorded, false once its clear is marked", async () => {
+    expect(browserForgetLedgerUnclearedForgets().forgetAll).toBe(false);
+
+    const revision = await recordForgetAllBrowserLogins();
+    expect(browserForgetLedgerUnclearedForgets().forgetAll).toBe(true);
+
+    await markBrowserForgetLedgerCleared(revision);
+    expect(browserForgetLedgerUnclearedForgets().forgetAll).toBe(false);
+  });
+});
+
+describe("unionUnclearedForgets", () => {
+  it("ORs forgetAll and unions the two domain sets", () => {
+    const a = {
+      forgetAll: false,
+      domains: new Set(["a.test", "shared.test"]),
+    };
+    const b = {
+      forgetAll: true,
+      domains: new Set(["b.test", "shared.test"]),
+    };
+
+    expect(unionUnclearedForgets(a, b)).toEqual({
+      forgetAll: true,
+      domains: new Set(["a.test", "shared.test", "b.test"]),
+    });
+    // Order must not matter - the mask is symmetric in its two operands.
+    expect(unionUnclearedForgets(b, a)).toEqual({
+      forgetAll: true,
+      domains: new Set(["a.test", "shared.test", "b.test"]),
+    });
+  });
+
+  it("stays false and empty when neither side has anything", () => {
+    const empty = { forgetAll: false, domains: new Set<string>() };
+
+    expect(unionUnclearedForgets(empty, empty)).toEqual(empty);
+  });
+});
+
+describe("bracketUnclearedForgets", () => {
+  beforeEach(loadEmptyLedger);
+
+  it("keeps a site recorded and cleared while the bracket is open in close().domains, though the plain answer no longer lists it", async () => {
+    const bracket = bracketUnclearedForgets();
+    const revision = await recordForgottenBrowserSite("example.com");
+    await markBrowserForgetLedgerCleared(revision);
+
+    expect(
+      browserForgetLedgerUnclearedForgets().domains.has("example.com"),
+    ).toBe(false);
+    expect(bracket.close().domains.has("example.com")).toBe(true);
+  });
+
+  it("excludes a site recorded and cleared before the bracket opened", async () => {
+    const revision = await recordForgottenBrowserSite("before.test");
+    await markBrowserForgetLedgerCleared(revision);
+
+    const bracket = bracketUnclearedForgets();
+
+    expect(bracket.close().domains.has("before.test")).toBe(false);
+  });
+
+  it("keeps a forget-all recorded while the bracket is open in close().forgetAll, even once its clear is marked", async () => {
+    const bracket = bracketUnclearedForgets();
+    const revision = await recordForgetAllBrowserLogins();
+    await markBrowserForgetLedgerCleared(revision);
+
+    expect(browserForgetLedgerUnclearedForgets().forgetAll).toBe(false);
+    expect(bracket.close().forgetAll).toBe(true);
+  });
+
+  // CodeRabbit regression: the ledger's own domains list is bounded to
+  // BROWSER_FORGET_LEDGER_MAX_DOMAINS for the wire, but the bracket's
+  // accumulator is not - it exists precisely so a burst of forgets during a
+  // read cannot lose one to that bound. Recorded one at a time, the shape a
+  // real caller (a login import) actually forgets in.
+  it("holds every site recorded while open past the ledger's own MAX_DOMAINS bound, is idempotent, and stops accumulating once closed", async () => {
+    const bracket = bracketUnclearedForgets();
+    const total = BROWSER_FORGET_LEDGER_MAX_DOMAINS + 5;
+    const domains: string[] = [];
+    const revisions: number[] = [];
+    for (let i = 0; i < total; i += 1) {
+      const domain = `site-${i}.example`;
+      domains.push(domain);
+      revisions.push(await recordForgottenBrowserSite(domain));
+    }
+    await markBrowserForgetLedgerClearedMany(revisions);
+
+    // The ledger's own rows stay bounded...
+    expect(
+      browserForgetLedgerDigestForHost("some-host").domains.length,
+    ).toBeLessThanOrEqual(BROWSER_FORGET_LEDGER_MAX_DOMAINS);
+
+    const closed = bracket.close();
+    // ...but the bracket saw every one of them, including the first five the
+    // ledger's own bound already dropped.
+    for (const domain of domains) {
+      expect(closed.domains.has(domain)).toBe(true);
+    }
+    expect(closed.domains.size).toBe(total);
+
+    // Idempotent: a second close() answers the SAME object.
+    expect(bracket.close()).toBe(closed);
+
+    // A closed bracket no longer accumulates: a record made afterwards is
+    // not folded into a later close() answer.
+    const afterRevision = await recordForgottenBrowserSite("after-close.test");
+    await markBrowserForgetLedgerCleared(afterRevision);
+    expect(bracket.close().domains.has("after-close.test")).toBe(false);
+  }, 20_000);
+});
+
+describe("withoutUnclearedForgets", () => {
+  function cookie(domain: string): BrowserStorageCookie {
+    return {
+      name: "sid",
+      value: "v",
+      domain,
+      path: "/",
+      expires: -1,
+      httpOnly: false,
+      secure: true,
+      sameSite: "Lax",
+      partitionKey: null,
+    };
+  }
+
+  it("drops a dotted or subdomain cookie and origin under a forgotten domain, keeping the rest", () => {
+    const result: BrowserPrimaryProfileCaptureResult = {
+      status: "captured",
+      storageState: {
+        cookies: [
+          cookie(".example.com"),
+          cookie("app.example.com"),
+          cookie("kept.test"),
+        ],
+        origins: [
+          { origin: "https://app.example.com", localStorage: [] },
+          { origin: "https://kept.test", localStorage: [] },
+        ],
+      },
+      reason: null,
+    };
+
+    const filtered = withoutUnclearedForgets(result, {
+      forgetAll: false,
+      domains: new Set(["example.com"]),
+    });
+
+    if (filtered.status !== "captured") {
+      throw new Error("expected a captured result");
+    }
+    expect(filtered.storageState.cookies.map((entry) => entry.domain)).toEqual([
+      "kept.test",
+    ]);
+    expect(filtered.storageState.origins.map((entry) => entry.origin)).toEqual([
+      "https://kept.test",
+    ]);
+  });
+
+  it("empties a captured result under an uncleared forget-all", () => {
+    const result: BrowserPrimaryProfileCaptureResult = {
+      status: "captured",
+      storageState: {
+        cookies: [cookie("example.com")],
+        origins: [{ origin: "https://example.com", localStorage: [] }],
+      },
+      reason: null,
+    };
+
+    const filtered = withoutUnclearedForgets(result, {
+      forgetAll: true,
+      domains: new Set(),
+    });
+
+    expect(filtered).toEqual({
+      status: "captured",
+      storageState: { cookies: [], origins: [] },
+      reason: null,
+    });
+  });
+
+  it("passes an unavailable result through untouched", () => {
+    const result: BrowserPrimaryProfileCaptureResult = {
+      status: "unavailable",
+      storageState: null,
+      reason: "no-window",
+    };
+
+    const filtered = withoutUnclearedForgets(result, {
+      forgetAll: true,
+      domains: new Set(["example.com"]),
+    });
+
+    expect(filtered).toBe(result);
+  });
+
+  it("returns the SAME object when nothing is uncleared", () => {
+    const result: BrowserPrimaryProfileCaptureResult = {
+      status: "captured",
+      storageState: { cookies: [cookie("example.com")], origins: [] },
+      reason: null,
+    };
+
+    const filtered = withoutUnclearedForgets(result, {
+      forgetAll: false,
+      domains: new Set(),
+    });
+
+    expect(filtered).toBe(result);
   });
 });
 

@@ -60,16 +60,23 @@ export interface JarRecorder {
    */
   failNextCapture: Error | null;
   /**
-   * When true, `awaitJarBarrier` returns a promise that only settles once a
-   * suite calls {@link releaseBarrier} - a way to pin what a HOST-issued
-   * capture does while a whole-jar barrier (a forget-all, a login import) is
-   * still pending. Unlike {@link deferCaptures}, a barrier is not a per-call
-   * queue: every awaiter blocked on it is released together, because that is
-   * what a barrier is - one gate, not one slot per caller.
+   * When true, `capturePrimaryProfileBehindBarrier` holds the gate closed
+   * until a suite calls {@link releaseBarrier} - a way to pin what a
+   * HOST-issued capture, or the final capture at close/quit, does while a
+   * whole-jar barrier (a forget-all, a login import) is still pending.
+   * Unlike {@link deferCaptures}, a barrier is not a per-call queue: every
+   * awaiter blocked on it is released together, because that is what a
+   * barrier is - one gate, not one slot per caller.
    */
   deferBarrier: boolean;
   /** Releases every awaiter currently blocked on the held barrier. */
   releaseBarrier: () => void;
+  /**
+   * How many `capturePrimaryProfileBehindBarrier` calls answered `null`
+   * because the barrier was still held past their bounded `waitMs` - the
+   * final capture's shutdown-budget path, never the host's unbounded ask.
+   */
+  boundedWaitTimeouts: number;
 }
 
 export function createJarRecorder(): JarRecorder {
@@ -77,6 +84,30 @@ export function createJarRecorder(): JarRecorder {
   const deltaListeners = new Set<(delta: BrowserPrimaryProfileDelta) => void>();
   const pendingCaptures: Array<() => void> = [];
   let barrierWaiters: Array<() => void> = [];
+  /**
+   * The read every jar-reading port method shares: counted in
+   * `recorder.captures`, honors `failNextCapture` once, and defers behind
+   * `deferCaptures` exactly like the un-barriered path did before.
+   */
+  function readPrimaryProfile(): Promise<BrowserPrimaryProfileCaptureResult> {
+    recorder.captures += 1;
+    if (recorder.failNextCapture !== null) {
+      const error = recorder.failNextCapture;
+      recorder.failNextCapture = null;
+      return Promise.reject(error);
+    }
+    const result: BrowserPrimaryProfileCaptureResult = {
+      status: "captured",
+      storageState: { cookies: [], origins: [] },
+      reason: null,
+    };
+    if (!recorder.deferCaptures) return Promise.resolve(result);
+    return new Promise<BrowserPrimaryProfileCaptureResult>((resolve) => {
+      pendingCaptures.push(() => {
+        resolve(result);
+      });
+    });
+  }
   const recorder: JarRecorder = {
     observed: [],
     acks: [],
@@ -88,6 +119,7 @@ export function createJarRecorder(): JarRecorder {
     deferCaptures: false,
     failNextCapture: null,
     deferBarrier: false,
+    boundedWaitTimeouts: 0,
     resolvePendingCapture: () => {
       const resolve = pendingCaptures.shift();
       if (resolve === undefined) {
@@ -108,33 +140,41 @@ export function createJarRecorder(): JarRecorder {
       for (const listener of deltaListeners) listener(delta);
     },
     port: {
-      // No barrier held by default: a host-issued capture reads at once. A
-      // suite that sets `deferBarrier` holds every awaiter open until it
-      // calls `releaseBarrier`.
-      awaitJarBarrier: () => {
-        if (!recorder.deferBarrier) return Promise.resolve();
-        return new Promise<void>((resolve) => {
-          barrierWaiters.push(resolve);
-        });
-      },
-      capturePrimaryProfile: () => {
-        recorder.captures += 1;
-        if (recorder.failNextCapture !== null) {
-          const error = recorder.failNextCapture;
-          recorder.failNextCapture = null;
-          return Promise.reject(error);
+      capturePrimaryProfile: () => readPrimaryProfile(),
+      // No barrier held by default: a host-issued capture (and the final
+      // capture) reads at once. A suite that sets `deferBarrier` holds every
+      // awaiter open until it calls `releaseBarrier`. `waitMs === null` waits
+      // however long the barrier holds; a bounded wait answers `null` - and
+      // counts a bounded-wait timeout - if `releaseBarrier` has not been
+      // called by then.
+      capturePrimaryProfileBehindBarrier: (waitMs) => {
+        if (!recorder.deferBarrier) return readPrimaryProfile();
+        if (waitMs === null) {
+          return new Promise<BrowserPrimaryProfileCaptureResult | null>(
+            (resolve) => {
+              barrierWaiters.push(() => {
+                resolve(readPrimaryProfile());
+              });
+            },
+          );
         }
-        const result: BrowserPrimaryProfileCaptureResult = {
-          status: "captured",
-          storageState: { cookies: [], origins: [] },
-          reason: null,
-        };
-        if (!recorder.deferCaptures) return Promise.resolve(result);
-        return new Promise<BrowserPrimaryProfileCaptureResult>((resolve) => {
-          pendingCaptures.push(() => {
-            resolve(result);
-          });
-        });
+        return new Promise<BrowserPrimaryProfileCaptureResult | null>(
+          (resolve) => {
+            let settled = false;
+            const timer = setTimeout(() => {
+              if (settled) return;
+              settled = true;
+              recorder.boundedWaitTimeouts += 1;
+              resolve(null);
+            }, waitMs);
+            barrierWaiters.push(() => {
+              if (settled) return;
+              settled = true;
+              clearTimeout(timer);
+              resolve(readPrimaryProfile());
+            });
+          },
+        );
       },
       applyObservedProfile: (input) => {
         recorder.observed.push({
