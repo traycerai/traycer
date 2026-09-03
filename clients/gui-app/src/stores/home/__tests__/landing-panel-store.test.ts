@@ -364,6 +364,7 @@ describe("fulfillPlaceholder", () => {
         sessionId: BROWSER_SESSION_A,
         tabId: "tab-1",
       }),
+      "placeholder-1",
     );
     expect(instanceIds(useLandingPanelStore.getState().tabs)).toEqual([
       "instance-1",
@@ -389,12 +390,91 @@ describe("fulfillPlaceholder", () => {
         sessionId: "session-2",
         hostId: HOST_A,
       }),
+      // A create that was answering no particular row, which is what every
+      // terminal create is.
+      null,
     );
     expect(instanceIds(useLandingPanelStore.getState().tabs)).toEqual([
       "instance-1",
       "instance-2",
     ]);
     expect(useLandingPanelStore.getState().activeInstanceId).toBe("instance-2");
+  });
+
+  // The reader picked Browser, changed their mind and picked Terminal, and the
+  // device answered the first pick afterwards. The row is the terminal's now,
+  // so the late answer lands as a tab without taking it back.
+  it("lands an answer whose row was taken without moving the selection", () => {
+    const store = useLandingPanelStore.getState();
+    store.addTab(
+      terminalTab({
+        instanceId: "instance-1",
+        sessionId: "session-1",
+        hostId: HOST_A,
+      }),
+    );
+    useLandingPanelStore.getState().openPlaceholder("placeholder-1", 1);
+    // The later pick takes the row.
+    useLandingPanelStore.getState().fulfillPlaceholder(
+      terminalTab({
+        instanceId: "instance-2",
+        sessionId: "session-2",
+        hostId: HOST_A,
+      }),
+      "placeholder-1",
+    );
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe("instance-2");
+
+    // The earlier pick's answer arrives for a row that no longer exists.
+    useLandingPanelStore.getState().fulfillPlaceholder(
+      browserTab({
+        instanceId: "instance-3",
+        hostId: HOST_A,
+        sessionId: BROWSER_SESSION_A,
+        tabId: "tab-1",
+      }),
+      "placeholder-1",
+    );
+
+    // It landed - the device opened it, and a tab with no row is unreachable.
+    expect(instanceIds(useLandingPanelStore.getState().tabs)).toEqual([
+      "instance-1",
+      "instance-2",
+      "instance-3",
+    ]);
+    // The keyboard stayed with the choice the reader actually made last.
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe("instance-2");
+  });
+
+  // Same rule for a dismissal: the reader closed the chooser, so a tab
+  // appearing under their hands afterwards is not something they asked for.
+  it("lands an answer whose row was dismissed without taking the selection", () => {
+    const store = useLandingPanelStore.getState();
+    store.addTab(
+      terminalTab({
+        instanceId: "instance-1",
+        sessionId: "session-1",
+        hostId: HOST_A,
+      }),
+    );
+    useLandingPanelStore.getState().openPlaceholder("placeholder-1", 1);
+    useLandingPanelStore.getState().dismissPlaceholder();
+
+    useLandingPanelStore.getState().fulfillPlaceholder(
+      browserTab({
+        instanceId: "instance-2",
+        hostId: HOST_A,
+        sessionId: BROWSER_SESSION_A,
+        tabId: "tab-1",
+      }),
+      "placeholder-1",
+    );
+
+    expect(instanceIds(useLandingPanelStore.getState().tabs)).toEqual([
+      "instance-1",
+      "instance-2",
+    ]);
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe("instance-1");
   });
 
   it("clamps a placeholder index that outlived the tabs it pointed past", () => {
@@ -424,6 +504,7 @@ describe("fulfillPlaceholder", () => {
         sessionId: "session-3",
         hostId: HOST_A,
       }),
+      "placeholder-1",
     );
     expect(instanceIds(useLandingPanelStore.getState().tabs)).toEqual([
       "instance-3",

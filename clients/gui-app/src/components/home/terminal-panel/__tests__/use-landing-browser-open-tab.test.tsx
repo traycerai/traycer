@@ -24,6 +24,7 @@ import {
   LANDING_BROWSER_TAB_CAP,
   landingBrowserCapMessage,
   landingBrowserTabCount,
+  landingBrowserViewerMessage,
   useLandingBrowserOpenTab,
 } from "../use-landing-browser-open-tab";
 
@@ -83,6 +84,9 @@ function renderOpener(args: {
   return renderHook(
     () =>
       useLandingBrowserOpenTab({
+        // Every scenario below is about a shell that CAN drive a tab; the one
+        // that is not renders its own opener.
+        canDriveTabs: true,
         hostId: HOST_ID,
         sessions: args.sessions,
         onOpened: args.onOpened,
@@ -97,6 +101,40 @@ afterEach(() => {
 });
 
 describe("landingBrowserTabCount", () => {
+  // A shell with no native browser capability can only WATCH a tab: the tile
+  // renders as a "View only" screencast, and an independent session has no
+  // agent driving it either. The chord opens without ever rendering the
+  // chooser's card, so the refusal has to be in the opener as well.
+  it("refuses on a shell that could only watch the tab it opened", async () => {
+    const openTab = vi.fn(() =>
+      Promise.resolve({ sessionId: "session-1", tabId: "tab-1" }),
+    );
+    const onOpened = vi.fn();
+    const { result } = renderHook(
+      () =>
+        useLandingBrowserOpenTab({
+          canDriveTabs: false,
+          hostId: HOST_ID,
+          sessions: sessionsState({ openTab }),
+          onOpened,
+        }),
+      { wrapper: QueryWrapper },
+    );
+
+    act(() => {
+      result.current.open();
+    });
+
+    await waitFor(() => {
+      expect(mocks.toastError).toHaveBeenCalledWith(
+        landingBrowserViewerMessage(),
+      );
+    });
+    // The device was never asked, so no tab was left open on it.
+    expect(openTab).not.toHaveBeenCalled();
+    expect(onOpened).not.toHaveBeenCalled();
+  });
+
   it("has no answer before the device publishes an inventory", () => {
     expect(
       landingBrowserTabCount(

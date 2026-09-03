@@ -1,3 +1,4 @@
+import { useMemo, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -12,7 +13,14 @@ import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/pl
 import type { PlainTerminalCollection } from "@/lib/terminals/plain-terminal-authority";
 import type { BrowserTabIdentity } from "@traycer/protocol/host/browser/contracts";
 import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
+import { useLandingBrowserTombstoneDrain } from "@/providers/landing-browser-tombstone-drain";
 import {
+  independentScope,
+  sessionInfo,
+  tabInfo,
+} from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
+import {
+  landingBrowserPendingKills,
   landingPanelLayoutFor,
   landingTerminalTabs,
   useLandingPanelStore,
@@ -103,6 +111,10 @@ const mocks = vi.hoisted(() => {
     plainImportAsync: vi.fn(),
     browserSessionsByHost,
     browserCloseTab: vi.fn(() => Promise.resolve()),
+    // Whether the SHELL has native browser capability. True is a desktop, the
+    // shell every browser scenario here is about; false is the web / mobile
+    // shell that can only watch a tab.
+    runnerHostHasBrowserView: true,
     reconcileXtermHostAfterLayoutTransition: vi.fn(),
     queryClient: {
       cancelQueries: vi.fn(() => Promise.resolve()),
@@ -151,6 +163,12 @@ const mocks = vi.hoisted(() => {
     })),
   };
 });
+
+vi.mock("@/providers/use-runner-host", () => ({
+  useRunnerHostOrNull: () => ({
+    browserView: mocks.runnerHostHasBrowserView ? {} : null,
+  }),
+}));
 
 vi.mock("@tanstack/react-query", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@tanstack/react-query")>();
@@ -622,6 +640,25 @@ function browserSessionsState(
   };
 }
 
+/**
+ * The always-mounted drain, standing in for the recovery bridge that carries it
+ * app-wide. Rendered beside the panel so a close is observed with BOTH watchers
+ * of the tombstone set present, which is the only arrangement in which a second
+ * sender can show up at all.
+ */
+function BrowserTombstoneDrainProbe(): ReactNode {
+  const pendingKills = useLandingPanelStore((state) => state.pendingKills);
+  const browserPendingKills = useMemo(
+    () => landingBrowserPendingKills(pendingKills),
+    [pendingKills],
+  );
+  useLandingBrowserTombstoneDrain({
+    pendingKills: browserPendingKills,
+    browserSessions: mocks.browserSessionsByHost,
+  });
+  return null;
+}
+
 async function flushAnimationFrame(): Promise<void> {
   await act(
     () =>
@@ -717,7 +754,12 @@ describe("<LandingTerminalPanel />", () => {
       Promise.reject(new Error("unexpected legacy import")),
     );
     mocks.browserSessionsByHost = {};
+    mocks.runnerHostHasBrowserView = true;
     mocks.browserCloseTab.mockClear();
+    // `mockClear` keeps an implementation a test installed, so restore the
+    // declared default here - a test that defers its close must not leak that
+    // into every test after it.
+    mocks.browserCloseTab.mockImplementation(() => Promise.resolve());
     // Reset (not just clear): a test may override the return with a fail-closed
     // `null`, and mockClear would leak that override into later tests. Restore
     // the default host-pinned client here.
@@ -2029,6 +2071,122 @@ describe("<LandingTerminalPanel />", () => {
     });
   });
 
+  // A shell with no native browser capability can only WATCH a browser tab -
+  // the tile renders "View only" and an independent session has no agent
+  // driving it either - so the card would open a blank page nobody can
+  // navigate. Unlike the cap or the connecting wait, this does not resolve.
+  it("refuses the browser card on a shell that could only watch the tab", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    mocks.plainAuthorityStatus = "capable";
+    mocks.plainCanMutate = true;
+    // Web / mobile: no native browser capability.
+    mocks.runnerHostHasBrowserView = false;
+    const openTab = vi.fn(() =>
+      Promise.resolve({ sessionId: "device-session", tabId: "device-tab" }),
+    );
+    mocks.browserSessionsByHost = {
+      "host-a": browserSessionsState({ openTab }),
+    };
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    const browserCard = await screen.findByTestId(
+      "landing-new-tab-card-browser",
+    );
+    // Disabled with a reason, the same shape the cap and the connecting wait
+    // use - and it stays that way, because a device answering changes nothing.
+    await waitFor(() => {
+      expect(browserCard.getAttribute("aria-disabled")).toBe("true");
+    });
+    expect(
+      screen.getByTestId("landing-new-tab-card-browser-reason").textContent,
+    ).toBe("Browser tabs need the desktop app");
+
+    fireEvent.click(browserCard);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(openTab).not.toHaveBeenCalled();
+    // The chooser is still there to pick a terminal from.
+    expect(useLandingPanelStore.getState().placeholder).not.toBe(null);
+
+    // The Terminal card is untouched: a shell that cannot drive a browser can
+    // still open a shell.
+    expect(
+      screen
+        .getByTestId("landing-new-tab-card-terminal")
+        .getAttribute("aria-disabled"),
+    ).toBeNull();
+  });
+
+  // The chooser's two cards are two answers to ONE row, and the device takes
+  // time over the browser one. A reader who changes their mind mid-flight is
+  // looking at the terminal they picked second; the browser answer arriving
+  // afterwards must not pull the keyboard onto a row they moved away from.
+  it("keeps the keyboard with the pick the reader made last", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    mocks.plainAuthorityStatus = "capable";
+    mocks.plainCanMutate = true;
+    let settle: ((identity: BrowserTabIdentity) => void) | null = null;
+    const openTab = vi.fn(
+      () =>
+        new Promise<BrowserTabIdentity>((resolve) => {
+          settle = resolve;
+        }),
+    );
+    mocks.browserSessionsByHost = {
+      "host-a": browserSessionsState({ openTab }),
+    };
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    const browserCard = await screen.findByTestId(
+      "landing-new-tab-card-browser",
+    );
+    await waitFor(() => {
+      expect(browserCard.getAttribute("aria-disabled")).toBeNull();
+    });
+    fireEvent.click(browserCard);
+    await waitFor(() => {
+      expect(openTab).toHaveBeenCalledTimes(1);
+    });
+
+    // Second thoughts, while the device is still answering the first pick.
+    fireEvent.click(screen.getByTestId("landing-new-tab-card-terminal"));
+    await waitFor(() => {
+      expect(useLandingPanelStore.getState().tabs).toHaveLength(1);
+    });
+    const terminal = useLandingPanelStore.getState().tabs[0];
+    expect(terminal.kind).toBe("terminal");
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
+      terminal.instanceId,
+    );
+
+    await act(async () => {
+      settle?.({ sessionId: "device-session", tabId: "device-tab" });
+      await Promise.resolve();
+    });
+
+    // The browser tab landed - the device opened it, and dropping it would
+    // leave a tab on the device with no row here.
+    await waitFor(() => {
+      expect(useLandingPanelStore.getState().tabs).toHaveLength(2);
+    });
+    expect(useLandingPanelStore.getState().tabs[1].kind).toBe("browser");
+    // ...  and the terminal the reader actually chose still has the keyboard.
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
+      terminal.instanceId,
+    );
+  });
+
   it("closes every terminal from the context menu, tombstoning before killing", async () => {
     mocks.activeHostId = "host-a";
     mocks.clientActiveHostId = "host-a";
@@ -2083,6 +2241,95 @@ describe("<LandingTerminalPanel />", () => {
     });
   });
 
+  // The two senders, mounted together for the first time. The panel had a fast
+  // path AND the always-mounted drain watches the same tombstone set, so one
+  // gesture sent two closes - the second racing a tab the host had already
+  // removed.
+  it("sends exactly one host close for one panel close", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    // The device answers LATE, which is the only timing in which a second
+    // sender is visible: a `Promise.resolve()` close clears the tombstone in a
+    // microtask, before the drain's effect ever reads it, so an instant mock
+    // hides the very collision this pins. A real device takes milliseconds.
+    let settleClose: (() => void) | null = null;
+    mocks.browserCloseTab.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          settleClose = resolve;
+        }),
+    );
+    // The inventory still LISTS the tab, which is the whole point: the device
+    // has been asked and has not answered, so its published snapshot is
+    // unchanged. An empty inventory makes the drain decide `clear` and retire
+    // the tombstone without sending - a second vacuum on top of the first.
+    mocks.browserSessionsByHost = {
+      "host-a": browserSessionsState({
+        closeTab: mocks.browserCloseTab,
+        items: [
+          sessionInfo({
+            sessionId: "browser-session",
+            hostId: "host-a",
+            scope: independentScope(),
+            // Titled, because reconciliation renames an untitled tab to its
+            // URL and the close control is labelled from the name.
+            tabs: [
+              tabInfo({
+                tabId: "browser-tab",
+                url: "https://example.com/",
+                title: "example.com",
+              }),
+            ],
+          }),
+        ],
+      }),
+    };
+    useLandingPanelStore.getState().addTab({
+      kind: "browser",
+      instanceId: "browser-instance",
+      hostId: "host-a",
+      sessionId: "browser-session",
+      tabId: "browser-tab",
+      name: "example.com",
+      titleSource: "default",
+    });
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(
+      <>
+        {panelUi()}
+        <BrowserTombstoneDrainProbe />
+      </>,
+    );
+
+    fireEvent.click(screen.getByLabelText("Close example.com"));
+
+    // The tombstone is written and the tab is gone from the strip; the device
+    // has not answered, and the inventory still lists the tab.
+    await waitFor(() => {
+      expect(useLandingPanelStore.getState().pendingKills).toHaveLength(1);
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(mocks.browserCloseTab).toHaveBeenCalledTimes(1);
+    expect(mocks.browserCloseTab).toHaveBeenCalledWith(
+      "browser-session",
+      "browser-tab",
+    );
+
+    await act(async () => {
+      settleClose?.();
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(useLandingPanelStore.getState().pendingKills).toEqual([]);
+    });
+    expect(mocks.browserCloseTab).toHaveBeenCalledTimes(1);
+  });
+
   // "Close All" over a MIXED list: one strip, two kinds, two different close
   // boundaries. Routing per tab is the whole point - a partition by list would
   // send a browser tab's ids to the terminal kill, which the host answers by
@@ -2096,7 +2343,23 @@ describe("<LandingTerminalPanel />", () => {
     mocks.plainAuthorityStatus = "capable";
     mocks.plainCanMutate = true;
     mocks.browserSessionsByHost = {
-      "host-a": browserSessionsState({ closeTab: mocks.browserCloseTab }),
+      "host-a": browserSessionsState({
+        closeTab: mocks.browserCloseTab,
+        items: [
+          sessionInfo({
+            sessionId: "browser-session",
+            hostId: "host-a",
+            scope: independentScope(),
+            tabs: [
+              tabInfo({
+                tabId: "browser-tab",
+                url: "https://example.com/",
+                title: "example.com",
+              }),
+            ],
+          }),
+        ],
+      }),
     };
     const terminalTab = {
       kind: "terminal" as const,
@@ -2120,7 +2383,14 @@ describe("<LandingTerminalPanel />", () => {
     useLandingPanelStore.getState().addTab(terminalTab);
     useLandingPanelStore.getState().addTab(browserTab);
     useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
-    render(panelUi());
+    // The browser half of "its own boundary" is the drain, so the drain has to
+    // be here for the boundary to be observable at all.
+    render(
+      <>
+        {panelUi()}
+        <BrowserTombstoneDrainProbe />
+      </>,
+    );
 
     // A third strip row that is neither kind: an unpicked placeholder.
     fireEvent.click(screen.getByTestId("landing-terminal-new-tab"));
@@ -2137,7 +2407,8 @@ describe("<LandingTerminalPanel />", () => {
     expect(useLandingPanelStore.getState().placeholder).toBe(null);
     expect(testLayout().panelOpen).toBe(false);
 
-    // Each kind reached its own boundary, with its own ids.
+    // Each kind reached its own boundary, with its own ids: the terminal
+    // through its dispatch, the browser through the tombstone the drain sends.
     await waitFor(() => {
       expect(mocks.plainCloseAsync).toHaveBeenCalledWith(
         expect.objectContaining({

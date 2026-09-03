@@ -89,8 +89,11 @@ import {
   selectLandingBrowserViewModel,
   type LandingBrowserViewModel,
 } from "./landing-browser-presentation";
+import { screencastRoleForShell } from "@/lib/browser-view/sessions/use-screencast-session";
+import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import {
   landingBrowserCapMessage,
+  landingBrowserViewerMessage,
   useLandingBrowserOpenLink,
   useLandingBrowserOpenTab,
   LANDING_BROWSER_TAB_CAP,
@@ -265,32 +268,20 @@ function dispatchLandingTerminalClose(args: {
     .catch(() => undefined);
 }
 
-/**
- * The browser arm of the same tombstone-first close: the store has already
- * removed the tab and recorded what is owed, and this is only the fast path.
- *
- * It is far shorter than the terminal arm because none of what makes that one
- * long applies. There is no capability fork - a device that speaks the browser
- * contract at all speaks `closeTab` - no `fifo` duplicate-RPC hazard, and no
- * second sender to collide with: the recovery bridge's browser drain waits for
- * `inventoryReady` and marks per stream incarnation, so a tab this call is
- * already closing is simply gone from the next snapshot it reads.
+/*
+ * There is deliberately no browser counterpart to
+ * `dispatchLandingTerminalClose`. The browser arm had one, and its docstring
+ * claimed the recovery bridge's drain could not collide with it. That was
+ * false: the drain gates on the same `inventoryReady` this did, decides from
+ * the published inventory, and a tab whose close is in flight is still IN that
+ * inventory until the device answers - so both senders read "present, not yet
+ * attempted" and both sent. The fast path only ever bought the latency of one
+ * effect flush, because unlike the terminal drain the browser drain has no
+ * backoff or dialability gate to wait through; the alternative, teaching this
+ * call to write the drain's per-host ready-generation bookkeeping, would have
+ * put that bookkeeping in a second place to save that flush. So the drain owns
+ * every browser close, and `closePanelTab` writes the tombstone and stops.
  */
-function dispatchLandingBrowserClose(args: {
-  readonly closed: LandingBrowserTabRef;
-  readonly sessions: BrowserSessionsState | null;
-}): void {
-  const { closed, sessions } = args;
-  // Not merely "a provider is mounted": an unready coordinator cannot carry the
-  // close, and the tombstone the store just wrote is what covers that case.
-  if (sessions === null || !sessions.inventoryReady) return;
-  void sessions
-    .closeTab(closed.sessionId, closed.tabId)
-    .then(() => {
-      useLandingPanelStore.getState().clearPendingKill(closed);
-    })
-    .catch(() => undefined);
-}
 
 function directoryRequestFor(
   target: LandingTerminalTarget,
@@ -601,21 +592,27 @@ export function LandingTerminalPanel(): ReactNode {
       // which is the case a create routed through the directory picker lands
       // in, since the placeholder can legitimately be dismissed while that
       // picker is up.
-      fulfillPlaceholder({
-        kind: "terminal",
-        instanceId,
-        sessionId: `landing-term-${uuidv4()}`,
-        hostId,
-        cwd,
-        name: terminalSessionTitle({
-          title: null,
-          activeProcessName: null,
-          currentCwd: cwd,
-        }),
-        titleSource: "default",
-        hostAuthorityAcknowledged: false,
-        pendingCreate: authority.authority.capability.status === "capable",
-      });
+      fulfillPlaceholder(
+        {
+          kind: "terminal",
+          instanceId,
+          sessionId: `landing-term-${uuidv4()}`,
+          hostId,
+          cwd,
+          name: terminalSessionTitle({
+            title: null,
+            activeProcessName: null,
+            currentCwd: cwd,
+          }),
+          titleSource: "default",
+          hostAuthorityAcknowledged: false,
+          pendingCreate: authority.authority.capability.status === "capable",
+        },
+        // No particular row: a terminal create answers immediately, so there is
+        // no window in which the placeholder it was picked from could be taken
+        // by something else.
+        null,
+      );
       return instanceId;
     },
     [authorityEntries, fulfillPlaceholder],
@@ -1055,27 +1052,26 @@ export function LandingTerminalPanel(): ReactNode {
 
   // Closing always removes the tab and records its tombstone, whatever the
   // bound host's authority looks like - a tab bound to an offline host is
-  // closable, and its shell is killed when that host comes back. The dispatch
-  // is the fast path only; `dispatchLandingTerminalClose` documents who carries
-  // the kill otherwise.
+  // closable, and its shell is killed when that host comes back. The terminal
+  // dispatch is the fast path only; `dispatchLandingTerminalClose` documents
+  // who carries the kill otherwise. A browser tab has no dispatch here.
   const closePanelTab = useCallback(
     (tab: LandingPanelTabRef) => {
       replaceDirectoryRequest(null);
       clearPending();
       const authorityEntry = authorityEntries[tab.hostId];
-      const sessions = browserSessions[tab.hostId] ?? null;
       const closed = closeTab(landingPageId, tab.instanceId);
       if (closed === null) return;
       // Routed by the CLOSED ref's kind, not the argument's. They agree, but
-      // the store is the one that decided what was removed.
+      // the store is the one that decided what was removed. A browser tab needs
+      // no arm here at all - the tombstone the store just wrote is the whole
+      // request, and the drain is its only sender.
       if (isLandingTerminalTab(closed)) {
         dispatchLandingTerminalClose({
           entry: authorityEntry,
           closed,
           killTerminal: killTerminalAsync,
         });
-      } else {
-        dispatchLandingBrowserClose({ closed, sessions });
       }
       // Closing a non-last tab promotes a surviving neighbor - keep the
       // keyboard with the panel. The promoted neighbour need not be a terminal
@@ -1096,7 +1092,6 @@ export function LandingTerminalPanel(): ReactNode {
       }
     },
     [
-      browserSessions,
       clearPending,
       closeTab,
       authorityEntries,
@@ -1116,7 +1111,7 @@ export function LandingTerminalPanel(): ReactNode {
     // tab's kill dispatches. An interruption mid-loop therefore leaves every
     // tab either untouched or tombstoned, never removed without a tombstone -
     // which is the invariant that matters, and it keeps focus handling and the
-    // fast-path dispatch in one place instead of duplicating them per tab.
+    // terminal dispatch in one place instead of duplicating them per tab.
     // Routing is per tab inside `closePanelTab`, so a mixed list needs no
     // partition here.
     replaceDirectoryRequest(null);
@@ -1194,13 +1189,31 @@ export function LandingTerminalPanel(): ReactNode {
     togglePanel();
   }, [panelOpen, togglePanel]);
 
+  // Whether this SHELL can drive a browser tab, which is what decides whether
+  // the tile it opens is controllable or a "View only" screencast. It is the
+  // shell's own capability and not the device's, so a desktop looking at a
+  // remote host still qualifies - that tab's pixels stream, but its input does
+  // too.
+  const canDriveBrowserTabs =
+    screencastRoleForShell(useRunnerHostOrNull()) === "tile";
+
+  // The chooser row a browser ask was made from, so its answer can tell "my
+  // row is still there" from "something else took it while the device was
+  // replying". `null` for the chord, which asks from no row at all. One slot is
+  // enough: the opener admits one ask per device at a time.
+  const browserOpenForPlaceholderRef = useRef<string | null>(null);
   const browserOpenTab = useLandingBrowserOpenTab({
+    canDriveTabs: canDriveBrowserTabs,
     hostId: target.hostId,
     sessions:
       target.hostId === null ? null : (browserSessions[target.hostId] ?? null),
-    // Same rule as the terminal arm: replace an open placeholder in its own
-    // strip position, append when there is none.
-    onOpened: fulfillPlaceholder,
+    // Same rule as the terminal arm: replace the placeholder it was picked from
+    // in that row's own strip position, and append when that row is gone.
+    onOpened: (tab) => {
+      const forPlaceholderInstanceId = browserOpenForPlaceholderRef.current;
+      browserOpenForPlaceholderRef.current = null;
+      fulfillPlaceholder(tab, forPlaceholderInstanceId);
+    },
   });
   const openBrowserTab = browserOpenTab.open;
   // Reveal for a BROWSER open. Deliberately not `openPanel`: that opens the
@@ -1208,12 +1221,15 @@ export function LandingTerminalPanel(): ReactNode {
   // question the chooser asks.
   const revealAndOpenBrowserTab = useCallback(() => {
     if (!panelOpen) setPanelOpen(true);
+    browserOpenForPlaceholderRef.current = null;
     openBrowserTab();
   }, [openBrowserTab, panelOpen, setPanelOpen]);
 
   // A link the page asked to open in a new tab, on the raising tab's device
-  // and through the same Query mutation the chooser's opener uses.
-  const openBrowserLink = useLandingBrowserOpenLink({ browserSessions }).open;
+  // and through the same serializing scope the chooser's opener uses. The
+  // openers are what dispatch the queue, so they have to be rendered.
+  const { open: openBrowserLink, openers: browserLinkOpeners } =
+    useLandingBrowserOpenLink({ browserSessions });
 
   // The TERMINAL card's gate, reading the effective target only: capability
   // from the captured host, fail-closed on an unpinned client, and the
@@ -1236,13 +1252,22 @@ export function LandingTerminalPanel(): ReactNode {
    */
   const browserDisabledReason = useMemo((): string | null => {
     const count = browserOpenTab.tabCount;
+    // First, and above the device's own terms: a shell that can only watch is
+    // refused whatever the device says, and saying "connecting" there would be
+    // a wait that resolves into a card the reader still cannot use.
+    if (!canDriveBrowserTabs) return landingBrowserViewerMessage();
     if (count === null) return LANDING_PANEL_CONNECTING_MESSAGE;
     return count >= LANDING_BROWSER_TAB_CAP ? landingBrowserCapMessage() : null;
-  }, [browserOpenTab.tabCount]);
+  }, [browserOpenTab.tabCount, canDriveBrowserTabs]);
 
   const pickNewTabKind = useCallback(
     (kind: LandingNewTabKind): void => {
       if (kind === "browser") {
+        // The row the pick was made from. A later pick - the other card, or a
+        // chord - can take this row while the device is answering, and that
+        // later choice is the one the reader is looking at.
+        browserOpenForPlaceholderRef.current =
+          useLandingPanelStore.getState().placeholder?.instanceId ?? null;
         openBrowserTab();
         return;
       }
@@ -1349,6 +1374,10 @@ export function LandingTerminalPanel(): ReactNode {
         selectedHostId={target.hostId}
         entries={authorityEntries}
       />
+      {/* Outside the availability gate: an ask already queued is one the page
+          raised, and losing it because the panel's target went unavailable
+          would drop a popup rather than let it refuse and say so. */}
+      {browserLinkOpeners}
       {panelUnavailable ? null : (
         <LandingTerminalPanelContents
           landingPageId={landingPageId}
