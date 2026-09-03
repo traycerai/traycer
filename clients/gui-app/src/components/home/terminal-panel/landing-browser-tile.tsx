@@ -160,6 +160,9 @@ function LandingBrowserTileBody(props: {
       // No PiP from the Start Page: `convertBrowserTabToPip` routes through an
       // epic's canvas, and a panel tab belongs to no epic.
       onConvertToPip={null}
+      // Nothing to claim: pane activation is a canvas concept, and the panel
+      // shows one tab at a time in a surface that has no panes.
+      onNativeTileFocused={null}
     />
   );
 }

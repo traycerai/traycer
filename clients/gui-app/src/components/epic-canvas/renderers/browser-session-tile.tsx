@@ -16,6 +16,7 @@ import { browserSessionsRefusal } from "@traycer-clients/shared/platform/browser
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import type { BrowserSessionTileRef } from "@/stores/epics/canvas/types";
+import { claimHostedPaneActivation } from "@/components/epic-canvas/pane-activation";
 
 interface BrowserSessionTileProps {
   readonly node: BrowserSessionTileRef;
@@ -99,6 +100,23 @@ export function BrowserSessionTile(props: BrowserSessionTileProps) {
   );
 
   /** Open a tab in this tile's session and place it beside this tile. */
+  /**
+   * Clicking into the native view moves the focus there, and the pane it sits
+   * in has to know - otherwise the previously active pane keeps the activation
+   * and the next pane-scoped gesture goes to the wrong tile.
+   *
+   * It lives here rather than in the shared surface because `viewTabId` and
+   * `paneId` are canvas facts: a pane is a canvas concept, and the surface is
+   * also the Start Page panel's, where there is nothing to claim.
+   */
+  const claimThisPaneActivation = useCallback(() => {
+    claimHostedPaneActivation(props.viewTabId, props.paneId, {
+      defaultPrevented: false,
+      scope: null,
+      target: null,
+    });
+  }, [props.paneId, props.viewTabId]);
+
   const onOpenLinkInNewTile = useCallback(
     (url: string, disposition: "foreground" | "background") => {
       if (
@@ -182,6 +200,7 @@ export function BrowserSessionTile(props: BrowserSessionTileProps) {
       // beside this tile, which is what the link path already does.
       onRequestNewTab={null}
       onConvertToPip={onConvertToPip}
+      onNativeTileFocused={claimThisPaneActivation}
     />
   );
 }

@@ -75,6 +75,16 @@ interface ElectronTabSurfaceProps {
   /** See `BrowserTabTileProps.onRequestNewTab`. `null` falls back to a link open. */
   readonly onRequestNewTab: (() => void) | null;
   readonly onConvertToPip: (() => void) | null;
+  /**
+   * The native view took focus, which is a BROWSER fact this surface is the
+   * only one positioned to hear - the desktop reports it per tile, and nothing
+   * above the surface knows which tile the report is for.
+   *
+   * What a host does about it is the host's own: the canvas claims its pane's
+   * activation, so the focus moves off whatever pane held it. The Start Page
+   * panel has no panes and passes `null`.
+   */
+  readonly onNativeTileFocused: (() => void) | null;
 }
 
 interface SurfaceAttachmentState {
@@ -224,6 +234,28 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
    */
   const onOpenLinkInNewTile = props.onOpenLinkInNewTile;
   const onRequestNewTab = props.onRequestNewTab;
+
+  const onNativeTileFocused = props.onNativeTileFocused;
+  // Only the report is this surface's business. The desktop names the tile, so
+  // the identity filter stays here - it is the same `tileKey` every other
+  // bridge subscription in this file matches on - and the consequence is
+  // forwarded, which is how every other host-shaped behaviour leaves this
+  // body.
+  useEffect(() => {
+    if (browserView === null || onNativeTileFocused === null) return;
+    const subscription = browserView.onTileFocused((focusedTile) => {
+      if (!isSameBrowserViewTile(focusedTile, tileKey)) return;
+      onNativeTileFocused();
+    });
+    return () => {
+      subscription.dispose();
+    };
+  }, [browserView, onNativeTileFocused, tileKey]);
+  // Only the report is this surface's business. The desktop names the tile, so
+  // the identity filter stays here - it is the same `tileKey` every other
+  // bridge subscription in this file matches on - and the consequence is
+  // forwarded, which is how every other host-shaped behaviour leaves this
+  // body.
 
   useEffect(() => {
     if (browserView === null) return;

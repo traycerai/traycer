@@ -42,6 +42,10 @@ import { BROWSERS_UNSUPPORTED_MESSAGE } from "@traycer-clients/shared/platform/b
 import { dismissPip } from "@/lib/browser-view/pip/pip-store";
 import { usePanelHeaderSearchStore } from "@/stores/epics/panel-header-search-store";
 import { usePanelHeaderMenuStore } from "@/stores/epics/panel-header-menu-store";
+import {
+  requestSidebarNodeReveal,
+  useSidebarNodeRevealStore,
+} from "@/stores/epics/sidebar-node-reveal-store";
 
 const dndState = vi.hoisted(() => ({
   draggables: [] as Array<{
@@ -304,6 +308,10 @@ describe("BrowsersPanelBody", () => {
       usePanelHeaderMenuStore.getInitialState(),
       true,
     );
+    useSidebarNodeRevealStore.setState(
+      { requestsByViewTabId: {}, visibleByViewTabId: {} },
+      true,
+    );
     seedCanvasTab();
     sessionsState.value = {
       hostId: "host-1",
@@ -398,6 +406,31 @@ describe("BrowsersPanelBody", () => {
     ).toContain("cursor-pointer");
     const isoRow = screen.getByTestId("epic-browser-sidebar-row-tab-iso");
     expect(isoRow.innerHTML).toContain("ring-amber-500/80");
+  });
+
+  it("scrolls to and flash-highlights a requested browser row", async () => {
+    const scrollIntoView = vi
+      .spyOn(Element.prototype, "scrollIntoView")
+      .mockImplementation(() => undefined);
+    usePanelHeaderSearchStore
+      .getState()
+      .openSearch("view-tab-1", "browsers", "checkout.example");
+    requestSidebarNodeReveal(
+      "view-tab-1",
+      "browser-session:sess-primary:tab-live",
+    );
+
+    render(wrapper(<BrowsersPanelBody epicId="epic-1" tabId="view-tab-1" />));
+
+    const row = screen.getByTestId("epic-browser-sidebar-row-tab-live");
+    await waitFor(() => {
+      expect(scrollIntoView.mock.instances).toContain(row);
+    });
+    expect(row.dataset.sidebarRevealHighlighted).toBe("true");
+    expect(screen.getByTestId("epic-browser-sidebar-row-tab-live")).toBe(row);
+    expect(
+      useSidebarNodeRevealStore.getState().requestsByViewTabId["view-tab-1"],
+    ).toBeUndefined();
   });
 
   it("keeps existing row order stable and appends newly discovered tabs", () => {
