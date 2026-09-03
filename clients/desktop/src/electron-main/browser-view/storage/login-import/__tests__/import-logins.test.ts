@@ -4225,57 +4225,69 @@ describe("import - refuses an import past the forget ledger's domain cap", () =>
   // is a distinct reason from `source-changed`: the source read fine and the
   // scan stays on record, so a smaller re-selection can retry without a
   // fresh scan.
-  it("refuses more sites than the forget ledger keeps, before the keystore or a write", async () => {
-    const homeDir = await makeTempDir("login-import-too-many-sites-");
-    const siteCount = BROWSER_FORGET_LEDGER_MAX_DOMAINS + 1;
-    const rows: FixtureCookieRow[] = [];
-    for (let index = 0; index < siteCount; index += 1) {
-      rows.push(
-        domainCookieRow(`.s${index}.com`, "sid", { kind: "plain", value: "v" }),
+  // A thousand-site source is a real SQLite jar written, snapshotted and
+  // read twice (scan, then import), which is seconds on a loaded CI runner
+  // and milliseconds here; the budget is for the runner, not the code.
+  it(
+    "refuses more sites than the forget ledger keeps, before the keystore or a write",
+    { timeout: 120_000 },
+    async () => {
+      const homeDir = await makeTempDir("login-import-too-many-sites-");
+      const siteCount = BROWSER_FORGET_LEDGER_MAX_DOMAINS + 1;
+      const rows: FixtureCookieRow[] = [];
+      for (let index = 0; index < siteCount; index += 1) {
+        rows.push(
+          domainCookieRow(`.s${index}.com`, "sid", {
+            kind: "plain",
+            value: "v",
+          }),
+        );
+      }
+      await createDarwinChromeSource(homeDir, rows, 23);
+      const session = new FakeLoginImportSession([]);
+      const macosKeychain = vi.fn((): Promise<SecretReadResult> => {
+        throw new Error("macOS keychain must not be consulted");
+      });
+      const recordReplacedSites = vi.fn(async (): Promise<number | null> => 1);
+      const markReplacementCleared = vi.fn(
+        async (): Promise<void> => undefined,
       );
-    }
-    await createDarwinChromeSource(homeDir, rows, 23);
-    const session = new FakeLoginImportSession([]);
-    const macosKeychain = vi.fn((): Promise<SecretReadResult> => {
-      throw new Error("macOS keychain must not be consulted");
-    });
-    const recordReplacedSites = vi.fn(async (): Promise<number | null> => 1);
-    const markReplacementCleared = vi.fn(async (): Promise<void> => undefined);
-    const pushJarToHosts = vi.fn(async (): Promise<number> => 0);
-    const { service } = buildHarness(
-      {
-        platform: "darwin",
-        homeDir,
-        snapshotRoot: await makeTempDir("snap-"),
-        secrets: {
-          macosKeychain,
-          linuxSecretService: alwaysUnavailable(),
-          windowsDpapi: () => Promise.resolve(null),
+      const pushJarToHosts = vi.fn(async (): Promise<number> => 0);
+      const { service } = buildHarness(
+        {
+          platform: "darwin",
+          homeDir,
+          snapshotRoot: await makeTempDir("snap-"),
+          secrets: {
+            macosKeychain,
+            linuxSecretService: alwaysUnavailable(),
+            windowsDpapi: () => Promise.resolve(null),
+          },
+          recordReplacedSites,
+          markReplacementCleared,
+          pushJarToHosts,
         },
-        recordReplacedSites,
-        markReplacementCleared,
-        pushJarToHosts,
-      },
-      session,
-    );
-    const { sourceId, scan } = await scanChromeSource(service);
-    expect(scan.sites.length).toBe(siteCount);
-    const domains = scan.sites.map((site) => site.domain);
+        session,
+      );
+      const { sourceId, scan } = await scanChromeSource(service);
+      expect(scan.sites.length).toBe(siteCount);
+      const domains = scan.sites.map((site) => site.domain);
 
-    const result = await service.import({
-      sourceId,
-      scanId: scan.scanId,
-      domains,
-      includeDeviceBound: false,
-    });
+      const result = await service.import({
+        sourceId,
+        scanId: scan.scanId,
+        domains,
+        includeDeviceBound: false,
+      });
 
-    expect(result).toEqual({ status: "blocked", reason: "too-many-sites" });
-    expect(session.setCalls).toEqual([]);
-    expect(recordReplacedSites).not.toHaveBeenCalled();
-    expect(pushJarToHosts).not.toHaveBeenCalled();
-    expect(markReplacementCleared).not.toHaveBeenCalled();
-    expect(macosKeychain).not.toHaveBeenCalled();
-  });
+      expect(result).toEqual({ status: "blocked", reason: "too-many-sites" });
+      expect(session.setCalls).toEqual([]);
+      expect(recordReplacedSites).not.toHaveBeenCalled();
+      expect(pushJarToHosts).not.toHaveBeenCalled();
+      expect(markReplacementCleared).not.toHaveBeenCalled();
+      expect(macosKeychain).not.toHaveBeenCalled();
+    },
+  );
 });
 
 // =================================================================================
