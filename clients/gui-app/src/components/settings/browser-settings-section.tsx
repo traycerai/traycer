@@ -30,6 +30,8 @@ import {
   type BrowserSaveLoginsController,
 } from "@/lib/browser-view/use-browser-save-logins";
 import { useBrowserSavedLoginSitesQuery } from "@/hooks/browser/use-browser-saved-login-sites-query";
+import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
+import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
 import { useHostBinding } from "@/lib/host";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { appLogger } from "@/lib/logger";
@@ -341,6 +343,20 @@ function SavedWebsiteSessionsRow(props: {
     sites.some((site) => site.domain === domain),
   );
   if (activeCleared.length !== cleared.length) setCleared(activeCleared);
+
+  const removeAll = async (): Promise<boolean> => {
+    const confirmed = await confirmedByMain(
+      props.browserView.forgetLogins(),
+      "[browser] clearing the browser partition failed",
+    );
+    if (!confirmed) return false;
+    setCleared((current) => [
+      ...new Set([...current, ...sites.map((site) => site.domain)]),
+    ]);
+    props.onRefresh();
+    return true;
+  };
+
   if (data === null) {
     if (props.loading) {
       return (
@@ -348,6 +364,7 @@ function SavedWebsiteSessionsRow(props: {
           status="Loading…"
           message={null}
           onRetry={null}
+          onRemoveAll={null}
         />
       );
     }
@@ -357,6 +374,7 @@ function SavedWebsiteSessionsRow(props: {
           status="Unavailable"
           message="Unable to load saved website sessions. Check the host connection and try again."
           onRetry={props.onRefresh}
+          onRemoveAll={null}
         />
       );
     }
@@ -365,6 +383,7 @@ function SavedWebsiteSessionsRow(props: {
         status="Unavailable"
         message="Update the connected Traycer host to view and manage saved website sessions."
         onRetry={null}
+        onRemoveAll={null}
       />
     );
   }
@@ -374,6 +393,7 @@ function SavedWebsiteSessionsRow(props: {
         status="Locked"
         message="Connect this desktop to unlock saved website sessions. If this computer has no system keyring, Traycer cannot encrypt them here, so they stay locked and nothing new is saved."
         onRetry={null}
+        onRemoveAll={removeAll}
       />
     );
   }
@@ -395,19 +415,6 @@ function SavedWebsiteSessionsRow(props: {
     return true;
   };
 
-  const removeAll = async (): Promise<boolean> => {
-    const confirmed = await confirmedByMain(
-      props.browserView.forgetLogins(),
-      "[browser] clearing the browser partition failed",
-    );
-    if (!confirmed) return false;
-    setCleared((current) => [
-      ...new Set([...current, ...sites.map((site) => site.domain)]),
-    ]);
-    props.onRefresh();
-    return true;
-  };
-
   return (
     <SavedWebsiteSessionsManager
       sites={alphabeticalSites}
@@ -424,6 +431,7 @@ function SavedWebsiteSessionsState(props: {
   readonly status: string;
   readonly message: string | null;
   readonly onRetry: (() => void) | null;
+  readonly onRemoveAll: (() => Promise<boolean>) | null;
 }): ReactNode {
   return (
     <div className="border-b border-border/40">
@@ -449,6 +457,19 @@ function SavedWebsiteSessionsState(props: {
               Try again
             </Button>
           )}
+          {props.onRemoveAll === null ? null : (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="text-destructive hover:text-destructive"
+              onClick={() => {
+                void props.onRemoveAll?.();
+              }}
+            >
+              Remove all…
+            </Button>
+          )}
         </div>
       )}
     </div>
@@ -469,6 +490,7 @@ function SavedWebsiteSessionsManager(props: {
   const searchId = useId();
   const searchInputRef = useRef<HTMLInputElement>(null);
   const emptyImportRef = useRef<HTMLButtonElement>(null);
+  const localHostId = useReactiveLocalHostId();
   const preview = props.sites.slice(0, 3);
   const hiddenCount = props.sites.length - preview.length;
   const normalizedQuery = query.trim().toLocaleLowerCase();
@@ -507,12 +529,10 @@ function SavedWebsiteSessionsManager(props: {
                   key={site.domain}
                   className="flex min-w-0 border-b border-border/40 px-5 py-2.5 last:border-b-0"
                 >
-                  <span
-                    className="min-w-0 break-all font-mono text-ui-sm text-foreground"
-                    translate="no"
-                  >
-                    {site.domain}
-                  </span>
+                  <SavedWebsiteSessionDetails
+                    site={site}
+                    localHostId={localHostId}
+                  />
                 </li>
               ))}
             </ul>
@@ -547,7 +567,7 @@ function SavedWebsiteSessionsManager(props: {
             General settings.
           </SheetDescription>
         </SheetHeader>
-        <p className="mx-4 mb-4 rounded-md bg-muted/50 px-3 py-2 text-ui-sm text-muted-foreground">
+        <p className="mx-4 mb-4 rounded-md bg-foreground/8 px-3 py-2 text-ui-sm text-muted-foreground">
           Shared collection · Removing a site may sign you out on connected
           Traycer hosts.
         </p>
@@ -591,12 +611,10 @@ function SavedWebsiteSessionsManager(props: {
                     key={site.domain}
                     className="flex min-w-0 items-center gap-4 border-t border-border/40 px-2 py-2 first:border-t-0"
                   >
-                    <span
-                      className="min-w-0 flex-1 break-all font-mono text-ui-sm text-foreground"
-                      translate="no"
-                    >
-                      {site.domain}
-                    </span>
+                    <SavedWebsiteSessionDetails
+                      site={site}
+                      localHostId={localHostId}
+                    />
                     <Button
                       type="button"
                       variant="ghost"
@@ -704,5 +722,35 @@ function SavedWebsiteSessionsManager(props: {
         </SheetFooter>
       </SheetContent>
     </Sheet>
+  );
+}
+
+function SavedWebsiteSessionDetails(props: {
+  readonly site: BrowserSavedLoginSite;
+  readonly localHostId: string | null;
+}): ReactNode {
+  const contributedByHostId = props.site.contributedByHostId;
+  const remoteHostId =
+    typeof contributedByHostId === "string" &&
+    contributedByHostId !== props.localHostId
+      ? contributedByHostId
+      : null;
+  const entry = useHostDirectoryEntry(remoteHostId);
+  const hostName = entry === null ? remoteHostId : entry.label;
+
+  return (
+    <div className="min-w-0 flex-1">
+      <span
+        className="block min-w-0 break-all font-mono text-ui-sm text-foreground"
+        translate="no"
+      >
+        {props.site.domain}
+      </span>
+      {hostName === null ? null : (
+        <span className="block min-w-0 truncate text-ui-xs text-muted-foreground">
+          Includes a sign-in from {hostName}
+        </span>
+      )}
+    </div>
   );
 }

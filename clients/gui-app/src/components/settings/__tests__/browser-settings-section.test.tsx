@@ -19,14 +19,34 @@ import type {
   BrowserSavedLoginSitesResponse,
 } from "@traycer/protocol/host/browser/contracts";
 
+type PreFieldSavedLoginSite = Omit<
+  BrowserSavedLoginSite,
+  "contributedByHostId"
+>;
+type SavedLoginSitesAnswer =
+  | Extract<BrowserSavedLoginSitesResponse, { kind: "sealed" }>
+  | {
+      readonly kind: "sites";
+      readonly sites: readonly (
+        | BrowserSavedLoginSite
+        | PreFieldSavedLoginSite
+      )[];
+    };
+
 const saveLogins = vi.hoisted((): { current: BrowserSaveLoginsController } => ({
   current: { enabled: true, pending: false, setEnabled: () => undefined },
 }));
-const sites = vi.hoisted(
-  (): { current: BrowserSavedLoginSitesResponse | null } => ({ current: null }),
-);
+const sites = vi.hoisted((): { current: SavedLoginSitesAnswer | null } => ({
+  current: null,
+}));
 const queryState = vi.hoisted(() => ({ isLoading: false, isError: false }));
 const refetch = vi.hoisted(() => vi.fn());
+const hostDirectory = vi.hoisted(
+  (): {
+    localHostId: string | null;
+    labels: Record<string, string | undefined>;
+  } => ({ localHostId: null, labels: {} }),
+);
 const hostBinding = vi.hoisted((): { current: object | null } => ({
   current: null,
 }));
@@ -60,6 +80,18 @@ vi.mock("@/hooks/browser/use-browser-saved-login-sites-query", () => ({
   }),
 }));
 
+vi.mock("@/hooks/host/use-reactive-local-host-id", () => ({
+  useReactiveLocalHostId: () => hostDirectory.localHostId,
+}));
+
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: (hostId: string | null) => {
+    if (hostId === null) return null;
+    const label = hostDirectory.labels[hostId];
+    return label === undefined ? null : { label };
+  },
+}));
+
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-1",
 }));
@@ -75,13 +107,16 @@ function controller(
   };
 }
 
-function savedSite(domain: string): BrowserSavedLoginSite {
-  return { domain, lastSeen: Date.now(), contributedByHostId: null };
+function savedSite(
+  domain: string,
+  contributedByHostId: string | null = null,
+): BrowserSavedLoginSite {
+  return { domain, lastSeen: Date.now(), contributedByHostId };
 }
 
 function renderSection(
   current: BrowserSaveLoginsController,
-  data: BrowserSavedLoginSitesResponse | null,
+  data: SavedLoginSitesAnswer | null,
 ) {
   saveLogins.current = current;
   sites.current = data;
@@ -122,6 +157,8 @@ describe("<BrowserSettingsSection /> website sessions", () => {
     sites.current = null;
     queryState.isLoading = false;
     queryState.isError = false;
+    hostDirectory.localHostId = null;
+    hostDirectory.labels = {};
     hostBinding.current = {};
     useBrowserFocusStore.setState({ openImportLogins: false });
     useSettingsStore.setState({ browserDevOrigins: [] });
@@ -247,7 +284,7 @@ describe("<BrowserSettingsSection /> website sessions", () => {
     expect(within(manager).getByText("2 sites")).not.toBeNull();
   });
 
-  it("keeps a sealed collection distinct from an empty one", () => {
+  it("keeps remove-all available when the collection is sealed", async () => {
     renderSection(controller({}), { kind: "sealed" });
 
     expect(screen.getByText("Locked")).not.toBeNull();
@@ -255,6 +292,46 @@ describe("<BrowserSettingsSection /> website sessions", () => {
       screen.getByText(/Connect this desktop to unlock saved website sessions/),
     ).not.toBeNull();
     expect(screen.queryByText("0 sites")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove all…" }));
+    await waitFor(() => {
+      expect(browserView.forgetLogins).toHaveBeenCalledTimes(1);
+      expect(refetch).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("keeps remote-host attribution in both previews and manager rows", () => {
+    hostDirectory.localHostId = "host-here";
+    hostDirectory.labels = {
+      "host-here": "This Mac",
+      "host-there": "Studio Mac",
+    };
+    const preFieldSite: PreFieldSavedLoginSite = {
+      domain: "legacy.example",
+      lastSeen: Date.now(),
+    };
+    renderSection(controller({}), {
+      kind: "sites",
+      sites: [
+        savedSite("remote.example", "host-there"),
+        savedSite("local.example", "host-here"),
+        preFieldSite,
+      ],
+    });
+
+    const preview = screen.getByRole("list", {
+      name: "First three saved sites",
+    });
+    expect(
+      within(preview).getByText("Includes a sign-in from Studio Mac"),
+    ).not.toBeNull();
+    expect(within(preview).queryByText(/This Mac/)).toBeNull();
+
+    const manager = openManager();
+    expect(
+      within(manager).getByText("Includes a sign-in from Studio Mac"),
+    ).not.toBeNull();
+    expect(within(manager).queryByText("Includes a sign-in from")).toBeNull();
   });
 
   it("shows loading and recoverable failure states", () => {

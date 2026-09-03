@@ -520,30 +520,30 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
     heading over an empty card. The link-open and agent-tab-surfacing selects
     that used to lead this group live in **Opening behavior** now - see that
     section for the fields and their semantics.
-  - **Saved logins** (`browser-settings-section.tsx`'s second group,
-    `data-testid="settings-saved-logins"`): where website logins in the in-app
-    browser are kept, and the only place they can be turned off, forgotten, or
+  - **Website sessions** (`browser-settings-section.tsx`'s second group,
+    `data-testid="settings-saved-logins"`): where session data from the in-app
+    browser is kept, and the only place it can be turned off, removed, or
     inspected per site. Keychain-refactor spec §7.3; the group renders NOTHING
     without a `browserView` bridge (the web build), because every row is about
     a machine's jar - nor without a host runtime (`useHostBinding()`, the
     non-throwing accessor), since the list is a host's answer and both
-    destructive rows travel to hosts. That gate is on what RENDERS: the rows
+    destructive actions travel to hosts. That gate is on what RENDERS: the rows
     live in their own component so the site-list query, which reaches
     `useHostClient()` and would THROW with no provider, is never mounted
     above it.
     Saving is silent and on by default, Chrome-style - there is no consent
-    step, no status row and nothing to retry - so this group is passive: a
-    toggle, a destructive action, and a list.
-    - **Save website logins on this machine** is the desktop-local pref
+    step and nothing to retry - so this group is passive: a toggle, a compact
+    preview, and an import row.
+    - **Save website sessions on this computer** is the desktop-local pref
       (`useBrowserSaveLogins()`), not a settings-store field and not a host
       value: it is a statement about THIS machine (decision #18), so it neither
       syncs nor follows the scoped host. Off switches new and live `primary`
       tiles onto a throwaway partition (they reload signed out) and leaves the
-      `persist:` jar on disk untouched - that is what Forget is for - so a
+      `persist:` jar on disk untouched - that is what Remove all is for - so a
       confirm stands in front of it and turning it back on returns to the same
       logins. Nothing is copied in either direction.
-    - **Import logins from another browser** (`import-logins-dialog.tsx`) is
-      the row between the toggle and Forget-all. It opens a three-step dialog
+    - **Bring in existing sessions** (`import-logins-dialog.tsx`) is the row
+      after the saved-session preview. It opens a three-step dialog
       over four desktop bridge calls: `listLoginImportSources` (Pick: the
       browsers and profiles found on this machine, plus "Import from a
       file…", whose native picker runs in main so the renderer never names a
@@ -606,22 +606,21 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
         so leaving the tour never resurrects the toast. The toast also holds
         until the system-tab modal API is published, since its action
         navigates through it and would otherwise no-op on a cold launch.
-    - **Forget all browser logins** (destructive confirm) moved here from the
-      tile shield popover, which was ticket 08's temporary home. It calls the
-      bridge's `forgetLogins()` directly and so speaks for EVERY host the user has a live browser stream to; that is
-      what "all" means, and it is why the action is not tile-scoped.
-      It answers whether any stream took the frame, and the confirm closes only
-      then - the same refusal the per-row Clear makes, so a click that reached
-      no host never reads as a completed forget.
-    - **Sites with saved logins** reads `browser.savedLoginSites` from the
-      surface's host (`useBrowserSavedLoginSitesQuery`) - registrable domains
-      and a relative last-seen, never values. The method is optional
+    - **Saved website sessions** reads `browser.savedLoginSites` from the
+      surface's host (`useBrowserSavedLoginSitesQuery`) - registrable domains,
+      never values. Settings shows the count and first three sites in
+      alphabetical order; a non-empty preview opens a right side sheet with
+      search, every site, per-site Remove, and Remove all. A genuinely empty
+      collection has no disclosure, while the sheet stays open after Remove
+      all to offer import as the next step. The method is optional
       (non-floor), so the query is gated on `useHostSupportsMethod` and a host
       that never answered renders no list rather than an empty one. `sealed`
       is NOT "no sites": it says the logins exist but this host cannot open
       them until the desktop that wrapped its key connects, and it renders its
-      own hint. A row whose `contributedByHostId` names a host OTHER than this
-      machine's carries one muted "Includes a sign-in from <host>" line
+      own hint plus Remove all because deleting the jar does not require
+      opening the collection. A preview or sheet row whose
+      `contributedByHostId` names a host OTHER than this machine's carries one
+      muted "Includes a sign-in from <host>" line
       (universal-sign-in decision 9) - weak copy on purpose, because the marker
       behind it is sticky and survives the user signing into that site here.
       The display name resolves through the host directory
@@ -639,14 +638,16 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
       the render guard is `typeof === "string"`, not `!== null`, because the
       same-minor RPC path returns the payload UNPARSED - a host predating the
       field sends no key at all, and the schema's `.default(null)` only runs on
-      the version-gap decode. Per-row **Clear** sends
+      the version-gap decode. Per-row **Remove** sends
       the `clearSite { domain }` frame
       (`browserView.clearSavedLoginSite()`) and refetches; the row is hidden optimistically
       because the host merges asynchronously and the refetch behind the click
       can still read the pre-clear slice. That optimism RELEASES itself: a
       domain is hidden only while the latest response still names it (retired
       from state during render), so signing back into a cleared site shows it
-      again instead of hiding it for the session.
+      again instead of hiding it for the session. **Remove all** calls the
+      bridge's `forgetLogins()` directly and therefore speaks for every host
+      with a live browser stream; main owns both native destructive confirms.
   - **Running agents**: Prevent sleep while running
     (`prevent-sleep-settings-section.tsx`, hidden in the mobile app - see
     "Two different mobile questions"), Show global resources button, Show
