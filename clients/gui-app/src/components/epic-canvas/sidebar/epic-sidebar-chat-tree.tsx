@@ -3040,6 +3040,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
         ownerHostUnreachable={false}
         ownerKind={null}
         roleClaims={roleClaims}
+        extraContent={null}
         side="right"
       />
     );
@@ -3167,6 +3168,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
       ownerHostUnreachable={ownerIsUnreachable}
       ownerKind={ownerKind}
       roleClaims={roleClaims}
+      extraContent={null}
       side="right"
     />
   );
