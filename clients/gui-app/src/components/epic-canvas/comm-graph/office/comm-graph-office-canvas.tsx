@@ -2116,6 +2116,22 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     [persistView, readScene, runtime, setSelectedAgentId, toSpritePoint],
   );
 
+  // A cancelled gesture is not a click: the browser took the pointer (a touch
+  // became a scroll, a window lost focus mid-press), and the coordinates it
+  // reports are wherever that happened, not somewhere the person chose.
+  const handlePointerCancel = useCallback(
+    (event: ReactPointerEvent<HTMLCanvasElement>) => {
+      const drag = dragRef.current;
+      if (drag === null || drag.pointerId !== event.pointerId) return;
+      dragRef.current = null;
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+      if (drag.moved) persistView();
+    },
+    [persistView],
+  );
+
   // A native listener, because a passive React `onWheel` cannot call
   // `preventDefault` - and without it the epic canvas scrolls under the floor.
   useEffect(() => {
@@ -2245,7 +2261,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
-          onPointerCancel={handlePointerUp}
+          onPointerCancel={handlePointerCancel}
           onPointerLeave={handlePointerLeave}
           // Nearest-neighbour scaling is what makes this pixel art rather than
           // a blurry upscale; the draw disables smoothing on its side too.

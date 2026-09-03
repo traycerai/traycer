@@ -369,6 +369,30 @@ describe("CommGraphOfficeCanvas", () => {
     expect(screen.queryByTestId("comm-graph-agent-panel")).toBeNull();
   });
 
+  it("does not open anything on a cancelled pointer", () => {
+    // A cancel is not a click - the browser took the pointer mid-press, and
+    // `handlePointerCancel` only clears the drag and releases capture. It
+    // must not fall through to either open path a `pointerUp` at the same
+    // spot would take.
+    const both = new Set([ORCHESTRATOR.id, REVIEWER.id]);
+    const view = render(withQueryClient(officeElement(both, STATIC_OFFICE)));
+    view.rerender(withQueryClient(officeElement(both, IN_FLIGHT)));
+    const rect = envelopeRect(both);
+    const surface = screen.getByRole("img", {
+      name: "Office view of the communication graph",
+    });
+
+    const point = {
+      clientX: rect.x + rect.width / 2,
+      clientY: rect.y + rect.height / 2,
+    };
+    fireEvent.pointerDown(surface, { pointerId: 1, ...point });
+    fireEvent.pointerCancel(surface, { pointerId: 1, ...point });
+
+    expect(screen.queryByTestId("comm-graph-thread-panel")).toBeNull();
+    expect(screen.queryByTestId("comm-graph-agent-panel")).toBeNull();
+  });
+
   it("stays mounted and reachable while its frame loop is paused", () => {
     // The floor pauses when its tile is not being painted - an unselected
     // Traycer tab keeps its tiles mounted under `display:none`. What pauses is

@@ -500,6 +500,12 @@ interface OfficeFiller {
 interface PendingItem {
   readonly bubble: OfficeSpriteName;
   readonly sparkle: boolean;
+  /**
+   * Whether the pile on the desk already counts this message: an unanswered
+   * request is in the as-of open-request count from the moment it lands, so
+   * adding it here as well would draw one message as two.
+   */
+  readonly inOpenCount: boolean;
 }
 
 interface OfficeCharacter {
@@ -1629,6 +1635,7 @@ export class OfficeScene {
     const item: PendingItem = {
       bubble: pulseKind === "notice" ? "bubble-notice" : "bubble-hello",
       sparkle: pulseKind === "created",
+      inOpenCount: pulseKind === "request",
     };
     if (!character.seated) {
       character.pending.push(item);
@@ -3084,9 +3091,20 @@ export class OfficeScene {
         });
       }
     }
+    // The walls and outlines stand for every agent the epic has, because a
+    // floor that restacks as the cursor moves cannot be read. The LETTERING
+    // does not: a sign or a plate names an agent, and one that does not exist
+    // yet at this cursor has no name to show.
     for (const room of this.currentLayout.rooms) {
-      this.pushSign(sorted, room.signTile, room.name);
-      for (const pod of room.pods) this.pushPodOutline(sorted, pod);
+      if (this.visibleAgentIds.has(room.rootAgentId)) {
+        this.pushSign(sorted, room.signTile, room.name);
+      }
+      for (const pod of room.pods) {
+        this.pushPodOutline(sorted, pod);
+        if (this.visibleAgentIds.has(pod.leadAgentId)) {
+          this.pushPodPlate(sorted, pod);
+        }
+      }
     }
     // The break room and the game room are named the same way a cabin is: a
     // walled room nobody owns still has to say what it is for.
@@ -3146,7 +3164,6 @@ export class OfficeScene {
         });
       }
     }
-    this.pushPodPlate(sorted, pod);
   }
 
   /**
@@ -3318,7 +3335,12 @@ export class OfficeScene {
     const character = this.characters.get(agentId);
     // A message that landed while its owner was away is on the desk in exactly
     // the sense the pile already draws: waiting, unanswered, in front of them.
-    const waiting = character === undefined ? 0 : character.pending.length;
+    // Except one that the open-request count already holds - that is the same
+    // envelope seen from two sides, not two envelopes.
+    const waiting =
+      character === undefined
+        ? 0
+        : character.pending.filter((item) => !item.inOpenCount).length;
     const open = (this.openRequestsByReceiver.get(agentId) ?? 0) + waiting;
     if (open <= 0) return null;
     const index = Math.min(open, ENVELOPE_STACKS.length) - 1;
@@ -3628,19 +3650,14 @@ export class OfficeScene {
     return movesFirst === onBeat ? "bubble-awaiting" : null;
   }
 
+  /**
+   * In DRAW order, because the renderer's hover test takes the last match:
+   * desks first, then the characters in the order they are painted, so a
+   * character walking across somebody else's desk is what the pointer is
+   * over - the same precedence `hitTest` gives a click.
+   */
   private buildHitRegions(): ReadonlyArray<OfficeHitRegion> {
     const regions: OfficeHitRegion[] = [];
-    for (const character of this.orderedCharacters()) {
-      regions.push({
-        agentId: character.agentId,
-        rect: {
-          x: character.col * OFFICE_TILE,
-          y: character.row * OFFICE_TILE + CHARACTER_Y_OFFSET,
-          width: OFFICE_CHARACTER_WIDTH,
-          height: OFFICE_CHARACTER_HEIGHT,
-        },
-      });
-    }
     for (const desk of this.visibleDesks()) {
       regions.push({
         agentId: desk.agentId,
@@ -3649,6 +3666,17 @@ export class OfficeScene {
           y: desk.deskTile.row * OFFICE_TILE,
           width: DESK_WIDTH_TILES * OFFICE_TILE,
           height: DESK_HIT_ROWS * OFFICE_TILE,
+        },
+      });
+    }
+    for (const character of this.orderedCharacters()) {
+      regions.push({
+        agentId: character.agentId,
+        rect: {
+          x: character.col * OFFICE_TILE,
+          y: character.row * OFFICE_TILE + CHARACTER_Y_OFFSET,
+          width: OFFICE_CHARACTER_WIDTH,
+          height: OFFICE_CHARACTER_HEIGHT,
         },
       });
     }

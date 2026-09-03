@@ -2512,6 +2512,9 @@ describe("OfficeScene", () => {
     for (let step = 0; step < 80; step += 1) scene.tick(100);
     expect(stacks(scene.frame())).toHaveLength(0);
 
+    // The request is open from the row it lands on, and the as-of count is
+    // what says so; the landed message itself only carries the greeting, or
+    // the one envelope would be drawn as two.
     scene.sync(
       sceneInput({
         agents: AGENTS,
@@ -2519,6 +2522,7 @@ describe("OfficeScene", () => {
         statusById: needsHelp,
         pulse: REQUEST_PULSE,
         pulseKey: "row-1",
+        openRequestsByReceiver: new Map([["beta", 1]]),
       }),
     );
     for (let step = 0; step < 20; step += 1) scene.tick(100);
@@ -2735,6 +2739,160 @@ describe("OfficeScene", () => {
     };
 
     expect(run()).toEqual(run());
+  });
+
+  it("draws every desk before any character, so the last hit at a shared point is the person", () => {
+    const scene = new OfficeScene(layoutOffice);
+    scene.sync(sceneInput({ agents: AGENTS, visibleAgentIds: BOTH }));
+    const frame = scene.frame();
+
+    const deskIndex = new Map<string, number>();
+    const characterIndex = new Map<string, number>();
+    frame.hitRegions.forEach((region, index) => {
+      if (region.rect.height === OFFICE_CHARACTER_HEIGHT) {
+        characterIndex.set(region.agentId, index);
+        return;
+      }
+      // The desk box is two tiles wide - the one other shape a hit region
+      // takes.
+      expect(region.rect.width).toBe(2 * OFFICE_TILE);
+      deskIndex.set(region.agentId, index);
+    });
+
+    for (const id of ["alpha", "beta"]) {
+      const desk = deskIndex.get(id);
+      const character = characterIndex.get(id);
+      if (desk === undefined || character === undefined) {
+        throw new Error(`missing a region for ${id}`);
+      }
+      // A renderer that takes the LAST match under a point resolves a
+      // character standing on somebody else's desk, not the furniture under
+      // its feet - which only holds if every desk sorts before every
+      // character.
+      expect(character).toBeGreaterThan(desk);
+    }
+  });
+
+  it("does not double count a landed request the open-request map already holds", () => {
+    const scene = new OfficeScene(layoutOffice);
+    // Attention sends beta to reception, needing a person - a stable "away
+    // from its desk" that a hurry never pulls it out of (pulling it out of
+    // line would drop its place), unlike a walk that could finish mid-test.
+    const statusById = new Map<string, OfficeAgentStatus>([
+      ["beta", "attention"],
+    ]);
+    scene.sync(
+      sceneInput({ agents: AGENTS, visibleAgentIds: BOTH, statusById }),
+    );
+    for (let step = 0; step < 80; step += 1) scene.tick(100);
+    expect(characterRect(scene.frame(), "beta")).not.toEqual(
+      seatedRect("beta"),
+    );
+
+    scene.sync(
+      sceneInput({
+        agents: AGENTS,
+        visibleAgentIds: BOTH,
+        statusById,
+        pulse: REQUEST_PULSE,
+        pulseKey: "row-1",
+        openRequestsByReceiver: new Map([["beta", 1]]),
+      }),
+    );
+    scene.tick(700);
+    // Still queued, not answered - the pile is what this asserts, not a walk
+    // back to the chair.
+    expect(characterRect(scene.frame(), "beta")).not.toEqual(
+      seatedRect("beta"),
+    );
+
+    // The open-request count already holds this one; `deliver` marking it
+    // `inOpenCount` is what keeps the pile from drawing it a second time.
+    const stackAfterRequest = stacks(scene.frame());
+    expect(stackAfterRequest).toHaveLength(1);
+    expect(stackAfterRequest[0].sprite.name).toBe("envelope-stack-1");
+
+    // Contrast: a notice is not itself an open request, so it DOES add to
+    // the pile on top of the one already open.
+    scene.sync(
+      sceneInput({
+        agents: AGENTS,
+        visibleAgentIds: BOTH,
+        statusById,
+        pulse: { ...REQUEST_PULSE, pulseKind: "notice" },
+        pulseKey: "row-2",
+        openRequestsByReceiver: new Map([["beta", 1]]),
+      }),
+    );
+    scene.tick(700);
+
+    const stackAfterNotice = stacks(scene.frame());
+    expect(stackAfterNotice).toHaveLength(1);
+    expect(stackAfterNotice[0].sprite.name).toBe("envelope-stack-2");
+  });
+
+  it("signs no cabin and plates no pod for a root or lead that does not exist yet at the cursor", () => {
+    const family = [
+      agent({ id: "root", name: "Root Team", createdAt: 1 }),
+      agent({ id: "lead", name: "Lead Squad", parentId: "root", createdAt: 2 }),
+      agent({ id: "kid-1", parentId: "lead", createdAt: 3 }),
+      agent({ id: "kid-2", parentId: "lead", createdAt: 4 }),
+    ];
+    const scene = new OfficeScene(layoutOffice);
+
+    // Nobody visible yet: the walls and the pod's own outline still stand for
+    // everyone, but neither name has anybody the cursor has revealed to
+    // belong to it.
+    scene.sync(
+      sceneInput({ agents: family, visibleAgentIds: new Set<string>() }),
+    );
+    const hidden = scene.frame();
+    expect(
+      labels(hidden.props).some((label) => label.text === "Root Team"),
+    ).toBe(false);
+    expect(
+      labels(hidden.props).some((label) => label.text === "Lead Squad"),
+    ).toBe(false);
+    expect(sprites(hidden.props, "pod-plate")).toHaveLength(0);
+
+    const room = scene.layout().rooms[0];
+    expect(room).toBeDefined();
+    expect(
+      sprites(hidden.floor, "wall-top").some(
+        (drawable) =>
+          drawable.x === room.bounds.col * OFFICE_TILE &&
+          drawable.y === room.bounds.row * OFFICE_TILE,
+      ),
+    ).toBe(true);
+
+    const pod = room.pods[0];
+    expect(pod).toBeDefined();
+    const styleArt: Readonly<Record<string, ReadonlyArray<string>>> = {
+      glass: ["partition", "partition-h"],
+      planters: ["planter"],
+      shelves: ["shelf", "shelf-h"],
+    };
+    const outline = hidden.props.filter(
+      (drawable) =>
+        drawable.kind === "sprite" &&
+        styleArt[pod.style].includes(drawable.sprite.name),
+    );
+    expect(outline.length).toBeGreaterThan(0);
+
+    scene.sync(
+      sceneInput({
+        agents: family,
+        visibleAgentIds: new Set(family.map((person) => person.id)),
+      }),
+    );
+    const visible = scene.frame();
+    expect(
+      labels(visible.props).some((label) => label.text === "Root Team"),
+    ).toBe(true);
+    expect(
+      labels(visible.props).some((label) => label.text === "Lead Squad"),
+    ).toBe(true);
+    expect(sprites(visible.props, "pod-plate")).toHaveLength(1);
   });
 });
 
