@@ -830,6 +830,28 @@ function OnboardingWordmark() {
   );
 }
 
+/**
+ * The session scan starts with the tour, not with its last act: reading every
+ * session on the machine takes a while, and the acts before the import one are
+ * exactly that while. Only a tour that will actually show the act pays for it -
+ * the phone tour never lists it, capability or not - and it pauses while a run
+ * is in flight. A finished run does not hold it back: a replayed tour after an
+ * earlier import would otherwise wait for the whole scan at the last act.
+ */
+function useOnboardingSessionImportScan(
+  acts: ReadonlyArray<OnboardingAct>,
+): SessionImportScanHandle {
+  const tourShowsSessionImport = acts.some(
+    (act) => act.id === "session-import",
+  );
+  const sessionImportRunInFlight = useSessionImportRunStore(
+    (state) => state.status === "starting" || state.status === "running",
+  );
+  return useSessionImportScan(
+    tourShowsSessionImport && !sessionImportRunInFlight,
+  );
+}
+
 export function OnboardingPage(props: { readonly replay: boolean }) {
   // Draft + provider-derived default live in one state object so the
   // query-sync effect mirrors them through a single trailing setState call
@@ -867,22 +889,7 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
     () => onboardingActsFor({ sessionImportAvailable, loginImportAvailable }),
     [loginImportAvailable, sessionImportAvailable],
   );
-  // The session scan starts with the tour, not with its last act: reading
-  // every session on the machine takes a while, and the acts before the import
-  // one are exactly that while. Only a tour that will actually show the act
-  // pays for it - the phone tour never lists it, capability or not - and it
-  // pauses while a run is in flight. A finished run does not hold it back: a
-  // replayed tour after an earlier import would otherwise wait for the whole
-  // scan at the last act.
-  const tourShowsSessionImport = acts.some(
-    (act) => act.id === "session-import",
-  );
-  const sessionImportRunInFlight = useSessionImportRunStore(
-    (state) => state.status === "starting" || state.status === "running",
-  );
-  const sessionImportScan = useSessionImportScan(
-    tourShowsSessionImport && !sessionImportRunInFlight,
-  );
+  const sessionImportScan = useOnboardingSessionImportScan(acts);
   // An import the login-import act started is a desktop write that may be
   // sitting on a keystore prompt; Continue holds until it settles so the
   // stage is there to show the outcome. Skip does not: the write finishes
