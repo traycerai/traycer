@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { useIsMutating, useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { v4 as uuidv4 } from "uuid";
@@ -6,11 +12,9 @@ import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-s
 import { browserSessionsRefusal } from "@traycer-clients/shared/platform/browser-view";
 import { browserMutationKeys } from "@/lib/query-keys/browser-mutation-keys";
 import { DEFAULT_BROWSER_TILE_URL } from "@/stores/epics/canvas/tile-schema/browser-tile";
-import {
-  useLandingPanelStore,
-  type LandingBrowserTabRef,
-} from "@/stores/home/landing-panel-store";
+import type { LandingBrowserTabRef } from "@/stores/home/landing-panel-store";
 import type { LandingBrowserSessionEntries } from "./landing-terminal-authority-fleet";
+import { LandingBrowserLinkOpener } from "./landing-browser-link-opener";
 import { defaultLandingBrowserTitle } from "./use-landing-browser-reconciliation";
 
 /**
@@ -81,16 +85,26 @@ export interface LandingBrowserOpenTab {
 export function useLandingBrowserOpenTab(args: {
   readonly hostId: string | null;
   readonly sessions: BrowserSessionsState | null;
+  /**
+   * Whether this shell can drive a tab it opens. See
+   * {@link landingBrowserViewerMessage} - the chord opens without ever
+   * rendering the chooser's card, so the refusal has to live here too.
+   */
+  readonly canDriveTabs: boolean;
   /** Runs once the device has answered, with the ref that was added. */
   readonly onOpened: (tab: LandingBrowserTabRef) => void;
 }): LandingBrowserOpenTab {
-  const { hostId, sessions, onOpened } = args;
+  const { canDriveTabs, hostId, sessions, onOpened } = args;
   /** Set for the whole in-flight window, so `open()` is idempotent per tick. */
   const inFlightRef = useRef<{ readonly hostId: string | null } | null>(null);
   const openTabKey = browserMutationKeys.openTab(hostId);
   const tabCount = landingBrowserTabCount(sessions, hostId);
   const openMutation = useMutation({
     mutationKey: openTabKey,
+    // Shared with the popup opener on this device, so the two cannot be in
+    // flight at once and the cap re-check below reads a count that includes
+    // whatever the other one just opened. See `openTabScope`.
+    scope: { id: browserMutationKeys.openTabScope(hostId) },
     mutationFn: async (): Promise<LandingBrowserTabRef> => {
       // `inventoryReady` belongs in THIS guard rather than being left to the
       // cap check below: a live stream that has not published an inventory has
@@ -98,6 +112,12 @@ export function useLandingBrowserOpenTab(args: {
       // device whose tabs nobody has counted. The device has not spoken yet -
       // which is what the connecting refusal says, and it is not the cap's
       // sentence to say.
+      // Before the stream terms, because this one is about the shell and does
+      // not resolve: a viewer that waited for `inventoryReady` would be told
+      // it is connecting to a device whose answer changes nothing.
+      if (!canDriveTabs) {
+        throw new Error(landingBrowserViewerMessage());
+      }
       if (
         hostId === null ||
         sessions === null ||
@@ -160,21 +180,40 @@ export function landingBrowserCapMessage(): string {
   return `This device has ${LANDING_BROWSER_TAB_CAP} browser tabs open`;
 }
 
+/**
+ * The same, on a shell that can only watch a browser tab.
+ *
+ * A Start Page browser tab is one the READER drives, and driving it needs the
+ * shell's own native browser capability: without it the tile is a screencast
+ * viewer marked "View only" (`screencastRoleForShell` - `readOnly` follows the
+ * SHELL, which is why a desktop viewing a remote host's tab still controls it
+ * and is not refused here). An independent session has no agent driving it
+ * either, so what the card would open is a blank page nobody can navigate away
+ * from - and unlike the cap or the connecting wait, this does not resolve.
+ */
+export function landingBrowserViewerMessage(): string {
+  return "Browser tabs need the desktop app";
+}
+
 /** Where a popup the page raised should land relative to the reader. */
 export type LandingBrowserLinkDisposition = "foreground" | "background";
 
 /**
- * How many unanswered popup asks the panel will hold.
+ * How many unanswered popup asks the panel holds FOR ONE DEVICE.
  *
  * {@link LANDING_BROWSER_TAB_CAP}, because that is the ceiling on what could
- * ever land: a device holds eight panel tabs, so a ninth queued open is one the
- * cap re-check would refuse anyway. Overflow is dropped rather than queued
- * behind asks that cannot succeed - a page emitting popups faster than a device
- * can answer them is not a reader making eight requests.
+ * ever land there: a device holds eight panel tabs, so a ninth queued open is
+ * one the cap re-check would refuse anyway. Overflow is dropped rather than
+ * queued behind asks that cannot succeed - a page emitting popups faster than a
+ * device can answer them is not a reader making eight requests.
+ *
+ * Per device, because the number describes a device's tab ceiling. A single
+ * pool would let one noisy page spend another device's slots, and every ask it
+ * dropped would be a popup that device had room for.
  */
-const MAX_PENDING_LINK_OPENS = LANDING_BROWSER_TAB_CAP;
+const MAX_PENDING_LINK_OPENS_PER_HOST = LANDING_BROWSER_TAB_CAP;
 
-interface LandingBrowserLinkRequest {
+export interface LandingBrowserLinkRequest {
   readonly hostId: string;
   readonly sessionId: string;
   readonly url: string;
@@ -183,12 +222,28 @@ interface LandingBrowserLinkRequest {
   readonly requestId: string;
 }
 
+/** Unanswered asks per device, in the order the page raised them. */
+type LandingBrowserLinkQueues = Readonly<
+  Record<string, ReadonlyArray<LandingBrowserLinkRequest>>
+>;
+
 export interface LandingBrowserOpenLink {
   readonly open: (
     tab: LandingBrowserTabRef,
     url: string,
     disposition: LandingBrowserLinkDisposition,
   ) => void;
+  /**
+   * One opener per device with unanswered asks. Render it - it paints nothing,
+   * and without it the queue is never dispatched.
+   *
+   * The openers are components rather than one hook-level mutation because a
+   * mutation carries ONE `mutationKey` and ONE `scope` per render, and both
+   * name a device. A single mutation could therefore only ever serve one
+   * device at a time, which is exactly the head-of-line blocking the per-device
+   * queues exist to remove.
+   */
+  readonly openers: ReactNode;
 }
 
 /**
@@ -198,114 +253,81 @@ export interface LandingBrowserOpenLink {
  * the tab that raised it, and a background open (middle / ctrl / cmd click)
  * must not take the selection from the tab being read.
  *
- * It goes through Query on the same key the chooser's opener uses,
- * `browserMutationKeys.openTab(hostId)`, so a popup and a chooser open on one
- * device are one in-flight open rather than two - which is also what makes the
- * cap re-check here mean anything. The key names the DEVICE, and a popup's
- * device is the raising tab's rather than the panel's active one, so the ask is
- * queued into state for one render and dispatched from there: the key is read
- * off the render the mutation starts in, and a ref could not move it.
+ * Asks are queued per device for one render and dispatched from there rather
+ * than sent from `open()`: the mutation's key and scope are read off the render
+ * it starts in, and a popup's device is the raising tab's rather than the
+ * panel's active one.
  */
 export function useLandingBrowserOpenLink(args: {
   readonly browserSessions: LandingBrowserSessionEntries;
 }): LandingBrowserOpenLink {
   const { browserSessions } = args;
-  // A QUEUE and not a slot: a page can emit two `window.open` calls in one
-  // tick, and a single slot would let the second overwrite the first before
-  // either was dispatched - losing a popup silently, which is worse than
-  // opening it late.
-  const [queue, setQueue] = useState<readonly LandingBrowserLinkRequest[]>([]);
-  const head = queue.at(0) ?? null;
-  const dispatchedRef = useRef<string | null>(null);
-  const openMutation = useMutation({
-    mutationKey: browserMutationKeys.openTab(head?.hostId ?? null),
-    mutationFn: async (
-      pending: LandingBrowserLinkRequest,
-    ): Promise<LandingBrowserTabRef> => {
-      const sessions = browserSessions[pending.hostId] ?? null;
-      if (
-        sessions === null ||
-        sessions.lifecycle !== "live" ||
-        !sessions.inventoryReady
-      ) {
-        throw new Error(browserSessionsRefusal(sessions));
-      }
-      const tabCount = landingBrowserTabCount(sessions, pending.hostId);
-      if (tabCount !== null && tabCount >= LANDING_BROWSER_TAB_CAP) {
-        throw new Error(landingBrowserCapMessage());
-      }
-      const opened = await sessions.openTab(pending.sessionId, pending.url);
-      // Read AFTER the await, not before it: the reader can move to another
-      // row - or close the one they were on - while the device is answering,
-      // and "the tab being read" is the row that is active when the popup
-      // ARRIVES, not the one that was active when it was asked for.
-      const previousActiveInstanceId =
-        useLandingPanelStore.getState().activeInstanceId;
-      const store = useLandingPanelStore.getState();
-      const tab: LandingBrowserTabRef = {
-        kind: "browser",
-        instanceId: `landing-browser-${uuidv4()}`,
-        hostId: pending.hostId,
-        sessionId: opened.sessionId,
-        tabId: opened.tabId,
-        name: pending.url,
-        titleSource: "default",
-      };
-      store.addTab(tab);
-      // `addTab` activates what it adds, which is right for a foreground open
-      // and wrong for a background one - so the background arm puts the
-      // selection back where the reader left it. `activateTab` ignores an id
-      // the store no longer holds, so a row closed mid-open leaves the new tab
-      // active rather than nothing.
-      if (
-        pending.disposition === "background" &&
-        previousActiveInstanceId !== null
-      ) {
-        store.activateTab(previousActiveInstanceId);
-      }
-      return tab;
-    },
-    onError: (cause: Error) => {
-      toast.error(cause.message);
-    },
-    onSettled: () => {
-      // Only the head is ever in flight, so the settled ask is the one that
-      // leaves - and the render that follows dispatches the next.
-      setQueue((current) => current.slice(1));
-    },
-  });
-  const mutate = openMutation.mutate;
+  // Read at EXECUTION rather than closed over at dispatch: an ask that arrives
+  // while another open is running on its device is paused by the shared scope
+  // and runs later, by which time the render it was queued in may name a
+  // stream that has since been replaced.
+  const sessionsRef = useRef(browserSessions);
   useEffect(() => {
-    if (head === null) {
-      dispatchedRef.current = null;
-      return;
-    }
-    if (dispatchedRef.current === head.requestId) return;
-    dispatchedRef.current = head.requestId;
-    mutate(head);
-  }, [mutate, head]);
+    sessionsRef.current = browserSessions;
+  }, [browserSessions]);
+  // A QUEUE per device and not a slot: a page can emit two `window.open` calls
+  // in one tick, and a single slot would let the second overwrite the first
+  // before either was dispatched - losing a popup silently, which is worse than
+  // opening it late.
+  const [queues, setQueues] = useState<LandingBrowserLinkQueues>({});
+  const settle = useCallback((hostId: string): void => {
+    setQueues((current) => {
+      // Only a device's head is ever in flight, so the settled ask is the one
+      // that leaves - and the render that follows dispatches the next.
+      const rest = (current[hostId] ?? []).slice(1);
+      const next = { ...current };
+      if (rest.length === 0) delete next[hostId];
+      else next[hostId] = rest;
+      return next;
+    });
+  }, []);
   const open = useCallback(
     (
       tab: LandingBrowserTabRef,
       url: string,
       disposition: LandingBrowserLinkDisposition,
     ): void => {
-      setQueue((current) =>
-        current.length >= MAX_PENDING_LINK_OPENS
-          ? current
-          : [
-              ...current,
-              {
-                hostId: tab.hostId,
-                sessionId: tab.sessionId,
-                url,
-                disposition,
-                requestId: uuidv4(),
-              },
-            ],
-      );
+      setQueues((current) => {
+        const pending = current[tab.hostId] ?? [];
+        if (pending.length >= MAX_PENDING_LINK_OPENS_PER_HOST) return current;
+        return {
+          ...current,
+          [tab.hostId]: [
+            ...pending,
+            {
+              hostId: tab.hostId,
+              sessionId: tab.sessionId,
+              url,
+              disposition,
+              requestId: uuidv4(),
+            },
+          ],
+        };
+      });
     },
     [],
   );
-  return { open };
+  const openers = (
+    <>
+      {Object.entries(queues).map(([hostId, pending]) => {
+        const head = pending.at(0);
+        if (head === undefined) return null;
+        return (
+          <LandingBrowserLinkOpener
+            key={hostId}
+            hostId={hostId}
+            head={head}
+            sessionsRef={sessionsRef}
+            onSettled={settle}
+          />
+        );
+      })}
+    </>
+  );
+  return { open, openers };
 }

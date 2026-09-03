@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { BrowserTabIdentity } from "@traycer/protocol/host/browser/contracts";
 import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import {
@@ -22,10 +22,13 @@ vi.mock("sonner", () => ({
   toast: { error: mocks.toastError },
 }));
 
+import type { LandingBrowserSessionEntries } from "../landing-terminal-authority-fleet";
 import {
   LANDING_BROWSER_TAB_CAP,
   landingBrowserCapMessage,
   useLandingBrowserOpenLink,
+  useLandingBrowserOpenTab,
+  type LandingBrowserOpenLink,
 } from "../use-landing-browser-open-tab";
 
 const HOST_ID = "host-a";
@@ -76,14 +79,42 @@ function QueryWrapper(props: { readonly children: ReactNode }): ReactNode {
   );
 }
 
-function renderOpener(sessions: BrowserSessionsState | null) {
-  return renderHook(
-    () =>
-      useLandingBrowserOpenLink({
-        browserSessions: sessions === null ? {} : { [HOST_ID]: sessions },
-      }),
-    { wrapper: QueryWrapper },
+/**
+ * Renders the hook AND the openers it hands back, because those are what
+ * dispatch the queue. A bare `renderHook` would put asks into a queue nothing
+ * ever drains, and every assertion below would be about a popup that was never
+ * attempted.
+ */
+function renderOpeners(browserSessions: LandingBrowserSessionEntries): {
+  readonly result: { current: LandingBrowserOpenLink };
+} {
+  // Named `…Ref` because it is written during render: the react-hooks
+  // immutability rule allows that only for a ref-shaped holder.
+  const resultRef: { current: LandingBrowserOpenLink } = {
+    current: { open: () => undefined, openers: null },
+  };
+  function Harness(): ReactNode {
+    const link = useLandingBrowserOpenLink({ browserSessions });
+    // In an effect, not during render: writing an outer variable while
+    // rendering is what `react-hooks/immutability` forbids. `render` is
+    // act-wrapped, so this has run by the time the caller reads it.
+    useEffect(() => {
+      resultRef.current = link;
+    }, [link]);
+    return link.openers;
+  }
+  render(
+    <QueryWrapper>
+      <Harness />
+    </QueryWrapper>,
   );
+  return { result: resultRef };
+}
+
+function renderOpener(sessions: BrowserSessionsState | null): {
+  readonly result: { current: LandingBrowserOpenLink };
+} {
+  return renderOpeners(sessions === null ? {} : { [HOST_ID]: sessions });
 }
 
 /** A deferred `openTab`, so the store can move while the device is answering. */
@@ -379,6 +410,160 @@ describe("useLandingBrowserOpenLink", () => {
 
     await waitFor(() => {
       expect(openTab).toHaveBeenCalledTimes(LANDING_BROWSER_TAB_CAP);
+    });
+  });
+
+  // Two devices, and neither waits on the other. A single pool would put host
+  // B's popup behind host A's unanswered open - a device that never answers
+  // would hold every other device's popups forever.
+  it("opens popups on two devices at once", async () => {
+    const SECOND_HOST_ID = "host-b";
+    const secondTab: LandingBrowserTabRef = {
+      ...RAISING_TAB,
+      instanceId: "second-raising-instance",
+      hostId: SECOND_HOST_ID,
+      sessionId: "second-raising-session",
+      tabId: "second-raising-tab",
+    };
+    const first = deferredOpenTab();
+    const second = deferredOpenTab();
+    const { result } = renderOpeners({
+      [HOST_ID]: sessionsState({ openTab: first.openTab }),
+      [SECOND_HOST_ID]: sessionsState({
+        hostId: SECOND_HOST_ID,
+        openTab: second.openTab,
+      }),
+    });
+
+    await act(async () => {
+      result.current.open(RAISING_TAB, "https://example.com/a", "foreground");
+      result.current.open(secondTab, "https://example.com/b", "foreground");
+      await Promise.resolve();
+    });
+
+    // Both devices were asked while NEITHER has answered.
+    await waitFor(() => {
+      expect(first.calls).toHaveLength(1);
+      expect(second.calls).toHaveLength(1);
+    });
+    expect(first.calls[0]?.sessionId).toBe("raising-session");
+    expect(second.calls[0]?.sessionId).toBe("second-raising-session");
+  });
+
+  // The bound is per device too, for the same reason the queue is: the number
+  // describes a device's tab ceiling, so one page filling its own device's
+  // queue must not spend another device's slots.
+  it("keeps one device's full queue from dropping another's popup", async () => {
+    const SECOND_HOST_ID = "host-b";
+    const secondTab: LandingBrowserTabRef = {
+      ...RAISING_TAB,
+      instanceId: "second-raising-instance",
+      hostId: SECOND_HOST_ID,
+      sessionId: "second-raising-session",
+      tabId: "second-raising-tab",
+    };
+    const first = deferredOpenTab();
+    const second = deferredOpenTab();
+    const { result } = renderOpeners({
+      [HOST_ID]: sessionsState({ openTab: first.openTab }),
+      [SECOND_HOST_ID]: sessionsState({
+        hostId: SECOND_HOST_ID,
+        openTab: second.openTab,
+      }),
+    });
+
+    await act(async () => {
+      // Fill the first device's queue to its bound, and one past it.
+      for (let ask = 0; ask <= LANDING_BROWSER_TAB_CAP; ask += 1) {
+        result.current.open(
+          RAISING_TAB,
+          `https://example.com/${ask}`,
+          "background",
+        );
+      }
+      result.current.open(secondTab, "https://example.com/b", "foreground");
+      await Promise.resolve();
+    });
+
+    // The second device's ask was not one of the dropped ones.
+    await waitFor(() => {
+      expect(second.calls).toHaveLength(1);
+    });
+    expect(second.calls[0]?.sessionId).toBe("second-raising-session");
+  });
+
+  // The chooser's opener and the popup queue are two senders to ONE device,
+  // and each re-checks the device's tab cap against its published count. A
+  // `mutationKey` groups them; it does not serialise them, so in parallel both
+  // would read the count from before either opened.
+  it("holds a popup until the chooser's open on that device settles", async () => {
+    const chooser = deferredOpenTab();
+    const popup = deferredOpenTab();
+    // One state per opener, so "they serialise" cannot be an artifact of them
+    // sharing a single `openTab` function.
+    const chooserSessions = sessionsState({ openTab: chooser.openTab });
+    const popupSessions = sessionsState({ openTab: popup.openTab });
+    const resultRef: { current: LandingBrowserOpenLink } = {
+      current: { open: () => undefined, openers: null },
+    };
+    const chooserOpenRef: { current: () => void } = {
+      current: () => undefined,
+    };
+    function Harness(): ReactNode {
+      const link = useLandingBrowserOpenLink({
+        browserSessions: { [HOST_ID]: popupSessions },
+      });
+      const direct = useLandingBrowserOpenTab({
+        canDriveTabs: true,
+        hostId: HOST_ID,
+        sessions: chooserSessions,
+        onOpened: () => undefined,
+      });
+      useEffect(() => {
+        resultRef.current = link;
+        chooserOpenRef.current = direct.open;
+      }, [direct.open, link]);
+      return link.openers;
+    }
+    render(
+      <QueryWrapper>
+        <Harness />
+      </QueryWrapper>,
+    );
+
+    await act(async () => {
+      chooserOpenRef.current();
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(chooser.calls).toHaveLength(1);
+    });
+
+    await act(async () => {
+      resultRef.current.open(
+        RAISING_TAB,
+        "https://example.com/a",
+        "foreground",
+      );
+      await Promise.resolve();
+    });
+
+    // Queued and dispatched, but the device has NOT been asked: the shared
+    // scope is holding it behind the chooser's open.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(popup.calls).toHaveLength(0);
+
+    await act(async () => {
+      chooser.settle?.({ sessionId: "chooser-session", tabId: "chooser-tab" });
+      await Promise.resolve();
+    });
+
+    // Released once the first settled, so its cap re-check reads a count that
+    // includes the tab the chooser just opened.
+    await waitFor(() => {
+      expect(popup.calls).toHaveLength(1);
     });
   });
 

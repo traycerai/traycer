@@ -350,7 +350,21 @@ export interface LandingPanelStoreState {
    * placeholder may legitimately be dismissed while the create is in flight,
    * and the terminal that lands still has to become a tab.
    */
-  readonly fulfillPlaceholder: (tab: LandingPanelTabRef) => void;
+  /**
+   * Lands an answered tab on the placeholder row it was asked for.
+   *
+   * `forPlaceholderInstanceId` names the row the caller was answering, and
+   * `null` is a caller that never had one - a chord, which takes the tab live
+   * wherever it lands. When it names a row that is no longer the placeholder,
+   * the answer LOST that row: something else fulfilled or dismissed it while
+   * the device was replying. The tab still lands, because the device opened it
+   * and a tab with no row would be unreachable, but it lands quietly - the
+   * keyboard stays with whatever the reader chose in the meantime.
+   */
+  readonly fulfillPlaceholder: (
+    tab: LandingPanelTabRef,
+    forPlaceholderInstanceId: string | null,
+  ) => void;
   readonly dismissPlaceholder: () => void;
   /**
    * Atomically tombstones then removes a user-closed tab.
@@ -623,15 +637,22 @@ export const useLandingPanelStore = create<LandingPanelStoreState>()(
           };
           return { placeholder, activeInstanceId: placeholder.instanceId };
         }),
-      fulfillPlaceholder: (tab) =>
+      fulfillPlaceholder: (tab, forPlaceholderInstanceId) =>
         set((state) => {
+          const ownsRow =
+            forPlaceholderInstanceId === null ||
+            state.placeholder?.instanceId === forPlaceholderInstanceId;
           const existing = findEquivalentTab(state.tabs, tab);
           if (existing !== undefined) {
+            // Not ours to clear, and not ours to select: the row this answered
+            // is gone, and the placeholder on screen belongs to someone else.
+            if (!ownsRow) return state;
             return {
               placeholder: null,
               activeInstanceId: existing.instanceId,
             };
           }
+          if (!ownsRow) return { tabs: [...state.tabs, tab] };
           return {
             tabs: fulfilledTabs(state.tabs, state.placeholder, tab),
             placeholder: null,
