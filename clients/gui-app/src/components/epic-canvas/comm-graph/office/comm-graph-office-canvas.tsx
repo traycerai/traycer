@@ -1984,8 +1984,15 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     [runtime],
   );
 
+  // Shared by the canvas and the hover trigger that sits over a character: a
+  // press that starts on the trigger is still a press on the floor. The
+  // pointer is captured by the CANVAS whichever element took the press, so
+  // the move and the release reach the canvas handlers - and a click, if the
+  // press never moved, is resolved there by the same hit test as any other.
   const handlePointerDown = useCallback(
-    (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    (event: ReactPointerEvent<HTMLElement>) => {
+      const canvas = canvasRef.current;
+      if (canvas === null) return;
       // Manual control is claimed when the drag actually MOVES, not here. A
       // plain click on an agent is not a statement about the camera, and
       // taking control on every press disabled auto-fit for the session.
@@ -1998,7 +2005,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         cameraY: camera.y,
         moved: false,
       };
-      event.currentTarget.setPointerCapture(event.pointerId);
+      canvas.setPointerCapture(event.pointerId);
     },
     [runtime],
   );
@@ -2109,7 +2116,13 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         setSelectedDetail({ kind: "pair", edgeId });
         return;
       }
-      const agentId = scene.hitTest(point);
+      // Answered from the last PAINTED frame, like the hover and the envelope
+      // above: the scene has ticked since, and on a floor with walkers the two
+      // can name different agents for the same pixels. The live scene is only
+      // the fallback before a first frame exists.
+      const agentId = runtime.hasDrawnFrame()
+        ? (hitRegionFor(runtime.getHitRegions(), point)?.agentId ?? null)
+        : scene.hitTest(point);
       if (agentId !== null) setSelectedAgentId(agentId);
     },
     [persistView, readScene, runtime, setSelectedAgentId, toSpritePoint],
@@ -2133,10 +2146,12 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
 
   // A native listener, because a passive React `onWheel` cannot call
   // `preventDefault` - and without it the epic canvas scrolls under the floor.
+  // On the CONTAINER rather than the canvas: the hover trigger is a sibling
+  // element over a character, and a wheel that lands on it is still a wheel
+  // over the floor.
   useEffect(() => {
-    const canvas = canvasRef.current;
     const container = containerRef.current;
-    if (canvas === null || container === null) return;
+    if (container === null) return;
     const onWheel = (event: WheelEvent): void => {
       event.preventDefault();
       runtime.takeManualControl();
@@ -2146,9 +2161,9 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       const factor = Math.exp(-event.deltaY / 300);
       zoomAbout(factor, event.clientX - rect.left, event.clientY - rect.top);
     };
-    canvas.addEventListener("wheel", onWheel, { passive: false });
+    container.addEventListener("wheel", onWheel, { passive: false });
     return () => {
-      canvas.removeEventListener("wheel", onWheel);
+      container.removeEventListener("wheel", onWheel);
     };
   }, [runtime, zoomAbout]);
 
@@ -2275,6 +2290,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
             agentId={hoveredAgent.id}
             name={hoveredAgent.name}
             screenRect={hoverCard.rect}
+            onPointerDown={handlePointerDown}
             extraContent={
               <OfficeHoverSupplement
                 status={statusById.get(hoveredAgent.id) ?? "idle"}

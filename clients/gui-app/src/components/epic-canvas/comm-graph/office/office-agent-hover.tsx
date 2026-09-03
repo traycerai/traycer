@@ -11,10 +11,12 @@
  * harness, model, worktree, branch and PR.
  *
  * The trigger also carries the CLICK, so a pointer that lands on a character
- * selects it whether or not the tooltip is open - the canvas below never sees
- * that press, because this element is over it.
+ * selects it whether or not the tooltip is open. A PRESS is handed back to
+ * the floor through `onPointerDown`: the canvas below never sees it
+ * otherwise, because this element is over it, and a drag or a wheel that
+ * happens to start on a character must still pan and zoom the floor.
  */
-import type { ReactElement } from "react";
+import type { PointerEvent as ReactPointerEvent, ReactElement } from "react";
 import { AgentHoverTooltip } from "@/components/epic-canvas/sidebar/agent-hover-tooltip";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
@@ -35,11 +37,21 @@ export interface OfficeAgentHoverProps {
   readonly extraContent: ReactElement;
   readonly onSelect: (agentId: string) => void;
   readonly onLeave: () => void;
+  /** The floor's own press handler, so a drag that starts here still pans. */
+  readonly onPointerDown: (event: ReactPointerEvent<HTMLElement>) => void;
 }
 
 export function OfficeAgentHover(props: OfficeAgentHoverProps) {
-  const { agentId, epicId, extraContent, name, onLeave, onSelect, screenRect } =
-    props;
+  const {
+    agentId,
+    epicId,
+    extraContent,
+    name,
+    onLeave,
+    onPointerDown,
+    onSelect,
+    screenRect,
+  } = props;
   // Resolved exactly as the graph node resolves them, from the node id alone -
   // see `comm-graph-agent-node.tsx`. Nothing about the hover is passed in from
   // the canvas, so the office cannot feed the card a different truth.
@@ -65,6 +77,7 @@ export function OfficeAgentHover(props: OfficeAgentHoverProps) {
         height: screenRect.height,
       }}
       onClick={() => onSelect(agentId)}
+      onPointerDown={onPointerDown}
       onPointerLeave={onLeave}
     />
   );

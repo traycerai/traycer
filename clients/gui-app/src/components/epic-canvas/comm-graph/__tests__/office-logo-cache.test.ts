@@ -107,15 +107,30 @@ describe("officeHarnessLogo", () => {
     }).not.toThrow();
   });
 
-  it("serves one raster per harness and forgets it all on a clear", () => {
+  it("serves one raster per harness and forgets it all on a clear", async () => {
     // The theme is NOT part of the key: the mark is recolored to the harness
     // accent, which is the same colour in both themes, so a per-theme entry
-    // only ever held a second identical raster. Asking repeatedly is a hit
-    // that starts no further work; clearing puts it back to a cold miss.
-    officeHarnessLogo("claude");
-    expect(officeHarnessLogo("claude")).toBeNull();
-    clearOfficeLogoCache();
-    expect(officeHarnessLogo("claude")).toBeNull();
+    // only ever held a second identical raster. With a decode pipeline in
+    // place the raster actually lands, so a clear is observable as a cold
+    // miss followed by a DIFFERENT canvas - a no-op clear would hand the
+    // first one straight back.
+    const restore = installLogoDecodePipeline();
+    try {
+      expect(officeHarnessLogo("claude")).toBeNull();
+      await flushMacrotask();
+      const first = officeHarnessLogo("claude");
+      expect(first).not.toBeNull();
+      expect(officeHarnessLogo("claude")).toBe(first);
+
+      clearOfficeLogoCache();
+      expect(officeHarnessLogo("claude")).toBeNull();
+      await flushMacrotask();
+      const second = officeHarnessLogo("claude");
+      expect(second).not.toBeNull();
+      expect(second).not.toBe(first);
+    } finally {
+      restore();
+    }
   });
 });
 

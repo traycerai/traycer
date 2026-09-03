@@ -36,6 +36,7 @@ function renderHover(onSelect: (agentId: string) => void) {
       }
       onSelect={onSelect}
       onLeave={vi.fn()}
+      onPointerDown={vi.fn()}
     />,
   );
 }

@@ -96,6 +96,13 @@ export class OfficeStaticLayer {
   private readonly create: OfficeStaticSurfaceFactory;
   private surface: OfficeStaticSurface | null = null;
   private key: OfficeStaticLayerKey | null = null;
+  /**
+   * Set once the factory has answered `null` for a real size: a platform with
+   * no offscreen 2D context does not grow one between frames, so asking again
+   * at frame cadence would only allocate a canvas per frame to throw away.
+   * `release()` forgets it, in case the layer is reused somewhere it works.
+   */
+  private unsupported = false;
   /** Counts repaints, so a test can prove a frame did NOT cause one. */
   private paints = 0;
 
@@ -118,6 +125,7 @@ export class OfficeStaticLayer {
     paint: (ctx: CanvasRenderingContext2D) => void,
   ): HTMLCanvasElement | null {
     if (key.width <= 0 || key.height <= 0) return null;
+    if (this.unsupported) return null;
     const current = this.key;
     if (
       this.surface !== null &&
@@ -141,6 +149,7 @@ export class OfficeStaticLayer {
     const surface = this.surface;
     if (surface === null) {
       this.key = null;
+      this.unsupported = true;
       return null;
     }
     surface.ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -156,6 +165,7 @@ export class OfficeStaticLayer {
   release(): void {
     this.releaseSurface();
     this.key = null;
+    this.unsupported = false;
   }
 
   private releaseSurface(): void {
