@@ -82,6 +82,7 @@ import {
   browserForgetLedgerPendingClears,
   isBrowserForgetLedgerPendingAck,
   isHeadlessOriginCookieKey,
+  browserForgetLedgerRevision,
   browserForgetLedgerUnclearedForgets,
   markBrowserForgetLedgerCleared,
   onBrowserForgetLedgerChanged,
@@ -91,6 +92,7 @@ import {
   recordHeadlessOriginCookieKeys,
   releaseBrowserForgetLedgerConnection,
   releaseHeadlessOriginCookieKeys,
+  unionUnclearedForgets,
   withoutUnclearedForgets,
 } from "../browser-view/storage/browser-forget-ledger";
 import { trustBrowserCertificate } from "../app/cert-trust";
@@ -541,11 +543,25 @@ export function registerBrowserViewIpc(
    * cycle only the barrier timer would break.
    */
   const captureLedgeredPrimaryProfile =
-    async (): Promise<BrowserPrimaryProfileCaptureResult> =>
-      withoutUnclearedForgets(
-        await primaryProfileSnapshots.capture(),
-        browserForgetLedgerUnclearedForgets(),
+    async (): Promise<BrowserPrimaryProfileCaptureResult> => {
+      // Bracketing the read, which does not queue on the serializer: a site
+      // clear that records, clears and marks itself while the cookies are
+      // being read would be in neither a mask taken before (not recorded
+      // yet) nor one taken after (already cleared), while the read still
+      // holds the cookie it removed. Before the read: the ledger's revision
+      // and what is uncleared then. After: what is uncleared now, widened
+      // to everything recorded since the mark. The union is the mask.
+      const mark = browserForgetLedgerRevision();
+      const before = browserForgetLedgerUnclearedForgets(null);
+      const captured = await primaryProfileSnapshots.capture();
+      return withoutUnclearedForgets(
+        captured,
+        unionUnclearedForgets(
+          before,
+          browserForgetLedgerUnclearedForgets(mark),
+        ),
       );
+    };
 
   /**
    * The jar plane's own streams. Everything cookie-bearing on

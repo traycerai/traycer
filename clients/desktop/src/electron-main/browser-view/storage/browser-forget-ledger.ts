@@ -531,17 +531,45 @@ export interface BrowserForgetLedgerUnclearedForgets {
   readonly domains: ReadonlySet<string>;
 }
 
-export function browserForgetLedgerUnclearedForgets(): BrowserForgetLedgerUnclearedForgets {
-  const uncleared = (revision: number): boolean =>
-    revision > ledger.clearedThrough && !completedClears.has(revision);
+/** The ledger's current top revision - a mark for {@link browserForgetLedgerUnclearedForgets}. */
+export function browserForgetLedgerRevision(): number {
+  return ledger.revision;
+}
+
+/**
+ * `recordedAfter` widens the answer to every forget recorded above that
+ * revision, cleared or not. A caller that reads the jar asynchronously takes
+ * the ledger's revision BEFORE the read and asks with it after: a forget
+ * recorded during the read may have been cleared and marked before the
+ * caller looks, and "uncleared right now" alone would miss it while the
+ * read still holds the cookie it removed. `null` asks for the plain
+ * uncleared set.
+ */
+export function browserForgetLedgerUnclearedForgets(
+  recordedAfter: number | null,
+): BrowserForgetLedgerUnclearedForgets {
+  const counts = (revision: number): boolean =>
+    (revision > ledger.clearedThrough && !completedClears.has(revision)) ||
+    (recordedAfter !== null && revision > recordedAfter);
   const forgetAll = ledger.forgetAll;
   return {
-    forgetAll: forgetAll !== null && uncleared(forgetAll.revision),
+    forgetAll: forgetAll !== null && counts(forgetAll.revision),
     domains: new Set(
       ledger.domains
-        .filter((entry) => uncleared(entry.revision))
+        .filter((entry) => counts(entry.revision))
         .map((entry) => entry.domain),
     ),
+  };
+}
+
+/** The forgets in either answer; a whole-jar read's mask is the union of before and after. */
+export function unionUnclearedForgets(
+  a: BrowserForgetLedgerUnclearedForgets,
+  b: BrowserForgetLedgerUnclearedForgets,
+): BrowserForgetLedgerUnclearedForgets {
+  return {
+    forgetAll: a.forgetAll || b.forgetAll,
+    domains: new Set([...a.domains, ...b.domains]),
   };
 }
 
@@ -565,6 +593,15 @@ export function browserForgetLedgerUnclearedForgets(): BrowserForgetLedgerUnclea
  * it momentarily is. Deferring the digest (see
  * {@link deferBrowserForgetLedgerNotifications}) does not change this, nor
  * would sending it at once: the push follows the digest either way.
+ *
+ * The mask has to bracket the READ, which is asynchronous and does not
+ * queue on the serializer: a site clear can record, clear and mark itself
+ * between the cookie read and the mask, and a mask taken only afterwards
+ * would then let the cookie the read still holds through. So the caller
+ * takes the uncleared set and the ledger's revision before the read, and
+ * masks with the union of that set and the after-read answer widened to
+ * everything recorded since ({@link unionUnclearedForgets},
+ * {@link browserForgetLedgerUnclearedForgets} with `recordedAfter`).
  *
  * An `unavailable` capture passes through untouched; a capture that has
  * nothing left stays `captured` and empty, since under a pending forget an

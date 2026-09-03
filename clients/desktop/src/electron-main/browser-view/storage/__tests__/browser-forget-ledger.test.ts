@@ -7,6 +7,7 @@ import type { BrowserStorageCookie } from "@traycer/protocol/host/browser/contra
 import {
   browserForgetLedgerDigestForHost,
   browserForgetLedgerPendingClears,
+  browserForgetLedgerRevision,
   browserForgetLedgerUnclearedForgets,
   deferBrowserForgetLedgerNotifications,
   initBrowserForgetLedger,
@@ -22,6 +23,7 @@ import {
   recordForgottenBrowserSites,
   recordHeadlessOriginCookieKeys,
   releaseBrowserForgetLedgerConnection,
+  unionUnclearedForgets,
   withoutUnclearedForgets,
 } from "../browser-forget-ledger";
 import { applyBrowserObservedProfile } from "../browser-observed-profile";
@@ -312,7 +314,7 @@ describe("forget ledger loaded-domain normalization", () => {
 
     await initBrowserForgetLedger(file);
 
-    const uncleared = browserForgetLedgerUnclearedForgets();
+    const uncleared = browserForgetLedgerUnclearedForgets(null);
     expect(uncleared.domains.has("example.com")).toBe(true);
 
     const cookie: BrowserStorageCookie = {
@@ -1109,17 +1111,17 @@ describe("forget ledger uncleared forgets", () => {
 
   it("reports a domain uncleared once forgotten, and clear once its jar clear is marked", async () => {
     expect(
-      browserForgetLedgerUnclearedForgets().domains.has("example.com"),
+      browserForgetLedgerUnclearedForgets(null).domains.has("example.com"),
     ).toBe(false);
 
     const revision = await recordForgottenBrowserSite("example.com");
     expect(
-      browserForgetLedgerUnclearedForgets().domains.has("example.com"),
+      browserForgetLedgerUnclearedForgets(null).domains.has("example.com"),
     ).toBe(true);
 
     await markBrowserForgetLedgerCleared(revision);
     expect(
-      browserForgetLedgerUnclearedForgets().domains.has("example.com"),
+      browserForgetLedgerUnclearedForgets(null).domains.has("example.com"),
     ).toBe(false);
   });
 
@@ -1136,7 +1138,7 @@ describe("forget ledger uncleared forgets", () => {
     // though the CONTIGUOUS watermark cannot step past A yet - this is
     // exactly what distinguishes this function from the durable,
     // boot-time-only read below.
-    const uncleared = browserForgetLedgerUnclearedForgets();
+    const uncleared = browserForgetLedgerUnclearedForgets(null);
     expect(uncleared.domains.has("b.test")).toBe(false);
     expect(uncleared.domains.has("a.test")).toBe(true);
 
@@ -1149,13 +1151,98 @@ describe("forget ledger uncleared forgets", () => {
   });
 
   it("reports forgetAll true once recorded, false once its clear is marked", async () => {
-    expect(browserForgetLedgerUnclearedForgets().forgetAll).toBe(false);
+    expect(browserForgetLedgerUnclearedForgets(null).forgetAll).toBe(false);
 
     const revision = await recordForgetAllBrowserLogins();
-    expect(browserForgetLedgerUnclearedForgets().forgetAll).toBe(true);
+    expect(browserForgetLedgerUnclearedForgets(null).forgetAll).toBe(true);
 
     await markBrowserForgetLedgerCleared(revision);
-    expect(browserForgetLedgerUnclearedForgets().forgetAll).toBe(false);
+    expect(browserForgetLedgerUnclearedForgets(null).forgetAll).toBe(false);
+  });
+
+  it("widens a domain to a mark taken before it was recorded, even once cleared - and excludes one recorded and cleared before the mark", async () => {
+    // Recorded and cleared entirely before the mark: gone from both the
+    // plain answer and the mark-widened one.
+    const before = await recordForgottenBrowserSite("before.test");
+    await markBrowserForgetLedgerCleared(before);
+
+    const mark = browserForgetLedgerRevision();
+
+    // Recorded AFTER the mark, and since cleared. A read that started at
+    // `mark` - before this site was ever forgotten - must still see it: the
+    // cookie it read may have been captured before this site's clear ran.
+    const after = await recordForgottenBrowserSite("after.test");
+    await markBrowserForgetLedgerCleared(after);
+
+    expect(
+      browserForgetLedgerUnclearedForgets(null).domains.has("before.test"),
+    ).toBe(false);
+    expect(
+      browserForgetLedgerUnclearedForgets(mark).domains.has("before.test"),
+    ).toBe(false);
+
+    expect(
+      browserForgetLedgerUnclearedForgets(null).domains.has("after.test"),
+    ).toBe(false);
+    expect(
+      browserForgetLedgerUnclearedForgets(mark).domains.has("after.test"),
+    ).toBe(true);
+  });
+
+  it("widens forgetAll the same way: recorded after the mark and cleared still counts against the mark", async () => {
+    const mark = browserForgetLedgerRevision();
+
+    const revision = await recordForgetAllBrowserLogins();
+    await markBrowserForgetLedgerCleared(revision);
+
+    expect(browserForgetLedgerUnclearedForgets(null).forgetAll).toBe(false);
+    expect(browserForgetLedgerUnclearedForgets(mark).forgetAll).toBe(true);
+  });
+});
+
+describe("unionUnclearedForgets", () => {
+  it("ORs forgetAll and unions the two domain sets", () => {
+    const a = {
+      forgetAll: false,
+      domains: new Set(["a.test", "shared.test"]),
+    };
+    const b = {
+      forgetAll: true,
+      domains: new Set(["b.test", "shared.test"]),
+    };
+
+    expect(unionUnclearedForgets(a, b)).toEqual({
+      forgetAll: true,
+      domains: new Set(["a.test", "shared.test", "b.test"]),
+    });
+    // Order must not matter - the mask is symmetric in its two operands.
+    expect(unionUnclearedForgets(b, a)).toEqual({
+      forgetAll: true,
+      domains: new Set(["a.test", "shared.test", "b.test"]),
+    });
+  });
+
+  it("stays false and empty when neither side has anything", () => {
+    const empty = { forgetAll: false, domains: new Set<string>() };
+
+    expect(unionUnclearedForgets(empty, empty)).toEqual(empty);
+  });
+});
+
+describe("browserForgetLedgerRevision", () => {
+  beforeEach(loadEmptyLedger);
+
+  it("tracks the revision each record bumps", async () => {
+    expect(browserForgetLedgerRevision()).toBe(0);
+
+    await recordForgottenBrowserSite("example.com");
+    expect(browserForgetLedgerRevision()).toBe(1);
+
+    await recordForgottenBrowserSite("other.test");
+    expect(browserForgetLedgerRevision()).toBe(2);
+
+    await recordForgetAllBrowserLogins();
+    expect(browserForgetLedgerRevision()).toBe(3);
   });
 });
 

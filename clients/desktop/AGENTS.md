@@ -221,6 +221,12 @@ failures.
   over `browserForgetLedgerUnclearedForgets()`, applied on both capture
   lanes in `browser-view-ipc.ts`), with an uncleared site's cookies and
   origins left out and nothing at all under an uncleared forget-all. The
+  mask BRACKETS the asynchronous cookie read, which does not queue on the
+  serializer: the uncleared set and the ledger revision are taken before
+  the read, and the mask is that set unioned with the after-read answer
+  widened to every forget recorded since the mark - a site clear that
+  records, clears and marks itself during the read is otherwise in
+  neither mask while the read still holds the cookie it removed. The
   forget recorded its revision before queueing its clear behind the
   import's barrier, and the import's own push reads from INSIDE that
   barrier, so without the filter the push would re-teach every host the

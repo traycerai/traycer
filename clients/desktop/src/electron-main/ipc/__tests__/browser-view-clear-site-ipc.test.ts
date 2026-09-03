@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { BrowserStorageCookie } from "@traycer/protocol/host/browser/contracts";
 import type { BrowserPrimaryProfileCaptureResult } from "../../browser-view/storage/browser-storage-state";
 
 /**
@@ -63,6 +64,13 @@ const fixture = vi.hoisted(() => ({
     storageState: { cookies: [], origins: [] },
     reason: null,
   } as BrowserPrimaryProfileCaptureResult,
+  /**
+   * Holds the whole-jar capture read open, so a test can run a clear to
+   * completion WHILE that read is still in flight - the race
+   * `captureLedgeredPrimaryProfile` brackets with a before-and-after mask.
+   * `null` means the read resolves immediately, as every other test wants.
+   */
+  captureGate: null as Promise<void> | null,
   /**
    * Holds a site's jar clear open, so a test can read a capture from INSIDE
    * the window between the ledger write and the clear actually finishing.
@@ -302,7 +310,9 @@ vi.mock("../../browser-view/storage/browser-storage-state", () => ({
     }
 
     capture(): Promise<BrowserPrimaryProfileCaptureResult> {
-      return Promise.resolve(fixture.captureResult);
+      const gate = fixture.captureGate;
+      if (gate === null) return Promise.resolve(fixture.captureResult);
+      return gate.then(() => fixture.captureResult);
     }
   },
   captureBrowserOriginLocalStorage: vi.fn(() => Promise.resolve(null)),
@@ -502,6 +512,7 @@ describe("clear-site IPC jar targeting", () => {
       storageState: { cookies: [], origins: [] },
       reason: null,
     };
+    fixture.captureGate = null;
     fixture.deferSiteClears = false;
     fixture.releaseSiteClear = null;
     fixture.userDataDir = `/tmp/traycer-desktop-test-${ledgerRun}`;
@@ -869,5 +880,139 @@ describe("clear-site IPC jar targeting", () => {
     expect(fixture.hostFrames).toEqual(["forgetLogins"]);
 
     ledger.dispose();
+  });
+
+  // The gap `captureLedgeredPrimaryProfile` closes: the mask is taken from
+  // BOTH sides of the asynchronous read (before AND after, unioned), because
+  // a site's whole clear - record, jar clear, mark cleared - can run to
+  // completion entirely inside the window the read is pending in. A mask
+  // taken only before the read would have seen nothing forgotten yet; one
+  // taken only after would have missed a clear that started and finished
+  // inside the window. The captureResult below still holds the cookie as if
+  // it were read before the clear, and the assertion is that the RETURNED
+  // capture omits it anyway.
+  it("masks a site whose entire clear runs to completion while the whole-jar read that started before it was recorded is still pending", async () => {
+    const clearHandler = await handlerFor("browserViewClearSavedLoginSite");
+    fixture.captureResult = {
+      status: "captured",
+      storageState: {
+        cookies: [
+          {
+            name: "sid",
+            value: "v",
+            domain: "example.com",
+            path: "/",
+            expires: -1,
+            httpOnly: false,
+            secure: true,
+            sameSite: "Lax",
+            partitionKey: null,
+          },
+          {
+            name: "sid",
+            value: "v",
+            domain: "kept.test",
+            path: "/",
+            expires: -1,
+            httpOnly: false,
+            secure: true,
+            sameSite: "Lax",
+            partitionKey: null,
+          },
+        ],
+        origins: [],
+      },
+      reason: null,
+    };
+    // A holder rather than a `let`: the executor assigns it from inside a
+    // callback, which TypeScript's narrowing cannot see.
+    const releaseGate: { current: (() => void) | null } = { current: null };
+    fixture.captureGate = new Promise<void>((resolve) => {
+      releaseGate.current = resolve;
+    });
+
+    const capturePrimaryProfile = fixture.capturePrimaryProfile;
+    if (capturePrimaryProfile === null) {
+      throw new Error(
+        "registration never captured the jar.capturePrimaryProfile callback",
+      );
+    }
+    // Started first, so its mark and before-read are taken before anything
+    // below runs - the read genuinely does start before the clear.
+    const pendingCapture = capturePrimaryProfile();
+
+    // The FULL clear-site handler, run to completion: confirm, record,
+    // clear the jar, mark cleared - all while the read above is still gated
+    // open on `fixture.captureGate`.
+    const confirmed = await clearHandler({}, { domain: "example.com" });
+    expect(confirmed).toBe(true);
+
+    const release = releaseGate.current;
+    if (release === null) {
+      throw new Error("no capture gate was created to release");
+    }
+    release();
+
+    const captured = await pendingCapture;
+    expect(captured.status).toBe("captured");
+    if (captured.status !== "captured") {
+      throw new Error("expected a captured result");
+    }
+    // The site cleared during the read is masked out even though the read
+    // itself never observed the clear; the site never touched is untouched.
+    expect(
+      captured.storageState.cookies.map((cookie) => cookie.domain),
+    ).toEqual(["kept.test"]);
+  });
+
+  it("keeps a site's cookies in a whole-jar capture when nothing is cleared during the read", async () => {
+    await handlerFor("browserViewClearSavedLoginSite");
+    fixture.captureResult = {
+      status: "captured",
+      storageState: {
+        cookies: [
+          {
+            name: "sid",
+            value: "v",
+            domain: "example.com",
+            path: "/",
+            expires: -1,
+            httpOnly: false,
+            secure: true,
+            sameSite: "Lax",
+            partitionKey: null,
+          },
+          {
+            name: "sid",
+            value: "v",
+            domain: "kept.test",
+            path: "/",
+            expires: -1,
+            httpOnly: false,
+            secure: true,
+            sameSite: "Lax",
+            partitionKey: null,
+          },
+        ],
+        origins: [],
+      },
+      reason: null,
+    };
+
+    const capturePrimaryProfile = fixture.capturePrimaryProfile;
+    if (capturePrimaryProfile === null) {
+      throw new Error(
+        "registration never captured the jar.capturePrimaryProfile callback",
+      );
+    }
+    const captured = await capturePrimaryProfile();
+
+    expect(captured.status).toBe("captured");
+    if (captured.status !== "captured") {
+      throw new Error("expected a captured result");
+    }
+    expect(
+      captured.storageState.cookies.map((cookie) => cookie.domain),
+    ).toEqual(["example.com", "kept.test"]);
   });
 });
