@@ -4,9 +4,22 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  DEFAULT_STATUS_BAR_LAYOUT,
+  useLayoutStore,
+} from "@/stores/settings/layout-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
 const windowHost = window as { runnerHost?: unknown };
+const DESKTOP_VIEWPORT_WIDTH = 1280;
+const MOBILE_VIEWPORT_WIDTH = 500;
+
+function setViewportWidth(width: number): void {
+  Object.defineProperty(window, "innerWidth", {
+    configurable: true,
+    value: width,
+  });
+}
 
 vi.mock("@/components/layout/tabs/tab-strip", () => ({
   TabStrip: () => <div data-testid="tab-strip" />,
@@ -92,6 +105,14 @@ vi.mock("@/components/resources/resource-monitor-popover", () => ({
   ),
 }));
 
+// The real strip resolves a host scope and re-provides two runtime contexts;
+// this provider-light test is about WHERE the shell mounts it and under which
+// placement, so it stands in for the whole surface the same way the two header
+// controls above do.
+vi.mock("@/components/layout/status-bar/app-status-bar", () => ({
+  AppStatusBar: () => <div data-testid="app-status-bar" />,
+}));
+
 vi.mock("@/components/auth/user-menu", () => ({
   UserMenu: () => <div data-testid="user-menu" />,
 }));
@@ -114,10 +135,6 @@ import {
 } from "@/lib/keybindings/dispatch";
 import { setMobileApp } from "@/lib/mobile-app";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
-import {
-  DEFAULT_STATUS_BAR_LAYOUT,
-  useLayoutStore,
-} from "@/stores/settings/layout-store";
 
 // The status-bar toggle is a dynamic handler, and dynamic dispatch never
 // touches the router - every field here just satisfies the parameter type.
@@ -191,6 +208,8 @@ describe("<AppShell />", () => {
 
   beforeEach(() => {
     windowHost.runnerHost = {};
+    setViewportWidth(DESKTOP_VIEWPORT_WIDTH);
+    useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
     useAuthStore
       .getState()
       .setSignedIn(
@@ -207,10 +226,17 @@ describe("<AppShell />", () => {
     queryClient = undefined;
     delete windowHost.runnerHost;
     setMobileApp(false);
-    useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
     useAuthStore.getState().setSignedOut();
     useSettingsStore.setState({ showGlobalResourceMonitor: true });
+    useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
+    setViewportWidth(DESKTOP_VIEWPORT_WIDTH);
   });
+
+  function selectStatusBarPlacement(): void {
+    useLayoutStore.setState({
+      statusBar: { ...DEFAULT_STATUS_BAR_LAYOUT, placement: "status-bar" },
+    });
+  }
 
   it("renders the signed-in app shell around routed children", async () => {
     queryClient = renderAppShell();
@@ -306,5 +332,72 @@ describe("<AppShell />", () => {
     await screen.findByTestId("app-shell-child");
 
     expect(screen.queryByTestId("resource-monitor-header-button")).toBeNull();
+  });
+
+  it("keeps the usage controls in the header at the default placement", async () => {
+    queryClient = renderAppShell();
+
+    await screen.findByTestId("app-shell-child");
+
+    expect(screen.queryByTestId("app-status-bar")).toBeNull();
+    expect(screen.getByTestId("rate-limit-header-button")).not.toBeNull();
+    expect(screen.getByTestId("resource-monitor-header-button")).not.toBeNull();
+  });
+
+  it("moves the usage controls to the strip under the status-bar placement", async () => {
+    selectStatusBarPlacement();
+
+    queryClient = renderAppShell();
+
+    await screen.findByTestId("app-shell-child");
+
+    expect(screen.getByTestId("app-status-bar")).not.toBeNull();
+    // Exactly one surface is live at a time — the whole point of a single
+    // `placement` rather than a footer toggle beside the header's controls.
+    expect(screen.queryByTestId("rate-limit-header-button")).toBeNull();
+    expect(screen.queryByTestId("resource-monitor-header-button")).toBeNull();
+  });
+
+  it("mounts the strip after the content viewport and before the shell's tail", async () => {
+    selectStatusBarPlacement();
+
+    queryClient = renderAppShell();
+
+    await screen.findByTestId("app-shell-child");
+
+    const statusBar = screen.getByTestId("app-status-bar");
+    const main = screen.getByTestId("route-adapter-layer").closest("main");
+    if (main === null) throw new Error("the shell rendered no <main>");
+    // After `</main>`, so the strip spans the full window rather than sitting
+    // inside the content column.
+    expect(
+      main.compareDocumentPosition(statusBar) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    // And NOT appended last: `historySwipeTransition` has to stay the final
+    // child so a frozen screen covers everything it was copied from. The probe
+    // span sits after the dialog/bridge tail, so a strip that precedes it
+    // cannot have been pushed to the end.
+    const probe = screen.getByTestId("active-host-probe");
+    expect(
+      statusBar.compareDocumentPosition(probe) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("ignores the status-bar placement on a mobile viewport", async () => {
+    // Not an `isMobileApp` gate: a narrow DESKTOP window behaves the same, and
+    // the mobile header keeps its own controls — so respecting `placement`
+    // here would leave that viewport with neither surface.
+    selectStatusBarPlacement();
+    setViewportWidth(MOBILE_VIEWPORT_WIDTH);
+
+    queryClient = renderAppShell();
+
+    await screen.findByTestId("app-shell-child");
+
+    expect(screen.queryByTestId("app-status-bar")).toBeNull();
+    expect(screen.getByTestId("rate-limit-header-button")).not.toBeNull();
+    expect(screen.getByTestId("resource-monitor-header-button")).not.toBeNull();
   });
 });

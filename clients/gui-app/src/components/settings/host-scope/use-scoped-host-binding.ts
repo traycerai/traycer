@@ -20,10 +20,13 @@ import type { HostScope } from "@/components/settings/host-scope/use-host-scope"
  *     `useTabHostClient()` and its host `useTabHostId()`. It has no `HostScope`
  *     to hand this hook, so it structurally cannot use it.
  *
- * SEVEN surfaces re-provide `HostRuntimeContext` in total: the five panels
+ * NINE surfaces re-provide `HostRuntimeContext` in total: the seven panels
  * through this hook (`rate-limit-icon`, `shell`, `diagnostics`, `providers`,
- * `host`) plus those two. Anything reading `useHostClient()` /
- * `useAddressableHostId()` beneath any of them gets that surface's host.
+ * `host`, `app-status-bar` — the bottom strip, which re-provides for the host
+ * its chip names — and `layout`, whose per-provider status-bar toggles read the
+ * same watch pick the strip does) plus those two. Anything reading
+ * `useHostClient()` / `useAddressableHostId()` beneath any of them gets that
+ * surface's host.
  *
  * ⚠ A RE-PROVIDER MUST NOT WRAP A SURFACE CONTAINING THE MIC PATH.
  * `useDictationAvailability` reads `useHostClient()` and is app-wide BY DESIGN
@@ -31,7 +34,11 @@ import type { HostScope } from "@/components/settings/host-scope/use-host-scope"
  * audio, so pointing it at a pinned host ships a user's voice to a machine they
  * only picked to administer. Today it is safe only because no re-provider
  * happens to sit above a composer — a positional fact, not an invariant, which
- * is why it is written down here where the eighth re-provider gets added.
+ * is why it is written down here where the tenth re-provider gets added. The
+ * two most recent are the bottom strip and Layout's status-bar group, and both
+ * are safe for that same positional reason: a 24px strip holds a host chip and
+ * a readout, a Settings group holds toggles, and no composer will ever be a
+ * child of either.
  *
  * ⚠ AND THE RULE BINDS `StreamRuntimeContext` AT LEAST AS HARD, which this
  * note used to imply it did not by naming only the unary provider.
@@ -41,9 +48,12 @@ import type { HostScope } from "@/components/settings/host-scope/use-host-scope"
  * user's microphone rides, and a stream re-provider above a composer is the
  * voice-to-the-wrong-machine outcome directly rather than by implication.
  * That population is no longer a single surface: `resource-monitor-popover`
- * was the only stream re-provider, and the epic sidebar's file tree and git
- * diff panel are now two more. All three are file/diff browsers containing no
- * composer, which is what keeps this safe — again positionally, not
+ * was the only stream re-provider, the epic sidebar's file tree and git diff
+ * panel are two more, and `app-status-bar` is the FOURTH — it re-provides both
+ * contexts for the host its chip names, since the strip's readout rides
+ * `resources.subscribe` while its chip's reads are unary. None of the four
+ * contains a composer — three are file/diff/process browsers and the fourth is
+ * a 24px strip — which is what keeps this safe, again positionally, not
  * structurally.
  *
  * Three arms, and which one you are in is the whole question:

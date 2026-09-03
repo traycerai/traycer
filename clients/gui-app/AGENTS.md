@@ -234,7 +234,7 @@ it resolved exactly what `useHostClient()` resolves.)
 SCOPED one, not the app-wide one. A binding re-provided by a host-scoped panel
 names its host (`HostRuntimeBinding.hostId`), and every consumer below it —
 `useHostClient()`, `useAddressableHostId()`, the wrappers above — resolves to
-that host. Seven surfaces re-provide; `useScopedHostBinding` lists them and the
+that host. Nine surfaces re-provide; `useScopedHostBinding` lists them and the
 two governed exceptions. Resolve a binding through
 `lib/host/binding-host-client.ts` and never inline
 `hostClient.createRequesterForHostId(...)` beside a separately-read host id:

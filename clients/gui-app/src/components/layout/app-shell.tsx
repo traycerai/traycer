@@ -14,6 +14,7 @@ import { SessionConnectivityStrip } from "@/components/layout/session-connectivi
 import { StatusBarKeybindingBridge } from "@/components/layout/status-bar/status-bar-keybinding-bridge";
 import { ClockSkewBanner } from "@/components/layout/clock-skew-banner";
 import { useMobileHistorySwipes } from "@/components/layout/shell/use-mobile-history-swipes";
+import { AppStatusBar } from "@/components/layout/status-bar/app-status-bar";
 import { TopLevelTabHost } from "@/components/layout/top-level-tab-host";
 import { TopLevelSurfaceActivationProvider } from "@/components/layout/top-level-surface-activation-provider";
 import { HostScopeReady } from "@/components/layout/host-readiness-controller";
@@ -25,6 +26,7 @@ import { useChatForkEventQuery } from "@/hooks/chats/use-chat-fork-queries";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { PrimaryFocusCoordinatorProvider } from "@/lib/focus/primary-focus-coordinator-provider";
+import { useLayoutStore } from "@/stores/settings/layout-store";
 
 interface AppShellProps {
   children: ReactNode;
@@ -41,6 +43,13 @@ export function AppShell(props: AppShellProps) {
   // Phones get the hamburger navigation drawer; it is only mounted below md so
   // desktop mounts nothing extra and stays unchanged.
   const isMobile = useIsMobileViewport();
+  // A mobile VIEWPORT, not a mobile build: a narrow desktop window behaves the
+  // same way. The footer would compete with the software keyboard and the nav
+  // drawer, so mobile ignores `placement` entirely and keeps its header
+  // controls.
+  const showStatusBar = useLayoutStore(
+    (state) => state.statusBar.placement === "status-bar" && !isMobile,
+  );
   // Observed, never rendered. A publication fork resolves itself now - the
   // banner and the dialog that used to read this query are gone - but the
   // per-chat `pendingFork` indicator is derived from an open fork episode and
@@ -130,6 +139,18 @@ export function AppShell(props: AppShellProps) {
                 <TileFindOwnerBridge />
                 <TileSelectAllBridge />
               </main>
+              {/* After `</main>` so the strip spans the full window under the
+                sidebar and the canvas alike (both live inside
+                `TopLevelTabHost`), and stays visible on Settings so a change
+                there previews live. NOT the last child: the swipe transition
+                below must stay last, or the frozen screen it renders would
+                slide under a strip it was copied with.
+
+                A React gate, never CSS hiding. The mobile header keeps its own
+                gauge and resource controls, and the dynamic action registry is
+                single-handler - a hidden second mount would take
+                `app.rate-limits.open` from the header that is still on screen. */}
+              {showStatusBar ? <AppStatusBar /> : null}
               <OpenFolderDialog />
               <RemoteFolderPickerDialog />
               <QuitInterceptBridge />

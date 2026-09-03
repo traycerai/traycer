@@ -92,11 +92,11 @@ export function resolveResourceMonitorHostReading(input: {
   // needed no picker to happen, and no pick to reproduce.
   return {
     killHostId: input.scope.hostId,
-    projection: attributedProjection(
-      input.scope,
-      input.hasExplicitPick,
-      input.streamed,
-    ),
+    projection: attributedProjection({
+      scopeHostId: input.scope.hostId,
+      hasExplicitPick: input.hasExplicitPick,
+      streamed: input.streamed,
+    }),
     desktopApp: readingShowsLocalDesktop(input.scope)
       ? input.localDesktopApp
       : null,
@@ -132,22 +132,49 @@ export function resolveResourceMonitorHostReading(input: {
  * throughout that same cold-start window (see `watchesNamedHost`), so keying on
  * it puts the strict branch in charge of exactly the case the permissive branch
  * exists for — which is the bug this comment used to describe as fixed.
+ *
+ * Exported because the rule belongs to every surface that reads the global
+ * projection while NAMING a host, not to the panel that happened to need it
+ * first. The bottom strip names one unconditionally — its host chip is always
+ * on screen — so it runs its projection through this before reading a single
+ * number. It takes the host id rather than the whole `HostScope`: that is all
+ * the rule consults, and a caller that holds only the id should not have to
+ * invent a scope to ask.
  */
-function attributedProjection(
-  scope: HostScope,
-  hasExplicitPick: boolean,
-  streamed: GlobalResourceProjection,
-): GlobalResourceProjection {
-  if (hasExplicitPick) {
-    return streamed.hostId !== null && streamed.hostId === scope.hostId
+export function attributedProjection(input: {
+  readonly scopeHostId: string | null;
+  readonly hasExplicitPick: boolean;
+  readonly streamed: GlobalResourceProjection;
+}): GlobalResourceProjection {
+  const { scopeHostId, streamed } = input;
+  if (input.hasExplicitPick) {
+    return streamed.hostId !== null && streamed.hostId === scopeHostId
       ? streamed
       : EMPTY_GLOBAL_RESOURCE_PROJECTION;
   }
   const provablyAnotherMachine =
     streamed.hostId !== null &&
-    scope.hostId !== null &&
-    streamed.hostId !== scope.hostId;
+    scopeHostId !== null &&
+    streamed.hostId !== scopeHostId;
   return provablyAnotherMachine ? EMPTY_GLOBAL_RESOURCE_PROJECTION : streamed;
+}
+
+/**
+ * What share of the machine's RAM a reading accounts for.
+ *
+ * One implementation for the panel's "RAM share" block and the strip's `ram`
+ * metric, so the two cannot round — or guard — differently. `hostTotalMemoryBytes`
+ * is `0` on a host that never reported a total, and dividing by it would print
+ * `Infinity%`; a null numerator is a sample that arrived without the memory
+ * field (nullable on the wire from @1.5 on).
+ */
+export function hostMemorySharePercent(
+  memoryBytes: number | null,
+  app: AppResourceUsage | null,
+): number | null {
+  if (memoryBytes === null) return null;
+  if (app === null || app.hostTotalMemoryBytes <= 0) return null;
+  return (memoryBytes / app.hostTotalMemoryBytes) * 100;
 }
 
 export function combineHeadlineResourceSummary(input: {
