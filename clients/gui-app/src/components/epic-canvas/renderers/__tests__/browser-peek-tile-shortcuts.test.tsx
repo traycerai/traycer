@@ -11,7 +11,6 @@ import {
   liveStream as fixtureLiveStream,
   streamAuthRevalidatorModule,
   tabHostIdModule,
-  tileBodyVisibleModule,
   runnerOpenExternalLinkModule,
   tileRoleRunnerHostModule,
   type FakeStreamSession,
@@ -19,7 +18,7 @@ import {
 import {
   BrowserPeekTile,
   type BrowserPeekNode,
-} from "@/components/epic-canvas/renderers/browser-peek-tile";
+} from "@/components/browser-tile/browser-peek-tile";
 import { isMac } from "@/lib/keybindings/platform";
 import { useScreencastArmedStore } from "@/stores/screencast-armed-store";
 
@@ -38,9 +37,6 @@ vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () =>
   tabHostIdModule(),
 );
 
-vi.mock("@/components/epic-canvas/hooks/use-tile-body-visible", () =>
-  tileBodyVisibleModule(hookState),
-);
 
 vi.mock("@/hooks/host/use-host-directory-entry", () =>
   hostDirectoryEntryModule(),
@@ -164,9 +160,9 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   it("pastes clipboard text as one insertText and suppresses V key frames", async () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -196,9 +192,9 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   it("sends nothing on paste while unarmed", () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -214,9 +210,9 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   it("sends nothing on paste while hidden", async () => {
     const view = renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -228,9 +224,9 @@ describe("BrowserPeekTile shortcuts and paste", () => {
     hookState.visible = false;
     view.rerender(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -246,9 +242,9 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   it("focuses the address bar on Cmd+L without forwarding L and without disarming", async () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -272,9 +268,9 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   it("reloads on Cmd+R without forwarding R", async () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -300,9 +296,9 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   it("still forwards Cmd+C as a rawKeyDown keyboard frame", async () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -327,9 +323,9 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   it("does not forward an orphan keyup the tile did not press", async () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -347,9 +343,9 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   it("clears the armed flag when the server revokes the arm", async () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -378,9 +374,9 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   it("clears the armed flag when the tile is hidden", async () => {
     const view = renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -393,9 +389,9 @@ describe("BrowserPeekTile shortcuts and paste", () => {
     hookState.visible = false;
     view.rerender(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -408,9 +404,9 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   it("clears the armed flag when Release control is clicked", async () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -429,9 +425,9 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   it("keeps control across a blur out of the tile", async () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -455,9 +451,9 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   it("does not preventDefault the V keydown of a paste chord", async () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -474,9 +470,9 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   it("suppresses the V keyup after the modifier is released first", async () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -494,9 +490,9 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   it("releases forwarded page keys when the address bar takes focus", async () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -533,9 +529,9 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   it("selects the address on Cmd+L even when it is already focused", async () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -559,9 +555,9 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   it("clears the armed flag on a failed stream frame", async () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -590,9 +586,9 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   it("clears the armed flag on a complete stream frame", async () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -620,9 +616,9 @@ describe("BrowserPeekTile shortcuts and paste", () => {
     const view = renderPeekTile(
       <div>
         <BrowserPeekTile
-          viewTabId="view-tab-1"
-          paneId="pane-1"
-          epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+          visible={hookState.visible}
+          onConvertToPip={() => {}}
           node={PEEK_NODE}
           completeMeans="ended"
         />
@@ -652,16 +648,16 @@ describe("BrowserPeekTile shortcuts and paste", () => {
     view.rerender(
       <div>
         <BrowserPeekTile
-          viewTabId="view-tab-1"
-          paneId="pane-1"
-          epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+          visible={hookState.visible}
+          onConvertToPip={() => {}}
           node={PEEK_NODE}
           completeMeans="ended"
         />
         <BrowserPeekTile
-          viewTabId="view-tab-1"
-          paneId="pane-1"
-          epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+          visible={hookState.visible}
+          onConvertToPip={() => {}}
           node={sibling}
           completeMeans="ended"
         />
@@ -673,9 +669,9 @@ describe("BrowserPeekTile shortcuts and paste", () => {
     view.rerender(
       <div>
         <BrowserPeekTile
-          viewTabId="view-tab-1"
-          paneId="pane-1"
-          epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+          visible={hookState.visible}
+          onConvertToPip={() => {}}
           node={PEEK_NODE}
           completeMeans="ended"
         />

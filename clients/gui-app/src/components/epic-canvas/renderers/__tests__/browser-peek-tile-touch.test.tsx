@@ -11,11 +11,10 @@ import {
   runnerOpenExternalLinkModule,
   streamAuthRevalidatorModule,
   tabHostIdModule,
-  tileBodyVisibleModule,
   tileRoleRunnerHostModule,
   type FakeStreamSession,
 } from "@/components/epic-canvas/renderers/__tests__/browser-peek-tile-stream-fixture";
-import { BrowserPeekTile } from "@/components/epic-canvas/renderers/browser-peek-tile";
+import { BrowserPeekTile } from "@/components/browser-tile/browser-peek-tile";
 
 const hookState = vi.hoisted(() => ({
   streamClient: null as FakeStreamClient | null,
@@ -32,9 +31,6 @@ vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () =>
   tabHostIdModule(),
 );
 
-vi.mock("@/components/epic-canvas/hooks/use-tile-body-visible", () =>
-  tileBodyVisibleModule(hookState),
-);
 
 vi.mock("@/hooks/host/use-host-directory-entry", () =>
   hostDirectoryEntryModule(),
@@ -143,9 +139,9 @@ function presentLiveFrame(stream: FakeStreamSession): void {
 function renderTile(): FakeStreamSession {
   renderPeekTile(
     <BrowserPeekTile
-      viewTabId="view-tab-1"
-      paneId="pane-1"
-      epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+      visible={hookState.visible}
+      onConvertToPip={() => {}}
       node={PEEK_NODE}
       completeMeans="ended"
     />,

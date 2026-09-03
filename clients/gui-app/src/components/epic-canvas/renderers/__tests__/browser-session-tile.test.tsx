@@ -14,9 +14,10 @@ import {
   tabInfo,
 } from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
 import { BrowserSessionTile } from "@/components/epic-canvas/renderers/browser-session-tile";
-import type { BrowserPeekCompleteMeaning } from "@/components/epic-canvas/renderers/browser-peek-tile";
+import type { BrowserPeekCompleteMeaning } from "@/components/browser-tile/browser-peek-tile";
 import type { ElectronTabBinding } from "@/lib/browser-view/sessions/electron-tab-directory";
 import type { BrowserSessionTileRef } from "@/stores/epics/canvas/types";
+import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 
 const harness = vi.hoisted(() => ({
   binding: null as ElectronTabBinding | null,
@@ -28,6 +29,40 @@ const harness = vi.hoisted(() => ({
   // false, and then never reaches the native or rebind branches at all.
   canMaterializeElectron: true,
   closeCanvasTile: vi.fn(),
+  // Fixed resolution, independent of the sessionId it is called with: the
+  // relocated open-link tests (below) assert on this literal return value,
+  // ported unchanged from `agent-browser-tile.test.tsx`'s own openTab
+  // fixture - only the CALL argument differs per file (this suite's NODE
+  // uses "sess-1"), never the resolved tab.
+  openTab: vi.fn((_sessionId: string | null, _url: string) =>
+    Promise.resolve({ sessionId: "session-1", tabId: "tab-2" }),
+  ),
+  closeTab: vi.fn(),
+}));
+
+/**
+ * The relocated open-link routing tests (moved from
+ * `agent-browser-tile.test.tsx`) drive `BrowserSessionTile`'s
+ * `onOpenLinkInNewTile` callback, which reads the canvas tab set and the
+ * epic tile-navigation hook directly - both mocked here the same way that
+ * suite mocked them before the move.
+ */
+const canvasState = vi.hoisted(() => ({
+  tabsById: {} as Record<string, unknown>,
+  openTile: vi.fn<(intent: TileOpenIntent) => void>(),
+}));
+
+/** Props `ElectronTabSurface` was actually handed on its latest render. */
+const surfaceCapture = vi.hoisted(() => ({
+  onOpenLinkInNewTile: null as
+    | ((url: string, disposition: "foreground" | "background") => void)
+    | null,
+  onRequestClose: null as (() => void) | null,
+  onConvertToPip: null as (() => void) | null,
+  persistViewportPreset: null as ((preset: string) => void) | null,
+  visible: null as boolean | null,
+  placement: null as unknown,
+  pageSessionId: null as string | null,
 }));
 
 /**
@@ -59,8 +94,14 @@ const peekFrameHarness = vi.hoisted(() => ({
   frame: null as { readonly src: string; readonly sequence: number } | null,
 }));
 
-vi.mock("@/components/epic-canvas/renderers/browser-sessions-context", () => ({
-  useBrowserSessionsContext: () => ({
+// `BrowserTabTile` (the shared body) reads `useBrowserSessionsContext`;
+// `BrowserSessionTile` (the canvas adapter, under test here) reads
+// `useMaybeBrowserSessionsContext` for its relocated open-tab flow. Both
+// names have to resolve from this one factory or the suite dies at import
+// time - and both must share `harness.openTab`/`harness.closeTab` so a test
+// can assert on the same call the adapter actually made.
+function sessionsContextValue() {
+  return {
     hostId: "host-test",
     lifecycle: harness.lifecycle,
     inventoryReady: harness.inventoryReady,
@@ -68,9 +109,23 @@ vi.mock("@/components/epic-canvas/renderers/browser-sessions-context", () => ({
     items: harness.items,
     errorMessage: null,
     retry: vi.fn(),
-    openTab: vi.fn(),
-    closeTab: vi.fn(),
-  }),
+    openTab: harness.openTab,
+    closeTab: harness.closeTab,
+  };
+}
+vi.mock("@/components/epic-canvas/renderers/browser-sessions-context", () => ({
+  useBrowserSessionsContext: () => sessionsContextValue(),
+  useMaybeBrowserSessionsContext: () => sessionsContextValue(),
+}));
+vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
+  useEpicTileNavigation: () => ({ openTile: canvasState.openTile }),
+}));
+vi.mock("@/stores/epics/canvas/store", () => ({
+  useEpicCanvasStore: Object.assign(
+    (selector: (value: Record<string, unknown>) => unknown) =>
+      selector(canvasState),
+    { getState: () => canvasState },
+  ),
 }));
 vi.mock("@/lib/browser-view/sessions/electron-tab-directory", () => ({
   useElectronTabBindingOnHost: (
@@ -94,19 +149,36 @@ vi.mock(
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => null,
 }));
-vi.mock("@/components/epic-canvas/renderers/agent-browser-tile", () => ({
+vi.mock("@/components/browser-tile/agent-browser-tile", () => ({
   ElectronTabSurface: (props: {
-    readonly node: { readonly id: string };
     readonly binding: ElectronTabBinding;
-  }) => (
-    <div
-      data-testid="managed-electron-tab"
-      data-node-id={props.node.id}
-      data-registration={props.binding.registrationId}
-    />
-  ),
+    readonly pageSessionId: string;
+    readonly visible: boolean;
+    readonly placement: unknown;
+    readonly onRequestClose: () => void;
+    readonly onConvertToPip: (() => void) | null;
+    readonly persistViewportPreset: ((preset: string) => void) | null;
+    readonly onOpenLinkInNewTile:
+      | ((url: string, disposition: "foreground" | "background") => void)
+      | null;
+  }) => {
+    surfaceCapture.onOpenLinkInNewTile = props.onOpenLinkInNewTile;
+    surfaceCapture.onRequestClose = props.onRequestClose;
+    surfaceCapture.onConvertToPip = props.onConvertToPip;
+    surfaceCapture.persistViewportPreset = props.persistViewportPreset;
+    surfaceCapture.visible = props.visible;
+    surfaceCapture.placement = props.placement;
+    surfaceCapture.pageSessionId = props.pageSessionId;
+    return (
+      <div
+        data-testid="managed-electron-tab"
+        data-node-id={props.pageSessionId}
+        data-registration={props.binding.registrationId}
+      />
+    );
+  },
 }));
-vi.mock("@/components/epic-canvas/renderers/browser-peek-tile", () => ({
+vi.mock("@/components/browser-tile/browser-peek-tile", () => ({
   BrowserPeekTile: (props: {
     readonly node: { readonly sessionId: string; readonly tabId: string };
     readonly completeMeans: BrowserPeekCompleteMeaning;
@@ -205,11 +277,22 @@ describe("BrowserSessionTile lifecycle projection", () => {
     harness.inventoryReady = true;
     harness.canMaterializeElectron = true;
     harness.closeCanvasTile.mockClear();
+    harness.openTab.mockClear();
+    harness.closeTab.mockClear();
     reachabilityHarness.status = "reachable";
     reachabilityHarness.hostLabel = "host-test";
     peekFrameHarness.frame = null;
     hostBindingHarness.reachabilityHostIds = [];
     hostBindingHarness.electronBindingCalls = [];
+    canvasState.tabsById = { "view-1": { epicId: "epic-1" } };
+    canvasState.openTile.mockClear();
+    surfaceCapture.onOpenLinkInNewTile = null;
+    surfaceCapture.onRequestClose = null;
+    surfaceCapture.onConvertToPip = null;
+    surfaceCapture.persistViewportPreset = null;
+    surfaceCapture.visible = null;
+    surfaceCapture.placement = null;
+    surfaceCapture.pageSessionId = null;
   });
 
   afterEach(() => {
@@ -746,5 +829,139 @@ describe("BrowserSessionTile lifecycle projection", () => {
       tabId: "tab-1",
       hostId: "host-remote",
     });
+  });
+});
+
+/**
+ * Moved from `agent-browser-tile.test.tsx`: the whole "open a tab in this
+ * pane's session and place it beside this tile" flow lives in the canvas
+ * adapter (`BrowserSessionTile.onOpenLinkInNewTile`) now, not in the native
+ * surface - the surface only forwards `(url, disposition)`. Driven directly
+ * through the mocked `ElectronTabSurface`'s captured `onOpenLinkInNewTile`,
+ * never through a native bridge, since the surface is a stub here.
+ *
+ * `expect(...)` bodies are unchanged from the originals. The one thing that
+ * cannot be byte-identical is `harness.openTab`'s call argument: it is
+ * `props.node.sessionId`, and this suite's own `NODE.sessionId` is
+ * "sess-1" (`agent-browser-tile.test.tsx`'s was "session-1") - so that one
+ * assertion reads "sess-1" while the RESOLVED tab (`harness.openTab`'s
+ * fixed return value, which is under this file's control) still reads
+ * "session-1", matching the original `node: { ..., sessionId: "session-1" }`
+ * assertions exactly.
+ */
+describe("BrowserSessionTile open-link routing", () => {
+  beforeEach(() => {
+    harness.binding = binding();
+    harness.items = [session("ready", "electron")];
+    harness.openTab.mockClear();
+    harness.closeTab.mockClear();
+    canvasState.tabsById = { "view-1": { epicId: "epic-1" } };
+    canvasState.openTile.mockClear();
+    surfaceCapture.onOpenLinkInNewTile = null;
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("opens an in-page popup as a tab of this pane, foreground focusing it", async () => {
+    renderTile();
+
+    act(() => {
+      surfaceCapture.onOpenLinkInNewTile?.(
+        "https://popup.example/",
+        "foreground",
+      );
+    });
+
+    await waitFor(() => {
+      expect(canvasState.openTile).toHaveBeenCalledTimes(1);
+    });
+    expect(canvasState.openTile.mock.calls[0]?.[0]).toMatchObject({
+      target: { tabId: "view-1" },
+      gesture: "explicit",
+      modifiers: null,
+      placement: { kind: "tab", paneId: "pane-1", index: null },
+      dedupe: true,
+      node: { type: "browser-session", sessionId: "session-1", tabId: "tab-2" },
+    });
+  });
+
+  it("falls back to the epic when the view tab closed mid-open", async () => {
+    // Held open so the tab is still there when the request arrives and gone
+    // only while `openTab` is in flight - which is what makes this a test of
+    // WHEN the target is resolved, not just that a missing tab falls back.
+    const pending: {
+      settle: (tab: { sessionId: string; tabId: string }) => void;
+    } = { settle: () => undefined };
+    harness.openTab.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          pending.settle = resolve;
+        }),
+    );
+    renderTile();
+
+    act(() => {
+      surfaceCapture.onOpenLinkInNewTile?.(
+        "https://popup.example/",
+        "foreground",
+      );
+    });
+    await waitFor(() => {
+      expect(harness.openTab).toHaveBeenCalledTimes(1);
+    });
+    expect(canvasState.openTile).not.toHaveBeenCalled();
+
+    // The tab goes away mid-flight; targeting it would put a tile in a canvas
+    // with no route (R8).
+    canvasState.tabsById = {};
+    act(() => {
+      pending.settle({ sessionId: "session-1", tabId: "tab-2" });
+    });
+
+    await waitFor(() => {
+      expect(canvasState.openTile).toHaveBeenCalledTimes(1);
+    });
+    expect(canvasState.openTile.mock.calls[0]?.[0].target).toEqual({
+      epicId: "epic-1",
+    });
+  });
+
+  it("opens a background popup as a host push, leaving the current tab active", async () => {
+    renderTile();
+
+    act(() => {
+      surfaceCapture.onOpenLinkInNewTile?.(
+        "https://popup.example/",
+        "background",
+      );
+    });
+
+    await waitFor(() => {
+      expect(canvasState.openTile).toHaveBeenCalledTimes(1);
+    });
+    expect(canvasState.openTile.mock.calls[0]?.[0]).toMatchObject({
+      gesture: "host",
+      placement: { kind: "tab", paneId: "pane-1", index: null },
+    });
+  });
+
+  it("opens a new tab in the same session on Cmd+T", async () => {
+    renderTile();
+
+    act(() => {
+      surfaceCapture.onOpenLinkInNewTile?.("about:blank", "foreground");
+    });
+
+    await waitFor(() => {
+      expect(harness.openTab).toHaveBeenCalledOnce();
+    });
+    // "sess-1", not "session-1": this is the argument the adapter actually
+    // passed (`props.node.sessionId`), which is this suite's own NODE - see
+    // the doc comment above for why this one value cannot be byte-identical
+    // to the original while the rest of this file's assertions still are.
+    expect(harness.openTab.mock.calls.at(0)?.at(0)).toBe("sess-1");
+    expect(harness.closeTab).not.toHaveBeenCalled();
   });
 });

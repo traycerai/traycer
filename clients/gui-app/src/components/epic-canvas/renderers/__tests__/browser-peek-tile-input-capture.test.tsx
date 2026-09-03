@@ -10,12 +10,11 @@ import {
   liveStream as fixtureLiveStream,
   streamAuthRevalidatorModule,
   tabHostIdModule,
-  tileBodyVisibleModule,
   runnerOpenExternalLinkModule,
   tileRoleRunnerHostModule,
   type FakeStreamSession,
 } from "@/components/epic-canvas/renderers/__tests__/browser-peek-tile-stream-fixture";
-import { BrowserPeekTile } from "@/components/epic-canvas/renderers/browser-peek-tile";
+import { BrowserPeekTile } from "@/components/browser-tile/browser-peek-tile";
 
 const hookState = vi.hoisted(() => ({
   streamClient: null as FakeStreamClient | null,
@@ -32,9 +31,6 @@ vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () =>
   tabHostIdModule(),
 );
 
-vi.mock("@/components/epic-canvas/hooks/use-tile-body-visible", () =>
-  tileBodyVisibleModule(hookState),
-);
 
 vi.mock("@/hooks/host/use-host-directory-entry", () =>
   hostDirectoryEntryModule(),
@@ -239,9 +235,9 @@ describe("BrowserPeekTile input capture", () => {
   it("captures pointerId 1 on the overlay button at pointerdown", () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -268,9 +264,9 @@ describe("BrowserPeekTile input capture", () => {
   it("releases pointer capture on pointerup", () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -307,9 +303,9 @@ describe("BrowserPeekTile input capture", () => {
   it("releases pointer capture on pointercancel", () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -338,9 +334,9 @@ describe("BrowserPeekTile input capture", () => {
   it("sends matching ups for every accepted button on pointercancel", () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -413,9 +409,9 @@ describe("BrowserPeekTile input capture", () => {
   it("sends both releases for a multi-button chord", () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -482,9 +478,9 @@ describe("BrowserPeekTile input capture", () => {
   it("releases pointer capture when the server revokes the arm", () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -523,9 +519,9 @@ describe("BrowserPeekTile input capture", () => {
   it("releases pointer capture on an explicit Release", () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -560,9 +556,9 @@ describe("BrowserPeekTile input capture", () => {
   it("releases pointer capture when the stream leaves open", () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -593,9 +589,9 @@ describe("BrowserPeekTile input capture", () => {
   it("keeps the same screencast image mounted across sequence changes", () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -615,9 +611,9 @@ describe("BrowserPeekTile input capture", () => {
   it("latches the presented sequence only at paint, not at frame arrival", () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -677,9 +673,9 @@ describe("BrowserPeekTile input capture", () => {
     const frames = installAnimationFrameQueue();
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -765,9 +761,9 @@ describe("BrowserPeekTile input capture", () => {
     vi.spyOn(performance, "now").mockImplementation(() => now);
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -795,9 +791,9 @@ describe("BrowserPeekTile input capture", () => {
     vi.spyOn(performance, "now").mockImplementation(() => now);
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -828,9 +824,9 @@ describe("BrowserPeekTile input capture", () => {
     const frames = installAnimationFrameQueue();
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -892,9 +888,9 @@ describe("BrowserPeekTile input capture", () => {
     const frames = installAnimationFrameQueue();
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -1008,9 +1004,9 @@ describe("BrowserPeekTile input capture", () => {
     const frames = installAnimationFrameQueue();
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -1089,9 +1085,9 @@ describe("BrowserPeekTile input capture", () => {
     const frames = installAnimationFrameQueue();
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -1132,9 +1128,9 @@ describe("BrowserPeekTile input capture", () => {
     const frames = installAnimationFrameQueue();
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -1175,9 +1171,9 @@ describe("BrowserPeekTile input capture", () => {
   it("flushes a pending wheel before a pointerdown in the same frame, in order", () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -1221,9 +1217,9 @@ describe("BrowserPeekTile input capture", () => {
   it("does not listen for wheel while unarmed", () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -1250,9 +1246,9 @@ describe("BrowserPeekTile input capture", () => {
   it("forwards Escape as a repeating rawKeyDown without disarming", () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -1283,9 +1279,9 @@ describe("BrowserPeekTile input capture", () => {
   it("forwards autoRepeat on a held letter", () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -1320,9 +1316,9 @@ describe("BrowserPeekTile input capture", () => {
   it("closes the stream and releases capture when the tile is hidden", () => {
     const view = renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -1346,9 +1342,9 @@ describe("BrowserPeekTile input capture", () => {
     hookState.visible = false;
     view.rerender(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -1362,9 +1358,9 @@ describe("BrowserPeekTile input capture", () => {
   it("delivers a buffered cold click after arm confirmation", () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -1428,9 +1424,9 @@ describe("BrowserPeekTile input capture", () => {
     vi.spyOn(performance, "now").mockImplementation(() => now);
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -1477,9 +1473,9 @@ describe("BrowserPeekTile input capture", () => {
   it("does not replay a cold down when arm confirms before the matching up", () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -1517,9 +1513,9 @@ describe("BrowserPeekTile input capture", () => {
   it("turns a buffered drag into arm-only", () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -1567,9 +1563,9 @@ describe("BrowserPeekTile input capture", () => {
   it("does not deliver a buffered gesture after a stream reset", () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -1609,9 +1605,9 @@ describe("BrowserPeekTile input capture", () => {
   it("drops both pointer frames when an armed down starts in the letterbox", () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -1652,9 +1648,9 @@ describe("BrowserPeekTile input capture", () => {
     const frames = installAnimationFrameQueue();
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -1739,9 +1735,9 @@ describe("BrowserPeekTile input capture", () => {
     // that has a plane.
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -1770,9 +1766,9 @@ describe("BrowserPeekTile input capture", () => {
     // gone; the next one starts on JPEG until the host says otherwise.
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={PEEK_NODE}
         completeMeans="ended"
       />,

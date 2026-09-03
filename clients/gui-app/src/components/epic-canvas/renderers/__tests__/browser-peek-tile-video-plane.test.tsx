@@ -17,12 +17,11 @@ import {
   makeFreshPeekNode,
   streamAuthRevalidatorModule,
   tabHostIdModule,
-  tileBodyVisibleModule,
 } from "@/components/epic-canvas/renderers/__tests__/browser-peek-tile-stream-fixture";
 import {
   BrowserPeekTile,
   type BrowserPeekNode,
-} from "@/components/epic-canvas/renderers/browser-peek-tile";
+} from "@/components/browser-tile/browser-peek-tile";
 import {
   browserPeekFrameKey,
   clearLastBrowserPeekFrame,
@@ -63,9 +62,6 @@ vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () =>
   tabHostIdModule(),
 );
 
-vi.mock("@/components/epic-canvas/hooks/use-tile-body-visible", () =>
-  tileBodyVisibleModule(hookState),
-);
 
 vi.mock("@/hooks/host/use-host-directory-entry", () =>
   hostDirectoryEntryModule(),
@@ -127,9 +123,9 @@ function jpegFrame(sequence: number, bytes: readonly number[]): void {
 function renderTile(): void {
   renderPeekTile(
     <BrowserPeekTile
-      viewTabId="view-tab-1"
-      paneId="pane-1"
-      epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+      visible={hookState.visible}
+      onConvertToPip={() => {}}
       node={peekNode}
       completeMeans="ended"
     />,
@@ -843,9 +839,9 @@ describe("BrowserPeekTile input ack", () => {
   it("promotes input to the channels when a host inputAck drains the mux", async () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
         node={peekNode}
         completeMeans="ended"
       />,

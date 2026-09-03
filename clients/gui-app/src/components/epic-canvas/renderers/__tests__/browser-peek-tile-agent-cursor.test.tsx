@@ -15,12 +15,11 @@ import {
   makeFreshPeekNode,
   streamAuthRevalidatorModule,
   tabHostIdModule,
-  tileBodyVisibleModule,
 } from "@/components/epic-canvas/renderers/__tests__/browser-peek-tile-stream-fixture";
 import {
   BrowserPeekTile,
   type BrowserPeekNode,
-} from "@/components/epic-canvas/renderers/browser-peek-tile";
+} from "@/components/browser-tile/browser-peek-tile";
 import type { MediaPeerHandlers } from "@/lib/browser-view/tiles/webrtc-media-registry";
 import { AgentCursorOverlay } from "@/components/epic-canvas/renderers/agent-cursor-overlay";
 import { containBox } from "@/components/epic-canvas/renderers/agent-cursor-contain-box";
@@ -54,9 +53,6 @@ vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () =>
   tabHostIdModule(),
 );
 
-vi.mock("@/components/epic-canvas/hooks/use-tile-body-visible", () =>
-  tileBodyVisibleModule(hookState),
-);
 
 vi.mock("@/hooks/host/use-host-directory-entry", () =>
   hostDirectoryEntryModule(),
@@ -93,9 +89,9 @@ const PAST_ANY_LINGER_MS = 30_000;
 function renderTile(): void {
   renderPeekTile(
     <BrowserPeekTile
-      viewTabId="view-tab-1"
-      paneId="pane-1"
-      epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+      visible={hookState.visible}
+      onConvertToPip={() => {}}
       node={peekNode}
       completeMeans="ended"
     />,

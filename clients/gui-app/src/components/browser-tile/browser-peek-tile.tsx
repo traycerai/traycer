@@ -1,15 +1,14 @@
 import { useLayoutEffect, useMemo, useState, type ReactElement } from "react";
 import { AlertTriangle, Monitor, Pause, Radio, WifiOff } from "lucide-react";
-import { toast } from "sonner";
-import { useTileBodyVisible } from "@/components/epic-canvas/hooks/use-tile-body-visible";
+import type { HostResourceScope } from "@traycer/protocol/host/resource-scope";
 import {
   BrowserTileToolbar,
   BrowserTileToolbarCompact,
   type BrowserPictureInPictureControl,
 } from "@/components/epic-canvas/renderers/browser-tile-toolbar";
-import { BrowserStartPage } from "@/components/epic-canvas/renderers/browser-start-page";
+import { BrowserStartPage } from "./browser-start-page";
+import type { BrowserTileNode } from "./browser-tile-placement";
 import { useMaybeBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
-import { useCloseCanvasTileWithNestedFocus } from "@/components/epic-canvas/renderers/use-close-canvas-tile-with-nested-focus";
 import type { TileController } from "@/components/epic-canvas/renderers/tile-controller";
 import { ScreencastSurface } from "@/components/epic-canvas/renderers/screencast-surface";
 import { useScreencastTileChrome } from "@/components/epic-canvas/renderers/use-screencast-tile-chrome";
@@ -29,7 +28,6 @@ import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useHostStreamClientFor } from "@/hooks/host/use-host-stream-client-for";
 import { useRegisterVisibleBrowserTile } from "@/lib/browser-view/tiles/visible-tile-registry";
 import { compositeKey } from "@/lib/browser-view/tiles/browser-view-keys";
-import { convertBrowserTabToPip } from "@/lib/browser-view/pip/pip-store";
 import {
   browserPeekFrameKey,
   snapshotVideoFrameIntoPeekCache,
@@ -44,8 +42,7 @@ import {
 import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
 import { cn } from "@/lib/utils";
 import { useScreencastArmedStore } from "@/stores/screencast-armed-store";
-import type { BrowserSessionTileRef } from "@/stores/epics/canvas/types";
-import { DEFAULT_BROWSER_TILE_URL } from "@/stores/epics/canvas/tile-schema/browser-tile";
+import { DEFAULT_BROWSER_TILE_URL } from "@/lib/browser-view/browser-tile-defaults";
 
 /**
  * `touch-none`: the controller translates a finger drag into wheel frames
@@ -64,8 +61,8 @@ interface BrowserPeekStatus {
 }
 
 export type BrowserPeekNode = Pick<
-  BrowserSessionTileRef,
-  "id" | "instanceId" | "hostId" | "sessionId" | "tabId"
+  BrowserTileNode,
+  "instanceId" | "hostId" | "sessionId" | "tabId"
 > & {
   readonly initialUrl: string;
 };
@@ -90,10 +87,17 @@ export type BrowserPeekCompleteMeaning =
   | "native-elsewhere";
 
 interface BrowserPeekTileProps {
-  readonly epicId: string;
+  readonly scope: HostResourceScope;
   readonly node: BrowserPeekNode;
-  readonly viewTabId: string;
-  readonly paneId: string;
+  /** Whether the tile body is actually on screen, not merely mounted. */
+  readonly visible: boolean;
+  /**
+   * No `onRequestClose` here on purpose: the streamed viewer never retires its
+   * own tile. The body owns that decision, and the picture-in-picture handoff
+   * - the one path that used to close from here - closes from the adapter that
+   * starts it.
+   */
+  readonly onConvertToPip: (() => void) | null;
   readonly completeMeans: BrowserPeekCompleteMeaning;
 }
 
@@ -107,17 +111,14 @@ interface BrowserPeekTileProps {
  * can actually reach.
  */
 export function BrowserPeekTile(props: BrowserPeekTileProps) {
-  const { epicId, node } = props;
+  const { node, visible } = props;
   const coarsePointer = useCoarsePointer();
   const hostEntry = useHostDirectoryEntry(node.hostId);
   const auth = useStreamAuthRevalidator();
   const client = useHostStreamClientFor(hostEntry, auth);
-  const visible = useTileBodyVisible();
-  const closeCanvasTile = useCloseCanvasTileWithNestedFocus(
-    props.viewTabId,
-    props.paneId,
-    node.instanceId,
-  );
+  // wire: the screencast hook and the start page still take an `epicId`; both
+  // become `scope` consumers when ticket 2's shared client lands.
+  const epicId = props.scope.kind === "epic" ? props.scope.epicId : "";
   useRegisterVisibleBrowserTile({
     hostId: node.hostId,
     sessionId: node.sessionId,
@@ -221,18 +222,11 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
         <ScreencastPeekChromeBar
           controller={controller}
           pictureInPicture={{
-            disabled: client === null,
-            convert: () => {
-              convertBrowserTabToPip({
-                epicId,
-                hostId: node.hostId,
-                sessionId: node.sessionId,
-                tabId: node.tabId,
-                origin: "manual",
-                onReady: closeCanvasTile,
-                onError: (message) => toast.error(message),
-              });
-            },
+            // Both halves of today's gate: a placement with nowhere to put a
+            // picture-in-picture window supplies no callback, and a tile with
+            // no stream client cannot hand one off either.
+            disabled: props.onConvertToPip === null || client === null,
+            convert: () => props.onConvertToPip?.(),
           }}
           loading={navState.loading}
           armed={armedEpoch !== null}
@@ -249,6 +243,7 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
         )}
       >
         {showStartPage ? (
+          // wire: `epicId` becomes `scope={props.scope}` on the rebase.
           <BrowserStartPage
             epicId={epicId}
             hostId={node.hostId}
