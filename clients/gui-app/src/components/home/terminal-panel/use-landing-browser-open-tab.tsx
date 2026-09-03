@@ -115,8 +115,17 @@ export function useLandingBrowserOpenTab(args: {
   ) => void;
 }): LandingBrowserOpenTab {
   const { canDriveTabs, hostId, sessions, onOpened } = args;
-  /** Set for the whole in-flight window, so `open()` is idempotent per tick. */
-  const inFlightRef = useRef<{ readonly hostId: string | null } | null>(null);
+  /**
+   * The devices with an open in flight, so `open()` is idempotent per tick.
+   *
+   * A SET, not one cell holding the device in flight. The panel's target host
+   * can change while an open is unanswered, so two devices are routinely in
+   * flight at once - and one cell cannot describe two. It failed in both
+   * directions: B's dispatch overwrote A's entry, and then whichever settled
+   * first cleared the other's latch, letting a second request on the still
+   * pending device through both guards and open a duplicate tab.
+   */
+  const pendingHostsRef = useRef<Set<string | null>>(new Set());
   const openTabKey = browserMutationKeys.openTab(hostId);
   const tabCount = landingBrowserTabCount(sessions, hostId);
   const openMutation = useMutation({
@@ -168,14 +177,20 @@ export function useLandingBrowserOpenTab(args: {
         titleSource: "default",
       };
     },
+    // The device this request is for, captured at dispatch - the house rule for
+    // a host-swap race, and here it is what lets the settle clear the right
+    // latch. Reading `hostId` in `onSettled` instead would read the host of
+    // whatever render the answer happened to arrive in.
+    onMutate: (): { readonly hostId: string | null } => ({ hostId }),
     onSuccess: (tab, request) => {
       onOpened(tab, request);
     },
     onError: (cause: Error) => {
       toast.error(cause.message);
     },
-    onSettled: () => {
-      inFlightRef.current = null;
+    onSettled: (_tab, _cause, _request, context) => {
+      if (context === undefined) return;
+      pendingHostsRef.current.delete(context.hostId);
     },
   });
   const isOpening = useIsMutating({ mutationKey: openTabKey }) > 0;
@@ -185,17 +200,14 @@ export function useLandingBrowserOpenTab(args: {
       // `isOpening` is RENDERED state: `useIsMutating` publishes through the
       // query cache's subscription, so two `open()` calls in one tick both read
       // the value from the render they were dispatched in - `false` - and both
-      // reach the mutation. Only a ref moves within the tick. It records the
-      // device rather than a bare boolean so a host switch mid-flight releases
-      // it: that is a different device, and its tab is not the one in flight.
+      // reach the mutation. Only a ref moves within the tick.
+      //
+      // It also only ever describes THIS device: the key it counts is
+      // `openTab(hostId)`. So the ref below has to be per device too, or the
+      // two guards disagree about which device they are talking about.
       if (isOpening) return;
-      if (
-        inFlightRef.current !== null &&
-        inFlightRef.current.hostId === hostId
-      ) {
-        return;
-      }
-      inFlightRef.current = { hostId };
+      if (pendingHostsRef.current.has(hostId)) return;
+      pendingHostsRef.current.add(hostId);
       mutate(request);
     },
     [hostId, isOpening, mutate],
