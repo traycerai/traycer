@@ -3,19 +3,9 @@ import { memo, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import type { ChatActiveTurn } from "@traycer/protocol/host/agent/gui/subscribe";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { cn } from "@/lib/utils";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-
-/**
- * Where Stop lives while a turn runs.
- *
- * - `"replace"`: this button morphs into Stop. The desktop toolbar's choice -
- *   Enter still queues there, so Send needs no button of its own mid-turn.
- * - `"beside"`: Send stays put (tapping it queues) and Stop renders to its
- *   left. The phone toolbar's choice - Return is a newline on a soft keyboard,
- *   so this button is the only way to queue.
- */
-export type ComposerStopPlacement = "replace" | "beside";
 
 interface ComposerSendButtonProps {
   canSubmit: boolean;
@@ -30,7 +20,6 @@ interface ComposerSendButtonProps {
    * leaves the normal "Send" affordance.
    */
   disabledHint: string | null;
-  stopPlacement: ComposerStopPlacement;
 }
 
 const BUTTON_CLASS_NAME =
@@ -45,8 +34,12 @@ function ComposerSendButtonImpl(props: ComposerSendButtonProps) {
     stopDisabled,
     onStopTurn,
     disabledHint,
-    stopPlacement,
   } = props;
+  // On a phone-width viewport Return inserts a newline (`chat-list-keymap`),
+  // so this button is the only way to queue a message mid-turn: Stop renders
+  // beside Send there instead of replacing it. Same VIEWPORT signal as the
+  // keymap, so the two can never disagree.
+  const stopBesideSend = useIsMobileViewport();
 
   if (activeTurnStatus === null) {
     return (
@@ -67,7 +60,7 @@ function ComposerSendButtonImpl(props: ComposerSendButtonProps) {
       onStopTurn={onStopTurn}
     />
   );
-  if (stopPlacement === "replace") return stop;
+  if (!stopBesideSend) return stop;
   return (
     <>
       {stop}
