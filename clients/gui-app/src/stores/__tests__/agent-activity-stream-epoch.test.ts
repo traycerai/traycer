@@ -22,6 +22,7 @@ import type {
 } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
 import {
   __resetAgentActivityStoreForTests,
+  agentActivityPlaneAnswers,
   openAgentActivityStream,
   useAgentActivityStore,
 } from "@/stores/agent-activity-store";
@@ -239,6 +240,49 @@ describe("agent activity stream epoch handoff", () => {
       "connecting",
     );
     expect(useAgentActivityStore.getState().cloudSyncStatus).toBeNull();
+  });
+
+  it("a replacement epoch does not vouch for the union until its own frame arrives, though servedBy survived the swap", () => {
+    const firstSession = new StubSession();
+    const firstClient = new StubHostStreamClient(firstSession, "host-stream-1");
+    const reconnectEngine = createStubReconnectEngine();
+
+    const disposeFirst = openAgentActivityStream(
+      reconnectEngine,
+      firstClient,
+      null,
+    );
+    driveToOpenAndConnected(firstSession);
+    expect(agentActivityPlaneAnswers()).toBe(true);
+
+    disposeFirst();
+
+    const secondSession = new StubSession();
+    const secondClient = new StubHostStreamClient(
+      secondSession,
+      "host-stream-2",
+    );
+    openAgentActivityStream(reconnectEngine, secondClient, null);
+    // The window this pins: a raw transport open with no frame behind it. The
+    // per-user union and its `servedBy` are still the FIRST epoch's, by
+    // design, so a plane predicate that read `servedBy !== null` would vouch
+    // here - and the epic cap, which fails closed on a plane that cannot
+    // vouch, would prune against a working set nobody has re-attested,
+    // evicting an Epic whose agent started during the gap.
+    secondSession.emitStatus("open", null);
+    expect(useAgentActivityStore.getState().connectionStatus).toBe("open");
+    expect(useAgentActivityStore.getState().servedBy).toBe("cloud");
+    expect(agentActivityPlaneAnswers()).toBe(false);
+
+    // Its own frame is the proof, and it is the thing that flips the answer.
+    secondSession.emitFrame({
+      kind: "state",
+      servedBy: "cloud",
+      byEpic: { [EPIC_ID]: { working: [AGENT_ID], turn: [AGENT_ID] } },
+      cloudSyncStatus: "connected",
+      hasBinaryPayload: false,
+    });
+    expect(agentActivityPlaneAnswers()).toBe(true);
   });
 
   it("the per-user cloud union survives a stream replacement", () => {

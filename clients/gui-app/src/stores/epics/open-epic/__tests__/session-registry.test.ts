@@ -8,7 +8,10 @@ import {
   publishAgentActivity,
   resetAgentActivity,
 } from "@/__tests__/agent-activity-harness";
-import { useAgentActivityStore } from "@/stores/agent-activity-store";
+import {
+  __setAgentActivityPlaneAnsweringForTests,
+  useAgentActivityStore,
+} from "@/stores/agent-activity-store";
 import { OpenEpicSessionRegistry } from "@/stores/epics/open-epic/session-registry";
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import type { EpicWriteCommandIntent } from "@/stores/epics/open-epic/runtime/epic-write-command";
@@ -144,11 +147,7 @@ function h(t: TestHandle): OpenedStoreForTest {
 // store's own "connecting" default. Tests that need the plane blind, or that
 // mark agents working, override this afterward.
 beforeEach(() => {
-  useAgentActivityStore.setState({
-    connectionStatus: "open",
-    servedBy: "local",
-    cloudSyncStatus: null,
-  });
+  __setAgentActivityPlaneAnsweringForTests();
 });
 
 afterEach(() => {
@@ -533,10 +532,16 @@ describe("cap eviction defers to the activity plane's own health", () => {
     }
   });
 
-  it("evicts nothing while the stream is open but has not yet delivered a served-by state frame", () => {
+  it("evicts nothing while the stream is open but has not yet delivered a state frame of its OWN", () => {
+    // The shape a replacement epoch is in between its raw `open` and its
+    // first frame: `servedBy` and `byEpic` survive the swap, so the only
+    // thing that says this epoch has not re-attested the union is the marker.
+    // Reading `servedBy` here would vouch with the PREVIOUS epoch's working
+    // set and evict an Epic whose agent started during the gap.
     useAgentActivityStore.setState({
       connectionStatus: "open",
-      servedBy: null,
+      servedBy: "cloud",
+      stateFrameSeenThisEpoch: false,
     });
     const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
     const handles = acquireOverflowing(registry, 6);
@@ -551,6 +556,9 @@ describe("cap eviction defers to the activity plane's own health", () => {
     useAgentActivityStore.setState({
       connectionStatus: "open",
       servedBy: "cloud",
+      // Everything else vouches, so the cloud stamp is the only refusal in
+      // play - without this the case would pass on the missing frame instead.
+      stateFrameSeenThisEpoch: true,
       cloudSyncStatus: "reconnecting",
     });
     const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
@@ -571,11 +579,7 @@ describe("cap eviction defers to the activity plane's own health", () => {
     // No acquire follows: the flip fires through
     // `subscribeAgentActivityPlaneHealth`, which every session subscribes to
     // independently of the working-set subscription.
-    useAgentActivityStore.setState({
-      connectionStatus: "open",
-      servedBy: "local",
-      cloudSyncStatus: null,
-    });
+    __setAgentActivityPlaneAnsweringForTests();
 
     expect(registry.size()).toBe(5);
     expect(handles[0].disposed).toBe(true);

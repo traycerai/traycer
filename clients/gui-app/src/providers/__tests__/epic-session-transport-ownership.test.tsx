@@ -163,7 +163,7 @@ import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   __resetAgentActivityStoreForTests,
-  useAgentActivityStore,
+  __setAgentActivityPlaneAnsweringForTests,
 } from "@/stores/agent-activity-store";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 
@@ -265,11 +265,7 @@ describe("<EpicSessionProvider /> transport ownership", () => {
     // prunable. The store's own default is `connecting`, which is exactly
     // that state, so the prune case below needs the plane answering. This
     // suite is about transports, not agents: no Epic here has working agents.
-    useAgentActivityStore.setState({
-      connectionStatus: "open",
-      servedBy: "local",
-      cloudSyncStatus: null,
-    });
+    __setAgentActivityPlaneAnsweringForTests();
   });
 
   afterEach(() => {

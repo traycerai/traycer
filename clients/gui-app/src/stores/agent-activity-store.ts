@@ -35,6 +35,18 @@ interface AgentActivityState {
    */
   readonly cloudSyncStatus: AgentActivityCloudSyncStatus | null;
   readonly byEpic: ReadonlyMap<string, EpicAgentActivity>;
+  /**
+   * Whether THIS stream epoch has delivered a `state` frame of its own.
+   *
+   * The epoch's proof marker, and deliberately not inferred from `servedBy`:
+   * a replacement stream keeps the previous epoch's `servedBy` and `byEpic`
+   * (the cloud union is per-user and survives a host switch), so between the
+   * new session's raw `open` and its first frame, `servedBy` is non-null
+   * while the union on record is the OLD epoch's. Anything that reads this
+   * store as evidence of what is happening NOW - the cap's busy gate - must
+   * gate on the frame, not on a field the swap carried over.
+   */
+  readonly stateFrameSeenThisEpoch: boolean;
   reset(): void;
 }
 
@@ -43,15 +55,34 @@ export const useAgentActivityStore = create<AgentActivityState>()((set) => ({
   connectionStatus: "connecting",
   cloudSyncStatus: null,
   byEpic: EMPTY_AGENT_ACTIVITY_BY_EPIC,
+  stateFrameSeenThisEpoch: false,
   reset: () => {
     set({
       servedBy: null,
       connectionStatus: "connecting",
       cloudSyncStatus: null,
       byEpic: EMPTY_AGENT_ACTIVITY_BY_EPIC,
+      stateFrameSeenThisEpoch: false,
     });
   },
 }));
+
+/**
+ * Retire the current epoch's health claim: what is on record was reported by
+ * a session that is no longer the one being read. Called at both ends of a
+ * replacement - opening the next epoch and disposing this one - so neither
+ * leaves a live-looking reading behind.
+ *
+ * `servedBy` and `byEpic` deliberately survive (see the field docs); the
+ * frame marker is what says the surviving union has not been re-attested.
+ */
+function retireEpochHealthClaim(): void {
+  useAgentActivityStore.setState({
+    connectionStatus: "connecting",
+    cloudSyncStatus: null,
+    stateFrameSeenThisEpoch: false,
+  });
+}
 
 export function openAgentActivityStream(
   /**
@@ -82,10 +113,7 @@ export function openAgentActivityStream(
   // `byEpic` is deliberately NOT cleared here: the cloud union is per-user and
   // stays valid across a host switch (see `resetHostReplica`). Only the health
   // of the stream that reported it belongs to the epoch.
-  useAgentActivityStore.setState({
-    connectionStatus: "connecting",
-    cloudSyncStatus: null,
-  });
+  retireEpochHealthClaim();
   let disposed = false;
   let currentClient: AgentActivityStreamClient | null = null;
   const reopenScheduler = reconnectEngine.openReopenLane(() => {
@@ -111,6 +139,7 @@ export function openAgentActivityStream(
             servedBy,
             cloudSyncStatus,
             byEpic: reconcileAgentActivityByEpic(byEpic, state.byEpic),
+            stateFrameSeenThisEpoch: true,
           }));
         },
         onConnectionStatus: (status, reason) => {
@@ -122,6 +151,7 @@ export function openAgentActivityStream(
                   servedBy: null,
                   cloudSyncStatus: null,
                   byEpic: EMPTY_AGENT_ACTIVITY_BY_EPIC,
+                  stateFrameSeenThisEpoch: false,
                 }
               : { connectionStatus: status },
           );
@@ -145,10 +175,7 @@ export function openAgentActivityStream(
     // The close above is swallowed by the identity guard (`currentClient` is
     // already null), so retire the epoch's health explicitly rather than
     // leaving the last live reading behind for whatever opens next.
-    useAgentActivityStore.setState({
-      connectionStatus: "connecting",
-      cloudSyncStatus: null,
-    });
+    retireEpochHealthClaim();
   };
 }
 
@@ -189,8 +216,10 @@ export function subscribeAgentActivity(listener: () => void): () => void {
 /**
  * Whether the activity plane can currently vouch for "no agent is working in
  * this epic". False while the stream is not open, while an open stream has
- * not yet delivered its first `state` frame in this epoch (`servedBy` is
- * `null` until then - a raw transport open proves nothing about the union),
+ * not yet delivered its first `state` frame in this epoch (a raw transport
+ * open proves nothing about the union, and the union on record at that
+ * moment is the PREVIOUS epoch's - `servedBy` and `byEpic` survive a stream
+ * replacement, which is why the marker exists rather than a `servedBy` read),
  * and while the host stamped the union with a cloud link that was
  * `reconnecting` / `disconnected` (other hosts' agents are dropped from the
  * union the instant that socket closes, so an epic served elsewhere reads
@@ -206,7 +235,7 @@ export function agentActivityPlaneAnswers(): boolean {
   const state = useAgentActivityStore.getState();
   return (
     state.connectionStatus === "open" &&
-    state.servedBy !== null &&
+    state.stateFrameSeenThisEpoch &&
     state.cloudSyncStatus !== "reconnecting" &&
     state.cloudSyncStatus !== "disconnected"
   );
@@ -240,7 +269,24 @@ export function __setAgentActivityStateForTests(
     servedBy,
     cloudSyncStatus,
     byEpic: reconcileAgentActivityByEpic(byEpic, state.byEpic),
+    stateFrameSeenThisEpoch: true,
   }));
+}
+
+/**
+ * Puts the plane in the state a live app is in: stream open, this epoch's own
+ * `state` frame received, no cloud-link complaint. Exists because the cap's
+ * busy gate fails CLOSED on a plane that cannot vouch, so any suite that
+ * exercises eviction has to say the plane is answering - and saying it by
+ * hand means restating a four-field truth table that only this module owns.
+ */
+export function __setAgentActivityPlaneAnsweringForTests(): void {
+  useAgentActivityStore.setState({
+    connectionStatus: "open",
+    servedBy: "local",
+    cloudSyncStatus: null,
+    stateFrameSeenThisEpoch: true,
+  });
 }
 
 export function __resetAgentActivityStoreForTests(): void {

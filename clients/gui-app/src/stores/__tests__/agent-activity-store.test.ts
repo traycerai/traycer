@@ -24,26 +24,33 @@ describe("agentActivityPlaneAnswers", () => {
     useAgentActivityStore.setState({
       connectionStatus: "closed",
       servedBy: "cloud",
+      stateFrameSeenThisEpoch: true,
       cloudSyncStatus: "connected",
     });
 
     expect(agentActivityPlaneAnswers()).toBe(false);
   });
 
-  it("is false while the stream is open but has not yet delivered a served-by state frame", () => {
+  it("is false while the stream is open but has not delivered a state frame of its OWN", () => {
+    // `servedBy` non-null is deliberately part of the fixture: it is what a
+    // replacement epoch inherits from the one it replaced, so a predicate
+    // reading it would vouch here while the union on record is the old
+    // epoch's. Only the frame marker separates the two.
     useAgentActivityStore.setState({
       connectionStatus: "open",
-      servedBy: null,
+      servedBy: "cloud",
+      stateFrameSeenThisEpoch: false,
       cloudSyncStatus: null,
     });
 
     expect(agentActivityPlaneAnswers()).toBe(false);
   });
 
-  it("is true once the stream is open, served-by is known, and the cloud status makes no claim", () => {
+  it("is true once the stream is open, this epoch has a frame, and the cloud status makes no claim", () => {
     useAgentActivityStore.setState({
       connectionStatus: "open",
       servedBy: "local",
+      stateFrameSeenThisEpoch: true,
       cloudSyncStatus: null,
     });
 
@@ -54,6 +61,7 @@ describe("agentActivityPlaneAnswers", () => {
     useAgentActivityStore.setState({
       connectionStatus: "open",
       servedBy: "cloud",
+      stateFrameSeenThisEpoch: true,
       cloudSyncStatus: "connected",
     });
 
@@ -64,6 +72,7 @@ describe("agentActivityPlaneAnswers", () => {
     useAgentActivityStore.setState({
       connectionStatus: "open",
       servedBy: "cloud",
+      stateFrameSeenThisEpoch: true,
       cloudSyncStatus: "reconnecting",
     });
 
@@ -74,6 +83,7 @@ describe("agentActivityPlaneAnswers", () => {
     useAgentActivityStore.setState({
       connectionStatus: "open",
       servedBy: "cloud",
+      stateFrameSeenThisEpoch: true,
       cloudSyncStatus: "disconnected",
     });
 
@@ -102,6 +112,7 @@ describe("subscribeAgentActivityPlaneHealth", () => {
     useAgentActivityStore.setState({
       connectionStatus: "open",
       servedBy: "local",
+      stateFrameSeenThisEpoch: true,
     });
     expect(callCount).toBe(1);
 
@@ -118,6 +129,7 @@ describe("subscribeAgentActivityPlaneHealth", () => {
     useAgentActivityStore.setState({
       connectionStatus: "open",
       servedBy: "local",
+      stateFrameSeenThisEpoch: true,
     });
     expect(callCount).toBe(2);
   });
