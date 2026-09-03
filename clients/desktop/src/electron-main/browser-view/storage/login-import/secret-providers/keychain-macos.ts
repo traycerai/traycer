@@ -32,6 +32,9 @@ const KEYCHAIN_ITEMS: Readonly<
   arc: { service: "Arc Safe Storage", account: "Arc" },
   vivaldi: { service: "Vivaldi Safe Storage", account: "Vivaldi" },
   opera: { service: "Opera Safe Storage", account: "Opera" },
+  aside: { service: "Aside Safe Storage", account: "Aside" },
+  // Helium names its item "Helium Storage Key", not "<Browser> Safe Storage".
+  helium: { service: "Helium Storage Key", account: "Helium" },
 };
 
 export async function readMacosKeychainPassphrase(

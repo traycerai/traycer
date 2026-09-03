@@ -468,6 +468,7 @@ function buildFakeBridge(
           cpuUsage: { user: 0, system: 0 },
         }),
         takeHeapSnapshot: async () => null,
+        measureJsHeaps: async () => null,
         traceStart: async () => false,
         traceStop: async () => null,
       },
