@@ -704,7 +704,7 @@ describe("<SessionImportWizard />", () => {
     // provider out is scope, not amnesia about its count.
     expect(findProviderPill("codex").textContent).toContain("2");
 
-    fireEvent.click(screen.getByTestId("session-import-submit"));
+    fireEvent.click(screen.getByRole("button", { name: "Import 1 session" }));
 
     expect(startSessionImportRunMock).toHaveBeenCalledTimes(1);
     expect(startSessionImportRunMock.mock.calls[0][0].selections).toEqual([

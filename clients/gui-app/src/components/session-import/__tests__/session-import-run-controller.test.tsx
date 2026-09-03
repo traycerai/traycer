@@ -206,6 +206,31 @@ describe("<SessionImportRunController />", () => {
     expect(runClientHarness.instances).toHaveLength(1);
   });
 
+  it("closes a probe still waiting for its answer and subscribes with the selections when start() is called", () => {
+    render(<SessionImportRunController />);
+    const probe = requireInstance(0);
+
+    const handle = getSessionImportStartHandle();
+    if (handle === null) {
+      throw new Error("Expected a session import start handle.");
+    }
+    const request: SessionImportRunRequest = {
+      selections: [SELECTION],
+      titles: new Map([["claude:s1", "My session"]]),
+    };
+    act(() => {
+      handle.start(request);
+    });
+
+    // The probe was only asking; the click must not be dropped for it. If a
+    // run WAS in flight, this subscribe attaches to it just as the probe
+    // would have.
+    expect(probe.close).toHaveBeenCalledTimes(1);
+    expect(runClientHarness.instances).toHaveLength(2);
+    expect(requireInstance(1).selections).toEqual([SELECTION]);
+    expect(useSessionImportRunStore.getState().status).toBe("starting");
+  });
+
   it("closes the probe on unmount when no answer has arrived yet", () => {
     const { unmount } = render(<SessionImportRunController />);
     const probe = requireInstance(0);

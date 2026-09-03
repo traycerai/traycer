@@ -48,11 +48,16 @@ export function SessionImportRunController(): null {
   // happened on another. See `StreamRuntimeBinding.hostId`.
   const streamHostId = useStreamHostId();
   const clientRef = useRef<SessionImportRunClient | null>(null);
+  // The mount-time probe while it is still waiting for the host's answer.
+  // Cleared the moment it attaches (it is the run's subscription then) or
+  // closes, so `start` can tell "a run is going" from "we are still asking".
+  const waitingProbeRef = useRef<SessionImportRunClient | null>(null);
 
   const closeClient = useCallback(() => {
     const client = clientRef.current;
     if (client !== null) {
       clientRef.current = null;
+      if (waitingProbeRef.current === client) waitingProbeRef.current = null;
       client.close();
     }
   }, []);
@@ -113,8 +118,15 @@ export function SessionImportRunController(): null {
     (request: SessionImportRunRequest) => {
       if (wsStreamClient === null) return;
       // One run at a time is the contract; a second subscribe would attach to
-      // the first and silently drop this submission's selections.
-      if (clientRef.current !== null) return;
+      // the first and silently drop this submission's selections. A probe
+      // still waiting for its answer is not a run, though: dropping the
+      // user's click for it would lose the submission with nothing on screen
+      // to say so. Close it and subscribe with the selections - if a run WAS
+      // in flight, this subscribe attaches to it exactly as the probe would.
+      if (clientRef.current !== null) {
+        if (clientRef.current !== waitingProbeRef.current) return;
+        closeClient();
+      }
       if (request.selections.length === 0) return;
 
       useSessionImportRunStore.getState().markStarting(request.titles);
@@ -124,7 +136,7 @@ export function SessionImportRunController(): null {
         callbacks: runCallbacks(streamHostId),
       });
     },
-    [runCallbacks, streamHostId, wsStreamClient],
+    [closeClient, runCallbacks, streamHostId, wsStreamClient],
   );
 
   // Subscribing with no selections is the host's "attach to whatever is
@@ -150,11 +162,13 @@ export function SessionImportRunController(): null {
             return;
           }
           attached = true;
+          waitingProbeRef.current = null;
           callbacks.onStarted(payload);
         },
       },
     });
     clientRef.current = probe;
+    waitingProbeRef.current = probe;
     return () => {
       // A probe still waiting for its answer when the client is replaced is
       // asking a connection that is gone; one that attached is the run's

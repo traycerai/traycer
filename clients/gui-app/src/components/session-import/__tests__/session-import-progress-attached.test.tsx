@@ -29,7 +29,7 @@ describe("SessionImportProgress", () => {
     cleanup();
   });
 
-  it("says another window started the import while running, with no 'you can close this' copy", () => {
+  it("says an import is already running on this machine while attached, with no 'you can close this' copy", () => {
     useSessionImportRunStore.getState().markStarting(new Map());
     useSessionImportRunStore
       .getState()
@@ -42,7 +42,7 @@ describe("SessionImportProgress", () => {
     const progress = screen.getByRole("status");
     expect(
       within(progress).getByText(
-        "This import was started from another window.",
+        "An import is already running on this machine.",
       ),
     ).toBeTruthy();
     expect(within(progress).getByText("Importing 0 of 4…")).toBeTruthy();
@@ -60,7 +60,7 @@ describe("SessionImportProgress", () => {
     const progress = screen.getByRole("status");
     expect(screen.queryByTestId("session-import-progress-attached")).toBeNull();
     expect(progress.textContent).not.toContain(
-      "This import was started from another window.",
+      "An import is already running on this machine.",
     );
     expect(progress.textContent).not.toContain("You can close this");
   });

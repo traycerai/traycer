@@ -83,13 +83,14 @@ export function SessionImportProgress(props: {
           </p>
         ) : null}
         {run.attached ? (
-          // Only reachable from a second window on the same machine: this
-          // window's own Import button is hidden while a run shows here.
+          // Reached from a second window on the same machine, or by this
+          // window after a reload - so the copy names the machine, not a
+          // window. This window's own Import button is hidden meanwhile.
           <p
             data-testid="session-import-progress-attached"
             className={cn("max-w-md text-ui-xs", tone.muted)}
           >
-            This import was started from another window.
+            An import is already running on this machine.
           </p>
         ) : null}
       </div>
