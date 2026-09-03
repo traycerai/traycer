@@ -214,6 +214,11 @@ describe("<ImportLoginsDialog /> pick step", () => {
         .getAllByRole("button")
         .map((button) => button.textContent),
     ).toEqual(["Work2h ago", "Default3h ago"]);
+    expect(
+      screen.getAllByRole("heading", { level: 3, name: "Google Chrome" }),
+    ).toHaveLength(1);
+    // And the heading is the only place the browser name is rendered: the
+    // rows under it carry the profile alone.
     expect(screen.getAllByText("Google Chrome")).toHaveLength(1);
   });
 
