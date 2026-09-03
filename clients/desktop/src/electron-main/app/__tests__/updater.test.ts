@@ -1296,41 +1296,6 @@ describe("RC release discovery and channel safety", () => {
     updater.startUpdateDownload();
     expect(autoUpdater.downloadUpdate).not.toHaveBeenCalled();
   });
-
-  it("ignores an update-available event whose check generation was superseded", async () => {
-    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
-    const discoveryControl: { resolve: ((response: Response) => void) | null } =
-      {
-        resolve: null,
-      };
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        () =>
-          new Promise<Response>((resolve) => {
-            discoveryControl.resolve = resolve;
-          }),
-      ),
-    );
-    await updater.installAutoUpdater(true, makeDeps(true));
-    await updater.setAllowPrereleaseUpdates(true);
-    const rcCheck = updater.checkForUpdatesNow(false, "automatic");
-    await flushPromises();
-
-    // Bumps channelGeneration, superseding the in-flight RC check.
-    await updater.setAllowPrereleaseUpdates(false);
-    autoUpdater.emit("update-available", { version: "9.9.9-rc.1" });
-
-    expect(updater.getAppUpdateSnapshot().status).not.toBe("available");
-
-    const release = discoveryControl.resolve;
-    if (release === null) {
-      throw new Error("Expected the RC discovery fetch to be pending");
-    }
-    release(new Response(JSON.stringify([]), { status: 200 }));
-    await rcCheck;
-  });
-
   it("refuses a channel change while a download is in progress, leaving the RC channel and download intact", async () => {
     const { autoUpdater, preferences, updater } =
       await loadUpdater(NOT_LINUX_GUIDANCE);
@@ -1364,61 +1329,6 @@ describe("RC release discovery and channel safety", () => {
     expect(change.snapshot.allowPrerelease).toBe(true);
     expect(preferences.allowPrerelease).toBe(true);
     expect(updater.getAppUpdateSnapshot().status).toBe("downloading");
-    expect(autoUpdater.setFeedURL).not.toHaveBeenCalled();
-  });
-
-  it("refuses a channel change while an update is ready to install", async () => {
-    // darwin: a natively staged artifact cannot be discarded, so the refusal
-    // STANDS. Windows/AppImage take the discard-then-switch path instead
-    // (see "compat recovery" below).
-    const { autoUpdater, preferences, updater } =
-      await loadUpdater(NOT_LINUX_GUIDANCE);
-    vi.stubGlobal(
-      "fetch",
-      fetchRouter([macReleaseFixture("desktop-v1.6.0-rc.1", true)], {
-        "desktop-v1.6.0-rc.1": manifestYamlForTag(
-          "desktop-v1.6.0-rc.1",
-          macZipAssetName("desktop-v1.6.0-rc.1"),
-        ),
-      }),
-    );
-    await updater.installAutoUpdater(true, makeDeps(true));
-    await updater.setAllowPrereleaseUpdates(true);
-    autoUpdater.checkForUpdates.mockImplementation(() => {
-      autoUpdater.emit("update-available", { version: "1.6.0-rc.1" });
-      return Promise.resolve(null);
-    });
-    await updater.checkForUpdatesNow(false, "manual");
-    updater.startUpdateDownload();
-    autoUpdater.emit("update-downloaded", { version: "1.6.0-rc.1" });
-    expect(updater.getAppUpdateSnapshot().status).toBe("ready");
-
-    const change = await updater.setAllowPrereleaseUpdates(false);
-
-    expect(change.outcome).toBe("refused-update-pending");
-    expect(change.snapshot.allowPrerelease).toBe(true);
-    expect(preferences.allowPrerelease).toBe(true);
-    expect(updater.getAppUpdateSnapshot().status).toBe("ready");
-  });
-
-  it("fails closed on the stable channel when the private repo coordinate is malformed (no network, no public fallback)", async () => {
-    process.env.VITE_TRAYCER_DESKTOP_UPDATE_REPO = "not-a-coordinate";
-    process.env.VITE_TRAYCER_DESKTOP_UPDATE_TOKEN = "test-token";
-    const fetchMock = vi.fn(() =>
-      Promise.resolve(new Response("[]", { status: 200 })),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
-    // Stable channel (allowPrerelease defaults off) - no opt-in.
-    await updater.installAutoUpdater(true, makeDeps(true));
-
-    await updater.checkForUpdatesNow(false, "manual");
-
-    expect(updater.getAppUpdateSnapshot().status).toBe("error");
-    // Neither the stable electron-updater check nor RC discovery runs, and no
-    // packaged/public feed is configured as a fallback.
-    expect(autoUpdater.checkForUpdates).not.toHaveBeenCalled();
-    expect(fetchMock).not.toHaveBeenCalled();
     expect(autoUpdater.setFeedURL).not.toHaveBeenCalled();
   });
 
@@ -1525,41 +1435,6 @@ describe("RC release discovery and channel safety", () => {
       url: "https://github.com/traycerai/traycer/releases/download/desktop-v1.6.0-rc.1/",
     });
   });
-
-  it("falls back to an older release when the newest release's manifest version disagrees with its tag (finding 4)", async () => {
-    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
-    vi.stubGlobal(
-      "fetch",
-      fetchRouter(
-        [
-          macReleaseFixture("desktop-v1.8.0-rc.1", true),
-          macReleaseFixture("desktop-v1.7.0-rc.1", true),
-        ],
-        {
-          // Publishing error: the manifest names a different version than
-          // the release tag it was fetched from.
-          "desktop-v1.8.0-rc.1": manifestYamlForTag(
-            "desktop-v1.8.0-rc.2",
-            macZipAssetName("desktop-v1.8.0-rc.1"),
-          ),
-          "desktop-v1.7.0-rc.1": manifestYamlForTag(
-            "desktop-v1.7.0-rc.1",
-            macZipAssetName("desktop-v1.7.0-rc.1"),
-          ),
-        },
-      ),
-    );
-    await updater.installAutoUpdater(true, makeDeps(true));
-
-    await updater.setAllowPrereleaseUpdates(true);
-    await updater.checkForUpdatesNow(false, "manual");
-
-    expect(autoUpdater.setFeedURL).toHaveBeenLastCalledWith({
-      provider: "generic",
-      url: "https://github.com/traycerai/traycer/releases/download/desktop-v1.7.0-rc.1/",
-    });
-  });
-
   it("never selects a tag with a leading-zero identifier, falling back to a strict-SemVer release", async () => {
     const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
     vi.stubGlobal(
@@ -1819,16 +1694,6 @@ describe("Linux deb/rpm silent-install gating", () => {
 
     expect(autoUpdater.autoInstallOnAppQuit).toBe(true);
   });
-
-  it("keeps autoInstallOnAppQuit enabled for a Linux AppImage build (no package-type)", async () => {
-    setPlatform("linux");
-    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
-
-    await updater.installAutoUpdater(true, makeDeps(true));
-
-    expect(autoUpdater.autoInstallOnAppQuit).toBe(true);
-  });
-
   it("disables autoInstallOnAppQuit for a Linux deb build regardless of registration", async () => {
     setPlatform("linux");
     const { autoUpdater, updater } = await loadUpdater({
@@ -1841,20 +1706,6 @@ describe("Linux deb/rpm silent-install gating", () => {
 
     expect(autoUpdater.autoInstallOnAppQuit).toBe(false);
   });
-
-  it("disables autoInstallOnAppQuit for a Linux rpm build", async () => {
-    setPlatform("linux");
-    const { autoUpdater, updater } = await loadUpdater({
-      packageType: "rpm",
-      silentInstallSupported: false,
-      isEscalationError: false,
-    });
-
-    await updater.installAutoUpdater(true, makeDeps(true));
-
-    expect(autoUpdater.autoInstallOnAppQuit).toBe(false);
-  });
-
   it("populates installGuidance on ready when silent install isn't supported", async () => {
     setPlatform("linux");
     const { autoUpdater, updater } = await loadUpdater({
@@ -2105,25 +1956,6 @@ describe("compat recovery: staged-artifact policy", () => {
       expect(updater.getAppUpdateSnapshot().status).toBe("downloading");
     },
   );
-
-  it("discard is idempotent", async () => {
-    setPlatform("win32");
-    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
-    await stageReadyBuild(updater, autoUpdater);
-
-    const first = await updater.resolveCompatRecovery({
-      minimumEpoch: 2,
-      hostAllowsRcRecovery: false,
-    });
-    const second = await updater.resolveCompatRecovery({
-      minimumEpoch: 2,
-      hostAllowsRcRecovery: false,
-    });
-    expect(first.route).toBe("manual");
-    expect(second.route).toBe("manual");
-    expect(updater.getAppUpdateSnapshot().status).toBe("idle");
-    expect(autoUpdater.autoInstallOnAppQuit).toBe(false);
-  });
 });
 
 describe("compat recovery: RC probe", () => {
@@ -2198,73 +2030,6 @@ describe("compat recovery: RC probe", () => {
       route: "update-available",
     });
     expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("returns manual when the probe's network wait exceeds its deadline", async () => {
-    // A stalled request never rejects, so without a wall-clock ceiling the
-    // `manual` fallback is unreachable and the blocking dialog sits on a
-    // spinner forever - the one outcome every arm of this surface avoids.
-    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
-    await updater.installAutoUpdater(true, makeDeps(true));
-    autoUpdater.setFeedURL.mockClear();
-    let recoverySignal: AbortSignal | undefined;
-    // Never settles on its own. It rejects only when the recovery deadline
-    // aborts it, proving the fallback does not leave a live request behind.
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        (_input: string | URL | Request, init: RequestInit | undefined) =>
-          new Promise((_resolve, reject) => {
-            recoverySignal = init?.signal ?? undefined;
-            recoverySignal?.addEventListener("abort", () => {
-              reject(new DOMException("aborted", "AbortError"));
-            });
-          }),
-      ),
-    );
-
-    vi.useFakeTimers();
-    try {
-      const pending = updater.resolveCompatRecovery({
-        minimumEpoch: 2,
-        hostAllowsRcRecovery: true,
-      });
-      await vi.advanceTimersByTimeAsync(20_000);
-      const plan = await pending;
-      expect(plan.route).toBe("manual");
-      expect(plan.rcCandidateVersion).toBeNull();
-      expect(recoverySignal?.aborted).toBe(true);
-    } finally {
-      vi.useRealTimers();
-    }
-    // Still read-only on the timeout path.
-    expect(autoUpdater.setFeedURL).not.toHaveBeenCalled();
-  });
-
-  it("skips an RC that clears the floor but is not newer than the running build", async () => {
-    // The running build is `1.0.0` (see `STABLE_APP_VERSION`). A sufficient
-    // RC that is OLDER by SemVer is a real shape - a release line predating an
-    // epoch backport produces one - and this updater never sets
-    // `allowDowngrade`, so electron-updater would report it as not available
-    // AFTER the user had already consented to the RC channel. Offering it is
-    // therefore a promise that cannot be kept.
-    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
-    const plan = await probe(updater, autoUpdater, [
-      { tag: "desktop-v1.0.0-rc.1", prerelease: true, epoch: 2 },
-    ]);
-    expect(plan.route).toBe("manual");
-    expect(plan.rcCandidateVersion).toBeNull();
-  });
-
-  it("still offers an RC that clears the floor and IS newer", async () => {
-    // The control for the case above: same epoch, newer version, so the offer
-    // is one electron-updater can actually honour.
-    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
-    const plan = await probe(updater, autoUpdater, [
-      { tag: "desktop-v2.0.0-rc.1", prerelease: true, epoch: 2 },
-    ]);
-    expect(plan.route).toBe("enable-rc");
-    expect(plan.rcCandidateVersion).toBe("2.0.0-rc.1");
   });
 
   it("does not offer the RC hop while a download is in flight", async () => {

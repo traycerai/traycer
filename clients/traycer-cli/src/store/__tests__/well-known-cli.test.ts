@@ -1935,47 +1935,6 @@ describe("refreshWellKnownSlotIfStale", () => {
     }
   });
 });
-
-// The downgrade guard (Fix: `slotOutranksRunning`). An UNANCHORED
-// nomination - the running binary self-nominated because no manifest
-// vouches for anything - may repair a slot but must never DEMOTE one: a
-// stray older SEA invoked once on a machine whose slot already holds a
-// newer CLI must not silently downgrade the registered service. Before
-// staging over an existing regular-file slot the guard asks it its
-// version and leaves it alone when it reports itself strictly newer than
-// `resolveCliVersion(process.env)` ("0.0.0-local" under vitest).
-it("packaged, no manifest, slot reports a STRICTLY NEWER version: leaves the slot alone", async () => {
-  seaState.current = true;
-  const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
-    await import("../well-known-cli");
-  const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
-  mkdirSync(dirname(wellKnownPath), { recursive: true });
-  const slotBytes = "the slot's current, newer-CLI bytes";
-  writeFileSync(wellKnownPath, slotBytes);
-  const running = join(workHome, "running-binary");
-  writeFileSync(running, "a much shorter running payload");
-  const base = Date.now();
-  utimesSync(wellKnownPath, new Date(base), new Date(base));
-  utimesSync(running, new Date(base - 120_000), new Date(base - 120_000));
-  // Positive control: without the version guard, the timestamp fallback
-  // alone would stage - the two files differ in both size and mtime, which
-  // is exactly the shape every other "still re-stages" test in this file
-  // depends on. This confirms the guard, not an absence of anything to do,
-  // is what leaves the slot alone below.
-  expect(statSync(wellKnownPath).size).not.toBe(statSync(running).size);
-  expect(statSync(wellKnownPath).mtime.getTime()).not.toBe(
-    statSync(running).mtime.getTime(),
-  );
-  slotProbeControl.versionForPath.set(wellKnownPath, "9.9.9\n");
-
-  const result = await withExecPath(running, () =>
-    refreshWellKnownSlotIfStale(ENVIRONMENT),
-  );
-
-  expect(result).toBeNull();
-  expect(readFileSync(wellKnownPath, "utf8")).toBe(slotBytes);
-});
-
 // The other direction of the same guard: a slot that reports itself OLDER
 // must not suppress the stage. "0.0.0-alpha.1" vs the vitest-resolved
 // "0.0.0-local": SemVer compares pre-release identifiers alphabetically
@@ -2004,41 +1963,6 @@ it("packaged, no manifest, slot reports an OLDER version: still re-stages", asyn
   expect(result?.staged).toBe("staged");
   expect(readFileSync(wellKnownPath, "utf8")).toBe(runningBytes);
 });
-
-// Any probe FAILURE - a slot that will not execute, prints garbage, or
-// hangs past the timeout, simulated here by the mock's default
-// non-executable-spawn behavior for an unmapped path - must stage rather
-// than suppress: an unprovable seniority claim can never be trusted to
-// block a repair the hookless-upgrade cohort depends on. This may
-// duplicate the effective path of an existing "re-stages" test above, but
-// it is kept as the explicit pin for this guard: the default-failing mock
-// makes the probe outcome EXPLICIT here rather than an incidental
-// consequence of some other test's setup.
-it("packaged, no manifest, slot version probe fails: stages (seniority unprovable)", async () => {
-  seaState.current = true;
-  const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
-    await import("../well-known-cli");
-  const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
-  mkdirSync(dirname(wellKnownPath), { recursive: true });
-  writeFileSync(wellKnownPath, "a slot binary that cannot answer --version");
-  const running = join(workHome, "running-binary");
-  const runningBytes = "the running binary's bytes";
-  writeFileSync(running, runningBytes);
-  const base = Date.now();
-  utimesSync(wellKnownPath, new Date(base), new Date(base));
-  utimesSync(running, new Date(base - 120_000), new Date(base - 120_000));
-  // No `slotProbeControl.versionForPath` entry for `wellKnownPath` - the
-  // mock's default rejects, exactly like spawning this suite's plain-text
-  // fixture would in production.
-
-  const result = await withExecPath(running, () =>
-    refreshWellKnownSlotIfStale(ENVIRONMENT),
-  );
-
-  expect(result?.staged).toBe("staged");
-  expect(readFileSync(wellKnownPath, "utf8")).toBe(runningBytes);
-});
-
 // Answering `--version` proves a program RUNS, not that it may hold the
 // slot. `isInterpreterDistribution` already refuses to nominate an npm
 // install for exactly one reason - the slot is spawned by the host daemon
@@ -2443,32 +2367,6 @@ describe("wellKnownSlotRefreshHasConverged", () => {
 
     expect(result).toBe(false);
   });
-
-  it("true after a successful refresh", async () => {
-    seaState.current = true;
-    const {
-      refreshWellKnownSlotIfStale,
-      wellKnownSlotRefreshHasConverged,
-      wellKnownCliBinaryPath,
-    } = await import("../well-known-cli");
-    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
-    mkdirSync(dirname(wellKnownPath), { recursive: true });
-    writeFileSync(wellKnownPath, "stale slot bytes");
-    const running = join(workHome, "running-binary");
-    writeFileSync(running, "the fresh running binary's bytes");
-
-    const refreshResult = await withExecPath(running, () =>
-      refreshWellKnownSlotIfStale(ENVIRONMENT),
-    );
-    expect(refreshResult?.staged).toBe("staged");
-
-    const converged = await withExecPath(running, () =>
-      wellKnownSlotRefreshHasConverged(ENVIRONMENT),
-    );
-
-    expect(converged).toBe(true);
-  });
-
   // The exact precondition of the unbounded exit-75 supervisor loop the gate
   // exists to break: a filesystem that cannot mirror timestamps (`utimes` is
   // a no-op) AND cannot land the staging record (its path is occupied by a

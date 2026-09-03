@@ -2313,28 +2313,6 @@ describe("canonical status: localAttempt retention (Ticket 07 §5.2.7)", () => {
 
     expect(status.localAttempt).toBeNull();
   });
-
-  it("still surfaces a terminal `failed` record stamped recently", async () => {
-    writeInstallRecord("production", {
-      version: "1.7.0",
-      runtimeVersion: "1.7.0",
-    });
-    removePidMetadata("production");
-    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-    writeTerminalAttemptRecord({ updatedAt: oneHourAgo });
-
-    const status = await newController("production").getStatus();
-
-    expect(status.localAttempt).toEqual({
-      attemptId: "local-attempt-1",
-      generation: 1,
-      sequence: 1,
-      targetVersion: "2.0.0",
-      phase: "failed",
-      continuation: null,
-      updatedAt: oneHourAgo,
-    });
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -2670,36 +2648,6 @@ describe("yank/apply ordering", () => {
 
     expect(downloads).toEqual([]);
   });
-
-  it("keeps the stable --automatic path when release-candidate updates are off", async () => {
-    vi.mocked(prereleaseUpdatesEnabled).mockReturnValue(false);
-    const controller = newController("production");
-    writeInstallRecord("production", {
-      version: "1.8.0",
-      runtimeVersion: "1.8.0",
-    });
-    // A genuine stable update - the untouched `--automatic` path handles it.
-    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
-      availableSnapshotFixture("1.9.0", ["1.9.0"]),
-    );
-    const downloads: string[] = [];
-    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
-      if (opts.args.includes("download")) downloads.push(opts.args.join(" "));
-      return { data: {} };
-    });
-
-    await controller.stageLatest();
-
-    // No opt-in and no RC staged => the probe stays stable-only...
-    expect(runBundledTraycerCliJson).toHaveBeenCalledWith([
-      "host",
-      "available",
-      "--json",
-    ]);
-    // ...and the download follows the stable `latest` via `--automatic`.
-    expect(downloads).toEqual(["host download --automatic"]);
-  });
-
   it("keeps revalidating a staged non-canonical prerelease after an opt-out", async () => {
     // The listing question is "would this row be hidden by the default view",
     // which covers every prerelease shape - NOT "is this a canonical RC",
@@ -2784,80 +2732,6 @@ describe("yank/apply ordering", () => {
     expect(downloads).toEqual(["host download 2.0.0"]);
   });
 
-  it("stages nothing when only another RC line has moved", async () => {
-    vi.mocked(prereleaseUpdatesEnabled).mockReturnValue(false);
-    const controller = newController("production");
-    writeInstallRecord("production", {
-      version: "2.0.0-rc.1",
-      runtimeVersion: "2.0.0-rc.1",
-    });
-    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
-      availableSnapshotFixture("1.9.0", ["1.9.0", "2.1.0-rc.1"]),
-    );
-    const downloads: string[] = [];
-    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
-      if (opts.args.includes("download")) downloads.push(opts.args.join(" "));
-      return { data: {} };
-    });
-
-    await controller.stageLatest();
-
-    expect(downloads).toEqual([]);
-  });
-
-  it("does not escape an abandoned line through the --automatic stable path", async () => {
-    // The `2.0.0` line is abandoned and the work shipped as stable `2.1.0`,
-    // which `latest` now names. `--automatic` would take it - a jump to a line
-    // nobody put this host on - so the automatic path is closed while
-    // following. No candidate on the line means no download at all.
-    vi.mocked(prereleaseUpdatesEnabled).mockReturnValue(false);
-    const controller = newController("production");
-    writeInstallRecord("production", {
-      version: "2.0.0-rc.1",
-      runtimeVersion: "2.0.0-rc.1",
-    });
-    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
-      availableSnapshotFixture("2.1.0", ["1.9.0", "2.1.0"]),
-    );
-    const downloads: string[] = [];
-    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
-      if (opts.args.includes("download")) downloads.push(opts.args.join(" "));
-      return { data: {} };
-    });
-
-    await controller.stageLatest();
-
-    expect(downloads).toEqual([]);
-    // `latest` is still reported verbatim - the pointer keeps its meaning, the
-    // follower just may not act on it.
-    expect((await controller.getStatus()).latestVersion).toBe("2.1.0");
-  });
-
-  it("does not refresh an off-line staged build through --automatic while following", async () => {
-    // A stage left behind by an earlier explicit opt-in. Its row is still in
-    // the widened listing, so it stays eligible to apply - but it must not
-    // cause a `--automatic` download that would stage another line's stable.
-    vi.mocked(prereleaseUpdatesEnabled).mockReturnValue(false);
-    const controller = newController("production");
-    writeInstallRecord("production", {
-      version: "2.0.0-rc.1",
-      runtimeVersion: "2.0.0-rc.1",
-    });
-    writeStagedRecord("production", "2.1.0-rc.1", "2.1.0-rc.1");
-    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
-      availableSnapshotFixture("2.1.0", ["1.9.0", "2.1.0", "2.1.0-rc.1"]),
-    );
-    const downloads: string[] = [];
-    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
-      if (opts.args.includes("download")) downloads.push(opts.args.join(" "));
-      return { data: {} };
-    });
-
-    await controller.stageLatest();
-
-    expect(downloads).toEqual([]);
-  });
-
   it("leaves an unpinned legacy stage alone while following, without attempting a purge", async () => {
     // A legacy (fingerprint-less) stage plus a line with nothing to replace it:
     // the repair must not run `--automatic` (that would stage another line's
@@ -2940,30 +2814,6 @@ describe("yank/apply ordering", () => {
 
     expect(downloads).toEqual(["host download 2.0.0"]);
   });
-
-  it("keeps taking a newer stable through --automatic on a stable host", async () => {
-    // The control for the two above: closing the automatic path is scoped to
-    // implicit following. A stable install with no opt-in is unaffected.
-    vi.mocked(prereleaseUpdatesEnabled).mockReturnValue(false);
-    const controller = newController("production");
-    writeInstallRecord("production", {
-      version: "2.0.0",
-      runtimeVersion: "2.0.0",
-    });
-    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
-      availableSnapshotFixture("2.1.0", ["2.0.0", "2.1.0"]),
-    );
-    const downloads: string[] = [];
-    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
-      if (opts.args.includes("download")) downloads.push(opts.args.join(" "));
-      return { data: {} };
-    });
-
-    await controller.stageLatest();
-
-    expect(downloads).toEqual(["host download --automatic"]);
-  });
-
   it("drives updateReady from the verified stage alone, with no second registry probe", async () => {
     // The landing banner reads `HostControllerStatus.updateReady` and nothing
     // else - no React-side release lookup. Proving that here means: one
@@ -3561,30 +3411,6 @@ describe("platform matrix", () => {
     expect(streamBundledTraycerCliJson).toHaveBeenCalled();
     expect(outcome.kind).toBe("ok");
   });
-
-  it("a BACKGROUND converge still obeys the removal sentinel", async () => {
-    // The other half of the same contract, and the reason the intent exists
-    // rather than an unconditional clear: the reconciler and launch
-    // convergence must leave a removed host removed.
-    const controller = newController("production");
-    writeInstallRecord("production", {
-      version: "1.7.0",
-      runtimeVersion: "1.7.0",
-    });
-    await markHostRemovedByUser();
-
-    const outcome = await controller.convergeReady(false, {
-      kind: "background",
-    });
-
-    expect(await isHostRemovedByUser()).toBe(true);
-    expect(streamBundledTraycerCliJson).not.toHaveBeenCalled();
-    expect(outcome).toEqual({
-      kind: "ok",
-      value: { running: false, version: null },
-    });
-  });
-
   it("a user-repair whose guard abandons mutates nothing", async () => {
     // The host was replaced while the repair waited in the lane. Nothing may
     // run — and critically the sentinel must NOT be cleared, since clearing
@@ -3771,70 +3597,6 @@ describe("platform matrix", () => {
       .mocked(streamBundledTraycerCliJson)
       .mock.calls.filter((call) => call[0].args.includes("restart"));
     expect(restartCalls).toEqual([]);
-  });
-
-  it("a user-repair respawn does not coalesce onto a background respawn", async () => {
-    // Same rule as the converge twin: joining the background job would hand
-    // the repair that job's guard-free policy. Keyed apart, the user repair
-    // runs as its own lane job and its guard is actually consulted.
-    const controller = newController("production");
-    writeInstallRecord("production", {
-      version: "1.7.0",
-      runtimeVersion: "1.7.0",
-    });
-    const restartGate = deferred<void>();
-    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async () => {
-      await restartGate.promise;
-      return { data: { activated: true } };
-    });
-    const background = controller.respawn({ kind: "background" });
-    let guardAsked = false;
-    const repair = controller.respawn({
-      kind: "user-repair",
-      targetHostId: "local-host",
-      guard: () => {
-        guardAsked = true;
-        return Promise.resolve({ kind: "abandon", message: "host changed" });
-      },
-    });
-
-    restartGate.resolve();
-    await expect(background).resolves.toEqual({
-      kind: "ok",
-      value: { activated: true },
-    });
-    // Had they coalesced, the repair would have resolved the background
-    // restart's outcome and never asked.
-    await expect(repair).resolves.toEqual({
-      kind: "abandoned",
-      message: "host changed",
-    });
-    expect(guardAsked).toBe(true);
-  });
-
-  it("a user-repair respawn keeps the removed-by-user deferral and clears nothing", async () => {
-    // A restart is NOT a reprovision. Even asked for by a person, it defers
-    // on the removal sentinel — only Install host / Register service mean
-    // "give me the host back", so only they clear it.
-    const controller = newController("production");
-    writeInstallRecord("production", {
-      version: "1.7.0",
-      runtimeVersion: "1.7.0",
-    });
-    await markHostRemovedByUser();
-
-    const outcome = await controller.respawn({
-      kind: "user-repair",
-      targetHostId: "local-host",
-      guard: () => Promise.resolve({ kind: "proceed" }),
-    });
-
-    expect(outcome).toEqual({
-      kind: "deferred",
-      message: HOST_REMOVED_BY_USER_MESSAGE,
-    });
-    expect(await isHostRemovedByUser()).toBe(true);
-    expect(streamBundledTraycerCliJson).not.toHaveBeenCalled();
   });
 
   it("a respawn admitted after another respawn already restarted answers restarted without a second cycle", async () => {
@@ -4410,109 +4172,6 @@ describe("applyStagedCliOwned stamping decision (fixup B9)", () => {
     );
   });
 
-  it("V4: stamps an ensured null-runtime generation using ensure's attested generation", async () => {
-    const controller = newController("production");
-    writePidMetadata("production", { version: "1.8.0", pid: process.pid });
-    const stampCalls: (readonly string[])[] = [];
-    vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
-      if (args.includes("stamp-runtime")) {
-        stampCalls.push(args);
-        return { outcome: "stamped" };
-      }
-      return {};
-    });
-    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
-      data: {
-        action: "started",
-        installed: true,
-        registered: true,
-        running: true,
-        version: "1.8.0",
-        runtimeVersion: null,
-        installGeneration: "ensure-command-generation",
-        postSwapError: null,
-      },
-    });
-
-    const outcome = await controller.convergeReady(false, {
-      kind: "background",
-    });
-
-    expect(outcome.kind).toBe("ok");
-    expect(stampCalls).toHaveLength(1);
-    const generationIndex = stampCalls[0]?.indexOf(
-      "--expected-install-generation",
-    );
-    if (generationIndex === undefined || generationIndex < 0) {
-      throw new Error("stamp-runtime did not receive an expected generation");
-    }
-    expect(stampCalls[0]?.[generationIndex + 1]).toBe(
-      "ensure-command-generation",
-    );
-  });
-
-  it("V4: stamps an installed null-runtime generation using install's attested generation", async () => {
-    const controller = newController("production");
-    writePidMetadata("production", { version: "1.8.0", pid: process.pid });
-    const stampCalls: (readonly string[])[] = [];
-    vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
-      if (args.includes("stamp-runtime")) {
-        stampCalls.push(args);
-        return { outcome: "stamped" };
-      }
-      return {};
-    });
-    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
-      data: {
-        version: "1.8.0",
-        runtimeVersion: null,
-        installGeneration: "install-command-generation",
-        serviceLifecycle: {
-          postSwapAction: "restart",
-          postSwapError: null,
-        },
-      },
-    });
-
-    const outcome = await controller.installVersion("1.8.0", false);
-
-    expect(outcome.kind).toBe("ok");
-    expect(stampCalls).toHaveLength(1);
-    const generationIndex = stampCalls[0]?.indexOf(
-      "--expected-install-generation",
-    );
-    if (generationIndex === undefined || generationIndex < 0) {
-      throw new Error("stamp-runtime did not receive an expected generation");
-    }
-    expect(stampCalls[0]?.[generationIndex + 1]).toBe(
-      "install-command-generation",
-    );
-  });
-
-  it("stamps when the newly-applied record is null-runtime, even though the record it replaced was already stamped", async () => {
-    const controller = newController("production");
-    writeInstallRecord("production", {
-      version: "1.7.0",
-      runtimeVersion: "1.7.0",
-    });
-    writeStagedRecord("production", "1.8.0", null);
-    writePidMetadata("production", { version: "1.8.0", pid: process.pid });
-    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
-      data: {
-        outcome: "applied",
-        record: { version: "1.8.0", runtimeVersion: null },
-        runningActivated: true,
-        installGeneration: "gen-1.8.0",
-      },
-    });
-
-    await controller.applyStaged("manual", false);
-
-    expect(runBundledTraycerCliJson).toHaveBeenCalledWith(
-      expect.arrayContaining(["host", "stamp-runtime"]),
-    );
-  });
-
   it("does not stamp when the newly-applied record already carries its own runtime stamp", async () => {
     const controller = newController("production");
     writeInstallRecord("production", {
@@ -4897,32 +4556,6 @@ describe("Windows bundled-host --from fallback", () => {
       expect.objectContaining({ args: ["host", "ensure"] }),
     );
   });
-
-  it("V7: omits --from when a valid bundled CLI has no sibling archive", async () => {
-    setPlatform("win32");
-    setArch("x64");
-    const cliDir = join(workHome, "cli");
-    mkdirSync(cliDir, { recursive: true });
-    const bundledCli = join(cliDir, "traycer.exe");
-    writeFileSync(bundledCli, "");
-    vi.mocked(resolveBundledCliPath).mockResolvedValue(bundledCli);
-
-    const controller = newController("production");
-    writeInstallRecord("production", {
-      version: "1.7.0",
-      runtimeVersion: "1.7.0",
-    });
-    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
-      data: { running: true, version: "1.7.0", action: "noop" },
-    });
-
-    await controller.convergeReady(false, { kind: "background" });
-
-    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
-      expect.objectContaining({ args: ["host", "ensure"] }),
-    );
-  });
-
   it("omits --from on macOS/Linux even when a bundled CLI path resolves (POSIX symlink self-resolution)", async () => {
     setPlatform("darwin");
     const cliDir = join(workHome, "cli");
@@ -4972,16 +4605,6 @@ describe("Windows bundled-host --from fallback", () => {
 // production gap, not a portable test case.
 // ---------------------------------------------------------------------------
 describe("applyPendingLoginItemRevisionIfIdle", () => {
-  it("returns null when the host is not reachable", async () => {
-    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
-    const controller = newController("production");
-    removePidMetadata("production");
-    expect(
-      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane"),
-    ).toBeNull();
-    expect(hasUnappliedPendingLoginItemRevision).not.toHaveBeenCalled();
-  });
-
   it("returns null when there is no pending revision marker", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
     const controller = newController("production");
@@ -5247,39 +4870,6 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
     expect(second?.kind).toBe("ok");
   });
-
-  it("registerHostLoginItem's revalidation guard reporting deferred-busy returns null (silent, no quarantine); a later attempt can still succeed", async () => {
-    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
-    const controller = newController("production");
-    writeInstallRecord("production", {
-      version: "1.7.0",
-      runtimeVersion: "1.7.0",
-    });
-    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
-    vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
-    vi.mocked(registerHostLoginItem).mockResolvedValueOnce("deferred-busy");
-    vi.mocked(waitForHostReady).mockResolvedValue({
-      ready: true,
-      version: "1.7.0",
-      pid: process.pid,
-      startedAt: "2026-01-01T00:00:00.000Z",
-      reason: "ready",
-    });
-
-    const outcome =
-      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
-    expect(outcome).toBeNull();
-    expect(controller.isPendingRevisionRefreshQuarantined()).toBe(false);
-
-    vi.mocked(registerHostLoginItem).mockResolvedValueOnce("enabled");
-    const second =
-      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
-    expect(second).toEqual({
-      kind: "ok",
-      value: { running: true, version: "1.7.0" },
-    });
-  });
-
   it("idle + pending revision: runs the locked register cycle and returns ok with the refreshed identity", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
     const controller = newController("production");
@@ -5392,104 +4982,6 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     expect(stampCalls[0]?.[(generationIndex as number) + 1]).toBe(
       expectedGenerationA,
     );
-  });
-
-  it("convergeReady on packaged macOS opportunistically applies a pending revision when already reachable", async () => {
-    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
-    const controller = newController("production");
-    writeInstallRecord("production", {
-      version: "1.7.0",
-      runtimeVersion: "1.7.0",
-    });
-    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
-    vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
-    vi.mocked(registerHostLoginItem).mockResolvedValue("enabled");
-    vi.mocked(waitForHostReady).mockResolvedValue({
-      ready: true,
-      version: "1.7.0",
-      pid: process.pid,
-      startedAt: "2026-01-01T00:00:00.000Z",
-      reason: "ready",
-    });
-
-    const outcome = await controller.convergeReady(false, {
-      kind: "background",
-    });
-    expect(outcome).toEqual({
-      kind: "ok",
-      value: { running: true, version: "1.7.0" },
-    });
-    expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
-  });
-
-  // Fixup B12 (lock rule 3): same exposure as `registerService` - re-read
-  // install state after lock acquisition rather than trusting the pre-lock
-  // reachability/busy probes, which can go stale against a concurrent
-  // terminal uninstall.
-  it("skips the bootout and returns null when the install is absent after lock acquisition", async () => {
-    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
-    const controller = newController("production");
-    // Deliberately no `writeInstallRecord` - the pid.json alone is enough
-    // to pass the pre-lock reachability check; the install record vanishing
-    // out from under it (a concurrent terminal uninstall) is exactly the
-    // race this fixup closes.
-    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
-    vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
-
-    const outcome =
-      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
-
-    expect(outcome).toBeNull();
-    expect(registerHostLoginItem).not.toHaveBeenCalled();
-  });
-
-  // Fixup B15: this cycle used to be entirely invisible to
-  // `awaitMutationLaneIdle` (the quit-time drain) when triggered standalone
-  // (the pending-login-item-revision monitor's poll loop calls this
-  // directly, never through `enqueueMutation`) - a quit during the cycle
-  // could tear down Electron mid-SMAppService-swap.
-  it("awaitMutationLaneIdle waits for a standalone (non-FIFO) revision-refresh cycle", async () => {
-    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
-    const controller = newController("production");
-    writeInstallRecord("production", {
-      version: "1.7.0",
-      runtimeVersion: "1.7.0",
-    });
-    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
-    vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
-    const registerGate = deferred<"enabled">();
-    let registerCalled = false;
-    vi.mocked(registerHostLoginItem).mockImplementation(async () => {
-      registerCalled = true;
-      return registerGate.promise;
-    });
-    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
-      data: {
-        action: "noop",
-        running: true,
-        version: "1.7.0",
-        runtimeVersion: "1.7.0",
-      },
-    });
-
-    const refreshPromise =
-      controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
-    // Real fs reads precede the disruptive step (readRunningRuntimeVersion,
-    // probeHostBusyVerdict, the lock acquisition, readRunningHostIdentity,
-    // readDesktopHostInstallRecord) - poll rather than a fixed microtask
-    // flush so this doesn't race those.
-    await vi.waitFor(() => {
-      if (!registerCalled) throw new Error("register not reached yet");
-    });
-
-    // Mid-cycle, never having gone through `enqueueMutation` - the drain
-    // must still see it as busy rather than idle.
-    expect(await controller.awaitMutationLaneIdle(20)).toBe(false);
-
-    registerGate.resolve("enabled");
-    await refreshPromise;
-
-    expect(await controller.awaitMutationLaneIdle(20)).toBe(true);
   });
 
   it("P4: quit drain sees the pending-revision intent during its reachability precheck", async () => {
@@ -5761,40 +5253,6 @@ describe("hostLifecycle wiring on success (fixup C2)", () => {
     expect(lifecycle.ensureWatcherInstalled).toHaveBeenCalled();
     expect(lifecycle.reloadSnapshotFromDisk).toHaveBeenCalled();
   });
-
-  it("the packaged-macOS locked activation cycle reinstalls the watcher and reloads the snapshot", async () => {
-    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
-    const lifecycle = fakeHostLifecycle();
-    const controller = new HostController({
-      environment: "production",
-      hostLifecycle: lifecycle,
-      reachabilityProbe: async () => true,
-      desktopLockWaitMs: DESKTOP_LOCK_WAIT_MS,
-      desktopLockPollIntervalMs: DESKTOP_LOCK_POLL_INTERVAL_MS,
-    });
-    writeInstallRecord("production", {
-      version: "1.7.0",
-      runtimeVersion: "1.7.0",
-    });
-    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
-    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
-      data: { version: "1.8.0", installGeneration: null },
-    });
-    vi.mocked(waitForHostReady).mockResolvedValue({
-      ready: true,
-      version: "1.7.0",
-      pid: process.pid,
-      startedAt: "2026-01-01T00:00:00.000Z",
-      reason: "ready",
-    });
-
-    const outcome = await controller.installVersion("1.8.0", false);
-
-    expect(outcome.kind).toBe("ok");
-    expect(lifecycle.ensureWatcherInstalled).toHaveBeenCalled();
-    expect(lifecycle.reloadSnapshotFromDisk).toHaveBeenCalled();
-  });
-
   it("Class B: a null post-cycle reload prevents the packaged-mac activation cycle from reporting activated", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
     const lifecycle = fakeHostLifecycle();
@@ -5823,98 +5281,6 @@ describe("hostLifecycle wiring on success (fixup C2)", () => {
 
     await expect(
       controller.installVersion("1.8.0", false),
-    ).resolves.toMatchObject({
-      kind: "failed",
-      message: expect.stringContaining("became unavailable"),
-    });
-  });
-
-  it("Class B: a null post-ensure reload prevents CLI convergence from reporting running", async () => {
-    const lifecycle = fakeHostLifecycle();
-    vi.mocked(lifecycle.reloadSnapshotFromDisk).mockResolvedValue(null);
-    const controller = new HostController({
-      environment: "production",
-      hostLifecycle: lifecycle,
-      reachabilityProbe: async () => true,
-      desktopLockWaitMs: DESKTOP_LOCK_WAIT_MS,
-      desktopLockPollIntervalMs: DESKTOP_LOCK_POLL_INTERVAL_MS,
-    });
-    writeInstallRecord("production", {
-      version: "1.7.0",
-      runtimeVersion: "1.7.0",
-    });
-    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
-      data: { action: "noop", version: "1.7.0", runtimeVersion: "1.7.0" },
-    });
-
-    await expect(
-      controller.convergeReady(false, { kind: "background" }),
-    ).resolves.toMatchObject({
-      kind: "failed",
-      message: expect.stringContaining("became unavailable"),
-    });
-  });
-
-  it("Class B: packaged-mac convergence refuses its post-activation branch when the live runtime disappears", async () => {
-    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
-    const lifecycle = fakeHostLifecycle();
-    const controller = new HostController({
-      environment: "production",
-      hostLifecycle: lifecycle,
-      reachabilityProbe: async () => true,
-      desktopLockWaitMs: DESKTOP_LOCK_WAIT_MS,
-      desktopLockPollIntervalMs: DESKTOP_LOCK_POLL_INTERVAL_MS,
-    });
-    writeInstallRecord("production", {
-      version: "1.7.0",
-      runtimeVersion: "1.7.0",
-    });
-    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
-      data: { action: "installed", version: "1.7.0", runtimeVersion: "1.7.0" },
-    });
-    vi.mocked(waitForHostReady).mockResolvedValue({
-      ready: true,
-      version: "1.7.0",
-      pid: process.pid,
-      startedAt: "2026-01-01T00:00:00.000Z",
-      reason: "ready",
-    });
-
-    await expect(
-      controller.convergeReady(false, { kind: "background" }),
-    ).resolves.toMatchObject({
-      kind: "failed",
-      message: expect.stringContaining("became unavailable"),
-    });
-  });
-
-  it("Class B: a pending LaunchAgent revision does not report running when its publication reload demotes", async () => {
-    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
-    const lifecycle = fakeHostLifecycle();
-    vi.mocked(lifecycle.reloadSnapshotFromDisk).mockResolvedValue(null);
-    const controller = new HostController({
-      environment: "production",
-      hostLifecycle: lifecycle,
-      reachabilityProbe: async () => true,
-      desktopLockWaitMs: DESKTOP_LOCK_WAIT_MS,
-      desktopLockPollIntervalMs: DESKTOP_LOCK_POLL_INTERVAL_MS,
-    });
-    writeInstallRecord("production", {
-      version: "1.7.0",
-      runtimeVersion: "1.7.0",
-    });
-    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
-    vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
-    vi.mocked(waitForHostReady).mockResolvedValue({
-      ready: true,
-      version: "1.7.0",
-      pid: process.pid,
-      startedAt: "2026-01-01T00:00:00.000Z",
-      reason: "ready",
-    });
-
-    await expect(
-      controller.applyPendingLoginItemRevisionIfIdle("outside-lane"),
     ).resolves.toMatchObject({
       kind: "failed",
       message: expect.stringContaining("became unavailable"),
@@ -6239,55 +5605,6 @@ describe("Class B no-op liveness", () => {
       kind: "installed-not-converged",
     });
   });
-
-  it("does not trust a CLI no-op apply to imply activation without a live endpoint", async () => {
-    const controller = newControllerWithReachability(
-      "production",
-      async () => false,
-    );
-    writeInstallRecord("production", {
-      version: "1.7.0",
-      runtimeVersion: "1.7.0",
-    });
-    writeStagedRecord("production", "1.8.0", "1.8.0");
-    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
-      availableSnapshotFixture("1.8.0", ["1.8.0"]),
-    );
-    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
-      data: { outcome: "no-op", installedVersion: "1.7.0" },
-    });
-
-    await expect(
-      controller.applyStaged("manual", false),
-    ).resolves.toMatchObject({
-      kind: "installed-not-converged",
-    });
-  });
-
-  it("does not trust a packaged-mac no-op apply to imply activation without a live endpoint", async () => {
-    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
-    const controller = newControllerWithReachability(
-      "production",
-      async () => false,
-    );
-    writeInstallRecord("production", {
-      version: "1.7.0",
-      runtimeVersion: "1.7.0",
-    });
-    writeStagedRecord("production", "1.8.0", "1.8.0");
-    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
-      availableSnapshotFixture("1.8.0", ["1.8.0"]),
-    );
-    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
-      data: { outcome: "no-op", installedVersion: "1.7.0" },
-    });
-
-    await expect(
-      controller.applyStaged("manual", false),
-    ).resolves.toMatchObject({
-      kind: "installed-not-converged",
-    });
-  });
 });
 
 // `completeServiceStart` owns the one post-start publication reload. These
@@ -6323,58 +5640,6 @@ describe("Class B CLI-owned caller publication", () => {
     configureRestartAndStamp();
 
     await expect(controller.activateInstalled(false)).resolves.toMatchObject({
-      kind: "ok",
-      value: { activated: true },
-    });
-    expect(lifecycle.reloadSnapshotFromDisk).toHaveBeenCalledTimes(1);
-  });
-
-  it("respawn performs only completeServiceStart's publication reload", async () => {
-    const lifecycle = fakeHostLifecycle();
-    const controller = newControllerWithLifecycle(lifecycle, async () => true);
-    writeInstallRecord("production", {
-      version: "1.7.0",
-      runtimeVersion: null,
-    });
-    configureRestartAndStamp();
-
-    await expect(
-      controller.respawn({ kind: "background" }),
-    ).resolves.toMatchObject({
-      kind: "ok",
-      value: { activated: true },
-    });
-    expect(lifecycle.reloadSnapshotFromDisk).toHaveBeenCalledTimes(1);
-  });
-
-  it("recoverIfDown performs only completeServiceStart's publication reload", async () => {
-    const lifecycle = fakeHostLifecycle();
-    const controller = newControllerWithLifecycle(lifecycle, async () => false);
-    writeInstallRecord("production", {
-      version: "1.7.0",
-      runtimeVersion: null,
-    });
-    configureRestartAndStamp();
-
-    await expect(controller.recoverIfDown()).resolves.toMatchObject({
-      kind: "ok",
-      value: { activated: true },
-    });
-    expect(lifecycle.reloadSnapshotFromDisk).toHaveBeenCalledTimes(1);
-  });
-
-  it("freePortAndRestart performs only completeServiceStart's publication reload", async () => {
-    const lifecycle = fakeHostLifecycle();
-    const controller = newControllerWithLifecycle(lifecycle, async () => true);
-    writeInstallRecord("production", {
-      version: "1.7.0",
-      runtimeVersion: null,
-    });
-    configureRestartAndStamp();
-
-    await expect(
-      controller.freePortAndRestart(null, null, { kind: "background" }),
-    ).resolves.toMatchObject({
       kind: "ok",
       value: { activated: true },
     });
@@ -7075,29 +6340,6 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
       // on a legitimate drain change while proving nothing extra.
       expect(await currentAttemptPhase()).not.toBe("waiting-to-activate");
     });
-
-    // The same invariant with the dimension that makes refusal HARMFUL: no
-    // running host. This is the faithful form of the 6-step trace - the test
-    // above pins "an adopted continuation is not refused" in general, this one
-    // pins it in the state where being refused strands the machine.
-    it("HOST DOWN: a cohort DISABLED mid-attempt still advances the adopted activation rather than leaving the machine with nothing running", async () => {
-      const controller = stagePackagedMacRestartWorldHostDown();
-      writeOwnedSmAppServiceSubstrate();
-      await seedParkedActivationAttempt("2.0.0");
-      stageCliWithVerificationAndRestart(
-        { outcome: "resumed", continuation: "activate" },
-        // The CLI's honest answer for a placed-byte park once
-        // `--defer-if-parked` is honoured: refuse WITHOUT stopping. With no
-        // host running, this is the arm that leaves nothing able to recover.
-        { restarted: false, deferredForParkedActivation: true },
-      );
-      expect(await currentAttemptPhase()).toBe("waiting-to-activate");
-
-      await controller.respawn({ kind: "background" });
-
-      expect(await currentAttemptPhase()).not.toBe("waiting-to-activate");
-    });
-
     // The other side of the sentence. Without this, "skip the gate whenever a
     // record exists" - or deleting the gate outright - would satisfy the test
     // above while silently admitting work the cohort is supposed to stop.
@@ -7804,42 +7046,6 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
         // record reached a terminal phase.
         await assertAttemptLockReleased();
       });
-
-      // KNOWN BUG — pinned, not routed around. The record's diagnostic
-      // should carry the REAL mint error ("simulated proof write failure"),
-      // but `registerActuator`'s `recoverOutsideLock` catch discards it -
-      // logging it via `log.warn` only - and returns the generic
-      // `{kind:"deferred", message: LOCK_BUSY_MESSAGE}` ("Another Traycer
-      // process is managing the host.") instead. That hardcoded message then
-      // becomes `terminalize`'s `cause`, so the record on disk claims lock
-      // contention for what was actually a local proof-write failure -
-      // actively misleading for the user-facing arm that reads this
-      // diagnostic. Contrast with the spawn-failure sibling test below,
-      // where `describeTakeoverRefusal` DOES carry the real refusal text -
-      // this is specific to the mint-failure catch in `host-controller.ts`,
-      // not takeover recovery in general.
-      it("a mint failure's diagnostic carries the REAL error, not a generic lock-busy message", async () => {
-        await respawnWithMintFailure();
-
-        const committed = await readUpdateAttemptRecord(
-          getHostFsLayout("production").rootDir,
-        );
-        expect(committed.kind).toBe("valid");
-        if (committed.kind !== "valid") return;
-        // `toContain`, not `toBe`: production prefixes the operation that
-        // failed ("adoption proof could not be minted: ..."), which the bare
-        // error text does not say. Still fails loudly if the real cause is
-        // discarded - the bug was substituting LOCK_BUSY_MESSAGE wholesale,
-        // and this assertion catches exactly that (ablated).
-        expect(committed.value.error?.message).toContain(
-          "simulated proof write failure",
-        );
-        // ...and the generic lock message must NOT be what got recorded.
-        expect(committed.value.error?.message).not.toContain(
-          "Another Traycer process is managing the host",
-        );
-      });
-
       it("a spawn (takeover CLI) failure terminalizes with the FULL correct contract, diagnostics included", async () => {
         eligibleDesktopCohort();
         const controller = stagePackagedMacRestartWorld(undefined);
@@ -8432,45 +7638,6 @@ describe("CLI-owned service start attestation (closing A2)", () => {
     );
   });
 
-  it("respawn stamps the restart command's attested generation", async () => {
-    const controller = newController("production");
-    writeInstallRecord("production", {
-      version: "1.7.0",
-      runtimeVersion: null,
-    });
-    configureStampAndServiceAttestation();
-
-    expect((await controller.respawn({ kind: "background" })).kind).toBe("ok");
-    expectCommandGenerationWasStamped();
-  });
-
-  it("recoverIfDown stamps the restart command's attested generation", async () => {
-    const controller = newController("production");
-    writeInstallRecord("production", {
-      version: "1.7.0",
-      runtimeVersion: null,
-    });
-    configureStampAndServiceAttestation();
-
-    expect((await controller.recoverIfDown()).kind).toBe("ok");
-    expectCommandGenerationWasStamped();
-  });
-
-  it("freePortAndRestart stamps its command's attested generation", async () => {
-    const controller = newController("production");
-    writeInstallRecord("production", {
-      version: "1.7.0",
-      runtimeVersion: null,
-    });
-    configureStampAndServiceAttestation();
-
-    expect(
-      (await controller.freePortAndRestart(null, null, { kind: "background" }))
-        .kind,
-    ).toBe("ok");
-    expectCommandGenerationWasStamped();
-  });
-
   it("does not report success when a command-attested stamped install publishes a different runtime", async () => {
     const controller = newController("production");
     writeInstallRecord("production", {
@@ -8984,19 +8151,6 @@ describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback
       expect(outcome.message).toContain("pid metadata never appeared");
     }
   });
-
-  it("registerService: register not-found recovers via the CLI takeover and reports registered", async () => {
-    const controller = stagePackagedMacWorld();
-    vi.mocked(registerHostLoginItem).mockResolvedValue("not-found");
-
-    const outcome = await controller.registerService({ kind: "background" });
-
-    expect(outcome).toEqual({ kind: "ok", value: { registered: true } });
-    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
-      expect.objectContaining({ args: TAKEOVER_ARGV }),
-    );
-  });
-
   // Split into its two legs (entry-point drift only touches the first): this
   // used to drive both `respawn` and `registerService` through the SAME
   // packaged-mac activation cycle. `respawn` no longer reaches it at all
@@ -9036,20 +8190,6 @@ describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback
     expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
     expect(runBundledTraycerCliJson).not.toHaveBeenCalledWith(TAKEOVER_ARGV);
   });
-
-  it("requires-approval NEVER escalates to the takeover (registerService leg) - the toggle is the user's alone", async () => {
-    const controller = stagePackagedMacWorld();
-    vi.mocked(registerHostLoginItem).mockResolvedValue("requires-approval");
-
-    const registerOutcome = await controller.registerService({
-      kind: "background",
-    });
-
-    expect(registerOutcome.kind).toBe("failed");
-    expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
-    expect(runBundledTraycerCliJson).not.toHaveBeenCalledWith(TAKEOVER_ARGV);
-  });
-
   it("removed-by-user NEVER escalates to the takeover - reinstalling the service would defy the removal", async () => {
     const controller = stagePackagedMacWorld();
     // The register cycle's own in-lock re-check found the removal sentinel

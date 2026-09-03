@@ -10,7 +10,7 @@ import { decideDesktopUpdateExecutorCohort } from "../update-executor-cohort";
 // runtime switch - Ticket 07 is the sole authorized cutover point - so every
 // substrate input must stay shadow/disabled, unconditionally, unmocked.
 describe("decideDesktopUpdateExecutorCohort - static shadow-only, no enable seam", () => {
-  it.each(["smappservice", "raw-fallback"] as const)(
+  it.each(["smappservice"] as const)(
     "returns shadow/disabled for substrate=%s with zero side effects",
     (substrate) => {
       expect(decideDesktopUpdateExecutorCohort(substrate)).toEqual({

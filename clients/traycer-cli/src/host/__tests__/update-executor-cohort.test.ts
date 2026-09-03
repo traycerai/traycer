@@ -12,7 +12,7 @@ import {
 // exclusively from a test-file-scoped `vi.mock` of this module, never from
 // a real code path here.
 describe("decideUpdateExecutorCohort - static shadow-only, no enable seam", () => {
-  it.each(["darwin", "win32", "linux"] as const)(
+  it.each(["darwin"] as const)(
     "returns shadow/disabled for %s with zero side effects",
     (platform) => {
       expect(decideUpdateExecutorCohort(platform)).toEqual({

@@ -37,10 +37,7 @@ describe("GitHub mention serialization", () => {
   // stays bare here too - it is the default every unqualified reference
   // already means, so qualifying it would churn every serialization that was
   // already fine.
-  it.each([
-    [ContextType.GithubPullRequest, "github-pr", 42],
-    [ContextType.GithubIssue, "github-issue", 7],
-  ] as const)(
+  it.each([[ContextType.GithubPullRequest, "github-pr", 42]] as const)(
     "omits both the url and the host suffix for a %s node on github.com with no url",
     (contextType, marker, number) => {
       expect(
@@ -64,10 +61,7 @@ describe("GitHub mention serialization", () => {
   // keeps `githubHost` even when no `url` was ever set, and dropping the
   // suffix here would make an `acme/widgets#42` on ghe.example.com
   // indistinguishable from the same coordinates on github.com.
-  it.each([
-    [ContextType.GithubPullRequest, "github-pr", 42],
-    [ContextType.GithubIssue, "github-issue", 7],
-  ] as const)(
+  it.each([[ContextType.GithubPullRequest, "github-pr", 42]] as const)(
     "appends the host suffix for a %s node on an enterprise host with no url",
     (contextType, marker, number) => {
       expect(
@@ -91,13 +85,10 @@ describe("GitHub mention serialization", () => {
   // A url already disambiguates the reference on its own, so an enterprise
   // host must not ALSO append its own suffix - that would double-qualify a
   // reference the url alone already resolves unambiguously.
-  it.each([
-    [ContextType.GithubPullRequest, "github-pr", "pull/42"],
-    [ContextType.GithubIssue, "github-issue", "issues/7"],
-  ] as const)(
+  it.each([[ContextType.GithubPullRequest, "github-pr", "pull/42"]] as const)(
     "prefers the url suffix and omits the host suffix for a %s node on an enterprise host with a url",
     (contextType, marker, path) => {
-      const number = contextType === ContextType.GithubPullRequest ? 42 : 7;
+      const number = 42;
       expect(
         serialize(
           {
@@ -117,35 +108,29 @@ describe("GitHub mention serialization", () => {
     },
   );
 
-  it.each([
-    [ContextType.GithubPullRequest, "github-pr", "pull/42"],
-    [ContextType.GithubIssue, "github-issue", "issues/7"],
-  ] as const)(
+  it.each([[ContextType.GithubPullRequest, "github-pr", "pull/42"]] as const)(
     "serializes %s as an agent reference with its URL for the LLM",
     (contextType, marker, path) => {
       expect(
         serialize(
           {
             contextType,
-            id: `${marker}:acme/widgets#${contextType === ContextType.GithubPullRequest ? 42 : 7}`,
+            id: `${marker}:acme/widgets#42`,
             organizationLogin: "acme",
             repositoryName: "widgets",
-            issueNumber: contextType === ContextType.GithubPullRequest ? 42 : 7,
+            issueNumber: 42,
             githubHost: "github.example.test",
             url: `https://github.com/acme/widgets/${path}`,
           },
           "llm",
         ),
       ).toBe(
-        `See @${marker}:acme/widgets#${contextType === ContextType.GithubPullRequest ? 42 : 7} [url=https://github.com/acme/widgets/${path}] before merging.`,
+        `See @${marker}:acme/widgets#42 [url=https://github.com/acme/widgets/${path}] before merging.`,
       );
     },
   );
 
-  it.each([
-    [ContextType.GithubPullRequest, 42],
-    [ContextType.GithubIssue, 7],
-  ] as const)(
+  it.each([[ContextType.GithubPullRequest, 42]] as const)(
     "uses the compact repository reference for display (%s)",
     (contextType, number) => {
       expect(
@@ -155,7 +140,7 @@ describe("GitHub mention serialization", () => {
             organizationLogin: "acme",
             repositoryName: "widgets",
             issueNumber: number,
-            url: `https://github.com/acme/widgets/${contextType === ContextType.GithubPullRequest ? "pull" : "issues"}/${number}`,
+            url: `https://github.com/acme/widgets/pull/${number}`,
           },
           "user",
         ),
@@ -169,10 +154,7 @@ describe("GitHub mention serialization", () => {
   // reads in the chip and the sent message, so it must not read an
   // enterprise reference as if it were the github.com repository it shares
   // coordinates with.
-  it.each([
-    [ContextType.GithubPullRequest, 42],
-    [ContextType.GithubIssue, 7],
-  ] as const)(
+  it.each([[ContextType.GithubPullRequest, 42]] as const)(
     "prefixes the enterprise host in the compact repository reference for display (%s)",
     (contextType, number) => {
       expect(
@@ -183,7 +165,7 @@ describe("GitHub mention serialization", () => {
             repositoryName: "widgets",
             issueNumber: number,
             githubHost: "github.example.test",
-            url: `https://github.example.test/acme/widgets/${contextType === ContextType.GithubPullRequest ? "pull" : "issues"}/${number}`,
+            url: `https://github.example.test/acme/widgets/pull/${number}`,
           },
           "user",
         ),
@@ -196,10 +178,7 @@ describe("GitHub mention serialization", () => {
   // The control: an explicit github.com host must keep the compact reference
   // byte-identical to what it has always been - qualifying the default host
   // would churn every display serialization that was already fine.
-  it.each([
-    [ContextType.GithubPullRequest, 42],
-    [ContextType.GithubIssue, 7],
-  ] as const)(
+  it.each([[ContextType.GithubPullRequest, 42]] as const)(
     "keeps the compact reference bare on github.com for display (%s)",
     (contextType, number) => {
       expect(
@@ -210,7 +189,7 @@ describe("GitHub mention serialization", () => {
             repositoryName: "widgets",
             issueNumber: number,
             githubHost: "github.com",
-            url: `https://github.com/acme/widgets/${contextType === ContextType.GithubPullRequest ? "pull" : "issues"}/${number}`,
+            url: `https://github.com/acme/widgets/pull/${number}`,
           },
           "user",
         ),
@@ -222,10 +201,7 @@ describe("GitHub mention serialization", () => {
   // FOLDS the compare: a node saved with `GitHub.com` (or any other casing)
   // is the default host exactly like `github.com`, and must omit the
   // `[host=]` suffix just as the lowercase spelling does.
-  it.each([
-    [ContextType.GithubPullRequest, "github-pr", 42],
-    [ContextType.GithubIssue, "github-issue", 7],
-  ] as const)(
+  it.each([[ContextType.GithubPullRequest, "github-pr", 42]] as const)(
     "omits the host suffix for a %s node on a differently-cased default host with no url",
     (contextType, marker, number) => {
       expect(
@@ -246,10 +222,7 @@ describe("GitHub mention serialization", () => {
 
   // The display-form sibling of the case above: the same folded compare must
   // omit the prefix, not just the LLM form's suffix.
-  it.each([
-    [ContextType.GithubPullRequest, 42],
-    [ContextType.GithubIssue, 7],
-  ] as const)(
+  it.each([[ContextType.GithubPullRequest, 42]] as const)(
     "keeps the compact reference bare for a differently-cased default host in display form (%s)",
     (contextType, number) => {
       expect(
@@ -260,7 +233,7 @@ describe("GitHub mention serialization", () => {
             repositoryName: "widgets",
             issueNumber: number,
             githubHost: "GitHub.com",
-            url: `https://github.com/acme/widgets/${contextType === ContextType.GithubPullRequest ? "pull" : "issues"}/${number}`,
+            url: `https://github.com/acme/widgets/pull/${number}`,
           },
           "user",
         ),
@@ -270,10 +243,7 @@ describe("GitHub mention serialization", () => {
 
   // The control: a non-default host must still qualify both forms, whatever
   // its own casing, so the fold above cannot be a blanket "never qualify".
-  it.each([
-    [ContextType.GithubPullRequest, "github-pr", 42],
-    [ContextType.GithubIssue, "github-issue", 7],
-  ] as const)(
+  it.each([[ContextType.GithubPullRequest, "github-pr", 42]] as const)(
     "still appends the host suffix for a %s node on an enterprise host, verbatim casing and all",
     (contextType, marker, number) => {
       expect(

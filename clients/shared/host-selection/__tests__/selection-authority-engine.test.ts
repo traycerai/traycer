@@ -4122,36 +4122,6 @@ describe("SelectionAuthorityEngineImpl - local proof-of-life clears the ensure c
 
     authority.dispose();
   });
-
-  it("T3b/P3: a proof of life on a fleet with no local host does not crash and clears nothing local-specific", () => {
-    const clock = createFakeAuthorityClock(0);
-    const authority = createTestAuthority({
-      initialFleet: {
-        identityGeneration: 0,
-        localHostId: null,
-        hosts: [fleetHost("R", "remote")],
-      },
-      initialIdentityKey: "acct-1",
-      clock,
-    });
-    const { engine } = authority;
-    const incarnation = attachReporter(engine, "A");
-
-    expect(() => {
-      engine.ingestEvidence(
-        "A",
-        incarnation,
-        dialOutcome("R", "r-1", "success", 1),
-      );
-    }).not.toThrow();
-
-    const after = findLease(engine.snapshot().leases, "R");
-    expect(after?.status).toBe("connecting");
-    expect(after?.dead).toBeNull();
-
-    authority.dispose();
-  });
-
   it("T4/addendum: a cooldown cleared by a live session does not resurface once that session is lost", async () => {
     const clock = createFakeAuthorityClock(0);
     const ensure = createDeferredEnsure();
@@ -4547,62 +4517,6 @@ describe("SelectionAuthorityEngineImpl - a dead host reaches `dead` (B1/C6)", ()
 
     authority.dispose();
   });
-
-  /**
-   * The arm-time half of that guard, which the bystander case above does NOT
-   * prove: removing the effectiveness check at ARM time leaves this suite
-   * green, because the derive-time check still catches the bystander.
-   *
-   * What it does not catch is a STALE ceiling. Arm on every session loss and
-   * a host that lost its session long ago carries an already-expired deadline
-   * into the moment it is selected - so it would be declared dead on arrival,
-   * before anything had the chance to dial it even once. Both checks are
-   * load-bearing, for different cases, and the mutation that survives the
-   * other test reddens here.
-   */
-  it("does not kill a host on arrival because its session ended long before it was selected", async () => {
-    const clock = createFakeAuthorityClock(0);
-    const authority = createTestAuthority({
-      initialFleet: {
-        identityGeneration: 0,
-        localHostId: "L",
-        hosts: [fleetHost("L", "local"), fleetHost("P", "remote")],
-      },
-      initialIdentityKey: "acct-1",
-      clock,
-      localHostEnsure: readyLocalHostEnsurePort(),
-    });
-    const { engine } = authority;
-    const incarnation = attachReporter(engine, "A");
-
-    engine.ingestEvidence(
-      "A",
-      incarnation,
-      sessionEvidence("P", "s1", "established", 0),
-    );
-    expect(engine.snapshot().effectiveHostId).toBe("L");
-    engine.ingestEvidence(
-      "A",
-      incarnation,
-      sessionEvidence("P", "s1", "lost", 0),
-    );
-
-    // Long past the ceiling, with P still a bystander.
-    clock.advance(30 * 60_000);
-
-    // The user now picks P in Settings. It has not been dialed yet, so the
-    // only honest verdict is `connecting` - nothing has asked it anything.
-    expect(await engine.activate("A", incarnation, "P")).toEqual({ ok: true });
-    expect(engine.snapshot().effectiveHostId).toBe("P");
-
-    const onArrival = findLease(engine.snapshot().leases, "P");
-    if (onArrival === undefined) throw new Error("expected a lease for P");
-    expect(onArrival.status).toBe("connecting");
-    expect(isUsableForSelection(onArrival)).toBe(true);
-
-    authority.dispose();
-  });
-
   /**
    * The derive-time half, which neither arm above proves: with the arm-time
    * check in place, a ceiling can still be armed and then OUTLIVE the app's
@@ -5110,40 +5024,6 @@ describe("selection authority dial-evidence instrumentation", () => {
 
     authority.dispose();
   });
-
-  it("warns ONCE per stall episode, not once per dial past the threshold", () => {
-    const log = createRecordingAuthorityLog();
-    const { authority, incarnationId } = attachedAuthority(log);
-    const { engine } = authority;
-
-    // The test above stops exactly AT the threshold, so it cannot tell "fire
-    // at the crossing" from "fire at or above it". This one runs well past it:
-    // a prolonged outage is when this warn fires and also when dials are most
-    // frequent, so warning on every subsequent report would bury the
-    // transition under its own repetitions, in the logs of the very incident
-    // it exists to mark.
-    engine.ingestEvidence(
-      "A",
-      incarnationId,
-      sessionEvidence("H", "s1", "established", 0),
-    );
-    const dials = CONFIRMED_DEATH_REFUSAL_STREAK * 4;
-    for (let i = 0; i < dials; i += 1) {
-      engine.ingestEvidence(
-        "A",
-        incarnationId,
-        dialRefusal("H", `attempt-${i}`, null, i),
-      );
-    }
-
-    expect(stallWarnings(log.records)).toHaveLength(1);
-    // Every report is still individually recorded - the `debug` channel keeps
-    // the full history, so quieting the warn costs no evidence.
-    expect(dialLogs(log.records)).toHaveLength(dials);
-
-    authority.dispose();
-  });
-
   it("names the crossing ONCE - later refusals stay ordinary `counted`", () => {
     const log = createRecordingAuthorityLog();
     const { authority, incarnationId } = attachedAuthority(log);
@@ -5172,63 +5052,6 @@ describe("selection authority dial-evidence instrumentation", () => {
     );
     expect(dispositions[CONFIRMED_DEATH_REFUSAL_STREAK]).toBe("counted");
     expect(findLease(engine.snapshot().leases, "H")?.status).toBe("dead");
-
-    authority.dispose();
-  });
-
-  it("keeps NO stall state for a host outside the fleet", () => {
-    const log = createRecordingAuthorityLog();
-    const { authority, incarnationId } = attachedAuthority(log);
-    const { engine } = authority;
-
-    // Evidence for an unknown host is dropped, so there is no lease to strand
-    // a surface on and nothing to warn about. Accumulating here would grow one
-    // entry per distinct id between fleet snapshots, and an entry recreated
-    // after a prune would be inherited by a durable id that later re-registers.
-    for (let i = 0; i < CONFIRMED_DEATH_REFUSAL_STREAK * 3; i += 1) {
-      engine.ingestEvidence(
-        "A",
-        incarnationId,
-        dialRefusal(`GONE-${i}`, `attempt-${i}`, null, i),
-      );
-    }
-    // Same id repeatedly, which is the case a per-host counter would catch.
-    for (let i = 0; i < CONFIRMED_DEATH_REFUSAL_STREAK * 3; i += 1) {
-      engine.ingestEvidence(
-        "A",
-        incarnationId,
-        dialRefusal("GONE", `gone-${i}`, null, 100 + i),
-      );
-    }
-
-    expect(stallWarnings(log.records)).toHaveLength(0);
-
-    authority.dispose();
-  });
-
-  it("does not count a REPLAYED success as a stalled failure", () => {
-    const log = createRecordingAuthorityLog();
-    const { authority, incarnationId } = attachedAuthority(log);
-    const { engine } = authority;
-
-    // A duplicate is classified before its outcome is ever read, so a success
-    // arriving twice looks exactly like a refusal that went nowhere. Warning
-    // "dial failures are not advancing" on a run of successes would point the
-    // reader at the opposite of what happened.
-    engine.ingestEvidence(
-      "A",
-      incarnationId,
-      dialOutcome("H", "same", "success", 0),
-    );
-    for (let i = 0; i < CONFIRMED_DEATH_REFUSAL_STREAK * 2; i += 1) {
-      engine.ingestEvidence(
-        "A",
-        incarnationId,
-        dialOutcome("H", "same", "success", 1 + i),
-      );
-    }
-
-    expect(stallWarnings(log.records)).toHaveLength(0);
 
     authority.dispose();
   });

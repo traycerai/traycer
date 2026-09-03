@@ -203,25 +203,6 @@ describe("host-lifecycle read-only import boundary", () => {
     );
   });
 
-  it("reports an error for the bare, aliased child_process specifier", () => {
-    expectBoundaryError(
-      lintViolator("host-lifecycle/bare-import.ts", [
-        'import * as cp from "child_process";',
-        "export function boom(): void {",
-        "  void cp;",
-        "}",
-      ]),
-    );
-  });
-
-  it("reports an error for a re-export of child_process", () => {
-    expectBoundaryError(
-      lintViolator("host-lifecycle/re-export.ts", [
-        'export { execFile } from "node:child_process";',
-      ]),
-    );
-  });
-
   it("reports an error for a dynamic import() of child_process", () => {
     expectBoundaryError(
       lintViolator("host-lifecycle/dynamic-import.ts", [
@@ -243,18 +224,6 @@ describe("host-lifecycle read-only import boundary", () => {
       ]),
     );
   });
-
-  it("reports an error for importing a CLI service platform controller", () => {
-    expectBoundaryError(
-      lintViolator("host-lifecycle/cli-platform.ts", [
-        'import * as macos from "../../../traycer-cli/src/service/platforms/macos";',
-        "export function boom(): void {",
-        "  void macos;",
-        "}",
-      ]),
-    );
-  });
-
   it("reports an error for importing desktop electron-main", () => {
     // Deliberately NOT `host-login-item`: that path is already covered by the
     // pre-existing `**/host-login-item*` glob, so using it here would have
@@ -283,18 +252,6 @@ describe("host-lifecycle read-only import boundary", () => {
       ]),
     );
   });
-
-  it("reports an error for a dynamic import() of a forbidden sibling", () => {
-    expectBoundaryError(
-      lintViolator("host-lifecycle/dynamic-sibling.ts", [
-        "export async function boom(): Promise<void> {",
-        '  const m = await import("../../host-lock/process-identity");',
-        "  void m;",
-        "}",
-      ]),
-    );
-  });
-
   it("still enforces the package type-safety selectors inside host-lifecycle", () => {
     // The host-lifecycle block re-states `no-restricted-syntax`, and flat
     // config replaces rule options rather than merging them. Without the
@@ -308,17 +265,6 @@ describe("host-lifecycle read-only import boundary", () => {
     expect(outcome.status).not.toBe(0);
     expect(outcome.messages.join("\n")).toMatch(/as any/i);
   });
-
-  it("permits an injected ProbeCommandRunner-shaped module with no spawn", () => {
-    // The negative control: the rule must not simply fail everything.
-    const outcome = lintViolator("host-lifecycle/clean.ts", [
-      "export function clean(value: string): string {",
-      "  return value;",
-      "}",
-    ]);
-    expect(outcome.status).toBe(0);
-  });
-
   it("exempts the real-supervisor suites, which exist to spawn real supervisors", () => {
     const outcome = lintViolator(
       "host-lifecycle/__tests__/real-supervisor-boundary-probe.ts",

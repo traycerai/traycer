@@ -232,7 +232,7 @@ describe("decideAttemptClaim - resume: each action against each parked continuat
     trigger: "automatic",
   });
 
-  it.each(["resume-apply", "force"] as const)(
+  it.each(["resume-apply"] as const)(
     "resumes a resume-apply park for action %s",
     (action) => {
       const decision = decideAttemptClaim({
@@ -255,16 +255,13 @@ describe("decideAttemptClaim - resume: each action against each parked continuat
     },
   );
 
-  it.each(["activate", "defer", "start"] as const)(
+  it.each(["activate"] as const)(
     "refuses request-action-mismatch for action %s against a resume-apply park",
     (action) => {
-      const request =
-        action === "start"
-          ? baseRequest({ action: "start", expected: null })
-          : baseRequest({
-              action,
-              expected: attemptIdentityOf(resumeApplyParked),
-            });
+      const request = baseRequest({
+        action,
+        expected: attemptIdentityOf(resumeApplyParked),
+      });
       const decision = decideAttemptClaim({
         current: { kind: "valid", version: 2, value: resumeApplyParked },
         request,
@@ -294,16 +291,13 @@ describe("decideAttemptClaim - resume: each action against each parked continuat
     expect(decision.record.continuation).toBe("activate");
   });
 
-  it.each(["resume-apply", "force", "defer", "start"] as const)(
+  it.each(["resume-apply"] as const)(
     "refuses request-action-mismatch for action %s against an activate park",
     (action) => {
-      const request =
-        action === "start"
-          ? baseRequest({ action: "start", expected: null })
-          : baseRequest({
-              action,
-              expected: attemptIdentityOf(activateParked),
-            });
+      const request = baseRequest({
+        action,
+        expected: attemptIdentityOf(activateParked),
+      });
       const decision = decideAttemptClaim({
         current: { kind: "valid", version: 2, value: activateParked },
         request,

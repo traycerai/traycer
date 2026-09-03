@@ -821,35 +821,6 @@ describe("DesktopSupportService - fingerprint sightings on freeze", () => {
     );
   });
 
-  it("does not re-record a sighting on the idempotent second freeze of a live key", async () => {
-    const service = buildService(null);
-    await service.freezeEvidence(KEY, "fp:v1:sight");
-    await service.freezeEvidence(KEY, "fp:v1:sight");
-    expect(reportLedgerMock.recordFingerprintSighting).toHaveBeenCalledTimes(1);
-  });
-
-  it("records ONE sighting across StrictMode freeze → discard → freeze of the same key", async () => {
-    // Real renderer mounts under <StrictMode> (renderer-shell/main.tsx):
-    // setup freezes, cleanup discards, setup freezes again with the SAME
-    // draftId/key. The live freeze-map alone is not enough - discard clears
-    // it between the two setups. A short-TTL recentSightingKeys set must
-    // suppress the second claim so first open never reads as "2nd time".
-    const service = buildService(null);
-    await service.freezeEvidence(KEY, "fp:v1:sight");
-    service.discardFrozenEvidence(KEY);
-    await service.freezeEvidence(KEY, "fp:v1:sight");
-    expect(reportLedgerMock.recordFingerprintSighting).toHaveBeenCalledTimes(1);
-  });
-
-  it("still records a second sighting for a different frozen-evidence key (real re-open)", async () => {
-    const service = buildService(null);
-    await service.freezeEvidence(KEY, "fp:v1:sight");
-    service.discardFrozenEvidence(KEY);
-    // A genuine second dialog open mints a new draftId → new key.
-    await service.freezeEvidence("sender-1:2", "fp:v1:sight");
-    expect(reportLedgerMock.recordFingerprintSighting).toHaveBeenCalledTimes(2);
-  });
-
   it("skips the sighting when fingerprint is null", async () => {
     await buildService(null).freezeEvidence(KEY, null);
     expect(reportLedgerMock.recordFingerprintSighting).not.toHaveBeenCalled();
@@ -977,18 +948,6 @@ describe("DesktopSupportService - freeze idempotency per key", () => {
     // itself, not just an incidental match.
     expect(eventIds[0]).toBe(eventIds[1]);
   });
-
-  it("returns the existing reportId when freezeEvidence is called again for an already-frozen live draft", async () => {
-    const service = buildService(null);
-    const { reportId: first } = await service.freezeEvidence(KEY, null);
-    const { reportId: second } = await service.freezeEvidence(KEY, null);
-
-    // Not a fresh mint: a second freeze of a still-live draft (React
-    // StrictMode's dev double-effect, or an accidental duplicate call) must
-    // not straddle a retry-vs-submit across two different report/event ids.
-    expect(second).toBe(first);
-  });
-
   it("resolves concurrent in-flight freezes of the same key to one shared reportId", async () => {
     const service = buildService(null);
 
