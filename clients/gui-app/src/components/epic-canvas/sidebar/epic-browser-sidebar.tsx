@@ -1,5 +1,5 @@
 import { Globe2, Plus, RotateCcw, Search, TriangleAlert } from "lucide-react";
-import { useCallback, useMemo } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef } from "react";
 import type {
   BrowserSessionInfo,
   BrowserTabDriver,
@@ -32,10 +32,18 @@ import {
   useTabSurfaceKey,
 } from "@/hooks/host/use-surface-host-pin";
 import { useEpicChatRecords } from "@/lib/epic-selectors";
-import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
+import {
+  browserSessionTileId,
+  makeBrowserSessionTileRef,
+} from "@/stores/epics/canvas/tile-schema/browser-tile";
 import { makeOpenableNodeRef } from "@/stores/epics/canvas/types";
 import { usePanelHeaderSearchQuery } from "@/stores/epics/panel-header-search-store";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
+import {
+  clearSidebarNodeRevealRequest,
+  useSidebarNodeRevealRequest,
+} from "@/stores/epics/sidebar-node-reveal-store";
+import { revealSidebarNode } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 
 /**
  * The browsers panel's header cluster lives in
@@ -74,6 +82,8 @@ function BrowsersPanelBodyLive(props: {
   readonly tabId: string;
 }) {
   const sessions = useBrowserSessionsContext();
+  const listRef = useRef<HTMLUListElement>(null);
+  const revealRequest = useSidebarNodeRevealRequest(props.tabId);
   const searchQuery = usePanelHeaderSearchQuery(props.tabId, BROWSERS_PANEL_ID);
   const chats = useEpicChatRecords();
   const chatById = useMemo(
@@ -82,12 +92,35 @@ function BrowsersPanelBodyLive(props: {
   );
   const tabs = useBrowserSidebarTabRows(sessions.items);
   const { secondaryByKey, duplicateTitles } = useBrowserTabRowLabels(tabs);
-  const filteredTabs = useMemo(
-    () => filterBrowserTabRows(tabs, searchQuery),
-    [searchQuery, tabs],
-  );
+  const filteredTabs = useMemo(() => {
+    const matches = filterBrowserTabRows(tabs, searchQuery);
+    if (revealRequest === null) return matches;
+    const matchKeys = new Set(matches.map((row) => row.key));
+    return tabs.filter(
+      (row) =>
+        matchKeys.has(row.key) ||
+        browserSessionTileId({
+          sessionId: row.session.sessionId,
+          tabId: row.tab.tabId,
+        }) === revealRequest.nodeId,
+    );
+  }, [revealRequest, searchQuery, tabs]);
   const { openTile } = useEpicTileNavigation();
   const { add: addBrowser, isAdding } = useAddBrowserAction(props.tabId, null);
+
+  useLayoutEffect(() => {
+    if (revealRequest === null || listRef.current === null) return;
+    if (
+      !revealSidebarNode(
+        listRef.current,
+        revealRequest.nodeId,
+        revealRequest.nonce,
+      )
+    ) {
+      return;
+    }
+    clearSidebarNodeRevealRequest(props.tabId, revealRequest.nonce);
+  }, [filteredTabs, props.tabId, revealRequest]);
 
   const openTab = useCallback(
     (session: BrowserSessionInfo, tab: BrowserTabInfo) => {
@@ -175,6 +208,7 @@ function BrowsersPanelBodyLive(props: {
       {hasNoResults ? <BrowsersPanelNoResultsState /> : null}
       {hasResults ? (
         <ul
+          ref={listRef}
           aria-label="Browser tabs"
           className="space-y-0.5"
           data-testid="epic-browsers-panel-list"

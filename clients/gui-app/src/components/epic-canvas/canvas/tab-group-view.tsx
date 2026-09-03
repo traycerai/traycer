@@ -82,12 +82,17 @@ import { reportChatRemoteDeletionState } from "@/components/epic-canvas/surface-
 import { resolveHostedTileOwnership } from "@/components/epic-canvas/surface-host/hosted-tile-resolver";
 import { HOSTED_TILE_RECORD_SELECTOR } from "@/components/epic-canvas/surface-host/hosted-tile-dom";
 import {
+  TILE_KIND_BROWSER_SESSION,
   TILE_KIND_GIT_DIFF,
   TILE_KIND_PUBLISHED_CHAT,
   TILE_KIND_PR_DETAIL,
   TILE_KIND_PR_DIFF,
   TILE_KIND_SNAPSHOT_DIFF,
 } from "@/stores/epics/canvas/tile-kinds";
+import {
+  tabSurfaceKey,
+  useSurfaceHostSelectionStore,
+} from "@/stores/host/surface-host-selection-store";
 
 import { TabStrip } from "@/components/epic-canvas/canvas/tab-strip";
 import { useRenameCanvasTab } from "@/components/epic-canvas/canvas/use-rename-canvas-tab";
@@ -130,6 +135,7 @@ function panelIdForTabType(
   if (tabType === WORKSPACE_FILE_TAB_KIND) return "file-tree";
   if (tabType === TILE_KIND_PR_DETAIL) return "pull-requests";
   if (tabType === TILE_KIND_PR_DIFF) return "pull-requests";
+  if (tabType === TILE_KIND_BROWSER_SESSION) return "browsers";
   return "artifacts";
 }
 
@@ -345,9 +351,14 @@ export const TabGroupView = memo(function TabGroupView(
       }
       if (
         tab !== undefined &&
-        (tab.type === "chat" || tab.type === "terminal-agent")
+        (isTileRefRecordBacked(tab) || tab.type === TILE_KIND_BROWSER_SESSION)
       ) {
         requestSidebarNodeReveal(tabId, tab.id);
+      }
+      if (tab?.type === TILE_KIND_BROWSER_SESSION) {
+        useSurfaceHostSelectionStore
+          .getState()
+          .setSelection(tabSurfaceKey("browsers", tabId), tab.hostId);
       }
       setActivePanelIdAndExpand(tabId, panelIdForTabType(tab?.type));
     },

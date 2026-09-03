@@ -10,6 +10,33 @@ import { useSettingsStore } from "@/stores/settings/settings-store";
 export const INDENT_PX = 16;
 export const BASE_PAD_LEFT = 8;
 
+const SIDEBAR_REVEAL_HIGHLIGHT_DURATION_MS = 3_000;
+
+/** Same visual treatment and lifetime as a communication-graph transcript jump. */
+export const SIDEBAR_REVEAL_HIGHLIGHT_CLASS =
+  "data-[sidebar-reveal-highlighted=true]:bg-primary/15 data-[sidebar-reveal-highlighted=true]:ring-2 data-[sidebar-reveal-highlighted=true]:ring-inset data-[sidebar-reveal-highlighted=true]:ring-primary/80 motion-safe:data-[sidebar-reveal-highlighted=true]:animate-pulse";
+
+export function revealSidebarNode(
+  region: HTMLElement,
+  nodeId: string,
+  nonce: number,
+): boolean {
+  const row = Array.from(
+    region.querySelectorAll<HTMLElement>("[data-sidebar-node-id]"),
+  ).find((element) => element.dataset.sidebarNodeId === nodeId);
+  if (row === undefined) return false;
+  const revealNonce = String(nonce);
+  row.scrollIntoView({ block: "nearest", inline: "nearest" });
+  row.dataset.sidebarRevealHighlighted = "true";
+  row.dataset.sidebarRevealNonce = revealNonce;
+  window.setTimeout(() => {
+    if (row.dataset.sidebarRevealNonce !== revealNonce) return;
+    delete row.dataset.sidebarRevealHighlighted;
+    delete row.dataset.sidebarRevealNonce;
+  }, SIDEBAR_REVEAL_HIGHLIGHT_DURATION_MS);
+  return true;
+}
+
 /**
  * Horizontal offset (from a row's own padding-left edge) to the center of its
  * chevron/icon column. Indent guide rails are drawn at the parent depth plus

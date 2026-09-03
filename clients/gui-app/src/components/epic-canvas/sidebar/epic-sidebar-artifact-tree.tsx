@@ -73,6 +73,10 @@ import {
   useIsActiveEpicArtifact,
 } from "@/stores/epics/canvas/store";
 import {
+  clearSidebarNodeRevealRequest,
+  useSidebarNodeRevealRequest,
+} from "@/stores/epics/sidebar-node-reveal-store";
+import {
   isOpenableEpicNodeKind,
   type EpicNodeRef,
   type OpenableEpicNodeKind,
@@ -109,6 +113,7 @@ import {
   startTransition,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -120,11 +125,13 @@ import {
   EMPTY_PENDING_LIST,
   EMPTY_PRE_ACK_LIST,
   INDENT_PX,
+  SIDEBAR_REVEAL_HIGHLIGHT_CLASS,
   STATUS_DOT_CLASSES,
   STATUS_LABELS,
   computeArtifactNodeAddChildPending,
   computeArtifactNodeStatusDot,
   nodePadRightClass,
+  revealSidebarNode,
   rowAddControlRevealClass,
 } from "./epic-sidebar-tree-shared";
 import { TreeGroupGuide } from "./epic-sidebar-tree-guide";
@@ -522,13 +529,30 @@ export function ArtifactReadLifecycleBridge(props: {
 export function ArtifactTreePanelBody(props: ArtifactTreePanelBodyProps) {
   const { epicId, tabId } = props;
   const panelId: RootCreatePanelId = "artifacts";
+  const treeRegionRef = useRef<HTMLDivElement>(null);
   const sort = useArtifactSort(epicId);
   const comparator = useMemo<NodeComparator | null>(
     () => (isDefaultSort(sort) ? null : makeNodeComparator(sort)),
     [sort],
   );
   const allRootIds = usePanelRootIds(comparator);
-  const visibleIds = useArtifactVisibleIds(epicId);
+  const filteredVisibleIds = useArtifactVisibleIds(epicId);
+  const tree = useEpicTreeIndex();
+  const revealRequest = useSidebarNodeRevealRequest(tabId);
+  const ancestorIdsOfReveal = useAncestorIds(revealRequest?.nodeId ?? null);
+  const visibleIds = useMemo(() => {
+    if (
+      revealRequest === null ||
+      filteredVisibleIds === null ||
+      !Object.hasOwn(tree.nodeById, revealRequest.nodeId)
+    ) {
+      return filteredVisibleIds;
+    }
+    return new Set([
+      ...filteredVisibleIds,
+      ...collectWithAncestors([revealRequest.nodeId], tree.nodeById),
+    ]);
+  }, [filteredVisibleIds, revealRequest, tree]);
   const rootIds = useMemo(
     () => applyVisibleFilter(allRootIds, visibleIds),
     [allRootIds, visibleIds],
@@ -560,8 +584,12 @@ export function ArtifactTreePanelBody(props: ArtifactTreePanelBodyProps) {
 
   const ancestorIdsOfActive = useAncestorIds(activeArtifactId);
   const forcedExpandedIds = useMemo(
-    () => mergeForcedExpanded(ancestorIdsOfActive, visibleIds),
-    [ancestorIdsOfActive, visibleIds],
+    () =>
+      mergeForcedExpanded(
+        mergeForcedExpanded(ancestorIdsOfActive, ancestorIdsOfReveal),
+        visibleIds,
+      ),
+    [ancestorIdsOfActive, ancestorIdsOfReveal, visibleIds],
   );
   const expandedIds = useEpicSidebarEffectiveExpanded(
     tabId,
@@ -584,6 +612,31 @@ export function ArtifactTreePanelBody(props: ArtifactTreePanelBodyProps) {
     },
     [tabId, panelId, expandAction],
   );
+
+  useLayoutEffect(() => {
+    if (revealRequest === null || treeRegionRef.current === null) return;
+    for (const ancestorId of ancestorIdsOfReveal) {
+      expandAction(tabId, panelId, ancestorId);
+    }
+    if (
+      !revealSidebarNode(
+        treeRegionRef.current,
+        revealRequest.nodeId,
+        revealRequest.nonce,
+      )
+    ) {
+      return;
+    }
+    clearSidebarNodeRevealRequest(tabId, revealRequest.nonce);
+  }, [
+    ancestorIdsOfReveal,
+    expandAction,
+    expandedIds,
+    panelId,
+    revealRequest,
+    tabId,
+    tree,
+  ]);
 
   const expansion = useMemo<ExpansionController>(
     () => ({ expandedIds, toggleExpanded, ensureExpanded }),
@@ -701,7 +754,10 @@ export function ArtifactTreePanelBody(props: ArtifactTreePanelBodyProps) {
       <SidebarFilterVisibilityContext.Provider value={visibleIds}>
         <ArtifactPanelSearchShell epicId={epicId} tabId={tabId}>
           <SidebarGroup className="min-h-0 flex-1 px-2 py-1">
-            <SidebarGroupContent className="flex min-h-0 flex-1 flex-col">
+            <SidebarGroupContent
+              ref={treeRegionRef}
+              className="flex min-h-0 flex-1 flex-col"
+            >
               {panelContent}
             </SidebarGroupContent>
           </SidebarGroup>
@@ -1695,6 +1751,7 @@ function ArtifactRowButton(props: ArtifactRowButtonProps) {
     isActive
       ? "bg-accent text-accent-foreground"
       : "text-foreground/75 hover:bg-accent/70 hover:text-accent-foreground",
+    SIDEBAR_REVEAL_HIGHLIGHT_CLASS,
   );
   const selectionInputId = `epic-sidebar-select-input-${nodeId}`;
 
@@ -1704,6 +1761,7 @@ function ArtifactRowButton(props: ArtifactRowButtonProps) {
         htmlFor={selectionInputId}
         ref={dragRef}
         data-testid={`epic-sidebar-item-${nodeId}`}
+        data-sidebar-node-id={nodeId}
         data-artifact-type={artifactType}
         className={rowClassName}
         style={{
@@ -1750,6 +1808,7 @@ function ArtifactRowButton(props: ArtifactRowButtonProps) {
       {...listeners}
       type="button"
       data-testid={`epic-sidebar-item-${nodeId}`}
+      data-sidebar-node-id={nodeId}
       data-artifact-type={artifactType}
       className={rowClassName}
       style={{

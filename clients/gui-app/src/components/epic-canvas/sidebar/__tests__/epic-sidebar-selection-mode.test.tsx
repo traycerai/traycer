@@ -1159,6 +1159,27 @@ describe("epic sidebar selection mode", () => {
       });
     });
     expect(scrollIntoView.mock.instances).toContain(row);
+    expect(row.dataset.sidebarRevealHighlighted).toBe("true");
+    expect(
+      useSidebarNodeRevealStore.getState().requestsByViewTabId[TAB_ID],
+    ).toBeUndefined();
+  });
+
+  it("scrolls to and flash-highlights a requested artifact row", async () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+    const scrollIntoView = vi
+      .spyOn(Element.prototype, "scrollIntoView")
+      .mockImplementation(() => undefined);
+    requestSidebarNodeReveal(TAB_ID, "ticket-child");
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    const row = screen.getByTestId("epic-sidebar-item-ticket-child");
+    await waitFor(() => {
+      expect(scrollIntoView.mock.instances).toContain(row);
+    });
+    expect(row.dataset.sidebarRevealHighlighted).toBe("true");
     expect(
       useSidebarNodeRevealStore.getState().requestsByViewTabId[TAB_ID],
     ).toBeUndefined();
