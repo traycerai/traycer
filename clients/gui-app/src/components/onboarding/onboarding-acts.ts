@@ -126,7 +126,7 @@ export const ONBOARDING_ACTS: ReadonlyArray<OnboardingAct> = [
     id: "login-import",
     eyebrowLabel: "YOUR LOGINS",
     title: "Stay signed in\neverywhere",
-    body: "Bring the sites you're signed into in Chrome, Edge, Brave, Firefox, or Safari into Traycer's browser. Agents then work on those sites as you, with nothing to sign into again.",
+    body: "Bring the logins from the browser you already use into Traycer's browser. Agents then work on those sites as you.",
     addon: "login-import",
   },
   AGENT_GUIDE_ACT,
