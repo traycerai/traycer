@@ -31,7 +31,7 @@ import {
   render,
   screen,
 } from "@testing-library/react";
-import type { ReactNode } from "react";
+import type { ReactElement } from "react";
 import type { EditorEntry, EditorId } from "@traycer/protocol/host";
 import { toast } from "sonner";
 import { FileTreeRowContextMenu } from "../file-tree-row-context-menu";
@@ -176,7 +176,7 @@ function renderTree(hostId: string | null) {
   );
 }
 
-function renderTreeWithChildren(hostId: string | null, children: ReactNode) {
+function renderTreeWithChildren(hostId: string | null, children: ReactElement) {
   return render(
     <FileTreeRowContextMenu
       hostId={hostId}

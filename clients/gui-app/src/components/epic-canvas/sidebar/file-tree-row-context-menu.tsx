@@ -21,7 +21,7 @@ import {
   useState,
   type MouseEvent,
   type PointerEvent,
-  type ReactNode,
+  type ReactElement,
 } from "react";
 import { Copy, FolderOpen } from "lucide-react";
 import { toast } from "sonner";
@@ -67,8 +67,12 @@ export interface FileTreeRowContextMenuProps {
   readonly workspacePath: string;
   /** Openable file rows; a tree path absent here is a directory row. */
   readonly fileNameByPath: ReadonlyMap<string, string>;
-  /** The tree container, which becomes the menu's trigger. */
-  readonly children: ReactNode;
+  /**
+   * The tree container, which becomes the menu's trigger. Exactly ONE element:
+   * `ContextMenuTrigger asChild` merges its props onto this node through
+   * Radix's `Slot`, which throws on text, `null`, or an array.
+   */
+  readonly children: ReactElement;
 }
 
 function reportCopyFailure(): void {
