@@ -90,12 +90,11 @@ function collectModuleSpecifiers(sourceFile: ts.SourceFile): readonly string[] {
     }
     if (
       ts.isCallExpression(node) &&
-      node.expression.kind === ts.SyntaxKind.ImportKeyword
+      node.expression.kind === ts.SyntaxKind.ImportKeyword &&
+      node.arguments.length > 0
     ) {
       const first = node.arguments[0];
-      if (first !== undefined && ts.isStringLiteral(first)) {
-        specifiers.push(first.text);
-      }
+      if (ts.isStringLiteral(first)) specifiers.push(first.text);
     }
     ts.forEachChild(node, visit);
   };

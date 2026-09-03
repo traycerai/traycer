@@ -4,6 +4,7 @@ import type {
   BrowserSessionProfileKind,
   BrowserTabDriver,
 } from "@traycer/protocol/host/browser/contracts";
+import type { HostResourceScope } from "@traycer/protocol/host/resource-scope";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useRegisterVisibleBrowserTile } from "@/lib/browser-view/tiles/visible-tile-registry";
@@ -18,6 +19,7 @@ import {
   browserTileBindingId,
   browserTileEpicId,
   browserTileKey,
+  browserTileScope,
   type BrowserTilePlacement,
 } from "./browser-tile-placement";
 import { BrowserViewSnapshotLayer } from "@/components/epic-canvas/renderers/browser-view-snapshot-layer";
@@ -409,7 +411,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
       >
         <ElectronTabSurfaceBaseLayer
           showStartPage={showStartPage}
-          epicId={epicId}
+          scope={browserTileScope(placement)}
           hostId={hostId}
           snapshot={snapshot}
           onNavigate={navigateToUrl}
@@ -446,17 +448,15 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
 
 function ElectronTabSurfaceBaseLayer(props: {
   readonly showStartPage: boolean;
-  readonly epicId: string | null;
+  readonly scope: HostResourceScope;
   readonly hostId: string;
   readonly snapshot: BrowserViewSnapshotState | null;
   readonly onNavigate: (url: string) => void;
 }) {
   if (props.showStartPage) {
     return (
-      // wire: `epicId` becomes `scope`, derived from the placement, on the
-      // rebase onto the shared client.
       <BrowserStartPage
-        epicId={props.epicId ?? ""}
+        scope={props.scope}
         hostId={props.hostId}
         browserRunsOnHost={false}
         onNavigate={props.onNavigate}

@@ -116,9 +116,6 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
   const hostEntry = useHostDirectoryEntry(node.hostId);
   const auth = useStreamAuthRevalidator();
   const client = useHostStreamClientFor(hostEntry, auth);
-  // wire: the screencast hook and the start page still take an `epicId`; both
-  // become `scope` consumers when ticket 2's shared client lands.
-  const epicId = props.scope.kind === "epic" ? props.scope.epicId : "";
   useRegisterVisibleBrowserTile({
     hostId: node.hostId,
     sessionId: node.sessionId,
@@ -128,7 +125,7 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
   const frameCacheKey = browserPeekFrameKey(node);
   const session = useScreencastSession({
     client,
-    scope: { kind: "epic", epicId },
+    scope: props.scope,
     hostId: node.hostId,
     sessionId: node.sessionId,
     tabId: node.tabId,
@@ -243,9 +240,8 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
         )}
       >
         {showStartPage ? (
-          // wire: `epicId` becomes `scope={props.scope}` on the rebase.
           <BrowserStartPage
-            epicId={epicId}
+            scope={props.scope}
             hostId={node.hostId}
             browserRunsOnHost
             onNavigate={chrome.navigateToUrl}

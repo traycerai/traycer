@@ -37,7 +37,6 @@ vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () =>
   tabHostIdModule(),
 );
 
-
 vi.mock("@/hooks/host/use-host-directory-entry", () =>
   hostDirectoryEntryModule(),
 );
@@ -616,7 +615,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
     const view = renderPeekTile(
       <div>
         <BrowserPeekTile
-        scope={{ kind: "epic", epicId: "epic-1" }}
+          scope={{ kind: "epic", epicId: "epic-1" }}
           visible={hookState.visible}
           onConvertToPip={() => {}}
           node={PEEK_NODE}
@@ -648,14 +647,14 @@ describe("BrowserPeekTile shortcuts and paste", () => {
     view.rerender(
       <div>
         <BrowserPeekTile
-        scope={{ kind: "epic", epicId: "epic-1" }}
+          scope={{ kind: "epic", epicId: "epic-1" }}
           visible={hookState.visible}
           onConvertToPip={() => {}}
           node={PEEK_NODE}
           completeMeans="ended"
         />
         <BrowserPeekTile
-        scope={{ kind: "epic", epicId: "epic-1" }}
+          scope={{ kind: "epic", epicId: "epic-1" }}
           visible={hookState.visible}
           onConvertToPip={() => {}}
           node={sibling}
@@ -669,7 +668,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
     view.rerender(
       <div>
         <BrowserPeekTile
-        scope={{ kind: "epic", epicId: "epic-1" }}
+          scope={{ kind: "epic", epicId: "epic-1" }}
           visible={hookState.visible}
           onConvertToPip={() => {}}
           node={PEEK_NODE}

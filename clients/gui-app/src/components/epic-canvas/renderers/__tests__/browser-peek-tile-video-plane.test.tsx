@@ -62,7 +62,6 @@ vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () =>
   tabHostIdModule(),
 );
 
-
 vi.mock("@/hooks/host/use-host-directory-entry", () =>
   hostDirectoryEntryModule(),
 );
@@ -123,7 +122,7 @@ function jpegFrame(sequence: number, bytes: readonly number[]): void {
 function renderTile(): void {
   renderPeekTile(
     <BrowserPeekTile
-        scope={{ kind: "epic", epicId: "epic-1" }}
+      scope={{ kind: "epic", epicId: "epic-1" }}
       visible={hookState.visible}
       onConvertToPip={() => {}}
       node={peekNode}

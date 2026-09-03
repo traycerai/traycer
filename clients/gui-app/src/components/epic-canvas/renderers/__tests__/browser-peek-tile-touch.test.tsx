@@ -31,7 +31,6 @@ vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () =>
   tabHostIdModule(),
 );
 
-
 vi.mock("@/hooks/host/use-host-directory-entry", () =>
   hostDirectoryEntryModule(),
 );
@@ -139,7 +138,7 @@ function presentLiveFrame(stream: FakeStreamSession): void {
 function renderTile(): FakeStreamSession {
   renderPeekTile(
     <BrowserPeekTile
-        scope={{ kind: "epic", epicId: "epic-1" }}
+      scope={{ kind: "epic", epicId: "epic-1" }}
       visible={hookState.visible}
       onConvertToPip={() => {}}
       node={PEEK_NODE}

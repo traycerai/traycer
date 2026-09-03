@@ -5,9 +5,10 @@ import {
   useHostDirectoryEntryForHostId,
 } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostQuery } from "@/hooks/host/use-host-query";
+import type { HostResourceScope } from "@traycer/protocol/host/resource-scope";
 
 interface BrowserStartPageProps {
-  readonly epicId: string;
+  readonly scope: HostResourceScope;
   readonly hostId: string;
   readonly browserRunsOnHost: boolean;
   readonly onNavigate: (url: string) => void;
@@ -25,7 +26,7 @@ export function BrowserStartPage(props: BrowserStartPageProps) {
     // The canvas start page is always inside a task. The Start Page panel
     // renders the same surface under `{ kind: "independent" }`, which lists the
     // ports that device's own terminals own rather than any epic's.
-    params: { scope: { kind: "epic", epicId: props.epicId } },
+    params: { scope: props.scope },
     cacheKeyIdentity: undefined,
     options: {
       enabled: localServersReachable,

@@ -22,9 +22,8 @@ const state = vi.hoisted(() => ({
   bridge: null as TestBridge | null,
   chromeInputs: [] as Array<Record<string, unknown>>,
   sessions: null as BrowserSessionsState | null,
-  onOpenLinkInNewTile: vi.fn<
-    (url: string, disposition: "foreground" | "background") => void
-  >(),
+  onOpenLinkInNewTile:
+    vi.fn<(url: string, disposition: "foreground" | "background") => void>(),
   /** Attach/detach/bounds in the order they actually happened. */
   events: [] as string[],
   closeTab: vi.fn((_sessionId: string, _tabId: string) => Promise.resolve()),
@@ -33,8 +32,7 @@ const state = vi.hoisted(() => ({
   ),
   closeCanvasTile: vi.fn(),
   focusAddress: vi.fn(),
-  persistViewportPreset:
-    vi.fn<(preset: BrowserViewViewportPresetId) => void>(),
+  persistViewportPreset: vi.fn<(preset: BrowserViewViewportPresetId) => void>(),
 }));
 
 vi.mock("@/providers/use-runner-host", () => ({
@@ -359,7 +357,10 @@ describe("ElectronTabSurface", () => {
   it("shows the start page without attaching an opaque native surface", () => {
     const bindSurface = vi.fn();
     render(
-      surfaceElement({ ...NODE, url: "about:blank" }, createBinding(bindSurface)),
+      surfaceElement(
+        { ...NODE, url: "about:blank" },
+        createBinding(bindSurface),
+      ),
     );
 
     expect(screen.getByText("Local servers")).toBeTruthy();
