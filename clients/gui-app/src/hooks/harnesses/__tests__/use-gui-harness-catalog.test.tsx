@@ -14,7 +14,10 @@ import {
   resetHostConnectionRegistryForTest,
 } from "@traycer-clients/shared/host-client/host-connection-registry";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
-import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import {
+  MockHostMessenger,
+  type MockMethodHandler,
+} from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type {
   GuiHarnessId,
@@ -22,6 +25,12 @@ import type {
   ListGuiAgentCommandsResponse,
   ListGuiAgentModelsResponse,
 } from "@traycer/protocol/host/index";
+import type {
+  RequestOfMethod,
+  ResponseOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
+import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import {
@@ -29,7 +38,11 @@ import {
   HARNESS_PENDING_POLL_LANE,
 } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { createAppQueryClient } from "@/lib/query-client";
-import { hostQueryKeys } from "@/lib/query-keys";
+import {
+  hostQueryKeys,
+  providersListQueryKey,
+  providersNativeQueryKeys,
+} from "@/lib/query-keys";
 import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import {
@@ -789,10 +802,54 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
     commands: number;
   }
 
+  // Trivial default for callers that never exercise the refresh path (the
+  // two default-host fixtures below): the mock messenger throws for any
+  // method with no registered handler, and `providers.list` is now dispatched
+  // unconditionally by `useRefreshProvidersForClient`'s mutation, so every
+  // `buildHostClient` caller needs SOME handler even when its test never
+  // reads the response.
+  function acceptingProvidersListHandler(): ResponseOfMethod<
+    HostRpcRegistry,
+    "providers.list"
+  > {
+    return { providers: [] as ProviderCliState[], native: null };
+  }
+
+  // A provider row carrying a value nothing else in the test produces, so
+  // "the forced response was committed" is an assertion about THIS response
+  // and not about any empty list that happened to land on the key. An empty
+  // `providers` array would have been satisfied by the seeded sentinel, by
+  // the other host's handler, and by a commit of the wrong response alike.
+  function markerProvider(label: string): ProviderCliState {
+    return {
+      providerId: "claude-code",
+      enabled: true,
+      disabledBy: null,
+      nativeCapabilities: DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
+      selected: { kind: "bundled" },
+      candidates: [],
+      auth: {
+        status: "authenticated",
+        badgeText: null,
+        label,
+        detail: null,
+      },
+      authPending: false,
+      checkedAt: null,
+      apiKey: { supported: false, configured: false, source: null },
+      terminalAgentArgs: "",
+      envOverrides: [],
+      loginCapability: null,
+      availabilityPending: false,
+      profiles: [],
+    };
+  }
+
   function buildHostClient(
     queryClient: QueryClient,
     hostId: string,
     calls: HostCallCounts,
+    providersList: MockMethodHandler<HostRpcRegistry, "providers.list">,
   ): HostClient<HostRpcRegistry> {
     let requestCounter = 0;
     const entry = {
@@ -826,6 +883,7 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
             calls.commands += 1;
             return { harnessId: "opencode", commands: [] };
           },
+          "providers.list": providersList,
         },
       }),
     });
@@ -838,7 +896,7 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
     return spine.createRequester(entry);
   }
 
-  it("useRefreshHarnessCatalogForClient invalidates only the target host's three catalog methods, leaving another host's cache untouched", async () => {
+  it("useRefreshHarnessCatalogForClient forces providers.list for host B only, commits the response under host B's exact classic key, and still refetches host B's three catalog methods", async () => {
     const queryClient = createAppQueryClient();
     const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
       <QueryClientProvider client={queryClient}>
@@ -847,8 +905,34 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
     );
     const hostACalls: HostCallCounts = { harnesses: 0, models: 0, commands: 0 };
     const hostBCalls: HostCallCounts = { harnesses: 0, models: 0, commands: 0 };
-    const clientA = buildHostClient(queryClient, "host-a", hostACalls);
-    const clientB = buildHostClient(queryClient, "host-b", hostBCalls);
+    const hostAProvidersListCalls: Array<
+      RequestOfMethod<HostRpcRegistry, "providers.list">
+    > = [];
+    const hostBProvidersListCalls: Array<
+      RequestOfMethod<HostRpcRegistry, "providers.list">
+    > = [];
+    const hostBProvidersListResponse: ResponseOfMethod<
+      HostRpcRegistry,
+      "providers.list"
+    > = { providers: [markerProvider("committed-from-host-b")], native: null };
+    const clientA = buildHostClient(
+      queryClient,
+      "host-a",
+      hostACalls,
+      (params) => {
+        hostAProvidersListCalls.push(params);
+        return acceptingProvidersListHandler();
+      },
+    );
+    const clientB = buildHostClient(
+      queryClient,
+      "host-b",
+      hostBCalls,
+      (params) => {
+        hostBProvidersListCalls.push(params);
+        return hostBProvidersListResponse;
+      },
+    );
 
     renderHook(
       () => {
@@ -890,15 +974,71 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
       expect(hostBCalls).toEqual({ harnesses: 1, models: 1, commands: 1 });
     });
 
+    // Seed host A's classic key and host B's native-scoped key with a
+    // sentinel, so "untouched" below means neither invalidated nor
+    // overwritten - the commit's exact-key write is the only thing that
+    // should ever move these.
+    //
+    // The sentinel's MARKER is what gives those assertions teeth, and it is
+    // load-bearing: while both it and the forced response were `{ providers:
+    // [], native: null }`, a commit that reached the wrong key would have
+    // written a value equal to what was already there, and the assertion
+    // could not fail. Nor would `toBe` have rescued it - `setQueryData`
+    // applies structural sharing, so a structurally-equal write KEEPS the
+    // prior reference and identity holds exactly when equality does.
+    // Distinct contents are the only signal either check can read.
+    const sentinel: ResponseOfMethod<HostRpcRegistry, "providers.list"> = {
+      providers: [markerProvider("seeded-sentinel")],
+      native: null,
+    };
+    const hostAClassicKey = providersListQueryKey("host-a");
+    const hostBClassicKey = providersListQueryKey("host-b");
+    const hostBNativeMcpKey = providersNativeQueryKeys.mcpList("host-b", {
+      providerId: "claude-code",
+      scope: "global",
+      workspaceRoot: null,
+    });
+    queryClient.setQueryData(hostAClassicKey, sentinel);
+    queryClient.setQueryData(hostBNativeMcpKey, sentinel);
+
     const { result } = renderHook(
       () => useRefreshHarnessCatalogForClient(clientB),
       { wrapper: Wrapper },
     );
     await act(async () => {
-      await result.current();
+      await expect(result.current()).resolves.toEqual({ kind: "refreshed" });
     });
 
-    // Host B's three catalog methods were re-fetched by the refresh...
+    // Host B received exactly one FORCED providers.list request...
+    expect(hostBProvidersListCalls).toEqual([
+      { forceAuthRefresh: true, native: null },
+    ]);
+    // ...whose response is now committed under host B's exact classic key
+    // (a direct write, not an invalidation - `commitAuthoritativeProvidersList`
+    // sets the cache entry itself so a stale background refetch can never
+    // clobber the fresh probe)...
+    expect(queryClient.getQueryData(hostBClassicKey)).toEqual(
+      hostBProvidersListResponse,
+    );
+    // ...host A - a DIFFERENT client, never passed to the refresh - received
+    // no providers.list call at all, and its classic cache is untouched...
+    expect(hostAProvidersListCalls).toEqual([]);
+    expect(queryClient.getQueryData(hostAClassicKey)).toEqual(sentinel);
+    // ...and a native-scoped `providers.list` key on the SAME host is a
+    // separate cache entry the commit's exact `{ native: null }` key never
+    // reaches.
+    expect(queryClient.getQueryData(hostBNativeMcpKey)).toEqual(sentinel);
+
+    // Host B's three catalog methods were re-fetched. Observed: harnesses
+    // lands at 2 (not 3) - `commitAuthoritativeProvidersList` invalidates
+    // every `PROVIDER_INVALIDATIONS` scope except `providers.list` itself,
+    // which includes `agent.gui.listHarnesses` and refetches it once as an
+    // active query; the refresh's OWN second invalidation pass then filters
+    // `agent.gui.listHarnesses` back out (it is already in
+    // `PROVIDER_INVALIDATIONS`) and only covers `agent.gui.listModels` /
+    // `agent.gui.listCommands`, so those land at 2 via that second pass.
+    // That filter is conditional on the commit having run at all - the
+    // failure-path test below is its other half.
     await waitFor(() => {
       expect(hostBCalls).toEqual({ harnesses: 2, models: 2, commands: 2 });
     });
@@ -907,6 +1047,75 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
     // target through the app-wide default (rather than the `client`
     // argument) would either refresh the wrong host or refresh both.
     expect(hostACalls).toEqual({ harnesses: 1, models: 1, commands: 1 });
+  });
+
+  it("still resolves 'refreshed' and refetches ALL THREE of host B's catalog methods - the harness row included - when the forced providers.list request throws", async () => {
+    const queryClient = createAppQueryClient();
+    const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+      <QueryClientProvider client={queryClient}>
+        {props.children}
+      </QueryClientProvider>
+    );
+    const hostBCalls: HostCallCounts = { harnesses: 0, models: 0, commands: 0 };
+    const hostBProvidersListCalls: Array<
+      RequestOfMethod<HostRpcRegistry, "providers.list">
+    > = [];
+    const clientB = buildHostClient(
+      queryClient,
+      "host-b",
+      hostBCalls,
+      (params) => {
+        hostBProvidersListCalls.push(params);
+        throw new Error("providers.list unreachable");
+      },
+    );
+
+    renderHook(
+      () => {
+        useGuiHarnessesQueryForClient(clientB, {
+          enabled: true,
+          subscribed: true,
+        });
+        useGuiHarnessModelsQueryForClient(clientB, "opencode", null, {
+          enabled: true,
+          subscribed: true,
+        });
+        useGuiHarnessCommandsQuery(clientB, "opencode", [], {
+          enabled: true,
+          subscribed: true,
+        });
+      },
+      { wrapper: Wrapper },
+    );
+
+    await waitFor(() => {
+      expect(hostBCalls).toEqual({ harnesses: 1, models: 1, commands: 1 });
+    });
+
+    const { result } = renderHook(
+      () => useRefreshHarnessCatalogForClient(clientB),
+      { wrapper: Wrapper },
+    );
+    // The forced request failed, but the mutation's own `onError` toasts it
+    // (`toastFromHostError`) and the refresh hook swallows the rejection
+    // (`.catch(() => undefined)`) rather than propagating it - the caller
+    // still gets a definite outcome to drive its spinner off of.
+    await act(async () => {
+      await expect(result.current()).resolves.toEqual({ kind: "refreshed" });
+    });
+
+    expect(hostBProvidersListCalls).toEqual([
+      { forceAuthRefresh: true, native: null },
+    ]);
+    // The catalog invalidation still ran despite the failed commit - and it
+    // covered ALL THREE methods, `agent.gui.listHarnesses` included. On the
+    // success path that one is deducted because the commit already
+    // invalidated it; here the commit never ran, so deducting it would leave
+    // the rail's own row (`enabled` / `available` / `authStatus`) stale
+    // behind a click that reported `refreshed`.
+    await waitFor(() => {
+      expect(hostBCalls).toEqual({ harnesses: 2, models: 2, commands: 2 });
+    });
   });
 
   it("returns unavailable without retaining invalidation while the target has no RPC endpoint", async () => {
@@ -1083,6 +1292,7 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
         queryClient,
         "default-host",
         defaultHostCalls,
+        acceptingProvidersListHandler,
       ),
     };
     setEffectiveHostId("default-host");
@@ -1123,6 +1333,7 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
         queryClient,
         "default-host",
         defaultHostCalls,
+        acceptingProvidersListHandler,
       ),
     };
     setEffectiveHostId("default-host");

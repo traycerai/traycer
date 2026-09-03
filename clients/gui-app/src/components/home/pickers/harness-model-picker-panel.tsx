@@ -284,7 +284,10 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
               />
             </div>
           ) : (
-            <PickerProviderAuthLine state={activeProviderState} />
+            <PickerProviderAuthLine
+              state={activeProviderState}
+              harness={activeProvider}
+            />
           )}
           <div className="min-h-0 flex-1 overflow-hidden">
             <HarnessModelPickerList

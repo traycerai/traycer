@@ -250,6 +250,18 @@ const COPILOT_TERMINAL_CAP: ProviderLoginCapability = {
   terminalLogin: {},
 };
 
+// Reasonix is also a terminal-login provider (its own credential wizard, not
+// a device-code sign-in), but it has setup guidance
+// (`provider-setup-guidance.ts`) - the one live entry today - so
+// `TerminalLoginRow` must swap in the guidance's button label and hint
+// instead of the generic "Sign in from a terminal" copy.
+const REASONIX_CAP: ProviderLoginCapability = {
+  oauthArgs: ["setup"],
+  token: null,
+  codePaste: null,
+  terminalLogin: {},
+};
+
 // The unreachable case this used to model: an old host's payload cannot
 // decode with `terminalLogin` genuinely absent - the v6 -> v7 upgrade bridge
 // (`registry.ts`) fills it to `null` on that exact hop. What DOES leave
@@ -261,6 +273,12 @@ function copilotState(
   loginCapability: ProviderLoginCapability | null,
 ): ProviderCliState {
   return { ...claudeState(loginCapability), providerId: "copilot" };
+}
+
+function reasonixState(
+  loginCapability: ProviderLoginCapability | null,
+): ProviderCliState {
+  return { ...claudeState(loginCapability), providerId: "reasonix" };
 }
 
 function claudeState(
@@ -452,6 +470,38 @@ describe("<ProviderReauthBanner />", () => {
       screen.getByRole("button", { name: /Sign in from a terminal/ }),
     ).toBeDefined();
     expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
+  });
+
+  // Reasonix is a terminal-login provider with its own setup guidance
+  // (`provider-setup-guidance.ts`): the generic "Sign in from a terminal" /
+  // "prints a sign-in code" copy is wrong for its credential-paste wizard, so
+  // `TerminalLoginRow` swaps in the guidance's own label and hint instead.
+  it("offers 'Set up in terminal' with the API-key hint for a provider with setup guidance (reasonix)", () => {
+    render(
+      <ProviderReauthBanner
+        epicId="epic-1"
+        viewTabId="tab-1"
+        providerId="reasonix"
+        state={reasonixState(REASONIX_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Set up in terminal" }),
+    ).toBeDefined();
+    expect(
+      screen.queryByRole("button", { name: "Sign in from a terminal" }),
+    ).toBeNull();
+    expect(
+      screen.getByText(
+        "Reasonix asks for your provider API key in that terminal. Finish there, then use Refresh above.",
+      ),
+    ).toBeDefined();
+    expect(screen.queryByText(/sign-in code/)).toBeNull();
   });
 
   // Row 2: a provider whose whole `loginCapability` is `null` (Cursor,
