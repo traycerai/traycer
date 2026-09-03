@@ -45,6 +45,9 @@ import type {
 } from "@traycer-clients/shared/platform/browser-view";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { FakeBrowserViewBridge } from "@/lib/browser-view/__tests__/fake-browser-view-overlay-bridge";
+import { useKeybindingStore } from "@/stores/settings/keybinding-store";
+import { getDefaultBindings } from "@/lib/keybindings/actions";
+import type { BrowserViewReservedChord } from "@traycer-clients/shared/platform/browser-view";
 
 const BASE_KEY: BrowserViewTileKey = {
   viewTabId: "view-1",
@@ -1090,4 +1093,81 @@ function rect(
     bottom: top + height,
     toJSON: () => ({}),
   };
+}
+
+/**
+ * The reserved-chord policy is derived from the reader's live bindings, so the
+ * bridge has to keep pushing it - registration is the ONLY copy of those
+ * bindings in the guest input path, and main holds whatever it was last told.
+ * A one-shot registration keyed on the runner host reads as correct and leaves
+ * a rebind half-done: the app renderer honours the new chord, the focused tile
+ * still claiming the old one.
+ */
+describe("<BrowserOverlayCoordinatorBridge /> reserved chords", () => {
+  afterEach(() => {
+    cleanup();
+    act(() => {
+      useKeybindingStore.setState({ bindings: getDefaultBindings() });
+    });
+  });
+
+  it("re-pushes the policy when a forwarded action is rebound", async () => {
+    const bridge = new RecordingChordsBridge();
+    renderBrowserOverlayCoordinator(bridge);
+
+    await waitFor(() => {
+      expect(bridge.reservedCalls).toHaveLength(1);
+    });
+    expect(tokensOf(bridge.reservedCalls[0])).toContain("mod+shift+w");
+
+    act(() => {
+      useKeybindingStore.getState().setBinding("epic.close", "mod+shift+e");
+    });
+
+    await waitFor(() => {
+      expect(bridge.reservedCalls).toHaveLength(2);
+    });
+    const latest = tokensOf(bridge.reservedCalls[1]);
+    expect(latest).toContain("mod+shift+e");
+    expect(latest).not.toContain("mod+shift+w");
+  });
+
+  it("drops an unbound action's chord from the pushed policy", async () => {
+    const bridge = new RecordingChordsBridge();
+    renderBrowserOverlayCoordinator(bridge);
+
+    await waitFor(() => {
+      expect(bridge.reservedCalls).toHaveLength(1);
+    });
+    expect(tokensOf(bridge.reservedCalls[0])).toContain("mod+j");
+
+    act(() => {
+      useKeybindingStore.getState().clearBinding("app.terminal.toggle");
+    });
+
+    await waitFor(() => {
+      expect(bridge.reservedCalls).toHaveLength(2);
+    });
+    const latest = tokensOf(bridge.reservedCalls[1]);
+    expect(latest).not.toContain("mod+j");
+    // The browser's own rows are not bindings and never move.
+    expect(latest).toContain("mod+w");
+  });
+});
+
+class RecordingChordsBridge extends FakeBrowserViewBridge {
+  readonly reservedCalls: (readonly BrowserViewReservedChord[])[] = [];
+
+  override setReservedChords(
+    chords: readonly BrowserViewReservedChord[],
+  ): Promise<void> {
+    this.reservedCalls.push(chords);
+    return Promise.resolve();
+  }
+}
+
+function tokensOf(
+  chords: readonly BrowserViewReservedChord[] | undefined,
+): readonly string[] {
+  return (chords ?? []).map((chord) => chord.token);
 }

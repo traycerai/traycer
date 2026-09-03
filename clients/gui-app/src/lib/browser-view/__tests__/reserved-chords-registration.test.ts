@@ -1,13 +1,30 @@
 import { describe, expect, it } from "vitest";
 import {
-  RESERVED_BROWSER_CHORDS,
   browserScopedChordLabel,
+  reservedBrowserChordsFor,
 } from "@/lib/browser-view/reserved-chords-registration";
-import { getDefaultBindings } from "@/lib/keybindings/actions";
+import { getDefaultBindings, type ActionId } from "@/lib/keybindings/actions";
+import type { ChordString } from "@/lib/keybindings/chord";
 import { findConflict } from "@/lib/keybindings/conflicts";
 
-function commandFor(token: string): string | null | undefined {
-  return RESERVED_BROWSER_CHORDS.find((row) => row.token === token)?.command;
+type Bindings = Readonly<Record<ActionId, ChordString | null>>;
+
+function bindingsWith(
+  overrides: Partial<Record<ActionId, ChordString | null>>,
+): Bindings {
+  return { ...getDefaultBindings(), ...overrides };
+}
+
+function commandFor(
+  bindings: Bindings,
+  token: string,
+): string | null | undefined {
+  return reservedBrowserChordsFor(bindings).find((row) => row.token === token)
+    ?.command;
+}
+
+function defaultCommandFor(token: string): string | null | undefined {
+  return commandFor(getDefaultBindings(), token);
 }
 
 /**
@@ -17,9 +34,9 @@ function commandFor(token: string): string | null | undefined {
  */
 describe("reserved browser chords", () => {
   it("scopes the browser's own chords to the focused tile", () => {
-    expect(commandFor("mod+w")).toBe("closeTab");
-    expect(commandFor("mod+t")).toBe("newTab");
-    expect(commandFor("mod+l")).toBe("focusAddressBar");
+    expect(defaultCommandFor("mod+w")).toBe("closeTab");
+    expect(defaultCommandFor("mod+t")).toBe("newTab");
+    expect(defaultCommandFor("mod+l")).toBe("focusAddressBar");
   });
 
   it("forwards app-level navigation to the renderer instead", () => {
@@ -31,7 +48,7 @@ describe("reserved browser chords", () => {
       "mod+shift+]",
       "mod+shift+[",
     ]) {
-      expect(commandFor(token)).toBeNull();
+      expect(defaultCommandFor(token)).toBeNull();
     }
   });
 
@@ -46,14 +63,73 @@ describe("reserved browser chords", () => {
     expect(bindings["app.terminal.new"]).toBe("mod+shift+j");
     expect(bindings["app.terminal.toggle"]).toBe("mod+j");
     for (const token of ["mod+shift+b", "mod+shift+j", "mod+j"]) {
-      expect(commandFor(token)).toBeNull();
+      expect(defaultCommandFor(token)).toBeNull();
     }
   });
 
   it("leaves everything else to the page", () => {
     // `epic.new` (mod+n) and the close-others family stay menu-/page-owned.
-    expect(commandFor("mod+n")).toBeUndefined();
-    expect(commandFor("mod+alt+w")).toBeUndefined();
+    expect(defaultCommandFor("mod+n")).toBeUndefined();
+    expect(defaultCommandFor("mod+alt+w")).toBeUndefined();
+  });
+
+  /**
+   * The forwarded rows follow the reader's LIVE binding, and the OLD default
+   * has to stop being reserved in the same move.
+   *
+   * Reserving both would be worse than reserving neither: the stale chord stays
+   * claimed for an action it no longer runs, so the page never sees it either.
+   */
+  it("follows a rebound action to its new chord and releases the old one", () => {
+    const rebound = bindingsWith({ "epic.close": "mod+shift+e" });
+    expect(commandFor(rebound, "mod+shift+e")).toBeNull();
+    expect(commandFor(rebound, "mod+shift+w")).toBeUndefined();
+  });
+
+  /**
+   * An UNBOUND action reserves nothing. There is no chord to claim, and holding
+   * its old default would take a key away from the page for an action that can
+   * no longer fire from any chord.
+   */
+  it("reserves nothing for an action the reader has unbound", () => {
+    const unbound = bindingsWith({ "app.terminal.toggle": null });
+    expect(commandFor(unbound, "mod+j")).toBeUndefined();
+    // The rest of the policy is untouched - this is one row leaving, not the
+    // derivation collapsing.
+    expect(commandFor(unbound, "mod+shift+j")).toBeNull();
+    expect(commandFor(unbound, "mod+w")).toBe("closeTab");
+  });
+
+  /**
+   * A forwarded action rebound ONTO a browser-scoped chord does not get a
+   * second row. Two rows for one token would leave main's last-write-wins table
+   * deciding whether Cmd+W closes the browser tab or is replayed to the app,
+   * which is precisely the ambiguity the rebinding UI already warns about.
+   */
+  it("does not duplicate a token the browser already scopes", () => {
+    const collided = bindingsWith({ "epic.close": "mod+w" });
+    const rows = reservedBrowserChordsFor(collided).filter(
+      (row) => row.token === "mod+w",
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.command).toBe("closeTab");
+  });
+
+  /**
+   * Two forwarded actions on the SAME chord yield one row, not two.
+   *
+   * The rebinding UI warns about a duplicate but does not make one
+   * unrepresentable - `mergePersistedKeybindings` can also carry a custom
+   * binding forward onto a chord that has since become another action's
+   * default. Main's table is keyed by token, so a second row for a token it
+   * already holds is a silent last-write-wins.
+   */
+  it("emits one row when two forwarded actions share a chord", () => {
+    const collided = bindingsWith({ "epic.next": "mod+k" });
+    const rows = reservedBrowserChordsFor(collided).filter(
+      (row) => row.token === "mod+k",
+    );
+    expect(rows).toHaveLength(1);
   });
 
   it("labels only the browser-scoped rows", () => {

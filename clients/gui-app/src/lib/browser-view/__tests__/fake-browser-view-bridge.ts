@@ -17,6 +17,7 @@ import type {
   BrowserViewOverlayOcclusionResult,
   BrowserViewOverlayRelease,
   BrowserViewOverlayReleaseResult,
+  BrowserViewReservedChord,
   BrowserViewAttachSurface,
   BrowserViewDetachSurface,
   BrowserViewSnapshotInvalidatedChange,
@@ -70,7 +71,13 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
     return Promise.resolve();
   }
 
-  setReservedChords(): Promise<void> {
+  // Declares the real parameter (the interface's) rather than dropping it: a
+  // subclass cannot narrow a `()` signature into one that takes an argument, so
+  // omitting it here is what makes the registered policy unobservable to a
+  // recording double.
+  setReservedChords(
+    _chords: readonly BrowserViewReservedChord[],
+  ): Promise<void> {
     return Promise.resolve();
   }
 

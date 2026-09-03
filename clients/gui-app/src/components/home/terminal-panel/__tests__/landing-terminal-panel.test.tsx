@@ -8,6 +8,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { CanonicalTerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-schemas";
 import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
 import type { PlainTerminalCollection } from "@/lib/terminals/plain-terminal-authority";
@@ -91,7 +92,7 @@ const mocks = vi.hoisted(() => {
     clientActiveHostId: null as string | null,
     probeData: undefined as TerminalListFixture | undefined,
     freshProbeData: undefined as TerminalListFixture | undefined,
-    probeError: null,
+    probeError: null as HostRpcError | null,
     dataUpdatedAt: 1,
     primaryWorkspacePath: null as string | null,
     isMobile: false,
@@ -3331,6 +3332,110 @@ describe("<LandingTerminalPanel />", () => {
     expect(
       await screen.findByText("Connecting to the selected host…"),
     ).toBeTruthy();
+  });
+
+  /**
+   * The same class as the three above, one level UP. `availability` also gates
+   * whether the panel MOUNTS, and an `unsupported` / `no-active-host` verdict
+   * about the terminal target unmounted every row - including a browser row on
+   * a device that verdict says nothing about. Fixing it only inside the body
+   * left the harm reachable through the branch above it.
+   *
+   * Asserted on the tile's PROPS, as the visibility work established: a native
+   * `WebContentsView` is painted over the window, so its presence and its
+   * on-screen state are the props the panel decides, not DOM the test can see.
+   */
+  it("keeps a live device's browser row when the target host is unsupported", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = undefined;
+    mocks.freshProbeData = undefined;
+    // The terminal target is an old host that cannot serve `terminal.list`.
+    mocks.probeError = new HostRpcError({
+      code: "DOWNGRADE_UNSUPPORTED",
+      message: "terminal.list is not supported by this host",
+      requestId: "req-unsupported",
+      method: "terminal.list",
+      fatalDetails: null,
+    });
+    mocks.browserSessionsByHost = {
+      "host-b": browserSessionsState({ hostId: "host-b" }),
+    };
+    useLandingPanelStore.getState().addTab({
+      kind: "browser",
+      instanceId: "browser-instance",
+      hostId: "host-b",
+      sessionId: "browser-session",
+      tabId: "browser-tab",
+      name: "example.com",
+      titleSource: "default",
+    });
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    const tile = await screen.findByTestId(
+      "landing-browser-tile-browser-instance",
+    );
+    expect(tile.getAttribute("data-active")).toBe("true");
+    expect(tile.getAttribute("data-panel-open")).toBe("true");
+  });
+
+  it("keeps a live device's browser row when no host is selected", async () => {
+    // `activeHostId: null` is `no-active-host` - the panel has no terminal
+    // target at all. The browser row still names a device that is serving it.
+    mocks.activeHostId = null;
+    mocks.clientActiveHostId = null;
+    mocks.primaryWorkspacePath = null;
+    mocks.probeData = undefined;
+    mocks.freshProbeData = undefined;
+    mocks.browserSessionsByHost = {
+      "host-b": browserSessionsState({ hostId: "host-b" }),
+    };
+    useLandingPanelStore.getState().addTab({
+      kind: "browser",
+      instanceId: "browser-instance",
+      hostId: "host-b",
+      sessionId: "browser-session",
+      tabId: "browser-tab",
+      name: "example.com",
+      titleSource: "default",
+    });
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    const tile = await screen.findByTestId(
+      "landing-browser-tile-browser-instance",
+    );
+    expect(tile.getAttribute("data-active")).toBe("true");
+    expect(tile.getAttribute("data-panel-open")).toBe("true");
+  });
+
+  // The other half, unchanged: with only terminal rows, every row IS served by
+  // the target host, so the verdict speaks for all of them and the panel still
+  // goes away exactly as it does today.
+  it("still unmounts a terminal-only panel when no host is selected", async () => {
+    mocks.activeHostId = null;
+    mocks.clientActiveHostId = null;
+    mocks.primaryWorkspacePath = null;
+    mocks.probeData = undefined;
+    mocks.freshProbeData = undefined;
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
+      instanceId: "terminal-instance",
+      sessionId: "terminal-session",
+      hostId: "host-a",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+    });
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("landing-terminal-panel")).toBeNull();
+    });
+    expect(screen.queryByTestId("landing-terminal-tile")).toBeNull();
   });
 
   // CSS cannot hide a `WebContentsView`: it is painted over the window by the

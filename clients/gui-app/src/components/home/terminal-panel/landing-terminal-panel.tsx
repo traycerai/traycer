@@ -284,6 +284,33 @@ function dispatchLandingTerminalClose(args: {
  * every browser close, and `closePanelTab` writes the tombstone and stops.
  */
 
+/**
+ * Whether the selected target's verdict may speak for these rows.
+ *
+ * `target.availability` is the TERMINAL target host's verdict, and it decides
+ * two things about this panel: whether the panel is mounted at all, and whether
+ * its body is replaced by a status line. Both are correct for a terminal row,
+ * which is served by that device.
+ *
+ * A BROWSER row is not. It is maintained through its own device's independent
+ * coordinator, its tile renders that device's own reconnecting and dormant
+ * state, and none of that is the target's to answer for - so a target that is
+ * unsupported, unselected or still resolving must not take a working page off
+ * screen and replace it with a sentence about a machine it has nothing to do
+ * with.
+ *
+ * This is the rule in ONE place on purpose. It was first written as a term
+ * inside the body's status branch, and the mount decision above that branch
+ * kept the harm reachable through a sibling verdict - a per-level exemption is
+ * how that happens. Pass what the verdict is about to govern: every row for the
+ * mount decision, the row on screen for the body.
+ */
+function landingTargetVerdictGoverns(
+  rows: ReadonlyArray<LandingPanelTabRef>,
+): boolean {
+  return landingBrowserTabs(rows).length === 0;
+}
+
 function directoryRequestFor(
   target: LandingTerminalTarget,
   mode: LandingTerminalDirectoryRequestMode,
@@ -1350,8 +1377,11 @@ export function LandingTerminalPanel(): ReactNode {
   // captured verdict so a mid-gesture switch to an unsupported host cannot
   // unmount the panel (and destroy the captured host's reconciliation).
   const panelUnavailable =
-    target.availability === "no-active-host" ||
-    target.availability === "unsupported";
+    (target.availability === "no-active-host" ||
+      target.availability === "unsupported") &&
+    // Every row, not the active one: the panel is the strip too, and unmounting
+    // it takes away rows the verdict does not speak for.
+    landingTargetVerdictGoverns(tabs);
 
   const renamePanelTab = (instanceId: string, name: string): void => {
     const tab = useLandingPanelStore
@@ -2245,17 +2275,13 @@ function LandingTerminalPanelBody(props: {
   // DISABLED cards carrying that same message, not a blank body that never
   // explains what the panel is waiting to offer.
   //
-  // So does a browser row, for a different reason: `availability` is the
-  // TERMINAL target host's, and the panel's rows name several devices. A
-  // browser tab is maintained through its own device's coordinator and its tile
-  // renders that device's own reconnecting / dormant state, so blanking it
-  // while an unrelated host resolves takes a working page off screen and
-  // replaces it with a sentence about a machine it has nothing to do with.
+  // So does a browser row, by `landingTargetVerdictGoverns` - the same rule the
+  // panel's mount decision reads, applied here to the row on screen.
   if (
     props.availability === "unknown" &&
     props.directoryPicker === null &&
     !placeholderActive &&
-    activeTab?.kind !== "browser"
+    landingTargetVerdictGoverns(activeTab === null ? [] : [activeTab])
   ) {
     return (
       <div
