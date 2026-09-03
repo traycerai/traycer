@@ -59,8 +59,13 @@ interface AgentActivityState {
    * none is. Distinct from `servedBy`, which says whether the UNION reaches
    * beyond that host (local vs. cloud) - this says WHICH host built it, so a
    * caller holding a session bound to a different host can tell a narrow
-   * union apart from one that happens to cover it. Set once per epoch, at
-   * open, by the one caller that knows which host it dialed; never inferred.
+   * union apart from one that happens to cover it. Re-asserted at the start
+   * of every dial - the initial open AND every reopen - by the one caller
+   * that knows which host it is dialing; never inferred. Re-asserting on a
+   * reopen (rather than trusting it survived) matters because a `closed`
+   * status runs through `noteAgentActivityConnectionStatus`, which nulls this
+   * field along with the rest of the epoch's claim, and a reopen dials again
+   * without going through this store's outer open path a second time.
    */
   readonly servingHostId: string | null;
   reset(): void;
@@ -179,12 +184,6 @@ export function openAgentActivityStream(
   // stays valid across a host switch (see `resetHostReplica`). Only the health
   // of the stream that reported it belongs to the epoch.
   retireEpochHealthClaim();
-  // Set unconditionally, after the retire above: this is the new epoch's own
-  // fact, known regardless of whether it ever attests, and the branch that
-  // reads it (`agentActivityPlaneCoversHost`) is already gated behind
-  // `agentActivityPlaneAnswers()` by every caller - so a `servingHostId` set
-  // ahead of the first frame is never consulted before it is current.
-  useAgentActivityStore.setState({ servingHostId });
   let disposed = false;
   let currentClient: AgentActivityStreamClient | null = null;
   const reopenScheduler = reconnectEngine.openReopenLane(() => {
@@ -196,6 +195,18 @@ export function openAgentActivityStream(
 
   function openClient(): void {
     if (disposed) return;
+    // Re-asserted on EVERY dial, not just the first: a `closed` status runs
+    // through `noteAgentActivityConnectionStatus`, which nulls this field
+    // (a closed stream retires the whole reading, host included), and the
+    // reopen lane above calls `openClient()` directly rather than this outer
+    // function - so without a set here, one reopen leaves `servingHostId`
+    // stuck at `null` forever while the stream is, in fact, open against this
+    // same host again. Ahead of the client construction below for the same
+    // reason the original single set led the function: the branch that reads
+    // it (`agentActivityPlaneCoversHost`) is gated behind
+    // `agentActivityPlaneAnswers()` by every caller, so a value set ahead of
+    // the first frame is never consulted before it is current.
+    useAgentActivityStore.setState({ servingHostId });
     let client: AgentActivityStreamClient | null = null;
     client = new AgentActivityStreamClient({
       wsStreamClient,
@@ -357,9 +368,17 @@ export function agentActivityPlaneCoversHost(hostId: string): boolean {
  * stale verdict until an unrelated write.
  *
  * `servingHostId` is deliberately NOT tracked here as a third field: every
- * write that changes it goes through `openAgentActivityStream`, which calls
- * `retireEpochHealthClaim` first - so `answers` always flips false and back
- * around any `servingHostId` change, and a listener already wakes on that.
+ * write that sets it to a REAL host (the initial open and every reopen, both
+ * inside `openClient`) lands while `answers` is already false - either
+ * `retireEpochHealthClaim` (initial open) or the `closed` status that
+ * preceded the reopen (`noteAgentActivityConnectionStatus`, which also nulls
+ * this field) already dropped it, and nothing about `openClient` itself moves
+ * `connectionStatus` or `stateFrameSeenThisEpoch` back. `answers` only
+ * returns to true later, once THIS dial's own status and frame land - by
+ * which point the host is already current - so that later flip is what wakes
+ * a listener, not a bracket around the `servingHostId` write itself. Either
+ * way a caller gated behind `agentActivityPlaneAnswers()` (every caller,
+ * `agentActivityPlaneCoversHost`'s own doc) never observes a stale value.
  */
 export function subscribeAgentActivityPlaneHealth(
   listener: () => void,

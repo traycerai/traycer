@@ -4,6 +4,7 @@ import {
   agentActivityPlaneAnswers,
   agentActivityPlaneCoversHost,
   agentActivityPlaneSpansFleet,
+  noteAgentActivityConnectionStatus,
   subscribeAgentActivityPlaneHealth,
   useAgentActivityStore,
 } from "@/stores/agent-activity-store";
@@ -217,15 +218,20 @@ describe("agentActivityPlaneCoversHost", () => {
   });
 
   it("covers no host once the serving connection has fully closed", () => {
-    // `noteAgentActivityConnectionStatus` clears `servingHostId` to `null` on
-    // `closed` - this is that state, so even `host-a`, the union's own
-    // former host, reads uncovered rather than stale.
+    // Driven through the real setter, not hand-set to the post-close shape:
+    // a future `closed` branch that stopped clearing `servingHostId` would
+    // still pass a fixture that assumes the clearing already happened.
     useAgentActivityStore.setState({
-      servedBy: null,
+      servedBy: "local",
       cloudSyncStatus: null,
-      servingHostId: null,
+      servingHostId: "host-a",
     });
+    expect(agentActivityPlaneCoversHost("host-a")).toBe(true);
 
+    noteAgentActivityConnectionStatus("closed");
+
+    // `host-a`, the union's own former host, reads uncovered rather than
+    // stale now that the connection that attested it is gone.
     expect(agentActivityPlaneCoversHost("host-a")).toBe(false);
   });
 });

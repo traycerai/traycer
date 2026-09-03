@@ -165,6 +165,49 @@ function createStubReconnectEngine(): HostReconnectEngine {
   };
 }
 
+/**
+ * Like {@link createStubReconnectEngine}, but the reopen lane also hands back
+ * the `reopen` callback `openAgentActivityStream` gives `openReopenLane`, so a
+ * test can fire it directly - standing in for the real engine's backoff timer
+ * elapsing, which is that module's own suite's job to cover, not this file's.
+ */
+function createReopenCapturingReconnectEngine(): {
+  readonly reconnectEngine: HostReconnectEngine;
+  readonly fireReopen: () => void;
+} {
+  let reopen: (() => void) | null = null;
+  const reconnectEngine: HostReconnectEngine = {
+    createRebuildPacer: vi.fn(createStubRebuildPacer),
+    openReopenLane: vi.fn((onReopen: () => void) => {
+      reopen = onReopen;
+      return createStubReopenLane();
+    }),
+    claimWakeEpisode: vi.fn(() => true),
+    isWithinWakeEpisode: vi.fn(() => false),
+    dispose: vi.fn(),
+  };
+  return {
+    reconnectEngine,
+    fireReopen: () => {
+      if (reopen === null) throw new Error("openReopenLane was never called");
+      reopen();
+    },
+  };
+}
+
+/** A close reason a reopen lane actually retries (`isReopenableHostStreamClose`). */
+function reopenableFatalClose(): StreamCloseReason {
+  return {
+    kind: "fatalError",
+    details: {
+      code: "CONNECTION_LOST",
+      reason: "test close: CONNECTION_LOST",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
+  };
+}
+
 const EPIC_ID = "epic-1";
 const AGENT_ID = "agent-1";
 
@@ -376,6 +419,53 @@ describe("agent activity stream epoch handoff", () => {
     driveOpenWithNarrowFrame(secondSession);
     expect(agentActivityPlaneCoversHost("host-b")).toBe(true);
     expect(agentActivityPlaneCoversHost("host-a")).toBe(false);
+  });
+
+  it("re-asserts the serving host on every reopen dial, not only the first", () => {
+    // A NARROW frame (`cloudSyncStatus: null`), not the shared
+    // `driveToOpenAndConnected` helper's fleet-spanning one:
+    // `agentActivityPlaneCoversHost` short-circuits true for ANY host once the
+    // union spans the fleet, which would prove nothing about `servingHostId`
+    // specifically.
+    function driveOpenWithNarrowFrame(session: StubSession): void {
+      session.emitStatus("open", null);
+      session.emitFrame({
+        kind: "state",
+        servedBy: "local",
+        byEpic: { [EPIC_ID]: { working: [AGENT_ID], turn: [AGENT_ID] } },
+        cloudSyncStatus: null,
+        hasBinaryPayload: false,
+      });
+    }
+
+    const { reconnectEngine, fireReopen } =
+      createReopenCapturingReconnectEngine();
+    const session = new StubSession();
+    const client = new StubHostStreamClient(session, "host-stream-1");
+
+    openAgentActivityStream(reconnectEngine, client, null, "host-a");
+    driveOpenWithNarrowFrame(session);
+    expect(agentActivityPlaneCoversHost("host-a")).toBe(true);
+
+    // A terminal close retires the whole reading through
+    // `noteAgentActivityConnectionStatus("closed")` - `servingHostId`
+    // included, same as every other field.
+    session.emitStatus("closed", reopenableFatalClose());
+    expect(useAgentActivityStore.getState().servingHostId).toBeNull();
+
+    // The reopen lane's timer firing, simulated directly: the callback
+    // `openAgentActivityStream` gave `openReopenLane` closes the old client
+    // and dials a fresh one against the same stub session - it does not go
+    // through `openAgentActivityStream` again, so nothing outside `openClient`
+    // itself can re-assert `servingHostId` for this dial.
+    fireReopen();
+    driveOpenWithNarrowFrame(session);
+
+    // Without the fix this reads false forever past a reopen: the close above
+    // cleared `servingHostId` to `null` and nothing on the reopen path re-set
+    // it, though the stream is, in fact, open against "host-a" again with its
+    // own fresh attestation.
+    expect(agentActivityPlaneCoversHost("host-a")).toBe(true);
   });
 
   it("the per-user cloud union survives a stream replacement", () => {
