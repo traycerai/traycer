@@ -160,6 +160,10 @@ function ComposerMobileToolbarImpl(props: ComposerMobileToolbarProps) {
           stopDisabled={stopDisabled}
           onStopTurn={onStopTurn}
           disabledHint={composerDisabledHint}
+          // Return is a newline on a soft keyboard, so this button is the only
+          // way to queue a message mid-turn: Stop sits beside it, never in
+          // its place.
+          stopPlacement="beside"
         />
       </div>
       <ComposerOptionsSheet
