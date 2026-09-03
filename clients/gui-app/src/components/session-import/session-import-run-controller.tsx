@@ -195,7 +195,13 @@ export function SessionImportRunController(): null {
       // subscription now and stays.
       if (!attached && clientRef.current === probe) closeClient();
     };
-  }, [clientGeneration, closeClient, runCallbacks, streamHostId, wsStreamClient]);
+  }, [
+    clientGeneration,
+    closeClient,
+    runCallbacks,
+    streamHostId,
+    wsStreamClient,
+  ]);
 
   useEffect(() => {
     setSessionImportStartHandle({ start });

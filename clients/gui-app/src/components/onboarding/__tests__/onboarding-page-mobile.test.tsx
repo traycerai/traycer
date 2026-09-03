@@ -54,9 +54,8 @@ const sessionImportScanMock = vi.hoisted(() => ({
 }));
 
 vi.mock("@/components/session-import/use-session-import-scan", async () => {
-  const model = await import(
-    "@/components/session-import/session-import-model"
-  );
+  const model =
+    await import("@/components/session-import/session-import-model");
   return {
     useSessionImportScan: (active: boolean) => {
       sessionImportScanMock.activeCalls.push(active);
