@@ -1,25 +1,28 @@
 /**
- * Sentry event shaping shared by the two inits this app runs -
- * `electron-main/app/crash-reporter.ts` (main process) and
- * `renderer-shell/main.tsx` (app-shell renderer).
+ * Sentry event shaping shared by every browser-SDK-family init a Traycer
+ * client runs: the desktop main process (`@sentry/electron/main`), the desktop
+ * app-shell renderer (`@sentry/electron/renderer`), and the mobile shell
+ * (`@sentry/browser`). One policy, one detection leaf, so a credential class
+ * caught on one surface is caught on all of them.
  *
  * `@sentry/electron`'s `electronBreadcrumbsIntegration` writes the full
  * renderer URL into every `webContents.*` breadcrumb it records, and the
  * browser SDK does the same for fetch/xhr/navigation; console breadcrumbs
  * carry the joined `console.*` arguments, and an unhandled error uploads its
  * message verbatim in `exception.values[].value`. None of that passes a
- * redactor on its own, and breadcrumbs are persisted to `scope_v3.json` and
- * re-attached to a later, unrelated crash.
+ * redactor on its own, and breadcrumbs are persisted (desktop: `scope_v3.json`)
+ * and re-attached to a later, unrelated crash.
  *
  * Detection comes from `@traycer/protocol/utils/text/redaction` and nothing
  * else, and the deep walk with its depth/array/key bounds from
- * `@traycer/protocol/utils/text/sentry-scrub`. What lives here is the
- * desktop's Sentry policy: which fields to walk and what to drop outright.
+ * `@traycer/protocol/utils/text/sentry-scrub`. What lives here is the client
+ * Sentry policy: which fields to walk and what to drop outright.
  *
- * Deliberately does NOT reach into `electron-main/app/support-scrubber.ts`.
- * That module is the support-bundle policy (path pseudonymization, no length
- * cap, line-wise application); telemetry egress must not inherit whatever it
- * decides next, and the renderer cannot import from `electron-main/` at all.
+ * Deliberately does NOT reach into the desktop's
+ * `electron-main/app/support-scrubber.ts`. That module is the support-bundle
+ * policy (path pseudonymization, no length cap, line-wise application);
+ * telemetry egress must not inherit whatever it decides next, and neither the
+ * renderer nor the mobile shell can import from `electron-main/` at all.
  */
 
 import {
@@ -35,7 +38,7 @@ import {
 } from "@traycer/protocol/utils/text/sentry-scrub";
 
 /** The slice of a Sentry event these hooks read and rewrite. */
-export interface DesktopSentryEvent {
+export interface ClientSentryEvent {
   platform?: string | undefined;
   message?: string | undefined;
   logentry?: { message?: string | undefined; params?: unknown } | undefined;
@@ -45,16 +48,16 @@ export interface DesktopSentryEvent {
   tags?: { [key: string]: unknown } | undefined;
   extra?: { [key: string]: unknown } | undefined;
   contexts?: { [key: string]: unknown } | undefined;
-  breadcrumbs?: DesktopSentryBreadcrumb[] | undefined;
-  request?: DesktopSentryRequest | undefined;
+  breadcrumbs?: ClientSentryBreadcrumb[] | undefined;
+  request?: ClientSentryRequest | undefined;
 }
 
 /**
- * The renderer SDK attaches request data to an event. Cookies and headers are
+ * The browser SDK attaches request data to an event. Cookies and headers are
  * removed rather than scrubbed: neither carries anything a maintainer reads,
  * and both carry session credentials whole.
  */
-interface DesktopSentryRequest {
+interface ClientSentryRequest {
   url?: string | undefined;
   query_string?: unknown;
   cookies?: unknown;
@@ -62,13 +65,11 @@ interface DesktopSentryRequest {
   data?: unknown;
 }
 
-export interface DesktopSentryBreadcrumb extends UrlBearingBreadcrumb {
+export interface ClientSentryBreadcrumb extends UrlBearingBreadcrumb {
   message?: string | undefined;
 }
 
-export function scrubDesktopSentryEventInPlace(
-  event: DesktopSentryEvent,
-): void {
+export function scrubSentryEventInPlace(event: ClientSentryEvent): void {
   if (event.message !== undefined) {
     event.message = redactSensitiveText(event.message);
   }
@@ -90,9 +91,10 @@ export function scrubDesktopSentryEventInPlace(
   }
   // Tags are indexed and searchable in the Sentry UI, which is exactly why a
   // caller reaches for one - and `setTag("url", …)` / a tag built from an
-  // error string carries the same credentials `extra` does. The minidump-drop
-  // policy reads `tags` BEFORE this runs (see `crash-reporter-guest-scope.ts`),
-  // so redacting them here cannot reopen that channel.
+  // error string carries the same credentials `extra` does. The desktop's
+  // minidump-drop policy reads `tags` BEFORE this runs (see its
+  // `crash-reporter-guest-scope.ts`), so redacting them here cannot reopen
+  // that channel.
   if (event.tags !== undefined) {
     event.tags = deepScrubSentryRecord(event.tags, redactSensitiveText);
   }
@@ -103,14 +105,14 @@ export function scrubDesktopSentryEventInPlace(
     event.contexts = deepScrubSentryRecord(event.contexts, redactSensitiveText);
   }
   for (const breadcrumb of event.breadcrumbs ?? []) {
-    scrubDesktopBreadcrumbInPlace(breadcrumb);
+    scrubSentryBreadcrumbInPlace(breadcrumb);
   }
   if (event.request !== undefined) {
-    scrubDesktopRequestInPlace(event.request);
+    scrubRequestInPlace(event.request);
   }
 }
 
-function scrubDesktopRequestInPlace(request: DesktopSentryRequest): void {
+function scrubRequestInPlace(request: ClientSentryRequest): void {
   delete request.cookies;
   delete request.headers;
   if (request.url !== undefined) {
@@ -127,8 +129,8 @@ function scrubDesktopRequestInPlace(request: DesktopSentryRequest): void {
   }
 }
 
-export function scrubDesktopBreadcrumbInPlace(
-  breadcrumb: DesktopSentryBreadcrumb,
+export function scrubSentryBreadcrumbInPlace(
+  breadcrumb: ClientSentryBreadcrumb,
 ): void {
   reduceBreadcrumbUrlsInPlace(breadcrumb);
   if (breadcrumb.message !== undefined) {
@@ -166,12 +168,12 @@ function reduceBreadcrumbUrlsInPlace(breadcrumb: UrlBearingBreadcrumb): void {
 }
 
 /** A transaction event: the root span's attributes hang off `contexts.trace`. */
-export interface DesktopSentryTransaction extends DesktopSentryEvent {
+export interface ClientSentryTransaction extends ClientSentryEvent {
   transaction?: string | undefined;
-  spans?: DesktopSentrySpan[] | undefined;
+  spans?: ClientSentrySpan[] | undefined;
 }
 
-export interface DesktopSentrySpan {
+export interface ClientSentrySpan {
   description?: string | undefined;
   data?: { [key: string]: unknown } | undefined;
 }
@@ -183,15 +185,17 @@ const URL_BEARING_SPAN_ATTRIBUTES = ["url.full", "http.url", "http.target"];
 const QUERY_SPAN_ATTRIBUTE = "url.query";
 
 /**
- * `beforeSendTransaction`. Tracing is on, and the http / undici
+ * `beforeSendTransaction`. Where tracing is on, the http / undici
  * instrumentations stamp the full request URL - query string and all - onto
  * every span with no `sendDefaultPii` gate, so the tracing envelope needs its
- * own hooks: `beforeSend` never sees a transaction.
+ * own hooks: `beforeSend` never sees a transaction. Registered even where no
+ * tracing integration is installed yet, so that adding one cannot reopen
+ * `url.full`.
  */
-export function scrubDesktopSentryTransactionInPlace(
-  event: DesktopSentryTransaction,
+export function scrubSentryTransactionInPlace(
+  event: ClientSentryTransaction,
 ): void {
-  scrubDesktopSentryEventInPlace(event);
+  scrubSentryEventInPlace(event);
   if (event.transaction !== undefined) {
     event.transaction = redactSensitiveText(event.transaction);
   }
@@ -200,12 +204,12 @@ export function scrubDesktopSentryTransactionInPlace(
     reduceSpanAttributesInPlace(trace["data"]);
   }
   for (const span of event.spans ?? []) {
-    scrubDesktopSentrySpanInPlace(span);
+    scrubSentrySpanInPlace(span);
   }
 }
 
 /** `beforeSendSpan`: child spans travel outside the transaction event. */
-export function scrubDesktopSentrySpanInPlace(span: DesktopSentrySpan): void {
+export function scrubSentrySpanInPlace(span: ClientSentrySpan): void {
   if (span.description !== undefined) {
     span.description = redactSensitiveText(span.description);
   }
