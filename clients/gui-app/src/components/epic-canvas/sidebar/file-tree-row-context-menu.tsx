@@ -26,6 +26,7 @@ import {
 import { Copy, FolderOpen } from "lucide-react";
 import { toast } from "sonner";
 import type { OpenPathsTarget } from "@traycer/protocol/host/editor/unary-schemas";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -200,6 +201,8 @@ function FileTreeRowContextMenuContent(
   // One launch at a time. The menu can be reopened and a target reselected
   // while a slow open is still in flight, and every mutate is queued rather
   // than coalesced, so an unguarded handler launches the same path twice.
+  // The launching items swap their leading icon for the spinner and keep
+  // their label, so the disabled state reads as work in progress.
   const opening = mutation.isPending || openFeedbackActive;
 
   const openPath = (editorId: OpenPathsTarget) => {
@@ -221,7 +224,15 @@ function FileTreeRowContextMenuContent(
             disabled={opening}
             onSelect={() => openPath(editor.id)}
           >
-            <Icon className="size-3.5" aria-hidden />
+            {opening ? (
+              <AgentSpinningDots
+                className="size-3.5"
+                testId={`epic-file-tree-row-open-${editor.id}-spinner`}
+                variant={undefined}
+              />
+            ) : (
+              <Icon className="size-3.5" aria-hidden />
+            )}
             <span>{editor.label}</span>
           </ContextMenuItem>
         );
@@ -249,7 +260,15 @@ function FileTreeRowContextMenuContent(
             disabled={opening}
             onSelect={() => openPath("finder")}
           >
-            <FolderOpen className="size-3.5" aria-hidden />
+            {opening ? (
+              <AgentSpinningDots
+                className="size-3.5"
+                testId="epic-file-tree-row-finder-spinner"
+                variant={undefined}
+              />
+            ) : (
+              <FolderOpen className="size-3.5" aria-hidden />
+            )}
             {/* A folder IS the Finder window; a file is revealed selected
                 inside its parent, which is a different gesture and says so. */}
             <span>

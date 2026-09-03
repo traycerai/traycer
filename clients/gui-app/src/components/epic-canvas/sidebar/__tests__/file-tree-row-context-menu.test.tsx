@@ -340,9 +340,11 @@ describe("<FileTreeRowContextMenu />", () => {
         vi.advanceTimersByTime(700);
       });
 
-      expect(screen.getByTestId("epic-file-tree-row-finder").textContent).toBe(
-        "Reveal in Finder",
-      );
+      // `toContain`, not `toBe`: the spinner glyph shares the item's
+      // textContent. A label swapped to "Opening…" still fails this.
+      expect(
+        screen.getByTestId("epic-file-tree-row-finder").textContent,
+      ).toContain("Reveal in Finder");
     });
 
     it("labels a directory row correctly through the same path", () => {
@@ -417,6 +419,45 @@ describe("<FileTreeRowContextMenu />", () => {
         screen
           .getByTestId("epic-file-tree-row-copy-relative-path")
           .getAttribute("data-disabled"),
+      ).toBeNull();
+    });
+
+    it("swaps each launching item's icon for the spinner, leaving the label alone", () => {
+      menuState.isPending = true;
+      renderTree("host-1");
+
+      fireEvent.contextMenu(screen.getByTestId("row-file"));
+
+      // The disabled state has to read as work in progress rather than as a
+      // dead item, and the label must not become "Opening…" - the spinner is
+      // the only channel that moves.
+      screen.getByTestId("epic-file-tree-row-open-vscode-spinner");
+      screen.getByTestId("epic-file-tree-row-finder-spinner");
+      expect(
+        screen.getByTestId("epic-file-tree-row-open-vscode").textContent,
+      ).toContain("VS Code");
+      // `toContain`, not `toBe`: the spinner glyph shares the item's
+      // textContent. A label swapped to "Opening…" still fails this.
+      expect(
+        screen.getByTestId("epic-file-tree-row-finder").textContent,
+      ).toContain("Reveal in Finder");
+
+      // The Copy items neither disable nor spin - they touch no host.
+      expect(
+        screen.queryByTestId("epic-file-tree-row-copy-path-spinner"),
+      ).toBeNull();
+    });
+
+    it("shows no spinner while idle", () => {
+      renderTree("host-1");
+
+      fireEvent.contextMenu(screen.getByTestId("row-file"));
+
+      expect(
+        screen.queryByTestId("epic-file-tree-row-open-vscode-spinner"),
+      ).toBeNull();
+      expect(
+        screen.queryByTestId("epic-file-tree-row-finder-spinner"),
       ).toBeNull();
     });
 
