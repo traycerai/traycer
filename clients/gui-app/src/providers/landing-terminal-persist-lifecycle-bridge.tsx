@@ -11,7 +11,12 @@ import {
   clearAndResetPersistedStore,
   retargetPersistedStore,
 } from "@/lib/persist/zustand-persist-lifecycle";
-import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
+import {
+  landingBrowserPendingKills,
+  landingTerminalPendingKills,
+  useLandingPanelStore,
+} from "@/stores/home/landing-panel-store";
+import { closeLandingBrowserTombstonesForSignOut } from "@/providers/landing-browser-tombstone-drain";
 
 export interface LandingTerminalPersistLifecycleBridgeProps {
   readonly children: ReactNode;
@@ -32,7 +37,14 @@ export function LandingTerminalPersistLifecycleBridge(
   const defaultClient = useHostClient();
   const directory = useHostDirectory();
   const drainTombstones = useCallback(() => {
-    for (const pending of useLandingPanelStore.getState().pendingKills) {
+    const pendingKills = useLandingPanelStore.getState().pendingKills;
+    // Narrowed at the predicate, like every other consumer of this mixed list.
+    // A browser tombstone's `sessionId` names the device's shared BROWSER
+    // session, drawn from a namespace `landingTabRefKey` refuses to assume is
+    // disjoint from terminal ids - which is why it carries a `kind` segment at
+    // all. Sending it to `terminal.kill` is the wrong RPC for the record, and
+    // on a collision it kills a live PTY nobody asked to kill.
+    for (const pending of landingTerminalPendingKills(pendingKills)) {
       const entry = directory.findById(pending.hostId);
       const client =
         entry === null ? null : buildDialableHostClient(defaultClient, entry);
@@ -47,6 +59,11 @@ export function LandingTerminalPersistLifecycleBridge(
           () => undefined,
         );
     }
+    // The browser half travels the coordinator, not an RPC of its own, so it
+    // can only be discharged for a device whose stream is up in this window.
+    closeLandingBrowserTombstonesForSignOut(
+      landingBrowserPendingKills(pendingKills),
+    );
   }, [defaultClient, directory]);
   const onTransition = useCallback(
     (transition: AuthIdentityTransition) => {

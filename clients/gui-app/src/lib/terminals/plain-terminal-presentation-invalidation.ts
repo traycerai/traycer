@@ -146,9 +146,16 @@ function hasPlainTerminalPresentationRefs(
     }),
   );
   if (closed) return true;
-  return useLandingPanelStore
-    .getState()
-    .tabs.some((tab) => tab.hostId === hostId && tab.sessionId === terminalId);
+  // Narrowed like its two siblings in this file. The landing list is mixed, and
+  // a browser tab's `sessionId` names the device's shared browser session -
+  // a host-minted id from a namespace nothing proves disjoint from terminal
+  // ids, which is exactly why `landingTabRefKey` carries a `kind` segment. On
+  // a collision this answered `true` for a ref that is not there, so the sweep
+  // below removed nothing and `fanOutPlainTerminalDeletionOnce` still reported
+  // the deletion as discharged.
+  return landingTerminalTabs(useLandingPanelStore.getState().tabs).some(
+    (tab) => tab.hostId === hostId && tab.sessionId === terminalId,
+  );
 }
 
 /**

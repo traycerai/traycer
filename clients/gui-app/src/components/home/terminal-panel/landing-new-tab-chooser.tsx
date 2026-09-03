@@ -52,27 +52,65 @@ export function LandingNewTabChooser(
   const terminalEnabled = props.terminal.disabledReason === null;
   const browserEnabled = props.browser.disabledReason === null;
 
-  // Terminal takes focus, per the core flows - unless it is the one that cannot
-  // be picked, in which case parking focus on a dead control would make Enter
-  // do nothing with no explanation of why.
+  // Placement is a ONE-SHOT: on mount, and again on the false -> true edge of
+  // `takeFocus`. It deliberately does not re-place when a card's gate moves,
+  // because those gates settle during the interaction - a device publishing its
+  // inventory flips `browserEnabled` seconds after the panel opens - and
+  // re-placing there takes the keyboard back from wherever the user put it. The
+  // next keystroke then performs the other action, so this is a correctness
+  // rule and not a focus nicety.
+  const placedRef = useRef(false);
   useEffect(() => {
-    if (!takeFocus) return;
-    if (terminalEnabled || !browserEnabled) {
-      terminalRef.current?.focus();
+    if (!takeFocus) {
+      placedRef.current = false;
       return;
     }
-    browserRef.current?.focus();
+    if (!placedRef.current) {
+      placedRef.current = true;
+      // Terminal takes focus, per the core flows - unless it is the one that
+      // cannot be picked, in which case parking focus on a dead control would
+      // make Enter do nothing with no explanation of why.
+      const initial =
+        terminalEnabled || !browserEnabled ? terminalRef : browserRef;
+      initial.current?.focus();
+      return;
+    }
+    // The one thing that moves focus after placement: the card HOLDING it goes
+    // dead. Leaving it there would make Enter silently do nothing, and the
+    // other card is the only thing left to offer.
+    const active = document.activeElement;
+    if (active === terminalRef.current && !terminalEnabled && browserEnabled) {
+      browserRef.current?.focus();
+      return;
+    }
+    if (active === browserRef.current && !browserEnabled && terminalEnabled) {
+      terminalRef.current?.focus();
+    }
   }, [browserEnabled, takeFocus, terminalEnabled]);
 
-  // On the CARDS rather than on their container: a `group` is a non-interactive
-  // role, and a keyboard handler on one is unreachable for anyone who cannot
-  // put focus there. Both cards are focusable, so both carry it.
-  const handleKeyDown = (event: KeyboardEvent<HTMLButtonElement>): void => {
-    if (event.key === "Escape") {
+  // Escape lives on the CONTAINER, which is focusable for exactly that reason:
+  // a click on the chooser's padding takes focus off the cards, and without a
+  // `tabIndex` it would land on `<body>`, where no handler of ours ever sees
+  // the key. It is attached natively rather than as an `onKeyDown` prop because
+  // `group` is a non-interactive role and the a11y rule forbids the prop there;
+  // the role is correct for two cards, so the listener moves instead.
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const container = containerRef.current;
+    if (container === null) return;
+    const onKeyDown = (event: globalThis.KeyboardEvent): void => {
+      if (event.key !== "Escape") return;
       event.preventDefault();
       onDismiss();
-      return;
-    }
+    };
+    container.addEventListener("keydown", onKeyDown);
+    return () => container.removeEventListener("keydown", onKeyDown);
+  }, [onDismiss]);
+
+  // Arrow keys stay on the CARDS: they are about moving between the two, both
+  // are focusable, and each one knows where "the other" is. Escape bubbles from
+  // here to the container listener above, so it needs no branch of its own.
+  const handleKeyDown = (event: KeyboardEvent<HTMLButtonElement>): void => {
     const forward = event.key === "ArrowRight" || event.key === "ArrowDown";
     const backward = event.key === "ArrowLeft" || event.key === "ArrowUp";
     if (!forward && !backward) return;
@@ -89,10 +127,14 @@ export function LandingNewTabChooser(
 
   return (
     <div
+      ref={containerRef}
       role="group"
       aria-label="New tab"
+      // Programmatically focusable only - never a tab stop, since the two cards
+      // are what the keyboard should reach.
+      tabIndex={-1}
       data-testid="landing-new-tab-chooser"
-      className="flex h-full w-full flex-col items-center justify-center gap-6 p-6"
+      className="flex h-full w-full flex-col items-center justify-center gap-6 p-6 outline-hidden"
     >
       <div className="flex w-full max-w-md flex-wrap items-stretch justify-center gap-3">
         <LandingNewTabCard

@@ -49,6 +49,18 @@ export const RESERVED_BROWSER_CHORDS: readonly BrowserViewReservedChord[] = [
   { token: "mod+[", command: null }, // tab.prev
   { token: "mod+shift+]", command: null }, // epic.next
   { token: "mod+shift+[", command: null }, // epic.prev
+  // The Start Page panel's own three, forwarded for the surface that created
+  // the problem: a panel browser tab is a native guest, so `terminalPolicy:
+  // "app"` - which is about an xterm swallowing a chord - does nothing here and
+  // the app renderer never sees the key. Without these rows, a user inside a
+  // focused panel browser cannot open a tab of either kind or collapse the
+  // panel, while ⌘T, ⌘W and ⌘]/⌘[ all still work: the gap reads as arbitrary
+  // precisely because it is the chooser's own hint line that advertises two of
+  // them. They are app-level by the same test as the rows above - a page has no
+  // business binding ⇧⌘B or ⇧⌘J, and ⌘J is this app's panel toggle.
+  { token: "mod+shift+b", command: null }, // app.browser.new
+  { token: "mod+shift+j", command: null }, // app.terminal.new
+  { token: "mod+j", command: null }, // app.terminal.toggle
 ];
 
 /** Chords a focused browser tile claims for the browser rather than the app. */

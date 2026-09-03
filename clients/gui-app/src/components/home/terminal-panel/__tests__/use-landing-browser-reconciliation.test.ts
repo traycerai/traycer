@@ -1,6 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, renderHook } from "@testing-library/react";
+import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import {
   landingTabRefKey,
+  useLandingPanelStore,
   type LandingBrowserTabRef,
 } from "@/stores/home/landing-panel-store";
 import {
@@ -12,6 +15,7 @@ import {
 import {
   defaultLandingBrowserTitle,
   reconcileLandingBrowserTabs,
+  useLandingBrowserReconciliation,
   type LandingBrowserReconciliationInput,
 } from "../use-landing-browser-reconciliation";
 
@@ -268,5 +272,165 @@ describe("defaultLandingBrowserTitle", () => {
         url: "https://c.example/",
       }),
     ).toBe("Real Title");
+  });
+});
+
+function sessionsState(
+  overrides: Partial<BrowserSessionsState>,
+): BrowserSessionsState {
+  return {
+    hostId: HOST_ID,
+    lifecycle: "live",
+    inventoryReady: true,
+    canMaterializeElectron: false,
+    items: [],
+    errorMessage: null,
+    retry: () => undefined,
+    openTab: () => Promise.reject(new Error("not used in this test")),
+    closeTab: () => Promise.reject(new Error("not used in this test")),
+    attachTab: () => Promise.reject(new Error("not used in this test")),
+    ...overrides,
+  };
+}
+
+function storedBrowserTab(instanceId: string, tabId: string): void {
+  useLandingPanelStore.getState().addTab({
+    kind: "browser",
+    instanceId,
+    hostId: HOST_ID,
+    sessionId: "session-1",
+    tabId,
+    name: "example.com",
+    titleSource: "default",
+  });
+}
+
+/**
+ * The pure function above is the RULES; this is the wiring. Both halves are
+ * load-bearing and neither implies the other: the `enabled` gate and the
+ * `inventoryReady` gate live only here, and so does the one call that reaches
+ * the store under a host and a kind.
+ */
+describe("useLandingBrowserReconciliation", () => {
+  afterEach(() => {
+    cleanup();
+    useLandingPanelStore.getState().resetForTests();
+    vi.restoreAllMocks();
+  });
+
+  it("writes nothing while the device's inventory is not ready", () => {
+    // The hook's own comment: a connecting stream reports an empty `items`,
+    // which is indistinguishable from "this device has no browser tabs" -
+    // acting on it drops every browser tab in the panel on every reconnect.
+    storedBrowserTab("browser-1", "tab-1");
+    const apply = vi.spyOn(
+      useLandingPanelStore.getState(),
+      "applyReconciliationSlice",
+    );
+
+    renderHook(() =>
+      useLandingBrowserReconciliation({
+        hostId: HOST_ID,
+        sessions: sessionsState({ inventoryReady: false, items: [] }),
+        enabled: true,
+      }),
+    );
+
+    expect(apply).not.toHaveBeenCalled();
+    expect(
+      useLandingPanelStore.getState().tabs.map((tab) => tab.instanceId),
+    ).toEqual(["browser-1"]);
+  });
+
+  it("writes nothing when this arm only reports", () => {
+    // Two surfaces mount the fleet and share one coordinator; only one may
+    // write. Two writers on one slice would each adopt and drop against a
+    // snapshot the other had already acted on.
+    storedBrowserTab("browser-1", "tab-1");
+    const apply = vi.spyOn(
+      useLandingPanelStore.getState(),
+      "applyReconciliationSlice",
+    );
+
+    renderHook(() =>
+      useLandingBrowserReconciliation({
+        hostId: HOST_ID,
+        sessions: sessionsState({ items: [] }),
+        enabled: false,
+      }),
+    );
+
+    expect(apply).not.toHaveBeenCalled();
+    expect(
+      useLandingPanelStore.getState().tabs.map((tab) => tab.instanceId),
+    ).toEqual(["browser-1"]);
+  });
+
+  it("applies exactly one slice, keyed by this device and the browser kind", () => {
+    storedBrowserTab("browser-1", "tab-1");
+    const apply = vi.spyOn(
+      useLandingPanelStore.getState(),
+      "applyReconciliationSlice",
+    );
+    const session = sessionInfo({
+      sessionId: "session-1",
+      hostId: HOST_ID,
+      scope: independentScope(),
+      tabs: [
+        tabInfo({
+          tabId: "tab-1",
+          title: "Fresh Title",
+          url: "https://example.com/",
+        }),
+      ],
+    });
+
+    renderHook(() =>
+      useLandingBrowserReconciliation({
+        hostId: HOST_ID,
+        sessions: sessionsState({ items: [session] }),
+        enabled: true,
+      }),
+    );
+
+    expect(apply).toHaveBeenCalledTimes(1);
+    expect(apply.mock.calls[0]?.[0]).toBe(HOST_ID);
+    expect(apply.mock.calls[0]?.[1]).toBe("browser");
+    expect(useLandingPanelStore.getState().tabs).toEqual([
+      {
+        kind: "browser",
+        instanceId: "browser-1",
+        hostId: HOST_ID,
+        sessionId: "session-1",
+        tabId: "tab-1",
+        name: "Fresh Title",
+        titleSource: "default",
+      },
+    ]);
+  });
+
+  it("leaves the device's terminal tabs alone across a browser pass that drops every browser tab", () => {
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
+      instanceId: "terminal-1",
+      sessionId: "terminal-session",
+      hostId: HOST_ID,
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+    });
+    storedBrowserTab("browser-1", "tab-1");
+
+    renderHook(() =>
+      useLandingBrowserReconciliation({
+        hostId: HOST_ID,
+        sessions: sessionsState({ items: [] }),
+        enabled: true,
+      }),
+    );
+
+    expect(
+      useLandingPanelStore.getState().tabs.map((tab) => tab.instanceId),
+    ).toEqual(["terminal-1"]);
   });
 });

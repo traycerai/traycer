@@ -3,6 +3,7 @@ import { cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserTabTileProps } from "@/components/browser-tile/browser-tab-tile";
 import type { LandingBrowserTabRef } from "@/stores/home/landing-panel-store";
+import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
 import { LandingBrowserTile } from "../landing-browser-tile";
 
 const captured = vi.hoisted<{ props: BrowserTabTileProps | null }>(() => ({
@@ -100,15 +101,25 @@ describe("<LandingBrowserTile />", () => {
     expect(captured.props?.onConvertToPip).toBeNull();
   });
 
+  // Three terms, not two. `paneVisible` is the one a DOM assertion cannot
+  // reach: the panel stays mounted behind a backgrounded header tab to keep its
+  // PTYs warm, and a browser tile's pixels are native, so without it a
+  // backgrounded Start Page keeps painting a browser view over whatever epic
+  // the reader switched to. The prop is the only guard there is.
   it.each([
-    [true, true, true],
-    [true, false, false],
-    [false, true, false],
-    [false, false, false],
+    [true, true, true, true],
+    [true, false, true, false],
+    [false, true, true, false],
+    [false, false, true, false],
+    [true, true, false, false],
   ] as const)(
-    "is visible only when active AND panelOpen (active=%s panelOpen=%s -> visible=%s)",
-    (active, panelOpen, expectedVisible) => {
-      render(tileElement({ active, panelOpen }));
+    "is visible only when active AND panelOpen AND the pane is visible (active=%s panelOpen=%s paneVisible=%s -> visible=%s)",
+    (active, panelOpen, paneVisible, expectedVisible) => {
+      render(
+        <PaneVisibilityContext.Provider value={paneVisible}>
+          {tileElement({ active, panelOpen })}
+        </PaneVisibilityContext.Provider>,
+      );
 
       expect(captured.props?.visible).toBe(expectedVisible);
     },

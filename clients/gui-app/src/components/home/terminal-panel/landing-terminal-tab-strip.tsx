@@ -35,6 +35,7 @@ import type {
 } from "@/stores/home/landing-panel-store";
 import type { PlainTerminalViewModel } from "@/lib/terminals/plain-terminal-authority";
 import type { LandingBrowserViewModel } from "./landing-browser-presentation";
+import { landingStripRows } from "./landing-strip-rows";
 
 export interface LandingTerminalTabStripProps {
   readonly tabs: ReadonlyArray<LandingPanelTabRef>;
@@ -137,34 +138,6 @@ export function LandingTerminalTabStrip(
       </div>
     </div>
   );
-}
-
-/**
- * One entry in the rendered strip: a real tab, or the unpicked placeholder at
- * the index it holds among them.
- *
- * Built here rather than by splicing a fake ref into `tabs`, because the
- * placeholder names no host resource - a member of the tab list with no session
- * is something every consumer of a ref would have to defend against.
- */
-type LandingStripRow =
-  | { readonly kind: "tab"; readonly tab: LandingPanelTabRef }
-  | {
-      readonly kind: "placeholder";
-      readonly placeholder: LandingPanelPlaceholder;
-    };
-
-function landingStripRows(
-  tabs: ReadonlyArray<LandingPanelTabRef>,
-  placeholder: LandingPanelPlaceholder | null,
-): ReadonlyArray<LandingStripRow> {
-  const rows: LandingStripRow[] = tabs.map((tab) => ({ kind: "tab", tab }));
-  if (placeholder === null) return rows;
-  // Clamped, not trusted: the store clamps on open, but tabs can be removed by
-  // a reconciliation pass while the placeholder sits there unpicked.
-  const index = Math.min(Math.max(placeholder.index, 0), rows.length);
-  rows.splice(index, 0, { kind: "placeholder", placeholder });
-  return rows;
 }
 
 /**

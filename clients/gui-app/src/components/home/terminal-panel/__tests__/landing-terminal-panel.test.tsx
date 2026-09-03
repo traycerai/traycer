@@ -1878,6 +1878,50 @@ describe("<LandingTerminalPanel />", () => {
     ).toBe("Connecting to the selected host…");
   });
 
+  // The other end of the chooser's Browser card: the device answers, the card
+  // comes alive, and picking it fills the placeholder IN PLACE from the ids the
+  // device minted - never optimistically, which a reconciliation pass would
+  // reconcile straight back out.
+  it("opens a browser tab into the placeholder once the device has published an inventory", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    mocks.plainAuthorityStatus = "capable";
+    mocks.plainCanMutate = true;
+    const openTab = vi.fn(() =>
+      Promise.resolve({ sessionId: "device-session", tabId: "device-tab" }),
+    );
+    mocks.browserSessionsByHost = {
+      "host-a": browserSessionsState({ openTab }),
+    };
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    const browserCard = await screen.findByTestId(
+      "landing-new-tab-card-browser",
+    );
+    await waitFor(() => {
+      expect(browserCard.getAttribute("aria-disabled")).toBeNull();
+    });
+    fireEvent.click(browserCard);
+
+    await waitFor(() => {
+      expect(useLandingPanelStore.getState().tabs).toHaveLength(1);
+    });
+    expect(openTab).toHaveBeenCalledWith(null, "about:blank");
+    const [opened] = useLandingPanelStore.getState().tabs;
+    expect(opened.kind).toBe("browser");
+    expect(opened.sessionId).toBe("device-session");
+    // Filled, not stacked beside: the placeholder is gone and the new tab is
+    // the active row.
+    expect(useLandingPanelStore.getState().placeholder).toBe(null);
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
+      opened.instanceId,
+    );
+  });
+
   it("closes every terminal from the context menu, tombstoning before killing", async () => {
     mocks.activeHostId = "host-a";
     mocks.clientActiveHostId = "host-a";
@@ -2373,6 +2417,166 @@ describe("<LandingTerminalPanel />", () => {
     // A digit past the last tab falls through instead of claiming the chord.
     const outOfRange = matchDigitAction(leaderDigitEvent("Digit9"));
     expect(outOfRange?.run()).toBe(false);
+  });
+
+  // The strip renders `landingStripRows`, which splices the placeholder in at
+  // its own index; the chords used to index `state.tabs`. Two projections are
+  // two orders the moment the placeholder is not last - and it need not be,
+  // since a reconciliation adoption appends past it.
+  function seedStripFixture(
+    count: number,
+    placeholderIndex: number | null,
+  ): void {
+    const store = useLandingPanelStore.getState();
+    for (let index = 1; index <= count; index += 1) {
+      store.addTab({
+        kind: "terminal",
+        instanceId: `tab-${index}`,
+        sessionId: `session-${index}`,
+        hostId: "host-a",
+        cwd: "/workspace/project",
+        name: `project ${index}`,
+        titleSource: "default",
+      });
+    }
+    store.setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    if (placeholderIndex !== null) {
+      useLandingPanelStore
+        .getState()
+        .openPlaceholder("placeholder-1", placeholderIndex);
+    }
+  }
+
+  function seedStripHost(): void {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+  }
+
+  it("steps tab.next and tab.prev OVER the placeholder row, from either side", () => {
+    seedStripHost();
+    // Rows: [tab-1, placeholder, tab-2, tab-3].
+    seedStripFixture(3, 1);
+    render(panelUi());
+    const router = fakeKeybindingRouter();
+
+    act(() => {
+      useLandingPanelStore.getState().activateTab("tab-1");
+    });
+    act(() => {
+      dispatchAction("tab.next", router);
+    });
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe("tab-2");
+
+    // From the placeholder itself: forward is the first real tab AFTER it,
+    // backward the one before. Before this, `findIndex` returned -1 and
+    // `Math.max(index, 0)` turned it into 0, so next skipped tab-1 entirely.
+    act(() => {
+      useLandingPanelStore.getState().activateTab("placeholder-1");
+    });
+    act(() => {
+      dispatchAction("tab.next", router);
+    });
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe("tab-2");
+
+    act(() => {
+      useLandingPanelStore.getState().activateTab("placeholder-1");
+    });
+    act(() => {
+      dispatchAction("tab.prev", router);
+    });
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe("tab-1");
+  });
+
+  it("wraps around the placeholder when it sits at either end", () => {
+    seedStripHost();
+    // Rows: [placeholder, tab-1, tab-2].
+    seedStripFixture(2, 0);
+    render(panelUi());
+    const router = fakeKeybindingRouter();
+
+    act(() => {
+      dispatchAction("tab.prev", router);
+    });
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe("tab-2");
+
+    act(() => {
+      useLandingPanelStore.getState().activateTab("tab-2");
+    });
+    act(() => {
+      dispatchAction("tab.next", router);
+    });
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe("tab-1");
+  });
+
+  it("counts REAL tabs in the move guard, so one tab beside the chooser is reachable", () => {
+    seedStripHost();
+    // Rows: [tab-1, placeholder], with the placeholder active.
+    seedStripFixture(1, 1);
+    render(panelUi());
+    const router = fakeKeybindingRouter();
+
+    // `state.tabs.length < 2` made this a no-op, so with the chooser open
+    // beside a single terminal the chord could not reach that terminal at all.
+    act(() => {
+      dispatchAction("tab.next", router);
+    });
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe("tab-1");
+  });
+
+  it("still refuses to move with one tab and no placeholder", () => {
+    seedStripHost();
+    seedStripFixture(1, null);
+    render(panelUi());
+    const router = fakeKeybindingRouter();
+
+    act(() => {
+      dispatchAction("tab.next", router);
+    });
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe("tab-1");
+  });
+
+  it("counts digits over the REAL rows in display order, with the placeholder first", () => {
+    seedStripHost();
+    // Rows: [placeholder, tab-1, tab-2].
+    seedStripFixture(2, 0);
+    render(panelUi());
+
+    act(() => {
+      expect(matchDigitAction(leaderDigitEvent("Digit1"))?.run()).toBe(true);
+    });
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe("tab-1");
+
+    act(() => {
+      expect(matchDigitAction(leaderDigitEvent("Digit2"))?.run()).toBe(true);
+    });
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe("tab-2");
+
+    // Three rows are on screen, but only two are reachable by digit - the
+    // placeholder is never a destination.
+    act(() => {
+      expect(matchDigitAction(leaderDigitEvent("Digit3"))?.run()).toBe(false);
+    });
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe("tab-2");
+  });
+
+  it("counts digits over the REAL rows in display order, with the placeholder in the middle", () => {
+    seedStripHost();
+    // Rows: [tab-1, placeholder, tab-2, tab-3].
+    seedStripFixture(3, 1);
+    render(panelUi());
+
+    act(() => {
+      expect(matchDigitAction(leaderDigitEvent("Digit2"))?.run()).toBe(true);
+    });
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe("tab-2");
+
+    act(() => {
+      expect(matchDigitAction(leaderDigitEvent("Digit3"))?.run()).toBe(true);
+    });
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe("tab-3");
   });
 
   it("maximizes and restores via app.terminal.maximize, revealing when collapsed", () => {

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import type { LandingBrowserSessionEntries } from "@/components/home/terminal-panel/landing-terminal-authority-fleet";
 import {
@@ -43,7 +43,13 @@ export function landingBrowserTombstoneDecision(args: {
   const session = sessions.items.find(
     (item) =>
       item.sessionId === args.pending.sessionId &&
-      item.hostId === args.pending.hostId,
+      item.hostId === args.pending.hostId &&
+      // The scope term its two siblings carry (`reconcileLandingBrowserTabs`,
+      // `selectLandingBrowserViewModel`). Inert while the only publisher is the
+      // fleet's independent provider, and this is the one arm whose false match
+      // sends a real `closeTab` at a live tab - so it is the last place to rely
+      // on the caller having handed over the right inventory.
+      item.scope.kind === "independent",
   );
   const present =
     session !== undefined &&
@@ -69,6 +75,8 @@ export function useLandingBrowserTombstoneDrain(args: {
   const generationRef = useRef<Map<string, number>>(new Map());
   const attemptedRef = useRef<Map<string, number>>(new Map());
   const inFlightRef = useRef<Set<string>>(new Set());
+  const [retryGeneration, setRetryGeneration] = useState(0);
+  useLandingBrowserSessionsPublication(browserSessions);
 
   useEffect(() => {
     for (const pending of pendingKills) {
@@ -118,9 +126,76 @@ export function useLandingBrowserTombstoneDrain(args: {
         })
         .finally(() => {
           inFlightRef.current.delete(key);
+          // Parity with the terminal arm's `signalRetry`, for the reason it
+          // states: clearing a ref renders nothing, so without this the drain
+          // never looks at this key again on its own. The window it closes is
+          // narrow but real - a close in flight while the stream drops and
+          // returns is skipped for being in flight, the generation moves past
+          // it, and a rejection then leaves the mark on the OLD generation with
+          // nothing scheduled. It cannot loop: a settled close takes the
+          // tombstone with it, and a failed one re-reads as "wait" until the
+          // next incarnation bumps the generation.
+          setRetryGeneration((current) => current + 1);
         });
     }
-  }, [browserSessions, pendingKills]);
+  }, [browserSessions, pendingKills, retryGeneration]);
+}
+
+/**
+ * The browser session states this WINDOW currently holds.
+ *
+ * Published from the drain because sign-out is not a render: it runs inside an
+ * auth-transition callback in `LandingTerminalPersistLifecycleBridge`, which
+ * sits ABOVE the bridge that owns these states and so cannot read them through
+ * context. Reading them here keeps the sign-out close on the coordinator the
+ * drain already uses instead of opening a second path to the device.
+ */
+let publishedBrowserSessions: LandingBrowserSessionEntries = {};
+
+function useLandingBrowserSessionsPublication(
+  entries: LandingBrowserSessionEntries,
+): void {
+  useEffect(() => {
+    publishedBrowserSessions = entries;
+    return () => {
+      // Only retract what is still ours: a remount publishes the next entries
+      // before this cleanup runs, and clearing unconditionally would blank it.
+      if (publishedBrowserSessions === entries) publishedBrowserSessions = {};
+    };
+  }, [entries]);
+}
+
+/**
+ * Discharges what can still be discharged, immediately before sign-out clears
+ * the store.
+ *
+ * Best effort by construction, and only for a device whose independent stream
+ * is live and ready in this window: the close travels on that stream, so a
+ * tombstone without one has nowhere to go and is dropped with the store. That
+ * is the honest outcome rather than a silent loss - the device is offline, its
+ * idle TTL owns the tab from here, and if the tab is still there at the next
+ * sign-in the panel re-adopts it, which is a visible tab the user can close
+ * again rather than a promise this window quietly failed to keep.
+ *
+ * Nothing is awaited and nothing is cleared: the store is about to go.
+ */
+export function closeLandingBrowserTombstonesForSignOut(
+  pendingKills: ReadonlyArray<LandingBrowserPendingKill>,
+): void {
+  for (const pending of pendingKills) {
+    const sessions = publishedBrowserSessions[pending.hostId] ?? null;
+    if (
+      sessions === null ||
+      sessions.lifecycle !== "live" ||
+      !sessions.inventoryReady
+    ) {
+      continue;
+    }
+    void sessions.closeTab(pending.sessionId, pending.tabId).catch(() => {
+      // Nobody asked for this in this session and there is no store left to
+      // record the failure in.
+    });
+  }
 }
 
 /**

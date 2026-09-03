@@ -35,6 +35,21 @@ describe("reserved browser chords", () => {
     }
   });
 
+  // The Start Page panel's own chords, from inside one of its browser tabs.
+  // `terminalPolicy: "app"` does not cover this: it is about an xterm eating a
+  // chord, and a native guest is not an xterm - the renderer's registry is not
+  // in the delivery chain at all. Read against the action table so a default
+  // rebind moves both sides together.
+  it("forwards the panel's own new-tab and toggle chords", () => {
+    const bindings = getDefaultBindings();
+    expect(bindings["app.browser.new"]).toBe("mod+shift+b");
+    expect(bindings["app.terminal.new"]).toBe("mod+shift+j");
+    expect(bindings["app.terminal.toggle"]).toBe("mod+j");
+    for (const token of ["mod+shift+b", "mod+shift+j", "mod+j"]) {
+      expect(commandFor(token)).toBeNull();
+    }
+  });
+
   it("leaves everything else to the page", () => {
     // `epic.new` (mod+n) and the close-others family stay menu-/page-owned.
     expect(commandFor("mod+n")).toBeUndefined();

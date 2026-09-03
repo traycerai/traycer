@@ -336,6 +336,49 @@ describe("plain terminal presentation invalidation", () => {
     ]);
   });
 
+  // The landing list is mixed, and a browser tab's `sessionId` is a host-minted
+  // id from a namespace nothing proves disjoint from terminal ids - which is
+  // why `landingTabRefKey` carries a `kind` segment. A predicate keyed on
+  // host + session alone answered `true` here, so the sweep removed nothing and
+  // the deletion was still reported as discharged.
+  it("does not count a browser tab sharing a terminal's session id as a presentation ref", () => {
+    const queryClient = new QueryClient();
+    const queryKey = ["plain-terminal-browser-collision"] as const;
+    expect(
+      commitPlainTerminalDeletion({
+        queryClient,
+        queryKey,
+        hostId: TARGET_HOST_ID,
+        terminalId: TARGET_TERMINAL_ID,
+        evidence: { kind: "stream", revision: 2 },
+        deferPresentation: false,
+      }),
+    ).toBe(true);
+    // The ONLY landing ref with these ids is a browser tab. Nothing else in
+    // either store carries them, so the answer is entirely this predicate's.
+    useLandingPanelStore.getState().addTab({
+      kind: "browser",
+      instanceId: "landing-browser",
+      sessionId: TARGET_TERMINAL_ID,
+      hostId: TARGET_HOST_ID,
+      tabId: "tab-1",
+      name: "example.com",
+      titleSource: "default",
+    });
+
+    expect(
+      consumeRetainedPlainTerminalTombstone({
+        queryClient,
+        queryKey,
+        hostId: TARGET_HOST_ID,
+        terminalId: TARGET_TERMINAL_ID,
+      }),
+    ).toBe(false);
+    expect(
+      useLandingPanelStore.getState().tabs.map((tab) => tab.instanceId),
+    ).toEqual(["landing-browser"]);
+  });
+
   it("discharges the same deferred tombstone across Query clients without duplicate store effects", () => {
     seedCanvas("one", [
       {

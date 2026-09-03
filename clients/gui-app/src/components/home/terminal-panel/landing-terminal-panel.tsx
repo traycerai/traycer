@@ -77,6 +77,11 @@ import {
 } from "@/stores/home/landing-panel-store";
 import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import { LandingTerminalTabStrip } from "./landing-terminal-tab-strip";
+import {
+  landingStripAdjacentInstanceId,
+  landingStripRows,
+  landingStripTabRows,
+} from "./landing-strip-rows";
 import { LandingTerminalDirectoryPicker } from "./landing-terminal-directory-picker";
 import { LandingTerminalTile } from "./landing-terminal-tile";
 import { LandingBrowserTile } from "./landing-browser-tile";
@@ -1887,22 +1892,30 @@ function useLandingTerminalShortcuts(args: {
       onCloseAllTabs();
     });
   }, [landingPageId, onCloseAllTabs, surfaceActive]);
+  // Indexed over the STRIP's rows, not over `state.tabs`: the placeholder is a
+  // rendered row and can sit anywhere among them, so two projections would be
+  // two orders. Skipping it is the ticket's intent; landing on the neighbour
+  // the user can SEE is what the projection buys.
   const activateAdjacentTab = useCallback(
     (delta: 1 | -1) => {
       if (systemTabOverlayActive()) return;
       const state = useLandingPanelStore.getState();
-      if (
-        !landingPanelLayoutFor(state, landingPageId).panelOpen ||
-        state.tabs.length < 2
-      ) {
-        return;
-      }
-      const index = state.tabs.findIndex(
-        (tab) => tab.instanceId === state.activeInstanceId,
-      );
-      const count = state.tabs.length;
-      const next = state.tabs[(Math.max(index, 0) + delta + count) % count];
-      onActivateTab(next.instanceId);
+      if (!landingPanelLayoutFor(state, landingPageId).panelOpen) return;
+      const placeholderActive =
+        state.placeholder !== null &&
+        state.placeholder.instanceId === state.activeInstanceId;
+      // The guard counts REAL tabs, because the placeholder is never a
+      // destination. Two of them are needed to move between them - but from an
+      // active placeholder one is enough, and that case matters: the chooser
+      // open beside a single terminal could otherwise not reach it at all.
+      if (state.tabs.length < (placeholderActive ? 1 : 2)) return;
+      const next = landingStripAdjacentInstanceId({
+        rows: landingStripRows(state.tabs, state.placeholder),
+        activeInstanceId: state.activeInstanceId,
+        delta,
+      });
+      if (next === null) return;
+      onActivateTab(next);
     },
     [landingPageId, onActivateTab],
   );
@@ -1934,10 +1947,16 @@ function useLandingTerminalShortcuts(args: {
             );
           },
           // Same digit convention as the canvas strip: physical "1"-"9"
-          // reach tabs 1-9; "0" maps to index -1 and falls through.
+          // reach tabs 1-9; "0" maps to index -1 and falls through. Counted
+          // over the strip's REAL rows in display order, through the same
+          // projection the strip renders, so the placeholder is skipped rather
+          // than shifting every digit past it.
           dispatch: (digit) => {
             const index = digit - 1;
-            const tabs = useLandingPanelStore.getState().tabs;
+            const state = useLandingPanelStore.getState();
+            const tabs = landingStripTabRows(
+              landingStripRows(state.tabs, state.placeholder),
+            );
             if (index < 0 || index >= tabs.length) return false;
             onActivateTab(tabs[index].instanceId);
             return true;
@@ -2265,11 +2284,14 @@ function LandingTerminalEmptyState(props: {
       </div>
     );
   }
-  return (
-    <div className="flex h-full min-h-0 items-center justify-center p-6 text-center text-ui-sm text-muted-foreground">
-      Starting terminal…
-    </div>
-  );
+  // Nothing, deliberately. This branch used to say "Starting terminal…", which
+  // was true while an open empty panel auto-spawned one; it now holds the
+  // chooser instead, and the open-transition effect opens that placeholder in
+  // the same commit. So the only state this can render in is the single frame
+  // before that effect lands - where a line promising the one thing the core
+  // flows removed would flash under the chooser replacing it. An empty frame
+  // says nothing, which is what there is to say.
+  return null;
 }
 
 function isLandingTerminalPanelElement(

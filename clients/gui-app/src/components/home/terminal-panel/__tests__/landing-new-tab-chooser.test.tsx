@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -9,22 +10,28 @@ import {
   landingBrowserCapMessage,
 } from "../use-landing-browser-open-tab";
 
-function renderChooser(args: {
+interface ChooserArgs {
   readonly terminalReason: string | null;
   readonly browserReason: string | null;
   readonly takeFocus: boolean;
   readonly onPick: (kind: LandingNewTabKind) => void;
   readonly onDismiss: () => void;
-}): void {
-  render(
+}
+
+function chooserElement(args: ChooserArgs): ReactElement {
+  return (
     <LandingNewTabChooser
       terminal={{ disabledReason: args.terminalReason }}
       browser={{ disabledReason: args.browserReason }}
       takeFocus={args.takeFocus}
       onPick={args.onPick}
       onDismiss={args.onDismiss}
-    />,
+    />
   );
+}
+
+function renderChooser(args: ChooserArgs): void {
+  render(chooserElement(args));
 }
 
 function openChooser(): {
@@ -197,14 +204,128 @@ describe("<LandingNewTabChooser />", () => {
       onDismiss: vi.fn(),
     });
 
-    // Read from the helper the chord's toast also uses, so the two cannot
-    // drift; the literal is asserted there against `LANDING_BROWSER_TAB_CAP`.
+    // Both sides LITERAL. Interpolating the constant into the expectation
+    // would hold at any value, which is the one thing this must not do: Core
+    // Flows fixes the string, and the constant restates the host's
+    // `DEFAULT_BROWSER_TAB_MAX_PER_SESSION`. Drift in either direction is a
+    // product change - too low hides capacity, too high shows an enabled card
+    // whose click fails - so it should be loud here.
+    expect(LANDING_BROWSER_TAB_CAP).toBe(8);
+    expect(landingBrowserCapMessage()).toBe(
+      "This device has 8 browser tabs open",
+    );
     expect(
       screen.getByTestId("landing-new-tab-card-browser-reason").textContent,
-    ).toBe(landingBrowserCapMessage());
-    expect(landingBrowserCapMessage()).toBe(
-      `This device has ${LANDING_BROWSER_TAB_CAP} browser tabs open`,
+    ).toBe("This device has 8 browser tabs open");
+  });
+
+  // The defect this pins: placement was written as "park focus on open" but
+  // depended on the two card gates, which settle DURING the interaction. A
+  // device publishing its inventory seconds after the panel opens flipped
+  // `browserEnabled`, the effect re-ran, and focus jumped back to Terminal -
+  // so the next Enter opened the other kind.
+  it("keeps focus on Browser when its gate comes alive under the user's hands", () => {
+    const onPick = vi.fn();
+    const connecting: ChooserArgs = {
+      terminalReason: null,
+      browserReason: "Connecting to the selected host…",
+      takeFocus: true,
+      onPick,
+      onDismiss: vi.fn(),
+    };
+    const view = render(chooserElement(connecting));
+
+    expect(document.activeElement).toBe(terminalCard());
+    fireEvent.keyDown(terminalCard(), { key: "ArrowRight" });
+    expect(document.activeElement).toBe(browserCard());
+
+    // The device answers. Nothing about the keyboard should move.
+    view.rerender(chooserElement({ ...connecting, browserReason: null }));
+
+    expect(document.activeElement).toBe(browserCard());
+    expect(browserCard().getAttribute("aria-disabled")).toBeNull();
+    // Enter on a focused native button IS a click; what the chooser owes is
+    // that the click goes to the card the user is standing on.
+    fireEvent.click(document.activeElement as HTMLElement);
+    expect(onPick).toHaveBeenCalledWith("browser");
+    expect(onPick).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps focus on Terminal when the browser gate settles behind it", () => {
+    const connecting: ChooserArgs = {
+      terminalReason: null,
+      browserReason: "Connecting to the selected host…",
+      takeFocus: true,
+      onPick: vi.fn(),
+      onDismiss: vi.fn(),
+    };
+    const view = render(chooserElement(connecting));
+    expect(document.activeElement).toBe(terminalCard());
+
+    view.rerender(chooserElement({ ...connecting, browserReason: null }));
+
+    expect(document.activeElement).toBe(terminalCard());
+  });
+
+  // The one case that still moves it: the card holding the keyboard goes dead,
+  // where leaving focus put would make Enter silently do nothing.
+  it("moves focus off the focused card when that card goes dead", () => {
+    const live: ChooserArgs = {
+      terminalReason: null,
+      browserReason: null,
+      takeFocus: true,
+      onPick: vi.fn(),
+      onDismiss: vi.fn(),
+    };
+    const view = render(chooserElement(live));
+
+    fireEvent.keyDown(terminalCard(), { key: "ArrowRight" });
+    expect(document.activeElement).toBe(browserCard());
+
+    view.rerender(
+      chooserElement({ ...live, browserReason: landingBrowserCapMessage() }),
     );
+
+    expect(document.activeElement).toBe(terminalCard());
+  });
+
+  it("re-places focus when the layer above it goes away", () => {
+    const layered: ChooserArgs = {
+      terminalReason: null,
+      browserReason: null,
+      takeFocus: false,
+      onPick: vi.fn(),
+      onDismiss: vi.fn(),
+    };
+    const view = render(chooserElement(layered));
+    expect(document.activeElement).toBe(document.body);
+
+    // Cancelling the directory picker hands the chooser back the keyboard,
+    // which is a fresh placement rather than the suppressed one-shot.
+    view.rerender(chooserElement({ ...layered, takeFocus: true }));
+
+    expect(document.activeElement).toBe(terminalCard());
+  });
+
+  it("dismisses on Escape from the chooser's own padding, not only from a card", () => {
+    const onDismiss = vi.fn();
+    renderChooser({
+      terminalReason: null,
+      browserReason: null,
+      takeFocus: true,
+      onPick: vi.fn(),
+      onDismiss,
+    });
+
+    // A stray click lands focus on the container, which is focusable for
+    // exactly this reason - without a `tabIndex` it would go to `<body>`,
+    // where no handler of the chooser's ever sees the key.
+    const container = screen.getByTestId("landing-new-tab-chooser");
+    container.focus();
+    expect(document.activeElement).toBe(container);
+
+    fireEvent.keyDown(container, { key: "Escape" });
+    expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 
   it("shows no reason line on a card that can be picked", () => {
