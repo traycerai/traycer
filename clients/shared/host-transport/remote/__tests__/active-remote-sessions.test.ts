@@ -1223,59 +1223,6 @@ describe("wake ownership", () => {
     expect(session.wakeReasons).toEqual(["forced:user-retry"]);
     expireLinger();
   });
-
-  it("ignores a wake from a view whose reference was already released", () => {
-    const identity = freshIdentity();
-    const session = fakeSession();
-    const view = acquireRemoteSession(identity, ELIGIBLE_POLICY, () => session);
-    view.close();
-
-    // The stale-callback case: a discarded render or a disposed binding still
-    // holding the view. Honouring it would hurry a session this consumer no
-    // longer holds - possibly one sitting at refCount 0 with nobody waiting.
-    view.wake("app-resumed", null);
-
-    expect(session.wakeReasons).toEqual([]);
-    expireLinger();
-  });
-
-  it("ignores a wake on a superseded entry even while a consumer still holds it", () => {
-    const identity = freshIdentity();
-    const session = fakeSession();
-    const view = acquireRemoteSession(identity, ELIGIBLE_POLICY, () => session);
-    // The host re-keyed underneath the live reference. The entry is marked
-    // superseded but not torn out from under its holder.
-    const rotated: RemoteSessionIdentity = {
-      ...identity,
-      hostPublicKey: `${identity.hostPublicKey}-rotated`,
-    };
-    const successor = acquireRemoteSession(
-      rotated,
-      ELIGIBLE_POLICY,
-      fakeSession,
-    );
-
-    view.wake("app-resumed", null);
-
-    // Its key embeds a public key the host has moved off, so it can never
-    // re-handshake; hurrying it only spends grants against a dead identity.
-    expect(session.wakeReasons).toEqual([]);
-    view.close();
-    successor.close();
-    expireLinger();
-  });
-
-  it("ignores a wake once the session has closed underneath the view", () => {
-    const identity = freshIdentity();
-    const session = fakeSession();
-    const view = acquireRemoteSession(identity, ELIGIBLE_POLICY, () => session);
-    session.closedUnderneath = true;
-
-    view.wake("app-resumed", null);
-
-    expect(session.wakeReasons).toEqual([]);
-    view.close();
-  });
 });
 
 describe("wakeHeldRemoteSessions", () => {

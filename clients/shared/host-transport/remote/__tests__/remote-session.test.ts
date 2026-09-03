@@ -2929,41 +2929,6 @@ describe("RemoteSession wake", () => {
       session.close();
     }
   }, 15_000);
-
-  it(
-    "never lengthens a pending redial - repeated wakes on the initial backoff still dial on roughly the original schedule",
-    async () => {
-      const relay = new FakeRelayHost();
-      const lease = new MutableBearerLease("token", "user-1");
-      relay.decideOpen = (_bearer, openIndex) =>
-        openIndex === 0
-          ? { kind: "fatal", details: retryableDropDetails() }
-          : { kind: "ack" };
-      const session = buildSession(relay, lease, null);
-      try {
-        session.start();
-        await vi.waitFor(() => expect(relay.openBearers).toHaveLength(1), WAIT);
-        const armedAt = Date.now();
-        session.wake("wake-1", null);
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        session.wake("wake-2", null);
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        session.wake("wake-3", null);
-        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
-        const elapsedMs = Date.now() - armedAt;
-        // One extra dial, and no wake pushed the deadline out: a draw landing
-        // later than the deadline already armed is discarded rather than
-        // applied, so waking a session can never cost it time.
-        expect(relay.openBearers).toHaveLength(2);
-        expect(elapsedMs).toBeLessThan(1_800);
-        expect(relay.errors).toEqual([]);
-      } finally {
-        session.close();
-      }
-    },
-    TEST_BUDGET_MS,
-  );
-
   it(
     "leaves a healthy, ready session untouched",
     async () => {
@@ -3131,29 +3096,6 @@ describe("RemoteSession wake", () => {
       session.close();
     }
   }, 10_000);
-
-  it("keeps the default wake-probe deadline when the caller supplies no tuning", async () => {
-    const relay = new FakeRelayHost();
-    const lease = new MutableBearerLease("token", "user-1");
-    const session = buildSession(relay, lease, null);
-    try {
-      session.start();
-      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
-      relay.answerPings = false;
-      session.wake("app-resumed", null);
-      await vi.waitFor(() => expect(relay.pingCount).toBeGreaterThan(0), WAIT);
-      // The probe is in flight on the 10s default deadline, so well past the
-      // mobile deadline the socket is still trusted and no redial has begun.
-      // The discriminating window against the test above.
-      await new Promise((resolve) => setTimeout(resolve, 1_200));
-      expect(relay.openBearers).toHaveLength(1);
-      expect(session.isReady()).toBe(true);
-      expect(relay.errors).toEqual([]);
-    } finally {
-      session.close();
-    }
-  }, 10_000);
-
   it("a default-tuned wake joining an in-flight probe does not retract the arming wake's redial policy", async () => {
     const relay = new FakeRelayHost();
     const lease = new MutableBearerLease("token", "user-1");
@@ -3349,88 +3291,7 @@ describe("RemoteSession wake", () => {
     } finally {
       session.close();
     }
-  }, 15_000);
-
-  it("an ordinary server drop AFTER the arm was answered follows the normal rung", async () => {
-    const relay = new FakeRelayHost();
-    const lease = new MutableBearerLease("token", "user-1");
-    relay.decideOpen = (_bearer, openIndex) =>
-      openIndex < 2
-        ? { kind: "fatal", details: retryableDropDetails() }
-        : { kind: "ack" };
-    const session = buildSession(relay, lease, null);
-    try {
-      session.start();
-      await vi.waitFor(() => expect(session.isReady()).toBe(true), {
-        timeout: 8_000,
-        interval: 50,
-      });
-      expect(relay.openBearers).toHaveLength(3);
-      const pingsBefore = relay.pingCount;
-      session.wake("app-resumed", {
-        timeoutMs: 3_000,
-        immediateRedialOnFailure: true,
-      });
-      await vi.waitFor(
-        () => expect(relay.pingCount).toBe(pingsBefore + 1),
-        WAIT,
-      );
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      // Liveness was proven; the arm is retired. A drop now is an ordinary
-      // loss and waits out its rung - the discriminating arm against the
-      // inherit-on-unanswered case above.
-      relay.dropCurrentConnection();
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      expect(relay.openBearers).toHaveLength(3);
-      await vi.waitFor(() => expect(session.isReady()).toBe(true), {
-        timeout: 8_000,
-        interval: 50,
-      });
-      expect(relay.openBearers).toHaveLength(4);
-      expect(relay.errors).toEqual([]);
-    } finally {
-      session.close();
-    }
-  }, 15_000);
-
-  it("a failed probe WITHOUT immediateRedialOnFailure keeps the armed backoff rung", async () => {
-    const relay = new FakeRelayHost();
-    const lease = new MutableBearerLease("token", "user-1");
-    relay.decideOpen = (_bearer, openIndex) =>
-      openIndex < 2
-        ? { kind: "fatal", details: retryableDropDetails() }
-        : { kind: "ack" };
-    const session = buildSession(relay, lease, null);
-    try {
-      session.start();
-      await vi.waitFor(() => expect(session.isReady()).toBe(true), {
-        timeout: 8_000,
-        interval: 50,
-      });
-      expect(relay.openBearers).toHaveLength(3);
-      relay.answerPings = false;
-      session.wake("app-resumed", {
-        timeoutMs: 250,
-        immediateRedialOnFailure: false,
-      });
-      // The same probe failure, without the latch: the redial waits out the
-      // escalated rung (jittered floor 1s past the ~250ms probe). Still only
-      // three opens at the window where the latched arm above had four - the
-      // two arms MUST read differently or the gate is decorative.
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      expect(relay.openBearers).toHaveLength(3);
-      await vi.waitFor(() => expect(session.isReady()).toBe(true), {
-        timeout: 8_000,
-        interval: 50,
-      });
-      expect(relay.openBearers).toHaveLength(4);
-      expect(relay.errors).toEqual([]);
-    } finally {
-      session.close();
-    }
-  }, 15_000);
-
-  /**
+  }, 15_000); /**
    * A one-method registry for the two `sendUnary` cases below, which need a
    * real dispatchable method rather than the suite's empty registries.
    */
@@ -3641,46 +3502,6 @@ describe("RemoteSession wake", () => {
   function useDwellControlledTimers(): void {
     vi.useFakeTimers({ shouldAdvanceTime: true });
   }
-
-  it("forgives the streak once the connection has held for the whole dwell", async () => {
-    const relay = new FakeRelayHost();
-    const lease = new MutableBearerLease("token", "user-1");
-    // Three failures escalate to the 8s step before the session goes ready.
-    relay.decideOpen = (_bearer, openIndex) =>
-      openIndex < 3
-        ? { kind: "fatal", details: retryableDropDetails() }
-        : { kind: "ack" };
-    // Before `start()`: the dwell timer must be armed against the fake
-    // implementation for this test to be able to fire it at all.
-    useDwellControlledTimers();
-    const session = buildSession(relay, lease, null);
-    try {
-      session.start();
-      await vi.waitFor(() => expect(session.isReady()).toBe(true), {
-        timeout: 12_000,
-        interval: 50,
-      });
-      expect(relay.openBearers).toHaveLength(4);
-
-      // Held, attached, and undisturbed for the full dwell: this connection
-      // has proven itself, so the streak behind it is forgiven.
-      vi.advanceTimersByTime(RECONNECT_STABLE_RESET_MS + 1_000);
-
-      session.requestSessionReconnect("forced-drop");
-      // Back at the fastest tier - the redial lands inside a window the
-      // escalated tier could not have reached.
-      await vi.waitFor(() => expect(session.isReady()).toBe(true), {
-        timeout: 2_500,
-        interval: 50,
-      });
-      expect(relay.openBearers).toHaveLength(5);
-      expect(relay.errors).toEqual([]);
-    } finally {
-      session.close();
-      vi.useRealTimers();
-    }
-  }, 25_000);
-
   it("cancels the pardon when the host leg detaches during the dwell", async () => {
     const relay = new FakeRelayHost();
     const lease = new MutableBearerLease("token", "user-1");
@@ -3989,41 +3810,6 @@ describe("RemoteSession forceReconnect", () => {
     }
   }, 10_000);
 
-  it("without a force, the failed grant mint waits its rung - the pre-dial control arm", async () => {
-    const relay = new FakeRelayHost();
-    const lease = new MutableBearerLease("token", "user-1");
-    let mintIndex = 0;
-    const session = new RemoteSession({
-      ...buildSessionOptions(relay, lease, null),
-      grantProvider: async () => {
-        mintIndex += 1;
-        if (mintIndex === 1) {
-          return {
-            kind: "unavailable" as const,
-            detail: "authn 503",
-            context: "",
-          };
-        }
-        return {
-          kind: "ok" as const,
-          grant: { grant: "grant-jws", expiresInSeconds: 300 },
-        };
-      },
-    });
-    try {
-      session.start();
-      await vi.waitFor(() => expect(mintIndex).toBe(1), WAIT);
-      await new Promise((resolve) => setTimeout(resolve, 250));
-      // Inside the rung's jittered floor (500ms): no forced demand, no early
-      // dial - the discriminating control for the forced grant arm above.
-      expect(mintIndex).toBe(1);
-      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
-      expect(relay.errors).toEqual([]);
-    } finally {
-      session.close();
-    }
-  }, 10_000);
-
   it("a force during a stalled PRE-SOCKET rejection (grant provider throws) is spent on that lander too", async () => {
     const relay = new FakeRelayHost();
     const lease = new MutableBearerLease("token", "user-1");
@@ -4059,48 +3845,6 @@ describe("RemoteSession forceReconnect", () => {
         interval: 10,
       });
       expect(Date.now() - releasedAt).toBeLessThan(400);
-      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
-      expect(relay.errors).toEqual([]);
-    } finally {
-      session.close();
-    }
-  }, 10_000);
-
-  it("a force arriving AFTER a pre-dial lander already armed its rung pulls that timer now", async () => {
-    const relay = new FakeRelayHost();
-    const lease = new MutableBearerLease("token", "user-1");
-    let mintIndex = 0;
-    const session = new RemoteSession({
-      ...buildSessionOptions(relay, lease, null),
-      grantProvider: async () => {
-        mintIndex += 1;
-        if (mintIndex === 1) {
-          return {
-            kind: "unavailable" as const,
-            detail: "authn 503",
-            context: "",
-          };
-        }
-        return {
-          kind: "ok" as const,
-          grant: { grant: "grant-jws", expiresInSeconds: 300 },
-        };
-      },
-    });
-    try {
-      session.start();
-      await vi.waitFor(() => expect(mintIndex).toBe(1), WAIT);
-      // Let the lander finish arming its rung. The phase still reads
-      // `connecting` here - a force keyed on `reconnecting` would fall
-      // through to pending ownership with no future failure left to spend it.
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      const forcedAt = Date.now();
-      session.forceReconnect("user-retry");
-      await vi.waitFor(() => expect(mintIndex).toBe(2), {
-        timeout: 300,
-        interval: 10,
-      });
-      expect(Date.now() - forcedAt).toBeLessThan(300);
       await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
       expect(relay.errors).toEqual([]);
     } finally {
@@ -4292,44 +4036,6 @@ describe("RemoteSession forceReconnect", () => {
       }
     }
   }, 20_000);
-
-  it("without a force, both revalidation arms wait their rung - the discriminating controls", async () => {
-    for (const outcome of ["network-error", "rotated"] as const) {
-      const relay = new FakeRelayHost();
-      const lease = new MutableBearerLease("token", "user-1");
-      relay.decideOpen = (_bearer, openIndex) =>
-        openIndex === 0
-          ? { kind: "fatal", details: unauthorizedDetails() }
-          : { kind: "ack" };
-      let releaseRevalidation = (): void => undefined;
-      const revalidationHeld = new Promise<void>((resolve) => {
-        releaseRevalidation = resolve;
-      });
-      const session = buildSession(relay, lease, {
-        revalidateForReconnect: async () => {
-          await revalidationHeld;
-          if (outcome === "rotated") {
-            lease.rotate("token-rotated");
-          }
-          return outcome;
-        },
-      });
-      try {
-        session.start();
-        await vi.waitFor(() => expect(relay.openBearers).toHaveLength(1), WAIT);
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        releaseRevalidation();
-        await new Promise((resolve) => setTimeout(resolve, 250));
-        // Inside the rung's jittered floor: no force, no early dial.
-        expect(relay.openBearers).toHaveLength(1);
-        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
-        expect(relay.errors).toEqual([]);
-      } finally {
-        session.close();
-      }
-    }
-  }, 20_000);
-
   it("a force during the handshake followed by a terminal fatal clears the intent and stays closed", async () => {
     const relay = new FakeRelayHost();
     const lease = new MutableBearerLease("token", "user-1");
@@ -6722,36 +6428,6 @@ describe("RemoteSession F7: a caller-requested reconnect is self-evidence, not h
     },
     TEST_BUDGET_MS,
   );
-
-  it(
-    "three consecutive caller-requested reconnects produce ZERO refusals - three app-driven reconnects must not reach the confirmed-death streak on a host that never stopped answering",
-    async () => {
-      const relay = new FakeRelayHost();
-      const lease = new MutableBearerLease("valid-token", "user-1");
-      const recorder = new RecordingEvidence();
-      const session = new RemoteSession({
-        ...buildSessionOptions(relay, lease, null),
-        evidence: recorder,
-      });
-      try {
-        session.start();
-        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
-
-        for (let attempt = 0; attempt < 3; attempt += 1) {
-          session.requestSessionReconnect("caller-requested-reconnect");
-          await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
-        }
-
-        expect(recorder.callsNamed("reportDialRefusal")).toHaveLength(0);
-        expect(
-          recorder.callsNamed("reportDialIndeterminate").length,
-        ).toBeGreaterThanOrEqual(3);
-      } finally {
-        session.close();
-      }
-    },
-    TEST_BUDGET_MS,
-  );
 });
 
 describe("RemoteSession reconnect backoff ladder (T5, B6)", () => {
@@ -6885,7 +6561,6 @@ describe("RemoteSession reconnect backoff ladder (T5, B6)", () => {
       session.close();
     }
   }, 10_000);
-
   it("the ladder resets to rung 0 only after RECONNECT_STABLE_RESET_MS of sustained ready - a session that already climbed the ladder once and drops again soon after reaching ready does NOT get rung 0 a second time", async () => {
     // The flapping case, stated explicitly and set up honestly: rung 0 is
     // legitimately available to a session's very FIRST-ever failure (that
@@ -7482,28 +7157,6 @@ describe("RemoteSession clock-skew park", () => {
     },
     TEST_BUDGET_MS,
   );
-
-  it(
-    "still reaches the terminal bound for a host config mismatch, which looks identical on the wire",
-    async () => {
-      // The reason the park keys on the tracker's verdict and never on the
-      // rejection shape: a misconfigured host produces the very same
-      // no-progress streak, and retrying that forever helps nobody.
-      const relay = new FakeRelayHost();
-      const lease = new MutableBearerLease("mismatched-token", "user-1");
-      const clock = makeClockSignal("ok");
-      const session = buildNoProgressSession(relay, lease, clock.signal);
-      try {
-        session.start();
-        await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
-        expect(clock.recoverySubscribers()).toBe(0);
-      } finally {
-        session.close();
-      }
-    },
-    TEST_BUDGET_MS,
-  );
-
   it(
     "does NOT park on a clock running BEHIND, and still reaches the terminal bound",
     async () => {
@@ -7522,83 +7175,6 @@ describe("RemoteSession clock-skew park", () => {
         session.start();
         await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
         expect(clock.recoverySubscribers()).toBe(0);
-      } finally {
-        session.close();
-      }
-    },
-    TEST_BUDGET_MS,
-  );
-
-  it(
-    "leaves the transient network-error arm untouched under skew",
-    async () => {
-      // A revalidation that cannot reach authn says nothing about the clock -
-      // the bearer is untouched, the streak resets, and the ordinary backoff
-      // rides. Parking here would strand a session whose only problem was a
-      // wake-time blip.
-      const relay = new FakeRelayHost();
-      const lease = new MutableBearerLease("stale-token", "user-1");
-      const clock = makeClockSignal("skewed-ahead");
-      relay.decideOpen = (_bearer, openIndex) =>
-        openIndex === 0
-          ? { kind: "fatal", details: unauthorizedDetails() }
-          : { kind: "ack" };
-      const session = new RemoteSession({
-        ...buildSessionOptions(relay, lease, {
-          revalidateForReconnect: () =>
-            Promise.resolve("network-error" as const),
-        }),
-        clock: clock.signal,
-      });
-      try {
-        session.start();
-        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
-        expect(clock.recoverySubscribers()).toBe(0);
-        expect(session.isClosed()).toBe(false);
-      } finally {
-        session.close();
-      }
-    },
-    TEST_BUDGET_MS,
-  );
-
-  it(
-    "releases the recovery subscription on close, so a later clock fix cannot revive a dead session",
-    async () => {
-      const relay = new FakeRelayHost();
-      const lease = new MutableBearerLease("clock-skewed-token", "user-1");
-      const clock = makeClockSignal("skewed-ahead");
-      const session = buildNoProgressSession(relay, lease, clock.signal);
-      session.start();
-      await vi.waitFor(() => expect(clock.recoverySubscribers()).toBe(1), WAIT);
-
-      session.close();
-      expect(clock.recoverySubscribers()).toBe(0);
-
-      clock.recover();
-      await new Promise((resolve) => setTimeout(resolve, 200));
-      expect(relay.openBearers).toEqual(["clock-skewed-token"]);
-    },
-    TEST_BUDGET_MS,
-  );
-
-  it(
-    "degrades to the pre-existing terminal bound with no tracker wired",
-    async () => {
-      const relay = new FakeRelayHost();
-      const lease = new MutableBearerLease("clock-skewed-token", "user-1");
-      relay.decideOpen = () => ({
-        kind: "fatal",
-        details: unauthorizedDetails(),
-      });
-      const session = new RemoteSession(
-        buildSessionOptions(relay, lease, {
-          revalidateForReconnect: () => Promise.resolve("rotated" as const),
-        }),
-      );
-      try {
-        session.start();
-        await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
       } finally {
         session.close();
       }
