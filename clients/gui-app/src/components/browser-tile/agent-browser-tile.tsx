@@ -71,6 +71,8 @@ interface ElectronTabSurfaceProps {
   readonly onOpenLinkInNewTile:
     | ((url: string, disposition: "foreground" | "background") => void)
     | null;
+  /** See `BrowserTabTileProps.onRequestNewTab`. `null` falls back to a link open. */
+  readonly onRequestNewTab: (() => void) | null;
   readonly onConvertToPip: (() => void) | null;
 }
 
@@ -220,6 +222,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
    * surface only forwards the request.
    */
   const onOpenLinkInNewTile = props.onOpenLinkInNewTile;
+  const onRequestNewTab = props.onRequestNewTab;
 
   useEffect(() => {
     if (browserView === null) return;
@@ -306,6 +309,14 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
       if (!isSameBrowserViewTile(event, tileKey)) return;
       switch (event.command) {
         case "newTab":
+          // The guest asked for a NEW TAB, not for a url. A host surface that
+          // has its own answer to that (the Start Page's chooser) takes it;
+          // otherwise it degrades to opening a blank tab beside this one,
+          // which is what every caller did before the two were separated.
+          if (onRequestNewTab !== null) {
+            onRequestNewTab();
+            return;
+          }
           onOpenLinkInNewTile?.(DEFAULT_BROWSER_TILE_URL, "foreground");
           return;
         case "focusAddressBar":
@@ -339,6 +350,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     browserView,
     onRequestClose,
     onOpenLinkInNewTile,
+    onRequestNewTab,
     props.binding.tabId,
     props.node.sessionId,
     tileKey,

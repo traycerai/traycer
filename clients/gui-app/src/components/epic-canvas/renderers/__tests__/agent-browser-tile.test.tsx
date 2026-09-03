@@ -302,6 +302,7 @@ function surfaceElement(
       onRequestClose={state.closeCanvasTile}
       persistViewportPreset={state.persistViewportPreset}
       onOpenLinkInNewTile={state.onOpenLinkInNewTile}
+      onRequestNewTab={null}
       onConvertToPip={() => undefined}
     />
   );
@@ -393,6 +394,7 @@ describe("ElectronTabSurface", () => {
         onRequestClose={state.closeCanvasTile}
         persistViewportPreset={null}
         onOpenLinkInNewTile={state.onOpenLinkInNewTile}
+        onRequestNewTab={null}
         onConvertToPip={null}
       />,
     );
@@ -615,6 +617,46 @@ describe("ElectronTabSurface browser-scoped chords", () => {
       "foreground",
     );
     expect(state.closeTab).not.toHaveBeenCalled();
+  });
+
+  it("still reaches onOpenLinkInNewTile for Cmd+T when onRequestNewTab is null, exactly as the canvas adapter passes it", () => {
+    renderTile(
+      createBinding(
+        vi.fn(() => Promise.resolve({ detach: () => Promise.resolve() })),
+      ),
+    );
+
+    act(() => state.bridge?.emitTileCommand("newTab"));
+
+    expect(state.onOpenLinkInNewTile).toHaveBeenCalledExactlyOnceWith(
+      "about:blank",
+      "foreground",
+    );
+  });
+
+  it("calls a non-null onRequestNewTab for Cmd+T instead of onOpenLinkInNewTile", () => {
+    const onRequestNewTab = vi.fn<() => void>();
+    render(
+      <ElectronTabSurface
+        node={NODE}
+        binding={createBinding(
+          vi.fn(() => Promise.resolve({ detach: () => Promise.resolve() })),
+        )}
+        placement={PLACEMENT}
+        visible={state.visible}
+        pageSessionId={PAGE_SESSION_ID}
+        onRequestClose={state.closeCanvasTile}
+        persistViewportPreset={state.persistViewportPreset}
+        onOpenLinkInNewTile={state.onOpenLinkInNewTile}
+        onRequestNewTab={onRequestNewTab}
+        onConvertToPip={() => undefined}
+      />,
+    );
+
+    act(() => state.bridge?.emitTileCommand("newTab"));
+
+    expect(onRequestNewTab).toHaveBeenCalledOnce();
+    expect(state.onOpenLinkInNewTile).not.toHaveBeenCalled();
   });
 
   it("asks the address field for the caret on Cmd+L", () => {

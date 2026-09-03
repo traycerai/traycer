@@ -177,6 +177,9 @@ export function BrowserSessionTile(props: BrowserSessionTileProps) {
       onRequestClose={closeCanvasTile}
       persistViewportPreset={persistViewportPreset}
       onOpenLinkInNewTile={onOpenLinkInNewTile}
+      // The canvas has no answer of its own to "new tab" beyond opening one
+      // beside this tile, which is what the link path already does.
+      onRequestNewTab={null}
       onConvertToPip={onConvertToPip}
     />
   );

@@ -17,6 +17,7 @@ import {
   TerminalSquare,
 } from "lucide-react";
 import { v4 as uuidv4 } from "uuid";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
 import { useLandingTerminalSurfaceActive } from "./landing-terminal-surface-binding";
@@ -65,16 +66,27 @@ import {
   MAX_LANDING_PANEL_WIDTH_FRACTION,
   MIN_LANDING_PANEL_WIDTH_FRACTION,
   isLandingTerminalTab,
+  landingBrowserTabs,
   landingPanelLayoutFor,
   landingTerminalTabs,
   useLandingPanelStore,
+  type LandingBrowserTabRef,
+  type LandingPanelTabRef,
   type LandingTerminalTabRef,
 } from "@/stores/home/landing-panel-store";
+import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import { LandingTerminalTabStrip } from "./landing-terminal-tab-strip";
 import { LandingTerminalDirectoryPicker } from "./landing-terminal-directory-picker";
 import { LandingTerminalTile } from "./landing-terminal-tile";
+import { LandingBrowserTile } from "./landing-browser-tile";
+import {
+  selectLandingBrowserViewModel,
+  type LandingBrowserViewModel,
+} from "./landing-browser-presentation";
+import { useLandingBrowserOpenTab } from "./use-landing-browser-open-tab";
 import {
   LandingTerminalAuthorityFleet,
+  type LandingBrowserSessionEntries,
   type LandingTerminalAuthorityEntries,
   type LandingTerminalAuthorityEntry,
 } from "./landing-terminal-authority-fleet";
@@ -227,6 +239,33 @@ function dispatchLandingTerminalClose(args: {
     .catch(() => undefined);
 }
 
+/**
+ * The browser arm of the same tombstone-first close: the store has already
+ * removed the tab and recorded what is owed, and this is only the fast path.
+ *
+ * It is far shorter than the terminal arm because none of what makes that one
+ * long applies. There is no capability fork - a device that speaks the browser
+ * contract at all speaks `closeTab` - no `fifo` duplicate-RPC hazard, and no
+ * second sender to collide with: the recovery bridge's browser drain waits for
+ * `inventoryReady` and marks per stream incarnation, so a tab this call is
+ * already closing is simply gone from the next snapshot it reads.
+ */
+function dispatchLandingBrowserClose(args: {
+  readonly closed: LandingBrowserTabRef;
+  readonly sessions: BrowserSessionsState | null;
+}): void {
+  const { closed, sessions } = args;
+  // Not merely "a provider is mounted": an unready coordinator cannot carry the
+  // close, and the tombstone the store just wrote is what covers that case.
+  if (sessions === null || !sessions.inventoryReady) return;
+  void sessions
+    .closeTab(closed.sessionId, closed.tabId)
+    .then(() => {
+      useLandingPanelStore.getState().clearPendingKill(closed);
+    })
+    .catch(() => undefined);
+}
+
 function directoryRequestFor(
   target: LandingTerminalTarget,
   mode: LandingTerminalDirectoryRequestMode,
@@ -362,20 +401,33 @@ export function LandingTerminalPanel(): ReactNode {
   // routing while focus has already moved to another page.
   const landingPageId = focusedLandingPageId ?? "unbound-landing-page";
   const targetLandingPageId = target.draftId ?? "unbound-landing-page";
-  // The store's list is mixed now; the panel below is still terminal-only, so
-  // it reads the terminal slice. Memoized rather than filtered inside the
-  // selector: zustand compares snapshots with `Object.is`, and a fresh array
-  // per read would report a change on every store notification.
-  const allTabs = useLandingPanelStore((state) => state.tabs);
-  const tabs = useMemo(() => landingTerminalTabs(allTabs), [allTabs]);
+  // The strip and the body render the MIXED list; the panel's terminal
+  // machinery - the authority fleet, reconciliation, the kill drain, the plain
+  // terminal view models - is terminal-only and reads the slice. Memoized
+  // rather than filtered inside the selector: zustand compares snapshots with
+  // `Object.is`, and a fresh array per read would report a change on every
+  // store notification.
+  const tabs = useLandingPanelStore((state) => state.tabs);
+  const terminalTabs = useMemo(() => landingTerminalTabs(tabs), [tabs]);
+  const browserTabs = useMemo(() => landingBrowserTabs(tabs), [tabs]);
   const [authorityEntries, setAuthorityEntries] =
     useState<LandingTerminalAuthorityEntries>({});
   const authorityHostIds = useMemo(
     () =>
-      [...new Set([...tabs.map((tab) => tab.hostId), target.hostId])].filter(
-        (hostId): hostId is string => hostId !== null,
-      ),
-    [tabs, target.hostId],
+      [
+        ...new Set([...terminalTabs.map((tab) => tab.hostId), target.hostId]),
+      ].filter((hostId): hostId is string => hostId !== null),
+    [terminalTabs, target.hostId],
+  );
+  // The target host is in the browser list even with no browser tab on it:
+  // creating one goes through that device's coordinator, so the arm has to be
+  // mounted before the first tab exists.
+  const browserHostIds = useMemo(
+    () =>
+      [
+        ...new Set([...browserTabs.map((tab) => tab.hostId), target.hostId]),
+      ].filter((hostId): hostId is string => hostId !== null),
+    [browserTabs, target.hostId],
   );
   const handleAuthorityEntry = useCallback(
     (hostId: string, entry: LandingTerminalAuthorityEntry | null): void => {
@@ -394,6 +446,23 @@ export function LandingTerminalPanel(): ReactNode {
   );
   const targetAuthority =
     target.hostId === null ? null : (authorityEntries[target.hostId] ?? null);
+  const [browserSessions, setBrowserSessions] =
+    useState<LandingBrowserSessionEntries>({});
+  const handleBrowserSessions = useCallback(
+    (hostId: string, state: BrowserSessionsState | null): void => {
+      setBrowserSessions((current) => {
+        if (state !== null) {
+          if (current[hostId] === state) return current;
+          return { ...current, [hostId]: state };
+        }
+        if (current[hostId] === undefined) return current;
+        const next = { ...current };
+        delete next[hostId];
+        return next;
+      });
+    },
+    [],
+  );
   const activeInstanceId = useLandingPanelStore(
     (state) => state.activeInstanceId,
   );
@@ -860,13 +929,17 @@ export function LandingTerminalPanel(): ReactNode {
     onSettled: handleReconciliationSettled,
   });
 
-  // Rename is a LIVE mutation with no durable fallback - only the host can
-  // record a manual title - so its affordance gates on that host's authority
-  // being ready, and the gate and the action stay one predicate. Close is
-  // deliberately NOT here: it is tombstone-first, so it stays available for a
-  // host that cannot be asked right now.
+  // Renaming a TERMINAL is a live mutation with no durable fallback - only the
+  // host can record a manual title - so its affordance gates on that host's
+  // authority being ready, and the gate and the action stay one predicate.
+  // Close is deliberately NOT here: it is tombstone-first, so it stays
+  // available for a host that cannot be asked right now.
   const canRenameTab = useCallback(
-    (tab: LandingTerminalTabRef): boolean =>
+    (tab: LandingPanelTabRef): boolean =>
+      // A browser tab's title is the panel's own - the store records it as
+      // `manual` and nothing on the host has to agree - so it renames whatever
+      // the device is doing.
+      tab.kind === "browser" ||
       landingTerminalAuthorityReady(authorityEntries[tab.hostId]),
     [authorityEntries],
   );
@@ -876,18 +949,25 @@ export function LandingTerminalPanel(): ReactNode {
   // closable, and its shell is killed when that host comes back. The dispatch
   // is the fast path only; `dispatchLandingTerminalClose` documents who carries
   // the kill otherwise.
-  const closeTerminalTab = useCallback(
-    (tab: LandingTerminalTabRef) => {
+  const closePanelTab = useCallback(
+    (tab: LandingPanelTabRef) => {
       replaceDirectoryRequest(null);
       clearPending();
       const authorityEntry = authorityEntries[tab.hostId];
+      const sessions = browserSessions[tab.hostId] ?? null;
       const closed = closeTab(landingPageId, tab.instanceId);
-      if (closed === null || !isLandingTerminalTab(closed)) return;
-      dispatchLandingTerminalClose({
-        entry: authorityEntry,
-        closed,
-        killTerminal: killTerminalAsync,
-      });
+      if (closed === null) return;
+      // Routed by the CLOSED ref's kind, not the argument's. They agree, but
+      // the store is the one that decided what was removed.
+      if (isLandingTerminalTab(closed)) {
+        dispatchLandingTerminalClose({
+          entry: authorityEntry,
+          closed,
+          killTerminal: killTerminalAsync,
+        });
+      } else {
+        dispatchLandingBrowserClose({ closed, sessions });
+      }
       // Closing a non-last tab promotes a surviving neighbor - keep the
       // keyboard with the panel. The last-tab case collapses the panel, and
       // the open-transition effect hands focus back to the composer instead.
@@ -903,6 +983,7 @@ export function LandingTerminalPanel(): ReactNode {
       }
     },
     [
+      browserSessions,
       clearPending,
       closeTab,
       authorityEntries,
@@ -912,9 +993,10 @@ export function LandingTerminalPanel(): ReactNode {
     ],
   );
 
-  const closeAllTerminalTabs = useCallback(() => {
-    // Every tab closes - "Close All" means all of them, including tabs whose
-    // host cannot be asked yet, whose kills the recovery bridge drains later.
+  const closeAllPanelTabs = useCallback(() => {
+    // Every tab closes - "Close All" means all of them, both kinds, including
+    // tabs whose device cannot be asked yet, whose closes the recovery bridge
+    // drains later.
     //
     // This replays a single close per tab, so the durability ordering is
     // per-tab: each tombstone is written with its own tab's removal, then that
@@ -922,14 +1004,14 @@ export function LandingTerminalPanel(): ReactNode {
     // tab either untouched or tombstoned, never removed without a tombstone -
     // which is the invariant that matters, and it keeps focus handling and the
     // fast-path dispatch in one place instead of duplicating them per tab.
+    // Routing is per tab inside `closePanelTab`, so a mixed list needs no
+    // partition here.
     replaceDirectoryRequest(null);
     clearPending();
-    landingTerminalTabs(useLandingPanelStore.getState().tabs).forEach(
-      closeTerminalTab,
-    );
+    useLandingPanelStore.getState().tabs.forEach(closePanelTab);
     clearPendingTerminalFocus(null);
     focusActiveComposer();
-  }, [clearPending, closeTerminalTab, replaceDirectoryRequest]);
+  }, [clearPending, closePanelTab, replaceDirectoryRequest]);
 
   const togglePanel = useCallback(() => {
     if (panelOpen) {
@@ -963,6 +1045,74 @@ export function LandingTerminalPanel(): ReactNode {
     togglePanel();
   }, [panelOpen, togglePanel]);
 
+  const browserOpenTab = useLandingBrowserOpenTab({
+    hostId: target.hostId,
+    sessions:
+      target.hostId === null ? null : (browserSessions[target.hostId] ?? null),
+  });
+  const openBrowserTab = browserOpenTab.open;
+  // Reveal for a BROWSER open. Deliberately not `openPanel`: that branch
+  // captures a directory request, and which working folder to use is not a
+  // question this gesture has - a browser tab has no cwd.
+  const revealAndOpenBrowserTab = useCallback(() => {
+    if (!panelOpen) setPanelOpen(true);
+    openBrowserTab();
+  }, [openBrowserTab, panelOpen, setPanelOpen]);
+
+  /**
+   * A link the page asked to open in a new tab. Browser semantics, not the
+   * panel's: the popup belongs to the SAME session as the tab that raised it,
+   * and a background open (middle/ctrl/cmd-click) must not take focus from the
+   * tab being read.
+   */
+  const openBrowserLink = useCallback(
+    (
+      tab: LandingBrowserTabRef,
+      url: string,
+      disposition: "foreground" | "background",
+    ): void => {
+      const sessions = browserSessions[tab.hostId] ?? null;
+      if (sessions === null || sessions.lifecycle !== "live") {
+        toast.error("Browsers are not connected yet.");
+        return;
+      }
+      const previousActiveInstanceId =
+        useLandingPanelStore.getState().activeInstanceId;
+      void sessions
+        .openTab(tab.sessionId, url)
+        .then((opened) => {
+          const instanceId = `landing-browser-${uuidv4()}`;
+          const store = useLandingPanelStore.getState();
+          store.addTab({
+            kind: "browser",
+            instanceId,
+            hostId: tab.hostId,
+            sessionId: opened.sessionId,
+            tabId: opened.tabId,
+            name: url,
+            titleSource: "default",
+          });
+          // `addTab` activates what it adds, which is right for a foreground
+          // open and wrong for a background one - so the background arm puts
+          // the selection back where the reader left it.
+          if (
+            disposition === "background" &&
+            previousActiveInstanceId !== null
+          ) {
+            store.activateTab(previousActiveInstanceId);
+          }
+        })
+        .catch((cause: unknown) => {
+          toast.error(
+            cause instanceof Error
+              ? cause.message
+              : "Couldn't open the browser tab.",
+          );
+        });
+    },
+    [browserSessions],
+  );
+
   // The `+` gate reads the effective target only: capability from the captured
   // host, fail-closed on an unpinned client, and the reconciled launch context.
   const { createEnabled, createDisabledReason } = landingTerminalCreateGate({
@@ -995,7 +1145,7 @@ export function LandingTerminalPanel(): ReactNode {
     Readonly<Partial<Record<string, PlainTerminalViewModel>>>
   >(() => {
     const viewModels: Partial<Record<string, PlainTerminalViewModel>> = {};
-    for (const tab of tabs) {
+    for (const tab of terminalTabs) {
       const projection = getPlainTerminal(
         authorityEntries[tab.hostId]?.authority.collection,
         tab.hostId,
@@ -1006,7 +1156,20 @@ export function LandingTerminalPanel(): ReactNode {
       }
     }
     return viewModels;
-  }, [authorityEntries, tabs]);
+  }, [authorityEntries, terminalTabs]);
+
+  const browserViewModels = useMemo<
+    Readonly<Partial<Record<string, LandingBrowserViewModel>>>
+  >(() => {
+    const viewModels: Partial<Record<string, LandingBrowserViewModel>> = {};
+    for (const tab of browserTabs) {
+      viewModels[tab.instanceId] = selectLandingBrowserViewModel({
+        tab,
+        sessions: browserSessions[tab.hostId] ?? null,
+      });
+    }
+    return viewModels;
+  }, [browserSessions, browserTabs]);
 
   // Several remote hosts can exist without a default selection. This is a
   // real page state, not an unsupported/unknown verdict: leave persistence
@@ -1017,11 +1180,17 @@ export function LandingTerminalPanel(): ReactNode {
     target.availability === "no-active-host" ||
     target.availability === "unsupported";
 
-  const renameTerminalTab = (instanceId: string, name: string): void => {
+  const renamePanelTab = (instanceId: string, name: string): void => {
     const tab = useLandingPanelStore
       .getState()
       .tabs.find((entry) => entry.instanceId === instanceId);
     if (tab === undefined) return;
+    // A browser tab has no host-side title to record, so the store IS the
+    // record; `renameTab` marks it manual and the reconciler leaves it alone.
+    if (tab.kind === "browser") {
+      renameTab(instanceId, name);
+      return;
+    }
     const entry = authorityEntries[tab.hostId];
     if (!landingTerminalAuthorityReady(entry)) return;
     if (entry.authority.capability.status === "legacy") {
@@ -1039,7 +1208,12 @@ export function LandingTerminalPanel(): ReactNode {
     <>
       <LandingTerminalAuthorityFleet
         hostIds={authorityHostIds}
+        browserHostIds={browserHostIds}
+        // The panel owns the browser slice; the always-mounted tombstone bridge
+        // shares the same coordinators and only reports.
+        browserArm="reconcile"
         onEntry={handleAuthorityEntry}
+        onBrowserSessions={handleBrowserSessions}
       />
       <LandingTerminalBoundHostReconciliationFleet
         landingPageId={landingPageId}
@@ -1070,12 +1244,16 @@ export function LandingTerminalPanel(): ReactNode {
           onSelectDirectory={selectDirectory}
           onCancelDirectoryPicker={cancelDirectoryRequest}
           onActivateTab={activateTerminalTab}
-          onCloseTab={closeTerminalTab}
-          onCloseAllTabs={closeAllTerminalTabs}
-          onRenameTab={renameTerminalTab}
+          onCloseTab={closePanelTab}
+          onCloseAllTabs={closeAllPanelTabs}
+          onRenameTab={renamePanelTab}
           canRenameTab={canRenameTab}
+          onOpenBrowserTab={openBrowserTab}
+          onRevealAndOpenBrowserTab={revealAndOpenBrowserTab}
+          onOpenBrowserLink={openBrowserLink}
           authorityEntries={authorityEntries}
           terminalViewModels={terminalViewModels}
+          browserViewModels={browserViewModels}
         />
       )}
     </>
@@ -1084,7 +1262,7 @@ export function LandingTerminalPanel(): ReactNode {
 
 interface LandingTerminalPanelContentsProps {
   readonly landingPageId: string;
-  readonly tabs: ReadonlyArray<LandingTerminalTabRef>;
+  readonly tabs: ReadonlyArray<LandingPanelTabRef>;
   readonly activeInstanceId: string | null;
   readonly availability: LandingTerminalAvailability;
   readonly panelOpen: boolean;
@@ -1105,13 +1283,25 @@ interface LandingTerminalPanelContentsProps {
   readonly onSelectDirectory: (workspacePath: string) => void;
   readonly onCancelDirectoryPicker: () => void;
   readonly onActivateTab: (instanceId: string) => void;
-  readonly onCloseTab: (tab: LandingTerminalTabRef) => void;
+  readonly onCloseTab: (tab: LandingPanelTabRef) => void;
   readonly onCloseAllTabs: () => void;
   readonly onRenameTab: (instanceId: string, name: string) => void;
-  readonly canRenameTab: (tab: LandingTerminalTabRef) => boolean;
+  readonly canRenameTab: (tab: LandingPanelTabRef) => boolean;
+  /** Opens a browser tab in an already-open panel. */
+  readonly onOpenBrowserTab: () => void;
+  /** The `app.browser.new` chord: reveals the panel first if it is collapsed. */
+  readonly onRevealAndOpenBrowserTab: () => void;
+  readonly onOpenBrowserLink: (
+    tab: LandingBrowserTabRef,
+    url: string,
+    disposition: "foreground" | "background",
+  ) => void;
   readonly authorityEntries: LandingTerminalAuthorityEntries;
   readonly terminalViewModels: Readonly<
     Partial<Record<string, PlainTerminalViewModel>>
+  >;
+  readonly browserViewModels: Readonly<
+    Partial<Record<string, LandingBrowserViewModel>>
   >;
 }
 
@@ -1154,6 +1344,7 @@ function LandingTerminalPanelContents(
     onTogglePanel: props.onTogglePanel,
     onOpenPanel: props.onOpenPanel,
     onRevealAndCreate: props.onRevealAndCreate,
+    onRevealAndOpenBrowserTab: props.onRevealAndOpenBrowserTab,
     onToggleMaximized: props.onToggleMaximized,
     onActivateTab: props.onActivateTab,
     onCloseTab: props.onCloseTab,
@@ -1272,6 +1463,7 @@ function LandingTerminalPanelContents(
           onRename={props.onRenameTab}
           canRename={props.canRenameTab}
           terminalViewModels={props.terminalViewModels}
+          browserViewModels={props.browserViewModels}
         />
         <LandingTerminalPanelBody
           landingPageId={props.landingPageId}
@@ -1287,6 +1479,9 @@ function LandingTerminalPanelContents(
           onSelectDirectory={props.onSelectDirectory}
           onCancelDirectoryPicker={props.onCancelDirectoryPicker}
           authorityEntries={props.authorityEntries}
+          onCloseTab={props.onCloseTab}
+          onOpenBrowserTab={props.onOpenBrowserTab}
+          onOpenBrowserLink={props.onOpenBrowserLink}
         />
         <LandingTerminalMobileKeyBar
           active={keyBarActive}
@@ -1450,8 +1645,9 @@ function useLandingTerminalShortcuts(args: {
   readonly onRevealAndCreate: () => void;
   readonly onToggleMaximized: () => void;
   readonly onActivateTab: (instanceId: string) => void;
-  readonly onCloseTab: (tab: LandingTerminalTabRef) => void;
+  readonly onCloseTab: (tab: LandingPanelTabRef) => void;
   readonly onCloseAllTabs: () => void;
+  readonly onRevealAndOpenBrowserTab: () => void;
 }): void {
   const {
     landingPageId,
@@ -1460,6 +1656,7 @@ function useLandingTerminalShortcuts(args: {
     onTogglePanel,
     onOpenPanel,
     onRevealAndCreate,
+    onRevealAndOpenBrowserTab,
     onToggleMaximized,
     onActivateTab,
     onCloseTab,
@@ -1486,6 +1683,15 @@ function useLandingTerminalShortcuts(args: {
     if (!surfaceActive) return;
     return registerDynamicActionHandler("app.terminal.new", onRevealAndCreate);
   }, [onRevealAndCreate, surfaceActive]);
+  // The browser twin of the chord above. It self-gates on the device's
+  // coordinator being live, so it is safe to register while one is connecting.
+  useEffect(() => {
+    if (!surfaceActive) return;
+    return registerDynamicActionHandler(
+      "app.browser.new",
+      onRevealAndOpenBrowserTab,
+    );
+  }, [onRevealAndOpenBrowserTab, surfaceActive]);
   useEffect(() => {
     if (!surfaceActive) return;
     return registerDynamicActionHandler("tab.new", () => {
@@ -1512,7 +1718,7 @@ function useLandingTerminalShortcuts(args: {
       if (systemTabOverlayActive()) return;
       const state = useLandingPanelStore.getState();
       if (!landingPanelLayoutFor(state, landingPageId).panelOpen) return;
-      const active = landingTerminalTabs(state.tabs).find(
+      const active = state.tabs.find(
         (tab) => tab.instanceId === state.activeInstanceId,
       );
       if (active === undefined) return;
@@ -1761,7 +1967,7 @@ function LandingTerminalPanelHeader(props: {
 
 function LandingTerminalPanelBody(props: {
   readonly landingPageId: string;
-  readonly tabs: ReadonlyArray<LandingTerminalTabRef>;
+  readonly tabs: ReadonlyArray<LandingPanelTabRef>;
   readonly activeInstanceId: string | null;
   readonly availability: LandingTerminalAvailability;
   readonly panelOpen: boolean;
@@ -1773,6 +1979,13 @@ function LandingTerminalPanelBody(props: {
   readonly onSelectDirectory: (workspacePath: string) => void;
   readonly onCancelDirectoryPicker: () => void;
   readonly authorityEntries: LandingTerminalAuthorityEntries;
+  readonly onCloseTab: (tab: LandingPanelTabRef) => void;
+  readonly onOpenBrowserTab: () => void;
+  readonly onOpenBrowserLink: (
+    tab: LandingBrowserTabRef,
+    url: string,
+    disposition: "foreground" | "background",
+  ) => void;
 }): ReactNode {
   if (props.availability === "unknown" && props.directoryPicker === null) {
     return (
@@ -1810,17 +2023,31 @@ function LandingTerminalPanelBody(props: {
                   "invisible pointer-events-none",
               )}
             >
-              <LandingTerminalTile
-                landingPageId={props.landingPageId}
-                tab={tab}
-                active={tab.instanceId === props.activeInstanceId}
-                createEnabled={Boolean(
-                  props.availability === "supported" &&
-                  props.panelOpen &&
-                  (props.createEnabled || tab.hostId !== props.activeHostId),
-                )}
-                authorityEntry={props.authorityEntries[tab.hostId] ?? null}
-              />
+              {tab.kind === "browser" ? (
+                <LandingBrowserTile
+                  landingPageId={props.landingPageId}
+                  tab={tab}
+                  active={tab.instanceId === props.activeInstanceId}
+                  panelOpen={props.panelOpen}
+                  onRequestClose={() => props.onCloseTab(tab)}
+                  onOpenLinkInNewTile={(url, disposition) => {
+                    props.onOpenBrowserLink(tab, url, disposition);
+                  }}
+                  onRequestNewTab={props.onOpenBrowserTab}
+                />
+              ) : (
+                <LandingTerminalTile
+                  landingPageId={props.landingPageId}
+                  tab={tab}
+                  active={tab.instanceId === props.activeInstanceId}
+                  createEnabled={Boolean(
+                    props.availability === "supported" &&
+                    props.panelOpen &&
+                    (props.createEnabled || tab.hostId !== props.activeHostId),
+                  )}
+                  authorityEntry={props.authorityEntries[tab.hostId] ?? null}
+                />
+              )}
             </div>
           ))
         )}

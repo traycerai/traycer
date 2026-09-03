@@ -69,6 +69,21 @@ export interface BrowserTabTileProps {
   readonly onOpenLinkInNewTile:
     | ((url: string, disposition: "foreground" | "background") => void)
     | null;
+  /**
+   * The guest's own "new tab" chord, which is a different request from a link
+   * open even though both used to arrive on `onOpenLinkInNewTile`.
+   *
+   * They cannot be told apart there: the chord is delivered as
+   * `onOpenLinkInNewTile(DEFAULT_BROWSER_TILE_URL, "foreground")`, which is
+   * byte-identical to a page calling `window.open("about:blank")`. The Start
+   * Page needs them separated - a chord opens its chooser, while a real popup
+   * must still open a host tab the page can then navigate - so the two are
+   * separate props rather than one callback with a url heuristic.
+   *
+   * `null` falls back to the link path, which is exactly the canvas behavior
+   * this replaced, so the canvas adapter passes `null` and is unchanged.
+   */
+  readonly onRequestNewTab: (() => void) | null;
   readonly onConvertToPip: (() => void) | null;
 }
 
@@ -271,6 +286,7 @@ function BrowserTabTileSurface(props: BrowserTabTileSurfaceProps) {
       onRequestClose={props.onRequestClose}
       persistViewportPreset={props.persistViewportPreset}
       onOpenLinkInNewTile={props.onOpenLinkInNewTile}
+      onRequestNewTab={props.onRequestNewTab}
       onConvertToPip={props.onConvertToPip}
     />
   );

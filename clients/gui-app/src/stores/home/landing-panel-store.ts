@@ -121,6 +121,13 @@ export function landingTerminalTabs(
   return tabs.filter(isLandingTerminalTab);
 }
 
+/** The browser slice of a mixed tab list. See {@link landingTerminalTabs}. */
+export function landingBrowserTabs(
+  tabs: ReadonlyArray<LandingPanelTabRef>,
+): ReadonlyArray<LandingBrowserTabRef> {
+  return tabs.filter(isLandingBrowserTab);
+}
+
 /**
  * A kill that is still owed for a session whose tab is already gone.
  *
@@ -191,6 +198,13 @@ export function landingTerminalPendingKills(
   pendingKills: ReadonlyArray<LandingPanelPendingKill>,
 ): ReadonlyArray<LandingTerminalPendingKill> {
   return pendingKills.filter(isLandingTerminalPendingKill);
+}
+
+/** The browser slice of the tombstone set. See {@link landingTerminalTabs}. */
+export function landingBrowserPendingKills(
+  pendingKills: ReadonlyArray<LandingPanelPendingKill>,
+): ReadonlyArray<LandingBrowserPendingKill> {
+  return pendingKills.filter(isLandingBrowserPendingKill);
 }
 
 /**

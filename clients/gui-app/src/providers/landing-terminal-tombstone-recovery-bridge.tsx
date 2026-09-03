@@ -23,10 +23,14 @@ import {
 } from "@/components/home/terminal-panel/use-landing-terminal-kill-mutation";
 import {
   LandingTerminalAuthorityFleet,
+  type LandingBrowserSessionEntries,
   type LandingTerminalAuthorityEntries,
   type LandingTerminalAuthorityEntry,
 } from "@/components/home/terminal-panel/landing-terminal-authority-fleet";
+import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
+import { useLandingBrowserTombstoneDrain } from "@/providers/landing-browser-tombstone-drain";
 import {
+  landingBrowserPendingKills,
   landingTabRefKey,
   landingTerminalPendingKills,
 } from "@/stores/home/landing-panel-store";
@@ -721,6 +725,23 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
     },
     [],
   );
+  const [browserSessions, setBrowserSessions] =
+    useState<LandingBrowserSessionEntries>({});
+  const handleBrowserSessions = useCallback(
+    (hostId: string, state: BrowserSessionsState | null): void => {
+      setBrowserSessions((current) => {
+        if (state !== null) {
+          if (current[hostId] === state) return current;
+          return { ...current, [hostId]: state };
+        }
+        if (current[hostId] === undefined) return current;
+        const next = { ...current };
+        delete next[hostId];
+        return next;
+      });
+    },
+    [],
+  );
   // Coarse, through the canonical rule. The edge this watches is "a route to
   // that host exists again", because what it does on that edge is send an RPC —
   // there is no copy here and nobody sees this. Asking `dialableHostEndpoint`
@@ -798,6 +819,25 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
     const fleet = new Set(directoryHostIds);
     return tombstoned.filter((hostId) => fleet.has(hostId));
   }, [allPendingKills, directoryHostIds, fleetSettled]);
+  const browserPendingKills = useMemo(
+    () => landingBrowserPendingKills(allPendingKills),
+    [allPendingKills],
+  );
+  // The same scoping rule as `authorityHostIds`, for the same reason: a
+  // departed host cannot answer, and the browser tombstone survives its
+  // absence exactly as the terminal one does.
+  const browserHostIds = useMemo(() => {
+    const tombstoned = [
+      ...new Set(browserPendingKills.map((pending) => pending.hostId)),
+    ];
+    if (!fleetSettled) return tombstoned;
+    const fleet = new Set(directoryHostIds);
+    return tombstoned.filter((hostId) => fleet.has(hostId));
+  }, [browserPendingKills, directoryHostIds, fleetSettled]);
+  useLandingBrowserTombstoneDrain({
+    pendingKills: browserPendingKills,
+    browserSessions,
+  });
   const hasReadySessionFor = useRemoteSessionsPollReadiness(directoryHostIds);
   const authorityEntriesRef = useRef(authorityEntries);
 
@@ -931,7 +971,13 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
   return (
     <LandingTerminalAuthorityFleet
       hostIds={authorityHostIds}
+      browserHostIds={browserHostIds}
+      // Report only. The panel owns the reconciliation of the browser slice;
+      // this bridge is mounted above the router and would otherwise adopt and
+      // drop against snapshots the panel had already acted on.
+      browserArm="report-only"
       onEntry={handleAuthorityEntry}
+      onBrowserSessions={handleBrowserSessions}
     />
   );
 }

@@ -319,6 +319,7 @@ vi.mock("@/components/epic-canvas/renderers/xterm-host-registry", () => ({
 
 import { LandingTerminalPanel } from "@/components/home/terminal-panel/landing-terminal-panel";
 import { LandingTerminalGestureProvider } from "@/components/home/terminal-panel/landing-terminal-gesture-provider";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { requestLandingTerminalClose } from "@/lib/terminals/landing-terminal-close-coordinator";
 
@@ -346,30 +347,44 @@ function panelUi() {
   return panelUiForDraft(TEST_LANDING_PAGE_ID);
 }
 
+/**
+ * A REAL client, unlike the hand-rolled `mocks.queryClient` the panel's own
+ * `useQueryClient()` reads. The panel opens browser tabs through `useMutation`
+ * / `useIsMutating`, and those resolve the client through react-query's own
+ * internal reference rather than through this suite's mocked export - so the
+ * fake never reaches them and they need a provider. Re-made per test, because
+ * `useIsMutating` counts across the whole client.
+ */
+let testQueryClient = new QueryClient();
+
 function panelUiForDraft(draftId: string | null) {
   return (
-    <TooltipProvider>
-      <LandingTerminalGestureProvider draftId={draftId}>
-        <LandingTerminalPanel />
-      </LandingTerminalGestureProvider>
-    </TooltipProvider>
+    <QueryClientProvider client={testQueryClient}>
+      <TooltipProvider>
+        <LandingTerminalGestureProvider draftId={draftId}>
+          <LandingTerminalPanel />
+        </LandingTerminalGestureProvider>
+      </TooltipProvider>
+    </QueryClientProvider>
   );
 }
 
 function panelUiInBoxlessPaneAnchor() {
   return (
-    <TooltipProvider>
-      <LandingTerminalGestureProvider draftId="draft-a">
-        <div className="flex" data-testid="landing-terminal-layout-row">
-          <div
-            data-testid="landing-terminal-pane-anchor"
-            style={{ display: "contents" }}
-          >
-            <LandingTerminalPanel />
+    <QueryClientProvider client={testQueryClient}>
+      <TooltipProvider>
+        <LandingTerminalGestureProvider draftId="draft-a">
+          <div className="flex" data-testid="landing-terminal-layout-row">
+            <div
+              data-testid="landing-terminal-pane-anchor"
+              style={{ display: "contents" }}
+            >
+              <LandingTerminalPanel />
+            </div>
           </div>
-        </div>
-      </LandingTerminalGestureProvider>
-    </TooltipProvider>
+        </LandingTerminalGestureProvider>
+      </TooltipProvider>
+    </QueryClientProvider>
   );
 }
 
@@ -624,6 +639,12 @@ describe("<LandingTerminalPanel />", () => {
       Promise.resolve(mocks.freshProbeData ?? mocks.probeData),
     );
     useLandingPanelStore.getState().resetForTests();
+    testQueryClient = new QueryClient({
+      defaultOptions: {
+        mutations: { retry: false },
+        queries: { retry: false },
+      },
+    });
   });
 
   afterEach(() => {
