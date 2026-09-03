@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from "uuid";
 import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
 import type { HostResourceScope } from "@traycer/protocol/host/resource-scope";
 import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
+import { consumeIndependentPageOpenedTab } from "@/lib/browser-view/sessions/independent-page-open-registry";
 import {
   landingBrowserTabs,
   landingTabRefKey,
@@ -73,6 +74,24 @@ export function useLandingBrowserReconciliation(args: {
       reconciliation.tabs,
       reconciliation.collapseWhenEmpty,
     );
+    // A tab the PAGE opened is a gesture the reader made, so the row it lands
+    // as is the one they should be on. Everything else the pass adopts is the
+    // device's existing inventory arriving - another window's tabs, a
+    // reconnect's snapshot - and yanking the selection onto those would move
+    // the panel for reasons the person at this keyboard did not cause.
+    //
+    // The last one wins because activation is single-valued and a pass can
+    // adopt several: the most recent open is the one still on screen in the
+    // reader's head.
+    const pageOpened = reconciliation.adoptedTabs.filter((tab) =>
+      consumeIndependentPageOpenedTab({
+        hostId: tab.hostId,
+        sessionId: tab.sessionId,
+        tabId: tab.tabId,
+      }),
+    );
+    const landed = pageOpened.at(-1);
+    if (landed !== undefined) store.activateTab(landed.instanceId);
   }, [enabled, hostId, inventoryReady, items]);
 }
 

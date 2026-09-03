@@ -2,6 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, renderHook } from "@testing-library/react";
 import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import {
+  recordIndependentPageOpenedTab,
+  resetIndependentPageOpensForTests,
+} from "@/lib/browser-view/sessions/independent-page-open-registry";
+import {
   landingTabRefKey,
   useLandingPanelStore,
   type LandingBrowserTabRef,
@@ -315,6 +319,7 @@ describe("useLandingBrowserReconciliation", () => {
   afterEach(() => {
     cleanup();
     useLandingPanelStore.getState().resetForTests();
+    resetIndependentPageOpensForTests();
     vi.restoreAllMocks();
   });
 
@@ -407,6 +412,71 @@ describe("useLandingBrowserReconciliation", () => {
         titleSource: "default",
       },
     ]);
+  });
+
+  // The independent half of the `tabOpened` route: the stream records the
+  // identity because it cannot reach a surface, and this pass is the surface.
+  it("activates a tab the page opened, and only that one", () => {
+    storedBrowserTab("browser-1", "tab-1");
+    useLandingPanelStore.getState().activateTab("browser-1");
+    recordIndependentPageOpenedTab({
+      hostId: HOST_ID,
+      sessionId: "session-1",
+      tabId: "popup-tab",
+    });
+    const session = sessionInfo({
+      sessionId: "session-1",
+      hostId: HOST_ID,
+      scope: independentScope(),
+      tabs: [
+        tabInfo({ tabId: "tab-1", url: "https://example.com/" }),
+        // Adopted in the same pass and NOT recorded - another window's tab, or
+        // a reconnect's snapshot. It must not move the selection.
+        tabInfo({ tabId: "other-tab", url: "https://other.example/" }),
+        tabInfo({ tabId: "popup-tab", url: "https://example.com/next" }),
+      ],
+    });
+
+    renderHook(() =>
+      useLandingBrowserReconciliation({
+        hostId: HOST_ID,
+        sessions: sessionsState({ items: [session] }),
+        enabled: true,
+      }),
+    );
+
+    const popup = useLandingPanelStore
+      .getState()
+      .tabs.find((tab) => tab.kind === "browser" && tab.tabId === "popup-tab");
+    expect(popup).not.toBeUndefined();
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
+      popup?.instanceId,
+    );
+  });
+
+  it("leaves the selection alone for tabs nobody at this keyboard opened", () => {
+    storedBrowserTab("browser-1", "tab-1");
+    useLandingPanelStore.getState().activateTab("browser-1");
+    const session = sessionInfo({
+      sessionId: "session-1",
+      hostId: HOST_ID,
+      scope: independentScope(),
+      tabs: [
+        tabInfo({ tabId: "tab-1", url: "https://example.com/" }),
+        tabInfo({ tabId: "other-tab", url: "https://other.example/" }),
+      ],
+    });
+
+    renderHook(() =>
+      useLandingBrowserReconciliation({
+        hostId: HOST_ID,
+        sessions: sessionsState({ items: [session] }),
+        enabled: true,
+      }),
+    );
+
+    expect(useLandingPanelStore.getState().tabs).toHaveLength(2);
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe("browser-1");
   });
 
   it("leaves the device's terminal tabs alone across a browser pass that drops every browser tab", () => {

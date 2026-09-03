@@ -10,6 +10,7 @@ import {
 import type { CanonicalTerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-schemas";
 import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
 import type { PlainTerminalCollection } from "@/lib/terminals/plain-terminal-authority";
+import type { BrowserTabIdentity } from "@traycer/protocol/host/browser/contracts";
 import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import {
   landingPanelLayoutFor,
@@ -24,6 +25,7 @@ import { useMobileHeaderRightActions } from "@/stores/layout/mobile-header-right
 import { registerComposerFocus } from "@/lib/composer/composer-focus-registry";
 import {
   handlePrimaryFocusIn,
+  hasPrimaryFocusIntent,
   reconcilePrimaryFocus,
   resetPrimaryFocusCoordinatorForTests,
   setPrimaryFocusInteractionActive,
@@ -750,6 +752,46 @@ describe("<LandingTerminalPanel />", () => {
       // the header) only renders the toggle while that page is on screen.
       seedTabsLayout([PANEL_DRAFT_TAB], PANEL_DRAFT_TAB.id);
       mocks.probeData = emptyList("/Users/dev");
+    });
+
+    // The key bar sends terminal chords to one instance id. Over a browser row
+    // its keys have nowhere to land, and on a phone it would cover the surface
+    // the reader is actually on.
+    it("mounts the key bar for a terminal row and not for a browser row", async () => {
+      mocks.browserSessionsByHost = {
+        "host-a": browserSessionsState({}),
+      };
+      useLandingPanelStore.getState().addTab({
+        kind: "terminal",
+        instanceId: "terminal-instance",
+        sessionId: "terminal-session",
+        hostId: "host-a",
+        cwd: "/workspace/project",
+        name: "project",
+        titleSource: "default",
+      });
+      useLandingPanelStore.getState().addTab({
+        kind: "browser",
+        instanceId: "browser-instance",
+        hostId: "host-a",
+        sessionId: "browser-session",
+        tabId: "browser-tab",
+        name: "example.com",
+        titleSource: "default",
+      });
+      useLandingPanelStore.getState().activateTab("terminal-instance");
+      useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+      render(panelUi());
+
+      expect(await screen.findByTestId("mobile-terminal-key-bar")).toBeTruthy();
+
+      act(() => {
+        useLandingPanelStore.getState().activateTab("browser-instance");
+      });
+
+      await waitFor(() => {
+        expect(screen.queryByTestId("mobile-terminal-key-bar")).toBeNull();
+      });
     });
 
     it("registers the reveal toggle for the mobile header instead of floating it", async () => {
@@ -1922,6 +1964,57 @@ describe("<LandingTerminalPanel />", () => {
     );
   });
 
+  // The opener's in-flight state has to REACH the card. Without it the chooser
+  // shows an enabled Browser card while a tab is already on its way, which is
+  // the one place a second click is easiest to make.
+  it("marks the chooser's browser card pending while the device is answering", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    mocks.plainAuthorityStatus = "capable";
+    mocks.plainCanMutate = true;
+    let settle: ((identity: BrowserTabIdentity) => void) | null = null;
+    const openTab = vi.fn(
+      () =>
+        new Promise<BrowserTabIdentity>((resolve) => {
+          settle = resolve;
+        }),
+    );
+    mocks.browserSessionsByHost = {
+      "host-a": browserSessionsState({ openTab }),
+    };
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    const browserCard = await screen.findByTestId(
+      "landing-new-tab-card-browser",
+    );
+    await waitFor(() => {
+      expect(browserCard.getAttribute("aria-disabled")).toBeNull();
+    });
+    fireEvent.click(browserCard);
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("landing-new-tab-card-browser-pending"),
+      ).toBeTruthy();
+    });
+    expect(browserCard.getAttribute("aria-disabled")).toBe("true");
+    // A second click while the first is unanswered reaches nothing.
+    fireEvent.click(browserCard);
+    expect(openTab).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      settle?.({ sessionId: "device-session", tabId: "device-tab" });
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(useLandingPanelStore.getState().tabs).toHaveLength(1);
+    });
+  });
+
   it("closes every terminal from the context menu, tombstoning before killing", async () => {
     mocks.activeHostId = "host-a";
     mocks.clientActiveHostId = "host-a";
@@ -2787,6 +2880,218 @@ describe("<LandingTerminalPanel />", () => {
     await waitFor(() => {
       expect(terminalFocus).toHaveBeenCalled();
     });
+  });
+
+  // The three tests below pin one class: `activeInstanceId` is no longer
+  // always a terminal. A terminal focus request is fulfilled by a REGISTERED
+  // terminal endpoint and otherwise PARKS, so aiming one at a browser row or
+  // the chooser leaves an intent nothing can ever claim - it outlives the row
+  // and swallows the next terminal's focus. Each asserts on the parked intent,
+  // because the harm is the request existing, not a call that never happened.
+  it("does not park a terminal focus request when a browser tab is activated", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    mocks.browserSessionsByHost = {
+      "host-a": browserSessionsState({}),
+    };
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
+      instanceId: "terminal-instance",
+      sessionId: "terminal-session",
+      hostId: "host-a",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+    });
+    useLandingPanelStore.getState().addTab({
+      kind: "browser",
+      instanceId: "browser-instance",
+      hostId: "host-a",
+      sessionId: "browser-session",
+      tabId: "browser-tab",
+      name: "example.com",
+      titleSource: "default",
+    });
+    useLandingPanelStore.getState().activateTab("terminal-instance");
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    fireEvent.click(
+      screen.getByTestId("landing-terminal-tab-browser-instance"),
+    );
+
+    await waitFor(() => {
+      expect(useLandingPanelStore.getState().activeInstanceId).toBe(
+        "browser-instance",
+      );
+    });
+    expect(
+      hasPrimaryFocusIntent(
+        (target) =>
+          target.kind === "terminal" &&
+          target.instanceId === "browser-instance",
+      ),
+    ).toBe(false);
+  });
+
+  it("leaves the keyboard alone when the panel opens on a browser row", () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    mocks.browserSessionsByHost = {
+      "host-a": browserSessionsState({}),
+    };
+    useLandingPanelStore.getState().addTab({
+      kind: "browser",
+      instanceId: "browser-instance",
+      hostId: "host-a",
+      sessionId: "browser-session",
+      tabId: "browser-tab",
+      name: "example.com",
+      titleSource: "default",
+    });
+    // Reconciliation never settles, so the reveal gesture the open transition
+    // captures cannot resolve into a terminal that supersedes what this effect
+    // requested. That is also the state an offline host leaves behind, and the
+    // one where a misaimed request stays parked for good.
+    mocks.queryClient.fetchQuery.mockImplementation(
+      () => new Promise(() => undefined),
+    );
+    render(panelUi());
+
+    // The phone header's route: `setPanelOpen` written on the store directly.
+    // `app.terminal.toggle` would not reach this effect - its own capture can
+    // raise a directory request the effect defers to.
+    act(() => {
+      useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    });
+
+    expect(testLayout().panelOpen).toBe(true);
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
+      "browser-instance",
+    );
+    expect(
+      hasPrimaryFocusIntent(
+        (target) =>
+          target.kind === "terminal" &&
+          target.instanceId === "browser-instance",
+      ),
+    ).toBe(false);
+  });
+
+  it("does not aim the reveal gesture's eager focus at a browser row", () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    mocks.browserSessionsByHost = {
+      "host-a": browserSessionsState({}),
+    };
+    // Reconciliation never settles, so the captured reveal gesture cannot
+    // create the terminal it will eventually focus - which leaves the toggle's
+    // own EAGER hand-off as the only focus request in play. That is exactly
+    // the state an offline host leaves behind, and the reason the eager
+    // request must not be aimed at a row no terminal will ever back.
+    mocks.queryClient.fetchQuery.mockImplementation(
+      () => new Promise(() => undefined),
+    );
+    useLandingPanelStore.getState().addTab({
+      kind: "browser",
+      instanceId: "browser-instance",
+      hostId: "host-a",
+      sessionId: "browser-session",
+      tabId: "browser-tab",
+      name: "example.com",
+      titleSource: "default",
+    });
+    render(panelUi());
+    const router = fakeKeybindingRouter();
+
+    act(() => {
+      dispatchAction("app.terminal.toggle", router);
+    });
+
+    expect(testLayout().panelOpen).toBe(true);
+    expect(
+      hasPrimaryFocusIntent(
+        (target) =>
+          target.kind === "terminal" &&
+          target.instanceId === "browser-instance",
+      ),
+    ).toBe(false);
+  });
+
+  it("hands focus back to the composer when closing a terminal promotes a browser neighbour", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    mocks.plainAuthorityStatus = "capable";
+    mocks.plainCanMutate = true;
+    mocks.browserSessionsByHost = {
+      "host-a": browserSessionsState({ closeTab: mocks.browserCloseTab }),
+    };
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
+      instanceId: "terminal-instance",
+      sessionId: "terminal-session",
+      hostId: "host-a",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+    });
+    useLandingPanelStore.getState().addTab({
+      kind: "browser",
+      instanceId: "browser-instance",
+      hostId: "host-a",
+      sessionId: "browser-session",
+      tabId: "browser-tab",
+      name: "example.com",
+      titleSource: "default",
+    });
+    useLandingPanelStore.getState().activateTab("terminal-instance");
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    const composerFocus = vi.fn();
+    focusCleanups.push(
+      registerComposerFocus(
+        "test-composer-promote-browser",
+        {
+          focus: composerFocus,
+          containsActiveElement: () => true,
+          isEligible: () => true,
+        },
+        true,
+      ),
+    );
+    render(panelUi());
+
+    fireEvent.click(screen.getByLabelText("Close project"));
+
+    await waitFor(() => {
+      expect(useLandingPanelStore.getState().activeInstanceId).toBe(
+        "browser-instance",
+      );
+    });
+    // The panel stayed open, so the open-transition effect never runs - this
+    // fallback is the only thing that can hand the keyboard back.
+    expect(testLayout().panelOpen).toBe(true);
+    await waitFor(() => {
+      expect(composerFocus).toHaveBeenCalled();
+    });
+    expect(
+      hasPrimaryFocusIntent(
+        (target) =>
+          target.kind === "terminal" &&
+          target.instanceId === "browser-instance",
+      ),
+    ).toBe(false);
   });
 
   it("refits the active terminal after reopening from zero width to the stored panel width", async () => {

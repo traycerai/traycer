@@ -533,17 +533,8 @@ function seedDeferredDeletionRefs(): void {
     titleSource: "manual",
     hostAuthorityAcknowledged: false,
   });
-  useLandingPanelStore.getState().addTab({
-    kind: "terminal",
-    instanceId: "landing-pending",
-    sessionId: "terminal-1",
-    hostId: HOST_ID,
-    cwd: "/pending",
-    name: "Pending",
-    titleSource: "default",
-    hostAuthorityAcknowledged: false,
-    pendingCreate: true,
-  });
+  // One landing tab, deliberately: `addTab` dedupes on `landingTabRefKey`
+  // (kind, host, session), so a second ref for `terminal-1` seeds nothing.
 }
 
 function deferredDeletionRefsRemain(): boolean {

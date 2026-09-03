@@ -129,6 +129,29 @@ export function landingBrowserTabs(
 }
 
 /**
+ * The active row's instance id when that row is a TERMINAL, else `null`.
+ *
+ * Every caller that hands the keyboard to `focusTerminalInstance` wants this
+ * and not `activeInstanceId`: the active row can now be a browser tab or the
+ * unpicked placeholder, and a terminal focus request parked against an id no
+ * terminal will ever register is never claimed and never cleared - it simply
+ * sits pending for the rest of the session, where the next terminal to
+ * register can be handed it. Each caller falls through to whatever it already
+ * did when there was no active row at all.
+ */
+export function activeLandingTerminalInstanceId(
+  state: Pick<LandingPanelStoreState, "tabs" | "activeInstanceId">,
+): string | null {
+  const active = state.activeInstanceId;
+  if (active === null) return null;
+  return landingTerminalTabs(state.tabs).some(
+    (tab) => tab.instanceId === active,
+  )
+    ? active
+    : null;
+}
+
+/**
  * A kill that is still owed for a session whose tab is already gone.
  *
  * The provenance fields exist because the drain cannot otherwise tell an absent

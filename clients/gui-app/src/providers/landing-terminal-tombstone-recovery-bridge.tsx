@@ -36,6 +36,7 @@ import {
 } from "@/stores/home/landing-panel-store";
 import { getPlainTerminal } from "@/lib/terminals/plain-terminal-authority";
 import { requestLandingTerminalClose } from "@/lib/terminals/landing-terminal-close-coordinator";
+import { terminalTombstoneOutstanding } from "@/providers/landing-terminal-tombstone-outstanding";
 
 const CAPABLE_CLOSE_RETRY_BASE_MS = 500;
 /**
@@ -248,14 +249,7 @@ function closeRetryStillWarranted(args: {
   readonly refs: TombstoneRetryRefs;
   readonly arm: TombstoneCloseArm;
 }): boolean {
-  const stillPending = useLandingPanelStore
-    .getState()
-    .pendingKills.some(
-      (candidate) =>
-        candidate.hostId === args.pending.hostId &&
-        candidate.sessionId === args.pending.sessionId,
-    );
-  if (!stillPending) return false;
+  if (!terminalTombstoneOutstanding(args.pending)) return false;
   // Per-arm, so a stale listing stops only the arm that reads one.
   const drainable = args.refs.dialable.current.get(args.pending.hostId);
   if (drainable === undefined) return false;
@@ -593,15 +587,7 @@ function dispatchLegacyClose(args: {
       // resolved close is a kill that is still owed, so it is retried on the
       // same backoff a rejection would have earned.
       () => {
-        if (
-          useLandingPanelStore
-            .getState()
-            .pendingKills.some(
-              (candidate) =>
-                candidate.hostId === args.pending.hostId &&
-                candidate.sessionId === args.pending.sessionId,
-            )
-        ) {
+        if (terminalTombstoneOutstanding(args.pending)) {
           scheduleCloseRetry({ ...args, answered: true, arm: "kill" });
           return;
         }

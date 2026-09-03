@@ -240,6 +240,98 @@ describe("useLandingBrowserOpenTab", () => {
     expect(openTab).not.toHaveBeenCalled();
   });
 
+  // The chooser's card is already unavailable while the count is `null`, so
+  // this is the CHORD's gap: ⇧⌘B never renders that card, and a live stream
+  // with no published inventory would otherwise sail past a cap check that has
+  // nothing to compare against.
+  it("refuses before the device has published an inventory, and says so", async () => {
+    const openTab = vi.fn(() =>
+      Promise.resolve({ sessionId: "s", tabId: "t" }),
+    );
+    const { result } = renderOpener({
+      sessions: sessionsState({ inventoryReady: false, openTab }),
+      onOpened: vi.fn(),
+    });
+
+    expect(result.current.tabCount).toBe(null);
+    act(() => {
+      result.current.open();
+    });
+
+    await waitFor(() => {
+      expect(mocks.toastError).toHaveBeenCalledWith(
+        "Browsers are not connected yet.",
+      );
+    });
+    // Not the cap's sentence: the device is connecting, and nothing about the
+    // cap is known yet.
+    expect(mocks.toastError).not.toHaveBeenCalledWith(
+      landingBrowserCapMessage(),
+    );
+    expect(openTab).not.toHaveBeenCalled();
+  });
+
+  // The in-flight guard above is `useIsMutating`, which is RENDERED state:
+  // both calls in one tick read the value from the render they were dispatched
+  // in. The chord and a click on the chooser's card can land in the same tick.
+  it("opens one tab when asked twice in the SAME tick", async () => {
+    let settle: ((identity: BrowserTabIdentity) => void) | null = null;
+    const openTab = vi.fn(
+      () =>
+        new Promise<BrowserTabIdentity>((resolve) => {
+          settle = resolve;
+        }),
+    );
+    const onOpened = vi.fn();
+    const { result } = renderOpener({
+      sessions: sessionsState({ openTab }),
+      onOpened,
+    });
+
+    // Both calls run before any render or microtask - the same tick a chord
+    // and a click can share - and the await only lets the winner's mutation
+    // reach the device.
+    await act(async () => {
+      result.current.open();
+      result.current.open();
+      await Promise.resolve();
+    });
+
+    expect(openTab).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      settle?.({ sessionId: "session-1", tabId: "tab-1" });
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(onOpened).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // The latch is released when the mutation settles, so the NEXT ask opens.
+  it("opens again once the device has answered", async () => {
+    const openTab = vi.fn(() =>
+      Promise.resolve({ sessionId: "s", tabId: "t" }),
+    );
+    const onOpened = vi.fn();
+    const { result } = renderOpener({
+      sessions: sessionsState({ openTab }),
+      onOpened,
+    });
+
+    act(() => {
+      result.current.open();
+    });
+    await waitFor(() => {
+      expect(onOpened).toHaveBeenCalledTimes(1);
+    });
+    act(() => {
+      result.current.open();
+    });
+    await waitFor(() => {
+      expect(openTab).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it("refuses before the device's stream is live", async () => {
     const openTab = vi.fn(() =>
       Promise.resolve({ sessionId: "s", tabId: "t" }),
