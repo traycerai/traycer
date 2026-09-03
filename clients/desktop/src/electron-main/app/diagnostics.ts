@@ -128,13 +128,36 @@ function readAttachedWorkerTarget(
   return { sessionId, url: targetInfo.url };
 }
 
-function withTimeout<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
+/**
+ * Set when the measurement has lost its awaiter, so the work still running
+ * behind it stops touching the debugger.
+ *
+ * CDP commands cannot be cancelled - `sendCommand` resolves when the browser
+ * answers, and a timed-out `measureIsolates` keeps going. Left alone it would
+ * reach its own cleanup and send `Target.setAutoAttach: false` after the outer
+ * `finally` detached; the harmful case is not the detached session (that command
+ * simply fails) but a LATER measurement having re-attached by then, whose
+ * auto-attach the straggler would switch off mid-flight, costing it every worker
+ * row and reporting a page-only breakdown as if that were the truth.
+ */
+interface MeasurementCancellation {
+  cancelled: boolean;
+}
+
+function withTimeout<T>(
+  work: Promise<T>,
+  timeoutMs: number,
+  cancellation: MeasurementCancellation,
+): Promise<T> {
   let timer: NodeJS.Timeout | null = null;
   const timeout = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => {
+      cancellation.cancelled = true;
       reject(new Error(`js heap measurement timed out after ${timeoutMs}ms`));
     }, timeoutMs);
   });
+  // `Promise.race` keeps a handler on `work`, so a late rejection from the
+  // straggler is absorbed here rather than surfacing as an unhandled rejection.
   return Promise.race([work, timeout]).finally(() => {
     if (timer !== null) clearTimeout(timer);
   });
@@ -194,10 +217,17 @@ export async function handleMeasureJsHeaps(
     return null;
   }
   debuggerApi.on("message", onMessage);
+  const cancellation: MeasurementCancellation = { cancelled: false };
   try {
     const isolates = await withTimeout(
-      measureIsolates(debuggerApi, contents.getURL(), attachedWorkers),
+      measureIsolates(
+        debuggerApi,
+        contents.getURL(),
+        attachedWorkers,
+        cancellation,
+      ),
       JS_HEAP_MEASURE_TIMEOUT_MS,
+      cancellation,
     );
     const pid = contents.getOSProcessId();
     const metric = app.getAppMetrics().find((entry) => entry.pid === pid);
@@ -247,12 +277,16 @@ async function measureIsolates(
   debuggerApi: Electron.Debugger,
   pageUrl: string,
   attachedWorkers: ReadonlyMap<string, AttachedWorkerTarget>,
+  cancellation: MeasurementCancellation,
 ): Promise<ReadonlyArray<RendererJsHeapIsolate>> {
   const isolates: RendererJsHeapIsolate[] = [];
   const page = readHeapUsage(
     await debuggerApi.sendCommand("Runtime.getHeapUsage", {}),
   );
   if (page !== null) isolates.push({ kind: "page", url: pageUrl, ...page });
+  // Every guard below is read in the same synchronous step as the command it
+  // protects, so a cancellation cannot slip between the two.
+  if (cancellation.cancelled) return isolates;
   await debuggerApi.sendCommand("Target.setAutoAttach", {
     autoAttach: true,
     waitForDebuggerOnStart: false,
@@ -266,6 +300,7 @@ async function measureIsolates(
   });
   try {
     for (const worker of attachedWorkers.values()) {
+      if (cancellation.cancelled) break;
       try {
         const usage = readHeapUsage(
           await debuggerApi.sendCommand(
@@ -286,11 +321,17 @@ async function measureIsolates(
       }
     }
   } finally {
-    await debuggerApi.sendCommand("Target.setAutoAttach", {
-      autoAttach: false,
-      waitForDebuggerOnStart: false,
-      flatten: true,
-    });
+    // A cancelled measurement skips its own cleanup: the outer `finally` is
+    // detaching, and auto-attach is session state that dies with the
+    // attachment, so there is nothing left to turn off - only someone else's
+    // attachment to damage.
+    if (!cancellation.cancelled) {
+      await debuggerApi.sendCommand("Target.setAutoAttach", {
+        autoAttach: false,
+        waitForDebuggerOnStart: false,
+        flatten: true,
+      });
+    }
   }
   return isolates;
 }
