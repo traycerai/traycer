@@ -181,7 +181,7 @@
     "jsdom": "^29.1.1",
     "lowlight": "^3.3.0",
     "lucide-react": "^1.39.0",
-    "marked": "^18.0.11",
+    "marked": "^17.0.6",
     "material-file-icons": "^2.4.0",
     "mermaid": "^11.17.2",
     "motion": "^12.43.0",

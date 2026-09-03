@@ -61,6 +61,7 @@ function openWithRecording(userId: string | null): {
   const handle = createOpenEpicStore({
     epicId: "epic-current-user",
     userId,
+    hostId: "test-host",
     // Unreached: this suite never calls `retryTransport`. Answered anyway
     // rather than defaulted, so it stays a decision the option forces.
     onRetryTransport: () => {},
