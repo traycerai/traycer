@@ -466,8 +466,14 @@ import {
   workspaceSearchTextV10,
 } from "@traycer/protocol/host/workspace/contracts";
 import { workspaceSubscribeFileListV10 } from "@traycer/protocol/host/workspace/subscribe";
-import { workspaceStreamAssetV10 } from "@traycer/protocol/host/workspace/asset-stream";
-import { gitStreamFileAssetV10 } from "@traycer/protocol/host/git-asset-stream";
+import {
+  workspaceStreamAssetV10,
+  workspaceStreamAssetV11,
+} from "@traycer/protocol/host/workspace/asset-stream";
+import {
+  gitStreamFileAssetV10,
+  gitStreamFileAssetV11,
+} from "@traycer/protocol/host/git-asset-stream";
 import {
   terminalCreateDowngradeV21ToV10,
   terminalCreateV10,
@@ -589,7 +595,10 @@ import {
 import { sessionImportScanV10 } from "@traycer/protocol/host/session-import/scan";
 import { sessionImportRunV10 } from "@traycer/protocol/host/session-import/run";
 import { sessionImportStatusV10 } from "@traycer/protocol/host/session-import/contracts";
-import { worktreeDeleteBatchByPathStreamV10 } from "@traycer/protocol/host/worktree-delete-batch-stream";
+import {
+  worktreeDeleteBatchByPathStreamV10,
+  worktreeDeleteBatchByPathStreamV11,
+} from "@traycer/protocol/host/worktree-delete-batch-stream";
 import {
   worktreeDeleteByPathStreamV10,
   worktreeDeleteByPathStreamV11,
@@ -606,7 +615,11 @@ import {
   hostChatRecordsSubscribeV11,
   hostChatRecordsSubscribeV12,
 } from "@traycer/protocol/host/epic/chat-records";
-import { editorOpenPathsV10 } from "@traycer/protocol/host/editor/contracts";
+import {
+  editorOpenPathsUpgradeV10ToV11,
+  editorOpenPathsV10,
+  editorOpenPathsV11,
+} from "@traycer/protocol/host/editor/contracts";
 import {
   gitListChangedFilesV10,
   gitListChangedFilesV11,
@@ -6898,11 +6911,15 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "editor.openPaths": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: editorOpenPathsV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: editorOpenPathsV11,
+          upgradeFromPreviousVersion: editorOpenPathsUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -9041,24 +9058,30 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       },
     },
   },
-  // Image preview stream for the workspace file tile - no-degrade rationale in `asset-stream.ts`'s file-level doc.
+  // Asset preview stream for the workspace file tile - no-degrade rationale in `asset-stream.ts`'s file-level doc. 1.1 adds PDF.
   "workspace.streamAsset": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: workspaceStreamAssetV10,
         },
+        1: {
+          contract: workspaceStreamAssetV11,
+        },
       },
     },
   },
-  // Sibling of `workspace.streamAsset` for the git diff tile's old/new image sides - same no-degrade rationale.
+  // Sibling of `workspace.streamAsset` for the git diff tile's old/new sides - same no-degrade rationale. 1.1 adds PDF.
   "git.streamFileAsset": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: gitStreamFileAssetV10,
+        },
+        1: {
+          contract: gitStreamFileAssetV11,
         },
       },
     },
@@ -9271,10 +9294,13 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // which is what makes fallback safe for a destructive operation.
   "worktree.deleteBatchByPath": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: worktreeDeleteBatchByPathStreamV10,
+        },
+        1: {
+          contract: worktreeDeleteBatchByPathStreamV11,
         },
       },
     },

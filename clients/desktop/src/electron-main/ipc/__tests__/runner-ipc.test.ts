@@ -35,6 +35,11 @@ import type {
 } from "../../../ipc-contracts/window-types";
 import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import { FakeHostController } from "./fake-host-controller";
+import {
+  createSigningKey,
+  jwksResponse,
+  userBearerClaims,
+} from "../../auth/__tests__/jws-fixture";
 
 const featureSettings = vi.hoisted(() => ({ agentRoles: false }));
 const readFeatureSettingsMock = vi.hoisted(() =>
@@ -518,262 +523,285 @@ afterEach(() => {
 });
 
 describe("RunnerIpcBridge", () => {
-  it("registers the refreshed IRunnerHost invoke channels", async () => {
-    const mod = await import("../register-runner-ipc");
-    const host = new FakeHost();
-    const bridge = new mod.RunnerIpcBridge({
-      host,
-      hostController: new FakeHostController(),
-      authnBaseUrl: "http://localhost:5005",
-      authRedirectUri: null,
-      tray: null,
-      zoomController: undefined,
-      authTokenStore: undefined,
-      window: buildWindow(),
-    });
-    bridge.install();
+  // An explicit timeout because the cost here is the dynamic IMPORT, not the
+  // assertion: `register-runner-ipc` pulls in the whole main-process IPC
+  // surface, which H10 grew by the browser-sessions owner and the jar plane.
+  // It settles in ~2.5 s locally and has crossed the 5 s default on both the
+  // Linux and macOS runners. This case measures which channels get registered;
+  // making it a de-facto import-speed budget only produces cross-OS flakes.
+  it(
+    "registers the refreshed IRunnerHost invoke channels",
+    { timeout: 30_000 },
+    async () => {
+      const mod = await import("../register-runner-ipc");
+      const host = new FakeHost();
+      const bridge = new mod.RunnerIpcBridge({
+        host,
+        hostController: new FakeHostController(),
+        authnBaseUrl: "http://localhost:5005",
+        authRedirectUri: null,
+        tray: null,
+        zoomController: undefined,
+        authTokenStore: undefined,
+        window: buildWindow(),
+      });
+      bridge.install();
 
-    const channels = Array.from(ipcMainState.handlers.keys()).sort();
-    expect(channels).toEqual(
-      [
-        RunnerHostInvoke.workspaceFoldersPick,
-        RunnerHostInvoke.validateAuthTokenIdentity,
-        RunnerHostInvoke.deviceFlowStart,
-        RunnerHostInvoke.deviceFlowPollNow,
-        RunnerHostInvoke.deviceFlowCancel,
-        // §3 FileTokenStore IPC seam (get/signIn/rotate/delete, plus the
-        // atomic conditional delete); §6 adds the one-time legacy→file
-        // migration channel.
-        RunnerHostInvoke.authTokenStoreGet,
-        RunnerHostInvoke.authTokenStoreSignIn,
-        RunnerHostInvoke.authTokenStoreRotate,
-        RunnerHostInvoke.authTokenStoreDelete,
-        RunnerHostInvoke.authTokenStoreDeleteIfToken,
-        RunnerHostInvoke.authTokenStoreMigrateLegacy,
-        // Remote Host Support: host-registry read (§7) and version-policy
-        // write (§13, T16) run in main for the renderer-origin CORS reason.
-        RunnerHostInvoke.deregisterHostFromAccount,
-        RunnerHostInvoke.listRegisteredHosts,
-        RunnerHostInvoke.updateHostVersionPolicy,
-        RunnerHostInvoke.listUserSessions,
-        RunnerHostInvoke.revokeUserSession,
-        RunnerHostInvoke.revokeAllSessions,
-        RunnerHostInvoke.mintHostCredential,
-        RunnerHostInvoke.requestStepUpChallenge,
-        RunnerHostInvoke.verifyStepUpChallenge,
-        RunnerHostInvoke.notificationShow,
-        RunnerHostInvoke.openExternalLink,
-        RunnerHostInvoke.getRegisteredUrlSchemes,
-        RunnerHostInvoke.requestMicrophoneAccess,
-        RunnerHostInvoke.openMicrophoneSettings,
-        RunnerHostInvoke.notificationOpenSystemSettings,
-        RunnerHostInvoke.requestHostRespawn,
-        RunnerHostInvoke.lastKnownLocalHostId,
-        RunnerHostInvoke.localHostSnapshot,
-        RunnerHostInvoke.traySetIndicator,
-        RunnerHostInvoke.traySetEpics,
-        RunnerHostInvoke.setUnsyncedEditsSnapshot,
-        RunnerHostInvoke.appLifecycleQuit,
-        RunnerHostInvoke.acknowledgeQuitRequest,
-        RunnerHostInvoke.respondToQuitRequest,
-        RunnerHostInvoke.freshUnsyncedSnapshotResponse,
-        RunnerHostInvoke.finalBrowserStateCaptured,
-        RunnerHostInvoke.unsyncableWorkAcrossWindows,
-        RunnerHostInvoke.appUpdateCheck,
-        RunnerHostInvoke.appUpdateDownload,
-        RunnerHostInvoke.appUpdateGetSnapshot,
-        RunnerHostInvoke.appUpdateInstall,
-        RunnerHostInvoke.appUpdateResolveCompatRecovery,
-        // Previously absent from this list because it was never registered at
-        // all: the preload and renderer halves shipped while the main handler
-        // went with the removed Settings channel toggle, so `setAllowPrerelease`
-        // rejected as an unhandled channel. The compatibility-recovery RC opt-in
-        // is the one caller that reaches it now.
-        RunnerHostInvoke.appUpdateSetAllowPrerelease,
-        RunnerHostInvoke.globalShortcutsGetSnapshot,
-        RunnerHostInvoke.globalShortcutsSet,
-        RunnerHostInvoke.windowsList,
-        RunnerHostInvoke.windowsRequestNew,
-        RunnerHostInvoke.windowsRequestFocus,
-        RunnerHostInvoke.windowsRequestClose,
-        RunnerHostInvoke.windowsRequestOpenEpicInNewWindow,
-        RunnerHostInvoke.windowsRequestOpenDraftInNewWindow,
-        RunnerHostInvoke.ownershipSnapshot,
-        RunnerHostInvoke.ownershipClaim,
-        RunnerHostInvoke.ownershipRelease,
-        RunnerHostInvoke.perWindowStateGet,
-        RunnerHostInvoke.perWindowStateCapabilities,
-        RunnerHostInvoke.perWindowStateUpdate,
-        RunnerHostInvoke.perWindowStateClear,
-        RunnerHostInvoke.authSessionGet,
-        RunnerHostInvoke.authSessionSet,
-        RunnerHostInvoke.supportSaveDiagnosticBundle,
-        RunnerHostInvoke.supportDiscardFrozenEvidence,
-        RunnerHostInvoke.supportFreezeEvidence,
-        RunnerHostInvoke.supportReadFrozenLogTail,
-        RunnerHostInvoke.supportGetFingerprintOccurrence,
-        RunnerHostInvoke.supportRevealLog,
-        RunnerHostInvoke.supportTailLog,
-        RunnerHostInvoke.supportBuildPublicDraft,
-        RunnerHostInvoke.supportSubmitReport,
-        RunnerHostInvoke.supportSnapshotGet,
-        RunnerHostInvoke.powerSetSleepBlocked,
-        // Legacy `runnerHost:service:*` install/uninstall/start/stop/restart/
-        // upgrade/enableLinger/status/getLogTail channels have been removed
-        // in favor of the `traycer-cli`-driven host-management handlers
-        // (`traycerHost*`). The bridge no longer registers them.
-        RunnerHostInvoke.traycerHostStatus,
-        RunnerHostInvoke.traycerConfigShellGet,
-        RunnerHostInvoke.traycerConfigShellList,
-        RunnerHostInvoke.traycerConfigShellSet,
-        RunnerHostInvoke.traycerConfigShellReset,
-        RunnerHostInvoke.traycerConfigShellAdd,
-        RunnerHostInvoke.traycerConfigShellRemove,
-        RunnerHostInvoke.traycerConfigShellProbe,
-        RunnerHostInvoke.traycerConfigShellPickProgramFile,
-        RunnerHostInvoke.traycerConfigShellRevertArgs,
-        RunnerHostInvoke.traycerConfigEnvList,
-        RunnerHostInvoke.traycerConfigEnvSet,
-        RunnerHostInvoke.traycerConfigEnvDelete,
-        RunnerHostInvoke.migrationAnnounceRunning,
-        RunnerHostInvoke.migrationGetRunningSnapshot,
-        // Native-packaging host-management bridge (Flow 4 / Flow 6).
-        // These channels are registered by `registerHostManagementIpc`
-        // which the bridge invokes during `install()`.
-        RunnerHostInvoke.traycerHostControllerStatusGet,
-        RunnerHostInvoke.traycerHostConvergeReady,
-        RunnerHostInvoke.traycerHostApplyStaged,
-        RunnerHostInvoke.traycerHostActivateInstalled,
-        RunnerHostInvoke.traycerHostInstallVersion,
-        RunnerHostInvoke.traycerHostUninstall,
-        RunnerHostInvoke.traycerAppUninstall,
-        RunnerHostInvoke.traycerHostRemovalGet,
-        RunnerHostInvoke.traycerHostRemovalClear,
-        RunnerHostInvoke.traycerHostRestart,
-        RunnerHostInvoke.traycerHostLogs,
-        RunnerHostInvoke.traycerHostDoctor,
-        RunnerHostInvoke.traycerHostAvailable,
-        RunnerHostInvoke.traycerHostInstalled,
-        RunnerHostInvoke.traycerHostNameGet,
-        RunnerHostInvoke.traycerHostNameSet,
-        RunnerHostInvoke.traycerServiceRegister,
-        RunnerHostInvoke.traycerServiceDeregister,
-        RunnerHostInvoke.traycerRegistryCheck,
-        RunnerHostInvoke.traycerFreePortAndRestart,
-        RunnerHostInvoke.traycerFreePortAndRestartIfIdle,
-        RunnerHostInvoke.traycerCliManifestRead,
-        // The maintenance-RPC projections the GUI's local fallback serves
-        // when a local host too old for the v1.2.0 `host.*` maintenance
-        // family negotiated it away. Registered by the same
-        // `registerHostManagementIpc` call as the block above.
-        RunnerHostInvoke.traycerMaintenanceUpdateCheck,
-        RunnerHostInvoke.traycerMaintenanceDoctor,
-        RunnerHostInvoke.traycerMaintenanceInstallationInfo,
-        RunnerHostInvoke.traycerMaintenanceInstallVersion,
-        RunnerHostInvoke.traycerHostRestartIfIdle,
-        RunnerHostInvoke.traycerDoctorRepairQueued,
-        RunnerHostInvoke.traycerDoctorRepairIfIdle,
-        // Platform IPC channels installed by `registerPlatformIpc(bridge)`,
-        // which is now invoked from `RunnerIpcBridge.install()` rather than
-        // wired by the host. They cover recent docs, window effects, GPU,
-        // proxies, certificates, diagnostics, displays, and TouchID.
-        RunnerHostInvoke.recentDocumentAdd,
-        RunnerHostInvoke.windowFlashFrame,
-        RunnerHostInvoke.windowSetProgressBar,
-        RunnerHostInvoke.windowSetBadge,
-        RunnerHostInvoke.windowSetRepresentedFilename,
-        RunnerHostInvoke.windowSetDocumentEdited,
-        RunnerHostInvoke.windowSetContentProtection,
-        RunnerHostInvoke.diagnosticsGetMetrics,
-        RunnerHostInvoke.diagnosticsTakeHeapSnapshot,
-        RunnerHostInvoke.diagnosticsTraceStart,
-        RunnerHostInvoke.diagnosticsTraceStop,
-        RunnerHostInvoke.systemPreferencesAccentColor,
-        RunnerHostInvoke.systemPreferencesAppearance,
-        RunnerHostInvoke.systemPreferencesAccessibilityTheme,
-        RunnerHostInvoke.touchIdAvailable,
-        RunnerHostInvoke.touchIdPrompt,
-        RunnerHostInvoke.windowSetVibrancy,
-        RunnerHostInvoke.windowSetBackgroundMaterial,
-        RunnerHostInvoke.windowSetVisibleOnAllWorkspaces,
-        RunnerHostInvoke.proxyAuthList,
-        RunnerHostInvoke.proxyAuthSave,
-        RunnerHostInvoke.proxyAuthClear,
-        RunnerHostInvoke.proxySetConfig,
-        RunnerHostInvoke.proxyResolve,
-        RunnerHostInvoke.certTrustList,
-        RunnerHostInvoke.certTrustAdd,
-        RunnerHostInvoke.certTrustRemove,
-        RunnerHostInvoke.certTrustListPending,
-        RunnerHostInvoke.certTrustDismissPending,
-        RunnerHostInvoke.certTrustSystemDialog,
-        RunnerHostInvoke.windowSetOverlayIcon,
-        RunnerHostInvoke.windowSetTitleBarOverlay,
-        // Windows frameless menu strip → native submenu popup.
-        RunnerHostInvoke.menuOpenTopLevel,
-        RunnerHostInvoke.displayList,
-        RunnerHostInvoke.fileDropWriteTemporary,
-        RunnerHostInvoke.fileDropCopyTemporary,
-        RunnerHostInvoke.fileDropReadNativeClipboardPaths,
-        RunnerHostInvoke.fileSave,
-        RunnerHostInvoke.fileOpenSaved,
-        RunnerHostInvoke.clipboardWriteImage,
-        RunnerHostInvoke.gpuAccelerationGet,
-        RunnerHostInvoke.gpuAccelerationSet,
-        RunnerHostInvoke.logLevelsGet,
-        RunnerHostInvoke.logLevelsSet,
-        RunnerHostInvoke.featureSettingsGet,
-        RunnerHostInvoke.agentRolesEnabledSet,
-        RunnerHostInvoke.fontsList,
-        RunnerHostInvoke.zoomGet,
-        RunnerHostInvoke.zoomSet,
-        RunnerHostInvoke.zoomStepIn,
-        RunnerHostInvoke.zoomStepOut,
-        RunnerHostInvoke.zoomReset,
-        RunnerHostInvoke.browserViewEnsureTab,
-        RunnerHostInvoke.browserViewAcceptTab,
-        RunnerHostInvoke.browserViewAttachSurface,
-        RunnerHostInvoke.browserViewDetachSurface,
-        RunnerHostInvoke.browserViewReleaseTab,
-        RunnerHostInvoke.browserViewControlElectronTab,
-        RunnerHostInvoke.browserViewElectronTabCdpDispatch,
-        RunnerHostInvoke.browserViewUpdateBounds,
-        RunnerHostInvoke.browserViewOverlayPaintAck,
-        RunnerHostInvoke.browserViewSetReservedChords,
-        RunnerHostInvoke.browserViewOccludeForOverlay,
-        RunnerHostInvoke.browserViewReleaseOverlay,
-        RunnerHostInvoke.browserViewCapturePage,
-        RunnerHostInvoke.browserViewFindInPage,
-        RunnerHostInvoke.browserViewStopFindInPage,
-        RunnerHostInvoke.browserViewCancelDownload,
-        RunnerHostInvoke.browserViewTrustCertificate,
-        RunnerHostInvoke.browserViewStartAnnotation,
-        RunnerHostInvoke.browserViewCancelAnnotation,
-        RunnerHostInvoke.browserViewSetAnnotationTargetChatLabel,
-        RunnerHostInvoke.browserViewAnnotationAttachResult,
-        RunnerHostInvoke.browserViewGetDebugSnapshot,
-        RunnerHostInvoke.browserViewPrimaryProfileCapture,
-        // Keychain refactor tickets 07 and 08: the tile-menu clear-site, the
-        // host-driven eviction of the same site on this machine, and the
-        // host-driven whole-jar forget.
-        RunnerHostInvoke.browserViewClearSite,
-        RunnerHostInvoke.browserViewEvictSite,
-        RunnerHostInvoke.browserViewForgetLogins,
-        RunnerHostInvoke.browserViewSaveLoginsGet,
-        RunnerHostInvoke.browserViewSaveLoginsSet,
-        RunnerHostInvoke.browserViewStoreKeyWrap,
-        RunnerHostInvoke.browserViewStoreKeyUnwrap,
-        RunnerHostInvoke.pipCaptureStart,
-        RunnerHostInvoke.pipCaptureStop,
-        // Selection authority (D16 / P1.1), plus P1.3's fleet-refresh edge.
-        RunnerHostInvoke.selectionAttach,
-        RunnerHostInvoke.selectionReportEvidence,
-        RunnerHostInvoke.selectionActivate,
-        RunnerHostInvoke.selectionRefreshFleet,
-      ].sort(),
-    );
-    bridge.dispose();
-  });
+      const channels = Array.from(ipcMainState.handlers.keys()).sort();
+      expect(channels).toEqual(
+        [
+          RunnerHostInvoke.workspaceFoldersPick,
+          RunnerHostInvoke.validateAuthTokenIdentity,
+          RunnerHostInvoke.deviceFlowStart,
+          RunnerHostInvoke.deviceFlowPollNow,
+          RunnerHostInvoke.deviceFlowCancel,
+          // §3 FileTokenStore IPC seam (get/signIn/rotate/delete, plus the
+          // atomic conditional delete); §6 adds the one-time legacy→file
+          // migration channel.
+          RunnerHostInvoke.authTokenStoreGet,
+          RunnerHostInvoke.authTokenStoreSignIn,
+          RunnerHostInvoke.authTokenStoreRotate,
+          RunnerHostInvoke.authTokenStoreDelete,
+          RunnerHostInvoke.authTokenStoreDeleteIfToken,
+          RunnerHostInvoke.authTokenStoreMigrateLegacy,
+          // Remote Host Support: host-registry read (§7) and version-policy
+          // write (§13, T16) run in main for the renderer-origin CORS reason.
+          RunnerHostInvoke.deregisterHostFromAccount,
+          RunnerHostInvoke.listRegisteredHosts,
+          RunnerHostInvoke.updateHostVersionPolicy,
+          RunnerHostInvoke.listUserSessions,
+          RunnerHostInvoke.revokeUserSession,
+          RunnerHostInvoke.revokeAllSessions,
+          RunnerHostInvoke.mintHostCredential,
+          RunnerHostInvoke.requestStepUpChallenge,
+          RunnerHostInvoke.verifyStepUpChallenge,
+          RunnerHostInvoke.notificationShow,
+          RunnerHostInvoke.openExternalLink,
+          RunnerHostInvoke.getRegisteredUrlSchemes,
+          RunnerHostInvoke.requestMicrophoneAccess,
+          RunnerHostInvoke.openMicrophoneSettings,
+          RunnerHostInvoke.openFullDiskAccessSettings,
+          RunnerHostInvoke.notificationOpenSystemSettings,
+          RunnerHostInvoke.requestHostRespawn,
+          RunnerHostInvoke.lastKnownLocalHostId,
+          RunnerHostInvoke.localHostSnapshot,
+          RunnerHostInvoke.traySetIndicator,
+          RunnerHostInvoke.traySetEpics,
+          RunnerHostInvoke.setUnsyncedEditsSnapshot,
+          RunnerHostInvoke.appLifecycleQuit,
+          RunnerHostInvoke.acknowledgeQuitRequest,
+          RunnerHostInvoke.respondToQuitRequest,
+          RunnerHostInvoke.freshUnsyncedSnapshotResponse,
+          // H10: main captures the final browser state directly off the
+          // `BrowserSessionsRegistry` on quit - there is no renderer round
+          // trip left to ack, so this channel is gone.
+          RunnerHostInvoke.unsyncableWorkAcrossWindows,
+          RunnerHostInvoke.appUpdateCheck,
+          RunnerHostInvoke.appUpdateDownload,
+          RunnerHostInvoke.appUpdateGetSnapshot,
+          RunnerHostInvoke.appUpdateInstall,
+          RunnerHostInvoke.appUpdateResolveCompatRecovery,
+          // Previously absent from this list because it was never registered at
+          // all: the preload and renderer halves shipped while the main handler
+          // went with the removed Settings channel toggle, so `setAllowPrerelease`
+          // rejected as an unhandled channel. The compatibility-recovery RC opt-in
+          // is the one caller that reaches it now.
+          RunnerHostInvoke.appUpdateSetAllowPrerelease,
+          RunnerHostInvoke.globalShortcutsGetSnapshot,
+          RunnerHostInvoke.globalShortcutsSet,
+          RunnerHostInvoke.windowsList,
+          RunnerHostInvoke.windowsRequestNew,
+          RunnerHostInvoke.windowsRequestFocus,
+          RunnerHostInvoke.windowsRequestClose,
+          RunnerHostInvoke.windowsRequestOpenEpicInNewWindow,
+          RunnerHostInvoke.windowsRequestOpenDraftInNewWindow,
+          RunnerHostInvoke.ownershipSnapshot,
+          RunnerHostInvoke.ownershipClaim,
+          RunnerHostInvoke.ownershipRelease,
+          RunnerHostInvoke.perWindowStateGet,
+          RunnerHostInvoke.perWindowStateCapabilities,
+          RunnerHostInvoke.perWindowStateUpdate,
+          RunnerHostInvoke.perWindowStateClear,
+          RunnerHostInvoke.authSessionGet,
+          RunnerHostInvoke.authSessionSet,
+          RunnerHostInvoke.supportSaveDiagnosticBundle,
+          RunnerHostInvoke.supportDiscardFrozenEvidence,
+          RunnerHostInvoke.supportFreezeEvidence,
+          RunnerHostInvoke.supportReadFrozenLogTail,
+          RunnerHostInvoke.supportGetFingerprintOccurrence,
+          RunnerHostInvoke.supportRevealLog,
+          RunnerHostInvoke.supportTailLog,
+          RunnerHostInvoke.supportBuildPublicDraft,
+          RunnerHostInvoke.supportSubmitReport,
+          RunnerHostInvoke.supportSnapshotGet,
+          RunnerHostInvoke.powerSetSleepBlocked,
+          // Legacy `runnerHost:service:*` install/uninstall/start/stop/restart/
+          // upgrade/enableLinger/status/getLogTail channels have been removed
+          // in favor of the `traycer-cli`-driven host-management handlers
+          // (`traycerHost*`). The bridge no longer registers them.
+          RunnerHostInvoke.traycerHostStatus,
+          RunnerHostInvoke.traycerConfigShellGet,
+          RunnerHostInvoke.traycerConfigShellList,
+          RunnerHostInvoke.traycerConfigShellSet,
+          RunnerHostInvoke.traycerConfigShellReset,
+          RunnerHostInvoke.traycerConfigShellAdd,
+          RunnerHostInvoke.traycerConfigShellRemove,
+          RunnerHostInvoke.traycerConfigShellProbe,
+          RunnerHostInvoke.traycerConfigShellPickProgramFile,
+          RunnerHostInvoke.traycerConfigShellRevertArgs,
+          RunnerHostInvoke.traycerConfigEnvList,
+          RunnerHostInvoke.traycerConfigEnvSet,
+          RunnerHostInvoke.traycerConfigEnvDelete,
+          RunnerHostInvoke.migrationAnnounceRunning,
+          RunnerHostInvoke.migrationGetRunningSnapshot,
+          // Native-packaging host-management bridge (Flow 4 / Flow 6).
+          // These channels are registered by `registerHostManagementIpc`
+          // which the bridge invokes during `install()`.
+          RunnerHostInvoke.traycerHostControllerStatusGet,
+          RunnerHostInvoke.traycerHostConvergeReady,
+          RunnerHostInvoke.traycerHostApplyStaged,
+          RunnerHostInvoke.traycerHostActivateInstalled,
+          RunnerHostInvoke.traycerHostInstallVersion,
+          RunnerHostInvoke.traycerHostUninstall,
+          RunnerHostInvoke.traycerAppUninstall,
+          RunnerHostInvoke.traycerHostRemovalGet,
+          RunnerHostInvoke.traycerHostRemovalClear,
+          RunnerHostInvoke.traycerHostRestart,
+          RunnerHostInvoke.traycerHostLogs,
+          RunnerHostInvoke.traycerHostDoctor,
+          RunnerHostInvoke.traycerHostAvailable,
+          RunnerHostInvoke.traycerHostInstalled,
+          RunnerHostInvoke.traycerHostNameGet,
+          RunnerHostInvoke.traycerHostNameSet,
+          RunnerHostInvoke.traycerServiceRegister,
+          RunnerHostInvoke.traycerServiceDeregister,
+          RunnerHostInvoke.traycerRegistryCheck,
+          RunnerHostInvoke.traycerFreePortAndRestart,
+          RunnerHostInvoke.traycerFreePortAndRestartIfIdle,
+          RunnerHostInvoke.traycerCliManifestRead,
+          // The maintenance-RPC projections the GUI's local fallback serves
+          // when a local host too old for the v1.2.0 `host.*` maintenance
+          // family negotiated it away. Registered by the same
+          // `registerHostManagementIpc` call as the block above.
+          RunnerHostInvoke.traycerMaintenanceUpdateCheck,
+          RunnerHostInvoke.traycerMaintenanceDoctor,
+          RunnerHostInvoke.traycerMaintenanceInstallationInfo,
+          RunnerHostInvoke.traycerMaintenanceInstallVersion,
+          RunnerHostInvoke.traycerHostRestartIfIdle,
+          RunnerHostInvoke.traycerDoctorRepairQueued,
+          RunnerHostInvoke.traycerDoctorRepairIfIdle,
+          // Platform IPC channels installed by `registerPlatformIpc(bridge)`,
+          // which is now invoked from `RunnerIpcBridge.install()` rather than
+          // wired by the host. They cover recent docs, window effects, GPU,
+          // proxies, certificates, diagnostics, displays, and TouchID.
+          RunnerHostInvoke.recentDocumentAdd,
+          RunnerHostInvoke.windowFlashFrame,
+          RunnerHostInvoke.windowSetProgressBar,
+          RunnerHostInvoke.windowSetBadge,
+          RunnerHostInvoke.windowSetRepresentedFilename,
+          RunnerHostInvoke.windowSetDocumentEdited,
+          RunnerHostInvoke.windowSetContentProtection,
+          RunnerHostInvoke.diagnosticsGetMetrics,
+          RunnerHostInvoke.diagnosticsTakeHeapSnapshot,
+          RunnerHostInvoke.diagnosticsTraceStart,
+          RunnerHostInvoke.diagnosticsTraceStop,
+          RunnerHostInvoke.systemPreferencesAccentColor,
+          RunnerHostInvoke.systemPreferencesAppearance,
+          RunnerHostInvoke.systemPreferencesAccessibilityTheme,
+          RunnerHostInvoke.touchIdAvailable,
+          RunnerHostInvoke.touchIdPrompt,
+          RunnerHostInvoke.windowSetVibrancy,
+          RunnerHostInvoke.windowSetBackgroundMaterial,
+          RunnerHostInvoke.windowSetVisibleOnAllWorkspaces,
+          RunnerHostInvoke.proxyAuthList,
+          RunnerHostInvoke.proxyAuthSave,
+          RunnerHostInvoke.proxyAuthClear,
+          RunnerHostInvoke.proxySetConfig,
+          RunnerHostInvoke.proxyResolve,
+          RunnerHostInvoke.certTrustList,
+          RunnerHostInvoke.certTrustAdd,
+          RunnerHostInvoke.certTrustRemove,
+          RunnerHostInvoke.certTrustListPending,
+          RunnerHostInvoke.certTrustDismissPending,
+          RunnerHostInvoke.certTrustSystemDialog,
+          RunnerHostInvoke.windowSetOverlayIcon,
+          RunnerHostInvoke.windowSetTitleBarOverlay,
+          // Windows frameless menu strip → native submenu popup.
+          RunnerHostInvoke.menuOpenTopLevel,
+          RunnerHostInvoke.displayList,
+          RunnerHostInvoke.fileDropWriteTemporary,
+          RunnerHostInvoke.fileDropCopyTemporary,
+          RunnerHostInvoke.fileDropReadNativeClipboardPaths,
+          RunnerHostInvoke.fileSave,
+          RunnerHostInvoke.fileOpenSaved,
+          RunnerHostInvoke.clipboardWriteImage,
+          RunnerHostInvoke.gpuAccelerationGet,
+          RunnerHostInvoke.gpuAccelerationSet,
+          RunnerHostInvoke.logLevelsGet,
+          RunnerHostInvoke.logLevelsSet,
+          RunnerHostInvoke.featureSettingsGet,
+          RunnerHostInvoke.agentRolesEnabledSet,
+          RunnerHostInvoke.fontsList,
+          RunnerHostInvoke.zoomGet,
+          RunnerHostInvoke.zoomSet,
+          RunnerHostInvoke.zoomStepIn,
+          RunnerHostInvoke.zoomStepOut,
+          RunnerHostInvoke.zoomReset,
+          // H10: the jar/CDP plane moved into main's own `browser-sessions`
+          // owner. The renderer no longer ensures/accepts/releases native tabs,
+          // dispatches CDP, captures/applies profiles, wraps store keys or
+          // attests desktop identity directly - it opens/closes/sends onto the
+          // `browser.sessions` stream and main drives all of that itself.
+          RunnerHostInvoke.browserViewSessionsOpen,
+          RunnerHostInvoke.browserViewSessionsClose,
+          RunnerHostInvoke.browserViewSessionsSend,
+          RunnerHostInvoke.browserViewAttachSurface,
+          RunnerHostInvoke.browserViewDetachSurface,
+          RunnerHostInvoke.browserViewControlElectronTab,
+          RunnerHostInvoke.browserViewUpdateBounds,
+          RunnerHostInvoke.browserViewOverlayPaintAck,
+          RunnerHostInvoke.browserViewSetReservedChords,
+          RunnerHostInvoke.browserViewOccludeForOverlay,
+          RunnerHostInvoke.browserViewReleaseOverlay,
+          RunnerHostInvoke.browserViewCapturePage,
+          RunnerHostInvoke.browserViewFindInPage,
+          RunnerHostInvoke.browserViewStopFindInPage,
+          RunnerHostInvoke.browserViewCancelDownload,
+          RunnerHostInvoke.browserViewTrustCertificate,
+          RunnerHostInvoke.browserViewStartAnnotation,
+          RunnerHostInvoke.browserViewCancelAnnotation,
+          RunnerHostInvoke.browserViewSetAnnotationTargetChatLabel,
+          RunnerHostInvoke.browserViewAnnotationAttachResult,
+          RunnerHostInvoke.browserViewGetDebugSnapshot,
+          // Keychain refactor tickets 07 and 08: the tile-menu clear-site and
+          // the whole-jar forget. The host-driven eviction of one site went with
+          // the `primaryProfileEvict` frame (universal-sign-in ticket 08).
+          RunnerHostInvoke.browserViewClearSite,
+          RunnerHostInvoke.browserViewForgetLogins,
+          RunnerHostInvoke.browserViewSaveLoginsGet,
+          RunnerHostInvoke.browserViewSaveLoginsSet,
+          // H10: "Clear" on one Settings > Browser row. Main confirms and sends
+          // the `clearSite` frames itself.
+          RunnerHostInvoke.browserViewClearSavedLoginSite,
+          // Login import: list / pick-file / scan / run. Every one answers a
+          // result value; `run` is the one that opens a keystore and, like
+          // forget-all, pushes the jar to the hosts from main.
+          RunnerHostInvoke.browserViewLoginImportListSources,
+          RunnerHostInvoke.browserViewLoginImportPickFile,
+          RunnerHostInvoke.browserViewLoginImportScan,
+          RunnerHostInvoke.browserViewLoginImportRun,
+          RunnerHostInvoke.pipCaptureStart,
+          RunnerHostInvoke.pipCaptureStop,
+          // Selection authority (D16 / P1.1), plus P1.3's fleet-refresh edge.
+          RunnerHostInvoke.selectionAttach,
+          RunnerHostInvoke.selectionReportEvidence,
+          RunnerHostInvoke.selectionActivate,
+          RunnerHostInvoke.selectionRefreshFleet,
+        ].sort(),
+      );
+      bridge.dispose();
+    },
+  );
 
   it("gets and sets agent roles through typed IPC, rejecting non-boolean payloads", async () => {
     const mod = await import("../register-runner-ipc");
@@ -2186,7 +2214,6 @@ describe("RunnerIpcBridge", () => {
     });
     bridge.dispose();
   });
-
   it("fails closed when dirty snapshots exist but the MRU renderer is not lifecycle-ready", async () => {
     const mod = await import("../register-runner-ipc");
     const registry = new FakeWindowRegistry();
@@ -2558,6 +2585,11 @@ describe("RunnerIpcBridge", () => {
   });
 
   it("fans out desktop-global auth-session commits to every window", async () => {
+    const signingKey = createSigningKey("kid-fanout", "bearer");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jwksResponse([signingKey.publicJwk])),
+    );
     const mod = await import("../register-runner-ipc");
     const registry = new FakeWindowRegistry();
     const windowA = buildWindow();
@@ -2595,23 +2627,30 @@ describe("RunnerIpcBridge", () => {
     windowB.sentMessages.length = 0;
     const signedIn: DesktopAuthSessionSnapshot = {
       status: "signed-in",
-      token: "jwt",
+      token: signingKey.sign(
+        userBearerClaims("test-user", Date.now() + 60_000),
+      ),
       profile: {
         userId: "test-user",
         userName: "Test User",
         email: "test@example.com",
       },
     };
-    await setHandler(sender(101), signedIn);
+    await expect(setHandler(sender(101), signedIn)).resolves.toEqual({
+      outcome: "accepted",
+    });
 
-    expect(await getHandler(sender(202))).toEqual(signedIn);
-    expect(authSession.get()).toEqual(signedIn);
+    // `verified` is main's own finding about the bearer, not a field the
+    // renderer sent - it is what a consumer speaking for the account asserts.
+    const adopted = { ...signedIn, verified: true };
+    expect(await getHandler(sender(202))).toEqual(adopted);
+    expect(authSession.get()).toEqual(adopted);
     // Signing in is an IDENTITY TRANSITION for the selection authority (null
     // -> userId), so every window is also told to re-attach: the transition
     // voids every incarnation, and `reattachRequired` is the mandatory
     // trigger that guarantees a post-transition attach.
     const expectedFanOut = [
-      { channel: RunnerHostEvent.authSessionChange, payload: signedIn },
+      { channel: RunnerHostEvent.authSessionChange, payload: adopted },
       {
         channel: RunnerHostEvent.selectionReattachRequired,
         payload: { revision: 1 },
@@ -2619,6 +2658,92 @@ describe("RunnerIpcBridge", () => {
     ];
     expect(windowA.sentMessages).toEqual(expectedFanOut);
     expect(windowB.sentMessages).toEqual(expectedFanOut);
+    bridge.dispose();
+  });
+
+  it("refuses an auth session whose bearer it cannot verify, keeping the one it holds", async () => {
+    // The finding this arm exists for: main derives the jar plane's bearer and
+    // userId from this session, so a renderer that can overwrite it shape-only
+    // can make main speak for an account it never authenticated.
+    const signingKey = createSigningKey("kid-refusal", "bearer");
+    const attackerKey = createSigningKey("kid-refusal", "bearer");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jwksResponse([signingKey.publicJwk])),
+    );
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    const window = buildWindow();
+    registry.add("window-a", 101, window);
+    const authSession = new DesktopAuthSession();
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership: new EpicWindowOwnership(null),
+      perWindowState: new PerWindowState(null),
+      authSession,
+      quitState: undefined,
+    });
+    bridge.install();
+
+    const setHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.authSessionSet,
+    );
+    if (setHandler === undefined) {
+      throw new Error("authSession set handler missing");
+    }
+
+    const owner: DesktopAuthSessionSnapshot = {
+      status: "signed-in",
+      token: signingKey.sign(userBearerClaims("owner", Date.now() + 60_000)),
+      profile: {
+        userId: "owner",
+        userName: "Owner",
+        email: "owner@example.com",
+      },
+    };
+    await setHandler(sender(101), owner);
+    window.sentMessages.length = 0;
+
+    const forged: DesktopAuthSessionSnapshot = {
+      status: "signed-in",
+      token: attackerKey.sign(
+        userBearerClaims("attacker", Date.now() + 60_000),
+      ),
+      profile: {
+        userId: "attacker",
+        userName: "Attacker",
+        email: "attacker@example.com",
+      },
+    };
+    await expect(setHandler(sender(101), forged)).resolves.toEqual({
+      outcome: "refused",
+      reason: "bad-signature",
+    });
+
+    // An authentic token for ANOTHER account is refused on the same edge.
+    const otherAccount: DesktopAuthSessionSnapshot = {
+      status: "signed-in",
+      token: signingKey.sign(userBearerClaims("owner", Date.now() + 60_000)),
+      profile: {
+        userId: "attacker",
+        userName: "Attacker",
+        email: "attacker@example.com",
+      },
+    };
+    await expect(setHandler(sender(101), otherAccount)).resolves.toEqual({
+      outcome: "refused",
+      reason: "subject-mismatch",
+    });
+
+    expect(authSession.get()).toEqual({ ...owner, verified: true });
+    expect(window.sentMessages).toEqual([]);
     bridge.dispose();
   });
 
@@ -3109,379 +3234,15 @@ describe("RunnerIpcBridge", () => {
     bridge.dispose();
   });
 
-  it("waits beyond 2.5 seconds for the matching final browser capture acknowledgement from every window", async () => {
-    vi.useFakeTimers();
-    try {
-      const mod = await import("../register-runner-ipc");
-      const { BrowserViewManager } =
-        await import("../../browser-view/browser-view-manager");
-      const hasNativeTabs = vi
-        .spyOn(BrowserViewManager.prototype, "hasNativeTabsForWindow")
-        .mockReturnValue(true);
-      const registry = new FakeWindowRegistry();
-      const windowA = buildWindow();
-      const windowB = buildWindow();
-      registry.add("window-a", 101, windowA);
-      registry.add("window-b", 202, windowB);
-      const bridge = new mod.RunnerIpcBridge({
-        host: new FakeHost(),
-        hostController: new FakeHostController(),
-        authnBaseUrl: "http://localhost:5005",
-        authRedirectUri: null,
-        tray: null,
-        zoomController: undefined,
-        authTokenStore: undefined,
-        windowRegistry: registry,
-        ownership: new EpicWindowOwnership(null),
-        perWindowState: new PerWindowState(null),
-        authSession: new DesktopAuthSession(),
-        quitState: undefined,
-      });
-      bridge.install();
-      bridge.appLifecycleReadyWindowIds.add("window-a");
-      bridge.appLifecycleReadyWindowIds.add("window-b");
-      windowA.sentMessages.length = 0;
-      windowB.sentMessages.length = 0;
-
-      try {
-        const drain = bridge.captureFinalBrowserState();
-        await vi.advanceTimersByTimeAsync(3_000);
-
-        const requestA = windowA.sentMessages.find(
-          (message) =>
-            message.channel === RunnerHostEvent.captureFinalBrowserState,
-        );
-        const requestB = windowB.sentMessages.find(
-          (message) =>
-            message.channel === RunnerHostEvent.captureFinalBrowserState,
-        );
-        const responseHandler = ipcMainState.handlers.get(
-          RunnerHostInvoke.finalBrowserStateCaptured,
-        );
-        if (requestA === undefined || requestB === undefined) {
-          throw new Error("final browser capture requests missing");
-        }
-        if (responseHandler === undefined) {
-          throw new Error("final browser capture response handler missing");
-        }
-        const requestIdA = (requestA.payload as { readonly requestId: string })
-          .requestId;
-        const requestIdB = (requestB.payload as { readonly requestId: string })
-          .requestId;
-
-        const pending = Symbol("pending");
-        await expect(
-          Promise.race([drain, Promise.resolve(pending)]),
-        ).resolves.toBe(pending);
-
-        await responseHandler(sender(202), { requestId: requestIdA });
-        await expect(
-          Promise.race([drain, Promise.resolve(pending)]),
-        ).resolves.toBe(pending);
-
-        await responseHandler(sender(101), { requestId: requestIdA });
-        await expect(
-          Promise.race([drain, Promise.resolve(pending)]),
-        ).resolves.toBe(pending);
-
-        await responseHandler(sender(202), { requestId: requestIdB });
-        await expect(drain).resolves.toBeUndefined();
-      } finally {
-        hasNativeTabs.mockRestore();
-        bridge.dispose();
-      }
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("keeps waiting for a reachable window's final browser capture after an undeliverable sibling", async () => {
-    vi.useFakeTimers();
-    try {
-      const mod = await import("../register-runner-ipc");
-      const { BrowserViewManager } =
-        await import("../../browser-view/browser-view-manager");
-      const hasNativeTabs = vi
-        .spyOn(BrowserViewManager.prototype, "hasNativeTabsForWindow")
-        .mockReturnValue(true);
-      const registry = new FakeWindowRegistry();
-      // The dead window is registered FIRST so its synchronous send failure is
-      // the first settled outcome of the fan-out.
-      const deadWindow = buildDestroyedWindow();
-      const liveWindow = buildWindow();
-      registry.add("window-a", 101, deadWindow);
-      registry.add("window-b", 202, liveWindow);
-      const bridge = new mod.RunnerIpcBridge({
-        host: new FakeHost(),
-        hostController: new FakeHostController(),
-        authnBaseUrl: "http://localhost:5005",
-        authRedirectUri: null,
-        tray: null,
-        zoomController: undefined,
-        authTokenStore: undefined,
-        windowRegistry: registry,
-        ownership: new EpicWindowOwnership(null),
-        perWindowState: new PerWindowState(null),
-        authSession: new DesktopAuthSession(),
-        quitState: undefined,
-      });
-      bridge.install();
-      bridge.appLifecycleReadyWindowIds.add("window-a");
-      bridge.appLifecycleReadyWindowIds.add("window-b");
-      liveWindow.sentMessages.length = 0;
-
-      try {
-        const drain = bridge.captureFinalBrowserState();
-        const settled = { value: false };
-        void drain.then(
-          () => {
-            settled.value = true;
-          },
-          () => {
-            settled.value = true;
-          },
-        );
-        await vi.advanceTimersByTimeAsync(0);
-
-        const request = liveWindow.sentMessages.find(
-          (message) =>
-            message.channel === RunnerHostEvent.captureFinalBrowserState,
-        );
-        const responseHandler = ipcMainState.handlers.get(
-          RunnerHostInvoke.finalBrowserStateCaptured,
-        );
-        if (request === undefined) {
-          throw new Error("final browser capture request missing");
-        }
-        if (responseHandler === undefined) {
-          throw new Error("final browser capture response handler missing");
-        }
-        // The undeliverable window must not end the fan-out: `window-b` has not
-        // reported yet, so quit is still blocked.
-        expect(settled.value).toBe(false);
-
-        await responseHandler(sender(202), {
-          requestId: (request.payload as { readonly requestId: string })
-            .requestId,
-        });
-        // Only now does the undeliverable window's failure surface.
-        await expect(drain).rejects.toThrow(
-          "Final browser capture request could not be delivered to window window-a",
-        );
-      } finally {
-        hasNativeTabs.mockRestore();
-        bridge.dispose();
-      }
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("resolves the final browser capture after the timeout when the renderer never acknowledges", async () => {
-    vi.useFakeTimers();
-    try {
-      const mod = await import("../register-runner-ipc");
-      const { FINAL_BROWSER_CAPTURE_TIMEOUT_MS } =
-        await import("../runner-ipc-bridge");
-      const { BrowserViewManager } =
-        await import("../../browser-view/browser-view-manager");
-      const hasNativeTabs = vi
-        .spyOn(BrowserViewManager.prototype, "hasNativeTabsForWindow")
-        .mockReturnValue(true);
-      const registry = new FakeWindowRegistry();
-      const window = buildWindow();
-      registry.add("window-a", 101, window);
-      const bridge = new mod.RunnerIpcBridge({
-        host: new FakeHost(),
-        hostController: new FakeHostController(),
-        authnBaseUrl: "http://localhost:5005",
-        authRedirectUri: null,
-        tray: null,
-        zoomController: undefined,
-        authTokenStore: undefined,
-        windowRegistry: registry,
-        ownership: new EpicWindowOwnership(null),
-        perWindowState: new PerWindowState(null),
-        authSession: new DesktopAuthSession(),
-        quitState: undefined,
-      });
-      bridge.install();
-      bridge.appLifecycleReadyWindowIds.add("window-a");
-      window.sentMessages.length = 0;
-
-      const drain = bridge.captureFinalBrowserState();
-      await vi.advanceTimersByTimeAsync(3_000);
-      expect(
-        window.sentMessages.some(
-          (message) =>
-            message.channel === RunnerHostEvent.captureFinalBrowserState,
-        ),
-      ).toBe(true);
-
-      const pending = Symbol("pending");
-      await expect(
-        Promise.race([drain, Promise.resolve(pending)]),
-      ).resolves.toBe(pending);
-
-      await vi.advanceTimersByTimeAsync(
-        FINAL_BROWSER_CAPTURE_TIMEOUT_MS - 3_000,
-      );
-
-      await expect(drain).resolves.toBeUndefined();
-      hasNativeTabs.mockRestore();
-      bridge.dispose();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("closes a window's native sessions only after its final capture is acknowledged", async () => {
-    const mod = await import("../register-runner-ipc");
-    const { BrowserViewManager } =
-      await import("../../browser-view/browser-view-manager");
-    const calls: string[] = [];
-    const hasNativeTabs = vi
-      .spyOn(BrowserViewManager.prototype, "hasNativeTabsForWindow")
-      .mockReturnValue(true);
-    const closeForWindow = vi
-      .spyOn(BrowserViewManager.prototype, "closeNativeSessionsForWindow")
-      .mockImplementation(() => {
-        calls.push("close");
-        return Promise.resolve();
-      });
-    const registry = new FakeWindowRegistry();
-    const window = buildWindow();
-    registry.add("window-a", 101, window);
-    const bridge = new mod.RunnerIpcBridge({
-      host: new FakeHost(),
-      hostController: new FakeHostController(),
-      authnBaseUrl: "http://localhost:5005",
-      authRedirectUri: null,
-      tray: null,
-      zoomController: undefined,
-      authTokenStore: undefined,
-      windowRegistry: registry,
-      ownership: new EpicWindowOwnership(null),
-      perWindowState: new PerWindowState(null),
-      authSession: new DesktopAuthSession(),
-      quitState: undefined,
-    });
-    bridge.install();
-    bridge.appLifecycleReadyWindowIds.add("window-a");
-    window.sentMessages.length = 0;
-
-    const close = bridge.prepareBrowserWindowClose("window-a");
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    // Nothing is torn down until the renderer reports its final capture.
-    expect(calls).toEqual([]);
-    const request = window.sentMessages.find(
-      (message) => message.channel === RunnerHostEvent.captureFinalBrowserState,
-    );
-    const responseHandler = ipcMainState.handlers.get(
-      RunnerHostInvoke.finalBrowserStateCaptured,
-    );
-    if (request === undefined || responseHandler === undefined) {
-      throw new Error("final browser capture request missing");
-    }
-    await responseHandler(sender(101), {
-      requestId: (request.payload as { readonly requestId: string }).requestId,
-    });
-
-    await expect(close).resolves.toBeUndefined();
-    expect(calls).toEqual(["close"]);
-    expect(bridge.needsFinalBrowserCaptureForWindow("window-a")).toBe(true);
-    bridge.markRendererUnavailable("window-a");
-    expect(bridge.needsFinalBrowserCaptureForWindow("window-a")).toBe(false);
-    closeForWindow.mockRestore();
-    hasNativeTabs.mockRestore();
-    bridge.dispose();
-  });
-
-  it("rejects a final browser capture when its renderer window closes before replying", async () => {
-    const mod = await import("../register-runner-ipc");
-    const { BrowserViewManager } =
-      await import("../../browser-view/browser-view-manager");
-    const hasNativeTabs = vi
-      .spyOn(BrowserViewManager.prototype, "hasNativeTabsForWindow")
-      .mockReturnValue(true);
-    const registry = new FakeWindowRegistry();
-    const window = buildWindow();
-    registry.add("window-a", 101, window);
-    const bridge = new mod.RunnerIpcBridge({
-      host: new FakeHost(),
-      hostController: new FakeHostController(),
-      authnBaseUrl: "http://localhost:5005",
-      authRedirectUri: null,
-      tray: null,
-      zoomController: undefined,
-      authTokenStore: undefined,
-      windowRegistry: registry,
-      ownership: new EpicWindowOwnership(null),
-      perWindowState: new PerWindowState(null),
-      authSession: new DesktopAuthSession(),
-      quitState: undefined,
-    });
-    bridge.install();
-    bridge.appLifecycleReadyWindowIds.add("window-a");
-    window.sentMessages.length = 0;
-
-    const drain = bridge.captureFinalBrowserState();
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    expect(
-      window.sentMessages.some(
-        (message) =>
-          message.channel === RunnerHostEvent.captureFinalBrowserState,
-      ),
-    ).toBe(true);
-
-    await registry.closeById("window-a");
-
-    await expect(drain).rejects.toThrow(
-      "Window closed before reporting its final browser capture",
-    );
-    hasNativeTabs.mockRestore();
-    bridge.dispose();
-  });
-
-  it("rejects an outstanding final browser capture when the IPC bridge is disposed", async () => {
-    const mod = await import("../register-runner-ipc");
-    const { BrowserViewManager } =
-      await import("../../browser-view/browser-view-manager");
-    const hasNativeTabs = vi
-      .spyOn(BrowserViewManager.prototype, "hasNativeTabsForWindow")
-      .mockReturnValue(true);
-    const window = buildWindow();
-    const bridge = new mod.RunnerIpcBridge({
-      host: new FakeHost(),
-      hostController: new FakeHostController(),
-      authnBaseUrl: "http://localhost:5005",
-      authRedirectUri: null,
-      tray: null,
-      zoomController: undefined,
-      authTokenStore: undefined,
-      window,
-    });
-    bridge.install();
-    bridge.appLifecycleReadyWindowIds.add("primary");
-    window.sentMessages.length = 0;
-
-    const drain = bridge.captureFinalBrowserState();
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    expect(
-      window.sentMessages.some(
-        (message) =>
-          message.channel === RunnerHostEvent.captureFinalBrowserState,
-      ),
-    ).toBe(true);
-
-    bridge.dispose();
-
-    await expect(drain).rejects.toThrow(
-      "Runner IPC bridge disposed before the final browser capture resolved",
-    );
-    hasNativeTabs.mockRestore();
-  });
-
+  // H10: main now captures the final browser state directly off the
+  // `BrowserSessionsRegistry` via `captureFinalPrimaryProfiles` - there is
+  // no renderer round trip, ack channel, or timeout left to drive from
+  // this bridge. The six arms that lived here (multi-window fan-out wait,
+  // undeliverable-sibling tolerance, ack timeout fallback,
+  // capture-then-close ordering, window-closed rejection, and
+  // dispose-time rejection) all existed only to pin that renderer round
+  // trip and were deleted rather than adapted; the `browser-sessions`
+  // owner's own suites cover the new direct-capture path.
   it("falls back to the cached ambient snapshot after the fresh-query timeout", async () => {
     vi.useFakeTimers();
     try {
@@ -3806,11 +3567,6 @@ describe("RunnerIpcBridge", () => {
       kind: "deferred" as const,
       message: "The host has work in progress, so it was not restarted.",
     },
-    {
-      kind: "busy" as const,
-      continuation: "activate" as const,
-      message: "The host has work in progress; restart it to finish.",
-    },
   ])(
     "resolves requestHostRespawn as declined when respawn() resolves $kind",
     async (outcome) => {
@@ -3941,6 +3697,8 @@ describe("RunnerIpcBridge", () => {
             userName: "Test User",
             email: "test@example.com",
           },
+          // Seeded directly onto the store, not through the verifying IPC.
+          verified: false,
         },
       },
       {
@@ -4535,114 +4293,6 @@ describe("RunnerIpcBridge", () => {
     ).toEqual([]);
     bridge.dispose();
   });
-
-  it("falls back to owned-or-MRU when no open tab matches a terminal notification", async () => {
-    const mod = await import("../register-runner-ipc");
-    const registry = new FakeWindowRegistry();
-    const windowOwner = buildWindow();
-    const windowMru = buildWindow();
-    registry.add("window-owner", 101, windowOwner);
-    registry.add("window-mru", 202, windowMru);
-    const ownership = new EpicWindowOwnership(null);
-    ownership.claim("tab-owned", "epic-owned", "window-owner");
-    const perWindowState = new PerWindowState(null);
-    perWindowState.update("window-owner", {
-      epicTabs: [{ id: "tab-owned", epicId: "epic-owned", name: "Owned" }],
-      activeTabId: "tab-owned",
-      canvasByTabId: {},
-    });
-    const bridge = new mod.RunnerIpcBridge({
-      host: new FakeHost(),
-      hostController: new FakeHostController(),
-      authnBaseUrl: "http://localhost:5005",
-      authRedirectUri: null,
-      tray: null,
-      zoomController: undefined,
-      authTokenStore: undefined,
-      windowRegistry: registry,
-      ownership,
-      perWindowState,
-      authSession: new DesktopAuthSession(),
-      quitState: undefined,
-    });
-    bridge.install();
-    registry.focusById("window-mru");
-    windowOwner.sentMessages.length = 0;
-    windowMru.sentMessages.length = 0;
-
-    const payload = {
-      kind: "notificationActivation",
-      version: 1,
-      route: {
-        kind: "terminal",
-        epicId: "epic-owned",
-        tabId: "tab-missing",
-        terminalId: "term-1",
-        paneId: "pane-1",
-        tileInstanceId: "tile-1",
-      },
-      feed: { source: "host", id: "row-1" },
-      originHostId: "host-1",
-    };
-    bridge.deliverNotificationClick(payload);
-
-    expect(registry.mostRecentlyFocusedId()).toBe("window-owner");
-    expect(
-      windowOwner.sentMessages.filter(
-        (message) => message.channel === RunnerHostEvent.notificationClick,
-      ),
-    ).toEqual([
-      {
-        channel: RunnerHostEvent.notificationClick,
-        payload,
-      },
-    ]);
-    expect(
-      windowMru.sentMessages.filter(
-        (message) => message.channel === RunnerHostEvent.notificationClick,
-      ),
-    ).toEqual([]);
-
-    // Unowned epic with no open tab → pure MRU fallback.
-    windowOwner.sentMessages.length = 0;
-    windowMru.sentMessages.length = 0;
-    registry.focusById("window-mru");
-    windowOwner.sentMessages.length = 0;
-    windowMru.sentMessages.length = 0;
-    const unownedPayload = {
-      kind: "notificationActivation",
-      version: 1,
-      route: {
-        kind: "terminal",
-        epicId: "unowned-epic",
-        tabId: "tab-x",
-        terminalId: "term-1",
-        paneId: "pane-1",
-        tileInstanceId: "tile-1",
-      },
-      feed: { source: "host", id: "row-unowned" },
-      originHostId: null,
-    };
-    bridge.deliverNotificationClick(unownedPayload);
-    expect(registry.mostRecentlyFocusedId()).toBe("window-mru");
-    expect(
-      windowMru.sentMessages.filter(
-        (message) => message.channel === RunnerHostEvent.notificationClick,
-      ),
-    ).toEqual([
-      {
-        channel: RunnerHostEvent.notificationClick,
-        payload: unownedPayload,
-      },
-    ]);
-    expect(
-      windowOwner.sentMessages.filter(
-        (message) => message.channel === RunnerHostEvent.notificationClick,
-      ),
-    ).toEqual([]);
-    bridge.dispose();
-  });
-
   it("routes artifact notification clicks to the window holding the exact artifact tile", async () => {
     const mod = await import("../register-runner-ipc");
     const registry = new FakeWindowRegistry();
@@ -4718,118 +4368,6 @@ describe("RunnerIpcBridge", () => {
     ).toEqual([]);
     bridge.dispose();
   });
-
-  it("falls back to owned-or-MRU when no open tile matches an artifact notification", async () => {
-    const mod = await import("../register-runner-ipc");
-    const registry = new FakeWindowRegistry();
-    const windowOwner = buildWindow();
-    const windowMru = buildWindow();
-    registry.add("window-owner", 101, windowOwner);
-    registry.add("window-mru", 202, windowMru);
-    const ownership = new EpicWindowOwnership(null);
-    ownership.claim("tab-owned", "epic-owned", "window-owner");
-    const perWindowState = new PerWindowState(null);
-    perWindowState.update("window-owner", {
-      epicTabs: [{ id: "tab-owned", epicId: "epic-owned", name: "Owned" }],
-      activeTabId: "tab-owned",
-      canvasByTabId: {
-        "tab-owned": {
-          tilesByInstanceId: {
-            "tile-other": {
-              id: "artifact-other",
-              type: "spec",
-              hostId: "host-1",
-            },
-          },
-        },
-      },
-    });
-    const bridge = new mod.RunnerIpcBridge({
-      host: new FakeHost(),
-      hostController: new FakeHostController(),
-      authnBaseUrl: "http://localhost:5005",
-      authRedirectUri: null,
-      tray: null,
-      zoomController: undefined,
-      authTokenStore: undefined,
-      windowRegistry: registry,
-      ownership,
-      perWindowState,
-      authSession: new DesktopAuthSession(),
-      quitState: undefined,
-    });
-    bridge.install();
-    registry.focusById("window-mru");
-    windowOwner.sentMessages.length = 0;
-    windowMru.sentMessages.length = 0;
-
-    const payload = {
-      kind: "notificationActivation",
-      version: 1,
-      route: {
-        kind: "artifact",
-        epicId: "epic-owned",
-        artifactId: "artifact-missing",
-      },
-      feed: { source: "host", id: "row-1" },
-      originHostId: "host-1",
-    };
-    bridge.deliverNotificationClick(payload);
-
-    expect(registry.mostRecentlyFocusedId()).toBe("window-owner");
-    expect(
-      windowOwner.sentMessages.filter(
-        (message) => message.channel === RunnerHostEvent.notificationClick,
-      ),
-    ).toEqual([
-      {
-        channel: RunnerHostEvent.notificationClick,
-        payload,
-      },
-    ]);
-    expect(
-      windowMru.sentMessages.filter(
-        (message) => message.channel === RunnerHostEvent.notificationClick,
-      ),
-    ).toEqual([]);
-
-    // Unowned epic with no open artifact tile → pure MRU fallback.
-    windowOwner.sentMessages.length = 0;
-    windowMru.sentMessages.length = 0;
-    registry.focusById("window-mru");
-    windowOwner.sentMessages.length = 0;
-    windowMru.sentMessages.length = 0;
-    const unownedPayload = {
-      kind: "notificationActivation",
-      version: 1,
-      route: {
-        kind: "artifact",
-        epicId: "unowned-epic",
-        artifactId: "artifact-x",
-      },
-      feed: { source: "host", id: "row-unowned" },
-      originHostId: null,
-    };
-    bridge.deliverNotificationClick(unownedPayload);
-    expect(registry.mostRecentlyFocusedId()).toBe("window-mru");
-    expect(
-      windowMru.sentMessages.filter(
-        (message) => message.channel === RunnerHostEvent.notificationClick,
-      ),
-    ).toEqual([
-      {
-        channel: RunnerHostEvent.notificationClick,
-        payload: unownedPayload,
-      },
-    ]);
-    expect(
-      windowOwner.sentMessages.filter(
-        (message) => message.channel === RunnerHostEvent.notificationClick,
-      ),
-    ).toEqual([]);
-    bridge.dispose();
-  });
-
   it("propagates a failed durable write out of the update handler and still releases echo suppression", async () => {
     // `perWindowStateUpdate` is `async` and awaits the durable write, so a
     // rejection has to reach `handleInvoke` rather than being swallowed into a

@@ -50,10 +50,6 @@ vi.mock("@/lib/attachments/use-attachment-blob-src", () => ({
   ) => useAttachmentBlobSrcMock(hash, mediaType, dataUrl),
 }));
 
-vi.mock("@/hooks/runner/use-open-external-link-mutation", () => ({
-  useRunnerOpenExternalLink: () => ({ isPending: false, mutate: vi.fn() }),
-}));
-
 function mountImageEditor(attrs: {
   readonly src: string;
   readonly alt: string;

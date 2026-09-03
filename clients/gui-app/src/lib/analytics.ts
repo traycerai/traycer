@@ -77,6 +77,7 @@ export type AnalyticsSettingsSection =
   | "keybindings"
   | "link-phone"
   | "notifications"
+  | "opening-behavior"
   | "providers"
   | "shell"
   | "usage"
@@ -187,6 +188,7 @@ export type AnalyticsResourcePressureTier = "elevated" | "high" | "critical";
 export type AnalyticsOnboardingStep =
   | "agent-guide"
   | "command-theme"
+  | "login-import"
   | "mobile-switcher"
   | "mobile-tasks"
   | "navigation"
@@ -234,7 +236,7 @@ export type AnalyticsRole = "editor" | "owner" | "viewer";
 
 export type AnalyticsSetting =
   | "allowPrereleaseUpdates"
-  | "agentTabSurfacingMode"
+  | "agentTabSurfacing"
   | "artifactIconColorMode"
   | "artifactIconColors"
   | "chatTurnMinimapSide"
@@ -247,6 +249,7 @@ export type AnalyticsSetting =
   | "defaultSelection"
   | "defaultServiceTier"
   | "diffViewerPreferences"
+  | "linkOpen"
   | "pinContextUsageBreakdown"
   | "pointerCursors"
   | "preventSleepWhileRunning"
@@ -261,6 +264,7 @@ export type AnalyticsSetting =
   | "terminalFontFamily"
   | "terminalFontSize"
   | "theme"
+  | "tilePlacement"
   | "themePreset"
   | "uiFontFamily"
   | "uiFontSize"
@@ -339,6 +343,10 @@ export enum AnalyticsEvent {
   WorkspaceRecentForgotten = "workspace_recent_forgotten",
   WorkspaceFileOpened = "workspace_file_opened",
   WorkspaceOpenedInEditor = "workspace_opened_in_editor",
+  // A PDF hit the 20 MiB asset-stream cap and fell back to "Open
+  // Externally" - the metric that decides whether the cap needs a
+  // per-type raise or range streaming (PDF preview design, Q6).
+  PdfPreviewTooLarge = "pdf_preview_too_large",
   WorktreeCreated = "worktree_created",
   WorktreeImported = "worktree_imported",
   WorktreeSelected = "worktree_selected",
@@ -640,6 +648,10 @@ export interface AnalyticsEventProperties {
     readonly surface: AnalyticsWorkspaceSurface;
   };
   readonly [AnalyticsEvent.WorkspaceFileOpened]: SourceProperties;
+  readonly [AnalyticsEvent.PdfPreviewTooLarge]: {
+    /** Which asset-stream surface the over-cap PDF was requested from. */
+    readonly surface: "workspace" | "git-old" | "git-new";
+  };
   readonly [AnalyticsEvent.WorkspaceOpenedInEditor]: SourceProperties & {
     readonly editor: AnalyticsEditor;
   };
@@ -1083,6 +1095,7 @@ const ANALYTICS_SETTINGS_SECTIONS = new Set<string>(
     keybindings: true,
     "link-phone": true,
     notifications: true,
+    "opening-behavior": true,
     providers: true,
     shell: true,
     usage: true,
@@ -1091,6 +1104,7 @@ const ANALYTICS_SETTINGS_SECTIONS = new Set<string>(
 );
 
 const ANALYTICS_SETTINGS = new Set<string>([
+  "agentTabSurfacing",
   "allowPrereleaseUpdates",
   "artifactIconColorMode",
   "artifactIconColors",
@@ -1103,6 +1117,7 @@ const ANALYTICS_SETTINGS = new Set<string>([
   "defaultSelection",
   "defaultServiceTier",
   "diffViewerPreferences",
+  "linkOpen",
   "pinContextUsageBreakdown",
   "pointerCursors",
   "preventSleepWhileRunning",
@@ -1115,6 +1130,7 @@ const ANALYTICS_SETTINGS = new Set<string>([
   "terminalFontSize",
   "theme",
   "themePreset",
+  "tilePlacement",
   "uiFontFamily",
   "uiFontSize",
   "voiceInputEnabled",
@@ -1300,6 +1316,7 @@ const EVENT_PROPERTY_KEYS = new Map<AnalyticsEvent, ReadonlyArray<string>>([
     [AnalyticsEvent.TaskCreationFailed],
     ["source", "blocker", "mode"],
   ),
+  ...eventKeyEntries([AnalyticsEvent.PdfPreviewTooLarge], ["surface"]),
   ...eventKeyEntries(
     [AnalyticsEvent.HostSetupStarted, AnalyticsEvent.HostSetupSucceeded],
     ["reason"],

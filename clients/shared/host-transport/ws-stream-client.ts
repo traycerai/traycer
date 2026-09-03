@@ -400,7 +400,19 @@ export class WsStreamClient<
     method: Method,
     params: ParamsOf<Registry, Method>,
   ): IStreamSession {
-    return this.subscribeWithParamsProvider(method, () => params);
+    return this.subscribeWithParamsProviderInternal(method, () => params, null);
+  }
+
+  subscribeAtVersion<Method extends keyof Registry & string>(
+    method: Method,
+    schemaVersion: SchemaVersion,
+    params: ParamsOf<Registry, Method>,
+  ): IStreamSession {
+    return this.subscribeWithParamsProviderInternal(
+      method,
+      () => params,
+      schemaVersion,
+    );
   }
 
   /**
@@ -412,6 +424,20 @@ export class WsStreamClient<
   subscribeWithParamsProvider<Method extends keyof Registry & string>(
     method: Method,
     paramsProvider: () => ParamsOf<Registry, Method>,
+  ): IStreamSession {
+    return this.subscribeWithParamsProviderInternal(
+      method,
+      paramsProvider,
+      null,
+    );
+  }
+
+  private subscribeWithParamsProviderInternal<
+    Method extends keyof Registry & string,
+  >(
+    method: Method,
+    paramsProvider: () => ParamsOf<Registry, Method>,
+    requiredSchemaVersion: SchemaVersion | null,
   ): IStreamSession {
     if (this.closed) {
       // Defense-in-depth (tech-plan D4): a subscribe on an already-closed
@@ -436,6 +462,7 @@ export class WsStreamClient<
     const session = new StreamSession<Registry>({
       method,
       paramsProvider,
+      requiredSchemaVersion,
       registry: this.options.registry,
       endpoint: this.options.endpoint,
       bearer: this.options.bearer,
@@ -1190,6 +1217,27 @@ function schemaVersionEqual(
   return a.major === b.major && a.minor === b.minor;
 }
 
+function incompatiblePinnedStreamDetails(
+  method: string,
+  requiredVersion: SchemaVersion,
+  hostVersion: SchemaVersion | undefined,
+): FatalErrorDetails {
+  return {
+    code: "INCOMPATIBLE",
+    reason: `Stream method '${method}' requires schema @${requiredVersion.major}.${requiredVersion.minor}`,
+    incompatibleMethods: [
+      {
+        method,
+        clientCanonical: requiredVersion,
+        hostCanonical: hostVersion ?? null,
+        blocking:
+          hostVersion === undefined ? "host-missing-method" : "no-bridge",
+      },
+    ],
+    upgradeGuidance: null,
+  };
+}
+
 type ExtractOpenRequest<MethodRegistry> =
   MethodRegistry extends Readonly<Record<number, infer Line>>
     ? Line extends {
@@ -1210,6 +1258,8 @@ type ExtractOpenRequest<MethodRegistry> =
 interface StreamSessionOptions<Registry extends VersionedStreamRpcRegistry> {
   readonly method: keyof Registry & string;
   readonly paramsProvider: () => unknown;
+  /** Exact client version to declare; rejects older peers before subscribe. */
+  readonly requiredSchemaVersion: SchemaVersion | null;
   readonly registry: Registry;
   readonly endpoint: HostEndpointProvider;
   readonly bearer: BearerSourceProvider;
@@ -2030,18 +2080,34 @@ class StreamSession<
     const hostCredentialState = ackParse.data.hostCredentialState;
 
     const theirManifest = ackParse.data.manifest;
-    const myManifest = selectConnectionManifestForPeer(
+    const selectedManifest = selectConnectionManifestForPeer(
       this.config.registry,
       buildStreamManifest(this.config.registry, CLIENT_SERVED_STREAM_MAJORS),
       theirManifest,
     );
-    const compat = checkStreamMethodCompatibility(
-      this.config.registry,
-      myManifest,
-      theirManifest,
-      "client",
-      this.config.method,
-    );
+    const requiredVersion = this.config.requiredSchemaVersion;
+    const theirVersion = theirManifest[this.config.method];
+    const pinnedVersionSupported =
+      requiredVersion === null ||
+      (theirVersion !== undefined &&
+        theirVersion.major === requiredVersion.major &&
+        theirVersion.minor >= requiredVersion.minor);
+    const compat = pinnedVersionSupported
+      ? checkStreamMethodCompatibility(
+          this.config.registry,
+          selectedManifest,
+          theirManifest,
+          "client",
+          this.config.method,
+        )
+      : {
+          ok: false as const,
+          details: incompatiblePinnedStreamDetails(
+            this.config.method,
+            requiredVersion,
+            theirVersion,
+          ),
+        };
 
     const socket = this.activeSocket;
     if (socket === null) {
@@ -2087,7 +2153,7 @@ class StreamSession<
     const prepared = prepareStreamSubscribeRequest(
       this.config.registry,
       this.config.method,
-      myManifest[this.config.method],
+      selectedManifest[this.config.method],
       theirManifest[this.config.method],
       this.config.paramsProvider(),
     );

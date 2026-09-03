@@ -14,6 +14,12 @@ import {
   type DesktopPreloadBridge,
 } from "./desktop-runner-host";
 import { composeDesktopSignInUrl, DESKTOP_REDIRECT_URI } from "./sign-in-url";
+import {
+  scrubSentryBreadcrumbInPlace,
+  scrubSentryEventInPlace,
+  scrubSentrySpanInPlace,
+  scrubSentryTransactionInPlace,
+} from "@traycer-clients/shared/platform/sentry-scrub";
 import { config } from "../config";
 
 declare global {
@@ -43,9 +49,40 @@ function bootstrap(): void {
       tracesSampleRate: sampleRate,
       profilesSampleRate: sampleRate,
       attachStacktrace: true,
+      // Stated, not inherited - see `electron-main/app/crash-reporter.ts`.
+      sendDefaultPii: false,
       // Use fetch transport so renderer events go directly to the renderer
       // Sentry project (traycer-desktop-renderer), not forwarded to main.
       transport: makeFetchTransport,
+      // The renderer's own egress filter, and not just a URL rewrite: an
+      // unhandled error uploads its message verbatim in
+      // `exception.values[].value`, and a console breadcrumb carries the
+      // joined `console.*` arguments - both routinely a credential a page or
+      // an RPC error rendered into text. This is the same shaping the main
+      // process applies, from the same detection leaf.
+      beforeSend: (event) => {
+        scrubSentryEventInPlace(event);
+        return event;
+      },
+      // The browser SDK records the full URL of every fetch/xhr/navigation.
+      // Signed asset URLs carry their credential in the query string, so
+      // breadcrumbs keep origin + pathname and nothing else. Recorded-time,
+      // not send-time: the scope outlives the event.
+      beforeBreadcrumb: (breadcrumb) => {
+        scrubSentryBreadcrumbInPlace(breadcrumb);
+        return breadcrumb;
+      },
+      // Inert until a tracing integration is added - the browser SDK ships
+      // none by default - and registered anyway so that adding one cannot
+      // reopen `url.full`, which no `beforeSend` ever sees.
+      beforeSendTransaction: (event) => {
+        scrubSentryTransactionInPlace(event);
+        return event;
+      },
+      beforeSendSpan: (span) => {
+        scrubSentrySpanInPlace(span);
+        return span;
+      },
     });
   }
 

@@ -1,3 +1,5 @@
+import { isPdfAssetPath } from "@/lib/assets/image-extension-allowlist";
+import { PDF_FILE_DIFF_COPY } from "@/lib/chat/file-edit-reason-copy";
 import { memo, useCallback, useEffect, useMemo, type ReactNode } from "react";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
@@ -24,6 +26,7 @@ import { useSnapshotResolveCumulativeDiffs } from "@/hooks/snapshots/use-snapsho
 import {
   accumulatedSummarySetComplete,
   hostAccumulatedChangeRows,
+  type AccumulatedChangeRow,
 } from "@/lib/chat/accumulated-change-rows";
 import {
   isWindowedTranscript,
@@ -41,6 +44,7 @@ import { useNativeDivScrollRestoration } from "@/hooks/scroll/use-native-div-scr
 import {
   createLoadedDiffTileFindSource,
   createLoadingDiffTileFindSource,
+  createMetadataOnlyDiffTileFindSource,
   createMissingDiffTileFindSource,
   type DiffTileFindSource,
 } from "@/stores/tile-find";
@@ -64,6 +68,8 @@ const SNAPSHOT_DIFF_LOADING_FIND_MESSAGE =
   "Snapshot diff content is still loading.";
 const SNAPSHOT_DIFF_MISSING_FIND_MESSAGE =
   "Snapshot source content is unavailable.";
+const SNAPSHOT_DIFF_PDF_FIND_MESSAGE =
+  "PDF content is not searchable; only file metadata was searched.";
 
 interface SnapshotDiffTileBodyProps {
   readonly node: SnapshotDiffTileRef;
@@ -321,13 +327,21 @@ function SnapshotDiffTileResolved(props: {
     });
   }, [node.diff, node.id, settledCapture, updatePayload, viewTabId]);
 
+  const pdfFilePath = snapshotTilePdfPath({
+    diff: node.diff,
+    segmentHashes,
+    hostRows,
+    hostRowsComplete,
+  });
+  const tileIsPdf = pdfFilePath !== null;
+
   const segmentQuery = useSnapshotDiffQuery({
     // The snapshot blobs were written by the host this TILE is bound to - the
     // same host its `useChatSessionHandle` above is keyed by (D15).
     client: tabHostClient,
     beforeHash: segmentHashes?.beforeHash ?? null,
     afterHash: segmentHashes?.afterHash ?? null,
-    enabled: segmentHashes !== null,
+    enabled: segmentHashes !== null && !tileIsPdf,
   });
 
   const cumulative = useSnapshotResolveCumulativeDiffs({
@@ -340,7 +354,7 @@ function SnapshotDiffTileResolved(props: {
     hostRows,
     hostRowsComplete,
     inlineChanges: accumulatedFileChanges,
-    enabled: segmentHashes === null,
+    enabled: segmentHashes === null && !tileIsPdf,
   });
 
   const resolved = useMemo<ReadonlyArray<ResolvedSnapshotDiff>>(() => {
@@ -402,6 +416,29 @@ function SnapshotDiffTileResolved(props: {
           })}
         />
         <SnapshotDiffLoading node={node} />
+      </SnapshotDiffTileShell>
+    );
+  }
+
+  if (pdfFilePath !== null) {
+    // Terminal, like every other branch: global Find still gets the file's
+    // metadata (name, directory, kind) and an honest coverage note, rather
+    // than a tile that simply does not exist to it.
+    return (
+      <SnapshotDiffTileShell node={node} viewTabId={viewTabId}>
+        <SnapshotDiffFindRegistration
+          tileInstanceId={node.instanceId}
+          source={createMetadataOnlyDiffTileFindSource({
+            metadataUnits: snapshotDiffMetadataUnits({
+              node,
+              filePaths: [pdfFilePath],
+            }),
+            coverageMessage: SNAPSHOT_DIFF_PDF_FIND_MESSAGE,
+          })}
+        />
+        <div className="p-4 text-ui-sm text-muted-foreground">
+          {PDF_FILE_DIFF_COPY}
+        </div>
       </SnapshotDiffTileShell>
     );
   }
@@ -472,7 +509,7 @@ function SnapshotFileDiffContent(props: {
         patch: props.patch,
         metadataUnits: snapshotDiffMetadataUnits({
           node: props.node,
-          resolved: props.resolved,
+          filePaths: props.resolved.map((entry) => entry.filePath),
         }),
         cacheKey: `snapshot:${props.node.id}`,
         isPartial: false,
@@ -530,20 +567,56 @@ function SnapshotDiffFindRegistration(props: {
   return null;
 }
 
+/**
+ * The PDF a single-file tile is aimed at, or `null`. Decided by PATH, not
+ * by content, for every single-file kind (hash-backed OR cumulative): a
+ * binary PDF's blobs were never captured (`SnapshotStore.capture` rejects
+ * non-text), so a content query would come back `reason: "binary"` and fall
+ * into the generic source-unavailable banner instead of the PDF copy - and
+ * an ASCII one would download and render source the tile must not show as
+ * a diff. Bundles decide per row (`SnapshotBundleDiffTileContent`).
+ *
+ * EXISTENCE is the one thing path alone cannot answer. A cumulative tile
+ * reads the LIVE accumulated set, where a path can leave (reverted, or
+ * edited back to its original) after the tile was opened; every other kind
+ * of file then falls to the source-unavailable banner. Short-circuiting on
+ * extension would exempt PDFs from that and keep presenting a row that is
+ * gone as one whose diff is merely not shown. Absence only counts once the
+ * set is COMPLETE - in a delivered prefix it means "not arrived yet"
+ * (`hostRowsComplete`) - and falling through costs no fetch, because a path
+ * with no row has nothing fetchable in the first place.
+ */
+function snapshotTilePdfPath(args: {
+  readonly diff: SnapshotDiffTilePayload;
+  readonly segmentHashes: { readonly filePath: string } | null;
+  readonly hostRows: ReadonlyArray<AccumulatedChangeRow>;
+  readonly hostRowsComplete: boolean;
+}): string | null {
+  const { diff } = args;
+  if (diff.kind === "snapshot-cumulative-bundle") return null;
+  const filePath = args.segmentHashes?.filePath ?? diff.filePath;
+  if (!isPdfAssetPath(filePath)) return null;
+  if (diff.kind === "snapshot-cumulative" && args.hostRowsComplete) {
+    const present = args.hostRows.some((row) => row.filePath === filePath);
+    if (!present) return null;
+  }
+  return filePath;
+}
+
 function snapshotDiffMetadataUnits(args: {
   readonly node: SnapshotDiffTileRef;
-  readonly resolved: ReadonlyArray<ResolvedSnapshotDiff>;
+  readonly filePaths: ReadonlyArray<string>;
 }): ReadonlyArray<DiffFindMetadataUnitInput> {
-  return args.resolved.map((entry, index) => {
-    const directory = getDirname(entry.filePath);
+  return args.filePaths.map((filePath, index) => {
+    const directory = getDirname(filePath);
     return {
-      id: `snapshot-file:${args.node.id}:${index}:${entry.filePath}`,
-      filePath: entry.filePath,
+      id: `snapshot-file:${args.node.id}:${index}:${filePath}`,
+      filePath,
       scopeId: null,
       text: [
-        snapshotDiffFindTitle(args.node.diff, entry.filePath),
+        snapshotDiffFindTitle(args.node.diff, filePath),
         directory.length > 0 ? directory : "Repository root",
-        entry.filePath,
+        filePath,
         snapshotDiffFindKindLabel(args.node.diff),
       ]
         .filter((part) => part.length > 0)

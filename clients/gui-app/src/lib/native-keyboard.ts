@@ -5,10 +5,10 @@
  * imports Capacitor, and in a plain browser tab (or on desktop) the state
  * simply never leaves its closed default.
  *
- * Why this exists: under the mobile app's `resize: native` keyboard mode the
- * webview is shrunk so nothing is ever covered, which means the
- * visualViewport-derived inset (`useVirtualKeyboardInset`) is 0 the whole time
- * the keyboard is up. Anything that needs "is the keyboard open?" as a fact -
+ * Why this exists: the mobile app runs the keyboard in overlay mode
+ * (`resize: none`), so the webview is never resized for it and the
+ * visualViewport-derived inset (`useVirtualKeyboardInset`) measures 0 the whole
+ * time the keyboard is up. Anything that needs "is the keyboard open?" as a fact -
  * the terminal key bar dropping its home-indicator padding, the terminal
  * deferring its PTY re-grid until the show/hide transition settles - was
  * reading a signal that could never fire. The plugin events are the only

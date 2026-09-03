@@ -11,6 +11,8 @@ import {
 } from "@/components/epic-tabs/pane-visibility-context";
 import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
 import { useSafeAreaCollisionPadding } from "@/components/ui/safe-area-collision-padding";
+import { useComposedRefs } from "radix-ui/internal";
+import { useRegisterBrowserOverlay } from "@/lib/browser-view/tiles/use-register-browser-overlay";
 
 /**
  * Un-presents in a background split pane by forcing the root CLOSED, not by
@@ -112,6 +114,7 @@ function SelectTrigger({
 }
 
 function SelectContent({
+  ref,
   className,
   children,
   position = "popper",
@@ -139,12 +142,16 @@ function SelectContent({
   // Radix's side - an `item-aligned` list positions itself over the trigger and
   // ignores collision geometry - so the width cap is what carries that case.
   const safeAreaInsets = useSafeAreaCollisionPadding();
+  // Read above the early return, like the hooks above it: hook order must
+  // not depend on concealment.
+  const registerOverlayRef = useRegisterBrowserOverlay<HTMLDivElement>();
+  const composedRef = useComposedRefs(ref, registerOverlayRef);
   if (concealed) return null;
   return (
     <SelectPrimitive.Portal>
       <SelectPrimitive.Content
+        ref={composedRef}
         data-slot="select-content"
-        data-browser-overlay="select"
         data-align-trigger={position === "item-aligned"}
         collisionPadding={collisionPadding ?? safeAreaInsets}
         className={cn(

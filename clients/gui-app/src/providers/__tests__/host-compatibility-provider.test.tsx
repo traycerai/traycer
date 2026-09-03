@@ -84,7 +84,7 @@ function registerActiveHandoff(epicId: string): void {
     content: { type: "doc", content: [] } satisfies JsonContent,
     settings: HANDOFF_SETTINGS,
     worktreeIntent: null,
-    placement: { kind: "active-tile" },
+    placement: null,
     messageId: `${epicId}-msg`,
     clientActionId: `${epicId}-cai`,
     createdAt: 1,

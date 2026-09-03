@@ -26,6 +26,8 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { useEpicCommentThreadsForClient } from "@/hooks/comments/use-epic-comment-threads";
 import { resolveArtifactCommentThreads } from "@/hooks/comments/use-lane-comment-threads";
 import { useCommentThreadsStore } from "@/stores/comments/comment-threads-store";
+import { useComposedRefs } from "radix-ui/internal";
+import { useRegisterBrowserOverlay } from "@/lib/browser-view/tiles/use-register-browser-overlay";
 import { CommentContent } from "./comment-content-renderer";
 import { deriveInitials } from "./mention-utils";
 
@@ -111,6 +113,8 @@ export function ThreadAnchorHoverPopover(props: ThreadAnchorHoverPopoverProps) {
   const showTimerRef = useRef<number | null>(null);
   const hideTimerRef = useRef<number | null>(null);
   const floatingRef = useRef<HTMLButtonElement | null>(null);
+  const registerOverlayRef = useRegisterBrowserOverlay<HTMLButtonElement>();
+  const composedFloatingRef = useComposedRefs(floatingRef, registerOverlayRef);
   // Which device produced the gesture in flight. `click` does not carry a
   // pointer type of its own, so it is read from the `pointerdown` that preceded
   // it.
@@ -277,11 +281,10 @@ export function ThreadAnchorHoverPopover(props: ThreadAnchorHoverPopoverProps) {
 
   return createPortal(
     <button
-      ref={floatingRef}
+      ref={composedFloatingRef}
       type="button"
       aria-label="Open thread"
       data-slot="thread-hover-popover"
-      data-browser-overlay="thread-hover-popover"
       onPointerEnter={cancelTimers}
       onPointerLeave={scheduleHide}
       onClick={() => {

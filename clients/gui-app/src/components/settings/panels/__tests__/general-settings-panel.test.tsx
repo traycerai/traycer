@@ -347,9 +347,13 @@ describe("GeneralSettingsPanel", () => {
       showNavigatorResourceStats: false,
       pinContextUsageBreakdown: false,
       quoteReplyEnabled: true,
-      browserLinkDefaultMode: "in-app",
-      terminalBrowserLinkOpenMode: "in-app",
-      markdownBrowserLinkOpenMode: "in-app",
+      linkOpen: {
+        default: "in-app",
+        markdown: "in-app",
+        terminal: "in-app",
+        github: "in-app",
+        image: "in-app",
+      },
       browserDevOrigins: [],
     });
   });
@@ -498,27 +502,28 @@ describe("GeneralSettingsPanel", () => {
     expect(useSettingsStore.getState().quoteReplyEnabled).toBe(false);
   });
 
-  it("renders the web link default row unconditionally", () => {
-    renderPanel();
-
-    expect(screen.getByText("Web link default")).toBeTruthy();
-  });
-
-  it("renders per-kind browser link settings and removable dev origins", () => {
+  // Link and agent-tab controls moved to Settings > Opening behavior; the
+  // Browser group here is dev origins and saved logins only, and its card is
+  // dropped entirely when nothing was detected.
+  it("renders removable dev origins", () => {
     useSettingsStore.setState({
-      browserLinkDefaultMode: "per-kind",
       browserDevOrigins: ["http://localhost:5173"],
     });
 
     renderPanel();
 
-    expect(screen.getByText("Terminal links")).toBeTruthy();
-    expect(screen.getByText("Markdown links")).toBeTruthy();
+    expect(screen.getByText("Detected dev origins")).toBeTruthy();
     expect(screen.getByText("http://localhost:5173")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Remove" }));
 
     expect(useSettingsStore.getState().browserDevOrigins).toEqual([]);
+  });
+
+  it("leaves the Browser group out when nothing was detected", () => {
+    renderPanel();
+
+    expect(screen.queryByText("Detected dev origins")).toBeNull();
   });
 
   it("labels the steering chord with the platform modifier", () => {

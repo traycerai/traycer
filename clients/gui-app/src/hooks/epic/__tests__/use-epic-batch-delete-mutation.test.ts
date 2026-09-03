@@ -194,7 +194,7 @@ describe("emitEpicDeleteToast", () => {
   it("keeps partial deletions as warnings with fixed report context", () => {
     useDesktopDialogStore.setState({ reportIssueAvailable: true });
 
-    emitEpicDeleteToast("warning", "Deleted 1 of 2; 1 failed.");
+    emitEpicDeleteToast("warning", "Deleted 1 of 2; 1 failed.", null);
 
     expect(toastWarning.mock.lastCall?.[0]).toBe("Deleted 1 of 2; 1 failed.");
     expect(readWarningOptions().cancel).toMatchObject({
@@ -213,9 +213,36 @@ describe("emitEpicDeleteToast", () => {
   });
 
   it("does not expose reporting when the capability is unavailable", () => {
-    emitEpicDeleteToast("warning", "Deleted 1 of 2; 1 failed.");
+    emitEpicDeleteToast("warning", "Deleted 1 of 2; 1 failed.", null);
 
     expect(toastWarning).toHaveBeenCalledWith("Deleted 1 of 2; 1 failed.");
+  });
+
+  // The detail names absolute worktree paths, so it is on-screen only: it goes
+  // in sonner's `description` and must never reach the report-issue context,
+  // which is public and carries fixed product copy.
+  it("puts the failure detail on screen and keeps it out of the report context", () => {
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+
+    emitEpicDeleteToast(
+      "warning",
+      "Epic was deleted · 1 worktree couldn't be removed",
+      "/wt/busy: The worktree is still in use by an agent.",
+    );
+
+    expect(readWarningOptions().description).toBe(
+      "/wt/busy: The worktree is still in use by an agent.",
+    );
+    clickWarningReportAction();
+    expect(useDesktopDialogStore.getState().reportIssueContext).toEqual({
+      title: "Epic deletion incomplete",
+      message: null,
+      code: null,
+      source: "Epic deletion",
+    });
+    expect(
+      JSON.stringify(useDesktopDialogStore.getState().reportIssueContext),
+    ).not.toMatch(/wt\/busy/);
   });
 });
 
@@ -252,7 +279,6 @@ describe("worktreeCleanupSummary", () => {
         removed: [],
         failed: [],
         uncertain: [],
-        holdersChanged: [],
       }),
     ).toBeNull();
   });
@@ -261,9 +287,8 @@ describe("worktreeCleanupSummary", () => {
     expect(
       worktreeCleanupSummary({
         removed: ["/wt/a", "/wt/b"],
-        failed: ["/wt/c"],
+        failed: [{ worktreePath: "/wt/c", reason: "Removing it failed." }],
         uncertain: [],
-        holdersChanged: [],
       }),
     ).toBe("2 worktrees removed, 1 worktree couldn't be removed");
   });
@@ -275,9 +300,8 @@ describe("worktreeCleanupSummary", () => {
     expect(
       worktreeCleanupSummary({
         removed: ["/wt/a"],
-        failed: ["/wt/b"],
+        failed: [{ worktreePath: "/wt/b", reason: "Removing it failed." }],
         uncertain: ["/wt/c", "/wt/d"],
-        holdersChanged: [],
       }),
     ).toBe(
       "1 worktree removed, 1 worktree couldn't be removed, 2 worktrees unconfirmed",

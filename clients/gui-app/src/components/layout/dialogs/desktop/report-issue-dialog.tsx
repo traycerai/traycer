@@ -71,7 +71,7 @@ import type {
   DesktopSupportLogTarget,
   DesktopSupportSnapshot,
 } from "@/lib/windows/types";
-import { useRunnerHost } from "@/providers/use-runner-host";
+import { useOpenLink } from "@/lib/links/open-link";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import type { FileRouteTypes } from "@/routeTree.gen";
 import type { DesktopSupportDialogProps } from "./types";
@@ -121,6 +121,7 @@ const ROUTE_TEMPLATE_LABELS: Readonly<
   "/settings/keybindings": "Settings - Keybindings",
   "/settings/link-phone": "Settings - Link mobile app",
   "/settings/notifications": "Settings - Notifications",
+  "/settings/opening-behavior": "Settings - Opening behavior",
   "/settings/providers": "Settings - Providers",
   "/settings/service": "Settings - Service",
   "/settings/shell": "Settings - Shell",
@@ -199,10 +200,10 @@ const INITIAL_FORM_STATE: ReportIssueFormState = {
   allowContact: false,
   includeDesktopLog: true,
   includeHostLog: true,
-  // Full D8 symmetry: browser diagnostics follows the same bug/idea/other
-  // default split as the other two log toggles, and the same touched-by-user
-  // tracking (ticket 03 fix round).
-  includeBrowserDiagnostics: true,
+  // Default OFF, unlike the other two log toggles: `browser-trace.jsonl`
+  // records the agent's cell source and every page it drove, so it is opt-in
+  // per report rather than opted-out. Touched-by-user tracking is unchanged.
+  includeBrowserDiagnostics: false,
   includeDiagnostics: true,
 };
 
@@ -406,7 +407,7 @@ export function ReportIssueDialog(
   props: DesktopSupportDialogProps & { readonly draftId: number },
 ): ReactNode {
   const { draftId, onOpenChange, open, support } = props;
-  const runnerHost = useRunnerHost();
+  const openLink = useOpenLink();
   const draftContext = useDesktopDialogStore(
     (state) => state.reportIssueDraftContext,
   );
@@ -678,24 +679,17 @@ export function ReportIssueDialog(
         buildRequest(previewTitle),
       );
       const url = buildGitHubIssueUrl(finalDraft);
-      // Track the attempt whether the OS handoff succeeds or not - the
-      // analytics event is about the user asking to open, not about the
-      // browser actually launching. Re-throw after tracking so onError keeps
-      // the preview screen and a retryable toast (publish flow: open failure
-      // must never silently claim success or leave the confirmation).
-      try {
-        await runnerHost.openExternalLink(url);
-      } catch (error) {
-        Analytics.getInstance().track(
-          AnalyticsEvent.ReportIssuePublicOpenAttempted,
-          null,
-        );
-        throw error;
-      }
+      // The event is about the user ASKING to open, so it is tracked before
+      // the handoff and regardless of its outcome.
       Analytics.getInstance().track(
         AnalyticsEvent.ReportIssuePublicOpenAttempted,
         null,
       );
+      // A GitHub issue draft is a `docs`-class page, so it always leaves for
+      // the OS browser (A2). AWAITED, and the rejection is left to propagate:
+      // `onError` is what keeps the preview screen and its retry toast, so a
+      // failed OS handoff must never advance to the confirmation (L1).
+      await openLink(url, "docs", null);
     },
     onSuccess: () => {
       toast.success("Opened in your browser");
@@ -741,7 +735,6 @@ export function ReportIssueDialog(
         type: nextType,
         includeDesktopLog: logsOn,
         includeHostLog: logsOn,
-        includeBrowserDiagnostics: logsOn,
       };
     });
   }
@@ -1194,7 +1187,6 @@ function CaptureScreenBody({
             setForm((prev) => ({ ...prev, includeHostLog: checked }));
           }}
           onToggleBrowserDiagnostics={(checked) => {
-            onLogsTouched();
             setForm((prev) => ({
               ...prev,
               includeBrowserDiagnostics: checked,

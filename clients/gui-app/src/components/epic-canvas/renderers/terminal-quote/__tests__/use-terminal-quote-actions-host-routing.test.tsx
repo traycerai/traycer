@@ -11,7 +11,6 @@ import {
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
 import { createChatRequestSchema } from "@traycer/protocol/host/epic/unary-schemas";
-import { ACTIVE_TILE_PLACEMENT } from "@/lib/canvas/conversation-tile-placement";
 import type { ReactNode } from "react";
 
 // The whole point of this suite is that the create mutation is REAL: the bug
@@ -225,7 +224,7 @@ describe("useTerminalQuoteActions host routing", () => {
     expect(useNewConversationModalOpenStore.getState().request).toEqual({
       epicId: EPIC_ID,
       tabId: TAB_ID,
-      placement: ACTIVE_TILE_PLACEMENT,
+      placement: null,
       parentId: null,
       hostId: TAB_HOST.hostId,
     });

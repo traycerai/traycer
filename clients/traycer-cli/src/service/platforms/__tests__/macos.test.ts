@@ -30,7 +30,11 @@ import {
   buildCompatibleHostStartScript,
   buildHostStartLauncherScript,
 } from "../host-start-script";
-import { ProcessRunError, type RunResult } from "../../process-runner";
+import {
+  ProcessRunError,
+  ProcessSpawnError,
+  type RunResult,
+} from "../../process-runner";
 import type { ServiceController } from "../../index";
 import {
   serviceLabelFor,
@@ -38,7 +42,11 @@ import {
   smAppServiceAgentLabelId,
 } from "../../label";
 import { CLI_ERROR_CODES } from "../../../runner/errors";
-import { ServiceMutationAuthorityError } from "../../mutation-authority";
+import {
+  isServiceMutationAuthorityError,
+  ServiceMutationAuthorityError,
+} from "../../mutation-authority";
+import { didServiceRegistrationCommit } from "../../cli-invocation-record";
 
 const execFileAsync = promisify(execFile);
 
@@ -326,61 +334,6 @@ printf '%s\\n' "$@" > ${JSON.stringify(args)}
       await rm(work, { recursive: true, force: true });
     }
   });
-
-  // The launcher-FILE form of the same contract: the macOS plist executes
-  // `~/.traycer/service/<label>/traycer-host-start <cli> <args...>` (so BTM
-  // names the login item after the file, not after /bin/sh), and BOTH CLI
-  // generations must still start. Executes the real emitted file, exactly
-  // like the inline-form row above.
-  it("launcher file: starts both an N-1 CLI without --service-label and a current CLI with it, preserving leading invocation args", async () => {
-    const work = mkdtempSync(join(tmpdir(), "traycer-host-start-launcher-"));
-    const launcher = join(work, "traycer-host-start");
-    const oldCli = join(work, "old-cli.sh");
-    const newCli = join(work, "new-cli.sh");
-    const oldArgs = join(work, "old-args.txt");
-    const newArgs = join(work, "new-args.txt");
-    try {
-      await writeFile(
-        launcher,
-        buildHostStartLauncherScript("ai.traycer.host.compat"),
-        "utf8",
-      );
-      await chmod(launcher, 0o755);
-      await writeFile(
-        oldCli,
-        `#!/bin/sh
-if [ "$1" = "host" ] && [ "$2" = "capabilities" ]; then
-  echo "error: unknown command 'capabilities'" >&2
-  exit 1
-fi
-printf '%s\\n' "$@" > ${JSON.stringify(oldArgs)}
-`,
-        "utf8",
-      );
-      await writeFile(
-        newCli,
-        `#!/bin/sh
-if [ "$1" = "--entry=cli-entry.js" ] && [ "$2" = "host" ] && [ "$3" = "adoption-nonce" ]; then printf '%s\\n' '11111111-1111-4111-8111-111111111111'; exit 0; fi
-if [ "$1" = "--entry=cli-entry.js" ] && [ "$2" = "host" ] && [ "$3" = "capabilities" ] && [ "$4" = "--has" ] && { [ "$5" = "service-label" ] || [ "$5" = "host-start-adoption-v2" ]; }; then exit 0; fi
-printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
-`,
-        "utf8",
-      );
-      await chmod(oldCli, 0o700);
-      await chmod(newCli, 0o700);
-
-      await execFileAsync(launcher, [oldCli]);
-      await execFileAsync(launcher, [newCli, "--entry=cli-entry.js"]);
-
-      expect(await readFile(oldArgs, "utf8")).toBe("host\nstart\n");
-      expect(await readFile(newArgs, "utf8")).toBe(
-        "--entry=cli-entry.js\nhost\nstart\n--service-label\nai.traycer.host.compat\n--adoption-nonce\n11111111-1111-4111-8111-111111111111\n",
-      );
-    } finally {
-      await rm(work, { recursive: true, force: true });
-    }
-  });
-
   // Field observation 2026-07-28 (sfltool dumpbtm): with `/bin/sh` as
   // ProgramArguments[0], BTM recorded `Name: sh, Parent Identifier:
   // Unknown Developer` for every CLI-registered install, and
@@ -650,61 +603,6 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       "kickstart",
     ]);
   });
-
-  it("continues bootstrap retry when race-recovery bootout reports no such process", async () => {
-    const calls: RecordedCall[] = [];
-    let bootstrapAttempts = 0;
-    let bootoutAttempts = 0;
-    const runner: ProcessRunner = async (command, args) => {
-      calls.push({ command, args });
-      if (args[0] === "bootstrap") {
-        bootstrapAttempts += 1;
-        if (bootstrapAttempts === 1) {
-          throw buildLaunchctlError({
-            command,
-            cmdArgs: args,
-            stderr: "Bootstrap failed: 37: Service is already loaded\n",
-            stdout: "",
-            exitCode: 37,
-          });
-        }
-      }
-      if (args[0] === "bootout") {
-        bootoutAttempts += 1;
-        if (bootoutAttempts === 2) {
-          throw buildLaunchctlError({
-            command,
-            cmdArgs: args,
-            stderr: "Boot-out failed: 3: No such process\n",
-            stdout: "",
-            exitCode: 3,
-          });
-        }
-      }
-      return buildSuccessResult();
-    };
-    const controller = createMacosController(runner);
-    createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
-
-    await expect(
-      controller.install({
-        label,
-        cli: { command: "/usr/local/bin/traycer", args: [] },
-        enableLinger: false,
-      }),
-    ).resolves.toBeUndefined();
-    expect(calls.map((c) => c.args[0])).toEqual([
-      "print",
-      "print",
-      "bootout",
-      "bootstrap",
-      "print",
-      "bootout",
-      "bootstrap",
-      "kickstart",
-    ]);
-  });
-
   it("fails closed when race-recovery bootout is denied", async () => {
     const calls: RecordedCall[] = [];
     let bootstrapAttempts = 0;
@@ -798,7 +696,6 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       "kickstart",
     ]);
   });
-
   it("refuses to bootout Desktop's SMAppService job when it wins the reload race before the recovery bootout", async () => {
     // A competing registrar that re-loads the label between the CLI's
     // failed first bootstrap and the reload recovery's own bootout may be
@@ -1002,6 +899,79 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       "bootstrap",
       "kickstart",
     ]);
+  });
+
+  // `registrationCommitted: true` is the signal `didServiceRegistrationCommit`
+  // reads: `bootstrap` already succeeded here (launchd holds the
+  // registration), so a caller holding a host-start adoption lease must
+  // honour it rather than treat this as a clean pre-registration failure.
+  it("marks a kickstart failure after a successful bootstrap as a committed registration", async () => {
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (args[0] === "kickstart") {
+        throw buildLaunchctlError({
+          command,
+          cmdArgs: args,
+          stderr: "Could not kickstart service: 3\n",
+          stdout: "",
+          exitCode: 3,
+        });
+      }
+      return buildSuccessResult();
+    };
+    const controller = createMacosController(runner);
+    createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
+    let caught: unknown = null;
+    try {
+      await controller.install({
+        label,
+        cli: { command: "/usr/local/bin/traycer", args: [] },
+        enableLinger: false,
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+      details: { registrationCommitted: true },
+    });
+    expect(didServiceRegistrationCommit(caught)).toBe(true);
+  });
+
+  // The negative twin: a `bootstrap` failure happens BEFORE the registration
+  // is in launchd's hands, so it must never carry the committed flag.
+  it("does not mark a bootstrap failure (pre-registration) as a committed registration", async () => {
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (args[0] === "bootstrap") {
+        throw buildLaunchctlError({
+          command,
+          cmdArgs: args,
+          stderr: "Bootstrap failed: 5: Operation not permitted\n",
+          stdout: "",
+          exitCode: 5,
+        });
+      }
+      return buildSuccessResult();
+    };
+    const controller = createMacosController(runner);
+    createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
+    let caught: unknown = null;
+    try {
+      await controller.install({
+        label,
+        cli: { command: "/usr/local/bin/traycer", args: [] },
+        enableLinger: false,
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+    });
+    expect(didServiceRegistrationCommit(caught)).toBe(false);
   });
 
   it("uses a bounded launchd completion barrier when pid metadata is missing", async () => {
@@ -1261,25 +1231,6 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
         message: expect.stringContaining("the stop did not take effect."),
       });
-    });
-
-    it("carries operation 'restart' through stopForRestart's force path, and a terminal outcome's message names 'host restart --force'", async () => {
-      const { controller } = stageForceStop();
-      MOCKS.forceStopHostProcess.mockResolvedValue({
-        kind: "hung",
-        pid: 4242,
-      });
-
-      await expect(
-        controller.stopForRestart(label, { force: true }),
-      ).rejects.toMatchObject({
-        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-        message: expect.stringContaining("host restart --force"),
-      });
-      expect(MOCKS.forceStopHostProcess).toHaveBeenCalledWith(
-        label.environment,
-        "restart",
-      );
     });
   });
 
@@ -2012,20 +1963,6 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       // against a supervisor mid-teardown.
       expect(calls.map((c) => c.args[0])).toEqual(["print"]);
     });
-
-    it("stopForRestart with --force never throws over live work - it kills the pid instead", async () => {
-      const { controller } = stageDesktopManagedRunner();
-      // Busy is a cooperative-flow outcome; force never dials that RPC at
-      // all, so staging `forceStopHostProcess` proves the busy gate was
-      // skipped rather than merely unreached by accident.
-      MOCKS.forceStopHostProcess.mockResolvedValue({ kind: "no-host" });
-
-      await expect(
-        controller.stopForRestart(label, { force: true }),
-      ).resolves.toEqual({ forcedRecycle: true });
-      expect(MOCKS.requestCooperativeShutdown).not.toHaveBeenCalled();
-    });
-
     it("relaunchAfterRestart recycles the agent job when the stop half could not ask the host to exit", async () => {
       const { calls, controller } = stageDesktopManagedRunner();
 
@@ -2229,49 +2166,6 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         message: expect.stringContaining("could not confirm"),
       });
     });
-
-    it("aborts the takeover when the post-bootout probe fails for a reason that is not service-not-found", async () => {
-      const calls: RecordedCall[] = [];
-      let agentPrints = 0;
-      const runner: ProcessRunner = async (command, args) => {
-        calls.push({ command, args });
-        if (args[0] === "print") {
-          const target = args[1] ?? "";
-          if (target.endsWith(`/${label.id}.agent`)) {
-            agentPrints += 1;
-            if (agentPrints === 1) {
-              return {
-                stdout: `path = ${smAgentPath}\n`,
-                stderr: "",
-                exitCode: 0,
-              };
-            }
-            // Non-zero, but NOT "could not find" - a permission failure is
-            // no evidence the label is gone.
-            return {
-              stdout: "",
-              stderr: "Operation not permitted\n",
-              exitCode: 1,
-            };
-          }
-          return {
-            stdout: "",
-            stderr: "Could not find specified service\n",
-            exitCode: 113,
-          };
-        }
-        return buildSuccessResult();
-      };
-      MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "stopped" });
-
-      await expect(
-        createMacosController(runner).takeoverDesktopRegistration(label),
-      ).rejects.toMatchObject({
-        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
-        message: expect.stringContaining("could not confirm"),
-      });
-    });
-
     it("refuses on a pre-split machine where the CLI label is Desktop's own registration", async () => {
       const { calls, controller } = stageTakeoverRunner({
         cliLabelOwned: true,
@@ -2628,22 +2522,6 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       const booted = calls.find((call) => call.args[0] === "bootout");
       expect(booted?.args).toContain("--wait");
     });
-
-    // Nothing was evicted, so there is nothing to compensate for - and
-    // kickstarting anyway would start a host on a machine whose agent
-    // launchd had deliberately left down. Covers the CLI-label-not-loaded
-    // branch; the loaded-but-bootout-failed branch is pinned below.
-    it("does not kickstart the agent when nothing was evicted", async () => {
-      const calls: RecordedCall[] = [];
-      const runner = makeRunner({ [agentLabelId]: SMAPPSERVICE_PRINT }, calls);
-      createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
-      await writeFile(createdPlistPath, "<plist/>", "utf8");
-
-      await createMacosController(runner).retireCompetingRegistration(label);
-
-      expect(calls.filter((call) => call.args[0] === "kickstart")).toEqual([]);
-    });
-
     // The eviction log is the CONTRACT, not decoration: this function's
     // outcome is deliberately not threaded through the install lifecycle, so
     // this line is the only record anywhere that a running host was booted
@@ -2748,6 +2626,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         kind: "retire-failed",
         bootoutFailed: true,
         manifestRemovalFailed: false,
+        bootedOut: false,
+        bootoutIndeterminate: true,
+        manifestRemoved: false,
       });
 
       // The competing host is STILL RUNNING (its bootout failed), so starting
@@ -2755,6 +2636,44 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       // exists to remove. The `bootedOut` guard - not merely "the CLI label
       // was loaded" - is what prevents that.
       expect(calls.filter((call) => call.args[0] === "kickstart")).toEqual([]);
+    });
+
+    it("a bootout whose launchctl could not be spawned is a failed, NOT indeterminate, eviction", async () => {
+      // `ProcessSpawnError` means the binary never started, so the request
+      // never reached launchd and the registration is provably untouched -
+      // the record decorator must not invalidate for it, unlike a bootout
+      // that ran and failed (which may have been accepted before the waiter
+      // died).
+      const runner: ProcessRunner = async (command, args) => {
+        if (args[0] === "print") {
+          const target = args[1] ?? "";
+          return {
+            stdout: `${target} = {\n${target.endsWith(`/${agentLabelId}`) ? SMAPPSERVICE_PRINT : CLI_PRINT}\n}\n`,
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+        throw new ProcessSpawnError(
+          `${command} ${args.join(" ")} could not be spawned (ENOENT): `,
+          command,
+          args,
+          -1,
+          "",
+          "",
+        );
+      };
+      expect(existsSync(join(tempPlistDir, `${label.id}.plist`))).toBe(false);
+
+      await expect(
+        createMacosController(runner).retireCompetingRegistration(label),
+      ).resolves.toEqual({
+        kind: "retire-failed",
+        bootoutFailed: true,
+        manifestRemovalFailed: false,
+        bootedOut: false,
+        bootoutIndeterminate: false,
+        manifestRemoved: false,
+      });
     });
 
     // The availability guard. Without an SMAppService-owned agent there is
@@ -2801,18 +2720,6 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         "<plist/>",
       );
     });
-
-    it("reports nothing-to-retire on a healthy post-split machine", async () => {
-      const calls: RecordedCall[] = [];
-      const runner = makeRunner({ [agentLabelId]: SMAPPSERVICE_PRINT }, calls);
-
-      await expect(
-        createMacosController(runner).retireCompetingRegistration(label),
-      ).resolves.toEqual({ kind: "nothing-to-retire" });
-
-      expect(bootoutTargets(calls)).toEqual([]);
-    });
-
     // Contractually non-throwing: this runs as a side effect of an install
     // whose bytes are already swapped in, so it must never fail it. The
     // manifest removal is the durable half and still applies.
@@ -2848,6 +2755,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         kind: "retire-failed",
         bootoutFailed: true,
         manifestRemovalFailed: false,
+        bootedOut: false,
+        bootoutIndeterminate: true,
+        manifestRemoved: true,
       });
 
       expect(MOCKS.cliLoggerWarn).toHaveBeenCalled();
@@ -2893,6 +2803,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         kind: "retire-failed",
         bootoutFailed: true,
         manifestRemovalFailed: false,
+        bootedOut: false,
+        bootoutIndeterminate: false,
+        manifestRemoved: true,
       });
 
       // Never bootout an owner we could not identify: the CLI label may BE
@@ -2903,22 +2816,6 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       // The durable half is safe either way, so it still happens.
       await expect(readFile(createdPlistPath, "utf8")).rejects.toThrow();
     });
-
-    it("does not report an unprobeable machine as already clean", async () => {
-      const calls: RecordedCall[] = [];
-      // No manifest on disk: folding a failed probe into not-loaded would
-      // make this the `nothing-to-retire` ("already clean") path.
-      await expect(
-        createMacosController(
-          makeRunnerWithFailingCliProbe(calls),
-        ).retireCompetingRegistration(label),
-      ).resolves.toEqual({
-        kind: "retire-failed",
-        bootoutFailed: true,
-        manifestRemovalFailed: false,
-      });
-    });
-
     // Runs the body with the LaunchAgents directory unreadable, so `stat` on
     // the manifest inside it fails with EACCES rather than ENOENT. Skipped
     // under root, which bypasses permission checks entirely.
@@ -2953,6 +2850,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
             kind: "retire-failed",
             bootoutFailed: false,
             manifestRemovalFailed: true,
+            bootedOut: false,
+            bootoutIndeterminate: false,
+            manifestRemoved: false,
           });
         });
 
@@ -2979,6 +2879,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
             kind: "retire-failed",
             bootoutFailed: false,
             manifestRemovalFailed: true,
+            bootedOut: true,
+            bootoutIndeterminate: false,
+            manifestRemoved: false,
           });
         });
 

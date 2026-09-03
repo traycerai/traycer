@@ -7,7 +7,9 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "@capacitor/app";
 import { Capacitor } from "@capacitor/core";
+import { Keyboard } from "@capacitor/keyboard";
 import { PushNotifications } from "@capacitor/push-notifications";
+import { init as initSentry } from "@sentry/browser";
 import {
   AndroidSettings,
   IOSSettings,
@@ -31,6 +33,7 @@ import {
 import "./index.css";
 import { startNativeKeyboardBridge } from "./native-keyboard-bridge";
 import { MobileRunnerHost } from "../mobile-runner-host";
+import { sentryInitOptions } from "../sentry";
 import { MobileDeviceDescriber } from "../device-describer";
 import { MobileFileSave, supportsDirectDownload } from "../file-save";
 import { MobileLinkCodeScanner } from "../link-code-scanner";
@@ -158,6 +161,17 @@ const remoteFetcher: RemoteHostFetcher | null =
   devHostFetch === null ? null : () => devHostFetch();
 
 function bootstrap(): void {
+  // Crash reporting comes up before anything that can fail, so a bootstrap
+  // error below is the first thing it sees rather than the one it misses.
+  // Synchronous and touching no OS capability, so it sits safely above the
+  // once-only deep-link read further down - that ordering rule is about
+  // nothing CONSUMING the launch URL first, and `init` reads nothing of the
+  // kind. A `null` here (no DSN baked - every local build) leaves reporting
+  // off and gui-app's own `isInitialized()` gate false, exactly as before.
+  const sentryOptions = sentryInitOptions(config);
+  if (sentryOptions !== null) {
+    initSentry(sentryOptions);
+  }
   document.documentElement.classList.add("traycer-mobile-client");
   // PRODUCT flag, not layout: unlocks mobile-app-only UX policy such as the
   // single-composer draft model and the link-code sign-in entry. See gui-app's
@@ -190,9 +204,14 @@ function bootstrap(): void {
   // Native-only: the Keyboard plugin has no web implementation, and the dev
   // browser tab's overlay keyboard is already covered by gui-app's
   // visualViewport fallback. Started before render so the first keyboard
-  // event after mount is never missed.
+  // event after mount is never missed. Only iOS overlays the keyboard
+  // (`resize: none`), so only there does the bridge own `--keyboard-inset`;
+  // Android resizes its own webview and `100dvh` already tracks it.
   if (Capacitor.isNativePlatform()) {
-    startNativeKeyboardBridge();
+    startNativeKeyboardBridge({
+      plugin: Keyboard,
+      drivesInset: nativePlatform === "ios",
+    });
   }
   // APNs addressing follows code signing, not the backend set: staging and
   // production both ship distribution-signed (TestFlight / App Store rewrite

@@ -542,6 +542,10 @@ export class WebRunnerHost implements IRunnerHost {
     // No settings pane a page may open.
   }
 
+  async openFullDiskAccessSettings(): Promise<void> {
+    // Same reason as the pane above, and there is no login import in a tab.
+  }
+
   onAuthCallback(handler: () => void): Disposable {
     // The browser-return signal is this tab regaining visibility after the
     // sign-in tab was used, not a parsed callback URL: there is no custom

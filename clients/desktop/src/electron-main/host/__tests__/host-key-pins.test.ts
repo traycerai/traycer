@@ -1,0 +1,185 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { HostListItem } from "@traycer/protocol/host/host-status";
+import type { HostKeyPinMismatch } from "../../../ipc-contracts/platform-types";
+import {
+  applyHostKeyPins,
+  clearHostKeyPinStore,
+} from "@traycer-clients/shared/host-client/host-key-pin";
+import {
+  installDesktopHostKeyPins,
+  setHostKeyPinMismatchEmitter,
+} from "../host-key-pins";
+
+const storeState = vi.hoisted(() => ({
+  payload: { pins: {} as Record<string, string> },
+  /**
+   * R3-9: lets a test hold `load()` open so two concurrent first-sight pins
+   * can both be driven before either underlying load settles.
+   */
+  loadGate: null as Promise<void> | null,
+  /** Makes the durable write reject, the way a read-only userData does. */
+  saveError: null as Error | null,
+}));
+
+vi.mock("electron", () => ({
+  app: { getPath: (): string => "/tmp/traycer-host-key-pin-test" },
+}));
+
+vi.mock("../../app/logger", () => ({
+  log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  describeLogError: (cause: unknown) => String(cause),
+}));
+
+vi.mock("../../app/json-file-store", () => ({
+  createJsonFileStore: () => ({
+    load: () =>
+      (storeState.loadGate ?? Promise.resolve()).then(() => storeState.payload),
+    save: (payload: { pins: Record<string, string> }) => {
+      storeState.payload = { pins: { ...payload.pins } };
+      return Promise.resolve();
+    },
+    // `save` swallows a persist failure; `saveStrict` is the one the pin
+    // store must use, so the fake distinguishes them.
+    saveStrict: (payload: { pins: Record<string, string> }) => {
+      const error = storeState.saveError;
+      if (error !== null) return Promise.reject(error);
+      storeState.payload = { pins: { ...payload.pins } };
+      return Promise.resolve();
+    },
+  }),
+}));
+
+function item(publicKey: string): HostListItem {
+  return itemForHost("host-1", publicKey);
+}
+
+function itemForHost(hostId: string, publicKey: string): HostListItem {
+  return {
+    hostId,
+    displayName: null,
+    platform: "Ubuntu",
+    kind: "personal",
+    publicKey,
+    createdAt: "2026-07-01T12:00:00.000Z",
+    status: {
+      connectivity: "connectable",
+      viewerReachability: "unknown",
+      clientCloud: "ok",
+      updateState: "current",
+      appVersion: "1.4.2",
+      lastSeenAt: "2026-07-03T11:59:50.000Z",
+    },
+    updatePolicy: "manual",
+  };
+}
+
+beforeEach(() => {
+  storeState.payload = { pins: {} };
+  storeState.loadGate = null;
+  storeState.saveError = null;
+  installDesktopHostKeyPins();
+});
+
+afterEach(() => {
+  clearHostKeyPinStore();
+  setHostKeyPinMismatchEmitter(() => undefined);
+});
+
+describe("desktop host key pins", () => {
+  it("persists the first key it sees", async () => {
+    await applyHostKeyPins([item("pk-1")]);
+    expect(storeState.payload.pins).toEqual({ "host-1": "pk-1" });
+  });
+
+  it("reports a first-sight pin the disk refused, and stays unpinned for the retry", async () => {
+    // A swallowed write logged a pin nothing persisted: `onPinWriteFailed`
+    // never ran, and the mutated in-memory map made every later read look
+    // pinned, so the retry the next registry read would perform could not
+    // happen and the pin was simply gone after a restart. TOFU protection for
+    // this host is the whole of what that costs.
+    storeState.saveError = new Error("EROFS: read-only file system");
+
+    // Still admitted - nothing is pinned, so nothing disagrees.
+    expect(await applyHostKeyPins([item("pk-1")])).toHaveLength(1);
+    expect(storeState.payload.pins).toEqual({});
+
+    // And the next read tries the write again rather than reading a pin that
+    // only ever existed in memory.
+    storeState.saveError = null;
+    expect(await applyHostKeyPins([item("pk-1")])).toHaveLength(1);
+    expect(storeState.payload.pins).toEqual({ "host-1": "pk-1" });
+  });
+
+  it("fans a changed key out to the renderer surface, not just the log", async () => {
+    const surfaced: HostKeyPinMismatch[] = [];
+    setHostKeyPinMismatchEmitter((entry) => surfaced.push(entry));
+
+    await applyHostKeyPins([item("pk-1")]);
+    const admitted = await applyHostKeyPins([item("pk-IMPOSTER")]);
+
+    expect(admitted).toEqual([]);
+    expect(surfaced).toHaveLength(1);
+    const entry = surfaced[0];
+    if (entry === undefined) throw new Error("expected one mismatch");
+    expect(entry.hostId).toBe("host-1");
+    expect(entry.pinnedKey).toBe("pk-1");
+    expect(entry.offeredKey).toBe("pk-IMPOSTER");
+    // The one honest recovery there is, carried to whoever renders it.
+    expect(entry.pinLocation).toContain("host-key-pins.json");
+    expect(entry.remedy).toContain(entry.pinLocation);
+    // Structured-clone-safe: the typed error never crosses the boundary.
+    expect(JSON.parse(JSON.stringify(entry))).toEqual(entry);
+    // And the pin is untouched.
+    expect(storeState.payload.pins).toEqual({ "host-1": "pk-1" });
+  });
+
+  it("R3-9: two hosts' first-sight pins started before either load settles both survive", async () => {
+    // RULE: the load is memoised on the PROMISE, not on its settled result -
+    // two first-sight pins racing the same cold load must not let the second
+    // write clobber the first. Before the fix, both saw an empty map and the
+    // second save dropped the first pin.
+    let releaseLoad: () => void = () => undefined;
+    storeState.loadGate = new Promise<void>((resolve) => {
+      releaseLoad = resolve;
+    });
+
+    const first = applyHostKeyPins([itemForHost("host-1", "pk-1")]);
+    const second = applyHostKeyPins([itemForHost("host-2", "pk-2")]);
+    // Both are in flight, blocked on the same unsettled load, before either
+    // is allowed to proceed.
+    releaseLoad();
+    await Promise.all([first, second]);
+
+    expect(storeState.payload.pins).toEqual({
+      "host-1": "pk-1",
+      "host-2": "pk-2",
+    });
+  });
+
+  it("R3-10: two concurrent first-sight pins for the SAME host pin exactly one key and refuse the other", async () => {
+    // RULE: the enrolment race this pin exists to make one-shot must not be
+    // winnable twice. Before the fix both reads saw an unpinned host and the
+    // later `pin` overwrote the earlier key, so a raced impostor was trusted.
+    const surfaced: HostKeyPinMismatch[] = [];
+    setHostKeyPinMismatchEmitter((entry) => surfaced.push(entry));
+    let releaseLoad: () => void = () => undefined;
+    storeState.loadGate = new Promise<void>((resolve) => {
+      releaseLoad = resolve;
+    });
+
+    const first = applyHostKeyPins([item("pk-REAL")]);
+    const second = applyHostKeyPins([item("pk-IMPOSTER")]);
+    releaseLoad();
+    const admitted = (await Promise.all([first, second])).flat();
+
+    expect(admitted).toHaveLength(1);
+    const winner = admitted[0];
+    if (winner === undefined) throw new Error("expected one admitted host");
+    expect(storeState.payload.pins).toEqual({ "host-1": winner.publicKey });
+    expect(surfaced).toHaveLength(1);
+    const refusal = surfaced[0];
+    if (refusal === undefined) throw new Error("expected one refusal");
+    expect(refusal.pinnedKey).toBe(winner.publicKey);
+    expect(refusal.offeredKey).not.toBe(winner.publicKey);
+  });
+});

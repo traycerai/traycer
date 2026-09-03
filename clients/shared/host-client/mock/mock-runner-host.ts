@@ -610,6 +610,10 @@ export class MockRunnerHost implements IRunnerHost {
     // No-op: no OS settings pane in the in-memory host.
   }
 
+  async openFullDiskAccessSettings(): Promise<void> {
+    // No-op: no OS settings pane in the in-memory host.
+  }
+
   onAuthCallback(handler: () => void): Disposable {
     this.authCallbackHandlers.add(handler);
     return {
