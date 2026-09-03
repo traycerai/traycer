@@ -217,18 +217,6 @@ export interface ScreencastSessionOptions {
 }
 
 /**
- * The control tier a shell may subscribe at. `"tile"` only where the shell
- * owns a native browser of its own - which is exactly the desktop, since
- * `browserView` is the shell's own "I have a real BrowserView" capability and
- * both the web bundle (no runner host at all) and the mobile shell
- * (`MobileRunnerHost.browserView = null`) answer `null`.
- *
- * Everything else is a `"viewer"`: it watches the tab, and the host refuses
- * its `arm` and its input frames outright (security review root cause G). The
- * declaration is what the host acts on, so a modified client can still claim
- * `"tile"` - the tier bounds a cooperating viewer, it does not authorize one.
- */
-/**
  * One referentially stable scope, so the subscribe effect below can depend on
  * it directly.
  *
@@ -247,6 +235,18 @@ function useStableScope(scope: HostResourceScope): HostResourceScope {
   );
 }
 
+/**
+ * The control tier a shell may subscribe at. `"tile"` only where the shell
+ * owns a native browser of its own - which is exactly the desktop, since
+ * `browserView` is the shell's own "I have a real BrowserView" capability and
+ * both the web bundle (no runner host at all) and the mobile shell
+ * (`MobileRunnerHost.browserView = null`) answer `null`.
+ *
+ * Everything else is a `"viewer"`: it watches the tab, and the host refuses
+ * its `arm` and its input frames outright (security review root cause G). The
+ * declaration is what the host acts on, so a modified client can still claim
+ * `"tile"` - the tier bounds a cooperating viewer, it does not authorize one.
+ */
 export function screencastRoleForShell(
   runnerHost: Pick<IRunnerHost, "browserView"> | null,
 ): BrowserScreencastViewerRole {

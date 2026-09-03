@@ -8,6 +8,7 @@ import type { StreamFrameEnvelope } from "@traycer-clients/shared/host-transport
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import {
   acquireBrowserSessionsCoordinator,
+  browserSessionAcrossCoordinators,
   browserSessionsCoordinatorKey,
   browserSessionsCoordinatorState,
   browserSessionsCoordinatorsForEpic,
@@ -18,6 +19,7 @@ import {
   epicScope,
   independentScope,
   owner,
+  sessionInfo,
 } from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
 
 /**
@@ -167,6 +169,60 @@ describe("browser sessions coordinator registry", () => {
 
     const epicCoordinators = browserSessionsCoordinatorsForEpic("epic-1");
     expect(epicCoordinators.map((entry) => entry.key)).toEqual([epicKey]);
+  });
+
+  it("does not resolve a chip's session id against an independent coordinator", () => {
+    const harness = createTransportHarness();
+    const independent = acquire({
+      scope: independentScope(),
+      openTransport: harness.openTransport,
+    });
+    soleSession(soleClient(harness.clients)).emit(
+      {
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        sessions: [
+          sessionInfo({
+            sessionId: "start-page-session",
+            scope: independentScope(),
+          }),
+        ],
+      },
+      null,
+    );
+    // The inventory really is there - the lookup below is refusing it on
+    // SCOPE, not failing to see it.
+    expect(
+      browserSessionsCoordinatorState(independent.key)?.items.map(
+        (item) => item.sessionId,
+      ),
+    ).toEqual(["start-page-session"]);
+
+    // A composer chip carries a session id and no host or scope. A Start Page
+    // session belongs to the device, not to any task, so an epic surface must
+    // not resolve one.
+    expect(browserSessionAcrossCoordinators("start-page-session")).toBeNull();
+
+    // The same scan still answers for an epic coordinator, so the narrow is
+    // not simply breaking the lookup.
+    const epic = acquire({
+      scope: epicScope("epic-1"),
+      openTransport: harness.openTransport,
+    });
+    const epicClient = harness.clients.at(1);
+    if (epicClient === undefined) throw new Error("expected a second client");
+    soleSession(epicClient).emit(
+      {
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        sessions: [sessionInfo({ sessionId: "task-session" })],
+      },
+      null,
+    );
+    expect(browserSessionsCoordinatorState(epic.key)).not.toBeNull();
+    expect(browserSessionAcrossCoordinators("task-session")?.sessionId).toBe(
+      "task-session",
+    );
   });
 
   it("resolves attachTab from its own actionAck, leaving an interleaved closeTab pending", async () => {

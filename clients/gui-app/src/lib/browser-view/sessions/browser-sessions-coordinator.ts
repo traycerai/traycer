@@ -10,7 +10,7 @@ import type {
   BrowserViewBridge,
   BrowserViewNativeTabCapability,
 } from "@traycer-clients/shared/platform/browser-view";
-import { browserSessionsScopeKeyParts } from "@traycer-clients/shared/platform/browser-view";
+import { browserSessionsStreamKeyId } from "@traycer-clients/shared/platform/browser-view";
 import type { HostResourceScope } from "@traycer/protocol/host/resource-scope";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
@@ -228,21 +228,25 @@ const browserSessionsCoordinatorListeners = new Map<string, Set<() => void>>();
 const browserSessionsRegistryListeners = new Set<() => void>();
 
 /**
- * The registry key every consumer acquires by. It is the stream key's own
- * encoding (`browserSessionsScopeKeyParts` flattens the scope, because
- * `JSON.stringify` would otherwise let two orderings of one scope literal
- * become two keys) so a coordinator and the main-process stream it drives are
- * named the same way on both sides of the desktop's IPC.
+ * The registry key every consumer acquires by: the stream key's own encoding,
+ * computed BY that encoder rather than re-spelled here.
+ *
+ * `browserSessionsStreamKeyId` exists because main and the renderer used to
+ * spell this separately, and a third spelling would reopen exactly the drift
+ * it closed - a coordinator and the main-process stream it drives have to be
+ * named identically on both sides of the desktop's IPC, and the encoding is
+ * load-bearing (it flattens the scope, because `JSON.stringify` would
+ * otherwise let two orderings of one scope literal become two keys).
  */
 export function browserSessionsCoordinatorKey(
   scope: HostResourceScope,
   owner: BrowserSessionsOwner,
 ): string {
-  return JSON.stringify([
-    ...browserSessionsScopeKeyParts(scope),
-    owner.hostId,
-    owner.identityKey,
-  ]);
+  return browserSessionsStreamKeyId({
+    scope,
+    hostId: owner.hostId,
+    identityKey: owner.identityKey,
+  });
 }
 
 export function hasBrowserSessionsCoordinator(key: string): boolean {
@@ -367,18 +371,27 @@ export function browserSessionsCoordinatorsForEpic(
 }
 
 /**
- * The live session with this id on ANY host whose coordinator is open, or
- * `null`.
+ * The live session with this id on ANY host whose EPIC-scoped coordinator is
+ * open, or `null`.
  *
  * Composer chips (browser-tab mentions, annotation cards) carry a
  * `sessionId`/`tabId` and no host, and they render inside a chat tile that is
  * bound to ONE host's sessions stream. Session ids are host-minted uuids, so
- * scanning the registry cannot resolve the wrong session.
+ * scanning the registry cannot resolve the wrong session by collision.
+ *
+ * Independent coordinators are skipped, and that is a SCOPE decision rather
+ * than a collision one - the two arguments are different, and only the first
+ * is answered by uuids. A Start Page browser session belongs to the device,
+ * not to any task: agent visibility is derived from the chat's epic on the
+ * host, so an independent session is invisible to an agent by construction,
+ * and the GUI's epic surfaces should not be the seam that hands one back. A
+ * chip cannot name a session the user never put in a task.
  */
 export function browserSessionAcrossCoordinators(
   sessionId: string,
 ): BrowserSessionInfo | null {
   for (const coordinator of browserSessionsCoordinators.values()) {
+    if (coordinator.scope.kind !== "epic") continue;
     const session = coordinator.state.items.find(
       (item) => item.sessionId === sessionId,
     );
