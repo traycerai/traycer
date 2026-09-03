@@ -40,7 +40,14 @@ function fakeOpenEpicHandle(id: string): OpenEpicStoreHandle & {
     },
     body: { applyDocUpdate: () => {}, applyAwareness: () => {} },
     store: {
-      getState: () => ({ unsyncedQueueSize: 0, snapshotMeta: null }) as never,
+      // `writeCommands` is read by the registry's eligibility key alongside
+      // `isDirty` and `unsyncedQueueSize`.
+      getState: () =>
+        ({
+          unsyncedQueueSize: 0,
+          writeCommands: [],
+          snapshotMeta: null,
+        }) as never,
       subscribe: () => () => undefined,
     } as never,
     dispose: () => {

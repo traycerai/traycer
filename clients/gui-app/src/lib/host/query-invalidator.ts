@@ -76,30 +76,6 @@ function isActiveRefetchExempt(query: Query): boolean {
 }
 
 /**
- * Whether an availability recovery has anything to do for this entry.
- *
- * The recovery sweep exists to un-strand queries: every automatic TanStack
- * recovery route is disabled for host RPCs, so a query that failed while the
- * host was unreachable sits in a terminal `error` state - or in a retry
- * backoff that is still `fetching` - with no other way back. Those are the
- * stranded shapes. A query that holds a successful result and is idle was not
- * stranded by anything; a recovered stream is not evidence its data changed,
- * which is the same doctrine the carve-outs above already state for the
- * catalogs, and its own `staleTime` still governs when it refreshes.
- *
- * Refetching the healthy ones was the storm: every stream client reports a
- * recovery independently, the pong heartbeat used to report one for the
- * client's own late ping, and each sweep re-issued every active host query -
- * a burst into a host that was busy enough to delay the next pong, which was
- * the next "recovery" (field: a sweep a minute for 10 h on 2026-09-03). With
- * the sweep scoped to stranded entries a false recovery costs nothing and a
- * true one costs exactly the queries that need it.
- */
-function isStrandedByOutage(query: Query): boolean {
-  return query.state.status === "error" || query.state.fetchStatus !== "idle";
-}
-
-/**
  * Adapts the app's `QueryClient` to the `IHostQueryInvalidator` port.
  *
  * Host-scoped queries use the key layout `["host", hostId, method, params]`,
@@ -132,23 +108,22 @@ export function createHostQueryInvalidator(
         // cancel below is async; reusing only the broad host predicate after
         // that await would also invalidate queries mounted in the meantime,
         // even though they were never stranded by this recovery episode.
-        const scoped = client
-          .getQueryCache()
-          .findAll({ queryKey })
-          .filter((query) => !isActiveRefetchExempt(query));
         const affectedQueries = new Set(
-          options.strandedOnly ? scoped.filter(isStrandedByOutage) : scoped,
+          client
+            .getQueryCache()
+            .findAll({ queryKey })
+            .filter((query) => !isActiveRefetchExempt(query)),
         );
         // The one line that counts SWEEPS. The per-stream-client recovery
-        // wiring used to log at info, once per client, which over-reported
-        // the sweep count by the number of live stream clients in the window.
+        // wiring logs at debug, once per client, which over-reported the
+        // sweep count by the number of live stream clients in the window -
+        // that reading is what turned two sweeps a minute into a reported
+        // "1056 refetch storms a day" in the 2026-09-03 field investigation.
+        // A sweep is worth an info line; a wiring reporting one is not.
         appLogger.info("[stream] host-scope sweep", {
           hostId: hostId ?? "all",
-          sweep: options.strandedOnly ? "stranded-only" : "everything",
           refetching: affectedQueries.size,
-          untouched: scoped.length - affectedQueries.size,
         });
-        if (affectedQueries.size === 0) return;
         const predicate = (query: Query): boolean => affectedQueries.has(query);
         // A query waiting in TanStack's retry backoff is still `fetchStatus:
         // "fetching"`. Invalidating it alone only marks it stale; it does not

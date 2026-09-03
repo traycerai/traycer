@@ -211,6 +211,8 @@ function buildDirtyHandle(epicId: string): OpenEpicStoreHandle {
   const state = {
     isDirty: true,
     unsyncedQueueSize: 1,
+    // The registry's eligibility key reads all three work fields.
+    writeCommands: [],
     snapshotMeta: null,
     discardUnsyncedEdits: () => undefined,
   };

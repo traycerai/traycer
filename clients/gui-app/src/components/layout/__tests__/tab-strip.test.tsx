@@ -337,6 +337,8 @@ function buildHeaderEpicHandle(
     snapshotMeta: null,
     isDirty: false,
     unsyncedQueueSize: 0,
+    // The registry's eligibility key reads all three work fields.
+    writeCommands: [],
     bindingVersion: 0,
     installedArm: null,
     chatIngestSeq: 0,

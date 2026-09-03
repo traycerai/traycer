@@ -33,6 +33,8 @@ function seedOpenEpicWithChatTitle(title: string): {
     snapshotMeta: null,
     isDirty: false,
     unsyncedQueueSize: 0,
+    // The registry's eligibility key reads all three work fields.
+    writeCommands: [],
   });
   const storeCallable = (_selector: unknown): unknown => stateOf();
   const storeBase: unknown = Object.assign(storeCallable, {

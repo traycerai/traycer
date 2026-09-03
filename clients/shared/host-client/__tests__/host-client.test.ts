@@ -302,9 +302,7 @@ describe("HostClient", () => {
     client.notifyHostAvailabilityRecovered("other-host");
     await flushAvailabilityCoalescing();
     expect(invalidator.calls).toEqual(["other-host"]);
-    expect(invalidator.options).toEqual([
-      { refetchActive: true, strandedOnly: true },
-    ]);
+    expect(invalidator.options).toEqual([{ refetchActive: true }]);
     // NOW IT ANNOUNCES, and the event names the host it is about. That is the
     // whole substitution: the active-host gate is replaced by a field
     // consumers filter on, so a reason-agnostic subscriber must be ready to
@@ -339,13 +337,11 @@ describe("HostClient", () => {
     // it must NOT announce, or the runtime answers the change by resetting the
     // very binding reporting the recovery. The other is the R-1 key-rotation
     // sweep in gui-app, where announcing would be a plainly false reason.
-    client.invalidateHostScopeUnannounced("mock-local", "everything");
+    client.invalidateHostScopeUnannounced("mock-local");
     await flushAvailabilityCoalescing();
 
     expect(invalidator.calls).toEqual(["mock-local"]);
-    expect(invalidator.options).toEqual([
-      { refetchActive: true, strandedOnly: false },
-    ]);
+    expect(invalidator.options).toEqual([{ refetchActive: true }]);
     expect(events).toEqual([]);
   });
 
@@ -359,7 +355,7 @@ describe("HostClient", () => {
     // change event survives because at least one caller asked for it.
     client.notifyHostAvailabilityRecovered("mock-local");
     client.notifyHostAvailabilityRecovered("mock-local");
-    client.invalidateHostScopeUnannounced("mock-local", "everything");
+    client.invalidateHostScopeUnannounced("mock-local");
     client.notifyHostAvailabilityRecovered("other-host");
     await flushAvailabilityCoalescing();
 
@@ -384,7 +380,7 @@ describe("HostClient", () => {
     // asked, and its announcement is true.)
     invalidator.calls.length = 0;
     events.length = 0;
-    client.invalidateHostScopeUnannounced("mock-local", "everything");
+    client.invalidateHostScopeUnannounced("mock-local");
     await flushAvailabilityCoalescing();
     expect(invalidator.calls).toEqual(["mock-local"]);
     expect(events).toEqual([]);
@@ -406,7 +402,7 @@ describe("HostClient", () => {
 
       // Rotation/ready-boundary sweeps are correctness boundaries, not noisy
       // recovery hints, so they remain immediate even inside the recovery gate.
-      client.invalidateHostScopeUnannounced("mock-local", "everything");
+      client.invalidateHostScopeUnannounced("mock-local");
       await flushAvailabilityCoalescing();
       expect(invalidator.calls).toHaveLength(2);
       expect(events).toHaveLength(1);
@@ -421,60 +417,33 @@ describe("HostClient", () => {
     }
   });
 
-  it("coalesces N independently-wired reports across separate macrotasks into one immediate invalidation and one trailing catch-up, both stranded-only", async () => {
+  it("coalesces N independently-wired reports arriving in SEPARATE macrotasks into one sweep plus one trailing catch-up", async () => {
     vi.useFakeTimers();
     try {
       const { client, invalidator, events } = buildHostClientWithMock();
 
-      // Five independent stream-client wirings all observing the SAME host
-      // recover, each reporting from its OWN macrotask rather than the same
-      // synchronous tick - a purely-microtask coalescing scheme could not be
-      // what is holding this to one call.
+      // The production shape the older cases miss: every wiring in this suite
+      // reports in the same synchronous tick, so a purely-microtask merge
+      // would satisfy them. A window runs a dozen or more stream clients and
+      // each one's recovery cooldown fires on its own timer, so the reports
+      // land in separate macrotasks - which is what the time-gated leading
+      // edge, not the microtask merge, is holding to one call.
       for (let i = 0; i < 5; i += 1) {
         client.notifyHostAvailabilityRecovered("mock-local");
         await vi.advanceTimersByTimeAsync(0);
       }
 
       expect(invalidator.calls).toEqual(["mock-local"]);
-      expect(invalidator.options).toEqual([
-        { refetchActive: true, strandedOnly: true },
-      ]);
       expect(events).toHaveLength(1);
 
-      // The trailing catch-up still fires once the window elapses, carrying
-      // the same stranded-only shape as the leading edge.
+      // One trailing catch-up for the reports the gate swallowed, and no more.
       await vi.advanceTimersByTimeAsync(HOST_AVAILABILITY_SWEEP_WINDOW_MS);
       expect(invalidator.calls).toEqual(["mock-local", "mock-local"]);
-      expect(invalidator.options).toEqual([
-        { refetchActive: true, strandedOnly: true },
-        { refetchActive: true, strandedOnly: true },
-      ]);
       expect(events).toHaveLength(2);
     } finally {
       vi.clearAllTimers();
       vi.useRealTimers();
     }
-  });
-
-  it("merges an unannounced 'everything' sweep landing in the same tick as a recovery report into one strandedOnly: false invalidation", async () => {
-    const { client, invalidator, events } = buildHostClientWithMock();
-
-    client.notifyHostAvailabilityRecovered("mock-local");
-    client.invalidateHostScopeUnannounced("mock-local", "everything");
-    await flushAvailabilityCoalescing();
-
-    expect(invalidator.calls).toEqual(["mock-local"]);
-    expect(invalidator.options).toEqual([
-      { refetchActive: true, strandedOnly: false },
-    ]);
-    // The recovery caller asked for an announcement and the merged sweep
-    // still carries it - the wider "everything" sweep wins the SCOPE merge,
-    // not the announcement.
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
-      currentHostId: "mock-local",
-      reason: "availability-recovered",
-    });
   });
 
   it("delegates a requester's unary request to the messenger under that host's authority", async () => {

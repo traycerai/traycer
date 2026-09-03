@@ -35,22 +35,7 @@ export interface IHostQueryInvalidator {
 
 export interface HostQueryInvalidationOptions {
   readonly refetchActive: boolean;
-  /**
-   * With `refetchActive`, whether the sweep may skip entries an outage could
-   * not have stranded - a successful, idle query - and touch only those in
-   * `error` or still fetching. An availability recovery says nothing about
-   * the data having changed, so it sweeps stranded-only; a key rotation says
-   * the whole machine is gone, so it sweeps everything. Ignored when
-   * `refetchActive` is false (that path marks stale without fetching).
-   */
-  readonly strandedOnly: boolean;
 }
-
-/**
- * What an unannounced host-scope sweep is allowed to refetch - see
- * {@link HostQueryInvalidationOptions.strandedOnly}.
- */
-export type HostScopeSweep = "stranded-only" | "everything";
 
 /** One host-wide recovery sweep per window, with one trailing delivery. */
 export const HOST_AVAILABILITY_SWEEP_WINDOW_MS = 10_000;
@@ -409,7 +394,7 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
     }
     const opened = { leadingPending: true, trailing: false };
     this.hostAvailabilitySweepGates.set(hostId, opened);
-    this.deliverHostScopeSweep(hostId, true, "stranded-only");
+    this.deliverHostScopeSweep(hostId, true);
     queueMicrotask(() => {
       if (this.hostAvailabilitySweepGates.get(hostId) === opened) {
         opened.leadingPending = false;
@@ -445,13 +430,9 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
    * This used to be `invalidateHostScopeForAvailability`, documented as
    * existing for one caller. It has two, and a name naming one of their
    * reasons would have to be replaced by the next one.
-   *
-   * The two differ in what they may refetch, and the caller says which: a
-   * ready boundary un-strands (`"stranded-only"`), a rotation replaces a
-   * machine (`"everything"`).
    */
-  invalidateHostScopeUnannounced(hostId: string, sweep: HostScopeSweep): void {
-    this.deliverHostScopeSweep(hostId, false, sweep);
+  invalidateHostScopeUnannounced(hostId: string): void {
+    this.deliverHostScopeSweep(hostId, false);
   }
 
   private readonly hostAvailabilitySweepGates = new Map<
@@ -471,7 +452,7 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
       }
       gate.trailing = false;
       gate.leadingPending = true;
-      this.deliverHostScopeSweep(hostId, true, "stranded-only");
+      this.deliverHostScopeSweep(hostId, true);
       queueMicrotask(() => {
         if (this.hostAvailabilitySweepGates.get(hostId) === gate) {
           gate.leadingPending = false;
@@ -493,33 +474,26 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
    */
   private readonly pendingHostScopeSweeps = new Map<
     string,
-    { emitChangeEvent: boolean; sweep: HostScopeSweep }
+    { emitChangeEvent: boolean }
   >();
 
   private deliverHostScopeSweep(
     hostId: string,
     emitChangeEvent: boolean,
-    sweep: HostScopeSweep,
   ): void {
     const pending = this.pendingHostScopeSweeps.get(hostId);
     if (pending !== undefined) {
       if (emitChangeEvent) {
         pending.emitChangeEvent = true;
       }
-      // The wider sweep wins a merge: a rotation landing in the same tick as
-      // a recovery still has to replace everything cached for the machine.
-      if (sweep === "everything") {
-        pending.sweep = "everything";
-      }
       return;
     }
-    const entry = { emitChangeEvent, sweep };
+    const entry = { emitChangeEvent };
     this.pendingHostScopeSweeps.set(hostId, entry);
     queueMicrotask(() => {
       this.pendingHostScopeSweeps.delete(hostId);
       this.invalidator.invalidateHostScope(hostId, {
         refetchActive: true,
-        strandedOnly: entry.sweep === "stranded-only",
       });
       // No active-host gate: there is no active host. The event carries the
       // host it is about, and consumers that care which one filter on
@@ -560,10 +534,7 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
     // because a bound host existed; with the slot gone there is no host to
     // name, and `null` is what both ports already document as "all
     // host-scoped".
-    this.invalidator.invalidateHostScope(null, {
-      refetchActive: false,
-      strandedOnly: false,
-    });
+    this.invalidator.invalidateHostScope(null, { refetchActive: false });
     this.cancelThenAbortAll();
     this.emitChange({
       previousHostId: null,

@@ -161,6 +161,10 @@ import {
 } from "@/lib/registries/epic-runtime-worker-factory-slot";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  __resetAgentActivityStoreForTests,
+  useAgentActivityStore,
+} from "@/stores/agent-activity-store";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 
 function resetAuth(
@@ -256,6 +260,16 @@ describe("<EpicSessionProvider /> transport ownership", () => {
     navigateMock.mockClear();
     __getOpenEpicRegistryForTests().disposeAll();
     resetAuth("signed-in", "alice@example.com");
+    // The cap's busy gate fails CLOSED while the agent-activity plane cannot
+    // vouch for "no agent is working" - every Epic reads busy, so nothing is
+    // prunable. The store's own default is `connecting`, which is exactly
+    // that state, so the prune case below needs the plane answering. This
+    // suite is about transports, not agents: no Epic here has working agents.
+    useAgentActivityStore.setState({
+      connectionStatus: "open",
+      servedBy: "local",
+      cloudSyncStatus: null,
+    });
   });
 
   afterEach(() => {
@@ -264,6 +278,7 @@ describe("<EpicSessionProvider /> transport ownership", () => {
     resetAuth("signed-out", null);
     hostBindingRef.value = null;
     resetHostConnectionRegistryForTest();
+    __resetAgentActivityStoreForTests();
   });
 
   it("opens exactly ONE transport for the session, before and after the store builds its stream client", async () => {

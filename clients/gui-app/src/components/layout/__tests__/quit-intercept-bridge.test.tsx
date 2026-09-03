@@ -47,6 +47,10 @@ type QuitDecisionPayload =
 interface FakeSessionState {
   isDirty: boolean;
   unsyncedQueueSize: number;
+  // Read by the registry's eligibility key on every session it materializes
+  // (the cap's data-loss gate is `isDirty` + these two), so a fake that omits
+  // it fails inside the registry rather than in anything this suite asserts.
+  writeCommands: readonly never[];
   snapshotMeta: { epicLight: { title: string } | null } | null;
   discardUnsyncedEdits: () => void;
 }
@@ -63,6 +67,7 @@ function buildHandle(epicId: string, title: string): FakeHandle {
   const state: FakeSessionState = {
     isDirty: false,
     unsyncedQueueSize: 0,
+    writeCommands: [],
     snapshotMeta: { epicLight: { title } },
     discardUnsyncedEdits: () => {
       handle.discardCalls += 1;
