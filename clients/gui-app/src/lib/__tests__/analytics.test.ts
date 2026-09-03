@@ -1163,3 +1163,86 @@ describe("app-surface pass-through in the outbound sanitizer", () => {
     ).toBeNull();
   });
 });
+
+describe("Layout page settings analytics", () => {
+  it("accepts the layout section id in the runtime settings-section allowlist", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.SettingsOpened, {
+        source: "direct_ui",
+        section: "layout",
+      }),
+    ).toEqual({ source: "direct_ui", section: "layout" });
+  });
+
+  it("tracks every layout.statusBar.* setting id through trackSettingChanged", async () => {
+    // Each of these is exercised through the real `trackSettingChanged` (not
+    // `sanitizeAnalyticsProperties` directly), so this also proves the
+    // `AnalyticsSetting` union member reaches `ANALYTICS_SETTINGS` - a value
+    // present in the type but missing from the runtime Set drops the event
+    // silently (`chatTurnMinimapSide` did exactly that before it was added).
+    const posthog = await import("posthog-js");
+    const captureSpy = vi.spyOn(posthog.default, "capture");
+    const { trackSettingChanged } = await import("@/lib/analytics");
+
+    const statusBarSettings = [
+      "layout.statusBar.placement",
+      "layout.statusBar.rateLimits.enabled",
+      "layout.statusBar.rateLimits.percentMode",
+      "layout.statusBar.rateLimits.provider",
+      "layout.statusBar.rateLimits.showBar",
+      "layout.statusBar.rateLimits.showTimer",
+      "layout.statusBar.rateLimits.window",
+      "layout.statusBar.resources.enabled",
+      "layout.statusBar.resources.metric",
+      "layout.statusBar.resources.scope",
+    ] as const;
+
+    for (const setting of statusBarSettings) {
+      trackSettingChanged("layout", setting);
+    }
+
+    // MODE === "test" disables PostHog entirely (see the top-of-file no-op
+    // test), so this is never about a real capture - it is about
+    // `Analytics.track` returning `true` (accepted, not sanitized away). The
+    // module's local `track()` return isn't exported, so the runtime
+    // allowlist is asserted directly instead, matching the "accepts every
+    // settings section" test above.
+    expect(captureSpy).not.toHaveBeenCalled();
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+    for (const setting of statusBarSettings) {
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.SettingChanged, {
+          source: "direct_ui",
+          section: "layout",
+          setting,
+        }),
+      ).toEqual({ source: "direct_ui", section: "layout", setting });
+    }
+  });
+
+  it("tracks the relocated layout settings (chat, sidebar, resource monitor rows) under the layout section", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    const relocatedSettings = [
+      "chatTurnMinimapSide",
+      "pinContextUsageBreakdown",
+      "showGlobalResourceMonitor",
+      "showNavigatorResourceStats",
+    ] as const;
+
+    for (const setting of relocatedSettings) {
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.SettingChanged, {
+          source: "direct_ui",
+          section: "layout",
+          setting,
+        }),
+      ).toEqual({ source: "direct_ui", section: "layout", setting });
+    }
+  });
+});

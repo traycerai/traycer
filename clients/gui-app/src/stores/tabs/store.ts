@@ -110,6 +110,7 @@ const SETTINGS_PATHS = new Set([
   "general",
   "host",
   "keybindings",
+  "layout",
   "notifications",
   "opening-behavior",
   "providers",

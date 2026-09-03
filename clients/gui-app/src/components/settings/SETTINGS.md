@@ -24,6 +24,7 @@ SettingsLayout
     └── settings panel route
         ├── GeneralSettingsPanel
         ├── AppearanceSettingsPanel
+        ├── LayoutSettingsPanel
         ├── OpeningBehaviorPanel
         ├── ProvidersSettingsPanel
         ├── NotificationsSettingsPanel
@@ -85,8 +86,28 @@ keyboard, and is still the end of a pairing that shows the code.
   setting's only consumer, `PreventSleepController`, holds an OS power-save
   blocker through the desktop power bridge, and `resolveDesktopPowerBridge`
   returns null there. Extracted from `general-settings-panel.tsx` for exactly
-  this reason; the Running-agents group keeps two other rows, so it never
-  empties.
+  this reason. It is now the group's ONLY row - the two resource-visibility
+  toggles that used to keep it populated moved to Layout - so the component
+  returns the whole **Running agents** `SettingsGroup`, heading included, and
+  one gate hides both. The panel gates nothing (the `BrowserSettingsSection`
+  shape); a second gate there would stay on the build identity the day this one
+  narrows to the capability it is really about, and the empty card would return.
+- **Layout's Status bar GROUP** - the footer is never drawn in the installed
+  mobile app (its header keeps the usage gauge and the resource monitor), so
+  every control ABOUT THE FOOTER would configure an absent surface. This one
+  collapses to a one-line "Status bar is desktop-only" note rather than
+  vanishing: the rest of the page is mobile-relevant, and a page whose first
+  heading differs per build reads as a broken build. **`Show resource monitor
+in header` survives the collapse and renders beside the note**, because it is
+  not a footer control - `MobileAppHeader` draws exactly that monitor, and
+  `showGlobalResourceMonitor` is device-local, so collapsing it would strand
+  the preference at its default on the one build where header width is
+  scarcest. The `app.status-bar.toggle` ACTION does collapse -
+  `desktopOnly: true` in `ACTION_META` drops its palette row
+  (`actions.source.ts`) and stops `StatusBarKeybindingBridge` registering its
+  handler - because a command that mutates a placement with no surface is worse
+  than a missing one. Both halves READ the flag; neither hard-codes the build,
+  so the next `desktopOnly` action gets the same treatment for free.
 - **The Keybindings SECTION** - chord capture is `window` `keydown` only
   (`chord-capture-core.tsx`): a tap arms the chip to "Press chord…" and nothing
   can commit it, and a binding clears only with Backspace.
@@ -101,7 +122,15 @@ keyboard, and is still the end of a pairing that shows the code.
   itself costs more than the case it serves.
 
 Each returns `null` outright rather than rendering disabled with rewritten
-copy: a control the build will never perform is worse than no control.
+copy: a control the build will never perform is worse than no control. Layout's
+Status bar group is the one entry that leaves a trace, and for a reason that
+does not generalize - it is a whole group at the TOP of a page whose other
+groups still apply, so a note names what is missing where silence would read as
+a page that failed to load. Note what that collapse is scoped to: the SURFACE,
+not the heading. The one row in the group that configures something the mobile
+app does draw stays live beside the note, because "this build cannot show the
+footer" says nothing about a header control that happened to be grouped with
+it.
 
 A whole section needs more than hiding its row, because a section id is
 addressable. `visibleSettingsSections()` (`lib/settings-sections.ts`) is the
@@ -510,8 +539,9 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
   - **Chat & composer**: Voice input (`voice-settings-section.tsx`), Quote
     reply on text selection, Steer with Cmd/Ctrl+Enter (toggles the fixed
     chord's mid-turn-steering semantics - stays out of Keybindings, which is
-    for rebinding), Pin context usage breakdown (global toggle for the
-    always-visible agent context-window breakdown, default off).
+    for rebinding). `Pin context usage breakdown` used to sit here and now
+    lives in **Layout › Chat** - it places a panel rather than changing what
+    the composer does.
   - **Browser**: the in-app browser has no toggle - it is always on, and the
     group carries no master switch. What is left of the group is the
     conditional **Detected dev origins** row (terminal URLs with local hosts
@@ -650,9 +680,14 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
       with a live browser stream; main owns both native destructive confirms.
   - **Running agents**: Prevent sleep while running
     (`prevent-sleep-settings-section.tsx`, hidden in the mobile app - see
-    "Two different mobile questions"), Show global resources button, Show
-    navigator resource stats (these stay out of Appearance - they change
-    information visibility, not styling).
+    "Two different mobile questions") is the only row left. The two
+    resource-visibility toggles that used to sit beside it - the global
+    resources button and the sidebar resource chips - moved to **Layout**
+    (Status bar and Sidebar respectively), which is where WHERE-a-thing-sits
+    controls live now. Because that leaves one self-hiding row, the group
+    itself is returned by `prevent-sleep-settings-section.tsx` rather than
+    wrapped here, so the heading disappears with the row instead of drawing
+    over an empty card.
   - **Setup & migration**: Product tour (replay onboarding), Data migration
     (retry moving local SQLite tasks/epics to cloud - stays out of
     Diagnostics, which is support capture, not user data recovery).
@@ -851,6 +886,59 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     (`lib/desktop-installed-fonts.ts`, mirrors `desktop-log-levels.ts`) via
     `useRunnerInstalledFontsQuery` (`staleTime: Infinity`; resolves `[]` on
     shells without the bridge instead of erroring).
+- `Layout` (`panels/layout-settings-panel.tsx`, `/settings/layout`, seventh and
+  last in the Application group, leader digit 7) Where the app's own chrome
+  SITS and how much of it shows. It is a page rather than a group inside
+  Appearance because its controls answer "where does this live", not "what does
+  it look like" - and because a per-provider, per-window rate-limit list needs
+  room Appearance does not have. Group order is fixed so a control keeps its
+  place as groups arrive: **Status bar** · Composer (nothing yet, so no
+  heading) · **Chat** · **Sidebar**.
+  - **Ownership.** This page is where a layout control belongs from now on, and
+    three rows were relocated onto it from General and one from Appearance.
+    Store keys and setters are unchanged (`settings-store`), so there is no
+    migration and nothing persisted moved - only the surface did. Their
+    analytics ids are unchanged too, but they are now reported under the
+    `layout` section (`AnalyticsSettingsSection`).
+
+    | Row                                 | Was                       | Now        |
+    | ----------------------------------- | ------------------------- | ---------- |
+    | Show resource monitor in header     | General ▸ Running agents  | Status bar |
+    | Pin context breakdown               | General ▸ Chat & composer | Chat       |
+    | Minimap side                        | Appearance                | Chat       |
+    | Show resource chips on sidebar rows | General ▸ Running agents  | Sidebar    |
+
+  - **Status bar** (one `SettingsGroup`, two `h3` bands inside it - the bar is
+    ONE layout slice, and rate limits and the resource monitor are two subjects
+    within it rather than two surfaces). Placement (Header / Status bar);
+    `Show resource monitor in header`, drawn only while placement is `header`
+    because in the other placement the group's own `Show resource monitor`
+    governs the same thing; then Rate limits (enabled, percentage used /
+    remaining, reset timer, usage bar, one switch per provider with a nested
+    switch per window, a hidden provider collapsing its windows) and Resource
+    monitor (enabled, scope Host / Desktop app, one switch per metric - RAM
+    share is disabled under the Desktop-app scope, which has no denominator
+    for it).
+  - **The provider list reads the WATCHED host**, not the app-wide one: the
+    page re-provides `HostRuntimeContext` from the scoped binding with the same
+    `scopedToOwnHost` gate `RateLimitIconButton` uses, and an unresolved pick
+    shows a notice instead of another host's providers. Every query on the page
+    is a passive observer (`PASSIVE_PROVIDER_RATE_LIMIT_OPTIONS`) - opening
+    this page, and toggling anything on it, must never spawn a provider read;
+    a provider with nothing in the shared cache yet renders a "waiting for
+    first reading" subtitle instead.
+  - **Mobile app**: the section stays listed (Chat and Sidebar are as relevant
+    on a phone as anywhere), but the Status bar group collapses under
+    `isMobileApp()` to the "Status bar is desktop-only" note - the footer is
+    never drawn there, so every control ABOUT IT would configure an absent
+    surface. One row survives beside the note: `Show resource monitor in
+header`, which describes `MobileAppHeader`'s own monitor rather than the
+    footer, and whose device-local key no desktop can set on the phone's
+    behalf. It carries no placement condition there, since that build has no
+    other placement. The `app.status-bar.toggle` action does collapse: it is
+    the one `desktopOnly: true` entry in `ACTION_META`, and both the palette
+    filter and `StatusBarKeybindingBridge` READ that flag rather than testing
+    the build, so the pair follows from the field.
 - `Providers` Per-provider CLI binary selection (Codex / Claude Code / OpenCode
   / Traycer / Cursor). Left rail picks the provider (brand icons via
   `HarnessIcon`); the

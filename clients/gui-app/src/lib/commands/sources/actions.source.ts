@@ -13,7 +13,9 @@
  *   - `app.palette.open` (the opener itself would loop);
  *   - `composer.dictation.toggle` (no `dispatchAction` handler - it's a
  *     press-and-hold action owned by a capture-phase hook, so a palette
- *     entry would be inert; toggling it is the mic button's job).
+ *     entry would be inert; toggling it is the mic button's job);
+ *   - `desktopOnly` actions in the installed mobile app (the surface they
+ *     act on is never drawn there).
  */
 import { useMemo } from "react";
 import {
@@ -22,6 +24,7 @@ import {
   type ActionId,
   type ActionMeta,
 } from "@/lib/keybindings/actions";
+import { isMobileApp } from "@/lib/mobile-app";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import type { CommandItem, ReactCommandSource } from "@/lib/commands/types";
 
@@ -43,6 +46,11 @@ export const actionsSource: ReactCommandSource = {
 
 function isPaletteEligible(meta: ActionMeta): boolean {
   if (meta.kind !== "chord") return false;
+  // The installed mobile app never draws the surface a desktop-only action
+  // acts on, and nothing there registers its handler - so the row would offer
+  // a command that cannot run. `isMobileApp()` is fixed before the first
+  // render, so reading it inside the memo is stable for the app's lifetime.
+  if (meta.desktopOnly && isMobileApp()) return false;
   if (meta.id === "app.palette.open") return false;
   // No dispatchAction handler; handled by the capture-phase dictation hook.
   if (meta.id === "composer.dictation.toggle") return false;

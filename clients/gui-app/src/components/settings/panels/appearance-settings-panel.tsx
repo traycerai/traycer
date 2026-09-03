@@ -18,7 +18,6 @@ import {
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
 } from "@/components/ui/select";
 import { useDesktopZoomBridge } from "@/hooks/runner/use-desktop-zoom-bridge";
 import {
@@ -64,10 +63,6 @@ export function AppearanceSettingsPanel() {
   const setPointerCursors = useSettingsStore(
     (state) => state.setPointerCursors,
   );
-  const chatTurnMinimapSide = useSettingsStore(
-    (state) => state.chatTurnMinimapSide,
-  );
-  const setMinimapSide = useSettingsStore((state) => state.setMinimapSide);
   const uiFontSize = useSettingsStore((state) => state.uiFontSize);
   const setUiFontSize = useSettingsStore((state) => state.setUiFontSize);
   const codeFontSize = useSettingsStore((state) => state.codeFontSize);
@@ -179,39 +174,6 @@ export function AppearanceSettingsPanel() {
                 )}
                 aria-label="Use pointer cursors"
               />
-            }
-          />
-          <SettingsRow
-            label="Minimap side"
-            description="Place chat and artifact minimaps on the left or right, or hide both."
-            control={
-              <Select
-                value={chatTurnMinimapSide}
-                onValueChange={(value) => {
-                  if (
-                    value !== "left" &&
-                    value !== "right" &&
-                    value !== "hide"
-                  ) {
-                    return;
-                  }
-                  trackAppearanceSetting("chatTurnMinimapSide");
-                  setMinimapSide(value);
-                }}
-              >
-                <SelectTrigger
-                  size="sm"
-                  aria-label="Minimap side"
-                  className="w-[min(40vw,8rem)]"
-                >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="right">Right</SelectItem>
-                  <SelectItem value="left">Left</SelectItem>
-                  <SelectItem value="hide">Hide</SelectItem>
-                </SelectContent>
-              </Select>
             }
           />
         </SettingsGroup>

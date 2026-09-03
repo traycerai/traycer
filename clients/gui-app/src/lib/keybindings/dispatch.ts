@@ -461,6 +461,9 @@ const REPEAT_SENSITIVE_ACTIONS: ReadonlySet<ActionId> = new Set([
   "app.terminal.new",
   "app.terminal.maximize",
   "tab.new",
+  // Unbound by default, so only a user-chosen chord can be held - and holding
+  // it would walk the status bar between header and footer once per repeat.
+  "app.status-bar.toggle",
 ]);
 
 export function isRepeatSensitiveAction(id: ActionId): boolean {

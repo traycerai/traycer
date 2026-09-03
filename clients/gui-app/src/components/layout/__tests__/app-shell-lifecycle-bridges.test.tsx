@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
@@ -25,6 +25,14 @@ vi.mock("@/components/layout/header/history-button", () => ({
 
 vi.mock("@/components/layout/header/sign-in-button", () => ({
   SignInButton: () => <button type="button">Sign in</button>,
+}));
+
+// Router-dependent like TabStrip, but only on the mobile path: the swipe
+// transition reads `useRouter`, which throws in this provider-light shell.
+// Desktop self-gates it to nothing, so the stub changes nothing there and lets
+// the mobile-app build render here at all.
+vi.mock("@/components/layout/shell/use-mobile-history-swipes", () => ({
+  useMobileHistorySwipes: () => null,
 }));
 
 vi.mock("@/components/open-folder-dialog", () => ({
@@ -100,7 +108,34 @@ import {
   HostRuntimeProvider,
   type HostRpcRegistry,
 } from "@/lib/host";
+import {
+  dispatchAction,
+  type KeybindingRouter,
+} from "@/lib/keybindings/dispatch";
+import { setMobileApp } from "@/lib/mobile-app";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import {
+  DEFAULT_STATUS_BAR_LAYOUT,
+  useLayoutStore,
+} from "@/stores/settings/layout-store";
+
+// The status-bar toggle is a dynamic handler, and dynamic dispatch never
+// touches the router - every field here just satisfies the parameter type.
+const NOOP_ROUTER: KeybindingRouter = {
+  getPathname: () => "/",
+  navigateHome: () => undefined,
+  navigateSettings: () => undefined,
+  navigateToEpic: () => undefined,
+  navigateToEpicTab: () => undefined,
+  navigateToEpicList: () => undefined,
+  navigateSettingsSection: () => undefined,
+  navigateToTabIntent: () => undefined,
+  goBack: () => undefined,
+  goForward: () => undefined,
+  isHistoryNavAvailable: () => false,
+  canGoBack: () => false,
+  canGoForward: () => false,
+};
 
 function renderAppShell(): QueryClient {
   const queryClient = new QueryClient({
@@ -171,6 +206,8 @@ describe("<AppShell />", () => {
     queryClient?.clear();
     queryClient = undefined;
     delete windowHost.runnerHost;
+    setMobileApp(false);
+    useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
     useAuthStore.getState().setSignedOut();
     useSettingsStore.setState({ showGlobalResourceMonitor: true });
   });
@@ -227,6 +264,38 @@ describe("<AppShell />", () => {
     const tabRegion = screen.getByTestId("tab-strip").parentElement;
     expect(tabRegion).not.toBeNull();
     expect(tabRegion?.className).toContain("[-webkit-app-region:drag]");
+  });
+
+  it("registers the status-bar placement toggle on desktop", async () => {
+    queryClient = renderAppShell();
+
+    await screen.findByTestId("app-shell-child");
+
+    let fired = false;
+    act(() => {
+      fired = dispatchAction("app.status-bar.toggle", NOOP_ROUTER);
+    });
+    expect(fired).toBe(true);
+    expect(useLayoutStore.getState().statusBar.placement).toBe("status-bar");
+  });
+
+  it("does not register the status-bar placement toggle in the installed mobile app", async () => {
+    setMobileApp(true);
+
+    queryClient = renderAppShell();
+
+    await screen.findByTestId("app-shell-child");
+
+    // The bridge mounts but registers nothing there (it reads the action's
+    // `desktopOnly` flag), so the action has no handler and the placement it
+    // would flip stays where it was - a mobile build cannot move usage
+    // controls into a footer it never draws.
+    let fired = true;
+    act(() => {
+      fired = dispatchAction("app.status-bar.toggle", NOOP_ROUTER);
+    });
+    expect(fired).toBe(false);
+    expect(useLayoutStore.getState().statusBar.placement).toBe("header");
   });
 
   it("hides the global resource monitor button when the preference is off", async () => {
