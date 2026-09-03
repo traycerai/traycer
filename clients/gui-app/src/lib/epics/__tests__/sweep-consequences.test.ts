@@ -41,7 +41,6 @@ function row(
     disabled: false,
     holders: [],
     holdersStatus: "none",
-    holdersRevision: undefined,
     ...over,
   };
 }

@@ -41,6 +41,16 @@ interface TraycerMobileBakedConfig {
    * (`vite.config.ts` SHIPPED_RETURN_SCHEMES has the pairing rules).
    */
   readonly returnScheme: string;
+  /**
+   * Sentry crash-reporting DSN, or `""` for reporting OFF. Read from
+   * `TRAYCER_MOBILE_SENTRY_DSN` at build time and baked as a literal, the way
+   * the desktop's deploy script stamps its `sentryRendererDsn`: an installed
+   * app cannot be repointed by a runtime environment variable. Empty in every
+   * local build by default; the release lanes export it. A DSN is public by
+   * design (it ships inside the app and only permits SENDING events), so its
+   * presence in the bundle is not a leak.
+   */
+  readonly sentryDsn: string;
   /** Dev host scaffolding, or `null` in shipped (staging/production) builds. */
   readonly devHost: TraycerMobileDevHost | null;
 }

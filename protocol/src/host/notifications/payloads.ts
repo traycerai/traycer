@@ -280,6 +280,41 @@ export function parseHostOperationCommonPayload(
  */
 export const HOST_OPERATION_WORKTREE_DELETION = "worktree.deletion";
 
+export const HOST_NOTIFICATION_WORKTREE_DELETION_FAILURE_KINDS = [
+  "busy",
+  "not_managed",
+  "teardown_failed",
+  "removal_failed",
+] as const;
+export const hostNotificationWorktreeDeletionFailureKindSchema = z.enum(
+  HOST_NOTIFICATION_WORKTREE_DELETION_FAILURE_KINDS,
+);
+export type HostNotificationWorktreeDeletionFailureKind = z.infer<
+  typeof hostNotificationWorktreeDeletionFailureKindSchema
+>;
+
+const hostNotificationWorktreeDeletionFailureCountSchema = z
+  .number()
+  .int()
+  .positive();
+
+/**
+ * Known failure counts, represented as an object with optional known keys
+ * instead of an enum-keyed `z.record`. Besides making partial aggregates
+ * natural, `z.object` strips unknown keys by default: a future host can add a
+ * category without making an older client reject the entire durable payload.
+ */
+export const hostNotificationWorktreeDeletionFailureKindsSchema = z.object({
+  busy: hostNotificationWorktreeDeletionFailureCountSchema.optional(),
+  not_managed: hostNotificationWorktreeDeletionFailureCountSchema.optional(),
+  teardown_failed:
+    hostNotificationWorktreeDeletionFailureCountSchema.optional(),
+  removal_failed: hostNotificationWorktreeDeletionFailureCountSchema.optional(),
+});
+export type HostNotificationWorktreeDeletionFailureKinds = z.infer<
+  typeof hostNotificationWorktreeDeletionFailureKindsSchema
+>;
+
 /**
  * `host.operation.finished` payload for a worktree-deletion command - the
  * first operation arm, and the template for every later one.
@@ -312,6 +347,8 @@ export const hostNotificationWorktreeDeletionPayloadSchema = z
     requestedCount: z.number().int().nonnegative(),
     deletedCount: z.number().int().nonnegative(),
     failedCount: z.number().int().nonnegative(),
+    /** Optional for rows minted before failure categorization existed. */
+    failureKinds: hostNotificationWorktreeDeletionFailureKindsSchema.optional(),
   })
   .catchall(z.unknown());
 export type HostNotificationWorktreeDeletionPayload = z.infer<

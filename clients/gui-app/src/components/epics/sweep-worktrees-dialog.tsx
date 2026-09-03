@@ -74,7 +74,6 @@ import { useTeardownAgentNames } from "@/lib/worktree/teardown-agent-names";
 import {
   formatUncheckedInUseKnown,
   formatUncheckedInUseUnknown,
-  sanitizeHoldersRevision,
 } from "@/lib/worktree/teardown-holder-copy";
 
 const SWEEP_WORKTREES_REFRESH_TIMEOUT_MS = 20_000;
@@ -344,7 +343,13 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
         const identityByPath = identityByPathFromRows(rows, reviewSnapshot);
         const nextOutcomes = mergeSessionOutcomes(
           sessionOutcomesRef.current,
-          result,
+          // Session outcomes are per-PATH row state; the failure reason rides
+          // the toast, not the dialog's re-review model.
+          {
+            removed: result.removed,
+            uncertain: result.uncertain,
+            failed: result.failed.map((failure) => failure.worktreePath),
+          },
           identityByPath,
         );
         sessionOutcomesRef.current = nextOutcomes;
@@ -770,10 +775,6 @@ function startSweepKickoff(input: {
         branch: row.entry.branch,
         repoIdentifier: row.entry.repoIdentifier,
         stopOwners: row.entry.inUse,
-        expectedHoldersRevision:
-          row.note === "in-use"
-            ? sanitizeHoldersRevision(row.holdersRevision)
-            : undefined,
       })),
     },
     {
@@ -825,34 +826,14 @@ function applySweepOutcome(
     if (removed.has(path)) return false;
     const outcome = sessionOutcomes.get(path);
     if (outcome?.kind === "uncertain") return false;
-    if (result.failed.includes(path)) return false;
+    if (result.failed.some((failure) => failure.worktreePath === path)) {
+      return false;
+    }
     return true;
   });
   if (remaining.length === 0) return null;
-  const byPath = new Map(
-    result.holdersChanged.map((entry) => [entry.worktreePath, entry]),
-  );
-  const updated = remaining.map((row) => {
-    const update = byPath.get(row.entry.worktreePath);
-    if (update === undefined) return row;
-    const holdersRevision = sanitizeHoldersRevision(update.holdersRevision);
-    if (update.holders.length === 0 || holdersRevision === undefined) {
-      return {
-        ...row,
-        holders: [],
-        holdersStatus: "unknown" as const,
-        holdersRevision: undefined,
-      };
-    }
-    return {
-      ...row,
-      holders: update.holders,
-      holdersStatus: "ready" as const,
-      holdersRevision,
-    };
-  });
   return captureReviewSnapshot(
-    updated,
+    remaining,
     bannersFromSessionOutcomes(sessionOutcomes),
   );
 }
@@ -1194,8 +1175,8 @@ function uncheckNonResubmittableOverrides(
   for (const path of result.uncertain) {
     next.set(path, false);
   }
-  for (const path of result.failed) {
-    next.set(path, false);
+  for (const failure of result.failed) {
+    next.set(failure.worktreePath, false);
   }
   return next;
 }
@@ -1447,7 +1428,7 @@ function SweepWorktreeRowItem(props: {
         {checked && row.note === "in-use" ? (
           <TeardownInlineDisclosure
             holders={row.holders}
-            heading="Stopping work on this worktree"
+            heading="Anything working in this worktree when the delete runs will be stopped."
             agentNames={props.agentNames}
             unknownConsequence={unknownConsequenceForRow(row)}
           />

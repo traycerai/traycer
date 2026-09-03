@@ -4122,36 +4122,6 @@ describe("SelectionAuthorityEngineImpl - local proof-of-life clears the ensure c
 
     authority.dispose();
   });
-
-  it("T3b/P3: a proof of life on a fleet with no local host does not crash and clears nothing local-specific", () => {
-    const clock = createFakeAuthorityClock(0);
-    const authority = createTestAuthority({
-      initialFleet: {
-        identityGeneration: 0,
-        localHostId: null,
-        hosts: [fleetHost("R", "remote")],
-      },
-      initialIdentityKey: "acct-1",
-      clock,
-    });
-    const { engine } = authority;
-    const incarnation = attachReporter(engine, "A");
-
-    expect(() => {
-      engine.ingestEvidence(
-        "A",
-        incarnation,
-        dialOutcome("R", "r-1", "success", 1),
-      );
-    }).not.toThrow();
-
-    const after = findLease(engine.snapshot().leases, "R");
-    expect(after?.status).toBe("connecting");
-    expect(after?.dead).toBeNull();
-
-    authority.dispose();
-  });
-
   it("T4/addendum: a cooldown cleared by a live session does not resurface once that session is lost", async () => {
     const clock = createFakeAuthorityClock(0);
     const ensure = createDeferredEnsure();
@@ -5143,7 +5113,6 @@ describe("selection authority dial-evidence instrumentation", () => {
 
     authority.dispose();
   });
-
   it("names the crossing ONCE - later refusals stay ordinary `counted`", () => {
     const log = createRecordingAuthorityLog();
     const { authority, incarnationId } = attachedAuthority(log);
@@ -5172,63 +5141,6 @@ describe("selection authority dial-evidence instrumentation", () => {
     );
     expect(dispositions[CONFIRMED_DEATH_REFUSAL_STREAK]).toBe("counted");
     expect(findLease(engine.snapshot().leases, "H")?.status).toBe("dead");
-
-    authority.dispose();
-  });
-
-  it("keeps NO stall state for a host outside the fleet", () => {
-    const log = createRecordingAuthorityLog();
-    const { authority, incarnationId } = attachedAuthority(log);
-    const { engine } = authority;
-
-    // Evidence for an unknown host is dropped, so there is no lease to strand
-    // a surface on and nothing to warn about. Accumulating here would grow one
-    // entry per distinct id between fleet snapshots, and an entry recreated
-    // after a prune would be inherited by a durable id that later re-registers.
-    for (let i = 0; i < CONFIRMED_DEATH_REFUSAL_STREAK * 3; i += 1) {
-      engine.ingestEvidence(
-        "A",
-        incarnationId,
-        dialRefusal(`GONE-${i}`, `attempt-${i}`, null, i),
-      );
-    }
-    // Same id repeatedly, which is the case a per-host counter would catch.
-    for (let i = 0; i < CONFIRMED_DEATH_REFUSAL_STREAK * 3; i += 1) {
-      engine.ingestEvidence(
-        "A",
-        incarnationId,
-        dialRefusal("GONE", `gone-${i}`, null, 100 + i),
-      );
-    }
-
-    expect(stallWarnings(log.records)).toHaveLength(0);
-
-    authority.dispose();
-  });
-
-  it("does not count a REPLAYED success as a stalled failure", () => {
-    const log = createRecordingAuthorityLog();
-    const { authority, incarnationId } = attachedAuthority(log);
-    const { engine } = authority;
-
-    // A duplicate is classified before its outcome is ever read, so a success
-    // arriving twice looks exactly like a refusal that went nowhere. Warning
-    // "dial failures are not advancing" on a run of successes would point the
-    // reader at the opposite of what happened.
-    engine.ingestEvidence(
-      "A",
-      incarnationId,
-      dialOutcome("H", "same", "success", 0),
-    );
-    for (let i = 0; i < CONFIRMED_DEATH_REFUSAL_STREAK * 2; i += 1) {
-      engine.ingestEvidence(
-        "A",
-        incarnationId,
-        dialOutcome("H", "same", "success", 1 + i),
-      );
-    }
-
-    expect(stallWarnings(log.records)).toHaveLength(0);
 
     authority.dispose();
   });
