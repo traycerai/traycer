@@ -11,7 +11,7 @@ import {
   clearAndResetPersistedStore,
   retargetPersistedStore,
 } from "@/lib/persist/zustand-persist-lifecycle";
-import { useLandingTerminalStore } from "@/stores/home/landing-terminal-store";
+import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 
 export interface LandingTerminalPersistLifecycleBridgeProps {
   readonly children: ReactNode;
@@ -32,7 +32,7 @@ export function LandingTerminalPersistLifecycleBridge(
   const defaultClient = useHostClient();
   const directory = useHostDirectory();
   const drainTombstones = useCallback(() => {
-    for (const pending of useLandingTerminalStore.getState().pendingKills) {
+    for (const pending of useLandingPanelStore.getState().pendingKills) {
       const entry = directory.findById(pending.hostId);
       const client =
         entry === null ? null : buildDialableHostClient(defaultClient, entry);
@@ -55,7 +55,7 @@ export function LandingTerminalPersistLifecycleBridge(
         transition.kind === "userSwitched"
       ) {
         retargetPersistedStore({
-          store: useLandingTerminalStore,
+          store: useLandingPanelStore,
           name: landingTerminalsKey(transition.userId),
           // Never the anonymous bucket: a null email must not adopt shared state into an account.
           legacyName:
@@ -65,7 +65,7 @@ export function LandingTerminalPersistLifecycleBridge(
       }
       drainTombstones();
       clearAndResetPersistedStore({
-        store: useLandingTerminalStore,
+        store: useLandingPanelStore,
         anonymousName: landingTerminalsKey(null),
       });
     },

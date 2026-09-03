@@ -16,7 +16,10 @@ import {
   type EpicCanvasTileRef,
 } from "@/stores/epics/canvas/types";
 import { hasTerminalPendingCreate } from "@/lib/terminals/pending-create-identity";
-import { useLandingTerminalStore } from "@/stores/home/landing-terminal-store";
+import {
+  landingTerminalTabs,
+  useLandingPanelStore,
+} from "@/stores/home/landing-panel-store";
 
 export type PlainTerminalDeletionEvidence =
   | {
@@ -74,7 +77,9 @@ export function acknowledgedPlainTerminalPresentationIdsForScope(
 ): ReadonlySet<string> {
   const terminalIds = new Set<string>();
   if (scope.kind === "independent") {
-    for (const tab of useLandingTerminalStore.getState().tabs) {
+    for (const tab of landingTerminalTabs(
+      useLandingPanelStore.getState().tabs,
+    )) {
       const acknowledged =
         tab.hostId === hostId &&
         tab.hostAuthorityAcknowledged === true &&
@@ -141,7 +146,7 @@ function hasPlainTerminalPresentationRefs(
     }),
   );
   if (closed) return true;
-  return useLandingTerminalStore
+  return useLandingPanelStore
     .getState()
     .tabs.some((tab) => tab.hostId === hostId && tab.sessionId === terminalId);
 }
@@ -159,7 +164,7 @@ function removePlainTerminalPresentationRefs(
   terminalId: string,
 ): void {
   useEpicCanvasStore.getState().removeHostTerminalRefs(hostId, terminalId);
-  useLandingTerminalStore.getState().removeHostTerminal(hostId, terminalId);
+  useLandingPanelStore.getState().removeHostTerminal(hostId, terminalId);
 }
 
 function fanOutPlainTerminalDeletionOnce(args: {

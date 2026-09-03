@@ -3,9 +3,9 @@ import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { LandingTerminalPersistLifecycleBridge } from "@/providers/landing-terminal-persist-lifecycle-bridge";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
-  useLandingTerminalStore,
+  useLandingPanelStore,
   type LandingTerminalTabRef,
-} from "@/stores/home/landing-terminal-store";
+} from "@/stores/home/landing-panel-store";
 import { landingTerminalsKey } from "@/lib/persist";
 
 vi.mock("@/lib/host", () => ({
@@ -42,6 +42,7 @@ function resetAuth(
 
 function persistedTab(identity: string): LandingTerminalTabRef {
   return {
+    kind: "terminal",
     instanceId: `${identity}-instance`,
     sessionId: `${identity}-session`,
     hostId: "host-test",
@@ -74,10 +75,10 @@ function persistSnapshot(bucketIdentity: string): void {
 }
 
 function resetStore(): void {
-  useLandingTerminalStore.persist.setOptions({
+  useLandingPanelStore.persist.setOptions({
     name: landingTerminalsKey(null),
   });
-  useLandingTerminalStore.getState().resetForTests();
+  useLandingPanelStore.getState().resetForTests();
 }
 
 describe("<LandingTerminalPersistLifecycleBridge />", () => {
@@ -107,10 +108,10 @@ describe("<LandingTerminalPersistLifecycleBridge />", () => {
       resetAuth("signed-in", ALICE_EMAIL);
     });
     await waitFor(() => {
-      expect(useLandingTerminalStore.persist.getOptions().name).toBe(
+      expect(useLandingPanelStore.persist.getOptions().name).toBe(
         landingTerminalsKey(ALICE_ID),
       );
-      expect(useLandingTerminalStore.getState().tabs).toEqual([
+      expect(useLandingPanelStore.getState().tabs).toEqual([
         persistedTab(ALICE_ID),
       ]);
     });
@@ -119,10 +120,10 @@ describe("<LandingTerminalPersistLifecycleBridge />", () => {
       resetAuth("signed-in", BOB_EMAIL);
     });
     await waitFor(() => {
-      expect(useLandingTerminalStore.persist.getOptions().name).toBe(
+      expect(useLandingPanelStore.persist.getOptions().name).toBe(
         landingTerminalsKey(BOB_ID),
       );
-      expect(useLandingTerminalStore.getState().tabs).toEqual([
+      expect(useLandingPanelStore.getState().tabs).toEqual([
         persistedTab(BOB_ID),
       ]);
     });
@@ -143,10 +144,10 @@ describe("<LandingTerminalPersistLifecycleBridge />", () => {
     });
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.persist.getOptions().name).toBe(
+      expect(useLandingPanelStore.persist.getOptions().name).toBe(
         landingTerminalsKey(ALICE_ID),
       );
-      expect(useLandingTerminalStore.getState().tabs).toEqual([
+      expect(useLandingPanelStore.getState().tabs).toEqual([
         persistedTab(ALICE_EMAIL),
       ]);
     });

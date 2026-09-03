@@ -22,7 +22,7 @@ import {
 } from "@/hooks/ui/use-inline-rename";
 import { registerPrimaryFocusEndpoint } from "@/lib/focus/primary-focus-coordinator";
 import { cn } from "@/lib/utils";
-import type { LandingTerminalTabRef } from "@/stores/home/landing-terminal-store";
+import type { LandingTerminalTabRef } from "@/stores/home/landing-panel-store";
 import type { PlainTerminalViewModel } from "@/lib/terminals/plain-terminal-authority";
 
 export interface LandingTerminalTabStripProps {

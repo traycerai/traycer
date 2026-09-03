@@ -19,9 +19,9 @@ import { focusRegisteredActiveComposer } from "@/lib/composer/composer-focus-reg
 import { isMobileApp } from "@/lib/mobile-app";
 import { focusTerminalInstance } from "@/lib/terminals/terminal-focus-registry";
 import {
-  landingTerminalLayoutFor,
-  useLandingTerminalStore,
-} from "@/stores/home/landing-terminal-store";
+  landingPanelLayoutFor,
+  useLandingPanelStore,
+} from "@/stores/home/landing-panel-store";
 import { usePaneActivationFocusIntent } from "@/components/epic-canvas/pane-activation";
 
 /**
@@ -227,8 +227,8 @@ function restoreLandingSurfaceFocus(
   surface: HTMLDivElement | null,
   previous: HTMLElement | null,
 ): void {
-  const terminalState = useLandingTerminalStore.getState();
-  const layout = landingTerminalLayoutFor(
+  const terminalState = useLandingPanelStore.getState();
+  const layout = landingPanelLayoutFor(
     terminalState,
     draftId ?? "unbound-landing-page",
   );

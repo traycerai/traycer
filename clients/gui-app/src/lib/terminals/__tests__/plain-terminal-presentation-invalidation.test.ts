@@ -20,7 +20,7 @@ import {
 } from "@/lib/terminals/plain-terminal-presentation-invalidation";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
-import { useLandingTerminalStore } from "@/stores/home/landing-terminal-store";
+import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 
 const TARGET_HOST_ID = "host-a";
 const TARGET_TERMINAL_ID = "terminal-shared";
@@ -62,7 +62,7 @@ function remainingEpicInstanceIds(): readonly string[] {
 describe("plain terminal presentation invalidation", () => {
   afterEach(() => {
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
-    useLandingTerminalStore.getState().resetForTests();
+    useLandingPanelStore.getState().resetForTests();
     // The GUI Vitest config does not restore mocks automatically, so the
     // store-action `vi.spyOn` wrappers below would otherwise leak forward.
     vi.restoreAllMocks();
@@ -144,9 +144,10 @@ describe("plain terminal presentation invalidation", () => {
       },
     ]);
 
-    useLandingTerminalStore.setState({
+    useLandingPanelStore.setState({
       tabs: [
         {
+          kind: "terminal",
           instanceId: "landing-target",
           sessionId: TARGET_TERMINAL_ID,
           hostId: TARGET_HOST_ID,
@@ -156,6 +157,7 @@ describe("plain terminal presentation invalidation", () => {
           hostAuthorityAcknowledged: true,
         },
         {
+          kind: "terminal",
           instanceId: "landing-target-legacy",
           sessionId: TARGET_TERMINAL_ID,
           hostId: TARGET_HOST_ID,
@@ -165,6 +167,7 @@ describe("plain terminal presentation invalidation", () => {
           hostAuthorityAcknowledged: false,
         },
         {
+          kind: "terminal",
           instanceId: "landing-target-pending",
           sessionId: TARGET_TERMINAL_ID,
           hostId: TARGET_HOST_ID,
@@ -175,6 +178,7 @@ describe("plain terminal presentation invalidation", () => {
           pendingCreate: true,
         },
         {
+          kind: "terminal",
           instanceId: "landing-other-host",
           sessionId: TARGET_TERMINAL_ID,
           hostId: "host-b",
@@ -184,6 +188,7 @@ describe("plain terminal presentation invalidation", () => {
           hostAuthorityAcknowledged: true,
         },
         {
+          kind: "terminal",
           instanceId: "landing-other-terminal",
           sessionId: "terminal-other",
           hostId: TARGET_HOST_ID,
@@ -311,12 +316,12 @@ describe("plain terminal presentation invalidation", () => {
       "epic-other-terminal-ref",
     ]);
     expect(
-      useLandingTerminalStore
+      useLandingPanelStore
         .getState()
         .tabs.map((tab) => tab.instanceId)
         .sort(),
     ).toEqual(["landing-other-host", "landing-other-terminal"]);
-    expect(useLandingTerminalStore.getState().activeInstanceId).toBe(
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
       "landing-other-host",
     );
     expect(
@@ -347,7 +352,8 @@ describe("plain terminal presentation invalidation", () => {
         },
       },
     ]);
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "landing-target",
       sessionId: TARGET_TERMINAL_ID,
       hostId: TARGET_HOST_ID,
@@ -361,7 +367,7 @@ describe("plain terminal presentation invalidation", () => {
       "removeHostTerminalRefs",
     );
     const landingRemove = vi.spyOn(
-      useLandingTerminalStore.getState(),
+      useLandingPanelStore.getState(),
       "removeHostTerminal",
     );
     epicRemove.mockClear();
@@ -498,9 +504,10 @@ describe("plain terminal presentation invalidation", () => {
         },
       },
     });
-    useLandingTerminalStore.setState({
+    useLandingPanelStore.setState({
       tabs: [
         {
+          kind: "terminal",
           instanceId: "late-legacy",
           sessionId: TARGET_TERMINAL_ID,
           hostId: TARGET_HOST_ID,
@@ -510,6 +517,7 @@ describe("plain terminal presentation invalidation", () => {
           hostAuthorityAcknowledged: false,
         },
         {
+          kind: "terminal",
           instanceId: "late-other-host",
           sessionId: TARGET_TERMINAL_ID,
           hostId: "host-b",
@@ -529,7 +537,7 @@ describe("plain terminal presentation invalidation", () => {
       "removeHostTerminalRefs",
     );
     const landingRemove = vi.spyOn(
-      useLandingTerminalStore.getState(),
+      useLandingPanelStore.getState(),
       "removeHostTerminal",
     );
     epicRemove.mockClear();
@@ -561,7 +569,7 @@ describe("plain terminal presentation invalidation", () => {
       "late-epic-other-host",
     ]);
     expect(
-      useLandingTerminalStore.getState().tabs.map((tab) => tab.instanceId),
+      useLandingPanelStore.getState().tabs.map((tab) => tab.instanceId),
     ).toEqual(["late-other-host"]);
     expect(
       Object.keys(
@@ -628,7 +636,8 @@ describe("plain terminal presentation invalidation", () => {
         cwd: "/legacy",
       },
     ]);
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "late-legacy",
       sessionId: TARGET_TERMINAL_ID,
       hostId: TARGET_HOST_ID,
@@ -660,7 +669,7 @@ describe("plain terminal presentation invalidation", () => {
       ],
     ).toBeDefined();
     expect(
-      useLandingTerminalStore
+      useLandingPanelStore
         .getState()
         .tabs.some((tab) => tab.instanceId === "late-legacy"),
     ).toBe(true);
@@ -679,7 +688,8 @@ describe("plain terminal presentation invalidation", () => {
         deferPresentation: false,
       }),
     ).toBe(true);
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "late-legacy",
       sessionId: TARGET_TERMINAL_ID,
       hostId: TARGET_HOST_ID,
@@ -696,7 +706,7 @@ describe("plain terminal presentation invalidation", () => {
         terminalId: TARGET_TERMINAL_ID,
       }),
     ).toBe(true);
-    expect(useLandingTerminalStore.getState().tabs).toEqual([]);
+    expect(useLandingPanelStore.getState().tabs).toEqual([]);
     expect(
       queryClient.getQueryData<PlainTerminalCollection>(queryKey)
         ?.projectionSequence,

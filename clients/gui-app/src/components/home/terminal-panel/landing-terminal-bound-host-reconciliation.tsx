@@ -4,7 +4,11 @@ import type {
   ImportLegacyPlainTerminalRequest,
   ImportLegacyPlainTerminalResponse,
 } from "@traycer/protocol/host/terminal/plain-schemas";
-import { useLandingTerminalStore } from "@/stores/home/landing-terminal-store";
+import {
+  landingTerminalPendingKills,
+  landingTerminalTabs,
+  useLandingPanelStore,
+} from "@/stores/home/landing-panel-store";
 import type { LandingTerminalAuthorityEntry } from "./landing-terminal-authority-fleet";
 import { reconcileCapableLandingTerminals } from "./use-landing-terminal-reconciliation";
 
@@ -41,11 +45,15 @@ function LandingTerminalBoundHostReconciliation(props: {
 }): ReactNode {
   const { entry, hostId, landingPageId } = props;
   const queryClient = useQueryClient();
-  const tabs = useLandingTerminalStore((state) => state.tabs);
-  const pendingKills = useLandingTerminalStore((state) => state.pendingKills);
+  const tabs = useLandingPanelStore((state) => state.tabs);
+  const pendingKills = useLandingPanelStore((state) => state.pendingKills);
   const reconciliationRef = useRef<string | null>(null);
 
-  const hostTabsFingerprint = tabs
+  // Terminals only, on both fingerprints. This reconciliation drives the plain
+  // terminal authority, so a browser tab moving is not a change it can act on -
+  // and including one would re-run the whole pass every time a page title
+  // changed in one of the panel's browser tabs.
+  const hostTabsFingerprint = landingTerminalTabs(tabs)
     .filter((tab) => tab.hostId === hostId)
     .map((tab) =>
       [
@@ -60,7 +68,7 @@ function LandingTerminalBoundHostReconciliation(props: {
       ].join("\u0001"),
     )
     .join("\u0002");
-  const pendingKillsFingerprint = pendingKills
+  const pendingKillsFingerprint = landingTerminalPendingKills(pendingKills)
     .filter((pending) => pending.hostId === hostId)
     .map((pending) => pending.sessionId)
     .join("\u0001");
@@ -95,7 +103,6 @@ function LandingTerminalBoundHostReconciliation(props: {
 
     void reconcileCapableLandingTerminals({
       activeHostId: hostId,
-      landingPageId,
       capability: authority.capability,
       canMutate: authority.canMutate,
       closeTerminal: (request) =>

@@ -163,7 +163,7 @@ describe("persist key builders — output-preserving against current source", ()
     // by userId).
     expect(epicCanvasKey(null)).toBe("traycer-gui-app:epic-canvas:anon");
     expect(epicCanvasKey("u1")).toBe("traycer-gui-app:epic-canvas:u1");
-    // Source: src/stores/home/landing-terminal-store.ts.
+    // Source: src/stores/home/landing-panel-store.ts.
     expect(landingTerminalsKey(null)).toBe(
       "traycer-gui-app:landing-terminals:anon",
     );

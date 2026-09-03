@@ -45,10 +45,10 @@ import {
   terminalFocusOwnsInstance,
 } from "@/lib/terminals/terminal-focus-registry";
 import {
-  landingTerminalLayoutFor,
-  useLandingTerminalStore,
+  landingPanelLayoutFor,
+  useLandingPanelStore,
   type LandingTerminalTabRef,
-} from "@/stores/home/landing-terminal-store";
+} from "@/stores/home/landing-panel-store";
 import { resolveLandingTerminalSyncedTitle } from "./landing-terminal-reconciliation";
 import type { LandingTerminalAuthorityEntry } from "./landing-terminal-authority-fleet";
 import { useLandingTerminalDurableLifecycle } from "./landing-terminal-durable-bootstrap";
@@ -122,19 +122,19 @@ function LandingTerminalTileBody(props: LandingTerminalTileProps): ReactNode {
 export function LandingTerminalLegacyBootstrap(
   props: LandingTerminalTileProps,
 ): ReactNode {
-  const removeExitedTab = useLandingTerminalStore(
+  const removeExitedTab = useLandingPanelStore(
     (state) => state.removeExitedTab,
   );
   const handleExitedTab = useCallback(
     (instanceId: string): void => {
       const ownsFocus = terminalFocusOwnsInstance(instanceId);
       const wasActive =
-        useLandingTerminalStore.getState().activeInstanceId === instanceId;
+        useLandingPanelStore.getState().activeInstanceId === instanceId;
       removeExitedTab(props.landingPageId, instanceId);
       if (!wasActive || !ownsFocus) return;
-      const state = useLandingTerminalStore.getState();
+      const state = useLandingPanelStore.getState();
       if (
-        landingTerminalLayoutFor(state, props.landingPageId).panelOpen &&
+        landingPanelLayoutFor(state, props.landingPageId).panelOpen &&
         state.activeInstanceId !== null
       ) {
         focusTerminalInstance(state.activeInstanceId);
@@ -145,7 +145,7 @@ export function LandingTerminalLegacyBootstrap(
     },
     [props.landingPageId, removeExitedTab],
   );
-  const rekeyTab = useLandingTerminalStore((state) => state.rekeyTab);
+  const rekeyTab = useLandingPanelStore((state) => state.rekeyTab);
   // Derivation, not a coarse read. This gate replaces the tile with an explicit
   // "is offline" state, which is a claim about a machine — so it asks the one
   // hook that knows the difference between the cloud saying a host is gone and
@@ -341,7 +341,7 @@ function LandingTerminalDurableBootstrap(
   );
   const adopt = useCallback(
     (terminal: PlainTerminalProjection): void => {
-      useLandingTerminalStore
+      useLandingPanelStore
         .getState()
         .adoptHostTerminal(props.tab.instanceId, terminal);
     },
@@ -501,7 +501,7 @@ function LandingTerminalTileLive(props: {
     handle.store,
     (state) => state.currentCwdReported,
   );
-  const syncDefaultTitle = useLandingTerminalStore(
+  const syncDefaultTitle = useLandingPanelStore(
     (state) => state.syncDefaultTitle,
   );
   const syncedTitle = resolveLandingTerminalSyncedTitle({

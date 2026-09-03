@@ -27,10 +27,12 @@ import { requestLandingTerminalClose } from "@/lib/terminals/landing-terminal-cl
 import {
   LANDING_TERMINAL_SOURCE_STORE_VERSION,
   absentListingProvesDeath,
-  terminalSessionKey,
-  useLandingTerminalStore,
+  landingTabRefKey,
+  landingTerminalPendingKills,
+  landingTerminalTabs,
+  useLandingPanelStore,
   type LandingTerminalPendingKill,
-} from "@/stores/home/landing-terminal-store";
+} from "@/stores/home/landing-panel-store";
 import {
   reconcileHostAuthoritativeLandingTerminalTabs,
   reconcileLandingTerminalTabs,
@@ -89,7 +91,6 @@ function abortableRequest<Value>(
 }
 
 interface LandingTerminalReconciliationArgs {
-  readonly landingPageId: string;
   readonly activeHostId: string | null;
   readonly availability: LandingTerminalAvailability;
   readonly panelOpen: boolean;
@@ -156,7 +157,6 @@ export function useLandingTerminalReconciliation(
   const {
     activeHostId,
     availability,
-    landingPageId,
     panelOpen,
     primaryWorkspacePath,
     generation,
@@ -267,7 +267,7 @@ export function useLandingTerminalReconciliation(
         homeCwd: freshResponse.homeCwd,
       };
 
-      const initial = useLandingTerminalStore.getState();
+      const initial = useLandingPanelStore.getState();
 
       if (plainAuthority.authority.capability.status === "capable") {
         // A read-only authority is a reconnecting list stream, not a failed
@@ -283,7 +283,6 @@ export function useLandingTerminalReconciliation(
         const outcome: CapableLandingTerminalReconciliationOutcome | "failed" =
           await reconcileCapableLandingTerminals({
             activeHostId,
-            landingPageId,
             capability: plainAuthority.authority.capability,
             canMutate: plainAuthority.authority.canMutate,
             closeTerminal: (request) =>
@@ -321,13 +320,11 @@ export function useLandingTerminalReconciliation(
         return;
       }
 
-      const hostTombstones = initial.pendingKills.filter(
-        (pending) => pending.hostId === activeHostId,
-      );
+      const hostTombstones = landingTerminalPendingKills(
+        initial.pendingKills,
+      ).filter((pending) => pending.hostId === activeHostId);
       const excludedSessionKeys = new Set(
-        hostTombstones.map((pending) =>
-          terminalSessionKey(pending.hostId, pending.sessionId),
-        ),
+        hostTombstones.map((pending) => landingTabRefKey(pending)),
       );
       const listedSessionIds = new Set(
         freshSessions.map((session) => session.sessionId),
@@ -344,19 +341,20 @@ export function useLandingTerminalReconciliation(
         return;
       }
 
-      const current = useLandingTerminalStore.getState();
+      const current = useLandingPanelStore.getState();
       const reconciliation = reconcileLandingTerminalTabs({
-        tabs: current.tabs,
-        activeInstanceId: current.activeInstanceId,
+        tabs: landingTerminalTabs(current.tabs).filter(
+          (tab) => tab.hostId === activeHostId,
+        ),
         activeHostId,
         sessions: freshSessions,
         excludedSessionKeys,
         mintInstanceId: () => `landing-terminal-${uuidv4()}`,
       });
-      current.applyReconciliation(
-        landingPageId,
+      current.applyReconciliationSlice(
+        activeHostId,
+        "terminal",
         reconciliation.tabs,
-        reconciliation.activeInstanceId,
         reconciliation.collapseWhenEmpty,
       );
       // Publish only after session reconciliation applied and host identity
@@ -380,7 +378,6 @@ export function useLandingTerminalReconciliation(
     connectionEpoch,
     generation,
     killTerminal,
-    landingPageId,
     onReconciled,
     onError,
     onSettled,
@@ -428,9 +425,7 @@ export async function drainLegacyLandingTombstones(args: {
       !args.listedSessionIds.has(pending.sessionId) &&
       absentListingProvesDeath(pending)
     ) {
-      useLandingTerminalStore
-        .getState()
-        .clearPendingKill(pending.hostId, pending.sessionId);
+      useLandingPanelStore.getState().clearPendingKill(pending);
     }
   }
   await Promise.all(
@@ -472,7 +467,6 @@ export async function drainLegacyLandingTombstones(args: {
 
 export async function reconcileCapableLandingTerminals(args: {
   readonly activeHostId: string;
-  readonly landingPageId: string;
   readonly capability: LandingTerminalAuthorityEntry["authority"]["capability"];
   readonly canMutate: boolean;
   readonly closeTerminal: (
@@ -493,8 +487,8 @@ export async function reconcileCapableLandingTerminals(args: {
   if (initialCollection?.streamSnapshotFresh !== true) {
     return "snapshot-not-fresh";
   }
-  const store = useLandingTerminalStore.getState();
-  const pendingKills = store.pendingKills.filter(
+  const store = useLandingPanelStore.getState();
+  const pendingKills = landingTerminalPendingKills(store.pendingKills).filter(
     (pending) => pending.hostId === activeHostId,
   );
 
@@ -543,9 +537,7 @@ export async function reconcileCapableLandingTerminals(args: {
         // by the recovery bridge. Leave it for that bridge to drain.
         return;
       }
-      useLandingTerminalStore
-        .getState()
-        .clearPendingKill(activeHostId, pending.sessionId);
+      useLandingPanelStore.getState().clearPendingKill(pending);
     }),
   );
 
@@ -555,14 +547,14 @@ export async function reconcileCapableLandingTerminals(args: {
     return "snapshot-not-fresh";
   }
 
-  const legacyTabs = useLandingTerminalStore
-    .getState()
-    .tabs.filter(
-      (tab) =>
-        tab.hostId === activeHostId &&
-        tab.hostAuthorityAcknowledged !== true &&
-        tab.pendingCreate !== true,
-    );
+  const legacyTabs = landingTerminalTabs(
+    useLandingPanelStore.getState().tabs,
+  ).filter(
+    (tab) =>
+      tab.hostId === activeHostId &&
+      tab.hostAuthorityAcknowledged !== true &&
+      tab.pendingCreate !== true,
+  );
   await Promise.all(
     legacyTabs.map(async (legacyTab) => {
       const collection =
@@ -573,7 +565,7 @@ export async function reconcileCapableLandingTerminals(args: {
         legacyTab.sessionId,
       );
       if (known !== undefined) {
-        useLandingTerminalStore
+        useLandingPanelStore
           .getState()
           .adoptHostTerminal(legacyTab.instanceId, known);
         return;
@@ -604,9 +596,9 @@ export async function reconcileCapableLandingTerminals(args: {
         },
         {
           read: () => {
-            const current = useLandingTerminalStore
-              .getState()
-              .tabs.find((tab) => tab.instanceId === legacyTab.instanceId);
+            const current = landingTerminalTabs(
+              useLandingPanelStore.getState().tabs,
+            ).find((tab) => tab.instanceId === legacyTab.instanceId);
             if (
               current === undefined ||
               current.hostAuthorityAcknowledged === true ||
@@ -627,7 +619,7 @@ export async function reconcileCapableLandingTerminals(args: {
             };
           },
           adoptCanonical: (response) => {
-            useLandingTerminalStore
+            useLandingPanelStore
               .getState()
               .adoptHostTerminal(legacyTab.instanceId, response.terminal);
           },
@@ -641,24 +633,25 @@ export async function reconcileCapableLandingTerminals(args: {
   if (collection?.streamSnapshotFresh !== true) {
     return "snapshot-not-fresh";
   }
-  const current = useLandingTerminalStore.getState();
+  const current = useLandingPanelStore.getState();
   const excludedTerminalKeys = new Set(
-    current.pendingKills
+    landingTerminalPendingKills(current.pendingKills)
       .filter((pending) => pending.hostId === activeHostId)
-      .map((pending) => terminalSessionKey(pending.hostId, pending.sessionId)),
+      .map((pending) => landingTabRefKey(pending)),
   );
   const reconciliation = reconcileHostAuthoritativeLandingTerminalTabs({
-    tabs: current.tabs,
-    activeInstanceId: current.activeInstanceId,
+    tabs: landingTerminalTabs(current.tabs).filter(
+      (tab) => tab.hostId === activeHostId,
+    ),
     hostId: activeHostId,
     terminals: plainTerminalCollectionValues(collection),
     excludedTerminalKeys,
     mintInstanceId: () => `landing-terminal-${uuidv4()}`,
   });
-  current.applyReconciliation(
-    args.landingPageId,
+  current.applyReconciliationSlice(
+    activeHostId,
+    "terminal",
     reconciliation.tabs,
-    reconciliation.activeInstanceId,
     reconciliation.collapseWhenEmpty,
   );
   return "reconciled";

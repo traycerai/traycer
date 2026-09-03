@@ -7,9 +7,9 @@ import { useTerminalListFor } from "@/hooks/terminal/use-terminal-list-for-query
 import { useHomeWorkspaceSource } from "@/components/home/host-workspace-selector/use-home-workspace-source";
 import type { WorktreeStagingKey } from "@/stores/worktree/worktree-intent-staging-store";
 import {
-  landingTerminalLayoutFor,
-  useLandingTerminalStore,
-} from "@/stores/home/landing-terminal-store";
+  landingPanelLayoutFor,
+  useLandingPanelStore,
+} from "@/stores/home/landing-panel-store";
 import {
   LandingTerminalGestureContext,
   type LandingTerminalGestureValue,
@@ -70,10 +70,10 @@ export function LandingTerminalGestureProvider(props: {
 
   const capturedLandingPageId =
     pendingGesture?.draftId ?? "unbound-landing-page";
-  const capturedPanelOpen = useLandingTerminalStore((state) =>
+  const capturedPanelOpen = useLandingPanelStore((state) =>
     pendingGesture === null
       ? false
-      : landingTerminalLayoutFor(state, capturedLandingPageId).panelOpen,
+      : landingPanelLayoutFor(state, capturedLandingPageId).panelOpen,
   );
 
   // A gesture only pins while the page it opened is still open. Its terminal

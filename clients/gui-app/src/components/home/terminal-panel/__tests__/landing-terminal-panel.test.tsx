@@ -11,9 +11,10 @@ import type { CanonicalTerminalSessionInfo } from "@traycer/protocol/host/termin
 import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
 import type { PlainTerminalCollection } from "@/lib/terminals/plain-terminal-authority";
 import {
-  landingTerminalLayoutFor,
-  useLandingTerminalStore,
-} from "@/stores/home/landing-terminal-store";
+  landingPanelLayoutFor,
+  landingTerminalTabs,
+  useLandingPanelStore,
+} from "@/stores/home/landing-panel-store";
 import {
   landingTerminalRightActionsKey,
   useMobileHeaderStore,
@@ -324,17 +325,14 @@ import { requestLandingTerminalClose } from "@/lib/terminals/landing-terminal-cl
 const TEST_LANDING_PAGE_ID = "test-landing-page";
 
 function testLayout() {
-  return landingTerminalLayoutFor(
-    useLandingTerminalStore.getState(),
+  return landingPanelLayoutFor(
+    useLandingPanelStore.getState(),
     TEST_LANDING_PAGE_ID,
   );
 }
 
 function layoutFor(landingPageId: string) {
-  return landingTerminalLayoutFor(
-    useLandingTerminalStore.getState(),
-    landingPageId,
-  );
+  return landingPanelLayoutFor(useLandingPanelStore.getState(), landingPageId);
 }
 
 /**
@@ -625,7 +623,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.queryClient.fetchQuery.mockImplementation(() =>
       Promise.resolve(mocks.freshProbeData ?? mocks.probeData),
     );
-    useLandingTerminalStore.getState().resetForTests();
+    useLandingPanelStore.getState().resetForTests();
   });
 
   afterEach(() => {
@@ -635,7 +633,7 @@ describe("<LandingTerminalPanel />", () => {
     focusCleanups.length = 0;
     resetTerminalFocusRegistryForTests();
     resetPrimaryFocusCoordinatorForTests();
-    useLandingTerminalStore.getState().resetForTests();
+    useLandingPanelStore.getState().resetForTests();
     setSystemTabModalApi(null);
     useTabsStore.setState(INITIAL_TABS_LAYOUT);
   });
@@ -684,9 +682,7 @@ describe("<LandingTerminalPanel />", () => {
     // app header - collapse therefore belongs in the same slot rather than in a
     // panel bar stacked under a header that is still on screen.
     it("turns into collapse in the same slot while the panel is open", async () => {
-      useLandingTerminalStore
-        .getState()
-        .setPanelOpen(TEST_LANDING_PAGE_ID, true);
+      useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
       render(
         <>
           {panelUi()}
@@ -704,9 +700,7 @@ describe("<LandingTerminalPanel />", () => {
     });
 
     it("renders no panel header row of its own", async () => {
-      useLandingTerminalStore
-        .getState()
-        .setPanelOpen(TEST_LANDING_PAGE_ID, true);
+      useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
       render(panelUi());
       await screen.findByTestId("landing-terminal-panel");
 
@@ -825,7 +819,7 @@ describe("<LandingTerminalPanel />", () => {
   });
 
   it("hides while no host is selected, preserving an open panel until selection", async () => {
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     const view = render(panelUi());
     expect(screen.queryByTestId("landing-terminal-panel")).toBeNull();
     expect(screen.queryByTestId("landing-terminal-toggle")).toBeNull();
@@ -849,7 +843,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = emptyList("/Users/dev");
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     // Open: the header owns collapse; the floating reveal button must be gone
@@ -966,7 +960,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen("draft-a", true);
+    useLandingPanelStore.getState().setPanelOpen("draft-a", true);
     render(panelUiInBoxlessPaneAnchor());
 
     const handle = await screen.findByTestId("landing-terminal-resize-handle");
@@ -1024,13 +1018,17 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = null;
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = emptyList("/Users/dev");
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
-    expect(useLandingTerminalStore.getState().tabs[0]?.cwd).toBe("/Users/dev");
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs)[0]?.cwd,
+    ).toBe("/Users/dev");
     expect(screen.queryByTestId("landing-terminal-select-folder")).toBeNull();
   });
 
@@ -1047,13 +1045,17 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = null;
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = emptyList("/Users/dev");
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
-    expect(useLandingTerminalStore.getState().tabs[0]?.hostId).toBe("host-b");
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs)[0]?.hostId,
+    ).toBe("host-b");
   });
 
   it("holds an auto-spawn that settles while the start page is backgrounded, then spawns on return", async () => {
@@ -1068,7 +1070,7 @@ describe("<LandingTerminalPanel />", () => {
     // a `display:none` pane cannot be measured and lands at the 80x24 fallback,
     // and the focus grab would pull the keyboard off the epic canvas.
     seedTabsLayout([PANEL_DRAFT_TAB, PANEL_EPIC_TAB], PANEL_EPIC_TAB.id);
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     // The fresh list is the last step before settlement, so waiting on it makes
@@ -1079,7 +1081,9 @@ describe("<LandingTerminalPanel />", () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(useLandingTerminalStore.getState().tabs).toHaveLength(0);
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs),
+    ).toHaveLength(0);
 
     // Returning must still open the terminal the user asked for: the
     // reconciliation key is unchanged on the way back, so a settlement that was
@@ -1091,9 +1095,13 @@ describe("<LandingTerminalPanel />", () => {
     });
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
-    expect(useLandingTerminalStore.getState().tabs[0]?.cwd).toBe("/Users/dev");
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs)[0]?.cwd,
+    ).toBe("/Users/dev");
   });
 
   it("shows host update guidance when homeCwd is null and nothing is pinned", async () => {
@@ -1102,13 +1110,15 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = null;
     mocks.probeData = emptyList(null);
     mocks.freshProbeData = emptyList(null);
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     expect(
       await screen.findByTestId("landing-terminal-host-update"),
     ).toBeTruthy();
-    expect(useLandingTerminalStore.getState().tabs).toHaveLength(0);
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs),
+    ).toHaveLength(0);
     expect(screen.queryByTestId("landing-terminal-select-folder")).toBeNull();
   });
 
@@ -1116,7 +1126,8 @@ describe("<LandingTerminalPanel />", () => {
     mocks.activeHostId = "host-a";
     mocks.clientActiveHostId = "host-a";
     mocks.primaryWorkspacePath = "/workspace/project";
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "tab-1",
       sessionId: "session-1",
       hostId: "host-a",
@@ -1124,7 +1135,7 @@ describe("<LandingTerminalPanel />", () => {
       name: "project",
       titleSource: "default",
     });
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
 
     render(panelUi());
 
@@ -1140,25 +1151,31 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = emptyList("/Users/dev");
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     // Opening an empty panel auto-spawns exactly one terminal.
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
-    expect(useLandingTerminalStore.getState().tabs[0]?.name).toBe(
-      "project · New Terminal",
-    );
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs)[0]?.name,
+    ).toBe("project · New Terminal");
 
     fireEvent.doubleClick(screen.getByTestId("landing-terminal-tab-strip"));
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(2);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(2);
     });
 
     // A double-click that lands on a tab activates it; it must not spawn.
     fireEvent.doubleClick(screen.getAllByRole("tab")[0]);
-    expect(useLandingTerminalStore.getState().tabs).toHaveLength(2);
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs),
+    ).toHaveLength(2);
   });
 
   it("scrolls a newly created tab into view when it overflows the strip", async () => {
@@ -1167,11 +1184,13 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = emptyList("/Users/dev");
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
 
     const scrollIntoView = vi.spyOn(
@@ -1181,10 +1200,14 @@ describe("<LandingTerminalPanel />", () => {
     fireEvent.click(screen.getByTestId("landing-terminal-new-tab"));
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(2);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(2);
     });
 
-    const created = useLandingTerminalStore.getState().tabs[1];
+    const created = landingTerminalTabs(
+      useLandingPanelStore.getState().tabs,
+    )[1];
     const createdEl = screen.getByTestId(
       `landing-terminal-tab-${created.instanceId}`,
     );
@@ -1200,13 +1223,15 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = emptyList("/Users/dev");
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
-    const tab = useLandingTerminalStore.getState().tabs[0];
+    const tab = landingTerminalTabs(useLandingPanelStore.getState().tabs)[0];
 
     fireEvent.contextMenu(
       screen.getByTestId(`landing-terminal-tab-${tab.instanceId}`),
@@ -1226,7 +1251,9 @@ describe("<LandingTerminalPanel />", () => {
     fireEvent.keyDown(input, { key: "Enter" });
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs[0]?.name).toBe("build");
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs)[0]?.name,
+      ).toBe("build");
     });
   });
 
@@ -1249,7 +1276,8 @@ describe("<LandingTerminalPanel />", () => {
       runtime: "dormant",
     });
     mocks.plainCollection = freshPlainCollection([running, dormant]);
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "running-instance",
       sessionId: "terminal-running",
       hostId: "host-a",
@@ -1258,7 +1286,8 @@ describe("<LandingTerminalPanel />", () => {
       titleSource: "default",
       hostAuthorityAcknowledged: true,
     });
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "dormant-instance",
       sessionId: "terminal-dormant",
       hostId: "host-a",
@@ -1267,7 +1296,7 @@ describe("<LandingTerminalPanel />", () => {
       titleSource: "default",
       hostAuthorityAcknowledged: true,
     });
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     expect(await screen.findByText("Host title")).toBeTruthy();
@@ -1300,7 +1329,8 @@ describe("<LandingTerminalPanel />", () => {
         runtime: "unknown",
       }),
     ]);
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "unknown-instance",
       sessionId: "terminal-unknown",
       hostId: "host-a",
@@ -1309,7 +1339,7 @@ describe("<LandingTerminalPanel />", () => {
       titleSource: "default",
       hostAuthorityAcknowledged: true,
     });
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     expect(
@@ -1337,6 +1367,7 @@ describe("<LandingTerminalPanel />", () => {
     });
     mocks.plainCollection = freshPlainCollection([projection]);
     const local = {
+      kind: "terminal" as const,
       instanceId: "shared-instance",
       sessionId: "terminal-shared",
       hostId: "host-a",
@@ -1345,8 +1376,8 @@ describe("<LandingTerminalPanel />", () => {
       titleSource: "manual" as const,
       hostAuthorityAcknowledged: true,
     };
-    useLandingTerminalStore.getState().addTab(local);
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().addTab(local);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     fireEvent.contextMenu(
@@ -1364,9 +1395,9 @@ describe("<LandingTerminalPanel />", () => {
       terminalId: "terminal-shared",
       manualTitle: "Renamed everywhere",
     });
-    expect(useLandingTerminalStore.getState().tabs[0]?.name).not.toBe(
-      "Renamed everywhere",
-    );
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs)[0]?.name,
+    ).not.toBe("Renamed everywhere");
 
     fireEvent.click(screen.getByRole("button", { name: "Close Shared title" }));
     await waitFor(() => {
@@ -1374,7 +1405,7 @@ describe("<LandingTerminalPanel />", () => {
         hostId: "host-a",
         terminalId: "terminal-shared",
       });
-      expect(useLandingTerminalStore.getState().pendingKills).toEqual([]);
+      expect(useLandingPanelStore.getState().pendingKills).toEqual([]);
     });
     expect(mocks.kill).not.toHaveBeenCalled();
   });
@@ -1399,7 +1430,8 @@ describe("<LandingTerminalPanel />", () => {
       runtime: "running",
     });
     mocks.plainCollection = freshPlainCollection([projection]);
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "owned-instance",
       sessionId: "terminal-owned",
       hostId: "host-a",
@@ -1408,7 +1440,7 @@ describe("<LandingTerminalPanel />", () => {
       titleSource: "manual" as const,
       hostAuthorityAcknowledged: true,
     });
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
 
     // Another surface's request is already in flight for this lifetime, and it
     // settles without retiring the record.
@@ -1429,14 +1461,14 @@ describe("<LandingTerminalPanel />", () => {
     render(panelUi());
     fireEvent.click(screen.getByRole("button", { name: "Close Owned title" }));
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().pendingKills).toHaveLength(1);
+      expect(useLandingPanelStore.getState().pendingKills).toHaveLength(1);
     });
     releaseOwner();
     await waitFor(() => expect(ownerClose).toHaveBeenCalledTimes(1));
 
     // It joined rather than sending its own, and left the record alone.
     expect(mocks.plainCloseAsync).not.toHaveBeenCalled();
-    expect(useLandingTerminalStore.getState().pendingKills).toHaveLength(1);
+    expect(useLandingPanelStore.getState().pendingKills).toHaveLength(1);
   });
 
   it("blocks capable-host create and rename, but still tombstones a close without dispatching, while authority is stale", async () => {
@@ -1454,6 +1486,7 @@ describe("<LandingTerminalPanel />", () => {
     });
     mocks.plainCollection = freshPlainCollection([projection]);
     const local = {
+      kind: "terminal" as const,
       instanceId: "stale-instance",
       sessionId: "terminal-stale",
       hostId: "host-a",
@@ -1462,14 +1495,16 @@ describe("<LandingTerminalPanel />", () => {
       titleSource: "manual" as const,
       hostAuthorityAcknowledged: true,
     };
-    useLandingTerminalStore.getState().addTab(local);
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().addTab(local);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     const plus = await screen.findByRole("button", { name: "New terminal" });
     expect(plus.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(plus);
-    expect(useLandingTerminalStore.getState().tabs).toEqual([local]);
+    expect(landingTerminalTabs(useLandingPanelStore.getState().tabs)).toEqual([
+      local,
+    ]);
 
     // Rename gates on the same authority readiness create does - unlike
     // close, it has no durable fallback.
@@ -1495,10 +1530,13 @@ describe("<LandingTerminalPanel />", () => {
     fireEvent.click(closeButton);
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toEqual([]);
+      expect(landingTerminalTabs(useLandingPanelStore.getState().tabs)).toEqual(
+        [],
+      );
     });
-    expect(useLandingTerminalStore.getState().pendingKills).toEqual([
+    expect(useLandingPanelStore.getState().pendingKills).toEqual([
       {
+        kind: "terminal",
         hostId: "host-a",
         sessionId: "terminal-stale",
         hostAuthorityAcknowledged: true,
@@ -1517,6 +1555,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.freshProbeData = mocks.probeData;
     mocks.plainAuthorityStatus = "unknown";
     const local = {
+      kind: "terminal" as const,
       instanceId: "unresolved-instance",
       sessionId: "terminal-unresolved",
       hostId: "host-a",
@@ -1524,8 +1563,8 @@ describe("<LandingTerminalPanel />", () => {
       name: "Unresolved title",
       titleSource: "default" as const,
     };
-    useLandingTerminalStore.getState().addTab(local);
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().addTab(local);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     const closeButton = await screen.findByRole("button", {
@@ -1537,10 +1576,13 @@ describe("<LandingTerminalPanel />", () => {
     fireEvent.click(closeButton);
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toEqual([]);
+      expect(landingTerminalTabs(useLandingPanelStore.getState().tabs)).toEqual(
+        [],
+      );
     });
-    expect(useLandingTerminalStore.getState().pendingKills).toEqual([
+    expect(useLandingPanelStore.getState().pendingKills).toEqual([
       {
+        kind: "terminal",
         hostId: "host-a",
         sessionId: "terminal-unresolved",
         hostAuthorityAcknowledged: false,
@@ -1566,6 +1608,7 @@ describe("<LandingTerminalPanel />", () => {
     });
     mocks.plainCollection = freshPlainCollection([projection]);
     const local = {
+      kind: "terminal" as const,
       instanceId: "ready-instance",
       sessionId: "terminal-ready",
       hostId: "host-a",
@@ -1574,8 +1617,8 @@ describe("<LandingTerminalPanel />", () => {
       titleSource: "manual" as const,
       hostAuthorityAcknowledged: true,
     };
-    useLandingTerminalStore.getState().addTab(local);
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().addTab(local);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     const closeButton = await screen.findByRole("button", {
@@ -1593,7 +1636,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
     mocks.plainAuthorityStatus = "unknown";
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
     const router = fakeKeybindingRouter();
 
@@ -1612,7 +1655,9 @@ describe("<LandingTerminalPanel />", () => {
       await Promise.resolve();
     });
 
-    expect(useLandingTerminalStore.getState().tabs).toHaveLength(0);
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs),
+    ).toHaveLength(0);
   });
 
   it("closes every terminal from the context menu, tombstoning before killing", async () => {
@@ -1621,17 +1666,21 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = emptyList("/Users/dev");
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
     fireEvent.click(screen.getByTestId("landing-terminal-new-tab"));
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(2);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(2);
     });
-    const before = useLandingTerminalStore.getState().tabs;
+    const before = landingTerminalTabs(useLandingPanelStore.getState().tabs);
 
     fireEvent.contextMenu(
       screen.getByTestId(`landing-terminal-tab-${before[0].instanceId}`),
@@ -1639,7 +1688,9 @@ describe("<LandingTerminalPanel />", () => {
     fireEvent.click(await screen.findByText("Close All"));
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(0);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(0);
     });
     expect(testLayout().panelOpen).toBe(false);
     // Every closed shell gets its own kill. (The tombstones they were written
@@ -1678,6 +1729,7 @@ describe("<LandingTerminalPanel />", () => {
         }),
     );
     const readyTab = {
+      kind: "terminal" as const,
       instanceId: "ready-instance",
       sessionId: "terminal-ready",
       hostId: "host-a",
@@ -1687,6 +1739,7 @@ describe("<LandingTerminalPanel />", () => {
       hostAuthorityAcknowledged: true,
     };
     const notReadyTab = {
+      kind: "terminal" as const,
       instanceId: "not-ready-instance",
       sessionId: "terminal-not-ready",
       hostId: "host-b",
@@ -1695,9 +1748,9 @@ describe("<LandingTerminalPanel />", () => {
       titleSource: "default" as const,
       hostAuthorityAcknowledged: true,
     };
-    useLandingTerminalStore.getState().addTab(readyTab);
-    useLandingTerminalStore.getState().addTab(notReadyTab);
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().addTab(readyTab);
+    useLandingPanelStore.getState().addTab(notReadyTab);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     await screen.findByTestId(`landing-terminal-tab-${readyTab.instanceId}`);
@@ -1709,20 +1762,24 @@ describe("<LandingTerminalPanel />", () => {
     fireEvent.click(await screen.findByText("Close All"));
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toEqual([]);
+      expect(landingTerminalTabs(useLandingPanelStore.getState().tabs)).toEqual(
+        [],
+      );
     });
     // Tombstone-first, batched: both refs are durably recorded - the
     // not-ready host's tombstone is the recovery bridge's only record that a
     // shell needs killing once that host becomes dialable.
-    expect(useLandingTerminalStore.getState().pendingKills).toEqual(
+    expect(useLandingPanelStore.getState().pendingKills).toEqual(
       expect.arrayContaining([
         {
+          kind: "terminal",
           hostId: "host-a",
           sessionId: "terminal-ready",
           hostAuthorityAcknowledged: true,
           pendingCreate: false,
         },
         {
+          kind: "terminal",
           hostId: "host-b",
           sessionId: "terminal-not-ready",
           hostAuthorityAcknowledged: true,
@@ -1749,8 +1806,9 @@ describe("<LandingTerminalPanel />", () => {
     // Only the dispatched (ready-host) tombstone clears on acknowledgement;
     // the not-ready host's stays until the recovery bridge can ask it.
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().pendingKills).toEqual([
+      expect(useLandingPanelStore.getState().pendingKills).toEqual([
         {
+          kind: "terminal",
           hostId: "host-b",
           sessionId: "terminal-not-ready",
           hostAuthorityAcknowledged: true,
@@ -1766,14 +1824,16 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = listWith([runningSession("orphan")], "/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
-      expect(useLandingTerminalStore.getState().tabs[0]?.sessionId).toBe(
-        "orphan",
-      );
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs)[0]?.sessionId,
+      ).toBe("orphan");
     });
     expect(mocks.kill).not.toHaveBeenCalled();
     expect(mocks.queryClient.fetchQuery).toHaveBeenCalledTimes(1);
@@ -1788,14 +1848,16 @@ describe("<LandingTerminalPanel />", () => {
       [runningSession("fresh-orphan")],
       "/Users/dev",
     );
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
-      expect(useLandingTerminalStore.getState().tabs[0]?.sessionId).toBe(
-        "fresh-orphan",
-      );
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs)[0]?.sessionId,
+      ).toBe("fresh-orphan");
     });
   });
 
@@ -1807,7 +1869,8 @@ describe("<LandingTerminalPanel />", () => {
       [runningSession("still-running")],
       "/Users/dev",
     );
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "tab-1",
       sessionId: "still-running",
       hostId: "host-a",
@@ -1815,8 +1878,8 @@ describe("<LandingTerminalPanel />", () => {
       name: "project",
       titleSource: "default",
     });
-    useLandingTerminalStore.getState().closeTab(TEST_LANDING_PAGE_ID, "tab-1");
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().closeTab(TEST_LANDING_PAGE_ID, "tab-1");
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     await waitFor(() => {
@@ -1825,8 +1888,9 @@ describe("<LandingTerminalPanel />", () => {
         sessionId: "still-running",
       });
     });
-    expect(useLandingTerminalStore.getState().pendingKills).toEqual([
+    expect(useLandingPanelStore.getState().pendingKills).toEqual([
       {
+        kind: "terminal",
         hostId: "host-a",
         sessionId: "still-running",
         hostAuthorityAcknowledged: false,
@@ -1840,13 +1904,17 @@ describe("<LandingTerminalPanel />", () => {
     mocks.clientActiveHostId = "host-a";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     const view = render(panelUi());
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
-    const homeTab = useLandingTerminalStore.getState().tabs[0];
+    const homeTab = landingTerminalTabs(
+      useLandingPanelStore.getState().tabs,
+    )[0];
     expect(homeTab.cwd).toBe("/Users/dev");
     expect(mocks.queryClient.fetchQuery).toHaveBeenCalledTimes(1);
 
@@ -1861,18 +1929,22 @@ describe("<LandingTerminalPanel />", () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(useLandingTerminalStore.getState().tabs).toEqual([homeTab]);
-    expect(useLandingTerminalStore.getState().activeInstanceId).toBe(
+    expect(landingTerminalTabs(useLandingPanelStore.getState().tabs)).toEqual([
+      homeTab,
+    ]);
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
       homeTab.instanceId,
     );
 
     fireEvent.click(screen.getByTestId("landing-terminal-new-tab"));
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(2);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(2);
     });
-    const created = useLandingTerminalStore
-      .getState()
-      .tabs.find((tab) => tab.instanceId !== homeTab.instanceId);
+    const created = landingTerminalTabs(
+      useLandingPanelStore.getState().tabs,
+    ).find((tab) => tab.instanceId !== homeTab.instanceId);
     expect(created?.cwd).toBe("/workspace/project");
   });
 
@@ -1882,35 +1954,41 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
     const router = fakeKeybindingRouter();
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
 
     act(() => {
       dispatchAction("tab.new", router);
     });
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(2);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(2);
     });
-    const [first, second] = useLandingTerminalStore.getState().tabs;
-    expect(useLandingTerminalStore.getState().activeInstanceId).toBe(
+    const [first, second] = landingTerminalTabs(
+      useLandingPanelStore.getState().tabs,
+    );
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
       second.instanceId,
     );
 
     act(() => {
       dispatchAction("tab.prev", router);
     });
-    expect(useLandingTerminalStore.getState().activeInstanceId).toBe(
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
       first.instanceId,
     );
     act(() => {
       dispatchAction("tab.next", router);
     });
-    expect(useLandingTerminalStore.getState().activeInstanceId).toBe(
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
       second.instanceId,
     );
 
@@ -1918,11 +1996,13 @@ describe("<LandingTerminalPanel />", () => {
       dispatchAction("tab.close", router);
     });
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
-    expect(useLandingTerminalStore.getState().tabs[0].instanceId).toBe(
-      first.instanceId,
-    );
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs)[0].instanceId,
+    ).toBe(first.instanceId);
     await waitFor(() => {
       expect(mocks.killAsync).toHaveBeenCalledWith({
         hostId: second.hostId,
@@ -1937,18 +2017,24 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
     fireEvent.click(screen.getByRole("button", { name: "New terminal" }));
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(2);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(2);
     });
-    const [first, second] = useLandingTerminalStore.getState().tabs;
-    expect(useLandingTerminalStore.getState().activeInstanceId).toBe(
+    const [first, second] = landingTerminalTabs(
+      useLandingPanelStore.getState().tabs,
+    );
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
       second.instanceId,
     );
 
@@ -1957,7 +2043,7 @@ describe("<LandingTerminalPanel />", () => {
     act(() => {
       expect(match?.run()).toBe(true);
     });
-    expect(useLandingTerminalStore.getState().activeInstanceId).toBe(
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
       first.instanceId,
     );
 
@@ -1972,12 +2058,14 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
     const router = fakeKeybindingRouter();
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
     expect(
       screen.queryByRole("button", { name: "Restore terminal panel" }),
@@ -2021,7 +2109,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = null;
     mocks.probeData = emptyList(null);
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     await screen.findByTestId("landing-terminal-host-update");
@@ -2029,7 +2117,9 @@ describe("<LandingTerminalPanel />", () => {
     expect(plus.getAttribute("aria-disabled")).toBe("true");
     // aria-disabled instead of the native attr keeps it inert but reachable.
     fireEvent.click(plus);
-    expect(useLandingTerminalStore.getState().tabs).toHaveLength(0);
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs),
+    ).toHaveLength(0);
 
     fireEvent.focus(plus);
     const hints = await screen.findAllByText(
@@ -2045,17 +2135,21 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
     const plus = screen.getByRole("button", { name: "New terminal" });
     expect(plus.getAttribute("aria-disabled")).toBeNull();
     fireEvent.click(plus);
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(2);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(2);
     });
   });
 
@@ -2065,12 +2159,14 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
     const router = fakeKeybindingRouter();
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
 
     setSystemTabModalApi(openOverlayApi);
@@ -2080,7 +2176,9 @@ describe("<LandingTerminalPanel />", () => {
       dispatchAction("tab.close-all", router);
     });
     expect(matchDigitAction(leaderDigitEvent("Digit1"))).toBeNull();
-    expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs),
+    ).toHaveLength(1);
     expect(mocks.kill).not.toHaveBeenCalled();
   });
 
@@ -2090,14 +2188,16 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
     const router = fakeKeybindingRouter();
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
-    const tab = useLandingTerminalStore.getState().tabs[0];
+    const tab = landingTerminalTabs(useLandingPanelStore.getState().tabs)[0];
     const terminalFocus = vi.fn();
     const composerFocus = vi.fn();
     focusCleanups.push(
@@ -2142,7 +2242,8 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = listWith([runningSession("session-1")], "/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "tab-1",
       sessionId: "session-1",
       hostId: "host-a",
@@ -2150,10 +2251,10 @@ describe("<LandingTerminalPanel />", () => {
       name: "project",
       titleSource: "default",
     });
-    useLandingTerminalStore
+    useLandingPanelStore
       .getState()
       .setPanelWidthFraction(TEST_LANDING_PAGE_ID, 0.42);
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     const panel = screen.getByTestId("landing-terminal-panel");
@@ -2197,7 +2298,8 @@ describe("<LandingTerminalPanel />", () => {
       runningSession("session-1"),
       { ...runningSession("session-2"), cwd: "/workspace/other" },
     ];
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "tab-1",
       sessionId: "session-1",
       hostId: "host-a",
@@ -2205,7 +2307,8 @@ describe("<LandingTerminalPanel />", () => {
       name: "project",
       titleSource: "default",
     });
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "tab-2",
       sessionId: "session-2",
       hostId: "host-a",
@@ -2213,7 +2316,7 @@ describe("<LandingTerminalPanel />", () => {
       name: "other",
       titleSource: "default",
     });
-    useLandingTerminalStore.getState().activateTab("tab-1");
+    useLandingPanelStore.getState().activateTab("tab-1");
     const resolvers: Array<(value: unknown) => void> = [];
     mocks.queryClient.fetchQuery.mockImplementation(
       () =>
@@ -2248,7 +2351,7 @@ describe("<LandingTerminalPanel />", () => {
     });
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().activeInstanceId).toBe("tab-2");
+      expect(useLandingPanelStore.getState().activeInstanceId).toBe("tab-2");
     });
     await waitFor(() => {
       expect(
@@ -2262,7 +2365,8 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = listWith([runningSession("session-1")], "/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "tab-1",
       sessionId: "session-1",
       hostId: "host-a",
@@ -2270,7 +2374,7 @@ describe("<LandingTerminalPanel />", () => {
       name: "project",
       titleSource: "default",
     });
-    useLandingTerminalStore
+    useLandingPanelStore
       .getState()
       .setPanelWidthFraction(TEST_LANDING_PAGE_ID, 0.42);
     render(panelUi());
@@ -2315,7 +2419,8 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "tab-1",
       sessionId: "session-1",
       hostId: "host-a",
@@ -2323,7 +2428,7 @@ describe("<LandingTerminalPanel />", () => {
       name: "project",
       titleSource: "default",
     });
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     const terminalFocus = vi.fn();
     focusCleanups.push(
       registerTerminalFocus(
@@ -2360,9 +2465,13 @@ describe("<LandingTerminalPanel />", () => {
       dispatchAction("app.terminal.toggle", router);
     });
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
-    const created = useLandingTerminalStore.getState().tabs[0];
+    const created = landingTerminalTabs(
+      useLandingPanelStore.getState().tabs,
+    )[0];
 
     // The auto-spawned tile's engine registers after the create - the parked
     // request must fire exactly then, not get lost.
@@ -2386,17 +2495,21 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
     fireEvent.click(screen.getByTestId("landing-terminal-new-tab"));
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(2);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(2);
     });
-    const [first] = useLandingTerminalStore.getState().tabs;
+    const [first] = landingTerminalTabs(useLandingPanelStore.getState().tabs);
     const firstFocus = vi.fn();
     let firstEligible = true;
     focusCleanups.push(
@@ -2448,11 +2561,13 @@ describe("<LandingTerminalPanel />", () => {
     await drainDeferredListFetches(resolvers);
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
-    const [spawned] = useLandingTerminalStore.getState().tabs;
+    const [spawned] = landingTerminalTabs(useLandingPanelStore.getState().tabs);
     expect(spawned.cwd).toBe("/workspace/draft-a");
-    expect(useLandingTerminalStore.getState().activeInstanceId).toBe(
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
       spawned.instanceId,
     );
   });
@@ -2461,7 +2576,8 @@ describe("<LandingTerminalPanel />", () => {
     mocks.activeHostId = "host-a";
     mocks.primaryWorkspacePath = "/workspace/draft-a";
     mocks.probeData = emptyList(null);
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "exited-tab",
       sessionId: "exited-session",
       hostId: "host-a",
@@ -2481,7 +2597,7 @@ describe("<LandingTerminalPanel />", () => {
 
     act(() => {
       dispatchAction("app.terminal.toggle", router);
-      useLandingTerminalStore.getState().setPanelOpen("draft-b", true);
+      useLandingPanelStore.getState().setPanelOpen("draft-b", true);
     });
     mocks.primaryWorkspacePath = "/workspace/draft-b";
     view.rerender(panelUiForDraft("draft-b"));
@@ -2508,7 +2624,9 @@ describe("<LandingTerminalPanel />", () => {
     });
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(0);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(0);
     });
     expect(layoutFor("draft-a").panelOpen).toBe(false);
     expect(layoutFor("draft-b").panelOpen).toBe(false);
@@ -2537,7 +2655,7 @@ describe("<LandingTerminalPanel />", () => {
 
     // A folderless gesture resolves to the settled host home (#567), never to
     // draft-b's folder - that folder only became focused AFTER the capture.
-    const tabs = useLandingTerminalStore.getState().tabs;
+    const tabs = landingTerminalTabs(useLandingPanelStore.getState().tabs);
     expect(tabs).toHaveLength(1);
     expect(tabs[0]?.cwd).toBe("/Users/dev");
   });
@@ -2563,8 +2681,12 @@ describe("<LandingTerminalPanel />", () => {
     view.rerender(panelUiForDraft("draft-b"));
     await drainDeferredListFetches(resolvers);
 
-    expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
-    expect(useLandingTerminalStore.getState().tabs[0]).toMatchObject({
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs),
+    ).toHaveLength(1);
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs)[0],
+    ).toMatchObject({
       hostId: "host-a",
       cwd: "/workspace/draft-a",
     });
@@ -2593,7 +2715,9 @@ describe("<LandingTerminalPanel />", () => {
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
-    expect(useLandingTerminalStore.getState().tabs).toHaveLength(0);
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs),
+    ).toHaveLength(0);
     expect(mocks.queryClient.fetchQuery).not.toHaveBeenCalled();
   });
 
@@ -2623,8 +2747,12 @@ describe("<LandingTerminalPanel />", () => {
     view.rerender(panelUiForDraft("draft-b"));
     await drainDeferredListFetches(resolvers);
 
-    expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
-    expect(useLandingTerminalStore.getState().tabs[0]).toMatchObject({
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs),
+    ).toHaveLength(1);
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs)[0],
+    ).toMatchObject({
       hostId: "host-a",
       cwd: "/workspace/draft-a",
     });
@@ -2643,7 +2771,9 @@ describe("<LandingTerminalPanel />", () => {
       dispatchAction("app.terminal.toggle", router);
     });
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
     expect(
       screen
@@ -2665,10 +2795,12 @@ describe("<LandingTerminalPanel />", () => {
       ).toBe("true");
     });
     // The A terminal survives; focus-following must not have spawned in B.
-    expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
-    expect(useLandingTerminalStore.getState().tabs[0]?.cwd).toBe(
-      "/workspace/draft-a",
-    );
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs),
+    ).toHaveLength(1);
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs)[0]?.cwd,
+    ).toBe("/workspace/draft-a");
   });
 
   it("creates a + terminal on the captured host and folder even after focus moved to a folderless draft", async () => {
@@ -2700,9 +2832,13 @@ describe("<LandingTerminalPanel />", () => {
     fireEvent.click(plus);
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
-    expect(useLandingTerminalStore.getState().tabs[0]).toMatchObject({
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs)[0],
+    ).toMatchObject({
       hostId: "host-a",
       cwd: "/workspace/draft-a",
     });
@@ -2727,7 +2863,9 @@ describe("<LandingTerminalPanel />", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
-    expect(useLandingTerminalStore.getState().tabs).toHaveLength(0);
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs),
+    ).toHaveLength(0);
   });
 
   it("remembers a captured host's availability downgrade after focus switches away", async () => {
@@ -2774,7 +2912,8 @@ describe("<LandingTerminalPanel />", () => {
     // spawn there on settle.
     mocks.primaryWorkspacePath = "/workspace/other";
     mocks.probeData = emptyList("/Users/dev");
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "tab-1",
       sessionId: "session-1",
       hostId: "host-a",
@@ -2800,8 +2939,10 @@ describe("<LandingTerminalPanel />", () => {
     fireEvent.click(screen.getByTestId("landing-terminal-tab-tab-1"));
     await drainDeferredListFetches(resolvers);
 
-    expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
-    expect(useLandingTerminalStore.getState().activeInstanceId).toBe("tab-1");
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs),
+    ).toHaveLength(1);
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe("tab-1");
   });
 
   it("hands focus to the composer when closing the last tab collapses the panel", async () => {
@@ -2810,12 +2951,14 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
     const router = fakeKeybindingRouter();
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
     const composerFocus = vi.fn();
     focusCleanups.push(
@@ -2865,17 +3008,21 @@ describe("<LandingTerminalPanel />", () => {
     await waitFor(() => {
       expect(document.activeElement).toBe(pickerInput);
     });
-    expect(useLandingTerminalStore.getState().tabs).toHaveLength(0);
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs),
+    ).toHaveLength(0);
 
     fireEvent.keyDown(pickerInput, { key: "ArrowDown" });
     fireEvent.keyDown(pickerInput, { key: "Enter" });
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
-    expect(useLandingTerminalStore.getState().tabs[0]?.cwd).toBe(
-      "/workspace/other",
-    );
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs)[0]?.cwd,
+    ).toBe("/workspace/other");
     expect(
       screen.queryByTestId("landing-terminal-directory-picker"),
     ).toBeNull();
@@ -2907,13 +3054,15 @@ describe("<LandingTerminalPanel />", () => {
     setPrimaryFocusInteractionActive(false);
     await drainDeferredListFetches(resolvers);
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
 
     const terminalTarget = document.createElement("textarea");
     document.body.append(terminalTarget);
     const terminalFocus = vi.fn(() => terminalTarget.focus());
-    const tab = useLandingTerminalStore.getState().tabs[0];
+    const tab = landingTerminalTabs(useLandingPanelStore.getState().tabs)[0];
     focusCleanups.push(
       registerTerminalFocus(
         tab.instanceId,
@@ -2957,13 +3106,15 @@ describe("<LandingTerminalPanel />", () => {
     handlePrimaryFocusIn(composer);
     await drainDeferredListFetches(resolvers);
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
 
     const terminalTarget = document.createElement("textarea");
     document.body.append(terminalTarget);
     const terminalFocus = vi.fn(() => terminalTarget.focus());
-    const tab = useLandingTerminalStore.getState().tabs[0];
+    const tab = landingTerminalTabs(useLandingPanelStore.getState().tabs)[0];
     focusCleanups.push(
       registerTerminalFocus(
         tab.instanceId,
@@ -3137,9 +3288,9 @@ describe("<LandingTerminalPanel />", () => {
     fireEvent.keyDown(pickerInput, { key: "Enter" });
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs[0]?.cwd).toBe(
-        "/workspace/other",
-      );
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs)[0]?.cwd,
+      ).toBe("/workspace/other");
     });
   });
 
@@ -3150,7 +3301,8 @@ describe("<LandingTerminalPanel />", () => {
     mocks.workspacePaths = ["/workspace/project", "/workspace/other"];
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "project-tab",
       sessionId: "project-session",
       hostId: "host-a",
@@ -3158,7 +3310,8 @@ describe("<LandingTerminalPanel />", () => {
       name: "project · New Terminal",
       titleSource: "default",
     });
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "other-tab",
       sessionId: "other-session",
       hostId: "host-a",
@@ -3166,7 +3319,7 @@ describe("<LandingTerminalPanel />", () => {
       name: "other · New Terminal",
       titleSource: "default",
     });
-    useLandingTerminalStore.getState().activateTab("project-tab");
+    useLandingPanelStore.getState().activateTab("project-tab");
     render(panelUi());
     const router = fakeKeybindingRouter();
     focusCleanups.push(
@@ -3203,14 +3356,16 @@ describe("<LandingTerminalPanel />", () => {
     fireEvent.keyDown(pickerInput, { key: "Enter" });
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().activeInstanceId).toBe(
+      expect(useLandingPanelStore.getState().activeInstanceId).toBe(
         "other-tab",
       );
       expect(document.activeElement).toBe(
         screen.getByTestId("landing-terminal-tab-other-tab"),
       );
     });
-    expect(useLandingTerminalStore.getState().tabs).toHaveLength(2);
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs),
+    ).toHaveLength(2);
   });
 
   it("always creates for explicit new-terminal actions after directory selection", async () => {
@@ -3220,12 +3375,14 @@ describe("<LandingTerminalPanel />", () => {
     mocks.workspacePaths = ["/workspace/project", "/workspace/other"];
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
     const router = fakeKeybindingRouter();
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
 
     const createInOther = async (): Promise<void> => {
@@ -3259,9 +3416,9 @@ describe("<LandingTerminalPanel />", () => {
     fireEvent.doubleClick(screen.getByTestId("landing-terminal-tab-strip"));
     await createInOther();
 
-    const otherTabs = useLandingTerminalStore
-      .getState()
-      .tabs.filter((tab) => tab.cwd === "/workspace/other");
+    const otherTabs = landingTerminalTabs(
+      useLandingPanelStore.getState().tabs,
+    ).filter((tab) => tab.cwd === "/workspace/other");
     expect(otherTabs).toHaveLength(4);
   });
 
@@ -3299,7 +3456,9 @@ describe("<LandingTerminalPanel />", () => {
       expect(testLayout().panelOpen).toBe(false);
       expect(composerFocus).toHaveBeenCalled();
     });
-    expect(useLandingTerminalStore.getState().tabs).toHaveLength(0);
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs),
+    ).toHaveLength(0);
   });
 
   it("returns from the inline chooser to the active terminal", async () => {
@@ -3309,11 +3468,13 @@ describe("<LandingTerminalPanel />", () => {
     mocks.workspacePaths = ["/workspace/project", "/workspace/other"];
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
     const newTerminalButton = screen.getByTestId("landing-terminal-new-tab");
     fireEvent.click(newTerminalButton);
@@ -3336,7 +3497,9 @@ describe("<LandingTerminalPanel />", () => {
       expect(document.activeElement).toBe(newTerminalButton);
     });
     expect(testLayout().panelOpen).toBe(true);
-    expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs),
+    ).toHaveLength(1);
   });
 
   it("clears an open chooser when the panel collapses through the store", async () => {
@@ -3346,7 +3509,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.workspacePaths = ["/workspace/project", "/workspace/other"];
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     fireEvent.click(screen.getByTestId("landing-terminal-new-tab"));
@@ -3355,9 +3518,7 @@ describe("<LandingTerminalPanel />", () => {
     ).toBeTruthy();
 
     act(() =>
-      useLandingTerminalStore
-        .getState()
-        .setPanelOpen(TEST_LANDING_PAGE_ID, false),
+      useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, false),
     );
 
     await waitFor(() => {
@@ -3381,14 +3542,16 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     const view = render(panelUi());
     const router = fakeKeybindingRouter();
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
-    const first = useLandingTerminalStore.getState().tabs[0];
+    const first = landingTerminalTabs(useLandingPanelStore.getState().tabs)[0];
     expect(first.cwd).toBe("/workspace/project");
 
     // Collapse, repoint the composer's pinned folder, re-expand: the panel
@@ -3403,13 +3566,15 @@ describe("<LandingTerminalPanel />", () => {
       dispatchAction("app.terminal.toggle", router);
     });
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(2);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(2);
     });
-    const second = useLandingTerminalStore
-      .getState()
-      .tabs.find((tab) => tab.instanceId !== first.instanceId);
+    const second = landingTerminalTabs(
+      useLandingPanelStore.getState().tabs,
+    ).find((tab) => tab.instanceId !== first.instanceId);
     expect(second?.cwd).toBe("/workspace/other");
-    expect(useLandingTerminalStore.getState().activeInstanceId).toBe(
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
       second?.instanceId,
     );
 
@@ -3424,11 +3589,13 @@ describe("<LandingTerminalPanel />", () => {
       dispatchAction("app.terminal.toggle", router);
     });
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().activeInstanceId).toBe(
+      expect(useLandingPanelStore.getState().activeInstanceId).toBe(
         first.instanceId,
       );
     });
-    expect(useLandingTerminalStore.getState().tabs).toHaveLength(2);
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs),
+    ).toHaveLength(2);
   });
 
   it("leaves the open panel alone when the pinned folder changes without a reopen", async () => {
@@ -3437,13 +3604,15 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     const view = render(panelUi());
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
-    const first = useLandingTerminalStore.getState().tabs[0];
+    const first = landingTerminalTabs(useLandingPanelStore.getState().tabs)[0];
 
     mocks.primaryWorkspacePath = "/workspace/other";
     view.rerender(panelUi());
@@ -3456,8 +3625,10 @@ describe("<LandingTerminalPanel />", () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
-    expect(useLandingTerminalStore.getState().activeInstanceId).toBe(
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs),
+    ).toHaveLength(1);
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
       first.instanceId,
     );
   });
@@ -3475,9 +3646,13 @@ describe("<LandingTerminalPanel />", () => {
       dispatchAction("app.terminal.toggle", router);
     });
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
-    const created = useLandingTerminalStore.getState().tabs[0];
+    const created = landingTerminalTabs(
+      useLandingPanelStore.getState().tabs,
+    )[0];
     expect(created.cwd).toBe("/Users/dev");
     expect(created.hostId).toBe("host-a");
     expect(screen.queryByTestId("landing-terminal-select-folder")).toBeNull();
@@ -3504,40 +3679,52 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = null;
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = emptyList("/Users/dev");
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
     const router = fakeKeybindingRouter();
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
-    expect(useLandingTerminalStore.getState().tabs[0]?.cwd).toBe("/Users/dev");
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs)[0]?.cwd,
+    ).toBe("/Users/dev");
 
     fireEvent.click(screen.getByTestId("landing-terminal-new-tab"));
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(2);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(2);
     });
 
     fireEvent.doubleClick(screen.getByTestId("landing-terminal-tab-strip"));
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(3);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(3);
     });
 
     act(() => {
       dispatchAction("tab.new", router);
     });
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(4);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(4);
     });
 
     act(() => {
       dispatchAction("app.terminal.new", router);
     });
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(5);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(5);
     });
 
-    const tabs = useLandingTerminalStore.getState().tabs;
+    const tabs = landingTerminalTabs(useLandingPanelStore.getState().tabs);
     expect(tabs.every((tab) => tab.cwd === "/Users/dev")).toBe(true);
     expect(tabs.every((tab) => tab.hostId === "host-a")).toBe(true);
     expect(screen.queryByTestId("landing-terminal-select-folder")).toBeNull();
@@ -3549,13 +3736,17 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = emptyList("/Users/dev");
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     const view = render(panelUi());
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
-    const folderTab = useLandingTerminalStore.getState().tabs[0];
+    const folderTab = landingTerminalTabs(
+      useLandingPanelStore.getState().tabs,
+    )[0];
     expect(folderTab.cwd).toBe("/workspace/project");
     expect(mocks.queryClient.fetchQuery).toHaveBeenCalledTimes(1);
 
@@ -3568,19 +3759,23 @@ describe("<LandingTerminalPanel />", () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(useLandingTerminalStore.getState().tabs).toEqual([folderTab]);
-    expect(useLandingTerminalStore.getState().activeInstanceId).toBe(
+    expect(landingTerminalTabs(useLandingPanelStore.getState().tabs)).toEqual([
+      folderTab,
+    ]);
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
       folderTab.instanceId,
     );
     expect(screen.queryByTestId("landing-terminal-select-folder")).toBeNull();
 
     fireEvent.click(screen.getByTestId("landing-terminal-new-tab"));
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(2);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(2);
     });
-    const created = useLandingTerminalStore
-      .getState()
-      .tabs.find((tab) => tab.instanceId !== folderTab.instanceId);
+    const created = landingTerminalTabs(
+      useLandingPanelStore.getState().tabs,
+    ).find((tab) => tab.instanceId !== folderTab.instanceId);
     expect(created?.cwd).toBe("/Users/dev");
   });
 
@@ -3590,26 +3785,30 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList(null);
     mocks.freshProbeData = emptyList(null);
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
-    expect(useLandingTerminalStore.getState().tabs[0]?.cwd).toBe(
-      "/workspace/project",
-    );
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs)[0]?.cwd,
+    ).toBe("/workspace/project");
     expect(screen.queryByTestId("landing-terminal-host-update")).toBeNull();
     expect(screen.queryByTestId("landing-terminal-select-folder")).toBeNull();
 
     fireEvent.click(screen.getByTestId("landing-terminal-new-tab"));
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(2);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(2);
     });
     expect(
-      useLandingTerminalStore
-        .getState()
-        .tabs.every((tab) => tab.cwd === "/workspace/project"),
+      landingTerminalTabs(useLandingPanelStore.getState().tabs).every(
+        (tab) => tab.cwd === "/workspace/project",
+      ),
     ).toBe(true);
   });
 
@@ -3619,14 +3818,16 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = null;
     mocks.probeData = emptyList(null);
     mocks.freshProbeData = emptyList(null);
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
     const router = fakeKeybindingRouter();
 
     expect(
       await screen.findByTestId("landing-terminal-host-update"),
     ).toBeTruthy();
-    expect(useLandingTerminalStore.getState().tabs).toHaveLength(0);
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs),
+    ).toHaveLength(0);
     expect(screen.queryByTestId("landing-terminal-select-folder")).toBeNull();
 
     fireEvent.doubleClick(screen.getByTestId("landing-terminal-tab-strip"));
@@ -3637,7 +3838,9 @@ describe("<LandingTerminalPanel />", () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(useLandingTerminalStore.getState().tabs).toHaveLength(0);
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs),
+    ).toHaveLength(0);
     expect(screen.getByTestId("landing-terminal-host-update")).toBeTruthy();
     expect(screen.queryByTestId("landing-terminal-select-folder")).toBeNull();
   });
@@ -3648,7 +3851,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = null;
     mocks.probeData = emptyList("/Users/host-a");
     mocks.freshProbeData = emptyList("/Users/host-a");
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
 
     type PendingList = {
       readonly hostId: string | null;
@@ -3669,9 +3872,13 @@ describe("<LandingTerminalPanel />", () => {
 
     // Host A settles folderless: reconciledContext + Host-A create callback.
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
-    const hostATab = useLandingTerminalStore.getState().tabs[0];
+    const hostATab = landingTerminalTabs(
+      useLandingPanelStore.getState().tabs,
+    )[0];
     expect(hostATab.hostId).toBe("host-a");
     expect(hostATab.cwd).toBe("/Users/host-a");
     // Subscribed BY HOST since P4.2: the panel is told "host-a's row moved",
@@ -3698,7 +3905,9 @@ describe("<LandingTerminalPanel />", () => {
     // Client advances to B; React reactive host and Host-A create closure stay A.
     mocks.clientActiveHostId = "host-b";
 
-    const tabsBeforeManualCreate = useLandingTerminalStore.getState().tabs;
+    const tabsBeforeManualCreate = landingTerminalTabs(
+      useLandingPanelStore.getState().tabs,
+    );
     const router = fakeKeybindingRouter();
     act(() => {
       dispatchAction("app.terminal.new", router);
@@ -3710,15 +3919,13 @@ describe("<LandingTerminalPanel />", () => {
     });
 
     // Manual create must not persist Host A's home after the client switched.
-    expect(useLandingTerminalStore.getState().tabs).toEqual(
+    expect(landingTerminalTabs(useLandingPanelStore.getState().tabs)).toEqual(
       tabsBeforeManualCreate,
     );
     expect(
-      useLandingTerminalStore
-        .getState()
-        .tabs.filter(
-          (tab) => tab.hostId === "host-a" && tab.cwd === "/Users/host-a",
-        ),
+      landingTerminalTabs(useLandingPanelStore.getState().tabs).filter(
+        (tab) => tab.hostId === "host-a" && tab.cwd === "/Users/host-a",
+      ),
     ).toHaveLength(1);
 
     // Late Host-A list resolves while client is already B (still no React rerender).
@@ -3731,14 +3938,14 @@ describe("<LandingTerminalPanel />", () => {
 
     // Stale publication/spawn rejected: no extra Host-A home tabs, nothing for B yet.
     expect(
-      useLandingTerminalStore
-        .getState()
-        .tabs.filter((tab) => tab.cwd === "/Users/host-a"),
+      landingTerminalTabs(useLandingPanelStore.getState().tabs).filter(
+        (tab) => tab.cwd === "/Users/host-a",
+      ),
     ).toHaveLength(1);
     expect(
-      useLandingTerminalStore
-        .getState()
-        .tabs.some((tab) => tab.hostId === "host-b"),
+      landingTerminalTabs(useLandingPanelStore.getState().tabs).some(
+        (tab) => tab.hostId === "host-b",
+      ),
     ).toBe(false);
     expect(screen.queryByTestId("landing-terminal-select-folder")).toBeNull();
 
@@ -3763,24 +3970,23 @@ describe("<LandingTerminalPanel />", () => {
     });
 
     // Once B is current, manual create may only use Host B's home.
-    const tabCountBeforeBCreate =
-      useLandingTerminalStore.getState().tabs.length;
+    const tabCountBeforeBCreate = landingTerminalTabs(
+      useLandingPanelStore.getState().tabs,
+    ).length;
     fireEvent.click(screen.getByTestId("landing-terminal-new-tab"));
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs.length).toBe(
-        tabCountBeforeBCreate + 1,
-      );
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs).length,
+      ).toBe(tabCountBeforeBCreate + 1);
     });
-    const createdOnB = useLandingTerminalStore
-      .getState()
-      .tabs.find((tab) => tab.hostId === "host-b");
+    const createdOnB = landingTerminalTabs(
+      useLandingPanelStore.getState().tabs,
+    ).find((tab) => tab.hostId === "host-b");
     expect(createdOnB?.cwd).toBe("/Users/host-b");
     expect(
-      useLandingTerminalStore
-        .getState()
-        .tabs.some(
-          (tab) => tab.hostId === "host-b" && tab.cwd === "/Users/host-a",
-        ),
+      landingTerminalTabs(useLandingPanelStore.getState().tabs).some(
+        (tab) => tab.hostId === "host-b" && tab.cwd === "/Users/host-a",
+      ),
     ).toBe(false);
   });
 
@@ -3795,21 +4001,25 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/host-a-project";
     mocks.probeData = emptyList("/Users/host-a");
     mocks.freshProbeData = emptyList("/Users/host-a");
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
-    expect(useLandingTerminalStore.getState().tabs[0]?.cwd).toBe(
-      "/workspace/host-a-project",
-    );
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs)[0]?.cwd,
+    ).toBe("/workspace/host-a-project");
 
     // Client advances to B; the reactive host and every installed handler
     // still come from Host A's render.
     mocks.clientActiveHostId = "host-b";
 
-    const tabsBeforeManualCreate = useLandingTerminalStore.getState().tabs;
+    const tabsBeforeManualCreate = landingTerminalTabs(
+      useLandingPanelStore.getState().tabs,
+    );
     const router = fakeKeybindingRouter();
     act(() => {
       dispatchAction("app.terminal.new", router);
@@ -3821,18 +4031,18 @@ describe("<LandingTerminalPanel />", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
-    expect(useLandingTerminalStore.getState().tabs).toEqual(
+    expect(landingTerminalTabs(useLandingPanelStore.getState().tabs)).toEqual(
       tabsBeforeManualCreate,
     );
     expect(
-      useLandingTerminalStore
-        .getState()
-        .tabs.filter((tab) => tab.cwd === "/workspace/host-a-project"),
+      landingTerminalTabs(useLandingPanelStore.getState().tabs).filter(
+        (tab) => tab.cwd === "/workspace/host-a-project",
+      ),
     ).toHaveLength(1);
     expect(
-      useLandingTerminalStore
-        .getState()
-        .tabs.some((tab) => tab.hostId === "host-b"),
+      landingTerminalTabs(useLandingPanelStore.getState().tabs).some(
+        (tab) => tab.hostId === "host-b",
+      ),
     ).toBe(false);
   });
 });
