@@ -3,6 +3,10 @@ import type {
   CanonicalTerminalSessionInfoWithCurrentCwd,
 } from "@traycer/protocol/host/terminal/unary-schemas";
 import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
+import {
+  PROVIDER_DISPLAY_NAMES,
+  type ProviderId,
+} from "@traycer/protocol/host/provider-schemas";
 import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
 import { selectPlainTerminalViewModel } from "@/lib/terminals/plain-terminal-authority";
 import {
@@ -22,6 +26,19 @@ export interface LandingTerminalReconciliationInput {
   /** Tombstones captured before their kill retries begin. */
   readonly excludedSessionKeys: ReadonlySet<string>;
   readonly mintInstanceId: () => string;
+  /**
+   * The provider a listed session was opened to sign in to, or `null` for an
+   * ordinary terminal. Injected rather than read here so this stays pure, the
+   * same way `mintInstanceId` is.
+   *
+   * Adoption needs it because `terminal.list` carries no origin: a sign-in
+   * session started in ANOTHER window (or before this renderer reloaded)
+   * arrives here as an ordinary running session, and an adopted ref without
+   * the marker is one a tile will happily `terminal.create` under - spawning a
+   * bare shell with none of the provider's spawn env, which looks like the
+   * sign-in terminal and cannot sign anyone in.
+   */
+  readonly providerLoginProviderFor: (sessionId: string) => ProviderId | null;
 }
 
 export interface LandingTerminalReconciliationResult {
@@ -121,6 +138,25 @@ export function reconcileLandingTerminalTabs(
       matchedSessionIds.has(session.sessionId)
     ) {
       return [];
+    }
+    const originProviderId = input.providerLoginProviderFor(session.sessionId);
+    if (originProviderId !== null) {
+      // Same ref shape the opening path writes, so every reader downstream -
+      // the adopt-only tile, the legacy-import exclusion, the close and rename
+      // paths - classifies a session discovered here exactly as one this
+      // window opened. Manual title for the same reason: the host names it
+      // "<Provider> sign-in" and reconciliation must not retitle it from cwd.
+      const signInTab: LandingTerminalTabRef = {
+        instanceId: input.mintInstanceId(),
+        sessionId: session.sessionId,
+        hostId: input.activeHostId,
+        cwd: session.cwd,
+        name: `${PROVIDER_DISPLAY_NAMES[originProviderId]} sign-in`,
+        titleSource: "manual",
+        origin: "provider-login",
+        originProviderId,
+      };
+      return [signInTab];
     }
     const tab: LandingTerminalTabRef = {
       instanceId: input.mintInstanceId(),

@@ -458,6 +458,7 @@ describe("landing terminal lifecycle", () => {
       sessions: [session({ sessionId: "orphan", status: "running" })],
       excludedSessionKeys: new Set(),
       mintInstanceId: () => "adopted-instance",
+      providerLoginProviderFor: () => null,
     });
 
     expect(result.tabs).toEqual([
@@ -473,6 +474,65 @@ describe("landing terminal lifecycle", () => {
     expect(result.adoptedTabs).toHaveLength(1);
     // The panel uses this non-empty result to skip its final auto-spawn step.
     expect(result.tabs.length === 0).toBe(false);
+  });
+
+  it("adopts an unmatched running session as a provider sign-in tab when providerLoginProviderFor resolves a provider", () => {
+    const result = reconcileLandingTerminalTabs({
+      tabs: [],
+      activeInstanceId: null,
+      activeHostId: HOST_A,
+      sessions: [session({ sessionId: "signin-session", status: "running" })],
+      excludedSessionKeys: new Set(),
+      mintInstanceId: () => "adopted-signin-instance",
+      providerLoginProviderFor: (sessionId) =>
+        sessionId === "signin-session" ? "reasonix" : null,
+    });
+
+    expect(result.adoptedTabs).toEqual([
+      {
+        instanceId: "adopted-signin-instance",
+        sessionId: "signin-session",
+        hostId: HOST_A,
+        cwd: "/workspace/project",
+        name: "Reasonix sign-in",
+        titleSource: "manual",
+        origin: "provider-login",
+        originProviderId: "reasonix",
+      },
+    ]);
+    // Adoption folds straight into `tabs` too - there was nothing to merge
+    // against.
+    expect(result.tabs).toEqual(result.adoptedTabs);
+    // Not the cwd-derived default title a plain adoption of this identical
+    // session produces below - the marker name replaces it entirely rather
+    // than decorating it.
+    expect(result.adoptedTabs[0]?.name).not.toBe("project · New Terminal");
+  });
+
+  it("adopts the same unmatched running session as an ordinary tab when providerLoginProviderFor returns null", () => {
+    const result = reconcileLandingTerminalTabs({
+      tabs: [],
+      activeInstanceId: null,
+      activeHostId: HOST_A,
+      sessions: [session({ sessionId: "signin-session", status: "running" })],
+      excludedSessionKeys: new Set(),
+      mintInstanceId: () => "adopted-signin-instance",
+      providerLoginProviderFor: () => null,
+    });
+
+    // Same session as the sign-in test above; only providerLoginProviderFor's
+    // answer differs, and behaviour is exactly the pre-existing adoption path:
+    // cwd-derived default title, no origin/originProviderId.
+    expect(result.adoptedTabs).toEqual([
+      {
+        ...tab({
+          instanceId: "adopted-signin-instance",
+          sessionId: "signin-session",
+          hostId: HOST_A,
+        }),
+        name: "project · New Terminal",
+      },
+    ]);
   });
 
   it("suppresses adoption after an offline close and across a reload", () => {
@@ -509,6 +569,7 @@ describe("landing terminal lifecycle", () => {
         terminalSessionKey(HOST_A, "session-close"),
       ]),
       mintInstanceId: () => "would-be-adopted",
+      providerLoginProviderFor: () => null,
     });
 
     // The persisted record above carries no provenance, so this also pins the
@@ -537,6 +598,7 @@ describe("landing terminal lifecycle", () => {
       sessions: [session({ sessionId: "ended", status: "exited" })],
       excludedSessionKeys: new Set(),
       mintInstanceId: () => "unused",
+      providerLoginProviderFor: () => null,
     });
 
     expect(result.tabs).toEqual([]);
@@ -565,6 +627,10 @@ describe("landing terminal lifecycle", () => {
       sessions: [session({ sessionId: "ended-signin", status: "exited" })],
       excludedSessionKeys: new Set(),
       mintInstanceId: () => "unused",
+      // This session is already matched to `signInTab` above, so adoption's
+      // `providerLoginProviderFor` is never consulted for it - this test is
+      // about the exited-tab survival rule, not adoption.
+      providerLoginProviderFor: () => null,
     });
 
     expect(result.tabs).toEqual([signInTab]);
@@ -596,6 +662,7 @@ describe("landing terminal lifecycle", () => {
       sessions: [session({ sessionId: "current", status: "running" })],
       excludedSessionKeys: new Set(),
       mintInstanceId: () => "unused",
+      providerLoginProviderFor: () => null,
     });
 
     expect(result.tabs.map((entry) => entry.instanceId)).toEqual([
@@ -705,6 +772,7 @@ describe("landing terminal lifecycle", () => {
       ],
       excludedSessionKeys: new Set(),
       mintInstanceId: () => "unused",
+      providerLoginProviderFor: () => null,
     });
 
     expect(result.tabs).toEqual([
@@ -732,6 +800,7 @@ describe("landing terminal lifecycle", () => {
       ],
       excludedSessionKeys: new Set(),
       mintInstanceId: () => "unused",
+      providerLoginProviderFor: () => null,
     });
 
     expect(result.tabs).toEqual([{ ...defaultTab, name: "vim" }]);

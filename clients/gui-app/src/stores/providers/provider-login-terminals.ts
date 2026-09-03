@@ -29,6 +29,10 @@ import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
  */
 const MAX_TRACKED_SESSIONS = 32;
 
+const PROVIDER_LOGIN_TERMINALS_PERSIST_KEY = persistKey(
+  STORE_KEYS.providerLoginTerminals,
+);
+
 interface ProviderLoginTerminalsState {
   readonly providerBySessionKey: Readonly<
     Record<string, ProviderId | undefined>
@@ -73,9 +77,32 @@ export const useProviderLoginTerminalsStore =
             return { providerBySessionKey, recentKeys };
           }),
       }),
-      basePersistOptions(persistKey(STORE_KEYS.providerLoginTerminals)),
+      basePersistOptions(PROVIDER_LOGIN_TERMINALS_PERSIST_KEY),
     ),
   );
+
+// Another window started a sign-in: follow it. Hydration alone is not enough
+// because the window that has to ANSWER this question is usually already open -
+// a second window lists the same host's independent sessions and would adopt
+// the sign-in session as an ordinary terminal, which is exactly the bare-shell
+// failure above. The `storage` event fires only in OTHER same-origin windows,
+// never the one that wrote, so this cannot loop with `record`. `event.key ===
+// null` covers an explicit `localStorage.clear()`. Same pattern as
+// `feature-announcements-store`.
+//
+// This closes the window-to-window gap, not the general one: the durable answer
+// is still an origin field on `terminal.list`, which would also cover a client
+// that never saw the write at all.
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", (event) => {
+    if (
+      event.key === null ||
+      event.key === PROVIDER_LOGIN_TERMINALS_PERSIST_KEY
+    ) {
+      void useProviderLoginTerminalsStore.persist.rehydrate();
+    }
+  });
+}
 
 /** Records a host-created sign-in terminal. Call this wherever the host hands
  *  one back, not only where a tile is opened for it. */

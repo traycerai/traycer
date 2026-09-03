@@ -23,7 +23,9 @@ import {
   drainLegacyLandingTombstones,
   reconcileCapableLandingTerminals,
 } from "@/components/home/terminal-panel/use-landing-terminal-reconciliation";
+import { reconcileLandingTerminalTabs } from "@/components/home/terminal-panel/landing-terminal-reconciliation";
 import { requestLandingTerminalClose } from "@/lib/terminals/landing-terminal-close-coordinator";
+import type { CanonicalTerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-schemas";
 
 const HOST_ID = "host-a";
 const LANDING_PAGE_ID = "landing-a";
@@ -664,6 +666,93 @@ describe("capable landing-terminal reconciliation", () => {
       .getState()
       .tabs.find((candidate) => candidate.instanceId === signIn.instanceId);
     expect(signInAfter).toEqual(signIn);
+  });
+
+  it("never imports an ADOPTED provider-login tab as legacy evidence either", async () => {
+    // Built the way reconciliation actually produces one - through
+    // `reconcileLandingTerminalTabs`'s adoption path (an unmatched running
+    // session whose `providerLoginProviderFor` resolves a provider) - rather
+    // than hand-assembling the `origin`/`originProviderId` shape as the test
+    // above does. This is the tab a real reload-then-reconnect sequence would
+    // hand to this function: adopted while the host was legacy, then reaching
+    // the capable importLegacy pass on a later, capable reconciliation.
+    const signInSession: CanonicalTerminalSessionInfo = {
+      sessionId: "terminal-signin-adopted",
+      scope: { kind: "independent" },
+      sessionKind: "terminal",
+      cwd: "/host/launch",
+      shellCommand: "zsh",
+      shellArgs: [],
+      cols: 80,
+      rows: 24,
+      status: "running",
+      exitCode: null,
+      exitReason: null,
+      createdAt: 1,
+      title: null,
+      activeProcessName: null,
+    };
+    const adoption = reconcileLandingTerminalTabs({
+      tabs: [],
+      activeInstanceId: null,
+      activeHostId: HOST_ID,
+      sessions: [signInSession],
+      excludedSessionKeys: new Set(),
+      mintInstanceId: () => "sign-in-adopted-instance",
+      providerLoginProviderFor: () => "reasonix",
+    });
+    const signIn = adoption.adoptedTabs.at(0);
+    if (signIn === undefined) {
+      throw new Error(
+        "expected reconcileLandingTerminalTabs to adopt a sign-in tab",
+      );
+    }
+    expect(signIn.origin).toBe("provider-login");
+
+    const ordinary = tab({
+      instanceId: "ordinary-instance-2",
+      terminalId: "terminal-ordinary-2",
+      name: "Ordinary title",
+    });
+    useLandingTerminalStore.getState().addTab(ordinary);
+    useLandingTerminalStore.getState().addTab(signIn);
+    queryClient.setQueryData(
+      hostQueryKeys.plainTerminals(HOST_ID, SCOPE),
+      freshCollection([]),
+    );
+    const importLegacy = vi.fn((request: ImportLegacyPlainTerminalRequest) => {
+      expect(request.terminalId).toBe("terminal-ordinary-2");
+      return Promise.resolve({
+        status: "existing" as const,
+        terminal: terminal({
+          terminalId: "terminal-ordinary-2",
+          manualTitle: "Ordinary title",
+          revision: 1,
+          runtime: "running",
+        }),
+      });
+    });
+
+    await reconcileCapableLandingTerminals({
+      activeHostId: HOST_ID,
+      landingPageId: LANDING_PAGE_ID,
+      capability: CAPABILITY,
+      canMutate: true,
+      closeTerminal: () => Promise.resolve(),
+      importLegacyTerminal: importLegacy,
+      queryClient,
+    });
+
+    // Same guarantee as the hand-built case above, now proven for the shape
+    // adoption actually produces.
+    expect(importLegacy).toHaveBeenCalledTimes(1);
+    expect(importLegacy).toHaveBeenCalledWith(
+      expect.objectContaining({ terminalId: "terminal-ordinary-2" }),
+    );
+    const signInAfterAdoption = useLandingTerminalStore
+      .getState()
+      .tabs.find((candidate) => candidate.instanceId === signIn.instanceId);
+    expect(signInAfterAdoption).toEqual(signIn);
   });
 
   it("returns reconciled after a successful pass", async () => {

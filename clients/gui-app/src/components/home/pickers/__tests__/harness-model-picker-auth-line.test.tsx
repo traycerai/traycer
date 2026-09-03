@@ -1,5 +1,7 @@
 import { cleanup, render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ReactNode } from "react";
 import type {
   ProviderAuthStatus,
   ProviderCliState,
@@ -11,21 +13,33 @@ import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messen
 import type { GuiHarnessCatalogEntry } from "@/hooks/harnesses/use-gui-harness-catalog";
 import { PickerProviderAuthLine } from "../harness-model-picker-auth-line";
 
-// The auth line's "setup" verdict renders the picker's terminal action button
-// through this hook for a landing surface. Mocked away (same seam
-// `harness-model-picker-empty-setup-cta.test.tsx` uses) so a button-rendering
-// test here needs neither a QueryClientProvider nor a host client - only the
-// wiring between the resolved setup and the button being ASKED to render is
-// this file's concern; the hook's own request/response behaviour is covered
-// in `use-landing-provider-terminal-login.test.tsx`.
+// The terminal action mounts a real mutation, so every render gets a client.
+// Fresh per render: a mutation cached across cases would carry its pending
+// state into the next one.
+function renderAuthLine(ui: ReactNode) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>,
+  );
+}
+
+// The HOST CLIENT is the only thing faked here - the external boundary. The
+// real `useLandingProviderStartTerminalLogin` runs, so this file covers the
+// wiring from the resolved setup through the button to the RPC, which a mock
+// of that hook would hide. Its own response handling (which tab opens, which
+// panel) is covered in `use-landing-provider-terminal-login.test.tsx`.
+const HOST_ID = "host-1";
+
 const mocks = vi.hoisted(() => ({
-  start: vi.fn(),
+  startTerminalLoginRequest: vi.fn(),
 }));
 
-vi.mock("@/hooks/providers/use-landing-provider-terminal-login", () => ({
-  useLandingProviderStartTerminalLogin: () => ({
-    start: mocks.start,
-    isPending: false,
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => ({
+    getActiveHostId: () => HOST_ID,
+    request: mocks.startTerminalLoginRequest,
   }),
 }));
 
@@ -140,11 +154,11 @@ function catalogErrorFor(
 describe("<PickerProviderAuthLine />", () => {
   afterEach(() => {
     cleanup();
-    mocks.start.mockClear();
+    mocks.startTerminalLoginRequest.mockClear();
   });
 
   it("renders nothing when both state and harness are null (no provider identity to resolve)", () => {
-    const { container } = render(
+    const { container } = renderAuthLine(
       <PickerProviderAuthLine
         state={null}
         harness={null}
@@ -157,7 +171,7 @@ describe("<PickerProviderAuthLine />", () => {
   });
 
   it("renders nothing for a disabled provider (enabled read off state)", () => {
-    const { container } = render(
+    const { container } = renderAuthLine(
       <PickerProviderAuthLine
         state={disabledProviderState("reasonix")}
         harness={null}
@@ -170,7 +184,7 @@ describe("<PickerProviderAuthLine />", () => {
   });
 
   it("renders nothing when state is null and the harness itself is disabled (enabled falls back to harness.enabled)", () => {
-    const { container } = render(
+    const { container } = renderAuthLine(
       <PickerProviderAuthLine
         state={null}
         harness={harnessOption("reasonix", false, "unauthenticated", null)}
@@ -183,7 +197,7 @@ describe("<PickerProviderAuthLine />", () => {
   });
 
   it("renders the compact signed-out line when state is null for a provider with NO guidance override (claude-code), even though identity/enabled resolve from the harness", () => {
-    render(
+    renderAuthLine(
       <PickerProviderAuthLine
         state={null}
         harness={harnessOption("claude", true, "unauthenticated", null)}
@@ -203,7 +217,7 @@ describe("<PickerProviderAuthLine />", () => {
   });
 
   it("renders the setup-guidance row (steps + manual-command sentence, no button) for a signed-out provider with guidance (reasonix)", () => {
-    render(
+    renderAuthLine(
       <PickerProviderAuthLine
         state={withTerminalLoginCapability(baseProviderState("reasonix"))}
         harness={null}
@@ -242,7 +256,7 @@ describe("<PickerProviderAuthLine />", () => {
   });
 
   it("renders the setup-guidance row with steps + manual command but NO button when the capability is absent (loginCapability: null) - reasonix's override survives an old/unresolved host even with a surface available", () => {
-    render(
+    renderAuthLine(
       <PickerProviderAuthLine
         state={baseProviderState("reasonix")}
         harness={null}
@@ -277,11 +291,11 @@ describe("<PickerProviderAuthLine />", () => {
     expect(code?.textContent).toBe("reasonix setup");
 
     expect(screen.queryByRole("button")).toBeNull();
-    expect(mocks.start).not.toHaveBeenCalled();
+    expect(mocks.startTerminalLoginRequest).not.toHaveBeenCalled();
   });
 
   it("renders the terminal action button when the capability is present and a landing surface is available", () => {
-    render(
+    renderAuthLine(
       <PickerProviderAuthLine
         state={withTerminalLoginCapability(baseProviderState("reasonix"))}
         harness={null}
@@ -307,7 +321,7 @@ describe("<PickerProviderAuthLine />", () => {
   });
 
   it("renders the bare 'Not authenticated' label for a signed-out provider without guidance", () => {
-    render(
+    renderAuthLine(
       <PickerProviderAuthLine
         state={baseProviderState("claude-code")}
         harness={null}
@@ -322,7 +336,7 @@ describe("<PickerProviderAuthLine />", () => {
   });
 
   it("treats a signed-out harness row (authStatus: unauthenticated) as signed out even when the provider state is authenticated", () => {
-    render(
+    renderAuthLine(
       <PickerProviderAuthLine
         state={withTerminalLoginCapability(
           providerStateWithAuth(
@@ -344,7 +358,7 @@ describe("<PickerProviderAuthLine />", () => {
   });
 
   it("renders only the compact 'Not authenticated' label - never the authenticated badge - when an authenticated state's harness reports the signed-out catalog error", () => {
-    render(
+    renderAuthLine(
       <PickerProviderAuthLine
         state={providerStateWithAuth(
           "reasonix",
@@ -379,7 +393,7 @@ describe("<PickerProviderAuthLine />", () => {
   });
 
   it("still renders the full guidance when the model list's error is NOT the signed-out message", () => {
-    render(
+    renderAuthLine(
       <PickerProviderAuthLine
         state={withTerminalLoginCapability(baseProviderState("reasonix"))}
         harness={harnessOption(
@@ -403,7 +417,7 @@ describe("<PickerProviderAuthLine />", () => {
   });
 
   it("renders the badge/label row for an authenticated provider", () => {
-    render(
+    renderAuthLine(
       <PickerProviderAuthLine
         state={providerStateWithAuth(
           "claude-code",
@@ -424,7 +438,7 @@ describe("<PickerProviderAuthLine />", () => {
   });
 
   it("renders the badge/label row for a configured provider", () => {
-    render(
+    renderAuthLine(
       <PickerProviderAuthLine
         state={providerStateWithAuth(
           "cursor",
@@ -443,7 +457,7 @@ describe("<PickerProviderAuthLine />", () => {
   });
 
   it("renders nothing for an authenticated provider with no badge or label", () => {
-    const { container } = render(
+    const { container } = renderAuthLine(
       <PickerProviderAuthLine
         state={providerStateWithAuth(
           "claude-code",
@@ -461,7 +475,7 @@ describe("<PickerProviderAuthLine />", () => {
   });
 
   it("renders nothing for a non-definitive, non-configured auth status (e.g. unknown)", () => {
-    const { container } = render(
+    const { container } = renderAuthLine(
       <PickerProviderAuthLine
         state={providerStateWithAuth(
           "claude-code",

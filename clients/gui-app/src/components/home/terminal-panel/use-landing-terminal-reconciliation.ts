@@ -24,6 +24,7 @@ import {
 } from "@/lib/terminals/plain-terminal-authority";
 import { consumeRetainedPlainTerminalTombstone } from "@/lib/terminals/plain-terminal-presentation-invalidation";
 import { requestLandingTerminalClose } from "@/lib/terminals/landing-terminal-close-coordinator";
+import { providerLoginTerminalProviderId } from "@/stores/providers/provider-login-terminals";
 import {
   LANDING_TERMINAL_SOURCE_STORE_VERSION,
   absentListingProvesDeath,
@@ -353,6 +354,8 @@ export function useLandingTerminalReconciliation(
         sessions: freshSessions,
         excludedSessionKeys,
         mintInstanceId: () => `landing-terminal-${uuidv4()}`,
+        providerLoginProviderFor: (sessionId) =>
+          providerLoginTerminalProviderId(activeHostId, sessionId),
       });
       current.applyReconciliation(
         landingPageId,

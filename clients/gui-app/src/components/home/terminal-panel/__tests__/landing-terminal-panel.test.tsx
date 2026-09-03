@@ -1408,10 +1408,8 @@ describe("<LandingTerminalPanel />", () => {
     fireEvent.contextMenu(
       await screen.findByTestId("landing-terminal-tab-sign-in-instance"),
     );
-    const renameItem = await screen.findByText("Rename");
-    expect(
-      renameItem.closest('[role="menuitem"]')?.getAttribute("data-disabled"),
-    ).not.toBeNull();
+    const renameItem = await screen.findByRole("menuitem", { name: "Rename" });
+    expect(renameItem.getAttribute("data-disabled")).not.toBeNull();
 
     // `fireEvent.click` targets the node directly (no pointer hit-testing),
     // and the strip's `ContextMenu` is `modal={false}` (see
