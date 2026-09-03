@@ -172,8 +172,9 @@ failures.
   site, not by what was written, so a row that fails to decrypt or to set,
   or that the reader never opens (an app-bound `v20` row, a partitioned
   one), leaves the jar's cookie at that key alone; one step wider, BY NAME,
-  a source row that did not land and whose name no landed row shares leaves
-  the jar's cookies of that name alone under any scope (the host-only `sid`
+  a source row that did not land - or was never opened - and whose name no
+  landed row shares leaves the jar's cookies of that name alone under any
+  scope (the host-only `sid`
   beside the source's failed domain `sid` is the sign-in that row would have
   replaced); and a kept cookie that a same-name removal reached anyway is
   put back from the pre-write listing - every prior cookie of a name whose
@@ -207,8 +208,15 @@ failures.
   the jar and put it straight back for the next capture to sync everywhere
   (the written keys' release covers only what the import wrote). The
   ledger's local side is marked cleared once the writes have ended, however
-  they ended. A write that ends early AFTER a cookie has reached the jar -
-  the barrier's budget, a refused removal, a failed localStorage clear - is
+  they ended; an import of more sites than the ledger keeps at once
+  (`BROWSER_FORGET_LEDGER_MAX_DOMAINS`) is refused as `too-many-sites`
+  before the keystore is opened, since a trimmed scope never reaches a
+  host's digest. A row refused on its re-write leaves `writtenKeys` too, so
+  the desktop takes no ownership of the prior cookie the restore puts back;
+  the jar is pushed once anything of the import's is in it OR the ledger has
+  told the hosts to prune, even a site the write then put back as it was. A write that ends early AFTER a cookie has reached the jar -
+  the barrier's budget, a refused removal, a failed localStorage clear, a
+  `flushStore` that rejects - is
   answered `incomplete`, not `unreadable`: what landed is kept, counted (per
   row, so a site stopped mid-way counts what it has) and pushed, and Import
   again finishes the rest; only a write that put nothing in the jar answers

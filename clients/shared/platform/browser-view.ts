@@ -298,6 +298,13 @@ export type LoginImportBlocked =
    */
   | "source-changed"
   /**
+   * Import only: more sites were chosen than the desktop's forget ledger
+   * keeps at once (a thousand or so), which is what tells every host to
+   * replace them. Nothing was imported and no prompt fired; choose fewer
+   * sites and import in batches.
+   */
+  | "too-many-sites"
+  /**
    * The source is a regular file bigger than the desktop will read into
    * main in one go (tens of megabytes; a cookie export is kilobytes). A path
    * that is not a regular file at all - a FIFO, a device - is `unreadable`.

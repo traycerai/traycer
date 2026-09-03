@@ -37,7 +37,9 @@ interface LoginImportRunContext {
  * On success the surface host's "Sites with saved logins" list is
  * invalidated: it is read from the host, which has just been handed the jar,
  * and its 30 s stale window would otherwise keep showing the pre-import list
- * behind a Done step that names the sites just added.
+ * behind a Done step that names the sites just added. An import that stopped
+ * part-way (`incomplete`) is a success for this purpose: what it did write is
+ * in the jar and was pushed, so the list is just as stale.
  */
 export function useLoginImportRun(
   browserView: BrowserViewBridge | null,
@@ -64,7 +66,7 @@ export function useLoginImportRun(
     },
     retry: false,
     onSuccess: (result, _request, context) => {
-      if (result.status !== "imported") return;
+      if (!changedTheJar(result)) return;
       void queryClient.invalidateQueries({
         queryKey: queryKeys.hostMethodScope(
           context.hostId,
@@ -74,4 +76,10 @@ export function useLoginImportRun(
     },
     onError: (error) => toastFromRunnerError(error, "Couldn't import logins"),
   });
+}
+
+/** A completed import, or one that stopped part-way with cookies written. */
+function changedTheJar(result: LoginImportResult): boolean {
+  if (result.status === "imported") return true;
+  return result.status === "blocked" && result.reason === "incomplete";
 }

@@ -115,6 +115,7 @@ function scan(overrides: Partial<LoginImportScan>): LoginImportScan {
 
 function renderDialog(bridge: TestBridge): {
   readonly onOpenChange: ReturnType<typeof vi.fn>;
+  readonly client: QueryClient;
 } {
   const onOpenChange = vi.fn();
   const client = new QueryClient({
@@ -129,7 +130,7 @@ function renderDialog(bridge: TestBridge): {
       />
     </QueryClientProvider>,
   );
-  return { onOpenChange };
+  return { onOpenChange, client };
 }
 
 async function pickSource(name: RegExp | string): Promise<void> {
@@ -137,12 +138,13 @@ async function pickSource(name: RegExp | string): Promise<void> {
   fireEvent.click(button);
 }
 
+/** The Choose step's confirm, by the label the user reads: "Import N sites". */
+const IMPORT_CONFIRM_NAME = /^Import \d+ sites?$/u;
+
 function importConfirmButton(): HTMLButtonElement {
-  const button = screen.getByTestId("import-logins-confirm");
-  if (!(button instanceof HTMLButtonElement)) {
-    throw new Error("the import confirm control is not a button");
-  }
-  return button;
+  return screen.getByRole<HTMLButtonElement>("button", {
+    name: IMPORT_CONFIRM_NAME,
+  });
 }
 
 afterEach(() => {
@@ -189,12 +191,12 @@ describe("<ImportLoginsDialog /> pick step", () => {
     renderDialog(bridge);
 
     await pickSource(/Import from a file…/);
-    await screen.findByTestId("import-logins-confirm");
+    await screen.findByRole("button", { name: IMPORT_CONFIRM_NAME });
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
     await screen.findByRole("button", { name: /exported-cookies\.txt/ });
 
     await pickSource(/Import from a file…/);
-    await screen.findByTestId("import-logins-confirm");
+    await screen.findByRole("button", { name: IMPORT_CONFIRM_NAME });
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
     await screen.findByRole("button", { name: /exported-cookies\.txt/ });
 
@@ -423,6 +425,7 @@ describe("<ImportLoginsDialog /> choose-sites step", () => {
     "source-changed",
     "unreadable",
     "file-too-large",
+    "too-many-sites",
   ])("renders the %s explainer and a Try again affordance", async (reason) => {
     const bridge = new TestBridge();
     bridge.sources = [source({})];
@@ -822,6 +825,50 @@ describe("<ImportLoginsDialog /> import", () => {
     await screen.findByText("The import stopped part-way");
     expect(screen.getByText(/import again to finish the rest/)).not.toBeNull();
     expect(screen.getByRole("button", { name: "Try again" })).not.toBeNull();
+  });
+
+  it("invalidates the saved sites after an incomplete import", async () => {
+    const bridge = new TestBridge();
+    bridge.sources = [source({})];
+    bridge.scanBySourceId.set(
+      "source-1",
+      scan({
+        sites: [{ domain: "example.com", cookieCount: 1, unlock: null }],
+      }),
+    );
+    bridge.importResult = { status: "blocked", reason: "incomplete" };
+    const { client } = renderDialog(bridge);
+    const invalidateQueries = vi.spyOn(client, "invalidateQueries");
+    await pickSource(/Google Chrome/);
+
+    await screen.findByText("example.com");
+    fireEvent.click(importConfirmButton());
+
+    await screen.findByText("The import stopped part-way");
+    // What it did write is in the jar and was pushed, so the saved-sites
+    // list is just as stale as after a completed import.
+    expect(invalidateQueries).toHaveBeenCalled();
+  });
+
+  it("leaves the saved sites alone for a blocked import that wrote nothing", async () => {
+    const bridge = new TestBridge();
+    bridge.sources = [source({})];
+    bridge.scanBySourceId.set(
+      "source-1",
+      scan({
+        sites: [{ domain: "example.com", cookieCount: 1, unlock: null }],
+      }),
+    );
+    bridge.importResult = { status: "blocked", reason: "saved-logins-off" };
+    const { client } = renderDialog(bridge);
+    const invalidateQueries = vi.spyOn(client, "invalidateQueries");
+    await pickSource(/Google Chrome/);
+
+    await screen.findByText("example.com");
+    fireEvent.click(importConfirmButton());
+
+    await screen.findByText("Nothing was imported");
+    expect(invalidateQueries).not.toHaveBeenCalled();
   });
 
   it("keeps the previous selection after a retry from a blocked import", async () => {

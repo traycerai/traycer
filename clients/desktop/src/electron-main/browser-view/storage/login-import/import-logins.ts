@@ -1,7 +1,10 @@
 import type { Cookie, CookiesGetFilter, CookiesSetDetails } from "electron";
 import { createHash, randomBytes } from "node:crypto";
 import { z } from "zod";
-import type { BrowserCookieKey } from "@traycer/protocol/host/browser/contracts";
+import {
+  BROWSER_FORGET_LEDGER_MAX_DOMAINS,
+  type BrowserCookieKey,
+} from "@traycer/protocol/host/browser/contracts";
 import type {
   LoginImportBlocked,
   LoginImportRequest,
@@ -571,6 +574,10 @@ export class LoginImportService {
         // the source has a cookie at that key, and the jar's cookie there is
         // kept rather than removed as "not carried" - see `writeSite` step 3.
         const carriedBySite = new Map<string, Set<string>>();
+        // And every NAME the source holds for a chosen site, from the same
+        // rows: the by-name keep in `writeSite` step 3 is about what the
+        // source has a cookie called, whether or not this reader opens it.
+        const namesBySite = new Map<string, Set<string>>();
         for (const row of read.rows) {
           const scope = classifyImportCookie(row, nowSeconds);
           if (scope === null || !chosen.has(scope.site)) continue;
@@ -583,6 +590,9 @@ export class LoginImportService {
             }),
           );
           carriedBySite.set(scope.site, carried);
+          const names = namesBySite.get(scope.site) ?? new Set<string>();
+          names.add(row.name);
+          namesBySite.set(scope.site, names);
           if (row.partitioned || row.secret.kind === "protected") continue;
           candidates.push({ row, scope });
         }
@@ -612,6 +622,14 @@ export class LoginImportService {
           const siteRows = bySite.get(candidate.scope.site) ?? [];
           siteRows.push(candidate);
           bySite.set(candidate.scope.site, siteRows);
+        }
+        // Every site the write touches goes into the forget ledger under one
+        // revision, and the ledger keeps that many domains: a batch past it
+        // would be TRIMMED, and a trimmed scope never reaches a host's digest,
+        // so a host that was away would keep what the import removed. Refused
+        // here, before the keystore is opened or a cookie moves.
+        if (bySite.size > BROWSER_FORGET_LEDGER_MAX_DOMAINS) {
+          return { ok: false, reason: "too-many-sites" };
         }
 
         const keys = await this.resolveKeys(read, candidates);
@@ -659,6 +677,7 @@ export class LoginImportService {
                   site,
                   siteRows,
                   carriedBySite.get(site) ?? new Set<string>(),
+                  namesBySite.get(site) ?? new Set<string>(),
                   read,
                   keys,
                   nowSeconds,
@@ -679,6 +698,11 @@ export class LoginImportService {
               // the capture that reconciles it.
               try {
                 await session.cookies.flushStore();
+              } catch (error) {
+                // A flush refused is a write that ended after its cookies
+                // reached the in-process jar: answered like any other such
+                // ending below, and pushed, not thrown past the push.
+                if (ending.failure === null) ending.failure = { error };
               } finally {
                 await this.deps.sleep(this.deps.settleWindowMs);
               }
@@ -703,19 +727,25 @@ export class LoginImportService {
             await this.deps.releaseHostOwnedKeys(tally.writtenKeys);
           }
         }
-        if (tally.writtenKeys.length === 0) {
-          // Nothing reached the jar: whatever ended the write is the whole
-          // answer, and there is nothing for the hosts to hear.
+        // The jar is the hosts' to hear about once anything of the import's
+        // is in it - or once the ledger has told them to prune a site, even
+        // one the write then put back as it was: a host that pruned and was
+        // never captured would hold LESS than this machine until something
+        // else asked for a capture. Nothing of either is nothing to hear.
+        const jarTouched = tally.writtenKeys.length > 0 || ledger.recorded;
+        if (!jarTouched) {
           if (ending.failure !== null) throw ending.failure.error;
           return { ok: true, outcome: tally, notifiedHosts: 0 };
         }
-        // A jar with anything of the import's in it is pushed, whatever
-        // ended the write: the hosts hold the previous slice for these sites
-        // and the ledger has told them to prune it, so a write that stopped
-        // part-way and was never captured would leave every host with LESS
-        // than this machine, until something else asked for a capture. Still
-        // inside the barrier - see `pushJarToHosts`.
+        // Pushed whatever ended the write, and still inside the barrier - see
+        // `pushJarToHosts`.
         const notifiedHosts = await this.deps.pushJarToHosts();
+        if (tally.writtenKeys.length === 0) {
+          // Touched and pushed, but nothing of the import's remains in the
+          // jar: what stopped it is the whole answer, as above.
+          if (ending.failure !== null) throw ending.failure.error;
+          return { ok: true, outcome: tally, notifiedHosts };
+        }
         if (ending.failure !== null) {
           // Answered as what it is - an import that stopped part-way, with
           // what it did write kept, counted and pushed - rather than as a
@@ -794,6 +824,12 @@ export class LoginImportService {
     // the same scope the write derives its key from, so a row that fails on
     // the way in (or never starts) still marks its key as carried.
     carriedKeyIds: ReadonlySet<string>,
+    // Every NAME the source holds for this site, from the same rows - the
+    // candidates' and the ones this reader never opens - for the by-name
+    // keep of step 3: a protected `sid` the reader never tried is still a
+    // `sid` the source has, so the jar's `sid` under another scope is not
+    // stale for want of a landed row of that name.
+    sourceNames: ReadonlySet<string>,
     read: SourceRead & { ok: true },
     keys: ChromiumKeys & { ok: true },
     nowSeconds: number,
@@ -836,13 +872,10 @@ export class LoginImportService {
     if (writtenRows.length === 0) return;
 
     // A name the source has a row for but no LANDED row of: that row failed
-    // on the way in (or, below, on its re-write), so the jar's cookies of
-    // that name are the sign-in it would have replaced, whatever their
-    // scope. Read against `writtenKeyIds` as it stands, so the re-write
-    // pass moving a key out of it moves that name in here.
-    const sourceNames = new Set(
-      siteRows.map((candidate) => candidate.row.name),
-    );
+    // on the way in (or, below, on its re-write), or was never opened, so
+    // the jar's cookies of that name are the sign-in it would have replaced,
+    // whatever their scope. Read against `writtenKeyIds` as it stands, so
+    // the re-write pass moving a key out of it moves that name in here.
     const orphaned = (name: string): boolean =>
       sourceNames.has(name) &&
       !writtenRows.some(
@@ -901,10 +934,18 @@ export class LoginImportService {
         session,
       );
       if (key === null) {
-        // Accepted a moment ago and refused now: counted as it stands.
+        // Accepted a moment ago and refused now: counted as it stands, and
+        // no longer the import's - the restore below puts the jar's prior
+        // cookie back at this key, so the desktop must not take ownership
+        // of a value a host may own.
         outcome.importedCookies -= 1;
         outcome.skippedInvalid += 1;
-        writtenKeyIds.delete(candidateKeyId(candidate));
+        const refusedKeyId = candidateKeyId(candidate);
+        writtenKeyIds.delete(refusedKeyId);
+        const index = outcome.writtenKeys.findIndex(
+          (written) => cookieKeyId(written) === refusedKeyId,
+        );
+        if (index !== -1) outcome.writtenKeys.splice(index, 1);
       }
     }
     // No written row survived its re-write: the site is back to step 2, and

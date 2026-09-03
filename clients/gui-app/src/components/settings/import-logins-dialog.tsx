@@ -569,7 +569,6 @@ function SiteChecklist(props: {
               includeDeviceBound,
             });
           }}
-          data-testid="import-logins-confirm"
         >
           {props.pending ? (
             <AgentSpinningDots
@@ -903,8 +902,14 @@ function BlockedExplainer(props: {
       return (
         <Notice tone="warning">
           Traycer stopped before every site was written. The logins it did
-          import are kept and have been sent to your hosts; import again to
-          finish the rest.
+          import are kept on this machine; import again to finish the rest.
+        </Notice>
+      );
+    case "too-many-sites":
+      return (
+        <Notice tone="warning">
+          That is more sites than Traycer can replace in one go. Choose fewer
+          sites and import the rest in another pass.
         </Notice>
       );
     default: {

@@ -34,7 +34,10 @@ import {
   type LoginImportSummary,
 } from "../import-logins";
 import type { SecretReadResult } from "../secret-providers/secret-read-result";
-import type { BrowserCookieKey } from "@traycer/protocol/host/browser/contracts";
+import {
+  BROWSER_FORGET_LEDGER_MAX_DOMAINS,
+  type BrowserCookieKey,
+} from "@traycer/protocol/host/browser/contracts";
 import type { LoginImportScan } from "@traycer-clients/shared/platform/browser-view";
 import { matchesDomainFilter } from "../../__tests__/cookie-jar-fixture";
 import { MAX_LOGIN_IMPORT_FILE_BYTES } from "../bounded-file";
@@ -346,6 +349,15 @@ class FakeLoginImportSession implements LoginImportJarSession {
     this.rejectRemoveNames.add(name);
   }
 
+  private rejectFlushOnce = false;
+
+  /** Rejects the NEXT `flushStore()` call once - the call still counts
+   * (`flushes` still increments) and the settle `sleep` after it in
+   * `writeSite`'s `finally` still runs; only the promise it returns rejects. */
+  rejectFlush(): void {
+    this.rejectFlushOnce = true;
+  }
+
   readonly cookies: LoginImportJarCookies = {
     get: (filter: CookiesGetFilter): Promise<Cookie[]> => {
       const domain = filter.domain;
@@ -430,6 +442,10 @@ class FakeLoginImportSession implements LoginImportJarSession {
     },
     flushStore: (): Promise<void> => {
       this.flushes += 1;
+      if (this.rejectFlushOnce) {
+        this.rejectFlushOnce = false;
+        return Promise.reject(new Error("flushStore rejected"));
+      }
       return Promise.resolve();
     },
   };
@@ -3648,8 +3664,14 @@ describe("import - a re-write refused restores the prior cookie at an UNCARRIED 
     };
     const session = new FakeLoginImportSession([uncarriedHostOnlyCookie]);
     session.rejectSetValueAfter("sid", "new-value", 1);
+    const releaseHostOwnedKeys = vi.fn(async (): Promise<void> => undefined);
     const { service } = buildHarness(
-      { platform: "darwin", homeDir, snapshotRoot: await makeTempDir("snap-") },
+      {
+        platform: "darwin",
+        homeDir,
+        snapshotRoot: await makeTempDir("snap-"),
+        releaseHostOwnedKeys,
+      },
       session,
     );
     const { sourceId, scan } = await scanChromeSource(service);
@@ -3677,6 +3699,12 @@ describe("import - a re-write refused restores the prior cookie at an UNCARRIED 
     const sidCookie = cookies.find((cookie) => cookie.name === "sid");
     expect(sidCookie?.hostOnly).toBe(true);
     expect(sidCookie?.value).toBe("uncarried-value");
+    // The refused "sid" re-write drops that key from `releaseHostOwnedKeys`'s
+    // list too - only "fresh", which actually stayed written, is released.
+    expect(releaseHostOwnedKeys).toHaveBeenCalledTimes(1);
+    expect(releaseHostOwnedKeys).toHaveBeenCalledWith([
+      { domain: ".restore-uncarried.com", name: "fresh", path: "/" },
+    ]);
   });
 });
 
@@ -3784,12 +3812,14 @@ describe("import - a site with nothing landed after every re-write is refused", 
     ]);
     session.rejectSetValueAfter("sid", "new-value", 1);
     const pushJarToHosts = vi.fn(async (): Promise<number> => 0);
+    const releaseHostOwnedKeys = vi.fn(async (): Promise<void> => undefined);
     const { service, clearedSites } = buildHarness(
       {
         platform: "darwin",
         homeDir,
         snapshotRoot: await makeTempDir("snap-"),
         pushJarToHosts,
+        releaseHostOwnedKeys,
       },
       session,
     );
@@ -3819,11 +3849,13 @@ describe("import - a site with nothing landed after every re-write is refused", 
     expect(oldCookie?.value).toBe("old-value");
     // Nothing landed: `writeSite` returns before the localStorage clear.
     expect(clearedSites).not.toContain("nothing-landed.com");
-    // But the site's FIRST write DID put a key in the jar for a moment (it
-    // was later undone by the refused re-write), so `tally.writtenKeys`
-    // still holds it - the outer import still treats this as "something of
-    // the import's landed at some point" and pushes the jar once.
+    // The refused re-write also drops the key from `tally.writtenKeys` (not
+    // only `writtenKeyIds`), so nothing of the import's remains written - the
+    // jar is still pushed once, but only because the "old" removal recorded
+    // the forget ledger, never because a key survived.
     expect(pushJarToHosts).toHaveBeenCalledTimes(1);
+    expect(releaseHostOwnedKeys).toHaveBeenCalledTimes(1);
+    expect(releaseHostOwnedKeys).toHaveBeenCalledWith([]);
   });
 });
 
@@ -4177,5 +4209,212 @@ describe("import - a picked cookie-file source enforces the read bound", () => {
 
     expect(scan.blocked).toBe("unreadable");
     expect(scan.sites).toEqual([]);
+  });
+});
+
+// =================================================================================
+// 36. An import naming more sites than the forget ledger can record is
+//     refused before the keystore prompt or the first write
+// =================================================================================
+
+describe("import - refuses an import past the forget ledger's domain cap", () => {
+  // Pins: `bySite.size > BROWSER_FORGET_LEDGER_MAX_DOMAINS` is checked right
+  // after grouping the source's candidates by site and BEFORE `resolveKeys` -
+  // so an import naming more sites than the forget ledger can record for one
+  // revision never opens a keystore and never writes a cookie. `too-many-sites`
+  // is a distinct reason from `source-changed`: the source read fine and the
+  // scan stays on record, so a smaller re-selection can retry without a
+  // fresh scan.
+  it("refuses more sites than the forget ledger keeps, before the keystore or a write", async () => {
+    const homeDir = await makeTempDir("login-import-too-many-sites-");
+    const siteCount = BROWSER_FORGET_LEDGER_MAX_DOMAINS + 1;
+    const rows: FixtureCookieRow[] = [];
+    for (let index = 0; index < siteCount; index += 1) {
+      rows.push(
+        domainCookieRow(`.s${index}.com`, "sid", { kind: "plain", value: "v" }),
+      );
+    }
+    await createDarwinChromeSource(homeDir, rows, 23);
+    const session = new FakeLoginImportSession([]);
+    const macosKeychain = vi.fn((): Promise<SecretReadResult> => {
+      throw new Error("macOS keychain must not be consulted");
+    });
+    const recordReplacedSites = vi.fn(async (): Promise<number | null> => 1);
+    const markReplacementCleared = vi.fn(async (): Promise<void> => undefined);
+    const pushJarToHosts = vi.fn(async (): Promise<number> => 0);
+    const { service } = buildHarness(
+      {
+        platform: "darwin",
+        homeDir,
+        snapshotRoot: await makeTempDir("snap-"),
+        secrets: {
+          macosKeychain,
+          linuxSecretService: alwaysUnavailable(),
+          windowsDpapi: () => Promise.resolve(null),
+        },
+        recordReplacedSites,
+        markReplacementCleared,
+        pushJarToHosts,
+      },
+      session,
+    );
+    const { sourceId, scan } = await scanChromeSource(service);
+    expect(scan.sites.length).toBe(siteCount);
+    const domains = scan.sites.map((site) => site.domain);
+
+    const result = await service.import({
+      sourceId,
+      scanId: scan.scanId,
+      domains,
+      includeDeviceBound: false,
+    });
+
+    expect(result).toEqual({ status: "blocked", reason: "too-many-sites" });
+    expect(session.setCalls).toEqual([]);
+    expect(recordReplacedSites).not.toHaveBeenCalled();
+    expect(pushJarToHosts).not.toHaveBeenCalled();
+    expect(markReplacementCleared).not.toHaveBeenCalled();
+    expect(macosKeychain).not.toHaveBeenCalled();
+  });
+});
+
+// =================================================================================
+// 37. `writeSite`'s by-name keep also covers a name the source holds only as
+//     a row that never becomes a candidate (protected/partitioned)
+// =================================================================================
+
+describe("import - keeps a prior cookie of a name the source holds only as a protected row", () => {
+  // Pins: `namesBySite` (importInner) is built from EVERY classified row for
+  // a chosen site, including a protected one that never reaches `candidates`
+  // - so `writeSite`'s `sourceNames` parameter carries that name too, and the
+  // jar's cookie of that name under another scope is treated as orphaned
+  // (kept), not stale (removed), even though no row of that name was ever
+  // attempted.
+  it("keeps a prior cookie of a name the source holds only as a protected row", async () => {
+    const homeDir = await makeTempDir("login-import-protected-name-kept-");
+    await createDarwinChromeSource(
+      homeDir,
+      [
+        domainCookieRow(".protected-name-kept.com", "fresh", {
+          kind: "plain",
+          value: "fresh-value",
+        }),
+        domainCookieRow(".protected-name-kept.com", "sid", {
+          kind: "protected",
+        }),
+      ],
+      23,
+    );
+    const uncarriedHostOnlyCookie: Cookie = {
+      name: "sid",
+      value: "uncarried-value",
+      domain: "protected-name-kept.com",
+      hostOnly: true,
+      path: "/",
+      secure: true,
+      httpOnly: false,
+      session: true,
+      sameSite: "lax",
+      expirationDate: 4_102_444_800,
+    };
+    const session = new FakeLoginImportSession([
+      uncarriedHostOnlyCookie,
+      cookieFixture("old", ".protected-name-kept.com"),
+    ]);
+    const { service } = buildHarness(
+      { platform: "darwin", homeDir, snapshotRoot: await makeTempDir("snap-") },
+      session,
+    );
+    const { sourceId, scan } = await scanChromeSource(service);
+
+    const result = await service.import({
+      sourceId,
+      scanId: scan.scanId,
+      domains: ["protected-name-kept.com"],
+      includeDeviceBound: false,
+    });
+
+    expect(result).toEqual({
+      status: "imported",
+      importedSites: 1,
+      importedCookies: 1,
+      replacedSites: 1,
+      skippedInvalid: 0,
+      notifiedHosts: 0,
+    });
+    const cookies = session.cookiesUnderDomain("protected-name-kept.com");
+    expect(cookies.map((cookie) => cookie.name).sort()).toEqual([
+      "fresh",
+      "sid",
+    ]);
+    const freshCookie = cookies.find((cookie) => cookie.name === "fresh");
+    expect(freshCookie?.value).toBe("fresh-value");
+    // "old" was not carried and not orphaned (the source has no row named
+    // "old" at all) - genuinely stale, so it was removed.
+    // The host-only "sid" survives untouched at its prior value: the source
+    // DOES hold a "sid" (the protected row), so the name is not stale even
+    // though no "sid" row ever attempted a write.
+    const sidCookie = cookies.find((cookie) => cookie.name === "sid");
+    expect(sidCookie?.hostOnly).toBe(true);
+    expect(sidCookie?.value).toBe("uncarried-value");
+  });
+});
+
+// =================================================================================
+// 38. A `flushStore()` rejection after a successful write is folded into the
+//     incomplete path, like any other ending that leaves cookies written
+// =================================================================================
+
+describe("import - a flush that rejects after a write still answers incomplete and pushes", () => {
+  it("answers incomplete and pushes when the store flush rejects after a write", async () => {
+    const homeDir = await makeTempDir("login-import-flush-rejects-");
+    await createDarwinChromeSource(
+      homeDir,
+      [
+        domainCookieRow(".flush-rejects.com", "sid", {
+          kind: "plain",
+          value: "v",
+        }),
+      ],
+      23,
+    );
+    const session = new FakeLoginImportSession([]);
+    session.rejectFlush();
+    const releaseHostOwnedKeys = vi.fn(async (): Promise<void> => undefined);
+    const pushJarToHosts = vi.fn(async (): Promise<number> => 0);
+    const sleep = vi.fn(async (): Promise<void> => undefined);
+    const { service } = buildHarness(
+      {
+        platform: "darwin",
+        homeDir,
+        snapshotRoot: await makeTempDir("snap-"),
+        releaseHostOwnedKeys,
+        pushJarToHosts,
+        sleep,
+      },
+      session,
+    );
+    const { sourceId, scan } = await scanChromeSource(service);
+
+    const result = await service.import({
+      sourceId,
+      scanId: scan.scanId,
+      domains: ["flush-rejects.com"],
+      includeDeviceBound: false,
+    });
+
+    expect(result).toEqual({ status: "blocked", reason: "incomplete" });
+    const cookies = session.cookiesUnderDomain("flush-rejects.com");
+    const sidCookie = cookies.find((cookie) => cookie.name === "sid");
+    expect(sidCookie?.value).toBe("v");
+    expect(pushJarToHosts).toHaveBeenCalledTimes(1);
+    expect(releaseHostOwnedKeys).toHaveBeenCalledTimes(1);
+    expect(releaseHostOwnedKeys).toHaveBeenCalledWith([
+      { domain: ".flush-rejects.com", name: "sid", path: "/" },
+    ]);
+    // The settle sleep after the flush still runs, even though the flush
+    // itself rejected.
+    expect(sleep).toHaveBeenCalledTimes(1);
+    expect(session.flushes).toBe(1);
   });
 });
