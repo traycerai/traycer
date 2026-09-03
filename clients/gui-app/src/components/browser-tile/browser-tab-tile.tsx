@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
 import type { BrowserViewViewportPresetId } from "@traycer-clients/shared/platform/browser-view";
@@ -25,6 +25,7 @@ import {
   clearLastBrowserPeekFrame,
   useLastBrowserPeekFrame,
 } from "@/lib/browser-view/sessions/peek-frame-cache";
+import { useDesktopWindowId } from "@/lib/windows/desktop-window-id";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 
 /**
@@ -79,6 +80,13 @@ interface BrowserTabTileSurfaceProps extends BrowserTabTileProps {
    * reconnecting" on a client that has no native tabs to reconnect.
    */
   readonly canMaterializeElectron: boolean;
+  /**
+   * THIS renderer's desktop window id, or `null` off Electron - the string the
+   * host echoes as `BrowserTabInfo.boundWindowId` for the route holding a
+   * tab's binding. `lib/windows/desktop-window-id.ts` records why those two
+   * are the same string rather than two ids describing one window.
+   */
+  readonly desktopWindowId: string | null;
   readonly wakeRequested: boolean;
   readonly wakeExpired: boolean;
   readonly onRequestWake: () => void;
@@ -96,6 +104,61 @@ function browserPeekCompleteMeaning(
 ): BrowserPeekCompleteMeaning {
   if (runtimeKind !== "electron") return "ended";
   return canMaterializeElectron ? "native-handoff" : "native-elsewhere";
+}
+
+/**
+ * Whether the host has said, as a fact, that this tab's native binding is held
+ * by a route in some OTHER desktop window.
+ *
+ * This is the question the tile used to answer by timing - "no binding after
+ * the deadline, so it must be elsewhere" - which mislabels four states that
+ * have nothing to do with another window: a same-window reload whose rebind
+ * stalls, a create still pending on this window's own route, the gap between a
+ * window closing and the host noticing, and a rebind that failed outright. The
+ * host knows which subscriber holds the binding and which window that
+ * subscriber speaks for, so it says so on `boundWindowId` and the tile reads
+ * it. `null` is not "elsewhere": it is "no route holds this tab", which is
+ * exactly the case the timing-based reconnect wait still covers.
+ */
+function tabBoundInAnotherWindow(
+  session: BrowserSessionInfo,
+  tab: BrowserSessionInfo["tabs"][number],
+  desktopWindowId: string | null,
+): boolean {
+  if (session.runtime.kind !== "electron") return false;
+  if (tab.boundWindowId === null) return false;
+  return tab.boundWindowId !== desktopWindowId;
+}
+
+/**
+ * The activation edge that asks the host to attach this tab on THIS window's
+ * route: the body is on screen, this client could place a native tab on the
+ * session's host, and no route has handed it a binding.
+ *
+ * That covers every state the ask is for - a dormant tab, a dormant session's
+ * first native birth, and a tab whose binding has not arrived - and it is
+ * deliberately NOT narrowed to `runtime.kind === "electron"`, because a
+ * dormant session's birth resolves its route from scratch and is exactly the
+ * case that would otherwise land in whichever window happens to be the
+ * scope's default.
+ *
+ * `canMaterializeElectron` is what keeps a viewer from ever asking, standing
+ * in for the gate it cannot sit below: the branch this precedes is an early
+ * return inside the surface, and no effect can follow one.
+ */
+function shouldRequestTabAttach(args: {
+  readonly canMaterializeElectron: boolean;
+  readonly inventoryReady: boolean;
+  readonly visible: boolean;
+  readonly session: BrowserSessionInfo | undefined;
+  readonly tab: BrowserSessionInfo["tabs"][number] | undefined;
+  readonly binding: ElectronTabBinding | null;
+  readonly hostReachable: boolean;
+}): boolean {
+  if (!args.canMaterializeElectron || !args.inventoryReady) return false;
+  if (!args.visible || !args.hostReachable) return false;
+  if (args.session === undefined || args.tab === undefined) return false;
+  return args.binding === null;
 }
 
 function BrowserTabTileSurface(props: BrowserTabTileSurfaceProps) {
@@ -156,6 +219,17 @@ function BrowserTabTileSurface(props: BrowserTabTileSurfaceProps) {
   }
 
   if (props.binding === null) {
+    // Below the `canMaterializeElectron` gate above, so a remote viewer never
+    // reaches it - a viewer has no window for the tab to be "elsewhere" from,
+    // and its own branch already says `native-elsewhere`. Before the wait
+    // rather than after it: the wait is a guess about elapsed time and this is
+    // the host's answer, so it displaces the spinner and pre-empts the
+    // reopen alert instead of sitting behind ten seconds of one.
+    if (
+      tabBoundInAnotherWindow(props.session, props.tab, props.desktopWindowId)
+    ) {
+      return <BrowserTabOtherWindowNote />;
+    }
     return (
       <BrowserTabRebindWait
         onWake={props.onRequestWake}
@@ -246,6 +320,29 @@ function BrowserTabRebindWait(props: {
       <Button type="button" variant="outline" size="sm" onClick={props.onWake}>
         Reopen tab
       </Button>
+    </div>
+  );
+}
+
+/**
+ * A tab whose native binding is held by another desktop window's route.
+ *
+ * Deliberately inert: moving a tab between windows is a follow-up, and the
+ * move is where the destructive race lives (the two windows' streams are
+ * separate connections into separate renderers, and a release racing an
+ * adopt closes the guest that was just adopted). So this states the fact and
+ * offers nothing - the user's answer today is to look at the other window, or
+ * close the tab and open one where they are. `role="status"` rather than
+ * `alert`: nothing is wrong, and nothing is pending either.
+ */
+function BrowserTabOtherWindowNote() {
+  return (
+    <div
+      role="status"
+      data-testid="browser-tab-other-window"
+      className="flex h-full w-full items-center justify-center px-4 text-center text-ui-sm text-muted-foreground"
+    >
+      Open in your other window
     </div>
   );
 }
@@ -412,7 +509,9 @@ function useRuntimeDemotionNote(
  */
 export function BrowserTabTile(props: BrowserTabTileProps) {
   const sessions = useBrowserSessionsContext();
+  const attachTab = sessions.attachTab;
   const reachability = useHostReachability(props.node.hostId);
+  const desktopWindowId = useDesktopWindowId();
   const session = sessions.items.find(
     (item) => item.sessionId === props.node.sessionId,
   );
@@ -445,10 +544,27 @@ export function BrowserTabTile(props: BrowserTabTileProps) {
   // infinite spinner.
   const [wakeRequestedAt, setWakeRequestedAt] = useState<number | null>(null);
   const [wakeWindowExpired, setWakeWindowExpired] = useState(false);
+  /**
+   * "Attach this tab on MY window's route." The host elects native routes per
+   * scope AND window, so without this the tab is woken onto whichever route is
+   * the scope's default and the reader watches it appear in the other window.
+   *
+   * Fire-and-forget by construction, and that is the whole design rather than
+   * missing error handling: the screencast subscription behind the peek branch
+   * is still what WAKES the tab, and this only names the window that asked. So
+   * a rejection (the tab is bound in another window, the session is closing)
+   * and a timeout (a host too old to have the frame's reader) both leave the
+   * tile rendering exactly what it renders without it, and neither is worth a
+   * retry - the reader's own next activation is the retry.
+   */
+  const sendAttachTab = useCallback(() => {
+    void attachTab(props.node.tabId).catch(() => undefined);
+  }, [attachTab, props.node.tabId]);
   const requestWake = useCallback(() => {
+    sendAttachTab();
     setWakeRequestedAt(Date.now());
     setWakeWindowExpired(false);
-  }, []);
+  }, [sendAttachTab]);
   useEffect(() => {
     if (wakeRequestedAt === null) return;
     const remaining =
@@ -463,6 +579,30 @@ export function BrowserTabTile(props: BrowserTabTileProps) {
       clearTimeout(timer);
     };
   }, [wakeRequestedAt]);
+  // Edge-triggered through a ref, not a dependency: once per activation is the
+  // contract, so a re-render, a rejected ack, a timed-out ack and a
+  // `wakeRequested` flip must all send nothing more. Going false re-arms it,
+  // which is what makes a later activation - a reconnect, a reader coming
+  // back to a concealed tab - a fresh ask.
+  const attachRequestedRef = useRef(false);
+  const shouldRequestAttach = shouldRequestTabAttach({
+    canMaterializeElectron: sessions.canMaterializeElectron,
+    inventoryReady: sessions.inventoryReady,
+    visible: props.visible,
+    session,
+    tab,
+    binding,
+    hostReachable: reachability.status !== "unreachable",
+  });
+  useEffect(() => {
+    if (!shouldRequestAttach) {
+      attachRequestedRef.current = false;
+      return;
+    }
+    if (attachRequestedRef.current) return;
+    attachRequestedRef.current = true;
+    sendAttachTab();
+  }, [sendAttachTab, shouldRequestAttach]);
   const wakeActive =
     binding === null && wakeRequestedAt !== null && !wakeWindowExpired;
   const wakeExpired =
@@ -520,6 +660,7 @@ export function BrowserTabTile(props: BrowserTabTileProps) {
           binding={binding}
           inventoryReady={sessions.inventoryReady}
           canMaterializeElectron={sessions.canMaterializeElectron}
+          desktopWindowId={desktopWindowId}
           wakeRequested={wakeActive}
           wakeExpired={wakeExpired}
           onRequestWake={requestWake}

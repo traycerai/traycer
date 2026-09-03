@@ -111,8 +111,13 @@ vi.mock("@/lib/host/use-durable-stream-transport", () => ({
 vi.mock("@/hooks/host/use-reactive-local-host-id", () => ({
   useReactiveLocalHostId: () => CANVAS_HOST_ID,
 }));
+// Both exports, because a `vi.mock` factory REPLACES the module: the browser
+// tile body reads `useRunnerHostOrNull` for this renderer's desktop window id,
+// and a factory naming only `useRunnerHost` fails that import at module init
+// rather than at the assertion.
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({ browserView: null }),
+  useRunnerHostOrNull: () => ({ browserView: null }),
 }));
 
 vi.mock("@/components/epic-canvas/tile-find/tile-find-scope", () => ({
