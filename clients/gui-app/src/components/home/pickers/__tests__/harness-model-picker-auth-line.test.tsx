@@ -1,5 +1,5 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
 import type {
   ProviderAuthStatus,
   ProviderCliState,
@@ -10,8 +10,6 @@ import { providerSignedOutMessage } from "@traycer/protocol/host/provider-displa
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { GuiHarnessCatalogEntry } from "@/hooks/harnesses/use-gui-harness-catalog";
 import { PickerProviderAuthLine } from "../harness-model-picker-auth-line";
-
-function noop(): void {}
 
 function baseProviderState(providerId: ProviderId): ProviderCliState {
   return {
@@ -65,13 +63,14 @@ function disabledProviderState(providerId: ProviderId): ProviderCliState {
 
 function harnessOption(
   id: GuiHarnessId,
+  enabled: boolean,
   authStatus: ProviderAuthStatus | undefined,
   modelsError: HostRpcError | null,
 ): GuiHarnessCatalogEntry {
   return {
     id,
     label: id,
-    enabled: true,
+    enabled,
     available: true,
     error: null,
     modes: ["gui"],
@@ -107,40 +106,54 @@ describe("<PickerProviderAuthLine />", () => {
     cleanup();
   });
 
-  it("renders nothing for a null state", () => {
+  it("renders nothing when both state and harness are null (no provider identity to resolve)", () => {
     const { container } = render(
-      <PickerProviderAuthLine
-        state={null}
-        harness={null}
-        onOpenProviderSettings={noop}
-      />,
+      <PickerProviderAuthLine state={null} harness={null} />,
     );
     expect(container.firstChild).toBeNull();
   });
 
-  it("renders nothing for a disabled provider", () => {
+  it("renders nothing for a disabled provider (enabled read off state)", () => {
     const { container } = render(
       <PickerProviderAuthLine
         state={disabledProviderState("reasonix")}
         harness={null}
-        onOpenProviderSettings={noop}
       />,
     );
     expect(container.firstChild).toBeNull();
   });
 
-  it("renders the setup-guidance row for a signed-out provider with guidance (reasonix)", () => {
-    const onOpenProviderSettings = vi.fn();
+  it("renders nothing when state is null and the harness itself is disabled (enabled falls back to harness.enabled)", () => {
+    const { container } = render(
+      <PickerProviderAuthLine
+        state={null}
+        harness={harnessOption("reasonix", false, "unauthenticated", null)}
+      />,
+    );
+    expect(container.firstChild).toBeNull();
+  });
+
+  it("renders the signed-out guidance line when state is null but an enabled harness row reports unauthenticated (provider identity and enabled both resolved from the harness)", () => {
+    render(
+      <PickerProviderAuthLine
+        state={null}
+        harness={harnessOption("reasonix", true, "unauthenticated", null)}
+      />,
+    );
+
+    expect(screen.getByRole("note", { name: "Setup required" })).toBeDefined();
+    expect(screen.getByText("Not authenticated")).toBeDefined();
+  });
+
+  it("renders the setup-guidance row (steps + manual-command sentence, no button) for a signed-out provider with guidance (reasonix)", () => {
     render(
       <PickerProviderAuthLine
         state={baseProviderState("reasonix")}
         harness={null}
-        onOpenProviderSettings={onOpenProviderSettings}
       />,
     );
 
     const note = screen.getByRole("note", { name: "Setup required" });
-    expect(note).toBeDefined();
     expect(screen.getByText("Not authenticated")).toBeDefined();
     expect(
       screen.getByText(
@@ -148,20 +161,24 @@ describe("<PickerProviderAuthLine />", () => {
       ),
     ).toBeDefined();
 
-    // First ordered-list item names the command in a <code> element.
+    // Steps render verbatim - no injected "Run … in a terminal" item.
     const list = note.querySelector("ol");
     expect(list).not.toBeNull();
-    const items = list?.querySelectorAll("li") ?? [];
-    expect(items.length).toBe(3);
-    const code = items[0]?.querySelector("code");
-    expect(code?.textContent).toBe("reasonix setup");
-    expect(items[1]?.textContent).toBe(
+    const items = Array.from(list?.querySelectorAll("li") ?? []);
+    expect(items.map((item) => item.textContent)).toEqual([
+      "From a chat, choose “Set up in terminal” in the banner above the composer. It opens Reasonix's setup wizard on the host this composer runs on.",
       "Paste your provider API key when asked (DeepSeek by default).",
-    );
-    expect(items[2]?.textContent).toBe("Refresh this list.");
+      "Refresh this list.",
+    ]);
 
-    fireEvent.click(screen.getByRole("button", { name: "Open Settings" }));
-    expect(onOpenProviderSettings).toHaveBeenCalledTimes(1);
+    // The manual-command sentence names the command in a <code>.
+    const code = note.querySelector("code");
+    expect(code?.textContent).toBe("reasonix setup");
+    expect(code?.closest("span")?.textContent).toBe(
+      "Installed the CLI yourself? Running reasonix setup in your own terminal on that machine does the same.",
+    );
+
+    expect(screen.queryByRole("button", { name: "Open Settings" })).toBeNull();
   });
 
   it("renders the bare 'Not authenticated' label for a signed-out provider without guidance", () => {
@@ -169,17 +186,14 @@ describe("<PickerProviderAuthLine />", () => {
       <PickerProviderAuthLine
         state={baseProviderState("claude-code")}
         harness={null}
-        onOpenProviderSettings={noop}
       />,
     );
 
     expect(screen.getByText("Not authenticated")).toBeDefined();
     expect(screen.queryByRole("note", { name: "Setup required" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Open Settings" })).toBeNull();
   });
 
   it("treats a signed-out harness row (authStatus: unauthenticated) as signed out even when the provider state is authenticated", () => {
-    const onOpenProviderSettings = vi.fn();
     render(
       <PickerProviderAuthLine
         state={providerStateWithAuth(
@@ -188,8 +202,7 @@ describe("<PickerProviderAuthLine />", () => {
           null,
           "Authenticated",
         )}
-        harness={harnessOption("reasonix", "unauthenticated", null)}
-        onOpenProviderSettings={onOpenProviderSettings}
+        harness={harnessOption("reasonix", true, "unauthenticated", null)}
       />,
     );
 
@@ -197,26 +210,31 @@ describe("<PickerProviderAuthLine />", () => {
     expect(screen.getByRole("note", { name: "Setup required" })).toBeDefined();
   });
 
-  it("renders only the compact 'Not authenticated' label (no steps, no button) when the model list already shows the signed-out CTA", () => {
-    const onOpenProviderSettings = vi.fn();
+  it("renders only the compact 'Not authenticated' label - never the authenticated badge - when an authenticated state's harness reports the signed-out catalog error", () => {
     render(
       <PickerProviderAuthLine
-        state={baseProviderState("reasonix")}
+        state={providerStateWithAuth(
+          "reasonix",
+          "authenticated",
+          "some badge",
+          "Authenticated",
+        )}
         harness={harnessOption(
           "reasonix",
+          true,
           undefined,
           catalogErrorFor(
             "agent.gui.listModels",
             providerSignedOutMessage("reasonix"),
           ),
         )}
-        onOpenProviderSettings={onOpenProviderSettings}
       />,
     );
 
     expect(screen.getByText("Not authenticated")).toBeDefined();
     expect(screen.queryByRole("note", { name: "Setup required" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Open Settings" })).toBeNull();
+    expect(screen.queryByText("Authenticated")).toBeNull();
+    expect(screen.queryByText("some badge")).toBeNull();
     expect(
       screen.queryByText(
         "Reasonix keeps provider API keys in its own store, not in your shell environment.",
@@ -230,10 +248,10 @@ describe("<PickerProviderAuthLine />", () => {
         state={baseProviderState("reasonix")}
         harness={harnessOption(
           "reasonix",
+          true,
           undefined,
           catalogErrorFor("agent.gui.listModels", "spawn failed: ENOENT"),
         )}
-        onOpenProviderSettings={noop}
       />,
     );
 
@@ -255,7 +273,6 @@ describe("<PickerProviderAuthLine />", () => {
           "Authenticated as octocat",
         )}
         harness={null}
-        onOpenProviderSettings={noop}
       />,
     );
 
@@ -274,7 +291,6 @@ describe("<PickerProviderAuthLine />", () => {
           "API key configured",
         )}
         harness={null}
-        onOpenProviderSettings={noop}
       />,
     );
 
@@ -291,7 +307,6 @@ describe("<PickerProviderAuthLine />", () => {
           null,
         )}
         harness={null}
-        onOpenProviderSettings={noop}
       />,
     );
     expect(container.firstChild).toBeNull();
@@ -307,7 +322,6 @@ describe("<PickerProviderAuthLine />", () => {
           "some label",
         )}
         harness={null}
-        onOpenProviderSettings={noop}
       />,
     );
     expect(container.firstChild).toBeNull();

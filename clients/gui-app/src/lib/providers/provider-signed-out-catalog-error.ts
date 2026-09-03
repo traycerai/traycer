@@ -1,5 +1,21 @@
-import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
+import {
+  PROVIDER_DISPLAY_NAMES,
+  type ProviderId,
+} from "@traycer/protocol/host/provider-schemas";
 import { providerSignedOutMessage } from "@traycer/protocol/host/provider-display";
+
+/**
+ * The sentence every provider's signed-out verdict carried before the
+ * protocol gave Reasonix its own. A signed host is released separately from
+ * this renderer and builds the error from whichever protocol it pins, so a
+ * host from before that change still sends this form for Reasonix, and a
+ * renderer that recognised only the new one would answer such a host with the
+ * generic error row and a report-issue icon - the exact state the setup CTA
+ * exists to replace. Remove once no supported host predates the change.
+ */
+function legacyProviderSignedOutMessage(providerId: ProviderId): string {
+  return `${PROVIDER_DISPLAY_NAMES[providerId]} is signed out. Reconnect to continue.`;
+}
 
 /**
  * Whether a model-list failure is the host's "signed out" verdict for this
@@ -17,8 +33,10 @@ export function isProviderSignedOutCatalogError(
   providerId: ProviderId,
   error: { readonly message: string } | null,
 ): boolean {
+  if (error === null) return false;
+  const message = error.message.trim();
   return (
-    error !== null &&
-    error.message.trim() === providerSignedOutMessage(providerId)
+    message === providerSignedOutMessage(providerId) ||
+    message === legacyProviderSignedOutMessage(providerId)
   );
 }

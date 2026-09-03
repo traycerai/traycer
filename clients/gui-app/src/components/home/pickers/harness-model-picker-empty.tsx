@@ -5,6 +5,7 @@ import { createReportIssueContext } from "@/lib/report-issue-context";
 import type { GuiHarnessCatalogEntry } from "@/hooks/harnesses/use-gui-harness-catalog";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import { guiHarnessIdToProviderId } from "@/lib/provider-ordering";
+import { ProviderSetupManualCommand } from "@/components/home/pickers/harness-model-picker-auth-line";
 import {
   type ProviderSetupGuidance,
   providerSetupGuidance,
@@ -128,14 +129,7 @@ export function ModelRowsState(props: ModelRowsStateProps): ReactNode | null {
     // report-issue icon beside it invites a bug report for a missing key.
     const setup = providerSetupCta(activeProvider);
     if (setup !== null) {
-      return (
-        <ProviderSetupCta
-          harnessId={activeProvider.id}
-          label={activeProvider.label}
-          guidance={setup}
-          onOpenProviderSettings={onOpenProviderSettings}
-        />
-      );
+      return <ProviderSetupCta label={activeProvider.label} guidance={setup} />;
     }
     // Surface the host's specific reason for API-key providers and packaged SDK
     // failures instead of a generic catch-all. Fall back when the message is
@@ -229,12 +223,13 @@ function providerSetupCta(
 
 // Shown in place of the model list when a provider with its own credential
 // store is signed out. Same shape as the API-key CTA below, but the steps are
-// the provider's terminal flow: Traycer cannot take the key itself.
+// the provider's terminal flow: Traycer cannot take the key itself. No
+// Settings button, deliberately - Settings has no terminal sign-in for such a
+// provider (its own hint sends the user back to the composer), so the button
+// would be a dead end; the steps name the composer banner instead.
 function ProviderSetupCta(props: {
-  readonly harnessId: GuiHarnessCatalogEntry["id"];
   readonly label: string;
   readonly guidance: ProviderSetupGuidance;
-  readonly onOpenProviderSettings: () => void;
 }): ReactNode {
   const { guidance } = props;
   return (
@@ -249,30 +244,13 @@ function ProviderSetupCta(props: {
         {guidance.summary}
       </p>
       <ol className="max-w-[min(90vw,18rem)] list-decimal space-y-0.5 pl-4 text-left text-ui-xs text-muted-foreground">
-        <li>
-          Run{" "}
-          <code className="rounded-sm bg-foreground/8 px-1 py-px font-mono text-[11px] text-foreground/90">
-            {guidance.command}
-          </code>{" "}
-          in a terminal.
-        </li>
         {guidance.steps.map((step) => (
           <li key={step}>{step}</li>
         ))}
       </ol>
-      <Button
-        size="sm"
-        variant="secondary"
-        className="mt-1"
-        onClick={() => {
-          // Land on this provider in Settings → Providers, same as the API-key
-          // CTA, so the Authenticate action there is one click away.
-          useProvidersFocusStore.getState().setFocusHarnessId(props.harnessId);
-          props.onOpenProviderSettings();
-        }}
-      >
-        Open Settings
-      </Button>
+      <p className="max-w-[min(90vw,18rem)] text-left text-ui-xs text-muted-foreground">
+        <ProviderSetupManualCommand command={guidance.manualCommand} />
+      </p>
     </div>
   );
 }

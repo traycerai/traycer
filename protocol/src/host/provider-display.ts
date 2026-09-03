@@ -18,13 +18,15 @@ import { PROVIDER_DISPLAY_NAMES, type ProviderId } from "./provider-schemas";
  * own `<reasonix-home>/.env` and from nowhere else, and the only way to put
  * one there is its terminal wizard. "Signed out. Reconnect." sent users to
  * export a shell variable the CLI never reads, so its sentence names the real
- * fix. The renderer matches this string exactly to recognise the verdict
- * (`isProviderSignedOutCatalogError`), which is why this function must stay
- * the single producer for every provider.
+ * fix. "Usable", not "missing": the same sentence heads a prompt-time 401 for
+ * a key that is present but rejected or expired, and telling that user no key
+ * is configured hides why a working setup stopped. The renderer matches this
+ * string exactly to recognise the verdict (`isProviderSignedOutCatalogError`),
+ * which is why this function must stay the single producer for every provider.
  */
 export function providerSignedOutMessage(providerId: ProviderId): string {
   if (providerId === "reasonix") {
-    return "Reasonix has no API key configured. Run reasonix setup to continue.";
+    return "Reasonix has no usable API key configured. Run reasonix setup to continue.";
   }
   return `${PROVIDER_DISPLAY_NAMES[providerId]} is signed out. Reconnect to continue.`;
 }

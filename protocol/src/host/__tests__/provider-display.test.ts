@@ -13,7 +13,7 @@ describe("providerSignedOutMessage", () => {
     // CLI never reads. The renderer matches this string EXACTLY to recognise
     // the signed-out catalog verdict, so the wording is a contract.
     expect(providerSignedOutMessage("reasonix")).toBe(
-      "Reasonix has no API key configured. Run reasonix setup to continue.",
+      "Reasonix has no usable API key configured. Run reasonix setup to continue.",
     );
   });
 
