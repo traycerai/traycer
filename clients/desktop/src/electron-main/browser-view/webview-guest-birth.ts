@@ -19,11 +19,12 @@ import {
 
 /**
  * How long a minted grant may wait for did-attach and for `onAttached` to
- * settle. Production `ensureTab` does not mint yet.
+ * settle.
  */
 const ATTACHMENT_GRANT_TTL_MS = 10_000;
 
 const BLANK_GUEST_SRC = "about:blank";
+const BLANK_GUEST_SRC_PREFIX = `${BLANK_GUEST_SRC}#`;
 
 interface MintAttachmentGrantInput {
   readonly windowId: string;
@@ -61,6 +62,23 @@ const births = new Map<string, GuestBirth>();
  */
 const awaitingCreateByEmbedderId = new Map<number, string>();
 let watchingGuestCreation = false;
+
+/**
+ * `mintAttachmentGrant` returns `{ mount, ready }` because the IPC send
+ * needs the full renderer payload. Provisioning reads a flat
+ * `{ registrationId, ready }`. Passing the mint result through as
+ * `attachRendererGuest` leaves `registrationId` undefined, and the host
+ * then drops `electronTabProvisioned`.
+ */
+export function guestAttachResultFromMint(granted: {
+  readonly mount: { readonly registrationId: string };
+  readonly ready: Promise<void>;
+}): { readonly registrationId: string; readonly ready: Promise<void> } {
+  return {
+    registrationId: granted.mount.registrationId,
+    ready: granted.ready,
+  };
+}
 
 export function mintAttachmentGrant(input: MintAttachmentGrantInput): {
   readonly mount: BrowserViewGuestMountRequested;
@@ -199,34 +217,34 @@ function handleWillAttach(
   webPreferences: WebPreferences,
   params: Record<string, string>,
 ): void {
-  const registrationId = params.name ?? "";
   const src = params.src ?? "";
+  const registrationId = registrationIdFromAttachParams(params);
   const partition = webPreferences.partition || params.partition || "";
   const birth = births.get(registrationId);
   if (birth === undefined) {
-    denyAttach(event, "no-grant");
+    denyAttach(event, "no-grant", src, params.name ?? "");
     return;
   }
   if (birth.windowId !== windowId) {
-    denyAttach(event, "window");
+    denyAttach(event, "window", src, params.name ?? "");
     return;
   }
   if (birth.guest !== null) {
-    denyAttach(event, "replay");
+    denyAttach(event, "replay", src, params.name ?? "");
     return;
   }
-  if (src !== BLANK_GUEST_SRC) {
-    denyAttach(event, "src");
+  if (!isBlankGuestSrc(src, registrationId)) {
+    denyAttach(event, "src", src, params.name ?? "");
     dropBirth(registrationId);
     return;
   }
   if (partition !== birth.partition) {
-    denyAttach(event, "partition");
+    denyAttach(event, "partition", src, params.name ?? "");
     dropBirth(registrationId);
     return;
   }
   if (awaitingCreateByEmbedderId.get(host.id) !== undefined) {
-    denyAttach(event, "busy");
+    denyAttach(event, "busy", src, params.name ?? "");
     return;
   }
   hardenGuestPreferences(webPreferences, birth.partition);
@@ -291,9 +309,40 @@ function hardenGuestPreferences(
   prefs.partition = partition;
 }
 
-function denyAttach(event: Event, reason: string): void {
+/**
+ * Electron 42.11's `<webview>` attribute map does not include `name`, so
+ * `will-attach-webview` params never carry it. The renderer puts the
+ * registration id in the `about:blank#…` fragment, which `src` does forward.
+ * `params.name` is still accepted for a later Electron that restores it.
+ */
+function registrationIdFromAttachParams(
+  params: Record<string, string>,
+): string {
+  const named = params.name ?? "";
+  if (named !== "") return named;
+  const src = params.src ?? "";
+  if (!src.startsWith(BLANK_GUEST_SRC_PREFIX)) return "";
+  return src.slice(BLANK_GUEST_SRC_PREFIX.length);
+}
+
+function isBlankGuestSrc(src: string, registrationId: string): boolean {
+  return (
+    src === BLANK_GUEST_SRC || src === `${BLANK_GUEST_SRC}#${registrationId}`
+  );
+}
+
+function denyAttach(
+  event: Event,
+  reason: string,
+  src: string,
+  name: string,
+): void {
   event.preventDefault();
-  log.warn("[webview-birth] attach denied", { reason });
+  log.warn("[webview-birth] attach denied", {
+    reason,
+    hasName: name !== "",
+    blankSrc: src === BLANK_GUEST_SRC || src.startsWith(BLANK_GUEST_SRC_PREFIX),
+  });
 }
 
 function expireBirth(registrationId: string): void {

@@ -61,6 +61,7 @@ vi.mock("../browser-session", () => ({
 import { ensureBrowserViewSessionForPartition } from "../browser-session";
 import {
   clearAllAttachmentGrants,
+  guestAttachResultFromMint,
   installWebviewAttachGuards,
   mintAttachmentGrant,
   releaseAttachmentGrant,
@@ -227,6 +228,32 @@ describe("webview guest birth", () => {
     );
     expect(webPreferences.preload).toBeUndefined();
     expect(webPreferences.additionalArguments).toBeUndefined();
+  });
+
+  it("flattens mint.mount.registrationId onto the attach result provisioning reads", () => {
+    const granted = mintGranted(WINDOW_A, attachedOk, null);
+    const attach = guestAttachResultFromMint(granted);
+    expect(attach.registrationId).toBe(granted.mount.registrationId);
+    expect(attach.ready).toBe(granted.ready);
+    expect(
+      Object.prototype.hasOwnProperty.call(granted, "registrationId"),
+    ).toBe(false);
+  });
+
+  it("correlates a grant through about:blank#registrationId when name is absent", () => {
+    const host = hostFor(1, WINDOW_A);
+    const mount = mint(WINDOW_A, attachedOk, null);
+    const { event } = willAttach(
+      host,
+      mount.registrationId,
+      {},
+      {
+        name: "",
+        src: `about:blank#${mount.registrationId}`,
+      },
+    );
+
+    expect(event.preventDefault).not.toHaveBeenCalled();
   });
 
   it("consumes src, partition, and did-attach type/host/session mismatch; does not consume no-grant or wrong-window", () => {

@@ -55,6 +55,7 @@ function TileProbe() {
     viewTabId: "view-1",
     paneId: "pane-1",
     presented: true,
+    tileKey: null,
   });
   return <div ref={surfaceRef} data-testid={SURFACE_TEST_ID} />;
 }
@@ -78,6 +79,17 @@ afterEach(() => {
 });
 
 describe("PersistentBrowserGuestHost", () => {
+  it("does not create a webview host when the runner has no browserView", () => {
+    render(
+      <RunnerHostProvider runnerHost={createFakeRunnerHost({})}>
+        <PersistentBrowserGuestHost />
+      </RunnerHostProvider>,
+    );
+
+    expect(queryHost()).toBeNull();
+    expect(document.querySelectorAll("webview")).toHaveLength(0);
+  });
+
   it("keeps a mounted publisher presented across browserView replacement", () => {
     const firstBridge = new FakeBrowserViewBridge();
     const view = render(<HostApp bridge={firstBridge} />);

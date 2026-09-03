@@ -211,10 +211,14 @@ function createGuestWebview(
   partition: string,
 ): HTMLElement {
   const webview = document.createElement("webview");
-  webview.setAttribute("src", BLANK_GUEST_SRC);
+  // Electron 42.11 does not forward the `name` attribute to
+  // `will-attach-webview`. The fragment is the grant correlation main
+  // actually receives (`params.src`). Keep `name` for a later Electron
+  // that restores it.
+  webview.setAttribute("src", `${BLANK_GUEST_SRC}#${registrationId}`);
   webview.setAttribute("partition", partition);
   webview.setAttribute("name", registrationId);
-  webview.style.display = "block";
+  webview.style.display = "flex";
   webview.style.width = "100%";
   webview.style.height = "100%";
   webview.style.border = "none";

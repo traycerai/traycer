@@ -3,6 +3,11 @@ import type { ComponentProps } from "react";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ElectronTabSurface } from "@/components/epic-canvas/renderers/agent-browser-tile";
+import {
+  startPersistentBrowserGuestHost,
+  stopPersistentBrowserGuestHost,
+} from "@/lib/browser-view/guest/persistent-browser-guest-host";
+import { FakeBrowserViewBridge } from "@/lib/browser-view/__tests__/fake-browser-view-bridge";
 import type {
   ElectronTabBinding,
   ElectronTabSurfaceLease,
@@ -11,7 +16,6 @@ import type { TileController } from "@/components/epic-canvas/renderers/tile-con
 import type { BrowserSessionsState } from "@/components/epic-canvas/renderers/browser-sessions-context";
 import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 import type {
-  BrowserViewBoundsUpdate,
   BrowserViewTileCommand,
   BrowserViewTileCommandEvent,
 } from "@traycer-clients/shared/platform/browser-view";
@@ -22,7 +26,7 @@ const state = vi.hoisted(() => ({
   chromeInputs: [] as Array<Record<string, unknown>>,
   sessions: null as BrowserSessionsState | null,
   openTile: vi.fn<(intent: TileOpenIntent) => void>(),
-  /** Attach/detach/bounds in the order they actually happened. */
+  /** Attach/detach in the order they actually happened. */
   events: [] as string[],
   closeTab: vi.fn((_sessionId: string, _tabId: string) => Promise.resolve()),
   openTab: vi.fn((sessionId: string | null, _url: string) =>
@@ -40,27 +44,6 @@ vi.mock("@/components/epic-canvas/hooks/use-tile-body-visible", () => ({
 }));
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({ browserView: state.bridge }),
-}));
-// The bounds bridge itself is REAL here: the regression this suite pins is the
-// ORDER in which the tile mounts it relative to the surface attach, and a
-// stubbed hook cannot have an order. Only the overlay registry it writes to is
-// faked, exactly as `use-browser-view-bounds-bridge.test.tsx` does.
-vi.mock(
-  "@/lib/browser-view/tiles/browser-overlay-coordinator",
-  async (load) => {
-    const actual =
-      await load<
-        typeof import("@/lib/browser-view/tiles/browser-overlay-coordinator")
-      >();
-    return {
-      ...actual,
-      registerBrowserOverlayTile: () => () => undefined,
-      updateBrowserOverlayTileRect: () => undefined,
-    };
-  },
-);
-vi.mock("@/components/epic-canvas/renderers/use-browser-view-snapshot", () => ({
-  useBrowserViewSnapshot: () => null,
 }));
 vi.mock("@/hooks/browser/use-browser-annotation-session", () => ({
   useBrowserAnnotationSession: () => null,
@@ -226,14 +209,6 @@ class TestBridge {
     return { dispose: () => {} };
   }
 
-  readonly boundsSends: BrowserViewBoundsUpdate[] = [];
-
-  updateBounds(input: BrowserViewBoundsUpdate): Promise<void> {
-    this.boundsSends.push(input);
-    state.events.push("bounds");
-    return Promise.resolve();
-  }
-
   emitStatus(change: NativeStatusChange): void {
     this.statusHandler?.(change);
   }
@@ -262,26 +237,8 @@ function createBinding(
   };
 }
 
-const SURFACE_RECT = { left: 8, top: 12, width: 400, height: 300 };
-
-/**
- * The real bounds bridge measures on mount and then only on animation frames.
- * jsdom has no layout, so both have to be supplied: a fixed rect (any usable
- * one - the assertions care that it is non-empty, not what it is) and a frame
- * queue nothing drains, which leaves exactly the mount-time send observable.
- */
 beforeEach(() => {
   state.events = [];
-  window.requestAnimationFrame = () => 1;
-  window.cancelAnimationFrame = () => undefined;
-  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
-    ...SURFACE_RECT,
-    x: SURFACE_RECT.left,
-    y: SURFACE_RECT.top,
-    right: SURFACE_RECT.left + SURFACE_RECT.width,
-    bottom: SURFACE_RECT.top + SURFACE_RECT.height,
-    toJSON: () => undefined,
-  });
 });
 
 afterEach(() => {
@@ -326,6 +283,28 @@ function liveSessions(): BrowserSessionsState {
   };
 }
 
+function mountGuestForTile(): void {
+  const bridge = new FakeBrowserViewBridge();
+  startPersistentBrowserGuestHost(bridge, null);
+  bridge.emitGuestMountRequested({
+    hostId: "host-1",
+    sessionId: "session-1",
+    tabId: "tab-1",
+    registrationId: "registration-1",
+    partition: "persist:primary",
+  });
+}
+
+function queryTileGuestWrapper(): HTMLElement {
+  const wrapper = document.querySelector(
+    '[data-browser-guest-registration="registration-1"]',
+  );
+  if (!(wrapper instanceof HTMLElement)) {
+    throw new Error("expected guest wrapper for registration-1");
+  }
+  return wrapper;
+}
+
 function popupRequest(
   disposition: "foreground" | "background",
 ): OpenTileRequest {
@@ -351,15 +330,20 @@ describe("ElectronTabSurface", () => {
 
   afterEach(() => {
     cleanup();
+    stopPersistentBrowserGuestHost();
   });
 
   it("attaches the accepted native incarnation before enabling tile chrome", async () => {
+    mountGuestForTile();
     const detach = vi.fn(() => Promise.resolve());
     const lease: ElectronTabSurfaceLease = { detach };
     const bindSurface = vi.fn(() => Promise.resolve(lease));
     renderTile(createBinding(bindSurface));
 
     expect(state.chromeInputs.at(0)?.surfaceServices).toBeNull();
+    expect(
+      queryTileGuestWrapper().getAttribute("data-browser-guest-state"),
+    ).not.toBe("presented");
     await waitFor(() => {
       expect(bindSurface).toHaveBeenCalledExactlyOnceWith({
         bindingId: "canvas\u001fview-1\u001fpane-1\u001ftile-1",
@@ -372,6 +356,10 @@ describe("ElectronTabSurface", () => {
       });
       expect(state.chromeInputs.at(-1)?.surfaceServices).toBe(state.bridge);
     });
+    const wrapper = queryTileGuestWrapper();
+    expect(wrapper.getAttribute("data-browser-guest-state")).toBe("presented");
+    expect(wrapper.style.pointerEvents).toBe("auto");
+    expect(wrapper.inert).toBe(false);
   });
 
   it("shows the start page without attaching an opaque native surface", () => {
@@ -413,23 +401,11 @@ describe("ElectronTabSurface", () => {
     });
   });
 
-  /**
-   * Canvas tabs are keep-alive: switching away hides the tile's layer, which
-   * detaches the surface in main (the key mapping and `entry.bounds` both go),
-   * and switching back re-attaches it. The bounds bridge is declared ABOVE the
-   * bind effect, so on the way back it re-mounts FIRST - and if the tile still
-   * believes it is attached, its single mount-time `updateBounds` lands on a
-   * surface key main no longer maps and is dropped. The rAF loop then dedupes
-   * that same rect forever, so the re-attached tile stays at `bounds === null`
-   * and renders blank until an unrelated window resize moves it.
-   */
-  it("re-attaches before sending bounds when a hidden tile comes back", async () => {
+  it("re-attaches when a hidden tile comes back", async () => {
     const binding = createRecordingBinding();
-    const bridge = state.bridge;
-    if (bridge === null) throw new Error("bridge missing");
     const view = renderTile(binding);
     await waitFor(() => {
-      expect(state.events).toEqual(["bind", "bounds"]);
+      expect(state.events).toEqual(["bind"]);
     });
 
     const show = (visible: boolean): void => {
@@ -446,35 +422,30 @@ describe("ElectronTabSurface", () => {
 
     show(false);
     await waitFor(() => {
-      expect(state.events).toEqual(["bind", "bounds", "detach"]);
+      expect(state.events).toEqual(["bind", "detach"]);
     });
 
     show(true);
     await waitFor(() => {
-      expect(state.events).toEqual([
-        "bind",
-        "bounds",
-        "detach",
-        // Broken ordering puts "bounds" here, before the re-attach.
-        "bind",
-        "bounds",
-      ]);
-    });
-    expect(bridge.boundsSends.at(-1)?.bounds).toEqual({
-      x: SURFACE_RECT.left,
-      y: SURFACE_RECT.top,
-      width: SURFACE_RECT.width,
-      height: SURFACE_RECT.height,
+      expect(state.events).toEqual(["bind", "detach", "bind"]);
     });
   });
 
   it("shows an attach failure without creating or releasing another tab", async () => {
+    mountGuestForTile();
     renderTile(
       createBinding(() => Promise.reject(new Error("surface attach rejected"))),
     );
 
     expect(await screen.findByText("Agent browser unavailable")).toBeTruthy();
     expect(screen.getByText("surface attach rejected")).toBeTruthy();
+    const wrapper = queryTileGuestWrapper();
+    expect(wrapper.getAttribute("data-browser-guest-state")).toBe("retained");
+    expect(wrapper.getAttribute("data-browser-guest-state")).not.toBe(
+      "presented",
+    );
+    expect(wrapper.style.pointerEvents).toBe("none");
+    expect(wrapper.inert).toBe(true);
   });
 
   it("opens an in-page popup as a tab of this pane, foreground focusing it", async () => {
@@ -633,6 +604,7 @@ describe("ElectronTabSurface browser-scoped chords", () => {
 
   afterEach(() => {
     cleanup();
+    stopPersistentBrowserGuestHost();
   });
 
   it("closes THIS tile's browser tab on Cmd+W, then retires the tile", async () => {

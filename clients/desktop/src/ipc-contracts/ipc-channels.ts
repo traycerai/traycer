@@ -336,15 +336,11 @@ export const RunnerHostInvoke = {
   browserViewAttachSurface: "runnerHost:browserView:nativeTab:attachSurface",
   browserViewDetachSurface: "runnerHost:browserView:nativeTab:detachSurface",
   browserViewControlElectronTab: "runnerHost:browserView:nativeTab:control",
-  browserViewUpdateBounds: "runnerHost:browserView:updateBounds",
   browserViewSetReservedChords: "runnerHost:browserView:setReservedChords",
-  browserViewOverlayPaintAck: "runnerHost:browserView:overlayPaintAck",
   browserViewFindInPage: "runnerHost:browserView:findInPage",
   browserViewStopFindInPage: "runnerHost:browserView:stopFindInPage",
   browserViewCancelDownload: "runnerHost:browserView:cancelDownload",
   browserViewTrustCertificate: "runnerHost:browserView:trustCertificate",
-  browserViewOccludeForOverlay: "runnerHost:browserView:occludeForOverlay",
-  browserViewReleaseOverlay: "runnerHost:browserView:releaseOverlay",
   browserViewCapturePage: "runnerHost:browserView:capturePage",
   browserViewGetDebugSnapshot: "runnerHost:browserView:getDebugSnapshot",
   // Clear cookies for one site (keychain refactor ticket 07): the user's
@@ -457,14 +453,6 @@ export const RunnerHostEvent = {
   browserViewCertificateError: "runnerHost:event:browserView:certificateError",
   browserViewOpenTileRequest: "runnerHost:event:browserView:openTileRequest",
   browserViewTileCommand: "runnerHost:event:browserView:tileCommand",
-  browserViewSnapshotInvalidated:
-    "runnerHost:event:browserView:snapshotInvalidated",
-  // Ticket 04 exit-edge handshake: fired once the un-parked native view's
-  // first composited frame lands, telling the renderer it may now drop the
-  // stand-in it kept mounted since occlusion. Only for tiles that were
-  // actually parked; a tile released without ever parking keeps answering
-  // through `restoredTiles` on the occlude/release return value.
-  browserViewOverlayRestored: "runnerHost:event:browserView:overlayRestored",
   browserViewAnnotationEvent: "runnerHost:event:browserView:annotation",
   browserViewAnnotationAttached:
     "runnerHost:event:browserView:annotationAttached",

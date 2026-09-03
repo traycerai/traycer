@@ -13,15 +13,11 @@ import type {
   BrowserViewFindRequest,
   BrowserViewFindStop,
   BrowserViewOpenTileRequest,
-  BrowserViewOverlayOcclusion,
-  BrowserViewOverlayOcclusionResult,
-  BrowserViewOverlayRelease,
-  BrowserViewOverlayReleaseResult,
   BrowserViewAttachSurface,
   BrowserViewDetachSurface,
   BrowserViewGuestMountRequested,
   BrowserViewGuestReleaseRequested,
-  BrowserViewSnapshotInvalidatedChange,
+  BrowserViewReservedChord,
   BrowserViewTileCommandEvent,
   BrowserViewTileKey,
   LoginImportRequest,
@@ -47,16 +43,7 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
    */
   private nextSetSaveLoginsResult: (() => Promise<boolean>) | null = null;
 
-  readonly occludeCalls: BrowserViewOverlayOcclusion[] = [];
-  /** Forces the `matchedCount` main reports, so a miss can be simulated. */
-  matchedCountOverride: number | null = null;
-  readonly releaseCalls: BrowserViewOverlayRelease[] = [];
-  readonly paintAckCalls: string[] = [];
-  private readonly occludedTiles: BrowserViewTileKey[] = [];
-  private readonly snapshotInvalidationHandlers = new Set<
-    (change: BrowserViewSnapshotInvalidatedChange) => void
-  >();
-
+  readonly reservedChordsCalls: BrowserViewReservedChord[][] = [];
   readonly openSessionsStreamCalls: BrowserSessionsStreamKey[] = [];
   readonly closeSessionsStreamCalls: BrowserSessionsStreamKey[] = [];
   readonly sendSessionsFrameCalls: BrowserSessionsStreamSend[] = [];
@@ -74,11 +61,10 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
     this.saveLoginsValue = input?.saveLogins ?? true;
   }
 
-  updateBounds(): Promise<void> {
-    return Promise.resolve();
-  }
-
-  setReservedChords(): Promise<void> {
+  setReservedChords(
+    chords: readonly BrowserViewReservedChord[],
+  ): Promise<void> {
+    this.reservedChordsCalls.push([...chords]);
     return Promise.resolve();
   }
 
@@ -137,33 +123,6 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
     return Promise.resolve();
   }
 
-  occludeForOverlay(
-    input: BrowserViewOverlayOcclusion,
-  ): Promise<BrowserViewOverlayOcclusionResult> {
-    this.occludeCalls.push(input);
-    this.occludedTiles.push(...input.tiles);
-    return Promise.resolve({
-      // The overlay id, so a suite can tell WHICH overlay's replacement frame
-      // a tile is showing rather than only that one arrived.
-      snapshots: input.tiles.map((tile) => ({
-        ...tile,
-        dataUrl: `data:image/png;base64,${input.overlayId}`,
-        stale: false,
-      })),
-      restoredTiles: [],
-      matchedCount: this.matchedCountOverride ?? input.tiles.length,
-    });
-  }
-
-  releaseOverlay(
-    input: BrowserViewOverlayRelease,
-  ): Promise<BrowserViewOverlayReleaseResult> {
-    this.releaseCalls.push(input);
-    // Whatever this bridge parked, exactly as main restores the tiles it
-    // occluded rather than an arbitrary set.
-    return Promise.resolve({ restoredTiles: [...this.occludedTiles] });
-  }
-
   getSaveLogins(): Promise<boolean> {
     return Promise.resolve(this.saveLoginsValue);
   }
@@ -195,11 +154,6 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
 
   forgetLogins(): Promise<boolean> {
     return Promise.resolve(true);
-  }
-
-  overlayPaintAck(overlayId: string): Promise<void> {
-    this.paintAckCalls.push(overlayId);
-    return Promise.resolve();
   }
 
   clearSite(): Promise<void> {
@@ -316,32 +270,6 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
         );
       },
     };
-  }
-
-  onSnapshotInvalidated(
-    handler: (change: BrowserViewSnapshotInvalidatedChange) => void,
-  ): {
-    dispose: () => void;
-  } {
-    this.snapshotInvalidationHandlers.add(handler);
-    return {
-      dispose: () => {
-        this.snapshotInvalidationHandlers.delete(handler);
-      },
-    };
-  }
-
-  /** Drives whatever suite is holding the overlay coordinator's subscription. */
-  emitSnapshotInvalidated(change: BrowserViewSnapshotInvalidatedChange): void {
-    this.snapshotInvalidationHandlers.forEach((handler) => {
-      handler(change);
-    });
-  }
-
-  onOverlayTileRestored(_handler: (tile: BrowserViewTileKey) => void): {
-    dispose: () => void;
-  } {
-    return { dispose: () => undefined };
   }
 
   onAnnotationEvent() {

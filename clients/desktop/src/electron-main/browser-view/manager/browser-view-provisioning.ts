@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type { BrowserViewNativeTabCapability } from "@traycer-clients/shared/platform/browser-view";
 import type { BrowserStorageState } from "@traycer/protocol/host/browser/contracts";
 import { describeLogError, log } from "../../app/logger";
@@ -29,23 +28,17 @@ interface BrowserViewProvisioningOptions {
   readonly entries: BrowserViewEntryRegistry<BrowserViewEntry>;
   readonly windows: BrowserViewWindowAttachment;
   readonly debugSessions: BrowserViewDebugSessions;
-  readonly createEntry: (
-    requestedUrl: string,
-    identity: BrowserViewNativeIdentity,
-    profile: BrowserSessionProfile,
-  ) => BrowserViewEntry;
   readonly createEntryFromWebContents: (
     requestedUrl: string,
     identity: BrowserViewNativeIdentity,
     profile: BrowserSessionProfile,
     webContents: BrowserViewWebContents,
   ) => BrowserViewEntry;
-  readonly attachRendererGuest:
-    | ((
-        windowId: string,
-        request: BrowserViewGuestAttachRequest,
-      ) => BrowserViewGuestAttachResult)
-    | null;
+  readonly attachRendererGuest: (
+    windowId: string,
+    request: BrowserViewGuestAttachRequest,
+  ) => BrowserViewGuestAttachResult;
+  readonly releaseRendererGuest: (registrationId: string) => void;
   readonly seedStorageState: (
     input: BrowserViewEnsureTab,
     webContents: BrowserViewWebContents,
@@ -65,23 +58,17 @@ export class BrowserViewProvisioning {
   private readonly entries: BrowserViewEntryRegistry<BrowserViewEntry>;
   private readonly windows: BrowserViewWindowAttachment;
   private readonly debugSessions: BrowserViewDebugSessions;
-  private readonly createEntry: (
-    requestedUrl: string,
-    identity: BrowserViewNativeIdentity,
-    profile: BrowserSessionProfile,
-  ) => BrowserViewEntry;
   private readonly createEntryFromWebContents: (
     requestedUrl: string,
     identity: BrowserViewNativeIdentity,
     profile: BrowserSessionProfile,
     webContents: BrowserViewWebContents,
   ) => BrowserViewEntry;
-  private readonly attachRendererGuest:
-    | ((
-        windowId: string,
-        request: BrowserViewGuestAttachRequest,
-      ) => BrowserViewGuestAttachResult)
-    | null;
+  private readonly attachRendererGuest: (
+    windowId: string,
+    request: BrowserViewGuestAttachRequest,
+  ) => BrowserViewGuestAttachResult;
+  private readonly releaseRendererGuest: (registrationId: string) => void;
   private readonly seedStorageState: (
     input: BrowserViewEnsureTab,
     webContents: BrowserViewWebContents,
@@ -92,14 +79,20 @@ export class BrowserViewProvisioning {
     url: string,
   ) => Promise<void>;
   private readonly emitStatus: (entry: BrowserViewEntry) => void;
+  /**
+   * Occupies a guest key for the whole async mint so a same-window second
+   * ensure joins the in-flight incarnation. A later ensure from a different
+   * window supersedes that mint instead of inheriting its guest.
+   */
+  private readonly inFlightEnsures = new Map<string, InFlightEnsure>();
 
   constructor(options: BrowserViewProvisioningOptions) {
     this.entries = options.entries;
     this.windows = options.windows;
     this.debugSessions = options.debugSessions;
-    this.createEntry = options.createEntry;
     this.createEntryFromWebContents = options.createEntryFromWebContents;
     this.attachRendererGuest = options.attachRendererGuest;
+    this.releaseRendererGuest = options.releaseRendererGuest;
     this.seedStorageState = options.seedStorageState;
     this.closeEntry = options.closeEntry;
     this.navigate = options.navigate;
@@ -121,27 +114,63 @@ export class BrowserViewProvisioning {
       }
       return this.restoreExistingNativeTab(windowId, input, existing);
     }
+    const inFlight = this.inFlightEnsures.get(guestKey);
+    if (inFlight !== undefined) {
+      if (inFlight.windowId === windowId) return inFlight.promise;
+      this.supersedeInFlightEnsure(guestKey, inFlight);
+    }
 
     logEnsureStage(input, startedAt, "manager_started", "started", null);
     const lifecycle = new NativeBrowserViewLifecycle();
-    this.windows.ensureResetListener(windowId);
-    if (this.attachRendererGuest !== null) {
-      return this.ensureAttachedGuestTab(windowId, input, lifecycle, startedAt);
-    }
-    const identity: BrowserViewNativeIdentity = {
-      key: {
-        hostId: input.hostId,
-        sessionId: input.sessionId,
-        tabId: input.tabId,
-      },
-      registrationId: randomUUID(),
-      lifecycleWindowId: windowId,
+    const record: InFlightEnsure = {
+      windowId,
+      registrationId: null,
+      entry: null,
       lifecycle,
+      promise: lifecycle.provisioned,
     };
-    const entry = this.createEntry(input.requestedUrl, identity, input.profile);
-    logEnsureStage(input, startedAt, "entry_created", "ok", null);
-    void this.settleNativeTabInitialization(entry, input, startedAt);
-    return lifecycle.provisioned;
+    try {
+      this.ensureAttachedGuestTab(
+        windowId,
+        input,
+        lifecycle,
+        startedAt,
+        record,
+      );
+    } catch (error) {
+      lifecycle.failProvisioning(error);
+      return record.promise;
+    }
+    this.inFlightEnsures.set(guestKey, record);
+    void record.promise
+      .finally(() => {
+        if (this.inFlightEnsures.get(guestKey) === record) {
+          this.inFlightEnsures.delete(guestKey);
+        }
+      })
+      .catch(() => undefined);
+    return record.promise;
+  }
+
+  private supersedeInFlightEnsure(
+    guestKey: string,
+    inFlight: InFlightEnsure,
+  ): void {
+    this.inFlightEnsures.delete(guestKey);
+    const entry = inFlight.entry;
+    if (entry !== null) {
+      void this.closeEntry(entry).catch((cleanupError: unknown) => {
+        log.warn("[browser-view] native tab cleanup failed", {
+          error: describeLogError(cleanupError),
+          guestKey: entry.guestKey,
+        });
+      });
+    } else if (inFlight.registrationId !== null) {
+      this.releaseRendererGuest(inFlight.registrationId);
+    }
+    inFlight.lifecycle.failProvisioning(
+      new Error("native tab ensure superseded by another window"),
+    );
   }
 
   private ensureAttachedGuestTab(
@@ -149,22 +178,18 @@ export class BrowserViewProvisioning {
     input: BrowserViewEnsureTab,
     lifecycle: NativeBrowserViewLifecycle,
     startedAt: number,
+    record: InFlightEnsure,
   ): Promise<BrowserViewNativeTabCapability> {
-    const attachRendererGuest = this.attachRendererGuest;
-    if (attachRendererGuest === null) {
-      throw new Error("Renderer guest attach seam is missing.");
-    }
     const key = {
       hostId: input.hostId,
       sessionId: input.sessionId,
       tabId: input.tabId,
     };
-    let createdEntry: BrowserViewEntry | null = null;
     let prepared: {
       readonly provisioned: BrowserViewNativeTabCapability;
       readonly seedScriptId: string | null;
     } | null = null;
-    const mount = attachRendererGuest(windowId, {
+    const mount = this.attachRendererGuest(windowId, {
       partition: partitionForProfile(input.profile, input.sessionId),
       identity: key,
       onAttached: async (guest) => {
@@ -180,7 +205,8 @@ export class BrowserViewProvisioning {
           input.profile,
           guest,
         );
-        createdEntry = entry;
+        record.entry = entry;
+        this.windows.ensureResetListener(windowId);
         logEnsureStage(input, startedAt, "entry_created", "ok", null);
         try {
           prepared = await this.initializeNativeTab(entry, input, startedAt);
@@ -204,6 +230,7 @@ export class BrowserViewProvisioning {
         }
       },
     });
+    record.registrationId = mount.registrationId;
     void mount.ready.then(
       () => {
         if (prepared === null) {
@@ -218,7 +245,7 @@ export class BrowserViewProvisioning {
         );
       },
       (error: unknown) => {
-        const pending = createdEntry;
+        const pending = record.entry;
         const cleanup =
           pending === null
             ? Promise.resolve()
@@ -299,43 +326,6 @@ export class BrowserViewProvisioning {
     this.windows.detachResetListenerIfUnused(previousWindowId);
   }
 
-  private async settleNativeTabInitialization(
-    entry: BrowserViewEntry,
-    input: BrowserViewEnsureTab,
-    startedAt: number,
-  ): Promise<void> {
-    try {
-      const initialized = await this.initializeNativeTab(
-        entry,
-        input,
-        startedAt,
-      );
-      entry.identity.lifecycle.completeProvisioning(
-        initialized.provisioned,
-        initialized.seedScriptId,
-      );
-    } catch (error) {
-      logEnsureStage(
-        input,
-        startedAt,
-        "manager_settled",
-        "failed",
-        error instanceof Error ? error.name : typeof error,
-      );
-      try {
-        await this.closeEntry(entry);
-      } catch (cleanupError) {
-        log.warn("[browser-view] native tab cleanup failed", {
-          error: describeLogError(cleanupError),
-          hostId: input.hostId,
-          sessionId: input.sessionId,
-          tabId: input.tabId,
-        });
-      }
-      entry.identity.lifecycle.failProvisioning(error);
-    }
-  }
-
   private async initializeNativeTab(
     entry: BrowserViewEntry,
     input: BrowserViewEnsureTab,
@@ -366,8 +356,8 @@ export class BrowserViewProvisioning {
     input: BrowserViewEnsureTab,
     startedAt: number,
   ): Promise<void> {
-    // Electron allocates WebContentsView eagerly, but its Page CDP domain does
-    // not accept commands until the first document target has loaded. This
+    // The renderer creates the guest at about:blank, but Page CDP does not
+    // accept commands until the first document target has loaded. This
     // internal navigation establishes that target before storage seeding; it
     // is deliberately suppressed from browser-session state and history.
     entry.internalNavigation = true;
@@ -406,6 +396,14 @@ export function isNativeTabAvailable(
     entry.status !== "dead" &&
     !entry.webContents.isDestroyed()
   );
+}
+
+interface InFlightEnsure {
+  readonly windowId: string;
+  registrationId: string | null;
+  entry: BrowserViewEntry | null;
+  readonly lifecycle: NativeBrowserViewLifecycle;
+  readonly promise: Promise<BrowserViewNativeTabCapability>;
 }
 
 function logEnsureStage(

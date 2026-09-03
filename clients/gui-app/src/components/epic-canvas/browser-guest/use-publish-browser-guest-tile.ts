@@ -1,9 +1,15 @@
 import { useLayoutEffect, useRef, type RefObject } from "react";
+import type { BrowserViewTileKey } from "@traycer-clients/shared/platform/browser-view";
 import {
   browserGuestCssAnchorName,
   clearBrowserGuestTilePlacement,
   setBrowserGuestTilePlacement,
 } from "@/lib/browser-view/guest/persistent-browser-guest-host";
+import {
+  rectFromDomRect,
+  registerBrowserOverlayTile,
+  updateBrowserOverlayTileRect,
+} from "@/lib/browser-view/tiles/browser-overlay-coordinator";
 
 export function usePublishBrowserGuestTile(input: {
   readonly surfaceRef: RefObject<HTMLElement | null>;
@@ -12,6 +18,7 @@ export function usePublishBrowserGuestTile(input: {
   readonly viewTabId: string;
   readonly paneId: string;
   readonly presented: boolean;
+  readonly tileKey: BrowserViewTileKey | null;
 }): void {
   const ownerRef = useRef(Symbol("browser-guest-tile"));
   const {
@@ -21,6 +28,7 @@ export function usePublishBrowserGuestTile(input: {
     surfaceRef,
     viewTabId,
     paneId,
+    tileKey,
   } = input;
   const anchorName = browserGuestCssAnchorName(registrationId);
 
@@ -55,4 +63,24 @@ export function usePublishBrowserGuestTile(input: {
     surfaceRef,
     viewTabId,
   ]);
+
+  useLayoutEffect(() => {
+    const surface = surfaceRef.current;
+    if (surface === null || tileKey === null || !presented) return;
+    const unregister = registerBrowserOverlayTile({
+      key: tileKey,
+      rect: rectFromDomRect(surface.getBoundingClientRect()),
+    });
+    const observer = new ResizeObserver(() => {
+      updateBrowserOverlayTileRect(
+        tileKey,
+        rectFromDomRect(surface.getBoundingClientRect()),
+      );
+    });
+    observer.observe(surface);
+    return () => {
+      observer.disconnect();
+      unregister();
+    };
+  }, [presented, surfaceRef, tileKey]);
 }

@@ -5,12 +5,8 @@ import { guestNavigationGuards } from "../browser-guest-navigation";
 import type {
   BrowserViewPopupWindow,
   BrowserViewWebContents,
-  ManagedBrowserView,
 } from "../browser-view-port";
-import type {
-  BrowserSessionProfile,
-  BrowserSessionProfileRequest,
-} from "../browser-session";
+import type { BrowserSessionProfile } from "../browser-session";
 import type { BrowserViewAnnotationHost } from "./browser-view-annotation-host";
 import type { BrowserViewChords } from "./browser-view-chords";
 import type {
@@ -22,18 +18,11 @@ import {
   type BrowserViewEntryRegistry,
 } from "./browser-view-entry-registry";
 import type { BrowserViewFind } from "./browser-view-find";
-import type { BrowserViewGeometry } from "./browser-view-geometry";
-import type { BrowserViewOverlay } from "./browser-view-overlay";
 import type { BrowserViewPopups } from "./browser-view-popups";
 import type { BrowserViewDebugSessions } from "./debug-session-for";
 
 interface BrowserViewEntryFactoryOptions {
-  readonly createView: (
-    request: BrowserSessionProfileRequest,
-  ) => ManagedBrowserView;
   readonly entries: BrowserViewEntryRegistry<BrowserViewEntry>;
-  readonly geometry: BrowserViewGeometry;
-  readonly overlay: BrowserViewOverlay;
   readonly annotations: BrowserViewAnnotationHost;
   readonly find: BrowserViewFind;
   readonly popups: BrowserViewPopups;
@@ -60,12 +49,7 @@ interface BrowserViewEntryFactoryOptions {
  * the coordinator only owns what a caller asks for.
  */
 export class BrowserViewEntryFactory {
-  private readonly createView: (
-    request: BrowserSessionProfileRequest,
-  ) => ManagedBrowserView;
   private readonly entries: BrowserViewEntryRegistry<BrowserViewEntry>;
-  private readonly geometry: BrowserViewGeometry;
-  private readonly overlay: BrowserViewOverlay;
   private readonly annotations: BrowserViewAnnotationHost;
   private readonly find: BrowserViewFind;
   private readonly popups: BrowserViewPopups;
@@ -85,10 +69,7 @@ export class BrowserViewEntryFactory {
   private readonly closeEntry: (entry: BrowserViewEntry) => void;
 
   constructor(options: BrowserViewEntryFactoryOptions) {
-    this.createView = options.createView;
     this.entries = options.entries;
-    this.geometry = options.geometry;
-    this.overlay = options.overlay;
     this.annotations = options.annotations;
     this.find = options.find;
     this.popups = options.popups;
@@ -100,33 +81,13 @@ export class BrowserViewEntryFactory {
     this.closeEntry = options.closeEntry;
   }
 
-  create(
-    requestedUrl: string,
-    identity: BrowserViewNativeIdentity,
-    profile: BrowserSessionProfile,
-  ): BrowserViewEntry {
-    // The host names the jar on `createElectronTab`; an `isolated` session
-    // lands on its own per-session partition and shares cookies with nothing.
-    const view = this.createView({
-      profile,
-      sessionId: identity.key.sessionId,
-    });
-    return this.bindGuest(
-      requestedUrl,
-      identity,
-      profile,
-      view.webContents,
-      view,
-    );
-  }
-
   createFromWebContents(
     requestedUrl: string,
     identity: BrowserViewNativeIdentity,
     profile: BrowserSessionProfile,
     webContents: BrowserViewWebContents,
   ): BrowserViewEntry {
-    return this.bindGuest(requestedUrl, identity, profile, webContents, null);
+    return this.bindGuest(requestedUrl, identity, profile, webContents);
   }
 
   private bindGuest(
@@ -134,7 +95,6 @@ export class BrowserViewEntryFactory {
     identity: BrowserViewNativeIdentity,
     profile: BrowserSessionProfile,
     webContents: BrowserViewWebContents,
-    view: ManagedBrowserView | null,
   ): BrowserViewEntry {
     const entry: BrowserViewEntry = {
       surface: null,
@@ -143,21 +103,12 @@ export class BrowserViewEntryFactory {
       identity,
       profile,
       webContents,
-      view,
       listeners: {
         "before-input-event": (event: Event, input: Input): void => {
           this.handleBeforeInputEvent(entry, event, input);
         },
         "did-create-window": (window: BrowserViewPopupWindow): void => {
           this.popups.handleDidCreateWindow(entry, window);
-        },
-        "did-frame-finish-load": (): void => {
-          if (entry.internalNavigation) return;
-          this.overlay.invalidateSnapshot(entry, "frame-finish-load");
-        },
-        "did-finish-load": (): void => {
-          if (entry.internalNavigation) return;
-          this.overlay.invalidateSnapshot(entry, "finish-load");
         },
         "did-navigate": (_event: Event, url: string): void => {
           this.handleCommittedNavigation(entry, url);
@@ -188,11 +139,7 @@ export class BrowserViewEntryFactory {
         "page-title-updated": (): void => {
           if (entry.internalNavigation) return;
           entry.currentTitle = entry.webContents.getTitle();
-          this.overlay.invalidateSnapshot(entry, "page-title-updated");
           this.emitStatus(entry);
-        },
-        paint: (): void => {
-          this.overlay.invalidateSnapshot(entry, "paint");
         },
         "render-process-gone": (
           _event: Event,
@@ -204,10 +151,7 @@ export class BrowserViewEntryFactory {
           this.closeEntry(entry);
         },
       },
-      parentWindowId: null,
       desiredVisible: false,
-      bounds: null,
-      lastAppliedBounds: null,
       requestedUrl,
       currentUrl: requestedUrl,
       currentTitle: "",
@@ -223,14 +167,6 @@ export class BrowserViewEntryFactory {
       debugSession: null,
       annotationSession: null,
       devToolsWindow: null,
-      viewportPreset: "responsive",
-      overlayOwnerIds: [],
-      overlaySnapshotStale: false,
-      overlayAwaitingPaintAck: false,
-      overlayParked: false,
-      overlayRestoreToken: null,
-      visible: null,
-      lastLoggedVisible: null,
       rendererResetPending: false,
       closePromise: null,
       internalNavigation: false,
@@ -268,13 +204,11 @@ export class BrowserViewEntryFactory {
     entry.currentTitle = entry.webContents.getTitle();
     this.observePrimaryProfileOrigin(url, entry.webContents, entry.profile);
     entry.certificateError = null;
-    this.overlay.invalidateSnapshot(entry, "navigation-committed");
     this.setStatus(entry, "ready", null);
     void this.debugSessions
       .ensure(entry)
       .enableAfterCommit()
       .catch(() => undefined);
-    this.geometry.applyVisibility(entry);
   }
 
   private handleInPageNavigation(
@@ -289,7 +223,6 @@ export class BrowserViewEntryFactory {
     entry.currentTitle = entry.webContents.getTitle();
     this.observePrimaryProfileOrigin(url, entry.webContents, entry.profile);
     this.annotations.end(entry, "navigation");
-    this.overlay.invalidateSnapshot(entry, "in-page-navigation");
     this.emitStatus(entry);
   }
 
@@ -298,12 +231,11 @@ export class BrowserViewEntryFactory {
     detail: string,
   ): void {
     this.annotations.end(entry, "crash");
-    this.overlay.invalidateSnapshot(entry, "render-process-gone");
-    // A crashed guest is reported as a plain `dead` tab status and its native
-    // view is destroyed. There is nothing to capture from a gone renderer and
-    // nothing to hand off - the host re-materializes the durable tab later.
+    // A crashed guest is reported as a plain `dead` tab status and its
+    // renderer guest is released. There is nothing to capture from a gone
+    // renderer and nothing to hand off - the host re-materializes the durable
+    // tab later.
     this.setStatus(entry, "dead", detail);
-    this.geometry.applyVisibility(entry);
     this.closeEntry(entry);
   }
 

@@ -58,6 +58,7 @@ function TileProbe(props: {
     viewTabId: props.viewTabId,
     paneId: props.paneId,
     presented: props.presented,
+    tileKey: null,
   });
   return (
     <div

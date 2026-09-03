@@ -16,21 +16,14 @@ import {
 } from "@/components/epic-canvas/renderers/browser-tile-status-panels";
 import { BrowserTileToolbar } from "@/components/epic-canvas/renderers/browser-tile-toolbar";
 import { BrowserStartPage } from "@/components/epic-canvas/renderers/browser-start-page";
-import { BrowserViewSnapshotLayer } from "@/components/epic-canvas/renderers/browser-view-snapshot-layer";
 import {
   useMaybeBrowserSessionsContext,
   type BrowserSessionsState,
 } from "@/components/epic-canvas/renderers/browser-sessions-context";
 import { PRIMARY_TILE_CHROME_CAPABILITIES } from "@/components/epic-canvas/renderers/tile-controller";
 import { useBrowserAnnotationSession } from "@/hooks/browser/use-browser-annotation-session";
-import { useBrowserViewSnapshot } from "@/components/epic-canvas/renderers/use-browser-view-snapshot";
 import { useCloseCanvasTileWithNestedFocus } from "@/components/epic-canvas/renderers/use-close-canvas-tile-with-nested-focus";
-import { useBrowserViewBoundsBridge } from "@/components/epic-canvas/renderers/use-browser-view-bounds-bridge";
 import { useElectronTabChrome } from "@/components/epic-canvas/renderers/use-electron-tile-chrome";
-import {
-  BROWSER_VIEW_SURFACE_ATTRIBUTE,
-  type BrowserViewSnapshotState,
-} from "@/lib/browser-view/tiles/browser-overlay-coordinator";
 import { isSameBrowserViewTile } from "@/lib/browser-view/tiles/browser-view-keys";
 import type {
   BrowserViewStatus,
@@ -165,14 +158,6 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
   );
   const bindSurface = props.binding.bindSurface;
   const registrationId = props.binding.registrationId;
-  usePublishBrowserGuestTile({
-    surfaceRef,
-    registrationId,
-    instanceId: props.node.instanceId,
-    viewTabId: props.viewTabId,
-    paneId: props.paneId,
-    presented: shouldAttachSurface(visible, showStartPage),
-  });
   const currentSurfaceAttachment = resolveCurrentSurfaceAttachment(
     surfaceAttachment,
     bindingId,
@@ -183,6 +168,15 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     showStartPage,
     currentSurfaceAttachment,
   );
+  usePublishBrowserGuestTile({
+    surfaceRef,
+    registrationId,
+    instanceId: props.node.instanceId,
+    viewTabId: props.viewTabId,
+    paneId: props.paneId,
+    presented: surfaceReady,
+    tileKey,
+  });
   const surfaceError = visible
     ? (currentSurfaceAttachment?.error ?? null)
     : null;
@@ -297,13 +291,6 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
   }, [browserView, openTabBesideThisTile, tileKey]);
 
   const attachedBrowserView = surfaceReady ? browserView : null;
-  useBrowserViewBoundsBridge({
-    browserView: attachedBrowserView,
-    surfaceRef,
-    tileKey,
-    visible,
-  });
-  const snapshot = useBrowserViewSnapshot(tileKey);
   const annotation = useBrowserAnnotationSession({
     browserView: showStartPage ? null : browserView,
     tileKey,
@@ -432,7 +419,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
           error:
             cause instanceof Error
               ? cause.message
-              : "The native browser surface could not be attached.",
+              : "The browser surface could not be attached.",
         });
       });
     return () => {
@@ -440,15 +427,6 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
       const lease = surfaceLeaseRef.current;
       surfaceLeaseRef.current = null;
       if (lease !== null) void lease.detach();
-      // The surface is gone in main the moment we detach, so the readiness
-      // this state feeds must go with it. Leaving it "ready" is what let the
-      // bounds bridge (declared ABOVE this effect, so it re-mounts first)
-      // fire its one mount-time `updateBounds` at a surface key main no
-      // longer maps - the send is dropped, the rAF dedupe never repeats it,
-      // and the re-attached tile stays at `bounds === null`, i.e. invisible
-      // until a window resize. Clearing here keeps the bridge unmounted until
-      // the NEXT attach resolves. The in-flight attach cannot resurrect it:
-      // `active` is already false, so its `.then`/`.catch` return early.
       setSurfaceAttachment(null);
     };
   }, [bindSurface, bindingId, registrationId, showStartPage, tileKey, visible]);
@@ -482,13 +460,17 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
       />
       <div
         ref={surfaceRef}
-        className="relative min-h-0 flex-1 bg-background"
-        {...{ [BROWSER_VIEW_SURFACE_ATTRIBUTE]: "" }}
+        className={cn(
+          "relative min-h-0 bg-background",
+          props.node.viewportPreset === "responsive"
+            ? "flex-1"
+            : "mx-auto my-auto",
+        )}
+        style={viewportPresetSurfaceStyle(props.node.viewportPreset)}
       >
         <ElectronTabSurfaceBaseLayer
           startPageEpicId={startPageEpicId}
           hostId={hostId}
-          snapshot={snapshot}
           onNavigate={navigateToUrl}
         />
         <div
@@ -524,20 +506,44 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
 function ElectronTabSurfaceBaseLayer(props: {
   readonly startPageEpicId: string | null;
   readonly hostId: string;
-  readonly snapshot: BrowserViewSnapshotState | null;
   readonly onNavigate: (url: string) => void;
 }) {
-  if (props.startPageEpicId !== null) {
-    return (
-      <BrowserStartPage
-        epicId={props.startPageEpicId}
-        hostId={props.hostId}
-        browserRunsOnHost={false}
-        onNavigate={props.onNavigate}
-      />
-    );
-  }
-  return <BrowserViewSnapshotLayer snapshot={props.snapshot} />;
+  if (props.startPageEpicId === null) return null;
+  return (
+    <BrowserStartPage
+      epicId={props.startPageEpicId}
+      hostId={props.hostId}
+      browserRunsOnHost={false}
+      onNavigate={props.onNavigate}
+    />
+  );
+}
+
+const VIEWPORT_PRESET_SIZES: Readonly<
+  Record<
+    BrowserViewViewportPresetId,
+    { readonly width: number; readonly height: number } | null
+  >
+> = {
+  responsive: null,
+  mobile: { width: 390, height: 844 },
+  tablet: { width: 820, height: 1180 },
+  desktop: { width: 1440, height: 900 },
+};
+
+function viewportPresetSurfaceStyle(
+  preset: BrowserViewViewportPresetId,
+):
+  | { width: number; height: number; maxWidth: string; maxHeight: string }
+  | undefined {
+  const size = VIEWPORT_PRESET_SIZES[preset];
+  if (size === null) return undefined;
+  return {
+    width: size.width,
+    height: size.height,
+    maxWidth: "100%",
+    maxHeight: "100%",
+  };
 }
 
 function resolveStartPageEpicId(

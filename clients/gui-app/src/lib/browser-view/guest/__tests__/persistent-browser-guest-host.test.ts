@@ -164,9 +164,12 @@ describe("persistent browser guest host", () => {
       expect(created.wrapper.parentNode).toBe(created.host);
       expect(created.webview.parentNode).toBe(created.wrapper);
       expect(created.webview.tagName).toBe("WEBVIEW");
-      expect(created.webview.getAttribute("src")).toBe("about:blank");
+      expect(created.webview.getAttribute("src")).toBe(
+        `about:blank#${REGISTRATION_A}`,
+      );
       expect(created.webview.getAttribute("name")).toBe(REGISTRATION_A);
       expect(created.webview.getAttribute("partition")).toBe(PARTITION_A);
+      expect(created.webview.style.display).toBe("flex");
       expect(created.wrapper.getAttribute("data-browser-guest-state")).toBe(
         "unbound",
       );

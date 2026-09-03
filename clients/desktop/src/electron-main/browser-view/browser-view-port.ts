@@ -6,7 +6,6 @@ import type {
   BrowserStorageState,
 } from "@traycer/protocol/host/browser/contracts";
 import type {
-  BrowserViewBounds,
   BrowserViewNativeTabCapability,
   BrowserViewNativeTabKey,
 } from "@traycer-clients/shared/platform/browser-view";
@@ -110,19 +109,6 @@ export interface BrowserViewCapturedImage {
   toPNG(): Uint8Array;
 }
 
-/**
- * Compositor frames additionally support downscaling: the BT-201 frame cache
- * caps the long edge before encoding, and `NativeImage` - the only production
- * source - provides `resize`. Kept separate from `BrowserViewCapturedImage`
- * so the crop/annotation paths keep the smaller contract they actually use.
- */
-export interface BrowserViewFrameImage extends BrowserViewCapturedImage {
-  resize(options: {
-    readonly width: number;
-    readonly height: number;
-  }): BrowserViewFrameImage;
-}
-
 interface BrowserViewDevToolsWebContents {
   readonly id: number;
 }
@@ -178,18 +164,8 @@ export interface BrowserViewWebContents {
       details: BrowserViewWindowOpenDetails,
     ) => BrowserViewWindowOpenResult,
   ): void;
-  beginFrameSubscription(
-    callback: (image: BrowserViewFrameImage) => void,
-  ): void;
-  endFrameSubscription(): void;
   on: NodeJS.EventEmitter["on"];
   off: NodeJS.EventEmitter["off"];
-}
-
-export interface ManagedBrowserView {
-  readonly webContents: BrowserViewWebContents;
-  setBounds(bounds: BrowserViewBounds): void;
-  setVisible(visible: boolean): void;
 }
 
 /**
@@ -209,11 +185,6 @@ export interface BrowserViewGuestAttachResult {
   readonly ready: Promise<void>;
 }
 
-interface ManagedContentView {
-  addChildView(view: ManagedBrowserView): void;
-  removeChildView(view: ManagedBrowserView): void;
-}
-
 export type BrowserViewInputModifier = "meta" | "control" | "shift" | "alt";
 
 export interface BrowserViewHostWebContents {
@@ -222,7 +193,7 @@ export interface BrowserViewHostWebContents {
   /**
    * Move OS keyboard focus off a focused guest and onto the host renderer.
    * Focusing a host DOM element is not enough by itself - the caret would
-   * render while keystrokes still went to the `WebContentsView`.
+   * render while keystrokes still went to the guest `webContents`.
    */
   focus(): void;
   sendInputEvent(event: {
@@ -233,9 +204,6 @@ export interface BrowserViewHostWebContents {
 }
 
 export interface BrowserViewWindow {
-  readonly contentView: ManagedContentView;
   readonly webContents: BrowserViewHostWebContents | null;
   isDestroyed(): boolean;
-  isVisible(): boolean;
-  isMinimized(): boolean;
 }

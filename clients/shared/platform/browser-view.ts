@@ -64,10 +64,6 @@ export type BrowserViewElectronTabControlAction =
   | { readonly kind: "reload" }
   | { readonly kind: "goBack" }
   | { readonly kind: "goForward" }
-  | {
-      readonly kind: "setViewportPreset";
-      readonly viewportPreset: BrowserViewViewportPresetId;
-    }
   | { readonly kind: "zoomIn" }
   | { readonly kind: "zoomOut" }
   | { readonly kind: "resetZoom" }
@@ -76,17 +72,6 @@ export type BrowserViewElectronTabControlAction =
 export type BrowserViewElectronTabControl = BrowserViewNativeTabCapability & {
   readonly action: BrowserViewElectronTabControlAction;
 };
-
-export interface BrowserViewBounds {
-  readonly x: number;
-  readonly y: number;
-  readonly width: number;
-  readonly height: number;
-}
-
-export interface BrowserViewBoundsUpdate extends BrowserViewTileKey {
-  readonly bounds: BrowserViewBounds;
-}
 
 export const BROWSER_VIEW_VIEWPORT_PRESET_IDS = [
   "responsive",
@@ -209,40 +194,6 @@ export interface BrowserViewReservedChord {
 
 export interface BrowserViewTileCommandEvent extends BrowserViewTileKey {
   readonly command: BrowserViewTileCommand;
-}
-
-export interface BrowserViewOverlayOcclusion {
-  readonly overlayId: string;
-  readonly tiles: readonly BrowserViewTileKey[];
-}
-
-export interface BrowserViewOverlayRelease {
-  readonly overlayId: string;
-}
-
-export interface BrowserViewOverlaySnapshot extends BrowserViewTileKey {
-  readonly dataUrl: string | null;
-  readonly stale: boolean;
-}
-
-export interface BrowserViewOverlayOcclusionResult {
-  readonly snapshots: readonly BrowserViewOverlaySnapshot[];
-  readonly restoredTiles: readonly BrowserViewTileKey[];
-  /**
-   * How many of the requested tiles the main process actually knows. Zero
-   * means the occlusion did not take at all (the scan raced tile teardown or
-   * a surface rebind), so the caller must be able to try that overlay again
-   * instead of remembering it as done.
-   */
-  readonly matchedCount: number;
-}
-
-export interface BrowserViewOverlayReleaseResult {
-  readonly restoredTiles: readonly BrowserViewTileKey[];
-}
-
-export interface BrowserViewSnapshotInvalidatedChange extends BrowserViewTileKey {
-  readonly reason: string;
 }
 
 /**
@@ -644,7 +595,6 @@ export interface BrowserSessionsStreamEventEnvelope {
 }
 
 export interface BrowserViewBridge {
-  updateBounds(input: BrowserViewBoundsUpdate): Promise<void>;
   setReservedChords(chords: readonly BrowserViewReservedChord[]): Promise<void>;
   findInPage(input: BrowserViewFindRequest): Promise<void>;
   stopFindInPage(input: BrowserViewFindStop): Promise<void>;
@@ -664,12 +614,6 @@ export interface BrowserViewBridge {
   reportAnnotationAttachResult(
     input: BrowserAnnotationAttachResultInput,
   ): Promise<void>;
-  occludeForOverlay(
-    input: BrowserViewOverlayOcclusion,
-  ): Promise<BrowserViewOverlayOcclusionResult>;
-  releaseOverlay(
-    input: BrowserViewOverlayRelease,
-  ): Promise<BrowserViewOverlayReleaseResult>;
   /**
    * Does this machine keep browser logins across restarts? On by default,
    * Chrome-style; the only way it is false is the user turning it off in
@@ -704,8 +648,6 @@ export interface BrowserViewBridge {
    * the caller must not send the host frames either.
    */
   forgetLogins(): Promise<boolean>;
-  /** Renderer confirms the replacement frame is painted before main parks the view. */
-  readonly overlayPaintAck: (overlayId: string) => Promise<void>;
   /**
    * "Clear cookies for this site" (spec §6.5): removes the tile's registrable
    * domain from the shared `primary` jars - cookies and the localStorage of
@@ -791,21 +733,6 @@ export interface BrowserViewBridge {
   };
   /** A browser-scoped reserved chord fired inside a focused guest page. */
   onTileCommand(handler: (event: BrowserViewTileCommandEvent) => void): {
-    dispose: () => void;
-  };
-  onSnapshotInvalidated(
-    handler: (change: BrowserViewSnapshotInvalidatedChange) => void,
-  ): {
-    dispose: () => void;
-  };
-  /**
-   * Ticket 04 exit-edge handshake: fires once for a tile that WAS parked,
-   * when the un-parked native view's first composited frame lands - the
-   * renderer's cue to drop the stand-in it kept mounted since occlusion. A
-   * tile released without ever parking never reaches here; it restores
-   * through `restoredTiles` on the occlude/release return value instead.
-   */
-  onOverlayTileRestored(handler: (tile: BrowserViewTileKey) => void): {
     dispose: () => void;
   };
   onAnnotationEvent(

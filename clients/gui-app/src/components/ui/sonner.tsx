@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTheme } from "next-themes";
 import { Toaster as Sonner, type ToasterProps } from "sonner";
-import { DismissableLayer, useComposedRefs } from "radix-ui/internal";
+import { DismissableLayer } from "radix-ui/internal";
 import {
   CircleCheckIcon,
   InfoIcon,
@@ -12,10 +12,8 @@ import { ProgressToastIcon } from "@/components/ui/progress-toast-icon";
 import { cn } from "@/lib/utils";
 import {
   listBrowserOverlayTiles,
-  registerBrowserOverlay,
   subscribeBrowserOverlayLayout,
 } from "@/lib/browser-view/tiles/browser-overlay-coordinator";
-import { useRegisterBrowserOverlay } from "@/lib/browser-view/tiles/use-register-browser-overlay";
 import {
   DEFAULT_TOASTER_ANCHOR,
   pickToasterAnchor,
@@ -47,17 +45,14 @@ const NOTIFICATION_TOAST_ACTION_SELECTOR = "[data-notification-toast-action]";
 // The outer `<section>` sonner renders is a static, zero-height wrapper -
 // the fixed, painted surface is one `<ol data-sonner-toaster>` per toast
 // position, and sonner (2.0.8) mounts each only once a toast exists for
-// that position. The section itself is worth registering too (it is what
-// `Sonner`'s own `ref` forwards to, and a stable anchor costs nothing), but
-// occlusion has to track the `<ol>`s, which come and go independently.
+// that position. Size is measured from those lists so toast placement can
+// prefer anchors that miss live browser tiles.
 const SONNER_TOASTER_LIST_SELECTOR = "[data-sonner-toaster]";
 
 const Toaster = ({ ...props }: ToasterProps) => {
   const { theme = "system" } = useTheme();
   const toasterTheme = normalizeToasterTheme(theme);
   const sectionRef = useRef<HTMLElement | null>(null);
-  const registerSectionOverlayRef = useRegisterBrowserOverlay<HTMLElement>();
-  const composedRef = useComposedRefs(sectionRef, registerSectionOverlayRef);
   // Sonner mounts the `<ol>` only while a toast exists (see the selector
   // comment above), so this is also the "is a toast currently visible" flag
   // - `recomputeAnchor` reads it to honor invariant 10's other half:
@@ -83,36 +78,21 @@ const Toaster = ({ ...props }: ToasterProps) => {
   useEffect(() => {
     const section = sectionRef.current;
     if (section === null) return;
-    const deregisterByList = new Map<Element, () => void>();
     const sync = (): void => {
-      const lists = section.querySelectorAll<HTMLElement>(
+      const first = section.querySelector<HTMLElement>(
         SONNER_TOASTER_LIST_SELECTOR,
       );
-      const seen = new Set<Element>(lists);
-      deregisterByList.forEach((deregister, element) => {
-        if (seen.has(element)) return;
-        deregister();
-        deregisterByList.delete(element);
-      });
-      lists.forEach((element) => {
-        const rect = element.getBoundingClientRect();
+      if (first !== null) {
+        const rect = first.getBoundingClientRect();
         toasterSizeRef.current = { width: rect.width, height: rect.height };
-        if (deregisterByList.has(element)) return;
-        deregisterByList.set(element, registerBrowserOverlay({ element }));
-      });
-      toastVisibleRef.current = lists.length > 0;
+      }
+      toastVisibleRef.current = first !== null;
     };
     sync();
     const observer = new MutationObserver(sync);
-    // `subtree`, not just the section's own children: a toast added to an
-    // ALREADY-mounted `<ol>` is a mutation inside it, not of the section, so
-    // a childList-only observer would keep the first measured size and let
-    // `pickToasterAnchor` compare a rect the grown toaster has outgrown.
     observer.observe(section, { childList: true, subtree: true });
     return () => {
       observer.disconnect();
-      deregisterByList.forEach((deregister) => deregister());
-      deregisterByList.clear();
     };
   }, []);
 
@@ -127,7 +107,7 @@ const Toaster = ({ ...props }: ToasterProps) => {
       onClick={activateNotificationToastSurface}
     >
       <Sonner
-        ref={composedRef}
+        ref={sectionRef}
         theme={toasterTheme}
         className="toaster group"
         icons={{

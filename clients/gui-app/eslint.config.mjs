@@ -77,18 +77,14 @@ const importRestrictionDimensions = {
   ],
   readPath: hostSelectionReadImportRestrictions.patterns,
   kernel: selectionKernelImportRestrictions.patterns,
-  // Overlay portal enforcement (browser-overlay-coexistence epic, ticket 02).
-  // The app's shadcn wrappers in src/components/ui/** are the registration
-  // seam - mounting them registers a live rect with the browser-tile
-  // occlusion coordinator (`useRegisterBrowserOverlay`, ticket 01). Reaching
-  // past a wrapper to the raw primitive skips that registration, so a tile
-  // can be occluded by an overlay the coordinator never learns about.
+  // Overlay portal enforcement: portal behavior stays in the shadcn wrappers
+  // in src/components/ui/**. Reaching past a wrapper to the raw primitive
+  // skips focus/concealment/safe-area policy those wrappers own.
   //
   // Scoped by `importNames`, not a whole-package ban: each package also
   // exports plain utilities with no portal/overlay behavior of their own
   // (`Slot`, `useComposedRefs`, `toast`, cmdk's item/group sub-components)
-  // that are legitimately imported outside `src/components/ui/**` today,
-  // including by the registration seam's own hand-rolled-popover callers.
+  // that are legitimately imported outside `src/components/ui/**` today.
   overlayPortal: [
     {
       group: ["radix-ui"],
@@ -107,7 +103,7 @@ const importRestrictionDimensions = {
         "Tooltip",
       ],
       message:
-        "Overlay portal primitives are built only by the shadcn wrappers in src/components/ui/** (they register with the browser-tile occlusion coordinator via useRegisterBrowserOverlay). Use the wrapper - Dialog/Popover/Select/DropdownMenu/Tooltip/ContextMenu/HoverCard from @/components/ui/* - instead of importing the Radix primitive directly.",
+        "Overlay portal primitives are built only by the shadcn wrappers in src/components/ui/**. Use the wrapper - Dialog/Popover/Select/DropdownMenu/Tooltip/ContextMenu/HoverCard from @/components/ui/* - instead of importing the Radix primitive directly.",
     },
     {
       group: ["radix-ui/internal"],
@@ -132,7 +128,7 @@ const importRestrictionDimensions = {
     {
       group: ["@radix-ui/*"],
       message:
-        "Radix primitive packages (@radix-ui/react-dialog, @radix-ui/react-dismissable-layer, ...) are wrapped by the shadcn components in src/components/ui/**, which register with the browser-tile occlusion coordinator via useRegisterBrowserOverlay. Use the wrapper instead of importing a @radix-ui/* package directly.",
+        "Radix primitive packages (@radix-ui/react-dialog, @radix-ui/react-dismissable-layer, ...) are wrapped by the shadcn components in src/components/ui/**. Use the wrapper instead of importing a @radix-ui/* package directly.",
     },
     {
       // `regex`, not `group`: `group` matching is gitignore-style (the
@@ -650,12 +646,11 @@ export default tseslint.config(
     },
   },
   {
-    // The registration seam's own reasoned raw-primitive consumers, per FILE.
-    // These predate/parallel the shadcn wrapper layer and register manually
-    // with `useRegisterBrowserOverlay` (ticket 01): the promotable-modal
+    // Reasoned raw-primitive consumers, per FILE.
+    // These predate/parallel the shadcn wrapper layer: the promotable-modal
     // family builds custom dialog chrome the shadcn Dialog wrapper does not
-    // support, so it constructs `DialogPrimitive` directly and registers it
-    // itself. `system-tab-modal-host.tsx` imports `Dialog.Root` only - its
+    // support, so it constructs `DialogPrimitive` directly.
+    // `system-tab-modal-host.tsx` imports `Dialog.Root` only - its
     // painted surface registers via `PromotableModalFrame`, not itself; it
     // is exempted here so that composition (Root wrapping a frame that
     // already registers) is not mistaken for a raw, unregistered portal.
@@ -761,8 +756,7 @@ export default tseslint.config(
     // minus `overlayPortal` rather than folded into the block above, so
     // neither file inherits the shadcn-only rule turn-offs by accident.
     // `epic-migration-modal.tsx`'s raw `DialogPrimitive` follows the
-    // promotable-modal family's pattern - it registers itself via
-    // `useRegisterBrowserOverlay` (contrast the `layout/dialogs` block
+    // promotable-modal family's pattern (contrast the `layout/dialogs` block
     // above, whose directory IS in the allowlist and so carries no
     // `readPath` to begin with). `palette-item-row.tsx` renders cmdk's
     // `Command` row internals for the command palette's own list, predating
