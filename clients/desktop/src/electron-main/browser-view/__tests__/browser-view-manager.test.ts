@@ -2247,6 +2247,17 @@ describe("BrowserViewManager host window renderer reset (fix round 2)", () => {
     );
     expect(view.visible).toBe(true);
   });
+
+  it("hides every entry on that window when the host renderer crashes", async () => {
+    const harness = createHarness();
+    const { view } = await makeVisible(harness, BASE_KEY);
+
+    const hostWebContents = harness.windows.get("window-1")?.webContents;
+    if (hostWebContents === undefined) throw new Error("expected host window");
+    hostWebContents.emit("render-process-gone", {}, { reason: "crashed" });
+
+    expect(view.visible).toBe(false);
+  });
   it("reattaching the tab clears the reset and makes it visible again", async () => {
     const harness = createHarness();
     const { capability, view } = await makeVisible(harness, BASE_KEY);

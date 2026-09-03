@@ -1941,6 +1941,38 @@ describe("refreshWellKnownSlotIfStale", () => {
 // once the core triplet ties, and "alpha.1" < "local" ('a' < 'l'), so
 // 0.0.0-alpha.1 is the OLDER version here - the guard must therefore let
 // the stage through exactly as it did before this fix existed.
+it("packaged, no manifest, slot reports a STRICTLY NEWER version: leaves the slot alone", async () => {
+  seaState.current = true;
+  const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
+    await import("../well-known-cli");
+  const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+  mkdirSync(dirname(wellKnownPath), { recursive: true });
+  const slotBytes = "the slot's current, newer-CLI bytes";
+  writeFileSync(wellKnownPath, slotBytes);
+  const running = join(workHome, "running-binary");
+  writeFileSync(running, "a much shorter running payload");
+  const base = Date.now();
+  utimesSync(wellKnownPath, new Date(base), new Date(base));
+  utimesSync(running, new Date(base - 120_000), new Date(base - 120_000));
+  // Positive control: without the version guard, the timestamp fallback
+  // alone would stage - the two files differ in both size and mtime, which
+  // is exactly the shape every other "still re-stages" test in this file
+  // depends on. This confirms the guard, not an absence of anything to do,
+  // is what leaves the slot alone below.
+  expect(statSync(wellKnownPath).size).not.toBe(statSync(running).size);
+  expect(statSync(wellKnownPath).mtime.getTime()).not.toBe(
+    statSync(running).mtime.getTime(),
+  );
+  slotProbeControl.versionForPath.set(wellKnownPath, "9.9.9\n");
+
+  const result = await withExecPath(running, () =>
+    refreshWellKnownSlotIfStale(ENVIRONMENT),
+  );
+
+  expect(result).toBeNull();
+  expect(readFileSync(wellKnownPath, "utf8")).toBe(slotBytes);
+});
+
 it("packaged, no manifest, slot reports an OLDER version: still re-stages", async () => {
   seaState.current = true;
   const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =

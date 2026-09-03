@@ -1476,6 +1476,40 @@ describe("delivery monotonicity", () => {
       );
     }
   });
+
+  it("converges equal-rank conflicting retryability on the conservative fact, in both orders", () => {
+    // `retryable: false` is the more terminal claim - it says no automatic
+    // retry is coming - so it wins whichever side it arrived on. Preferring
+    // "whatever landed first" would let two peers converge on DIFFERENT states
+    // from the same pair of updates, and would sometimes promise a retry the
+    // outbox had already ruled out.
+    const trueFirst = reduce(
+      reduce(
+        streamingBlock(),
+        settlementWith(makeDeliveryProjection(BASE_ID, "failed", true, 1), 10),
+      ).block,
+      settlementWith(makeDeliveryProjection(BASE_ID, "failed", false, 1), 20),
+    );
+    expect(trueFirst.changed).toBe(true);
+    expect(trueFirst.block.delivery).toEqual(
+      makeDeliveryProjection(BASE_ID, "failed", false, 1),
+    );
+
+    const falseFirst = reduce(
+      reduce(
+        streamingBlock(),
+        settlementWith(makeDeliveryProjection(BASE_ID, "failed", false, 1), 10),
+      ).block,
+      settlementWith(makeDeliveryProjection(BASE_ID, "failed", true, 1), 20),
+    );
+    expect(falseFirst.changed).toBe(false);
+    expect(falseFirst.block.delivery).toEqual(
+      makeDeliveryProjection(BASE_ID, "failed", false, 1),
+    );
+
+    // Commutative: both orders land on the same projection.
+    expect(trueFirst.block.delivery).toStrictEqual(falseFirst.block.delivery);
+  });
   it("never swaps a different deliveryId even when the incoming generation is newer", () => {
     // Identity beats generation. Two outbox items carry no relative order;
     // guessing would flap on reconnect. The authoritative outbox repairs

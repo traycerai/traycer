@@ -4931,6 +4931,39 @@ describe("WsStreamClient wake probe vs the stale heartbeat deadline", () => {
 
     session.close();
   });
+
+  it("emits availability recovery for a successful wake probe even when the outage was shorter than the heartbeat threshold", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "token-abc",
+      pingIntervalMs: 1_000,
+      pongTimeoutMs: 2_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+    const recovered = vi.fn();
+    client.subscribeAvailabilityRecovered(recovered);
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    const stub = await settleHandshake(sockets);
+    expect(recovered).not.toHaveBeenCalled();
+
+    // A brief offline/resume cycle: well under pingIntervalMs (1s) + the 5s
+    // recovery slack, so the gap-based arm can never fire for it.
+    vi.setSystemTime(Date.now() + 2_000);
+    client.reconnectAll("wake-resume", { probeFirst: true, wakeProbe: null });
+
+    stub.fireText({ kind: "pong", hasBinaryPayload: false });
+    expect(recovered).toHaveBeenCalledTimes(1);
+    expect(stub.closed).toBeNull();
+
+    // Healthy-cadence pongs after the probe settled stay silent.
+    await vi.advanceTimersByTimeAsync(1_000);
+    stub.fireText({ kind: "pong", hasBinaryPayload: false });
+    expect(recovered).toHaveBeenCalledTimes(1);
+
+    session.close();
+  });
 });
 
 /**

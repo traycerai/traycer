@@ -535,7 +535,17 @@ describe("commitAttemptMutation - byte authority and round trips", () => {
     );
   }
 
-  it.each(["create", "recover"] as const)(
+  const mutationIntentKinds: {
+    readonly [K in AttemptMutationIntent["kind"]]: K;
+  } = {
+    create: "create",
+    resume: "resume",
+    supersede: "supersede",
+    advance: "advance",
+    recover: "recover",
+  };
+
+  it.each(Object.values(mutationIntentKinds))(
     "writes decoder-valid, byte-identical output for the %s intent",
     async (kind) => {
       const dir = await freshDir();
@@ -559,27 +569,101 @@ describe("commitAttemptMutation - byte authority and round trips", () => {
       expect(created.kind).toBe("committed");
       if (created.kind !== "committed") return;
 
+      if (kind === "recover") {
+        // Active, unheld record with independently verified install + running
+        // evidence for the exact target: the sole path that bypasses the
+        // ordinary verifying -> complete edge.
+        await expectExactRoundTrip(
+          dir,
+          await commitExecutorOnlyAttemptMutation({
+            handle,
+            intent: {
+              kind,
+              recovery: {
+                expected: created.identity,
+                action: "force",
+                requestedTargetVersion: "1.2.3",
+                evidence: {
+                  installed: { kind: "verified", version: "1.2.3" },
+                  staged: { kind: "absent" },
+                  running: {
+                    kind: "verified",
+                    version: "1.2.3",
+                    owner: "host-home-bound",
+                  },
+                },
+                nowIso: "2026-01-01T00:04:00.000Z",
+              },
+            },
+          }),
+        );
+        return;
+      }
+
+      if (kind === "advance") {
+        await expectExactRoundTrip(
+          dir,
+          await commitAttemptMutation({
+            handle,
+            intent: {
+              kind,
+              held: created.identity,
+              advance: {
+                phase: "preparing",
+                continuation: null,
+                progress: { percent: 10, bytes: 20, totalBytes: 200 },
+                error: null,
+                nowIso: "2026-01-01T00:02:00.000Z",
+              },
+            },
+          }),
+        );
+        return;
+      }
+
+      const parked = await commitAttemptMutation({
+        handle,
+        intent: {
+          kind: "advance",
+          held: created.identity,
+          advance: {
+            phase: "waiting-for-work",
+            continuation: "resume-apply",
+            progress: null,
+            error: null,
+            nowIso: "2026-01-01T00:01:00.000Z",
+          },
+        },
+      });
+      expect(parked.kind).toBe("committed");
+      if (parked.kind !== "committed") return;
+
+      if (kind === "resume") {
+        await expectExactRoundTrip(
+          dir,
+          await commitAttemptMutation({
+            handle,
+            intent: {
+              kind,
+              request: baseCreateRequest({
+                action: "resume-apply",
+                expected: parked.identity,
+                initialPhase: "preparing",
+                nowIso: "2026-01-01T00:03:00.000Z",
+              }),
+            },
+          }),
+        );
+        return;
+      }
+
       await expectExactRoundTrip(
         dir,
-        await commitExecutorOnlyAttemptMutation({
+        await commitAttemptMutation({
           handle,
           intent: {
-            kind: "recover",
-            recovery: {
-              expected: created.identity,
-              action: "force",
-              requestedTargetVersion: "1.2.3",
-              evidence: {
-                installed: { kind: "verified", version: "1.2.3" },
-                staged: { kind: "absent" },
-                running: {
-                  kind: "verified",
-                  version: "1.2.3",
-                  owner: "host-home-bound",
-                },
-              },
-              nowIso: "2026-01-01T00:04:00.000Z",
-            },
+            kind,
+            request: baseCreateRequest({ targetVersion: "9.9.9" }),
           },
         }),
       );

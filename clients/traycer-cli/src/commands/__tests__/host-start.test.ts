@@ -294,7 +294,11 @@ interface RunStubs {
 
 const TERMINAL_WRITER_EXIT_CASES: ReadonlyArray<
   readonly [string, number | null, NodeJS.Signals | null, number]
-> = [["crash exit", 7, null, 7]];
+> = [
+  ["clean exit", 0, null, 0],
+  ["crash exit", 7, null, 7],
+  ["signal exit", null, "SIGTERM", 143],
+];
 
 function makeRunStubs(
   installRecord: HostInstallRecord | null,
@@ -1339,6 +1343,47 @@ describe("runHostStart - signal/exit propagation", () => {
     expect(crashed?.fields.report).toBeUndefined();
   });
 
+  it("survives an error on the stderr stream and still writes the terminal marker", async () => {
+    // Major: an unhandled Readable error on child.stderr used to kill the
+    // supervisor before persistChildExit wrote the marker Desktop reads.
+    const exec = "/opt/traycer/host/install/traycer-host";
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const stderr = new PassThrough();
+    Object.assign(child, { stderr });
+    const originalSpawn = deps.spawn;
+    if (originalSpawn === undefined) {
+      throw new Error("test spawn dependency missing");
+    }
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...deps,
+            spawn: (command, args, options) => {
+              const spawned = originalSpawn(command, args, options);
+              setImmediate(() => {
+                stderr.write(Buffer.from("partial fatal text\n"));
+                // Stream error instead of a clean end — must be swallowed.
+                stderr.emit("error", new Error("EIO on host stderr"));
+                child.emit("exit", 7, null);
+              });
+              return spawned;
+            },
+          },
+        ),
+      recorded,
+    );
+
+    expect(recorded.exited).toBe(7);
+    const crashed = recorded.markers.find((m) => m.phase === "crashed");
+    expect(crashed).toBeDefined();
+    expect(crashed?.fields.exitCode).toBe(7);
+    // Bytes that arrived before the error are still worth recording.
+    expect(String(crashed?.fields.stderrTail)).toContain("partial fatal text");
+  });
+
   it("spawn() throw is translated into HOST_SPAWN_FAILED + exit 66", async () => {
     const exec = "/opt/traycer/host/install/traycer-host";
     const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
@@ -2227,6 +2272,61 @@ describe("runHostStart - crash relaunch loop", () => {
     // invocation, treats it as served, and starts the host. Not relaunching
     // in-process while telling the service manager to relaunch us is not a stop.
     expect(term.recorded.exited).toBe(0);
+  });
+
+  it("escalates a raced stop to SIGKILL when the child ignores SIGTERM", async () => {
+    // Without this the supervisor awaits `childEnding` with no deadline, and
+    // nothing else intervenes: the stop announced itself on disk, `host stop`
+    // has already returned, and no service manager is watching this process. A
+    // child that never handles SIGTERM would leave the supervisor waiting
+    // forever while the host it was told to stop kept serving.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const originalSpawn = deps.spawn;
+    if (originalSpawn === undefined) {
+      throw new Error("test spawn dependency missing");
+    }
+    const killed: string[] = [];
+    let stopLanded = false;
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...deps,
+            maxRelaunches: 5,
+            hasStopIntent: async () => stopLanded,
+            // Fire the escalation immediately instead of after 30s.
+            escalateAfter: (_ms, run) => {
+              setImmediate(run);
+              return () => undefined;
+            },
+            spawn: (command, args, options) => {
+              originalSpawn(command, args, options);
+              stopLanded = true;
+              const child = makeStubChild();
+              child.kill = (signal: NodeJS.Signals | undefined) => {
+                killed.push(String(signal));
+                // SIGTERM is IGNORED - only the escalation ends this child.
+                if (signal === "SIGKILL") {
+                  setImmediate(() => {
+                    child.emit("exit", null, "SIGKILL");
+                  });
+                }
+                return true;
+              };
+              return asChildProcess(child);
+            },
+          },
+        ),
+      recorded,
+    );
+
+    expect(killed).toEqual(["SIGTERM", "SIGKILL"]);
+    // Still a deliberate stop: no relaunch, and no nonzero exit asking the
+    // service manager to start a replacement.
+    expect(recorded.spawnCalls).toHaveLength(1);
+    expect(recorded.exited).toBe(0);
   });
 
   it("does not relaunch when a stop was requested", async () => {

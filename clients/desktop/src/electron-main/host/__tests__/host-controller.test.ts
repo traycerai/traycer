@@ -4179,6 +4179,17 @@ describe("applyStagedCliOwned stamping decision (fixup B9)", () => {
       runtimeVersion: null,
     });
     writeStagedRecord("production", "1.8.0", "1.8.0");
+    // The committed record carries runtime 1.8.0, so activation readiness is
+    // checked against 1.8.0. The suite default publishes 1.0.0, which makes
+    // `confirmActivationReadiness` throw and lands this on
+    // installed-not-converged before the stamp decision is even observable.
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: true,
+      version: "1.8.0",
+      pid: 1,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reason: "ready",
+    });
     vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
       data: {
         outcome: "applied",
@@ -4188,8 +4199,17 @@ describe("applyStagedCliOwned stamping decision (fixup B9)", () => {
       },
     });
 
-    await controller.applyStaged("manual", false);
+    const outcome = await controller.applyStaged("manual", false);
 
+    // `applyStaged` can leave before it ever runs the apply command
+    // (`deferred` when the staged record is not eligible), and that path
+    // trivially satisfies the no-stamp assertion below. Pin the apply
+    // actually succeeding first, so this stays a test about the stamp
+    // decision rather than about not reaching it.
+    expect(outcome.kind).toBe("ok");
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.objectContaining({ args: expect.arrayContaining(["apply"]) }),
+    );
     expect(runBundledTraycerCliJson).not.toHaveBeenCalledWith(
       expect.arrayContaining(["host", "stamp-runtime"]),
     );

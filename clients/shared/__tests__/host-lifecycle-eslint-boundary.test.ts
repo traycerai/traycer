@@ -263,6 +263,17 @@ describe("host-lifecycle read-only import boundary", () => {
       ]),
     );
   });
+
+  it("reports an error for a dynamic import() of a forbidden sibling", () => {
+    expectBoundaryError(
+      lintViolator("host-lifecycle/dynamic-sibling.ts", [
+        "export async function boom(): Promise<void> {",
+        '  const m = await import("../../host-lock/process-identity");',
+        "  void m;",
+        "}",
+      ]),
+    );
+  });
   it("still enforces the package type-safety selectors inside host-lifecycle", () => {
     // The host-lifecycle block re-states `no-restricted-syntax`, and flat
     // config replaces rule options rather than merging them. Without the

@@ -1367,6 +1367,27 @@ describe("RC release discovery and channel safety", () => {
     expect(autoUpdater.setFeedURL).not.toHaveBeenCalled();
   });
 
+  it("fails closed on the stable channel when the private repo coordinate is malformed (no network, no public fallback)", async () => {
+    process.env.VITE_TRAYCER_DESKTOP_UPDATE_REPO = "not-a-coordinate";
+    process.env.VITE_TRAYCER_DESKTOP_UPDATE_TOKEN = "test-token";
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(new Response("[]", { status: 200 })),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    // Stable channel (allowPrerelease defaults off) - no opt-in.
+    await updater.installAutoUpdater(true, makeDeps(true));
+
+    await updater.checkForUpdatesNow(false, "manual");
+
+    expect(updater.getAppUpdateSnapshot().status).toBe("error");
+    // Neither the stable electron-updater check nor RC discovery runs, and no
+    // packaged/public feed is configured as a fallback.
+    expect(autoUpdater.checkForUpdates).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(autoUpdater.setFeedURL).not.toHaveBeenCalled();
+  });
+
   it("skips a newer macOS release shipping only the install-only DMG and falls back to an older updatable release", async () => {
     const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
     vi.stubGlobal(
@@ -1734,6 +1755,19 @@ describe("Linux deb/rpm silent-install gating", () => {
     const { autoUpdater, updater } = await loadUpdater({
       packageType: "deb",
       silentInstallSupported: true,
+      isEscalationError: false,
+    });
+
+    await updater.installAutoUpdater(true, makeDeps(true));
+
+    expect(autoUpdater.autoInstallOnAppQuit).toBe(false);
+  });
+
+  it("disables autoInstallOnAppQuit for a Linux rpm build", async () => {
+    setPlatform("linux");
+    const { autoUpdater, updater } = await loadUpdater({
+      packageType: "rpm",
+      silentInstallSupported: false,
       isEscalationError: false,
     });
 

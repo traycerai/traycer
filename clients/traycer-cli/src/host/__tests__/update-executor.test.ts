@@ -292,7 +292,7 @@ describe("dispatchAttemptExecutor - cohort gate is derived internally, never cal
 });
 
 describe("decideUpdateExecutorCohort - static shadow-only production default, unmocked in this describe block", () => {
-  it.each(["darwin"] as const)(
+  it.each(["darwin", "win32", "linux"] as const)(
     "dispatchAttemptExecutor stays disabled for %s with zero spawn/reconcile side effects against the real (beforeEach-reset) implementation",
     async (platform) => {
       let spawnCalls = 0;
@@ -402,6 +402,30 @@ describe("dispatchAttemptExecutor - reconciles exactly once, never double-spawns
     expect(outcome).toEqual({ kind: "indeterminate", canonical: null });
     expect(reconcileCalls).toBe(1);
   });
+
+  it("hits the before-dispatch-spawn fault exactly once before spawning", async () => {
+    mockCohortEligible("linux");
+    const hits: string[] = [];
+    const faults: UpdateExecutorFaults = {
+      hit: async (point) => {
+        hits.push(point);
+      },
+    };
+    let spawnCalls = 0;
+    await dispatchAttemptExecutor(
+      dispatchOptions({
+        faults,
+        spawn: () => {
+          spawnCalls += 1;
+          expect(hits).toEqual(["before-dispatch-spawn"]);
+          return Promise.reject(new Error("stop here"));
+        },
+        reconcile: () => Promise.resolve(null),
+      }),
+    );
+    expect(spawnCalls).toBe(1);
+    expect(hits).toEqual(["before-dispatch-spawn"]);
+  });
   it("reconciles exactly once, without a second spawn, when a fault fires after spawn but before waiting for the ACK", async () => {
     mockCohortEligible("linux");
     let spawnCalls = 0;
@@ -469,6 +493,80 @@ describe("dispatchAttemptExecutor - the ACK/exit/timeout race, exactly one recon
     );
     expect(outcome).toEqual({ kind: "accepted", claim });
     expect(reconcileCalls).toBe(0);
+  });
+
+  it("reconciles once when the child EXITS before ever sending a private ACK", async () => {
+    mockCohortEligible("linux");
+    let reconcileCalls = 0;
+    const canonical = claimedOutcome().record;
+    const child: SpawnedAttemptExecutor = {
+      waitForPrivateAcknowledgement: () => neverSettles(),
+      waitForExit: () => Promise.resolve(),
+    };
+    const outcome = await dispatchAttemptExecutor(
+      dispatchOptions({
+        spawn: () => Promise.resolve(child),
+        reconcile: () => {
+          reconcileCalls += 1;
+          return Promise.resolve(canonical);
+        },
+      }),
+    );
+    expect(outcome).toEqual({ kind: "indeterminate", canonical });
+    expect(reconcileCalls).toBe(1);
+  });
+
+  it("reconciles once when the bounded ACK wait TIMES OUT before any ACK or exit", async () => {
+    mockCohortEligible("linux");
+    let reconcileCalls = 0;
+    let timeoutCalls = 0;
+    const canonical = claimedOutcome().record;
+    const child: SpawnedAttemptExecutor = {
+      waitForPrivateAcknowledgement: () => neverSettles(),
+      waitForExit: () => neverSettles(),
+    };
+    const outcome = await dispatchAttemptExecutor(
+      dispatchOptions({
+        acknowledgementTimeoutMs: 5_000,
+        waitForAcknowledgementTimeout: (ms) => {
+          timeoutCalls += 1;
+          expect(ms).toBe(5_000);
+          return Promise.resolve();
+        },
+        spawn: () => Promise.resolve(child),
+        reconcile: () => {
+          reconcileCalls += 1;
+          return Promise.resolve(canonical);
+        },
+      }),
+    );
+    expect(outcome).toEqual({ kind: "indeterminate", canonical });
+    expect(timeoutCalls).toBe(1);
+    expect(reconcileCalls).toBe(1);
+  });
+
+  it("never spawns a second child after an exit/timeout reconcile - dispatch itself is called exactly once per race", async () => {
+    mockCohortEligible("linux");
+    let spawnCalls = 0;
+    let reconcileCalls = 0;
+    const child: SpawnedAttemptExecutor = {
+      waitForPrivateAcknowledgement: () => neverSettles(),
+      waitForExit: () => Promise.resolve(),
+    };
+    await dispatchAttemptExecutor(
+      dispatchOptions({
+        spawn: () => {
+          spawnCalls += 1;
+          return Promise.resolve(child);
+        },
+        reconcile: () => {
+          reconcileCalls += 1;
+          return Promise.resolve(null);
+        },
+      }),
+    );
+    expect(spawnCalls).toBe(1);
+    expect(reconcileCalls).toBe(1);
   });
 });
 

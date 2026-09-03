@@ -608,6 +608,22 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
 
     expect(refreshRegistryUpdateStateMock).not.toHaveBeenCalled();
   });
+
+  it("B1: skips the post-apply refresh when the host was removed by the user mid-apply", async () => {
+    const controller = fakeHostController(
+      fakeStatus(true, "unavailable", false),
+      {
+        kind: "ok",
+        value: { appliedVersion: "1.4.1", runningActivated: true },
+      },
+      { kind: "ok", value: { activated: true } },
+    );
+    isHostRemovedByUserMock.mockResolvedValue(true);
+
+    await runLaunchHostConvergeReconcile(controller, fakeMenu());
+
+    expect(refreshRegistryUpdateStateMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("armLocalHostBootOnSignIn", () => {
