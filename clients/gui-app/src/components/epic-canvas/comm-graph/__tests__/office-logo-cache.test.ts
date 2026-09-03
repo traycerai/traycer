@@ -47,13 +47,7 @@ function flushMacrotask(): Promise<void> {
  */
 interface LogoDrawContext {
   imageSmoothingEnabled: boolean;
-  readonly drawImage: (
-    image: CanvasImageSource,
-    dx: number,
-    dy: number,
-    dw: number,
-    dh: number,
-  ) => void;
+  readonly drawImage: CanvasRenderingContext2D["drawImage"];
 }
 
 /**
