@@ -7,6 +7,7 @@ import type {
   BrowserSessionsUxClientFrame,
   BrowserSessionsUxServerFrame,
 } from "@traycer/protocol/host/browser/contracts";
+import type { HostResourceScope } from "@traycer/protocol/host/resource-scope";
 import type {
   BrowserAnnotationAttachResultInput,
   BrowserAnnotationAttachedIpcEvent,
@@ -569,13 +570,36 @@ export function browserSessionsError(
  * main's jar stream at a host it controls.
  */
 export interface BrowserSessionsStreamKey {
-  readonly epicId: string;
+  /**
+   * Which inventory this stream speaks for: one epic's, or the device's
+   * epic-less `independent` one. It is the stream's whole authorization scope
+   * on the host, so two scopes are two streams even on one host and identity.
+   */
+  readonly scope: HostResourceScope;
   readonly hostId: string;
   /**
    * The signed-in owner identity the renderer keys its coordinator by. Opaque
    * to main, which only uses it to keep two identities' streams apart.
    */
   readonly identityKey: string;
+}
+
+/**
+ * The scope's contribution to a map key, as a fixed-arity tuple rather than the
+ * scope object itself.
+ *
+ * `JSON.stringify` preserves INSERTION order, so `{ kind, epicId }` and
+ * `{ epicId, kind }` - the same scope, written by two call sites - would encode
+ * to two different keys, and the refcounted coordinator would open a second
+ * stream for an inventory it already had. Flattening to `[kind, epicId|null]`
+ * takes the field order out of the encoding.
+ */
+export function browserSessionsScopeKeyParts(
+  scope: HostResourceScope,
+): readonly [string, string | null] {
+  return scope.kind === "epic"
+    ? [scope.kind, scope.epicId]
+    : [scope.kind, null];
 }
 
 /**
@@ -589,7 +613,11 @@ export interface BrowserSessionsStreamKey {
 export function browserSessionsStreamKeyId(
   key: BrowserSessionsStreamKey,
 ): string {
-  return JSON.stringify([key.epicId, key.hostId, key.identityKey]);
+  return JSON.stringify([
+    ...browserSessionsScopeKeyParts(key.scope),
+    key.hostId,
+    key.identityKey,
+  ]);
 }
 
 export function browserViewNativeTabKeyId(

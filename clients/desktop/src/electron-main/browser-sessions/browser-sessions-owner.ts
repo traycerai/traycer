@@ -238,7 +238,7 @@ function streamKeyId(windowId: string, key: BrowserSessionsStreamKey): string {
 
 /**
  * Every main-owned `browser.sessions` stream, keyed by
- * `{windowId, epicId, hostId, identityKey}`.
+ * `{windowId, scope, hostId, identityKey}`.
  *
  * NOT deduped across windows, deliberately: one subscriber is one Electron
  * lifecycle owner, so collapsing two windows onto one would put both windows'
@@ -671,7 +671,7 @@ class BrowserSessionsStream {
     try {
       this.client = new BrowserSessionsStreamClient({
         wsStreamClient: transport.wsStreamClient,
-        epicId: this.key.epicId,
+        scope: this.key.scope,
         callbacks: {
           onServerFrame: (frame) => {
             this.handleServerFrame(frame);

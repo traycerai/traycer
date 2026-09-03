@@ -156,15 +156,24 @@ const saveLoginsSchema = z.boolean();
  */
 const sessionsStreamKeySchema: z.ZodType<BrowserSessionsStreamKey> =
   z.strictObject({
-    epicId: nonEmptyStringSchema.max(128),
+    // The protocol's scope union, re-declared here only to carry the same
+    // bound as the fields beside it - a renderer-supplied epic id is echoed
+    // into a map key and a log line whichever union it arrives in.
+    scope: z.discriminatedUnion("kind", [
+      z.strictObject({
+        kind: z.literal("epic"),
+        epicId: nonEmptyStringSchema.max(128),
+      }),
+      z.strictObject({ kind: z.literal("independent") }),
+    ]),
     hostId: nonEmptyStringSchema.max(128),
     identityKey: nonEmptyStringSchema.max(512),
   });
 
 /**
  * One user-initiated request onto that stream, parsed against the PROTOCOL's
- * own client-frame schema and then narrowed to the three kinds a renderer may
- * ask for.
+ * own client-frame schema and then narrowed to the kinds a renderer may ask
+ * for.
  *
  * The narrowing is the gate, not the parse: `forgetLogins` and `clearSite`
  * shred every connected host's slice of the user's logins, so they are

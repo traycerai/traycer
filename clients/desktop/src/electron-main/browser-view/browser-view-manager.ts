@@ -644,21 +644,24 @@ export class BrowserViewManager {
     );
   }
 
+  /**
+   * Closes the native guests the closing window OWNS, and only those.
+   *
+   * It used to widen: one guest in this window pulled in every guest of that
+   * guest's whole session, in every window. That was safe while a session's
+   * native tabs could only ever live in one window. They cannot now - the host
+   * elects a native route per scope AND window, so one session's tabs are
+   * split across windows by design - and the widened close would destroy the
+   * other window's live tabs, while the host is rebinding onto them.
+   *
+   * Ownership is per guest, and `lifecycleWindowId` is precisely who owns one.
+   */
   async closeNativeSessionsForWindow(windowId: string): Promise<void> {
-    const entries = Array.from(this.entries.guestValues());
-    const sessionKeys = new Set(
-      entries
-        .filter((entry) => entry.identity.lifecycleWindowId === windowId)
-        .map((entry) => nativeSessionKey(entry.identity.key)),
+    const owned = Array.from(this.entries.guestValues()).filter(
+      (entry) => entry.identity.lifecycleWindowId === windowId,
     );
-    if (sessionKeys.size === 0) return;
-    await Promise.all(
-      entries
-        .filter((entry) =>
-          sessionKeys.has(nativeSessionKey(entry.identity.key)),
-        )
-        .map((entry) => this.closeEntry(entry)),
-    );
+    if (owned.length === 0) return;
+    await Promise.all(owned.map((entry) => this.closeEntry(entry)));
   }
 
   private findExactNativeEntry(
