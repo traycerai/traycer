@@ -98,7 +98,21 @@ export function BrowserSessionsHostBoundary(props: {
 }): ReactNode {
   const canvasHostId = useCanvasHostId();
   const hostClient = useHostClientForHostId(props.hostId);
-  if (props.hostId === canvasHostId) return props.children;
+  // The scope has to match too, not just the host. What the canvas provides is
+  // ONE stream - the canvas host's EPIC-scoped one - so falling through hands
+  // the children whatever scope that ambient provider holds, not the scope
+  // this boundary was asked for. An `independent` caller on the canvas host
+  // would silently read the epic's inventory: scope confusion, which is the
+  // one class this whole feature exists to remove.
+  //
+  // Inert today, and it must stay: all four call sites pass epic scope, so
+  // this changes no behavior now. It is a guard against the Start Page's
+  // `independent` boundary ever being mounted inside a canvas subtree, where
+  // the host ids WOULD match and the bug would be invisible - a tile reading
+  // a plausible, populated, wrong inventory rather than failing.
+  if (props.hostId === canvasHostId && props.scope.kind === "epic") {
+    return props.children;
+  }
   return (
     <BrowserSessionsHostProvider
       hostId={props.hostId}
