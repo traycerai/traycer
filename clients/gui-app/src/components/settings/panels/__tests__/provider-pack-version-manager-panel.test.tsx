@@ -250,6 +250,7 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
+  useHostMethodSchemaVersion: () => null,
   useHostMethodSupport: (hostId: string | null, method: string) => {
     mocks.lastSupportArgs = { hostId, method };
     mocks.supportCalls.push({ hostId, method });

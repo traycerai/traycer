@@ -25,6 +25,11 @@ import {
   type TabNavigationIntent,
 } from "@/lib/tab-navigation/intents";
 import { parseNestedFocusTargetFromSearch } from "@/lib/epic-nested-focus-route";
+import {
+  commitWithoutNavigation,
+  MANUAL_TILE_OPEN,
+  openTileWithNavigation,
+} from "@/lib/canvas/tile-open/open-tile";
 import { hasRestoredTabs } from "@/lib/has-restored-tabs";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { activeHostIdOrNull } from "@/lib/host/runtime";
@@ -54,6 +59,7 @@ import {
 import type { TabRef } from "@/stores/tabs/types";
 import { isRouteBookkeepingState } from "@/lib/tab-navigation/route-bookkeeping";
 import { normalizeEpicFocusSearch } from "@/routes/epic-route-search";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 export {
   completeEpicMigrationIntent,
@@ -1025,9 +1031,19 @@ export class TabNavigationController {
     if (preparation === null) return null;
     const canvas = useEpicCanvasStore.getState();
     if (preparation.kind === "open-tile") {
-      return preparation.preview
-        ? canvas.prepareOpenTilePreviewInTabFocusTarget(tabId, preparation.node)
-        : canvas.prepareOpenTileInTabFocusTarget(tabId, preparation.node);
+      // `commitWithoutNavigation`: this target is folded into the tab
+      // navigation envelope being built here, so the open must not issue a
+      // route write of its own.
+      return openTileWithNavigation(
+        tileIntent(
+          preparation.node,
+          { tabId },
+          preparation.gesture,
+          "direct_ui",
+        ),
+        commitWithoutNavigation,
+        MANUAL_TILE_OPEN,
+      );
     }
     return canvas.prepareSetActiveTileTabFocusTarget(
       tabId,

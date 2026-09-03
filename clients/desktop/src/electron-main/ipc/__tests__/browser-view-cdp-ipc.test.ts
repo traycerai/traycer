@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserWindowConstructorOptions } from "electron";
 import type {
-  BrowserViewElectronTabCdpDispatch,
   BrowserViewElectronTabControl,
-  BrowserViewEnsureTab,
   BrowserViewNativeTabCapability,
 } from "@traycer-clients/shared/platform/browser-view";
+import type {
+  BrowserViewElectronTabCdpDispatch,
+  BrowserViewEnsureTab,
+} from "../../browser-view/browser-view-port";
 
 type DispatchElectronTabCdpCall = BrowserViewElectronTabCdpDispatch;
 
@@ -24,15 +26,50 @@ type InvokeHandler = (
   payload: unknown,
 ) => unknown | Promise<unknown>;
 
+interface AuthSnapshot {
+  readonly status: string;
+  readonly token: string | null;
+  readonly profile: { readonly userId: string } | null;
+  /**
+   * Whether main itself checked the bearer against authn's signing keys. The
+   * renderer hands main the token; only a verified one is a principal.
+   */
+  readonly verified: boolean;
+}
+
+const SIGNED_OUT: AuthSnapshot = {
+  status: "signed-out",
+  token: null,
+  profile: null,
+  verified: false,
+};
+
 type BrowserViewManagerFactoryOptions = {
   readonly createDevToolsWindow: (windowId: string) => unknown;
+  readonly createPopupWindowOptions: (request: {
+    readonly profile: string;
+    readonly sessionId: string;
+  }) => BrowserWindowConstructorOptions;
 };
 
 const captured = vi.hoisted(() => ({
   dispatchedTabs: [] as DispatchElectronTabCdpCall[],
   ensuredTabs: [] as EnsureTabCall[],
   controlledTabs: [] as ControlElectronTabCall[],
+  /** The account each jar-plane dial was opened for. */
+  transportOpens: [] as string[],
+  /** Transports the registry tore back down. */
+  transportCloses: 0,
+  /** Everyone main told to re-read the auth session. */
+  authChangeListeners: [] as Array<() => void>,
+  authSnapshot: {
+    status: "signed-out",
+    token: null,
+    profile: null,
+    verified: false,
+  } as AuthSnapshot,
   browserWindowOptions: [] as BrowserWindowConstructorOptions[],
+  webPreferencesRequests: [] as unknown[],
   managerOptions: null as BrowserViewManagerFactoryOptions | null,
 }));
 
@@ -52,6 +89,8 @@ vi.mock("electron", () => {
   return {
     app: {
       getPath: (_key: string): string => "/tmp/traycer-desktop-test",
+      // Read when a jar-plane transport is dialed.
+      getVersion: (): string => "1.0.0",
       relaunch: (): void => undefined,
       exit: (_code: number): void => undefined,
     },
@@ -59,6 +98,9 @@ vi.mock("electron", () => {
     WebContentsView,
     dialog: {
       showSaveDialogSync: () => undefined,
+      // The destructive handlers ask asynchronously; nothing here raises one.
+      showMessageBox: (): Promise<{ readonly response: number }> =>
+        Promise.resolve({ response: 0 }),
       showMessageBoxSync: () => 0,
     },
     session: {
@@ -75,6 +117,35 @@ vi.mock("electron", () => {
     safeStorage: {
       isEncryptionAvailable: () => true,
       getSelectedStorageBackend: () => "unknown",
+    },
+  };
+});
+
+/**
+ * The dial itself, over the registry's own fake stream client - so the stream
+ * really opens, and a torn-down one really closes.
+ */
+vi.mock("../../browser-sessions/browser-sessions-transport", async () => {
+  const { FakeStreamClient, LOCAL_HOST_ENTRY } =
+    await import("../../browser-sessions/__tests__/browser-sessions-stream-fixture");
+  return {
+    createBrowserSessionsHostDirectory: () => ({
+      invalidate: (): void => undefined,
+      reset: (): void => undefined,
+      resolve: () => Promise.resolve(LOCAL_HOST_ENTRY),
+      endpoint: () => ({
+        hostId: LOCAL_HOST_ENTRY.hostId,
+        websocketUrl: LOCAL_HOST_ENTRY.websocketUrl,
+      }),
+    }),
+    openBrowserSessionsTransport: (_target: unknown, userId: string) => {
+      captured.transportOpens.push(userId);
+      return {
+        wsStreamClient: new FakeStreamClient(false),
+        close: (): void => {
+          captured.transportCloses += 1;
+        },
+      };
     },
   };
 });
@@ -139,7 +210,10 @@ vi.mock("../../browser-view/browser-view-manager", () => ({
 }));
 
 vi.mock("../../browser-view/browser-session", () => ({
-  createBrowserViewWebPreferences: vi.fn(() => ({})),
+  createBrowserViewWebPreferences: vi.fn((request: unknown) => {
+    captured.webPreferencesRequests.push(request);
+    return { request };
+  }),
   cancelBrowserViewDownload: vi.fn(),
   clearBrowserViewPendingCertificateError: vi.fn(),
   ensureBrowserViewSession: vi.fn(),
@@ -151,6 +225,11 @@ vi.mock("../../browser-view/browser-session", () => ({
   onBrowserViewDownloadChange: vi.fn(),
   readBrowserViewPendingCertificateError: vi.fn(() => null),
   registerBrowserViewWebContents: vi.fn(),
+  // The login-import service is built at registration and takes this as a
+  // dependency; nothing in this suite imports, so it only has to exist.
+  suppressAllBrowserPrimaryProfileDeltas: vi.fn(
+    (action: () => Promise<unknown>) => action(),
+  ),
 }));
 
 vi.mock("../../browser-view/storage/browser-saved-logins", () => ({
@@ -184,7 +263,6 @@ vi.mock("../../browser-view/storage/browser-storage-state", () => ({
       reason: null,
     }),
   ),
-  seedBrowserViewCookies: vi.fn(() => Promise.resolve()),
 }));
 
 function makeBridge() {
@@ -204,6 +282,25 @@ function makeBridge() {
     safeSendToWindow: vi.fn(),
     fanOut: vi.fn(),
     resolveSenderWindowId: vi.fn(() => "window-1"),
+    // The jar-plane registry is built during registration (H10), so a bridge
+    // double now has to answer for the host snapshot it subscribes to and the
+    // auth session its bearer comes from. Nothing here dials: no stream is
+    // opened unless a renderer asks for one.
+    options: {
+      authnBaseUrl: "https://authn.test",
+      host: {
+        getSnapshot: () => null,
+        on: vi.fn(),
+        off: vi.fn(),
+      },
+    },
+    authSession: {
+      get: () => captured.authSnapshot,
+      on: vi.fn((_event: string, listener: () => void) => {
+        captured.authChangeListeners.push(listener);
+      }),
+      off: vi.fn(),
+    },
   };
 }
 
@@ -230,12 +327,46 @@ function findInvokeHandler(
   return handler as InvokeHandler;
 }
 
+/** Drains the microtask queue without ordering anything by a clock. */
+function flushMicrotasks(): Promise<void> {
+  return Promise.resolve().then().then().then().then();
+}
+
+const STREAM_KEY = {
+  epicId: "epic-1",
+  hostId: "host-1",
+  identityKey: "identity-1",
+};
+
+/**
+ * One renderer asking main to hold a jar-plane stream open, driven to the
+ * point where the dial either happened or did not. The directory read is one
+ * await wide, so the queue is drained before the answer is read.
+ */
+async function openSessionsStream(): Promise<void> {
+  const { registerBrowserViewIpc } = await import("../browser-view-ipc");
+  const { RunnerHostInvoke } =
+    await import("../../../ipc-contracts/ipc-channels");
+  const bridge = makeBridge();
+  registerBrowserViewIpc(bridge as never);
+  await findInvokeHandler(bridge, RunnerHostInvoke.browserViewSessionsOpen)(
+    {},
+    STREAM_KEY,
+  );
+  await flushMicrotasks();
+}
+
 describe("native browser tab IPC", () => {
   beforeEach(() => {
     captured.dispatchedTabs = [];
     captured.ensuredTabs = [];
     captured.controlledTabs = [];
+    captured.transportOpens = [];
+    captured.transportCloses = 0;
+    captured.authChangeListeners = [];
+    captured.authSnapshot = SIGNED_OUT;
     captured.browserWindowOptions = [];
+    captured.webPreferencesRequests = [];
     captured.managerOptions = null;
     vi.clearAllMocks();
   });
@@ -258,60 +389,67 @@ describe("native browser tab IPC", () => {
     );
   });
 
-  it("dispatches a curated command with its logical frame target", async () => {
+  it("creates a top-level secure popup with the opener's browser session", async () => {
     const { registerBrowserViewIpc } = await import("../browser-view-ipc");
-    const { RunnerHostInvoke } =
-      await import("../../../ipc-contracts/ipc-channels");
 
-    const bridge = makeBridge();
-    registerBrowserViewIpc(bridge as never);
-    const handler = findInvokeHandler(
-      bridge,
-      RunnerHostInvoke.browserViewElectronTabCdpDispatch,
-    );
-    await handler(
-      {},
-      {
-        hostId: "host-1",
-        sessionId: "session-1",
-        tabId: "tab-1",
-        registrationId: "registration-1",
-        target: {
-          kind: "frame",
-          frameId: "frame-1",
-          parentFrameId: "root-frame",
-        },
-        command: { kind: "cdpInsertText", text: "hello" },
-      },
-    );
+    registerBrowserViewIpc(makeBridge() as never);
+    const managerOptions = captured.managerOptions;
+    if (managerOptions === null) throw new Error("manager was not registered");
 
-    expect(captured.dispatchedTabs).toEqual([
-      {
-        hostId: "host-1",
-        sessionId: "session-1",
-        tabId: "tab-1",
-        registrationId: "registration-1",
-        target: {
-          kind: "frame",
-          frameId: "frame-1",
-          parentFrameId: "root-frame",
-        },
-        command: { kind: "cdpInsertText", text: "hello" },
-      },
-    ]);
+    const request = { profile: "isolated", sessionId: "popup-session" };
+    const popupOptions = managerOptions.createPopupWindowOptions(request);
+
+    expect(popupOptions).toEqual(
+      expect.objectContaining({
+        show: true,
+        width: 900,
+        height: 700,
+        backgroundColor: "#0b0b0d",
+        fullscreen: false,
+        fullscreenable: false,
+        modal: false,
+        kiosk: false,
+      }),
+    );
+    expect(popupOptions).not.toHaveProperty("parent");
+    expect(popupOptions.webPreferences).toEqual({ request });
+    expect(captured.webPreferencesRequests).toEqual([request]);
   });
 
-  it("passes the native tab storage seed through the IPC parser", async () => {
-    const { registerBrowserViewIpc } = await import("../browser-view-ipc");
-    const { RunnerHostInvoke } =
-      await import("../../../ipc-contracts/ipc-channels");
+  // The renderer-facing CDP dispatch and ensure-tab invoke channels
+  // (`browserViewElectronTabCdpDispatch`, `browserViewEnsureTab`) were
+  // deleted under H10 - the jar/CDP plane moved into main's own
+  // `browser-sessions` owner, which calls the manager directly rather than
+  // crossing IPC. What is left to pin here is that `BrowserViewManager`
+  // still exposes `dispatchElectronTabCdp` / `ensureTab` with the same
+  // signatures, so it drives them directly instead of through a deleted
+  // sender-scoped handler.
+  it("dispatches a curated command with its logical frame target", async () => {
+    const { BrowserViewManager } =
+      await import("../../browser-view/browser-view-manager");
+    const manager = new BrowserViewManager({} as never);
+    const input: BrowserViewElectronTabCdpDispatch = {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      registrationId: "registration-1",
+      target: {
+        kind: "frame",
+        frameId: "frame-1",
+        parentFrameId: "root-frame",
+      },
+      command: { kind: "cdpInsertText", text: "hello" },
+    };
 
-    const bridge = makeBridge();
-    registerBrowserViewIpc(bridge as never);
-    const handler = findInvokeHandler(
-      bridge,
-      RunnerHostInvoke.browserViewEnsureTab,
-    );
+    await manager.dispatchElectronTabCdp(input);
+
+    expect(captured.dispatchedTabs).toEqual([input]);
+  });
+
+  it("passes the native tab storage seed through to the manager", async () => {
+    const { BrowserViewManager } =
+      await import("../../browser-view/browser-view-manager");
+    const manager = new BrowserViewManager({} as never);
     const seedStorageState = {
       cookies: [],
       origins: [
@@ -321,30 +459,20 @@ describe("native browser tab IPC", () => {
         },
       ],
     };
+    const input: BrowserViewEnsureTab = {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      requestedUrl: "https://example.com/background",
+      profile: "primary",
+      seedStorageState,
+      // The provenance main prices the seed's jar write against.
+      connectionId: "connection-1",
+    };
 
-    await handler(
-      {},
-      {
-        hostId: "host-1",
-        sessionId: "session-1",
-        tabId: "tab-1",
-        requestedUrl: "https://example.com/background",
-        seedStorageState,
-      },
-    );
+    await manager.ensureTab("window-1", input);
 
-    expect(captured.ensuredTabs).toEqual([
-      {
-        windowId: "window-1",
-        input: expect.objectContaining({
-          hostId: "host-1",
-          sessionId: "session-1",
-          tabId: "tab-1",
-          requestedUrl: "https://example.com/background",
-          seedStorageState,
-        }),
-      },
-    ]);
+    expect(captured.ensuredTabs).toEqual([{ windowId: "window-1", input }]);
   });
 
   it("parses native tab control without routing through a surface key", async () => {
@@ -381,5 +509,53 @@ describe("native browser tab IPC", () => {
         },
       },
     ]);
+  });
+
+  // The jar plane's principal is a VERIFIED session, not merely a signed-in
+  // one. Main is handed its bearer by the renderer, so a session it has not
+  // checked against authn's signing keys is not a degraded principal - it is
+  // no principal at all, and everything on the plane (the dial, the relay
+  // grant, the store-key wrap, the ledger's per-user match) reads the same
+  // answer.
+  it("opens no jar-plane stream for a signed-in session main has not verified", async () => {
+    captured.authSnapshot = {
+      status: "signed-in",
+      token: "bearer-1",
+      profile: { userId: "user-1" },
+      verified: false,
+    };
+
+    await openSessionsStream();
+
+    expect(captured.transportOpens).toEqual([]);
+  });
+
+  it("tears a live stream down when the session it was opened for stops being verified", async () => {
+    captured.authSnapshot = {
+      status: "signed-in",
+      token: "bearer-1",
+      profile: { userId: "user-1" },
+      verified: true,
+    };
+
+    await openSessionsStream();
+
+    expect(captured.transportOpens).toEqual(["user-1"]);
+
+    // The same edge a sign-out takes: the account this stream speaks for is
+    // read fresh, answers null, and no longer matches the one it was opened
+    // for - so the socket goes rather than carrying a credential main can no
+    // longer vouch for.
+    captured.authSnapshot = {
+      status: "signed-in",
+      token: "bearer-1",
+      profile: { userId: "user-1" },
+      verified: false,
+    };
+    for (const listener of captured.authChangeListeners) listener();
+    await flushMicrotasks();
+
+    expect(captured.transportCloses).toBe(1);
+    expect(captured.transportOpens).toEqual(["user-1"]);
   });
 });

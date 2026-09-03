@@ -446,9 +446,9 @@ export function spawnEpicRuntimeWorker<TProjection>(
     // bridge nothing reads. Nothing else collected them: the provider marks
     // the handle dead rather than disposing it (registry mutation belongs to
     // the acquire effect), and that pass only runs if the user comes back.
-    // Cap-eviction cannot stand in either - `isClean()` requires
-    // `hostTransportStatus === "open"`, which a session whose runtime just
-    // died does not have.
+    // Cap-eviction cannot stand in either: the registry only evicts an
+    // UNMOUNTED entry the cap has pushed past, and a fatal can land on a
+    // mounted one, under the cap, with a frozen state that reads dirty.
     //
     // Through `dispose()` rather than a fatal-only teardown, for the reason
     // `dispose()` itself gives about `detach()`: a second copy of the

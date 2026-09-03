@@ -1,4 +1,4 @@
-import { useCallback, type ReactNode } from "react";
+import { useCallback, type MouseEvent, type ReactNode } from "react";
 import { Lock } from "lucide-react";
 import { v4 as uuidv4 } from "uuid";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
@@ -9,11 +9,11 @@ import { useCompactRelativeTime } from "@/lib/relative-time";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import {
-  useEpicCanvasStore,
   useIsActiveEpicArtifact,
   useIsActiveTile,
 } from "@/stores/epics/canvas/store";
-import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
+import { modifiersFromMouseEvent } from "@/lib/canvas/tile-open/intent";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { useChatTreeSurface } from "@/components/epic-canvas/sidebar/chat-tree-surface";
 import {
   makePublishedChatTileRef,
@@ -48,7 +48,6 @@ const ChatIcon = EPIC_NODE_ICONS.chat;
 
 export interface EpicSidebarCloudChatRowProps {
   readonly chat: CloudChatSummary;
-  readonly epicId: string;
   readonly tabId: string;
   readonly depth: number;
   /**
@@ -100,19 +99,13 @@ export function EpicSidebarCloudChatRow(
   // refusal in the tile rather than a transcript - rare, visible, and
   // strictly better than routing every reachable-owner chat to a stale
   // read-only copy. An unreachable owner keeps the locked published copy.
-  const navigateNested = useEpicNestedFocusNavigation();
+  const { openTile } = useEpicTileNavigation();
   // Cloud rows sit in the same tree a mounting surface wraps, so they owe it
   // the same post-open call a local row makes - otherwise tapping a remote or
   // published-copy chat on the phone opens its tile behind a sheet that never
   // closes. On the TAP path only, exactly as the local row does it: the
   // promote-on-double-click path does not call it there either.
   const surface = useChatTreeSurface();
-  const prepareOpenTilePreviewInTabFocusTarget = useEpicCanvasStore(
-    (s) => s.prepareOpenTilePreviewInTabFocusTarget,
-  );
-  const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
-    (s) => s.prepareOpenTileInTabFocusTarget,
-  );
 
   // Whether this tab is showing THIS row's chat - in either of the two forms a
   // click below can open it. A live open is an ordinary record-backed chat
@@ -163,39 +156,36 @@ export function EpicSidebarCloudChatRow(
     [ownerReachable, liveTileRef, publishedTileRef],
   );
 
-  const open = useCallback(() => {
-    const ref = openRef();
-    navigateNested(props.epicId, props.tabId, () =>
-      prepareOpenTilePreviewInTabFocusTarget(props.tabId, {
-        ...ref,
-        instanceId: uuidv4(),
-      }),
-    );
-    if (surface !== null) surface.onRowActivated();
-  }, [
-    openRef,
-    navigateNested,
-    props.epicId,
-    props.tabId,
-    prepareOpenTilePreviewInTabFocusTarget,
-    surface,
-  ]);
+  const open = useCallback(
+    (event: MouseEvent<HTMLButtonElement>) => {
+      openTile({
+        node: { ...openRef(), instanceId: uuidv4() },
+        target: { tabId: props.tabId },
+        gesture: "single",
+        modifiers: modifiersFromMouseEvent(event),
+        placement: null,
+        dedupe: true,
+        source: "direct_ui",
+      });
+      if (surface !== null) surface.onRowActivated();
+    },
+    [openRef, openTile, props.tabId, surface],
+  );
 
-  const openPermanent = useCallback(() => {
-    const ref = openRef();
-    navigateNested(props.epicId, props.tabId, () =>
-      prepareOpenTileInTabFocusTarget(props.tabId, {
-        ...ref,
-        instanceId: uuidv4(),
-      }),
-    );
-  }, [
-    openRef,
-    navigateNested,
-    props.epicId,
-    props.tabId,
-    prepareOpenTileInTabFocusTarget,
-  ]);
+  const openPermanent = useCallback(
+    (event: MouseEvent<HTMLButtonElement>) => {
+      openTile({
+        node: { ...openRef(), instanceId: uuidv4() },
+        target: { tabId: props.tabId },
+        gesture: "double",
+        modifiers: modifiersFromMouseEvent(event),
+        placement: null,
+        dedupe: true,
+        source: "direct_ui",
+      });
+    },
+    [openRef, openTile, props.tabId],
+  );
 
   const ownerLabel = ownerReachability.hostLabel;
   const lockCopy = lockedRowCopy(ownerLabel);

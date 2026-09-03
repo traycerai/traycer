@@ -417,6 +417,35 @@ describe("HostClient", () => {
     }
   });
 
+  it("coalesces N independently-wired reports arriving in SEPARATE macrotasks into one sweep plus one trailing catch-up", async () => {
+    vi.useFakeTimers();
+    try {
+      const { client, invalidator, events } = buildHostClientWithMock();
+
+      // The production shape the older cases miss: every wiring in this suite
+      // reports in the same synchronous tick, so a purely-microtask merge
+      // would satisfy them. A window runs a dozen or more stream clients and
+      // each one's recovery cooldown fires on its own timer, so the reports
+      // land in separate macrotasks - which is what the time-gated leading
+      // edge, not the microtask merge, is holding to one call.
+      for (let i = 0; i < 5; i += 1) {
+        client.notifyHostAvailabilityRecovered("mock-local");
+        await vi.advanceTimersByTimeAsync(0);
+      }
+
+      expect(invalidator.calls).toEqual(["mock-local"]);
+      expect(events).toHaveLength(1);
+
+      // One trailing catch-up for the reports the gate swallowed, and no more.
+      await vi.advanceTimersByTimeAsync(HOST_AVAILABILITY_SWEEP_WINDOW_MS);
+      expect(invalidator.calls).toEqual(["mock-local", "mock-local"]);
+      expect(events).toHaveLength(2);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
   it("delegates a requester's unary request to the messenger under that host's authority", async () => {
     const { client, requester, messenger } = buildHostClientWithMock();
     client.setRequestContext(makeContext("user-1", "tok-1"));

@@ -95,6 +95,7 @@ function terminalWorkspaceLeaf(props: {
         tabId: ctx.activeTabId,
         groupId: ctx.targetGroupId,
         ref: mintNewEpicTerminalTile({ ...target, epicId }),
+        dedupe: false,
         navigateNestedFocus: ctx.router.navigateNestedFocus,
       });
     },

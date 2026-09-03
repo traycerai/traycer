@@ -119,6 +119,29 @@ export interface DesktopAuthSessionSnapshot {
   readonly profile: DesktopAuthSessionProfile | null;
 }
 
+/**
+ * Why main refused to adopt a renderer-pushed auth session. Every value is a
+ * statement about the TOKEN, never about who sent it, so it is safe to log and
+ * safe to show. See `electron-main/auth/bearer-verifier.ts`.
+ */
+export type DesktopAuthSessionRefusalReason =
+  | "malformed-token"
+  | "unsupported-algorithm"
+  | "unknown-signing-key"
+  | "key-source-unavailable"
+  | "bad-signature"
+  | "expired"
+  | "issuer-mismatch"
+  | "audience-mismatch"
+  | "subject-mismatch";
+
+export type DesktopAuthSessionSetResult =
+  | { readonly outcome: "accepted" }
+  | {
+      readonly outcome: "refused";
+      readonly reason: DesktopAuthSessionRefusalReason;
+    };
+
 export type OpenEpicInNewWindowResult =
   | { readonly result: "focused"; readonly windowId: string }
   | { readonly result: "moved"; readonly windowId: string }

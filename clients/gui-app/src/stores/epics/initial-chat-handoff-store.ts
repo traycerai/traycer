@@ -4,7 +4,8 @@ import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
-import type { ConversationTilePlacement } from "@/lib/canvas/conversation-tile-placement";
+import type { ExplicitTilePlacement } from "@/lib/canvas/tile-open/intent";
+import type { EdgeDropPosition } from "@/stores/epics/canvas/tile-tree";
 
 export type InitialChatHandoffStatus =
   | "pending"
@@ -37,11 +38,12 @@ export interface InitialChatHandoff {
    */
   readonly worktreeIntent: WorktreeIntent | null;
   /**
-   * Where the eager-opened chat tile lands. The creation trigger picks this:
-   * sidebar `+` / landing → `active-tile` (new tab); in-pane PaneOpener →
-   * `target-group`; ⌘K split commands → `split`.
+   * Explicit placement for the eager-opened chat tile, or `null` to let the
+   * conversation tile-placement setting decide (C3, C8). Only the in-pane
+   * PaneOpener names a pane; the sidebar `+`, the landing composer and the
+   * palette pass `null`.
    */
-  readonly placement: ConversationTilePlacement;
+  readonly placement: ExplicitTilePlacement | null;
   readonly clientActionId: string | null;
   readonly messageId: string | null;
   readonly failureReason: string | null;
@@ -59,7 +61,7 @@ export interface RegisterInitialChatHandoffInput extends InitialChatHandoffScope
   readonly content: JsonContent;
   readonly settings: ChatRunSettings;
   readonly worktreeIntent: WorktreeIntent | null;
-  readonly placement: ConversationTilePlacement;
+  readonly placement: ExplicitTilePlacement | null;
   // Pre-minted at submit so the same ids ride on `epic.createChat`'s
   // `initialMessage` (turn-overlap) and on any fallback `send`, letting the
   // host's idempotency gate dedupe.
@@ -135,12 +137,12 @@ function isStringOrNull(value: unknown): boolean {
  * A persisted handoff, identified by the fields this store's own logic
  * BRANCHES on - the scope triple, `chatId`, and the status union.
  *
- * The payload fields (`content`, `settings`, `worktreeIntent`, `placement`)
- * are deliberately not re-validated: v1 wrote them from this same interface at
- * these same types, and the only thing v2 changed is the map key. Checking the
- * discriminators is what keeps a truncated or hand-edited blob from
- * rehydrating into a record whose `status` no transition matches, which would
- * strand it as unconsumable.
+ * `content`, `settings` and `worktreeIntent` are deliberately not
+ * re-validated: every version wrote them from this same interface at these
+ * same types. `placement` is the exception and is re-read by
+ * {@link readPersistedPlacement}. Checking the discriminators is what keeps a
+ * truncated or hand-edited blob from rehydrating into a record whose `status`
+ * no transition matches, which would strand it as unconsumable.
  */
 function isPersistedHandoff(value: unknown): value is InitialChatHandoff {
   if (!isRecord(value)) return false;
@@ -149,6 +151,45 @@ function isPersistedHandoff(value: unknown): value is InitialChatHandoff {
   if (!isStringOrNull(value.hostId)) return false;
   if (!isStringOrNull(value.chatId)) return false;
   return typeof value.status === "string" && HANDOFF_STATUSES.has(value.status);
+}
+
+/**
+ * v2 -> v3: the tile-opening refactor replaced the persisted
+ * `ConversationTilePlacement` (`{ kind: "active-tile" | "target-group" |
+ * "split" }`, no pane id) with {@link ExplicitTilePlacement}. A blob written
+ * by the previous release would otherwise rehydrate into a field the resolver
+ * reads as an explicit placement and cannot honour, so an unrecognized shape
+ * falls back to `null` - the conversation placement setting then decides,
+ * which is what every caller but the PaneOpener passes anyway.
+ */
+function readPersistedPlacement(value: unknown): ExplicitTilePlacement | null {
+  if (!isRecord(value)) return null;
+  if (typeof value.paneId !== "string") return null;
+  if (value.kind === "tab") {
+    return {
+      kind: "tab",
+      paneId: value.paneId,
+      index: typeof value.index === "number" ? value.index : null,
+    };
+  }
+  if (value.kind === "split" && isEdgeDropPosition(value.edge)) {
+    return { kind: "split", paneId: value.paneId, edge: value.edge };
+  }
+  return null;
+}
+
+// A total record rather than a literal list: adding an `EdgeDropPosition`
+// fails the build here instead of silently reading a persisted placement
+// carrying it back as `null`.
+const PERSISTED_EDGES: Record<EdgeDropPosition, true> = {
+  left: true,
+  right: true,
+  top: true,
+  bottom: true,
+};
+
+function isEdgeDropPosition(value: unknown): value is EdgeDropPosition {
+  return typeof value === "string" && Object.hasOwn(PERSISTED_EDGES, value);
 }
 
 /**
@@ -177,7 +218,11 @@ export function migrateInitialChatHandoffState(
   for (const value of Object.values(persisted.handoffs)) {
     if (!isPersistedHandoff(value)) continue;
     const key = initialChatHandoffKey(value);
-    handoffs[key] = { ...value, key };
+    handoffs[key] = {
+      ...value,
+      key,
+      placement: readPersistedPlacement(value.placement),
+    };
   }
   return { handoffs };
 }
@@ -297,10 +342,11 @@ export const useInitialChatHandoffStore = create<InitialChatHandoffStore>()(
     }),
     {
       ...basePersistOptions(persistKey(STORE_KEYS.initialChatHandoff)),
-      // v2 dropped the `hostId` segment from every persisted map key; see
-      // `initialChatHandoffKey` for why, and `migrateInitialChatHandoffState`
-      // for what happens to a v1 blob.
-      version: 2,
+      // v2 dropped the `hostId` segment from every persisted map key (see
+      // `initialChatHandoffKey` for why); v3 re-reads `placement`, whose shape
+      // the tile-opening refactor changed. `migrateInitialChatHandoffState`
+      // handles both, and is idempotent for a blob already at either.
+      version: 3,
       storage: createJSONStorage(() => localStorage),
       migrate: (persisted) => migrateInitialChatHandoffState(persisted),
     },

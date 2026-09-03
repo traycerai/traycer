@@ -158,7 +158,11 @@ export function TopLevelTabHost() {
   return (
     <div
       ref={hostBoundsRef}
-      className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden"
+      // `overflow-clip`, not `overflow-hidden`: see the content viewport in
+      // `app-shell.tsx`. Every box between the header and a surface must be
+      // unscrollable, or a stray `focus()` / `scrollIntoView` can park it at a
+      // non-zero offset and push the surface's top row under the header.
+      className="relative flex min-h-0 min-w-0 flex-1 overflow-clip"
       data-testid="top-level-tab-host"
     >
       <PhaseMigrationControllerHost />
@@ -540,7 +544,9 @@ function surfacePlacementKey(
 
 function surfaceClassName(placement: SurfacePlacement): string {
   return cn(
-    "absolute inset-y-0 flex h-full min-h-0 min-w-0 flex-col overflow-hidden",
+    // `overflow-clip`, not `overflow-hidden` - same reason as the host above:
+    // a surface mount that can scroll programmatically never scrolls back.
+    "absolute inset-y-0 flex h-full min-h-0 min-w-0 flex-col overflow-clip",
     placement.kind === "single" && "inset-x-0",
     placement.kind === "hidden" && "hidden pointer-events-none",
   );

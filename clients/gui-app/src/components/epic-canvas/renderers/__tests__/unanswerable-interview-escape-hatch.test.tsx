@@ -71,9 +71,6 @@ const QUESTION: InterviewQuestion = {
 
 const ANSWERABLE_CARD: PendingInterviewView = {
   blockId: "streaming-block",
-  toolName: "AskUserQuestion",
-  title: null,
-  description: null,
   questions: [QUESTION],
   assistantMessageId: null,
 };

@@ -149,8 +149,8 @@ function openBatchClient(
     commandId: COMMAND_ID,
     source: "settings",
     targets: [
-      { worktreePath: "/wt/a", scripts: null },
-      { worktreePath: "/wt/b", scripts: null },
+      { worktreePath: "/wt/a", scripts: null, stopOwners: false },
+      { worktreePath: "/wt/b", scripts: null, stopOwners: false },
     ],
     callbacks: NOOP_CALLBACKS,
   });
@@ -173,7 +173,7 @@ describe("WorktreeDeleteBatchStreamClient replay safety", () => {
       commandId: COMMAND_ID,
       source: "task_sweep",
       epicId: "epic-1",
-      targets: [{ worktreePath: "/wt/a", scripts: null }],
+      targets: [{ worktreePath: "/wt/a", scripts: null, stopOwners: false }],
       callbacks: NOOP_CALLBACKS,
     });
 
@@ -229,6 +229,54 @@ describe("WorktreeDeleteBatchStreamClient replay safety", () => {
     batch.close();
   });
 
+  it("reports an incompatible close on the observe session as a connection failure, not unsupported", () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory);
+    const onUnsupported = vi.fn();
+    const onConnectionStatus = vi.fn();
+    const batch = new WorktreeDeleteBatchStreamClient({
+      wsStreamClient: client,
+      commandId: COMMAND_ID,
+      source: "settings",
+      targets: [{ worktreePath: "/wt/a", scripts: null, stopOwners: false }],
+      callbacks: {
+        ...NOOP_CALLBACKS,
+        onUnsupported,
+        onConnectionStatus,
+      },
+    });
+
+    // The host has the command: start was subscribed on a live socket.
+    completeHandshake(sockets[0]);
+    expect(subscribeParams(sockets[0])).toMatchObject({ mode: "start" });
+    sockets[0].fireClose(1006, "abnormal");
+    expect(sockets).toHaveLength(2);
+
+    // The replacement host lacks the method. `onUnsupported` here would
+    // licence the legacy fallback to run the deletion a second time.
+    const reason = {
+      kind: "fatalError" as const,
+      details: {
+        code: "INCOMPATIBLE",
+        reason: "host does not offer worktree.deleteBatchByPath",
+        incompatibleMethods: [
+          {
+            method: "worktree.deleteBatchByPath",
+            clientCanonical: { major: 1, minor: 1 },
+            hostCanonical: null,
+            blocking: "host-missing-method" as const,
+          },
+        ],
+        upgradeGuidance: null,
+      },
+    };
+    sockets[1].fireText(reason);
+
+    expect(onUnsupported).not.toHaveBeenCalled();
+    expect(onConnectionStatus).toHaveBeenLastCalledWith("closed", reason);
+    batch.close();
+  });
+
   it("keeps retrying start while the drop happened before the host ever saw it", () => {
     const { factory, sockets } = makeFactory();
     const client = makeClient(factory);
@@ -259,7 +307,7 @@ describe("WorktreeDeleteBatchStreamClient replay safety", () => {
       wsStreamClient: client,
       commandId: COMMAND_ID,
       source: "settings",
-      targets: [{ worktreePath: "/wt/a", scripts: null }],
+      targets: [{ worktreePath: "/wt/a", scripts: null, stopOwners: false }],
       callbacks: {
         ...NOOP_CALLBACKS,
         onUnsupported: () => {
@@ -286,6 +334,145 @@ describe("WorktreeDeleteBatchStreamClient replay safety", () => {
     expect(sockets[0].textSent).toHaveLength(2);
     expect(JSON.parse(sockets[0].textSent[1])).toMatchObject({
       kind: "fatalError",
+    });
+    batch.close();
+  });
+
+  it("reports a generic incompatible close as a connection failure", () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory);
+    const onUnsupported = vi.fn();
+    const onConnectionStatus = vi.fn();
+    const batch = new WorktreeDeleteBatchStreamClient({
+      wsStreamClient: client,
+      commandId: COMMAND_ID,
+      source: "settings",
+      targets: [{ worktreePath: "/wt/a", scripts: null, stopOwners: false }],
+      callbacks: {
+        ...NOOP_CALLBACKS,
+        onUnsupported,
+        onConnectionStatus,
+      },
+    });
+    const reason = {
+      kind: "fatalError" as const,
+      details: {
+        code: "INCOMPATIBLE",
+        reason: "protocol version skew",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    };
+
+    completeHandshake(sockets[0]);
+    sockets[0].fireText(reason);
+
+    expect(onUnsupported).not.toHaveBeenCalled();
+    expect(onConnectionStatus).toHaveBeenLastCalledWith("closed", reason);
+    batch.close();
+  });
+
+  it("rejects a force-target @1.1 command against a 1.0 host before subscribe", () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory);
+    const onUnsupported = vi.fn();
+    const batch = new WorktreeDeleteBatchStreamClient({
+      wsStreamClient: client,
+      commandId: COMMAND_ID,
+      source: "settings",
+      targets: [{ worktreePath: "/wt/force", scripts: null, stopOwners: true }],
+      callbacks: { ...NOOP_CALLBACKS, onUnsupported },
+    });
+
+    sockets[0].fireOpen();
+    const open = JSON.parse(sockets[0].textSent[0]) as {
+      readonly manifest: Record<string, { major: number; minor: number }>;
+    };
+    sockets[0].fireText({
+      kind: "openAck",
+      manifest: {
+        ...open.manifest,
+        "worktree.deleteBatchByPath": { major: 1, minor: 0 },
+      },
+    });
+
+    expect(onUnsupported).toHaveBeenCalledOnce();
+    expect(sockets[0].textSent).toHaveLength(2);
+    expect(JSON.parse(sockets[0].textSent[1])).toMatchObject({
+      kind: "fatalError",
+      details: {
+        incompatibleMethods: [{ method: "worktree.deleteBatchByPath" }],
+      },
+    });
+    expect(
+      sockets[0].textSent.some((raw) => JSON.parse(raw).kind === "subscribe"),
+    ).toBe(false);
+    batch.close();
+  });
+
+  it("sends a force target on an accepted pinned @1.1 subscribe", () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory);
+    const batch = new WorktreeDeleteBatchStreamClient({
+      wsStreamClient: client,
+      commandId: COMMAND_ID,
+      source: "settings",
+      targets: [{ worktreePath: "/wt/force", scripts: null, stopOwners: true }],
+      callbacks: NOOP_CALLBACKS,
+    });
+
+    completeHandshake(sockets[0]);
+
+    expect(subscribeFrame(sockets[0])).toMatchObject({
+      kind: "subscribe",
+      method: "worktree.deleteBatchByPath",
+      schemaVersion: { major: 1, minor: 1 },
+      params: {
+        mode: "start",
+        targets: [
+          {
+            worktreePath: "/wt/force",
+            scripts: null,
+            stopOwners: true,
+          },
+        ],
+      },
+    });
+    batch.close();
+  });
+
+  it("re-attaches a force command with an unpinned observe request", () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory);
+    const batch = new WorktreeDeleteBatchStreamClient({
+      wsStreamClient: client,
+      commandId: COMMAND_ID,
+      source: "settings",
+      targets: [{ worktreePath: "/wt/force", scripts: null, stopOwners: true }],
+      callbacks: NOOP_CALLBACKS,
+    });
+
+    completeHandshake(sockets[0]);
+    sockets[0].fireClose(1006, "abnormal");
+    expect(sockets).toHaveLength(2);
+
+    sockets[1].fireOpen();
+    const open = JSON.parse(sockets[1].textSent[0]) as {
+      readonly manifest: Record<string, { major: number; minor: number }>;
+    };
+    sockets[1].fireText({
+      kind: "openAck",
+      manifest: {
+        ...open.manifest,
+        "worktree.deleteBatchByPath": { major: 1, minor: 0 },
+      },
+    });
+
+    expect(subscribeFrame(sockets[1])).toMatchObject({
+      kind: "subscribe",
+      method: "worktree.deleteBatchByPath",
+      schemaVersion: { major: 1, minor: 0 },
+      params: { mode: "observe", commandId: COMMAND_ID },
     });
     batch.close();
   });

@@ -15,6 +15,8 @@ import {
   makeChatOpenTileRef,
 } from "@/lib/chats/chat-open-tile-ref";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import { modifiersFromMouseEvent } from "@/lib/canvas/tile-open/intent";
 import {
   useEpicArchiveChat,
   useEpicDeleteChat,
@@ -275,7 +277,6 @@ import {
   type SidebarRowMenuEntry,
 } from "@/components/epic-canvas/sidebar/sidebar-row-menu-items";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
-import { ACTIVE_TILE_PLACEMENT } from "@/lib/canvas/conversation-tile-placement";
 import { useExistingChatSessionHandle } from "@/lib/registries/chat-session-registry";
 import { chatActivityIndicator } from "@/components/epic-canvas/renderers/chat-tile-session-state";
 import { type IndicatorRunningKind } from "@/components/notifications/notification-indicator-icon";
@@ -1223,7 +1224,6 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
                     <EpicSidebarCloudChatRow
                       key={entry.key}
                       chat={entry.chat}
-                      epicId={epicId}
                       tabId={tabId}
                       depth={0}
                       selectionMode={selectionMode}
@@ -1422,19 +1422,13 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   const node = useChatRowNode(nodeId);
   const childIds = useFilteredPanelChildIds(nodeId, treeFilter);
   const navigateNested = useEpicNestedFocusNavigation();
+  const { openTile } = useEpicTileNavigation();
   // Non-null only where this tree is mounted on a surface that cannot express
   // the desktop open gestures - see `ChatTreeSurface`.
   const surface = useChatTreeSurface();
-  const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
-    (s) => s.prepareOpenTileInTabFocusTarget,
-  );
-  const prepareOpenTilePreviewInTabFocusTarget = useEpicCanvasStore(
-    (s) => s.prepareOpenTilePreviewInTabFocusTarget,
-  );
   const prepareCloseCanvasTabFocusTarget = useEpicCanvasStore(
     (s) => s.prepareCloseCanvasTabFocusTarget,
   );
-  const promotePreviewInTab = useEpicCanvasStore((s) => s.promotePreviewInTab);
   const markArtifactSelfDeleted = useEpicCanvasStore(
     (s) => s.markArtifactSelfDeleted,
   );
@@ -1590,64 +1584,46 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     ],
   );
 
-  const selectChatNode = useCallback(() => {
-    if (isRenaming) return;
-    if (openableType === null) return;
-    navigateNested(epicId, tabId, () =>
-      prepareOpenTilePreviewInTabFocusTarget(tabId, {
-        ...openRef(),
-      }),
-    );
-    // The opening itself is the tree's, on every surface. A mounting surface
-    // only gets to append - the switcher sheet closes here.
-    if (surface !== null) surface.onRowActivated();
-  }, [
+  const selectChatNode = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      if (isRenaming) return;
+      if (openableType === null) return;
+      openTile({
+        node: openRef(),
+        target: { tabId },
+        gesture: "single",
+        modifiers: modifiersFromMouseEvent(event),
+        placement: null,
+        dedupe: true,
+        source: "direct_ui",
+      });
+      // The opening itself is the tree's, on every surface. A mounting surface
+      // only gets to append - the switcher sheet closes here.
+      if (surface !== null) surface.onRowActivated();
+    },
     // No `nodeId` / `nodeName`: the tile ref is built inside `openRef`, which
     // closes over both and is itself a dependency.
-    openRef,
-    epicId,
-    isRenaming,
-    navigateNested,
-    openableType,
-    prepareOpenTilePreviewInTabFocusTarget,
-    surface,
-    tabId,
-  ]);
+    [openRef, isRenaming, openableType, openTile, surface, tabId],
+  );
 
-  const handleDoubleClick = useCallback(() => {
-    if (isRenaming) return;
-    if (openableType === null) return;
-    // Host-aware: a cross-host clone holds one tab per host for the same
-    // copied chat id, and this row means its own.
-    const found = findOpenTileInTab(tabId, openRef());
-    if (found !== null) {
-      navigateNested(epicId, tabId, () => {
-        promotePreviewInTab(tabId, found.paneId);
-        return {
-          paneId: found.paneId,
-          tileInstanceId: found.instanceId,
-        };
+  const handleDoubleClick = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      if (isRenaming) return;
+      if (openableType === null) return;
+      // Host-aware dedupe: a cross-host clone holds one tab per host for the
+      // same copied chat id, and `openRef` means this row's own.
+      openTile({
+        node: { ...openRef(), instanceId: uuidv4() },
+        target: { tabId },
+        gesture: "double",
+        modifiers: modifiersFromMouseEvent(event),
+        placement: null,
+        dedupe: true,
+        source: "direct_ui",
       });
-    } else {
-      navigateNested(epicId, tabId, () =>
-        prepareOpenTileInTabFocusTarget(tabId, {
-          ...openRef(),
-          instanceId: uuidv4(),
-        }),
-      );
-    }
-  }, [
-    // `nodeId` and `nodeName` both reach the lookup through `openRef` now,
-    // which is itself a dependency.
-    openRef,
-    epicId,
-    isRenaming,
-    navigateNested,
-    openableType,
-    prepareOpenTileInTabFocusTarget,
-    promotePreviewInTab,
-    tabId,
-  ]);
+    },
+    [openRef, isRenaming, openableType, openTile, tabId],
+  );
 
   const handleToggle = useCallback(
     (event: React.MouseEvent<HTMLSpanElement>) => {
@@ -1864,7 +1840,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       onToggleSelection(nodeId);
       return;
     }
-    selectChatNode();
+    selectChatNode(event);
   };
   const rowDoubleClick = selectionMode ? noopRowAction : handleDoubleClick;
 
@@ -1958,7 +1934,7 @@ interface ChatNodeShellProps {
   readonly onRenameKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
   readonly onToggle: (event: React.MouseEvent<HTMLSpanElement>) => void;
   readonly onClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
-  readonly onDoubleClick: () => void;
+  readonly onDoubleClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
   readonly onStartRename: () => void;
   readonly onPerformDelete: () => void;
   readonly confirmDeleteOpen: boolean;
@@ -2095,7 +2071,7 @@ function ChatNodeShellBody(
     openNewConversationModal({
       epicId,
       tabId,
-      placement: ACTIVE_TILE_PLACEMENT,
+      placement: null,
       parentId: nodeId,
       // Names no host, exactly like the panel's own `+`: the modal resolves
       // this Epic's placement memory (last created chat's host, else the
@@ -2745,7 +2721,7 @@ interface ChatRowButtonProps {
   readonly expanded: boolean;
   readonly onToggle: (event: React.MouseEvent<HTMLSpanElement>) => void;
   readonly onClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
-  readonly onDoubleClick: () => void;
+  readonly onDoubleClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
   readonly selectionMode: boolean;
   readonly isSelected: boolean;
   readonly onToggleSelection: (id: string) => void;
@@ -3064,6 +3040,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
         ownerHostUnreachable={false}
         ownerKind={null}
         roleClaims={roleClaims}
+        extraContent={null}
         side="right"
       />
     );
@@ -3191,6 +3168,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
       ownerHostUnreachable={ownerIsUnreachable}
       ownerKind={ownerKind}
       roleClaims={roleClaims}
+      extraContent={null}
       side="right"
     />
   );

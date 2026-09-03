@@ -433,9 +433,6 @@ function renderCardFor(args: {
       <PendingInterviewCard
         chatId={args.chatId}
         blockId={args.blockId}
-        toolName="AskUserQuestion"
-        title="AskUserQuestion"
-        description="Choose the path to continue."
         questions={args.questions}
         isActive
         isBusy={args.isBusy}
@@ -471,9 +468,6 @@ function cardElement(args: {
     <PendingInterviewCard
       chatId={args.chatId}
       blockId={args.blockId}
-      toolName="AskUserQuestion"
-      title="AskUserQuestion"
-      description="Choose the path to continue."
       questions={args.questions}
       isActive
       isBusy={args.isBusy}
@@ -1959,9 +1953,6 @@ describe("PendingInterviewCard keyboard navigation", () => {
         <PendingInterviewCard
           chatId="chat-1"
           blockId="bg"
-          toolName={null}
-          title={null}
-          description={null}
           questions={[singleSelect("q", "Question?", ["Alpha", "Beta"])]}
           isActive={false}
           isBusy={false}
@@ -1983,9 +1974,6 @@ describe("PendingInterviewCard keyboard navigation", () => {
         <PendingInterviewCard
           chatId="chat-1"
           blockId="fg"
-          toolName={null}
-          title={null}
-          description={null}
           questions={[singleSelect("q", "Question?", ["Alpha", "Beta"])]}
           isActive
           isBusy={false}

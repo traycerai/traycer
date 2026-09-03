@@ -364,6 +364,16 @@ export interface IRunnerHost {
   openMicrophoneSettings(): Promise<void>;
 
   /**
+   * Opens the macOS Privacy → Full Disk Access pane, where the login import
+   * sends a user whose Safari jar the OS refused to let Traycer read. A
+   * dedicated method rather than an `openExternalLink(...)` of the pane's
+   * `x-apple.systempreferences:` URL, which the desktop's http(s)-only link
+   * gate would refuse silently. Shells without the pane (other platforms,
+   * mobile/web/tests) implement this as a resolved no-op.
+   */
+  openFullDiskAccessSettings(): Promise<void>;
+
+  /**
    * Called by the GUI auth controller immediately before
    * `openExternalLink(...)`.
    * Implementations close the previous attempt window (so any callback URL

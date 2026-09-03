@@ -52,6 +52,7 @@ import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useArtifactVersionHistoryAvailable } from "@/hooks/epic/use-artifact-version-history-available";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 import { isEditableRole } from "@/lib/epic-permissions";
 import {
   epicNodeRefForNodeId,
@@ -584,7 +585,11 @@ function ArtifactVersionHistoryPanel(props: {
       props.hostId,
     );
     if (ref === null) return;
-    tileNavigation.openTilePreviewInTab(viewTabId, ref);
+    // A `single` gesture is what the resolver reads as a PREVIEW open, which
+    // is what the provenance link always was: a peek at the originating chat.
+    tileNavigation.openTile(
+      tileIntent(ref, { tabId: viewTabId }, "single", "direct_ui"),
+    );
   };
 
   return (

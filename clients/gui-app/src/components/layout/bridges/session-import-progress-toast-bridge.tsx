@@ -68,7 +68,15 @@ export function SessionImportProgressToastBridge(): null {
         {
           id: SESSION_IMPORT_PROGRESS_TOAST_ID,
           duration: Infinity,
-          description: run.lastTitle ?? undefined,
+          // Always one line: the toast's height is then the same from the first
+          // frame to the last, instead of jumping as titles wrap. Before the
+          // first session lands there is no title yet, and a blank line there
+          // read as a gap - so the line says what the run is doing instead.
+          description: (
+            <span className="block truncate">
+              {run.lastTitle ?? "Reading your sessions…"}
+            </span>
+          ),
           onDismiss: () => {
             // Fires only for the user's own close: the terminal paths below
             // replace or dismiss this toast after clearing the visible flag.

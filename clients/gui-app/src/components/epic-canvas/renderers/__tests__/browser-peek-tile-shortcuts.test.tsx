@@ -1,11 +1,6 @@
 import "../../../../../__tests__/test-browser-apis";
-import {
-  act,
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-} from "@testing-library/react";
+import { act, cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderPeekTile } from "@/components/epic-canvas/renderers/__tests__/browser-peek-tile-render";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   FakeStreamClient,
@@ -17,6 +12,8 @@ import {
   streamAuthRevalidatorModule,
   tabHostIdModule,
   tileBodyVisibleModule,
+  runnerOpenExternalLinkModule,
+  tileRoleRunnerHostModule,
   type FakeStreamSession,
 } from "@/components/epic-canvas/renderers/__tests__/browser-peek-tile-stream-fixture";
 import {
@@ -30,6 +27,12 @@ const hookState = vi.hoisted(() => ({
   streamClient: null as FakeStreamClient | null,
   visible: true,
 }));
+
+vi.mock("@/providers/use-runner-host", () => tileRoleRunnerHostModule());
+
+vi.mock("@/hooks/runner/use-open-external-link-mutation", () =>
+  runnerOpenExternalLinkModule(),
+);
 
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () =>
   tabHostIdModule(),
@@ -159,7 +162,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   });
 
   it("pastes clipboard text as one insertText and suppresses V key frames", async () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -191,7 +194,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   });
 
   it("sends nothing on paste while unarmed", () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -209,7 +212,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   });
 
   it("sends nothing on paste while hidden", async () => {
-    const view = render(
+    const view = renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -241,7 +244,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   });
 
   it("focuses the address bar on Cmd+L without forwarding L and without disarming", async () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -267,7 +270,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   });
 
   it("reloads on Cmd+R without forwarding R", async () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -295,7 +298,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   });
 
   it("still forwards Cmd+C as a rawKeyDown keyboard frame", async () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -322,7 +325,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   });
 
   it("does not forward an orphan keyup the tile did not press", async () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -342,7 +345,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   });
 
   it("clears the armed flag when the server revokes the arm", async () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -373,7 +376,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   });
 
   it("clears the armed flag when the tile is hidden", async () => {
-    const view = render(
+    const view = renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -403,7 +406,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   });
 
   it("clears the armed flag when Release control is clicked", async () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -424,7 +427,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   });
 
   it("keeps control across a blur out of the tile", async () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -450,7 +453,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   });
 
   it("does not preventDefault the V keydown of a paste chord", async () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -469,7 +472,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   });
 
   it("suppresses the V keyup after the modifier is released first", async () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -489,7 +492,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   });
 
   it("releases forwarded page keys when the address bar takes focus", async () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -528,7 +531,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   });
 
   it("selects the address on Cmd+L even when it is already focused", async () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -554,7 +557,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   });
 
   it("clears the armed flag on a failed stream frame", async () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -585,7 +588,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   });
 
   it("clears the armed flag on a complete stream frame", async () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -614,7 +617,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
       instanceId: "peek-instance-2",
       tabId: "headless-tab-2",
     };
-    const view = render(
+    const view = renderPeekTile(
       <div>
         <BrowserPeekTile
           viewTabId="view-tab-1"

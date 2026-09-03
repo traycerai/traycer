@@ -12,20 +12,15 @@ import { PrimaryActionShortcutHint } from "@/components/ui/primary-action-shortc
 import { ShortcutHint } from "@/components/ui/shortcut-hint";
 import { InterviewForkActions } from "@/components/chat/segments/interview-fork-actions";
 import {
-  InterviewFraming,
   InterviewQuestionHeader,
   InterviewQuestionPager,
 } from "@/components/chat/segments/interview-visuals";
-import { displayInterviewFraming } from "@/components/chat/segments/interview-review-model";
 import { QuestionPage } from "./question-page";
 import { QUESTION_TRANSITION, useInterviewCard } from "./use-interview-card";
 
 interface PendingInterviewCardProps {
   chatId: string;
   blockId: string;
-  toolName: string | null;
-  title: string | null;
-  description: string | null;
   questions: ReadonlyArray<InterviewQuestion>;
   // Whether this card's chat tab is the active one in its pane - gates focus
   // for multi-pane layouts (see useInterviewCard).
@@ -69,11 +64,6 @@ interface PendingInterviewCardProps {
 
 export function PendingInterviewCard(props: PendingInterviewCardProps) {
   const shouldReduceMotion = useReducedMotion();
-  const framing = displayInterviewFraming({
-    toolName: props.toolName,
-    title: props.title,
-    description: props.description,
-  });
   const {
     containerRef,
     total,
@@ -115,12 +105,6 @@ export function PendingInterviewCard(props: PendingInterviewCardProps) {
       tabIndex={-1}
       className="flex flex-col gap-3 rounded-md border border-border/70 bg-card/70 p-3 text-ui-sm shadow-sm outline-none"
     >
-      <InterviewFraming
-        title={framing.title}
-        description={framing.description}
-        titleFindUnitId={null}
-        descriptionFindUnitId={null}
-      />
       {question === null ? (
         <InterviewQuestionHeader
           header={null}

@@ -1,11 +1,12 @@
 import type {
-  BrowserCdpCommand,
-  BrowserCdpResult,
-  BrowserCdpTarget,
-  BrowserPrimaryProfileDelta,
+  StreamCloseReason,
+  StreamConnectionStatus,
+} from "../host-transport/i-stream-session";
+import { isMethodIncompatibleClose } from "../host-transport/i-stream-session";
+import type {
   BrowserScreencastServerFrame,
-  BrowserSessionProfileKind,
-  BrowserStorageState,
+  BrowserSessionsUxClientFrame,
+  BrowserSessionsUxServerFrame,
 } from "@traycer/protocol/host/browser/contracts";
 import type {
   BrowserAnnotationAttachResultInput,
@@ -29,17 +30,6 @@ export interface BrowserViewNativeTabKey {
 /** Exact authority for one live Electron-owned browser guest incarnation. */
 export interface BrowserViewNativeTabCapability extends BrowserViewNativeTabKey {
   readonly registrationId: string;
-}
-
-export interface BrowserViewEnsureTab extends BrowserViewNativeTabKey {
-  readonly requestedUrl: string;
-  /**
-   * Which jar the guest is born into. It travels from the host's
-   * `createElectronTab` frame; `isolated` selects the session's own in-memory
-   * partition and never carries a seed.
-   */
-  readonly profile: BrowserSessionProfileKind;
-  readonly seedStorageState: BrowserStorageState | null;
 }
 
 export interface BrowserViewAttachSurface extends BrowserViewNativeTabCapability {
@@ -106,6 +96,16 @@ export interface BrowserViewNativeTabStatusChange extends BrowserViewNativeTabCa
   readonly canGoBack: boolean;
   readonly canGoForward: boolean;
   readonly zoomPercent: number;
+  /**
+   * Whether a tile is showing this guest right now.
+   *
+   * Read by main, which reports it to the host as `electronTabState.viewed`.
+   * It used to be the renderer's answer, because the renderer held the surface
+   * lease AND the stream; with the stream in main (H10) the attachment is
+   * read where it actually lives - the manager's own entry - rather than
+   * inferred from a lease object on the far side of an IPC boundary.
+   */
+  readonly viewed: boolean;
 }
 
 export interface BrowserViewFindRequest extends BrowserViewTileKey {
@@ -171,6 +171,9 @@ export interface BrowserViewCertificateTrust extends BrowserViewTileKey {
 
 export interface BrowserViewOpenTileRequest extends BrowserViewTileKey {
   readonly url: string;
+  /** Chromium's disposition for the in-page open: `background-tab` is the
+   * only one that maps to `background` (middle/ctrl/cmd-click). */
+  readonly disposition: "foreground" | "background";
 }
 
 /**
@@ -231,45 +234,234 @@ export interface BrowserViewSnapshotInvalidatedChange extends BrowserViewTileKey
 }
 
 /**
- * One coalesced cookie-change window from the durable `primary` jar. Re-exported
- * so renderer code sees the bridge and its payloads in one import.
+ * Which browser a login-import source was read from. `file` is a cookie
+ * export the user picked (Netscape `cookies.txt`, Cookie-Editor JSON, or a
+ * Playwright storage state).
  */
-export type { BrowserPrimaryProfileDelta };
+export type LoginImportBrowser =
+  | "chrome"
+  | "chromium"
+  | "edge"
+  | "brave"
+  | "arc"
+  | "vivaldi"
+  | "opera"
+  | "aside"
+  | "helium"
+  | "firefox"
+  | "safari"
+  | "file";
 
-export type BrowserPrimaryProfileCaptureResult =
-  | {
-      readonly status: "captured";
-      readonly storageState: BrowserStorageState;
-      readonly reason: null;
-    }
-  | {
-      readonly status: "unavailable";
-      readonly storageState: null;
-      readonly reason: string;
-    };
+/** The product names the dialog and main's confirmation both show. */
+export const LOGIN_IMPORT_BROWSER_LABELS: Readonly<
+  Record<LoginImportBrowser, string>
+> = {
+  chrome: "Google Chrome",
+  chromium: "Chromium",
+  edge: "Microsoft Edge",
+  brave: "Brave",
+  arc: "Arc",
+  vivaldi: "Vivaldi",
+  opera: "Opera",
+  aside: "Aside",
+  helium: "Helium",
+  firefox: "Firefox",
+  safari: "Safari",
+  file: "Cookie file",
+};
 
-export interface BrowserViewElectronTabCdpDispatch extends BrowserViewNativeTabCapability {
-  readonly target: BrowserCdpTarget;
-  readonly command: BrowserCdpCommand;
+/**
+ * One importable cookie jar on this machine. `id` is opaque and derived from
+ * the source's location: the renderer never learns a filesystem path, and can
+ * only name a source the desktop listed for it. It survives a re-listing, so a
+ * scan taken in one settings window is still valid after another lists the
+ * sources, and it changes the moment the underlying jar moves - which is
+ * exactly when an earlier scan must not be trusted.
+ */
+export interface LoginImportSource {
+  readonly id: string;
+  readonly browser: LoginImportBrowser;
+  /** "Default", "Work", a Firefox profile name, or the picked file's name. */
+  readonly profileLabel: string;
+  /** When the jar was last written, or null when the desktop cannot tell. */
+  readonly lastUsedAt: number | null;
 }
 
 /**
- * Answer to one store-key wrap. `ok: false` is an expected outcome, not a bug:
- * the keystore may be unavailable on this machine, and the host then simply
- * stays sealed.
+ * Why a source cannot be read at all. Every value is a state the dialog can
+ * explain and the user can act on; none carries a message from the OS.
  */
-export type BrowserStoreKeyWrapResult =
-  | { readonly ok: true; readonly wrappedKey: string }
-  | { readonly ok: false; readonly reason: string };
+export type LoginImportBlocked =
+  | "keyring-unavailable"
+  | "needs-full-disk-access"
+  | "browser-locked"
+  /**
+   * Import only: the source changed between the scan and the Import click in
+   * a way that would open a keystore the Choose step did not name (a site the
+   * scan read as plaintext gained an encrypted row). Nothing was imported and
+   * no prompt fired; the way back in is a fresh scan.
+   */
+  | "source-changed"
+  /**
+   * Import only: more sites were chosen than the desktop's forget ledger
+   * keeps at once (a thousand or so), which is what tells every host to
+   * replace them. Nothing was imported and no prompt fired; choose fewer
+   * sites and import in batches.
+   */
+  | "too-many-sites"
+  /**
+   * The source is a regular file bigger than the desktop will read into
+   * main in one go (tens of megabytes; a cookie export is kilobytes). A path
+   * that is not a regular file at all - a FIFO, a device - is `unreadable`.
+   */
+  | "file-too-large"
+  /**
+   * An installed profile's cookie database (with its write-ahead log) is
+   * bigger than the desktop will copy, or holds more rows than it will read
+   * - many times what any browser keeps, so a corrupt or runaway file rather
+   * than a big jar. Nothing is copied or read.
+   */
+  | "profile-too-large"
+  | "unreadable";
 
 /**
- * Answer to one store-key unwrap. `ok: false` means this machine cannot open
- * the host's blob (keystore item ACL changed, or a different machine wrapped
- * it); the host is told so it can stay sealed instead of re-minting.
+ * The OS credential store the Import click will touch for this source. Known
+ * from the scan without touching it: the cookie rows' encryption prefix says
+ * which key they need. `null` when nothing in the selection is encrypted.
  */
-export type BrowserStoreKeyUnwrapResult =
-  | { readonly ok: true; readonly rawKey: string }
-  | { readonly ok: false; readonly reason: string };
+export type LoginImportUnlock =
+  | "macos-keychain"
+  | "linux-keyring"
+  | "windows-dpapi";
+
+export interface LoginImportSite {
+  /** Registrable domain (eTLD+1); never a cookie name, never a value. */
+  readonly domain: string;
+  readonly cookieCount: number;
+  /**
+   * The keystore importing THIS site opens, or `null` for a site whose rows
+   * are all plaintext. The dialog's pre-prompt explainer is derived from the
+   * selected sites' values, so a plaintext-only selection promises no prompt.
+   */
+  readonly unlock: LoginImportUnlock | null;
+}
+
+export interface LoginImportExcludedSite {
+  readonly domain: string;
+  readonly cookieCount: number;
+  readonly unlock: LoginImportUnlock | null;
+  readonly reason: "google-device-bound";
+}
+
+/**
+ * What a source holds, read from metadata only: no keystore is opened and no
+ * value is decrypted, so a scan never prompts. Counts are honest by
+ * construction - a cookie the import cannot bring over is reported under the
+ * reason it cannot, never dropped from the arithmetic.
+ */
+export interface LoginImportScan {
+  readonly sourceId: string;
+  /**
+   * This scan's own opaque token, which the import request must quote. Two
+   * Settings windows can scan the same source, and each import is checked
+   * against the scan ITS window rendered - the site list and the keystore
+   * promise the user saw - never against whichever scan came last.
+   */
+  readonly scanId: string;
+  readonly sites: readonly LoginImportSite[];
+  readonly excluded: readonly LoginImportExcludedSite[];
+  /** Windows App-Bound-Encryption rows (`v20`), which no app can decrypt. */
+  readonly protectedCookieCount: number;
+  /**
+   * CHIPS / container cookies, which have no unpartitioned home in the jar.
+   */
+  readonly partitionedCookieCount: number;
+  /**
+   * Records the reader could not make a row of (a Safari record that fails
+   * its bounds check). They belong to no site, so they are neither listed
+   * nor counted under `skippedInvalid`; the dialog names them so the scan
+   * does not claim to account for everything.
+   */
+  readonly unreadableCookieCount: number;
+  readonly unlock: LoginImportUnlock | null;
+  readonly blocked: LoginImportBlocked | null;
+}
+
+export interface LoginImportRequest {
+  readonly sourceId: string;
+  /**
+   * The `scanId` of the scan this request's domains were chosen from. An
+   * import honours only that scan's site list; a token the desktop no longer
+   * holds (a failed re-scan, a retired source, a scan that fell out of the
+   * retained set) answers `unreadable`, and the dialog's Try again re-scans.
+   */
+  readonly scanId: string;
+  /**
+   * Registrable domains from the scan's `sites` - and, only with
+   * `includeDeviceBound`, from its `excluded`; anything else is ignored.
+   */
+  readonly domains: readonly string[];
+  /**
+   * The user's explicit opt-in to the scan's `excluded` (Google) sites.
+   * Google binds its sessions to the device, so an imported one can end on
+   * its own; the dialog says so beside the toggle, and the desktop honours a
+   * Google domain only when this is true.
+   */
+  readonly includeDeviceBound: boolean;
+}
+
+export type LoginImportResult =
+  | {
+      readonly status: "imported";
+      readonly importedSites: number;
+      readonly importedCookies: number;
+      /**
+       * Chosen sites the jar already held cookies for, now replaced: the
+       * cookies the source did not carry are gone, and so is the site's
+       * localStorage, which belonged to whichever account was signed in
+       * before.
+       */
+      readonly replacedSites: number;
+      /**
+       * Cookies the scan COUNTED for a chosen site that could not be written:
+       * a value that would not decrypt, or a `set` Electron refused. A row the
+       * scan never counted - expired, nameless, breaking its own prefix rule -
+       * is not here either, so a site's `cookieCount` from the scan is exactly
+       * its share of `importedCookies` plus its share of this number.
+       */
+      readonly skippedInvalid: number;
+      /**
+       * Hosts that acked the jar main pushed after the write, counted once per
+       * host. Zero is an ordinary outcome (no host has a live stream yet), not
+       * a failure: the import is on this machine either way, and the next
+       * capture carries it.
+       */
+      readonly notifiedHosts: number;
+    }
+  | {
+      readonly status: "blocked";
+      readonly reason:
+        | LoginImportBlocked
+        | "keychain-denied"
+        | "saved-logins-off"
+        /**
+         * The write stopped part-way - the jar barrier's budget ran out, a
+         * removal or a site's localStorage clear failed - AFTER at least one
+         * cookie had reached the jar. What was written is kept, and the jar
+         * was pushed to the hosts as it stands; importing again finishes the
+         * rest. Nothing written is one of the reasons above instead.
+         */
+        | "incomplete";
+    }
+  /**
+   * The desktop's own confirmation - a native dialog main draws over every
+   * window, naming the source and how many sites the request validated to -
+   * was declined. Nothing was read or written; the dialog stays on the
+   * Choose step. The renderer may ASK for a replacement of saved logins, but
+   * a native dialog it cannot draw or dismiss is what turns the ask into a
+   * decision, exactly as for clearing a site or forgetting every login.
+   */
+  | { readonly status: "cancelled" };
 
 export type BrowserViewConsoleLevel =
   | "log"
@@ -324,11 +516,180 @@ export interface BrowserViewCapturePageResult extends BrowserViewTileKey {
 }
 
 export type {
-  BrowserViewElementAttribute,
   BrowserViewElementBoundingBox,
   BrowserViewElementCapture,
   BrowserViewElementStyle,
 } from "@traycer/protocol/persistence/epic/schemas";
+
+/**
+ * How far along one main-owned `browser.sessions` stream is, as the renderer
+ * renders it. Lives here rather than beside the renderer's reducer because
+ * main is what computes it now and this is the IPC payload's own contract.
+ */
+export type BrowserSessionsLifecycle =
+  | "connecting"
+  | "live"
+  | "reconnecting"
+  | "closed"
+  | "failed"
+  /**
+   * The host has no `browser.sessions` at all (a release before browsers
+   * existed). Distinct from `failed` because it is a statement about the
+   * host's capability, not about this attempt: no retry can change it, and
+   * the only remedy is updating the host.
+   */
+  | "unsupported";
+
+export const BROWSERS_UNSUPPORTED_MESSAGE =
+  "This host doesn't support browsers. Update Traycer Host to use browser tabs here.";
+
+export const BROWSERS_APP_OUTDATED_MESSAGE =
+  "This app is too old for this host's browsers. Update the Traycer app to use browser tabs here.";
+
+/**
+ * Which side the INCOMPATIBLE close says to update. A host from before
+ * browsers existed is the common case (no guidance, or host-should-upgrade);
+ * a host whose `browser.sessions` moved past what this app speaks is the
+ * other, and telling that user to update the host would send them the wrong
+ * way.
+ */
+function unsupportedBrowsersMessage(reason: StreamCloseReason | null): string {
+  const guidance =
+    reason?.kind === "fatalError" ? reason.details.upgradeGuidance : null;
+  return guidance !== null &&
+    guidance.clientShouldUpgrade &&
+    !guidance.hostShouldUpgrade
+    ? BROWSERS_APP_OUTDATED_MESSAGE
+    : BROWSERS_UNSUPPORTED_MESSAGE;
+}
+
+/**
+ * The lifecycle a stream's connection status reads as, and the message that
+ * goes with it.
+ *
+ * Both sides compute it: main for every desktop stream, and the renderer for
+ * the direct one it still owns on a shell with no main process. One home, so
+ * the two cannot drift into disagreeing about what `reconnecting` looks like.
+ */
+export function browserSessionsLifecycle(
+  status: StreamConnectionStatus,
+  reason: StreamCloseReason | null,
+): BrowserSessionsLifecycle {
+  if (isMethodIncompatibleClose(reason)) return "unsupported";
+  if (reason?.kind === "fatalError") return "failed";
+  if (status === "open") return "live";
+  if (status === "reconnecting") return "reconnecting";
+  if (status === "closed") return "closed";
+  return "connecting";
+}
+
+export function browserSessionsError(
+  status: StreamConnectionStatus,
+  reason: StreamCloseReason | null,
+): string | null {
+  if (isMethodIncompatibleClose(reason)) {
+    return unsupportedBrowsersMessage(reason);
+  }
+  if (reason?.kind === "fatalError") return reason.details.reason;
+  if (status === "reconnecting") return "Reconnecting browser sessions.";
+  if (status === "closed") return "Browser sessions stream closed.";
+  return null;
+}
+
+/** The slice of stream state a refusal is decided from. */
+export interface BrowserSessionsRefusalInput {
+  readonly lifecycle: BrowserSessionsLifecycle;
+  readonly errorMessage: string | null;
+}
+
+/**
+ * Why an action that needs a live stream is refused right now. One string
+ * for every surface that opens a tab, so a host without browsers is told the
+ * same thing from the "+" button, the empty state and the command palette -
+ * and the same thing the panel's own unavailable state already shows, which
+ * is why an unsupported stream's refusal is its recorded message.
+ */
+export function browserSessionsRefusal(
+  sessions: BrowserSessionsRefusalInput | null,
+): string {
+  if (sessions?.lifecycle !== "unsupported") {
+    return "Browsers are not connected yet.";
+  }
+  return sessions.errorMessage ?? BROWSERS_UNSUPPORTED_MESSAGE;
+}
+
+/**
+ * The renderer's name for one stream. Main keys its own streams by this plus
+ * the sender's window id, and never dedupes across windows: one subscriber is
+ * one Electron lifecycle owner, so collapsing two windows onto one would put
+ * both windows' native tabs on a single route.
+ *
+ * `hostId` is an ID, not a directory row. Main resolves the row itself with
+ * the bearer it already holds, because that row carries the host's static
+ * Noise key - a renderer-supplied one would let a compromised renderer point
+ * main's jar stream at a host it controls.
+ */
+export interface BrowserSessionsStreamKey {
+  readonly epicId: string;
+  readonly hostId: string;
+  /**
+   * The signed-in owner identity the renderer keys its coordinator by. Opaque
+   * to main, which only uses it to keep two identities' streams apart.
+   */
+  readonly identityKey: string;
+}
+
+/**
+ * The one map-key encoding for each of the two identities main and the renderer
+ * both index by. Both sides used to spell them separately - `JSON.stringify` in
+ * main, a joined string in the renderer - which is a silent-collision seam
+ * around a value that decides which live socket or native guest a request
+ * reaches. `JSON.stringify` over the fields in a fixed order is injective for
+ * arbitrary strings, which a separator join is not.
+ */
+export function browserSessionsStreamKeyId(
+  key: BrowserSessionsStreamKey,
+): string {
+  return JSON.stringify([key.epicId, key.hostId, key.identityKey]);
+}
+
+export function browserViewNativeTabKeyId(
+  key: BrowserViewNativeTabKey,
+): string {
+  return JSON.stringify([key.hostId, key.sessionId, key.tabId]);
+}
+
+export interface BrowserSessionsStreamSend {
+  readonly key: BrowserSessionsStreamKey;
+  readonly frame: BrowserSessionsUxClientFrame;
+}
+
+/**
+ * Everything main forwards to the window that opened a stream. `frame` is
+ * typed as the UX projection, so a jar frame cannot be forwarded by mistake -
+ * the protocol's `BrowserSessionsUxServerFrame` is an `Exclude` with a
+ * `never` assertion over every cookie-bearing field.
+ */
+export type BrowserSessionsStreamEvent =
+  | {
+      readonly kind: "status";
+      readonly lifecycle: BrowserSessionsLifecycle;
+      readonly errorMessage: string | null;
+    }
+  | { readonly kind: "frame"; readonly frame: BrowserSessionsUxServerFrame }
+  | {
+      readonly kind: "tabBound";
+      readonly capability: BrowserViewNativeTabCapability;
+    }
+  | {
+      readonly kind: "tabReleased";
+      readonly capability: BrowserViewNativeTabCapability;
+    };
+
+export interface BrowserSessionsStreamEventEnvelope {
+  readonly key: BrowserSessionsStreamKey;
+  readonly event: BrowserSessionsStreamEvent;
+}
 
 export interface BrowserViewBridge {
   updateBounds(input: BrowserViewBoundsUpdate): Promise<void>;
@@ -372,38 +733,27 @@ export interface BrowserViewBridge {
    */
   setSaveLogins(enabled: boolean): Promise<boolean>;
   /**
-   * Seals the host's freshly minted primary-profile store key with this
-   * machine's OS keystore (spec §6.2). The host keeps the returned blob; it
-   * never sees a key this machine cannot open again.
-   */
-  wrapStoreKey(rawKey: string): Promise<BrowserStoreKeyWrapResult>;
-  /** Opens a blob wrapped earlier on this machine, so the host can unseal. */
-  unwrapStoreKey(wrappedKey: string): Promise<BrowserStoreKeyUnwrapResult>;
-  /**
-   * "Forget all browser logins" (spec §6.5), this machine's half: clear the
-   * `primary` jars - the durable partition always, and the ephemeral one the
-   * live guests are on when saving is off, which otherwise keeps them signed
-   * in until the app restarts - drop the remembered localStorage origins, and
-   * recreate the open primary tiles at their URLs on the empty jar.
+   * "Forget all browser logins" (spec §6.5), this machine's half: record the
+   * forget in the durable ledger, clear the `primary` jars - the durable
+   * partition always, and the ephemeral one the live guests are on when saving
+   * is off, which otherwise keeps them signed in until the app restarts - drop
+   * the remembered localStorage origins, and recreate the open primary tiles at
+   * their URLs on the empty jar.
    *
-   * Called only in answer to the host's `primaryProfileForgotten`, so the key
-   * and the host's slice are already gone by the time the jar is cleared -
-   * never the other way round, which would leave the host holding logins the
-   * user believes are forgotten.
+   * Called by Settings alongside the `forgetLogins` frame that shreds each
+   * connected host's slice; there is no host fan-out any more (universal-sign-in
+   * decision 6). The ledger is what reaches a host that was disconnected, and
+   * it is written before a cookie moves so an in-flight observation for a
+   * forgotten site cannot land behind the clear.
+   *
+   * Answers whether the user CONFIRMED. Main raises the native dialog (the
+   * renderer is not a trustworthy place to gate the most destructive action
+   * the browser surface has), so `false` means nothing was touched here and
+   * the caller must not send the host frames either.
    */
-  forgetLogins(): Promise<void>;
-  /**
-   * Push for every coalesced cookie change in the durable `primary` jar (spec
-   * §6.3). Unsolicited and continuous: the renderer holding the host stream
-   * forwards each one as a `primaryProfileDelta` client frame, so a login
-   * reaches the store within a window instead of waiting for teardown.
-   */
-  onPrimaryProfileDelta(handler: (delta: BrowserPrimaryProfileDelta) => void): {
-    dispose: () => void;
-  };
+  forgetLogins(): Promise<boolean>;
   /** Renderer confirms the replacement frame is painted before main parks the view. */
   readonly overlayPaintAck: (overlayId: string) => Promise<void>;
-  capturePrimaryProfile(): Promise<BrowserPrimaryProfileCaptureResult>;
   /**
    * "Clear cookies for this site" (spec §6.5): removes the tile's registrable
    * domain from the shared `primary` jars - cookies and the localStorage of
@@ -415,12 +765,64 @@ export interface BrowserViewBridge {
    */
   clearSite(input: BrowserViewTileKey): Promise<void>;
   /**
-   * The receiving half of the same action: the host says one site was cleared
-   * somewhere else for this user (`primaryProfileEvict`), so this machine's
-   * `primary` jars drop it too. Emits **no** delta - the store already recorded the
-   * tombstones, and an echo would only re-assert what it just decided.
+   * Opens (or adopts) the main-owned `browser.sessions` stream for this
+   * window and this key. Idempotent per key: a second call from the same
+   * window is the same stream.
+   *
+   * The stream lives in main because the jar does - every cookie-bearing
+   * frame on it is produced and consumed there, and this renderer sees only
+   * the UX projection (browser-security-hardening H10, root cause C).
+   *
+   * A host id and an epic, and nothing else. The signed-in user is main's own
+   * (it holds the desktop auth session), for the same reason the directory row
+   * is: anything the renderer states here is something a compromised renderer
+   * could state differently.
    */
-  evictSite(domain: string): Promise<void>;
+  openSessionsStream(key: BrowserSessionsStreamKey): Promise<void>;
+  closeSessionsStream(key: BrowserSessionsStreamKey): Promise<void>;
+  /** One user-initiated request onto that stream. */
+  sendSessionsFrame(input: BrowserSessionsStreamSend): Promise<void>;
+  onSessionsStreamEvent(
+    handler: (envelope: BrowserSessionsStreamEventEnvelope) => void,
+  ): { dispose: () => void };
+  /**
+   * "Clear" on one row of Settings > Browser: signs the user out of that site
+   * on every host this process holds a stream to.
+   *
+   * Main confirms it and main sends the frames. It is forget-all one domain
+   * at a time as far as a host's slice is concerned, so it may not be a frame
+   * a renderer can mint (H05's residual for H10). Answers whether the user
+   * confirmed.
+   */
+  clearSavedLoginSite(domain: string): Promise<boolean>;
+  /**
+   * Import logins from another browser on this machine, in three calls that
+   * mirror the dialog's steps. `listLoginImportSources` discovers installed
+   * browsers and profiles; `pickLoginImportFile` opens the native file dialog
+   * from main so the renderer never names a path; `scanLoginImportSource`
+   * reads metadata only and never prompts; `importLogins` is the one call
+   * that opens the OS credential store, decrypts, and writes the durable
+   * `primary` jar with the cookie-delta observer muted. None of the four ever
+   * rejects: every failure is a result value, because a rejected invoke's
+   * message is logged and reported and a cookie must never travel that way.
+   */
+  listLoginImportSources(): Promise<readonly LoginImportSource[]>;
+  /** Null when no file was picked: the user cancelled, or the dialog could not open. */
+  pickLoginImportFile(): Promise<LoginImportSource | null>;
+  scanLoginImportSource(sourceId: string): Promise<LoginImportScan>;
+  /**
+   * Only domains the scan the request quotes (`scanId`) listed under `sites`
+   * are honoured (its `excluded` Google sites too, only with
+   * `includeDeviceBound`); anything else is dropped in main, and a token the
+   * desktop no longer holds, or one taken of another source, is refused as
+   * `unreadable`. The user chooses from what THIS window was shown, not from
+   * a later scan another window took of the same source.
+   *
+   * The push to the hosts is main's, like every other jar action: the write
+   * runs with the delta observer muted, so nothing would reach a host on its
+   * own, and `notifiedHosts` reports what main's capture actually placed.
+   */
+  importLogins(input: LoginImportRequest): Promise<LoginImportResult>;
   onFindChange(handler: (change: BrowserViewFindChange) => void): {
     dispose: () => void;
   };
@@ -444,6 +846,16 @@ export interface BrowserViewBridge {
   ): {
     dispose: () => void;
   };
+  /**
+   * Ticket 04 exit-edge handshake: fires once for a tile that WAS parked,
+   * when the un-parked native view's first composited frame lands - the
+   * renderer's cue to drop the stand-in it kept mounted since occlusion. A
+   * tile released without ever parking never reaches here; it restores
+   * through `restoredTiles` on the occlude/release return value instead.
+   */
+  onOverlayTileRestored(handler: (tile: BrowserViewTileKey) => void): {
+    dispose: () => void;
+  };
   onAnnotationEvent(
     handler: (change: BrowserAnnotationSessionIpcEvent) => void,
   ): {
@@ -454,17 +866,9 @@ export interface BrowserViewBridge {
   ): {
     dispose: () => void;
   };
-  ensureTab(
-    input: BrowserViewEnsureTab,
-  ): Promise<BrowserViewNativeTabCapability>;
-  acceptTab(input: BrowserViewNativeTabCapability): Promise<void>;
   attachSurface(input: BrowserViewAttachSurface): Promise<void>;
   detachSurface(input: BrowserViewDetachSurface): Promise<void>;
-  releaseTab(input: BrowserViewNativeTabCapability): Promise<boolean>;
   controlElectronTab(input: BrowserViewElectronTabControl): Promise<void>;
-  dispatchElectronTabCdp(
-    input: BrowserViewElectronTabCdpDispatch,
-  ): Promise<BrowserCdpResult>;
   startPipCapture(input: PipCaptureStartInput): Promise<void>;
   stopPipCapture(): Promise<void>;
   onPipCaptureFrame(

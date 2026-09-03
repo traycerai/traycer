@@ -611,30 +611,6 @@ export const epicSchemaSurfaceBaseline = {
                                               "type": "string"
                                             }
                                           },
-                                          "attributes": {
-                                            "type": "array",
-                                            "items": {
-                                              "type": "object",
-                                              "properties": {
-                                                "name": {
-                                                  "type": "string"
-                                                },
-                                                "value": {
-                                                  "type": "string"
-                                                }
-                                              },
-                                              "required": [
-                                                "name",
-                                                "value"
-                                              ]
-                                            }
-                                          },
-                                          "outerHtml": {
-                                            "type": "string"
-                                          },
-                                          "outerHtmlTruncated": {
-                                            "type": "boolean"
-                                          },
                                           "textPreview": {
                                             "anyOf": [
                                               {
@@ -728,9 +704,6 @@ export const epicSchemaSurfaceBaseline = {
                                           "tagName",
                                           "elementId",
                                           "classNames",
-                                          "attributes",
-                                          "outerHtml",
-                                          "outerHtmlTruncated",
                                           "textPreview",
                                           "ariaRole",
                                           "accessibleName",
@@ -8941,31 +8914,6 @@ export const epicSchemaSurfaceBaseline = {
                                               "type": "string"
                                             }
                                           },
-                                          "attributes": {
-                                            "type": "array",
-                                            "items": {
-                                              "type": "object",
-                                              "properties": {
-                                                "name": {
-                                                  "type": "string"
-                                                },
-                                                "value": {
-                                                  "type": "string"
-                                                }
-                                              },
-                                              "required": [
-                                                "name",
-                                                "value"
-                                              ],
-                                              "additionalProperties": false
-                                            }
-                                          },
-                                          "outerHtml": {
-                                            "type": "string"
-                                          },
-                                          "outerHtmlTruncated": {
-                                            "type": "boolean"
-                                          },
                                           "textPreview": {
                                             "anyOf": [
                                               {
@@ -9061,9 +9009,6 @@ export const epicSchemaSurfaceBaseline = {
                                           "tagName",
                                           "elementId",
                                           "classNames",
-                                          "attributes",
-                                          "outerHtml",
-                                          "outerHtmlTruncated",
                                           "textPreview",
                                           "ariaRole",
                                           "accessibleName",

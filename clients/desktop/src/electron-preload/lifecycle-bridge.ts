@@ -55,18 +55,6 @@ export function buildLifecycleBridge(): LifecycleBridgeSurface {
           RunnerHostInvoke.freshUnsyncedSnapshotResponse,
           reply,
         ) as Promise<void>,
-      onCaptureFinalBrowserState: (handler) =>
-        subscribe<{ readonly requestId: string }>(
-          RunnerHostEvent.captureFinalBrowserState,
-          handler,
-        ),
-      respondFinalBrowserStateCaptured: (reply: {
-        readonly requestId: string;
-      }) =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.finalBrowserStateCaptured,
-          reply,
-        ) as Promise<void>,
       unsyncableWorkAcrossWindows: () =>
         ipcRenderer.invoke(
           RunnerHostInvoke.unsyncableWorkAcrossWindows,

@@ -75,6 +75,7 @@ const state = vi.hoisted(() => ({
   openedChats: [] as Array<{
     readonly tabId: string;
     readonly node: OpenedChatNode;
+    readonly gesture: string;
   }>,
   historyEntries: [] as ArtifactVersionObservationEntry[],
   historyNextCursor: null as string | null,
@@ -125,8 +126,19 @@ vi.mock("@/lib/epic-selectors", async (importOriginal) => ({
 
 vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   useEpicTileNavigation: () => ({
-    openTilePreviewInTab: (tabId: string, node: OpenedChatNode) => {
-      state.openedChats.push({ tabId, node });
+    // The one navigation entry point since the tile-open refactor: the
+    // provenance link expresses "preview into this tab" as an intent.
+    openTile: (intent: {
+      readonly node: OpenedChatNode;
+      readonly target: { readonly tabId: string } | { readonly epicId: string };
+      readonly gesture: string;
+    }) => {
+      if (!("tabId" in intent.target)) throw new Error("expected a tab target");
+      state.openedChats.push({
+        tabId: intent.target.tabId,
+        node: intent.node,
+        gesture: intent.gesture,
+      });
     },
   }),
 }));
@@ -608,6 +620,8 @@ describe("<ArtifactVersionHistoryEntryPoint />", () => {
     expect(state.openedChats).toEqual([
       {
         tabId: "tab-a",
+        // `single` is what the resolver reads as a PREVIEW open.
+        gesture: "single",
         node: {
           id: "chat-observation-linked",
           instanceId: "instance-chat-observation-linked",

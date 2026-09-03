@@ -83,6 +83,7 @@ vi.mock("@/components/diff/diff-edit-provider-loader", () => ({
 }));
 
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
+  useHostMethodSchemaVersion: () => null,
   useHostSupportsMethod: () => true,
 }));
 

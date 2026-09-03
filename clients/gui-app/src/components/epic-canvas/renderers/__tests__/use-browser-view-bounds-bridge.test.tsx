@@ -4,6 +4,7 @@ import type { RefObject } from "react";
 import { useBrowserViewBoundsBridge } from "@/components/epic-canvas/renderers/use-browser-view-bounds-bridge";
 import {
   registerBrowserOverlayTile,
+  setBrowserOverlayTileMotion,
   updateBrowserOverlayTileRect,
 } from "@/lib/browser-view/tiles/browser-overlay-coordinator";
 import type {
@@ -14,11 +15,13 @@ import { createFakeRunnerHost } from "../../../../../__tests__/create-fake-runne
 
 vi.mock("@/lib/browser-view/tiles/browser-overlay-coordinator", () => ({
   registerBrowserOverlayTile: vi.fn(() => () => undefined),
+  setBrowserOverlayTileMotion: vi.fn(),
   updateBrowserOverlayTileRect: vi.fn(),
 }));
 
 const registerMock = vi.mocked(registerBrowserOverlayTile);
 const updateRectMock = vi.mocked(updateBrowserOverlayTileRect);
+const motionMock = vi.mocked(setBrowserOverlayTileMotion);
 
 const TILE_KEY: BrowserViewTileKey = {
   viewTabId: "view-tab-1",
@@ -189,6 +192,40 @@ describe("useBrowserViewBoundsBridge", () => {
       TILE_KEY,
       expect.objectContaining({ left: 500 }),
     );
+  });
+
+  it("does not report motion for the mount-time rect", () => {
+    renderBridge(true);
+
+    expect(motionMock).not.toHaveBeenCalled();
+  });
+
+  it("reports motion start the frame the rect changes, and rest after the threshold's worth of identical frames", () => {
+    const harness = renderBridge(true);
+    harness.sentBounds.length = 0;
+
+    harness.setRect(500, 12, 400, 300);
+    act(() => {
+      flushFrames();
+    });
+    expect(motionMock).toHaveBeenLastCalledWith(TILE_KEY, true);
+
+    motionMock.mockClear();
+    // Threshold is 6 identical frames (MOTION_REST_FRAME_THRESHOLD): every
+    // stable frame short of the threshold must not release yet.
+    act(() => {
+      flushFrames();
+      flushFrames();
+      flushFrames();
+      flushFrames();
+      flushFrames();
+    });
+    expect(motionMock).not.toHaveBeenCalled();
+
+    act(() => {
+      flushFrames();
+    });
+    expect(motionMock).toHaveBeenLastCalledWith(TILE_KEY, false);
   });
 
   it("sends nothing while the rect is unchanged", () => {

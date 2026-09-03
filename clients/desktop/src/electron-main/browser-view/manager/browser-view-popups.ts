@@ -2,6 +2,11 @@ import type { BrowserWindowConstructorOptions } from "electron";
 import { RunnerHostEvent } from "../../../ipc-contracts/ipc-channels";
 import { log } from "../../app/logger";
 import {
+  installGuestNavigationGuard,
+  isAllowedGuestNavigationUrl,
+  traceRefusedGuestNavigation,
+} from "../browser-guest-navigation";
+import {
   toTileKey,
   type BrowserViewEntry,
   type BrowserViewSend,
@@ -16,7 +21,6 @@ import type {
 
 interface BrowserViewPopupsOptions {
   readonly createPopupWindowOptions: (
-    windowId: string,
     request: BrowserSessionProfileRequest,
   ) => BrowserWindowConstructorOptions;
   readonly registerPopupWebContents: (
@@ -27,21 +31,30 @@ interface BrowserViewPopupsOptions {
 
 /**
  * Decision #22: real popups keep their opener as a native window, while
- * `target=_blank` and tab dispositions become Traycer tiles.
+ * `target=_blank` and tab dispositions become Traycer tiles carrying
+ * Chromium's disposition (`background-tab` -> background, else foreground).
  */
 export class BrowserViewPopups {
   private readonly createPopupWindowOptions: (
-    windowId: string,
     request: BrowserSessionProfileRequest,
   ) => BrowserWindowConstructorOptions;
   private readonly registerPopupWebContents: (
     webContents: BrowserViewPopupWebContents,
   ) => void;
   private readonly send: BrowserViewSend;
-  // ponytail: popups are opened with `parent` + `outlivesOpener: false`, but
-  // `parent` degrades to undefined when the opener window record is missing,
-  // so quit-time closing is not provably Electron's job. Tracked here only to
-  // close them in `dispose()`.
+  /**
+   * A native popup is still a browser guest. Keep the policy install keyed by
+   * WebContents so a duplicate did-create-window delivery cannot stack
+   * handlers, while allowing each popup to recursively create policy-bound
+   * children of its own.
+   */
+  private readonly policyInstalledOn =
+    new WeakSet<BrowserViewPopupWebContents>();
+  private readonly trackedPopupWindows = new WeakSet<BrowserViewPopupWindow>();
+  // `outlivesOpener: false` preserves Chromium's opener lifetime, while these
+  // windows intentionally have no native BrowserWindow parent: a native child
+  // of a fullscreen macOS window can black out its owner after closing. Keep
+  // tracking them so manager disposal closes any popup that is still alive.
   private readonly openWindows = new Set<BrowserViewPopupWindow>();
 
   constructor(options: BrowserViewPopupsOptions) {
@@ -56,25 +69,36 @@ export class BrowserViewPopups {
   ): BrowserViewWindowOpenResult {
     const surface = entry.surface;
     if (surface === null) return { action: "deny" };
+    // The third door the guest scheme gate has to cover: a guest CAN open
+    // windows, and both outcomes below carry the target onward - one into a
+    // new tile, one into a real popup on the opener's jar. Resolved against
+    // the opener first, because `window.open("/x")` is relative and a scheme
+    // check on the raw string would be checking the wrong string.
+    const target = normalizeOpenedUrl(details.url, entry.currentUrl);
+    if (!isAllowedGuestNavigationUrl(target)) {
+      traceRefusedGuestNavigation(target, "window-open");
+      return { action: "deny" };
+    }
     // Electron exposes featureless scripted window.open the same as _blank
     // tab opens, so the available guardrail is non-empty popup features.
     if (windowOpenShouldCreateTile(details)) {
       this.send(surface.windowId, RunnerHostEvent.browserViewOpenTileRequest, {
         ...toTileKey(surface),
-        url: normalizeOpenedUrl(details.url, entry.currentUrl),
+        url: target,
+        disposition:
+          details.disposition === "background-tab"
+            ? "background"
+            : "foreground",
       });
       return { action: "deny" };
     }
     return {
       action: "allow",
       // A popup shares its opener's jar; same profile, same session id.
-      overrideBrowserWindowOptions: this.createPopupWindowOptions(
-        surface.windowId,
-        {
-          profile: entry.profile,
-          sessionId: entry.identity.key.sessionId,
-        },
-      ),
+      overrideBrowserWindowOptions: this.createPopupWindowOptions({
+        profile: entry.profile,
+        sessionId: entry.identity.key.sessionId,
+      }),
       outlivesOpener: false,
     };
   }
@@ -87,7 +111,10 @@ export class BrowserViewPopups {
       window.close();
       return;
     }
+    if (this.trackedPopupWindows.has(window)) return;
+    this.trackedPopupWindows.add(window);
     this.registerPopupWebContents(window.webContents);
+    this.installPopupPolicy(entry, window.webContents);
     this.openWindows.add(window);
     window.on("closed", () => {
       this.openWindows.delete(window);
@@ -95,6 +122,21 @@ export class BrowserViewPopups {
     log.info("[browser-view] popup created", {
       openerWebContentsId: entry.view.webContents.id,
       popupWebContentsId: window.webContents.id,
+    });
+  }
+
+  private installPopupPolicy(
+    entry: BrowserViewEntry,
+    webContents: BrowserViewPopupWebContents,
+  ): void {
+    if (this.policyInstalledOn.has(webContents)) return;
+    this.policyInstalledOn.add(webContents);
+    installGuestNavigationGuard(webContents);
+    webContents.setWindowOpenHandler((details) =>
+      this.handleWindowOpen(entry, details),
+    );
+    webContents.on("did-create-window", (window: BrowserViewPopupWindow) => {
+      this.handleDidCreateWindow(entry, window);
     });
   }
 

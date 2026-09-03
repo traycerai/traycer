@@ -5,11 +5,11 @@ import {
 import { createContext, type Context } from "react";
 import { getEpicRuntimeWorkerFactoryOverride } from "./epic-runtime-worker-factory-slot";
 import {
-  DEFAULT_MAX_LIVE_EPICS,
   OpenEpicSessionRegistry,
   type RetainedHandleIdentity,
   type UnsyncedEditsEntry,
 } from "@/stores/epics/open-epic/session-registry";
+import { getRetentionProfile } from "@/stores/replica-memory/retention-profile";
 // RE-EXPORTED, not re-declared. The liveness cell moved to the module that owns
 // `acquireMounted`, because that seam is what has to consult it - and this
 // module imports THAT one, so a map declared here could not be read there
@@ -167,7 +167,10 @@ export function getEpicSessionHandleHostClient(
  * live (within the MRU cap) so re-entering the route is instant.
  */
 export const registry = new OpenEpicSessionRegistry({
-  maxLive: DEFAULT_MAX_LIVE_EPICS,
+  // The shell's retention profile (desktop: `DEFAULT_MAX_LIVE_EPICS`), read
+  // on every cap walk so the phone's smaller cap applies whenever its
+  // bootstrap selected it.
+  maxLive: () => getRetentionProfile().maxLiveEpics,
 });
 registry.setReleaseListener((epicId) => {
   void releaseDesktopEpicOwnershipForEpic(epicId);

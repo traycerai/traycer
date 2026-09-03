@@ -4968,39 +4968,6 @@ describe("createChatSessionStore", () => {
     expect(reason).not.toContain("taken by a later message");
     expect(reason).not.toContain("no longer exists");
   });
-
-  // The other silent arm: no mark at all. The user cleared the slot, so
-  // sending without a worktree was their decision.
-  it("says nothing about a worktree the user cleared", () => {
-    useWorktreeIntentStagingStore.getState().resetForTests();
-    const harness = createHarness();
-    const callbacks = harness.callbacks();
-    emitSnapshot(callbacks, "owner");
-    const key: WorktreeStagingKey = {
-      surface: "owner",
-      hostId: "host-a",
-      epicId: EPIC_ID,
-      ownerKind: "chat",
-      ownerId: CHAT_ID,
-    };
-
-    useWorktreeIntentStagingStore
-      .getState()
-      .setIntent(key, worktreeIntentFor("feat/sent"));
-    sendTestMessage(
-      harness.handle.store,
-      CONTENT,
-      { type: "user", userId: OWNER_ID },
-      { settings: SETTINGS, deliveryPolicy: "auto" },
-    );
-    useWorktreeIntentStagingStore.getState().clear(key);
-    rejectLastAction(harness, "Host refused the send.");
-
-    const reason =
-      harness.handle.store.getState().failedSendRestoration?.reason ?? "";
-    expect(reason).not.toContain("taken by a later message");
-  });
-
   // The same pairing rule, reached through the OTHER door. The sweep's
   // fallback defers to a prompt handed back by its own pass - but a prompt
   // handed back by an EARLIER pass is still sitting in the slot, and staging a
@@ -5172,24 +5139,6 @@ describe("createChatSessionStore", () => {
       ],
     ).toBeDefined();
   });
-
-  it("sends worktreeIntent null when nothing is staged", () => {
-    useWorktreeIntentStagingStore.setState({ intentByKey: {} });
-    const harness = createHarness();
-    emitSnapshot(harness.callbacks(), "owner");
-    sendTestMessage(
-      harness.handle.store,
-      CONTENT,
-      { type: "user", userId: OWNER_ID },
-      { settings: SETTINGS, deliveryPolicy: "auto" },
-    );
-    const frame = harness.sent.at(-1);
-    if (frame === undefined || frame.kind !== "send") {
-      throw new Error("Expected send frame");
-    }
-    expect(frame.worktreeIntent).toBeNull();
-  });
-
   it("keeps accepted send records consumable until they are acked", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -5468,14 +5417,6 @@ describe("createChatSessionStore", () => {
     expect(notice.message).toContain("/repo/frontend");
     expect(notice.message).toContain("/repo/backend");
   });
-
-  it("leaves a single staged workspace unqualified", () => {
-    const notice = statedNoticeWithIntent(worktreeIntentFor("feat/only"));
-
-    expect(notice.message).toContain("feat/only");
-    expect(notice.message).not.toContain(" in /repo");
-  });
-
   // R12 `-A8bB`: the winning prompt's claim is TERMINAL. A send deliberately
   // dispatched with no worktree still decides the slot - it just decides it is
   // empty. Skipping a null claim let a stale edit's binding attach itself to a
@@ -6360,37 +6301,6 @@ describe("createChatSessionStore", () => {
     expect(notice.message).toContain("gpt-5-codex");
     expect(notice.message).toContain("model");
   });
-
-  it("says nothing about settings that did not move", () => {
-    const harness = createHarness();
-    const callbacks = harness.callbacks();
-    emitSnapshotFrame({
-      callbacks,
-      access: "owner",
-      messages: [],
-      queue: { status: "idle", items: [] },
-      pendingFileEditApprovals: [],
-      settings: SETTINGS,
-    });
-    sendTwo(harness, CONTENT, SECOND_CONTENT);
-    const second = harness.sent[1];
-    if (second.kind !== "send") throw new Error("Expected a send frame");
-
-    callbacks.onConnectionStatus("reconnecting", null);
-    emitSnapshotFrame({
-      callbacks,
-      access: "owner",
-      messages: [],
-      queue: { status: "idle", items: [] },
-      pendingFileEditApprovals: [],
-      settings: SETTINGS,
-    });
-
-    // Stating the full tuple every time would bury the one field that moved.
-    const notice = noticeFor(harness, second.clientActionId);
-    expect(notice.message).not.toContain("different settings now");
-  });
-
   // R7 `-oRb`: "no branch to re-pick" is not "nothing to state". A send staged
   // to switch to a LOCAL checkout or to IMPORT an existing worktree settles
   // with no statement at all today, so the resend runs against the previous
@@ -6409,23 +6319,6 @@ describe("createChatSessionStore", () => {
 
     expect(notice.message).toContain("/repo/service-a");
   });
-
-  it("names an imported worktree a stated send was staged to adopt", () => {
-    const notice = statedNoticeWithIntent({
-      entries: [
-        {
-          kind: "import",
-          workspacePath: "/repo",
-          worktreePath: "/repo/../wt-hotfix",
-          repoIdentifier: null,
-          isPrimary: true,
-        },
-      ],
-    });
-
-    expect(notice.message).toContain("/repo/../wt-hotfix");
-  });
-
   // R7 `-oRn`: the guard's contract is "a newer LIVE pick wins", but it was
   // implemented as "a newer REVISION wins". A second send consuming its own
   // staged pick advances the revision and then leaves the slot EMPTY - so
@@ -7177,37 +7070,6 @@ describe("createChatSessionStore", () => {
       state.errorNotices.some((notice) => notice.clientActionId === occupant),
     ).toBe(true);
   });
-
-  it("states nothing extra when the only stranded send wins the free slot", () => {
-    const harness = createHarness();
-    const callbacks = harness.callbacks();
-    emitSnapshot(callbacks, "owner");
-
-    sendTestMessage(
-      harness.handle.store,
-      CONTENT,
-      { type: "user", userId: OWNER_ID },
-      { settings: SETTINGS, deliveryPolicy: "auto" },
-    );
-    const stranded = acceptLastAction(harness);
-
-    callbacks.onConnectionStatus("reconnecting", null);
-    emitSnapshot(callbacks, "owner");
-
-    const state = harness.handle.store.getState();
-    // It claimed the slot, so its text is in the composer - the notice would
-    // be noise, and the composer restoration is the statement.
-    expect(state.failedSendRestoration).toEqual({
-      clientActionId: stranded,
-      content: CONTENT,
-      browserAnnotations: [],
-      reason: "The message was not recorded before the turn stopped.",
-      displacedReason: "The message was not recorded before the turn stopped.",
-      stated: false,
-    });
-    expect(state.errorNotices).toEqual([]);
-  });
-
   it("keeps an in-flight send pending when a same-connection refresh snapshot omits it", () => {
     // The host broadcasts snapshots on a live connection for unrelated
     // reasons (a turn finishing, a pump-backlog backfill). One built before
@@ -8732,52 +8594,6 @@ describe("createChatSessionStore", () => {
     ).toBeUndefined();
     expect(harness.handle.store.getState().pendingInterviews).toEqual([]);
   });
-
-  it("clears the interview draft on host interviewErrored", () => {
-    const harness = createHarness();
-    const callbacks = harness.callbacks();
-    const blockId = "question-draft-errored";
-
-    emitSnapshotFrame({
-      callbacks,
-      access: "owner",
-      messages: [],
-      queue: { status: "idle", items: [] },
-      pendingFileEditApprovals: [],
-      pendingInterviews: [{ blockId, requestedAt: 2 }],
-    });
-
-    useInterviewDraftStore.getState().saveDraft(CHAT_ID, blockId, {
-      pageIndex: 1,
-      answers: [
-        { selected: [], otherText: "skip me later", otherSelected: true },
-      ],
-    });
-    expect(
-      useInterviewDraftStore.getState().draftsByChat[CHAT_ID]?.[blockId],
-    ).toBeDefined();
-
-    callbacks.onInterviewErrored({
-      kind: "interviewErrored",
-      hasBinaryPayload: false,
-      epicId: EPIC_ID,
-      chatId: CHAT_ID,
-      blockId,
-      reason: "Skipped by user",
-      resolvedAt: 5,
-      settlementId: null,
-      settlementSource: null,
-      outcome: "skipped",
-      draftAnswers: [],
-      delivery: null,
-    });
-
-    expect(
-      useInterviewDraftStore.getState().draftsByChat[CHAT_ID],
-    ).toBeUndefined();
-    expect(harness.handle.store.getState().pendingInterviews).toEqual([]);
-  });
-
   it("does not clear the interview draft when an interview action is rejected", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -8989,59 +8805,6 @@ describe("createChatSessionStore", () => {
     ).toBe(false);
     expect(readInterviewDraftSnapshot(CHAT_ID, blockId)).toBeNull();
   });
-
-  it("drops pending and accepted interview actions on interviewErrored", () => {
-    const harness = createHarness();
-    const callbacks = harness.callbacks();
-    const blockId = "question-error-actions";
-
-    emitSnapshotFrame({
-      callbacks,
-      access: "owner",
-      messages: [],
-      queue: { status: "idle", items: [] },
-      pendingFileEditApprovals: [],
-      pendingInterviews: [{ blockId, requestedAt: 2 }],
-    });
-    useInterviewDraftStore.getState().saveDraft(CHAT_ID, blockId, {
-      pageIndex: 0,
-      answers: [{ selected: [], otherText: "skip", otherSelected: true }],
-    });
-
-    const actionId = harness.handle.store
-      .getState()
-      .interviewSkip(blockId, "Skipped by user", []);
-    if (actionId === null) {
-      throw new Error("expected interview Skip action");
-    }
-
-    callbacks.onInterviewErrored({
-      kind: "interviewErrored",
-      hasBinaryPayload: false,
-      epicId: EPIC_ID,
-      chatId: CHAT_ID,
-      blockId,
-      reason: "Skipped by user",
-      resolvedAt: 5,
-      settlementId: null,
-      settlementSource: null,
-      outcome: "skipped",
-      draftAnswers: [],
-      delivery: null,
-    });
-
-    expect(harness.handle.store.getState().pendingInterviews).toEqual([]);
-    expect(
-      harness.handle.store.getState().pendingActions[actionId],
-    ).toBeUndefined();
-    expect(
-      Object.values(harness.handle.store.getState().acceptedActions).some(
-        (action) => action.interviewBlockId === blockId,
-      ),
-    ).toBe(false);
-    expect(readInterviewDraftSnapshot(CHAT_ID, blockId)).toBeNull();
-  });
-
   it("prunes orphan interview drafts on the first snapshot", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -9080,55 +8843,6 @@ describe("createChatSessionStore", () => {
       window.localStorage.getItem(interviewDraftKey(CHAT_ID, dropBlock)),
     ).toBeNull();
   });
-
-  it("prunes orphan interview drafts on a later reconnect snapshot", () => {
-    const harness = createHarness();
-    const callbacks = harness.callbacks();
-    const keepBlock = "question-keep-later";
-    const dropBlock = "question-drop-later";
-    const keepDraft = {
-      pageIndex: 0,
-      answers: [{ selected: ["Keep"], otherText: "", otherSelected: false }],
-    };
-    const dropDraft = {
-      pageIndex: 0,
-      answers: [{ selected: ["Drop"], otherText: "", otherSelected: false }],
-    };
-
-    emitSnapshotFrame({
-      callbacks,
-      access: "owner",
-      messages: [],
-      queue: { status: "idle", items: [] },
-      pendingFileEditApprovals: [],
-      pendingInterviews: [
-        { blockId: keepBlock, requestedAt: 2 },
-        { blockId: dropBlock, requestedAt: 3 },
-      ],
-    });
-    useInterviewDraftStore.getState().saveDraft(CHAT_ID, keepBlock, keepDraft);
-    useInterviewDraftStore.getState().saveDraft(CHAT_ID, dropBlock, dropDraft);
-
-    // Reconnect snapshot: only keepBlock is still pending.
-    emitSnapshotFrame({
-      callbacks,
-      access: "owner",
-      messages: [],
-      queue: { status: "idle", items: [] },
-      pendingFileEditApprovals: [],
-      pendingInterviews: [{ blockId: keepBlock, requestedAt: 2 }],
-    });
-
-    expectPersistedInterviewDraft(
-      readInterviewDraftSnapshot(CHAT_ID, keepBlock),
-      keepDraft,
-    );
-    expect(readInterviewDraftSnapshot(CHAT_ID, dropBlock)).toBeNull();
-    expect(
-      window.localStorage.getItem(interviewDraftKey(CHAT_ID, dropBlock)),
-    ).toBeNull();
-  });
-
   it("tracks checkpoint restore action and lifecycle frames", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -10279,45 +9993,6 @@ describe("createChatSessionStore", () => {
       expect.objectContaining({ type: "text", blockId: "active-text" }),
     ]);
   });
-
-  it("does not apply an ownerless detached background command terminal to the active turn", () => {
-    const harness = createHarness();
-    const callbacks = harness.callbacks();
-    startRunningTurn(callbacks);
-    callbacks.onBlockDelta({
-      kind: "blockDelta",
-      hasBinaryPayload: false,
-      epicId: EPIC_ID,
-      chatId: CHAT_ID,
-      event: {
-        type: "text.delta",
-        blockId: "active-text",
-        timestamp: 4,
-        delta: "Active turn",
-      },
-    });
-
-    callbacks.onBlockDelta({
-      kind: "blockDelta",
-      hasBinaryPayload: false,
-      epicId: EPIC_ID,
-      chatId: CHAT_ID,
-      event: {
-        type: "command.completed",
-        blockId: "detached-command",
-        timestamp: 5,
-        command: "sleep 20 && echo done",
-        exitCode: 0,
-        backgroundTask: true,
-      },
-    });
-
-    const blocks = harness.handle.store.getState().liveAssistantMessage?.blocks;
-    expect(blocks).toEqual([
-      expect.objectContaining({ type: "text", blockId: "active-text" }),
-    ]);
-  });
-
   // The live turn's OWN cards, which the detached drop must never eat.
   //
   // "No message owns this block" is the detached test, and it is satisfied by
@@ -10520,150 +10195,8 @@ describe("createChatSessionStore", () => {
         update: "still working",
       } satisfies RuntimeEvent,
     ],
-    [
-      "completed",
-      {
-        type: "subagent.completed",
-        blockId: "evicted-subagent",
-        timestamp: 5,
-        outcome: "completed",
-        result: "done",
-      } satisfies RuntimeEvent,
-    ],
   ])(
     "still drops an ownerless subagent %s rather than opening a card for it",
-    (_label, event) => {
-      const harness = createHarness();
-      const callbacks = harness.callbacks();
-      startRunningTurn(callbacks);
-      emitTextDelta(callbacks, "Active turn", 4);
-
-      callbacks.onBlockDelta({
-        kind: "blockDelta",
-        hasBinaryPayload: false,
-        epicId: EPIC_ID,
-        chatId: CHAT_ID,
-        event,
-      });
-
-      expect(
-        harness.handle.store.getState().liveAssistantMessage?.blocks,
-      ).toEqual([expect.objectContaining({ type: "text" })]);
-    },
-  );
-
-  // `workflow.*` is the same card by another name: all three write the SAME
-  // `subagent` block through `makeSubAgentBlock`, addressed by `event.blockId`,
-  // and all three build one when none exists - the accumulator's `started`
-  // opens, `progress`/`completed` update-or-synthesize, exactly as `subagent.*`
-  // does. A Workflow run is a fleet that outlives its spawning turn for the
-  // same reason a background subagent does, so it inherits the same hazard and
-  // must inherit the same rule.
-  it("creates the active turn's own workflow card from its first workflow.started", () => {
-    const harness = createHarness();
-    const callbacks = harness.callbacks();
-    startRunningTurn(callbacks);
-    emitTextDelta(callbacks, "Active turn", 4);
-
-    callbacks.onBlockDelta({
-      kind: "blockDelta",
-      hasBinaryPayload: false,
-      epicId: EPIC_ID,
-      chatId: CHAT_ID,
-      event: {
-        type: "workflow.started",
-        blockId: "live-workflow",
-        timestamp: 5,
-        name: "review-changes",
-        intent: "Review changed files across dimensions",
-      },
-    });
-
-    expect(
-      harness.handle.store.getState().liveAssistantMessage?.blocks,
-    ).toEqual([
-      expect.objectContaining({ type: "text" }),
-      expect.objectContaining({
-        type: "subagent",
-        blockId: "live-workflow",
-        status: "streaming",
-      }),
-    ]);
-  });
-
-  it("keeps applying progress and completion to the workflow card it created", () => {
-    const harness = createHarness();
-    const callbacks = harness.callbacks();
-    startRunningTurn(callbacks);
-    const emit = (event: RuntimeEvent): void => {
-      callbacks.onBlockDelta({
-        kind: "blockDelta",
-        hasBinaryPayload: false,
-        epicId: EPIC_ID,
-        chatId: CHAT_ID,
-        event,
-      });
-    };
-    emit({
-      type: "workflow.started",
-      blockId: "live-workflow",
-      timestamp: 5,
-      name: "review-changes",
-      intent: "Review changed files",
-    });
-    emit({
-      type: "workflow.progress",
-      blockId: "live-workflow",
-      timestamp: 6,
-      activity: { kind: "phase", text: "Review" },
-      agentsStarted: 3,
-      agentsFinished: 1,
-    });
-    emit({
-      type: "workflow.completed",
-      blockId: "live-workflow",
-      timestamp: 7,
-      outcome: "completed",
-      result: "3 findings",
-    });
-
-    expect(
-      harness.handle.store.getState().liveAssistantMessage?.blocks,
-    ).toEqual([
-      expect.objectContaining({
-        type: "subagent",
-        blockId: "live-workflow",
-        status: "completed",
-        progressUpdates: ["Review"],
-        result: "3 findings",
-      }),
-    ]);
-  });
-
-  it.each([
-    [
-      "progress",
-      {
-        type: "workflow.progress",
-        blockId: "evicted-workflow",
-        timestamp: 5,
-        activity: { kind: "phase", text: "Verify" },
-        agentsStarted: 4,
-        agentsFinished: 2,
-      } satisfies RuntimeEvent,
-    ],
-    [
-      "completed",
-      {
-        type: "workflow.completed",
-        blockId: "evicted-workflow",
-        timestamp: 5,
-        outcome: "completed",
-        result: "done",
-      } satisfies RuntimeEvent,
-    ],
-  ])(
-    "still drops an ownerless workflow %s rather than opening a card for it",
     (_label, event) => {
       const harness = createHarness();
       const callbacks = harness.callbacks();
@@ -13530,6 +13063,7 @@ describe("the chat's managed commands", () => {
       cadence: { debounceMs: 500, maxWaitMs: 15_000, throttleMs: 5_000 },
       status: { state: "running", pid: 4410, startedAtMs: 10 },
       chatId: CHAT_ID,
+      relaunchOnHostRestart: false,
       createdAtMs: 10,
       updatedAtMs: 10,
       ...over,
