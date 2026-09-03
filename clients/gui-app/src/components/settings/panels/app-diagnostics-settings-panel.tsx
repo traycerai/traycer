@@ -145,6 +145,10 @@ const JS_HEAP_MEASURE_MUTATION_SCOPE = "runner-js-heap-measure";
 
 function MemoryDiagnosticsGroup(): ReactNode {
   const bridge = useMemo(() => getDesktopHeapSnapshotBridge(), []);
+  // The two capabilities are gated independently, like every other pair of
+  // desktop bridges on this page: a shell that carries one and not the other
+  // still gets the one it has.
+  const jsHeapAvailable = useMemo(() => getDesktopJsHeapBridge() !== null, []);
   const [snapshotPath, setSnapshotPath] = useState<string | null>(null);
 
   const captureMutation = useMutation({
@@ -171,7 +175,7 @@ function MemoryDiagnosticsGroup(): ReactNode {
     },
   });
 
-  if (bridge === null) {
+  if (bridge === null && !jsHeapAvailable) {
     return (
       <SettingsGroup
         title="Memory"
@@ -193,46 +197,50 @@ function MemoryDiagnosticsGroup(): ReactNode {
       dataTestId={undefined}
       fill={false}
     >
-      <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5">
-        <span className="min-w-0 flex-1 text-ui-xs text-muted-foreground">
-          Captures a heap snapshot of this window for a memory report. The app
-          stops responding while the snapshot is written, and the file can be
-          several gigabytes.
-        </span>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="shrink-0"
-          disabled={captureMutation.isPending}
-          onClick={() => captureMutation.mutate()}
-          data-testid="diagnostics-capture-heap-snapshot"
-        >
-          {captureMutation.isPending ? (
-            <AgentSpinningDots
-              className="text-current"
-              testId={undefined}
-              variant={undefined}
-            />
-          ) : null}
-          Capture heap snapshot
-        </Button>
-      </div>
-      {snapshotPath === null ? null : (
-        <div className="flex items-start gap-2 px-4 pb-3">
-          <pre
-            className="min-w-0 flex-1 overflow-auto rounded-md border border-border/60 bg-muted/30 px-3 py-2 font-mono text-code-xs text-muted-foreground"
-            data-testid="diagnostics-heap-snapshot-path"
-          >
-            {snapshotPath}
-          </pre>
-          <CopyTextButton
-            value={snapshotPath}
-            label="Copy"
-            ariaLabel="Copy heap snapshot path"
-            disabled={false}
-          />
-        </div>
+      {bridge === null ? null : (
+        <>
+          <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5">
+            <span className="min-w-0 flex-1 text-ui-xs text-muted-foreground">
+              Captures a heap snapshot of this window for a memory report. The
+              app stops responding while the snapshot is written, and the file
+              can be several gigabytes.
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="shrink-0"
+              disabled={captureMutation.isPending}
+              onClick={() => captureMutation.mutate()}
+              data-testid="diagnostics-capture-heap-snapshot"
+            >
+              {captureMutation.isPending ? (
+                <AgentSpinningDots
+                  className="text-current"
+                  testId={undefined}
+                  variant={undefined}
+                />
+              ) : null}
+              Capture heap snapshot
+            </Button>
+          </div>
+          {snapshotPath === null ? null : (
+            <div className="flex items-start gap-2 px-4 pb-3">
+              <pre
+                className="min-w-0 flex-1 overflow-auto rounded-md border border-border/60 bg-muted/30 px-3 py-2 font-mono text-code-xs text-muted-foreground"
+                data-testid="diagnostics-heap-snapshot-path"
+              >
+                {snapshotPath}
+              </pre>
+              <CopyTextButton
+                value={snapshotPath}
+                label="Copy"
+                ariaLabel="Copy heap snapshot path"
+                disabled={false}
+              />
+            </div>
+          )}
+        </>
       )}
       <JsHeapReadout />
     </SettingsGroup>

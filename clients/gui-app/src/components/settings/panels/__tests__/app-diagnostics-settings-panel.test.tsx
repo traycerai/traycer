@@ -429,6 +429,25 @@ describe("<AppDiagnosticsSettingsPanel />", () => {
     expect(path.textContent).toBe("/tmp/heap-1.heapsnapshot");
   });
 
+  it("renders the Measure JS heaps button without a heap-snapshot bridge", async () => {
+    installLogLevelsBridge(defaultSnapshot());
+    installJsHeapBridge(() => Promise.resolve(null));
+    renderPanel(makeHost(makeSupportBridge({})));
+
+    await screen.findByRole("heading", { name: "Memory" });
+    expect(
+      screen.getByRole("button", { name: "Measure JS heaps" }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Capture heap snapshot" }),
+    ).toBeNull();
+    expect(
+      screen.queryByText(
+        "Memory snapshots are only available on the desktop app.",
+      ),
+    ).toBeNull();
+  });
+
   it("does not render the Measure JS heaps button when the bridge is not installed", async () => {
     installLogLevelsBridge(defaultSnapshot());
     installHeapSnapshotBridge(() => Promise.resolve(null));
