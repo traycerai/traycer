@@ -609,7 +609,7 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
     - **Saved website sessions** reads `browser.savedLoginSites` from the
       surface's host (`useBrowserSavedLoginSitesQuery`) - registrable domains,
       never values. Settings shows the count and first three sites in
-      alphabetical order; a non-empty preview opens a right side sheet with
+      alphabetical order; a non-empty preview opens a right-side sheet with
       search, every site, per-site Remove, and Remove all. A genuinely empty
       collection has no disclosure, while the sheet stays open after Remove
       all to offer import as the next step. The method is optional

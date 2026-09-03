@@ -109,7 +109,7 @@ function controller(
 
 function savedSite(
   domain: string,
-  contributedByHostId: string | null = null,
+  contributedByHostId: string | null,
 ): BrowserSavedLoginSite {
   return { domain, lastSeen: Date.now(), contributedByHostId };
 }
@@ -214,7 +214,7 @@ describe("<BrowserSettingsSection /> website sessions", () => {
     useSettingsStore.setState({ browserDevOrigins: ["http://localhost:5173"] });
     renderSection(controller({ enabled: true }), {
       kind: "sites",
-      sites: [savedSite("example.com")],
+      sites: [savedSite("example.com", null)],
     });
 
     expect(screen.queryByText("Website sessions")).toBeNull();
@@ -226,11 +226,11 @@ describe("<BrowserSettingsSection /> website sessions", () => {
     renderSection(controller({}), {
       kind: "sites",
       sites: [
-        savedSite("zulu.example"),
-        savedSite("beta.example"),
-        savedSite("alpha.example"),
-        savedSite("echo.example"),
-        savedSite("delta.example"),
+        savedSite("zulu.example", null),
+        savedSite("beta.example", null),
+        savedSite("alpha.example", null),
+        savedSite("echo.example", null),
+        savedSite("delta.example", null),
       ],
     });
 
@@ -265,7 +265,10 @@ describe("<BrowserSettingsSection /> website sessions", () => {
   it("searches the side sheet and distinguishes an empty search", () => {
     renderSection(controller({}), {
       kind: "sites",
-      sites: [savedSite("alpha.example"), savedSite("beta.example")],
+      sites: [
+        savedSite("alpha.example", null),
+        savedSite("beta.example", null),
+      ],
     });
     const manager = openManager();
     const search = within(manager).getByLabelText("Search saved sites");
@@ -331,6 +334,9 @@ describe("<BrowserSettingsSection /> website sessions", () => {
     expect(
       within(manager).getByText("Includes a sign-in from Studio Mac"),
     ).not.toBeNull();
+    expect(
+      within(manager).queryByText("Includes a sign-in from This Mac"),
+    ).toBeNull();
     expect(within(manager).queryByText("Includes a sign-in from")).toBeNull();
   });
 
@@ -364,7 +370,7 @@ describe("<BrowserSettingsSection /> website sessions", () => {
   it("removes one site only after main confirms", async () => {
     renderSection(controller({}), {
       kind: "sites",
-      sites: [savedSite("example.com"), savedSite("example.org")],
+      sites: [savedSite("example.com", null), savedSite("example.org", null)],
     });
     const manager = openManager();
 
@@ -385,7 +391,7 @@ describe("<BrowserSettingsSection /> website sessions", () => {
   it("holds an optimistic removal through a stale reply, then releases it", async () => {
     const bothSites: BrowserSavedLoginSitesResponse = {
       kind: "sites",
-      sites: [savedSite("example.com"), savedSite("example.org")],
+      sites: [savedSite("example.com", null), savedSite("example.org", null)],
     };
     saveLogins.current = controller({});
     sites.current = bothSites;
@@ -406,7 +412,7 @@ describe("<BrowserSettingsSection /> website sessions", () => {
 
     sites.current = {
       kind: "sites",
-      sites: [savedSite("example.org")],
+      sites: [savedSite("example.org", null)],
     };
     view.rerender(<BrowserSettingsSection />);
     sites.current = bothSites;
@@ -421,7 +427,7 @@ describe("<BrowserSettingsSection /> website sessions", () => {
       .mockRejectedValueOnce(new Error("the main process went away"));
     renderSection(controller({}), {
       kind: "sites",
-      sites: [savedSite("example.com")],
+      sites: [savedSite("example.com", null)],
     });
     const manager = openManager();
     const remove = () =>
@@ -449,7 +455,7 @@ describe("<BrowserSettingsSection /> website sessions", () => {
     browserViewState.current = bridge;
     renderSection(controller({}), {
       kind: "sites",
-      sites: [savedSite("example.com"), savedSite("example.org")],
+      sites: [savedSite("example.com", null), savedSite("example.org", null)],
     });
     const manager = openManager();
 
@@ -485,7 +491,7 @@ describe("<BrowserSettingsSection /> website sessions", () => {
   it("keeps previews manageable while saving is paused and disables import with a reason", () => {
     renderSection(controller({ enabled: false }), {
       kind: "sites",
-      sites: [savedSite("example.com"), savedSite("example.org")],
+      sites: [savedSite("example.com", null), savedSite("example.org", null)],
     });
 
     expect(screen.getByText("example.com")).not.toBeNull();
