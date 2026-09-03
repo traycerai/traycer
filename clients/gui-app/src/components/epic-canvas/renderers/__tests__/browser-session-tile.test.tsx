@@ -7,6 +7,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
@@ -44,7 +45,18 @@ const harness = vi.hoisted(() => ({
     Promise.resolve({ sessionId: "session-1", tabId: "tab-2" }),
   ),
   closeTab: vi.fn(),
-  attachTab: vi.fn(() => Promise.resolve()),
+  attachTab: vi.fn(() => {
+    harness.frameOrder.push("attachTab");
+    return Promise.resolve();
+  }),
+  /**
+   * Which frame each seam issued, in issue order, across the sessions stream
+   * (`attachTab`) and the screencast stream (the peek tile's subscribe). The
+   * body's window hint has to be issued BEFORE the wake, because the host
+   * rejects an attach for a tab already bound elsewhere and never relocates
+   * it - so a wake that lands first elects the default route permanently.
+   */
+  frameOrder: [] as string[],
 }));
 
 /**
@@ -143,8 +155,14 @@ vi.mock("@/components/epic-canvas/renderers/browser-sessions-context", () => ({
   useBrowserSessionsContext: () => sessionsContextValue(),
   useMaybeBrowserSessionsContext: () => sessionsContextValue(),
 }));
+// Both exports, for the reason the sibling `use-runner-host` mock in
+// `tile-render-browser-link-host.test.tsx` documents: a factory REPLACES the
+// module, so the first importer to reach a missing export fails at module
+// init rather than at an assertion. Nothing in this graph reads
+// `readDesktopWindowId` today; naming it costs a line and removes the trap.
 vi.mock("@/lib/windows/desktop-window-id", () => ({
   useDesktopWindowId: () => desktopWindowIdHarness.windowId,
+  readDesktopWindowId: () => desktopWindowIdHarness.windowId,
 }));
 vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   useEpicTileNavigation: () => ({ openTile: canvasState.openTile }),
@@ -209,21 +227,37 @@ vi.mock("@/components/browser-tile/agent-browser-tile", () => ({
     );
   },
 }));
-vi.mock("@/components/browser-tile/browser-peek-tile", () => ({
-  BrowserPeekTile: (props: {
-    readonly node: { readonly sessionId: string; readonly tabId: string };
-    readonly completeMeans: BrowserPeekCompleteMeaning;
-  }) => (
-    <button
-      type="button"
-      aria-label="Browser screencast controls"
-      data-testid="headless-browser-tab"
-      data-session={props.node.sessionId}
-      data-tab={props.node.tabId}
-      data-complete-means={props.completeMeans}
-    />
-  ),
-}));
+// The stand-in subscribes in a PASSIVE effect, exactly as the real peek tile
+// does through `useScreencastSession` - that subscription is the host-side
+// wake, so a stand-in that subscribes to nothing cannot witness whether the
+// window hint was issued before it. `visible` gates it the same way the real
+// hook's effect does, so a conceal/reveal cycle re-subscribes here too.
+vi.mock("@/components/browser-tile/browser-peek-tile", async () => {
+  const { useEffect } = await import("react");
+  return {
+    BrowserPeekTile: (props: {
+      readonly node: { readonly sessionId: string; readonly tabId: string };
+      readonly completeMeans: BrowserPeekCompleteMeaning;
+      readonly visible: boolean;
+    }) => {
+      const visible = props.visible;
+      useEffect(() => {
+        if (!visible) return;
+        harness.frameOrder.push("screencastSubscribe");
+      }, [visible]);
+      return (
+        <button
+          type="button"
+          aria-label="Browser screencast controls"
+          data-testid="headless-browser-tab"
+          data-session={props.node.sessionId}
+          data-tab={props.node.tabId}
+          data-complete-means={props.completeMeans}
+        />
+      );
+    },
+  };
+});
 vi.mock("@/lib/browser-view/sessions/peek-frame-cache", () => ({
   useLastBrowserPeekFrame: () => peekFrameHarness.frame,
   clearLastBrowserPeekFrame: vi.fn(),
@@ -332,6 +366,7 @@ describe("BrowserSessionTile lifecycle projection", () => {
     harness.openTab.mockClear();
     harness.closeTab.mockClear();
     harness.attachTab.mockClear();
+    harness.frameOrder.length = 0;
     desktopWindowIdHarness.windowId = "window-a";
     reachabilityHarness.status = "reachable";
     reachabilityHarness.hostLabel = "host-test";
@@ -936,6 +971,99 @@ describe("BrowserSessionTile lifecycle projection", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("issues the window hint before the screencast wake on the mount path", () => {
+    // The activation this ticket exists for: a dormant tab, in a window that
+    // is not the scope's default route. The surface takes the peek branch, so
+    // both frames go out on the same commit - and the order decides the
+    // outcome, because the host answers an attach for a tab already bound
+    // elsewhere with a rejection and never relocates it. Wake first means the
+    // host elects the default route and the hint arrives too late to matter.
+    harness.items = [session("dormant", "electron")];
+
+    renderTile();
+
+    expect(harness.frameOrder).toEqual(["attachTab", "screencastSubscribe"]);
+  });
+
+  it("issues the window hint before the screencast wake on the reveal path", () => {
+    harness.items = [session("dormant", "electron")];
+
+    const view = render(
+      <TabBodySelectedContext.Provider value={false}>
+        <BrowserSessionTile
+          node={NODE}
+          viewTabId="view-1"
+          paneId="pane-1"
+          epicId="epic-1"
+        />
+      </TabBodySelectedContext.Provider>,
+    );
+
+    expect(harness.frameOrder).toEqual([]);
+
+    view.rerender(
+      <TabBodySelectedContext.Provider value>
+        <BrowserSessionTile
+          node={NODE}
+          viewTabId="view-1"
+          paneId="pane-1"
+          epicId="epic-1"
+        />
+      </TabBodySelectedContext.Provider>,
+    );
+
+    expect(harness.frameOrder).toEqual(["attachTab", "screencastSubscribe"]);
+  });
+
+  it("sends attachTab once under StrictMode's setup, cleanup, setup", () => {
+    // The only place the latch is load-bearing, and it is every dev launch:
+    // the desktop renderer entry wraps the app in `<StrictMode>`, which runs
+    // each effect twice on mount. Without the ref the tile asks the host
+    // twice for one activation.
+    harness.items = [session("ready", "electron")];
+
+    render(
+      <StrictMode>
+        <BrowserSessionTile
+          node={NODE}
+          viewTabId="view-1"
+          paneId="pane-1"
+          epicId="epic-1"
+        />
+      </StrictMode>,
+    );
+
+    expect(harness.attachTab).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fire attachTab for a live headless session", () => {
+    // `canMaterializeElectron` is a property of the CLIENT - a desktop
+    // co-located with the tile's host - so every local agent-driven headless
+    // browser tile satisfies the other terms: no native binding is ever
+    // published for a headless session. Asking there would put a pending
+    // attach and its timer behind every reveal of every Playwright tile, for
+    // a case the send does not exist for.
+    harness.items = [session("ready", "headless")];
+
+    renderTile();
+
+    expect(screen.getByTestId("headless-browser-tab").dataset.tab).toBe(
+      "tab-1",
+    );
+    expect(harness.attachTab).not.toHaveBeenCalled();
+  });
+
+  it("still fires attachTab for a dormant tab of a headless session", () => {
+    // The narrowing above is keyed to LIVE headless: a dormant tab is one of
+    // the two cases the send exists for, whatever its session's runtime says.
+    harness.items = [session("dormant", "headless")];
+
+    renderTile();
+
+    expect(harness.attachTab).toHaveBeenCalledTimes(1);
+    expect(harness.attachTab).toHaveBeenCalledWith("tab-1");
   });
 
   it("does not fire attachTab when a native binding is already present", () => {

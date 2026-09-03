@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { X } from "lucide-react";
 import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
 import type { BrowserViewViewportPresetId } from "@traycer-clients/shared/platform/browser-view";
@@ -158,7 +164,18 @@ function shouldRequestTabAttach(args: {
   if (!args.canMaterializeElectron || !args.inventoryReady) return false;
   if (!args.visible || !args.hostReachable) return false;
   if (args.session === undefined || args.tab === undefined) return false;
-  return args.binding === null;
+  if (args.binding !== null) return false;
+  // A LIVE headless session is neither of the two cases above and must not
+  // ask. `canMaterializeElectron` is a property of the CLIENT, not of the
+  // session, so without this term every local agent-driven Playwright tile on
+  // a desktop satisfies every other term - a headless session never publishes
+  // a native binding - and asks the host to place its tab natively on nothing
+  // but being looked at. The two intended cases both survive: a dormant
+  // session's first native birth is a dormant TAB, and a tab whose binding has
+  // not arrived is on an `electron` session.
+  return (
+    args.session.runtime.kind === "electron" || args.tab.status === "dormant"
+  );
 }
 
 function BrowserTabTileSurface(props: BrowserTabTileSurfaceProps) {
@@ -560,6 +577,18 @@ export function BrowserTabTile(props: BrowserTabTileProps) {
   const sendAttachTab = useCallback(() => {
     void attachTab(props.node.tabId).catch(() => undefined);
   }, [attachTab, props.node.tabId]);
+  /**
+   * The wake sends the hint first, so it precedes the peek branch the two
+   * `setState`s below are about to mount - the same ordering the activation
+   * layout effect buys on the mount path.
+   *
+   * The restart survives every ack outcome only because `attachTab` cannot
+   * throw SYNCHRONOUSLY: the coordinator wraps its send in try/catch and hands
+   * back a rejected promise when the stream is not live, and the
+   * no-coordinator stub returns `Promise.reject`. Nothing sits between this
+   * call and `setWakeRequestedAt`, so a future `attachTab` that threw on the
+   * calling stack would eat the reader's restart.
+   */
   const requestWake = useCallback(() => {
     sendAttachTab();
     setWakeRequestedAt(Date.now());
@@ -579,12 +608,18 @@ export function BrowserTabTile(props: BrowserTabTileProps) {
       clearTimeout(timer);
     };
   }, [wakeRequestedAt]);
-  // Edge-triggered through a ref, not a dependency: once per activation is the
-  // contract, so a re-render, a rejected ack, a timed-out ack and a
-  // `wakeRequested` flip must all send nothing more. Going false re-arms it,
-  // which is what makes a later activation - a reconnect, a reader coming
-  // back to a concealed tab - a fresh ask.
-  const attachRequestedRef = useRef(false);
+  // Edge-triggered through a ref holding the tab it last asked for: once per
+  // activation is the contract, so a re-render, a rejected ack, a timed-out
+  // ack and a `wakeRequested` flip must all send nothing more. The predicate
+  // going false clears it, which is what makes a later activation - a
+  // reconnect, a reader coming back to a concealed tab - a fresh ask. Keyed to
+  // the tab id rather than a bare flag because the effect also re-runs when
+  // `props.node.tabId` changes underneath a predicate that stayed true, and a
+  // flag would swallow the NEW tab's ask and leave the tile waiting on a
+  // binding it never requested. Unreachable on the canvas, where a tab change
+  // remounts, and reachable as soon as the Start Page panel renders this body
+  // with a store that re-keys refs in place.
+  const attachRequestedTabIdRef = useRef<string | null>(null);
   const shouldRequestAttach = shouldRequestTabAttach({
     canMaterializeElectron: sessions.canMaterializeElectron,
     inventoryReady: sessions.inventoryReady,
@@ -594,15 +629,34 @@ export function BrowserTabTile(props: BrowserTabTileProps) {
     binding,
     hostReachable: reachability.status !== "unreachable",
   });
-  useEffect(() => {
+  // A LAYOUT effect, and that one word is the whole ordering guarantee.
+  //
+  // On the activation this ticket exists for - a dormant tab, in the window
+  // that is not the scope's default route - the surface renders the peek
+  // branch, and the peek tile's screencast subscription is what funnels the
+  // tab into the host's `ensureTabAttached`. That subscribe is a PASSIVE
+  // effect in a child, and React flushes every layout effect of a commit
+  // before any passive effect of that commit, so asking here beats the wake
+  // there on both the mount path and the reveal path. Passive would lose:
+  // passive effects flush child-first, the wake would reach the host with no
+  // window named, the host would elect the default route, and the hint that
+  // followed would be answered "bound in another window" - leaving window B
+  // showing "Open in your other window" for a tab it had just asked for.
+  //
+  // Load-bearing because the host rejects and never relocates: an attach that
+  // arrives after the binding exists elsewhere cannot move it back, so the
+  // only fix is to arrive first. The two frames still travel on different
+  // streams (`browser.sessions` and `browser.screencast`), so this buys ISSUE
+  // order, not host-side arrival order; the host is what closes the remainder.
+  useLayoutEffect(() => {
     if (!shouldRequestAttach) {
-      attachRequestedRef.current = false;
+      attachRequestedTabIdRef.current = null;
       return;
     }
-    if (attachRequestedRef.current) return;
-    attachRequestedRef.current = true;
+    if (attachRequestedTabIdRef.current === props.node.tabId) return;
+    attachRequestedTabIdRef.current = props.node.tabId;
     sendAttachTab();
-  }, [sendAttachTab, shouldRequestAttach]);
+  }, [props.node.tabId, sendAttachTab, shouldRequestAttach]);
   const wakeActive =
     binding === null && wakeRequestedAt !== null && !wakeWindowExpired;
   const wakeExpired =
