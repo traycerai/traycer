@@ -4,7 +4,7 @@ import type { ChatActiveTurn } from "@traycer/protocol/host/agent/gui/subscribe"
 
 import { ComposerSendButton } from "../composer-send-button";
 
-const viewport = { mobile: false };
+const viewport = vi.hoisted(() => ({ mobile: false }));
 vi.mock("@/hooks/ui/use-mobile-viewport", () => ({
   useIsMobileViewport: () => viewport.mobile,
 }));

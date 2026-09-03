@@ -136,7 +136,7 @@ vi.mock("@/providers/use-resolved-theme", () => ({
 
 // The composer's send button places Stop beside Send on a phone-width
 // viewport; jsdom is desktop-width, so the phone case flips this explicitly.
-const viewport = { mobile: false };
+const viewport = vi.hoisted(() => ({ mobile: false }));
 vi.mock("@/hooks/ui/use-mobile-viewport", async (importActual) => ({
   ...(await importActual<typeof import("@/hooks/ui/use-mobile-viewport")>()),
   useIsMobileViewport: () => viewport.mobile,
@@ -1529,7 +1529,7 @@ describe("<ChatTile />", () => {
       });
     });
 
-    expect(screen.getByTestId("chat-stop-button")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Stop" })).not.toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Queue" }));
 
     expect(chatHarness.sent).toHaveLength(1);
