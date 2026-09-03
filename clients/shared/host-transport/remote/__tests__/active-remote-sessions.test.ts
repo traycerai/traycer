@@ -97,6 +97,9 @@ function fakeSession(): FakeSession {
     subscribe: vi.fn(() => {
       throw new Error("not exercised by these tests");
     }),
+    subscribeAtVersion: vi.fn(() => {
+      throw new Error("not exercised by these tests");
+    }),
     subscribeWithParamsProvider: vi.fn(() => {
       throw new Error("not exercised by these tests");
     }),
