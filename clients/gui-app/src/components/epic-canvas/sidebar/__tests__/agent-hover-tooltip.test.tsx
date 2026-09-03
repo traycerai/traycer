@@ -242,4 +242,58 @@ describe("AgentHoverTooltip", () => {
       screen.getByTestId("worktree-owner-tooltip").getAttribute("data-side"),
     ).toBe("right");
   });
+
+  it("keeps the agent name alongside extra content in the fallback tooltip", async () => {
+    // Regression coverage: the fallback branch used to drop the name whenever
+    // a caller supplied `extraContent`, because the label collapsed to just
+    // the extra node. Both have to survive - the extra line is appended
+    // UNDER the name, never in place of it.
+    renderHover({
+      hostId: null,
+      ownerKind: null,
+      ownerHostUnreachable: false,
+      roleClaims: [],
+      side: "top",
+      extraContent: (
+        <span data-testid="caller-extra">Working · large model</span>
+      ),
+    });
+
+    await userEvent.hover(screen.getByRole("button", { name: "Reviewer" }));
+
+    // Wait for the tooltip content to actually mount before counting - the
+    // trigger's own "Reviewer" already exists in the document, so a plain
+    // findAllByText resolves on that single match without ever waiting for
+    // the tooltip to open.
+    const tooltip = await screen.findByRole("tooltip");
+    expect(tooltip.textContent).toContain("Reviewer");
+    expect(tooltip.textContent).toContain("Working · large model");
+    // One "Reviewer" is the trigger button's own label; the other is the
+    // tooltip content TooltipWrapper renders on hover - so finding two is
+    // what proves the name reached the tooltip rather than just the trigger.
+    expect(screen.getAllByText("Reviewer")).toHaveLength(2);
+  });
+
+  it("keeps the agent name alongside extra content when the owner host is unreachable", async () => {
+    // Same fallback branch, reached through the OTHER gate: an owner host that
+    // cannot be reached degrades from the rich card to this same tooltip, so
+    // the name-plus-extra guarantee has to hold here too.
+    renderHover({
+      hostId: "host-a",
+      ownerKind: "chat",
+      ownerHostUnreachable: true,
+      roleClaims: [],
+      side: "top",
+      extraContent: (
+        <span data-testid="caller-extra">Working · large model</span>
+      ),
+    });
+
+    await userEvent.hover(screen.getByRole("button", { name: "Reviewer" }));
+
+    const tooltip = await screen.findByRole("tooltip");
+    expect(tooltip.textContent).toContain("Reviewer");
+    expect(tooltip.textContent).toContain("Working · large model");
+    expect(screen.getAllByText("Reviewer")).toHaveLength(2);
+  });
 });

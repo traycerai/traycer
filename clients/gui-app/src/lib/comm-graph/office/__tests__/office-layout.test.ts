@@ -830,6 +830,74 @@ describe("layoutOffice floors", () => {
     expect(reversed.walkable).toEqual(forward.walkable);
   });
 
+  it("still gives a single-host layout no stairwell", () => {
+    // The stairwell only exists to join storeys, so a building with exactly
+    // one has nothing to climb to. A regression that always reserved a
+    // stairwell corner would show up here first.
+    const layout = layoutOffice(SINGLE_HOST);
+    expect(layout.floors).toHaveLength(1);
+    expect(layout.floors[0].stairsTile).toBeNull();
+  });
+
+  it.each(
+    // Host A sweeps every count from 1 to 20; host B sweeps 1, 4, 7, ...19 -
+    // a coarser stride paired against the finer one so the two storeys rarely
+    // land on the same size. The previous amenity packer stacked every room
+    // straight down the first (right-hand) column, and on a two-storey
+    // building that column's last room could run its own bottom wall right
+    // through the stairwell reserved in the lobby's corner - but only at
+    // SOME combinations of sizes, never all of them, which is why a sweep
+    // catches it and a handful of fixed cases did not.
+    Array.from({ length: 20 }, (_, index) => index + 1).map((aCount, index) => {
+      const bCounts = [1, 4, 7, 10, 13, 16, 19];
+      return { aCount, bCount: bCounts[index % bCounts.length] };
+    }),
+  )(
+    "keeps the stairwell's footprint clear of every amenity ($aCount+$bCount agents)",
+    ({ aCount, bCount }) => {
+      const hostA = Array.from({ length: aCount }, (_, index) =>
+        agent({
+          id: `stair-a${index}`,
+          hostId: "host-a",
+          createdAt: index,
+          parentId: index === 0 ? null : "stair-a0",
+        }),
+      );
+      const hostB = Array.from({ length: bCount }, (_, index) =>
+        agent({
+          id: `stair-b${index}`,
+          hostId: "host-b",
+          createdAt: 1000 + index,
+          parentId: index === 0 ? null : "stair-b0",
+        }),
+      );
+      const layout = layoutOffice([...hostA, ...hostB]);
+
+      // Two storeys, so both get a stairwell - a `null` here is itself the
+      // bug this sweep exists to catch on a multi-floor building.
+      expect(layout.floors.length).toBeGreaterThanOrEqual(2);
+      for (const floor of layout.floors) {
+        const stairs = floor.stairsTile;
+        expect(stairs, `no stairs on host ${String(floor.hostId)}`).not.toBe(
+          null,
+        );
+        if (stairs === null) continue;
+        const stairsBounds: OfficeTileRect = {
+          col: stairs.col,
+          row: stairs.row,
+          cols: 2,
+          rows: 2,
+        };
+        for (const amenityRoom of floor.amenities) {
+          expect(
+            overlaps(stairsBounds, amenityRoom.bounds),
+            `${amenityRoom.kind} on host ${String(floor.hostId)} overlaps the stairwell`,
+          ).toBe(false);
+        }
+      }
+    },
+  );
+
   it("walls a cafeteria into every storey's top-right corner", () => {
     const layout = layoutOffice(TWO_HOSTS);
 

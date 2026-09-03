@@ -97,6 +97,40 @@ function agentRoleHoverContent(
   return <AgentRoleHoverContent agentName={agentName} claims={roleClaims} />;
 }
 
+/**
+ * What the plain tooltip shows when there is no owner card to hang content
+ * under.
+ *
+ * The name must survive whatever else is shown: the office's line under it is
+ * "Working · large model", which names nothing, and the floor's own tag is
+ * truncated - so a card that dropped the title for the posture line would take
+ * away the only place the full name was readable. The role content already
+ * carries the name, so it is only added when nothing else does.
+ */
+function fallbackTooltipLabel(
+  nodeName: string,
+  roleContent: ReactNode | null,
+  extraContent: ReactElement | null,
+): ReactNode {
+  if (roleContent !== null) {
+    return (
+      <>
+        {roleContent}
+        {extraContent}
+      </>
+    );
+  }
+  if (extraContent !== null) {
+    return (
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <span className="break-words">{nodeName}</span>
+        {extraContent}
+      </div>
+    );
+  }
+  return nodeName;
+}
+
 export function AgentHoverTooltip(props: AgentHoverTooltipProps): ReactNode {
   const {
     epicId,
@@ -113,9 +147,9 @@ export function AgentHoverTooltip(props: AgentHoverTooltipProps): ReactNode {
   // `null` is the ONLY way to say "nothing to add", which is why the prop is
   // an element and not a `ReactNode`. `ReactNode` admits `undefined`, `false`
   // and `""`, all of which are absent to a reader and present to a `!== null`
-  // test - and a non-null `supplemental` is what displaces the name label
-  // below, so each of them cost the card its title and put nothing in its
-  // place. The type makes them unrepresentable instead of guarding for them.
+  // test - and a non-null `supplemental` is what the owner card hangs a
+  // section under, so each of them bought an empty section. The type makes
+  // them unrepresentable instead of guarding for them.
   const supplemental =
     roleContent === null && extraContent === null ? null : (
       <>
@@ -144,7 +178,7 @@ export function AgentHoverTooltip(props: AgentHoverTooltipProps): ReactNode {
   // this for selection mode; the shared component gives it everywhere).
   return (
     <TooltipWrapper
-      label={supplemental ?? nodeName}
+      label={fallbackTooltipLabel(nodeName, roleContent, extraContent)}
       side={side}
       sideOffset={6}
       align="start"

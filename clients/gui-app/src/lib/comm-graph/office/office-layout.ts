@@ -664,18 +664,26 @@ function minColumnHeight(specs: ReadonlyArray<AmenitySpec>): number {
  * whenever the next one would run past the storey's last usable row. A column
  * is as wide as its widest room, so a narrow gym does not reserve a break
  * room's width for the whole storey.
+ *
+ * The FIRST column - the one against the right wall - has its own last row,
+ * because the stairwell stands in that corner on a multi-storey building and
+ * a room packed down to the corridor would have the stairs cut into its
+ * bottom wall. Reserving the rows here is what keeps the two apart; the
+ * stairwell is placed later and checks nothing.
  */
 function packAmenities(
   specs: ReadonlyArray<AmenitySpec>,
   firstRow: number,
   lastRow: number,
+  firstColumnLastRow: number,
 ): AmenityPacking {
   const placements: AmenityPlacement[] = [];
   let rightOffset = 0;
   let columnCols = 0;
   let row = firstRow;
   for (const spec of specs) {
-    if (columnCols > 0 && row + spec.rows - 1 > lastRow) {
+    const columnLastRow = rightOffset === 0 ? firstColumnLastRow : lastRow;
+    if (columnCols > 0 && row + spec.rows - 1 > columnLastRow) {
       rightOffset += columnCols + ROOM_GAP_TILES;
       columnCols = 0;
       row = firstRow;
@@ -1000,6 +1008,10 @@ function buildFloors(
       ? [{ hostId: null, agents: [] as ReadonlyArray<OfficeAgentInput> }]
       : groups;
   const builds: FloorBuild[] = [];
+  // Known before any storey is shaped, because a storey's rooms have to leave
+  // the stairwell's corner clear and only a multi-storey building has one.
+  const multiFloor = shapes.length > 1;
+  const stairsRows = multiFloor ? STAIRS_TILES : 0;
   let originRow = 0;
   for (const group of shapes) {
     const forest = buildForest(group.agents);
@@ -1029,13 +1041,17 @@ function buildFloors(
         : Math.max(
             contentBottom + BUILDING_BOTTOM_MARGIN_TILES,
             // The cap, the wall face, the rooms, and the corridor row the
-            // lowest room's door opens onto.
-            BUILDING_TOP_WALL_ROWS + minColumnHeight(specs) + 2,
+            // lowest room's door opens onto - plus the stairwell's rows, which
+            // the first column cannot use, so it still holds what the height
+            // was measured for.
+            BUILDING_TOP_WALL_ROWS + minColumnHeight(specs) + 2 + stairsRows,
           );
+    const lastRoomRow = originRow + localRows - 2;
     const packing = packAmenities(
       specs,
       originRow + BUILDING_TOP_WALL_ROWS,
-      originRow + localRows - 2,
+      lastRoomRow,
+      lastRoomRow - stairsRows,
     );
     const localCols =
       cabins.length === 0

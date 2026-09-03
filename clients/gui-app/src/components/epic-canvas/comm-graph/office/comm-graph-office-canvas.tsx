@@ -69,7 +69,10 @@ import {
   officeCatchUpMs,
   OfficeFrameGate,
 } from "@/components/epic-canvas/comm-graph/office/office-frame-gate";
-import { officeHarnessLogo } from "@/components/epic-canvas/comm-graph/office/office-logo-cache";
+import {
+  officeHarnessLogo,
+  onOfficeLogoReady,
+} from "@/components/epic-canvas/comm-graph/office/office-logo-cache";
 import { createCommGraphFindAdapter } from "@/components/epic-canvas/comm-graph/comm-graph-find-adapter";
 import { useRegisterTileFindAdapter } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
 import { BASE_STEP_MS } from "@/components/epic-canvas/comm-graph/use-comm-graph-transport";
@@ -178,6 +181,50 @@ interface OfficeHoverTarget {
   readonly agentId: string;
   /** The character's box in container screen pixels; the trigger's geometry. */
   readonly rect: OfficeRect;
+}
+
+/**
+ * What the open hover card was measured against, so the frame loop can tell
+ * when that measurement has stopped being true without a pointer event.
+ *
+ * The card's screen rect is computed on a pointermove and never again, but the
+ * thing it points at keeps moving: the character walks off to lunch, or an
+ * auto-pan slides the whole floor under a stationary cursor. Either leaves the
+ * trigger anchored over empty floor. Both are a change in exactly these five
+ * numbers, which is what makes them the thing to remember.
+ */
+interface HoverAnchor {
+  readonly agentId: string;
+  /** The hit region's box in sprite space, as it was when the pointer landed. */
+  readonly rect: OfficeRect;
+  readonly cameraX: number;
+  readonly cameraY: number;
+  readonly zoom: number;
+}
+
+function sameRect(a: OfficeRect, b: OfficeRect): boolean {
+  return (
+    a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height
+  );
+}
+
+/** Whether the hovered box is still exactly where the card was measured. */
+function hoverAnchorHolds(
+  anchor: HoverAnchor,
+  regions: ReadonlyArray<OfficeHitRegion>,
+  camera: OfficeCamera,
+): boolean {
+  if (
+    camera.x !== anchor.cameraX ||
+    camera.y !== anchor.cameraY ||
+    camera.zoom !== anchor.zoom
+  ) {
+    return false;
+  }
+  return regions.some(
+    (region) =>
+      region.agentId === anchor.agentId && sameRect(region.rect, anchor.rect),
+  );
 }
 
 /** An in-flight camera move, in screen space. */
@@ -306,6 +353,14 @@ interface OfficeRuntime {
   readonly setHoveredAgentId: (next: string | null) => void;
   readonly getHostNames: () => ReadonlyMap<string, string>;
   readonly setHostNames: (next: ReadonlyMap<string, string>) => void;
+  /**
+   * Agent display names for the name tags. Mirrored here rather than closed
+   * over by the frame loop: a rename is the ONE agent change the scene does
+   * not treat as a new floor, and tearing the loop down for it would repaint
+   * the whole static layer to change one label.
+   */
+  readonly getNameById: () => ReadonlyMap<string, string>;
+  readonly setNameById: (next: ReadonlyMap<string, string>) => void;
 }
 
 function createOfficeRuntime(view: CommGraphTileViewState): OfficeRuntime {
@@ -331,6 +386,7 @@ function createOfficeRuntime(view: CommGraphTileViewState): OfficeRuntime {
   let autoFitEnabled = isDefaultCommGraphView(view);
   let sceneInput: OfficeSceneInput | null = null;
   let hostNames: ReadonlyMap<string, string> = new Map();
+  let nameById: ReadonlyMap<string, string> = new Map();
   let hoveredAgentId: string | null = null;
   return {
     getCamera: () => camera,
@@ -355,8 +411,15 @@ function createOfficeRuntime(view: CommGraphTileViewState): OfficeRuntime {
     },
     hasDrawnFrame: () => drawnFrame,
     getSearchMatchIds: () => searchMatchIds,
+    // The match outlines and the hovered name tag are painted by the frame,
+    // and on a still floor the idle skip refuses every frame - so a change to
+    // either has to ask for one, or Find would report no matches over a floor
+    // still wearing the last query's outlines. Only a CHANGE asks: a pointer
+    // resting on one agent reports it on every move.
     setSearchMatchIds: (next) => {
+      if (next === searchMatchIds) return;
       searchMatchIds = next;
+      invalidateListener();
     },
     takePanRequest: () => {
       const taken = pendingPan;
@@ -392,11 +455,17 @@ function createOfficeRuntime(view: CommGraphTileViewState): OfficeRuntime {
     },
     getHoveredAgentId: () => hoveredAgentId,
     setHoveredAgentId: (next) => {
+      if (next === hoveredAgentId) return;
       hoveredAgentId = next;
+      invalidateListener();
     },
     getHostNames: () => hostNames,
     setHostNames: (next) => {
       hostNames = next;
+    },
+    getNameById: () => nameById,
+    setNameById: (next) => {
+      nameById = next;
     },
     takeManualControl: () => {
       autoPanEnabled = false;
@@ -628,8 +697,9 @@ function drawHarnessLogo(
     );
   }
   ctx.fill();
-  // `null` while the logo rasterizes - the chip alone is the placeholder, and
-  // the next frame after the decode picks the mark up with no invalidation.
+  // `null` while the logo rasterizes - the chip alone is the placeholder. The
+  // decode asks for the frame that first shows the mark (`onOfficeLogoReady`),
+  // which a still floor would otherwise never draw.
   const logo = officeHarnessLogo(drawable.harnessId);
   if (logo !== null) {
     ctx.drawImage(logo, drawable.x - half, drawable.y - half);
@@ -1302,7 +1372,18 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   // GROWS - agents arriving after the first frame, which is the normal case -
   // is framed as the room it became rather than as the empty one it started
   // as. The first pan, zoom or explicit fit ends that for good.
-  const fittedFloorRef = useRef<OfficeSize>({ width: 0, height: 0 });
+  //
+  // The VIEWPORT is part of what was fitted, not only the floor: a tile that
+  // shrinks or grows around an unchanged floor needs framing again just as
+  // much as a floor that grew inside an unchanged tile.
+  const fittedRef = useRef<{
+    readonly floor: OfficeSize;
+    readonly viewport: ScreenSize;
+  }>({
+    floor: { width: 0, height: 0 },
+    viewport: { width: 0, height: 0 },
+  });
+  const hoverAnchorRef = useRef<HoverAnchor | null>(null);
   // A pan asked for outside the frame loop. Handlers and the Find adapter have
   // no frame clock, so they name the destination and the loop starts it.
   const dragRef = useRef<DragState | null>(null);
@@ -1355,6 +1436,12 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     () => new Map(agents.map((agent) => [agent.id, agent.name])),
     [agents],
   );
+  useEffect(() => {
+    runtime.setNameById(nameById);
+    // A rename moves nothing, so nothing else would ask for the frame that
+    // shows it.
+    runtime.invalidateFrame();
+  }, [nameById, runtime]);
 
   const officeAgents = useMemo<ReadonlyArray<OfficeAgentInput>>(
     () =>
@@ -1493,6 +1580,10 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         : sceneInput;
     runtime.setSceneInput(stamped);
     readScene().sync(stamped);
+    // Not every change to the input moves anything. A paused seek that answers
+    // an open request takes an envelope off a desk and starts no walk, and
+    // within the same minute the idle skip would leave the pile painted.
+    runtime.invalidateFrame();
   }, [readScene, runtime, sceneInput]);
 
   // Pressing Play is an explicit request to follow the action again. Pause
@@ -1555,7 +1646,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     runtime.getCamera().x = fitted.x;
     runtime.getCamera().y = fitted.y;
     runtime.getCamera().zoom = fitted.zoom;
-    fittedFloorRef.current = size;
+    fittedRef.current = { floor: size, viewport };
     persistView();
   }, [persistView, readScene, runtime]);
 
@@ -1642,6 +1733,11 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     runtime.onInvalidateFrame(() => {
       gate.invalidate();
     });
+    // A logo lands asynchronously, and a still floor is the one that would
+    // never draw the frame that shows it.
+    const stopWatchingLogos = onOfficeLogoReady(() => {
+      gate.invalidate();
+    });
 
     // A wall clock only has to be right to the minute, but it must not be
     // right only at mount. Re-syncing the SAME input with a fresh `clockMs`
@@ -1662,16 +1758,22 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       runtime.setSceneInput(stamped);
     };
 
-    // Re-fit an unframed tile whenever the floor's size changes - agents
-    // arriving after the first frame is the normal case, and the room they
-    // land in is the one worth framing.
+    // Re-fit an unframed tile whenever the floor's size OR the tile's changes -
+    // agents arriving after the first frame is the normal case, and the room
+    // they land in is the one worth framing; a resized tile is the same floor
+    // seen through a different window, and the old framing crops it.
     const applyAutoFit = (floor: OfficeSize, viewport: ScreenSize): void => {
-      const fitted = fittedFloorRef.current;
+      const fitted = fittedRef.current;
       if (!runtime.isAutoFitEnabled()) return;
       if (floor.width <= 0 || viewport.width <= 0 || viewport.height <= 0) {
         return;
       }
-      if (floor.width === fitted.width && floor.height === fitted.height) {
+      if (
+        floor.width === fitted.floor.width &&
+        floor.height === fitted.floor.height &&
+        viewport.width === fitted.viewport.width &&
+        viewport.height === fitted.viewport.height
+      ) {
         return;
       }
       const next = fitCamera(floor, viewport);
@@ -1679,7 +1781,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       camera.x = next.x;
       camera.y = next.y;
       camera.zoom = next.zoom;
-      fittedFloorRef.current = floor;
+      fittedRef.current = { floor, viewport };
     };
 
     // One visibility decision per cursor step, exactly like the node graph's:
@@ -1755,24 +1857,27 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       if ((window.devicePixelRatio || 1) !== appliedDprRef.current) {
         applyCanvasSize();
       }
-      // The hover card's rect was measured on the last pointermove, and the
-      // character it points at can leave without the pointer moving at all:
-      // the cursor scrubs to a time before that agent existed, or the agent
-      // simply walks off to the cafeteria. Holding the card open would leave
-      // it anchored to empty floor.
-      const hovered = runtime.getHoveredAgentId();
-      if (
-        hovered !== null &&
-        !frame.hitRegions.some((region) => region.agentId === hovered)
-      ) {
-        runtime.setHoveredAgentId(null);
-        setHoverCard(null);
-      }
       const camera = runtime.getCamera();
       const viewport = runtime.getViewport();
       applyAutoFit(frame.size, viewport);
       requestPlaybackPan(frame.focus, viewport);
       advanceCamera(now, viewport);
+      // The hover card's rect was measured on the last pointermove, and what
+      // it points at can move without the pointer moving at all: the cursor
+      // scrubs to a time before that agent existed, the agent walks off to
+      // the cafeteria, or an auto-pan slides the floor under the cursor.
+      // Holding the card open would leave it anchored to empty floor. Checked
+      // AFTER the camera has moved for this frame, so a pan is caught on the
+      // frame it happens rather than the one after.
+      const anchor = hoverAnchorRef.current;
+      if (
+        anchor !== null &&
+        !hoverAnchorHolds(anchor, frame.hitRegions, camera)
+      ) {
+        hoverAnchorRef.current = null;
+        runtime.setHoveredAgentId(null);
+        setHoverCard(null);
+      }
 
       // Repainted only when the floor's version, the theme or its size moves;
       // every other frame this is a single `drawImage`.
@@ -1797,7 +1902,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         dpr: appliedDprRef.current,
         theme: resolvedTheme,
         searchMatchIds: runtime.getSearchMatchIds(),
-        nameById,
+        nameById: runtime.getNameById(),
         floors: scene.layout().floors,
         hostNameById: runtime.getHostNames(),
         awayAgentIds: awayAgentIdsIn(frame, scene.layout()),
@@ -1850,11 +1955,12 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       document.removeEventListener("visibilitychange", onVisibility);
       observer.disconnect();
       stop();
+      stopWatchingLogos();
       runtime.onInvalidateFrame(() => undefined);
       // A floor's worth of pixels is real memory; it goes with the tile.
       staticLayer.release();
     };
-  }, [applyCanvasSize, nameById, readScene, resolvedTheme, runtime]);
+  }, [applyCanvasSize, readScene, resolvedTheme, runtime]);
 
   const toSpritePoint = useCallback(
     (clientX: number, clientY: number): OfficePoint | null => {
@@ -1914,6 +2020,16 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       // Mirrored for the DRAW, which needs it to keep an away agent's name tag
       // while the pointer is on it; the card itself is React state.
       runtime.setHoveredAgentId(region === null ? null : region.agentId);
+      hoverAnchorRef.current =
+        region === null
+          ? null
+          : {
+              agentId: region.agentId,
+              rect: region.rect,
+              cameraX: camera.x,
+              cameraY: camera.y,
+              zoom: camera.zoom,
+            };
       setHoverCard(
         region === null
           ? null
@@ -1936,6 +2052,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   );
 
   const clearHover = useCallback(() => {
+    hoverAnchorRef.current = null;
     runtime.setHoveredAgentId(null);
     setHoverCard(null);
   }, [runtime]);

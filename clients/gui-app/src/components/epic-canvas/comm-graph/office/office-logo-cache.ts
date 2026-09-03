@@ -11,9 +11,10 @@
  *
  * RASTERIZING IS ASYNCHRONOUS and the frame loop is not. `officeHarnessLogo`
  * therefore never blocks: it returns `null` until a logo is ready and starts
- * the work on the first miss. A frame that finds `null` draws nothing and the
- * next one picks the logo up - which is why nothing here needs to tell the
- * renderer that anything changed.
+ * the work on the first miss. A frame that finds `null` draws nothing, and a
+ * finished decode announces itself through `onOfficeLogoReady` - because the
+ * frame that would pick the logo up is exactly the one a STILL floor skips,
+ * and a paused historical cursor is still for as long as it is looked at.
  *
  * WHERE THERE IS NO CANVAS AND NO IMAGE DECODER (jsdom), every path here is a
  * silent no-op. That is not defensive: the office's own suite runs there, and a
@@ -41,6 +42,20 @@ type LogoSlot = HTMLCanvasElement | null;
  * ever bought a second identical raster.
  */
 const logoCache = new Map<GuiHarnessId, LogoSlot>();
+
+/** Every mounted office floor, each waiting to be told a logo is drawable. */
+const readyListeners = new Set<() => void>();
+
+/**
+ * Calls `listener` whenever a logo finishes rasterizing. Returns the
+ * unsubscribe, which a floor calls when its frame loop stops.
+ */
+export function onOfficeLogoReady(listener: () => void): () => void {
+  readyListeners.add(listener);
+  return () => {
+    readyListeners.delete(listener);
+  };
+}
 
 /**
  * A 2d context, or `null` where the platform has no canvas. jsdom throws
@@ -116,6 +131,7 @@ function rasterizeLogo(harnessId: GuiHarnessId): void {
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(image, 0, 0, OFFICE_LOGO_SIZE, OFFICE_LOGO_SIZE);
     logoCache.set(harnessId, canvas);
+    for (const listener of readyListeners) listener();
   };
   image.onerror = () => {
     URL.revokeObjectURL(url);
