@@ -1,6 +1,7 @@
 import type { ChordString } from "@traycer-clients/shared/keybindings/chord-core";
 import type { BrowserViewReservedChord } from "@traycer-clients/shared/platform/browser-view";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
+import type { ActionId } from "@/lib/keybindings/actions";
 import { ignoreError } from "./ignore-error";
 
 /**
@@ -28,44 +29,90 @@ import { ignoreError } from "./ignore-error";
  * (reload, cut/copy/paste, select-all), which already act on the focused
  * web contents and are therefore correct as they are.
  *
- * `@/lib/keybindings/conflicts.ts` reads this table so the rebinding UI can
- * warn about a chord a focused browser tile would swallow - the two sides
- * cannot drift.
+ * `@/lib/keybindings/conflicts.ts` reads the browser-scoped rows so the
+ * rebinding UI can warn about a chord a focused browser tile would swallow -
+ * the two sides cannot drift.
  *
- * ponytail: the app-forwarded tokens are the DEFAULT chords for their actions,
- * not the user's live bindings, so a rebound `epic.close` stops being
- * forwarded. Registration happens outside the bindings store today; wire it to
- * the store if anyone actually rebinds these.
+ * The BROWSER-SCOPED rows are literal tokens, because they are not app
+ * bindings at all: they are what a browser does with those keys, and the
+ * rebinding UI warns (through `browserScopedChordLabel`) that a focused tile
+ * swallows them. The APP-FORWARDED rows are derived from the reader's LIVE
+ * bindings instead - see {@link reservedBrowserChordsFor}.
  */
-export const RESERVED_BROWSER_CHORDS: readonly BrowserViewReservedChord[] = [
-  // Browser-scoped: the focused tile's own tab.
+const BROWSER_SCOPED_CHORDS: readonly BrowserViewReservedChord[] = [
   { token: "mod+w", command: "closeTab" },
   { token: "mod+t", command: "newTab" },
   { token: "mod+l", command: "focusAddressBar" },
-  // App-forwarded: app-level navigation that stays meaningful over a page.
-  { token: "mod+k", command: null }, // app.palette.open
-  { token: "mod+shift+w", command: null }, // epic.close
-  { token: "mod+]", command: null }, // tab.next
-  { token: "mod+[", command: null }, // tab.prev
-  { token: "mod+shift+]", command: null }, // epic.next
-  { token: "mod+shift+[", command: null }, // epic.prev
+];
+
+/**
+ * The app actions main replays into the host renderer, by ACTION rather than by
+ * chord.
+ *
+ * A token here would be the action's DEFAULT chord, and a reader who rebinds or
+ * unbinds one of these gets the worst of both: the renderer's live registry is
+ * out of the input path while a guest has focus, so their configured
+ * replacement reaches the page while the stale default still fires the action.
+ * Naming the action and resolving it at registration is what keeps the reserved
+ * set and the bindings the same fact.
+ */
+const APP_FORWARDED_ACTIONS: readonly ActionId[] = [
+  "app.palette.open",
+  "epic.close",
+  "tab.next",
+  "tab.prev",
+  "epic.next",
+  "epic.prev",
   // The Start Page panel's own three, forwarded for the surface that created
   // the problem: a panel browser tab is a native guest, so `terminalPolicy:
   // "app"` - which is about an xterm swallowing a chord - does nothing here and
-  // the app renderer never sees the key. Without these rows, a user inside a
+  // the app renderer never sees the key. Without these, a reader inside a
   // focused panel browser cannot open a tab of either kind or collapse the
-  // panel, while ⌘T, ⌘W and ⌘]/⌘[ all still work: the gap reads as arbitrary
-  // precisely because it is the chooser's own hint line that advertises two of
-  // them. They are app-level by the same test as the rows above - a page has no
-  // business binding ⇧⌘B or ⇧⌘J, and ⌘J is this app's panel toggle.
-  { token: "mod+shift+b", command: null }, // app.browser.new
-  { token: "mod+shift+j", command: null }, // app.terminal.new
-  { token: "mod+j", command: null }, // app.terminal.toggle
+  // panel, while the browser-scoped rows all still work.
+  "app.browser.new",
+  "app.terminal.new",
+  "app.terminal.toggle",
 ];
 
-/** Chords a focused browser tile claims for the browser rather than the app. */
+/**
+ * The policy for one set of bindings.
+ *
+ * An action the reader has UNBOUND reserves nothing - there is no chord to
+ * claim, and reserving its old default would take a key away from the page for
+ * an action that can no longer run. An app-forwarded binding that collides with
+ * a browser-scoped row is dropped rather than duplicated: the browser row wins,
+ * which is what the rebinding UI already warns will happen.
+ */
+export function reservedBrowserChordsFor(
+  bindings: Readonly<Record<ActionId, ChordString | null>>,
+): readonly BrowserViewReservedChord[] {
+  const browserScoped = new Set(
+    BROWSER_SCOPED_CHORDS.map((reserved) => reserved.token),
+  );
+  const seen = new Set<string>();
+  const forwarded = APP_FORWARDED_ACTIONS.flatMap(
+    (action): BrowserViewReservedChord[] => {
+      const chord = bindings[action];
+      if (chord === null || browserScoped.has(chord) || seen.has(chord)) {
+        return [];
+      }
+      seen.add(chord);
+      return [{ token: chord, command: null }];
+    },
+  );
+  return [...BROWSER_SCOPED_CHORDS, ...forwarded];
+}
+
+/**
+ * Chords a focused browser tile claims for the browser rather than the app.
+ *
+ * Reads the BROWSER-SCOPED rows only, which is the whole of what this answers:
+ * an app-forwarded chord is not swallowed, it is replayed, so the rebinding UI
+ * has nothing to warn about there. That is also why this needs no bindings
+ * argument even though the reserved set now depends on them.
+ */
 export function browserScopedChordLabel(chord: ChordString): string | null {
-  const row = RESERVED_BROWSER_CHORDS.find(
+  const row = BROWSER_SCOPED_CHORDS.find(
     (reserved) => reserved.token === chord,
   );
   if (row === undefined || row.command === null) return null;
@@ -79,14 +126,21 @@ const BROWSER_SCOPED_CHORD_LABELS = {
 } as const;
 
 /**
- * Push the policy into the complete desktop preload bridge when present.
+ * Push the policy for these bindings into the complete desktop preload bridge
+ * when present.
+ *
  * Idempotent and HMR-safe: main REPLACES its whole table on every call, so a
- * re-registration after hot reload can never duplicate or drift.
+ * re-registration after hot reload can never duplicate or drift - which is also
+ * what makes it safe to call again on every rebind, and why the caller
+ * subscribes rather than diffing.
  */
-export function registerReservedBrowserChords(runnerHost: IRunnerHost): void {
+export function registerReservedBrowserChords(
+  runnerHost: IRunnerHost,
+  bindings: Readonly<Record<ActionId, ChordString | null>>,
+): void {
   const browserView = runnerHost.browserView;
   if (browserView === null) return;
   void browserView
-    .setReservedChords(RESERVED_BROWSER_CHORDS)
+    .setReservedChords(reservedBrowserChordsFor(bindings))
     .catch(ignoreError);
 }
