@@ -157,7 +157,7 @@ export function useBrowserOpenerItems(
     keywords: ["new", "browser", "web", "page", hostLabel],
     run: () => {
       if (sessions.lifecycle !== "live" || sessions.hostId === null) {
-        toast.error(browserSessionsRefusal(sessions.lifecycle));
+        toast.error(browserSessionsRefusal(sessions));
         return;
       }
       const hostId = sessions.hostId;

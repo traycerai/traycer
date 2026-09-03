@@ -56,7 +56,7 @@ export function useAddBrowserAction(
     mutationFn: async () => {
       const hostId = sessions.hostId;
       if (sessions.lifecycle !== "live" || hostId === null) {
-        throw new Error(browserSessionsRefusal(sessions.lifecycle));
+        throw new Error(browserSessionsRefusal(sessions));
       }
       const opened = await sessions.openTab(null, DEFAULT_BROWSER_TILE_URL);
       return { hostId, sessionId: opened.sessionId, tabId: opened.tabId };

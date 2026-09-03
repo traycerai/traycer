@@ -232,7 +232,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
         browserSessions.lifecycle !== "live" ||
         browserSessions.hostId !== props.node.hostId
       ) {
-        toast.error(browserSessionsRefusal(browserSessions?.lifecycle ?? null));
+        toast.error(browserSessionsRefusal(browserSessions));
         return;
       }
       void browserSessions
