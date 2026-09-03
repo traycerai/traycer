@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { act, cleanup, render } from "@testing-library/react";
 import {
   afterEach,
@@ -301,6 +302,22 @@ describe("<SessionImportRunController />", () => {
     // The binding was probed at mount; a client closing on it is not a new
     // question, and a fresh probe here would re-ask on every finished run.
     expect(runClientHarness.instances).toHaveLength(2);
+  });
+
+  it("asks again after StrictMode replays the effect, instead of treating the closed probe as answered", () => {
+    render(
+      <StrictMode>
+        <SessionImportRunController />
+      </StrictMode>,
+    );
+
+    // setup -> cleanup -> setup: the first probe is closed unanswered, the
+    // second is the live one. Without a live probe a dev build would never
+    // notice a run already going on the host.
+    expect(runClientHarness.instances).toHaveLength(2);
+    expect(requireInstance(0).close).toHaveBeenCalledTimes(1);
+    expect(requireInstance(1).close).not.toHaveBeenCalled();
+    expect(requireInstance(1).selections).toEqual([]);
   });
 
   it("closes the probe on unmount when no answer has arrived yet", () => {

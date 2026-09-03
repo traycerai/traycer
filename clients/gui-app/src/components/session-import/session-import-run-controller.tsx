@@ -193,7 +193,18 @@ export function SessionImportRunController(): null {
       // A probe still waiting for its answer when the client is replaced is
       // asking a connection that is gone; one that attached is the run's
       // subscription now and stays.
-      if (!attached && clientRef.current === probe) closeClient();
+      if (!attached && clientRef.current === probe) {
+        // Closed before the host answered (StrictMode's setup-cleanup-setup
+        // replay, or the binding changed underneath it): the question was
+        // never answered, so the next run of this effect asks again. Closed
+        // by hand rather than through `closeClient`: that bumps the
+        // generation this effect depends on, and a cleanup that re-runs its
+        // own effect would close and re-ask without end.
+        probedStreamClientRef.current = null;
+        waitingProbeRef.current = null;
+        clientRef.current = null;
+        probe.close();
+      }
     };
   }, [
     clientGeneration,
