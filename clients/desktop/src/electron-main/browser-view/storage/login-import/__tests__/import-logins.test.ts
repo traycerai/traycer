@@ -41,6 +41,7 @@ import {
 import type { LoginImportScan } from "@traycer-clients/shared/platform/browser-view";
 import { matchesDomainFilter } from "../../__tests__/cookie-jar-fixture";
 import { MAX_LOGIN_IMPORT_FILE_BYTES } from "../bounded-file";
+import { MAX_SQLITE_SNAPSHOT_BYTES } from "../sqlite-snapshot";
 
 /**
  * `LoginImportService` orchestration suite. Every dependency is faked: no
@@ -528,6 +529,7 @@ function buildHarness(
   };
   const clearedSites: string[] = [];
   const confirmations: LoginImportSummary[] = [];
+  let nextDefaultRevision = 0;
   const deps: LoginImportServiceDependencies = {
     platform: "darwin",
     homeDir: "/unused-home",
@@ -546,8 +548,12 @@ function buildHarness(
       return Promise.resolve(true);
     },
     releaseHostOwnedKeys: async () => undefined,
-    recordReplacedSites: async () => 1,
+    recordReplacedSite: async () => {
+      nextDefaultRevision += 1;
+      return nextDefaultRevision;
+    },
     markReplacementCleared: async () => undefined,
+    deferLedgerDigests: () => ({ end: () => undefined }),
     pushJarToHosts: async () => 0,
     settleWindowMs: 5,
     sleep: () => Promise.resolve(),
@@ -3865,7 +3871,7 @@ describe("import - a site with nothing landed after every re-write is refused", 
 // =================================================================================
 
 describe("import - the forget ledger is recorded lazily, once, before the first removal", () => {
-  it("records every written site in the ledger under one revision before the first removal and marks it cleared after", async () => {
+  it("records each site one at a time, immediately before its own first removal, and marks every revision cleared after", async () => {
     const homeDir = await makeTempDir("login-import-ledger-order-");
     await createDarwinChromeSource(
       homeDir,
@@ -3896,20 +3902,16 @@ describe("import - the forget ledger is recorded lazily, once, before the first 
       order.push(`remove:${name}`);
       return originalRemove(url, name);
     };
-    const recordReplacedSites = vi.fn(
-      async (sites: readonly string[]): Promise<number> => {
-        order.push("record");
-        expect([...sites].sort()).toEqual([
-          "ledger-site-one.com",
-          "ledger-site-two.com",
-        ]);
-        return 7;
-      },
-    );
+    let nextRevision = 6;
+    const recordReplacedSite = vi.fn(async (site: string): Promise<number> => {
+      nextRevision += 1;
+      order.push(`record:${site}:${nextRevision}`);
+      return nextRevision;
+    });
     const markReplacementCleared = vi.fn(
-      async (revision: number): Promise<void> => {
+      async (revisions: readonly number[]): Promise<void> => {
         order.push("mark-cleared");
-        expect(revision).toBe(7);
+        expect(revisions).toEqual([7, 8]);
       },
     );
     const releaseHostOwnedKeys = vi.fn(async (): Promise<void> => {
@@ -3920,7 +3922,7 @@ describe("import - the forget ledger is recorded lazily, once, before the first 
         platform: "darwin",
         homeDir,
         snapshotRoot: await makeTempDir("snap-"),
-        recordReplacedSites,
+        recordReplacedSite,
         markReplacementCleared,
         releaseHostOwnedKeys,
       },
@@ -3936,13 +3938,29 @@ describe("import - the forget ledger is recorded lazily, once, before the first 
     });
 
     expect(result.status).toBe("imported");
-    expect(recordReplacedSites).toHaveBeenCalledTimes(1);
+    // One call per site, in write order - never the batch up front.
+    expect(recordReplacedSite).toHaveBeenCalledTimes(2);
+    expect(recordReplacedSite.mock.calls.map((call) => call[0])).toEqual([
+      "ledger-site-one.com",
+      "ledger-site-two.com",
+    ]);
     expect(markReplacementCleared).toHaveBeenCalledTimes(1);
-    expect(markReplacementCleared).toHaveBeenCalledWith(7);
-    const recordIndex = order.indexOf("record");
-    // Recorded after the first site's write, before its first removal.
-    expect(recordIndex).toBeGreaterThan(order.indexOf("set:keep1"));
-    expect(recordIndex).toBeLessThan(order.indexOf("remove:old1"));
+    // Every revision recorded (n sites -> n revisions), once the write ends.
+    expect(markReplacementCleared).toHaveBeenCalledWith([7, 8]);
+    // Each site's record lands right after ITS OWN write and right before
+    // ITS OWN first removal - one at a time, never both up front.
+    expect(order.indexOf("record:ledger-site-one.com:7")).toBeGreaterThan(
+      order.indexOf("set:keep1"),
+    );
+    expect(order.indexOf("record:ledger-site-one.com:7")).toBeLessThan(
+      order.indexOf("remove:old1"),
+    );
+    expect(order.indexOf("record:ledger-site-two.com:8")).toBeGreaterThan(
+      order.indexOf("set:keep2"),
+    );
+    expect(order.indexOf("record:ledger-site-two.com:8")).toBeLessThan(
+      order.indexOf("remove:old2"),
+    );
     // Marked cleared after the last write and before the keys are released.
     const lastSetIndex = Math.max(
       order.indexOf("set:keep1"),
@@ -3952,6 +3970,54 @@ describe("import - the forget ledger is recorded lazily, once, before the first 
     expect(order.indexOf("mark-cleared")).toBeLessThan(
       order.indexOf("release"),
     );
+  });
+
+  it("never records a site that has nothing stale to remove, even alongside one that does", async () => {
+    const homeDir = await makeTempDir("login-import-ledger-mixed-");
+    await createDarwinChromeSource(
+      homeDir,
+      [
+        domainCookieRow(".ledger-mixed-stale.com", "fresh1", {
+          kind: "plain",
+          value: "v1",
+        }),
+        domainCookieRow(".ledger-mixed-clean.com", "fresh2", {
+          kind: "plain",
+          value: "v2",
+        }),
+      ],
+      23,
+    );
+    const session = new FakeLoginImportSession([
+      cookieFixture("stale-one", ".ledger-mixed-stale.com"),
+    ]);
+    const recordReplacedSite = vi.fn(
+      async (_site: string): Promise<number> => 9,
+    );
+    const markReplacementCleared = vi.fn(async (): Promise<void> => undefined);
+    const { service } = buildHarness(
+      {
+        platform: "darwin",
+        homeDir,
+        snapshotRoot: await makeTempDir("snap-"),
+        recordReplacedSite,
+        markReplacementCleared,
+      },
+      session,
+    );
+    const { sourceId, scan } = await scanChromeSource(service);
+
+    const result = await service.import({
+      sourceId,
+      scanId: scan.scanId,
+      domains: ["ledger-mixed-stale.com", "ledger-mixed-clean.com"],
+      includeDeviceBound: false,
+    });
+
+    expect(result.status).toBe("imported");
+    expect(recordReplacedSite).toHaveBeenCalledTimes(1);
+    expect(recordReplacedSite).toHaveBeenCalledWith("ledger-mixed-stale.com");
+    expect(markReplacementCleared).toHaveBeenCalledWith([9]);
   });
 
   it("does not touch the ledger when no site has anything to remove", async () => {
@@ -3971,15 +4037,18 @@ describe("import - the forget ledger is recorded lazily, once, before the first 
       23,
     );
     const session = new FakeLoginImportSession([]);
-    const recordReplacedSites = vi.fn(async (): Promise<number> => 7);
+    const recordReplacedSite = vi.fn(async (): Promise<number> => 7);
     const markReplacementCleared = vi.fn(async (): Promise<void> => undefined);
+    const digestEnd = vi.fn();
+    const deferLedgerDigests = vi.fn(() => ({ end: digestEnd }));
     const { service } = buildHarness(
       {
         platform: "darwin",
         homeDir,
         snapshotRoot: await makeTempDir("snap-"),
-        recordReplacedSites,
+        recordReplacedSite,
         markReplacementCleared,
+        deferLedgerDigests,
       },
       session,
     );
@@ -3993,8 +4062,138 @@ describe("import - the forget ledger is recorded lazily, once, before the first 
     });
 
     expect(result.status).toBe("imported");
-    expect(recordReplacedSites).not.toHaveBeenCalled();
+    expect(recordReplacedSite).not.toHaveBeenCalled();
     expect(markReplacementCleared).not.toHaveBeenCalled();
+    // An import that removes nothing still ends the deferred digests exactly
+    // once - the edge is per write, not per recorded site.
+    expect(digestEnd).toHaveBeenCalledTimes(1);
+  });
+});
+
+// =================================================================================
+// 32b. The barrier's abort after one site's removals never reaches a later
+//      site's ledger record
+// =================================================================================
+
+describe("import - an abort after one site's removals never records or clears a later site", () => {
+  it("records only the first site, marks only its revision cleared, and answers incomplete", async () => {
+    const homeDir = await makeTempDir("login-import-abort-after-removal-");
+    await createDarwinChromeSource(
+      homeDir,
+      [
+        domainCookieRow(".abort-removal-one.com", "fresh1", {
+          kind: "plain",
+          value: "v1",
+        }),
+        domainCookieRow(".abort-removal-two.com", "fresh2", {
+          kind: "plain",
+          value: "v2",
+        }),
+      ],
+      23,
+    );
+    const session = new FakeLoginImportSession([
+      cookieFixture("stale-one", ".abort-removal-one.com"),
+    ]);
+    const controller = new AbortController();
+    const originalRemove = session.cookies.remove;
+    session.cookies.remove = (url: string, name: string): Promise<void> => {
+      const result = originalRemove(url, name);
+      // Mimics the barrier expiring the instant the first site's only
+      // removal has been attempted - before the second site is ever reached.
+      controller.abort();
+      return result;
+    };
+    const recordReplacedSite = vi.fn(
+      async (_site: string): Promise<number> => 11,
+    );
+    const markReplacementCleared = vi.fn(async (): Promise<void> => undefined);
+    const pushJarToHosts = vi.fn(async (): Promise<number> => 0);
+    const { service } = buildHarness(
+      {
+        platform: "darwin",
+        homeDir,
+        snapshotRoot: await makeTempDir("snap-"),
+        serializeJarWrite: async <T>(
+          action: (signal: AbortSignal) => Promise<T>,
+        ): Promise<T> => action(controller.signal),
+        recordReplacedSite,
+        markReplacementCleared,
+        pushJarToHosts,
+      },
+      session,
+    );
+    const { sourceId, scan } = await scanChromeSource(service);
+
+    const result = await service.import({
+      sourceId,
+      scanId: scan.scanId,
+      domains: ["abort-removal-one.com", "abort-removal-two.com"],
+      includeDeviceBound: false,
+    });
+
+    expect(result).toEqual({ status: "blocked", reason: "incomplete" });
+    expect(recordReplacedSite).toHaveBeenCalledTimes(1);
+    expect(recordReplacedSite).toHaveBeenCalledWith("abort-removal-one.com");
+    expect(markReplacementCleared).toHaveBeenCalledWith([11]);
+    // Site two's write never ran at all.
+    expect(session.namesUnderDomain("abort-removal-two.com")).toEqual([]);
+    expect(pushJarToHosts).toHaveBeenCalledTimes(1);
+  });
+});
+
+// =================================================================================
+// 32c. deferLedgerDigests().end() runs before the jar is pushed to hosts
+// =================================================================================
+
+describe("import - ends the deferred ledger digests before pushing the jar", () => {
+  it("calls digests.end() before pushJarToHosts", async () => {
+    const homeDir = await makeTempDir("login-import-digest-before-push-");
+    await createDarwinChromeSource(
+      homeDir,
+      [
+        domainCookieRow(".digest-before-push.com", "fresh", {
+          kind: "plain",
+          value: "v",
+        }),
+      ],
+      23,
+    );
+    const session = new FakeLoginImportSession([
+      cookieFixture("stale", ".digest-before-push.com"),
+    ]);
+    const order: string[] = [];
+    const digestEnd = vi.fn(() => {
+      order.push("digest-end");
+    });
+    const deferLedgerDigests = vi.fn(() => ({ end: digestEnd }));
+    const pushJarToHosts = vi.fn(async (): Promise<number> => {
+      order.push("push");
+      return 0;
+    });
+    const { service } = buildHarness(
+      {
+        platform: "darwin",
+        homeDir,
+        snapshotRoot: await makeTempDir("snap-"),
+        deferLedgerDigests,
+        pushJarToHosts,
+      },
+      session,
+    );
+    const { sourceId, scan } = await scanChromeSource(service);
+
+    const result = await service.import({
+      sourceId,
+      scanId: scan.scanId,
+      domains: ["digest-before-push.com"],
+      includeDeviceBound: false,
+    });
+
+    expect(result.status).toBe("imported");
+    expect(deferLedgerDigests).toHaveBeenCalledTimes(1);
+    expect(digestEnd).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(["digest-end", "push"]);
   });
 });
 
@@ -4019,16 +4218,21 @@ describe("import - the ledger is marked cleared and the jar is pushed even when 
     const session = new FakeLoginImportSession([
       cookieFixture("stale", ".ledger-incomplete.com"),
     ]);
+    const recordReplacedSite = vi.fn(async (): Promise<number> => 42);
     const markReplacementCleared = vi.fn(async (): Promise<void> => undefined);
     const pushJarToHosts = vi.fn(async (): Promise<number> => 0);
+    const digestEnd = vi.fn();
+    const deferLedgerDigests = vi.fn(() => ({ end: digestEnd }));
     const { service } = buildHarness(
       {
         platform: "darwin",
         homeDir,
         snapshotRoot: await makeTempDir("snap-"),
         clearSiteLocalStorage: () => Promise.reject(new Error("clear failed")),
+        recordReplacedSite,
         markReplacementCleared,
         pushJarToHosts,
+        deferLedgerDigests,
       },
       session,
     );
@@ -4042,7 +4246,12 @@ describe("import - the ledger is marked cleared and the jar is pushed even when 
     });
 
     expect(result).toEqual({ status: "blocked", reason: "incomplete" });
+    // The finally path: a failure that ends the write after cookies already
+    // landed still ends the deferred digests and clears the revision(s) it
+    // recorded.
+    expect(digestEnd).toHaveBeenCalledTimes(1);
     expect(markReplacementCleared).toHaveBeenCalledTimes(1);
+    expect(markReplacementCleared).toHaveBeenCalledWith([42]);
     expect(pushJarToHosts).toHaveBeenCalledTimes(1);
   });
 });
@@ -4128,16 +4337,19 @@ describe("import - does not push when nothing was written", () => {
     session.rejectSet("one");
     session.rejectSet("two");
     const pushJarToHosts = vi.fn(async (): Promise<number> => 0);
-    const recordReplacedSites = vi.fn(async (): Promise<number> => 1);
+    const recordReplacedSite = vi.fn(async (): Promise<number> => 1);
     const markReplacementCleared = vi.fn(async (): Promise<void> => undefined);
+    const digestEnd = vi.fn();
+    const deferLedgerDigests = vi.fn(() => ({ end: digestEnd }));
     const { service } = buildHarness(
       {
         platform: "darwin",
         homeDir,
         snapshotRoot: await makeTempDir("snap-"),
         pushJarToHosts,
-        recordReplacedSites,
+        recordReplacedSite,
         markReplacementCleared,
+        deferLedgerDigests,
       },
       session,
     );
@@ -4159,8 +4371,10 @@ describe("import - does not push when nothing was written", () => {
       notifiedHosts: 0,
     });
     expect(pushJarToHosts).not.toHaveBeenCalled();
-    expect(recordReplacedSites).not.toHaveBeenCalled();
+    expect(recordReplacedSite).not.toHaveBeenCalled();
     expect(markReplacementCleared).not.toHaveBeenCalled();
+    // Removing nothing still ends the deferred ledger digests exactly once.
+    expect(digestEnd).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -4213,6 +4427,49 @@ describe("import - a picked cookie-file source enforces the read bound", () => {
 });
 
 // =================================================================================
+// 28b. A chromium snapshot the sqlite layer refuses as too-large answers
+//      profile-too-large
+// =================================================================================
+
+describe("import - a chromium source over the sqlite snapshot bound answers profile-too-large", () => {
+  it("answers profile-too-large when the live Cookies file has grown past the snapshot bound", async () => {
+    const homeDir = await makeTempDir("login-import-profile-too-large-");
+    const cookiesPath = await createDarwinChromeSource(
+      homeDir,
+      [
+        domainCookieRow(".profile-too-large-site.com", "sid", {
+          kind: "plain",
+          value: "v",
+        }),
+      ],
+      23,
+    );
+    const { service } = buildHarness(
+      { platform: "darwin", homeDir, snapshotRoot: await makeTempDir("snap-") },
+      new FakeLoginImportSession([]),
+    );
+    const { sourceId, scan } = await scanChromeSource(service);
+    expect(scan.sites).toEqual([
+      { domain: "profile-too-large-site.com", cookieCount: 1, unlock: null },
+    ]);
+
+    // Grown past the sqlite snapshot bound AFTER the scan, so it is the
+    // IMPORT's read that is refused - the copy is sized before a byte is
+    // copied (`copySqliteFiles`), so a sparse truncate is enough and instant.
+    await truncate(cookiesPath, MAX_SQLITE_SNAPSHOT_BYTES + 1);
+
+    const result = await service.import({
+      sourceId,
+      scanId: scan.scanId,
+      domains: ["profile-too-large-site.com"],
+      includeDeviceBound: false,
+    });
+
+    expect(result).toEqual({ status: "blocked", reason: "profile-too-large" });
+  });
+});
+
+// =================================================================================
 // 36. An import naming more sites than the forget ledger can record is
 //     refused before the keystore prompt or the first write
 // =================================================================================
@@ -4248,7 +4505,7 @@ describe("import - refuses an import past the forget ledger's domain cap", () =>
       const macosKeychain = vi.fn((): Promise<SecretReadResult> => {
         throw new Error("macOS keychain must not be consulted");
       });
-      const recordReplacedSites = vi.fn(async (): Promise<number | null> => 1);
+      const recordReplacedSite = vi.fn(async (): Promise<number | null> => 1);
       const markReplacementCleared = vi.fn(
         async (): Promise<void> => undefined,
       );
@@ -4263,7 +4520,7 @@ describe("import - refuses an import past the forget ledger's domain cap", () =>
             linuxSecretService: alwaysUnavailable(),
             windowsDpapi: () => Promise.resolve(null),
           },
-          recordReplacedSites,
+          recordReplacedSite,
           markReplacementCleared,
           pushJarToHosts,
         },
@@ -4282,7 +4539,7 @@ describe("import - refuses an import past the forget ledger's domain cap", () =>
 
       expect(result).toEqual({ status: "blocked", reason: "too-many-sites" });
       expect(session.setCalls).toEqual([]);
-      expect(recordReplacedSites).not.toHaveBeenCalled();
+      expect(recordReplacedSite).not.toHaveBeenCalled();
       expect(pushJarToHosts).not.toHaveBeenCalled();
       expect(markReplacementCleared).not.toHaveBeenCalled();
       expect(macosKeychain).not.toHaveBeenCalled();

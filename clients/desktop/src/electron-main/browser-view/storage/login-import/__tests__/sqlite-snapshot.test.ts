@@ -8,6 +8,7 @@ import {
   readdir,
   rm,
   stat,
+  truncate,
   unlink,
   writeFile,
 } from "node:fs/promises";
@@ -15,9 +16,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
+import { SqliteRowBudgetError } from "../sqlite-columns";
 import {
   classifyCopyFailure,
   copySqliteFiles,
+  MAX_SQLITE_SNAPSHOT_BYTES,
   SQLITE_SNAPSHOT_COPY_ATTEMPTS,
   sweepSqliteSnapshots,
   withSqliteSnapshot,
@@ -85,6 +88,22 @@ describe("withSqliteSnapshot - success", () => {
     expect(result).toEqual({ ok: false, reason: "unreadable" });
     const remaining = await readdir(snapshotRoot);
     expect(remaining).toEqual([]);
+  });
+
+  it("maps a thrown SqliteRowBudgetError from the reader to reason 'too-large', not the generic 'unreadable'", async () => {
+    const sourceDir = await mkdtemp(join(tmpdir(), "sqlite-snapshot-source-"));
+    dirsToClean.push(sourceDir);
+    const sourcePath = await makeRealSqliteFile(sourceDir, "cookies.sqlite");
+    const snapshotRoot = await makeSnapshotRoot();
+
+    const result = await withSqliteSnapshot(
+      { sourcePath, snapshotRoot, platform: process.platform },
+      () => {
+        throw new SqliteRowBudgetError("t");
+      },
+    );
+
+    expect(result).toEqual({ ok: false, reason: "too-large" });
   });
 
   it("removes the per-call snapshot directory on the success path too", async () => {
@@ -358,5 +377,64 @@ describe("copySqliteFiles - retry against a moving source", () => {
     await expect(stat(`${snapshotPath}-wal`)).rejects.toMatchObject({
       code: "ENOENT",
     });
+  });
+});
+
+describe("copySqliteFiles - too-large refusal by size alone, before any byte is copied", () => {
+  // Uses fs.promises.truncate to grow a sparse file to the target size
+  // instantly, rather than writing MAX_SQLITE_SNAPSHOT_BYTES real bytes.
+  it("refuses when the main file alone exceeds MAX_SQLITE_SNAPSHOT_BYTES, with no -wal present", async () => {
+    const sourceDir = await mkdtemp(join(tmpdir(), "sqlite-snapshot-source-"));
+    dirsToClean.push(sourceDir);
+    const sourcePath = join(sourceDir, "cookies.sqlite");
+    await writeFile(sourcePath, "");
+    await truncate(sourcePath, MAX_SQLITE_SNAPSHOT_BYTES + 1);
+    const snapshotDir = await mkdtemp(join(tmpdir(), "sqlite-snapshot-dest-"));
+    dirsToClean.push(snapshotDir);
+    const snapshotPath = join(snapshotDir, "cookies.sqlite");
+
+    let copyCallCount = 0;
+    const copy: SqliteFileCopy = async (from, to) => {
+      copyCallCount += 1;
+      await copyFile(from, to);
+    };
+
+    const result = await copySqliteFiles(
+      sourcePath,
+      snapshotPath,
+      process.platform,
+      copy,
+    );
+
+    expect(result).toBe("too-large");
+    expect(copyCallCount).toBe(0);
+  });
+
+  it("refuses when the main file is small but the -wal sibling pushes the sum over the bound", async () => {
+    const sourceDir = await mkdtemp(join(tmpdir(), "sqlite-snapshot-source-"));
+    dirsToClean.push(sourceDir);
+    const sourcePath = join(sourceDir, "cookies.sqlite");
+    await writeFile(sourcePath, "small main file");
+    await writeFile(`${sourcePath}-wal`, "");
+    await truncate(`${sourcePath}-wal`, MAX_SQLITE_SNAPSHOT_BYTES + 1);
+    const snapshotDir = await mkdtemp(join(tmpdir(), "sqlite-snapshot-dest-"));
+    dirsToClean.push(snapshotDir);
+    const snapshotPath = join(snapshotDir, "cookies.sqlite");
+
+    let copyCallCount = 0;
+    const copy: SqliteFileCopy = async (from, to) => {
+      copyCallCount += 1;
+      await copyFile(from, to);
+    };
+
+    const result = await copySqliteFiles(
+      sourcePath,
+      snapshotPath,
+      process.platform,
+      copy,
+    );
+
+    expect(result).toBe("too-large");
+    expect(copyCallCount).toBe(0);
   });
 });

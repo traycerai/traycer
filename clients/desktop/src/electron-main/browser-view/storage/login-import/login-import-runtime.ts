@@ -11,7 +11,8 @@ import {
 } from "../../browser-session";
 import { BROWSER_COOKIE_DELTA_WINDOW_MS } from "../browser-cookie-change-observer";
 import {
-  markBrowserForgetLedgerCleared,
+  deferBrowserForgetLedgerNotifications,
+  markBrowserForgetLedgerClearedMany,
   recordForgottenBrowserSites,
   releaseHeadlessOriginCookieKeys,
 } from "../browser-forget-ledger";
@@ -65,7 +66,9 @@ export interface LoginImportJarCoordination {
  * confirmation on - and can hold the user for a couple of minutes - because
  * expiry is not a
  * soft limit here: the serializer aborts the write and admits the queued jar
- * work, and the import answers `blocked` for a jar it only partly wrote.
+ * work, and the import answers `incomplete` for a jar it only partly wrote
+ * (the serializer lets the import settle within its grace and hands that
+ * answer up, rather than rejecting the caller the moment the timer fires).
  */
 export const LOGIN_IMPORT_JAR_BARRIER_TIMEOUT_MS = 10 * 60_000;
 
@@ -85,10 +88,12 @@ export function createLoginImportService(
       ensureBrowserViewSessionForPartition(BROWSER_VIEW_PARTITION),
     serializeJarWrite: jar.serializeJarWrite,
     clearSiteLocalStorage: jar.clearSiteLocalStorage,
-    // The site clear's own ledger entry, for every site the import will
-    // write, and the same "cleared" mark once the writes have ended.
-    recordReplacedSites: recordForgottenBrowserSites,
-    markReplacementCleared: markBrowserForgetLedgerCleared,
+    // The site clear's own ledger entry, per site as the import reaches its
+    // removals, the streams told once when the write ends, and the same
+    // "cleared" mark for every revision once the writes have ended.
+    recordReplacedSite: (site) => recordForgottenBrowserSites([site]),
+    markReplacementCleared: markBrowserForgetLedgerClearedMany,
+    deferLedgerDigests: deferBrowserForgetLedgerNotifications,
     pushJarToHosts: jar.pushJarToHosts,
     // The same native dialog forget-all and a site clear go through: the
     // copy names the registered source and the validated count, and Cancel

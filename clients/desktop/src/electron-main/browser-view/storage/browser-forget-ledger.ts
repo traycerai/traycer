@@ -206,6 +206,15 @@ const completedClears = new Set<number>();
  */
 let headlessOriginKeyIds = new Set<string>();
 const changeListeners = new Set<() => void>();
+/**
+ * Open {@link deferBrowserForgetLedgerNotifications} scopes, and whether a
+ * bump happened inside one. The ledger itself is never deferred - every
+ * record lands in memory and on disk as it is made - only the "tell every
+ * stream" edge is, so a caller recording many sites one at a time costs
+ * each host one digest rather than one per site.
+ */
+let deferredNotificationDepth = 0;
+let notificationPending = false;
 
 export function browserForgetLedgerFilePath(): string {
   return join(app.getPath("userData"), FORGET_LEDGER_FILE_NAME);
@@ -225,6 +234,8 @@ export async function initBrowserForgetLedger(filePath: string): Promise<void> {
     (value) => recordSchema.safeParse(value).data ?? EMPTY_RECORD,
   );
   completedClears.clear();
+  deferredNotificationDepth = 0;
+  notificationPending = false;
   const loaded = await store.load();
   // Clamped to the SAME bounds the write path applies. The schema puts none on
   // these three lists, and every limit in this file lives on a mutation
@@ -306,12 +317,15 @@ export async function recordForgottenBrowserSite(
 }
 
 /**
- * Several sites forgotten under ONE revision: the login import, which
- * replaces every site it writes and records them all before its first write.
- * One revision rather than one per site because a host is sent every entry
- * above its acked watermark on every push, so an import of hundreds of sites
- * recorded one at a time would push a digest that grows with each - and
- * because the sites are one action of the user's, cleared together.
+ * Several sites forgotten under ONE revision - the shape a caller that knows
+ * its whole batch up front records with. The login import is NOT such a
+ * caller: it records each site on its own, immediately before that site's
+ * first removal, so a site the write never reaches is never in the ledger
+ * (a host away for the import would otherwise prune a site this machine
+ * still holds whole, losing a login only that host had). It wraps those
+ * records in {@link deferBrowserForgetLedgerNotifications} so a host is
+ * still pushed one digest, and marks every revision cleared together with
+ * {@link markBrowserForgetLedgerClearedMany}.
  *
  * A domain that does not collapse to a registrable one is left out, as
  * above; a list with none left records nothing and answers `null`, so a
@@ -364,7 +378,23 @@ export async function recordForgottenBrowserSites(
 export async function markBrowserForgetLedgerCleared(
   revision: number,
 ): Promise<void> {
-  if (revision <= ledger.clearedThrough || revision > ledger.revision) return;
+  await markBrowserForgetLedgerClearedMany([revision]);
+}
+
+/**
+ * Several revisions' local clears finished at once - the login import's,
+ * one per site it replaced. One watermark computation and at most one
+ * write, where marking them one at a time in ascending order would advance
+ * the watermark - and write the file - once per site.
+ */
+export async function markBrowserForgetLedgerClearedMany(
+  revisions: readonly number[],
+): Promise<void> {
+  const completed = revisions.filter(
+    (revision) =>
+      revision > ledger.clearedThrough && revision <= ledger.revision,
+  );
+  if (completed.length === 0) return;
   // A CONTIGUOUS watermark, not a high-water mark, because two clears of
   // different sites run in parallel through the jar serializer and can
   // complete out of order. Advancing straight to the newest completed
@@ -372,7 +402,7 @@ export async function markBrowserForgetLedgerCleared(
   // reconciliation would never re-run it - the exact gap this field exists to
   // close. Held in memory only: a completion the process did not live to
   // record is one the next launch re-runs anyway.
-  completedClears.add(revision);
+  for (const revision of completed) completedClears.add(revision);
   // A revision the ledger no longer REPRESENTS can never be completed, and the
   // watermark must step over it rather than wedge on it. That happens whenever
   // a row is superseded before its clear finishes - forget a site twice and
@@ -690,6 +720,38 @@ export function onBrowserForgetLedgerChanged(listener: () => void): {
   };
 }
 
+/**
+ * Holds the "tell every stream" edge until `end()`, for a caller that records
+ * sites one at a time (the login import, one revision per site as each
+ * reaches its removals): the records themselves land in memory and on disk
+ * as they are made - the gate on in-flight observations closes with each,
+ * and a crash between them loses nothing recorded - and the streams push ONE
+ * digest per host when the scope ends, which carries every revision above
+ * that host's watermark anyway. Scopes nest; the outermost `end()` releases.
+ * `end()` is idempotent, so a scope can be ended from a `finally` that may
+ * run twice.
+ */
+export function deferBrowserForgetLedgerNotifications(): {
+  readonly end: () => void;
+} {
+  deferredNotificationDepth += 1;
+  let ended = false;
+  return {
+    end: () => {
+      if (ended) return;
+      ended = true;
+      deferredNotificationDepth -= 1;
+      if (deferredNotificationDepth > 0 || !notificationPending) return;
+      notificationPending = false;
+      notifyChanged();
+    },
+  };
+}
+
+function notifyChanged(): void {
+  for (const listener of [...changeListeners]) listener();
+}
+
 function ackedRevisionForHost(hostId: string): number {
   return (
     ledger.ackedByHost.find((entry) => entry.hostId === hostId)?.revision ?? 0
@@ -705,7 +767,11 @@ function mutate(next: ForgetLedgerRecord): void {
   ledger = next;
   reindexHeadlessOriginKeys();
   if (!bumped) return;
-  for (const listener of [...changeListeners]) listener();
+  if (deferredNotificationDepth > 0) {
+    notificationPending = true;
+    return;
+  }
+  notifyChanged();
 }
 
 /**

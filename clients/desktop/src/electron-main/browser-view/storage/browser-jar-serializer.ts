@@ -94,22 +94,47 @@ export class BrowserJarSerializer {
   private barrierGate: Promise<void> = Promise.resolve();
 
   /**
-   * Resolves once no whole-jar barrier is pending or running - for a READ
-   * that must not see a jar mid-barrier, which is the one thing a barrier's
-   * action cannot promise its per-site steps add up to at every instant: a
-   * host-issued whole-jar capture taken while the login import is writing
-   * site by site would carry some sites imported and some not, and a host
-   * that took it would hold that hybrid until the next capture. Looped,
-   * because a barrier requested while this waited publishes a new gate; it
-   * returns only when the gate it awaited is still the current one. Never
-   * called by a barrier's own action - that would wait on itself.
+   * Runs a whole-jar READ with no barrier running under it - for a read that
+   * must not see a jar mid-barrier, which is the one thing a barrier's action
+   * cannot promise its per-site steps add up to at every instant: a
+   * whole-jar capture taken while the login import is writing site by site
+   * would carry some sites imported and some not, and a host that took it
+   * would hold that hybrid until the next capture.
+   *
+   * Shaped like {@link runOnDomain}, and the shape is the guarantee: the
+   * gate is captured and the read registered in `inFlight` SYNCHRONOUSLY,
+   * so a barrier requested after this call waits behind the read (it is in
+   * that barrier's `ahead`), and a barrier requested before it is the gate
+   * this read waits on. Merely waiting for the gate and then reading - the
+   * earlier shape - left the read outside every barrier's accounting, and a
+   * barrier published between the wait and the read wrote under it.
+   *
+   * `waitMs` bounds only the WAIT for the gate, for a caller with a budget
+   * of its own (the final capture at quit): a gate still closed when it runs
+   * out answers `barrier-held` and reads nothing, rather than shipping the
+   * hybrid it exists to prevent. `null` waits however long the barrier
+   * holds. Never called by a barrier's own action - that would wait on
+   * itself.
    */
-  async barrierSettled(): Promise<void> {
-    for (;;) {
-      const gate = this.barrierGate;
-      await gate;
-      if (this.barrierGate === gate) return;
-    }
+  readBehindBarrier<T>(
+    read: () => Promise<T>,
+    waitMs: number | null,
+  ): Promise<JarReadOutcome<T>> {
+    const gate = this.barrierGate;
+    const run = (async (): Promise<JarReadOutcome<T>> => {
+      if (waitMs === null) {
+        await gate;
+      } else if (!(await settlesWithin(gate, waitMs))) {
+        return { ok: false, reason: "barrier-held" };
+      }
+      return { ok: true, value: await read() };
+    })();
+    const settled = run.then(ignore, ignore);
+    this.inFlight.add(settled);
+    void settled.then(() => {
+      this.inFlight.delete(settled);
+    });
+    return run;
   }
 
   /** Runs `action` with no other jar work for the same registrable domain. */
@@ -147,8 +172,13 @@ export class BrowserJarSerializer {
    * outcome worse than a forget-all that failed is one that reported failure
    * and then emptied the jar minutes later, under no barrier at all. A
    * barrier whose time runs out while its action is RUNNING aborts the
-   * signal and opens its gate; the action reads the signal between its steps
-   * and stops.
+   * signal; the action reads it between its steps, stops, and the caller is
+   * answered with what the action then settles with - within the grace.
+   * A login import the timer catches mid-site puts its reached cookies
+   * back, pushes what it did commit and answers `incomplete`, and that
+   * answer is the caller's, not a rejection that reads as "nothing was
+   * imported". Only an action that has not settled by the end of the grace
+   * - the wedge - is answered with the expiry, as the gate is forced open.
    */
   runOnEveryDomain<T>(
     action: (signal: AbortSignal) => Promise<T>,
@@ -193,13 +223,15 @@ export class BrowserJarSerializer {
       const settled = run.then(ignore, ignore);
       const timer = setTimeout(() => {
         gaveUp = true;
-        // The signal first, then the caller: the action must learn to stop
-        // before anything queued behind it can be admitted.
+        // The signal first: the action must learn to stop before anything
+        // queued behind it can be admitted.
         controller.abort();
-        expire();
         if (!running) {
           // Still waiting: nothing of this barrier's is touching the jar, and
-          // the gate is chained behind the barrier ahead anyway.
+          // the gate is chained behind the barrier ahead anyway. The caller
+          // is answered now - its action never ran, so there is no other
+          // answer to wait for.
+          expire();
           openGate();
           return;
         }
@@ -207,10 +239,16 @@ export class BrowserJarSerializer {
         // the abort, and admitting a forget-all under it would let that call
         // land in the emptied jar afterwards. The action reads the signal
         // between its calls, so one that is merely long settles as soon as
-        // the call in flight does, and the gate opens THEN; only one that
-        // never settles - a wedged call, the case the timer exists for - has
-        // the gate forced open after the grace.
-        const grace = setTimeout(openGate, BARRIER_SETTLE_GRACE_MS);
+        // the call in flight does - and the caller is answered with THAT,
+        // the gate opening then: the import's `incomplete`, with what it
+        // committed pushed, is an answer the expiry must not pre-empt. Only
+        // an action that never settles - a wedged call, the case the timer
+        // exists for - is answered with the expiry, as the gate is forced
+        // open after the grace.
+        const grace = setTimeout(() => {
+          expire();
+          openGate();
+        }, BARRIER_SETTLE_GRACE_MS);
         grace.unref();
         void settled.then(() => {
           clearTimeout(grace);
@@ -229,6 +267,25 @@ export class BrowserJarSerializer {
       }
     })();
   }
+}
+
+/** What a {@link BrowserJarSerializer.readBehindBarrier} answers. */
+export type JarReadOutcome<T> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly reason: "barrier-held" };
+
+/** `true` once `gate` resolves, `false` if `waitMs` elapses first. */
+function settlesWithin(gate: Promise<void>, waitMs: number): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => {
+      resolve(false);
+    }, waitMs);
+    timer.unref();
+    void gate.then(() => {
+      clearTimeout(timer);
+      resolve(true);
+    });
+  });
 }
 
 function barrierExpiredError(timeoutMs: number): Error {

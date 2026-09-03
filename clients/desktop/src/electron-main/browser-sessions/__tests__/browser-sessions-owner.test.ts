@@ -328,6 +328,155 @@ describe("the browser.sessions jar plane lives in main", () => {
     harness.jar.releaseBarrier();
   });
 
+  it("the final capture at close/quit skips the read when the barrier is still held past its shutdown budget, sending no frame", async () => {
+    vi.useFakeTimers();
+    try {
+      const session = await openLiveStream(harness, registry, "window-1");
+      session.emit(
+        {
+          kind: "capturePrimaryProfile",
+          hasBinaryPayload: false,
+          requestId: "standing-1",
+          standing: true,
+        },
+        null,
+      );
+
+      harness.jar.deferBarrier = true;
+      const flushed = registry.captureFinalPrimaryProfiles("window-1");
+      await vi.advanceTimersByTimeAsync(FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS);
+      await flushed;
+
+      // The barrier was still held past the shutdown budget: nothing was
+      // read, so no frame left and no ack was ever awaited - shipping a
+      // hybrid jar is exactly what the bounded wait exists to avoid.
+      expect(harness.jar.captures).toBe(0);
+      expect(harness.jar.boundedWaitTimeouts).toBe(1);
+      expect(session.framesOfKind("primaryProfileCaptured")).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+      harness.jar.releaseBarrier();
+    }
+  });
+
+  it("sends the final capture once the barrier releases, and still awaits its ack", async () => {
+    const session = await openLiveStream(harness, registry, "window-1");
+    session.emit(
+      {
+        kind: "capturePrimaryProfile",
+        hasBinaryPayload: false,
+        requestId: "standing-1",
+        standing: true,
+      },
+      null,
+    );
+
+    harness.jar.deferBarrier = true;
+    let settled = false;
+    const flushed = registry
+      .captureFinalPrimaryProfiles("window-1")
+      .then(() => {
+        settled = true;
+      });
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // The barrier is held open: the read has not even started.
+    expect(harness.jar.captures).toBe(0);
+    expect(session.framesOfKind("primaryProfileCaptured")).toHaveLength(0);
+    expect(settled).toBe(false);
+
+    harness.jar.releaseBarrier();
+    // The bounded-wait promise resolves through an extra microtask hop (it
+    // adopts `readPrimaryProfile()`'s own promise rather than settling with
+    // a plain value), so the ack waiter needs a few more ticks to register
+    // than the frame needs to leave.
+    for (let tick = 0; tick < 8; tick += 1) {
+      await Promise.resolve();
+    }
+
+    expect(harness.jar.captures).toBe(1);
+    const captured = session.framesOfKind("primaryProfileCaptured");
+    expect(captured).toHaveLength(1);
+    // Sent, but not yet acked - the quit flush still waits for the host's
+    // ack, not merely for the socket write.
+    expect(settled).toBe(false);
+
+    session.emit(
+      {
+        kind: "primaryProfileCaptureAck",
+        hasBinaryPayload: false,
+        requestId: "standing-1",
+      },
+      null,
+    );
+    await flushed;
+    expect(settled).toBe(true);
+  });
+
+  it("the import's own push still reads and sends immediately while the barrier is deferred, unblocked by a final capture waiting on the same gate", async () => {
+    const session = await openLiveStream(harness, registry, "window-1");
+    session.emit(
+      {
+        kind: "capturePrimaryProfile",
+        hasBinaryPayload: false,
+        requestId: "standing-1",
+        standing: true,
+      },
+      null,
+    );
+
+    harness.jar.deferBarrier = true;
+    // The final capture is queued behind the barrier first ...
+    const flushed = registry.captureFinalPrimaryProfiles("window-1");
+    // ... and the import's own push arrives while it is still waiting.
+    const pushed = registry.capturePrimaryProfileOnEveryHost();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // The push quotes "now" ordering, which never awaits the barrier: it
+    // read and sent its frame while the final capture is still held open.
+    expect(harness.jar.captures).toBe(1);
+    const captured = session.framesOfKind("primaryProfileCaptured");
+    expect(captured).toHaveLength(1);
+
+    session.emit(
+      {
+        kind: "primaryProfileCaptureAck",
+        hasBinaryPayload: false,
+        requestId: "standing-1",
+      },
+      null,
+    );
+    expect(await pushed).toBe(1);
+
+    // The final capture has still sent nothing - the push did not release it.
+    expect(session.framesOfKind("primaryProfileCaptured")).toHaveLength(1);
+
+    harness.jar.releaseBarrier();
+    // Same extra-hop reasoning as the previous test: the bounded-wait
+    // promise adopts `readPrimaryProfile()`'s promise, which costs one more
+    // microtask tick than the frame needing to leave.
+    for (let tick = 0; tick < 8; tick += 1) {
+      await Promise.resolve();
+    }
+
+    expect(harness.jar.captures).toBe(2);
+    expect(session.framesOfKind("primaryProfileCaptured")).toHaveLength(2);
+
+    session.emit(
+      {
+        kind: "primaryProfileCaptureAck",
+        hasBinaryPayload: false,
+        requestId: "standing-1",
+      },
+      null,
+    );
+    await flushed;
+  });
+
   it("hands the createElectronTab seed straight to the native manager, and the renderer only learns a tab exists", async () => {
     const session = await openLiveStream(harness, registry, "window-1");
 
@@ -1250,7 +1399,7 @@ describe("the browser.sessions jar plane lives in main", () => {
     expect(await secondPushed).toBe(1);
   });
 
-  it("runs overlapping captures on one stream one at a time, the later one after the first's ack", async () => {
+  it("runs the import's push and the final capture independently on one stream, since the final capture bypasses capturePrimaryProfileNow's lane", async () => {
     const session = await openLiveStream(harness, registry, "window-1");
     session.emit(
       {
@@ -1263,20 +1412,23 @@ describe("the browser.sessions jar plane lives in main", () => {
     );
 
     // Two callers overlapping on the SAME stream - a login import's push
-    // beside the quit-path flush, or two imports in succession. The second
-    // does NOT ride the first's frame: that frame may have read the jar
-    // before the second caller's write landed. It gets the next capture,
-    // which starts only once the first has been acked, so the two never
-    // share the standing id's one ack waiter.
+    // beside the quit-path flush. The final capture is deliberately NOT
+    // routed through `capturePrimaryProfileNow`'s in-flight/trailing lane
+    // (the import's own push takes that lane from inside its barrier, and a
+    // final capture queued ahead of it there would have the push wait on the
+    // capture that waits on the push) - so both read the jar and send their
+    // own frame independently, quoting the one standing id.
     const pushed = registry.capturePrimaryProfileOnEveryHost();
     const flushed = registry.captureFinalPrimaryProfiles("window-1");
     await Promise.resolve();
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(harness.jar.captures).toBe(1);
-    expect(session.framesOfKind("primaryProfileCaptured")).toHaveLength(1);
+    expect(harness.jar.captures).toBe(2);
+    expect(session.framesOfKind("primaryProfileCaptured")).toHaveLength(2);
 
+    // Acks are attributed in SEND order under the standing id: the first ack
+    // satisfies the push's frame, sent first.
     session.emit(
       {
         kind: "primaryProfileCaptureAck",
@@ -1285,16 +1437,9 @@ describe("the browser.sessions jar plane lives in main", () => {
       },
       null,
     );
-
     expect(await pushed).toBe(1);
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
 
-    // The trailing capture read the jar again and sent its own frame.
-    expect(harness.jar.captures).toBe(2);
-    expect(session.framesOfKind("primaryProfileCaptured")).toHaveLength(2);
-
+    // The second ack satisfies the final capture's own slot.
     session.emit(
       {
         kind: "primaryProfileCaptureAck",

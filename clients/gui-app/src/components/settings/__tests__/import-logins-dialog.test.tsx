@@ -9,6 +9,8 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ImportLoginsDialog } from "@/components/settings/import-logins-dialog";
+import { ImportLoginsFlow } from "@/components/settings/import-logins-flow";
+import { PLAIN_IMPORT_LOGINS_FRAME } from "@/components/settings/import-logins-frame";
 import { FakeBrowserViewBridge } from "@/lib/browser-view/__tests__/fake-browser-view-bridge";
 import type {
   LoginImportBlocked,
@@ -425,6 +427,7 @@ describe("<ImportLoginsDialog /> choose-sites step", () => {
     "source-changed",
     "unreadable",
     "file-too-large",
+    "profile-too-large",
     "too-many-sites",
   ])("renders the %s explainer and a Try again affordance", async (reason) => {
     const bridge = new TestBridge();
@@ -443,6 +446,16 @@ describe("<ImportLoginsDialog /> choose-sites step", () => {
     if (reason === "source-changed") {
       const explainerText = notes.map((note) => note.textContent).join(" ");
       expect(explainerText).toContain("try again to read the profile afresh");
+    }
+
+    // profile-too-large is the desktop's own size guard on the profile's
+    // cookie database (distinct from file-too-large, a picked file), so its
+    // explainer has to name the database rather than reuse the file copy.
+    if (reason === "profile-too-large") {
+      const explainerText = notes.map((note) => note.textContent).join(" ");
+      expect(explainerText).toContain(
+        "far larger than a browser normally keeps",
+      );
     }
   });
 
@@ -965,5 +978,103 @@ describe("<ImportLoginsDialog /> import", () => {
         .getByRole("checkbox", { name: "Import logins for google.com" })
         .getAttribute("data-state"),
     ).toBe("checked");
+  });
+});
+
+describe("<ImportLoginsDialog /> Done step affordance", () => {
+  it("shows a Done affordance on a successful import when onFinished is present", async () => {
+    const bridge = new TestBridge();
+    bridge.sources = [source({})];
+    bridge.scanBySourceId.set(
+      "source-1",
+      scan({
+        sites: [{ domain: "example.com", cookieCount: 1, unlock: null }],
+      }),
+    );
+    bridge.importResult = {
+      status: "imported",
+      importedSites: 1,
+      importedCookies: 1,
+      replacedSites: 0,
+      skippedInvalid: 0,
+      notifiedHosts: 0,
+    };
+    const { onOpenChange } = renderDialog(bridge);
+    await pickSource(/Google Chrome/);
+
+    await screen.findByText("example.com");
+    fireEvent.click(importConfirmButton());
+
+    await screen.findByText("Logins imported");
+    const done = screen.getByRole("button", { name: "Done" });
+    fireEvent.click(done);
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+});
+
+describe("<ImportLoginsFlow /> with nowhere to go (onFinished null)", () => {
+  function renderPlainFlow(bridge: TestBridge): void {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={client}>
+        <ImportLoginsFlow
+          browserView={bridge}
+          enabled
+          frame={PLAIN_IMPORT_LOGINS_FRAME}
+          onFinished={null}
+        />
+      </QueryClientProvider>,
+    );
+  }
+
+  it("shows no Close/Done button on the Done step", async () => {
+    const bridge = new TestBridge();
+    bridge.sources = [source({})];
+    bridge.scanBySourceId.set(
+      "source-1",
+      scan({
+        sites: [{ domain: "example.com", cookieCount: 1, unlock: null }],
+      }),
+    );
+    bridge.importResult = {
+      status: "imported",
+      importedSites: 1,
+      importedCookies: 1,
+      replacedSites: 0,
+      skippedInvalid: 0,
+      notifiedHosts: 0,
+    };
+    renderPlainFlow(bridge);
+    await pickSource(/Google Chrome/);
+
+    await screen.findByText("example.com");
+    fireEvent.click(importConfirmButton());
+
+    await screen.findByText("Logins imported");
+    expect(screen.queryByRole("button", { name: "Done" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
+  });
+
+  it("keeps Try again on a blocked Done step, with no Close button", async () => {
+    const bridge = new TestBridge();
+    bridge.sources = [source({})];
+    bridge.scanBySourceId.set(
+      "source-1",
+      scan({
+        sites: [{ domain: "example.com", cookieCount: 1, unlock: null }],
+      }),
+    );
+    bridge.importResult = { status: "blocked", reason: "browser-locked" };
+    renderPlainFlow(bridge);
+    await pickSource(/Google Chrome/);
+
+    await screen.findByText("example.com");
+    fireEvent.click(importConfirmButton());
+
+    await screen.findByText("Nothing was imported");
+    expect(screen.getByRole("button", { name: "Try again" })).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
   });
 });

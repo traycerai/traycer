@@ -8,6 +8,7 @@ import {
   readChromiumCookieDatabase,
   type ChromiumCookieDatabase,
 } from "../chromium-cookies";
+import { MAX_SQLITE_COOKIE_ROWS } from "../sqlite-columns";
 import { withSqliteSnapshot } from "../sqlite-snapshot";
 
 /**
@@ -518,5 +519,52 @@ describe("readChromiumCookieDatabase - meta version", () => {
     const database = await readDatabase(path);
 
     expect(database.metaVersion).toBe(24);
+  });
+});
+
+describe("readChromiumCookieDatabase - row budget", () => {
+  it("refuses ('too-large') a cookies table one row past MAX_SQLITE_COOKIE_ROWS", async () => {
+    const { dir, path, writer } = await createChromiumDatabase({
+      withPartitionColumns: true,
+    });
+    writers.push(writer);
+    dirsToClean.push(dir);
+    writer.exec(`
+      INSERT INTO cookies
+        (host_key, name, path, value, encrypted_value, expires_utc, is_secure, is_httponly, top_frame_site_key, has_expires, samesite)
+      SELECT
+        'row-budget.example.com',
+        'cookie_' || x,
+        '/',
+        'value',
+        X'',
+        0,
+        0,
+        0,
+        '',
+        0,
+        -1
+      FROM (
+        WITH RECURSIVE seq(x) AS (
+          SELECT 1
+          UNION ALL
+          SELECT x + 1 FROM seq WHERE x < ${MAX_SQLITE_COOKIE_ROWS + 1}
+        )
+        SELECT x FROM seq
+      );
+    `);
+
+    const snapshotRoot = join(
+      tmpdir(),
+      `chromium-cookies-snapshot-${randomUUID()}`,
+    );
+    snapshotRoots.push(snapshotRoot);
+
+    const result = await withSqliteSnapshot(
+      { sourcePath: path, snapshotRoot, platform: process.platform },
+      readChromiumCookieDatabase,
+    );
+
+    expect(result).toEqual({ ok: false, reason: "too-large" });
   });
 });

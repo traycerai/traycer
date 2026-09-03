@@ -7,8 +7,10 @@ import type { BrowserStorageCookie } from "@traycer/protocol/host/browser/contra
 import {
   browserForgetLedgerDigestForHost,
   browserForgetLedgerPendingClears,
+  deferBrowserForgetLedgerNotifications,
   initBrowserForgetLedger,
   markBrowserForgetLedgerCleared,
+  markBrowserForgetLedgerClearedMany,
   isBrowserForgetLedgerPendingAck,
   isHeadlessOriginCookieKey,
   releaseHeadlessOriginCookieKeys,
@@ -831,6 +833,147 @@ describe("forget ledger acked-revision gate", () => {
         domain: "example.com",
       }),
     ).toBe(true);
+  });
+});
+
+describe("forget ledger notification deferral", () => {
+  beforeEach(loadEmptyLedger);
+
+  it("holds the digest edge open across several deferred records, then fires once", async () => {
+    let notifications = 0;
+    const subscription = onBrowserForgetLedgerChanged(() => {
+      notifications += 1;
+    });
+
+    const scope = deferBrowserForgetLedgerNotifications();
+    await recordForgottenBrowserSites(["first.test"]);
+    await recordForgottenBrowserSites(["second.test"]);
+    await recordForgottenBrowserSites(["third.test"]);
+    // Each record lands in memory and bumps the revision, but the "tell every
+    // stream" edge is held until the scope ends.
+    expect(notifications).toBe(0);
+    expect(browserForgetLedgerDigestForHost(HOST).revision).toBe(3);
+
+    scope.end();
+
+    expect(notifications).toBe(1);
+    subscription.dispose();
+  });
+
+  it("persists every deferred record though only the notification is held", async () => {
+    const file = pathIn("deferred-persist.json");
+    await initBrowserForgetLedger(file);
+
+    const scope = deferBrowserForgetLedgerNotifications();
+    await recordForgottenBrowserSites(["first.test"]);
+    await recordForgottenBrowserSites(["second.test"]);
+    await recordForgottenBrowserSites(["third.test"]);
+    scope.end();
+
+    const persisted: unknown = JSON.parse(await readFile(file, "utf8"));
+    expect(persisted).toMatchObject({
+      revision: 3,
+      domains: expect.arrayContaining([
+        expect.objectContaining({ domain: "first.test" }),
+        expect.objectContaining({ domain: "second.test" }),
+        expect.objectContaining({ domain: "third.test" }),
+      ]),
+    });
+  });
+
+  it("closes idempotently: a second end() call notifies no further", async () => {
+    let notifications = 0;
+    const subscription = onBrowserForgetLedgerChanged(() => {
+      notifications += 1;
+    });
+
+    const scope = deferBrowserForgetLedgerNotifications();
+    await recordForgottenBrowserSites(["only.test"]);
+    scope.end();
+    scope.end();
+
+    expect(notifications).toBe(1);
+    subscription.dispose();
+  });
+
+  it("only releases on the outermost end(), leaving an inner end() a no-op", async () => {
+    let notifications = 0;
+    const subscription = onBrowserForgetLedgerChanged(() => {
+      notifications += 1;
+    });
+
+    const outer = deferBrowserForgetLedgerNotifications();
+    const inner = deferBrowserForgetLedgerNotifications();
+    await recordForgottenBrowserSites(["nested.test"]);
+
+    inner.end();
+    expect(notifications).toBe(0);
+
+    outer.end();
+    expect(notifications).toBe(1);
+    subscription.dispose();
+  });
+
+  it("notifies immediately when no scope is open, as the control", async () => {
+    let notifications = 0;
+    const subscription = onBrowserForgetLedgerChanged(() => {
+      notifications += 1;
+    });
+
+    await recordForgottenBrowserSites(["immediate.test"]);
+
+    expect(notifications).toBe(1);
+    subscription.dispose();
+  });
+});
+
+describe("forget ledger clear reconciliation, several revisions at once", () => {
+  beforeEach(loadEmptyLedger);
+
+  it("advances the watermark to the newest of several revisions marked together", async () => {
+    await recordForgottenBrowserSite("first.test");
+    await recordForgottenBrowserSite("second.test");
+    await recordForgottenBrowserSite("third.test");
+
+    await markBrowserForgetLedgerClearedMany([1, 2, 3]);
+
+    expect(browserForgetLedgerPendingClears()).toEqual({
+      forgetAll: null,
+      domains: [],
+    });
+  });
+
+  it("ignores a revision already cleared or above the ledger's top, without throwing", async () => {
+    await recordForgottenBrowserSite("example.com");
+    await markBrowserForgetLedgerCleared(1);
+
+    await expect(
+      markBrowserForgetLedgerClearedMany([1, 999]),
+    ).resolves.toBeUndefined();
+
+    expect(browserForgetLedgerPendingClears()).toEqual({
+      forgetAll: null,
+      domains: [],
+    });
+  });
+
+  it("holds the watermark back on an out-of-order older pending revision, the same contiguity rule the single-clear function enforces", async () => {
+    await recordForgottenBrowserSite("first.test");
+    await recordForgottenBrowserSite("second.test");
+    await recordForgottenBrowserSite("third.test");
+
+    // Only the newer two are marked; the oldest (revision 1) is still
+    // pending, so the watermark must not step past it.
+    await markBrowserForgetLedgerClearedMany([2, 3]);
+
+    expect(browserForgetLedgerPendingClears().domains).toEqual([
+      { domain: "first.test", revision: 1 },
+      { domain: "second.test", revision: 2 },
+      { domain: "third.test", revision: 3 },
+    ]);
+
+    await markBrowserForgetLedgerClearedMany([1]);
+    expect(browserForgetLedgerPendingClears().domains).toEqual([]);
   });
 });
 

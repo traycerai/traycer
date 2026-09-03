@@ -10,6 +10,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { useIsMutating } from "@tanstack/react-query";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import { AnimatePresence, m } from "motion/react";
 import { traycerInfo } from "@traycer-clients/shared/platform/traycer-info";
@@ -34,11 +35,14 @@ import {
   OnboardingPhoneDiorama,
   type OnboardingPhoneSceneId,
 } from "@/components/onboarding/onboarding-phone-diorama";
+import { OnboardingLoginImportStage } from "@/components/onboarding/onboarding-login-import-stage";
 import { OnboardingSessionImportStage } from "@/components/onboarding/onboarding-session-import-stage";
 import { OnboardingThemePicker } from "@/components/onboarding/onboarding-theme-picker";
 import { useAgentSelectionGuideGlobalOnboardingDraftQuery } from "@/hooks/agent/use-agent-selection-guide-global-onboarding-draft-query";
 import { useAgentSelectionGuideSetGlobalMutation } from "@/hooks/agent/use-agent-selection-guide-set-global-mutation";
+import { useLoginImportAvailable } from "@/hooks/browser/use-login-import-available";
 import { useSessionImportAvailable } from "@/hooks/session-import/use-session-import-available";
+import { browserMutationKeys } from "@/lib/query-keys";
 import { getClientAppVersionLabel } from "@/lib/app-version";
 import { shortcutHintsVisible } from "@/lib/keybindings/shortcut-hints";
 import { useOpenLink } from "@/lib/links/open-link";
@@ -582,6 +586,7 @@ type OnboardingMiniature =
   | { readonly kind: "desktop"; readonly actId: DesktopOnboardingActId }
   | { readonly kind: "phone"; readonly scene: OnboardingPhoneSceneId }
   | { readonly kind: "session-import" }
+  | { readonly kind: "login-import" }
   | { readonly kind: "none" };
 
 /**
@@ -593,8 +598,9 @@ type OnboardingMiniature =
  * The two acts that do real setup work drop the miniature on a phone: providers
  * already stacked to its list-only layout below `lg`, and the agent guide moves
  * its editor into the copy rail, where a phone keyboard can reach it. Session
- * import is desktop-only (the mobile tour never lists it), and shows no
- * miniature at all - its stage is the live wizard.
+ * import and login import are desktop-only (the mobile tour never lists
+ * them), and show no miniature at all - their stages are the live wizard and
+ * the live import flow.
  */
 function miniatureForAct(actId: OnboardingActId): OnboardingMiniature {
   const mobile = isMobileApp();
@@ -612,6 +618,8 @@ function miniatureForAct(actId: OnboardingActId): OnboardingMiniature {
       return mobile ? { kind: "none" } : { kind: "desktop", actId };
     case "session-import":
       return { kind: "session-import" };
+    case "login-import":
+      return { kind: "login-import" };
     case "mobile-tasks":
       return { kind: "phone", scene: "drawer" };
     case "mobile-switcher":
@@ -646,6 +654,8 @@ function OnboardingMiniatureColumn(props: {
         registerSubmit={registerSessionImportSubmit}
       />
     );
+  } else if (miniature.kind === "login-import") {
+    content = <OnboardingLoginImportStage />;
   } else {
     content = (
       <OnboardingDiorama actId={miniature.actId} agentGuide={agentGuide} />
@@ -851,15 +861,24 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
   const router = useRouter();
   const { replay } = props;
   // The tour this shell can run, not the full catalog: the installed app plays
-  // the phone tour, and a host that cannot scan sessions never reaches the
-  // session-import act, whose stage is the live wizard. Everything below
+  // the phone tour, a host that cannot scan sessions never reaches the
+  // session-import act, whose stage is the live wizard, and a machine that
+  // cannot import logins (no browser bridge, or saving off) never reaches the
+  // login-import act, whose stage is the live import flow. Everything below
   // counts acts off this list, so an omitted act is unreachable rather than
   // merely blank.
   const sessionImportAvailable = useSessionImportAvailable();
+  const loginImportAvailable = useLoginImportAvailable();
   const acts = useMemo(
-    () => onboardingActsFor(sessionImportAvailable),
-    [sessionImportAvailable],
+    () => onboardingActsFor({ sessionImportAvailable, loginImportAvailable }),
+    [loginImportAvailable, sessionImportAvailable],
   );
+  // An import the login-import act started is a desktop write that may be
+  // sitting on a keystore prompt; Continue holds until it settles so the
+  // stage is there to show the outcome. Skip does not: the write finishes
+  // either way, and the user can always leave.
+  const loginImportPending =
+    useIsMutating({ mutationKey: browserMutationKeys.importLogins() }) > 0;
   // Read the raw step and clamp here: negotiation can retire an act while the
   // user is already past its new end, and the clamp is what keeps the page on
   // a real act until the next move re-seats the store.
@@ -1013,7 +1032,8 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
     onValueChange: updateAgentGuideDraft,
     onRevertToDefault: revertAgentGuideDraft,
   };
-  const advanceDisabled = (isAgentGuideAct || isLastAct) && agentGuideSaving;
+  const advanceDisabled =
+    ((isAgentGuideAct || isLastAct) && agentGuideSaving) || loginImportPending;
 
   // Finishing the tour must never leave the app on the tabless landing.
   // Replay-from-settings sets `?replay=true` (and pushed /onboarding onto the
@@ -1213,7 +1233,8 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
             <OnboardingStageEdgeFade
               visible={
                 miniature.kind === "desktop" ||
-                miniature.kind === "session-import"
+                miniature.kind === "session-import" ||
+                miniature.kind === "login-import"
               }
             />
             <div className="onboarding-actions absolute z-10 flex items-center justify-end gap-3">

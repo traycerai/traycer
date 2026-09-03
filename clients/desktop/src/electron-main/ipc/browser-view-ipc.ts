@@ -590,13 +590,20 @@ export function registerBrowserViewIpc(
         await forgetLedgerReconciled;
         return await primaryProfileSnapshots.capture();
       },
-      // A HOST-issued whole-jar read waits for any whole-jar barrier: taken
-      // while the login import writes site by site, it would carry some
-      // sites imported and some not, and the host would hold that hybrid
-      // until the next capture. Only the host's own asks wait here - the
-      // pushes main makes (the import's, inside its barrier; the final
-      // capture at quit) go straight to the jar.
-      awaitJarBarrier: () => jarSerializer.barrierSettled(),
+      // A HOST-issued whole-jar read - and the final capture at a window's
+      // close or quit - runs behind any whole-jar barrier, holding the
+      // serializer's read lease through the read so no barrier can open
+      // under it: taken while the login import writes site by site, it
+      // would carry some sites imported and some not, and the host would
+      // hold that hybrid until the next capture. The import's own push,
+      // inside its barrier, goes straight to the jar.
+      capturePrimaryProfileBehindBarrier: async (waitMs) => {
+        const read = await jarSerializer.readBehindBarrier(async () => {
+          await forgetLedgerReconciled;
+          return await primaryProfileSnapshots.capture();
+        }, waitMs);
+        return read.ok ? read.value : null;
+      },
       applyObservedProfile: async (observed) => {
         await applyHostContributedCookies(
           { source: "observed", ...observed },

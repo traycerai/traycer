@@ -310,6 +310,13 @@ export type LoginImportBlocked =
    * that is not a regular file at all - a FIFO, a device - is `unreadable`.
    */
   | "file-too-large"
+  /**
+   * An installed profile's cookie database (with its write-ahead log) is
+   * bigger than the desktop will copy, or holds more rows than it will read
+   * - many times what any browser keeps, so a corrupt or runaway file rather
+   * than a big jar. Nothing is copied or read.
+   */
+  | "profile-too-large"
   | "unreadable";
 
 /**

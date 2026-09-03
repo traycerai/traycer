@@ -59,6 +59,15 @@ vi.mock("@/hooks/session-import/use-session-import-available", () => ({
   useSessionImportAvailable: () => sessionImportAvailableMock.value,
 }));
 
+// Off by default: the login-import act needs a browser bridge and saved
+// logins on, which this harness has no desktop for. Suites that exercise
+// the act flip it and stub the stage.
+const loginImportAvailableMock = vi.hoisted(() => ({ value: false }));
+
+vi.mock("@/hooks/browser/use-login-import-available", () => ({
+  useLoginImportAvailable: () => loginImportAvailableMock.value,
+}));
+
 vi.mock("@/components/onboarding/onboarding-diorama", () => ({
   OnboardingDiorama: (props: {
     readonly actId: OnboardingActId;
@@ -177,7 +186,10 @@ function createRunnerHost() {
 
 /** The tour the mocked host actually runs - not always the whole catalog. */
 function visibleActs(): ReadonlyArray<OnboardingAct> {
-  return onboardingActsFor(sessionImportAvailableMock.value);
+  return onboardingActsFor({
+    sessionImportAvailable: sessionImportAvailableMock.value,
+    loginImportAvailable: loginImportAvailableMock.value,
+  });
 }
 
 function currentActId(): string | null {

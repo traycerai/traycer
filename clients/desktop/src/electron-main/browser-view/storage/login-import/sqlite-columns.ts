@@ -62,6 +62,35 @@ export function readFlag(row: SqliteRow, column: string): boolean {
 }
 
 /** The column names of one table, so a SELECT can be built for the schema at hand. */
+/**
+ * The most rows one cookie table read materialises. Every browser caps its
+ * jar - Chromium at 3 300 cookies, Firefox at 3 000 - so a table past this
+ * is not a bigger profile, it is a corrupt or hand-made file, and `.all()`
+ * on it would build that many objects in Electron main.
+ */
+export const MAX_SQLITE_COOKIE_ROWS = 50_000;
+
+/** Thrown by {@link assertRowBudget}; the snapshot answers it as `too-large`. */
+export class SqliteRowBudgetError extends Error {
+  constructor(table: string) {
+    // The table name, never the path: this message may be logged.
+    super(`The ${table} table holds more rows than the import reads`);
+    this.name = "SqliteRowBudgetError";
+  }
+}
+
+/**
+ * Refuses `table` before a reader selects from it, by count alone: a count
+ * touches no row's value, so the refusal costs nothing on a real jar.
+ */
+export function assertRowBudget(database: DatabaseSync, table: string): void {
+  const counted = database
+    .prepare(`SELECT count(*) AS rows FROM ${table}`)
+    .get();
+  const rows = counted === undefined ? 0 : (readInteger(counted, "rows") ?? 0);
+  if (rows > MAX_SQLITE_COOKIE_ROWS) throw new SqliteRowBudgetError(table);
+}
+
 export function tableColumns(
   database: DatabaseSync,
   table: string,

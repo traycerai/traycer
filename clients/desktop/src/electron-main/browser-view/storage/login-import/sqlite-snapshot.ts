@@ -3,6 +3,7 @@ import { copyFile, mkdir, rm, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { errnoCode } from "./errno-code";
+import { SqliteRowBudgetError } from "./sqlite-columns";
 
 /**
  * Reads a browser's SQLite cookie database through a private copy.
@@ -29,13 +30,33 @@ import { errnoCode } from "./errno-code";
  * first read has opened them, so they exist only as descriptors and a crash
  * mid-read leaves nothing behind; Windows cannot unlink an open file, so there
  * the directory is removed after close and swept by the next call.
+ *
+ * BOUNDED before it is copied and before it is read. A browser's cookie
+ * database is megabytes - every browser caps its jar at a few thousand
+ * cookies - but the path is a file on the user's disk, and a corrupt or
+ * runaway one (a WAL that never checkpointed) could be gigabytes: copied
+ * whole it would fill the disk, and materialised whole (`.all()`, in main)
+ * it would take the process with it. So the main file and its WAL together
+ * must be under {@link MAX_SQLITE_SNAPSHOT_BYTES} at every copy attempt, and
+ * the reader refuses a table past {@link SqliteRowBudgetError}'s budget
+ * before it selects a row; either answers `too-large`.
  */
+
+/**
+ * The most bytes of cookie database - the main file plus its WAL - one
+ * snapshot copies. A real jar is single-digit megabytes (Chromium keeps at
+ * most a few thousand cookies, Firefox likewise); the headroom is for a
+ * database whose free pages or WAL have grown, never for one that holds
+ * more logins than a browser can.
+ */
+export const MAX_SQLITE_SNAPSHOT_BYTES = 256 * 1024 * 1024;
 
 export type SqliteSnapshotFailure =
   | "missing"
   | "locked"
   | "permission"
-  | "unreadable";
+  | "unreadable"
+  | "too-large";
 
 export type SqliteSnapshotResult<T> =
   | { readonly ok: true; readonly value: T }
@@ -88,7 +109,12 @@ export async function withSqliteSnapshot<T>(
         await unlinkQuietly(`${snapshotPath}-shm`);
       }
       return { ok: true, value: read(database) };
-    } catch {
+    } catch (error) {
+      // The reader's own refusal of a table past its row budget, told apart
+      // from a database it could not read at all.
+      if (error instanceof SqliteRowBudgetError) {
+        return { ok: false, reason: "too-large" };
+      }
       return { ok: false, reason: "unreadable" };
     } finally {
       database.close();
@@ -141,6 +167,13 @@ export async function copySqliteFiles(
   copy: SqliteFileCopy,
 ): Promise<SqliteSnapshotFailure | null> {
   for (let attempt = 0; attempt < SQLITE_SNAPSHOT_COPY_ATTEMPTS; attempt += 1) {
+    // Refused by size BEFORE a byte is copied, and on every attempt, since a
+    // source that grew past the bound between two is the retry's to catch.
+    // A main file that cannot be stat'ed is left to the copy to classify
+    // (`missing`, `permission`); a sibling that cannot be counts as absent.
+    if ((await sourceBytes(sourcePath)) > MAX_SQLITE_SNAPSHOT_BYTES) {
+      return "too-large";
+    }
     const before = await sourceSignature(sourcePath);
     const failure = await copySqliteFilesOnce(
       sourcePath,
@@ -196,6 +229,22 @@ async function sourceSignature(sourcePath: string): Promise<string> {
     }
   }
   return parts.join("|");
+}
+
+/**
+ * The bytes a copy would take: the main file plus its WAL. The shm is a
+ * fixed-size index and is left out; a file that is not there weighs nothing.
+ */
+async function sourceBytes(sourcePath: string): Promise<number> {
+  let total = 0;
+  for (const suffix of ["", "-wal"] as const) {
+    try {
+      total += (await stat(`${sourcePath}${suffix}`)).size;
+    } catch {
+      // Absent, or unreadable: the copy answers for it either way.
+    }
+  }
+  return total;
 }
 
 async function copyOne(

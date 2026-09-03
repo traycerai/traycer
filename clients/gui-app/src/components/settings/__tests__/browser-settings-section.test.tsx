@@ -10,6 +10,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BrowserSettingsSection } from "@/components/settings/browser-settings-section";
 import { FakeBrowserViewBridge } from "@/lib/browser-view/__tests__/fake-browser-view-bridge";
+import { useBrowserFocusStore } from "@/stores/settings/browser-focus-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { BrowserSaveLoginsController } from "@/lib/browser-view/use-browser-save-logins";
 import type {
@@ -556,5 +557,56 @@ describe("<BrowserSettingsSection /> saved logins", () => {
         name: "Import logins from another browser",
       }),
     ).not.toBeNull();
+  });
+
+  describe("the import intent (browser-focus-store)", () => {
+    afterEach(() => {
+      useBrowserFocusStore.setState({ openImportLogins: false });
+    });
+
+    it("an armed intent opens the dialog on mount without a click", async () => {
+      browserViewState.current = new FakeBrowserViewBridge();
+      useBrowserFocusStore.getState().requestImportLogins();
+
+      renderSection(controller({ enabled: true }), null);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("import-logins-dialog")).not.toBeNull();
+      });
+    });
+
+    it("closing consumes the intent, so it stays closed on a remount", async () => {
+      browserViewState.current = new FakeBrowserViewBridge();
+      useBrowserFocusStore.getState().requestImportLogins();
+
+      renderSection(controller({ enabled: true }), null);
+      await waitFor(() => {
+        expect(screen.getByTestId("import-logins-dialog")).not.toBeNull();
+      });
+
+      fireEvent.keyDown(document, { key: "Escape" });
+      await waitFor(() => {
+        expect(screen.queryByTestId("import-logins-dialog")).toBeNull();
+      });
+      expect(useBrowserFocusStore.getState().openImportLogins).toBe(false);
+
+      cleanup();
+      renderSection(controller({ enabled: true }), null);
+      expect(screen.queryByTestId("import-logins-dialog")).toBeNull();
+    });
+
+    it("an intent armed with saving off opens nothing and still consumes it", async () => {
+      browserViewState.current = new FakeBrowserViewBridge({
+        saveLogins: false,
+      });
+      useBrowserFocusStore.getState().requestImportLogins();
+
+      renderSection(controller({ enabled: false }), null);
+
+      await waitFor(() => {
+        expect(useBrowserFocusStore.getState().openImportLogins).toBe(false);
+      });
+      expect(screen.queryByTestId("import-logins-dialog")).toBeNull();
+    });
   });
 });

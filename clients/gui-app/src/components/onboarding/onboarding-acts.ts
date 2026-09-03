@@ -11,6 +11,7 @@ export type DesktopOnboardingActId =
   | "task-context"
   | "providers"
   | "session-import"
+  | "login-import"
   | "agent-guide"
   | "command-theme";
 
@@ -39,12 +40,19 @@ export interface OnboardingAct {
   readonly title: string;
   readonly body: string;
   /**
-   * What rides along with the copy - or, for `session-import`, what the stage
-   * itself becomes. `agent-guide` is the mobile tour's own: the real editor
-   * moves into the rail there, because a modal inside a phone-sized miniature
-   * is not something a thumb can type into.
+   * What rides along with the copy - or, for `session-import` and
+   * `login-import`, what the stage itself becomes. `agent-guide` is the
+   * mobile tour's own: the real editor moves into the rail there, because a
+   * modal inside a phone-sized miniature is not something a thumb can type
+   * into.
    */
-  readonly addon: "agents" | "session-import" | "theme" | "agent-guide" | null;
+  readonly addon:
+    | "agents"
+    | "session-import"
+    | "login-import"
+    | "theme"
+    | "agent-guide"
+    | null;
 }
 
 /**
@@ -121,6 +129,13 @@ export const ONBOARDING_ACTS: ReadonlyArray<OnboardingAct> = [
     body: "Work you started in Claude Code, Codex, or OpenCode comes with you as tasks. Pick what to bring; the import runs while you carry on.",
     addon: "session-import",
   },
+  {
+    id: "login-import",
+    eyebrowLabel: "YOUR LOGINS",
+    title: "Stay signed in\neverywhere",
+    body: "Bring the sites you're signed into in Chrome, Edge, Brave, Firefox, or Safari into Traycer's browser. Agents then work on those sites as you, with nothing to sign into again.",
+    addon: "login-import",
+  },
   AGENT_GUIDE_ACT,
   {
     id: "command-theme",
@@ -141,7 +156,8 @@ export const ONBOARDING_ACTS: ReadonlyArray<OnboardingAct> = [
  * No session-import act here: its stage is the live desktop-sized wizard
  * reading the host's own disk, and the phone tour's fixed six-act arc was
  * designed without it. Where the capability exists, the wizard stays reachable
- * from Settings.
+ * from Settings. No login-import act either: a phone has no browser jar of
+ * its own to import into.
  */
 const MOBILE_ONBOARDING_ACTS: ReadonlyArray<OnboardingAct> = [
   {
@@ -165,10 +181,42 @@ const MOBILE_ONBOARDING_ACTS: ReadonlyArray<OnboardingAct> = [
   { ...AGENT_GUIDE_ACT, addon: "agent-guide" },
 ];
 
-// Precomputed so the accessor hands back a stable reference per (platform,
-// capability) pair rather than filtering into a fresh array on every call.
-const DESKTOP_ACTS_WITHOUT_SESSION_IMPORT: ReadonlyArray<OnboardingAct> =
-  ONBOARDING_ACTS.filter((act) => act.id !== "session-import");
+/**
+ * What this shell can do, of the things the desktop tour has an act for.
+ * Each false drops one act; see {@link onboardingActsFor}.
+ */
+export interface OnboardingTourCapabilities {
+  /** The bound host advertises `sessionImport.scan`. */
+  readonly sessionImportAvailable: boolean;
+  /** A desktop with a browser bridge and saved logins on. */
+  readonly loginImportAvailable: boolean;
+}
+
+// Precomputed per capability pair on first use, so the accessor hands back a
+// stable reference per (platform, capabilities) rather than filtering into a
+// fresh array on every call - memoised consumers would re-render otherwise.
+const DESKTOP_TOURS = new Map<string, ReadonlyArray<OnboardingAct>>();
+
+function desktopTourFor(
+  capabilities: OnboardingTourCapabilities,
+): ReadonlyArray<OnboardingAct> {
+  if (
+    capabilities.sessionImportAvailable &&
+    capabilities.loginImportAvailable
+  ) {
+    return ONBOARDING_ACTS;
+  }
+  const key = `${String(capabilities.sessionImportAvailable)}:${String(capabilities.loginImportAvailable)}`;
+  const cached = DESKTOP_TOURS.get(key);
+  if (cached !== undefined) return cached;
+  const tour = ONBOARDING_ACTS.filter(
+    (act) =>
+      (act.id !== "session-import" || capabilities.sessionImportAvailable) &&
+      (act.id !== "login-import" || capabilities.loginImportAvailable),
+  );
+  DESKTOP_TOURS.set(key, tour);
+  return tour;
+}
 
 /**
  * The tour this shell will actually walk. Two facts pick it, and both are
@@ -184,16 +232,19 @@ const DESKTOP_ACTS_WITHOUT_SESSION_IMPORT: ReadonlyArray<OnboardingAct> =
  * cannot hide the same way, because its stage IS the live wizard - there is no
  * mini-app behind it. Leaving the act in would strand the user on copy
  * inviting them to pick sessions that a host which cannot scan will never
- * produce, so the act is dropped from the tour instead.
+ * produce, so the act is dropped from the tour instead. Login import is the
+ * same shape one act later: its stage is the live import flow, which needs a
+ * desktop with a browser bridge and saved logins ON - Settings' own row is
+ * disabled with saving off, so the tour must not offer what the row would
+ * refuse - and the act is dropped when either is missing.
  *
  * Everything that walks the tour - the step bounds, the progress rail, the
  * diorama - reads this list rather than `ONBOARDING_ACTS`, so an act omitted
  * here is simply unreachable.
  */
 export function onboardingActsFor(
-  sessionImportAvailable: boolean,
+  capabilities: OnboardingTourCapabilities,
 ): ReadonlyArray<OnboardingAct> {
   if (isMobileApp()) return MOBILE_ONBOARDING_ACTS;
-  if (sessionImportAvailable) return ONBOARDING_ACTS;
-  return DESKTOP_ACTS_WITHOUT_SESSION_IMPORT;
+  return desktopTourFor(capabilities);
 }

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { readFirefoxCookieRows } from "../firefox-cookies";
+import { MAX_SQLITE_COOKIE_ROWS } from "../sqlite-columns";
 import { withSqliteSnapshot } from "../sqlite-snapshot";
 import type { ImportCookieRow } from "../cookie-rows";
 
@@ -361,5 +362,50 @@ describe("readFirefoxCookieRows - schema missing sameSite/originAttributes", () 
     const rows = await readRows(path);
 
     expect(rows.map((row) => row.name)).toContain("old_wal_cookie");
+  });
+});
+
+describe("readFirefoxCookieRows - row budget", () => {
+  it("refuses ('too-large') a moz_cookies table one row past MAX_SQLITE_COOKIE_ROWS", async () => {
+    const { dir, path, writer } = await createFirefoxDatabase({
+      withOptionalColumns: true,
+    });
+    writers.push(writer);
+    dirsToClean.push(dir);
+    writer.exec(`
+      INSERT INTO moz_cookies
+        (host, name, value, path, expiry, isSecure, isHttpOnly, sameSite, originAttributes)
+      SELECT
+        'row-budget.example.com',
+        'cookie_' || x,
+        'value',
+        '/',
+        0,
+        0,
+        0,
+        0,
+        ''
+      FROM (
+        WITH RECURSIVE seq(x) AS (
+          SELECT 1
+          UNION ALL
+          SELECT x + 1 FROM seq WHERE x < ${MAX_SQLITE_COOKIE_ROWS + 1}
+        )
+        SELECT x FROM seq
+      );
+    `);
+
+    const snapshotRoot = join(
+      tmpdir(),
+      `firefox-cookies-snapshot-${randomUUID()}`,
+    );
+    snapshotRoots.push(snapshotRoot);
+
+    const result = await withSqliteSnapshot(
+      { sourcePath: path, snapshotRoot, platform: process.platform },
+      readFirefoxCookieRows,
+    );
+
+    expect(result).toEqual({ ok: false, reason: "too-large" });
   });
 });

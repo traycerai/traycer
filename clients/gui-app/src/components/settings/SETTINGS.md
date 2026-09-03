@@ -579,7 +579,25 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
       closed reason and one explainer (Full Disk Access deep-links to the
       pane; "quit the browser fully" for a locked database); nothing retries
       on its own, because a retry after a denied Keychain prompt is a second
-      prompt.
+      prompt. The steps themselves are the headless `ImportLoginsFlow`
+      (`import-logins-flow.tsx`), which the dialog wraps and the tour's
+      login-import act renders on its stage; the surface supplies the
+      FRAME (header / title / description / footer) because the dialog's
+      are Radix parts that throw outside a `Dialog`. The dialog reads
+      "an import is in flight" off the mutation cache (`useIsMutating` on
+      `browserMutationKeys.importLogins()`), since the mutation is the
+      flow's. The row also opens on a ONE-SHOT INTENT
+      (`stores/settings/browser-focus-store.ts`, the `providers-focus-store`
+      shape): the login-import announcement toast
+      (`login-import-announcement-controller.tsx`, mounted beside the
+      app-update toast) arms `openImportLogins` and navigates to General,
+      the row derives `open` from its own state OR the intent, and closing
+      - or mounting with saving off, when the row would refuse - consumes
+        it. The toast shows once per install, for a user who has already
+        finished onboarding (a fresh user meets the feature as a tour act
+        instead); either surface consumes the `login-import` id in the
+        persisted `feature-announcements` store, so exactly one of them ever
+        shows.
     - **Forget all browser logins** (destructive confirm) moved here from the
       tile shield popover, which was ticket 08's temporary home. It calls the
       bridge's `forgetLogins()` directly and so speaks for EVERY host the user has a live browser stream to; that is
