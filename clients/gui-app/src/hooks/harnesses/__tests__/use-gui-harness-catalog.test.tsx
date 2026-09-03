@@ -30,6 +30,7 @@ import type {
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
+import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import {
@@ -814,6 +815,36 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
     return { providers: [] as ProviderCliState[], native: null };
   }
 
+  // A provider row carrying a value nothing else in the test produces, so
+  // "the forced response was committed" is an assertion about THIS response
+  // and not about any empty list that happened to land on the key. An empty
+  // `providers` array would have been satisfied by the seeded sentinel, by
+  // the other host's handler, and by a commit of the wrong response alike.
+  function markerProvider(label: string): ProviderCliState {
+    return {
+      providerId: "claude-code",
+      enabled: true,
+      disabledBy: null,
+      nativeCapabilities: DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
+      selected: { kind: "bundled" },
+      candidates: [],
+      auth: {
+        status: "authenticated",
+        badgeText: null,
+        label,
+        detail: null,
+      },
+      authPending: false,
+      checkedAt: null,
+      apiKey: { supported: false, configured: false, source: null },
+      terminalAgentArgs: "",
+      envOverrides: [],
+      loginCapability: null,
+      availabilityPending: false,
+      profiles: [],
+    };
+  }
+
   function buildHostClient(
     queryClient: QueryClient,
     hostId: string,
@@ -883,7 +914,7 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
     const hostBProvidersListResponse: ResponseOfMethod<
       HostRpcRegistry,
       "providers.list"
-    > = { providers: [] as ProviderCliState[], native: null };
+    > = { providers: [markerProvider("committed-from-host-b")], native: null };
     const clientA = buildHostClient(
       queryClient,
       "host-a",
@@ -944,11 +975,20 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
     });
 
     // Seed host A's classic key and host B's native-scoped key with a
-    // sentinel distinct from host B's forced response, so "untouched" below
-    // means neither invalidated nor overwritten - the commit's exact-key
-    // write is the only thing that should ever move these.
+    // sentinel, so "untouched" below means neither invalidated nor
+    // overwritten - the commit's exact-key write is the only thing that
+    // should ever move these.
+    //
+    // The sentinel's MARKER is what gives those assertions teeth, and it is
+    // load-bearing: while both it and the forced response were `{ providers:
+    // [], native: null }`, a commit that reached the wrong key would have
+    // written a value equal to what was already there, and the assertion
+    // could not fail. Nor would `toBe` have rescued it - `setQueryData`
+    // applies structural sharing, so a structurally-equal write KEEPS the
+    // prior reference and identity holds exactly when equality does.
+    // Distinct contents are the only signal either check can read.
     const sentinel: ResponseOfMethod<HostRpcRegistry, "providers.list"> = {
-      providers: [] as ProviderCliState[],
+      providers: [markerProvider("seeded-sentinel")],
       native: null,
     };
     const hostAClassicKey = providersListQueryKey("host-a");
@@ -997,6 +1037,8 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
     // `agent.gui.listHarnesses` back out (it is already in
     // `PROVIDER_INVALIDATIONS`) and only covers `agent.gui.listModels` /
     // `agent.gui.listCommands`, so those land at 2 via that second pass.
+    // That filter is conditional on the commit having run at all - the
+    // failure-path test below is its other half.
     await waitFor(() => {
       expect(hostBCalls).toEqual({ harnesses: 2, models: 2, commands: 2 });
     });
@@ -1007,7 +1049,7 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
     expect(hostACalls).toEqual({ harnesses: 1, models: 1, commands: 1 });
   });
 
-  it("still resolves 'refreshed' and still refetches host B's catalog methods when the forced providers.list request throws", async () => {
+  it("still resolves 'refreshed' and refetches ALL THREE of host B's catalog methods - the harness row included - when the forced providers.list request throws", async () => {
     const queryClient = createAppQueryClient();
     const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
       <QueryClientProvider client={queryClient}>
@@ -1065,12 +1107,14 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
     expect(hostBProvidersListCalls).toEqual([
       { forceAuthRefresh: true, native: null },
     ]);
-    // The catalog invalidation still ran despite the failed commit. Only
-    // `agent.gui.listModels` / `agent.gui.listCommands` move here -
-    // `agent.gui.listHarnesses` would have come from the (never-run) commit's
-    // own invalidation, so it stays at its original count.
+    // The catalog invalidation still ran despite the failed commit - and it
+    // covered ALL THREE methods, `agent.gui.listHarnesses` included. On the
+    // success path that one is deducted because the commit already
+    // invalidated it; here the commit never ran, so deducting it would leave
+    // the rail's own row (`enabled` / `available` / `authStatus`) stale
+    // behind a click that reported `refreshed`.
     await waitFor(() => {
-      expect(hostBCalls).toEqual({ harnesses: 1, models: 2, commands: 2 });
+      expect(hostBCalls).toEqual({ harnesses: 2, models: 2, commands: 2 });
     });
   });
 

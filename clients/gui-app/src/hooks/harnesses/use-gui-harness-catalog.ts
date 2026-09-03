@@ -583,17 +583,30 @@ export function useRefreshHarnessCatalogForClient(
     // the Settings and banner refresh buttons use, committed under this
     // host's classic key. Its failure is already toasted by the mutation and
     // must not withhold the catalog refetch below.
-    await refreshProviders().catch(() => undefined);
+    const providersRefreshed = await refreshProviders().then(
+      () => true,
+      () => false,
+    );
     // `invalidateQueries` resolves once the refetches it triggers on active
     // queries settle, so awaiting all of them lets the caller drive a spinner
-    // that reflects real refetch progress (not just fire-and-forget). The
-    // authoritative list commit above already invalidated every
-    // `PROVIDER_INVALIDATIONS` scope (`agent.gui.listHarnesses` among them);
-    // invalidating those again here would restart refetches already in
-    // flight, so only the catalog scopes it does not cover are touched.
+    // that reflects real refetch progress (not just fire-and-forget).
+    //
+    // The dedupe below is owed entirely to the commit ABOVE HAVING RUN: a
+    // successful `commitAuthoritativeProvidersList` invalidates every
+    // `PROVIDER_INVALIDATIONS` scope (`agent.gui.listHarnesses` among them),
+    // so invalidating those again here would restart refetches already in
+    // flight. A REJECTED forced request never reaches that commit and so
+    // invalidates nothing - and the harness row is where `enabled`,
+    // `available` and `authStatus` come from, the very fields the rail dims
+    // on. Deducting it unconditionally would return `refreshed` from a click
+    // that refetched neither the provider list nor the rail it feeds, over a
+    // provider-probe timeout that left the catalog endpoints perfectly
+    // usable. So the filter applies only on the success path; on failure this
+    // pass covers every refreshable method itself.
     await Promise.all(
       REFRESHABLE_CATALOG_METHODS.filter(
-        (method) => !PROVIDER_INVALIDATIONS.includes(method),
+        (method) =>
+          !providersRefreshed || !PROVIDER_INVALIDATIONS.includes(method),
       ).map((method) =>
         queryClient.invalidateQueries({
           queryKey: hostQueryKeys.methodScope(hostId, method),
