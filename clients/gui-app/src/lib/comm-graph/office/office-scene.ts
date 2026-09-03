@@ -1052,6 +1052,14 @@ export class OfficeScene {
     // and the walk they asked to skip play out for another few seconds.
     if (motionJustReduced && !firstSync) this.settleMotion();
     this.stepMs = input.stepMs;
+    // A cursor that moved BACK - a seek, a step, or leaving live for history -
+    // lands on a prefix in which whatever was mid-flight has not happened yet.
+    // An envelope from a later row must not keep flying over the earlier
+    // floor, let alone land there.
+    const rewound =
+      input.cursorMs !== null &&
+      (this.cursorMs === null || input.cursorMs < this.cursorMs);
+    if (rewound && !firstSync) this.dropTransientMotion();
     this.cursorMs = input.cursorMs;
     this.clockMs = input.clockMs;
     this.pulse = input.pulse;
@@ -1730,6 +1738,22 @@ export class OfficeScene {
     }
   }
 
+  /**
+   * Forgets every timeline-derived transient: envelopes in flight, messages
+   * waiting on desks, the bubbles and sparkles they raised. Unlike
+   * `settleMotion` nothing is delivered, because on the prefix the cursor now
+   * shows those messages have not been sent. Walks are left alone - a
+   * character's position is not a fact about the timeline.
+   */
+  private dropTransientMotion(): void {
+    this.envelopes = [];
+    for (const character of this.characters.values()) {
+      character.pending = [];
+      character.bubble = null;
+      character.sparkleMs = 0;
+    }
+  }
+
   private advanceEnvelopes(dtMs: number): void {
     if (this.envelopes.length === 0) return;
     const live: OfficeEnvelope[] = [];
@@ -1977,7 +2001,7 @@ export class OfficeScene {
    * than a room being evacuated.
    */
   private advanceFiller(character: OfficeCharacter, dtMs: number): void {
-    if (this.playing || this.reducedMotion) {
+    if (this.playing || this.cursorMs !== null || this.reducedMotion) {
       character.filler = null;
       return;
     }
@@ -2074,6 +2098,9 @@ export class OfficeScene {
    */
   private errandMustEnd(agentId: string): boolean {
     if (this.playing) return true;
+    // A paused historical view is a still photograph of that moment; the
+    // people in it do not wander off for coffee while it is looked at.
+    if (this.cursorMs !== null) return true;
     if (!this.visibleAgentIds.has(agentId)) return true;
     if (this.archivedIds.has(agentId)) return true;
     return this.statusOf(agentId) !== "idle";
@@ -2097,7 +2124,7 @@ export class OfficeScene {
    * their ids rather than about map insertion order.
    */
   private updateErrandStarts(): void {
-    if (this.playing || this.reducedMotion) return;
+    if (this.playing || this.cursorMs !== null || this.reducedMotion) return;
     const claimed = this.claimedSpotKeys();
     for (const character of this.orderedByAgentId()) {
       if (!this.mayStartErrand(character)) continue;

@@ -588,6 +588,110 @@ describe("OfficeScene", () => {
     );
   });
 
+  it("drops an in-flight envelope on a rewind into history, but not on a forward move", () => {
+    const scene = new OfficeScene(layoutOffice);
+    scene.sync(sceneInput({ agents: AGENTS, visibleAgentIds: BOTH }));
+    const withPulse = sceneInput({
+      agents: AGENTS,
+      visibleAgentIds: BOTH,
+      pulse: REQUEST_PULSE,
+      pulseKey: "row-1",
+    });
+    scene.sync(withPulse);
+    scene.tick(50);
+    expect(envelopes(scene.frame())).toHaveLength(1);
+
+    // Same pulse key, so nothing replays - only the cursor moves, from live
+    // into a historical moment. Whatever was mid-flight has not happened on
+    // this prefix, so it is dropped rather than delivered.
+    scene.sync({ ...withPulse, cursorMs: 5 });
+
+    const rewound = scene.frame();
+    expect(envelopes(rewound)).toHaveLength(0);
+    expect(hasBubbleAt(rewound, "bubble-hello", seatedHead("beta"))).toBe(
+      false,
+    );
+    expect(stacks(rewound)).toHaveLength(0);
+
+    // Contrast: a forward move within history must not touch what is in
+    // flight - only a REWIND (a null-to-history landing, or a seek backward)
+    // does.
+    const forwardScene = new OfficeScene(layoutOffice);
+    forwardScene.sync(
+      sceneInput({ agents: AGENTS, visibleAgentIds: BOTH, cursorMs: 5 }),
+    );
+    const forwardWithPulse = sceneInput({
+      agents: AGENTS,
+      visibleAgentIds: BOTH,
+      pulse: REQUEST_PULSE,
+      pulseKey: "row-1",
+      cursorMs: 5,
+    });
+    forwardScene.sync(forwardWithPulse);
+    forwardScene.tick(50);
+    expect(envelopes(forwardScene.frame())).toHaveLength(1);
+
+    forwardScene.sync({ ...forwardWithPulse, cursorMs: 10 });
+    expect(envelopes(forwardScene.frame())).toHaveLength(1);
+  });
+
+  it("freezes ambient motion under a paused historical cursor, and recalls an errand already under way", () => {
+    const scene = new OfficeScene(layoutOffice);
+    scene.sync(
+      sceneInput({
+        agents: IDLE_CREW,
+        visibleAgentIds: CREW_IDS,
+        cursorMs: 5,
+      }),
+    );
+
+    // Comfortably past the idle-errand threshold plus its widest per-agent
+    // stagger - on a live floor this is well into everyone's first errand.
+    for (let step = 0; step < 150; step += 1) scene.tick(100);
+
+    const paused = scene.frame();
+    for (const person of IDLE_CREW) {
+      expect(characterRect(paused, person.id)).toEqual(
+        crewSeatedRect(person.id),
+      );
+    }
+    expect(scene.isAnimating()).toBe(false);
+
+    // Now the same crew, but caught mid-errand while still live, the way the
+    // existing "sends an idle agent on an errand" test reaches one.
+    const liveScene = new OfficeScene(layoutOffice);
+    liveScene.sync(
+      sceneInput({ agents: IDLE_CREW, visibleAgentIds: CREW_IDS }),
+    );
+    let awayId: string | null = null;
+    let elapsedMs = 0;
+    while (elapsedMs < 60_000 && awayId === null) {
+      liveScene.tick(100);
+      elapsedMs += 100;
+      const away = crewAway(liveScene.frame());
+      if (away.length > 0) awayId = away[0];
+    }
+    if (awayId === null) throw new Error("nobody left their desk");
+    expect(characterRect(liveScene.frame(), awayId)).not.toEqual(
+      crewSeatedRect(awayId),
+    );
+
+    // A historical cursor lands mid-errand: the character is recalled on this
+    // very sync - reduced motion is what makes the recall instant rather than
+    // a walk back across the floor, which is what keeps this assertion cheap.
+    liveScene.sync(
+      sceneInput({
+        agents: IDLE_CREW,
+        visibleAgentIds: CREW_IDS,
+        cursorMs: 5,
+        reducedMotion: true,
+      }),
+    );
+    expect(characterRect(liveScene.frame(), awayId)).toEqual(
+      crewSeatedRect(awayId),
+    );
+  });
+
   it("bubbles a standing status when nothing transient is showing", () => {
     const scene = new OfficeScene(layoutOffice);
     scene.sync(

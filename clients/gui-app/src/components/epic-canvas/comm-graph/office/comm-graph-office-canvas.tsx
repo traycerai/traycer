@@ -2364,7 +2364,9 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       )}
       <CommGraphAgentDetailSurface
         agentId={selectedAgentId}
-        agents={agents}
+        // As of the cursor, like the floor: a panel opened live and then
+        // scrubbed to before its agent existed has nothing to show for it.
+        agents={visibleAgents}
         agentNames={nameById}
         events={events}
         epicId={epicId}

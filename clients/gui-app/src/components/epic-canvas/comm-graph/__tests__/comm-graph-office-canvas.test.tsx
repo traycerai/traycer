@@ -287,6 +287,31 @@ describe("CommGraphOfficeCanvas", () => {
     expect(screen.getAllByText("Reviewer").length).toBeGreaterThan(0);
   });
 
+  it("closes the detail panel when its agent drops out of the as-of visible set", () => {
+    const both = new Set([ORCHESTRATOR.id, REVIEWER.id]);
+    const view = render(withQueryClient(officeElement(both, STATIC_OFFICE)));
+
+    fireEvent.click(
+      screen.getByTestId(`comm-graph-office-agent-${REVIEWER.id}`),
+    );
+    expect(screen.getByTestId("comm-graph-agent-panel")).toBeDefined();
+    expect(screen.getAllByText("Reviewer").length).toBeGreaterThan(0);
+
+    // The cursor moves back before Reviewer existed: it drops out of
+    // agentIds, so the surface is handed the as-of set rather than the full
+    // present-day roster.
+    view.rerender(
+      withQueryClient(officeElement(new Set([ORCHESTRATOR.id]), STATIC_OFFICE)),
+    );
+
+    // The panel's own selection is still Reviewer's id, but that id is no
+    // longer among the agents the surface was handed, so it resolves
+    // nothing to show and renders nothing at all - it does not fall back to
+    // stale data.
+    expect(screen.queryByTestId("comm-graph-agent-panel")).toBeNull();
+    expect(screen.queryByText("Reviewer")).toBeNull();
+  });
+
   it("registers a Find adapter that searches the agents on the floor", async () => {
     renderOffice(new Set([ORCHESTRATOR.id, REVIEWER.id]));
 
