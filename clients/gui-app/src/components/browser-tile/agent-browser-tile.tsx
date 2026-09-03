@@ -18,6 +18,7 @@ import { BrowserStartPage } from "./browser-start-page";
 import {
   browserTileBindingId,
   browserTileEpicId,
+  browserTileHostOwnsClose,
   browserTileKey,
   browserTileScope,
   type BrowserTilePlacement,
@@ -323,6 +324,13 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
           focusAddress();
           return;
         case "closeTab": {
+          // A host surface that owns the close gets ASKED, and nothing else
+          // happens here - not even the liveness guard below, because its path
+          // is tombstone-first and closes a row whose device cannot be reached.
+          if (browserTileHostOwnsClose(placement)) {
+            onRequestClose();
+            return;
+          }
           if (
             browserSessions === null ||
             browserSessions.lifecycle !== "live"
@@ -351,6 +359,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     onRequestClose,
     onOpenLinkInNewTile,
     onRequestNewTab,
+    placement,
     props.binding.tabId,
     props.node.sessionId,
     tileKey,
@@ -429,6 +438,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
       >
         <ElectronTabSurfaceBaseLayer
           showStartPage={showStartPage}
+          visible={visible}
           scope={browserTileScope(placement)}
           hostId={hostId}
           snapshot={snapshot}
@@ -466,6 +476,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
 
 function ElectronTabSurfaceBaseLayer(props: {
   readonly showStartPage: boolean;
+  readonly visible: boolean;
   readonly scope: HostResourceScope;
   readonly hostId: string;
   readonly snapshot: BrowserViewSnapshotState | null;
@@ -477,6 +488,7 @@ function ElectronTabSurfaceBaseLayer(props: {
         scope={props.scope}
         hostId={props.hostId}
         browserRunsOnHost={false}
+        visible={props.visible}
         onNavigate={props.onNavigate}
       />
     );

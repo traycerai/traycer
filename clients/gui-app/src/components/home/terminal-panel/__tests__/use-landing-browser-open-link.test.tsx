@@ -294,6 +294,94 @@ describe("useLandingBrowserOpenLink", () => {
     );
   });
 
+  // A page can emit two `window.open` calls in one tick. A single pending SLOT
+  // let the second overwrite the first before either was dispatched, so one of
+  // the two popups vanished with no refusal and no toast.
+  it("opens both popups when a page raises two in one tick", async () => {
+    const settles: Array<(identity: BrowserTabIdentity) => void> = [];
+    const openTab = vi.fn(
+      () =>
+        new Promise<BrowserTabIdentity>((resolve) => {
+          settles.push(resolve);
+        }),
+    );
+    const { result } = renderOpener(sessionsState({ openTab }));
+    useLandingPanelStore.getState().addTab(RAISING_TAB);
+
+    await act(async () => {
+      result.current.open(RAISING_TAB, "https://example.com/a", "foreground");
+      result.current.open(RAISING_TAB, "https://example.com/b", "foreground");
+      await Promise.resolve();
+    });
+
+    // One at a time on one device - the queue serialises, it does not fan out.
+    await waitFor(() => {
+      expect(openTab).toHaveBeenCalledTimes(1);
+    });
+    await act(async () => {
+      settles[0]?.({ sessionId: "raising-session", tabId: "popup-a" });
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(openTab).toHaveBeenCalledTimes(2);
+    });
+    await act(async () => {
+      settles[1]?.({ sessionId: "raising-session", tabId: "popup-b" });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(browserTabs()).toHaveLength(3);
+    });
+    expect(browserTabs().map((tab) => tab.tabId)).toEqual([
+      "raising-tab",
+      "popup-a",
+      "popup-b",
+    ]);
+  });
+
+  // Bounded, and the bound is the device's own tab cap: a ninth queued ask is
+  // one the cap re-check would refuse anyway, so it is dropped rather than
+  // queued behind asks that cannot land.
+  it("holds no more asks than the device could ever serve", async () => {
+    const settles: Array<(identity: BrowserTabIdentity) => void> = [];
+    const openTab = vi.fn(
+      () =>
+        new Promise<BrowserTabIdentity>((resolve) => {
+          settles.push(resolve);
+        }),
+    );
+    const { result } = renderOpener(sessionsState({ openTab }));
+
+    await act(async () => {
+      for (let ask = 0; ask <= LANDING_BROWSER_TAB_CAP; ask += 1) {
+        result.current.open(
+          RAISING_TAB,
+          `https://example.com/${ask}`,
+          "background",
+        );
+      }
+      await Promise.resolve();
+    });
+
+    // Drain the queue, one settle per dispatch. The loop is bounded by the cap
+    // plus the ask that must NOT have been kept.
+    for (let drained = 0; drained <= LANDING_BROWSER_TAB_CAP; drained += 1) {
+      // `settles` grows as each settle lets the next ask dispatch, so running
+      // out of them IS the queue running dry - which is the bound under test.
+      if (drained >= settles.length) break;
+      const settle = settles[drained];
+      await act(async () => {
+        settle({ sessionId: "raising-session", tabId: `popup-${drained}` });
+        await Promise.resolve();
+      });
+    }
+
+    await waitFor(() => {
+      expect(openTab).toHaveBeenCalledTimes(LANDING_BROWSER_TAB_CAP);
+    });
+  });
+
   it("refuses at the device's cap with the same sentence the chooser carries", async () => {
     const deferred = deferredOpenTab();
     const { result } = renderOpener(

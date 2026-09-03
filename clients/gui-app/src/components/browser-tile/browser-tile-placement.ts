@@ -86,6 +86,27 @@ export function browserTileEpicId(
 }
 
 /**
+ * Whether the surface HOSTING this tile owns closing its tab, rather than the
+ * tile closing it directly.
+ *
+ * On a canvas the tile is the only party: nothing else records that tab, so it
+ * sends the host close itself and retires once the host agrees. The Start Page
+ * panel is the other shape - closing a row there is a tombstone-first sequence
+ * that also removes the store ref, promotes a neighbour and clears the
+ * tombstone when the device answers - so a tile that ALSO sent the close would
+ * issue two for one gesture, the second racing a tab the host has already
+ * removed and surfacing its refusal as a toast the reader did nothing to earn.
+ *
+ * The panel's path is also the one that works when the device cannot be asked
+ * at all, which the tile's own arm refuses outright.
+ */
+export function browserTileHostOwnsClose(
+  placement: BrowserTilePlacement,
+): boolean {
+  return placement.kind === "landing";
+}
+
+/**
  * The key naming this tile's native surface to the desktop. Opaque to main,
  * which never interprets it - it only has to be stable for one mounted tile
  * and distinct between tiles.

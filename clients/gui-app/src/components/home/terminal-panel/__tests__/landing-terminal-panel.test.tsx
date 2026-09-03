@@ -352,8 +352,22 @@ vi.mock("@/components/home/terminal-panel/landing-terminal-tile", () => ({
 // coordinator provider off the host binding, which this suite does not stand
 // up. Its own behavior is covered in `landing-browser-tile.test.tsx`.
 vi.mock("@/components/home/terminal-panel/landing-browser-tile", () => ({
-  LandingBrowserTile: () => (
-    <div data-testid="landing-browser-tile">Browser</div>
+  // Renders the two props the panel DECIDES, because a browser tile's pixels
+  // are a native view the desktop paints over the window: no DOM assertion can
+  // see whether it is on screen, and `invisible` on an ancestor does not hide
+  // it. Visibility there is this prop, so this is where it has to be asserted.
+  LandingBrowserTile: (props: {
+    readonly tab: { readonly instanceId: string };
+    readonly active: boolean;
+    readonly panelOpen: boolean;
+  }) => (
+    <div
+      data-testid={`landing-browser-tile-${props.tab.instanceId}`}
+      data-active={String(props.active)}
+      data-panel-open={String(props.panelOpen)}
+    >
+      Browser
+    </div>
   ),
 }));
 vi.mock("@/components/epic-canvas/renderers/xterm-host-registry", () => ({
@@ -2888,6 +2902,177 @@ describe("<LandingTerminalPanel />", () => {
   // the chooser leaves an intent nothing can ever claim - it outlives the row
   // and swallows the next terminal's focus. Each asserts on the parked intent,
   // because the harm is the request existing, not a call that never happened.
+  // `availability` is the TERMINAL TARGET host's, and the panel's rows name
+  // several devices. Replacing the whole body with its status line therefore
+  // takes a working page off screen and puts a sentence about an unrelated
+  // machine in its place.
+  it("keeps a live device's browser row on screen while the target host resolves", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    // No probe answer for the target host: availability is "unknown".
+    mocks.probeData = undefined;
+    mocks.freshProbeData = undefined;
+    mocks.browserSessionsByHost = {
+      "host-b": browserSessionsState({ hostId: "host-b" }),
+    };
+    useLandingPanelStore.getState().addTab({
+      kind: "browser",
+      instanceId: "browser-instance",
+      hostId: "host-b",
+      sessionId: "browser-session",
+      tabId: "browser-tab",
+      name: "example.com",
+      titleSource: "default",
+    });
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    const tile = await screen.findByTestId(
+      "landing-browser-tile-browser-instance",
+    );
+    // Mounted is not enough - the native view is only on screen when the panel
+    // says so.
+    expect(tile.getAttribute("data-active")).toBe("true");
+    expect(tile.getAttribute("data-panel-open")).toBe("true");
+    expect(screen.queryByText("Connecting to the selected host…")).toBeNull();
+  });
+
+  // The other half, unchanged: with nothing else to show, the connecting line
+  // is still what a resolving target puts in the body.
+  it("still shows the connecting status when there is no row to keep", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = undefined;
+    mocks.freshProbeData = undefined;
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
+      instanceId: "terminal-instance",
+      sessionId: "terminal-session",
+      hostId: "host-a",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+    });
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    expect(
+      await screen.findByText("Connecting to the selected host…"),
+    ).toBeTruthy();
+  });
+
+  // CSS cannot hide a `WebContentsView`: it is painted over the window by the
+  // desktop, so the picker's `invisible` wrapper leaves it on top of the DOM
+  // dialog, taking input. The assertion is on the visibility PROP for exactly
+  // that reason - a DOM-only assertion cannot see this class of bug.
+  it("takes the native browser view off screen while the directory picker is up", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.workspacePaths = ["/workspace/project", "/workspace/other"];
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    mocks.browserSessionsByHost = {
+      "host-a": browserSessionsState({}),
+    };
+    useLandingPanelStore.getState().addTab({
+      kind: "browser",
+      instanceId: "browser-instance",
+      hostId: "host-a",
+      sessionId: "browser-session",
+      tabId: "browser-tab",
+      name: "example.com",
+      titleSource: "default",
+    });
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+    const router = fakeKeybindingRouter();
+
+    const tile = await screen.findByTestId(
+      "landing-browser-tile-browser-instance",
+    );
+    expect(tile.getAttribute("data-active")).toBe("true");
+
+    // ⇧⌘J with two folders raises the picker OVER the body, and cancelling it
+    // from an already-open panel leaves the panel open.
+    act(() => {
+      dispatchAction("app.terminal.new", router);
+    });
+    expect(
+      await screen.findByTestId("landing-terminal-directory-picker"),
+    ).toBeTruthy();
+    await waitFor(() => {
+      expect(
+        screen
+          .getByTestId("landing-browser-tile-browser-instance")
+          .getAttribute("data-active"),
+      ).toBe("false");
+    });
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Cancel terminal creation" }),
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId("landing-terminal-directory-picker"),
+      ).toBeNull();
+      expect(
+        screen
+          .getByTestId("landing-browser-tile-browser-instance")
+          .getAttribute("data-active"),
+      ).toBe("true");
+    });
+  });
+
+  // Reveal is not create. `⇧⌘J` still asks for a terminal in as many words;
+  // this chord asks for the panel, and a strip holding only browser tabs has
+  // nothing to reuse - which used to mean "spawn one".
+  it("reveals a browser-only panel without spawning a terminal", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    mocks.browserSessionsByHost = {
+      "host-a": browserSessionsState({}),
+    };
+    useLandingPanelStore.getState().addTab({
+      kind: "browser",
+      instanceId: "browser-instance",
+      hostId: "host-a",
+      sessionId: "browser-session",
+      tabId: "browser-tab",
+      name: "example.com",
+      titleSource: "default",
+    });
+    render(panelUi());
+    const router = fakeKeybindingRouter();
+
+    act(() => {
+      dispatchAction("app.terminal.toggle", router);
+    });
+
+    await waitFor(() => {
+      expect(testLayout().panelOpen).toBe(true);
+    });
+    // Settle every reconciliation generation the reveal armed - the spawn this
+    // pins against was never synchronous.
+    await act(async () => {
+      for (let pass = 0; pass < 5; pass += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+    });
+    expect(landingTerminalTabs(useLandingPanelStore.getState().tabs)).toEqual(
+      [],
+    );
+    expect(
+      screen.getByTestId("landing-browser-tile-browser-instance"),
+    ).toBeTruthy();
+  });
+
   it("does not park a terminal focus request when a browser tab is activated", async () => {
     mocks.activeHostId = "host-a";
     mocks.clientActiveHostId = "host-a";
