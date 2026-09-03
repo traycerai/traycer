@@ -208,6 +208,23 @@ export function useBrowserOpenerItems(
     }),
   );
   if (openTabs.length > 0) return [changeHost, newBrowser, ...openTabs];
+  if (sessions.lifecycle === "unsupported") {
+    // No retry leaf: nothing this app can do changes the host's answer, and
+    // the "Loading…" leaf below would otherwise sit there forever.
+    return [
+      changeHost,
+      newBrowser,
+      {
+        ...openerActionLeaf({
+          id: "open:browser:unsupported",
+          label: browserSessionsRefusal(sessions),
+          keywords: ["browser", "unsupported", "update", hostLabel],
+          run: () => undefined,
+        }),
+        disabled: true,
+      },
+    ];
+  }
   if (sessions.lifecycle === "failed" || sessions.lifecycle === "closed") {
     return [
       changeHost,
