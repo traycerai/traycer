@@ -13,6 +13,7 @@ import {
 interface ChooserArgs {
   readonly terminalReason: string | null;
   readonly browserReason: string | null;
+  readonly browserPending: boolean;
   readonly takeFocus: boolean;
   readonly onPick: (kind: LandingNewTabKind) => void;
   readonly onDismiss: () => void;
@@ -21,8 +22,11 @@ interface ChooserArgs {
 function chooserElement(args: ChooserArgs): ReactElement {
   return (
     <LandingNewTabChooser
-      terminal={{ disabledReason: args.terminalReason }}
-      browser={{ disabledReason: args.browserReason }}
+      terminal={{ disabledReason: args.terminalReason, pending: false }}
+      browser={{
+        disabledReason: args.browserReason,
+        pending: args.browserPending,
+      }}
       takeFocus={args.takeFocus}
       onPick={args.onPick}
       onDismiss={args.onDismiss}
@@ -43,6 +47,7 @@ function openChooser(): {
   renderChooser({
     terminalReason: null,
     browserReason: null,
+    browserPending: false,
     takeFocus: true,
     onPick,
     onDismiss,
@@ -97,6 +102,7 @@ describe("<LandingNewTabChooser />", () => {
     renderChooser({
       terminalReason: "No folder is attached",
       browserReason: null,
+      browserPending: false,
       takeFocus: true,
       onPick: vi.fn(),
       onDismiss: vi.fn(),
@@ -111,6 +117,7 @@ describe("<LandingNewTabChooser />", () => {
     renderChooser({
       terminalReason: "No folder is attached",
       browserReason: landingBrowserCapMessage(),
+      browserPending: false,
       takeFocus: true,
       onPick: vi.fn(),
       onDismiss: vi.fn(),
@@ -126,6 +133,7 @@ describe("<LandingNewTabChooser />", () => {
     renderChooser({
       terminalReason: null,
       browserReason: null,
+      browserPending: false,
       takeFocus: false,
       onPick: vi.fn(),
       onDismiss: vi.fn(),
@@ -177,6 +185,7 @@ describe("<LandingNewTabChooser />", () => {
     renderChooser({
       terminalReason: "No folder is attached",
       browserReason: null,
+      browserPending: false,
       takeFocus: true,
       onPick,
       onDismiss: vi.fn(),
@@ -199,6 +208,7 @@ describe("<LandingNewTabChooser />", () => {
     renderChooser({
       terminalReason: null,
       browserReason: landingBrowserCapMessage(),
+      browserPending: false,
       takeFocus: true,
       onPick: vi.fn(),
       onDismiss: vi.fn(),
@@ -229,6 +239,7 @@ describe("<LandingNewTabChooser />", () => {
     const connecting: ChooserArgs = {
       terminalReason: null,
       browserReason: "Connecting to the selected host…",
+      browserPending: false,
       takeFocus: true,
       onPick,
       onDismiss: vi.fn(),
@@ -255,6 +266,7 @@ describe("<LandingNewTabChooser />", () => {
     const connecting: ChooserArgs = {
       terminalReason: null,
       browserReason: "Connecting to the selected host…",
+      browserPending: false,
       takeFocus: true,
       onPick: vi.fn(),
       onDismiss: vi.fn(),
@@ -273,6 +285,7 @@ describe("<LandingNewTabChooser />", () => {
     const live: ChooserArgs = {
       terminalReason: null,
       browserReason: null,
+      browserPending: false,
       takeFocus: true,
       onPick: vi.fn(),
       onDismiss: vi.fn(),
@@ -289,10 +302,62 @@ describe("<LandingNewTabChooser />", () => {
     expect(document.activeElement).toBe(terminalCard());
   });
 
+  // The pending state is a WAIT, not a reason: the label is unchanged, the
+  // spinner says why, and a second click cannot slip a second tab past the
+  // opener while the first is in flight.
+  it("shows the browser card as pending without changing its label", () => {
+    const onPick = vi.fn();
+    const live: ChooserArgs = {
+      terminalReason: null,
+      browserReason: null,
+      browserPending: false,
+      takeFocus: true,
+      onPick,
+      onDismiss: vi.fn(),
+    };
+    const view = render(chooserElement(live));
+
+    view.rerender(chooserElement({ ...live, browserPending: true }));
+
+    expect(
+      screen.getByTestId("landing-new-tab-card-browser-pending"),
+    ).toBeTruthy();
+    expect(browserCard().textContent).toContain("Browser");
+    expect(browserCard().getAttribute("aria-disabled")).toBe("true");
+    // No sentence is added - a wait has nothing to say that the spinner does
+    // not already say.
+    expect(screen.queryByTestId("landing-new-tab-card-browser-reason")).toBe(
+      null,
+    );
+    fireEvent.click(browserCard());
+    expect(onPick).not.toHaveBeenCalled();
+  });
+
+  // The card the user just picked is where the keyboard belongs while its
+  // answer is on the way - which is why `pending` is not a `disabledReason`.
+  it("leaves the keyboard on the browser card while its open is in flight", () => {
+    const live: ChooserArgs = {
+      terminalReason: null,
+      browserReason: null,
+      browserPending: false,
+      takeFocus: true,
+      onPick: vi.fn(),
+      onDismiss: vi.fn(),
+    };
+    const view = render(chooserElement(live));
+    fireEvent.keyDown(terminalCard(), { key: "ArrowRight" });
+    expect(document.activeElement).toBe(browserCard());
+
+    view.rerender(chooserElement({ ...live, browserPending: true }));
+
+    expect(document.activeElement).toBe(browserCard());
+  });
+
   it("re-places focus when the layer above it goes away", () => {
     const layered: ChooserArgs = {
       terminalReason: null,
       browserReason: null,
+      browserPending: false,
       takeFocus: false,
       onPick: vi.fn(),
       onDismiss: vi.fn(),
@@ -312,6 +377,7 @@ describe("<LandingNewTabChooser />", () => {
     renderChooser({
       terminalReason: null,
       browserReason: null,
+      browserPending: false,
       takeFocus: true,
       onPick: vi.fn(),
       onDismiss,

@@ -6,6 +6,7 @@ import {
   type RefObject,
 } from "react";
 import { Globe, TerminalSquare } from "lucide-react";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { cn } from "@/lib/utils";
 
 export type LandingNewTabKind = "terminal" | "browser";
@@ -13,6 +14,17 @@ export type LandingNewTabKind = "terminal" | "browser";
 export interface LandingNewTabCardState {
   /** Why this kind cannot be picked right now, or `null` when it can. */
   readonly disabledReason: string | null;
+  /**
+   * A pick of this kind is already in flight on the device.
+   *
+   * Separate from `disabledReason` on purpose: a reason is a SENTENCE the card
+   * shows and the focus rule below reads, while this is a wait with nothing to
+   * say. The label is unchanged and a spinner sits beside it - the repo's
+   * pending convention - and deliberately does NOT move the keyboard, because
+   * the card the user just picked is exactly where focus belongs while its
+   * answer is on the way.
+   */
+  readonly pending: boolean;
 }
 
 export interface LandingNewTabChooserProps {
@@ -144,6 +156,7 @@ export function LandingNewTabChooser(
           description="Shell in the selected folder"
           icon={<TerminalSquare className="size-5" aria-hidden="true" />}
           disabledReason={props.terminal.disabledReason}
+          pending={props.terminal.pending}
           onPick={onPick}
           onKeyDown={handleKeyDown}
         />
@@ -154,6 +167,7 @@ export function LandingNewTabChooser(
           description="Signed-in browser on this device"
           icon={<Globe className="size-5" aria-hidden="true" />}
           disabledReason={props.browser.disabledReason}
+          pending={props.browser.pending}
           onPick={onPick}
           onKeyDown={handleKeyDown}
         />
@@ -177,6 +191,7 @@ function LandingNewTabCard({
   description,
   icon,
   disabledReason,
+  pending,
   onPick,
   onKeyDown,
 }: {
@@ -186,10 +201,13 @@ function LandingNewTabCard({
   readonly description: string;
   readonly icon: ReactNode;
   readonly disabledReason: string | null;
+  readonly pending: boolean;
   readonly onPick: (kind: LandingNewTabKind) => void;
   readonly onKeyDown: (event: KeyboardEvent<HTMLButtonElement>) => void;
 }): ReactNode {
-  const disabled = disabledReason !== null;
+  // A card in flight refuses a second pick for the same reason the opener's own
+  // latch does - one gesture, one tab - and shows why without a second sentence.
+  const disabled = disabledReason !== null || pending;
   return (
     <button
       ref={cardRef}
@@ -215,7 +233,16 @@ function LandingNewTabCard({
       <span className="flex size-9 items-center justify-center rounded-lg bg-foreground/8 text-foreground">
         {icon}
       </span>
-      <span className="text-ui-sm font-medium text-foreground">{title}</span>
+      <span className="flex items-center gap-1.5 text-ui-sm font-medium text-foreground">
+        {title}
+        {pending ? (
+          <AgentSpinningDots
+            className={undefined}
+            testId={`landing-new-tab-card-${kind}-pending`}
+            variant={undefined}
+          />
+        ) : null}
+      </span>
       <span className="text-ui-xs text-muted-foreground">{description}</span>
       {disabledReason === null ? null : (
         <span

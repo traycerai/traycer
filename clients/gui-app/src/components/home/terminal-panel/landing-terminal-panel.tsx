@@ -17,7 +17,6 @@ import {
   PanelRightOpen,
 } from "lucide-react";
 import { v4 as uuidv4 } from "uuid";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
 import { useLandingTerminalSurfaceActive } from "./landing-terminal-surface-binding";
@@ -69,6 +68,7 @@ import {
   landingBrowserTabs,
   landingPanelLayoutFor,
   landingTerminalTabs,
+  activeLandingTerminalInstanceId,
   useLandingPanelStore,
   type LandingBrowserTabRef,
   type LandingPanelPlaceholder,
@@ -76,7 +76,6 @@ import {
   type LandingTerminalTabRef,
 } from "@/stores/home/landing-panel-store";
 import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
-import { browserSessionsRefusal } from "@traycer-clients/shared/platform/browser-view";
 import { LandingTerminalTabStrip } from "./landing-terminal-tab-strip";
 import {
   landingStripAdjacentInstanceId,
@@ -92,6 +91,7 @@ import {
 } from "./landing-browser-presentation";
 import {
   landingBrowserCapMessage,
+  useLandingBrowserOpenLink,
   useLandingBrowserOpenTab,
   LANDING_BROWSER_TAB_CAP,
 } from "./use-landing-browser-open-tab";
@@ -767,15 +767,17 @@ export function LandingTerminalPanel(): ReactNode {
       replaceDirectoryRequest(null);
       clearPending();
       activateTab(instanceId);
-      // The placeholder has no terminal to hand the keyboard to - the chooser
-      // takes focus itself on mount - and parking a terminal focus request
-      // against an instance id no terminal will ever have would leave it
-      // pending for the rest of the session.
-      if (
-        useLandingPanelStore.getState().placeholder?.instanceId === instanceId
-      )
-        return;
-      focusTerminalInstance(instanceId);
+      // Neither the placeholder nor a browser tab has a terminal to hand the
+      // keyboard to - the chooser and the browser tile take focus themselves -
+      // and parking a terminal focus request against an instance id no terminal
+      // will ever have would leave it pending for the rest of the session. So
+      // the id is resolved through the terminal list rather than assumed: the
+      // strip is mixed, and `activeInstanceId` is no longer always a terminal.
+      const activated = activeLandingTerminalInstanceId(
+        useLandingPanelStore.getState(),
+      );
+      if (activated === null) return;
+      focusTerminalInstance(activated);
     },
     [activateTab, clearPending, replaceDirectoryRequest],
   );
@@ -809,8 +811,12 @@ export function LandingTerminalPanel(): ReactNode {
     if (wasOpen === panelOpen) return;
     if (panelOpen) {
       if (!pending) capture();
-      const openActiveInstanceId =
-        useLandingPanelStore.getState().activeInstanceId;
+      // Only a terminal row can claim a terminal focus request. An open panel
+      // whose active row is the chooser or a browser tab leaves the request
+      // unsent - those surfaces focus themselves on mount.
+      const openActiveInstanceId = activeLandingTerminalInstanceId(
+        useLandingPanelStore.getState(),
+      );
       if (
         openActiveInstanceId !== null &&
         directoryRequestRef.current === null
@@ -1034,14 +1040,18 @@ export function LandingTerminalPanel(): ReactNode {
         dispatchLandingBrowserClose({ closed, sessions });
       }
       // Closing a non-last tab promotes a surviving neighbor - keep the
-      // keyboard with the panel. The last-tab case collapses the panel, and
-      // the open-transition effect hands focus back to the composer instead.
+      // keyboard with the panel. The promoted neighbour need not be a terminal
+      // in a mixed strip, and only a terminal can claim the request, so the
+      // browser/chooser case falls through to the composer.
+      // The last-tab case collapses the panel, and the open-transition effect
+      // hands focus back to the composer instead.
       const state = useLandingPanelStore.getState();
+      const promoted = activeLandingTerminalInstanceId(state);
       if (
         landingPanelLayoutFor(state, landingPageId).panelOpen &&
-        state.activeInstanceId !== null
+        promoted !== null
       ) {
-        focusTerminalInstance(state.activeInstanceId);
+        focusTerminalInstance(promoted);
       } else {
         clearPendingTerminalFocus(tab.instanceId);
         focusActiveComposer();
@@ -1123,7 +1133,13 @@ export function LandingTerminalPanel(): ReactNode {
     replaceDirectoryRequest(request);
     setPanelOpen(true);
     if (request === null) {
-      const instanceId = useLandingPanelStore.getState().activeInstanceId;
+      // Same rule as every other hand-off in this file: only a terminal row
+      // can claim a terminal focus request, and this one is EAGER - a
+      // settlement that never arrives (an offline host) would leave an intent
+      // parked against a browser tab for the rest of the session.
+      const instanceId = activeLandingTerminalInstanceId(
+        useLandingPanelStore.getState(),
+      );
       if (instanceId !== null) focusTerminalInstance(instanceId);
     }
   }, [
@@ -1157,59 +1173,9 @@ export function LandingTerminalPanel(): ReactNode {
     openBrowserTab();
   }, [openBrowserTab, panelOpen, setPanelOpen]);
 
-  /**
-   * A link the page asked to open in a new tab. Browser semantics, not the
-   * panel's: the popup belongs to the SAME session as the tab that raised it,
-   * and a background open (middle/ctrl/cmd-click) must not take focus from the
-   * tab being read.
-   */
-  const openBrowserLink = useCallback(
-    (
-      tab: LandingBrowserTabRef,
-      url: string,
-      disposition: "foreground" | "background",
-    ): void => {
-      const sessions = browserSessions[tab.hostId] ?? null;
-      if (sessions === null || sessions.lifecycle !== "live") {
-        toast.error(browserSessionsRefusal(sessions));
-        return;
-      }
-      const previousActiveInstanceId =
-        useLandingPanelStore.getState().activeInstanceId;
-      void sessions
-        .openTab(tab.sessionId, url)
-        .then((opened) => {
-          const instanceId = `landing-browser-${uuidv4()}`;
-          const store = useLandingPanelStore.getState();
-          store.addTab({
-            kind: "browser",
-            instanceId,
-            hostId: tab.hostId,
-            sessionId: opened.sessionId,
-            tabId: opened.tabId,
-            name: url,
-            titleSource: "default",
-          });
-          // `addTab` activates what it adds, which is right for a foreground
-          // open and wrong for a background one - so the background arm puts
-          // the selection back where the reader left it.
-          if (
-            disposition === "background" &&
-            previousActiveInstanceId !== null
-          ) {
-            store.activateTab(previousActiveInstanceId);
-          }
-        })
-        .catch((cause: unknown) => {
-          toast.error(
-            cause instanceof Error
-              ? cause.message
-              : "Couldn't open the browser tab.",
-          );
-        });
-    },
-    [browserSessions],
-  );
+  // A link the page asked to open in a new tab, on the raising tab's device
+  // and through the same Query mutation the chooser's opener uses.
+  const openBrowserLink = useLandingBrowserOpenLink({ browserSessions }).open;
 
   // The TERMINAL card's gate, reading the effective target only: capability
   // from the captured host, fail-closed on an unpinned client, and the
@@ -1370,6 +1336,7 @@ export function LandingTerminalPanel(): ReactNode {
           onPickNewTabKind={pickNewTabKind}
           onDismissPlaceholder={dismissPlaceholder}
           browserDisabledReason={browserDisabledReason}
+          browserOpening={browserOpenTab.isOpening}
           onSelectDirectory={selectDirectory}
           onCancelDirectoryPicker={cancelDirectoryRequest}
           onActivateTab={activatePanelTab}
@@ -1414,6 +1381,8 @@ interface LandingTerminalPanelContentsProps {
   readonly onDismissPlaceholder: () => void;
   /** Why the chooser's Browser card cannot be picked, or `null`. */
   readonly browserDisabledReason: string | null;
+  /** A browser tab has been asked for on this device and is on its way. */
+  readonly browserOpening: boolean;
   readonly onSelectDirectory: (workspacePath: string) => void;
   readonly onCancelDirectoryPicker: () => void;
   readonly onActivateTab: (instanceId: string) => void;
@@ -1468,7 +1437,15 @@ function LandingTerminalPanelContents(
   // stays 0 while the keyboard is up; the plugin-fed native state is the live
   // signal there (drives the key bar's padding, not the overlay geometry).
   const nativeKeyboardOpen = useNativeKeyboardOpen();
-  const keyBarActive = isMobile && props.panelOpen;
+  // The key bar sends terminal chords to `instanceId`, so it belongs to a
+  // TERMINAL row and not merely to an open panel: over a browser tab or the
+  // chooser its keys would have nowhere to land, and it would sit on the phone
+  // covering the surface the user is actually reading.
+  const keyBarInstanceId = activeLandingTerminalInstanceId({
+    tabs: props.tabs,
+    activeInstanceId: props.activeInstanceId,
+  });
+  const keyBarActive = isMobile && props.panelOpen && keyBarInstanceId !== null;
   useLandingTerminalShortcuts({
     landingPageId: props.landingPageId,
     panelOpen: props.panelOpen,
@@ -1612,6 +1589,7 @@ function LandingTerminalPanelContents(
           createEnabled={props.createEnabled}
           createDisabledReason={props.createDisabledReason}
           browserDisabledReason={props.browserDisabledReason}
+          browserOpening={props.browserOpening}
           primaryWorkspacePath={props.primaryWorkspacePath}
           reconciledContext={props.reconciledContext}
           directoryPicker={props.directoryPicker}
@@ -1626,7 +1604,7 @@ function LandingTerminalPanelContents(
         />
         <LandingTerminalMobileKeyBar
           active={keyBarActive}
-          instanceId={props.activeInstanceId}
+          instanceId={keyBarInstanceId}
           keyboardOpen={keyboardInset > 0 || nativeKeyboardOpen}
         />
       </aside>
@@ -2140,6 +2118,8 @@ function LandingTerminalPanelBody(props: {
   readonly createEnabled: boolean;
   readonly createDisabledReason: string | null;
   readonly browserDisabledReason: string | null;
+  /** A browser tab has been asked for on this device and is on its way. */
+  readonly browserOpening: boolean;
   readonly primaryWorkspacePath: string | null;
   readonly reconciledContext: LandingTerminalHostContext | null;
   readonly directoryPicker: LandingTerminalDirectoryRequest | null;
@@ -2191,8 +2171,17 @@ function LandingTerminalPanelBody(props: {
         {placeholderActive ? (
           <div className="absolute inset-0 min-h-0">
             <LandingNewTabChooser
-              terminal={{ disabledReason: props.createDisabledReason }}
-              browser={{ disabledReason: props.browserDisabledReason }}
+              terminal={{
+                disabledReason: props.createDisabledReason,
+                // The terminal pick has no in-flight window of its own: it
+                // either creates synchronously or raises the directory picker
+                // over this chooser, and the picker IS the wait.
+                pending: false,
+              }}
+              browser={{
+                disabledReason: props.browserDisabledReason,
+                pending: props.browserOpening,
+              }}
               takeFocus={props.directoryPicker === null}
               onPick={props.onPickNewTabKind}
               onDismiss={props.onDismissPlaceholder}

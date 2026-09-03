@@ -17,6 +17,7 @@ import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 import { appLogger } from "@/lib/logger";
 import { surfaceHostOpenedTab } from "@/lib/browser-view/tiles/surface-host-opened-tab";
 import { browserSessionsReducer } from "@/lib/browser-view/sessions/browser-sessions-stream";
+import { recordIndependentPageOpenedTab } from "@/lib/browser-view/sessions/independent-page-open-registry";
 import {
   openBrowserSessionsSession,
   type BrowserSessionsSession,
@@ -837,11 +838,21 @@ function applyCaptionFrame(
 }
 
 /**
- * Surfacing a host-opened tab means putting it on an EPIC canvas, which an
- * independent stream has none of: it belongs to the device's Start Page, not
- * to a task. The host never sends this frame on one, so the guard changes no
- * behavior - it keeps the module boundary honest, and stops this arm reaching
- * into the canvas store for an epic id a sentinel would have had to invent.
+ * Where a host-opened tab is surfaced, which is a different place per scope.
+ *
+ * An epic stream's surface is that Epic's canvas, reached through a registered
+ * presenter. An independent stream has no canvas - its tabs belong to the
+ * device's Start Page - and the frame carries no scope restriction of its own,
+ * so the arm below routes it rather than dropping it. What it can do there is
+ * narrower: the panel is not necessarily mounted, and its tab list is built
+ * from the device's inventory, so the identity is recorded for the panel's
+ * reconciler to consume when it adopts the row.
+ *
+ * `source` is the whole decision on that side. A page opening a tab is a
+ * gesture the reader made and expects to land on; an agent's is not - and an
+ * agent has no business on an independent stream anyway, since agents are
+ * epic-scoped on the host, which is exactly why the arm asserts it instead of
+ * surfacing whatever arrives.
  */
 function surfaceTabOpenedFrame(
   frame: Extract<BrowserSessionsUxServerFrame, { readonly kind: "tabOpened" }>,
@@ -849,7 +860,15 @@ function surfaceTabOpenedFrame(
   hostId: string,
   presenters: readonly BrowserSessionsPresenter[],
 ): void {
-  if (scope.kind !== "epic") return;
+  if (scope.kind !== "epic") {
+    if (frame.source !== "page") return;
+    recordIndependentPageOpenedTab({
+      hostId,
+      sessionId: frame.sessionId,
+      tabId: frame.tabId,
+    });
+    return;
+  }
   for (const presenter of presenters) {
     if (
       surfaceHostOpenedTab({

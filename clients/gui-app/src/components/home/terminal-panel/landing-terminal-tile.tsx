@@ -45,6 +45,7 @@ import {
   terminalFocusOwnsInstance,
 } from "@/lib/terminals/terminal-focus-registry";
 import {
+  activeLandingTerminalInstanceId,
   landingPanelLayoutFor,
   useLandingPanelStore,
   type LandingTerminalTabRef,
@@ -133,11 +134,14 @@ export function LandingTerminalLegacyBootstrap(
       removeExitedTab(props.landingPageId, instanceId);
       if (!wasActive || !ownsFocus) return;
       const state = useLandingPanelStore.getState();
+      // The promoted neighbour need not be a terminal: the strip is mixed, and
+      // a browser tab or the chooser can be what the exit promotes.
+      const nextTerminal = activeLandingTerminalInstanceId(state);
       if (
         landingPanelLayoutFor(state, props.landingPageId).panelOpen &&
-        state.activeInstanceId !== null
+        nextTerminal !== null
       ) {
-        focusTerminalInstance(state.activeInstanceId);
+        focusTerminalInstance(nextTerminal);
         return;
       }
       clearPendingTerminalFocus(instanceId);

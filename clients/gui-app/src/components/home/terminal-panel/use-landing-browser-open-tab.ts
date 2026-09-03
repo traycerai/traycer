@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useIsMutating, useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { v4 as uuidv4 } from "uuid";
@@ -6,7 +6,11 @@ import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-s
 import { browserSessionsRefusal } from "@traycer-clients/shared/platform/browser-view";
 import { browserMutationKeys } from "@/lib/query-keys/browser-mutation-keys";
 import { DEFAULT_BROWSER_TILE_URL } from "@/stores/epics/canvas/tile-schema/browser-tile";
-import type { LandingBrowserTabRef } from "@/stores/home/landing-panel-store";
+import {
+  useLandingPanelStore,
+  type LandingBrowserTabRef,
+} from "@/stores/home/landing-panel-store";
+import type { LandingBrowserSessionEntries } from "./landing-terminal-authority-fleet";
 import { defaultLandingBrowserTitle } from "./use-landing-browser-reconciliation";
 
 /**
@@ -81,15 +85,24 @@ export function useLandingBrowserOpenTab(args: {
   readonly onOpened: (tab: LandingBrowserTabRef) => void;
 }): LandingBrowserOpenTab {
   const { hostId, sessions, onOpened } = args;
+  /** Set for the whole in-flight window, so `open()` is idempotent per tick. */
+  const inFlightRef = useRef<{ readonly hostId: string | null } | null>(null);
   const openTabKey = browserMutationKeys.openTab(hostId);
   const tabCount = landingBrowserTabCount(sessions, hostId);
   const openMutation = useMutation({
     mutationKey: openTabKey,
     mutationFn: async (): Promise<LandingBrowserTabRef> => {
+      // `inventoryReady` belongs in THIS guard rather than being left to the
+      // cap check below: a live stream that has not published an inventory has
+      // no count, so the cap check passes vacuously and the open goes to a
+      // device whose tabs nobody has counted. The device has not spoken yet -
+      // which is what the connecting refusal says, and it is not the cap's
+      // sentence to say.
       if (
         hostId === null ||
         sessions === null ||
-        sessions.lifecycle !== "live"
+        sessions.lifecycle !== "live" ||
+        !sessions.inventoryReady
       ) {
         throw new Error(browserSessionsRefusal(sessions));
       }
@@ -119,17 +132,157 @@ export function useLandingBrowserOpenTab(args: {
     onError: (cause: Error) => {
       toast.error(cause.message);
     },
+    onSettled: () => {
+      inFlightRef.current = null;
+    },
   });
   const isOpening = useIsMutating({ mutationKey: openTabKey }) > 0;
   const mutate = openMutation.mutate;
   const open = useCallback(() => {
+    // `isOpening` is RENDERED state: `useIsMutating` publishes through the
+    // query cache's subscription, so two `open()` calls in one tick both read
+    // the value from the render they were dispatched in - `false` - and both
+    // reach the mutation. Only a ref moves within the tick. It records the
+    // device rather than a bare boolean so a host switch mid-flight releases
+    // it: that is a different device, and its tab is not the one in flight.
     if (isOpening) return;
+    if (inFlightRef.current !== null && inFlightRef.current.hostId === hostId) {
+      return;
+    }
+    inFlightRef.current = { hostId };
     mutate();
-  }, [isOpening, mutate]);
+  }, [hostId, isOpening, mutate]);
   return { isOpening, tabCount, open };
 }
 
 /** The chooser's disabled-card copy, and the chord's toast when it refuses. */
 export function landingBrowserCapMessage(): string {
   return `This device has ${LANDING_BROWSER_TAB_CAP} browser tabs open`;
+}
+
+/** Where a popup the page raised should land relative to the reader. */
+export type LandingBrowserLinkDisposition = "foreground" | "background";
+
+interface LandingBrowserLinkRequest {
+  readonly hostId: string;
+  readonly sessionId: string;
+  readonly url: string;
+  readonly disposition: LandingBrowserLinkDisposition;
+  /** Distinguishes a second identical ask from the first one. */
+  readonly requestId: string;
+}
+
+export interface LandingBrowserOpenLink {
+  readonly open: (
+    tab: LandingBrowserTabRef,
+    url: string,
+    disposition: LandingBrowserLinkDisposition,
+  ) => void;
+}
+
+/**
+ * A link the page asked to open in a new tab.
+ *
+ * Browser semantics, not the panel's: the popup belongs to the SAME session as
+ * the tab that raised it, and a background open (middle / ctrl / cmd click)
+ * must not take the selection from the tab being read.
+ *
+ * It goes through Query on the same key the chooser's opener uses,
+ * `browserMutationKeys.openTab(hostId)`, so a popup and a chooser open on one
+ * device are one in-flight open rather than two - which is also what makes the
+ * cap re-check here mean anything. The key names the DEVICE, and a popup's
+ * device is the raising tab's rather than the panel's active one, so the ask is
+ * queued into state for one render and dispatched from there: the key is read
+ * off the render the mutation starts in, and a ref could not move it.
+ */
+export function useLandingBrowserOpenLink(args: {
+  readonly browserSessions: LandingBrowserSessionEntries;
+}): LandingBrowserOpenLink {
+  const { browserSessions } = args;
+  const [request, setRequest] = useState<LandingBrowserLinkRequest | null>(
+    null,
+  );
+  const dispatchedRef = useRef<string | null>(null);
+  const openMutation = useMutation({
+    mutationKey: browserMutationKeys.openTab(request?.hostId ?? null),
+    mutationFn: async (
+      pending: LandingBrowserLinkRequest,
+    ): Promise<LandingBrowserTabRef> => {
+      const sessions = browserSessions[pending.hostId] ?? null;
+      if (
+        sessions === null ||
+        sessions.lifecycle !== "live" ||
+        !sessions.inventoryReady
+      ) {
+        throw new Error(browserSessionsRefusal(sessions));
+      }
+      const tabCount = landingBrowserTabCount(sessions, pending.hostId);
+      if (tabCount !== null && tabCount >= LANDING_BROWSER_TAB_CAP) {
+        throw new Error(landingBrowserCapMessage());
+      }
+      const opened = await sessions.openTab(pending.sessionId, pending.url);
+      // Read AFTER the await, not before it: the reader can move to another
+      // row - or close the one they were on - while the device is answering,
+      // and "the tab being read" is the row that is active when the popup
+      // ARRIVES, not the one that was active when it was asked for.
+      const previousActiveInstanceId =
+        useLandingPanelStore.getState().activeInstanceId;
+      const store = useLandingPanelStore.getState();
+      const tab: LandingBrowserTabRef = {
+        kind: "browser",
+        instanceId: `landing-browser-${uuidv4()}`,
+        hostId: pending.hostId,
+        sessionId: opened.sessionId,
+        tabId: opened.tabId,
+        name: pending.url,
+        titleSource: "default",
+      };
+      store.addTab(tab);
+      // `addTab` activates what it adds, which is right for a foreground open
+      // and wrong for a background one - so the background arm puts the
+      // selection back where the reader left it. `activateTab` ignores an id
+      // the store no longer holds, so a row closed mid-open leaves the new tab
+      // active rather than nothing.
+      if (
+        pending.disposition === "background" &&
+        previousActiveInstanceId !== null
+      ) {
+        store.activateTab(previousActiveInstanceId);
+      }
+      return tab;
+    },
+    onError: (cause: Error) => {
+      toast.error(cause.message);
+    },
+    onSettled: () => {
+      setRequest(null);
+    },
+  });
+  const mutate = openMutation.mutate;
+  useEffect(() => {
+    if (request === null) {
+      dispatchedRef.current = null;
+      return;
+    }
+    if (dispatchedRef.current === request.requestId) return;
+    dispatchedRef.current = request.requestId;
+    mutate(request);
+  }, [mutate, request]);
+  const open = useCallback(
+    (
+      tab: LandingBrowserTabRef,
+      url: string,
+      disposition: LandingBrowserLinkDisposition,
+    ): void => {
+      setRequest({
+        hostId: tab.hostId,
+        sessionId: tab.sessionId,
+        url,
+        disposition,
+        requestId: uuidv4(),
+      });
+    },
+    [],
+  );
+  return { open };
 }

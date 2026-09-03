@@ -15,6 +15,10 @@ import {
   hasBrowserSessionsCoordinator,
 } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import {
+  consumeIndependentPageOpenedTab,
+  resetIndependentPageOpensForTests,
+} from "@/lib/browser-view/sessions/independent-page-open-registry";
+import {
   coordinatorKey,
   epicScope,
   independentScope,
@@ -98,6 +102,7 @@ describe("browser sessions coordinator registry", () => {
   const releasers: Array<() => void> = [];
   afterEach(() => {
     for (const release of releasers.splice(0)) release();
+    resetIndependentPageOpensForTests();
   });
 
   function acquire(args: {
@@ -166,6 +171,79 @@ describe("browser sessions coordinator registry", () => {
     arm.release();
     expect(session.closed).toBe(true);
     expect(hasBrowserSessionsCoordinator(arm.key)).toBe(false);
+  });
+
+  // An independent stream has no canvas, so its `tabOpened` used to be dropped
+  // on a claim about the host that the contract does not make. The Start Page
+  // is that scope's surface, and the panel's reconciler is what can reach it -
+  // so the frame leaves an identity for it to consume.
+  it("records a page-opened independent tab for the Start Page to adopt", () => {
+    const harness = createTransportHarness();
+    acquire({
+      scope: independentScope(),
+      openTransport: harness.openTransport,
+    });
+    const session = soleSession(soleClient(harness.clients));
+    session.emitStatus("open");
+
+    session.emit(
+      {
+        kind: "tabOpened",
+        hasBinaryPayload: false,
+        sessionId: "device-session",
+        tabId: "popup-tab",
+        source: "page",
+      },
+      null,
+    );
+
+    expect(
+      consumeIndependentPageOpenedTab({
+        hostId: "host-1",
+        sessionId: "device-session",
+        tabId: "popup-tab",
+      }),
+    ).toBe(true);
+    // Consumed exactly once: a second window adopting the same row later must
+    // not have its selection yanked as well.
+    expect(
+      consumeIndependentPageOpenedTab({
+        hostId: "host-1",
+        sessionId: "device-session",
+        tabId: "popup-tab",
+      }),
+    ).toBe(false);
+  });
+
+  // Agents are epic-scoped on the host, so an agent-sourced frame on an
+  // independent stream is not a gesture anyone at this keyboard made.
+  it("does not record an agent-opened independent tab", () => {
+    const harness = createTransportHarness();
+    acquire({
+      scope: independentScope(),
+      openTransport: harness.openTransport,
+    });
+    const session = soleSession(soleClient(harness.clients));
+    session.emitStatus("open");
+
+    session.emit(
+      {
+        kind: "tabOpened",
+        hasBinaryPayload: false,
+        sessionId: "device-session",
+        tabId: "agent-tab",
+        source: "agent",
+      },
+      null,
+    );
+
+    expect(
+      consumeIndependentPageOpenedTab({
+        hostId: "host-1",
+        sessionId: "device-session",
+        tabId: "agent-tab",
+      }),
+    ).toBe(false);
   });
 
   it("keys two scopes on the same host and identity into two coordinators, independent of scope field order", () => {

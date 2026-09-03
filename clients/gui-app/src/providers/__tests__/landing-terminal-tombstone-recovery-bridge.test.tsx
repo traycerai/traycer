@@ -138,6 +138,7 @@ vi.mock(
 );
 
 import { LandingTerminalTombstoneRecoveryBridge } from "@/providers/landing-terminal-tombstone-recovery-bridge";
+import { terminalTombstoneOutstanding } from "@/providers/landing-terminal-tombstone-outstanding";
 import { requestLandingTerminalClose } from "@/lib/terminals/landing-terminal-close-coordinator";
 
 /**
@@ -1762,5 +1763,80 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     // had climbed to.
     await advance(1_000);
     expect(mocks.closeAsync.mock.calls.length).toBeGreaterThan(1);
+  });
+});
+
+/**
+ * The two retry arms read `pendingKills`, which is MIXED. Their effect is
+ * masked downstream - the drain narrows its own dispatch list and
+ * `cancelUndrainableCapableCloseRetries` reaps any retry whose key is not in
+ * it - so a component-level case cannot tell the two answers apart. The
+ * predicate is what is wrong when it is wrong, so the predicate is what this
+ * pins.
+ */
+describe("terminalTombstoneOutstanding", () => {
+  afterEach(() => {
+    useLandingPanelStore.getState().resetForTests();
+  });
+
+  function tombstoneFor(instanceId: string): void {
+    useLandingPanelStore.getState().closeTab("landing-page", instanceId);
+  }
+
+  it("does not read a browser tombstone as the terminal's, on the same ids", () => {
+    // Same host, same session id, different kind - which the store's own key
+    // helper is built to keep apart, and nothing proves the two host-minted
+    // namespaces disjoint.
+    useLandingPanelStore.getState().addTab({
+      kind: "browser",
+      instanceId: "browser-tab",
+      sessionId: "session-shared",
+      hostId: "host-b",
+      tabId: "tab-1",
+      name: "example.com",
+      titleSource: "default",
+    });
+    tombstoneFor("browser-tab");
+    expect(useLandingPanelStore.getState().pendingKills).toHaveLength(1);
+
+    expect(
+      terminalTombstoneOutstanding({
+        hostId: "host-b",
+        sessionId: "session-shared",
+      }),
+    ).toBe(false);
+  });
+
+  it("reads the terminal's own tombstone, and only on matching ids", () => {
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
+      instanceId: "terminal-tab",
+      sessionId: "session-shared",
+      hostId: "host-b",
+      cwd: "/legacy",
+      name: "Shared",
+      titleSource: "default",
+      hostAuthorityAcknowledged: true,
+    });
+    tombstoneFor("terminal-tab");
+
+    expect(
+      terminalTombstoneOutstanding({
+        hostId: "host-b",
+        sessionId: "session-shared",
+      }),
+    ).toBe(true);
+    expect(
+      terminalTombstoneOutstanding({
+        hostId: "host-other",
+        sessionId: "session-shared",
+      }),
+    ).toBe(false);
+    expect(
+      terminalTombstoneOutstanding({
+        hostId: "host-b",
+        sessionId: "session-other",
+      }),
+    ).toBe(false);
   });
 });
