@@ -53,6 +53,7 @@ import {
   resourcesRegistry,
   type GlobalResourceProjection,
 } from "@/stores/resources/resources-registry";
+import { useResourceMonitorStore } from "@/stores/resources/resource-monitor-store";
 import { useTitleBarDragStore } from "@/stores/layout/title-bar-drag-store";
 import { queryClient } from "@/lib/query-client";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
@@ -890,6 +891,9 @@ afterEach(() => {
   globalResourcesUnsupportedMock.unsupported = null;
   resourcesRegistry.disposeAll();
   useTitleBarDragStore.setState({ suppressors: new Set() });
+  // The sort pick is persisted, so it outlives a test that changed it - reset
+  // it the way every other shared store here is reset.
+  useResourceMonitorStore.getState().setSortOption("tab");
   queryClient.clear();
 });
 
@@ -957,6 +961,33 @@ describe("ResourceMonitorPopover", () => {
         .getByRole("menuitemradio", { name: "Tab order" })
         .getAttribute("aria-checked"),
     ).toBe("true");
+  });
+
+  it("keeps the chosen sort option after the popover is closed and reopened", () => {
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(projection({ owners: [owner({})] }));
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Sort resource rows" }),
+      { button: 0, ctrlKey: false, pointerType: "mouse" },
+    );
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Memory" }));
+
+    // Closing unmounts the panel - the pick has to survive that, not the panel.
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(
+      screen.queryByRole("searchbox", { name: "Search resources" }),
+    ).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    expect(
+      screen.getByRole("button", { name: "Sort resource rows" }).textContent,
+    ).toContain("Memory");
   });
 
   it("filters tasks and owners with case-insensitive free text", () => {

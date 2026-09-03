@@ -2,6 +2,7 @@ import type {
   StreamCloseReason,
   StreamConnectionStatus,
 } from "../host-transport/i-stream-session";
+import { isMethodIncompatibleClose } from "../host-transport/i-stream-session";
 import type {
   BrowserScreencastServerFrame,
   BrowserSessionsUxClientFrame,
@@ -527,7 +528,37 @@ export type BrowserSessionsLifecycle =
   | "live"
   | "reconnecting"
   | "closed"
-  | "failed";
+  | "failed"
+  /**
+   * The host has no `browser.sessions` at all (a release before browsers
+   * existed). Distinct from `failed` because it is a statement about the
+   * host's capability, not about this attempt: no retry can change it, and
+   * the only remedy is updating the host.
+   */
+  | "unsupported";
+
+export const BROWSERS_UNSUPPORTED_MESSAGE =
+  "This host doesn't support browsers. Update Traycer Host to use browser tabs here.";
+
+export const BROWSERS_APP_OUTDATED_MESSAGE =
+  "This app is too old for this host's browsers. Update the Traycer app to use browser tabs here.";
+
+/**
+ * Which side the INCOMPATIBLE close says to update. A host from before
+ * browsers existed is the common case (no guidance, or host-should-upgrade);
+ * a host whose `browser.sessions` moved past what this app speaks is the
+ * other, and telling that user to update the host would send them the wrong
+ * way.
+ */
+function unsupportedBrowsersMessage(reason: StreamCloseReason | null): string {
+  const guidance =
+    reason?.kind === "fatalError" ? reason.details.upgradeGuidance : null;
+  return guidance !== null &&
+    guidance.clientShouldUpgrade &&
+    !guidance.hostShouldUpgrade
+    ? BROWSERS_APP_OUTDATED_MESSAGE
+    : BROWSERS_UNSUPPORTED_MESSAGE;
+}
 
 /**
  * The lifecycle a stream's connection status reads as, and the message that
@@ -541,6 +572,7 @@ export function browserSessionsLifecycle(
   status: StreamConnectionStatus,
   reason: StreamCloseReason | null,
 ): BrowserSessionsLifecycle {
+  if (isMethodIncompatibleClose(reason)) return "unsupported";
   if (reason?.kind === "fatalError") return "failed";
   if (status === "open") return "live";
   if (status === "reconnecting") return "reconnecting";
@@ -552,10 +584,35 @@ export function browserSessionsError(
   status: StreamConnectionStatus,
   reason: StreamCloseReason | null,
 ): string | null {
+  if (isMethodIncompatibleClose(reason)) {
+    return unsupportedBrowsersMessage(reason);
+  }
   if (reason?.kind === "fatalError") return reason.details.reason;
   if (status === "reconnecting") return "Reconnecting browser sessions.";
   if (status === "closed") return "Browser sessions stream closed.";
   return null;
+}
+
+/** The slice of stream state a refusal is decided from. */
+export interface BrowserSessionsRefusalInput {
+  readonly lifecycle: BrowserSessionsLifecycle;
+  readonly errorMessage: string | null;
+}
+
+/**
+ * Why an action that needs a live stream is refused right now. One string
+ * for every surface that opens a tab, so a host without browsers is told the
+ * same thing from the "+" button, the empty state and the command palette -
+ * and the same thing the panel's own unavailable state already shows, which
+ * is why an unsupported stream's refusal is its recorded message.
+ */
+export function browserSessionsRefusal(
+  sessions: BrowserSessionsRefusalInput | null,
+): string {
+  if (sessions?.lifecycle !== "unsupported") {
+    return "Browsers are not connected yet.";
+  }
+  return sessions.errorMessage ?? BROWSERS_UNSUPPORTED_MESSAGE;
 }
 
 /**

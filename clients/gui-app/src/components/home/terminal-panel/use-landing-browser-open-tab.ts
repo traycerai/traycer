@@ -3,6 +3,7 @@ import { useIsMutating, useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { v4 as uuidv4 } from "uuid";
 import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
+import { browserSessionsRefusal } from "@traycer-clients/shared/platform/browser-view";
 import { browserMutationKeys } from "@/lib/query-keys/browser-mutation-keys";
 import { DEFAULT_BROWSER_TILE_URL } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import type { LandingBrowserTabRef } from "@/stores/home/landing-panel-store";
@@ -90,7 +91,7 @@ export function useLandingBrowserOpenTab(args: {
         sessions === null ||
         sessions.lifecycle !== "live"
       ) {
-        throw new Error("Browsers are not connected yet.");
+        throw new Error(browserSessionsRefusal(sessions));
       }
       // Re-checked here and not only at the affordance: the chord opens a tab
       // without ever rendering the chooser's disabled card, and the count can

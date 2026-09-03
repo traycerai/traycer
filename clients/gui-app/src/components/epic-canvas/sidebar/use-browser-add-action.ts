@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import { useIsMutating, useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { browserSessionsRefusal } from "@traycer-clients/shared/platform/browser-view";
 import { useBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { browserMutationKeys } from "@/lib/query-keys/browser-mutation-keys";
@@ -55,7 +56,7 @@ export function useAddBrowserAction(
     mutationFn: async () => {
       const hostId = sessions.hostId;
       if (sessions.lifecycle !== "live" || hostId === null) {
-        throw new Error("Browsers are not connected yet.");
+        throw new Error(browserSessionsRefusal(sessions));
       }
       const opened = await sessions.openTab(null, DEFAULT_BROWSER_TILE_URL);
       return { hostId, sessionId: opened.sessionId, tabId: opened.tabId };

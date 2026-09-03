@@ -12,6 +12,7 @@ import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import type { TileOpenTarget } from "@/lib/canvas/tile-open/intent";
 import { convertBrowserTabToPip } from "@/lib/browser-view/pip/pip-store";
 import type { BrowserViewViewportPresetId } from "@traycer-clients/shared/platform/browser-view";
+import { browserSessionsRefusal } from "@traycer-clients/shared/platform/browser-view";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import type { BrowserSessionTileRef } from "@/stores/epics/canvas/types";
@@ -105,7 +106,7 @@ export function BrowserSessionTile(props: BrowserSessionTileProps) {
         browserSessions.lifecycle !== "live" ||
         browserSessions.hostId !== props.node.hostId
       ) {
-        toast.error("Browsers are not connected yet.");
+        toast.error(browserSessionsRefusal(browserSessions));
         return;
       }
       void browserSessions

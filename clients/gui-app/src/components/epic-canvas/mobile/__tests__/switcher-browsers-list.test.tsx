@@ -25,6 +25,8 @@ import {
   sessionInfo,
   tabInfo,
 } from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
+import { BROWSERS_UNSUPPORTED_MESSAGE } from "@traycer-clients/shared/platform/browser-view";
+import { toast } from "sonner";
 
 const browserHostPinState = vi.hoisted(() => ({
   selection: null as string | null,
@@ -432,5 +434,29 @@ describe("SwitcherBrowsersList", () => {
     renderList(() => undefined);
     expect(screen.getByText("Browsers unavailable.")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+
+  it("names the host update as the remedy, with no retry, when the host has no browsers", () => {
+    // A host from before browsers existed refuses the stream at handshake.
+    // Retrying cannot change that, so the state carries the remedy instead of
+    // a button - and the "+" tells the same story rather than "not connected".
+    replaceSessions([], "unsupported");
+    sessionsState.value = {
+      ...sessionsState.value,
+      errorMessage: BROWSERS_UNSUPPORTED_MESSAGE,
+    };
+    renderList(() => undefined);
+
+    expect(screen.getByText("Browsers unavailable.")).toBeTruthy();
+    expect(screen.getByText(BROWSERS_UNSUPPORTED_MESSAGE)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.queryByTestId("epic-browsers-panel-empty")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Add browser" }));
+    return waitFor(() => {
+      expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+        BROWSERS_UNSUPPORTED_MESSAGE,
+      );
+    });
   });
 });

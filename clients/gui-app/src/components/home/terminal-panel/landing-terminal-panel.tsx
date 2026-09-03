@@ -76,6 +76,7 @@ import {
   type LandingTerminalTabRef,
 } from "@/stores/home/landing-panel-store";
 import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
+import { browserSessionsRefusal } from "@traycer-clients/shared/platform/browser-view";
 import { LandingTerminalTabStrip } from "./landing-terminal-tab-strip";
 import {
   landingStripAdjacentInstanceId,
@@ -1170,7 +1171,7 @@ export function LandingTerminalPanel(): ReactNode {
     ): void => {
       const sessions = browserSessions[tab.hostId] ?? null;
       if (sessions === null || sessions.lifecycle !== "live") {
-        toast.error("Browsers are not connected yet.");
+        toast.error(browserSessionsRefusal(sessions));
         return;
       }
       const previousActiveInstanceId =
