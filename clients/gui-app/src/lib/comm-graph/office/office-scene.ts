@@ -1056,9 +1056,18 @@ export class OfficeScene {
     // lands on a prefix in which whatever was mid-flight has not happened yet.
     // An envelope from a later row must not keep flying over the earlier
     // floor, let alone land there.
+    //
+    // Two rows can share a millisecond, and a step between them moves the
+    // cursor without moving `cursorMs`. The pulse key names the row, so a key
+    // change at an equal time is a move too - taken as a rewind either way,
+    // because dropping a flight the next row would restart costs nothing and
+    // keeping one from a later row costs the truth of the earlier prefix.
     const rewound =
       input.cursorMs !== null &&
-      (this.cursorMs === null || input.cursorMs < this.cursorMs);
+      (this.cursorMs === null ||
+        input.cursorMs < this.cursorMs ||
+        (input.cursorMs === this.cursorMs &&
+          input.pulseKey !== this.lastPulseKey));
     if (rewound && !firstSync) this.dropTransientMotion();
     this.cursorMs = input.cursorMs;
     this.clockMs = input.clockMs;
