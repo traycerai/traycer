@@ -312,7 +312,10 @@ describe("BrowsersPanelBody", () => {
       usePanelHeaderMenuStore.getInitialState(),
       true,
     );
-    useSidebarNodeRevealStore.setState({ requestsByViewTabId: {} }, true);
+    useSidebarNodeRevealStore.setState(
+      { requestsByViewTabId: {}, visibleByViewTabId: {} },
+      true,
+    );
     seedCanvasTab();
     sessionsState.value = {
       hostId: "host-1",
@@ -412,6 +415,9 @@ describe("BrowsersPanelBody", () => {
     const scrollIntoView = vi
       .spyOn(Element.prototype, "scrollIntoView")
       .mockImplementation(() => undefined);
+    usePanelHeaderSearchStore
+      .getState()
+      .openSearch("view-tab-1", "browsers", "checkout.example");
     requestSidebarNodeReveal(
       "view-tab-1",
       "browser-session:sess-primary:tab-live",
@@ -424,6 +430,7 @@ describe("BrowsersPanelBody", () => {
       expect(scrollIntoView.mock.instances).toContain(row);
     });
     expect(row.dataset.sidebarRevealHighlighted).toBe("true");
+    expect(screen.getByTestId("epic-browser-sidebar-row-tab-live")).toBe(row);
     expect(
       useSidebarNodeRevealStore.getState().requestsByViewTabId["view-tab-1"],
     ).toBeUndefined();

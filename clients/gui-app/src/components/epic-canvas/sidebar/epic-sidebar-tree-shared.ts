@@ -6,11 +6,10 @@
 import type { EpicNodeKind } from "@/lib/artifacts/node-display";
 import { cn } from "@/lib/utils";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { SIDEBAR_NODE_REVEAL_VISIBILITY_MS } from "@/stores/epics/sidebar-node-reveal-store";
 
 export const INDENT_PX = 16;
 export const BASE_PAD_LEFT = 8;
-
-const SIDEBAR_REVEAL_HIGHLIGHT_DURATION_MS = 3_000;
 
 /** Same visual treatment and lifetime as a communication-graph transcript jump. */
 export const SIDEBAR_REVEAL_HIGHLIGHT_CLASS =
@@ -24,7 +23,7 @@ export function flashSidebarElement(element: HTMLElement, nonce: number): void {
     if (element.dataset.sidebarRevealNonce !== revealNonce) return;
     delete element.dataset.sidebarRevealHighlighted;
     delete element.dataset.sidebarRevealNonce;
-  }, SIDEBAR_REVEAL_HIGHLIGHT_DURATION_MS);
+  }, SIDEBAR_NODE_REVEAL_VISIBILITY_MS);
 }
 
 export function revealSidebarNode(

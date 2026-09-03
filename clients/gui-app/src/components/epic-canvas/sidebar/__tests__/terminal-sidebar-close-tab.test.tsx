@@ -405,7 +405,10 @@ describe("terminal sidebar Close", () => {
     durableAuthority.collectionIncludesSession = false;
     terminalSessions.value = [RUNNING_SESSION];
     resetEpicTerminalDurableCreatesForTests();
-    useSidebarNodeRevealStore.setState({ requestsByViewTabId: {} }, true);
+    useSidebarNodeRevealStore.setState(
+      { requestsByViewTabId: {}, visibleByViewTabId: {} },
+      true,
+    );
     seedOpenTerminalTab("legacy");
   });
 
@@ -414,7 +417,10 @@ describe("terminal sidebar Close", () => {
     resetOriginStores();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     resetEpicTerminalDurableCreatesForTests();
-    useSidebarNodeRevealStore.setState({ requestsByViewTabId: {} }, true);
+    useSidebarNodeRevealStore.setState(
+      { requestsByViewTabId: {}, visibleByViewTabId: {} },
+      true,
+    );
   });
 
   it("highlights the terminal shown in the active canvas pane", () => {

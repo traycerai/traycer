@@ -162,7 +162,10 @@ describe("PrPanelBody card list", () => {
 
   beforeEach(() => {
     resetCanvas();
-    useSidebarNodeRevealStore.setState({ requestsByViewTabId: {} }, true);
+    useSidebarNodeRevealStore.setState(
+      { requestsByViewTabId: {}, visibleByViewTabId: {} },
+      true,
+    );
     nestedFocusBoundaryMock.navigateNested.mockClear();
     queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
@@ -173,7 +176,10 @@ describe("PrPanelBody card list", () => {
   afterEach(() => {
     cleanup();
     resetCanvas();
-    useSidebarNodeRevealStore.setState({ requestsByViewTabId: {} }, true);
+    useSidebarNodeRevealStore.setState(
+      { requestsByViewTabId: {}, visibleByViewTabId: {} },
+      true,
+    );
     queryClient.clear();
   });
 

@@ -2132,7 +2132,10 @@ describe("<TabGroupView /> Reveal in Sidebar", () => {
     testState.missingArtifactIds.clear();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useFileTreeRevealStore.setState({ requestsByViewTabId: {} }, true);
-    useSidebarNodeRevealStore.setState({ requestsByViewTabId: {} }, true);
+    useSidebarNodeRevealStore.setState(
+      { requestsByViewTabId: {}, visibleByViewTabId: {} },
+      true,
+    );
     useSurfaceHostSelectionStore.getState().resetForTests();
     useEpicLeftPanelStore.setState(
       useEpicLeftPanelStore.getInitialState(),

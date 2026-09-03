@@ -42,6 +42,7 @@ import { tileIntent } from "@/lib/canvas/tile-open/intent";
 import {
   clearSidebarNodeRevealRequest,
   useSidebarNodeRevealRequest,
+  useVisibleSidebarNodeRevealRequest,
 } from "@/stores/epics/sidebar-node-reveal-store";
 import { revealSidebarNode } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 
@@ -84,6 +85,7 @@ function BrowsersPanelBodyLive(props: {
   const sessions = useBrowserSessionsContext();
   const listRef = useRef<HTMLUListElement>(null);
   const revealRequest = useSidebarNodeRevealRequest(props.tabId);
+  const visibleRevealRequest = useVisibleSidebarNodeRevealRequest(props.tabId);
   const searchQuery = usePanelHeaderSearchQuery(props.tabId, BROWSERS_PANEL_ID);
   const chats = useEpicChatRecords();
   const chatById = useMemo(
@@ -94,7 +96,7 @@ function BrowsersPanelBodyLive(props: {
   const { secondaryByKey, duplicateTitles } = useBrowserTabRowLabels(tabs);
   const filteredTabs = useMemo(() => {
     const matches = filterBrowserTabRows(tabs, searchQuery);
-    if (revealRequest === null) return matches;
+    if (visibleRevealRequest === null) return matches;
     const matchKeys = new Set(matches.map((row) => row.key));
     return tabs.filter(
       (row) =>
@@ -102,9 +104,9 @@ function BrowsersPanelBodyLive(props: {
         browserSessionTileId({
           sessionId: row.session.sessionId,
           tabId: row.tab.tabId,
-        }) === revealRequest.nodeId,
+        }) === visibleRevealRequest.nodeId,
     );
-  }, [revealRequest, searchQuery, tabs]);
+  }, [searchQuery, tabs, visibleRevealRequest]);
   const { openTile } = useEpicTileNavigation();
   const { add: addBrowser, isAdding } = useAddBrowserAction(props.tabId, null);
 

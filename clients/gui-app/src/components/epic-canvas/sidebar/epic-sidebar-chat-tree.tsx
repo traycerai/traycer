@@ -2670,6 +2670,7 @@ function ChatRenameRow(props: ChatRenameRowProps) {
       className={cn(
         "flex min-h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1",
         props.isArchived && ARCHIVED_ROW_CLASS,
+        SIDEBAR_REVEAL_HIGHLIGHT_CLASS,
       )}
       style={{
         paddingLeft: `${depth * INDENT_PX + BASE_PAD_LEFT}px`,

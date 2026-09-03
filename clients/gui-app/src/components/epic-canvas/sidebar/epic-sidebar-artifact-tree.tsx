@@ -75,7 +75,9 @@ import {
 import {
   clearSidebarNodeRevealRequest,
   useSidebarNodeRevealRequest,
+  useVisibleSidebarNodeRevealRequest,
 } from "@/stores/epics/sidebar-node-reveal-store";
+import { usePanelHeaderSearchStore } from "@/stores/epics/panel-header-search-store";
 import {
   isOpenableEpicNodeKind,
   type EpicNodeRef,
@@ -539,20 +541,21 @@ export function ArtifactTreePanelBody(props: ArtifactTreePanelBodyProps) {
   const filteredVisibleIds = useArtifactVisibleIds(epicId);
   const tree = useEpicTreeIndex();
   const revealRequest = useSidebarNodeRevealRequest(tabId);
+  const visibleRevealRequest = useVisibleSidebarNodeRevealRequest(tabId);
   const ancestorIdsOfReveal = useAncestorIds(revealRequest?.nodeId ?? null);
   const visibleIds = useMemo(() => {
     if (
-      revealRequest === null ||
+      visibleRevealRequest === null ||
       filteredVisibleIds === null ||
-      !Object.hasOwn(tree.nodeById, revealRequest.nodeId)
+      !Object.hasOwn(tree.nodeById, visibleRevealRequest.nodeId)
     ) {
       return filteredVisibleIds;
     }
     return new Set([
       ...filteredVisibleIds,
-      ...collectWithAncestors([revealRequest.nodeId], tree.nodeById),
+      ...collectWithAncestors([visibleRevealRequest.nodeId], tree.nodeById),
     ]);
-  }, [filteredVisibleIds, revealRequest, tree]);
+  }, [filteredVisibleIds, tree, visibleRevealRequest]);
   const rootIds = useMemo(
     () => applyVisibleFilter(allRootIds, visibleIds),
     [allRootIds, visibleIds],
@@ -598,6 +601,7 @@ export function ArtifactTreePanelBody(props: ArtifactTreePanelBodyProps) {
     forcedExpandedIds,
   );
   const expandAction = useEpicSidebarExpansionStore((s) => s.expand);
+  const closeSearch = usePanelHeaderSearchStore((s) => s.closeSearch);
   const collapseAction = useEpicSidebarExpansionStore((s) => s.collapse);
   const toggleExpanded = useCallback(
     (id: string) => {
@@ -615,6 +619,7 @@ export function ArtifactTreePanelBody(props: ArtifactTreePanelBodyProps) {
 
   useLayoutEffect(() => {
     if (revealRequest === null || treeRegionRef.current === null) return;
+    closeSearch(tabId, panelId);
     for (const ancestorId of ancestorIdsOfReveal) {
       expandAction(tabId, panelId, ancestorId);
     }
@@ -630,6 +635,7 @@ export function ArtifactTreePanelBody(props: ArtifactTreePanelBodyProps) {
     clearSidebarNodeRevealRequest(tabId, revealRequest.nonce);
   }, [
     ancestorIdsOfReveal,
+    closeSearch,
     expandAction,
     expandedIds,
     panelId,
@@ -1612,7 +1618,11 @@ function ArtifactRenameRow(props: ArtifactRenameRowProps) {
   } = props;
   return (
     <div
-      className="flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md px-2"
+      data-sidebar-node-id={nodeId}
+      className={cn(
+        "flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md px-2",
+        SIDEBAR_REVEAL_HIGHLIGHT_CLASS,
+      )}
       style={{
         paddingLeft: `${depth * INDENT_PX + BASE_PAD_LEFT}px`,
       }}
