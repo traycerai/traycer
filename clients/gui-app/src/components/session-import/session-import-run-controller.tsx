@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useReducer, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   SessionImportRunClient,
@@ -52,6 +52,18 @@ export function SessionImportRunController(): null {
   // Cleared the moment it attaches (it is the run's subscription then) or
   // closes, so `start` can tell "a run is going" from "we are still asking".
   const waitingProbeRef = useRef<SessionImportRunClient | null>(null);
+  // The stream client this window has already asked "is a run going?". One
+  // question per binding: a probe that came back empty must not be asked
+  // again on the same connection every time a client closes, while a NEW
+  // binding - the app pointed at another host - has never been asked at all.
+  const probedStreamClientRef = useRef<object | null>(null);
+  // Bumped whenever a client closes. Closing only mutates refs, and an effect
+  // cannot see a ref change; without this, a run retained across a host swap
+  // would close and leave the new host un-probed for the life of the window.
+  const [clientGeneration, noteClientClosed] = useReducer(
+    (generation: number) => generation + 1,
+    0,
+  );
 
   const closeClient = useCallback(() => {
     const client = clientRef.current;
@@ -59,6 +71,7 @@ export function SessionImportRunController(): null {
       clientRef.current = null;
       if (waitingProbeRef.current === client) waitingProbeRef.current = null;
       client.close();
+      noteClientClosed();
     }
   }, []);
 
@@ -144,10 +157,17 @@ export function SessionImportRunController(): null {
   // answers with an empty run instead. The store is touched only in the first
   // case - the probe closes on the empty answer before its `complete` frame
   // could read as "nothing was imported".
+  //
+  // Asked once per stream binding, and not gated on the store: after a host
+  // swap the store may still hold the previous host's finished summary, and a
+  // run in flight on the new host is the fresher fact - `applyStarted` lets a
+  // new run id supersede it. A probe that finds nothing leaves the store as
+  // it was.
   useEffect(() => {
     if (wsStreamClient === null) return;
     if (clientRef.current !== null) return;
-    if (useSessionImportRunStore.getState().status !== "idle") return;
+    if (probedStreamClientRef.current === wsStreamClient) return;
+    probedStreamClientRef.current = wsStreamClient;
 
     const callbacks = runCallbacks(streamHostId);
     let attached = false;
@@ -175,7 +195,7 @@ export function SessionImportRunController(): null {
       // subscription now and stays.
       if (!attached && clientRef.current === probe) closeClient();
     };
-  }, [closeClient, runCallbacks, streamHostId, wsStreamClient]);
+  }, [clientGeneration, closeClient, runCallbacks, streamHostId, wsStreamClient]);
 
   useEffect(() => {
     setSessionImportStartHandle({ start });

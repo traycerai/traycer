@@ -231,6 +231,78 @@ describe("<SessionImportRunController />", () => {
     expect(useSessionImportRunStore.getState().status).toBe("starting");
   });
 
+  it("probes the new host once a run retained across a host swap closes", () => {
+    const view = render(<SessionImportRunController />);
+    const firstProbe = requireInstance(0);
+    act(() => {
+      firstProbe.callbacks.onStarted({
+        attached: true,
+        runId: "run-1",
+        total: 2,
+      });
+    });
+
+    // The app is pointed at another host while host-a's run is still going.
+    // That run keeps the client slot, so the new host is not asked yet.
+    streamBinding.client = { stream: "test-b" };
+    streamBinding.hostId = "host-b";
+    view.rerender(<SessionImportRunController />);
+    expect(runClientHarness.instances).toHaveLength(1);
+
+    act(() => {
+      firstProbe.callbacks.onComplete({
+        runId: "run-1",
+        counts: { imported: 2, skippedAlreadyImported: 0, failed: 0 },
+      });
+    });
+
+    // Host-a's run closing is what frees the slot, and the new binding has
+    // never been asked - so it is asked now, finished summary or not.
+    expect(runClientHarness.instances).toHaveLength(2);
+    const secondProbe = requireInstance(1);
+    expect(secondProbe.selections).toEqual([]);
+    act(() => {
+      secondProbe.callbacks.onStarted({
+        attached: true,
+        runId: "run-2",
+        total: 3,
+      });
+    });
+    const state = useSessionImportRunStore.getState();
+    expect(state.runId).toBe("run-2");
+    expect(state.status).toBe("running");
+  });
+
+  it("does not ask the same binding again after its own run finishes", () => {
+    render(<SessionImportRunController />);
+    const probe = requireInstance(0);
+    act(() => {
+      probe.callbacks.onStarted({ attached: false, runId: "run-0", total: 0 });
+    });
+    const handle = getSessionImportStartHandle();
+    if (handle === null) {
+      throw new Error("Expected a session import start handle.");
+    }
+    act(() => {
+      handle.start({
+        selections: [SELECTION],
+        titles: new Map([["claude:s1", "My session"]]),
+      });
+    });
+    const run = requireInstance(1);
+    act(() => {
+      run.callbacks.onStarted({ attached: false, runId: "run-1", total: 1 });
+      run.callbacks.onComplete({
+        runId: "run-1",
+        counts: { imported: 1, skippedAlreadyImported: 0, failed: 0 },
+      });
+    });
+
+    // The binding was probed at mount; a client closing on it is not a new
+    // question, and a fresh probe here would re-ask on every finished run.
+    expect(runClientHarness.instances).toHaveLength(2);
+  });
+
   it("closes the probe on unmount when no answer has arrived yet", () => {
     const { unmount } = render(<SessionImportRunController />);
     const probe = requireInstance(0);
