@@ -104,12 +104,12 @@ describe("browser sessions coordinator registry", () => {
     readonly scope: HostResourceScope;
     readonly openTransport: (hostId: string) => DurableStreamTransport;
   }): { readonly key: string; readonly release: () => void } {
-    const key = coordinatorKey(args.scope);
+    const key = coordinatorKey(args.scope, {});
     const release = acquireBrowserSessionsCoordinator({
       key,
       consumerId: Symbol("consumer"),
       scope: args.scope,
-      owner: owner(),
+      owner: owner({}),
       runtime: buildRuntime(args.openTransport),
       createIfMissing: true,
     });
@@ -169,7 +169,7 @@ describe("browser sessions coordinator registry", () => {
   });
 
   it("keys two scopes on the same host and identity into two coordinators, independent of scope field order", () => {
-    const sameOwner = owner();
+    const sameOwner = owner({});
     const epicKey = browserSessionsCoordinatorKey(
       epicScope("epic-1"),
       sameOwner,

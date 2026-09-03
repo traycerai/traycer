@@ -8,6 +8,7 @@ import {
   PaneVisibilityContext,
 } from "@/components/epic-tabs/pane-visibility-context";
 import {
+  BrowserSessionsHostBoundary,
   BrowserSessionsHostProvider,
   BrowserSessionsProvider,
 } from "@/components/epic-canvas/renderers/browser-sessions-provider";
@@ -23,6 +24,7 @@ import {
 import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
 import {
   epicScope,
+  independentScope,
   openRequest,
   sessionInfo,
   tabInfo,
@@ -88,6 +90,14 @@ vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
 
 vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
   useEpicSessionHostClient: () => hookState.hostClient,
+}));
+
+// `BrowserSessionsHostBoundary` resolves its own client by host id, and the
+// real hook reads the host binding and the app-wide client - neither of which
+// this suite stands up. Same fake the epic provider is handed, so a boundary
+// that decides to wrap opens a stream through the same transport.
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => hookState.hostClient,
 }));
 
 const openTransport = vi.hoisted(
@@ -470,9 +480,53 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
     expect(client?.subscribes).toEqual([
       {
         method: "browser.sessions",
-        params: openRequest(),
+        params: openRequest({}),
       },
     ]);
+  });
+
+  it("mounts its own provider for an independent scope on the canvas host", async () => {
+    // The short-circuit exists so a boundary for the canvas host does not
+    // re-wrap the stream the canvas already provides. That stream is
+    // EPIC-scoped, so matching the host alone is not enough to reuse it: an
+    // independent-scope caller falling through would silently read the epic's
+    // inventory instead of the device's. Inert today - every call site passes
+    // epic scope - which is exactly why it needs a test rather than a reader
+    // noticing later.
+    render(
+      <BrowserSessionsHostBoundary
+        hostId="host-test"
+        scope={independentScope()}
+      >
+        <SharedProbe id="independent" />
+      </BrowserSessionsHostBoundary>,
+    );
+
+    await waitFor(() => {
+      expect(hookState.streamClient?.subscribes).toEqual([
+        {
+          method: "browser.sessions",
+          params: openRequest({ scope: independentScope() }),
+        },
+      ]);
+    });
+  });
+
+  it("still falls through for an epic scope on the canvas host", () => {
+    // The other half of the guard: the behavior it must not change. A canvas
+    // -host, epic-scope boundary opens nothing, because the canvas already
+    // provides exactly that stream.
+    render(
+      <BrowserSessionsHostBoundary
+        hostId="host-test"
+        scope={epicScope("epic-1")}
+      >
+        <div data-testid="fell-through" />
+      </BrowserSessionsHostBoundary>,
+    );
+
+    expect(screen.getByTestId("fell-through")).toBeTruthy();
+    expect(hookState.streamClient?.subscribes).toEqual([]);
   });
 
   it("shares one coordinator until the last same-owner provider unmounts", async () => {
@@ -495,7 +549,7 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
       expect(client.subscribes).toEqual([
         {
           method: "browser.sessions",
-          params: openRequest(),
+          params: openRequest({}),
         },
       ]);
     });
@@ -807,7 +861,7 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
       expect(client.subscribes).toEqual([
         {
           method: "browser.sessions",
-          params: openRequest(),
+          params: openRequest({}),
         },
       ]);
     });
@@ -816,7 +870,7 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
       {
         endpoint: INITIAL_ENDPOINT,
         method: "browser.sessions",
-        params: openRequest(),
+        params: openRequest({}),
       },
     ]);
 
@@ -872,7 +926,7 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
     expect(client.wireSubscriptions[1]).toEqual({
       endpoint: RESTARTED_ENDPOINT,
       method: "browser.sessions",
-      params: openRequest(),
+      params: openRequest({}),
     });
     expect(stream.closed).toBe(false);
 

@@ -28,7 +28,7 @@ export function independentScope(): HostResourceScope {
 }
 
 export function sessionInfo(
-  overrides: Partial<BrowserSessionInfo> = {},
+  overrides: Partial<BrowserSessionInfo>,
 ): BrowserSessionInfo {
   return {
     sessionId: "session-1",
@@ -42,9 +42,7 @@ export function sessionInfo(
   };
 }
 
-export function tabInfo(
-  overrides: Partial<BrowserTabInfo> = {},
-): BrowserTabInfo {
+export function tabInfo(overrides: Partial<BrowserTabInfo>): BrowserTabInfo {
   return {
     tabId: "tab-1",
     url: "about:blank",
@@ -59,7 +57,7 @@ export function tabInfo(
 }
 
 export function owner(
-  overrides: Partial<BrowserSessionsOwner> = {},
+  overrides: Partial<BrowserSessionsOwner>,
 ): BrowserSessionsOwner {
   return {
     hostId: "host-1",
@@ -69,7 +67,7 @@ export function owner(
 }
 
 export function openRequest(
-  overrides: Partial<BrowserSessionsOpenRequest> = {},
+  overrides: Partial<BrowserSessionsOpenRequest>,
 ): BrowserSessionsOpenRequest {
   return {
     scope: epicScope(FIXTURE_EPIC_ID),
@@ -83,7 +81,7 @@ export function openRequest(
  */
 export function coordinatorKey(
   scope: HostResourceScope,
-  ownerOverrides: Partial<BrowserSessionsOwner> = {},
+  ownerOverrides: Partial<BrowserSessionsOwner>,
 ): string {
   return browserSessionsCoordinatorKey(scope, owner(ownerOverrides));
 }

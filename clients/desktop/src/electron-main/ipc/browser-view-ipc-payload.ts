@@ -4,6 +4,7 @@ import {
   browserSessionsClientFrameSchema,
 } from "@traycer/protocol/host/browser/contracts";
 import { registrableDomain } from "@traycer/protocol/host/browser/registrable-domain";
+import { hostResourceScopeSchema } from "@traycer/protocol/host/resource-scope";
 import type {
   BrowserAnnotationAttachResultInput,
   BrowserAnnotationSetTargetChatLabelInput,
@@ -147,6 +148,31 @@ const pipCaptureStartSchema: z.ZodType<PipCaptureStartInput> =
 const saveLoginsSchema = z.boolean();
 
 /**
+ * The renderer-supplied resource scope, DERIVED from the protocol's own union
+ * rather than restated here.
+ *
+ * The restatement it replaces was a second definition of an authorization
+ * scope, which is the thing `host/resource-scope.ts` exists to prevent: the
+ * field is typed `HostResourceScope`, so a scope kind added there would
+ * type-check at every call site in this process and then be rejected at
+ * runtime by this parser alone - a mismatch no compile can see.
+ *
+ * The 128-character bound survives as a refinement instead of a re-typed
+ * member, because the reason for it is local to this file and not a protocol
+ * fact: a renderer-supplied epic id is echoed into a map key and a log line
+ * here, and the fields beside it are bounded for the same reason. Applying it
+ * outside the union is what lets the union stay derived.
+ */
+const MAX_RENDERER_EPIC_ID_LENGTH = 128;
+const sessionsStreamScopeSchema = hostResourceScopeSchema.refine(
+  (scope) =>
+    scope.kind !== "epic" || scope.epicId.length <= MAX_RENDERER_EPIC_ID_LENGTH,
+  {
+    message: `epicId must be at most ${String(MAX_RENDERER_EPIC_ID_LENGTH)} characters`,
+  },
+);
+
+/**
  * Which main-owned `browser.sessions` stream a renderer means.
  *
  * A host ID, never a directory row: the row carries the host's static Noise
@@ -156,16 +182,7 @@ const saveLoginsSchema = z.boolean();
  */
 const sessionsStreamKeySchema: z.ZodType<BrowserSessionsStreamKey> =
   z.strictObject({
-    // The protocol's scope union, re-declared here only to carry the same
-    // bound as the fields beside it - a renderer-supplied epic id is echoed
-    // into a map key and a log line whichever union it arrives in.
-    scope: z.discriminatedUnion("kind", [
-      z.strictObject({
-        kind: z.literal("epic"),
-        epicId: nonEmptyStringSchema.max(128),
-      }),
-      z.strictObject({ kind: z.literal("independent") }),
-    ]),
+    scope: sessionsStreamScopeSchema,
     hostId: nonEmptyStringSchema.max(128),
     identityKey: nonEmptyStringSchema.max(512),
   });
