@@ -42,6 +42,30 @@ function flushMacrotask(): Promise<void> {
 }
 
 /**
+ * The two canvas members `office-logo-cache.ts` touches on the context it
+ * draws a decoded logo into - nothing else is modelled.
+ */
+interface LogoDrawContext {
+  imageSmoothingEnabled: boolean;
+  readonly drawImage: (
+    image: CanvasImageSource,
+    dx: number,
+    dy: number,
+    dw: number,
+    dh: number,
+  ) => void;
+}
+
+/**
+ * THE DOM boundary of this suite, in one place: `getContext` is typed by the
+ * platform to return the whole 2D context, and the narrow double above is
+ * what the module under test actually reads from it.
+ */
+function asRenderingContext(context: LogoDrawContext): RenderingContext {
+  return context as CanvasRenderingContext2D;
+}
+
+/**
  * Installs the whole decode pipeline jsdom does not have: an `Image` that
  * actually loads, a `URL` that hands back a fake blob URL, and a 2D canvas
  * context to draw into. Everything is torn down together, so a listener test
@@ -52,16 +76,13 @@ function installLogoDecodePipeline(): () => void {
   vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:fake-logo");
   vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
 
-  const contextStub: Partial<CanvasRenderingContext2D> = {
+  const context: LogoDrawContext = {
     imageSmoothingEnabled: false,
     drawImage: vi.fn(),
   };
-  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(((
-    contextId: string,
-  ): CanvasRenderingContext2D | null => {
-    if (contextId !== "2d") return null;
-    return contextStub as CanvasRenderingContext2D;
-  }) as HTMLCanvasElement["getContext"]);
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(
+    asRenderingContext(context),
+  );
 
   return () => {
     vi.unstubAllGlobals();

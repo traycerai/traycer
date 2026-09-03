@@ -48,6 +48,7 @@ import type { CommGraphEvent } from "@/lib/comm-graph/comm-graph-events";
 import type { CommGraphPulse } from "@/lib/comm-graph/comm-graph-timeline";
 import { layoutOffice } from "@/lib/comm-graph/office/office-layout";
 import { OfficeScene } from "@/lib/comm-graph/office/office-scene";
+import { BASE_STEP_MS } from "@/components/epic-canvas/comm-graph/use-comm-graph-transport";
 import { agentAppearance } from "@/lib/comm-graph/office/office-appearance";
 import { officeModelTier } from "@/lib/comm-graph/office/office-model-tier";
 import type {
@@ -211,7 +212,9 @@ function envelopeRect(visibleIds: ReadonlySet<string>): OfficeRect {
     statusById: new Map(),
     pulse: null,
     pulseKey: null,
-    stepMs: 700,
+    // The component's own value at the speed this suite runs (1x), so the
+    // parallel scene stays the identical question if the base step changes.
+    stepMs: BASE_STEP_MS / 1,
     cursorMs: null,
     clockMs: 0,
     openRequestsByReceiver: new Map(),

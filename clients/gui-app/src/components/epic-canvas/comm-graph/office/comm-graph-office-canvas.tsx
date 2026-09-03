@@ -1033,7 +1033,6 @@ function drawStaticFloor(
 ): void {
   for (const drawable of floor) {
     if (!officeBakesIntoStaticFloor(drawable)) continue;
-    if (drawable.kind !== "sprite") continue;
     drawAnchoredSprite(ctx, drawable, "top-left", theme);
   }
 }

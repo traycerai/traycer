@@ -31,7 +31,9 @@ import type {
  * Only sprites qualify. Labels are drawn later in SCREEN space, clocks need
  * hands over them, and an envelope or a logo is not static by nature.
  */
-export function officeBakesIntoStaticFloor(drawable: OfficeDrawable): boolean {
+export function officeBakesIntoStaticFloor(
+  drawable: OfficeDrawable,
+): drawable is Extract<OfficeDrawable, { kind: "sprite" }> {
   return drawable.kind === "sprite";
 }
 
