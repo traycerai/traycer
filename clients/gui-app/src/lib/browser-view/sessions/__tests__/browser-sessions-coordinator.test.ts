@@ -139,6 +139,35 @@ describe("browser sessions coordinator registry", () => {
     expect(hasBrowserSessionsCoordinator(first.key)).toBe(false);
   });
 
+  // The Start Page panel's shape: its authority arm holds `{independent,
+  // <device>}` unconditionally, and EVERY browser tile it renders provides the
+  // same scope again. Three consumers, one device, one stream - otherwise each
+  // tile would open its own inventory push and count the 8-tab cap on its own.
+  it("shares one independent stream across a panel arm and its browser tiles", () => {
+    const harness = createTransportHarness();
+    const scope = independentScope();
+    const arm = acquire({ scope, openTransport: harness.openTransport });
+    const tileOne = acquire({ scope, openTransport: harness.openTransport });
+    const tileTwo = acquire({ scope, openTransport: harness.openTransport });
+
+    expect(tileOne.key).toBe(arm.key);
+    expect(tileTwo.key).toBe(arm.key);
+    expect(harness.clients).toHaveLength(1);
+    expect(harness.clients[0]?.subscribes).toHaveLength(1);
+
+    const session = soleSession(soleClient(harness.clients));
+    // Closing tabs must not take the stream down with them: the arm is what
+    // keeps the chord and the chooser's count answerable with no tab open.
+    tileOne.release();
+    tileTwo.release();
+    expect(session.closed).toBe(false);
+    expect(hasBrowserSessionsCoordinator(arm.key)).toBe(true);
+
+    arm.release();
+    expect(session.closed).toBe(true);
+    expect(hasBrowserSessionsCoordinator(arm.key)).toBe(false);
+  });
+
   it("keys two scopes on the same host and identity into two coordinators, independent of scope field order", () => {
     const sameOwner = owner();
     const epicKey = browserSessionsCoordinatorKey(

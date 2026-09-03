@@ -12,9 +12,9 @@ import {
 import {
   Maximize2,
   Minimize2,
+  PanelRight,
   PanelRightClose,
   PanelRightOpen,
-  TerminalSquare,
 } from "lucide-react";
 import { v4 as uuidv4 } from "uuid";
 import { toast } from "sonner";
@@ -71,6 +71,7 @@ import {
   landingTerminalTabs,
   useLandingPanelStore,
   type LandingBrowserTabRef,
+  type LandingPanelPlaceholder,
   type LandingPanelTabRef,
   type LandingTerminalTabRef,
 } from "@/stores/home/landing-panel-store";
@@ -83,7 +84,15 @@ import {
   selectLandingBrowserViewModel,
   type LandingBrowserViewModel,
 } from "./landing-browser-presentation";
-import { useLandingBrowserOpenTab } from "./use-landing-browser-open-tab";
+import {
+  landingBrowserCapMessage,
+  useLandingBrowserOpenTab,
+  LANDING_BROWSER_TAB_CAP,
+} from "./use-landing-browser-open-tab";
+import {
+  LandingNewTabChooser,
+  type LandingNewTabKind,
+} from "./landing-new-tab-chooser";
 import {
   LandingTerminalAuthorityFleet,
   type LandingBrowserSessionEntries,
@@ -106,6 +115,17 @@ import {
   resolveLandingTerminalLaunchCwd,
   type LandingTerminalHostContext,
 } from "./landing-terminal-host-context";
+
+/**
+ * The one "the device has not answered yet" string, shared by the body's status
+ * line, the terminal create gate, and the chooser's cards. The core flows call
+ * for the SAME message in all three, and four separate literals is four chances
+ * for one to drift.
+ */
+const LANDING_PANEL_CONNECTING_MESSAGE = "Connecting to the selected host…";
+
+/** The strip "+" tooltip. The chord is spelled out because "+" is not. */
+const LANDING_NEW_TAB_TOOLTIP = "New tab (\u2318T)";
 
 /**
  * The panel's own surface. Desktop is a docked split, so it reads as chrome
@@ -390,7 +410,6 @@ export function LandingTerminalPanel(): ReactNode {
     target,
     pending,
     pendingGeneration,
-    openEpisodeDraftId,
     workspace,
     capture,
     selectWorkspacePath,
@@ -421,7 +440,11 @@ export function LandingTerminalPanel(): ReactNode {
   );
   // The target host is in the browser list even with no browser tab on it:
   // creating one goes through that device's coordinator, so the arm has to be
-  // mounted before the first tab exists.
+  // mounted before the first tab exists. The stream is held unconditionally
+  // for exactly that reason - the `app.browser.new` chord and the chooser's
+  // tab-cap count both need a coordinator to ask before there is anything to
+  // reconcile - and it costs one stream per window with an open Start Page,
+  // which is what the refcounted coordinator key already assumes.
   const browserHostIds = useMemo(
     () =>
       [
@@ -466,6 +489,7 @@ export function LandingTerminalPanel(): ReactNode {
   const activeInstanceId = useLandingPanelStore(
     (state) => state.activeInstanceId,
   );
+  const placeholder = useLandingPanelStore((state) => state.placeholder);
   const layout = useLandingPanelStore((state) =>
     landingPanelLayoutFor(state, landingPageId),
   );
@@ -483,10 +507,18 @@ export function LandingTerminalPanel(): ReactNode {
   const setPanelMaximizedForPage = useLandingPanelStore(
     (state) => state.setPanelMaximized,
   );
-  const addTab = useLandingPanelStore((state) => state.addTab);
   const activateTab = useLandingPanelStore((state) => state.activateTab);
   const renameTab = useLandingPanelStore((state) => state.renameTab);
   const closeTab = useLandingPanelStore((state) => state.closeTab);
+  const openPlaceholder = useLandingPanelStore(
+    (state) => state.openPlaceholder,
+  );
+  const fulfillPlaceholder = useLandingPanelStore(
+    (state) => state.fulfillPlaceholder,
+  );
+  const dismissPlaceholder = useLandingPanelStore(
+    (state) => state.dismissPlaceholder,
+  );
   const kill = useLandingTerminalKill();
   const killTerminalAsync = kill.mutateAsync;
   // Last settled generation's host context. Manual create uses it only when
@@ -558,7 +590,12 @@ export function LandingTerminalPanel(): ReactNode {
       const authority = authorityEntries[hostId];
       if (!landingTerminalAuthorityReady(authority)) return null;
       const instanceId = `landing-terminal-${uuidv4()}`;
-      addTab({
+      // Through the placeholder, always. `fulfillPlaceholder` replaces an open
+      // one in its own strip position and plain-appends when there is none -
+      // which is the case a create routed through the directory picker lands
+      // in, since the placeholder can legitimately be dismissed while that
+      // picker is up.
+      fulfillPlaceholder({
         kind: "terminal",
         instanceId,
         sessionId: `landing-term-${uuidv4()}`,
@@ -575,7 +612,7 @@ export function LandingTerminalPanel(): ReactNode {
       });
       return instanceId;
     },
-    [addTab, authorityEntries],
+    [authorityEntries, fulfillPlaceholder],
   );
 
   // Manual create paths: the routing target's primary folder, else the last
@@ -719,11 +756,19 @@ export function LandingTerminalPanel(): ReactNode {
     }
   }, [requestDirectoryPickerFocus, writeDirectoryRequest]);
 
-  const activateTerminalTab = useCallback(
+  const activatePanelTab = useCallback(
     (instanceId: string) => {
       replaceDirectoryRequest(null);
       clearPending();
       activateTab(instanceId);
+      // The placeholder has no terminal to hand the keyboard to - the chooser
+      // takes focus itself on mount - and parking a terminal focus request
+      // against an instance id no terminal will ever have would leave it
+      // pending for the rest of the session.
+      if (
+        useLandingPanelStore.getState().placeholder?.instanceId === instanceId
+      )
+        return;
       focusTerminalInstance(instanceId);
     },
     [activateTab, clearPending, replaceDirectoryRequest],
@@ -737,6 +782,19 @@ export function LandingTerminalPanel(): ReactNode {
   useEffect(() => {
     const previous = previousPanelLayoutRef.current;
     previousPanelLayoutRef.current = { landingPageId, panelOpen };
+    // An open panel holding nothing shows the CHOOSER. This is a CONDITION,
+    // not an open-transition step, because the panel reaches that state by
+    // several routes that are not `togglePanel`: the phone header's toggle
+    // writes `setPanelOpen` on the store directly, a page can mount with a
+    // persisted open layout, and a reconciliation pass can drop the last tab
+    // without collapsing. It replaces the auto-spawn that used to fill the
+    // same gap from reconciliation settlement.
+    if (panelOpen) {
+      const opening = useLandingPanelStore.getState();
+      if (opening.tabs.length === 0 && opening.placeholder === null) {
+        openPlaceholder(`landing-placeholder-${uuidv4()}`, 0);
+      }
+    }
     if (previous.landingPageId !== landingPageId) {
       clearPendingTerminalFocus(null);
       return;
@@ -760,7 +818,16 @@ export function LandingTerminalPanel(): ReactNode {
     // All of them should hand the keyboard back to the composer.
     clearPendingTerminalFocus(null);
     focusActiveComposer();
-  }, [capture, landingPageId, panelOpen, pending]);
+  }, [
+    capture,
+    landingPageId,
+    openPlaceholder,
+    panelOpen,
+    pending,
+    // The empty-panel condition above has to be re-checked when the tab count
+    // moves, not only when the panel opens.
+    tabs.length,
+  ]);
   useEffect(
     () => () => {
       clearPendingTerminalFocus(null);
@@ -828,24 +895,13 @@ export function LandingTerminalPanel(): ReactNode {
         clearIfPending();
         return;
       }
-      // Creation can be refused (the host's authority went unready between
-      // this generation's reconciliation and its settlement), so the focus
-      // hand-off is conditional on a tab actually existing.
-      const spawnAndFocus = (focus: boolean): void => {
-        const created = addTerminalTab(context.hostId, launchCwd);
-        if (focus && created !== null) focusTerminalInstance(created);
-      };
       if (state.tabs.length === 0) {
-        // Empty-panel auto-spawn is pinned to the opening draft. A gesture
-        // spawns its captured draft; a gesture-less live settlement (post-clear,
-        // or a pre-opened panel whose folder just arrived) only spawns while
-        // focus still rests on the opening draft, so switching drafts mid-flight
-        // never spawns a terminal in the draft the user merely moved to.
-        if (!pending && target.draftId !== openEpisodeDraftId) {
-          clearIfPending();
-          return;
-        }
-        spawnAndFocus(pending);
+        // An empty panel shows the CHOOSER, opened by whatever opened the panel
+        // - it no longer auto-spawns a terminal here. That decision belonged to
+        // a world with one kind of tab; with two, spawning one of them is
+        // deciding for the user, which is exactly what the placeholder exists
+        // to stop. The gesture is still consumed so a later one projects live
+        // focus rather than this stale snapshot.
         clearIfPending();
         return;
       }
@@ -857,7 +913,11 @@ export function LandingTerminalPanel(): ReactNode {
         launchCwd,
       );
       if (existing === undefined) {
-        spawnAndFocus(true);
+        // Creation can be refused (the host's authority went unready between
+        // this generation's reconciliation and its settlement), so the focus
+        // hand-off is conditional on a tab actually existing.
+        const created = addTerminalTab(context.hostId, launchCwd);
+        if (created !== null) focusTerminalInstance(created);
         clearIfPending();
         return;
       }
@@ -870,7 +930,6 @@ export function LandingTerminalPanel(): ReactNode {
     [
       addTerminalTab,
       clearPending,
-      openEpisodeDraftId,
       pending,
       pendingGeneration,
       replaceDirectoryRequest,
@@ -1009,9 +1068,30 @@ export function LandingTerminalPanel(): ReactNode {
     replaceDirectoryRequest(null);
     clearPending();
     useLandingPanelStore.getState().tabs.forEach(closePanelTab);
+    // An unpicked placeholder is a strip row like any other, so "Close All"
+    // takes it too - otherwise the panel would stay open holding nothing but
+    // the chooser the user just asked to be rid of.
+    dismissPlaceholder();
     clearPendingTerminalFocus(null);
     focusActiveComposer();
-  }, [clearPending, closePanelTab, replaceDirectoryRequest]);
+  }, [
+    clearPending,
+    closePanelTab,
+    dismissPlaceholder,
+    replaceDirectoryRequest,
+  ]);
+
+  /**
+   * Open the "New tab" placeholder and show the chooser in it.
+   *
+   * Reveals the panel first when it is collapsed, and focuses an existing
+   * placeholder rather than adding a second - only one exists at a time.
+   */
+  const openNewTabPlaceholder = useCallback(() => {
+    if (!panelOpen) setPanelOpen(true);
+    const state = useLandingPanelStore.getState();
+    openPlaceholder(`landing-placeholder-${uuidv4()}`, state.tabs.length);
+  }, [openPlaceholder, panelOpen, setPanelOpen]);
 
   const togglePanel = useCallback(() => {
     if (panelOpen) {
@@ -1021,6 +1101,15 @@ export function LandingTerminalPanel(): ReactNode {
       setPanelOpen(false);
       clearPendingTerminalFocus(null);
       focusActiveComposer();
+      return;
+    }
+    const state = useLandingPanelStore.getState();
+    if (state.tabs.length === 0 && state.placeholder === null) {
+      // An empty panel raises no directory request: which folder to launch in
+      // is a question only the Terminal card asks, and asking it before the
+      // user has said "terminal" decides for them. The chooser itself is
+      // opened by the open-transition effect, which every opener reaches.
+      setPanelOpen(true);
       return;
     }
     const captured = capture();
@@ -1049,11 +1138,14 @@ export function LandingTerminalPanel(): ReactNode {
     hostId: target.hostId,
     sessions:
       target.hostId === null ? null : (browserSessions[target.hostId] ?? null),
+    // Same rule as the terminal arm: replace an open placeholder in its own
+    // strip position, append when there is none.
+    onOpened: fulfillPlaceholder,
   });
   const openBrowserTab = browserOpenTab.open;
-  // Reveal for a BROWSER open. Deliberately not `openPanel`: that branch
-  // captures a directory request, and which working folder to use is not a
-  // question this gesture has - a browser tab has no cwd.
+  // Reveal for a BROWSER open. Deliberately not `openPanel`: that opens the
+  // chooser on an empty panel, and this gesture has already answered the very
+  // question the chooser asks.
   const revealAndOpenBrowserTab = useCallback(() => {
     if (!panelOpen) setPanelOpen(true);
     openBrowserTab();
@@ -1113,8 +1205,11 @@ export function LandingTerminalPanel(): ReactNode {
     [browserSessions],
   );
 
-  // The `+` gate reads the effective target only: capability from the captured
-  // host, fail-closed on an unpinned client, and the reconciled launch context.
+  // The TERMINAL card's gate, reading the effective target only: capability
+  // from the captured host, fail-closed on an unpinned client, and the
+  // reconciled launch context. It no longer gates the strip's "+", which opens
+  // the chooser: a device that cannot start a terminal can still open a
+  // browser, so the refusal belongs on the card it is about.
   const { createEnabled, createDisabledReason } = landingTerminalCreateGate({
     panelOpen,
     availability: target.availability,
@@ -1124,6 +1219,30 @@ export function LandingTerminalPanel(): ReactNode {
     reconciledContext,
     authority: targetAuthority,
   });
+
+  /**
+   * The Browser card's gate, which is only ever the cap or the device not
+   * having spoken. Everything else the browser needs, it can wait for.
+   */
+  const browserDisabledReason = useMemo((): string | null => {
+    const count = browserOpenTab.tabCount;
+    if (count === null) return LANDING_PANEL_CONNECTING_MESSAGE;
+    return count >= LANDING_BROWSER_TAB_CAP ? landingBrowserCapMessage() : null;
+  }, [browserOpenTab.tabCount]);
+
+  const pickNewTabKind = useCallback(
+    (kind: LandingNewTabKind): void => {
+      if (kind === "browser") {
+        openBrowserTab();
+        return;
+      }
+      // The existing terminal create flow, directory picker and all. It
+      // fulfills the placeholder itself through `addTerminalTab`, including
+      // after a picker round trip.
+      revealAndCreateTerminal();
+    },
+    [openBrowserTab, revealAndCreateTerminal],
+  );
 
   const visibleDirectoryRequest = useMemo(() => {
     if (!panelOpen || directoryRequest === null) return null;
@@ -1224,6 +1343,7 @@ export function LandingTerminalPanel(): ReactNode {
         <LandingTerminalPanelContents
           landingPageId={landingPageId}
           tabs={tabs}
+          placeholder={placeholder}
           activeInstanceId={activeInstanceId}
           availability={target.availability}
           panelOpen={panelOpen}
@@ -1239,16 +1359,18 @@ export function LandingTerminalPanel(): ReactNode {
           onOpenPanel={openPanel}
           onToggleMaximized={() => setMaximized(!layout.maximized)}
           onSetPanelWidthFraction={setPanelWidthFraction}
-          onCreateTerminal={revealAndCreateTerminal}
+          onOpenNewTab={openNewTabPlaceholder}
           onRevealAndCreate={revealAndCreateTerminal}
+          onPickNewTabKind={pickNewTabKind}
+          onDismissPlaceholder={dismissPlaceholder}
+          browserDisabledReason={browserDisabledReason}
           onSelectDirectory={selectDirectory}
           onCancelDirectoryPicker={cancelDirectoryRequest}
-          onActivateTab={activateTerminalTab}
+          onActivateTab={activatePanelTab}
           onCloseTab={closePanelTab}
           onCloseAllTabs={closeAllPanelTabs}
           onRenameTab={renamePanelTab}
           canRenameTab={canRenameTab}
-          onOpenBrowserTab={openBrowserTab}
           onRevealAndOpenBrowserTab={revealAndOpenBrowserTab}
           onOpenBrowserLink={openBrowserLink}
           authorityEntries={authorityEntries}
@@ -1263,6 +1385,7 @@ export function LandingTerminalPanel(): ReactNode {
 interface LandingTerminalPanelContentsProps {
   readonly landingPageId: string;
   readonly tabs: ReadonlyArray<LandingPanelTabRef>;
+  readonly placeholder: LandingPanelPlaceholder | null;
   readonly activeInstanceId: string | null;
   readonly availability: LandingTerminalAvailability;
   readonly panelOpen: boolean;
@@ -1278,8 +1401,13 @@ interface LandingTerminalPanelContentsProps {
   readonly onOpenPanel: () => void;
   readonly onToggleMaximized: () => void;
   readonly onSetPanelWidthFraction: (fraction: number) => void;
-  readonly onCreateTerminal: () => void;
+  /** The "+", the empty-strip double-click and `tab.new`: open the chooser. */
+  readonly onOpenNewTab: () => void;
   readonly onRevealAndCreate: () => void;
+  readonly onPickNewTabKind: (kind: LandingNewTabKind) => void;
+  readonly onDismissPlaceholder: () => void;
+  /** Why the chooser's Browser card cannot be picked, or `null`. */
+  readonly browserDisabledReason: string | null;
   readonly onSelectDirectory: (workspacePath: string) => void;
   readonly onCancelDirectoryPicker: () => void;
   readonly onActivateTab: (instanceId: string) => void;
@@ -1287,8 +1415,6 @@ interface LandingTerminalPanelContentsProps {
   readonly onCloseAllTabs: () => void;
   readonly onRenameTab: (instanceId: string, name: string) => void;
   readonly canRenameTab: (tab: LandingPanelTabRef) => boolean;
-  /** Opens a browser tab in an already-open panel. */
-  readonly onOpenBrowserTab: () => void;
   /** The `app.browser.new` chord: reveals the panel first if it is collapsed. */
   readonly onRevealAndOpenBrowserTab: () => void;
   readonly onOpenBrowserLink: (
@@ -1345,6 +1471,8 @@ function LandingTerminalPanelContents(
     onOpenPanel: props.onOpenPanel,
     onRevealAndCreate: props.onRevealAndCreate,
     onRevealAndOpenBrowserTab: props.onRevealAndOpenBrowserTab,
+    onOpenNewTab: props.onOpenNewTab,
+    onDismissPlaceholder: props.onDismissPlaceholder,
     onToggleMaximized: props.onToggleMaximized,
     onActivateTab: props.onActivateTab,
     onCloseTab: props.onCloseTab,
@@ -1415,7 +1543,7 @@ function LandingTerminalPanelContents(
         aria-valuenow={Math.round(props.panelWidthFraction * 100)}
         aria-valuemin={Math.round(MIN_LANDING_PANEL_WIDTH_FRACTION * 100)}
         aria-valuemax={Math.round(MAX_LANDING_PANEL_WIDTH_FRACTION * 100)}
-        aria-label="Resize terminal panel"
+        aria-label="Resize panel"
         data-testid="landing-terminal-resize-handle"
         className={cn(
           "relative z-10 shrink-0 bg-background ring-offset-background focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-hidden",
@@ -1452,13 +1580,15 @@ function LandingTerminalPanelContents(
         />
         <LandingTerminalTabStrip
           tabs={props.tabs}
+          placeholder={props.placeholder}
           activeInstanceId={
             props.directoryPicker === null ? props.activeInstanceId : null
           }
-          createDisabledReason={props.createDisabledReason}
-          onAdd={props.onCreateTerminal}
+          addTooltip={LANDING_NEW_TAB_TOOLTIP}
+          onAdd={props.onOpenNewTab}
           onActivate={props.onActivateTab}
           onClose={props.onCloseTab}
+          onDismissPlaceholder={props.onDismissPlaceholder}
           onCloseAll={props.onCloseAllTabs}
           onRename={props.onRenameTab}
           canRename={props.canRenameTab}
@@ -1468,11 +1598,14 @@ function LandingTerminalPanelContents(
         <LandingTerminalPanelBody
           landingPageId={props.landingPageId}
           tabs={props.tabs}
+          placeholder={props.placeholder}
           activeInstanceId={props.activeInstanceId}
           availability={props.availability}
           panelOpen={props.panelOpen}
           activeHostId={props.activeHostId}
           createEnabled={props.createEnabled}
+          createDisabledReason={props.createDisabledReason}
+          browserDisabledReason={props.browserDisabledReason}
           primaryWorkspacePath={props.primaryWorkspacePath}
           reconciledContext={props.reconciledContext}
           directoryPicker={props.directoryPicker}
@@ -1480,8 +1613,10 @@ function LandingTerminalPanelContents(
           onCancelDirectoryPicker={props.onCancelDirectoryPicker}
           authorityEntries={props.authorityEntries}
           onCloseTab={props.onCloseTab}
-          onOpenBrowserTab={props.onOpenBrowserTab}
+          onOpenNewTab={props.onOpenNewTab}
           onOpenBrowserLink={props.onOpenBrowserLink}
+          onPickNewTabKind={props.onPickNewTabKind}
+          onDismissPlaceholder={props.onDismissPlaceholder}
         />
         <LandingTerminalMobileKeyBar
           active={keyBarActive}
@@ -1549,14 +1684,14 @@ function landingTerminalCreateDisabledReason(args: {
   readonly reconciledContext: LandingTerminalHostContext | null;
   readonly authority: LandingTerminalAuthorityEntry | null;
 }): string | null {
-  if (!args.clientReady) return "Connecting to the selected host…";
+  if (!args.clientReady) return LANDING_PANEL_CONNECTING_MESSAGE;
   if (args.availability !== "supported") {
-    return "Connecting to the selected host…";
+    return LANDING_PANEL_CONNECTING_MESSAGE;
   }
   // Same predicate `addTerminalTab` enforces, so the "+" cannot look live for
   // a host whose authority would refuse the create.
   if (!landingTerminalAuthorityReady(args.authority)) {
-    return "Connecting to the selected host…";
+    return LANDING_PANEL_CONNECTING_MESSAGE;
   }
   if (args.primaryWorkspacePath !== null) return null;
   if (
@@ -1564,7 +1699,7 @@ function landingTerminalCreateDisabledReason(args: {
     args.activeHostId === null ||
     args.reconciledContext.hostId !== args.activeHostId
   ) {
-    return "Connecting to the selected host…";
+    return LANDING_PANEL_CONNECTING_MESSAGE;
   }
   if (args.reconciledContext.homeCwd === null) {
     return LANDING_TERMINAL_HOST_UPDATE_GUIDANCE;
@@ -1648,6 +1783,8 @@ function useLandingTerminalShortcuts(args: {
   readonly onCloseTab: (tab: LandingPanelTabRef) => void;
   readonly onCloseAllTabs: () => void;
   readonly onRevealAndOpenBrowserTab: () => void;
+  readonly onOpenNewTab: () => void;
+  readonly onDismissPlaceholder: () => void;
 }): void {
   const {
     landingPageId,
@@ -1657,6 +1794,8 @@ function useLandingTerminalShortcuts(args: {
     onOpenPanel,
     onRevealAndCreate,
     onRevealAndOpenBrowserTab,
+    onOpenNewTab,
+    onDismissPlaceholder,
     onToggleMaximized,
     onActivateTab,
     onCloseTab,
@@ -1692,13 +1831,16 @@ function useLandingTerminalShortcuts(args: {
       onRevealAndOpenBrowserTab,
     );
   }, [onRevealAndOpenBrowserTab, surfaceActive]);
+  // `tab.new` (the ⌘T family) asks for a NEW TAB, which is now a question
+  // rather than a terminal: it opens the chooser. `app.terminal.new` above is
+  // the direct chord that still bypasses it.
   useEffect(() => {
     if (!surfaceActive) return;
     return registerDynamicActionHandler("tab.new", () => {
       if (systemTabOverlayActive()) return;
-      onRevealAndCreate();
+      onOpenNewTab();
     });
-  }, [onRevealAndCreate, surfaceActive]);
+  }, [onOpenNewTab, surfaceActive]);
   useEffect(() => {
     if (!surfaceActive) return;
     return registerDynamicActionHandler("app.terminal.maximize", () => {
@@ -1718,13 +1860,19 @@ function useLandingTerminalShortcuts(args: {
       if (systemTabOverlayActive()) return;
       const state = useLandingPanelStore.getState();
       if (!landingPanelLayoutFor(state, landingPageId).panelOpen) return;
+      // The placeholder is a closable row like any other, and closing it is a
+      // dismissal rather than a close - there is no tab yet to tombstone.
+      if (state.placeholder?.instanceId === state.activeInstanceId) {
+        onDismissPlaceholder();
+        return;
+      }
       const active = state.tabs.find(
         (tab) => tab.instanceId === state.activeInstanceId,
       );
       if (active === undefined) return;
       onCloseTab(active);
     });
-  }, [landingPageId, onCloseTab, surfaceActive]);
+  }, [landingPageId, onCloseTab, onDismissPlaceholder, surfaceActive]);
   useEffect(() => {
     if (!surfaceActive) return;
     return registerDynamicActionHandler("tab.close-all", () => {
@@ -1732,7 +1880,7 @@ function useLandingTerminalShortcuts(args: {
       const state = useLandingPanelStore.getState();
       if (
         !landingPanelLayoutFor(state, landingPageId).panelOpen ||
-        state.tabs.length === 0
+        (state.tabs.length === 0 && state.placeholder === null)
       ) {
         return;
       }
@@ -1810,7 +1958,7 @@ function LandingTerminalPanelToggle(props: {
       type="button"
       variant="ghost"
       size="icon-sm"
-      aria-label="Open terminal panel"
+      aria-label="Open panel"
       data-testid="landing-terminal-toggle"
       // Occupies exactly the box the header's collapse button renders in
       // while the panel is open (1px panel border + an icon-sm button
@@ -1854,7 +2002,7 @@ function LandingTerminalHeaderToggle(props: {
       type="button"
       variant="ghost"
       size="icon-sm"
-      aria-label={panelOpen ? "Collapse terminal panel" : "Open terminal panel"}
+      aria-label={panelOpen ? "Collapse panel" : "Open panel"}
       data-testid={
         panelOpen ? "landing-terminal-collapse" : "landing-terminal-toggle"
       }
@@ -1929,19 +2077,15 @@ function LandingTerminalPanelHeader(props: {
   return (
     <div className="flex h-9 shrink-0 items-center justify-between border-b border-canvas-border/70 px-2">
       <div className="flex min-w-0 items-center gap-2 text-ui-sm font-medium">
-        <TerminalSquare className="size-4 shrink-0" />
-        <span className="truncate">Terminal</span>
+        <PanelRight className="size-4 shrink-0" />
+        <span className="truncate">Panel</span>
       </div>
       <div className="flex shrink-0 items-center">
         <Button
           type="button"
           variant="ghost"
           size="icon-sm"
-          aria-label={
-            props.maximized
-              ? "Restore terminal panel"
-              : "Maximize terminal panel"
-          }
+          aria-label={props.maximized ? "Restore panel" : "Maximize panel"}
           onClick={props.onToggleMaximized}
         >
           {props.maximized ? (
@@ -1954,7 +2098,7 @@ function LandingTerminalPanelHeader(props: {
           type="button"
           variant="ghost"
           size="icon-sm"
-          aria-label="Collapse terminal panel"
+          aria-label="Collapse panel"
           data-testid="landing-terminal-collapse"
           onClick={props.onTogglePanel}
         >
@@ -1968,11 +2112,14 @@ function LandingTerminalPanelHeader(props: {
 function LandingTerminalPanelBody(props: {
   readonly landingPageId: string;
   readonly tabs: ReadonlyArray<LandingPanelTabRef>;
+  readonly placeholder: LandingPanelPlaceholder | null;
   readonly activeInstanceId: string | null;
   readonly availability: LandingTerminalAvailability;
   readonly panelOpen: boolean;
   readonly activeHostId: string | null;
   readonly createEnabled: boolean;
+  readonly createDisabledReason: string | null;
+  readonly browserDisabledReason: string | null;
   readonly primaryWorkspacePath: string | null;
   readonly reconciledContext: LandingTerminalHostContext | null;
   readonly directoryPicker: LandingTerminalDirectoryRequest | null;
@@ -1980,20 +2127,34 @@ function LandingTerminalPanelBody(props: {
   readonly onCancelDirectoryPicker: () => void;
   readonly authorityEntries: LandingTerminalAuthorityEntries;
   readonly onCloseTab: (tab: LandingPanelTabRef) => void;
-  readonly onOpenBrowserTab: () => void;
+  /** The guest's own new-tab chord inside a panel browser: opens the chooser. */
+  readonly onOpenNewTab: () => void;
   readonly onOpenBrowserLink: (
     tab: LandingBrowserTabRef,
     url: string,
     disposition: "foreground" | "background",
   ) => void;
+  readonly onPickNewTabKind: (kind: LandingNewTabKind) => void;
+  readonly onDismissPlaceholder: () => void;
 }): ReactNode {
-  if (props.availability === "unknown" && props.directoryPicker === null) {
+  const placeholderActive =
+    props.placeholder !== null &&
+    props.placeholder.instanceId === props.activeInstanceId;
+  // The chooser outranks the connecting status line, and deliberately: the
+  // core flows want a device that is still connecting to show the chooser with
+  // DISABLED cards carrying that same message, not a blank body that never
+  // explains what the panel is waiting to offer.
+  if (
+    props.availability === "unknown" &&
+    props.directoryPicker === null &&
+    !placeholderActive
+  ) {
     return (
       <div
         role="status"
         className="flex min-h-0 flex-1 items-center justify-center p-6 text-center text-ui-sm text-muted-foreground"
       >
-        Connecting to the selected host…
+        {LANDING_PANEL_CONNECTING_MESSAGE}
       </div>
     );
   }
@@ -2007,7 +2168,18 @@ function LandingTerminalPanelBody(props: {
           props.directoryPicker !== null && "invisible pointer-events-none",
         )}
       >
-        {props.tabs.length === 0 ? (
+        {placeholderActive ? (
+          <div className="absolute inset-0 min-h-0">
+            <LandingNewTabChooser
+              terminal={{ disabledReason: props.createDisabledReason }}
+              browser={{ disabledReason: props.browserDisabledReason }}
+              takeFocus={props.directoryPicker === null}
+              onPick={props.onPickNewTabKind}
+              onDismiss={props.onDismissPlaceholder}
+            />
+          </div>
+        ) : null}
+        {props.tabs.length === 0 && props.placeholder === null ? (
           <LandingTerminalEmptyState
             primaryWorkspacePath={props.primaryWorkspacePath}
             activeHostId={props.activeHostId}
@@ -2033,7 +2205,7 @@ function LandingTerminalPanelBody(props: {
                   onOpenLinkInNewTile={(url, disposition) => {
                     props.onOpenBrowserLink(tab, url, disposition);
                   }}
-                  onRequestNewTab={props.onOpenBrowserTab}
+                  onRequestNewTab={props.onOpenNewTab}
                 />
               ) : (
                 <LandingTerminalTile

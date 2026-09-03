@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  independentScope,
+  sessionInfo,
+  tabInfo,
+} from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
+import { reconcileLandingBrowserTabs } from "@/components/home/terminal-panel/use-landing-browser-reconciliation";
+import {
   landingPanelLayoutFor,
   landingTabRefKey,
   parseLandingPanelTabRef,
@@ -598,6 +604,80 @@ describe("applyReconciliationSlice", () => {
       landingPanelLayoutFor(useLandingPanelStore.getState(), LANDING_PAGE_ID)
         .panelOpen,
     ).toBe(false);
+  });
+
+  // The whole rename -> reconcile -> apply path, not the reconciler alone:
+  // `applyReconciliationSlice` replaces its slice WHOLESALE, so a manual title
+  // survives a pass only if the reconciler carried it into the refs the store
+  // is handed. Either half getting this wrong renames the user's tab back to
+  // whatever the page's <title> says on the next inventory push.
+  it("leaves a manually renamed browser tab's title alone across a pass", () => {
+    const store = useLandingPanelStore.getState();
+    store.addTab(
+      browserTab({
+        instanceId: "a-browser-1",
+        hostId: HOST_A,
+        sessionId: BROWSER_SESSION_A,
+        tabId: "tab-1",
+      }),
+    );
+    store.addTab(
+      browserTab({
+        instanceId: "a-browser-2",
+        hostId: HOST_A,
+        sessionId: BROWSER_SESSION_A,
+        tabId: "tab-2",
+      }),
+    );
+    useLandingPanelStore.getState().renameTab("a-browser-1", "Release notes");
+
+    const reconciled = reconcileLandingBrowserTabs({
+      tabs: useLandingPanelStore
+        .getState()
+        .tabs.filter((tab) => tab.kind === "browser"),
+      hostId: HOST_A,
+      sessions: [
+        sessionInfo({
+          sessionId: BROWSER_SESSION_A,
+          hostId: HOST_A,
+          scope: independentScope(),
+          tabs: [
+            tabInfo({
+              tabId: "tab-1",
+              title: "Whatever The Page Calls Itself",
+              url: "https://example.com/notes",
+            }),
+            tabInfo({
+              tabId: "tab-2",
+              title: "Fresh Title",
+              url: "https://example.com/other",
+            }),
+          ],
+        }),
+      ],
+      excludedTabKeys: new Set<string>(),
+      mintInstanceId: () => {
+        throw new Error("nothing should be adopted in this scenario");
+      },
+    });
+    useLandingPanelStore
+      .getState()
+      .applyReconciliationSlice(
+        HOST_A,
+        "browser",
+        reconciled.tabs,
+        reconciled.collapseWhenEmpty,
+      );
+
+    const tabs = useLandingPanelStore.getState().tabs;
+    const renamed = tabs.find((tab) => tab.instanceId === "a-browser-1");
+    const untouched = tabs.find((tab) => tab.instanceId === "a-browser-2");
+    expect(renamed?.name).toBe("Release notes");
+    expect(renamed?.titleSource).toBe("manual");
+    // The control: a tab the user never renamed does follow the live title, so
+    // the case above is preservation and not a pass that changed nothing.
+    expect(untouched?.name).toBe("Fresh Title");
+    expect(untouched?.titleSource).toBe("default");
   });
 
   it("leaves an already-empty panel open when the pass removed nothing", () => {

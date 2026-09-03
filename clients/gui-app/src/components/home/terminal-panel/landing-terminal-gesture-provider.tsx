@@ -62,12 +62,6 @@ export function LandingTerminalGestureProvider(props: {
   const [pendingGesture, setPendingGesture] =
     useState<LandingTerminalTarget | null>(null);
   const gestureGenerationRef = useRef(0);
-  // The draft the current open episode belongs to; the empty-panel auto-spawn
-  // is pinned to it (see the settlement handler's folderless guard). It is set
-  // on capture (which already re-renders) and survives the gesture clear, so it
-  // is state rather than a render-read ref.
-  const [openEpisodeDraftId, setOpenEpisodeDraftId] = useState(draftId);
-
   const capturedLandingPageId =
     pendingGesture?.draftId ?? "unbound-landing-page";
   const capturedPanelOpen = useLandingPanelStore((state) =>
@@ -153,7 +147,6 @@ export function LandingTerminalGestureProvider(props: {
       client: pinnedClient,
     };
     gestureGenerationRef.current = gesture.generation;
-    setOpenEpisodeDraftId(draftId);
     setPendingGesture(gesture);
     return gesture;
   }, [
@@ -233,7 +226,6 @@ export function LandingTerminalGestureProvider(props: {
       target,
       pending: openGesture !== null,
       pendingGeneration: openGesture === null ? null : openGesture.generation,
-      openEpisodeDraftId,
       workspace,
       capture,
       selectWorkspacePath,
@@ -243,7 +235,6 @@ export function LandingTerminalGestureProvider(props: {
       capture,
       clearPending,
       draftId,
-      openEpisodeDraftId,
       openGesture,
       selectWorkspacePath,
       target,
