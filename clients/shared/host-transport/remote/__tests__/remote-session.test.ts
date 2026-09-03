@@ -1404,7 +1404,7 @@ describe("RemoteSession relay policy kills", () => {
     jitterPin.mockRestore();
   });
 
-  it.each(["peer_gone"] as const)(
+  it.each(["peer_gone", "killed"] as const)(
     "%s{policy_violation} drops without going terminal and schedules the capped reconnect",
     async (controlType) => {
       const relay = new FakeRelayHost();
@@ -1480,7 +1480,7 @@ describe("RemoteSession relay policy kills", () => {
     TEST_BUDGET_MS,
   );
 
-  it.each(["peer_gone"] as const)(
+  it.each(["peer_gone", "killed"] as const)(
     "%s{future_reason} is parsed as a capped retryable transport loss",
     async (controlType) => {
       const relay = new FakeRelayHost();
