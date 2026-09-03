@@ -53,6 +53,7 @@ import { handleSignInLinkCopyError } from "@/components/settings/panels/provider
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import { providerSupportsTerminalLogin } from "@/components/providers/provider-signin-availability";
 import { useProviderTerminalLogin } from "@/hooks/providers/use-provider-terminal-login";
+import { providerSetupGuidance } from "@/lib/providers/provider-setup-guidance";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 
 function noop(): void {}
@@ -485,6 +486,11 @@ function TerminalLoginRow({
     // host itself reports as replaced.
     launchedFromTile: null,
   });
+  // A provider whose terminal flow is a credential WIZARD rather than a
+  // device-code sign-in (Reasonix's `setup` asks for an API key) gets its own
+  // label and hint: "prints a sign-in code" is false there, and it is the copy
+  // the user reads while deciding what to do next.
+  const guidance = providerSetupGuidance(providerId);
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex flex-wrap items-center gap-2">
@@ -494,13 +500,16 @@ function TerminalLoginRow({
           disabled={terminalLogin.isPending}
           onClick={terminalLogin.start}
         >
-          Sign in from a terminal
+          {guidance === null
+            ? "Sign in from a terminal"
+            : guidance.terminalActionLabel}
           {terminalLogin.isPending ? <MutedAgentSpinner /> : null}
         </Button>
       </div>
       <span className="text-ui-xs text-muted-foreground">
-        {providerLabel} prints a sign-in code that only exists in the terminal.
-        Complete the sign-in there, then use Refresh above.
+        {guidance === null
+          ? `${providerLabel} prints a sign-in code that only exists in the terminal. Complete the sign-in there, then use Refresh above.`
+          : guidance.terminalHint}
       </span>
     </div>
   );
