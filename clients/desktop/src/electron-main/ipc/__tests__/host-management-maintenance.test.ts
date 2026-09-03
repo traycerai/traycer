@@ -1987,6 +1987,40 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
     });
   });
 
+  it("queued restart hands the controller a user-repair intent", async () => {
+    // The third sibling. A restart queues exactly like converge/register, so
+    // a pre-enqueue check alone proves nothing about the host a zero-argument
+    // respawn would eventually force-restart — the identity question has to
+    // ride the intent to the head of the lane.
+    writeEnrollment(LIVE_HOST_ID);
+    const invoke = RunnerHostInvoke;
+    const bridge = makeBridge();
+    const handler = await registerHandler(
+      bridge,
+      invoke.traycerDoctorRepairQueued,
+    );
+    const respawn = vi.fn((_intent: LocalHostMutationIntent) =>
+      Promise.resolve({ kind: "ok" as const, value: { activated: true } }),
+    );
+    bridge.options.hostController.respawn = respawn;
+
+    await expect(
+      handler(null, { repair: "restart", expectedHostId: LIVE_HOST_ID }),
+    ).resolves.toEqual({ kind: "applied" });
+    expect(respawn).toHaveBeenCalledTimes(1);
+
+    const [intent] = respawn.mock.calls[0] ?? [];
+    if (intent?.kind !== "user-repair") {
+      throw new Error("expected a user-repair intent");
+    }
+    await expect(intent.guard()).resolves.toEqual({ kind: "proceed" });
+    writeEnrollment("some-other-host");
+    await expect(intent.guard()).resolves.toEqual({
+      kind: "abandon",
+      message: expect.stringContaining("host changed"),
+    });
+  });
+
   it("the watched restart passes a user-repair intent and reports a late refusal as declined", async () => {
     // `traycerHostRestartIfIdle` is admitted only against an empty lane, but
     // admission-to-execution still crosses a microtask boundary, so the

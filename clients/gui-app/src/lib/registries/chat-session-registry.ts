@@ -27,17 +27,20 @@ import {
 import {
   ChatSessionRegistry,
   DEFAULT_CHAT_IDLE_TTL_MS,
-  DEFAULT_MAX_WARM_CHAT_SESSIONS,
 } from "@/stores/chats/session-registry";
 import {
   BROWSER_STREAM_FLUSH_TIMERS,
   createStreamFlushCoordinator,
 } from "@/stores/chats/stream-flush-coordinator";
 import { createRendererRuntimeEnvironment } from "@/stores/epics/open-epic/runtime/runtime-environment";
+import { getRetentionProfile } from "@/stores/replica-memory/retention-profile";
 
 const registry = new ChatSessionRegistry({
   idleTtlMs: DEFAULT_CHAT_IDLE_TTL_MS,
-  maxWarmSessions: DEFAULT_MAX_WARM_CHAT_SESSIONS,
+  // The shell's retention profile (desktop: `DEFAULT_MAX_WARM_CHAT_SESSIONS`),
+  // read on every cap walk so the phone's smaller pool applies whenever its
+  // bootstrap selected it.
+  maxWarmSessions: () => getRetentionProfile().maxWarmChatSessions,
 });
 
 /**

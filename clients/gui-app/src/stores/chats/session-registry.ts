@@ -6,6 +6,7 @@ import {
   type SessionRegistry,
 } from "@traycer-clients/shared/replica-runtime";
 import { createRendererRuntimeEnvironment } from "@/stores/epics/open-epic/runtime/runtime-environment";
+import { DESKTOP_RETENTION_PROFILE } from "@/stores/replica-memory/retention-profile";
 import {
   isChatRunInProgress,
   type ChatSessionStoreHandle,
@@ -29,7 +30,8 @@ export const MAX_ACTIVE_CHAT_IDLE_DEFER_MS = 60 * 60 * 1_000;
  * sessions with active chat work are never evicted by the cap, but they still
  * contribute to overflow and can crowd out older inactive warm sessions.
  */
-export const DEFAULT_MAX_WARM_CHAT_SESSIONS = 6;
+export const DEFAULT_MAX_WARM_CHAT_SESSIONS =
+  DESKTOP_RETENTION_PROFILE.maxWarmChatSessions;
 
 /**
  * Everything `acquire` needs to name ONE session: its identity - (epic, chat,
@@ -45,7 +47,12 @@ export interface ChatSessionTarget {
 
 export interface ChatSessionRegistryOptions {
   readonly idleTtlMs: number;
-  readonly maxWarmSessions: number;
+  /**
+   * The warm-pool cap. A function is resolved on every cap walk, which is
+   * how the production singleton follows the shell's retention profile
+   * without having to be constructed after the shell selected it.
+   */
+  readonly maxWarmSessions: number | (() => number);
 }
 
 /**
@@ -101,7 +108,12 @@ export class ChatSessionRegistry {
       environment: createRendererRuntimeEnvironment(),
       policy: {
         idleTtlMs: options.idleTtlMs,
-        maxWarm: options.maxWarmSessions,
+        // A getter, read on every cap walk - see `maxWarmSessions`.
+        get maxWarm(): number {
+          return typeof options.maxWarmSessions === "function"
+            ? options.maxWarmSessions()
+            : options.maxWarmSessions;
+        },
         // The cap bounds the WARM pool: "Leased sessions are outside the warm
         // pool."
         warmCapScope: "demand-free",

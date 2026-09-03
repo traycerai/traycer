@@ -410,10 +410,10 @@ describe("spawnEpicRuntimeWorker", () => {
     // does neither leaves host subscriptions live indefinitely, forwarding
     // frames toward a bridge nothing reads.
     //
-    // Cap-eviction cannot stand in for it either: the registry's
-    // `isEvictable` is `handle.isClean()`, which requires
-    // `hostTransportStatus === "open"` - not true of a session whose runtime
-    // just died.
+    // Cap-eviction cannot stand in for it either: the registry's prune walk
+    // only ever tears down UNMOUNTED, over-cap entries - a fatal can land on
+    // a session whose Epic tab is still open (mounted), and a mounted entry
+    // is never a candidate no matter what `isEvictable` says.
     const fixture = createFixture(false);
     const recording = createRecordingStreamClient();
     const relay = { log: vi.fn(), fatal: vi.fn() };

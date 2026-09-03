@@ -1574,6 +1574,21 @@ describe("delivery monotonicity", () => {
       source: "gui",
     });
   });
+
+  it("clears delivery when a winning settlement carries null", () => {
+    // Same adopt-on-win rule, null included. The new settlement has no
+    // outbox item; inheriting the old projection would attribute a stale
+    // delivery to a fresh answer. Contrast "never lets a null delivery
+    // clear an existing projection" above, which is a same-id replay
+    // (MERGE, silence is not a retraction).
+    const stored = makeDeliveryProjection("delivery-1", "delivered", false, 0);
+    const result = applyInterviewSettlement(runtimeAuthoritativeBlock(stored), {
+      ...guiAnswered(20),
+      delivery: null,
+    });
+    expect(result.changed).toBe(true);
+    expect(result.patch.delivery).toBeNull();
+  });
 });
 
 describe("draft/outcome relation", () => {

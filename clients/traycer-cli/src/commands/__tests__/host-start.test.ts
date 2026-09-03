@@ -1384,6 +1384,48 @@ describe("runHostStart - signal/exit propagation", () => {
     expect(String(crashed?.fields.stderrTail)).toContain("partial fatal text");
   });
 
+  it("writes the marker within the stderr-end deadline when the stream never ends", async () => {
+    // A grandchild holding the inherited stderr fd can delay close forever;
+    // the wait is bounded so the supervisor cannot hang on exit.
+    const exec = "/opt/traycer/host/install/traycer-host";
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const stderr = new PassThrough();
+    Object.assign(child, { stderr });
+    const originalSpawn = deps.spawn;
+    if (originalSpawn === undefined) {
+      throw new Error("test spawn dependency missing");
+    }
+
+    const started = Date.now();
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...deps,
+            spawn: (command, args, options) => {
+              const spawned = originalSpawn(command, args, options);
+              setImmediate(() => {
+                stderr.write(Buffer.from("partial\n"));
+                // Never end/close — only exit.
+                child.emit("exit", 7, null);
+              });
+              return spawned;
+            },
+          },
+        ),
+      recorded,
+    );
+    const elapsed = Date.now() - started;
+
+    expect(recorded.exited).toBe(7);
+    const crashed = recorded.markers.find((m) => m.phase === "crashed");
+    expect(crashed).toBeDefined();
+    // Bound: wait is STDERR_END_WAIT_TIMEOUT_MS, not forever.
+    expect(elapsed).toBeLessThan(STDERR_END_WAIT_TIMEOUT_MS + 1_500);
+    expect(elapsed).toBeGreaterThanOrEqual(STDERR_END_WAIT_TIMEOUT_MS - 200);
+  }, 10_000);
+
   it("does not hold the relaunch decision on a reportHostCrash that never resolves", async () => {
     // The reporter is dispatched WITHOUT awaiting it: the relaunch decision
     // and its backoff must start the moment the marker is written, not after
@@ -2359,6 +2401,35 @@ describe("runHostStart - crash relaunch loop", () => {
     // Still a deliberate stop: no relaunch, and no nonzero exit asking the
     // service manager to start a replacement.
     expect(recorded.spawnCalls).toHaveLength(1);
+    expect(recorded.exited).toBe(0);
+  });
+
+  it("relaunches a host the OOM killer took, which no diagnostic whitelist names", async () => {
+    // Recoverability and diagnosability are different questions, and deciding
+    // one with the other's answer is the bug this pins. `describeFatalSignal`
+    // lists native-crash signals so a support log can explain them; SIGKILL is
+    // deliberately absent because there is nothing to explain. Keying "should
+    // we relaunch" off that list made the single most likely signal death on
+    // Linux - the OOM killer - the one death that was never recovered.
+    //
+    // The real question is only whether the death was ASKED FOR, and this
+    // supervisor asks with SIGTERM/SIGINT/SIGHUP.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const scripted = withScriptedAttempts(deps, [
+      { code: null, signal: "SIGKILL" },
+      { code: 0, signal: null },
+    ]);
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          { ...scripted.deps, maxRelaunches: 5 },
+        ),
+      recorded,
+    );
+
+    expect(recorded.spawnCalls).toHaveLength(2);
     expect(recorded.exited).toBe(0);
   });
 

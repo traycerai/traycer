@@ -434,6 +434,15 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
   // had nobody left to re-register it and the machine stayed unreachable until
   // the next launch.
   it.each([
+    ["a failed apply", { kind: "failed" as const, message: "apply failed" }],
+    [
+      "a stage that no longer matches",
+      { kind: "stage-fingerprint-mismatch" as const, message: "mismatch" },
+    ],
+    [
+      "bytes that committed without converging",
+      { kind: "installed-not-converged" as const, message: "not converged" },
+    ],
     // Codex P1: `deferred` is NOT always contention. A registry outage leaves
     // the stage un-eligibility-checked and resolves this same arm while
     // holding no lock at all - skipping recovery there left an installed

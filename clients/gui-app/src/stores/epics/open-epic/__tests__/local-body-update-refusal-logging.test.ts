@@ -193,6 +193,7 @@ describe("local body/update refusal settlement (open-epic store.ts)", () => {
     const handle = createOpenEpicStore({
       epicId: EPIC_ID,
       userId: null,
+      hostId: "test-host",
       // Unreached: this suite never calls `retryTransport`. Answered anyway
       // rather than defaulted, so it stays a decision the option forces.
       onRetryTransport: () => {},
@@ -313,6 +314,7 @@ describe("local body/update refusal settlement (open-epic store.ts)", () => {
       const handle = createOpenEpicStore({
         epicId: `${EPIC_ID}-lineage-${settlement}`,
         userId: null,
+        hostId: "test-host",
         onRetryTransport: () => {},
         runtime: binding,
         accounting: createProcessBackedAccountingPort({
@@ -405,4 +407,91 @@ describe("local body/update refusal settlement (open-epic store.ts)", () => {
       }
     },
   );
+
+  it("latches isDirty the instant a body edit posts, before the worker answers either way", async () => {
+    // Codex, #1694: the cap's data-loss gate reads `isDirty` synchronously on
+    // every prune walk, but until this fix `onLocalDocUpdate` only latched it
+    // on a PROVEN refusal - the window between posting `body/update` and that
+    // answer arriving read `isDirty: false` although the edit exists ONLY in
+    // main's live doc and the worker has not yet said it took ownership. The
+    // previous `isClean()` transport clause covered this window by accident,
+    // by refusing to evict ANY session with a non-`open` transport; the
+    // data-loss gate that replaced it does not, so a synchronous session
+    // check racing this exact window would have read the epic as evictable
+    // and `dispose()`d it - discarding the edit for good.
+    const pair = createFakeBridgePair("sync");
+    const worker = createWorkerSide(pair);
+    const main = createMainBridgeEndpoint(pair.main, stubMainCallHandlers({}));
+    const binding: EpicRuntimeBinding = {
+      port: main,
+      command: () => {},
+      awarenessOut: () => {},
+      currentUser: () => {},
+      detach: () => {},
+      dispose: () => {},
+    };
+    const handle = createOpenEpicStore({
+      epicId: `${EPIC_ID}-in-flight`,
+      userId: null,
+      hostId: "test-host",
+      onRetryTransport: () => {},
+      runtime: binding,
+      accounting: createProcessBackedAccountingPort({
+        hostId: "test-host",
+        epicId: `${EPIC_ID}-in-flight`,
+        environment: createRendererRuntimeEnvironment(),
+      }),
+    });
+
+    try {
+      handle.projection.apply({ installedArm: "lanes" }, 1);
+      const lease = handle.store
+        .getState()
+        .acquireResidentArtifactBodyLease(ARTIFACT_ID, "linger");
+      await lease.resident;
+      const fragment = handle.store.getState().getArtifactFragment(ARTIFACT_ID);
+      if (fragment === null) {
+        throw new Error("artifact body did not become resident");
+      }
+      expect(handle.store.getState().isDirty).toBe(false);
+
+      typeInto(fragment, "in flight");
+      // The call is genuinely outstanding, not "nothing happened" wearing the
+      // assertion below's clothes - the worker has not been told to answer it.
+      expect(worker.pendingBodyUpdateCallIds).toHaveLength(1);
+      // SYNCHRONOUS: no await, no drain. This is the exact tick a prune walk
+      // would read if it ran right now.
+      expect(handle.store.getState().isDirty).toBe(true);
+
+      // A worker verdict of `false` cannot clear it while the call it would
+      // have to prove is still unanswered - the same rule the refusal arms
+      // pin, extended to the window BEFORE the answer is known at all.
+      // `artifactRooms: ready` is re-affirmed here for the same reason the
+      // refusal arms' own patch carries it: every `applyProjection` call ends
+      // by reconciling residency against the CURRENT room state, and this is
+      // the first one since materialize - omitting it would drop the body as
+      // a room that never announced ready, retiring the doc on an unrelated
+      // path and proving nothing about the pending latch this line exists to
+      // pin.
+      handle.projection.apply(
+        {
+          artifactRooms: { stateByArtifactId: { [ARTIFACT_ID]: "ready" } },
+          isDirty: false,
+        },
+        2,
+      );
+      expect(handle.store.getState().isDirty).toBe(true);
+
+      // Settling it - here, as a drop - releases the pending latch; the
+      // refusal arms above already pin what happens to `isDirty` from there.
+      // The point of this test is everything ABOVE this line: it was already
+      // `true` before the worker said anything at all.
+      worker.respondBodyUpdateDropped("closing the in-flight window");
+      await drainRejections();
+      expect(handle.store.getState().isDirty).toBe(true);
+    } finally {
+      worker.unsubscribe();
+      handle.dispose();
+    }
+  });
 });
