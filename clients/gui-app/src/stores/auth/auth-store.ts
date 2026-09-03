@@ -124,6 +124,26 @@ export function authorizesCloudCapability(status: AuthStatus): boolean {
 export type SignInAttemptKind = "device" | "link";
 
 /**
+ * WHY the current `signed-out` was projected - the one fact the status alone
+ * cannot carry and that the identity-transition hook needs.
+ *
+ * - `retired` - the identity the local plane was held for is gone: an
+ *   explicit `signOut()` after the credentials file was deleted, a file found
+ *   deleted / tombstoned / owned by another user, or another window's
+ *   sign-out projected into this one. Account-scoped state is purged.
+ * - `attempt-failed` - an interactive sign-in attempt failed. `applyFailure`
+ *   never touches the shared credentials file, so a stored identity may still
+ *   be on disk and recovery may re-admit it; a `signed-out` reached this way
+ *   from a held attempt is NOT a retirement, and the lifecycle bridges keep the
+ *   pre-attempt account's state bound across it.
+ *
+ * Two reducers rather than one parameterised `setSignedOut`: every retirement
+ * site in the service and every test that signs out already calls the bare
+ * form, and the failure path is the single caller that means something else.
+ */
+export type SignedOutCause = "retired" | "attempt-failed";
+
+/**
  * Subset of the AuthnV3 `/api/v3/user` response that the GUI surfaces in the
  * UserMenu. Identity fields are present because `AuthService.validateToken`
  * treats a 2xx response without a usable identity as a rejection - the menu
@@ -209,6 +229,12 @@ export interface AuthState {
    * asked to approve on their desktop right now.
    */
   readonly signingInAttempt: SignInAttemptKind | null;
+  /**
+   * Set while `status === "signed-out"`, `null` under every other status. See
+   * {@link SignedOutCause}; `useAuthIdentityTransition` reads it to decide
+   * whether a `signed-out` that ends a held attempt retires the identity.
+   */
+  readonly signedOutCause: SignedOutCause | null;
   setSigningIn(attempt: SignInAttemptKind): void;
   setSignedIn(
     profile: AuthProfile,
@@ -229,7 +255,39 @@ export interface AuthState {
     profile: AuthProfile,
     contextMetadata: AuthContextMetadata,
   ): void;
+  /** Project `signed-out` with cause `retired` - the identity is gone. */
   setSignedOut(): void;
+  /**
+   * Project `signed-out` with cause `attempt-failed`: the same projection as
+   * {@link setSignedOut} for every surface that renders status, but the
+   * credentials file was not touched, so a held attempt's bridges do not
+   * treat it as a retirement. `AuthService.applyInteractiveFailure` is its
+   * only caller.
+   */
+  setInteractiveAttemptFailed(): void;
+}
+
+function signedOutState(
+  cause: SignedOutCause,
+): Pick<
+  AuthState,
+  | "status"
+  | "signingInAttempt"
+  | "signedOutCause"
+  | "profile"
+  | "contextMetadata"
+  | "shareableTeams"
+  | "subscriptionStatus"
+> {
+  return {
+    status: "signed-out",
+    signingInAttempt: null,
+    signedOutCause: cause,
+    profile: null,
+    contextMetadata: null,
+    shareableTeams: [],
+    subscriptionStatus: null,
+  };
 }
 
 /**
@@ -249,12 +307,19 @@ function coalesceUserName(
 export const useAuthStore = create<AuthState>()((set) => ({
   status: "signed-out",
   signingInAttempt: null,
+  // The initial `signed-out` is the absence of any identity, which is a
+  // retirement as far as a bridge is concerned: there is nothing to hold.
+  signedOutCause: "retired",
   profile: null,
   contextMetadata: null,
   shareableTeams: [],
   subscriptionStatus: null,
   setSigningIn: (attempt: SignInAttemptKind) => {
-    set({ status: "signing-in", signingInAttempt: attempt });
+    set({
+      status: "signing-in",
+      signingInAttempt: attempt,
+      signedOutCause: null,
+    });
   },
   setSignedIn: (
     profile: AuthProfile,
@@ -277,6 +342,7 @@ export const useAuthStore = create<AuthState>()((set) => ({
     set({
       status: "signed-in",
       signingInAttempt: null,
+      signedOutCause: null,
       profile: safeProfile,
       contextMetadata,
       shareableTeams,
@@ -299,6 +365,8 @@ export const useAuthStore = create<AuthState>()((set) => ({
     // and HomeHero is on the very surface this state exists to render.
     set({
       status: "unverified",
+      signingInAttempt: null,
+      signedOutCause: null,
       profile: {
         ...profile,
         userName: coalesceUserName(profile.userName, profile.email),
@@ -317,14 +385,14 @@ export const useAuthStore = create<AuthState>()((set) => ({
     // `applySignedIn` that follows a successful revalidation makes it.
   },
   setSignedOut: () => {
-    set({
-      status: "signed-out",
-      signingInAttempt: null,
-      profile: null,
-      contextMetadata: null,
-      shareableTeams: [],
-      subscriptionStatus: null,
-    });
+    set(signedOutState("retired"));
+    Analytics.getInstance().reset();
+  },
+  setInteractiveAttemptFailed: () => {
+    set(signedOutState("attempt-failed"));
+    // The analytics identity is reset exactly as for a retirement: the failed
+    // attempt held no verified account, and whatever `unverified` identity
+    // recovery re-admits was never `identify`-ed (see `setUnverifiedSession`).
     Analytics.getInstance().reset();
   },
 }));

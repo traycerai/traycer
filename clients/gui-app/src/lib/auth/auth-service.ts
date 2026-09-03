@@ -59,6 +59,7 @@ import {
   type AuthContextMetadata,
   type AuthProfile,
   type AuthStatus,
+  type SignedOutCause,
 } from "@/stores/auth/auth-store";
 import { normalizeAvatarUrl } from "@/lib/avatar-url";
 import {
@@ -857,7 +858,7 @@ export class AuthService {
         this.currentBearer !== null ||
         useAuthStore.getState().status !== "signed-out"
       ) {
-        this.applySignedOut();
+        this.applySignedOut("retired");
       }
       return;
     }
@@ -2076,7 +2077,7 @@ export class AuthService {
       return;
     }
     this.setLastError(null);
-    this.applySignedOut();
+    this.applySignedOut("retired");
     // Published chat bytes do not survive leaving the account.
     //
     // The part store is shared across every viewer on the installation, which
@@ -2175,7 +2176,7 @@ export class AuthService {
       return;
     }
     if (session.status === "signed-out") {
-      this.applySignedOut();
+      this.applySignedOut("retired");
       return;
     }
     const liveContext = this.contextProvider.current();
@@ -3063,7 +3064,7 @@ export class AuthService {
    * re-adopts if a sibling rotation later lands.
    */
   private clearUiSession(): void {
-    this.applySignedOut();
+    this.applySignedOut("retired");
   }
 
   // Clear the UI session only when one is actually projected — avoids a redundant
@@ -4303,8 +4304,17 @@ export class AuthService {
    * Aborts the live `RequestContext` (if any) and projects signed-out
    * state. Idempotent - a second call while already signed-out is a
    * no-op for the provider.
+   *
+   * `cause` is what the projection cannot say on its own and what
+   * `useAuthIdentityTransition` needs: every caller but one has retired the
+   * identity (the file is gone, or another window says so), and that one -
+   * `applyInteractiveFailure` - has not touched the file. A `signed-out` that
+   * ends a held attempt is a retirement in the first case and a hold in the
+   * second, and the two arrive through the identical `unverified ->
+   * signing-in -> signed-out` sequence when an explicit `signOut()`'s delete
+   * lands after a sign-in began.
    */
-  private applySignedOut(): void {
+  private applySignedOut(cause: SignedOutCause): void {
     if (this.disposed) {
       return;
     }
@@ -4323,7 +4333,11 @@ export class AuthService {
     // list can be projected against the departed account's entitlement.
     this.currentSubscription = null;
     this.contextProvider.signOut();
-    useAuthStore.getState().setSignedOut();
+    if (cause === "attempt-failed") {
+      useAuthStore.getState().setInteractiveAttemptFailed();
+    } else {
+      useAuthStore.getState().setSignedOut();
+    }
     this.emitSessionSnapshot();
     // The cached identity goes with the session. HERE rather than only in
     // `signOut()`, so the UI-only signed-out projection a dead credential
@@ -4455,7 +4469,7 @@ export class AuthService {
     Analytics.getInstance().track(AnalyticsEvent.SignInFailed, {
       blocker: SIGN_IN_FAILURE_BLOCKERS[error] ?? "unknown",
     });
-    this.applySignedOut();
+    this.applySignedOut("attempt-failed");
     // A failed interactive attempt says nothing about the SHARED file - a
     // recoverable stored session may still be sitting there (the entry to
     // `signIn` settled any loop that was nursing one). Re-arm; the first tick
