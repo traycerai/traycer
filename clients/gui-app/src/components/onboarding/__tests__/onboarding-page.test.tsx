@@ -761,18 +761,34 @@ describe("OnboardingPage", () => {
     ).toBeDefined();
   });
 
-  it("does not consume the login-import announcement on Skip when the import is unavailable", async () => {
+  it("consumes the login-import announcement on Skip even when the import is unavailable, so a pending availability read cannot resurrect the toast", async () => {
     loginImportAvailableMock.value = false;
     renderPage({ replay: false });
 
-    fireEvent.click(screen.getByTestId("onboarding-skip"));
+    fireEvent.click(screen.getByRole("button", { name: /Skip intro/ }));
 
     await waitFor(() => {
       expect(useOnboardingStore.getState().completedAt).not.toBeNull();
     });
     expect(
       useFeatureAnnouncementsStore.getState().consumed["login-import"],
-    ).toBeUndefined();
+    ).toBeDefined();
+  });
+
+  it("consumes the login-import announcement on a completed tour (Continue through the last act)", async () => {
+    loginImportAvailableMock.value = true;
+    renderPage({ replay: false });
+
+    const acts = visibleActs();
+    await advanceToAct(acts[acts.length - 1].id);
+    fireEvent.click(screen.getByTestId("onboarding-advance"));
+
+    await waitFor(() => {
+      expect(useOnboardingStore.getState().completedAt).not.toBeNull();
+    });
+    expect(
+      useFeatureAnnouncementsStore.getState().consumed["login-import"],
+    ).toBeDefined();
   });
 
   it("disables Back while a login import is pending, and re-enables once it settles", async () => {
@@ -813,7 +829,8 @@ describe("OnboardingPage", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByTestId<HTMLButtonElement>("onboarding-back").disabled,
+        screen.getByRole<HTMLButtonElement>("button", { name: /Back/ })
+          .disabled,
       ).toBe(true);
     });
 
@@ -830,11 +847,12 @@ describe("OnboardingPage", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByTestId<HTMLButtonElement>("onboarding-back").disabled,
+        screen.getByRole<HTMLButtonElement>("button", { name: /Back/ })
+          .disabled,
       ).toBe(false);
     });
 
-    fireEvent.click(screen.getByTestId("onboarding-back"));
+    fireEvent.click(screen.getByRole("button", { name: /Back/ }));
     await waitFor(() => {
       expect(currentActId()).not.toBe("login-import");
     });

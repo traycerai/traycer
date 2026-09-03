@@ -13,6 +13,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { useOnboardingTourOpenStore } from "@/stores/onboarding/onboarding-tour-open-store";
 import { useBrowserFocusStore } from "@/stores/settings/browser-focus-store";
+import { useSystemTabModalApiPublished } from "@/stores/tabs/system-tab-modal-bridge";
 import {
   isFeatureAnnouncementConsumed,
   useFeatureAnnouncementsStore,
@@ -41,7 +42,9 @@ const LOGIN_IMPORT_ANNOUNCEMENT_TOAST_ID = "traycer-login-import-announcement";
  *   its dialog, where a toast renders dead (`pointer-events: none`) and
  *   could never be dismissed - the same predicate the app-update toast
  *   reads, so the two cannot disagree. Held, not dropped: the effect re-runs
- *   when the narrator releases.
+ *   when the narrator releases;
+ * - Settings is reachable: the system-tab modal API is published, so the
+ *   action has somewhere to go (see `settingsReachable` below).
  *
  * The primary action arms the one-shot intent BEFORE navigating, so the row
  * that mounts on the General section finds it armed and opens the dialog;
@@ -60,6 +63,13 @@ export function LoginImportAnnouncementController(): null {
     isFeatureAnnouncementConsumed(state.consumed, "login-import"),
   );
   const claim = useFeatureAnnouncementsStore((state) => state.claim);
+  // The action navigates to Settings through the system-tab modal API, which
+  // `SystemTabModalHost` publishes only once it is mounted - behind
+  // `HostReadyGate`, so on a cold launch the toast could otherwise show while
+  // its action still no-ops: the toast would dismiss itself, consumed, with
+  // Settings never opened and the intent left armed for a later visit. Held
+  // until the API exists; the effect re-runs when it is published.
+  const settingsReachable = useSystemTabModalApiPublished();
   const readiness = useSurfaceReadiness("default-host", null);
   const { hasBeenDefaultHostReady } = useHostReadinessController();
   const narrated =
@@ -91,7 +101,7 @@ export function LoginImportAnnouncementController(): null {
       return;
     }
     if (consumed || !available || !signedIn || !onboardingComplete) return;
-    if (tourOpen || narrated) return;
+    if (tourOpen || narrated || !settingsReachable) return;
     // A claim, not a consume: `consumed` above is this window's copy, and a
     // second window restored alongside this one holds its own. The claim
     // re-reads the install's record, so of two windows that both get here
@@ -124,6 +134,7 @@ export function LoginImportAnnouncementController(): null {
     consumed,
     narrated,
     onboardingComplete,
+    settingsReachable,
     signedIn,
     tourOpen,
   ]);

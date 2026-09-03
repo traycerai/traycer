@@ -928,16 +928,6 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
   useLayoutEffect(() => {
     seatedActIdRef.current = act.id;
   });
-  // Whether THIS tour ever offered the login-import act. Tour-scoped rather
-  // than the live availability, which can drop the act again before the
-  // user reaches it (saving turned off in Settings meanwhile); the finish
-  // consumes the announcement off this marker.
-  const tourOfferedLoginImportRef = useRef(false);
-  useEffect(() => {
-    if (acts.some((entry) => entry.id === "login-import")) {
-      tourOfferedLoginImportRef.current = true;
-    }
-  }, [acts]);
   const miniature = miniatureForAct(act.id);
   const isAgentGuideAct = act.id === "agent-guide";
   const agentGuideQueryData = agentGuideQuery.data;
@@ -1091,16 +1081,18 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
             : AnalyticsEvent.OnboardingSkipped,
           { last_step: act.id },
         );
-        // The login-import act was in this tour at some point, so the tour
-        // was the surface that announced the feature - reached or skipped
-        // past. Consumed before `complete()`, which is what makes the
-        // release toast eligible: a user who skipped the intro must not meet
-        // the feature they skipped as an announcement the moment they leave.
-        // The marker, not the live availability: an act the list held and
-        // then dropped (saving turned off mid-tour) was still offered.
-        if (tourOfferedLoginImportRef.current) {
-          consumeAnnouncement("login-import");
-        }
+        // The tour is this release's announcement surface, so finishing it -
+        // completed or skipped, act reached or not - consumes the
+        // announcement: the release toast is for a user who finished
+        // onboarding BEFORE the feature existed, and whoever leaves this
+        // tour is not that user. Unconditional on purpose, since every
+        // narrower rule had a hole: the act's availability is `false` while
+        // the saved-logins read is still pending, so an immediate Skip saw
+        // no act; an act the list held can be dropped again before it is
+        // reached; and on a shell with no bridge the toast never shows, so
+        // consuming costs nothing. Before `complete()`, which is what makes
+        // the toast eligible.
+        consumeAnnouncement("login-import");
         complete();
         if (replay) {
           router.history.back();

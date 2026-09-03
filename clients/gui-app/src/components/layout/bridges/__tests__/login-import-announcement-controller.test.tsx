@@ -21,6 +21,13 @@ import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { useOnboardingTourOpenStore } from "@/stores/onboarding/onboarding-tour-open-store";
 import { useBrowserFocusStore } from "@/stores/settings/browser-focus-store";
 import { useFeatureAnnouncementsStore } from "@/stores/settings/feature-announcements-store";
+import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
+import type {
+  OpenSettingsModalOpts,
+  SystemOverlayKind,
+  SystemTabModalApi,
+} from "@/stores/tabs/use-system-tab-modal";
+import type { SettingsSectionId } from "@/lib/settings-sections";
 import { persistKey, STORE_KEYS } from "@/lib/persist";
 
 // Typed to the two sonner calls the controller makes, so `mock.lastCall`
@@ -116,6 +123,24 @@ function resetStores(): void {
   window.localStorage.clear();
 }
 
+/**
+ * Minimal `SystemTabModalApi`. Published by default so the existing suite
+ * keeps testing gates other than `settingsReachable` - the controller only
+ * ever reads it through `useSystemTabModalApiPublished()`, never calls a
+ * method on it, since `@/lib/settings-navigation` is mocked above.
+ */
+function buildFakeSystemTabModalApi(): SystemTabModalApi {
+  return {
+    active: null,
+    openSettings: vi.fn<(opts: OpenSettingsModalOpts) => void>(),
+    openHistory: vi.fn<() => void>(),
+    close: vi.fn<() => void>(),
+    setSection: vi.fn<(section: SettingsSectionId) => void>(),
+    promoteToTab: vi.fn<() => void>(),
+    isOverlayActive: vi.fn<(kind: SystemOverlayKind) => boolean>(() => false),
+  };
+}
+
 describe("<LoginImportAnnouncementController />", () => {
   beforeEach(() => {
     loginImportAvailableMock.value = true;
@@ -123,11 +148,13 @@ describe("<LoginImportAnnouncementController />", () => {
     toastMock.dismiss.mockClear();
     navigateToSettingsSectionMock.mockClear();
     resetStores();
+    setSystemTabModalApi(buildFakeSystemTabModalApi());
   });
 
   afterEach(() => {
     cleanup();
     resetStores();
+    setSystemTabModalApi(null);
     // "the primary action..." test spies on the real
     // useBrowserFocusStore.getState().requestImportLogins with
     // mockImplementation; nothing here auto-restores it, so a leaked spy
@@ -326,5 +353,21 @@ describe("<LoginImportAnnouncementController />", () => {
     });
 
     expect(toastMock.dismiss).not.toHaveBeenCalled();
+  });
+
+  it("holds the toast while no Settings surface is reachable, then shows once the system-tab modal API publishes", () => {
+    setSystemTabModalApi(null);
+    render(<LoginImportAnnouncementController />);
+
+    expect(toastMock).not.toHaveBeenCalled();
+    expect(
+      useFeatureAnnouncementsStore.getState().consumed["login-import"],
+    ).toBeUndefined();
+
+    act(() => {
+      setSystemTabModalApi(buildFakeSystemTabModalApi());
+    });
+
+    expect(toastMock).toHaveBeenCalledTimes(1);
   });
 });
