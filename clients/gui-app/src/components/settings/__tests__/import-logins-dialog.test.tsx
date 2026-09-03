@@ -214,6 +214,13 @@ describe("<ImportLoginsDialog /> pick step", () => {
         .getAllByRole("button")
         .map((button) => button.textContent),
     ).toEqual(["Work2h ago", "Default3h ago"]);
+    // The heading carries the browser visually; each row still names it for
+    // assistive tech, so a reader never hears a bare "Default".
+    expect(
+      within(chrome)
+        .getAllByRole("button")
+        .map((button) => button.getAttribute("aria-label")),
+    ).toEqual(["Google Chrome · Work", "Google Chrome · Default"]);
     expect(
       screen.getAllByRole("heading", { level: 3, name: "Google Chrome" }),
     ).toHaveLength(1);
