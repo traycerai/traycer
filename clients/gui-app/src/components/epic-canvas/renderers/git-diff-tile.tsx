@@ -58,6 +58,7 @@ import { NoChangesInWorktree } from "@/components/epic-canvas/git-diff/empty-sta
 import { GitErrorBlock } from "@/components/epic-canvas/git-diff/git-error-block";
 import { GitWatcherStatusNotice } from "@/components/epic-canvas/git-diff/git-watcher-status-notice";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
+import { useEffectiveDefaultEditor } from "@/hooks/editor/use-effective-default-editor";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { BoundedTileLoad } from "@/components/epic-canvas/renderers/tile-host-load-state";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
@@ -275,7 +276,7 @@ interface GitDiffTileToolbarProps {
 
 function GitDiffTileToolbar(props: GitDiffTileToolbarProps): ReactNode {
   const queryClient = useQueryClient();
-  const defaultEditor = useSettingsStore((s) => s.defaultEditor);
+  const effectiveEditor = useEffectiveDefaultEditor(useTabHostId());
   const diffViewerPreferences = useSettingsStore(
     (s) => s.diffViewerPreferences,
   );
@@ -358,11 +359,11 @@ function GitDiffTileToolbar(props: GitDiffTileToolbarProps): ReactNode {
     if (openFileOpening) return;
     triggerOpenFileFeedback();
     editorOpen.mutate({
-      editorId: defaultEditor ?? "vscode",
+      editorId: effectiveEditor,
       paths: [absoluteFilePath(props.node.diff.runningDir, props.onOpenFile)],
     });
   }, [
-    defaultEditor,
+    effectiveEditor,
     editorOpen,
     openFileOpening,
     props.node.diff.runningDir,
@@ -504,7 +505,7 @@ function showsPdfDiffBlock(args: {
 
 function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
   const tabHostClient = useTabHostClient();
-  const defaultEditor = useSettingsStore((s) => s.defaultEditor);
+  const effectiveEditor = useEffectiveDefaultEditor(useTabHostId());
   const editorOpen = useEditorOpenForClient(tabHostClient, "file");
   const {
     active: openExternallyFeedbackActive,
@@ -599,11 +600,11 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
     if (openExternallyOpening) return;
     triggerOpenExternallyFeedback();
     editorOpen.mutate({
-      editorId: defaultEditor ?? "vscode",
+      editorId: effectiveEditor,
       paths: [absoluteFilePath(props.node.diff.runningDir, props.file.path)],
     });
   }, [
-    defaultEditor,
+    effectiveEditor,
     editorOpen,
     openExternallyOpening,
     props.file.path,

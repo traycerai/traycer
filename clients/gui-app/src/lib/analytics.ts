@@ -92,7 +92,18 @@ export type AnalyticsArtifactKind = "review" | "spec" | "story" | "ticket";
  * carries no signal here. */
 export type AnalyticsUsageImageExportSource = "epic_dialog" | "settings";
 
-export type AnalyticsEditor = "cursor" | "vscode" | "windsurf" | "zed";
+/**
+ * Mirrors the protocol's `EditorId` registry. Spelled out rather than derived
+ * so a wire-level addition is a deliberate analytics decision: the union is a
+ * reported dimension, and widening it silently would put a value into the
+ * warehouse that no dashboard was built to expect.
+ */
+export type AnalyticsEditor =
+  | "cursor"
+  | "vscode"
+  | "vscodium"
+  | "windsurf"
+  | "zed";
 
 export type AnalyticsHarness =
   | "amp"

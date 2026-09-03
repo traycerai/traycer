@@ -14,8 +14,22 @@ import {
   render,
   screen,
 } from "@testing-library/react";
+import type { EditorEntry, EditorId } from "@traycer/protocol/host";
 import { OpenInEditorButton } from "../open-in-editor-button";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+
+// Mirrors the live `EDITORS` registry's shape (id/label/urlScheme) without
+// importing it, so the fixture stays a self-contained value the test owns
+// rather than a runtime dependency on the protocol package's current catalog.
+const EDITOR_CATALOG: ReadonlyArray<EditorEntry> = vi.hoisted(
+  (): ReadonlyArray<EditorEntry> => [
+    { id: "vscode", label: "VS Code", urlScheme: "vscode" },
+    { id: "cursor", label: "Cursor", urlScheme: "cursor" },
+    { id: "windsurf", label: "Windsurf", urlScheme: "windsurf" },
+    { id: "zed", label: "Zed", urlScheme: "zed" },
+    { id: "vscodium", label: "VSCodium", urlScheme: "vscodium" },
+  ],
+);
 
 interface EditorButtonTestState {
   mutate: Mock<
@@ -29,6 +43,17 @@ interface EditorButtonTestState {
   // whether the OPEN TARGET's own host is local, so the fixture below answers
   // per hostId rather than off one ambient "the active host" value.
   hostKindByHostId: Record<string, string>;
+  // Finder's own gate (`useFinderOpenAvailability`) - independent of the host
+  // directory lookup above, which the button also consults for its editor
+  // gate; this fixture answers it directly rather than reconstructing the
+  // negotiated-version stack the real hook is built on.
+  finderAvailable: boolean;
+  // What `useOfferableEditors` returns, expressed as the ids to keep from
+  // `EDITOR_CATALOG` - the host-accepts gate, independent of `availability`
+  // (the installed-on-this-machine probe). Defaults to the full catalog so
+  // the pre-existing tests below see the same unrestricted menu they did
+  // before this gate existed.
+  offerableEditorIds: EditorId[];
 }
 
 const editorState = vi.hoisted((): EditorButtonTestState => ({
@@ -37,6 +62,8 @@ const editorState = vi.hoisted((): EditorButtonTestState => ({
   availability: ["vscode", "cursor", "windsurf", "zed"],
   hasLocalHost: true,
   hostKindByHostId: { "host-1": "local" },
+  finderAvailable: false,
+  offerableEditorIds: ["vscode", "cursor", "windsurf", "zed", "vscodium"],
 }));
 
 const directoryEntryCalls: string[] = [];
@@ -71,6 +98,20 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   },
 }));
 
+// Mocked at the hook boundary rather than reconstructed from the negotiated
+// version + host directory stack it is built on - the component only cares
+// about the boolean these hooks resolve to.
+vi.mock("@/hooks/editor/use-finder-open-availability", () => ({
+  useFinderOpenAvailability: () => editorState.finderAvailable,
+}));
+
+vi.mock("@/hooks/editor/use-offerable-editors", () => ({
+  useOfferableEditors: () =>
+    EDITOR_CATALOG.filter((editor) =>
+      editorState.offerableEditorIds.includes(editor.id),
+    ),
+}));
+
 describe("<OpenInEditorButton />", () => {
   beforeEach(() => {
     cleanup();
@@ -80,6 +121,14 @@ describe("<OpenInEditorButton />", () => {
     editorState.availability = ["vscode", "cursor", "windsurf", "zed"];
     editorState.hasLocalHost = true;
     editorState.hostKindByHostId = { "host-1": "local" };
+    editorState.finderAvailable = false;
+    editorState.offerableEditorIds = [
+      "vscode",
+      "cursor",
+      "windsurf",
+      "zed",
+      "vscodium",
+    ];
     directoryEntryCalls.length = 0;
     useSettingsStore.setState({ defaultEditor: null });
   });
@@ -210,5 +259,133 @@ describe("<OpenInEditorButton />", () => {
     );
 
     expect(screen.queryByTestId("workspace-open-in-editor")).toBeNull();
+  });
+
+  it("offers Open in Finder and dispatches the finder target when the gate is open", () => {
+    editorState.finderAvailable = true;
+    render(
+      <OpenInEditorButton
+        openTarget={{ workspacePath: "/repo", hostId: "host-1" }}
+        hostClient={null}
+      />,
+    );
+
+    fireEvent.pointerDown(
+      screen.getByTestId("workspace-open-in-editor-chevron"),
+      { button: 0 },
+    );
+
+    fireEvent.click(screen.getByTestId("workspace-open-in-editor-finder"));
+
+    expect(editorState.mutate).toHaveBeenCalledWith({
+      editorId: "finder",
+      paths: ["/repo"],
+    });
+  });
+
+  it("hides Open in Finder when the gate is closed, without hiding the rest of the menu", () => {
+    editorState.finderAvailable = false;
+    render(
+      <OpenInEditorButton
+        openTarget={{ workspacePath: "/repo", hostId: "host-1" }}
+        hostClient={null}
+      />,
+    );
+
+    fireEvent.pointerDown(
+      screen.getByTestId("workspace-open-in-editor-chevron"),
+      { button: 0 },
+    );
+
+    expect(screen.queryByTestId("workspace-open-in-editor-finder")).toBeNull();
+    screen.getByTestId("workspace-open-in-editor-vscode");
+    screen.getByTestId("workspace-open-in-editor-copy-path");
+  });
+
+  it("gates the vscodium menu item on the offer list, not merely on install detection", () => {
+    // The install probe reports vscodium as available, but the host has not
+    // negotiated the minor that lets the client tell it about that id - the
+    // offer gate, not the probe, must be what keeps the item off the menu.
+    editorState.availability = [
+      "vscode",
+      "cursor",
+      "windsurf",
+      "zed",
+      "vscodium",
+    ];
+    editorState.offerableEditorIds = ["vscode", "cursor", "windsurf", "zed"];
+    render(
+      <OpenInEditorButton
+        openTarget={{ workspacePath: "/repo", hostId: "host-1" }}
+        hostClient={null}
+      />,
+    );
+
+    fireEvent.pointerDown(
+      screen.getByTestId("workspace-open-in-editor-chevron"),
+      { button: 0 },
+    );
+
+    expect(
+      screen.queryByTestId("workspace-open-in-editor-vscodium"),
+    ).toBeNull();
+  });
+
+  it("shows the vscodium menu item once the host offers it and it is installed", () => {
+    editorState.availability = [
+      "vscode",
+      "cursor",
+      "windsurf",
+      "zed",
+      "vscodium",
+    ];
+    editorState.offerableEditorIds = [
+      "vscode",
+      "cursor",
+      "windsurf",
+      "zed",
+      "vscodium",
+    ];
+    render(
+      <OpenInEditorButton
+        openTarget={{ workspacePath: "/repo", hostId: "host-1" }}
+        hostClient={null}
+      />,
+    );
+
+    fireEvent.pointerDown(
+      screen.getByTestId("workspace-open-in-editor-chevron"),
+      { button: 0 },
+    );
+
+    screen.getByTestId("workspace-open-in-editor-vscodium");
+  });
+
+  it("falls the primary button back off a stored vscodium default the host no longer offers", () => {
+    // `defaultEditor` was persisted from before, or from a host that still
+    // offers vscodium; this host's offer list has since narrowed and must
+    // not be told to open an id it never advertised.
+    useSettingsStore.setState({ defaultEditor: "vscodium" });
+    editorState.availability = [
+      "vscode",
+      "cursor",
+      "windsurf",
+      "zed",
+      "vscodium",
+    ];
+    editorState.offerableEditorIds = ["vscode", "cursor", "windsurf", "zed"];
+    render(
+      <OpenInEditorButton
+        openTarget={{ workspacePath: "/repo", hostId: "host-1" }}
+        hostClient={null}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("workspace-open-in-editor-primary"));
+
+    expect(editorState.mutate).toHaveBeenCalledWith({
+      editorId: "vscode",
+      paths: ["/repo"],
+    });
   });
 });
