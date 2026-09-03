@@ -75,7 +75,8 @@ export interface BrowserSessionsState {
  * On the desktop the SOCKET is not here: main owns it, and this coordinator
  * holds the UX projection of it (browser-security-hardening H10). What the
  * coordinator kept is exactly what it is for - which streams should exist, the
- * session inventory it renders, and the three user-initiated tab requests.
+ * session inventory it renders, and the user-initiated tab requests with the
+ * request correlation they need.
  */
 export interface BrowserSessionsOwner {
   readonly hostId: string;

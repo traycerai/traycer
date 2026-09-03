@@ -36,7 +36,7 @@ vi.mock("../../app/logger", () => ({
 }));
 
 const OPEN_REQUEST = {
-  epicId: "epic-1",
+  scope: { kind: "epic", epicId: "epic-1" } as const,
   hostId: "host-1",
   identityKey: "identity-1",
 };

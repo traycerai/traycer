@@ -323,6 +323,7 @@ function liveSessions(): BrowserSessionsState {
     retry: () => {},
     openTab: state.openTab,
     closeTab: state.closeTab,
+    attachTab: () => Promise.reject(new Error("not used")),
   };
 }
 

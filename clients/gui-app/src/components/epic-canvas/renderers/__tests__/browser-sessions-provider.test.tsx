@@ -22,6 +22,7 @@ import {
 } from "@traycer/protocol/host/index";
 import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
 import {
+  epicScope,
   openRequest,
   sessionInfo,
   tabInfo,
@@ -655,14 +656,14 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
         <BrowserSessionsHostProvider
           hostId="host-a"
           hostClient={hostClientA}
-          epicId="epic-1"
+          scope={epicScope("epic-1")}
         >
           <SharedProbe id="host-a" />
         </BrowserSessionsHostProvider>
         <BrowserSessionsHostProvider
           hostId="host-b"
           hostClient={hostClientB}
-          epicId="epic-1"
+          scope={epicScope("epic-1")}
         >
           <SharedProbe id="host-b" />
         </BrowserSessionsHostProvider>
@@ -735,14 +736,14 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
         <BrowserSessionsHostProvider
           hostId="shared-host"
           hostClient={hostClientA}
-          epicId="epic-1"
+          scope={epicScope("epic-1")}
         >
           <SharedProbe id="owner-a" />
         </BrowserSessionsHostProvider>
         <BrowserSessionsHostProvider
           hostId="shared-host"
           hostClient={hostClientB}
-          epicId="epic-1"
+          scope={epicScope("epic-1")}
         >
           <SharedProbe id="owner-b" />
         </BrowserSessionsHostProvider>

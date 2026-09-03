@@ -139,6 +139,7 @@ function liveSessionsState(hostId: string): BrowserSessionsState {
       return Promise.resolve({ sessionId: "sess-1", tabId: "tab-1" });
     },
     closeTab: () => Promise.resolve(),
+    attachTab: () => Promise.reject(new Error("not used")),
   };
 }
 

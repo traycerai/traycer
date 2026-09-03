@@ -174,6 +174,7 @@ const sessionsState = vi.hoisted<{
     retry: vi.fn(),
     openTab: forwardOpenTab,
     closeTab: forwardCloseTab,
+    attachTab: () => Promise.reject(new Error("not used")),
   },
 }));
 
@@ -357,6 +358,7 @@ describe("BrowsersPanelBody", () => {
       retry: vi.fn(),
       openTab: forwardOpenTab,
       closeTab: forwardCloseTab,
+      attachTab: () => Promise.reject(new Error("not used")),
     };
   });
 
@@ -1382,6 +1384,7 @@ describe("BrowsersPanelActions", () => {
       retry: vi.fn(),
       openTab: forwardOpenTab,
       closeTab: forwardCloseTab,
+      attachTab: () => Promise.reject(new Error("not used")),
     };
   });
 

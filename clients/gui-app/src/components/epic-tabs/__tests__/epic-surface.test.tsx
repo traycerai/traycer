@@ -4,7 +4,10 @@ import type { ReactNode } from "react";
 import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
 import { TabSurfaceActivityProvider } from "@/components/layout/tab-surface-activity";
 import type { BrowserSessionsState } from "@/components/epic-canvas/renderers/browser-sessions-context";
-import { sessionInfo } from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
+import {
+  epicScope,
+  sessionInfo,
+} from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
 import {
   epicTabRightActionsKey,
   useMobileHeaderStore,
@@ -103,6 +106,7 @@ vi.mock(
           retry: () => undefined,
           openTab: () => Promise.reject(new Error("not used")),
           closeTab: () => Promise.resolve(),
+          attachTab: () => Promise.reject(new Error("not used")),
         };
         return (
           <BrowserSessionsContext.Provider value={value}>
@@ -188,7 +192,7 @@ import { EpicSurface } from "@/components/epic-tabs/epic-surface";
 
 const SAMPLE_SESSION: BrowserSessionInfo = sessionInfo({
   sessionId: "sess-1",
-  epicId: "epic-a",
+  scope: epicScope("epic-a"),
   hostId: "host-test",
   lastActivityAt: 2,
   runtime: { kind: "electron", revision: 0 },

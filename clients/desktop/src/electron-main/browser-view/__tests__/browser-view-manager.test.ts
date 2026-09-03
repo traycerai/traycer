@@ -1957,8 +1957,32 @@ describe("BrowserViewManager native tab lifecycle", () => {
       seedStorageState: null,
       connectionId: null,
     });
+    // One SHARED session with a tab bound to each window - the regression
+    // this method exists to fix. The old code widened from one matching guest
+    // to that guest's whole session across every window, so closing window-1
+    // would have destroyed window-2's live tab of the same session too.
+    const sharedInWindow1 = await harness.manager.ensureTab("window-1", {
+      hostId: "host-1",
+      sessionId: "session-shared",
+      tabId: "tab-shared-window-1",
+      requestedUrl: "https://example.com/shared-1",
+      profile: "primary",
+      seedStorageState: null,
+      connectionId: null,
+    });
+    const sharedInWindow2 = await harness.manager.ensureTab("window-2", {
+      hostId: "host-1",
+      sessionId: "session-shared",
+      tabId: "tab-shared-window-2",
+      requestedUrl: "https://example.com/shared-2",
+      profile: "primary",
+      seedStorageState: null,
+      connectionId: null,
+    });
     await harness.manager.acceptTab(closing);
     await harness.manager.acceptTab(remaining);
+    await harness.manager.acceptTab(sharedInWindow1);
+    await harness.manager.acceptTab(sharedInWindow2);
 
     expect(harness.manager.hasNativeTabsForWindow("window-1")).toBe(true);
     expect(harness.manager.hasNativeTabsForWindow("window-2")).toBe(true);
@@ -1966,6 +1990,11 @@ describe("BrowserViewManager native tab lifecycle", () => {
     await harness.manager.closeNativeSessionsForWindow("window-1");
     expect(harness.views[0]?.webContents.closeCalls).toBe(1);
     expect(harness.views[1]?.webContents.closeCalls).toBe(0);
+    // The shared session's window-1 guest closes with the rest of window-1's
+    // guests; its window-2 sibling - same sessionId, different tabId and
+    // window - must survive untouched.
+    expect(harness.views[2]?.webContents.closeCalls).toBe(1);
+    expect(harness.views[3]?.webContents.closeCalls).toBe(0);
     expect(harness.manager.hasNativeTabsForWindow("window-1")).toBe(false);
     expect(harness.manager.hasNativeTabsForWindow("window-2")).toBe(true);
     harness.manager.dispose();

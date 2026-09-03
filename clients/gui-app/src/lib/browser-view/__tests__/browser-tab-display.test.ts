@@ -18,6 +18,7 @@ function tab(
     title: null,
     viewed: false,
     drivenBy: [],
+    boundWindowId: null,
     ...overrides,
   };
 }

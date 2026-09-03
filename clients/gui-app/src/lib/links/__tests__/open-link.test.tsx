@@ -7,6 +7,7 @@ import type {
   BrowserTabInfo,
 } from "@traycer/protocol/host/browser/contracts";
 import type { BrowserSessionsState } from "@/components/epic-canvas/renderers/browser-sessions-context";
+import { epicScope } from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
 import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 import { LinkTargetContext } from "@/lib/links/link-target-context";
 import { useOpenLink, type LinkClickEvent } from "@/lib/links/open-link";
@@ -85,6 +86,7 @@ function tab(overrides: Partial<BrowserTabInfo>): BrowserTabInfo {
     title: null,
     viewed: false,
     drivenBy: [],
+    boundWindowId: null,
     ...overrides,
   };
 }
@@ -92,7 +94,7 @@ function tab(overrides: Partial<BrowserTabInfo>): BrowserTabInfo {
 function session(tabs: readonly BrowserTabInfo[]): BrowserSessionInfo {
   return {
     sessionId: "session-1",
-    epicId: EPIC_ID,
+    scope: epicScope(EPIC_ID),
     hostId: HOST_ID,
     profile: "primary",
     lastActivityAt: 0,
@@ -118,6 +120,7 @@ function liveSessions(
     retry: () => undefined,
     openTab,
     closeTab: () => Promise.resolve(),
+    attachTab: () => Promise.reject(new Error("not used")),
   };
 }
 

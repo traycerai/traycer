@@ -850,6 +850,7 @@ function browserSessionsState(
     retry: () => {},
     openTab: () => Promise.reject(new Error("not implemented")),
     closeTab: () => Promise.reject(new Error("not implemented")),
+    attachTab: () => Promise.reject(new Error("not implemented")),
     ...fields,
   };
 }
@@ -1008,6 +1009,7 @@ describe("browserTabMentionEntriesFromSessions", () => {
               title: "Example",
               viewed: false,
               drivenBy: [],
+              boundWindowId: null,
             },
           ],
         }),
@@ -1105,6 +1107,7 @@ describe("createBrowserTabMentionEntriesSnapshotCache", () => {
                     title: "Example",
                     viewed: false,
                     drivenBy: [],
+                    boundWindowId: null,
                   },
                 ],
               }),
@@ -1136,6 +1139,7 @@ describe("createBrowserTabMentionEntriesSnapshotCache", () => {
       title: "Example",
       viewed: false,
       drivenBy: [],
+      boundWindowId: null,
     };
     const first = getSnapshot(
       [
