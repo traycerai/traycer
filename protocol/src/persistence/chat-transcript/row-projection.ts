@@ -20,6 +20,7 @@ import { assistantTurnKey } from "@traycer/protocol/persistence/chat-transcript/
 import {
   compareCanonicalRowOrder,
   forkedChatLinkRowSource,
+  importedChatMarkerRowSource,
   notificationAnchorRowSource,
 } from "@traycer/protocol/persistence/chat-transcript/row-order";
 import { partitionSetupCardWindows } from "@traycer/protocol/persistence/chat-transcript/setup-card-windows";
@@ -51,8 +52,9 @@ import { steeredMessageIdsFromEvents } from "@traycer/protocol/persistence/chat-
  *    `rowAnchorAt`, not on the record `timestamp` the host rewrites on every
  *    streaming delta - and EVERY row of one turn shares that single value, so
  *    intra-turn order rests on sort stability alone. On top of that the genesis
- *    setup card pins to the top regardless of its key, and a mid-chat one is
- *    woven above its anchor BY ID.
+ *    setup card pins to the top regardless of its key, a mid-chat one is
+ *    woven above its anchor BY ID, and an imported chat's provenance marker
+ *    pins above even the genesis card.
  *
  * An ordinal numbered from a one-per-record enumeration puts bodies under the
  * wrong rows for the rest of a transcript, and nothing about that failure is
@@ -197,6 +199,7 @@ export type TranscriptRowSource =
     }
   | { readonly kind: "forked-chat-link"; readonly eventId: string }
   | { readonly kind: "notification-anchor"; readonly eventId: string }
+  | { readonly kind: "imported-chat-marker"; readonly eventId: string }
   | {
       readonly kind: "setup-card";
       readonly windowIndex: number;
@@ -293,6 +296,10 @@ export function queueSteerRowId(queueItemId: string): string {
 
 export function forkedChatLinkRowId(eventId: string): string {
   return `forked-chat-link:${eventId}`;
+}
+
+export function importedChatMarkerRowId(eventId: string): string {
+  return `imported-chat-marker:${eventId}`;
 }
 
 export function setupCardRowId(
@@ -879,7 +886,23 @@ export function projectTranscriptRows(
     });
   }
 
-  return placeSetupCards(base, input);
+  // The provenance marker sits above EVERYTHING, the pinned genesis setup card
+  // included. Its timestamp is the import time - later than every message it
+  // introduces, so a `createdAt` sort would file it at the bottom - and what
+  // it says ("Imported from Claude Code") is about the whole chat's origin:
+  // the workspace a genesis card describes was bound to this chat after the
+  // transcript already existed elsewhere. Event-log order between two markers.
+  const markers: TranscriptRowDescriptor[] = [];
+  for (const event of input.events) {
+    if (importedChatMarkerRowSource(event) === null) continue;
+    markers.push({
+      rowId: importedChatMarkerRowId(event.eventId),
+      createdAt: event.timestamp,
+      source: { kind: "imported-chat-marker", eventId: event.eventId },
+      context: EMPTY_ROW_CONTEXT,
+    });
+  }
+  return [...markers, ...placeSetupCards(base, input)];
 }
 
 /**
