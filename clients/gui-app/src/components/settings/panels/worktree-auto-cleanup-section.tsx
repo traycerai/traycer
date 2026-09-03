@@ -1,4 +1,4 @@
-import { useCallback, useId, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useState, type ReactNode } from "react";
 import { History, Info } from "lucide-react";
 import type { WorktreeAutoCleanupPolicyState } from "@traycer/protocol/host/worktree-auto-cleanup-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -27,7 +27,11 @@ import {
   AUTO_CLEANUP_PAUSED_COPY,
   autoCleanupDaysError,
 } from "@/components/settings/panels/worktree-auto-cleanup-copy";
-import { useRelativeTimestamp } from "@/lib/relative-time";
+import {
+  formatResetCountdown,
+  useRelativeTimestamp,
+  useSampledNow,
+} from "@/lib/relative-time";
 
 /**
  * Settings ▸ Worktrees ▸ Automatic cleanup — the per-HOST opt-in.
@@ -210,14 +214,32 @@ function AutoCleanupControls(props: {
           {AUTO_CLEANUP_PAUSED_COPY[policy.pausedReason]}
         </p>
       ) : null}
-      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/40 px-3.5 py-2">
-        {policy !== null && policy.enabled ? (
-          <AutoCleanupSchedule policy={policy} />
-        ) : (
-          <span className="text-ui-xs text-muted-foreground">
-            Cleanup is off. Nothing is deleted automatically on this host.
-          </span>
-        )}
+      <AutoCleanupFooter policy={policy} onOpenHistory={onOpenHistory} />
+    </div>
+  );
+}
+
+/** The schedule line and the history entry point. */
+function AutoCleanupFooter(props: {
+  readonly policy: WorktreeAutoCleanupPolicyState | null;
+  readonly onOpenHistory: () => void;
+}): ReactNode {
+  const { policy, onOpenHistory } = props;
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/40 px-3.5 py-2">
+      {policy !== null && policy.enabled ? (
+        <AutoCleanupSchedule policy={policy} />
+      ) : (
+        <span className="text-ui-xs text-muted-foreground">
+          Cleanup is off. Nothing is deleted automatically on this host.
+        </span>
+      )}
+      {policy !== null && policy.enabled ? (
+        // History records AUTOMATIC runs only - manual deletions never appear
+        // in it - so the button belongs to the enabled policy and nowhere
+        // else. With cleanup off, a button here read as the place manual
+        // deletions should show up. The rows themselves persist (retention
+        // is 200 runs / 90 days), so re-enabling brings the record back.
         <Button
           type="button"
           variant="outline"
@@ -226,9 +248,9 @@ function AutoCleanupControls(props: {
           onClick={onOpenHistory}
         >
           <History className="size-4" />
-          <span>Cleanup history</span>
+          <span>Automatic cleanup history</span>
         </Button>
-      </div>
+      ) : null}
     </div>
   );
 }
@@ -263,7 +285,7 @@ function AutoCleanupSchedule(props: {
         <>Next check: paused</>
       ) : (
         <>
-          next check <AutoCleanupWhen at={policy.nextEvaluationAt} />
+          next check <AutoCleanupNextCheck at={policy.nextEvaluationAt} />
         </>
       )}
     </span>
@@ -274,6 +296,48 @@ function AutoCleanupSchedule(props: {
 function AutoCleanupWhen(props: { readonly at: number }): ReactNode {
   const label = useRelativeTimestamp(props.at);
   return <>{label}</>;
+}
+
+/**
+ * A deadline closer than this reads as "under a minute" rather than as a
+ * seconds count. The shared clock ticks once a minute, so "in 28s" would sit
+ * frozen past its own deadline; a phrase that stays true for the whole
+ * minute is honest at that granularity, and a one-second timer for a row
+ * nobody watches would not be.
+ */
+const UNDER_A_MINUTE_MS = 60_000;
+
+/**
+ * The FUTURE leaf. `useRelativeTimestamp` is a past-tense formatter whose
+ * negative-delta clamp renders any upcoming instant as "Just now" - which is
+ * exactly what a freshly enabled policy showed for a check ~30s away. A time
+ * that has already arrived (the scheduler picks the pass up on its next
+ * cadence tick) reads as due rather than as a countdown of zero.
+ */
+function AutoCleanupNextCheck(props: { readonly at: number }): ReactNode {
+  const sampled = useSampledNow();
+  // The deadline-aligned wake. The shared clock samples once a minute, so
+  // without this "in under a minute" would outlive the deadline by up to a
+  // tick. Inside the last minute a one-shot timer fires exactly at `at`;
+  // re-armed on every sample as well as on `at`, because the minute the
+  // deadline enters is only known once a fresh sample says so. `arrivedAt`
+  // needs no reset when `at` moves: a stale value is always below the new
+  // deadline, and `max` with the live sample discards it.
+  const [arrivedAt, setArrivedAt] = useState<number | null>(null);
+  useEffect(() => {
+    const remaining = props.at - Date.now();
+    if (remaining <= 0 || remaining >= UNDER_A_MINUTE_MS) return undefined;
+    const handle = window.setTimeout(() => {
+      setArrivedAt(props.at);
+    }, remaining);
+    return () => {
+      window.clearTimeout(handle);
+    };
+  }, [props.at, sampled]);
+  const now = arrivedAt === null ? sampled : Math.max(sampled, arrivedAt);
+  if (props.at <= now) return <>due now</>;
+  if (props.at - now < UNDER_A_MINUTE_MS) return <>in under a minute</>;
+  return <>in {formatResetCountdown(props.at, now)}</>;
 }
 
 /**
